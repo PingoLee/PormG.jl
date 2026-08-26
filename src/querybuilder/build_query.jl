@@ -116,26 +116,134 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # Check if the ORDER BY target matches a selected alias. Only those aliases can be
     # referenced directly in ORDER BY. Cached join paths created while resolving CTE join_field
     # entries must reuse their resolved SQL selector instead of quoting the raw lookup string.
-    for value in object.values
-      if isa(value, SQLTypeFunction) && value.field.aggregate == true
-        continue
-      end
+    #
+    # Scan `instruc.select` — the RENDERED projections — not `object.values`, the declared ones.
+    # The two are NOT the same set, and trusting the declared list is a silent-wrong-answer bug
+    # (#423): `get_select_query` collapses a projection whose `_as` is already cached onto the
+    # cached SQLField and DISCARDS its `custom_as`, so a name the caller declared can fail to reach
+    # the SQL at all.
+    #
+    #     values("note", "gg" => "note")   ->   SELECT "Tb"."note" as "note", "Tb"."note" as "note"
+    #
+    # `gg` is declared and never rendered. Emitting `ORDER BY "gg"` from the declared list names
+    # neither an output nor an input column: PostgreSQL raises `column "gg" does not exist`, and
+    # SQLite's double-quoted-string fallback degrades the unresolvable identifier to the literal
+    # 'gg' — a constant sort key — so the rows come back UNSORTED with no error at all. Scanning
+    # what will actually be rendered keeps that shape on the loud, backend-aligned path it was on
+    # before (an `UnknownFieldError` from the resolution branch below).
+    #
+    # `instruc.select` is authoritative and fully populated here: `build` calls `get_select_query`
+    # before `get_order_query`, and that is its only writer, assigning contiguously over
+    # `eachindex(values)`. The vector is sized up front, so the trailing slots are `undef` — hence
+    # the `isassigned` guard. It is the same discipline `_query_select` uses, not the same
+    # behavior: that one `return`s at the first gap, this one `continue`s. Equivalent only because
+    # assignment is contiguous; `continue` is the safer of the two if that ever stops being true.
+    #
+    # The scan also runs to completion rather than breaking on the first hit, so a name carried by
+    # TWO RENDERED columns over different expressions can be refused. `.values()` permits that —
+    # `values("x" => "note", "x" => "qty")` renders `as "x"` twice — and `ORDER BY "x"` is then
+    # ambiguous: PostgreSQL rejects it, SQLite picks one arbitrarily.
+    #
+    # Keyed on OBJECT IDENTITY. Two matching slots are safe exactly when they are the same
+    # `SQLField`, which is precisely `get_select_query`'s dedupe relation: it collapses a projection
+    # whose `_as` is already cached onto the cached object, so collapsed slots are `===` and render
+    # byte-identical SQL — which is what PostgreSQL's `equal()` accepts. Anything else is two
+    # distinct expressions under one output name, which PostgreSQL rejects.
+    #
+    # Two earlier keys were wrong, both for reasons worth keeping written down:
+    #
+    #   `_as`  — justified as "equal `_as` means the same object". True of the field/function
+    #            branch, FALSE of the `SQLText` one, which assigns `instruc.select[i]`
+    #            unconditionally without consulting the cache. So
+    #            `values("lbl" => Value("a"), "lbl" => Value("b"))` carries one `_as` over two
+    #            different Params and slipped through.
+    #   rendered text — closer, but SQLite renders EVERY parameter as `?`, so the text key collapses
+    #            any two parameterized projections regardless of their values. That made the guard
+    #            raise on PostgreSQL and stay silent on SQLite for the same query — the strict
+    #            engine refusing while the lax engine sorts by an arbitrary one of two DIFFERENT
+    #            values. Exactly the divergence this guard exists to prevent, introduced by the
+    #            guard itself.
+    #
+    # Identity has neither blind spot and needs no placeholder text. It IS over-strict when two
+    # distinct objects resolve to identical SQL. The reachable instance is two literal-`NULL`
+    # projections — `Value(nothing)` short-circuits to the literal, not a parameter — so
+    # `values("lbl" => Value(nothing), "lbl" => Value(nothing))` renders `NULL as "lbl"` twice.
+    # PostgreSQL parses those as equal `Const`s and accepts; PormG refuses, with a message that
+    # degenerates to "over NULL and NULL". Harmless (ordering by a doubly-projected NULL is
+    # meaningless) and loud rather than silent, which is the direction to err in — but it is a real
+    # case, not the contrived two-spellings-of-one-column one an earlier draft of this comment
+    # named.
+    # An ORDER BY term with NO alias cannot name a projection, and must not be compared as if it
+    # could: `selected_alias == v_field_copy._as` would reduce to `nothing == nothing` and match
+    # every unaliased select entry. One match then reaches `quote_identifier(nothing, …)`, two
+    # produce the nonsense `Ambiguous order_by("nothing")` — and both are reachable through the
+    # fluent surface, since a bare `Value("hi")` in `values()` projects with no alias at all and
+    # `SQLOrder(SQLField(f, nothing))` is accepted by `order_by`.
+    #
+    # Skipping the scan restores EXACT parity with the pre-#423 path for such a term. To be precise
+    # about what that parity is: the shape was already broken, raising `MethodError: Cannot convert
+    # an object of type Nothing` from the resolution branch — a raw MethodError outside the error
+    # taxonomy (#231/#239). This guard does not fix that; it only keeps #423 from replacing one
+    # untyped failure with a different, more confusing one. The underlying leak is pre-existing and
+    # tracked separately.
+    matched_value = nothing
+    for i in (v_field_copy._as === nothing ? () : eachindex(instruc.select))
+      isassigned(instruc.select, i) || continue
+      value = instruc.select[i]
 
       selected_alias = value.custom_as !== nothing ? value.custom_as : value._as
-      if selected_alias == v_field_copy._as
-        found_in_select = true
-        break
+      selected_alias == v_field_copy._as || continue
+
+      if found_in_select && !(value === matched_value)
+        # Name each side INDEPENDENTLY: a field-path projection keeps the path in `_as` (which reads
+        # far better than its rendered column), while an `SQLText` one keeps the chosen alias there.
+        # Choosing globally printed the ordered alias back as one of its own sources on a mixed
+        # pair — "over note and x" for `order_by("x")`, which is circular.
+        _name(v) = v._as == v_field_copy._as ? string(v.field) : string(v._as)
+        throw(QueryBuildError(
+          "Ambiguous \e[4m\e[31morder_by(\"$(v_field_copy._as)\")\e[0m: " *
+          "\e[4m\e[32m.values(...)\e[0m projects that name twice, over " *
+          "\e[33m$(_name(matched_value))\e[0m and \e[33m$(_name(value))\e[0m. PostgreSQL " *
+          "rejects an ambiguous ORDER BY alias and SQLite would pick one arbitrarily, so PormG " *
+          "refuses it rather than diverge. Give the two projections distinct names, or order by " *
+          "the underlying field path instead of the alias."))
       end
+      found_in_select = true
+      matched_value = value
     end
 
-    if haskey(instruc.cache, v_field_copy._as)
-      if found_in_select
-        # Use the alias name instead of the expression to avoid double parameterization.
-        # Most databases (PG, SQLite, MySQL) support aliases in ORDER BY.
-        v_field_copy.field = quote_identifier(v_field_copy._as, instruc.connection)
-      else
-        v_field_copy.field = instruc.cache[v_field_copy._as].field
-      end
+    # #423: the projection test comes FIRST. It used to be nested inside the `instruc.cache` hit
+    # below, and the two disagree about where a projection's chosen name is stored:
+    #
+    #     values("s" => "parent__sku")  ->  _as = "parent__sku"   custom_as = "s"
+    #     values("c" => Count("id"))    ->  _as = "c"             custom_as = nothing
+    #
+    # For a field-path projection the PATH becomes `_as` and the chosen name goes to `custom_as`;
+    # for a function the chosen name becomes `_as` outright. `get_select_query` caches under `_as`,
+    # so the cache has no "s" entry, the `haskey` missed, and control fell through to
+    # `_get_select_query("s")` — which resolves "s" as a physical column of the base model. That is
+    # an `UnknownFieldError` for a name like "s", and something worse for a name that happens to
+    # match a real column: `values("note" => "qty"); order_by("note")` silently emitted
+    # `ORDER BY "Tb"."note"`, sorting a DIFFERENT column than the one projected under that name.
+    # Aggregate and window aliases escaped only because their chosen name IS `_as`, so the cache
+    # key happened to match — which is exactly the asymmetry users reported.
+    #
+    # The branch inversion itself changes exactly one combination — found_in_select && cache-miss,
+    # which used to fall through to `_get_select_query`. The other three are byte-identical, and
+    # both the #76 DISTINCT guard and the `instruc.group` push below stay gated on
+    # `!found_in_select`, so neither is reachable from the new branch.
+    #
+    # The ambiguity guard above is NOT gated on the cache, so it moves a second combination:
+    # found_in_select && cache-HIT. `values("note", "note" => "qty")` renders two output columns
+    # named "note" over different expressions and used to emit `ORDER BY "note"`; PostgreSQL
+    # rejected that at execution as ambiguous, so refusing it at build time is the aligned
+    # behavior — but it IS a second change, and saying "only one" would be wrong.
+    if found_in_select
+      # Use the alias name instead of the expression to avoid double parameterization.
+      # Most databases (PG, SQLite, MySQL) support aliases in ORDER BY.
+      v_field_copy.field = quote_identifier(v_field_copy._as, instruc.connection)
+    elseif haskey(instruc.cache, v_field_copy._as)
+      v_field_copy.field = instruc.cache[v_field_copy._as].field
     else
       v_field_copy.field = _get_select_query(v_field_copy.field, instruc)
     end
@@ -151,8 +259,17 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # through `_get_filter_query(::SQLTypeField)`, which returns `instruc.cache[_as].field`
     # verbatim. Clobbering here put `"parent__sku"` (a projection alias) into an ON clause, which
     # both backends reject. The existing entry is the fully-qualified selector and is strictly
-    # better for every reader; only a path resolved fresh at :140 has nothing to preserve.
-    haskey(instruc.cache, v_field_copy._as) || (instruc.cache[v_field_copy._as] = v_field_copy)
+    # better for every reader; only a freshly resolved path has nothing to preserve.
+    #
+    # #423 adds the second half of the same rule. Inverting the branches above made
+    # `found_in_select` reachable on a cache MISS, so this would newly write the degraded alias
+    # under the caller's chosen name — the poisoned form the #404 clause above exists to keep out
+    # of the join render, arriving by a new route. DEFENSIVE, not demonstrated: no query shape is
+    # known that reads `instruc.cache` under a `custom_as` alias, so removing this would probably
+    # not turn the suite red. It costs one boolean, and a bare alias is legal in ORDER BY and
+    # nowhere else, so it is never worth caching under any circumstances.
+    (found_in_select || haskey(instruc.cache, v_field_copy._as)) ||
+      (instruc.cache[v_field_copy._as] = v_field_copy)
 
     if !found_in_select
       # #76: Under DISTINCT, an ORDER BY term that is not part of the projection is rejected by

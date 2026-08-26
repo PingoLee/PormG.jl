@@ -336,6 +336,72 @@ end
     @test all(s -> s !== missing && !isempty(s), projected_df.surname)
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Ordering by a values() alias over a field path (#423)
+# `values()` puts a field-path projection's chosen name in `custom_as` and the PATH in `_as`, while
+# `get_select_query` caches under `_as`. `get_order_query` read `custom_as` to decide the term named
+# a projection, then looked it up in the `_as`-keyed cache, missed, and re-resolved the alias as a
+# physical column — `UnknownFieldError` for a name that matches nothing, and a silent sort on the
+# WRONG column for a name that matches something.
+#
+# Rendering coverage is in `test/unit/test_order_by_alias.jl`; this asserts the queries actually run
+# and come back ordered, on a real database, on both engines. The oracle pattern matches the #404
+# testset above: compare the alias-ordered result against the same ordering expressed the way that
+# always worked, so the assertion is independent of backend collation and of the fixture's contents.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "order_by on a values() alias over a field path executes (#423)" begin
+    # (a) join-path alias. `surname` is projected under the name "driver" and ordered by that name.
+    aliased = M.Result.objects
+    aliased.values("resultid", "driver" => "driverid__surname")
+    aliased.order_by("driver", "resultid")
+    aliased.limit(25)
+    aliased_df = aliased |> DataFrame
+
+    @test nrow(aliased_df) == 25
+    # The join really produced driver rows — a NULL-filled column would satisfy the oracle below.
+    @test all(s -> s !== missing && !isempty(s), aliased_df.driver)
+
+    # Oracle: the same ordering by the UNDERLYING path, which was never affected. Ordering by the
+    # alias and by its source must agree row for row.
+    by_path = M.Result.objects
+    by_path.values("resultid", "driver" => "driverid__surname")
+    by_path.order_by("driverid__surname", "resultid")
+    by_path.limit(25)
+    @test aliased_df.resultid == (by_path |> DataFrame).resultid
+
+    # (b) local-column alias — no join involved at all, which is the half that shows the defect was
+    # never about join resolution.
+    local_alias = M.Result.objects
+    local_alias.values("id" => "resultid")
+    local_alias.order_by("-id")
+    local_alias.limit(10)
+    desc_ids = (local_alias |> DataFrame).id
+
+    @test length(desc_ids) == 10
+    @test issorted(desc_ids, rev = true)
+
+    # (c) the alias shadows a real column. `points` is projected under the name "grid", so ordering
+    # by "grid" must sort by POINTS, not by the untouched grid column. Pre-fix this emitted
+    # `ORDER BY "Tb"."grid"` and returned rows in the wrong order with no error — the silent half.
+    shadow = M.Result.objects
+    shadow.values("resultid", "grid" => "points")
+    shadow.order_by("-grid", "resultid")
+    shadow.limit(30)
+    shadow_df = shadow |> DataFrame
+
+    @test nrow(shadow_df) == 30
+    # The projected column holds points and is sorted descending. This is the discriminating
+    # assertion: pre-fix the sort ran on the untouched `grid` column, which does not order the
+    # points values, so this fails.
+    @test issorted(collect(skipmissing(shadow_df.grid)), rev = true)
+    # Oracle: ordering by the SOURCE of the alias must give the same rows as ordering by the alias.
+    by_source = M.Result.objects
+    by_source.values("resultid", "grid" => "points")
+    by_source.order_by("-points", "resultid")
+    by_source.limit(30)
+    @test shadow_df.resultid == (by_source |> DataFrame).resultid
+end
+
 @testset "ORDER BY NULL placement normalized across backends (#75)" begin
     # Scratch helpers are loaded in-suite by runtests.jl; load them for standalone runs too.
     if !isdefined(Main, :_clear_bulk_update_scratch_rows!)

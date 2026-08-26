@@ -109,6 +109,20 @@ const DOCERR_CASES = [
         () -> DOCERR_RESULT_PG.objects.values("bad alias!" => "points").list(show_query = :dict),
     ),
     (
+        # #423. Making a values() alias resolve in ORDER BY means a name shared by two projections
+        # would emit an ambiguous `ORDER BY "x"` — PostgreSQL rejects it at execution, SQLite picks
+        # one. Refused at build time so the backends stay aligned.
+        #
+        # The doc sentence uses `grid`/`points` (F1); this model has no `grid` and adding one would
+        # change what every other case's model injects on a write (#331). Same shape, different
+        # column pair — what is pinned is the error TYPE for a duplicated alias, which is what the
+        # doc names.
+        "read/values_and_joins.md — two projections sharing an alias cannot be ordered by it",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("x" => "points", "x" => "resultid").
+            order_by("x").list(show_query = :dict),
+    ),
+    (
         # #424. `cjoin_on`'s `on` is the whole ON clause and is NOT path-prefixed, so a bare
         # `"ev__col" => v` resolves against a `join_field`-less (CROSS-joined) CTE — which has no ON
         # clause to carry it. Two predicates: with only one, the "produced no ON conditions" guard

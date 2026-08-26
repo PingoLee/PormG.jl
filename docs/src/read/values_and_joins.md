@@ -275,6 +275,50 @@ df = M.Driver.objects.filter("driverref" => "hamilton").
 !!! tip
     Aliasing happens at the SQL level (`SELECT "field" AS "alias"`). This is more efficient than renaming columns in a Julia DataFrame after the query.
 
+### Ordering by an Alias
+
+An alias declared in `values()` can be used as the sort key, whatever is on the right of the pair —
+a field path, a local column, an aggregate, or a window function:
+
+```julia
+query = M.Result.objects
+query.values("resultid", "driver" => "driverid__surname")
+query.order_by("driver")          # sorts on the projected alias
+```
+
+```sql
+SELECT "Tb"."resultid" as "resultid", "Tb_1"."surname" as "driver"
+FROM "result" as "Tb"
+ INNER JOIN "driver" AS "Tb_1" ON "Tb"."driverid" = "Tb_1"."driverid"
+ORDER BY "driver" ASC NULLS LAST
+```
+
+Ordering by the underlying path instead is equally valid and produces the same rows — it just
+renders the qualified column rather than the alias:
+
+```julia
+query.order_by("driverid__surname")     # ORDER BY "Tb_1"."surname" ASC NULLS LAST
+```
+
+!!! warning "An alias that shadows a column name wins"
+    If the alias reuses the name of a real column, the sort follows the **alias**, not the column:
+
+    ```julia
+    query = M.Result.objects
+    query.values("resultid", "grid" => "points")
+    query.order_by("-grid")        # sorts by POINTS (the projected value), not by the grid column
+    ```
+
+    That is what both PostgreSQL and SQLite do with a `SELECT` alias in `ORDER BY`, and it keeps the
+    sort consistent with the column the query actually returns. If you meant the underlying column,
+    name it explicitly (`order_by("-points")`) or choose an alias that shadows nothing.
+
+!!! note "Two projections may not share an alias in `order_by`"
+    `.values("x" => "grid", "x" => "points")` followed by `order_by("x")` raises `QueryBuildError`:
+    the sort key matches two different projections. PostgreSQL rejects an ambiguous `ORDER BY` alias
+    and SQLite would resolve it arbitrarily, so PormG refuses it rather than diverge. Give the two
+    projections distinct names.
+
 ---
 
 ## Common Patterns

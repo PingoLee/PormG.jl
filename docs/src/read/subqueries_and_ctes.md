@@ -78,6 +78,64 @@ WHERE "Tb"."driverid" IN (
 
 ---
 
+## A Subquery Cannot Declare Its Own CTE
+
+A subquery consumed by `@in` / `@nin`, `Subquery(...)` or `Exists(...)` **must not declare a CTE of its own**. PormG raises a `QueryBuildError` naming the CTE:
+
+```julia
+fast_laps = M.Lap_times.objects
+fast_laps.filter("milliseconds__@lt" => 90_000)      # sub-90-second laps
+fast_laps.values("raceid", "milliseconds")
+
+inner = M.Result.objects
+inner.with("fast" => fast_laps, join_field = "raceid" => "raceid")   # ← CTE inside the subquery
+inner.filter("fast__milliseconds__@lt" => 90_000)
+inner.values("driverid")
+
+query = M.Driver.objects
+query.filter("driverid__@in" => inner)     # QueryBuildError: names "fast"
+```
+
+A nested CTE renders inside the subquery's parentheses, but its bind values are collected into the `:cte` parameter bucket, which is flattened *ahead of* `:select` and `:where`. On SQLite that puts them in front of any value whose text comes earlier in the statement, and the query then matches the wrong rows with no error at all. Rather than emit a statement that is correct on one backend and silently wrong on the other, PormG refuses it on both.
+
+**Instead**, fold the CTE's predicate into the subquery's own `filter(...)`:
+
+```julia
+inner = M.Lap_times.objects
+inner.filter("milliseconds__@lt" => 90_000)   # no nested CTE
+inner.values("driverid")
+
+query = M.Driver.objects
+query.filter("driverid__@in" => inner)
+query.values("driverid", "surname")
+```
+
+!!! note
+    Declaring a CTE **inside another CTE's body** is fine and stays supported — `with("outer" => q)` where `q` itself calls `with("inner" => ...)` renders a nested `WITH` and binds correctly on both backends. The restriction is only on subqueries used in a filter or a projection.
+
+Likewise, a CTE can only be referenced by a statement that actually emits a `WITH` clause. Reads (`list`, `first`, `count`, `exists`) do; `update(...)` and `bulk_update(...)` do not, so referencing a CTE from either raises a `QueryBuildError` rather than building SQL against a relation the statement never declares.
+
+`delete()` refuses a CTE-scoped queryset for a related reason: it re-uses the query you are deleting as a scoping subquery (`DELETE ... WHERE pk IN (<your query>)`, plus one per cascade), which puts the `WITH` in exactly the nested position described above. Resolve the CTE first and filter on its result:
+
+```julia
+# ✗ refused
+query = M.Result.objects
+query.with("fast" => fast_laps, join_field = "raceid" => "raceid")
+query.filter("fast__milliseconds__@lt" => 90_000)
+query.delete()
+
+# ✓ filter on the ids instead
+fast_race_ids = M.Lap_times.objects
+fast_race_ids.filter("milliseconds__@lt" => 90_000)
+fast_race_ids.values("raceid")
+
+query = M.Result.objects
+query.filter("raceid__@in" => fast_race_ids)
+query.delete()
+```
+
+---
+
 ## Subqueries with Additional Filters
 
 Combine subquery `@in` with other filter conditions:

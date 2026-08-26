@@ -144,6 +144,42 @@ function delete(objct::SQLObjectHandler;
     ))
   end
 
+  # #433: a CTE-scoped delete is refused here, at the entry, rather than at either render site.
+  #
+  # The deletion collector re-uses THIS queryset as a scoping subquery: for a model with dependents
+  # it synthesizes `"<fk>__@in" => objct` (`find_related_objects!`), and for a leaf it renders
+  # `DELETE ... WHERE pk IN (<objct>)` directly (`delete_objects`). Those two paths reach different
+  # amounts of the query builder, so guarding downstream made the SAME user code succeed or fail
+  # depending on whether the target model happened to have a reverse relation — an invisible,
+  # schema-dependent split.
+  #
+  # Refusing rather than exempting is deliberate. An exemption scoped to "anything rendered under a
+  # delete" was measured to re-open the very misbind #433 exists to prevent: with a filter bound
+  # before the nested CTE, SQLite bound ["CTEVAL","INNERVAL","NOTEVAL"] against a text order of
+  # NOTEVAL, CTEVAL, INNERVAL — a silent WRONG DELETE, the worst failure mode in the package. A
+  # narrower origin-tracking exemption is possible but is the same "trust where this subquery came
+  # from" reasoning that produced this bug class.
+  #
+  # UnsafeMutationError, not the QueryBuildError the rest of the #433 family throws. The
+  # discriminator is not the query SHAPE — the identical query is legal on a read path and renders
+  # its `WITH` fine — it is that this is a MUTATION, which is the axis `UnsafeMutationError` names
+  # ("an UPDATE or DELETE ... in another unsafe shape"). `QueryBuildError` is the default bucket for
+  # what has no sharper category, and this has one. It also keeps the type uniform across the five
+  # guards in this function, so a caller catching `UnsafeMutationError` to mean "refine this delete"
+  # has no blind spot. (`update()`'s CTE refusal is a `QueryBuildError` only incidentally: it is
+  # raised deep in `_build_row_join`, where the statement kind is not known.)
+  if !isempty(objct.object.ctes)
+    throw(UnsafeMutationError(
+      "Cannot call \e[4m\e[32mdelete()\e[0m on a query that declares a CTE " *
+      "(\e[4m\e[31m$(join(collect(keys(objct.object.ctes)), ", "))\e[0m). The delete re-uses this " *
+      "query as a scoping subquery, where a nested \e[4m\e[32mWITH\e[0m binds into the " *
+      "\e[4m\e[31m:cte\e[0m bucket ahead of values whose text comes first — on SQLite that deletes " *
+      "the wrong rows with no error.\n  " *
+      "Resolve the CTE first and filter on its result, e.g. " *
+      "\e[4m\e[32m.filter(\"pk__@in\" => ids)\e[0m (#433)."
+    ))
+  end
+
   # don't allow to delete without filter
   if !allow_delete_all && objct.object.filter |> isempty
     throw(UnsafeMutationError(

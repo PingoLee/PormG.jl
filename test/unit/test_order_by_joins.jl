@@ -617,6 +617,15 @@ end
 # Phase 1b mutates only the local `on_clause_extras`; `row_join` keeps its `on_conditions`. So the
 # two cases stay distinguishable at the raise site with no extra bookkeeping, and `relocated_to`
 # (recorded in Phase 1b) supplies the destination alias for the message.
+#
+# STRIP ANSI BEFORE MATCHING. `_emsg` keeps the SGR sequences when `Base.have_color` is true and
+# drops them otherwise, so a needle that spans a color boundary — `"another cjoin_on"`, which is
+# really `"another \e[4m\e[32mcjoin_on\e[0m"` — matches on a piped Windows run and fails on CI's
+# Linux runner. That is exactly how these two testsets went green locally and red on CI, and the
+# NEGATIVE assertions are worse: they pass for free wherever the escapes survive. Matching stripped
+# text makes every assertion here mean the same thing on both.
+_no_ansi(s::AbstractString) = replace(s, r"\e\[[0-9;]*m" => "")
+
 @testset "cjoin_on distinguishes 'you passed none' from 'they all relocated' (#435)" begin
 
   # ── case 2: predicates given, all relocated away ──────────────────────────
@@ -650,7 +659,7 @@ end
         e
       end
       @test err isa PormG.QueryBuildError
-      msg = sprint(showerror, err)
+      msg = _no_ansi(sprint(showerror, err))
 
       # The regression itself: it must NOT claim the caller supplied nothing.
       @test !occursin("produced no ON conditions", msg)
@@ -710,7 +719,7 @@ end
     msg = try
       inspect_query(q; connection = _OBJ_SL); ""
     catch e
-      sprint(showerror, e)
+      _no_ansi(sprint(showerror, e))
     end
     @test occursin("does correlate", msg)
     @test occursin("Project that path", msg)
@@ -736,7 +745,7 @@ end
     msg2 = try
       inspect_query(q2; connection = _OBJ_SL); ""
     catch e
-      sprint(showerror, e)
+      _no_ansi(sprint(showerror, e))
     end
     @test occursin("No predicate you gave names", msg2)
     @test occursin("Do NOT instead project", msg2)
@@ -759,7 +768,7 @@ end
     msg = try
       inspect_query(q; connection = _OBJ_SL); ""
     catch e
-      sprint(showerror, e)
+      _no_ansi(sprint(showerror, e))
     end
 
     @test occursin("does correlate", msg)              # still the self-ref branch
@@ -802,7 +811,7 @@ end
     msg = try
       inspect_query(q; connection = _OBJ_SL); ""
     catch e
-      sprint(showerror, e)
+      _no_ansi(sprint(showerror, e))
     end
 
     @test occursin("Project that path", msg)             # the model-path destination
@@ -828,7 +837,7 @@ end
       e
     end
     @test err isa PormG.QueryBuildError
-    msg = sprint(showerror, err)
+    msg = _no_ansi(sprint(showerror, err))
     @test occursin("produced no ON conditions", msg)   # unchanged wording
     @test occursin("b2", msg)
     @test !occursin("#435", msg)                       # not the relocation story

@@ -126,7 +126,12 @@ const ALLOWED_UNTYPED_ERROREXCEPTION = Dict(
 )
 const ALLOWED_UNTYPED_BARE_ERROR = Dict(
     "src/querybuilder/deletion.jl"      => 1,  # empty generated SQL — internal invariant
-    "src/querybuilder/build_joins.jl"   => 2,  # missing join alias / unmaterialized CTE — internal
+    # #433 shrank this from 2 to 1. The "unmaterialized CTE" site was NOT an internal invariant:
+    # `cte_dict["model"]` is written only by `build_cte_clause`, so its absence means the statement
+    # emits no WITH clause — reachable from `update()` on a query that references a CTE. It is now a
+    # QueryBuildError. The remaining keep is the missing-join-alias lookup, which is genuinely
+    # internal (aliases are minted from the same row_join vector that is then searched).
+    "src/querybuilder/build_joins.jl"   => 1,  # missing join alias — internal invariant
     "src/querybuilder/build_helpers.jl" => 2,  # duplicate dedup row / bad placeholder type — internal
     "src/ConnectionPool.jl"             => 1,  # `error("validation failed")` inside atomic()'s DOCSTRING example
 )

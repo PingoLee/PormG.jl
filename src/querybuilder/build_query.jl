@@ -443,13 +443,16 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         #     through `build_cte_clause`, which switches to `:cte` and binds there. Both `?` end up in
         #     the JOIN text while both values end up in `:cte`, so the mark (holding the `:join`
         #     vector) correctly lifts NOTHING and the OnExtra carries markers with no params.
-        #     >> RESIDUAL #421 HOLE, not closed here. Those values do not travel with their text, so
-        #        relocating such a fragment desynchronizes them exactly as #421 did. It already
-        #        misbinds with no relocation at all: an ON list of
-        #        `["id__@gt" => 7, "parent__@in" => <subquery with a .with(...)>]` binds SQLite
+        #     >> CLOSED BY #433, not here. This described a live hole: an ON list of
+        #        `["id__@gt" => 7, "parent__@in" => <subquery with a .with(...)>]` bound SQLite
         #        ["CTEVAL","SUBVAL",7] against PostgreSQL's [7,"CTEVAL","SUBVAL"], because `:cte`
         #        flattens before `:join` while the text order is the reverse. Different root cause
-        #        (bucket choice, not fragment movement); `OnExtra` neither causes nor repairs it.
+        #        from #421 (bucket choice, not fragment movement); `OnExtra` neither caused nor
+        #        repaired it. #433 refuses the shape — a subquery consumed by `@in`,
+        #        `Subquery(...)` or `Exists(...)` may no longer declare its own CTE. Note WHERE:
+        #        such an ON list is still ACCEPTED at declaration and refused at build/render time,
+        #        so the desynchronizing input can be constructed but never rendered. Kept as a
+        #        record of WHY the refusal exists: if that guard is narrowed, this misbind returns.
         #   - `Exists(...)` — which a `cjoin_on` ON expression DOES accept, though a keyed cjoin's
         #     `filters` reject it — runs a NESTED build, and that build's own join render calls
         #     `set_context!(:join)` UNGATED even under `set_contexts=false`. So context does move.

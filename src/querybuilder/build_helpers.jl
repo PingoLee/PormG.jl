@@ -741,6 +741,48 @@ function _guard_no_nested_projection(instruc::SQLInstruction, what::AbstractStri
   return nothing
 end
 
+# #433: a `.with(...)` declared INSIDE a Subquery / Exists / `__@in` subquery is refused, because
+# no backend renders it correctly today. The three call sites fail in two different ways, and the
+# guard is deliberately wider than either break:
+#
+#   - `Exists(...)` never rendered it AT ALL. `_build_exists_query` hand-rolls its own SELECT rather
+#     than going through `query()`, so it emits no `WITH` prefix and never materializes the CTE's
+#     model — the first path resolving `<cte>__col` reached the "internal error … please report it"
+#     in `build_joins.jl`, for a shape the user was always entitled to write. That message is for a
+#     broken invariant; this was a missing render step.
+#   - `Subquery(...)` and `"col__@in" => sub` DO render an inline `WITH`, and on PostgreSQL they are
+#     correct. On SQLite they can misbind: `build_cte_clause` binds unconditionally into the `:cte`
+#     bucket, `:cte` is flattened FIRST (`get_final_parameters`), and the subquery's text sits in
+#     SELECT or WHERE. Any value whose TEXT precedes the nested CTE but whose bucket flattens later
+#     ends up bound behind it. Measured on this fixture:
+#         filter("note" => "A", "parent__@in" => <sub declaring .with("gv" => …)>)
+#         PostgreSQL ["A", "CTEVAL", "INNERVAL"]   SQLite ["CTEVAL", "INNERVAL", "A"]
+#     — wrong rows, no error. It is conditional, not universal: with no earlier parameter to jump,
+#     the same shapes bind correctly, which is why this survived so long.
+#
+# Refusing on BOTH backends rather than only on SQLite is the "keep PostgreSQL and SQLite aligned"
+# rule: a query that builds on one engine and is refused on the other is a worse trap than one
+# refused on both. The removal of the working PostgreSQL shapes is recorded in `UPGRADING.md`.
+#
+# NOT guarded, on purpose: a CTE declared inside a CTE **body**. That renders through
+# `build_cte_clause` → `query(…, cte=…)`, so its values bind in `:cte` during the same pass that
+# emits their text, all of it inside the leading `WITH` — measured correct on both backends. The
+# guard therefore belongs at these three filter/projection sites and nowhere else.
+function _guard_no_nested_cte(handler::SQLObjectHandler, what::AbstractString)
+  ctes = handler.object.ctes
+  isempty(ctes) && return nothing
+  names = join(collect(keys(ctes)), ", ")
+  throw(QueryBuildError(
+    "$what does not support a subquery that declares its own \e[4m\e[32m.with(...)\e[0m; " *
+    "this one declares \e[4m\e[31m$(names)\e[0m.\n  " *
+    "A nested CTE renders inside the subquery's parentheses, but its values bind into the " *
+    "\e[4m\e[31m:cte\e[0m parameter bucket, which is flattened ahead of \e[4m\e[31m:select\e[0m " *
+    "and \e[4m\e[31m:where\e[0m — on SQLite that binds them ahead of any value whose text comes " *
+    "first, silently matching the wrong rows.\n  " *
+    "Fold the CTE's predicate into the subquery's own \e[4m\e[32m.filter(...)\e[0m, or declare " *
+    "the CTE on a query that is not nested inside a filter or a projection (#433)."))
+end
+
 _projection_is_aggregate(v)::Bool =
   v isa SQLTypeField && v.field isa SQLTypeFunction &&
   hasproperty(v.field, :aggregate) && getproperty(v.field, :aggregate) === true
@@ -768,6 +810,8 @@ end
 function _get_select_query(v::SubqueryObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   # #92: scalar single-column correlated subquery projected as a SELECT-list column.
   _guard_no_nested_projection(instruc, "Subquery")
+  # #433: renders an inline WITH that binds into `:cte` while its text sits in the SELECT list.
+  _guard_no_nested_cte(v.query, "Subquery(...)")
 
   # query() mutates the handler's parameters, and SQLField deepcopy is shallow on `.field`, so the same
   # SubqueryObject can be shared across list()/count() deepcopies — copy before rendering.
@@ -805,6 +849,11 @@ function _resolve_outer_ref_field_name(ref::OuterRefObject, outer::SQLInstructio
 end
 
 function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction)::String
+  # #433 — before the deepcopy: this renderer emits no `WITH` prefix at all, so a CTE declared on
+  # the subquery would be dropped from the SQL while still being resolvable by path. Guarding here
+  # covers `Exists` in BOTH positions, because the projected form (`_get_select_query`) delegates
+  # to the filter form.
+  _guard_no_nested_cte(subquery, "Exists(...)")
   q = deepcopy(subquery)
   q.object.values = []
   q.object.order = []
@@ -1271,6 +1320,8 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       throw(FilterError("Invalid subquery filter on \"$(v.column.field)\": a queryset value requires a membership operator — use \"$(v.column.field)__@in\" => subquery or __@nin."))
     end
     _validate_membership_subquery(v)
+    # #433: renders an inline WITH that binds into `:cte` while its text sits in the WHERE clause.
+    _guard_no_nested_cte(v.values, "A membership filter (__@in / __@nin)")
     placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc)
     return string(_get_filter_query(v.column, instruc), " ", v.operator, " ($placeholders)")
   else

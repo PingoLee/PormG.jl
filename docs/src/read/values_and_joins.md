@@ -313,11 +313,19 @@ query.order_by("driverid__surname")     # ORDER BY "Tb_1"."surname" ASC NULLS LA
     sort consistent with the column the query actually returns. If you meant the underlying column,
     name it explicitly (`order_by("-points")`) or choose an alias that shadows nothing.
 
-!!! note "Two projections may not share an alias in `order_by`"
-    `.values("x" => "grid", "x" => "points")` followed by `order_by("x")` raises `QueryBuildError`:
-    the sort key matches two different projections. PostgreSQL rejects an ambiguous `ORDER BY` alias
-    and SQLite would resolve it arbitrarily, so PormG refuses it rather than diverge. Give the two
-    projections distinct names.
+!!! note "Two projections may not share an output name"
+    `.values("x" => "grid", "x" => "points")` raises `QueryBuildError` at the `values()` call — two
+    columns under one name are indistinguishable to whatever reads the result, and on SQLite the
+    second one's placeholders desynchronize every parameter after it. Give the two projections
+    distinct names.
+
+    The rule is on the **output** name, so `"*"` counts as the physical columns the database expands
+    it to: with `note` declared `db_column = "obs"`, `.values("*", "obs" => …)` collides while
+    `.values("*", "note" => …)` does not.
+
+    Naming the same expression under two *different* names is fine and renders two columns —
+    `.values("a" => "points", "b" => "points")` gives you both, over a single join where a path is
+    involved.
 
 ---
 

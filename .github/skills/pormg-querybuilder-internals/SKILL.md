@@ -41,11 +41,13 @@ For positional backends, preserve bucket semantics and flatten order. The bucket
 
 `:cte → :select → :update → :join → :where → :having`
 
+**A nested render does not pick a bucket (#432).** An `Exists(...)`, a projected `Subquery(...)` or an `__@in` subquery renders inside the PARENT's clause, so its values are marked, lifted and re-emitted as one clause-ordered run at the parent's marker position (`nested_parameter_mark` / `detach_nested_run!`), with `own_contexts=true` so the inner build files its values under its own clauses first. Binding order is not text order: a build binds joins last and renders them first, which is what the buckets exist to reconcile.
+
 Parameter collector model:
 
 - `AbstractPormGParam`: base abstraction for all collectors
 - `PormGPostgresParam`: linear collector for `$1`, `$2`, ... placeholders
-- `PormGPositionalParam`: bucketed collector for positional `?` placeholders
+- `PormGSQLiteParam`: bucketed collector for positional `?` placeholders (concrete type `SQLiteParameterizedQuery`)
 
 When changing parameter behavior, verify:
 
@@ -54,7 +56,7 @@ When changing parameter behavior, verify:
 - parent and subquery inheritance behavior
 - HAVING alias promotion placement
 - custom join parameter routing into the join bucket
-- flattening through `get_final_parameters(::PormGPositionalParam)` in SQL-clause order
+- flattening through `get_final_parameters(::PormGSQLiteParam)` in SQL-clause order
 
 Query-building context rules:
 
@@ -235,7 +237,8 @@ When introducing a new parameterized SQL clause or changing clause order, update
 
 - bucket struct fields in `parameters.jl`
 - `set_context!` call sites in builder modules
-- `get_final_parameters` flatten order
+- `_BUCKET_ORDER` in `parameters.jl` — the single list both `get_final_parameters` and
+  `detach_nested_run!` (#432) read; there is no second copy to keep in sync
 - unit coverage in the canonical alignment tests
 - integration coverage if the behavior is user-visible
 

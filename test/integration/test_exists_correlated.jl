@@ -252,3 +252,63 @@ end
     @test count2 <= count1
 end
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A nested render binds its values in TEXT order, against real rows (#432)
+#
+# The unit file pins the parameter vector; this pins the ROWS, which is the only thing that proves a
+# misbind mattered. A positional mix-up produces perfectly valid SQL — the driver is happy, nothing
+# raises, and the query just answers a different question. Only comparing the returned set against
+# an independently computed one catches that.
+#
+# The shape needs three things at once, and dropping any one makes it pass against the bug:
+#   1. a value bound in the OUTER query whose text PRECEDES the nested render (`statusid`),
+#   2. a nested `Exists` whose inner query binds a value in a JOIN ON clause (`year`),
+#   3. and another in the inner WHERE (`milliseconds`).
+# Before the fix SQLite flattened `:join` ahead of `:where`, so `year`'s value bound to `statusid`'s
+# marker and the query silently selected on the wrong columns.
+#
+# The cjoin is INNER on purpose. Under the default LEFT JOIN the ON predicate does not filter — a
+# non-matching row still satisfies `EXISTS` — so the year value would have no effect on the result
+# and this testset would pass whatever it bound to. Measured: 3218 rows LEFT, 121 rows INNER.
+#
+# `PORMG_DB=db_sl` is where this can fail; on PostgreSQL `$N` travels with the text, so there the
+# same assertions are a control rather than a regression.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "nested Exists binds in text order against real rows (#432)" begin
+    threshold = 95_000   # ms — broad enough to select a real, non-empty set
+    year      = 2009
+    finished  = 1        # statusid 1 == "Finished" in the F1 fixture
+
+    inner = M.Lap_times.objects
+    inner.values("raceid")
+    inner.filter("raceid" => OuterRef("raceid"), "driverid" => OuterRef("driverid"))
+    inner.cjoin("raceid" => "Race", filters = ["year" => year], join_type = "INNER", warn = false)
+    inner.filter("milliseconds__@lt" => threshold)
+
+    q = M.Result.objects
+    q.filter("statusid" => finished)      # MUST be declared before the nesting — see above
+    q.filter(Exists(inner))
+    q.values("resultid")
+
+    got = Set((q |> DataFrame).resultid)
+
+    # Independently computed expectation: two plain queries, no nesting, so it cannot share the
+    # defect under test. A Result row qualifies iff it is Finished AND that driver set a sub-95s lap
+    # in that race AND the race was in `year`.
+    fast = M.Lap_times.objects
+    fast.filter("milliseconds__@lt" => threshold, "raceid__year" => year)
+    fast.values("raceid", "driverid")
+    pairs = Set((r.raceid, r.driverid) for r in eachrow(fast |> DataFrame))
+
+    finished_rows = M.Result.objects
+    finished_rows.filter("statusid" => finished)
+    finished_rows.values("resultid", "raceid", "driverid")
+    expected = Set(r.resultid for r in eachrow(finished_rows |> DataFrame)
+                   if (r.raceid, r.driverid) in pairs)
+
+    # Non-emptiness is a premise, not decoration: an empty set makes the comparison vacuous and this
+    # testset would pass against the bug it exists to catch.
+    @test !isempty(expected)
+    @test got == expected
+end

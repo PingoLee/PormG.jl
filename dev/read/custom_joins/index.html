@@ -139,17 +139,74 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     (`&quot;b2.col__@gte&quot; =&gt; 3`) are not supported yet — express a joined-side comparison-to-literal by
     restructuring, or filter the base side with a bare pair (`&quot;col__@gte&quot; =&gt; 3`). Referencing a
     *third* table (another join&#39;s alias) inside one `cjoin_on` is also out of scope for now — and
-    when that third table is a **CROSS-joined CTE** (`.with(...)` with no `join_field`), it now
+    when that third table is a **CROSS-joined CTE** (`.with(...)` with no `join_field`), it
     raises `QueryBuildError` instead of quietly dropping the predicate (#424) — a `CROSS JOIN` has
-    no `ON` clause to carry one, so the join would otherwise match every row. The same guard fires
+    no `ON` clause to carry one, so the join would otherwise match every row. That fires even when
+    the predicate is the join&#39;s **only** one (#435). The same guard fires
     when a `cjoin_on`&#39;s **alias** happens to equal an unkeyed CTE&#39;s name: that collision hands the
     CTE this join&#39;s predicates. Rename the CTE, give it a `join_field`, or move the predicate to
     `.filter(...)` (#44).
+
     `cjoin_on` works in reads and in the common `update()`/`delete()` (which scope rows via a
     subquery); only a **correlated** UPDATE-FROM/DELETE-USING (setting a column *from* a joined
     table) is unsupported and raises. Finally, a `cjoin_on` join is not tracked by the #74
     aggregate fan-out guard — if the join is to-many, aggregate the base table with `distinct=true`
     (or over the joined table&#39;s own column) to avoid silent row multiplication.
+
+!!! warning &quot;Give the join a predicate that names its own alias&quot;
+    Every predicate in `on` that references a join emitted *after* this one is moved onto that
+    join — it has to be, because a join cannot reference an alias that has not appeared yet. If
+    **all** of them move, your join is left with no `ON` clause and PormG raises, naming the alias
+    they went to (#435):
+
+    ```julia
+    query = M.Result.objects
+    query.values(&quot;points&quot;)
+    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d&quot;, on = [&quot;raceid__circuitid__country&quot; =&gt; &quot;Italy&quot;])
+    # ERROR: Every ON predicate given for d resolved onto Tb_2 instead, …
+    ```
+
+    **The fix depends on whether your predicates name the alias at all**, and the two cases pull
+    in opposite directions. The error message tells you which one you are in.
+
+    *Nothing names it* — as above. The join has nothing correlating it. Add a predicate that does
+    (`F(&quot;d.driverid&quot;) == F(&quot;driverid&quot;)`), or move the conditions to `.filter(...)` and drop the
+    `cjoin_on` entirely — it needs at least one `on` predicate, so moving them all out without
+    removing the call raises too.
+
+    Here, **do not** &quot;fix&quot; it by projecting the path in `values(...)` first. That builds those
+    joins ahead of the `cjoin_on`, so nothing needs to move and the query renders — as
+    `INNER JOIN &quot;driver&quot; AS &quot;d&quot; ON &quot;Tb_2&quot;.&quot;country&quot; = ?`, an `ON` clause that never mentions `d`.
+    That is an unconstrained join: every `driver` row against every qualifying base row, silently.
+    The error is the better outcome.
+
+    *It names the alias and a deeper path* — `on = [F(&quot;d.nationality&quot;) == F(&quot;raceid__circuitid__country&quot;)]`,
+    drivers racing in their home country — is a real correlation that moved only because the join
+    on its other side is built later. Projecting **is** the fix here: add
+    `raceid__circuitid__country` to `values(...)` and the clause renders exactly as written.
+
+    *It names the alias and another `cjoin_on` alias* — there is no path to project, so declare
+    the predicate on whichever of the two PormG emits **later**; the reference then points
+    backwards and nothing moves. The error message names that join for you. Give the first join an
+    `ON` predicate of its own as well — it is still joined, and `cjoin_on` requires at least one:
+
+    ```julia
+    # ✗ before — d1&#39;s only predicate names d2, which is emitted after it
+    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d1&quot;, on = [F(&quot;d1.surname&quot;) == F(&quot;d2.surname&quot;)])
+    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d2&quot;, on = [F(&quot;d2.driverid&quot;) == F(&quot;driverid&quot;)])
+
+    # ✓ after — the shared predicate moves to d2, and d1 gets one of its own
+    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d1&quot;, on = [F(&quot;d1.driverid&quot;) == F(&quot;driverid&quot;)])
+    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d2&quot;, on = [F(&quot;d2.surname&quot;) == F(&quot;d1.surname&quot;)])
+    ```
+
+    (Which of two `cjoin_on` aliases is emitted first is currently decided by alias hashing rather
+    than declaration order — [#449](https://github.com/PingoLee/PormG.jl/issues/449).)
+
+    More generally, PormG checks that the join *has* an `ON` clause, not that the clause
+    constrains it — `on = [&quot;points__@gt&quot; =&gt; 10]` renders and multiplies rows just the same
+    ([#448](https://github.com/PingoLee/PormG.jl/issues/448)). Make sure at least one predicate
+    names the alias you gave.
 
 ## Use Cases
 
@@ -232,4 +289,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Wednesday 26 August 2026 16:40">Wednesday 26 August 2026</span>. Using Julia version 1.12.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Wednesday 26 August 2026 19:10">Wednesday 26 August 2026</span>. Using Julia version 1.12.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

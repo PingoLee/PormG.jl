@@ -74,7 +74,80 @@ function _values!(q::SQLObject, values)
     end
   end
 
+  _reject_duplicate_projection_names(q)
   return q
+end
+
+# #441: two projections may not render under the same output column name.
+#
+# `get_select_query` memoises resolved projections, so a second entry under a name already taken was
+# replaced by the first and never resolved at all. On both backends the caller silently got one
+# column twice instead of the two they asked for; on SQLite it was worse, because the cached field's
+# ALREADY-RENDERED text carries its `?` — so the statement emitted one marker more than the driver
+# had values for, and every parameter after it bound one slot early. Measured:
+# `values("note", "h" => Exists(a), "h" => Exists(b)) + filter("note" => "TAIL")` emitted three `?`
+# against `["AAA", "TAIL"]` — "TAIL" bound to the second EXISTS and the outer WHERE went unbound.
+#
+# Refused at declaration rather than repaired at render: two columns under one name are
+# indistinguishable to every consumer downstream — a DataFrame column, an `order_by` alias — so no
+# reading of the query keeps both.
+#
+# `Value(...)` duplicates are refused too, even though they render correctly today (the `SQLText`
+# branch bypasses the memo). One rule, no per-kind carve-out: a conditional rule is exactly the kind
+# of subtlety this defect family keeps escaping through.
+#
+# `"*"` is compared as the PHYSICAL columns the database expands it to, not `field_names`. A
+# `field_names` check is wrong in BOTH directions — with `note` carrying `db_column = "obs"`,
+# `values("*", "obs" => x)` collides (the star contributes `obs`) while `values("*", "note" => x)`
+# does not, and a name-based check gets both backwards.
+function _reject_duplicate_projection_names(q::SQLObject)
+  isempty(q.values) && return nothing
+  seen = Dict{String,String}()          # output name => what claimed it
+  for v in q.values
+    name = v.custom_as !== nothing ? v.custom_as : v._as
+    name === nothing && continue        # build-time raises a clearer "Field requires an alias"
+    if name == "*"
+      # `unique`, because the star emits each PHYSICAL column once. Two model fields can map to one
+      # `db_column` — nothing in `src/` forbids it — and without this, `values("*")` on such a model
+      # refused itself with a message naming no projection the caller could rename. The defect there
+      # is in the model, not the query, and refusing the single most common projection over it is
+      # both wrong and unactionable.
+      model = q.model
+      for col in unique(Models.field_db_column(model.fields[f], f) for f in model.field_names)
+        _claim_projection_name!(seen, col, "\"*\"")
+      end
+    else
+      _claim_projection_name!(seen, name, _describe_projection(v))
+    end
+  end
+  return nothing
+end
+
+function _claim_projection_name!(seen::Dict{String,String}, name::String, descr::String)
+  prior = get(seen, name, nothing)
+  prior === nothing || throw(QueryBuildError(
+    "values() projects the name \e[4m\e[31m$(name)\e[0m twice — from $(prior) and from $(descr).\n  " *
+    "Two columns under one name are indistinguishable to whatever reads the result, and on SQLite " *
+    "the second one's placeholders desynchronize every parameter after it.\n  " *
+    "Give them distinct names, e.g. \e[4m\e[32m.values(\"a\" => …, \"b\" => …)\e[0m (#441)."))
+  seen[name] = descr
+  return nothing
+end
+
+# A short, USER-recognisable label for the colliding entry — the point of the message is that the
+# caller can tell the two apart, so a bare type name (`FObject` for every aggregate alike) is useless.
+function _describe_projection(v)
+  f = v.field
+  f isa String && return "\"$(f)\""
+  # Spell these the way the caller wrote them. `Exists`/`Subquery` under one name is the headline
+  # case — it is the shape that misaligns SQLite parameters — and `ExistsObject` is not a word that
+  # appears anywhere in a user's source.
+  f isa ExistsObject && return "Exists(...)"
+  f isa SubqueryObject && return "Subquery(...)"
+  # `Value("a")` would otherwise print as `"a"`, indistinguishable from a column path in the message.
+  v isa SQLTypeText && return "Value($(repr(f)))"
+  hasproperty(f, :function_name) && f.function_name isa String && return "$(f.function_name)(...)"
+  return string(nameof(typeof(f)))
 end
 
 function _create!(q::SQLObject, values; kwargs...)

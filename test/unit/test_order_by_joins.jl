@@ -504,11 +504,13 @@ const _OB_424_PRODUCERS = [
       q = OBJ.Cj_child.objects
       q.with("ev" => _ob_cte())                       # no join_field => CROSS JOIN (#44)
       q.values("note")
-      # Two predicates on purpose: with only one, relocating it away empties the join's extras and
-      # `cjoin_on` raises "produced no ON conditions" first — a different, separately misleading
-      # error that would mask what is under test.
-      q.cjoin_on("Cj_parent", alias = "b2",
-                 on = [F("b2.sku") == F("note"), "ev__code" => "Z"])
+      # ONE predicate, and that is the point. This case used to need a second one as padding:
+      # relocating the only predicate away emptied `b2`'s extras, and because `b2` sits at a lower
+      # `row_join` index than the CTE, Phase 2 reached its "produced no ON conditions" guard before
+      # the CROSS branch could report the actual cause. #435 hoisted this guard into Phase 1c, so
+      # the cause now wins on ordering-independent grounds and the padding is gone. This is also
+      # the issue's own reproduction, verbatim.
+      q.cjoin_on("Cj_parent", alias = "b2", on = ["ev__code" => "Z"])
       q
     end,
   ),
@@ -597,4 +599,247 @@ const _OB_424_PRODUCERS = [
   ok_sql = inspect_query(ok; connection = _OBJ_SL)[:sql_text]
   @test occursin("CROSS JOIN \"ev\"", ok_sql)
   @test !occursin(r"CROSS JOIN[^\n]*ON", ok_sql)
+end
+
+# ── #435: the anchor-less guard must say WHICH of two things went wrong ──────────────────────────
+#
+# `cjoin_on` renders its ON clause entirely from the caller's predicates — there is no equi-anchor
+# to fall back on — so an empty extras list at emission time is fatal. Two unrelated causes reach
+# that state, and one message described only the first:
+#
+#   1. the caller passed no predicates at all;
+#   2. the caller passed some, and Phase 1b relocated every one onto a join emitted later.
+#
+# In case 2 the old text — "cjoin_on produced no ON conditions for alias 'b2'" — describes the
+# internal state after relocation, and flatly contradicts what the caller wrote. It sent you looking
+# for a missing argument that is right there in the call.
+#
+# Phase 1b mutates only the local `on_clause_extras`; `row_join` keeps its `on_conditions`. So the
+# two cases stay distinguishable at the raise site with no extra bookkeeping, and `relocated_to`
+# (recorded in Phase 1b) supplies the destination alias for the message.
+@testset "cjoin_on distinguishes 'you passed none' from 'they all relocated' (#435)" begin
+
+  # ── case 2: predicates given, all relocated away ──────────────────────────
+  # The trigger is purely POSITIONAL: `b2`'s only predicate names a join that sits at a HIGHER
+  # `row_join` index, so Phase 1b moves it there and `b2` is left holding nothing. Two ways to get
+  # there, and the review of this change refuted a narrower claim that only the first counts:
+  #
+  #   - the referenced join does not exist yet and is created during Phase 1's resolution of that
+  #     very condition (this fixture: an UNPROJECTED deep path), or
+  #   - it already exists but is ordered later. For two `cjoin_on` aliases that ordering comes from
+  #     `Dict` iteration over `custom_join`, i.e. from the alias STRINGS — declaring `b3` before
+  #     `b2` and after it both yield `[b3, b2]`. Which of a pair raises is therefore decided by
+  #     hashing, which is why this fixture uses the deep path instead: it is deterministic.
+  #
+  # For THIS fixture, projecting the path first would build those joins at LOWER indices and nothing
+  # would relocate — but the query then renders an ON clause that never mentions `b2`, an
+  # unconstrained join, so the error is the better outcome and neither the docs nor the message
+  # offer projecting here. That is specific to a predicate naming no alias of its own; when the
+  # predicate DOES name the join, projecting is the correct fix and both do recommend it — see the
+  # branch testset below. A real join, not a CROSS CTE, so Phase 1c does not intercept.
+  @testset "all predicates relocated onto a later join" begin
+    for (backend, conn) in (("PostgreSQL", _OBJ_PG), ("SQLite", _OBJ_SL))
+      q = OBJ.Cj_child.objects
+      q.values("note")
+      q.cjoin_on("Cj_parent", alias = "b2", on = ["parent__grandparent__code" => "Z"])
+
+      err = try
+        inspect_query(q; connection = conn)
+        nothing
+      catch e
+        e
+      end
+      @test err isa PormG.QueryBuildError
+      msg = sprint(showerror, err)
+
+      # The regression itself: it must NOT claim the caller supplied nothing.
+      @test !occursin("produced no ON conditions", msg)
+
+      @test occursin("b2", msg)          # the join left without an ON clause
+      @test occursin("Tb_2", msg)        # …and where its predicate actually went
+      @test occursin("#435", msg)
+      # Same vocabulary as the #424 guard, which reaches this relocation from the other side.
+      @test occursin("resolved onto", msg)
+      @test occursin(".filter(", msg)    # one of the remedies
+      # A user-writable shape is never the user's fault to report (see the #424 testset).
+      @test !occursin("internal", lowercase(msg))
+      @test !occursin("report", lowercase(msg))
+    end
+  end
+
+  # ── the boundary: ONE predicate relocating is not an error ────────────────
+  # Same deep path, plus a predicate that stays. `b2` keeps an ON clause, the relocated fragment
+  # lands on the join it names, and nothing raises. Without this, a guard that fired whenever
+  # ANY predicate relocated would pass every assertion above while breaking a working shape.
+  @testset "a surviving predicate keeps the join renderable" begin
+    for (backend, conn) in (("PostgreSQL", _OBJ_PG), ("SQLite", _OBJ_SL))
+      q = OBJ.Cj_child.objects
+      q.values("note")
+      q.cjoin_on("Cj_parent", alias = "b2",
+                 on = [F("b2.sku") == F("note"), "parent__grandparent__code" => "Z"])
+      r = inspect_query(q; connection = conn)
+      sql = r[:sql_text]
+      @test occursin("JOIN \"cj_parent\" AS \"b2\" ON ", sql)
+      @test occursin("\"b2\".\"sku\" = \"Tb\".\"note\"", sql)
+      # the relocated fragment is merged into the ON of the join it references, not dropped
+      @test occursin("\"Tb_2\".\"code\" = ", sql)
+      # …and its value travels with it rather than being dropped or orphaned. Only ONE predicate
+      # binds here, so this cannot observe #421-style REORDERING — `_cj_two_depth` above owns that.
+      # What it does pin is that a relocated fragment still consumes exactly its own value, on both
+      # backends, which is the half a text-only assertion cannot see.
+      @test r[:parameters] == ["Z"]
+    end
+  end
+
+  # ── the two branches give OPPOSITE advice, and the code must pick ─────────
+  # Review of this change caught the message asserting one branch's remedy at both. The bit that
+  # decides it: did any predicate that relocated ALSO name the join it left?
+  #
+  #   names its own alias too → a real correlation whose other side is built later. Projecting that
+  #     path in `values(...)` builds it first and the clause renders AS WRITTEN. Verified below.
+  #   names no alias of its own → nothing correlates the join. Projecting renders an ON clause that
+  #     never mentions the alias — an unconstrained join, silent row multiplication (#448).
+  #
+  # So the same message must NOT recommend projecting in both cases, and these two testsets are
+  # what stop it drifting back.
+  @testset "the remedy branches on whether a relocated predicate named the alias" begin
+    # self-referencing: predicate names b2 AND the deeper join
+    q = OBJ.Cj_child.objects
+    q.values("note")
+    q.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("parent__grandparent__code")])
+    msg = try
+      inspect_query(q; connection = _OBJ_SL); ""
+    catch e
+      sprint(showerror, e)
+    end
+    @test occursin("does correlate", msg)
+    @test occursin("Project that path", msg)
+    @test !occursin("Do NOT", msg)            # projecting is the RIGHT fix here
+    @test !occursin("No predicate you gave names", msg)
+    # Second tripwire on the partition: with every destination a model join, the `cjoin_on`
+    # sentence must be absent. Without this, misclassifying destinations the other way leaves
+    # only one assertion standing (review finding).
+    @test !occursin("another cjoin_on", msg)
+    @test occursin("nothing relocates", msg)  # projecting IS the whole fix here, so promise it
+
+    # …and projecting really does render it as written, which is what the advice promises
+    ok = OBJ.Cj_child.objects
+    ok.values("note", "parent__grandparent__code")
+    ok.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("parent__grandparent__code")])
+    ok_sql = inspect_query(ok; connection = _OBJ_SL)[:sql_text]
+    @test occursin("JOIN \"cj_parent\" AS \"b2\" ON (\"b2\".\"sku\" = \"Tb_2\".\"code\")", ok_sql)
+
+    # non-self-referencing: the fixture shape, which must get the opposite advice
+    q2 = OBJ.Cj_child.objects
+    q2.values("note")
+    q2.cjoin_on("Cj_parent", alias = "b2", on = ["parent__grandparent__code" => "Z"])
+    msg2 = try
+      inspect_query(q2; connection = _OBJ_SL); ""
+    catch e
+      sprint(showerror, e)
+    end
+    @test occursin("No predicate you gave names", msg2)
+    @test occursin("Do NOT instead project", msg2)
+    @test !occursin("does correlate", msg2)
+    # the remedy must not send them to .filter() without saying the cjoin_on has to go too —
+    # `_cjoin_on` refuses an empty `on`, so moving every predicate out and leaving the call raises
+    @test occursin("drop the", msg2)
+  end
+
+  # ── self-ref, but the destination has no path to project ──────────────────
+  # "Project it in values(...)" is unactionable when the predicate relocated onto ANOTHER cjoin_on:
+  # `values("b2…")` is not a thing. Caught in review — the self-ref remedy was written for a
+  # model-path destination and asserted at both. The actionable move is the reverse: declare the
+  # predicate on the join PormG emits LATER, so the reference points backwards.
+  @testset "a cjoin_on destination gets the reorder remedy, not 'project it'" begin
+    q = OBJ.Cj_child.objects
+    q.values("note")
+    q.cjoin_on("Cj_parent", alias = "b3", on = [F("b3.sku") == F("b2.sku")])
+    q.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("note")])
+    msg = try
+      inspect_query(q; connection = _OBJ_SL); ""
+    catch e
+      sprint(showerror, e)
+    end
+
+    @test occursin("does correlate", msg)              # still the self-ref branch
+    @test occursin("another cjoin_on", msg)            # …and it says why projecting is not it
+    @test occursin("declare this predicate on", msg)
+    @test !occursin("Project that path", msg)          # the unactionable advice must be absent
+    @test !occursin("Project those paths", msg)
+
+    # Moving the predicate is only HALF the rewrite, and the message must say the other half.
+    # This branch fires only when the relocated predicates were ALL of them, so moving them out
+    # leaves `b3` with an empty `on` — which `_cjoin_on` refuses — while dropping `b3` entirely
+    # makes `b3.sku` unresolvable in the predicate that referenced it. Both dead ends were
+    # reachable by following the first draft of this remedy literally (review finding); the same
+    # omission had already been fixed once in the `.filter(...)` remedy.
+    @test occursin("an ON predicate of its own", msg)
+    @test occursin("requires at least one", msg)
+
+    # …and the full rewrite the message describes actually renders: the shared predicate declared
+    # on the LATER join, and `b3` given a predicate of its own.
+    ok = OBJ.Cj_child.objects
+    ok.values("note")
+    ok.cjoin_on("Cj_parent", alias = "b3", on = [F("b3.sku") == F("note")])
+    ok.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("b3.sku")])
+    ok_sql = inspect_query(ok; connection = _OBJ_SL)[:sql_text]
+    @test occursin("JOIN \"cj_parent\" AS \"b3\" ON (\"b3\".\"sku\" = \"Tb\".\"note\")", ok_sql)
+    @test occursin("JOIN \"cj_parent\" AS \"b2\" ON (\"b2\".\"sku\" = \"b3\".\"sku\")", ok_sql)
+  end
+
+  # ── mixed destinations: both remedies, and the projecting half must not overclaim ──
+  # With one predicate relocating onto a model join and another onto a `cjoin_on`, projecting is
+  # only half the fix. The tail "then nothing relocates and the ON clause renders as you wrote it"
+  # is false there — the other predicate still moves — and it contradicts the sentence appended
+  # right after it. Verified: projecting this shape does render, but `b3`'s ON is not as written.
+  @testset "mixed destinations get both remedies without contradicting each other" begin
+    q = OBJ.Cj_child.objects
+    q.values("note")
+    q.cjoin_on("Cj_parent", alias = "b3",
+               on = [F("b3.sku") == F("b2.sku"), F("b3.sku") == F("parent__grandparent__code")])
+    q.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("note")])
+    msg = try
+      inspect_query(q; connection = _OBJ_SL); ""
+    catch e
+      sprint(showerror, e)
+    end
+
+    @test occursin("Project that path", msg)             # the model-path destination
+    @test occursin("another cjoin_on", msg)              # …and the cjoin_on one
+    @test occursin("that predicate stays", msg)          # scoped promise
+    @test !occursin("nothing relocates and the ON clause renders as you wrote it", msg)
+  end
+
+  # ── case 1: genuinely no predicates ───────────────────────────────────────
+  # Not reachable through the public API — `_cjoin_on` refuses an empty `on` at the call site — so
+  # reach it white-box by emptying the stored filters. `_build_cjoin_on_row_join` then omits the
+  # `on_conditions` key entirely, which IS the state this branch is about.
+  @testset "no predicates passed keeps its own message" begin
+    q = OBJ.Cj_child.objects
+    q.values("note")
+    q.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("note")])
+    empty!(q.object.custom_join["b2"]["filters"])
+
+    err = try
+      inspect_query(q; connection = _OBJ_PG)
+      nothing
+    catch e
+      e
+    end
+    @test err isa PormG.QueryBuildError
+    msg = sprint(showerror, err)
+    @test occursin("produced no ON conditions", msg)   # unchanged wording
+    @test occursin("b2", msg)
+    @test !occursin("#435", msg)                       # not the relocation story
+  end
+
+  # ── control: an ordinary cjoin_on still renders ───────────────────────────
+  # Without this, splitting the guard into two throws could satisfy every assertion above while
+  # breaking the feature — the same trap the #424 testset's control covers.
+  ok = OBJ.Cj_child.objects
+  ok.values("note")
+  ok.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("note")])
+  ok_sql = inspect_query(ok; connection = _OBJ_SL)[:sql_text]
+  @test occursin("JOIN \"cj_parent\" AS \"b2\" ON ", ok_sql)
 end

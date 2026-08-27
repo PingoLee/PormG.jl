@@ -167,6 +167,20 @@ you touched. Before running the full suite, ask which of these your diff could r
 | `test_error_taxonomy.jl` | add or reparent an exception type |
 | `test_kernel_layering.jl` | add a file to `src/` or move shared vocabulary |
 
+**When your fix makes an EXISTING test fail, adjudicate — do not assume either side.** Two reflexes
+are available and both are wrong. *"The test is older, so my fix must be broken"* leaves the bug half
+fixed. *"My fix is newer, so the test must be stale"* is how goalposts move. A test can encode the
+defect: #432 found `test_alignment_sqlite.jl`'s saturation expectation asserting a parameter misbind
+as the expected vector, with comments documenting it as design
+(`# CTE-internal JOIN: param "Monza" -> goes to PARENT's :join bucket`).
+
+Derive the correct answer from a source that is **neither** the test nor your change — for parameter
+order that is the cross-backend differential (see the QueryBuilder skill's *Parameter routing*); for
+a query result it is an independently computed set; for a doc example it is running it. Only then
+decide which side moves. If it is the test, say so **in the commit message**: you are overwriting
+someone's recorded intent, and the next reader needs to know it was deliberate rather than
+convenient.
+
 **Integration runs need explicit permission every time** — the user works several issues in parallel
 and `db_2` hits one shared PostgreSQL server. Ask which database is free. `db_sl` in a worktree uses
 its own copied fixture and cannot corrupt another session, but ask anyway. Do **not** pipe any run

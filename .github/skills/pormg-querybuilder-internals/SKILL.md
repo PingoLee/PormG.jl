@@ -43,6 +43,26 @@ For positional backends, preserve bucket semantics and flatten order. The bucket
 
 **A nested render does not pick a bucket (#432).** An `Exists(...)`, a projected `Subquery(...)` or an `__@in` subquery renders inside the PARENT's clause, so its values are marked, lifted and re-emitted as one clause-ordered run at the parent's marker position (`nested_parameter_mark` / `detach_nested_run!`), with `own_contexts=true` so the inner build files its values under its own clauses first. Binding order is not text order: a build binds joins last and renders them first, which is what the buckets exist to reconcile.
 
+**The cross-backend differential is the oracle for parameter order.** Do not eyeball it. PostgreSQL
+numbers placeholders as it binds, so `$N` travels with the text and is authoritative: walk the `$N`
+markers left to right, map each through PostgreSQL's parameter vector, and you have the true text
+order. SQLite's flattened vector must equal it.
+
+```julia
+pg  = inspect_query(build_it(); connection = a_postgres_mock)
+sl  = inspect_query(build_it(); connection = a_sqlite_mock)
+idx = [parse(Int, m.match[2:end]) for m in eachmatch(r"\$\d+", pg[:sql_text])]
+text_order = [pg[:parameters][i] for i in idx]     # authoritative
+@assert sl[:parameters] == text_order              # SQLite must match it
+```
+
+This turns "is this order right?" from a judgment call into a measurement, and it scales: the #432
+fix was validated by sweeping 29 shapes through it (20 misaligned before, 0 after) rather than by
+reasoning about buckets. Every bug in the #421 / #432 / #441 family is findable in one pass with it.
+Two caveats: `__@in` binds as ONE array parameter on PostgreSQL and expands to N `?` on SQLite — a
+dialect split, not a misalignment; and a value legitimately reused twice on PostgreSQL renders the
+same `$N` twice, so compare distinct indices when counting.
+
 Parameter collector model:
 
 - `AbstractPormGParam`: base abstraction for all collectors

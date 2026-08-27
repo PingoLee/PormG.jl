@@ -175,4 +175,5 @@ After reporting:
 - Do not rely on a single giant diff when ordered slices are available
 - Do not treat generated docs or build artifacts as the primary source of truth
 - Do not approve sensitive logging, SQL interpolation, or weakened destructive guards as minor issues
+- Do not report a performance finding measured **cold**. Julia compiles on first call, so an unwarmed timing is dominated by compilation and every variant reads roughly the same. Call it once, then time a loop, and report both the warm number and the size you measured at — a claim of "44x slower" in one review was 4.3x warm, and the author's restatement of it inherited the error. A wrong perf number is worse than none, because it gets acted on
 - Do not count green-theater tests as coverage — a type/shape-only "it ran" assertion, a `@test_throws` with no cause check, a tautology, or a weak bound where the exact value is knowable is a **finding**, not a pass; name it and give the assertion that would actually fail if the behavior regressed

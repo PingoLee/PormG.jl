@@ -138,14 +138,19 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     Reference the joined copy with `F(&quot;alias.col&quot;)`. Alias-qualified **operator pairs**
     (`&quot;b2.col__@gte&quot; =&gt; 3`) are not supported yet — express a joined-side comparison-to-literal by
     restructuring, or filter the base side with a bare pair (`&quot;col__@gte&quot; =&gt; 3`). Referencing a
-    *third* table (another join&#39;s alias) inside one `cjoin_on` is also out of scope for now — and
-    when that third table is a **CROSS-joined CTE** (`.with(...)` with no `join_field`), it
-    raises `QueryBuildError` instead of quietly dropping the predicate (#424) — a `CROSS JOIN` has
-    no `ON` clause to carry one, so the join would otherwise match every row. That fires even when
-    the predicate is the join&#39;s **only** one (#435). The same guard fires
-    when a `cjoin_on`&#39;s **alias** happens to equal an unkeyed CTE&#39;s name: that collision hands the
-    CTE this join&#39;s predicates. Rename the CTE, give it a `join_field`, or move the predicate to
-    `.filter(...)` (#44).
+    *third* table (another join&#39;s alias) inside one `cjoin_on` is also out of scope for now, and a
+    predicate that all relocates onto a later join leaves this one with no `ON` clause of its own,
+    which raises `QueryBuildError` (#435).
+
+    **A CTE cannot be referenced from an `ON` clause at all.** A `CTE(name, path)` inside `on`
+    raises `FilterError`: an `ON` clause targets the joined *model*, and a CTE is joined by its own
+    `.with(...)` declaration. Put the predicate in `.filter(...)` instead (#444).
+
+    One CTE-related collision still reaches the `ON` machinery: a `cjoin_on` **alias** spelled the
+    same as an unkeyed (CROSS-joined) CTE&#39;s name. That collision hands the CTE this join&#39;s
+    predicates, and a `CROSS JOIN` has no `ON` clause to carry them — so PormG raises
+    `QueryBuildError` rather than dropping them and matching every row (#424). Rename the alias,
+    give the CTE a `join_field`, or move the predicate to `.filter(...)` (#44).
 
     `cjoin_on` works in reads and in the common `update()`/`delete()` (which scope rows via a
     subquery); only a **correlated** UPDATE-FROM/DELETE-USING (setting a column *from* a joined
@@ -289,4 +294,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 27 August 2026 10:51">Thursday 27 August 2026</span>. Using Julia version 1.12.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 27 August 2026 18:46">Thursday 27 August 2026</span>. Using Julia version 1.12.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

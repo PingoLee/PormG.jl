@@ -127,5 +127,3 @@ When you file (or notice) one issue superseding another:
 - Recreate a `TODO.md` backlog mirror — the `pre-publish` label query is the only gating tracker.
 - Put draft/placeholder numbers in issue bodies and leave them — resolve to real `#numbers`.
 - Inline rich bodies on the command line — use `--body-file`.
-- Commit related doc/instruction changes unless the user asks; they follow the normal
-  commit-only-when-asked rule.

@@ -98,6 +98,30 @@ Integration touchpoints:
 
 For the unit-vs-integration split, see *Boundary With Public API Work* above and *Test Placement Rules* below.
 
+### Design note: the buckets are a two-pass artifact
+
+Recorded so whoever patches this family next knows what they are patching.
+
+**The buckets exist because SQL text and its parameters are produced by two separate passes.** A
+build binds joins last and renders them first, so a reconciliation step has to put the two back in
+agreement — that is what `set_context!`, `_BUCKET_ORDER` and `detach_nested_run!` are for.
+
+SQLAlchemy Core has no such step: its dialect compiler walks the expression tree emitting text
+**and** binding parameters in the same pass, so positional order is correct by construction — no
+bucket to route to, no flatten order to keep in sync, nothing to reconcile. The cross-backend
+differential above is, in effect, a test that reconstructs by hand what a one-pass compiler gives
+for free.
+
+So **#421 / #432 / #441 are not three independent bugs** — they are one reconciliation failure
+surfacing in three clauses, which is why fixing a fourth will not shrink the surface for a fifth.
+
+**This is not a call to rewrite.** The bucket system works, is well covered, and a rewrite would be
+a large breaking change for no user-visible gain. It is a marker: if this layer is ever redesigned,
+the buckets are the thing that goes away, and the prior art for what replaces them is SQLAlchemy
+Core — consistent with *Design stance* in
+[`general.instructions.md`](../../instructions/general.instructions.md), since a bucket is implicit
+reconciliation and a one-pass compile is not.
+
 ### Identifier sanitization contract
 
 `sanitization.jl` has **two rules, one per axis** (#394). Neither ever strips characters silently.
@@ -153,46 +177,50 @@ as a `ChainCaller` makes the keyword throw. Coverage: `test/unit/test_fluent_par
 > Of the helpers **PormG itself owns**, one is `_`-prefixed unless the name is API in its own
 > right — i.e. unless `Base.ispublic(QueryBuilder, name)`.
 
-The 29 branches route to 29 targets, and since #305 there is **no exception list**: **20**
-`_`-prefixed (`_filter!`, `_db!`, `_values!`, `_order_by!`, `_limit!`, `_offset!`, `_page!`,
-`_distinct!`, `_select_for_update!`, `_create!`, `_update!`, `_update_or_create!`,
-`_get_or_create!`, `_count`, `_aggregate`, `_exists`, `_with`, `_cjoin`, `_cjoin_on`, `_on` —
-matching the `_` marker the rest of `src/` already uses for an internal, `_query_select`,
-`_validate_identifier`, …), **5** bare and public (`list`, `delete`, `earliest`, `latest`,
-`inspect_query`), and **4** Base-owned and out of scope (`first`, `last`, `get`, `deepcopy`).
+Since #305 there is **no exception list**. Every `getproperty` target falls into exactly three
+groups: `_`-prefixed internals (matching the `_` marker the rest of `src/` already uses —
+`_query_select`, `_validate_identifier`, …), a small bare-and-`public` set (`list`, `delete`,
+`earliest`, `latest`, `inspect_query`), and Base-owned names out of scope (`first`, `last`, `get`,
+`deepcopy`).
 
-**The ownership clause is load-bearing, not a hedge** — read it as *"a name PormG can rename"*. The
-chain routes to `first`, `last`, `get` and `deepcopy`, whose bindings resolve to `Base`; an unscoped
-rule would demand renaming `Base.deepcopy`. And it is *not* "Base's names are exempt": `first`/`last`
-pass `ispublic` only because `src/QueryBuilder.jl:135` declares `public first, last` and `get`
-because `:105` exports it, while `deepcopy` and `copy` are equally Base's and are `ispublic == false`.
-Ownership sets the scope; `ispublic` decides what is in it. It is rooted at **PormG**, not
-QueryBuilder, so a helper defined in a sibling module and imported here stays covered — it is
-renameable, and just as able to leak through `_fluent_name`.
+**The internals are deliberately not enumerated here.** That set grows with every fluent method
+added, and a prose copy goes stale silently: the guard asserts `length(owned) >= 20` — a floor, not
+an exact count — so a wrong number in this file would never fail a test.
+`test/unit/test_docstring_coverage.jl` extracts the live set from the `getproperty` body; read the
+names there. Maintaining a second copy here is the same mistake as the allowlist the rule below
+warns against.
 
-**The join/CTE family used to be the exception (#305).** `With` was exported and `cjoin` was
-`public` because each had a documented free-function form, which left their siblings `on`/`cjoin_on`
-as two hard-coded exceptions — prefixing only those two would have split one family's spelling.
-#305 removed the split at its source by withdrawing the free-function form entirely: the fluent
-`.with` / `.cjoin` / `.cjoin_on` / `.on` are the only public surface, so all four are internals and
-the rule covers them like any other helper. `_with` is lowercase for consistency with every
-other helper — the capital `W` only existed because the name was user-facing. Not a `_fluent_name`
-argument: all four are closure-backed, so they never reach `ChainCaller`.
+**"Owns" means "a name PormG can rename"** — that scoping is load-bearing, not a hedge. The chain
+routes to `first`, `last`, `get`, `deepcopy`, whose bindings resolve to `Base`; unscoped, the rule
+would demand renaming `Base.deepcopy`. But it is *not* "Base's names are exempt": `first`/`last`
+pass `ispublic` only because `src/QueryBuilder.jl:135` declares `public first, last`, and `get`
+because `:105` exports it — `deepcopy` and `copy` are equally Base's and are `ispublic == false`.
+**Ownership sets the scope; `ispublic` decides what is in it.** Rooted at *PormG*, not QueryBuilder,
+so a helper defined in a sibling module and imported here stays covered — still renameable, still
+able to leak through `_fluent_name`.
 
-The rule is enforced, not just documented: that testset extracts every PormG-owned function named in
-the `getproperty` body and asserts the non-`_`, non-public set is **empty**. If a name ever shows up
-there, make the code satisfy the rule — rename it, or declare it `public` if it is genuinely API.
-**Do not re-add names to that list**; it becomes an allowlist and stops guarding anything.
+**It is about the name, not call sites.** `_count`/`_exists` (`deletion.jl`) and `_values!`/`_filter!`
+(`execution.jl`) are called from elsewhere in `src/querybuilder/`; internal reuse does not make a
+helper API — being declared API does.
 
-The rule is about the **name**, not about call sites. `_count`/`_exists` (`deletion.jl`) and
-`_values!`/`_filter!` (`execution.jl`) are all called from elsewhere inside `src/querybuilder/`;
-internal reuse does not make a helper API, being declared API does.
+**Why the join/CTE family stopped being an exception (#305).** `With` was exported and `cjoin`
+`public`, each having a documented free-function form, which stranded siblings `on`/`cjoin_on` as
+two hard-coded exceptions — prefixing only those two would have split one family's spelling. #305
+withdrew the free-function form instead, making the fluent `.with`/`.cjoin`/`.cjoin_on`/`.on` the
+only public surface: all four are internals and the rule covers them like anything else. `_with` is
+lowercase because the capital `W` only existed while the name was user-facing. Not a `_fluent_name`
+argument — all four are closure-backed and never reach `ChainCaller`.
 
-This is diagnostic, not cosmetic: these names are what a user sees when a chain misfires (#272 surfaced
-as `no method matching page!(::SQLObjectQuery, ::Tuple{Int64})`), and the prefix is the signal that the
-spelling is one they could not have typed. `_fluent_name` in `object_manager.jl` is the exact inverse
-of this rule — it strips `^_` and `!$` to recover the method the caller wrote — so **adding a helper
-that does not follow the rule silently degrades the kwarg-rejection message.**
+**Enforced, not just documented.** `test_docstring_coverage.jl` extracts every PormG-owned function
+named in the `getproperty` body and asserts the non-`_`, non-public set is **empty**. If a name
+appears, fix the code — rename it, or declare it `public` if it is genuinely API. **Never re-add
+names to an exception list**; it becomes an allowlist and stops guarding anything.
+
+This is diagnostic, not cosmetic. These names are what a user sees when a chain misfires (#272:
+`no method matching page!(::SQLObjectQuery, ::Tuple{Int64})`), and the prefix signals a spelling
+they could not have typed. `_fluent_name` (`object_manager.jl`) is the exact inverse — it strips
+`^_` and `!$` to recover the method the caller wrote — so **a helper that breaks the rule silently
+degrades the kwarg-rejection message.**
 
 **A `ChainCaller`-backed helper carries no docstring.** Not because it would be published — since
 #289 `api.md` sets `Private = false`, so an un-`public` name stays off the site either way — but
@@ -244,6 +272,10 @@ When changing count rendering, verify both dialects execute (not just that the S
 
 ### Inspection tools
 
+**Reproduce with the smallest query that fails, then read its built state before editing code.** A
+parameter or clause bug is visible in the builder's own metadata; reasoning about it from the source
+is how the wrong module gets changed.
+
 Useful internal tools:
 
 - `show_query=:sql` on terminal methods (returns just the query string)
@@ -286,23 +318,20 @@ Integration regressions should still use the public fluent API unless the bug on
 
 Follow the canonical [PormG Test Writing Standard](../../instructions/test-writing.md): standardized `@testset` header comments and heavily commented test logic.
 
-## Workflow
-
-1. Reproduce the failure with the smallest relevant query
-2. Inspect the built query or parameters before editing code
-3. Fix the root cause in the smallest internal module possible
-4. Add deterministic unit coverage
-5. Add a public-API integration regression if user-visible behavior changed
-6. Re-run the narrow test slice before broader suites
-
 ## Verification Commands
 
+Narrowest first. The three integration files are **slices, and each needs the user's explicit
+permission** — `db_2` is one shared PostgreSQL server. Query-rendering diffs are covered by unit
+coverage plus the naming slice; do **not** escalate to `test/integration/runtests.jl` unless the
+diff is in the rung-5 table in [`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md) →
+*Verify*. The full suite on both engines is a release gate, not a per-issue step.
+
 ```powershell
-julia --project=. test/unit/test_alignment_sqlite.jl
-julia --project=. test/unit/test_inspect_query.jl
-julia -t auto --project=. test/integration/test_having.jl
-julia -t auto --project=. test/integration/test_cjoin.jl
-julia -t auto --project=. test/integration/test_cte.jl
+julia --project=. test/unit/test_alignment_sqlite.jl                              # no permission needed
+julia --project=. test/unit/test_inspect_query.jl                                 # no permission needed
+julia -t auto --project=test/integration test/integration/test_having.jl          # rung 4 slice — ask first
+julia -t auto --project=test/integration test/integration/test_cjoin.jl           # rung 4 slice — ask first
+julia -t auto --project=test/integration test/integration/test_cte.jl             # rung 4 slice — ask first
 ```
 
 ## Anti-Patterns

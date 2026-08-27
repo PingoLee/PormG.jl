@@ -36,9 +36,14 @@ suite runs, on both backends, because that is where a train's worth of changes m
 prologue — real DDL from empty, a full fixture reseed, the ordering effects no slice can surface.
 
 ```bash
-julia --project=test/integration test/integration/runtests.jl                  # db_2 (PostgreSQL)
-PORMG_DB=db_sl julia --project=test/integration test/integration/runtests.jl   # SQLite
+julia -t auto --project=test/integration test/integration/runtests.jl                  # db_2 (PostgreSQL)
+PORMG_DB=db_sl julia -t 1 --project=test/integration test/integration/runtests.jl      # SQLite — -t 1 required
 ```
+
+**The `-t 1` on the SQLite run is not optional.** SQLite does not tolerate `-t auto`
+(`test/integration/common_setup.jl`, above the connection setup). Julia defaults to one thread, so
+omitting it passes right up until `JULIA_NUM_THREADS` is set in the shell — and the release gate is
+the single worst place to inherit a flake from an unstated default.
 
 - **Ask the maintainer before running** — `db_2` is one shared PostgreSQL server and other sessions
   may be mid-issue on it. Ask which database is free. This is the standing rule; a cut does not

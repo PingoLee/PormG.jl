@@ -20,24 +20,48 @@ This is a review workflow, not an implementation workflow. The default job is to
 
 ## Primary Output
 
-- Findings first, ordered by severity
+- Findings first, ordered by severity — never lead with a summary
 - Each finding should name the concrete risk, why it matters, and where it appears
-- Use file references when available
 - Keep summaries brief and secondary
-- If no findings are discovered, state that explicitly and call out residual testing gaps or uncertainty
+- With no findings, say so **and** call out residual testing gaps or uncertainty — a clean report is a claim, not an absence of one
 
 ## Diff Collection Workflow
 
-### Default review target
+### Pick the target from where the work lives
 
-This project uses a single-developer workflow: unstaged changes are reviewed first, then staged, committed, and pushed directly to `main`. Review targets in priority order:
+Single maintainer, but **two** landing modes, and they need different diffs:
 
-1. **Unstaged (default):** working tree changes not yet staged — use `git diff`
-2. **Staged:** when the user explicitly says they have already staged — use `git diff --staged`
-3. **All local (staged + unstaged):** when the user wants a full picture — use `git diff HEAD`
-4. **Already pushed:** when the user wants to review what was just pushed — use `git diff origin/main~1 origin/main`
+- **Issue work** — a `fix/<N>-<slug>` branch in a worktree → PR → merge into `main`
+  ([`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md)). This is most code review.
+- **Instruction, skill and doc commits** — often straight onto `main`, no branch.
 
-If the working tree is clean and nothing is staged, state that and stop.
+So **check where you are before choosing a command** — `git branch --show-current` and
+`git status --porcelain`. A branch with commits on it needs a *branch* diff; `git diff` alone shows
+only the working tree and will report "no changes" on a fully-committed branch, which reads as
+"nothing to review" when the entire PR is sitting there unreviewed.
+
+| Situation | Target |
+|---|---|
+| Uncommitted work, either mode **(default)** | `git diff` |
+| Staged, user says so | `git diff --staged` |
+| Staged + unstaged together | `git diff HEAD` |
+| **On a `fix/…` branch, work committed — the pre-PR review** | `git diff main...HEAD` |
+| **An open PR** | `gh pr diff <N>` |
+| Just pushed to `main` directly | `git diff origin/main~1 origin/main` |
+
+**Three dots, not two.** `main...HEAD` diffs from the **merge base** — what the branch actually
+adds. `main..HEAD` diffs tip-to-tip, so every commit that landed on `main` after you branched shows
+up *reversed*, as though your branch deleted it. Measured on this repo: against a branch tip that
+`main` has since moved past, `main...<tip>` reports **0** files and `main..<tip>` reports **39** —
+39 files of someone else's merged work, presented as your diff. The two forms agree only while
+`main` has not moved, which is exactly when you would not notice picking the wrong one.
+
+**A branch review covers committed work *and* whatever is still uncommitted.** If
+`git status --porcelain` is dirty on a `fix/…` branch, review `git diff main...HEAD` **and**
+`git diff` — the PR gets both once you commit, so reviewing only one half is a gap.
+
+If every target you tried is empty, say so and stop — but say *which* you tried, so "clean tree" is
+never mistaken for "branch reviewed".
 
 ### Ordered diff slices
 
@@ -51,27 +75,36 @@ Do not start with a whole-repo patch if the change can be reviewed in slices.
 
 ### Recommended commands
 
-Use `git diff --name-only` first to learn the surface area.
+Use `git diff --name-only` first to learn the surface area, then inspect patches in ordered slices.
+One recipe, every shell — `:(exclude)` pathspecs work in bash, Git Bash **and Windows PowerShell**
+when single-quoted:
 
-Then inspect patches in ordered slices. The `:(exclude)` pathspec syntax works on Linux/bash and Git Bash; on Windows PowerShell use separate per-folder calls instead of exclusion patterns.
-
-**Linux / bash / Git Bash:**
-```bash
+```
 # unstaged review (default)
 git diff -- src
 git diff -- test
 git diff -- . ':(exclude)src' ':(exclude)test'
 ```
 
-**Windows PowerShell:**
-```powershell
-# unstaged review (default)
-git diff -- src
-git diff -- test
-git diff -- docs ext .github db
+**Slice 3 must be an exclusion, never a hand-written folder list.** A list like
+`git diff -- docs ext .github db` silently drops every changed file at the repo root — including
+`Project.toml` and `UPGRADING.md`, the two this skill has explicit heuristics for (see *Other
+folders* below and the `UPGRADING.md` non-negotiable). Reconcile slice 3 against the
+`--name-only` output before moving on: every path not under `src` or `test` must have appeared.
+
+**The slicing is independent of the target** — take whichever target the table gave you and append
+the same three pathspecs:
+
+```
+git diff --staged -- src                              # staged
+git diff HEAD -- src                                  # staged + unstaged
+git diff main...HEAD -- src                           # branch, pre-PR
+git diff main...HEAD -- . ':(exclude)src' ':(exclude)test'
 ```
 
-For staged review, add `--staged` (e.g. `git diff --staged -- src`). For all local changes, use `git diff HEAD -- src`.
+`gh pr diff <N>` is the exception: it takes no pathspec. Either fetch the branch and slice it with
+`git diff main...<branch>`, or read `gh pr diff <N> --name-only` first and keep the same
+src → test → everything-else reading order by hand.
 
 If one slice is empty, skip it and continue to the next slice.
 
@@ -133,17 +166,19 @@ In the final pass, review `docs`, `ext`, `.github`, `db`, and any remaining chan
 - workflow or CI changes that hide failures or leak secrets
 - generated files that drift from source-of-truth files
 - configuration changes that alter runtime or migration behavior without matching tests
-- **`Project.toml` `[compat]` bumps — the file is deliberately comment-free.** CompatHelper rewrites `Project.toml` through a TOML round-trip that **silently drops every comment line**; no flag disables it, so a comment there survives only until the next dependency bump. If a diff *removes* a `#` line, or a PR *adds* one, the fix is to move that rationale to `README.md` / `.github/instructions/general.instructions.md` — **not** to restore it and wait for it to be deleted again. Separately, a widened bound is a *claim*: for a **weakdep**, confirm the extension is actually exercised before treating green CI as evidence — an extension only loads when its trigger package does. Check both `[targets].test` **and** the subprocess tests that build their own `Project.toml` (`test/unit/test_reload.jl` covers `PormGReviseExt` that way, which `[targets].test` alone would not reveal). If nothing loads the extension at the new major, verify by hand or state in the PR that you didn't.
-- **changed query examples in `docs/`, `README.md`, or `src/*.md`** that were not verified against the live `db_sl` data — confirm the SQL shape, execute the example, and cross-check the value per the verification recipe in [`../pormg-public-api-development/SKILL.md`](../pormg-public-api-development/SKILL.md) ("Verifying doc examples against the live database"). Flag query paths whose case doesn't match the declared field — lookups are case-sensitive (#57). The F1 models declare lowercase fields, so `driverId__surname` throws (the field is `driverid`); the path must match the declared case.
+- **`Project.toml` comment lines** — flag a diff that *removes* a `#` line (CompatHelper ate it) or *adds* one (it will be eaten next bump). The rationale moves to `README.md` / `general.instructions.md`; never restore it in place. Full rule: the `Project.toml` non-negotiable in [`general.instructions.md`](../../instructions/general.instructions.md)
+- **A widened `[compat]` bound is a claim, not a fact — and for a weakdep, green CI is not evidence.** An extension only loads when its trigger package does, so confirm the extension is actually exercised at the new major. Check `[targets].test` **and** the subprocess tests that build their own `Project.toml` (`test/unit/test_reload.jl` covers `PormGReviseExt` that way; `[targets].test` alone would not reveal it). If nothing loads it, verify by hand or say in the PR that you didn't
+- **changed query examples in `docs/`, `README.md`, or `src/*.md`** that were not verified against the live `db_sl` data — confirm the SQL shape, execute the example, and cross-check the value per the verification recipe in [`../pormg-public-api-development/SKILL.md`](../pormg-public-api-development/SKILL.md) ("Verifying doc examples against the live database"). Flag query paths whose case doesn't match the declared field — lookups are case-sensitive (#57); that skill's *Verifying doc examples* section states the rule and the F1 lowercase convention.
 
 ## Review Method
 
 1. Read `.github/instructions/general.instructions.md` to get the current architecture checkpoints and subsystem map before starting — this ensures heuristics cover newly added subsystems automatically.
-2. Identify the changed file set with `git diff --name-only`.
-3. Read the `src` diff first and understand the behavior change.
-4. Read the `test` diff to confirm the changed behavior is covered correctly.
-5. Read the remaining diffs for configuration, docs, CI, or packaging risks.
-6. Report findings before any summary.
+2. Establish **where the work lives** — `git branch --show-current` + `git status --porcelain` — and pick the target from *Pick the target from where the work lives*. On a `fix/…` branch that is the branch diff, not the working tree.
+3. Identify the changed file set with that target's `--name-only` (e.g. `git diff main...HEAD --name-only`), and reconcile slice 3 against it.
+4. Read the `src` diff first and understand the behavior change.
+5. Read the `test` diff to confirm the changed behavior is covered correctly.
+6. Read the remaining diffs for configuration, docs, CI, or packaging risks.
+7. Report findings before any summary.
 
 ## PormG-Specific Heuristics
 
@@ -154,10 +189,10 @@ The bullets below are permanent baselines, not an exhaustive list — Review Met
 - Flag any public field-struct change that does not update `Models.Model_to_str`
 - Flag migration changes that weaken destructive safeguards or skip `dry_run()` discipline
 - Flag docs or examples that regress to generic domains instead of Formula 1 scenarios
-- When a new subsystem file appears in `src/` that is not yet listed in `general.instructions.md`, flag it as an architecture-checkpoint gap
-- Flag any reintroduction of silent identifier stripping (e.g. `replace(id, r"[^a-zA-Z0-9_]" => "")` before quoting) — neither half of the contract rewrites an identifier: an alias is fail-closed (`quote_identifier` → `_validate_identifier` throws), a physical table or column is escape-only (`safe_table_identifier` / `safe_column_identifier`)
-- Flag a new physical table/column identifier routed through `quote_identifier`, or a new alias routed through `safe_*_identifier` — that partition is the #394 fix, and mixing the two either refuses a legal `db_table`/`db_column` or drops the guard on a caller-supplied alias
-- Flag raw ANSI escape codes (`\e[`) embedded in `throw(...)` / `error(...)` messages — these must route through a taxonomy subtype's constructor or `_emsg` (both in `src/exceptions.jl` / `src/Kernel.jl`) so color degrades off-TTY; `@info`/`@warn`/`@error` logging may keep ANSI
+- **Flag a new public surface that resolves something implicitly** — a caller-supplied name landing in a shared namespace, action at a distance, a hidden state machine — against *Design stance* in [`general.instructions.md`](../../instructions/general.instructions.md). #444 is the precedent: the fix was an explicit object with its own namespace, **not** a guard on the implicit form. A guard on a magic shape is the smell; say so rather than reviewing the guard's correctness
+- When a new subsystem file appears in `src/` **or `ext/`** that is not yet listed in `general.instructions.md`, flag it as an architecture-checkpoint gap. `ext/` counts: the checkpoint read `src/`-only while `ext/PormGReviseExt.jl` sat unlisted and two skills referenced it
+- Flag any identifier-quoting change that breaks the #394 partition — silent stripping reintroduced (`replace(id, r"[^a-zA-Z0-9_]" => "")` before quoting), a physical table/column routed through `quote_identifier`, or an alias routed through `safe_*_identifier`. Which function owns which kind of name, and why collapsing the split re-opens #394, is in [`../pormg-querybuilder-internals/SKILL.md`](../pormg-querybuilder-internals/SKILL.md) → *Identifier sanitization contract*: read the contract there rather than judging from a paraphrase here
+- **Flag raw ANSI (`\e[`) anywhere it can reach a non-TTY sink** — `throw`/`error` messages, `@info`/`@warn`/`@error` logging, `print`/`println`. All of them route through a taxonomy subtype's constructor or `_emsg` (`src/exceptions.jl` / `src/Kernel.jl`). Logging is **not** exempt: Julia clears `Base.have_color` off-TTY, so an unwrapped log leaks escapes into CI output and log files — `src/` already routes ~21 logging sites through `_emsg`. `test_error_message_ansi.jl` does not cover the logging macros, so this review is the only thing that catches a new one
 - Flag any new `throw(ArgumentError(...))` in `src/` — since #239 every PormG domain error is a `PormGError` subtype. `ArgumentError` is correct **only** for Julia-level API misuse (a missing kwarg, a missing path), not for a field, model, config, query, or migration problem
 
 ## After Reporting Findings
@@ -171,6 +206,8 @@ After reporting:
 ## Anti-Patterns
 
 - Do not lead with a summary when concrete findings exist
+- **Do not report "clean tree, nothing to review" from `git diff` alone.** On a `fix/…` branch with the work committed, `git diff` is empty and the whole PR is still unreviewed. Check `git branch --show-current` first and use `git diff main...HEAD`
+- Do not review only the committed half of a dirty branch, or only the uncommitted half — the PR will carry both
 - Do not review only tests while skipping the paired `src` change
 - Do not rely on a single giant diff when ordered slices are available
 - Do not treat generated docs or build artifacts as the primary source of truth

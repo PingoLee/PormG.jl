@@ -50,6 +50,13 @@ Threading: PostgreSQL integration tests are meant to run under `julia -t auto`. 
 tolerate `-t auto` well** — run `db_sl` integration tests with `-t 1`
 (`test/integration/common_setup.jl` documents this directly above the connection setup).
 
+**Every integration command below needs the user's explicit permission, every time** — `db_2` is one
+shared PostgreSQL server, and a second session mid-issue on it is itself a documented cause of
+phantom failures (see *False regression from two sessions/worktrees* below). Diagnosis starts at the
+narrowest failing file, not at these: reach for a full suite only once *Diagnostic workflow* step 1
+has isolated the failure, or when the rung-5 table in
+[`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md) → *Verify* says the diff owes one.
+
 ```powershell
 # Unit suite (CI-equivalent)
 julia --project=. test/runtests.jl
@@ -58,12 +65,13 @@ julia --project=. test/runtests.jl
 $env:PORMG_DB="db_sl"; julia --project=. test/runtests.jl
 
 # Full integration suite, PostgreSQL
-julia -t auto --project=. test/integration/runtests.jl
+julia -t auto --project=test/integration test/integration/runtests.jl
 
-# Full integration suite, SQLite (single-threaded)
-$env:PORMG_DB="db_sl"; julia -t 1 --project=. test/integration/runtests.jl
+# Full integration suite, SQLite (-t 1 required — SQLite does not tolerate -t auto)
+$env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl
 
 # Everything, via the unit entrypoint's opt-in integration block
+# (--project=. is correct here: this is the UNIT entrypoint; common_setup.jl redirects from there)
 $env:PORMG_INTEGRATION_TESTS="true"; julia -t auto --project=. test/runtests.jl
 ```
 
@@ -166,11 +174,4 @@ point one at a separate database/schema instead of debugging phantom failures.
 - Do not conclude "flaky test, ignore it" — every flakiness class found in this repo so far has
   had a deterministic root cause and a regression test once actually investigated.
 
-## Verification Commands
-
-```powershell
-julia --project=. test/runtests.jl
-$env:PORMG_DB="db_sl"; julia --project=. test/runtests.jl
-julia -t auto --project=. test/integration/runtests.jl
-$env:PORMG_DB="db_sl"; julia -t 1 --project=. test/integration/runtests.jl
-```
+(Commands live in *Test layout & how to run a narrow slice* above — not repeated here.)

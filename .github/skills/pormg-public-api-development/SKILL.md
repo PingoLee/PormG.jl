@@ -79,12 +79,15 @@ row = M.Result.objects.filter(
 ).list() |> first
 ```
 
-Do **not** break the chain by starting a new line with a leading `.`:
+Do **not** break the chain by starting a new line with a leading `.`. This is not a style
+preference and not a risk — it **is** a `ParseError`: the newline ends the expression, and a line
+opening with `.filter(…)` is not valid syntax on its own. Julia needs the trailing operator to know
+the expression continues.
 
 ```julia
-# ✗ avoid — Julia requires a trailing operator to continue across lines
+# ✗ invalid — Meta.parse throws Base.Meta.ParseError on this
 row = M.Result.objects
-          .filter("driverid__surname" => "Senna")  # leading dot — parse error risk
+          .filter("driverid__surname" => "Senna")
           .list() |> first
 ```
 
@@ -229,24 +232,25 @@ Add both:
 
 Follow the canonical [PormG Test Writing Standard](../../instructions/test-writing.md): standardized `@testset` header comments, heavily commented test logic, isolated setup with explicit cleanup, and never weakening field contracts to fit dirty fixtures (normalize at the import/setup layer).
 
-## Workflow
-
-1. Read the relevant source and failing tests first
-2. Fix the root cause, not just the symptom
-3. Add or adjust tests through the public API when behavior changed
-4. Add unit coverage when the bug lives in builder/rendering/validation internals
-5. Run the smallest relevant test slice first
-6. Run the broader suite only after targeted failures are green
-
 ## Verification Commands
 
+Narrowest first. **Every integration run needs the user's explicit permission, every time** — `db_2`
+is one shared PostgreSQL server. The **full** integration suite is a release gate
+([`pormg-cut-release`](../pormg-cut-release/SKILL.md) → precondition 4), not a per-issue step: run a
+slice unless the diff is in the rung-5 table in
+[`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md) → *Verify*.
+
 ```powershell
-julia --project=. test/runtests.jl
-julia -t auto --project=. test/integration/runtests.jl
-julia -t auto --project=. test/integration/test_bulk_copy.jl
-$env:PORMG_DB="db_sl"; julia -t 1 --project=. test/integration/runtests.jl
-julia --project=. docs/make.jl
+julia --project=. test/runtests.jl                                                              # unit — no permission needed
+julia -t auto --project=test/integration test/integration/test_bulk_copy.jl                     # rung 4 slice — ask first
+julia -t auto --project=test/integration test/integration/runtests.jl                           # rung 5 — ask; release gate
+$env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl       # rung 5, SQLite (-t 1 required)
+julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate(); include("docs/make.jl")'
 ```
+
+The docs build needs `--project=docs`: the package env carries no Documenter, so a plain
+`--project=. docs/make.jl` fails. Same rule as
+[`general.instructions.md`](../../instructions/general.instructions.md) → *Verification*.
 
 ## Anti-Patterns
 

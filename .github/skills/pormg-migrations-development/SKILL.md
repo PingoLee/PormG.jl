@@ -26,7 +26,7 @@ This skill is for the migration subsystem itself, not for ordinary ORM query beh
 - Treat `Generator.create_db_folder_and_yml()` as the expected bootstrap path for creating `db/connection.yml` before migration workflows touch project config
 - PormG uses a state-based migration engine that reconciles current Julia model state against the live database schema via introspection
 - **State-based, not Django-graph — do not port Django assumptions.** `makemigrations` computes `diff(live-DB introspection, models file)` and **never reads previous migration files**; there is no dependency graph or replay. `pending_migrations.jl` and `applied_migrations/` are **inert audit artifacts**, not a source of truth — editing an applied file changes nothing downstream. "Drift" that matters is live-schema-vs-models (surfaced by the next `makemigrations` and `status()`), not migration-file checksum divergence. Concept doc: `docs/src/migrations/index.md` → *What this means in practice*.
-- Keep docs, tests, and CLI guidance explicit about unsupported or partial behavior rather than implying Django-style completeness
+- Keep docs, tests, and CLI guidance explicit about unsupported or partial behavior (the rule and its `migrate_to` case live under *Unsupported behavior* below)
 
 ## Core Rules
 
@@ -107,23 +107,35 @@ Follow the canonical [PormG Test Writing Standard](../../instructions/test-writi
 - Keep limitations explicit, especially for destructive rollback and unsupported targeted execution paths
 - Build docs when migration-facing public behavior or examples change
 
-## Workflow
+## Triage
 
-1. Read the planner, runner, and current migration tests first
-2. Identify whether the issue is planning, execution, introspection, or history tracking
-3. Fix the root cause in the migration subsystem
-4. Add or update a regression test at the correct layer
-5. Update docs if public behavior changed
-6. Run the narrowest migration-focused test slice first
+Identify which stage the issue lives in — **planning, execution, introspection, or history
+tracking** — before editing. That choice picks both the file and the test layer, and the four fail
+in different ways: a planner bug produces wrong SQL, an introspection bug produces a wrong *diff*
+from correct SQL, and a history bug leaves the DB right and `pormg_migrations` wrong.
 
 ## Verification Commands
 
+Narrowest first. **Every integration run needs the user's explicit permission, every time** — `db_2`
+is one shared PostgreSQL server. Migration diffs are one of the cases that genuinely owe the **full**
+suite rather than a slice (the DDL path only executes in `test_migration_bootstrap.jl`) — see the
+rung-5 table in [`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md) → *Verify*.
+
 ```powershell
-julia --project=. test/runtests.jl
-julia -t auto --project=. test/integration/test_migration_bootstrap.jl
-julia -t auto --project=. test/integration/runtests.jl
-julia --project=. docs/make.jl
+julia --project=. test/runtests.jl                                                              # unit — no permission needed
+julia -t auto --project=test/integration test/integration/runtests.jl                           # rung 5 — ask first
+$env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl       # rung 5, SQLite (-t 1 required)
+julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate(); include("docs/make.jl")'
 ```
+
+Two traps in this block specifically:
+
+- **`test_migration_bootstrap.jl` cannot be run standalone.** It guards on `:reset_database!`, not
+  `:PormG`, so `common_setup.jl` never loads — its own header says it is included from `runtests.jl`
+  *after* setup. Reach it through the suite, not by naming the file.
+- **The docs build needs `--project=docs`** — the package env carries no Documenter, so
+  `--project=. docs/make.jl` fails. Same rule as
+  [`general.instructions.md`](../../instructions/general.instructions.md) → *Verification*.
 
 ## Anti-Patterns
 

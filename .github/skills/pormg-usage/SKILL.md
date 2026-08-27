@@ -23,7 +23,7 @@ This skill is split so the common read/query path stays lean. Read these sibling
 - **[`reference.md`](reference.md)** — full field-type table, field parameters, and `on_delete` options. Load when *defining models* or choosing a field type.
 - **[`writing.md`](writing.md)** — migrations flow, create/update/delete, the `row.save()` lifecycle, many-to-many managers, bulk insert/copy/update, and transactions (`atomic`/savepoints/`select_for_update`). Load when *changing data or schema*.
 
-> Building a **package on top of** PormG (extension hooks like `register_ignore_tables!`, `set_before_connect_hook`, the package-extension pattern)? That's a framework-author topic — see `docs/src/extending.md`, not this skill.
+> Building a **package on top of** PormG (extension hooks like `register_ignore_tables!`, `set_before_connect_hook`, the package-extension pattern)? That's a framework-author topic — see the *Extending PormG* page in the PormG documentation (<https://pingolee.github.io/PormG.jl>), not this skill.
 
 Everything below covers setup, the read/query surface, and a summary of the write path (full detail in `writing.md`).
 
@@ -331,7 +331,7 @@ Pass the column to the aggregate as a **plain string**, and apply the math to th
 
 Filtering on an aggregate alias auto-promotes the condition to `HAVING` (e.g. `filter("wins__@gt" => 5)`).
 
-Full SQL-shape examples: `docs/src/read/filters_and_aggregates.md` and `docs/src/read/field_expressions.md`.
+Full SQL-shape examples: the *Filters and Aggregates* and *Field Expressions* pages in the PormG documentation (<https://pingolee.github.io/PormG.jl>).
 
 ---
 
@@ -379,7 +379,7 @@ PormG.Configuration.load_many(["db/conn_primary.yml", "db/conn_replica.yml"])
 
 ---
 
-## 10. Anti-Patterns
+## 10. Aliases & Error Types
 
 ### Alias identifier rules
 
@@ -399,6 +399,8 @@ Alias identifiers must start with a Unicode letter or underscore, followed by le
     subtype (`InvalidValueError`, `UnknownFieldError`, `UnsafeMutationError`, …) to react precisely.
 
 ---
+
+## 11. Anti-Patterns
 
 | Anti-Pattern | Preferred Alternative |
 | :--- | :--- |

@@ -96,8 +96,8 @@ git branch -m fix/<N>-<slug>            # EnterWorktree can only produce worktre
 
 ### A worktree prevents corruption, not conflict
 
-Isolation is not selection. Two sessions can be perfectly isolated and still be the wrong two
-issues to run at once, so **check what is already in flight before picking one up**:
+Isolation is not selection — two sessions can be perfectly isolated and still be the wrong two
+issues to run at once. **Check what is already in flight before picking one up:**
 
 ```bash
 git worktree list
@@ -106,19 +106,19 @@ for p in $(git worktree list --porcelain | grep '^worktree' | cut -d' ' -f2-); d
 done          # uncommitted work is invisible to `git log` and `git diff main...<branch>`
 ```
 
-Two rules follow, and neither is enforced by the worktree:
+Two rules the worktree does **not** enforce for you:
 
-- **Two issues whose fixes land in the same `src/` file do not run concurrently.** The receipt:
-  `fix/400-410-importer-degrades` and `fix/402-enum-scope-per-statement` ran in correct worktrees
-  and both edited `src/migrations/importers.jl`, `docs/src/import_django.md` and
-  `test/unit/test_import_django_project.jl` — uncommitted, simultaneously. The worktrees did their
-  job; the second branch still owed a merge (`ac0c57c`). Predict the file set from the issue's own
-  "Cause" section before starting, not after.
-- **Some tests are hostile to other sessions, not merely hungry.** Rung 4's "ask which database is
-  free" covers *using* a shared database. It does not cover *destroying* it: a connection-pool
-  issue that reproduces via `pg_terminate_backend` or a server restart kills every other session's
-  `db_2` connections, and they will report failures that are not theirs. If your repro terminates
-  backends, drops a schema, or wipes a fixture, say so up front and get the database to yourself.
+- **Two issues whose fixes land in the same `src/` file do not run concurrently.** Predict the file
+  set from the issue's own "Cause" section *before* starting. Receipt:
+  `fix/400-410-importer-degrades` and `fix/402-enum-scope-per-statement` sat in correct worktrees
+  and still both edited `src/migrations/importers.jl`, `docs/src/import_django.md` and
+  `test/unit/test_import_django_project.jl` simultaneously — the second branch owed a merge
+  (`ac0c57c`).
+- **Some repros are hostile to other sessions, not merely hungry.** Rung 4's "ask which database is
+  free" covers *using* `db_2`, not *destroying* it — `pg_terminate_backend` or a server restart
+  kills every other session's connections, and they will report failures that are not theirs. If
+  your repro terminates backends, drops a schema or wipes a fixture, say so up front and get the
+  database to yourself.
 
 Gotchas that are not visible from the repo:
 
@@ -205,9 +205,12 @@ end
 — so it can be invoked on its own:
 
 ```bash
-julia --project=test/integration test/integration/test_json_fields.jl          # db_2 (default)
-PORMG_DB=db_sl julia --project=test/integration test/integration/test_cte.jl   # SQLite
+julia -t auto --project=test/integration test/integration/test_json_fields.jl        # db_2 (default)
+PORMG_DB=db_sl julia -t 1 --project=test/integration test/integration/test_cte.jl    # SQLite — -t 1 required
 ```
+
+`-t 1` on every db_sl run: SQLite does not tolerate `-t auto`. Julia's one-thread default hides an
+omission until `JULIA_NUM_THREADS` is set, so write it explicitly.
 
 **Precondition: the target database must already be bootstrapped and seeded** by a prior full run.
 A slice run does no DDL and no reseed — that is the point. Against a fresh or wiped database, run
@@ -311,9 +314,10 @@ guards, declined findings, scope you widened and on whose say-so.
 - Do not run an integration suite without asking, even when a plan lists it
 - Do not reach for the full integration suite when a slice covers the diff — nor slice one of the four files that cannot be sliced
 - Do not slice against a database that was never bootstrapped — the slice does no DDL and no reseed
-- Do not claim a doc example works because it looks right — run it against `f1.sqlite`. The same applies to **any claim you are about to act on, including one you wrote yourself**: an issue's diagnosis, a reviewer's classification, a premise in your own approved plan. #433 shipped three corrections from this alone — a "genuine internal invariant" that `update()` reached from ordinary input, a misbind described as universal that was conditional, and a doc example that was fabricated on the first pass and semantically wrong on the second
+- Do not claim a doc example works because it looks right — run it against `f1.sqlite`
+- **Do not act on an unverified claim, including one you wrote yourself** — an issue's diagnosis, a reviewer's classification, a premise in your own approved plan. #433 yielded three corrections from this alone: a "genuine internal invariant" that `update()` reached from ordinary input, a misbind called universal that was conditional, and a doc example fabricated on pass 1 and semantically wrong on pass 2
 - Do not commit, push, or open a PR on plan approval alone
-- Do not start an issue that lands in a `src/` file another in-flight worktree is already editing — a worktree stops corruption, not a merge conflict, and uncommitted work is invisible to `git log`
+- Do not start an issue landing in a `src/` file another in-flight worktree is already editing — uncommitted work is invisible to `git log`
 - Do not run a repro that terminates backends or wipes a fixture without getting the database to yourself first — "which database is free" is a different question from "will my test kill your connections"
 - Do not `git add -A` in a worktree
 - Do not narrow an issue's task list without saying so

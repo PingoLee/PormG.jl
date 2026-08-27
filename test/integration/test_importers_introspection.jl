@@ -23,6 +23,21 @@
 # `pormg_it_` prefix and are dropped in a `finally`, leaving the schema untouched.
 # ==============================================================================
 
+# Standalone guard, added with #414/#415. Every fixture in this file is created and dropped by the
+# file itself, and the one table it borrows (`field_validation_scratch`, section 5) comes from the
+# bootstrap — so against an ALREADY-BOOTSTRAPPED database this file runs on its own:
+#
+#   julia --project=test/integration test/integration/test_importers_introspection.jl
+#   PORMG_DB=db_sl julia --project=test/integration test/integration/test_importers_introspection.jl
+#
+# It used to be the one file in the suite with no guard at all, which forced every change reaching
+# introspection through the full `runtests.jl` prologue (~170 DDL statements plus a fixture reseed)
+# to see a single assertion. A slice still does NO DDL and NO reseed: bootstrap the target database
+# with a full run first.
+if !isdefined(Main, :PormG)
+    include("common_setup.jl")
+end
+
 @testset "Schema Importer / Introspection ($(PORMG_DB_FOLDER))" begin
   settings = PormG.config[PORMG_DB_FOLDER]
   pool = settings.connections
@@ -32,7 +47,11 @@
   # Child before parent: since #276 SQLite enforces foreign keys, so dropping the parent while the
   # child still references it raises instead of silently succeeding.
   fixtures = ("pormg_it_fk_child", "pormg_it_fk_parent",
+              "pormg_it_spaced",
               "pormg_it_MixedChild", "pormg_it_MixedParent",
+              "pormg_it_comp_child", "pormg_it_comp_parent",
+              "pormg_it_uq_child", "pormg_it_uq_parent",
+              "pormg_it_nopk_child", "pormg_it_nopk_parent",
               "pormg_it_natural_key", "pormg_it_numeric_key", "pormg_it_ignored",
               "pormg_it_uniq")
   drop_fixtures() = for t in fixtures
@@ -97,6 +116,106 @@
          "ParentId" INTEGER REFERENCES "pormg_it_MixedParent"("Id") ON DELETE CASCADE
        )"""
 
+  # #414 fixture: an identifier CONTAINING A SPACE, on the two axes that used to disagree about it.
+  # The PostgreSQL `columns` aggregate is `quote_ident(name) || ' ' || format_type(…)`, and the
+  # reader split it on `" "` — so `"Parent Id" bigint` was torn into the phantom name `"Parent` and
+  # the non-type `Id"`. `fk_map`, `pk_set` and `index_map` all key on names that survive a space
+  # (they split on `", "`, or come from the one RAW aggregate), so the relation was LOST and every
+  # `makemigrations` proposed `ADD COLUMN "\"Parent"` plus a DROP of the real column.
+  #
+  # `"Parent Id"` is the FK axis and `"driver ref"` the index axis; the latter is the exact spelling
+  # #394's `Odd_identifier_scratch` fixture carries, and the reason that fixture could not use it as
+  # a `db_column` until now. Reuses `pormg_it_MixedParent` as the parent so the spaced CHILD column
+  # and a quoted mixed-case referenced column are exercised in one constraint.
+  #
+  # Both backends: SQLite reads `PRAGMA` output raw and was never affected, so asserting there is
+  # what makes this a cross-engine agreement rather than an assumption.
+  spaced_ddl = is_pg ?
+    """CREATE TABLE "pormg_it_spaced" (
+         id           BIGINT PRIMARY KEY,
+         "driver ref" VARCHAR(30),
+         "Parent Id"  BIGINT REFERENCES "pormg_it_MixedParent"("Id") ON DELETE CASCADE
+       )""" :
+    """CREATE TABLE "pormg_it_spaced" (
+         id           INTEGER PRIMARY KEY,
+         "driver ref" TEXT,
+         "Parent Id"  INTEGER REFERENCES "pormg_it_MixedParent"("Id") ON DELETE CASCADE
+       )"""
+
+  # #415 fixture A: a foreign key that references a NON-PRIMARY-KEY unique column. Legal wherever
+  # that column carries a UNIQUE constraint, and the shape the old CTE could not express at all —
+  # it read the referenced column from the parent's PRIMARY KEY INDEX, never from `con.confkey`,
+  # so this introspected as pointing at `id`. `pk_field` was then wrong and so was every consumer
+  # of it, and the DDL PormG emitted named a different column than the live constraint does.
+  uq_parent_ddl = is_pg ?
+    """CREATE TABLE "pormg_it_uq_parent" (id BIGINT PRIMARY KEY, ukey VARCHAR(20) UNIQUE, label VARCHAR(50))""" :
+    """CREATE TABLE "pormg_it_uq_parent" (id INTEGER PRIMARY KEY, ukey TEXT UNIQUE, label TEXT)"""
+  uq_child_ddl = is_pg ?
+    """CREATE TABLE "pormg_it_uq_child" (
+         id         BIGINT PRIMARY KEY,
+         parent_key VARCHAR(20) REFERENCES "pormg_it_uq_parent"(ukey) ON DELETE CASCADE
+       )""" :
+    """CREATE TABLE "pormg_it_uq_child" (
+         id         INTEGER PRIMARY KEY,
+         parent_key TEXT REFERENCES "pormg_it_uq_parent"(ukey) ON DELETE CASCADE
+       )"""
+
+  # #415 fixture B: a COMPOSITE-KEYED parent carrying both remaining shapes on one child table.
+  #
+  #   * `parent_a` — a SINGLE-column FK into that parent. The old CTE joined the parent's PK index
+  #     with `attnum = ANY(pk_idx.indkey)`, yielding one row per parent key column and multiplying
+  #     every aggregate; the LAST fanned-out entry won the `fk_map[...]` assignment. The referenced
+  #     column is `a` and the parent's key is `(a, b)`, so the pre-fix answer was `b` — the fixture
+  #     is ordered that way deliberately, since a parent keyed `(b, a)` would have made the wrong
+  #     answer coincide with the right one and the test would pass on a defect.
+  #   * `(ca, cb)` — a genuine MULTI-column FK, which PormG has no field type for and now skips on
+  #     both engines rather than splitting into two plausible-looking single-column relations.
+  #
+  # Both on ONE table on purpose: `parent_a` is the control proving the skip is per-CONSTRAINT, not
+  # per-table. `a` carries its own UNIQUE because a single-column FK requires one.
+  comp_parent_ddl = is_pg ?
+    """CREATE TABLE "pormg_it_comp_parent" (
+         a BIGINT UNIQUE, b BIGINT, label VARCHAR(50), PRIMARY KEY (a, b)
+       )""" :
+    """CREATE TABLE "pormg_it_comp_parent" (
+         a INTEGER UNIQUE, b INTEGER, label TEXT, PRIMARY KEY (a, b)
+       )"""
+  comp_child_ddl = is_pg ?
+    """CREATE TABLE "pormg_it_comp_child" (
+         id       BIGINT PRIMARY KEY,
+         parent_a BIGINT REFERENCES "pormg_it_comp_parent"(a) ON DELETE SET NULL,
+         ca       BIGINT,
+         cb       BIGINT,
+         FOREIGN KEY (ca, cb) REFERENCES "pormg_it_comp_parent"(a, b) ON DELETE CASCADE
+       )""" :
+    """CREATE TABLE "pormg_it_comp_child" (
+         id       INTEGER PRIMARY KEY,
+         parent_a INTEGER REFERENCES "pormg_it_comp_parent"(a) ON DELETE SET NULL,
+         ca       INTEGER,
+         cb       INTEGER,
+         FOREIGN KEY (ca, cb) REFERENCES "pormg_it_comp_parent"(a, b) ON DELETE CASCADE
+       )"""
+
+  # #415 fixture C: a parent with NO PRIMARY KEY, only a UNIQUE column. Legal on both engines — a
+  # referenced column needs uniqueness, not the key — and it used to be INVISIBLE to PostgreSQL
+  # introspection: the old CTE joined `pg_index ... AND pk_idx.indisprimary` as an INNER join, so a
+  # keyless parent matched no row and the whole foreign key dropped out of the aggregate. The child
+  # column then introspected as an ordinary integer with no relation, while SQLite (whose
+  # `PRAGMA foreign_key_list` never consulted a primary key) reported it correctly. Dropping that
+  # join is what makes the two engines agree, and this is the fixture that says so.
+  nopk_parent_ddl = is_pg ?
+    """CREATE TABLE "pormg_it_nopk_parent" (ukey VARCHAR(20) UNIQUE, label VARCHAR(50))""" :
+    """CREATE TABLE "pormg_it_nopk_parent" (ukey TEXT UNIQUE, label TEXT)"""
+  nopk_child_ddl = is_pg ?
+    """CREATE TABLE "pormg_it_nopk_child" (
+         id         BIGINT PRIMARY KEY,
+         parent_key VARCHAR(20) REFERENCES "pormg_it_nopk_parent"(ukey) ON DELETE RESTRICT
+       )""" :
+    """CREATE TABLE "pormg_it_nopk_child" (
+         id         INTEGER PRIMARY KEY,
+         parent_key TEXT REFERENCES "pormg_it_nopk_parent"(ukey) ON DELETE RESTRICT
+       )"""
+
   # #318: TWO separate single-column UNIQUEs on one table plus a composite. This is the ONLY place
   # PostgreSQL's `unique_constraints` CTE actually runs, and the two-uniques shape is precisely what
   # it got wrong (it merged both constraints' columns into one per-table array, then rejected both
@@ -119,6 +238,16 @@
   ddl(fk_child_ddl)
   ddl(mixed_parent_ddl)
   ddl(mixed_child_ddl)
+  ddl(spaced_ddl)
+  # The index axis of #414. NOT on the UNIQUE column: the `indexes` CTE excludes `indisunique`, so a
+  # unique column's backing index never reaches `index_map` and the assertion would be vacuous.
+  ddl("""CREATE INDEX "pormg_it_spaced_ref_idx" ON "pormg_it_spaced" ("driver ref")""")
+  ddl(uq_parent_ddl)
+  ddl(uq_child_ddl)
+  ddl(comp_parent_ddl)
+  ddl(comp_child_ddl)
+  ddl(nopk_parent_ddl)
+  ddl(nopk_child_ddl)
   ddl(uniq_ddl)
   # #347: a composite NON-unique index on the same table, deliberately in the REVERSE column order
   # of the composite UNIQUE declared above. Both backends excluded every multi-column index from
@@ -345,6 +474,123 @@
     # The #360 half still holds for a mixed-case parent table.
     @test mixed_child.fields["ParentId"].to_table == "pormg_it_MixedParent"
     @test mixed_child.fields["ParentId"].on_delete === PormG.Models.CASCADE
+
+    # ── 3e. An identifier containing a SPACE survives the columns parse (#414) ──
+    # THE live half of this issue, and the only one that executes the PostgreSQL `columns`
+    # aggregate. The reader split that aggregate on `" "` to separate the name from the type, so a
+    # spaced identifier was destroyed before any de-quoting could help — the column arrived under
+    # the phantom name `"Parent` (the leading quote survives; `_unquote_ident` correctly refuses to
+    # strip a lone unbalanced one), its type read as `Id"` so it degraded to `TextField`, and the
+    # foreign key was LOST because `fk_map`'s key — from an aggregate split on `", "` — was the
+    # correct `Parent Id` and no longer matched.
+    #
+    # Since #394 this was the last layer where a spaced `db_column` broke; `Dialect.field_to_column`
+    # escapes it in DDL and `safe_column_identifier` renders it in queries. Asserted on BOTH engines
+    # because SQLite was never affected — that is what makes this an agreement rather than an
+    # assumption, and it is the same PG/SQLite divergence #414 reports.
+    spaced_models = PormG.Migrations.convert_schema_to_models(pool;
+        include_table = ["pormg_it_spaced", "pormg_it_MixedParent"])
+    spaced = Dict(lowercase(string(m.name)) => m for m in spaced_models)["pormg_it_spaced"]
+
+    # Exact key set: the phantom name must not appear under ANY spelling, and the real names must
+    # be the only ones present. A bare `haskey` would pass while a phantom sat beside it.
+    @test Set(keys(spaced.fields)) == Set(["id", "driver ref", "Parent Id"])
+
+    # The FK axis — the relation, not the TextField the torn type produced.
+    @test spaced.fields["Parent Id"] isa PormG.Models.sForeignKey
+    @test spaced.fields["Parent Id"].pk_field == "Id"
+    @test spaced.fields["Parent Id"].to_table == "pormg_it_MixedParent"
+    @test spaced.fields["Parent Id"].on_delete === PormG.Models.CASCADE
+
+    # The index axis — `index_map`'s key comes from the one RAW aggregate and was therefore already
+    # `driver ref`, so it stopped matching `col_name` the moment the name was torn. `db_index=true`
+    # reading back false is the #325 churn, in a new place.
+    @test spaced.fields["driver ref"].db_index
+    @test spaced.cache["index"]["driver ref"] == "pormg_it_spaced_ref_idx"
+    if is_pg
+      # The type survived too: `col_parts[2]` was `Id"`-shaped for the FK column and equally wrong
+      # here, so a sized textual column degraded to TextField and lost its length.
+      @test spaced.fields["driver ref"] isa PormG.Models.sCharField
+      @test spaced.fields["driver ref"].max_length == 30
+    end
+
+    # ── 3f. An FK reads the column its constraint names, not the parent's PK (#415) ──
+    # The PostgreSQL `foreign_keys` CTE derived the referenced column from the parent's PRIMARY KEY
+    # INDEX; `con.confkey` — the array saying which parent columns the FK actually references — was
+    # never selected anywhere in the file. `REFERENCES parent(ukey)` is legal wherever that column
+    # carries a UNIQUE constraint, and it introspected as pointing at `id`.
+    #
+    # Live-only by construction: this is a SQL change, and a `DataFrameRow` fixture cannot execute
+    # SQL. The hermetic block in test/unit/test_introspection_guards.jl pins the consumer contract
+    # this relies on (one entry per FK, aggregates paired by position) and says so explicitly.
+    uq_models = PormG.Migrations.convert_schema_to_models(pool;
+        include_table = ["pormg_it_uq_parent", "pormg_it_uq_child"])
+    uq_child = Dict(lowercase(string(m.name)) => m for m in uq_models)["pormg_it_uq_child"]
+
+    @test uq_child.fields["parent_key"] isa PormG.Models.sForeignKey
+    @test uq_child.fields["parent_key"].pk_field == "ukey"      # pre-fix: "id"
+    @test uq_child.fields["parent_key"].to_table == "pormg_it_uq_parent"
+    @test uq_child.fields["parent_key"].on_delete === PormG.Models.CASCADE
+    # …and resolved the same way, since `pk_field` is what every consumer of the relation reads.
+    @test PormG.Models.fk_target_column(uq_child.fields["parent_key"]) == "ukey"
+
+    # ── 3g. A composite parent key no longer fans the aggregates out (#415) ──
+    # `attnum = ANY(pk_idx.indkey)` yielded one row per parent PK column, multiplying every
+    # aggregate in the CTE — and the LAST fanned-out entry silently won the `fk_map[...]`
+    # assignment. The parent's key is `(a, b)` and the constraint references `a`, so the pre-fix
+    # answer was `b`: a single-column FK bound to an arbitrary one of the parent's key columns, with
+    # no warning. The same fan-out duplicated `delete_rules`, breaking the alignment #292
+    # established.
+    comp_models = PormG.Migrations.convert_schema_to_models(pool;
+        include_table = ["pormg_it_comp_parent", "pormg_it_comp_child"])
+    comp_child = Dict(lowercase(string(m.name)) => m for m in comp_models)["pormg_it_comp_child"]
+
+    @test comp_child.fields["parent_a"] isa PormG.Models.sForeignKey
+    @test comp_child.fields["parent_a"].pk_field == "a"          # pre-fix: "b"
+    @test comp_child.fields["parent_a"].to_table == "pormg_it_comp_parent"
+    # The action survived the de-fan: read off a duplicated position it was still `n` here, so this
+    # is a no-regression pin for #292 rather than a mutation gate on its own.
+    @test comp_child.fields["parent_a"].on_delete === PormG.Models.SET_NULL
+
+    # The genuine MULTI-column foreign key is SKIPPED, not split. PormG has no composite-FK field
+    # type, so the alternatives are both wrong: pick one column and pretend, or emit two independent
+    # single-column relations that regenerate as two constraints the parent cannot accept (neither
+    # `a` nor `b` is unique on its own — `a` is here only so `parent_a` above is legal, and `b` is
+    # not). A skipped constraint reads as "no relation" on both sides of the diff, so the schema
+    # still converges.
+    #
+    # Both engines: PostgreSQL excludes it in the CTE (`array_length(con.conkey, 1) = 1`), SQLite by
+    # grouping `PRAGMA foreign_key_list` on `id`. Before this SQLite split it into two relations and
+    # PostgreSQL fanned it out — one schema, two wrong answers.
+    @test !(comp_child.fields["ca"] isa PormG.Models.sForeignKey)
+    @test !(comp_child.fields["cb"] isa PormG.Models.sForeignKey)
+    # The TYPE the member falls back to, not merely "not a relation". `UPGRADING.md` tells a
+    # consuming app to redeclare these columns by hand, so the type it names has to be the one
+    # introspection actually reports — `bigint` maps to `BigIntegerField` (src/constants.jl), and
+    # advising `IntegerField` would trade the lost relation for a permanent `:type` proposal.
+    # PostgreSQL only: the SQLite fixture declares `INTEGER`, which is a different (correct) answer.
+    if is_pg
+      @test comp_child.fields["ca"] isa PormG.Models.sBigIntegerField
+      @test comp_child.fields["cb"] isa PormG.Models.sBigIntegerField
+    end
+
+    # ── 3h. A foreign key into a PRIMARY-KEY-LESS parent is visible at all (#415) ──
+    # The third consequence of correlating through `confkey`, and the one that is a pure gain. The
+    # old CTE reached the referenced column through `JOIN pg_index … AND pk_idx.indisprimary` — an
+    # INNER join — so a parent with no primary key matched no row and the foreign key dropped out of
+    # the aggregate entirely. The child column introspected as a plain integer with no relation.
+    #
+    # That schema is legal: a referenced column needs a UNIQUE constraint, not the key. SQLite read
+    # it correctly all along (`PRAGMA foreign_key_list` never consults a primary key), so this is
+    # another case of one schema reading two ways — asserted on both engines for that reason.
+    nopk_models = PormG.Migrations.convert_schema_to_models(pool;
+        include_table = ["pormg_it_nopk_parent", "pormg_it_nopk_child"])
+    nopk_child = Dict(lowercase(string(m.name)) => m for m in nopk_models)["pormg_it_nopk_child"]
+
+    @test nopk_child.fields["parent_key"] isa PormG.Models.sForeignKey
+    @test nopk_child.fields["parent_key"].pk_field == "ukey"
+    @test nopk_child.fields["parent_key"].to_table == "pormg_it_nopk_parent"
+    @test nopk_child.fields["parent_key"].on_delete === PormG.Models.RESTRICT
 
     # ── 4. The regenerated module registers via set_models (#287/#291) ───────
     # THE regression assertion. Before #292 this threw ModelDefinitionError ("declares on_delete

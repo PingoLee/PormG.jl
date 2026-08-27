@@ -135,14 +135,23 @@ end
 # each table as a Julia binding. The unit layer pins the renderers agreeing on a string; only a live
 # database proves the statements they produce actually execute, and that the schema converges.
 #
-# The COLUMN axis is not exercised here — see the fixture comment in `models.jl`. It renders and
-# queries correctly, but PostgreSQL introspection tears a spaced column name in half (#414).
+# The COLUMN axis rides along since #414: `driverref` pins `db_column = "driver ref"`, so the same
+# fixture carries a spaced table name and a spaced column name. It always rendered and queried
+# correctly; what it could not do was survive PostgreSQL introspection, which split the `columns`
+# aggregate on `" "` and read the column back as the phantom `"driver` — rendered in the drift line
+# as the sanitized binding `driver`. So the global no-drift assertion below is the live mutation
+# gate for #414 as well as for #59/#325 — ON db_2 specifically. SQLite reads `PRAGMA` output raw and
+# never had the defect, so on db_sl that assertion proves the two engines agree, not that the parse
+# was fixed.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "db_table: a spaced table round-trips end to end (#394)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
 
     cols = column_names(pool, "Odd Identifier Scratch")
-    @test "driverref" in cols
+    # The PHYSICAL name, which is now the spaced one (#414). The logical field stays `driverref`
+    # everywhere below — that split is what `db_column` is for.
+    @test "driver ref" in cols
+    @test !("driverref" in cols)
     @test "points" in cols
 
     # The folded/underscored twin must not exist — a renderer that sanitized the name instead of

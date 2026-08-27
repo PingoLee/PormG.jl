@@ -488,6 +488,33 @@ category = Models.ForeignKey("constructor", on_delete=CASCADE)
 | `DO_NOTHING` | `NO ACTION` |
 | `PROTECT` | `RESTRICT` |
 
+### A foreign key may reference any unique column, not only the key
+
+`pk_field` records the column the constraint actually names, which does not have to be the parent's
+primary key — referencing any column with a `UNIQUE` constraint is legal on both engines, and
+introspection reads it back as declared:
+
+```julia
+# live: parent_key VARCHAR(20) REFERENCES driver_registry(licence_no)
+#       …where driver_registry's primary key is `id` and `licence_no` is UNIQUE
+registration = Models.ForeignKey("driver_registry", pk_field="licence_no", on_delete=CASCADE)
+```
+
+!!! warning "A multi-column foreign key is not read back"
+    PormG has no composite-`ForeignKey` field type, so `FOREIGN KEY (a, b) REFERENCES parent(x, y)`
+    is **skipped** by `inspectdb`/`makemigrations` introspection on both PostgreSQL and SQLite: the
+    member columns are imported as ordinary fields with no relation, and the constraint is left
+    alone in the database.
+
+    This is deliberate — the same reject-rather-than-reinterpret rule that keeps a non-default index
+    out of an imported model. The alternatives both regenerate a *different* schema: bind to one
+    arbitrary member column, or emit one single-column constraint per member, which the parent will
+    usually refuse because no member is unique on its own. Being skipped means the column reads as
+    "no relation" on both sides of the diff, so a re-diff proposes nothing rather than churning.
+
+    A **single**-column foreign key into a composite-keyed parent is unaffected and reads back
+    normally — it names one column, and that column carries its own `UNIQUE`.
+
 ## Timestamp fields
 
 PormG does **not** implicitly add `created` / `modified` columns. Auto-managed timestamps are

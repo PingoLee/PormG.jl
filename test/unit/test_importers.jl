@@ -232,5 +232,61 @@ end
       end
     end
   end
-
 end
+
+# ───────────────────────────────────────────────────────────────────────────
+# 6. #415 — a genuinely MULTI-COLUMN foreign key is skipped, not split into N single-column ones.
+#
+#    `PRAGMA foreign_key_list` returns one row per column and groups a composite constraint under
+#    a shared `id`. The reader keyed `fk_map` on the child column (`from`) alone, so one composite
+#    constraint became TWO independent single-column relations — each plausible on its own, and
+#    each regenerating as a separate `REFERENCES parent(col)` that the parent may not even accept,
+#    since neither member of a composite key is unique by itself. PormG has no composite-FK field
+#    type, so there is nothing faithful to read: the reject-rather-than-reinterpret rule this file
+#    already applies to composite UNIQUE and to non-default indexes applies here too.
+#
+#    This is the SQLite half of a cross-engine change. PostgreSQL excludes the same shape in its
+#    `foreign_keys` CTE (`array_length(con.conkey, 1) = 1`), and the two are kept symmetric on
+#    purpose — one schema must not read two ways.
+#
+#    Mutation gate: drop the `columns_per_fk[...] > 1 && continue` skip and `child_a`/`child_b`
+#    come back as `sForeignKey`, failing the two `isa` assertions below.
+# ───────────────────────────────────────────────────────────────────────────
+@testset "a composite foreign key is skipped rather than split (#415)" begin
+  mktempdir() do dir
+    dbfile = joinpath(dir, "scratch_composite_fk.sqlite")
+    pool   = SQLiteConnectionPool(dbfile; pool_size = 1)
+    try
+      # `parent` carries a two-column PRIMARY KEY; `child` references BOTH columns as one
+      # constraint, and separately carries an ordinary single-column FK into a normal parent.
+      fetch(pool, "CREATE TABLE parent (a INTEGER, b INTEGER, PRIMARY KEY (a, b));")
+      fetch(pool, "CREATE TABLE solo (id INTEGER PRIMARY KEY);")
+      fetch(pool, """CREATE TABLE child (
+                       id      INTEGER PRIMARY KEY,
+                       child_a INTEGER,
+                       child_b INTEGER,
+                       solo_id INTEGER REFERENCES solo(id),
+                       FOREIGN KEY (child_a, child_b) REFERENCES parent(a, b)
+                     );""")
+
+      model = PormG.Migrations.convertSQLToModel(pool, "child")
+
+      # The composite members are ordinary columns, not relations. Pre-fix each came back as an
+      # `sForeignKey` bound to its own half of the parent key.
+      @test !(model.fields["child_a"] isa PormG.Models.sForeignKey)
+      @test !(model.fields["child_b"] isa PormG.Models.sForeignKey)
+      @test model.fields["child_a"] isa PormG.Models.sIntegerField
+      @test model.fields["child_b"] isa PormG.Models.sIntegerField
+
+      # CONTROL, and the reason the skip is per-CONSTRAINT rather than per-table: an ordinary
+      # single-column foreign key on the SAME table is untouched. A guard that keyed off "this
+      # table has a composite FK" would take this one out with it.
+      @test model.fields["solo_id"] isa PormG.Models.sForeignKey
+      @test model.fields["solo_id"].pk_field == "id"
+      @test model.fields["solo_id"].to_table == "solo"
+    finally
+      close_pool!(pool)
+    end
+  end
+end
+

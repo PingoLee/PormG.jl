@@ -847,3 +847,166 @@ struct MockPg389 <: PormG.PormGPostgres end
     @test model.fields["driverid"].on_delete === PormG.Models.CASCADE
   end
 end
+
+# ───────────────────────────────────────────────────────────────────────────
+# #414 — an identifier CONTAINING A SPACE survives the columns parse.
+#
+# The reader used to `split(col, " ")` and take `[1]` as the name and `[2]` as the type, so
+# `"Parent Id" bigint` was torn in half before anything else could look at it. Three things went
+# wrong at once and this block gates all three: the phantom name `"Parent` (the leading quote
+# SURVIVES — `_unquote_ident` correctly refuses to strip a lone unbalanced one), the type `Id"`
+# which no lookup matches so the column degraded to `TextField`, and the LOST RELATION, because
+# `fk_map`'s key comes from an aggregate split on `", "` and therefore survived the space intact.
+# The two sides genuinely disagreed for exactly this class of name.
+#
+# Since #394 this was the only layer where a spaced `db_column` still broke — the DDL and the
+# query builder both handle it — which is what made every `makemigrations` propose
+# `ADD COLUMN "\"Parent"` plus a DROP of the real column, forever.
+# ───────────────────────────────────────────────────────────────────────────
+@testset "a column name containing a space is not torn in half (#414)" begin
+  model = convertSQLToModel(_introspection_row(
+    table_name              = "probe",
+    columns                 = "id bigint NOT NULL, \"Parent Id\" bigint",
+    primary_keys            = "id",
+    foreign_keys            = "\"Parent Id\"",
+    foreign_tables          = "\"MixedParent\"",
+    referenced_primary_keys = "\"Id\"",
+    delete_rules            = "a"))
+
+  # The name, whole. `"Parent` — the measured pre-fix value — must not appear under any key.
+  @test haskey(model.fields, "Parent Id")
+  @test !any(k -> occursin('"', k), keys(model.fields))
+  @test Set(keys(model.fields)) == Set(["id", "Parent Id"])
+
+  # The RELATION, not a TextField. This is the discriminating assertion: the type degraded
+  # because `col_parts[2]` was `Id"` rather than `bigint`, and the FK lookup missed because it
+  # was keyed on the phantom name.
+  @test model.fields["Parent Id"] isa PormG.Models.sForeignKey
+  @test !(model.fields["Parent Id"] isa PormG.Models.sTextField)
+  @test model.fields["Parent Id"].pk_field == "Id"
+  @test model.fields["Parent Id"].to_table == "MixedParent"
+end
+
+@testset "a spaced name reaches pk_set and index_map too (#414)" begin
+  # The other two consumers keyed on `col_name`. Both already survived a space on their own side
+  # (`primary_keys` splits on `", "`; `index_columns` is the one RAW aggregate), so they were
+  # correct all along and only `col_name` disagreed with them — which is why repairing the one
+  # parse site is what makes all four agree. A spaced PRIMARY KEY left the table KEYLESS before.
+  model = convertSQLToModel(_introspection_row(
+    table_name    = "probe2",
+    columns       = "\"Key Col\" bigint NOT NULL, \"Idx Col\" bigint",
+    primary_keys  = "\"Key Col\"",
+    index_columns = "Idx Col",
+    index_names   = "probe2_idx"))
+
+  @test model.fields["Key Col"] isa PormG.Models.sIDField
+  @test model.fields["Key Col"].primary_key
+  @test model.fields["Idx Col"].db_index
+  @test model.cache["index"]["Idx Col"] == "probe2_idx"
+end
+
+@testset "a column NAMED like a marker does not mark itself (#414)" begin
+  # The sibling class the same parse defect created, and the reason the flag/type scans moved off
+  # the whole entry and onto the post-name remainder.
+  #
+  # Which shapes actually broke, measured rather than assumed — a bare reserved word did NOT.
+  # `quote_ident` wraps it, so `"UNIQUE" bigint` split to `["\"UNIQUE\"", "bigint"]`, and #318's
+  # token test (`"UNIQUE" in col_parts`) does not match the quoted form. That case was safe by
+  # accident of quoting, and is kept below as a control. The three that broke are the ones where a
+  # SPACE inside the name puts a bare marker token, or a rewritten type, into the split:
+  #
+  #   * `"has UNIQUE inside"` → `[…, "UNIQUE", …]`, so #318's token test fires on the NAME and the
+  #     column is read as carrying a uniqueness constraint it never had — inventing drift the
+  #     planner then proposes forever. #318 closed the `DEFAULT 'UNIQUE'` half of this; the name
+  #     half stayed open because the split it depends on was the defect underneath.
+  #   * `"NOT NULL"` → `occursin("NOT NULL", col)` fires on the name alone, so a nullable column
+  #     reads as NOT NULL.
+  #   * `"double precision"` → the reader rewrites that two-word TYPE to `double_precision` before
+  #     splitting, and the rewrite hit a column so NAMED.
+  model = convertSQLToModel(_introspection_row(
+    table_name   = "marker_probe",
+    columns      = "id bigint NOT NULL, \"has UNIQUE inside\" bigint, \"NOT NULL\" bigint, \"double precision\" bigint, \"UNIQUE\" bigint",
+    primary_keys = "id"))
+
+  @test Set(keys(model.fields)) ==
+        Set(["id", "has UNIQUE inside", "NOT NULL", "double precision", "UNIQUE"])
+  @test !model.fields["has UNIQUE inside"].unique   # says it, does not have it
+  @test model.fields["NOT NULL"].null               # says it, is still nullable
+  # The name was NOT rewritten to `double_precision`, and the column keeps its declared bigint
+  # type rather than being read as the float that rewrite would have implied.
+  @test model.fields["double precision"] isa PormG.Models.sBigIntegerField
+  @test !model.fields["UNIQUE"].unique               # control: was already correct pre-#414
+
+  # Control: the real markers still work, on a column whose name says nothing.
+  plain = convertSQLToModel(_introspection_row(
+    table_name   = "marker_control",
+    columns      = "id bigint NOT NULL, slug character varying(30) NOT NULL UNIQUE, dp double precision",
+    primary_keys = "id"))
+  @test plain.fields["slug"].unique
+  @test !plain.fields["slug"].null
+  @test plain.fields["slug"].max_length == 30
+  @test plain.fields["dp"] isa PormG.Models.sFloatField
+end
+
+# ───────────────────────────────────────────────────────────────────────────
+# #415 — the CONSUMER half. Read the scope of this block literally.
+#
+# The defect was in the `foreign_keys` CTE (it derived the referenced column from the parent's
+# PRIMARY KEY INDEX instead of from `con.confkey`, and fanned every aggregate out once per parent
+# PK column). A `DataFrameRow` fixture cannot execute SQL, so NOTHING HERE PROVES THE FIX — that
+# is `test/integration/test_importers_introspection.jl`'s job, against a live server.
+#
+# What this pins is the contract the fixed CTE now relies on: given ONE entry per foreign key,
+# every aggregate pairs by position. The values are made mutually distinguishable on purpose —
+# two FKs with different parents, different referenced columns and different delete rules — so a
+# future off-by-one or a reintroduced fan-out fails here rather than passing on symmetry.
+# ───────────────────────────────────────────────────────────────────────────
+@testset "one entry per FK: every aggregate pairs by position (#415)" begin
+  model = convertSQLToModel(_introspection_row(
+    table_name              = "child",
+    columns                 = "id bigint NOT NULL, a_id bigint, b_id bigint",
+    primary_keys            = "id",
+    foreign_keys            = "a_id, b_id",
+    foreign_tables          = "parent_a, parent_b",
+    # NOT the parents' primary keys: `parent_a` is referenced on a non-PK UNIQUE column. This is
+    # the value the old CTE could not produce at all, because it never selected `confkey`.
+    referenced_primary_keys = "some_unique_col, id",
+    delete_rules            = "c, n"))
+
+  @test model.fields["a_id"].pk_field == "some_unique_col"
+  @test model.fields["a_id"].to_table == "parent_a"
+  @test model.fields["a_id"].on_delete === PormG.Models.CASCADE
+
+  @test model.fields["b_id"].pk_field == "id"
+  @test model.fields["b_id"].to_table == "parent_b"
+  @test model.fields["b_id"].on_delete === PormG.Models.SET_NULL
+end
+
+@testset "the fanned-out row shape is what the CTE must no longer emit (#415)" begin
+  # The measurement from the issue, kept as documentation of the defect rather than as a
+  # requirement on the reader. A composite-keyed parent used to multiply every aggregate, so this
+  # row — `foreign_keys` naming ONE child column twice, `referenced_primary_keys` naming the
+  # parent's two key columns — is what reached the consumer, and the LAST entry won the
+  # `fk_map[...]` assignment: `pk_field` came back as `"b"` for a relation that references `a`.
+  #
+  # The reader still behaves that way given that input, and deliberately so: last-write-wins on a
+  # duplicate key is not a defect the consumer can detect, and inventing a guard here would
+  # duplicate — badly — a fix that belongs in the SQL. The assertion is that the shape is
+  # DEGENERATE, which is the argument for why the CTE must not produce it.
+  model = convertSQLToModel(_introspection_row(
+    table_name              = "probe",
+    columns                 = "id bigint NOT NULL, parent_id bigint",
+    primary_keys            = "id",
+    foreign_keys            = "parent_id, parent_id",
+    foreign_tables          = "comp_parent, comp_parent",
+    referenced_primary_keys = "a, b",
+    delete_rules            = "a, a"))
+
+  # MEMBERSHIP, not the exact value. `== "b"` is what this actually returns today (last write wins),
+  # but pinning it would freeze an answer the codebase calls wrong: anyone later adding a
+  # consumer-side guard — warn or skip on a duplicated `fk_map` key, a reasonable defence in depth —
+  # would have to DELETE this test to go green. What is worth pinning is that the reader picks one
+  # of the parent's key columns arbitrarily and reports no problem, which is the argument for fixing
+  # it upstream in the CTE.
+  @test model.fields["parent_id"].pk_field in ("a", "b")
+end

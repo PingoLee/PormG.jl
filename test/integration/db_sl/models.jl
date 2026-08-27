@@ -550,15 +550,26 @@ Db_table_col_scratch = Models.Model("db_table_col_scratch",
 # index, no unique constraint and no foreign key, so the fixture stays clear of the index-name and
 # REFERENCES renderers, which Db_table_scratch above already covers.
 #
-# The COLUMN axis is deliberately absent here. A spaced `db_column` renders and queries correctly
-# (pinned in `test/unit/test_identifier_quoting.jl`), but PostgreSQL introspection tears it in half
-# on the `columns` aggregate — a pre-existing, separately-tracked defect (#414) whose fix is a change
-# to that aggregate's format, not to any quoting. Putting one here would make this fixture re-propose
-# `Add field / Remove field` on every `makemigrations` and fail the global no-drift assertion.
+# The COLUMN axis is covered too, since #414. `driverref` pins `db_column = "driver ref"`, so this
+# one fixture carries a spaced TABLE name and a spaced COLUMN name through every layer at once:
+# `Dialect.field_to_column` escapes it in DDL, `safe_column_identifier` renders it in queries
+# (pinned at the unit layer in `test/unit/test_identifier_quoting.jl`), and PostgreSQL introspection
+# now reads it back whole.
+#
+# It could not be here before #414 — on PostgreSQL. That reader split its `columns` aggregate on
+# `" "`, so `"driver ref"` came back as the phantom `"driver` (with the leading quote, which
+# `_unquote_ident` correctly refuses to strip from a lone unbalanced pair) and every
+# `makemigrations` proposed `Add field: driverref; Remove field: driver` — the binding
+# `_julia_field_identifier` sanitizes that phantom to — forever.
+#
+# SQLite was never affected: this reader takes `PRAGMA table_info` output raw, one identifier per
+# field, with no string splitting. The fixture is declared identically on BOTH engines on purpose,
+# so the global no-drift assertion in `test_db_table_db.jl` proves the two agree about one schema
+# rather than assuming it. The mutation gate itself lives on db_2.
 Odd_identifier_scratch = Models.Model("odd_identifier_scratch",
   db_table = "Odd Identifier Scratch",
   id = Models.IDField(),
-  driverref = Models.CharField(max_length=30, null=true),
+  driverref = Models.CharField(max_length=30, null=true, db_column="driver ref"),
   points = Models.IntegerField(null=true),
 )
 

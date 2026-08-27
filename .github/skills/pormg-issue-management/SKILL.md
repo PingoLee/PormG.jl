@@ -76,6 +76,36 @@ before hitting the API.** A single targeted issue the user asked for can be crea
 7. **Verify after.** Check the open count, label assignment, and spot-check that a rich body (task
    lists, blockquotes, code fences) rendered: `gh issue view <n> --json body -q '.body'`.
 
+## Reproductions: say whether one needs a database
+
+Every bug issue states, near the top, whether reproducing it needs a live database — the established
+wording is **"No live database needed (mock connections)"**, followed by an inline model module, or
+a hermetic constructor call such as `convertSQLToModel(_introspection_row(...))`.
+
+This is scheduling metadata, not a courtesy. A hermetic repro verifies at rung 1 in seconds and
+contends for nothing, so the issue can be worked alongside other sessions; one that needs `db_2` or
+`f1.sqlite` costs a fixture negotiation every time anyone touches it. In practice it has been the
+single best predictor of whether an issue closes in one sitting. If you build a hermetic repro while
+investigating, put it **in the issue**, not only in the PR.
+
+## Superseding an open issue
+
+A design or refactor issue frequently makes an open bug **unrepresentable** rather than fixed. That
+relationship has to exist somewhere a query can see, because a superseded issue that still reads as
+ordinary open work gets scheduled and planned around at full cost — #431 and #434 stayed live on the
+board after #444 superseded them, since the only record was #444's opening line.
+
+When you file (or notice) one issue superseding another:
+
+1. **The superseding issue names them up front** — `**Supersedes:** #A, #B — <what happens to them>`.
+   Say whether they become unrepresentable, merely lower priority, or still need a guard if the
+   proposal is rejected.
+2. **Edit each superseded issue** to point back: `gh issue comment <A> --body "Superseded by #C: …"`.
+   A back-reference the other direction is what makes it visible to anyone reading #A alone.
+3. **Do not close them on the strength of the proposal.** A `discussion` issue is not a decision.
+   They close when the superseding work actually lands — with `Closes #A` in that PR — or they come
+   back if the user rejects the design.
+
 ## Closing a resolved issue
 
 1. **Link the fix.** Prefer letting GitHub auto-close: put `Closes #N` (or `Fixes #N`) in the PR

@@ -77,6 +77,12 @@ from issue text.
    changes that **force** a consuming-app source edit. A new arity, a new kwarg, a fix to something
    that was already broken — all additive, no entry, and **never** a `Project.toml` bump (release
    trains, see `/pormg-cut-release`).
+5. **Establish whether the repro is hermetic** — does reproducing it need a live database, or only
+   mock connections and an inline model module? This is not a detail; it decides two things at once.
+   A hermetic issue verifies in seconds at rung 1, contends for nothing, and is therefore safe to
+   run alongside other sessions. One that needs `db_2` or `f1.sqlite` costs a fixture negotiation
+   every time it is touched. If the issue does not say, work it out before starting — and if you
+   build one while fixing, put it in the PR body so the next reader inherits it.
 
 ## 2. Isolate
 
@@ -87,6 +93,32 @@ Work in a git worktree so parallel sessions cannot collide.
 bash scripts/worktree_setup.sh          # Manifest, db_sl fixtures, f1.sqlite, Pkg.instantiate()
 git branch -m fix/<N>-<slug>            # EnterWorktree can only produce worktree-<name>
 ```
+
+### A worktree prevents corruption, not conflict
+
+Isolation is not selection. Two sessions can be perfectly isolated and still be the wrong two
+issues to run at once, so **check what is already in flight before picking one up**:
+
+```bash
+git worktree list
+for p in $(git worktree list --porcelain | grep '^worktree' | cut -d' ' -f2-); do
+  echo "[$p]"; git -C "$p" status --porcelain
+done          # uncommitted work is invisible to `git log` and `git diff main...<branch>`
+```
+
+Two rules follow, and neither is enforced by the worktree:
+
+- **Two issues whose fixes land in the same `src/` file do not run concurrently.** The receipt:
+  `fix/400-410-importer-degrades` and `fix/402-enum-scope-per-statement` ran in correct worktrees
+  and both edited `src/migrations/importers.jl`, `docs/src/import_django.md` and
+  `test/unit/test_import_django_project.jl` — uncommitted, simultaneously. The worktrees did their
+  job; the second branch still owed a merge (`ac0c57c`). Predict the file set from the issue's own
+  "Cause" section before starting, not after.
+- **Some tests are hostile to other sessions, not merely hungry.** Rung 4's "ask which database is
+  free" covers *using* a shared database. It does not cover *destroying* it: a connection-pool
+  issue that reproduces via `pg_terminate_backend` or a server restart kills every other session's
+  `db_2` connections, and they will report failures that are not theirs. If your repro terminates
+  backends, drops a schema, or wipes a fixture, say so up front and get the database to yourself.
 
 Gotchas that are not visible from the repo:
 
@@ -245,6 +277,12 @@ guards, declined findings, scope you widened and on whose say-so.
 - File follow-ups for anything deferred, using
   [`pormg-issue-management`](../pormg-issue-management/SKILL.md). A single targeted issue the user
   asked for can be created directly; anything bulk gets drafted and confirmed first.
+- **If a follow-up supersedes an open issue, edit that issue — do not leave the relationship in
+  prose.** A design follow-up routinely makes a sibling bug *unrepresentable* rather than fixed, and
+  a superseded issue that still reads as ordinary open work gets scheduled, scoped and planned
+  around for free. #444 named #431 and #434 as superseded in its own opening line and both stayed
+  live on the board regardless, because nothing outside that sentence recorded it. The convention is
+  in [`pormg-issue-management`](../pormg-issue-management/SKILL.md) → *Superseding an open issue*.
 - **Teardown: both git safety checks fire on stale references.** `ExitWorktree` compares against the
   *pre-rename* branch name, and `git branch -d` compares against your possibly-behind local `main`.
   Both will claim work is unmerged when it is not. Verify against `origin/main` explicitly, then
@@ -261,6 +299,8 @@ guards, declined findings, scope you widened and on whose say-so.
 - Do not slice against a database that was never bootstrapped — the slice does no DDL and no reseed
 - Do not claim a doc example works because it looks right — run it against `f1.sqlite`. The same applies to **any claim you are about to act on, including one you wrote yourself**: an issue's diagnosis, a reviewer's classification, a premise in your own approved plan. #433 shipped three corrections from this alone — a "genuine internal invariant" that `update()` reached from ordinary input, a misbind described as universal that was conditional, and a doc example that was fabricated on the first pass and semantically wrong on the second
 - Do not commit, push, or open a PR on plan approval alone
+- Do not start an issue that lands in a `src/` file another in-flight worktree is already editing — a worktree stops corruption, not a merge conflict, and uncommitted work is invisible to `git log`
+- Do not run a repro that terminates backends or wipes a fixture without getting the database to yourself first — "which database is free" is a different question from "will my test kill your connections"
 - Do not `git add -A` in a worktree
 - Do not narrow an issue's task list without saying so
 - Do not add an `UPGRADING.md` entry for an additive change, or bump `Project.toml` in a fix PR

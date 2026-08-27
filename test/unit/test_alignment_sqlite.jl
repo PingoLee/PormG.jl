@@ -2150,7 +2150,7 @@ end
     cte.values("code", "label")
     main = M.Db_column_pk_scratch.objects
     main.with("rpk_cte" => cte, join_field="code" => "code")
-    main.values("label", "cval" => "rpk_cte__label")
+    main.values("label", "cval" => CTE("rpk_cte", "label"))
     sql = inspect_query(main)[:sql_text]
     @test occursin("pk_code\" =", sql)      # main physical-table join key resolved (key_a)
 end

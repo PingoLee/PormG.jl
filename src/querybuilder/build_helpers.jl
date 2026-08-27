@@ -111,6 +111,43 @@ _check_function(x::String) = _check_function(String.(split(x, "__@")))
 function _check_function(x::FExpression)
   return x
 end
+# #444 — a CTE handle is already fully resolved; there is nothing left to peel.
+_check_function(x::CTEReference) = x
+
+# #444 — retag a resolved column expression so its terminal column becomes a CTE handle.
+#
+# The parse pipeline for a CTE reference deliberately runs on `ref.path` ALONE, which lets it reuse
+# every existing String code path unchanged — operator-suffix peeling, transform-function
+# construction, and all fifteen RHS-typed `_get_pair_to_oper` validations. What that leaves behind is
+# a plain `"seen"` where a CTE-scoped reference belongs, so this walks the result and swaps it.
+#
+# Shape and boundary are copied from `_prefix_join_filter` (ctes.jl), which already does this kind of
+# recursive rewrite: descend `.column` / `.field` only, NEVER `kwargs`. That boundary is load-bearing
+# here — `Y_M(["seen"])` is `ToChar(x, "YYYY-MM", …)` (functions.jl), so the format literal sits in
+# kwargs and retagging it would corrupt the rendered function.
+_retag_cte_column(x::String, name::String) = CTEReference(name=name, path=x)
+_retag_cte_column(x::CTEReference, ::String) = x
+function _retag_cte_column(x::SQLTypeFunction, name::String)
+  x.column = _retag_cte_column(x.column, name)
+  return x
+end
+_retag_cte_column(x::Vector, name::String) = Any[_retag_cte_column(v, name) for v in x]
+function _retag_cte_column(x, ::String)
+  throw(QueryBuildError(
+    "Internal: a CTE reference resolved to an unexpected column expression (::$(typeof(x))). " *
+    "Please report this (#444)."))
+end
+
+# Top-level entry: retag the SQLField a String-path parse produced, and restore the `name__path`
+# spelling on `_as`. Keeping `_as` byte-identical to the pre-#444 string form is what lets every
+# `_as`-keyed consumer downstream keep working untouched — `instruct.cache`, `tab_field_cache`,
+# ORDER BY alias matching, the #352/#373 sargable date rewrite, the #441 duplicate-projection guard,
+# and the result-column names users index DataFrames by.
+function _retag_cte_field!(field::SQLField, name::String)
+  field.field = _retag_cte_column(field.field, name)
+  field._as === nothing || (field._as = _cte_as(name, field._as))
+  return field
+end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Invalid filter-operator diagnostics (#98)
@@ -191,6 +228,16 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLObjectHandler
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     _raise_invalid_filter_operator(x.first, "subquery", ["in", "nin"])
+  end
+end
+# #444 — `filter("raceid" => CTE("r91", "raceid"))`: the RHS is a COLUMN reference, not a value.
+# Same shape as the SQLTypeF method below it (that is the idiom `F("r91__raceid")` used pre-#444).
+function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeCTE
+  _reject_cte_desc(x.second, "a filter comparison")
+  if haskey(PormGsuffix, x.first[end])
+    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  else
+    return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
   end
 end
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeF
@@ -335,6 +382,17 @@ function _validate_membership_subquery(v::SQLTypeOper)
 end
 
 function _check_filter(x::Pair)
+  # #444: a CTE-scoped LHS. Delegate on `ref.path` so the whole String pipeline runs — the `__@`
+  # peel, `_check_function`'s transform construction, and whichever of the fifteen RHS-typed
+  # `_get_pair_to_oper` methods matches (with its `in`/`range`/`jcontains`/arity validation intact) —
+  # then retag the column it produced. Reusing the ladder is the point: a hand-written CTE branch
+  # would have to re-derive every one of those checks and would drift from them.
+  if isa(x.first, CTEReference)
+    ref = _reject_cte_desc(x.first, "filter(...)")
+    oper = _check_filter(ref.path => x.second)
+    isa(oper, SQLTypeOper) && isa(oper.column, SQLField) && _retag_cte_field!(oper.column, ref.name)
+    return oper
+  end
   if isa(x.first, AbstractString)
     key = String(x.first)
     check = String.(split(key, "__@"))
@@ -576,6 +634,14 @@ end
 function _resolve_window_order(v::SQLTypeOrder, instruc::SQLInstruction)::String
   return string(_resolve_window_expression(v.field, instruc), " ", _normalize_window_orientation(v.orientation))
 end
+# #444 — a window's ORDER BY is the SECOND place where `desc = true` is meaningful (the fluent
+# `order_by(...)` is the first), so it consumes the flag here instead of letting `_cte_join_path`
+# refuse it. Rendering goes through the same `_get_select_query` every other CTE reference uses,
+# which is what keeps the emitted OVER (...) clause identical to the pre-#444 `"-<cte>__col"` string.
+function _resolve_window_order(v::CTEReference, instruc::SQLInstruction)::String
+  orientation = v.desc ? "DESC" : "ASC"
+  return string(_get_select_query(CTEReference(name=v.name, path=v.path), instruc), " ", orientation)
+end
 
 function _build_over_clause(over::WindowSpec, instruc::SQLInstruction)::String
   parts = String[]
@@ -807,6 +873,9 @@ end
 function _get_select_query(v::OuterRefObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   return _get_filter_query(v, instruc)
 end
+function _get_select_query(v::CTEReference, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
+  return _build_row_join(_cte_join_path(v), instruc, cte=true)
+end
 function _get_select_query(v::SubqueryObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   # #92: scalar single-column correlated subquery projected as a SELECT-list column.
   _guard_no_nested_projection(instruc, "Subquery")
@@ -986,6 +1055,24 @@ function _get_filter_query(v::OuterRefObject, instruc::SQLInstruction)
   instruc.outer === nothing && throw(QueryBuildError("OuterRef(\"$(v.field_name)\") can only be resolved while building a correlated subquery such as Exists(subquery)."))
   return _get_filter_query(_resolve_outer_ref_field_name(v, instruc.outer), instruc.outer)
 end
+function _get_filter_query(v::CTEReference, instruc::SQLInstruction)
+  return _build_row_join(_cte_join_path(v), instruc, as=false, cte=true)
+end
+
+# #444 — lower a CTE handle to the segment vector `_build_row_join` walks. It is byte-for-byte the
+# vector the pre-#444 string `"<name>__<path>"` produced, which is why the deep-hop loop, the
+# FK-reached JSON gate and the terminality error all keep working with no edit of their own.
+function _cte_join_path(v::CTEReference)
+  _reject_cte_desc(v, "a projection or predicate")
+  # Every legitimate suffix has been peeled by the parse boundary (`_check_filter` splits `ref.path`
+  # on `__@` before retagging; `values`/`order_by` refuse suffixes outright). One surviving here can
+  # only come from a spelling those boundaries never see — e.g. a CTE handle on a filter's RIGHT side.
+  occursin("__@", v.path) && throw(QueryBuildError(
+    "\e[4m\e[31mCTE(\"$(v.name)\", \"$(v.path)\")\e[0m carries an operator or transform suffix " *
+    "(\e[4m\e[31m__@\e[0m) where a plain column path is required. Suffixes belong on the LEFT side " *
+    "of a \e[4m\e[32mfilter(...)\e[0m pair."))
+  return String[v.name; String.(split(v.path, "__"))]
+end
 # function _get_filter_query(v::SQLTypeText, instruc::SQLInstruction)
 #   return _get_select_query(v, instruc)
 # end
@@ -1112,7 +1199,13 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
   fobj = v.column.field
   isa(fobj, FObject) || return nothing
   raw_field = fobj.column
-  isa(raw_field, String) || return nothing
+  # #444: a CTE-scoped bucket column arrives as a handle rather than a `"<cte>__col"` string. It
+  # must be admitted here or the rewrite silently stops firing for every CTE date filter — the exact
+  # failure mode #376 describes two paragraphs down in `_resolve_bucket_column`, reached by a
+  # different route. Measured against main by rendering both spellings: without this line
+  # `filter(CTE("ev","seen__@yyyy_mm__@lte") => "1991-10")` degraded from `"seen" < '1991-11-01'`
+  # back to `to_char("seen",'YYYY-MM') <= '1991-10'`.
+  isa(raw_field, Union{String,CTEReference}) || return nothing
   v.operator in ("=", ">=", ">", "<=", "<") || return nothing
   (v.values isa AbstractString || v.values isa Number) || return nothing
 
@@ -1182,7 +1275,9 @@ function _resolve_bucket_column(raw_field::String, instruc::SQLInstruction)
     return _checked_bucket_column(f_meta, raw_field, _get_select_query(raw_field, instruc), instruc)
   end
 
-  # A CTE-rooted path needs no special case, which is worth recording because it is not obvious.
+  # A CTE-rooted reference now takes the `::CTEReference` method below (#444) rather than this
+  # branch, but the reasoning that makes the DATE gate trustworthy over a CTE is the same and is
+  # recorded here because it is not obvious.
   # A CTE model's column types are INFERRED (`_set_field_from_sql_function`, ctes.jl), so the
   # question is whether one can ever be typed DATE while the column holds something else. It cannot:
   # a plain-column projection reads the real field; COUNT/SUM yield IntegerField; CASE/WHEN route
@@ -1204,6 +1299,20 @@ function _resolve_bucket_column(raw_field::String, instruc::SQLInstruction)
   f_meta = get(instruc.tab_field_cache, raw_field, nothing)
   f_meta === nothing && return (nothing, "")
   return _checked_bucket_column(f_meta, String(last(split(raw_field, "__"))), column_sql, instruc)
+end
+
+# #444 — the CTE-handle twin of the joined-path branch above, and deliberately identical to it in
+# every step: render first (only `_build_row_join` is authority on what a path resolves to), read
+# the terminal field back out of `tab_field_cache`, then run the same drift guard. The cache key is
+# `_cte_as(ref)` — `"<name>__<path>"` — which is precisely the key `_build_row_join` writes, because
+# the segment vector it walks is the one the pre-#444 string produced. All the reasoning above about
+# why the DATE gate can be trusted over a CTE (inferred column types, #376's db_column stripping)
+# applies here unchanged.
+function _resolve_bucket_column(ref::CTEReference, instruc::SQLInstruction)
+  column_sql = _get_select_query(ref, instruc)
+  f_meta = get(instruc.tab_field_cache, _cte_as(ref), nothing)
+  f_meta === nothing && return (nothing, "")
+  return _checked_bucket_column(f_meta, String(last(split(ref.path, "__"))), column_sql, instruc)
 end
 
 # Drift guard: the rewrite may only range on a column that IS the one `f_meta` describes. That holds
@@ -1306,9 +1415,11 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   if isa(v.column, SQLTypeField) && v.column._as !== nothing && haskey(instruc.json_lookup_cache, v.column._as)
     return _render_json_lookup_comparison(v, column, instruc)
   end
-  if isa(v.values, SQLTypeF)
+  if isa(v.values, Union{SQLTypeF,SQLTypeCTE})
     @pormg_debug false
-    # F expressions are safe since they reference model fields    
+    # F expressions are safe since they reference model fields; a CTE handle (#444) is the same
+    # thing scoped to a CTE — `filter("raceid" => CTE("r91", "raceid"))` is a column comparison,
+    # never a bound value.
     placeholders = _get_filter_query(v.values, instruc)
     return string(column, " ", v.operator, " ", placeholders)
   elseif isa(v.values, SQLTypeFunction)

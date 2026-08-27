@@ -48,8 +48,9 @@ pre-existing and neither was caused by #404:
     `on_clause_extras`, so a predicate that landed there was silently dropped and the join stopped
     filtering. A CROSS-joined CTE acquires one when its NAME collides with a join key (a `cjoin`
     path, a `cjoin_on` alias, or an `on()` path) or when Phase 1b relocates a fragment naming its
-    alias. Four producers are pinned; the testset explains why it pins that invariant rather than a
-    list of call shapes.
+    alias. **#444 removed the relocation route** — a `__` string can no longer name a CTE and a
+    `CTE(...)` handle is refused inside every join clause, including as an `F` comparison operand —
+    so this file pins three producers where it once pinned four. The testset carries the arithmetic.
 
 All assertions render through mock PostgreSQL/SQLite connections — no live database. The execution
 half (the query actually returning rows on both backends) lives in
@@ -200,7 +201,7 @@ end
   q = OBJ.Par.objects
   q.with("ev" => cte, join_field = "id" => "id")
   q.values("name")
-  q.order_by("ev__sku")          # the only reference to the CTE besides the join_field itself
+  q.order_by(CTE("ev", "sku"))          # the only reference to the CTE besides the join_field itself
 
   sql = inspect_query(q)[:sql_text]
 
@@ -471,18 +472,50 @@ end
 #     Phase 1b relocates a fragment that names its alias.
 #
 # "Join key" means a `custom_join` key, and `custom_join` is written at three unrelated sites —
-# keyed by a `cjoin` PATH, a `cjoin_on` ALIAS, and an `on()` PATH. So a collision with any of them
-# produces this, with or without a model-field collision and with or without any relocation at all.
-# The producers below cover all four routes; a fifth `custom_join` writer would inherit the same
-# behavior, and that is exactly why the emitted message names the collision rather than the method.
+# keyed by a `cjoin` PATH, a `cjoin_on` ALIAS, and an `on()` PATH.
 #
-# Measured pre-fix (route A), this rendered:
+# Measured pre-fix (the deleted route A), this rendered:
 #     INNER JOIN "cj_parent" AS "b2" ON ("b2"."sku" = "R1"."note")
 #     CROSS JOIN "ev" AS "R1_1"
 # — the predicate gone from the SQL while its value stayed orphaned in the `:join` bucket. #421
 # makes that strictly worse before this guard makes it better: once values travel with their
 # fragment the orphan disappears too, so the wrong query becomes perfectly well-formed. That is why
 # the two land together.
+#
+# ── #444 removed ONE of the four routes, not three. The arithmetic is worth recording ───────────
+#
+# #444 gave CTE columns their own namespace (`CTE(name, path)`), so a `__`-separated STRING can no
+# longer name a CTE, and a `CTE(...)` handle is refused outright inside `on`/`cjoin`/`cjoin_on` —
+# including when it arrives as the operand of an `F` comparison (`F("sku") == CTE("ev","sku")`),
+# which is a `FilterType` and therefore an accepted element of all three.
+#
+#   A  GONE — and the reason is an INVARIANT, not a list of spellings. This file already learned
+#      that lesson once: the note below records the shape list being "written twice and wrong twice".
+#      A first draft of this paragraph enumerated two spellings and review found a third
+#      (`"sku" => (F("note") == CTE("zz","sku"))`, a handle nested in a pair's RHS), which was
+#      accepted and did reach this guard. So state the property instead:
+#
+#        a predicate can only name a CTE by carrying a `CTE(...)` handle, and every join clause
+#        refuses one — at any nesting depth, in any slot, whatever the surrounding expression.
+#
+#      `_guard_no_cte_reference` (ctes.jl) is what makes that true: it walks Pairs, Q/Qor, OperObject
+#      and FExpression recursively, and both `_prefix_join_filter` (on/cjoin) and `_cjoin_on` run it
+#      on every element. The pre-#444 string spelling is gone separately, so nothing else can name a
+#      CTE from inside a join. That closes the Phase-1b relocation-onto-a-CTE route entirely.
+#
+#   B, C, D  ALL SURVIVE, and are pinned below. The collision in each is between the `.with()` LABEL
+#      and a `custom_join` KEY — a `cjoin` path, a `cjoin_on` alias, an `on()` path — which is a
+#      different namespace question from the one #444 answered, and untouched by it.
+#
+# What DID change about B and D is what makes the CTE's join get built at all. Pre-#444 the string
+# `values("note","parent__sku")` was itself the CTE reference; now that path means the ForeignKey,
+# so each carries an explicit `CTE("parent","sku")` to reference the CTE. Without it the CTE is
+# declared and never joined, no CROSS entry exists, and the guard correctly does not fire — which is
+# exactly how an earlier draft of this file talked itself into deleting B and D as "unreachable".
+# They are reachable; the reconstruction was wrong. Verified by rendering all four.
+#
+# So the guard's message — "a cjoin path, a cjoin_on alias, or an on() path" — remains accurate on
+# all three thirds, and this block still pins each one.
 # ─────────────────────────────────────────────────────────────────────────────
 _ob_cte() = begin
   c = OBJ.Cj_grand.objects
@@ -499,31 +532,15 @@ end
 # (label, the CTE name the message must report, builder). Each must reach the SAME guard.
 const _OB_424_PRODUCERS = [
   (
-    "A: cjoin_on `on` names a CTE path (via Phase 1b relocation)", "ev",
+    "B: CTE name collides with a cjoin PATH (a model field)", "parent",
     () -> begin
       q = OBJ.Cj_child.objects
-      q.with("ev" => _ob_cte())                       # no join_field => CROSS JOIN (#44)
-      q.values("note")
-      # ONE predicate, and that is the point. This case used to need a second one as padding:
-      # relocating the only predicate away emptied `b2`'s extras, and because `b2` sits at a lower
-      # `row_join` index than the CTE, Phase 2 reached its "produced no ON conditions" guard before
-      # the CROSS branch could report the actual cause. #435 hoisted this guard into Phase 1c, so
-      # the cause now wins on ordering-independent grounds and the padding is gone. This is also
-      # the issue's own reproduction, verbatim.
-      q.cjoin_on("Cj_parent", alias = "b2", on = ["ev__code" => "Z"])
-      q
-    end,
-  ),
-  (
-    "B: CTE name collides with a cjoin PATH (a model field; no relocation)", "parent",
-    () -> begin
-      q = OBJ.Cj_child.objects
-      # "parent" is a ForeignKey field of Cj_child. Join resolution consults the CTE registry BEFORE
-      # the model-field branch, so the CTE shadows the field's join entirely, and the cjoin then
-      # hangs its filters on the CROSS entry as its own `on_conditions` — one row_join entry, empty
-      # relocation window, `on_clause_extras` filled in Phase 1.
-      q.with("parent" => _ob_parent_cte())
-      q.values("note")
+      # "parent" is a ForeignKey field of Cj_child AND the CTE's name. Since #444 those are separate
+      # namespaces, so the cjoin resolves to the ForeignKey and the CTE is a relation of its own —
+      # but the CTE is unkeyed, so referencing it CROSS JOINs it, and the cjoin's `custom_join` entry
+      # is keyed by the same string the CTE is named by. That is the collision this guard is for.
+      q.with("parent" => _ob_parent_cte())            # no join_field => CROSS JOIN (#44)
+      q.values("note", "c" => CTE("parent", "sku"))   # the reference that builds the CROSS entry
       q.cjoin("parent" => "Cj_parent", filters = ["sku" => "S"], warn = false)
       q
     end,
@@ -532,13 +549,13 @@ const _OB_424_PRODUCERS = [
     "C: CTE name collides with a cjoin_on ALIAS (no model field involved)", "b2",
     () -> begin
       q = OBJ.Cj_child.objects
-      # "b2" is NOT a field of Cj_child — nothing is shadowed. The collision is with the cjoin_on
-      # ALIAS, which is what `_cjoin_on` uses as its `custom_join` key. This is the producer that
-      # proved a message blaming "a CTE named after a model FIELD" asserts something false.
+      # "b2" is NOT a field of Cj_child — nothing is shadowed, and no string path names the CTE.
+      # The collision is between the `.with()` label and the cjoin_on ALIAS, which is what
+      # `_cjoin_on` uses as its `custom_join` key.
       q.with("b2" => _ob_cte())
       q.values("note")
       q.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("note")])
-      q.filter("b2__code" => "X")                     # forces the CTE join to be built first
+      q.filter(CTE("b2", "code") => "X")                     # forces the CTE join to be built first
       q
     end,
   ),
@@ -546,11 +563,14 @@ const _OB_424_PRODUCERS = [
     "D: CTE name collides with an on() PATH declared BEFORE the .with()", "parent",
     () -> begin
       q = OBJ.Cj_child.objects
-      # Order matters: `.with()` then `.on()` is refused earlier by `_resolve_join_target_model`,
-      # which only sees CTEs declared so far. Reversed, that check never fires.
+      # #434's ordering asymmetry is gone: `on("parent", …)` resolves to the ForeignKey in BOTH
+      # orderings now. What remains is the same key collision as B, reached through `on()` instead
+      # of `cjoin()`. Pinned in the declared-first order because that is the one that used to slip
+      # past `_resolve_join_target_model` entirely; the reverse order is pinned in the sibling
+      # testset below.
       q.on("parent", "sku" => "S")
       q.with("parent" => _ob_parent_cte())
-      q.values("note", "parent__sku")
+      q.values("note", "parent__sku", "c" => CTE("parent", "sku"))
       q
     end,
   ),
@@ -595,7 +615,7 @@ const _OB_424_PRODUCERS = [
   ok = OBJ.Cj_child.objects
   ok.with("ev" => _ob_cte())
   ok.values("note")
-  ok.filter(F("note") == F("ev__code"))
+  ok.filter(F("note") == CTE("ev", "code"))
   ok_sql = inspect_query(ok; connection = _OBJ_SL)[:sql_text]
   @test occursin("CROSS JOIN \"ev\"", ok_sql)
   @test !occursin(r"CROSS JOIN[^\n]*ON", ok_sql)

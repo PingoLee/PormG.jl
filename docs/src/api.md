@@ -37,11 +37,12 @@ These methods modify the query builder and return the handler for further chaini
 | `.on("path", key => value)` | Add predicates to the ON clause of an existing join path. | `.on("driverid", "nationality" => "British")` |
 | `.cjoin("field" => "Model", ...)` | Add a custom join at query time. | `.cjoin("driverid" => "Driver")` |
 | `.cjoin_on("Model"; alias, on, join_type)` | Anchor-less join: `on` is the **entire** ON clause. | `.cjoin_on("Driver"; alias = "d", on = [...])` |
-| `.with("name" => subquery; join_field, join_type)` | Define one CTE on the query; call again for a second. | `.with("fast" => sub)` |
+| `.with("name" => subquery; join_field, join_type)` | Define one CTE on the query; call again for a second. Its columns are then reached with [`CTE(name, path)`](@ref CTE). | `.with("fast" => sub)` |
 | `.select_for_update(; nowait, skip_locked, no_key)` | `SELECT … FOR UPDATE` row lock (PostgreSQL; must run inside a transaction). | `.select_for_update(nowait = true)` |
 | `.copy()` | Deep-copy the handler to branch a chain without disturbing the original. | `base.copy().filter("year" => 2020)` |
 
-See also: [`.cjoin()`](#cjoin) for custom join definitions and [`.with()`](#with-common-table-expressions) for CTEs.
+See also: [Custom Joins](read/custom_joins.md) for `.cjoin()` / `.cjoin_on()` / `.on()`, and
+[Subqueries and CTEs](read/subqueries_and_ctes.md) for `.with()` and the [`CTE`](@ref) reference object.
 
 !!! info "Important"
     Queries that use `.cjoin()` **must** call `.values(...)` explicitly before execution.
@@ -643,7 +644,7 @@ PormG's type hierarchy provides the foundation for the query builder and model s
 | `SQLTypeQor` | Qor-expression type (OR logic). |
 | `SQLTypeF` | F-expression type (field references). |
 | `SQLTypeFunction` | SQL function type. |
-| `SQLTypeCTE` | Common Table Expression type. |
+| `SQLTypeCTE` | Supertype of [`CTE`](@ref)'s reference object — a CTE column handle. |
 | `PormGModel` | Base for model types. |
 | `PormGField` | Base for field type definitions. |
 | `PormGError` | Root of the semantic error taxonomy (`<: Exception`). Every PormG misuse — querying, model definition, configuration, migrations, the pool — raises a subtype (see [Error taxonomy](#Error-taxonomy)); `catch PormGError` catches them all. |
@@ -657,7 +658,7 @@ scope — the SQL function constructors are *not* among them (see
 [SQL function library](#sql-function-library-pormgfunctions)).
 
 ### Query Builder
-`object`, `get`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery`, `Interval`, `show_query`, `inspect_query`
+`object`, `get`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery`, `CTE`, `Interval`, `show_query`, `inspect_query`
 
 ### Rows & exceptions
 `PormGRow`, `pk`, `DoesNotExist`, `MultipleObjectsReturned`
@@ -857,7 +858,7 @@ M.Result.objects.values(              # …or qualify without importing
     "n" => PormG.Functions.Count("resultid"))
 ```
 
-`bulk_*`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery`, `Interval` stay at the top level —
+`bulk_*`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery`, `CTE`, `Interval` stay at the top level —
 they are query primitives, not part of the function library.
 
 The library in full — the same index `?PormG.Functions` prints in the REPL:

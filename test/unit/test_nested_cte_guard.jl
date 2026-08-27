@@ -109,7 +109,7 @@ end
 _ncg_inner_with_cte() = begin
   s = NCG.Ncg_parent.objects
   s.with("gv" => _ncg_grand_cte(), join_field = "grandparent" => "id")
-  s.filter("gv__code" => "INNERVAL")
+  s.filter(CTE("gv", "code") => "INNERVAL")
   s.values("id")
   s
 end
@@ -270,7 +270,7 @@ end
   _boundary() = begin
     q = NCG.Ncg_child.objects
     q.with("pc" => _ncg_inner_with_cte(), join_field = "parent" => "id")
-    q.values("note", "pid" => "pc__id")
+    q.values("note", "pid" => CTE("pc", "id"))
     q
   end
 
@@ -308,7 +308,7 @@ end
   _upd_q() = begin
     q = NCG.Ncg_child.objects
     q.with("gv" => _ncg_grand_cte(), join_field = "parent" => "id")
-    q.filter("gv__code" => "CTEVAL")
+    q.filter(CTE("gv", "code") => "CTEVAL")
     q
   end
 
@@ -351,7 +351,7 @@ end
   _cte_scoped(model, fk) = begin
     q = model.objects
     q.with("gv" => _ncg_grand_cte(), join_field = fk => "id")
-    q.filter("gv__code" => "CTEVAL")
+    q.filter(CTE("gv", "code") => "CTEVAL")
     q
   end
 

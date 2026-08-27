@@ -322,8 +322,15 @@ _sdr_where(res) = strip(split(res[:sql_text], " WHERE ")[end])
   end
 
   # =========================================================================
-  # 4d. #373 — a CTE-projected DateField is rewritten too, and that needs no special case, which is
-  #     worth pinning because it is not obvious. A CTE model's column types are INFERRED
+  # 4d. #373 — a CTE-projected DateField is rewritten too. Since #444 the CTE reference is a
+  #     `CTE(name, path)` HANDLE rather than a string, and `_resolve_bucket_column` needs a method
+  #     for it: the gate reads `FObject.column` and tests `isa(..., String)`, so without one this
+  #     rewrite silently stopped firing and the predicate degraded back to a non-sargable
+  #     `to_char(col,'YYYY-MM') <= '1991-10'` — no error, just the lost index. Caught by rendering
+  #     both spellings against `main` and diffing, not by reasoning.
+  #
+  #     Whether the DATE gate can be TRUSTED over a CTE is a separate question, and it can be:
+  #     a CTE model's column types are INFERRED
   #     (`_set_field_from_sql_function`), so the question is whether one can be typed DATE while
   #     holding something else. It cannot: a plain-column projection reads the real field, COUNT/SUM
   #     give IntegerField, CASE/WHEN route through `_infer_case_output_type` (Integer/Float/Char
@@ -336,7 +343,7 @@ _sdr_where(res) = strip(split(res[:sql_text], " WHERE ")[end])
     inner = _SdrEv.objects.values("teamid", "happened")
     res = _SdrEv.objects.
       with("ev" => inner, join_field = "teamid" => "teamid").
-      filter("ev__happened__@yyyy_mm__@lte" => "1991-10").
+      filter(CTE("ev", "happened__@yyyy_mm__@lte") => "1991-10").
       list(show_query=:dict)
     @test !occursin("to_char", lowercase(res[:sql_text]))
     @test "1991-11-01" in res[:parameters]
@@ -346,7 +353,7 @@ _sdr_where(res) = strip(split(res[:sql_text], " WHERE ")[end])
     bad = _SdrEv.objects.values("teamid", "bucket" => ToChar("happened", "YYYY-MM"))
     @test_throws PormG.QueryBuildError _SdrEv.objects.
       with("evb" => bad, join_field = "teamid" => "teamid").
-      filter("evb__bucket__@yyyy_mm__@lte" => "1991-10").
+      filter(CTE("evb", "bucket__@yyyy_mm__@lte") => "1991-10").
       list(show_query=:dict)
   end
 

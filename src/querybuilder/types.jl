@@ -99,20 +99,24 @@ Base.show(io::IO, ::SubqueryObject) = print(io, "Subquery(…)")
 """Filter components: Operator objects, Q (AND), Qor (OR), F expressions, and EXISTS predicates."""
 const FilterType = Union{SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF,ExistsObject}
 
-"""Field references in SQL: text, functions, string names, or projected subqueries (Subquery/Exists, #92)."""
-const FieldPart = Union{SQLTypeText,SQLTypeFunction,String,SQLTypeF,SubqueryObject,ExistsObject}
+"""Field references in SQL: text, functions, string names, projected subqueries (Subquery/Exists, #92), or a CTE column handle (`CTE(name, path)`, #444)."""
+const FieldPart = Union{SQLTypeText,SQLTypeFunction,String,SQLTypeF,SubqueryObject,ExistsObject,SQLTypeCTE}
 
-"""Column references: fields, functions, strings, or vectors of operations."""
-const ColumnPart = Union{SQLTypeField,SQLTypeFunction,String,SQLTypeF,Vector{Union{String,SQLTypeF}}}
+"""Column references: fields, functions, strings, CTE column handles, or vectors of operations."""
+const ColumnPart = Union{SQLTypeField,SQLTypeFunction,String,SQLTypeF,SQLTypeCTE,Vector{Union{String,SQLTypeF}}}
 
 """Window PARTITION BY expressions."""
-const WindowPartitionPart = Union{String,SQLTypeField,SQLTypeFunction,SQLTypeF}
+# #444: `SQLTypeCTE` — PARTITION BY a CTE column worked before the change (the reference was a
+# plain String, already admitted here) and must keep working.
+const WindowPartitionPart = Union{String,SQLTypeField,SQLTypeFunction,SQLTypeF,SQLTypeCTE}
 
 """Window ORDER BY expressions."""
-const WindowOrderPart = Union{String,SQLTypeOrder}
+# #444: `SQLTypeCTE` — a window ORDER BY over a CTE column worked before the change; it is also
+# the second site (after the fluent `order_by`) where `CTE(...; desc = true)` is meaningful.
+const WindowOrderPart = Union{String,SQLTypeOrder,SQLTypeCTE}
 
 """Window function argument expressions."""
-const WindowColumnPart = Union{Nothing,String,SQLTypeField,SQLTypeText,SQLTypeFunction,SQLTypeF}
+const WindowColumnPart = Union{Nothing,String,SQLTypeField,SQLTypeText,SQLTypeFunction,SQLTypeF,SQLTypeCTE}
 
 """Optional strings (often used for aliases or configs)."""
 const OptionalString = Union{String,Nothing}
@@ -380,7 +384,7 @@ That is a internal function, please do not use it.
 """
 @kwdef mutable struct OperObject <: SQLTypeOper
   operator::String
-  values::Union{String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,SQLObjectHandler,SQLTypeF,SQLTypeFunction,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF}
+  values::Union{String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,SQLObjectHandler,SQLTypeF,SQLTypeFunction,SQLTypeCTE,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF}
   column::ColumnPart # Vector{String} is needed
 end
 OP(column::String, value) = OperObject(operator="=", values=value, column=SQLField(column))
@@ -480,7 +484,9 @@ const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 @kwdef mutable struct FExpression <: SQLTypeF
   field_name::Union{String,Integer,SQLTypeF,SQLTypeFunction}
   operation::OptionalString = nothing  # +, -, *, /, etc.
-  operand::Union{String,Integer,Float64,SQLTypeF,SQLTypeFunction,Dates.Period,Dates.CompoundPeriod,Interval,Nothing} = nothing
+  # #444: `SQLTypeCTE` so `F("note") == CTE("ev","code")` builds a comparison instead of
+  # falling through to `Base.==` and silently yielding a Bool.
+  operand::Union{String,Integer,Float64,SQLTypeF,SQLTypeFunction,SQLTypeCTE,Dates.Period,Dates.CompoundPeriod,Interval,Nothing} = nothing
   function_name::String = "F"
   column::Union{String,SQLTypeField,Vector{String}} = ""
   aggregate::Bool = false
@@ -626,7 +632,7 @@ end
 Base.:+(operand::_DurationOperand, f::FExpression) = f + operand
 
 # Comparison operations for F expressions
-function Base.:(==)(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
+function Base.:(==)(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE})
   if f.operation === nothing
     f.operation = "="
     f.operand = operand
@@ -635,7 +641,7 @@ function Base.:(==)(f::FExpression, operand::Union{Integer,Float64,String,Dates.
     return FExpression(field_name=f, operation="=", operand=operand, function_name="F", column="", aggregate=f.aggregate)
   end
 end
-function Base.:(!=)(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
+function Base.:(!=)(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE})
   if f.operation === nothing
     f.operation = "!="
     f.operand = operand
@@ -644,7 +650,7 @@ function Base.:(!=)(f::FExpression, operand::Union{Integer,Float64,String,Dates.
     return FExpression(field_name=f, operation="!=", operand=operand, function_name="F", column="", aggregate=f.aggregate)
   end
 end
-function Base.:>(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
+function Base.:>(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE})
   if f.operation === nothing
     f.operation = ">"
     f.operand = operand
@@ -654,7 +660,7 @@ function Base.:>(f::FExpression, operand::Union{Integer,Float64,String,Dates.Dat
   end
 end
 
-function Base.:<(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
+function Base.:<(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE})
   if f.operation === nothing
     f.operation = "<"
     f.operand = operand
@@ -664,7 +670,7 @@ function Base.:<(f::FExpression, operand::Union{Integer,Float64,String,Dates.Dat
   end
 end
 
-function Base.:>=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
+function Base.:>=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE})
   if f.operation === nothing
     f.operation = ">="
     f.operand = operand
@@ -674,7 +680,7 @@ function Base.:>=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Da
   end
 end
 
-function Base.:<=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
+function Base.:<=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE})
   if f.operation === nothing
     f.operation = "<="
     f.operand = operand
@@ -764,13 +770,105 @@ function OuterRef(field_name::AbstractString)
 end
 Base.deepcopy(x::OuterRefObject) = OuterRefObject(field_name=x.field_name)
 
+# #444 — a CTE column reference. `SQLTypeCTE` (Kernel.jl) was declared with zero subtypes and zero
+# uses; this is what it was reserved for. Deliberately NOT `<: SQLTypeF`: that would auto-admit the
+# type into `FilterType`, `FObject.column` and the ~18 `functions.jl` unions for free, which is
+# exactly the hazard — `Sum(CTE(...))` would silently construct (it is refused, see functions.jl)
+# and a bare `filter(CTE("ev","sku"))` with no pair would parse as a standalone filter. Every
+# admission below is a named seam, on purpose.
+@kwdef mutable struct CTEReference <: SQLTypeCTE
+  name::String        # the `.with(...)` label this column belongs to
+  path::String        # a field path INSIDE that CTE
+  desc::Bool = false  # order_by only; refused everywhere else
+end
+
+"""
+    CTE(name::AbstractString, path::AbstractString; desc::Bool = false) -> CTEReference
+
+Reference a column of a CTE declared with [`.with(...)`](@ref object). The CTE's columns live in
+their **own namespace**, separate from the model's field paths, so a CTE may legally share a name
+with a field and neither shadows the other (#444):
+
+```julia
+parent_cte = M.Cj_parent.objects
+parent_cte.values("id", "sku")
+
+q = M.Cj_child.objects
+q.with("parent" => parent_cte)          # "parent" is ALSO a ForeignKey of Cj_child
+q.values("note",
+         "parent__sku",                 # the ForeignKey's column — unambiguous
+         "fk" => CTE("parent", "sku"))  # the CTE's column        — unambiguous
+```
+
+The second argument is a **path**, not a bare column, and carries the same `__` vocabulary the rest
+of PormG uses — a hop out of the CTE through a projected ForeignKey, a JSON sub-path, or an operator
+suffix:
+
+```julia
+q.filter(CTE("ev", "sku") => "ABC")                       # plain column
+q.values("s" => CTE("ev", "parent__sku"))                 # hop through a projected FK
+q.filter(CTE("ev", "meta__driver") => "senna")            # JSON sub-path
+q.filter(CTE("ev", "seen__@yyyy_mm__@lte") => "1991-10")  # operator suffix
+q.filter("raceid" => CTE("r91", "raceid"))                # correlate an unkeyed CTE (#44)
+q.order_by(CTE("monaco_stats", "total_points"; desc = true))
+```
+
+An unaliased projection is named by joining the two with a double underscore —
+`values(CTE("parent", "sku"))` emits the output column `parent__sku`.
+
+SQL functions, aggregates and window clauses accept a handle wherever they accept a field path —
+`Lower(CTE("ev","sku"))`, `Cast(CTE("ev","qty"), "text")`, `Sum(CTE("ev","qty"))`,
+`Rank(over = WindowOver(partition_by = CTE("ev","sku")))`.
+
+`desc = true` is meaningful in `order_by(...)` and in a window's `order_by`; anywhere else it raises
+a `QueryBuildError`. A CTE column cannot be referenced from `on(...)`, `cjoin(...)` or
+`cjoin_on(...)` — those clauses target model relations — however it is spelled, including as the
+operand of an `F` comparison.
+
+See also [Subqueries and CTEs](read/subqueries_and_ctes.md).
+"""
+function CTE(name::AbstractString, path::AbstractString; desc::Bool=false)
+  normalized_name = String(name)
+  normalized_path = String(path)
+  isempty(normalized_name) && throw(QueryBuildError("CTE requires a non-empty CTE name"))
+  # Refused HERE rather than at build time, where the same mistake surfaced as
+  # "CTE reference 'ev' must include a field name" after a join had already been planned.
+  isempty(normalized_path) && throw(QueryBuildError(
+    "CTE(\e[4m\e[31m$(normalized_name)\e[0m, \"\") requires a column path inside the CTE. " *
+    "Example: \e[4m\e[32mCTE(\"$(normalized_name)\", \"sku\")\e[0m."))
+  # The CTE NAME is not identifier-validated here on purpose: `_with` already validates it
+  # fail-closed at declaration (#394), and duplicating the check would fire with a less specific
+  # message on the call that is not the one at fault.
+  return CTEReference(name=normalized_name, path=normalized_path, desc=desc)
+end
+Base.deepcopy(x::CTEReference) = CTEReference(name=x.name, path=x.path, desc=x.desc)
+
+# The output/cache spelling of a CTE reference — `name__path`. It is byte-identical to what the
+# pre-#444 string form produced, which is what lets every `_as`-keyed consumer downstream
+# (`instruct.cache`, `tab_field_cache`, ORDER BY alias matching, the #352/#373 sargable rewrite,
+# the #441 duplicate-projection guard, and result-column names) keep working unchanged.
+_cte_as(name::AbstractString, path::AbstractString) = string(name, "__", path)
+_cte_as(ref::CTEReference) = _cte_as(ref.name, ref.path)
+
+# Guard for every site that accepts a CTE reference but cannot express an ordering direction.
+function _reject_cte_desc(ref::CTEReference, context::AbstractString)
+  ref.desc && throw(QueryBuildError(
+    "\e[4m\e[31mdesc = true\e[0m on \e[4m\e[31mCTE(\"$(ref.name)\", \"$(ref.path)\")\e[0m is only " *
+    "meaningful in \e[4m\e[32morder_by(...)\e[0m, not in $(context). Drop it here."))
+  return ref
+end
+
 #
 # SQLTypeFunction Objects (functions from sql)
 #
 
 @kwdef mutable struct FObject <: SQLTypeFunction
   function_name::String
-  column::Union{String,SQLTypeField,SQLTypeText,N,Vector{N},Vector{T},SQLTypeOper,SQLTypeQ,SQLTypeQor,SQLTypeF} where {N<:SQLTypeFunction,T}
+  # #444: `SQLTypeCTE` is admitted for the TRANSFORM path — `CTE("ev", "seen__@yyyy_mm__@lte")`
+  # builds a `ToChar` over the CTE's column, and the retag puts the handle here. It does NOT open the
+  # aggregate door: `Sum`/`Avg`/`Count`/`Max`/`Min` refuse a `CTEReference` at the constructor
+  # (functions.jl), so no aggregate FObject can ever be built holding one.
+  column::Union{String,SQLTypeField,SQLTypeText,SQLTypeCTE,N,Vector{N},Vector{T},SQLTypeOper,SQLTypeQ,SQLTypeQor,SQLTypeF} where {N<:SQLTypeFunction,T}
   aggregate::Bool = false
   formatter::Union{Nothing,Function} = nothing # function to format the value
   _as::OptionalString = nothing

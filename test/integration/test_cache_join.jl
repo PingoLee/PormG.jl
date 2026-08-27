@@ -34,7 +34,7 @@ end
     query.values(
         "raceid__name",
         "driverid__surname",
-        "driver_stats__nationality"
+        CTE("driver_stats", "nationality")
     )
 
     # # Show query for debugging if needed
@@ -72,7 +72,7 @@ end
     query.filter("raceid__year" => 2021)
     query.values(
         "raceid__name",
-        "circuit_info__country"
+        CTE("circuit_info", "country")
     )
     
     df = query |> DataFrame

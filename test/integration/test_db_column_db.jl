@@ -331,7 +331,7 @@ end
         # #376: `rpk_cte__code` is the half this testset used to miss. `label` has no db_column, so
         # projecting only it never exercised the CTE COLUMN rule; `code` does (→ "pk_code"), and
         # before #376 the outer query asked the CTE for "pk_code" — a column it does not expose.
-        main.values("code", "cte_code" => "rpk_cte__code", "lbl" => "rpk_cte__label")
+        main.values("code", "cte_code" => CTE("rpk_cte", "code"), "lbl" => CTE("rpk_cte", "label"))
         rows = main.list()
         @test length(rows) == 1                 # INNER join keeps only the matched code (700)
         @test rows[1][:code] == 700
@@ -367,8 +367,8 @@ end
         # filter + values on the CTE-reached column, in one query.
         main = M.Db_column_scratch.objects
         main.with("ev" => cte, join_field="id" => "id", join_type="INNER")
-        main.filter("ev__sku" => "CTE-A")
-        main.values("name", "s" => "ev__sku")
+        main.filter(CTE("ev", "sku") => "CTE-A")
+        main.values("name", "s" => CTE("ev", "sku"))
         rows = main.list()
         @test length(rows) == 1
         @test rows[1][:name] == "Alpha"
@@ -388,9 +388,9 @@ end
 
         ordered = M.Db_column_scratch.objects
         ordered.with("ev2" => cte2, join_field="id" => "id", join_type="INNER")
-        ordered.filter("ev2__name" => "Alpha")
+        ordered.filter(CTE("ev2", "name") => "Alpha")
         ordered.values("name")
-        ordered.order_by("ev2__sku")
+        ordered.order_by(CTE("ev2", "sku"))
         ord_rows = ordered.list()
         @test length(ord_rows) == 1           # executes at all — the pre-#376 failure mode
         @test ord_rows[1][:name] == "Alpha"
@@ -415,7 +415,7 @@ end
 
         main = M.Db_column_child_scratch.objects
         main.with("ev" => cte, join_field="id" => "id", join_type="INNER")
-        main.values("note", "s" => "ev__parent__sku")
+        main.values("note", "s" => CTE("ev", "parent__sku"))
         rows = main.list()
         @test length(rows) == 1
         @test rows[1][:note] == "kid"

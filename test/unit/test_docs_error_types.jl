@@ -132,21 +132,40 @@ const DOCERR_CASES = [
         () -> DOCERR_RESULT_PG.objects.values("*", "statusid" => "points").list(show_query = :dict),
     ),
     (
-        # #424. `cjoin_on`'s `on` is the whole ON clause and is NOT path-prefixed, so a bare
-        # `"ev__col" => v` resolves against a `join_field`-less (CROSS-joined) CTE — which has no ON
-        # clause to carry it. ONE predicate, which is the doc's own shape: this used to need a
-        # second as padding, because relocating the only predicate away emptied `d`'s extras and
-        # the "produced no ON conditions" guard fired first, pinning the wrong error. #435 hoisted
-        # the CROSS check ahead of emission, so the cause wins regardless of join order.
-        "read/custom_joins.md — a cjoin_on ON predicate on a CROSS-joined CTE is refused",
+        # #424, as #444 left it. The shape this case used to pin — a `cjoin_on` `on` list naming a
+        # CROSS-joined CTE — is no longer reachable: a `__` string cannot name a CTE any more, and a
+        # `CTE(...)` handle is refused at the call (the next case). What still reaches this guard is
+        # the ALIAS collision: `.with("d" => …)` unkeyed, and a `cjoin_on` whose alias is also "d",
+        # so the cjoin_on's predicates land on the CTE's CROSS entry — which has no ON clause to
+        # carry them. Nothing is shadowed and no reference spelling is involved, which is exactly
+        # why #444 did not touch it.
+        "read/custom_joins.md — an ON predicate on a CROSS-joined CTE is refused",
         QueryBuildError,
         () -> begin
             ev = DOCERR_STATUS_PG.objects
             ev.values("statusid", "status")
             q = DOCERR_RESULT_PG.objects
-            q.with("ev" => ev)                       # no join_field => CROSS JOIN (#44)
+            q.with("d" => ev)                        # no join_field => CROSS JOIN (#44)
             q.values("resultid")
-            q.cjoin_on("DOCERR_DRIVER_PG", alias = "d", on = ["ev__status" => "Finished"])
+            q.cjoin_on("DOCERR_DRIVER_PG", alias = "d", on = [F("d.surname") == F("resultid")])
+            q.filter(CTE("d", "status") => "Finished")   # forces the CTE join to be built
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #444. A CTE column reference cannot appear in a JOIN's ON clause at all — `cjoin_on`'s
+        # `on` is the whole ON clause, and a CTE is joined by its own `.with()` declaration, not by
+        # someone else's join. Refused at the call, before any SQL is planned. FilterError rather
+        # than QueryBuildError because this is about what a FILTER element may reference.
+        "read/custom_joins.md — a CTE(...) reference inside a join ON clause is refused",
+        FilterError,
+        () -> begin
+            ev = DOCERR_STATUS_PG.objects
+            ev.values("statusid", "status")
+            q = DOCERR_RESULT_PG.objects
+            q.with("ev" => ev)
+            q.values("resultid")
+            q.cjoin_on("DOCERR_DRIVER_PG", alias = "d", on = [CTE("ev", "status") => "Finished"])
             q.list(show_query = :dict)
         end,
     ),
@@ -176,7 +195,7 @@ const DOCERR_CASES = [
             fast.values("statusid", "status")
             inner = DOCERR_RESULT_PG.objects
             inner.with("fast" => fast, join_field = "statusid" => "statusid")
-            inner.filter("fast__status" => "Finished")
+            inner.filter(CTE("fast", "status") => "Finished")
             inner.values("driverid")
             q = DOCERR_DRIVER_PG.objects
             q.values("driverid")
@@ -194,7 +213,7 @@ const DOCERR_CASES = [
             fast.values("statusid", "status")
             q = DOCERR_RESULT_PG.objects
             q.with("fast" => fast, join_field = "statusid" => "statusid")
-            q.filter("fast__status" => "Finished")
+            q.filter(CTE("fast", "status") => "Finished")
             q.update("points" => 0, show_query = :dict)
         end,
     ),
@@ -211,7 +230,7 @@ const DOCERR_CASES = [
             ev.values("statusid", "status")
             q = DOCERR_RESULT_PG.objects
             q.with("ev" => ev, join_field = "statusid" => "statusid")
-            q.filter("ev__status" => "Finished")
+            q.filter(CTE("ev", "status") => "Finished")
             q.delete(show_query = :dict)
         end,
     ),

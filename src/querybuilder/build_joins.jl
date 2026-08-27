@@ -71,10 +71,10 @@ function _build_cjoin_on_row_join(config::Dict{String,Any}, join_path::String, i
   return nothing
 end
 
-function _build_row_join(field::Vector{SubString{String}}, instruct::SQLInstruction; as::Bool=true)
+function _build_row_join(field::Vector{SubString{String}}, instruct::SQLInstruction; as::Bool=true, cte::Bool=false)
   # convert the field to a vector of string
   vector = String.(field)
-  _build_row_join(vector, instruct, as=as)  
+  _build_row_join(vector, instruct, as=as, cte=cte)
 end
 
 # Resolve one join-path segment to the field that actually carries the relation, so a Django-style
@@ -347,7 +347,7 @@ function _render_json_lookup(instruct::SQLInstruction, alias::String, json_field
   return Dialect._json_extract_expr(instruct.connection, col, segs)
 end
 
-function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bool=true)
+function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bool=true, cte::Bool=false)
   vector = copy(field)
   # The `String` member is UNREACHABLE as of #388, and deliberately left in place. Every one of the
   # nine assignments below now stores a resolved model — `cte_model`, `_apply_many_to_many_branch`'s
@@ -373,17 +373,38 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # not a join hop. Fire before the CTE/FK cascade — otherwise `payload` enters the forward-FK
   # branch and crashes in `_determine_join_type` (a JSONField has no `.how`). A TERMINAL JSON field
   # (length == 1) is left to resolve as a plain jsonb column (the target of the containment operators).
-  if haskey(instruct.object.model.fields, first_column) &&
+  #
+  # `!cte` because a CTE-scoped path is resolved against the CTE's own model, not the base model. A
+  # CTE named after a base-model JSONField would otherwise be extracted from that field's jsonb.
+  if !cte && haskey(instruct.object.model.fields, first_column) &&
      Models.is_json_field(instruct.object.model.fields[first_column]) &&
      length(vector) > 1
     return _render_json_lookup(instruct, instruct.alias,
       instruct.object.model.fields[first_column], first_column, String.(vector[2:end]), field)
   end
 
-  # Check if first_column references a CTE table
-  if haskey(instruct.object.ctes, vector[1])
+  # #444: a CTE is reached ONLY through `CTE(name, path)`, which sets `cte=true`. It is no longer
+  # discovered by testing `haskey(instruct.object.ctes, vector[1])` on a plain field path.
+  #
+  # That test WAS this branch's condition, and it sat ahead of the many-to-many, forward-FK and
+  # reverse-relation arms below — so for any first segment naming both a CTE and something on the
+  # model, the CTE won and the model's own join was never emitted. Silently: the only signal was the
+  # #44 Cartesian warning, which reports an uncorrelated CROSS JOIN rather than a shadowed relation
+  # (#431). Splitting the namespaces removes the precedence question entirely rather than answering
+  # it — `.with("parent" => …)` and the `parent` ForeignKey now coexist in one query, each
+  # addressable, neither shadowing the other.
+  if cte
     @pormg_debug false
     cte_name = vector[1]
+    # #444: the single point where a `CTE(name, …)` handle is checked against the query's registry.
+    # Both render entries (`_get_select_query` / `_get_filter_query`) funnel through here, so neither
+    # has to repeat it.
+    if !haskey(instruct.object.ctes, cte_name)
+      declared = isempty(instruct.object.ctes) ? "none" : join(sort(collect(keys(instruct.object.ctes))), ", ")
+      throw(UnknownFieldError(
+        "CTE \e[4m\e[31m$(cte_name)\e[0m is not declared on this query; declared CTEs: " *
+        "\e[4m\e[32m$(declared)\e[0m. Add it with \e[4m\e[32m.with(\"$(cte_name)\" => subquery)\e[0m."))
+    end
     cte_dict = instruct.object.ctes[cte_name]
     # #433: this is NOT an internal invariant, which is what it claimed to be until the #433 audit.
     # `cte_dict["model"]` is written in exactly one place — `_build_cte_custom_model`, reached only
@@ -421,7 +442,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
     cte_model = cte_dict["model"]::PormGModel
     
-    length(vector) == 1 && throw(QueryBuildError("CTE reference '$(cte_name)' must include a field name. Example: '$(cte_name)__field_name'"))
+    # #444: unreachable from user input — `CTE(name, path)` refuses an empty path at construction,
+    # with a message that names the call the user wrote. Kept as a fail-closed backstop so a future
+    # internal caller passing a one-element vector gets this instead of a KeyError on `vector[2]`.
+    length(vector) == 1 && throw(QueryBuildError("CTE reference '$(cte_name)' must include a column path. Example: CTE(\"$(cte_name)\", \"field_name\")"))
 
     # Get the join field configuration from the CTE
     jf = cte_dict["join_field"]
@@ -577,6 +601,20 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
   else
     @pormg_debug false
+    # #444 migration diagnostic. `"ev__sku"` used to resolve to the CTE `ev`; it now resolves as a
+    # field path and lands here. This is a THROW, not a resolution — the string spelling is gone, not
+    # aliased — but the generic "column not found" below would send the reader looking for a missing
+    # model field rather than at the spelling that changed.
+    if haskey(instruct.object.ctes, vector[1])
+      rest = length(vector) > 1 ? join(vector[2:end], "__") : "column"
+      throw(UnknownFieldError(
+        "\e[4m\e[31m$(join(vector, "__"))\e[0m is not a field path on " *
+        "\e[4m\e[32m$(instruct.object.model.name)\e[0m, and \e[4m\e[31m$(vector[1])\e[0m is a CTE " *
+        "declared on this query.\n  Since #444 a CTE column has its own namespace and is referenced " *
+        "with \e[4m\e[32mCTE(\"$(vector[1])\", \"$(rest)\")\e[0m, not with a " *
+        "\e[4m\e[31m\"$(vector[1])__$(rest)\"\e[0m path — that spelling now means the model's own " *
+        "\e[4m\e[31m$(vector[1])\e[0m field, which does not exist here."))
+    end
     throw(UnknownFieldError("the column \e[4m\e[31m$(vector[1])\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m, that contains the fields: \e[4m\e[32m$(join(instruct.object.model.field_names, ", "))\e[0m and the related objects: \e[4m\e[32m$(join(keys(instruct.object.model.related_objects), ", "))\e[0m"))
   end
 

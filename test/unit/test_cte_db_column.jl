@@ -102,13 +102,13 @@ _cdc_sku_cte() = (c = CDC.Cdc_parent.objects; c.values("id", "sku"); c)
 
   # ─────────────────────────────────────────────────────────────────────────────
   # CTE reference: filter on a CTE-projected db_column field
-  # `.with("ev" => cte).filter("ev__sku" => …)` must render `"R1_1"."sku"` — the alias the CTE
+  # `.with("ev" => cte).filter(CTE("ev", "sku") => …)` must render `"R1_1"."sku"` — the alias the CTE
   # exposes. Pre-#376 it rendered `"R1_1"."product_sku"`, which no backend can resolve.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "filter on a CTE-projected db_column field uses the alias" begin
     q = CDC.Cdc_parent.objects
     q.with("ev" => _cdc_sku_cte(), join_field = "id" => "id")
-    q.filter("ev__sku" => "ABC")
+    q.filter(CTE("ev", "sku") => "ABC")
     q.values("id")
 
     insp = inspect_query(q)
@@ -130,7 +130,7 @@ _cdc_sku_cte() = (c = CDC.Cdc_parent.objects; c.values("id", "sku"); c)
   @testset "SQLite renders the same alias contract" begin
     q = CDC.Cdc_parent.objects
     q.with("ev" => _cdc_sku_cte(), join_field = "id" => "id")
-    q.filter("ev__sku" => "ABC")
+    q.filter(CTE("ev", "sku") => "ABC")
     q.values("id")
 
     sql = inspect_query(q; connection = _CDC_SL)[:sql_text]
@@ -146,7 +146,7 @@ _cdc_sku_cte() = (c = CDC.Cdc_parent.objects; c.values("id", "sku"); c)
   @testset "values() projects the CTE alias" begin
     q = CDC.Cdc_parent.objects
     q.with("ev" => _cdc_sku_cte(), join_field = "id" => "id")
-    q.values("name", "s" => "ev__sku")
+    q.values("name", "s" => CTE("ev", "sku"))
 
     sql = inspect_query(q)[:sql_text]
     @test occursin("\"R1_1\".\"sku\" as \"s\"", sql)
@@ -171,9 +171,9 @@ _cdc_sku_cte() = (c = CDC.Cdc_parent.objects; c.values("id", "sku"); c)
 
     q = CDC.Cdc_parent.objects
     q.with("ev" => cte, join_field = "id" => "id")
-    q.filter("ev__sku" => "ABC")     # emits the join, and caches "ev__sku" — NOT "ev__seen"
+    q.filter(CTE("ev", "sku") => "ABC")     # emits the join, and caches "ev__sku" — NOT "ev__seen"
     q.values("id")
-    q.order_by("ev__seen")           # ... so this path is resolved here for the first time
+    q.order_by(CTE("ev", "seen"))           # ... so this path is resolved here for the first time
 
     sql = inspect_query(q)[:sql_text]
     @test occursin("JOIN \"ev\" AS \"R1_1\" ON \"R1\".\"id\" = \"R1_1\".\"id\"", sql)
@@ -193,7 +193,7 @@ _cdc_sku_cte() = (c = CDC.Cdc_parent.objects; c.values("id", "sku"); c)
 
     q = CDC.Cdc_parent.objects
     q.with("ev" => cte, join_field = "id" => "id")
-    q.filter("ev__psku" => "ABC")
+    q.filter(CTE("ev", "psku") => "ABC")
     q.values("id")
 
     sql = inspect_query(q)[:sql_text]
@@ -213,7 +213,7 @@ _cdc_sku_cte() = (c = CDC.Cdc_parent.objects; c.values("id", "sku"); c)
 
     q = CDC.Cdc_child.objects
     q.with("ev" => cte, join_field = "id" => "id")
-    q.values("note", "p" => "ev__parent")
+    q.values("note", "p" => CTE("ev", "parent"))
 
     sql = inspect_query(q)[:sql_text]
     @test occursin("\"R1_1\".\"parent\" as \"p\"", sql)
@@ -232,7 +232,7 @@ _cdc_sku_cte() = (c = CDC.Cdc_parent.objects; c.values("id", "sku"); c)
 
     q = CDC.Cdc_child.objects
     q.with("ev" => cte, join_field = "id" => "id")
-    q.values("note", "s" => "ev__parent__sku")
+    q.values("note", "s" => CTE("ev", "parent__sku"))
 
     sql = inspect_query(q)[:sql_text]
     # The join OUT of the CTE keys on the alias the CTE exposes ...
@@ -254,7 +254,7 @@ _cdc_sku_cte() = (c = CDC.Cdc_parent.objects; c.values("id", "sku"); c)
 
     q = CDC.Cdc_parent.objects
     q.with("ev" => cte, join_field = "id" => "id")
-    q.filter("ev__meta__driver" => "senna")
+    q.filter(CTE("ev", "meta__driver") => "senna")
     q.values("id")
 
     sql = inspect_query(q)[:sql_text]
@@ -277,7 +277,7 @@ _cdc_sku_cte() = (c = CDC.Cdc_parent.objects; c.values("id", "sku"); c)
 
     q = CDC.Cdc_parent.objects
     q.with("ev" => cte, join_field = "id" => "id")
-    q.filter("ev__seen__@yyyy_mm__@lte" => "1991-10")
+    q.filter(CTE("ev", "seen__@yyyy_mm__@lte") => "1991-10")
     q.values("id")
 
     insp = inspect_query(q)
@@ -325,7 +325,7 @@ _cdc_sku_cte() = (c = CDC.Cdc_parent.objects; c.values("id", "sku"); c)
 
     q2 = CDC.Cdc_parent.objects
     q2.with("ev" => bare, join_field = "id" => "id")
-    q2.values("id", "s" => "ev__sku")
+    q2.values("id", "s" => CTE("ev", "sku"))
 
     err2 = try inspect_query(q2); nothing catch e; e end
     @test err2 isa PormG.UnknownFieldError
@@ -350,7 +350,7 @@ _cdc_sku_cte() = (c = CDC.Cdc_parent.objects; c.values("id", "sku"); c)
 
     q = CDC.Cdc_parent.objects
     q.with("ev" => cte, join_field = "sku" => "sku")
-    q.values("id", "x" => "ev__sku")
+    q.values("id", "x" => CTE("ev", "sku"))
 
     sql = inspect_query(q)[:sql_text]
     # The CTE really does expose a "product_sku" column carrying `name` — without this the rest of
@@ -376,8 +376,8 @@ _cdc_sku_cte() = (c = CDC.Cdc_parent.objects; c.values("id", "sku"); c)
 
     q = CDC.Cdc_plain.objects
     q.with("ev" => cte, join_field = "id" => "id")
-    q.filter("ev__sku" => "ABC")
-    q.values("id", "s" => "ev__sku")
+    q.filter(CTE("ev", "sku") => "ABC")
+    q.values("id", "s" => CTE("ev", "sku"))
 
     sql = inspect_query(q)[:sql_text]
     @test occursin("\"Tb\".\"sku\" as \"sku\"", sql)     # body: column == field name

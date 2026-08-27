@@ -14,7 +14,7 @@ using Dates, TimeZones, Decimals, UUIDs
 import PormG.Models: CharField, IntegerField, get_model_pk_field, sForeignKey, sManyToManyField, sBinaryField
 import PormG: Dialect, Models
 import PormG: config
-import PormG: SQLType, PormGSettings, PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, AbstractPormGParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
+import PormG: SQLType, PormGSettings, PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, AbstractPormGParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, SQLTypeCTE, PormGModel, PormGField, PormGTypeField
 import PormG: PormGBytes  # binary payloads bind as one blob, not as an array of values (#296)
 # Semantic error taxonomy (#231, #239). The types are defined in `src/exceptions.jl`, included by
 # `Kernel` (layer 1) so every subsystem can reach them; only the message-composing funnels
@@ -89,7 +89,7 @@ include("querybuilder/ctes.jl")
 # low-level builder used inside the date-bucketing helpers (QUADRIMESTER/QUARTER). Reach it
 # as `PormG.QueryBuilder.OP` if ever needed — it stays defined, just off the public surface.
 export Q, Qor
-export Sum, Avg, Count, Max, Min, When, F, Exists, OuterRef, Subquery, Case, Cast, Concat, Extract, ToChar, Value, Interval
+export Sum, Avg, Count, Max, Min, When, F, Exists, OuterRef, Subquery, CTE, Case, Cast, Concat, Extract, ToChar, Value, Interval
 export WindowOver, WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
 export Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim
 export Floor, Ceil, Sqrt, Exp, Ln, Power, Mod

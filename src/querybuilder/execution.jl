@@ -1320,6 +1320,12 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     return _set_update_query(operand, instruc)
   elseif isa(operand, SQLTypeFunction)
     return _get_select_query(operand, instruc)
+  elseif isa(operand, SQLTypeCTE)
+    # #444: a CTE handle is a COLUMN reference, exactly like the `F("<cte>__col")` it replaces.
+    # Without this arm it falls through to the `add_parameter!` at the bottom of this chain and
+    # binds as a VALUE — `F("note") == CTE("ev","code")` rendered `"R1"."note" = ?` with no join
+    # emitted at all, which is valid SQL comparing a column against a stringified handle.
+    return _get_select_query(operand, instruc)
   elseif isa(operand, String)
     # Check if it's a field reference
     if contains(operand, "__") || operand in instruc.object.model.field_names
@@ -1365,6 +1371,11 @@ function _set_update_query_left(value::Any, operation::String, instruc::SQLInstr
     return _set_update_query(value, instruc)
   end
 end
+
+# #444: a bare CTE handle as an UPDATE SET value. Resolving it through the ordinary column path is
+# what makes `update()`'s no-WITH-clause refusal (#433) fire with its own accurate message instead of
+# a `MethodError` from the field formatter.
+_set_update_query(v::CTEReference, instruc::SQLInstruction) = _get_select_query(v, instruc)
 
 function _set_update_query(v::FExpression, instruc::SQLInstruction)
   if v.operation === nothing
@@ -1605,7 +1616,14 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     
     quoted_field = safe_column_identifier(Models.field_db_column(model.fields[field], field), connection)  # db_column (#50)
 
-    if isa(objct.insert[field], SQLTypeF) || isa(objct.insert[field], SQLTypeFunction)
+    # #444: a `CTE(...)` handle joins this branch rather than the value branch below. It is
+    # unambiguously a COLUMN reference — never a literal — so binding it as a value was never right;
+    # it reached `field.formatter` and died with a bare `MethodError` (outside the #231 taxonomy).
+    # Routed here, it resolves as a column and `update()`'s own "this statement emits no WITH
+    # clause" refusal (#433) fires with the accurate message, which is exactly what the pre-#444
+    # `F("<cte>__col")` spelling produced.
+    if isa(objct.insert[field], SQLTypeF) || isa(objct.insert[field], SQLTypeFunction) ||
+       isa(objct.insert[field], SQLTypeCTE)
       f_value = _set_update_query(objct.insert[field], instruction)
       push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else

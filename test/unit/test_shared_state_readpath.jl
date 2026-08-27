@@ -56,7 +56,7 @@ function _cte_query()
   q = SS.Result.objects
   q.with("agg" => agg, join_field = "driverid" => "driverid")
   q.filter("id__@lte" => 100)
-  q.values("id", "driverid", "agg__total")
+  q.values("id", "driverid", CTE("agg", "total"))
   q.order_by("id")
   return q
 end

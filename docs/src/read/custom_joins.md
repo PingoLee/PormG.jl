@@ -329,14 +329,19 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     Reference the joined copy with `F("alias.col")`. Alias-qualified **operator pairs**
     (`"b2.col__@gte" => 3`) are not supported yet — express a joined-side comparison-to-literal by
     restructuring, or filter the base side with a bare pair (`"col__@gte" => 3`). Referencing a
-    *third* table (another join's alias) inside one `cjoin_on` is also out of scope for now — and
-    when that third table is a **CROSS-joined CTE** (`.with(...)` with no `join_field`), it
-    raises `QueryBuildError` instead of quietly dropping the predicate (#424) — a `CROSS JOIN` has
-    no `ON` clause to carry one, so the join would otherwise match every row. That fires even when
-    the predicate is the join's **only** one (#435). The same guard fires
-    when a `cjoin_on`'s **alias** happens to equal an unkeyed CTE's name: that collision hands the
-    CTE this join's predicates. Rename the CTE, give it a `join_field`, or move the predicate to
-    `.filter(...)` (#44).
+    *third* table (another join's alias) inside one `cjoin_on` is also out of scope for now, and a
+    predicate that all relocates onto a later join leaves this one with no `ON` clause of its own,
+    which raises `QueryBuildError` (#435).
+
+    **A CTE cannot be referenced from an `ON` clause at all.** A `CTE(name, path)` inside `on`
+    raises `FilterError`: an `ON` clause targets the joined *model*, and a CTE is joined by its own
+    `.with(...)` declaration. Put the predicate in `.filter(...)` instead (#444).
+
+    One CTE-related collision still reaches the `ON` machinery: a `cjoin_on` **alias** spelled the
+    same as an unkeyed (CROSS-joined) CTE's name. That collision hands the CTE this join's
+    predicates, and a `CROSS JOIN` has no `ON` clause to carry them — so PormG raises
+    `QueryBuildError` rather than dropping them and matching every row (#424). Rename the alias,
+    give the CTE a `join_field`, or move the predicate to `.filter(...)` (#44).
 
     `cjoin_on` works in reads and in the common `update()`/`delete()` (which scope rows via a
     subquery); only a **correlated** UPDATE-FROM/DELETE-USING (setting a column *from* a joined

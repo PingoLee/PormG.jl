@@ -3,9 +3,9 @@ Unit coverage for CTE ergonomics (#44): referencing a CTE's columns with `F()` i
 query WITHOUT a `join_field`.
 
 When `.with("r91" => sub)` is given no `join_field`, the CTE is emitted but not keyed to the
-main table. Referencing one of its columns via `F("r91__col")` then CROSS JOINs the CTE and the
+main table. Referencing one of its columns via `CTE("r91", "col")` then CROSS JOINs the CTE and the
 `F()` filter supplies the correlation verbatim in WHERE — WYSIWYG. This is the natural,
-Django-flavored way to correlate a main query with a CTE (`filter("raceid" => F("r91__raceid"))`).
+Django-flavored way to correlate a main query with a CTE (`filter("raceid" => CTE("r91", "raceid"))`).
 
 What is pinned here (deterministic, DB-free — rendered via `inspect_query`, both dialects):
   - No-`join_field` + `F()` correlation → a `CROSS JOIN` (no ON) and the correlation lands in
@@ -42,7 +42,7 @@ PormG.config["cte_ergo_mock"] = PormG.Configuration.Settings(
 
 # Inline F1-flavored models (NOT a re-include of db_sl/models.jl — a second include would
 # redefine module `models` in the shared Main scope). `raceid` on the result table is a real FK
-# to the race table, mirroring the canonical schema so `F("r91__raceid")` correlates a real
+# to the race table, mirroring the canonical schema so `CTE("r91", "raceid")` correlates a real
 # main-table column against the CTE's projected `raceid`.
 module CteErgoModels
 import PormG
@@ -73,14 +73,14 @@ _races_91() = CE.Cte_race.objects.filter("year" => 1991).values("raceid")
 
   # ─────────────────────────────────────────────────────────────────────────────
   # CROSS JOIN + WHERE correlation (SQLite): the issue's exact shape
-  # `.with("r91" => races_91).filter("raceid" => F("r91__raceid"), "positionorder" => 1)`
+  # `.with("r91" => races_91).filter("raceid" => CTE("r91", "raceid"), "positionorder" => 1)`
   # must emit a CROSS JOIN (no ON) and render the F() correlation verbatim in WHERE. CTE
   # parameter (1991) must precede the WHERE parameter (1) in the positional buckets.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "SQLite: no join_field → CROSS JOIN + WHERE correlation" begin
     q = CE.Cte_result.objects
     q.with("r91" => _races_91())
-    q.filter("raceid" => F("r91__raceid"), "positionorder" => 1)
+    q.filter("raceid" => CTE("r91", "raceid"), "positionorder" => 1)
     q.values("resultid", "positionorder")
 
     insp = inspect_query(q)          # default connection = mock SQLite
@@ -113,7 +113,7 @@ _races_91() = CE.Cte_race.objects.filter("year" => 1991).values("raceid")
   @testset "PostgreSQL: no join_field → CROSS JOIN + WHERE correlation" begin
     q = CE.Cte_result.objects
     q.with("r91" => _races_91())
-    q.filter("raceid" => F("r91__raceid"), "positionorder" => 1)
+    q.filter("raceid" => CTE("r91", "raceid"), "positionorder" => 1)
     q.values("resultid", "positionorder")
 
     insp = inspect_query(q; connection = _CTE_PG)
@@ -138,7 +138,7 @@ _races_91() = CE.Cte_race.objects.filter("year" => 1991).values("raceid")
     q = CE.Cte_result.objects
     q.with("r91" => _races_91(), join_field = "raceid" => "raceid")
     q.filter("positionorder" => 1)
-    q.values("resultid", "r91__raceid")
+    q.values("resultid", CTE("r91", "raceid"))
 
     sql = inspect_query(q)[:sql_text]
 
@@ -154,8 +154,8 @@ _races_91() = CE.Cte_race.objects.filter("year" => 1991).values("raceid")
   @testset "two references to the same CTE dedup to one CROSS JOIN" begin
     q = CE.Cte_result.objects
     q.with("r91" => CE.Cte_race.objects.filter("year" => 1991).values("raceid", "year"))
-    q.filter("raceid" => F("r91__raceid"))
-    q.values("resultid", "r91__raceid", "r91__year")
+    q.filter("raceid" => CTE("r91", "raceid"))
+    q.values("resultid", CTE("r91", "raceid"), CTE("r91", "year"))
 
     sql = inspect_query(q)[:sql_text]
 
@@ -173,7 +173,7 @@ _races_91() = CE.Cte_race.objects.filter("year" => 1991).values("raceid")
     warn_q = () -> begin
       q = CE.Cte_result.objects
       q.with("r91" => _races_91())
-      q.values("resultid", "r91__raceid")
+      q.values("resultid", CTE("r91", "raceid"))
       inspect_query(q)
     end
     @test_logs (:warn, r"CROSS JOINed with no correlating filter") warn_q()
@@ -182,7 +182,7 @@ _races_91() = CE.Cte_race.objects.filter("year" => 1991).values("raceid")
     quiet_q = () -> begin
       q = CE.Cte_result.objects
       q.with("r91" => _races_91())
-      q.filter("raceid" => F("r91__raceid"))
+      q.filter("raceid" => CTE("r91", "raceid"))
       q.values("resultid")
       inspect_query(q)
     end
@@ -191,14 +191,14 @@ _races_91() = CE.Cte_race.objects.filter("year" => 1991).values("raceid")
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Over-long CTE path errors cleanly — never a cryptic KeyError("how")
-  # A CTE column is terminal: `F("r91__raceid__year")` cannot traverse past `raceid`. The CROSS
+  # A CTE column is terminal: `CTE("r91", "raceid__year")` cannot traverse past `raceid`. The CROSS
   # branch seeds a "how" sentinel so this reaches the same "not a foreign key" failure as the
   # keyed path — a raw KeyError("how") (the pre-fix behavior) would fail the second assertion.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "over-long CTE path errors cleanly, not KeyError" begin
     q = CE.Cte_result.objects
     q.with("r91" => _races_91())
-    q.filter("raceid" => F("r91__raceid__year"))   # one segment too deep — raceid is terminal
+    q.filter("raceid" => CTE("r91", "raceid__year"))   # one segment too deep — raceid is terminal
     q.values("resultid")
 
     err = try inspect_query(q); nothing catch e; e end

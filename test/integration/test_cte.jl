@@ -19,7 +19,7 @@ end
         main_query = M.Result.objects
         main_query.with("tb_dup" => duplicates, join_field="driverid" => "driverid")
         main_query.filter("resultid__@lte" => 100)
-        main_query.values("resultid", "driverid", "tb_dup__dias")
+        main_query.values("resultid", "driverid", CTE("tb_dup", "dias"))
         df = main_query |> DataFrame
 
         @test nrow(df) == 100
@@ -42,8 +42,8 @@ end
         query.filter("driverid__@lte" => 50)
         query.values(
             "driverid", "forename", "surname",
-            "driver_stats__total_results",
-            "driver_stats__avg_grid"
+            CTE("driver_stats", "total_results"),
+            CTE("driver_stats", "avg_grid")
         )
         df = query |> DataFrame
 
@@ -69,7 +69,7 @@ end
         query.values(
             "resultid",
             "driver_name" => "driverid__surname",
-            "driver_lookup__driverid"
+            CTE("driver_lookup", "driverid")
         )
         query.order_by("driverid__surname", "resultid")
 
@@ -93,8 +93,8 @@ end
         query = M.Result.objects
         query.with("recent" => recent_races, join_field="raceid" => "raceid")
         query.with("top_d" => top_drivers, join_field="driverid" => "driverid")
-        query.values("resultid", "recent__name", "top_d__forename", "points")
-        query.filter("recent__name__@isnull" => false, "top_d__forename__@isnull" => false)
+        query.values("resultid", CTE("recent", "name"), CTE("top_d", "forename"), "points")
+        query.filter(CTE("recent", "name__@isnull") => false, CTE("top_d", "forename__@isnull") => false)
         df = query |> DataFrame
 
         @test nrow(df) == 294
@@ -111,7 +111,7 @@ end
 
         query = M.Driver.objects
         query.with("high_scorers" => high_scorers, join_field="driverid" => "driverid", join_type="INNER")
-        query.values("driverid", "forename", "max_points" => "high_scorers__max_points")
+        query.values("driverid", "forename", "max_points" => CTE("high_scorers", "max_points"))
         query.filter("driverid__@lte" => 100)
         df = query |> DataFrame
 
@@ -164,7 +164,7 @@ end
 
     @testset "F() reference without join_field: CROSS JOIN + WHERE correlation (#44)" begin
         # #44: a CTE registered WITHOUT join_field, correlated to the main query by an F()
-        # filter. `.with("r91" => races_91).filter("raceid" => F("r91__raceid"), ...)` must emit
+        # filter. `.with("r91" => races_91).filter("raceid" => CTE("r91", "raceid"), ...)` must emit
         # a CROSS JOIN to the CTE and render the correlation in WHERE — returning exactly the
         # 1991 race winners. Result-driven: cross-checked against the semantically equivalent
         # join-filter query, so this fails if the CROSS JOIN correlation is wrong.
@@ -175,7 +175,7 @@ end
         races_91 = M.Race.objects.filter("year" => 1991).values("raceid")
         q = M.Result.objects
         q.with("r91" => races_91)                       # no join_field
-        q.filter("raceid" => F("r91__raceid"),          # correlation → CROSS JOIN + WHERE
+        q.filter("raceid" => CTE("r91", "raceid"),          # correlation → CROSS JOIN + WHERE
                  "positionorder" => 1)                  # race winners only
         q.values("resultid", "raceid", "positionorder")
 
@@ -205,7 +205,7 @@ end
         query = M.Driver.objects
         query.with("old_guard" => drivers_old, join_field="driverid" => "driverid")
         query.filter("nationality" => "British")
-        query.values("forename", "surname", "old_guard__dob")
+        query.values("forename", "surname", CTE("old_guard", "dob"))
         df = query |> DataFrame
 
         lewis = df[df.forename.=="Lewis", :]
@@ -228,7 +228,7 @@ end
             join_field="driverid" => "driverid",
             join_type="INNER")
         query_inner.filter("nationality" => "British")
-        query_inner.values("forename", "surname", "old_guard_inner__dob")
+        query_inner.values("forename", "surname", CTE("old_guard_inner", "dob"))
         df_inner = query_inner |> DataFrame
 
         @test isempty(df_inner[df_inner.forename.=="Lewis", :])
@@ -250,8 +250,8 @@ end
         main_query = M.Constructor.objects
         main_query.with("monaco_stats" => cte_source, join_field="constructorid" => "constructorid")
         main_query.filter("name__@ne" => "Ferrari")             # main param 3
-        main_query.values("name", "nationality", "monaco_stats__total_points")
-        main_query.order_by("-monaco_stats__total_points")
+        main_query.values("name", "nationality", CTE("monaco_stats", "total_points"))
+        main_query.order_by(CTE("monaco_stats", "total_points"; desc = true))
         df = main_query |> DataFrame
 
         @test "monaco_stats__total_points" in names(df)
@@ -366,7 +366,7 @@ end
         query = M.Result.objects
         query.with("tc" => top_const, join_field="constructorid" => "constructorid")
         query.cjoin("driverid" => "Driver", filters=["nationality" => "German"], warn=false)
-        query.values("resultid", "tc__name", "driverid__surname")
+        query.values("resultid", CTE("tc", "name"), "driverid__surname")
         query.limit(10)
         df = query |> DataFrame
 
@@ -388,7 +388,7 @@ end
         query.with("tc" => top_const, join_field="constructorid" => "constructorid")
         query.on("driverid", "nationality" => "Brazilian")
         query.filter("positionorder" => 1, "resultid__@lte" => 200)
-        query.values("resultid", "tc__name", "driverid__surname")
+        query.values("resultid", CTE("tc", "name"), "driverid__surname")
         df = query |> DataFrame
 
         @test "tc__name" in names(df)
@@ -504,12 +504,12 @@ end
         "driverid",
         "constructorid",
         "points",
-        "tc__name",                      # from CTE 1
-        "mr__year",                      # from CTE 2
+        CTE("tc", "name"),               # from CTE 1
+        CTE("mr", "year"),               # from CTE 2
         "raceid__name",                  # from cjoin → Race
         "driverid__surname",             # from on() → Driver (LEFT: may be missing)
         "total_points" => Sum("points"), # aggregate — will go to HAVING
-        "tc__nationality"
+        CTE("tc", "nationality")
     )
 
     # HAVING: only groups with summed points > 5
@@ -631,7 +631,7 @@ end
     q = M.Result.objects
     q.with("tb_dup" => dup, join_field="driverid" => "driverid")
     q.filter("resultid__@lte" => 100)
-    q.values("resultid", "driverid", "tb_dup__dias")
+    q.values("resultid", "driverid", CTE("tb_dup", "dias"))
     q.order_by("resultid")   # deterministic row order so DataFrame equality is stable
 
     # AC4: re-executing the same query returns identical results (no accumulation).

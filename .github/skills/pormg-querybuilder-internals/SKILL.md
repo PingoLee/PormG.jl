@@ -89,6 +89,7 @@ Canonical unit files:
 
 - `test/unit/test_alignment_sqlite.jl`
 - `test/unit/test_parameters.jl`
+- `test/unit/test_cte_reference.jl` — the `CTE(name, path)` namespace (#444); the CTE surface's entry point
 
 Integration touchpoints:
 

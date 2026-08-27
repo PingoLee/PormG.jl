@@ -107,7 +107,7 @@ include("QueryBuilder.jl")
 # Query primitives only. The SQL function constructors are NOT imported into PormG — they
 # live solely in `PormG.Functions` (below). There is intentionally no `PormG.Sum`: the
 # function library has exactly one home, reached via `using PormG.Functions` / `PormG.Functions.X`.
-import .QueryBuilder: object, get, PormGRow, pk, Q, Qor, F, Exists, OuterRef, Subquery, Interval, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys, resync_sequences
+import .QueryBuilder: object, get, PormGRow, pk, Q, Qor, F, Exists, OuterRef, Subquery, CTE, Interval, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys, resync_sequences
 # The error taxonomy needs no bridge line: since #239 every subtype (including `DoesNotExist` /
 # `MultipleObjectsReturned`) is defined in `Kernel` and already bound here by `using .Kernel` above.
 # QueryBuilder imports the same names from `PormG`, so both modules see one set of types.
@@ -148,7 +148,7 @@ using PormG.Functions: Sum, Count     # …or just the ones you use
 M.Result.objects.values("n" => PormG.Functions.Count("resultid"))
 ```
 
-`Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery` and `Interval` are **not** part of this
+`Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery`, `CTE` and `Interval` are **not** part of this
 library — they are query primitives and stay on the top-level `using PormG` surface.
 """
 module Functions
@@ -164,7 +164,7 @@ end
 
 # Curated top-level surface: query primitives only. The SQL function constructors above
 # live in `PormG.Functions` and are reached via `using PormG.Functions` / `PormG.Functions.X`.
-export object, get, PormGRow, pk, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Subquery, Interval, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys, resync_sequences
+export object, get, PormGRow, pk, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Subquery, CTE, Interval, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys, resync_sequences
 # Semantic error taxonomy (#231): catch `PormGError` for any query-builder misuse, or a specific subtype.
 export PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError, QueryBuildError, UnsafeMutationError, InvalidValueError, WritesDisabledError, UnsupportedConnectionError, BackendCapabilityError, ProtectedError
 # Schema / configuration / migration errors (#239). These complete the taxonomy: `catch PormGError`

@@ -220,7 +220,7 @@ end
     gv.values("id", "code")
     s = PAN.Pan_parent.objects
     s.with("gv" => gv, join_field = "grandparent" => "id")
-    s.filter("gv__code" => "CTEVAL")
+    s.filter(CTE("gv", "code") => "CTEVAL")
     s.values("id")
     s
   end
@@ -291,7 +291,7 @@ end
     cte.filter("sku" => "CTEWHERE")
     q = PAN.Pan_child.objects
     q.with("cq" => cte, join_field = "parent" => "id")
-    q.values("note", "s" => "cq__sku")
+    q.values("note", "s" => CTE("cq", "sku"))
     q.filter("note" => "TAIL")
     q
   end

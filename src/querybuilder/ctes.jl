@@ -86,9 +86,74 @@ function _normalize_cjoin_filter_key(key::String, prefix::String, foreign_model:
   throw(FilterError("Invalid cjoin filter field '$(key)' for join path '$(prefix)'. cjoin filters modify the JOIN ON clause and must target fields on the joined model '$(foreign_model.name)'. Use a joined-model field like '$(prefix)__field' (or just 'field' for auto-prefixing), and keep base-query filters in .filter(...)."))
 end
 
+# #444 — a CTE column cannot appear in a JOIN's ON clause. Pre-#444 the same class was reachable by
+# spelling `"<cte>__col"` inside `on`/`cjoin`/`cjoin_on`, and it was caught only downstream, by
+# #424's CROSS-join guard, with a message about a name collision. Now the reference is typed, so
+# refuse it where it is written, naming the clause the caller used.
+function _reject_cte_in_join(ref::CTEReference, context::String)
+  throw(FilterError(
+    "\e[4m\e[31mCTE(\"$(ref.name)\", \"$(ref.path)\")\e[0m cannot be used in $(context). A JOIN's " *
+    "ON clause targets the joined MODEL; a CTE is joined by its own \e[4m\e[32m.with(...)\e[0m " *
+    "declaration (\e[4m\e[32mjoin_field=\e[0m keys it, \e[4m\e[32mjoin_type=\e[0m sets how).\n  " *
+    "Put the predicate in \e[4m\e[32m.filter(...)\e[0m instead (#444)."))
+end
+
+# Recursive CTE-handle sweep for a filter element that has NOT been through `_prefix_join_filter`.
+# `_cjoin_on` is the one such caller: it skips that helper on purpose, because the helper forces
+# every reference onto a single joined model and `cjoin_on` must reference both sides.
+function _guard_no_cte_reference(filter, context::String, depth::Int = 0)
+  # `Base.:(==)(f::FExpression, ::FExpression)` MUTATES `f` in place when `f.operation === nothing`,
+  # so `f = F("x"); g = (f == f)` builds a genuine self-cycle (`g.operand === g`). Walking that
+  # unbounded is a StackOverflowError — which Julia reports with "program state may be corrupted".
+  # A depth cap is enough: no legitimate predicate nests anywhere near this deep, and stopping the
+  # walk only means the guard declines to look further, never that it accepts something it saw.
+  depth > 32 && return nothing
+  if filter isa CTEReference
+    _reject_cte_in_join(filter, context)
+  elseif filter isa Pair
+    # RECURSE into both sides rather than testing `isa CTEReference`. A pair's RHS is very often an
+    # expression — `"sku" => (F("note") == CTE("ev","sku"))` — and a flat test walked straight past
+    # it, letting the handle reach the ON clause after all. The rendered SQL was not merely on the
+    # wrong join, it compared a varchar to a boolean:
+    #   ON … AND "R1_1"."product_sku" = ("R1"."note" = "R1_2"."sku")
+    _guard_no_cte_reference(filter.first, context, depth + 1)
+    _guard_no_cte_reference(filter.second, context, depth + 1)
+  elseif filter isa QObject
+    for f in filter.filters; _guard_no_cte_reference(f, context, depth + 1); end
+  elseif filter isa QorObject
+    for f in filter.or; _guard_no_cte_reference(f, context, depth + 1); end
+  elseif filter isa OperObject
+    filter.column isa CTEReference && _reject_cte_in_join(filter.column, context)
+    filter.column isa SQLField && filter.column.field isa CTEReference &&
+      _reject_cte_in_join(filter.column.field, context)
+    filter.values isa CTEReference && _reject_cte_in_join(filter.values, context)
+    _guard_no_cte_reference(filter.values, context, depth + 1)
+  elseif filter isa FExpression
+    # #444: the comparison overloads (`F("sku") == CTE("ev","sku")`) put the handle in `.operand`,
+    # and an `FExpression` is a `FilterType`, so `on`/`cjoin`/`cjoin_on` accept it as an element.
+    # Without this arm the predicate was ACCEPTED and then resolved onto the CTE's own join instead
+    # of the one the caller named — silently the wrong join, which is the whole defect class #444
+    # exists to close. Every slot that can hold a handle is swept, including nested F expressions.
+    filter.field_name isa CTEReference && _reject_cte_in_join(filter.field_name, context)
+    filter.column     isa CTEReference && _reject_cte_in_join(filter.column, context)
+    filter.operand    isa CTEReference && _reject_cte_in_join(filter.operand, context)
+    _guard_no_cte_reference(filter.field_name, context, depth + 1)
+    _guard_no_cte_reference(filter.operand, context, depth + 1)
+  end
+  return nothing
+end
+
 function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGModel,Nothing})
   if filter isa Pair
     key = filter.first
+    # Refuse BEFORE the `return filter` fall-through below: without this a CTE-keyed pair passes
+    # through untouched and `_check_filter` — which since #444 resolves such a key — would build a
+    # perfectly valid CTE predicate onto a join that cannot carry it.
+    #
+    # The sweep is RECURSIVE on both sides. A flat `isa CTEReference` test missed the common shape
+    # `"sku" => (F("note") == CTE("ev","sku"))`, where the handle sits inside an F expression on the
+    # RHS — accepted, then resolved onto the CTE's own join instead of the one the caller named.
+    _guard_no_cte_reference(filter, "a join ON clause (on(...) / cjoin(...))")
     if key isa String
       return _normalize_cjoin_filter_key(key, prefix, foreign_model) => filter.second
     end
@@ -99,6 +164,15 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
     return QorObject(or=[_prefix_join_filter(f, prefix, foreign_model) for f in filter.or])
   elseif filter isa OperObject
     new_oper = deepcopy(filter)
+
+    # A `Q(...)`/`Qor(...)` element arrives here already converted, so the CTE handle is inside the
+    # OperObject rather than on a raw Pair. Same refusal, same reason (#444).
+    new_oper.column isa SQLField && new_oper.column.field isa CTEReference &&
+      _reject_cte_in_join(new_oper.column.field, "a join ON clause (on(...) / cjoin(...))")
+    new_oper.column isa CTEReference &&
+      _reject_cte_in_join(new_oper.column, "a join ON clause (on(...) / cjoin(...))")
+    new_oper.values isa CTEReference &&
+      _reject_cte_in_join(new_oper.values, "a join ON clause (on(...) / cjoin(...))")
 
     if new_oper.column isa SQLField && new_oper.column.field isa String
       new_oper.column = SQLField(
@@ -116,6 +190,11 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
 
     return new_oper
   elseif filter isa FExpression
+    # #444: sweep the F expression BEFORE prefixing. `F("sku") == CTE("ev","sku")` is a `FilterType`,
+    # so `on()`/`cjoin()` accept it, and the arms below only rewrite `String` slots — a handle rode
+    # through untouched and its predicate then resolved onto the CTE's join rather than the join the
+    # caller named. Same refusal as a raw pair; `_guard_no_cte_reference` walks the nested slots.
+    _guard_no_cte_reference(filter, "a join ON clause (on(...) / cjoin(...))")
     new_filter = deepcopy(filter)
 
     if new_filter.field_name isa String
@@ -178,9 +257,15 @@ function _resolve_join_target_model(q::SQLObject, join_path::String)
   for (index, part) in enumerate(parts)
     current_path = join(parts[1:index], "__")
 
-    if index == 1 && haskey(q.ctes, part)
-      throw(QueryBuildError("on() does not target CTE names. Use with(..., join_type=...) to configure CTE join types."))
-    end
+    # #434 was here: `if index == 1 && haskey(q.ctes, part) throw(…) end`. It read the CTE registry
+    # as it stood at `.on()` time, so `.with()` then `.on()` was refused while `.on()` then `.with()`
+    # sailed past — order-dependent where every other fluent method is order-independent.
+    #
+    # #444 dissolves it rather than moving it. `join_path` is now unambiguously a FIELD path: a CTE
+    # is reachable only through `CTE(name, path)`, which `on()` refuses outright (see
+    # `_prefix_join_filter`). So a segment naming a CTE is simply a segment that is not a relation,
+    # and the generic error below is both correct and order-independent. The CTE-aware hint lives
+    # there, where it can be best-effort without any of this being conditional on it.
 
     field = if part in current_model.field_names
       current_model.fields[part]
@@ -210,7 +295,12 @@ function _resolve_join_target_model(q::SQLObject, join_path::String)
         current_model = (related_value::Models.ReverseRelation).model_resolved
       end
     else
-      throw(QueryBuildError("Join path '$(join_path)' is invalid. The segment '$(part)' is not a relation on model '$(current_model.name)'."))
+      # #434/#444: best-effort hint. Both `.on()`-then-`.with()` and `.with()`-then-`.on()` reach
+      # this same throw with the same wording; only the parenthetical depends on whether the CTE has
+      # been declared yet, and it adds information rather than deciding the outcome.
+      hint = haskey(q.ctes, part) ?
+        " ('$(part)' is a CTE declared on this query — on() targets model relations only; set a CTE's join type with with(..., join_type=...).)" : ""
+      throw(QueryBuildError("Join path '$(join_path)' is invalid. The segment '$(part)' is not a relation on model '$(current_model.name)'.$(hint)"))
     end
   end
 
@@ -447,6 +537,10 @@ function _cjoin_on(q::SQLObject, target_model::String, on::AbstractVector; alias
   # Pair into an OperObject; the alias-qualified resolution happens at render time.
   parsed = Vector{FilterType}()
   for f in on
+    # #444: `_prefix_join_filter` is deliberately skipped here (see the note above), so this loop
+    # carries its own copy of that helper's CTE refusal. Without it a CTE handle would resolve into
+    # a valid predicate on an ON clause that cannot carry it.
+    _guard_no_cte_reference(f, "a cjoin_on `on` expression")
     if isa(f, Pair)
       push!(parsed, _check_filter(f))
     elseif isa(f, FilterType)

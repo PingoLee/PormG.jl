@@ -22,7 +22,8 @@ using PormG
 # scope; `public` records "this is API" for tooling, `?`, and Documenter's `Private = false`.
 const EXPECTED_TOPLEVEL = Set([
     # Query builder
-    :object, :get, :Q, :Qor, :F, :Exists, :OuterRef, :Subquery, :Interval, :show_query, :inspect_query,
+    # `CTE` (#444) is a CTE-column reference object, a query primitive like F/OuterRef/Subquery.
+    :object, :get, :Q, :Qor, :F, :Exists, :OuterRef, :Subquery, :CTE, :Interval, :show_query, :inspect_query,
     # Rows & exceptions
     :PormGRow, :pk, :DoesNotExist, :MultipleObjectsReturned, :PoolTimeoutError, :PoolConnectError, :pool_stats,
     # Semantic error taxonomy (#231): PormGError root + query-builder subtypes

@@ -190,31 +190,55 @@ function delete(objct::SQLObjectHandler;
   end
   
   # If no objects to delete, return early (unless we're just inspecting the query)
+  #
+  # #452: this probe deliberately stays OUTSIDE the transaction, unlike the per-path probes in
+  # `find_related_objects!` (moved inside, below). The asymmetry is the failure mode, not the cost:
+  # being wrong here yields a delete that found nothing, which is indistinguishable from the delete
+  # having run an instant earlier and can never produce a PARTIAL cascade. Being wrong there deletes
+  # the root and skips a dependent path. Keeping this one out also avoids opening a transaction —
+  # and, on SQLite, taking the process-wide write lock — for every no-op delete.
   if show_query === :execute && objct |> !_exists
     return 0, Dict{String, Integer}()
   end
 
   # We'll track deletion counts
   deleted_counter = Dict{String, Integer}()
-  
-  # Collect related models that need special handling
-  collector = DeletionCollector(model, settings, show_query)
-  
-  # Add the primary objects to delete
-  add_objects_to_collector!(collector, objct |> deepcopy, model)
-  
-  # Build and sort the deletion graph
-  process_collector!(collector)
 
   # Definition of run_deletions (backend agnostic)
   results = []
   run_deletions = function(conn)
-    # Process fast deletes first (objects that can be deleted directly)
-    for (model, keys) in collector.fast_deletes
-      res = delete_objects(connection, model, keys, show_query, deleted_counter, conn)
+    # Plan INSIDE the transaction (#452).
+    #
+    # `find_related_objects!` probes every cascade path with `_exists` and DROPS the ones that come
+    # back empty. That planning used to run before `BEGIN`, so a row inserted on a pruned path
+    # between the probe and the DELETE was never deleted: the root went, the dependent stayed. It is
+    # also what kept #452 itself invisible — the F1 fixture declares two CASCADE paths into
+    # `just_a_test_deletion`, and the second was always pruned because nothing populates it.
+    #
+    # On SQLite this closes the window: `BEGIN IMMEDIATE` plus the process-wide write lock means no
+    # other writer can commit while planning runs.
+    #
+    # On PostgreSQL it only NARROWS it, and the comment says so rather than implying otherwise:
+    # READ COMMITTED gives every statement a fresh snapshot even inside a transaction, so a
+    # concurrent insert between a probe and its DELETE is still possible. Closing it there needs
+    # REPEATABLE READ / SERIALIZABLE or explicit row locks — a separate decision, not this fix.
+    #
+    # Two costs, both accepted deliberately: SQLite now holds the write lock across the probe
+    # SELECTs, and a `ProtectedError` / `ModelDefinitionError` raised while planning now costs a
+    # BEGIN + ROLLBACK instead of throwing before any transaction existed.
+    collector = DeletionCollector(model, settings, show_query)
+    add_objects_to_collector!(collector, objct |> deepcopy, model)
+    process_collector!(collector)
+
+    # Process fast deletes first (objects that can be deleted directly).
+    # Named `fast_model` rather than `model`: the enclosing `model` is now read inside this closure
+    # (the collector is built here since #452), and two meanings for one name in one scope is a
+    # reading hazard even where Julia's loop scoping makes it harmless.
+    for (fast_model, fast_keys) in collector.fast_deletes
+      res = delete_objects(connection, fast_model, fast_keys, show_query, deleted_counter, conn)
       push!(results, res)
       # Remove from objects to prevent double deletion
-      delete!(collector.objects, model)
+      delete!(collector.objects, fast_model)
     end
 
     # Process field updates (for SET_NULL, SET_DEFAULT, etc.)
@@ -558,65 +582,129 @@ function collect_fast_deletes!(collector::DeletionCollector)
   end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Rows a statement actually removed (#452)
+#
+# Taken from the driver, not from a `SELECT COUNT(*)` issued just before the DELETE. That pre-count
+# was one extra round trip per table, and on PostgreSQL it was not even atomic: READ COMMITTED gives
+# every statement a fresh snapshot *inside* a transaction, so a row committed between the COUNT and
+# the DELETE was removed and not counted.
+#
+# This is `update()`'s contract rather than a new one (see execution.jl): PostgreSQL exposes the
+# count on the driver result; SQLite needs `changes()` on the SAME connection, which `conn`
+# guarantees here because every delete statement runs inside the collector's transaction on the
+# pinned connection. RETURNING is deliberately not used — `insert()` documents why SQLite RETURNING
+# is avoided (it can hang inside libsqlite3 for some table shapes).
+#
+# Only ever called under `show_query === :execute`, which is also the only state in which `conn` is
+# non-nothing. The guard below keeps that structural rather than documentary: on SQLite, with
+# `conn = nothing`, `with_transaction` leases a connection with `release_conn = false` and this call
+# site discards the handle, so every delete would leak a pool slot until `acquire_connection` began
+# timing out. A silent leak is worth one comparison to rule out.
+#
+# Two things about that guard that the obvious reading gets wrong:
+#
+#   - It sits ABOVE the PostgreSQL return, so it refuses `conn = nothing` on a backend where nothing
+#     leases and nothing can leak. Deliberate: "keep PostgreSQL and SQLite aligned" applies to
+#     preconditions too, and a contract that holds on one backend only is the kind of divergence
+#     that gets discovered by a bug report rather than by a test.
+#   - It is an ASSERTION, not a precondition — it runs after the DELETE has already executed. If it
+#     ever fired, the enclosing transaction would roll the statement back, which is the outcome we
+#     want; but do not read it as guarding the write.
+# ─────────────────────────────────────────────────────────────────────────────
+function _affected_row_count(connection::Union{PormGPostgres, PormGSQLite}, result, conn)::Int
+  conn === nothing && error(_emsg("PormG internal error in delete(): _affected_row_count needs the statement's connection — this should not happen; please report it."))
+  connection isa PormGPostgres && return backend_num_affected_rows(connection, result)
+  changes, _ = with_transaction(connection, "SELECT changes();", conn=conn)
+  return Int((changes |> DataFrames.DataFrame)[1, 1])
+end
+
 function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
    show_query::Symbol, deleted_counter::Dict{String, Integer}, conn)
   @pormg_debug false
+  isempty(keys) && error(_emsg("PormG internal error in delete(): delete_objects was called with no keys for $(model.name) — this should not happen; please report it."))
+
   if size(keys, 1) == 1 && keys[1][:key] == DIRECT_DELETE_KEY_SENTINEL
     objct = keys[1][:objct]
     isempty(objct.object.filter) || throw(QueryBuildError("Delete on keyless model $(model.name) with filters is not supported; define a primary key or delete all rows explicitly"))
 
-    deleted_counter[model.name] = show_query === :execute ? (objct |> _count) : 0
     sql = "DELETE FROM $(safe_table_identifier(Models.model_table_name(model), connection))"
 
     if show_query !== :execute
       return _show_query_result(show_query, sql, connection, model, :delete, parameters=nothing)
     end
 
-    with_transaction(connection, sql, conn=conn, params=nothing)
+    result, _ = with_transaction(connection, sql, conn=conn, params=nothing)
+    deleted_counter[model.name] = _affected_row_count(connection, result, conn)
     return deleted_counter
   end
 
-  # Execute the actual deletion SQL
+  # Checked over EVERY entry, not just the first. Entries for one model do NOT necessarily share a
+  # resolved key: `resolve_delete_key` falls back to the referencing FIELD name when the model has no
+  # primary key, so a keyless child reached by two foreign keys resolves two different keys. The
+  # sentinel means "no key at all", which no WHERE fragment can address.
+  any(k -> k[:key] == DIRECT_DELETE_KEY_SENTINEL, keys) &&
+    throw(QueryBuildError("Multi-path delete on keyless model $(model.name) is not supported; define a primary key"))
+
+  # One WHERE fragment per cascade path, ORed together — and the ONLY thing that renders into
+  # `parameters`.
+  #
+  # #452: the multi-path case used to build these fragments, throw the text away, and re-render the
+  # same subqueries through a `Qor` into this SAME collector. The statement then carried twice as
+  # many bound values as it had markers — SQLite refuses the surplus outright
+  # ("values should be provided for all query placeholders"), PostgreSQL orphans the leading run.
+  # That branch also addressed every arm with `keys[1][:key]`, which is a silent WRONG DELETE the
+  # moment two entries resolve different keys. A keyless child reached by two FKs compared ONE
+  # column against the OTHER column's values — measured, `"owner" IN (SELECT … "backup" …)`. Which
+  # of the two wins is `related_objects` Dict order, so the direction flips between model sets; that
+  # it is arbitrary is the point. Both defects are gone with the branch rather than guarded — each
+  # fragment carries its own key, and there is exactly one renderer and one collector here.
   _where = String[]
   parameters = get_parameter(connection)
-  # @info keys[1][:objct] |> query
   for key in keys
     pk_field = key[:key]
+    # #432's nested-run machinery, the same wrap the read builder's four splice sites use: mark every
+    # bucket, let the inner build file its values under its OWN clauses (`own_contexts`), then lift
+    # the run and re-emit it as one contiguous, clause-ordered block at this fragment's marker
+    # position.
+    #
+    # NOT load-bearing today, and the honest note is worth more than the flattering one. Measured on
+    # a two-path cascade whose ROOT carries a parameterized `cjoin` — the shape that should
+    # interleave — removing this wrap leaves every statement's SQL text and flattened value vector
+    # identical. (It does move one thing: the ROOT statement's `ON` value sits in `:join` unwrapped
+    # and in `:where` wrapped. Same flatten, but `:parameter_buckets` is public `:dict` output, so
+    # that difference is visible — it is not "no change at all".)
+    #
+    # Why it cannot interleave, stated precisely — the tempting short version ("no delete fragment
+    # binds at its own `:join`") is FALSE, so do not simplify back to it. A fragment can: the user's
+    # root queryset does. What it cannot do is share a statement with a second fragment.
+    # Every OTHER fragment is built by `find_related_objects!` as
+    # `child.objects.filter("<fk>__@in" => parent).values(<key>)`, which carries no join of its own;
+    # and a second entry for the ROOT model needs an FK cycle, which `topological_sort` refuses
+    # (measured: a self-loop and a two-model cycle both raise "Circular dependency detected in
+    # model relationships"). So the interleave needs two join-binding fragments in one statement,
+    # and the graph cannot produce them.
+    #
+    # Kept as insurance, not decoration: it is what makes the alignment a property of the code
+    # rather than of that reachability argument, which nothing enforces and which a future fragment
+    # shape (a join, a HAVING) would quietly invalidate. `docs/src/architecture.md` states the same
+    # thing rather than claiming a fix that is not one.
+    nested_mark = nested_parameter_mark(parameters)
+    subquery = query(key[:objct], parameters=parameters, own_contexts=true)
+    reattach_parameters!(parameters, detach_nested_run!(parameters, nested_mark))
     # Outer WHERE targets the physical column (db_column when set); the subquery already
     # projects/aliases the key, so only this identifier needs resolving (#50).
-    push!(_where, """$(safe_column_identifier(Models.model_column(model, pk_field), connection)) IN ($(query(key[:objct], parameters=parameters)))""")
-  end
-  sql::String = ""
-  if size(keys, 1) == 1
-    deleted_counter[model.name] = show_query === :execute ? (keys[1][:objct] |> _count) : 0
-    sql = "DELETE FROM $(safe_table_identifier(Models.model_table_name(model), connection)) WHERE $(join(_where, " OR "))"
-  else
-    # Multi-path merge: all entries for the same model share the same resolved key field.
-    # Keyless (sentinel) models reaching this path are not supported.
-    pk_field = keys[1][:key]
-    pk_field == DIRECT_DELETE_KEY_SENTINEL && throw(QueryBuildError("Multi-path delete on keyless model $(model.name) is not supported; define a primary key"))
-    _query = model |> object;
-    or_object = Qor("$(pk_field)__@in" => keys[1][:objct])
-    for (index, key) in enumerate(keys)
-      if index == 1
-        continue # already added
-      end
-      push!(or_object, "$(pk_field)__@in" => key[:objct])
-    end
-    _query.filter(or_object)
-    deleted_counter[model.name] = show_query === :execute ? (_query |> _count) : 0
-    _query.values(pk_field) # Ensure the query is built
-    @pormg_debug false
-    sql = "DELETE FROM $(safe_table_identifier(Models.model_table_name(model), connection)) WHERE $(safe_column_identifier(Models.model_column(model, pk_field), connection)) IN ($(query(_query, parameters=parameters)))"
+    push!(_where, """$(safe_column_identifier(Models.model_column(model, pk_field), connection)) IN ($(subquery))""")
   end
 
-  sql == "" && error(_emsg("PormG internal error in delete(): the generated SQL is empty — this should not happen; please report it."))
-      
+  sql::String = "DELETE FROM $(safe_table_identifier(Models.model_table_name(model), connection)) WHERE $(join(_where, " OR "))"
+
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model, :delete, parameters=parameters)
   end
   @pormg_debug false
-  result, conn = with_transaction(connection, sql, conn=conn, params=parameters)
+  result, _ = with_transaction(connection, sql, conn=conn, params=parameters)
+  deleted_counter[model.name] = _affected_row_count(connection, result, conn)
   return deleted_counter  # Return count of deleted objects
 end
 
@@ -628,8 +716,14 @@ function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::Porm
   _query = keys[:objct]
   parameters = get_parameter(connection)
   value_sql = value === nothing ? "NULL" : model.fields[field].formatter(value)
+  # Same #432 wrap as delete_objects above. There is only one splice here, so the run is trivially in
+  # text order today — the wrap is what makes that a property of the code instead of a property of
+  # there happening to be only one.
+  nested_mark = nested_parameter_mark(parameters)
+  subquery = query(_query, parameters=parameters, own_contexts=true)
+  reattach_parameters!(parameters, detach_nested_run!(parameters, nested_mark))
   # SET column and outer WHERE key both target the physical column (db_column) — #50.
-  sql = "UPDATE $(safe_table_identifier(Models.model_table_name(model), connection)) SET $(safe_column_identifier(Models.model_column(model, field), connection)) = $(value_sql) WHERE $(safe_column_identifier(Models.model_column(model, pk_field), connection)) IN ($(query(_query, parameters=parameters)))"
+  sql = "UPDATE $(safe_table_identifier(Models.model_table_name(model), connection)) SET $(safe_column_identifier(Models.model_column(model, field), connection)) = $(value_sql) WHERE $(safe_column_identifier(Models.model_column(model, pk_field), connection)) IN ($(subquery))"
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model, :update, parameters=parameters)
   end

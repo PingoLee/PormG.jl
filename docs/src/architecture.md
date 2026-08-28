@@ -194,10 +194,17 @@ characterizations worth stating plainly.
   position (`nested_parameter_mark` / `detach_nested_run!`). All four such sites in the **read**
   builder go through it — `Exists`, a projected `Subquery`, an `__@in` subquery, and a CTE body.
 
-  `deletion.jl` splices subqueries into hand-built `DELETE`/`UPDATE` clauses without it, and is
-  correct today only by coincidence: it builds a fresh collector per statement, and a lone
-  subquery's own text order *is* `_BUCKET_ORDER`, so the flatten happens to agree. That is a
-  narrower claim than "contained", and deliberately so.
+  `deletion.jl` splices subqueries into hand-built `DELETE`/`UPDATE` clauses, and both splice sites
+  now go through the same machinery — so the claim is "contained" there too. The narrowing was
+  about *why* it held: a **lone** subquery's own text order **is** `_BUCKET_ORDER`, so the flatten
+  happened to agree. #452 removed the lone-subquery premise — a cascade reaching one model by two
+  paths splices **two** subqueries into one collector — without, as it turns out, breaking the
+  result. Measured: a fragment that binds at its own top-level `:join` **does** exist (the user's
+  root queryset), but it is never accompanied by a second fragment in the same statement, and every
+  other fragment is a bare `filter("<fk>__@in" => parent)` with no join to contribute. An interleave
+  needs two join-binding fragments in one statement, which the cascade graph cannot produce. So the
+  wrap there is **insurance, not a live fix** — it lets this paragraph claim containment instead of
+  re-deriving that reachability argument every time a fragment's shape changes.
 
 !!! note "\"Async-first\" is backend-specific"
     For **PostgreSQL** the async path is genuine: the pool lock is released before the round-trip and

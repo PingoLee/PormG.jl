@@ -303,9 +303,25 @@ end
 # Routed through `_emsg` so the highlight degrades off-TTY (log files, CI, structured sinks).
 function _reverse_accessor_for(model::PormGModel, model_name::Symbol, field_name::AbstractString,
                                field, target::PormGModel, counts::IdDict{PormGModel, Int})::String
-  field.related_name === nothing || return String(field.related_name)
+  # #420. Both arms are checked here — derived or explicit, FK/O2O or many-to-many, `set_models` or
+  # `add_field!` — because this funnel computes almost every accessor. Two other guards complete it,
+  # and neither is redundant: `_validate_related_name` in `models/fields.jl` catches an explicit name
+  # at the line the user wrote it, and `_register_many_to_many_relation!` re-checks at the WRITE,
+  # because `_relation_from_many_to_many` can derive an accessor without coming through here.
+  if field.related_name !== nothing
+    accessor = String(field.related_name)
+    _accessor_has_separator(accessor) &&
+      throw(_reverse_accessor_unaddressable(model, field_name, target, accessor, false))
+    return accessor
+  end
   n = get(counts, target, 1)
   accessor = _derived_reverse_accessor(model_name, field_name, n)
+  # A derived name inherits the field name verbatim, so a legacy column like `caused__by_id` produces
+  # `<model>_caused__by_id`. Introspection must keep LOADING such a column (#317 — the `Dict`
+  # constructors deliberately do not run `format_fild_name`, because refusing there aborted the whole
+  # import); it is only the derived ACCESSOR that cannot exist.
+  _accessor_has_separator(accessor) &&
+    throw(_reverse_accessor_unaddressable(model, field_name, target, accessor, true))
   n > 1 && @info _emsg(
     "$(model.name).$(field_name) declares no related_name and is one of $(n) relations to " *
     "$(target.name); its reverse accessor is \e[31m$(accessor)\e[0m. " *
@@ -335,6 +351,67 @@ function _accessor_context(model::PormGModel, field_name::AbstractString,
     " The relation is self-referential, so both of its ends land on this one model." : ""
   return "$(model.name).$(field_name) wants the reverse accessor \e[4m\e[31m$(accessor)\e[0m on " *
          "\e[32m$(target.name)\e[0m$(origin).$(self)"
+end
+
+# The lexical rule for a reverse accessor (#420). `__` is the lookup-path separator and `@` opens an
+# operator suffix, so a name containing either can REGISTER and then never be written as a path
+# segment: every resolver splits the path first and probes the dict with the pieces, so the whole
+# name is never the key it looks up. That is the same charset rule `format_fild_name` already
+# enforces for a declared field name, and it has to be the same rule — an accessor and a field share
+# ONE namespace on the target model, which is exactly why `_register_reverse_accessor!` checks each
+# against the other.
+#
+# Django reaches the same conclusion from the same cause: `fields.E309` ("Reverse query name '%s'
+# must not contain '__'") is a system check, refused at startup rather than at query time. PormG has
+# no check phase, so registration is the analogous moment.
+_accessor_has_separator(accessor::AbstractString)::Bool = occursin(r"__|@", accessor)
+
+# One explanation, every guard that enforces the rule (#420) — the registration funnel below, the
+# write-time check in `_register_many_to_many_relation!`, the declaration-time twin in
+# `models/fields.jl`, and the Django importer's own message. Deliberately not a count: a number here
+# goes stale the moment a fourth site appears. Kept in one binding so the sites cannot drift — whoever
+# trips one must read the same sentence as whoever trips another.
+const _ACCESSOR_SEPARATOR_REASON =
+  "\e[1m__\e[0m is the lookup-path separator and \e[1m@\e[0m opens an operator suffix, so every " *
+  "resolver splits a path on them before looking the pieces up. Such a name registers cleanly and is " *
+  "then permanently unaddressable — a query naming it reports a truncated fragment that never appears " *
+  "in your own source."
+
+function _reverse_accessor_unaddressable(model::PormGModel, field_name::AbstractString,
+                                         target::PormGModel, accessor::AbstractString,
+                                         derived::Bool)::ModelDefinitionError
+  # An explicit name has one remedy. A DERIVED one has two, and which second remedy is right depends
+  # on where the separator actually came from — so say. The accessor is `<model>` for a lone relation
+  # and `<model>_<field>` for a group, which gives four possible origins, and "rename the field" is
+  # dead advice for three of them. Never send a user looking for something that is not in their own
+  # source — the same rule `_accessor_context` follows for the derived/explicit distinction.
+  remedy = if !derived
+    "Choose a \e[1mrelated_name\e[0m without \e[1m__\e[0m."
+  else
+    # `model.name` is the spelling the USER wrote, which is the right thing to name in a remedy. It is
+    # not always the string the accessor was built from: with `django_prefix` set, `get_model_name`
+    # strips `"<app>_"` before `_derived_reverse_accessor` sees it. When that strip eats part of a
+    # `__` run, this over-attributes — `Model("ba__")` under prefix `a` derives the component `b_`,
+    # so the accessor's `__` is a boundary artifact while `model.name` still looks dirty and gets
+    # named. An ORDINARY app label is enough to reach it; it does not need a `__` in the prefix.
+    #
+    # It stays safe because over-attribution is not mis-attribution: `ba__` is still one of the two
+    # strings in the user's source, and renaming it still fixes the accessor. A brute force over the
+    # model/field/prefix space found no case where the real culprit goes unnamed.
+    model_dirty = _accessor_has_separator(String(model.name))
+    field_dirty = _accessor_has_separator(field_name)
+    culprit =
+      model_dirty && field_dirty ? "both the model name and the field name" :
+      model_dirty ? "the model name \e[1m$(model.name)\e[0m" :
+      field_dirty ? "the field name \e[1m$(field_name)\e[0m" :
+      "the boundary between \e[1m$(model.name)\e[0m and \e[1m$(field_name)\e[0m — one ends, or " *
+      "the other begins, with \e[1m_\e[0m"
+    "The separator comes from $(culprit). Rename whichever carries it, or give " *
+    "$(model.name).$(field_name) an explicit \e[1mrelated_name\e[0m without \e[1m__\e[0m."
+  end
+  return ModelDefinitionError(
+    _accessor_context(model, field_name, target, accessor, derived) *
+    " But $(_ACCESSOR_SEPARATOR_REASON) $(remedy)")
 end
 
 function _reverse_accessor_taken(model::PormGModel, field_name::AbstractString, target::PormGModel,
@@ -3378,6 +3455,14 @@ function _register_many_to_many_relation!(_module::Module, settings::PormGSettin
   # (`has_many_to_many_accessor` / `get_many_to_many_relation`). That is not a merely dead accessor:
   # the manager's `_m2m_query` filters on `inverse_accessor`, so every `.all()` would traverse the
   # join table backwards and silently answer the opposite question.
+  # #420. The separator check is repeated HERE, at the write, and not left to `_reverse_accessor_for`.
+  # `accessor` can also arrive from `_relation_from_many_to_many`'s own fallback derivation, which
+  # does not pass through that funnel. No `src/` call site reaches the fallback today — both pass
+  # `reverse_accessor` explicitly — but `test/unit/test_many_to_many.jl` calls this registrar
+  # directly with none, so "every accessor is checked" is only true if the check sits where the
+  # accessor is STORED rather than only where one of its two producers computes it.
+  _accessor_has_separator(accessor) &&
+    throw(_reverse_accessor_unaddressable(model, field_name, related_model, accessor, derived))
   haskey(related_model.fields, accessor) &&
     throw(_reverse_accessor_shadows_field(model, field_name, related_model, accessor, derived))
   haskey(related_model.related_objects, accessor) &&

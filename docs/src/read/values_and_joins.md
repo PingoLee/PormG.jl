@@ -170,6 +170,48 @@ query = M.Result.objects
 query.values("resultid", "test_deletion__name")
 ```
 
+!!! warning "A reverse accessor cannot contain `__`"
+    `__` is the lookup-path separator, so PormG splits a path on it *before* looking any piece up.
+    A name containing `__` would therefore be registered and then never be addressable — a query
+    naming it could only ever report a truncated fragment. `@` is refused for the same reason: it
+    opens an operator suffix (`__@gt`).
+
+    ```julia
+    # ✗ refused at the field, with a FieldValidationError
+    Models.ForeignKey(Driver, pk_field="id", related_name="incident__driver")
+
+    # ✓
+    Models.ForeignKey(Driver, pk_field="id", related_name="incident_driver")
+    ```
+
+    The rule covers **derived** names too, and that is the case worth knowing about. A derived
+    accessor is the **model name** for a lone relation and `<model>_<field>` for a group of two or
+    more to the same target, so the separator can arrive from three places:
+
+    | Where the `__` is | Example | Accessor |
+    |---|---|---|
+    | the model name | `Models.Model("incident__log", …)` with any one relation | `incident__log` |
+    | a field name | a legacy column `caused__by_id`, in a group of two or more | `incident_caused__by_id` |
+    | the boundary between them | a field named `_id`, in a group of two or more | `incident__id` |
+
+    PormG refuses all three at registration with a `ModelDefinitionError` that names the accessor
+    **and says where the separator comes from**, so the remedy is not a guess: rename whichever name
+    carries it, or give the field an explicit `related_name`.
+
+    A `__` **column** is still perfectly legal on its own — only an accessor derived from it is
+    illegal. `Model_to_str` renames such a column to a legal Julia identifier and pins the real name
+    with `db_column`, so a *generated* model file never carries a `__` field identifier at all; the
+    field-derived row above is reachable only from a hand-written
+    `Model_Type(; fields = Dict(...))` — the same shape introspection builds in memory, though
+    introspection never registers those models, so it cannot trip this by itself.
+
+    Django enforces the same rule, and on the same derived name: `related_query_name()` falls back
+    to the model name when no `related_name` is given, and system check `fields.E309` refuses a `__`
+    in the result — so a Django class named `A__B` is rejected exactly as PormG now rejects it.
+    `fields.E002` additionally forbids a *field* name containing `__` outright, which is the one
+    place PormG is deliberately more permissive: a legacy schema may hold such a column, and
+    refusing it once aborted whole introspection imports.
+
 ### Chained Multi-Hop Reverse Joins
 
 PormG supports traversing multiple relationships in reverse, seamlessly chaining backward hops. Continuing from the previous example, if a `Just_a_nested_roll_back` model has a FK to `Just_a_test_deletion`:

@@ -440,7 +440,15 @@ function _cjoin(
       pk_field=pk_field,
       on_delete="RESTRICT",
       null=true,
-      related_name="$(q.model.name)_$(main_join.second)_join",
+      # #420: deliberately NO `related_name`. This FK is synthesized at QUERY time and is never
+      # registered as a reverse accessor — nothing reads the name back — but `related_name` is now
+      # shape-validated at the constructor, so a synthetic value could fail that check for a string
+      # the user never wrote and cannot change. It did: the old
+      # `"$(q.model.name)_$(main_join.second)_join"` renders `tb__Circuit_join` for a model named
+      # `tb_` (a trailing underscore is legal — `_validate_positional_model_name` rejects only mixed
+      # case and a LEADING underscore), so `M.Tb_.objects.cjoin(...)` died with a definition error
+      # from a read path.
+      related_name=nothing,
       how=join_type
     )
   else

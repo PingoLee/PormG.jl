@@ -2379,3 +2379,68 @@ class Legado(models.Model):
         cleanup_import_test!(key2, existed2)
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #420: a Django `related_name` containing `__` is refused, naming the class and attribute.
+#
+# `__` is PormG's lookup-path separator, so such an accessor registers and is then unaddressable.
+# The importer checks it itself rather than letting the field constructor do it, because only this
+# site knows which Python class and attribute the value came from — on a project with hundreds of
+# models that is the difference between a grep and a line number.
+#
+# Aborting the import is the right severity rather than a harsh one: Django refuses the same name
+# through system check `fields.E309`, so a project that passes `manage.py check` cannot produce it.
+# That is why it does not go through the recover-and-continue path `choices`/`default` uses.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer refuses a related_name containing __ (#420)" begin
+    source = """
+from django.db import models
+
+class Driver(models.Model):
+    surname = models.CharField(max_length=50)
+
+class Incident(models.Model):
+    lap = models.IntegerField()
+    caused_by = models.ForeignKey(Driver, on_delete=models.CASCADE, related_name='incident__driver')
+"""
+    config_key, db_dir_existed = temp_import_config!()
+    try
+        err = @test_throws PormG.InvalidMigrationError import_models_from_django(
+            source; db = config_key, file = "django_420_unit.jl", force_replace = true)
+        msg = err.value.msg
+        # The class and the attribute — the whole reason the check lives here.
+        @test occursin("Incident", msg)
+        @test occursin("caused_by", msg)
+        # The offending value verbatim, never a fragment.
+        @test occursin("incident__driver", msg)
+        # Cites the Django check, so a reader can confirm their own project was already invalid.
+        @test occursin("fields.E309", msg)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #420 control: a clean `related_name` still imports and still reaches the generated file.
+#
+# Without this the testset above would pass just as well if the importer had started rejecting
+# `related_name` outright.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer still carries a clean related_name (#420 control)" begin
+    source = """
+from django.db import models
+
+class Driver(models.Model):
+    surname = models.CharField(max_length=50)
+
+class Incident(models.Model):
+    lap = models.IntegerField()
+    caused_by = models.ForeignKey(Driver, on_delete=models.CASCADE, related_name='incident_driver')
+"""
+    generated, config_key, db_dir_existed = import_django_source(source; output_file = "django_420_ok.jl")
+    try
+        @test occursin("related_name=\"incident_driver\"", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end

@@ -469,3 +469,320 @@ end
   # It names the group size, so the user can tell why the name is not the bare one.
   @test occursin("one of 3 relations", msgs)
 end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# #420 — a reverse accessor containing `__` (the lookup-path separator)
+#
+# Every resolver splits a lookup path on `__` BEFORE looking the pieces up, so an accessor whose own
+# name contains `__` can register cleanly and then never be addressed: the dict is only ever probed
+# with a fragment. The old failure was an `UnknownFieldError` naming a truncated string
+# (`the column a not found in …`) that appears nowhere in the user's source, which reads as a
+# corrupted model rather than an illegal name.
+#
+# Same defect class as sections 6 and 7 above — "registers cleanly and is then permanently
+# unreachable" is literally the sentence `_reverse_accessor_shadows_field` already used — reached
+# through the separator instead of through field precedence.
+#
+# TWO guards, on purpose, and the tests below cover both arms rather than only the one that fires
+# first. The constructor guard (`_validate_related_name`) reports an explicit `related_name` at the
+# line the user wrote; the registration funnel (`_reverse_accessor_for`) is the total one, because it
+# is the only place a DERIVED accessor exists. Their exception types differ by design and by each
+# file's own convention — `FieldValidationError` for a bad constructor argument,
+# `ModelDefinitionError` for a model that cannot register — and both are `<: DefinitionError`.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 12. An explicit `related_name` is refused at the field constructor, on all three relation types.
+#
+# All three are covered rather than one plus an assumption: `related_name` reaches its slot by a
+# different expression in each constructor, and before #420 not one of them validated its shape while
+# all three already routed `pk_field` / `source_field` / `target_field` through `format_fild_name`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an explicit related_name containing __ is refused at declaration (#420)" begin
+  for (label, build) in (
+        ("ForeignKey",      () -> Models.ForeignKey("Driver", pk_field = "id", related_name = "a__b")),
+        ("OneToOneField",   () -> Models.OneToOneField("Driver", pk_field = "id", related_name = "a__b")),
+        ("ManyToManyField", () -> Models.ManyToManyField("Driver", related_name = "a__b")))
+    err = @test_throws PormG.FieldValidationError build()
+    msg = err.value.msg
+    # Names the field type, so a stack of relation declarations points at the right line.
+    @test occursin(label, msg)
+    # Names the ACCESSOR the user actually wrote — never a fragment such as a bare "a".
+    @test occursin("a__b", msg)
+    # Says WHY, so the remedy is not a guess.
+    @test occursin("lookup-path separator", msg)
+  end
+
+  # `@` is refused by the same rule and for the same reason: it opens an operator suffix, and an
+  # accessor shares one namespace with the target's fields, where `format_fild_name` has refused both
+  # characters since #317.
+  at_err = @test_throws PormG.FieldValidationError Models.ForeignKey("Driver", pk_field = "id",
+                                                                     related_name = "a@b")
+  # Assert the CAUSE, not just the type: a constructor has many ways to raise this type, and without
+  # this the assertion would pass on an unrelated failure.
+  @test occursin("a@b", at_err.value.msg)
+
+  # Control — a clean name is untouched and normalizes to `String` on every route.
+  for build in (() -> Models.ForeignKey("Driver", pk_field = "id", related_name = "incidents"),
+                () -> Models.OneToOneField("Driver", pk_field = "id", related_name = "incidents"),
+                () -> Models.ManyToManyField("Driver", related_name = "incidents"))
+    field = build()
+    @test field.related_name == "incidents"
+    @test field.related_name isa String
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 13. The registration funnel refuses it too, for a field the constructor never vetted.
+#
+# The constructor guard is the better error LOCATION, not the complete one. `_reverse_accessor_for` is
+# the single point every accessor passes through exactly once, and this test enters behind the
+# constructor — the way a mutated field, or one built before the guard existed, arrives — to prove the
+# funnel is not dead code shadowed by the eager check.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the registration funnel refuses an explicit __ accessor the constructor never saw (#420)" begin
+  err = @test_throws PormG.ModelDefinitionError _ran_module(:RanSepExplicitModels, quote
+    Driver = Models.Model("ranse_driver", id = Models.IDField(), surname = Models.CharField())
+    Result = Models.Model("ranse_result",
+      id = Models.IDField(),
+      driverid = Models.ForeignKey(Driver, pk_field = "id"),
+    )
+    # The struct is mutable, so this is the shape a field that bypassed the constructor arrives in.
+    Result.fields["driverid"].related_name = "a__b"
+  end)
+
+  msg = err.value.msg
+  @test occursin("a__b", msg)
+  @test occursin("ranse_result.driverid", msg)
+  @test occursin("lookup-path separator", msg)
+  # The name was the user's, so no "derived" clause and no invitation to rename the field.
+  @test !occursin("derived", msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 14. A DERIVED accessor inherits `__` from the field name — the route introspection can reach.
+#
+# `_derived_reverse_accessor` is `<model>_<field>` for a group of two or more, so a legacy column
+# literally named `caused__by_id` produces `<model>_caused__by_id`. This is the half nobody can fix by
+# choosing a better `related_name` before the fact, because the user never wrote a name at all — so
+# the message has to say where the name came from and offer BOTH remedies.
+#
+# The `Model_Type(; fields = Dict(...))` spelling is deliberate: it is the shape `inspectdb`
+# introspection and the Django importer build, and it is the reason this route is reachable without
+# anyone hand-writing a `__` field name.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a derived accessor containing __ is refused and names the whole accessor (#420)" begin
+  err = @test_throws PormG.ModelDefinitionError _ran_module(:RanSepDerivedModels, quote
+    Driver = Models.Model("ransd_driver", id = Models.IDField(), surname = Models.CharField())
+    Incident = Models.Model_Type(name = "ransd_incident",
+      fields = Dict{String, PormG.PormGField}(
+        "id"             => Models.IDField(),
+        "lap"            => Models.IntegerField(),
+        "caused__by_id"  => Models.ForeignKey("Driver", pk_field = "id"),
+        "affected_by_id" => Models.ForeignKey("Driver", pk_field = "id")),
+      field_names = ["id", "lap", "caused__by_id", "affected_by_id"])
+  end)
+
+  msg = err.value.msg
+  # The load-bearing assertion: the WHOLE accessor, not the `ransd_incident_caused` fragment the old
+  # UnknownFieldError reported. A test matching only "caused" would have passed before the fix.
+  @test occursin("ransd_incident_caused__by_id", msg)
+  @test occursin("declares no related_name", msg)
+  # The remedy clause, pinned specifically. `occursin("related_name", msg)` would be a tautology here
+  # — the assertion above already guarantees that substring — and `occursin("rename the field", msg)`
+  # was wrong advice for this route in the first place: the separator is in the FIELD name, so the
+  # message must name that rather than tell the user to rename something unspecified.
+  @test occursin("The separator comes from the field name", msg)
+  # Matched on a run with no ANSI in it. `related_name` is wrapped in \e[1m…\e[0m in this message,
+  # so a substring spanning it passes under --color=no and fails under --color=yes (and on CI).
+  @test occursin("Rename whichever carries it", msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 15. CONTROL — an `a__b` COLUMN still loads. This pins the #317 exemption.
+#
+# #420's own issue text proposed applying `format_fild_name`'s `__` check to the `Model_Type` Dict
+# constructor. That is exactly what #317 deliberately removed: an `a__b` column used to abort the
+# whole import from inside that loop, before `Model_to_str` could render it (and `Model_to_str` DOES
+# handle it — `_julia_field_identifier` renames the field and pins `db_column`). The guard is on the
+# ACCESSOR, never on the column, and this testset is what fails if someone later "completes" #420 by
+# moving it onto the field name.
+#
+# Same column as section 14, one relation instead of two — so the derived accessor is the bare model
+# name and contains no separator.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a column named a__b still loads when its accessor has no separator (#420, pins #317)" begin
+  CTL = _ran_module(:RanSepControlModels, quote
+    Driver = Models.Model("ransc_driver", id = Models.IDField(), surname = Models.CharField())
+    Incident = Models.Model_Type(name = "ransc_incident",
+      fields = Dict{String, PormG.PormGField}(
+        "id"            => Models.IDField(),
+        "caused__by_id" => Models.ForeignKey("Driver", pk_field = "id")),
+      field_names = ["id", "caused__by_id"])
+  end)
+
+  # `Base.invokelatest`: the bindings were defined by `Core.eval` in a newer world age than this
+  # function body — the same seam `_ran_module` documents for `set_models`.
+  driver = Base.invokelatest(getfield, CTL, :Driver)
+  incident = Base.invokelatest(getfield, CTL, :Incident)
+
+  # The column survived verbatim — no rename, no strip.
+  @test "caused__by_id" in incident.field_names
+  @test haskey(incident.fields, "caused__by_id")
+  # And the relation registered, under the bare model name.
+  @test collect(keys(driver.related_objects)) == ["ransc_incident"]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 16. The MODEL NAME route — and it needs only ONE relation.
+#
+# `_derived_reverse_accessor` returns the bare model name for a lone relation, so a model named
+# `…__…` produces an unaddressable accessor with a single ForeignKey. This is the widest arm of the
+# rule and the one that is reachable from GENERATED code: `Model_to_str` renames an illegal COLUMN
+# and pins `db_column`, so a generated file can never carry a `__` field identifier — but it writes
+# the model name verbatim.
+#
+# Django validates the identical case: `related_query_name()` falls back to `opts.model_name`, so
+# `fields.E309` fires on a Django class named `A__B` too.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a model name containing __ is refused with a single relation (#420)" begin
+  err = @test_throws PormG.ModelDefinitionError _ran_module(:RanSepModelNameModels, quote
+    Driver = Models.Model("ransm_driver", id = Models.IDField(), surname = Models.CharField())
+    # ONE relation. The derived accessor is the bare model name, not `<model>_<field>`.
+    Incident = Models.Model("ransm__incident",
+      id = Models.IDField(),
+      driverid = Models.ForeignKey(Driver, pk_field = "id"),
+    )
+  end)
+
+  msg = err.value.msg
+  @test occursin("ransm__incident", msg)
+  # The remedy must point at the MODEL name. Before this was fixed the message said "rename the
+  # field", which is dead advice here — renaming `driverid` changes nothing.
+  @test occursin("The separator comes from the model name", msg)
+  @test !occursin("the field name", msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 17. The BOUNDARY route — neither name contains `__`, their junction does.
+#
+# `_id` is a legitimate introspected column (`format_fild_name`'s own comment blesses it), and
+# `<model>` + `_` + `_id` is `<model>__id`. A message that blamed either name alone would be wrong,
+# so this pins the third branch of the remedy.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a derived accessor whose separator is at the model/field boundary (#420)" begin
+  err = @test_throws PormG.ModelDefinitionError _ran_module(:RanSepBoundaryModels, quote
+    Driver = Models.Model("ransb_driver", id = Models.IDField(), surname = Models.CharField())
+    Incident = Models.Model_Type(name = "ransb_incident",
+      fields = Dict{String, PormG.PormGField}(
+        "id"   => Models.IDField(),
+        "_id"  => Models.ForeignKey("Driver", pk_field = "id"),
+        "b_id" => Models.ForeignKey("Driver", pk_field = "id")),
+      field_names = ["id", "_id", "b_id"])
+  end)
+
+  msg = err.value.msg
+  @test occursin("ransb_incident__id", msg)
+  @test occursin("the boundary between", msg)
+  # Neither name is blamed on its own, because neither carries the separator. Matched WITHOUT the
+  # model name: that name is wrapped in \e[1m…\e[0m, so including it would make this negative pass
+  # vacuously under --color=yes — the exact mode it is here to defend.
+  @test !occursin("comes from the model name", msg)
+  @test !occursin("comes from the field name", msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 18. The funnel covers ManyToManyField too, not only ForeignKey.
+#
+# This is section 13's assertion for the other relation kind: `set_models` calls
+# `_reverse_accessor_for` for m2m fields on a different branch, so covering only the FK branch would
+# leave half the funnel untested. It does NOT reach the write-time guard in
+# `_register_many_to_many_relation!` — `set_models` funnels first — which is why section 20 exists.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an m2m explicit __ accessor is refused by the funnel (#420)" begin
+  err = @test_throws PormG.ModelDefinitionError _ran_module(:RanSepM2MModels, quote
+    Driver = Models.Model("ransx_driver", id = Models.IDField(), surname = Models.CharField())
+    Championship = Models.Model("ransx_championship",
+      id = Models.IDField(),
+      drivers = Models.ManyToManyField(Driver),
+    )
+    # Behind the constructor guard, as in section 13.
+    Championship.fields["drivers"].related_name = "a__b"
+  end)
+
+  msg = err.value.msg
+  @test occursin("a__b", msg)
+  @test occursin("ransx_championship.drivers", msg)
+  @test !occursin("derived", msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 19. A definition-time guard must not fire from a READ path.
+#
+# `_cjoin` synthesizes a ForeignKey at query time to describe an auto-discovered join. It used to
+# hand that field a `related_name` built as `"$(model.name)_$(target)_join"` — a string the user
+# never wrote — and once `related_name` became shape-validated, a model whose name ends in `_`
+# rendered `tb__Circuit_join` and turned an ordinary `.cjoin(...)` into a `FieldValidationError`.
+#
+# A trailing underscore is legal: `_validate_positional_model_name` rejects mixed case and a LEADING
+# underscore, nothing else. The synthetic name is never read back, so it is simply not set any more.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "cjoin on a model whose name ends in _ still builds (#420 regression)" begin
+  CJ = _ran_module(:RanSepCjoinModels, quote
+    Circuit = Models.Model("ranscj_circuit", id = Models.IDField(), name = Models.CharField())
+    # Trailing underscore — legal, and the shape that produced `tb__Circuit_join`.
+    Lap_ = Models.Model("ranscj_lap_", id = Models.IDField(), circuit = Models.IntegerField())
+  end)
+
+  sql = Base.invokelatest() do
+    q = getfield(CJ, :Lap_).objects
+    q.cjoin("circuit" => "Circuit"; warn = false)
+    q.values("id", "circuit__name")
+    inspect_query(q)[:sql_text]
+  end
+
+  # It builds at all — that is the regression. Then: it really did join.
+  @test occursin("ranscj_circuit", sql)
+  @test occursin("JOIN", uppercase(sql))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 20. The check at the WRITE, reached the only way it can be.
+#
+# Testset 18 above goes through `set_models`, which calls `_reverse_accessor_for` BEFORE the
+# registrar — so the funnel refuses first and the write-time check in
+# `_register_many_to_many_relation!` is never reached. Deleting that check leaves testset 18 green.
+# This one calls the registrar directly with no `reverse_accessor`, which is the shape that makes
+# `_relation_from_many_to_many` derive an accessor of its own, bypassing the funnel entirely — the
+# second producer the write-time check exists for. It is the only assertion in this file that turns
+# red if `Models.jl`'s write-time `_accessor_has_separator` guard is removed.
+#
+# Same direct-registrar idiom as `test/unit/test_many_to_many.jl`'s shadow testsets, which is where
+# that call shape is already exercised.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the m2m write-time guard is reached when the funnel is bypassed (#420)" begin
+  settings = PormG.Configuration.Settings(connections = RanMockPostgres(), change_data = true)
+
+  reg_module = Module(:RanSepM2MDirect)
+  Core.eval(reg_module, :(import PormG; import PormG.Models))
+  Core.eval(reg_module, :(Driver = Models.Model("ransy_driver",
+    id = Models.IDField(), surname = Models.CharField())))
+  Core.eval(reg_module, :(Championship = Models.Model("ransy_championship",
+    id = Models.IDField(),
+    drivers = Models.ManyToManyField("Driver"),
+  )))
+  champ = Core.eval(reg_module, :(Championship))
+  # Behind the constructor guard, as in sections 13 and 18.
+  champ.fields["drivers"].related_name = "a__b"
+
+  err = @test_throws PormG.ModelDefinitionError Models._register_many_to_many_relation!(
+    reg_module, settings, champ, "drivers", champ.fields["drivers"])
+
+  msg = err.value.msg
+  @test occursin("a__b", msg)
+  @test occursin("ransy_championship.drivers", msg)
+  # Assert the CAUSE: this call shape can also raise ModelDefinitionError for a shadowed or taken
+  # accessor, and either would satisfy a bare type check.
+  @test occursin("lookup-path separator", msg)
+  @test !occursin("is a FIELD of that model", msg)
+end

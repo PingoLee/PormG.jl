@@ -3964,6 +3964,25 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
       continue
     end
 
+    # #420. `related_name` is the one option whose value has to survive as a lookup-path SEGMENT, and
+    # until now nothing validated its shape anywhere. Checked here rather than left to the field
+    # constructor because the constructor sees only the value — this site also knows the Python class
+    # and attribute it came from, which is the difference between a grep and a line number on a
+    # project with hundreds of models.
+    #
+    # Aborting the import is the right severity, not a harsh one: `related_name='a__b'` is invalid
+    # Django as well — system check `fields.E309`, "Reverse query name '%s' must not contain '__'" —
+    # so no project that passes `manage.py check` can reach this branch. That is why it does not go
+    # through the recover-and-continue path the `choices`/`default` disagreement below uses.
+    if haskey(options, :related_name) && options[:related_name] isa AbstractString &&
+       Models._accessor_has_separator(String(options[:related_name]))
+      throw(InvalidMigrationError(
+        "Error processing field '$field_name' in class '$class_label': " *
+        "related_name=\"$(options[:related_name])\" cannot contain \e[1m__\e[0m or \e[1m@\e[0m. " *
+        "$(Models._ACCESSOR_SEPARATOR_REASON) Django refuses the same name — system check " *
+        "\e[1mfields.E309\e[0m — so `manage.py check` would not have accepted this model either."))
+    end
+
     # Instantiate the field
     try
       # println(field_type)

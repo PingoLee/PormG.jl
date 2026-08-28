@@ -884,6 +884,11 @@ Team_radio = Models.Model(
 )
 ```
 
+A `related_name` may not contain `__` or `@`: `__` is the lookup-path separator and `@` opens an
+operator suffix, so such a name registers and is then permanently unaddressable. The same rule
+applies to a name PormG *derives* for you — see
+[Naming Reverse Relations](read/values_and_joins.md#Naming-Reverse-Relations).
+
 **On Delete Options**:
 - `CASCADE`: Delete this record when target is deleted
 - `RESTRICT`: Prevent deletion of target if this record exists

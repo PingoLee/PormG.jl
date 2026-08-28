@@ -13,6 +13,29 @@
 # FieldValidationError so the whole constructor surface reports one category.
 _fielderr(msg::AbstractString) = FieldValidationError(msg)
 
+# #420, the declaration-time arm of the reverse-accessor separator rule. The registration funnel
+# `_reverse_accessor_for` in `Models.jl` sees more than this can — derived accessors, which no
+# constructor can know about — but it does not run until `set_models`, so on its own it reports the
+# name from a file away from where the user wrote it. This reports at the field. (Neither is the
+# whole rule: `_register_many_to_many_relation!` re-checks at the write, for an accessor
+# `_relation_from_many_to_many` derives without passing through the funnel.)
+#
+# Until #420, `related_name` was the one relation kwarg with no shape validation at all: `pk_field`,
+# `source_field` and `target_field` have all gone through `format_fild_name` since #317, and
+# `related_name` lands in the very same path namespace they do.
+#
+# `FieldValidationError` rather than the funnel's `ModelDefinitionError`, per this file's one-category
+# rule above: here the caller got a field CONSTRUCTOR argument wrong. Both are `<: DefinitionError`,
+# so a `catch DefinitionError` covers either route.
+function _validate_related_name(related_name, field_type::AbstractString)::Union{String, Nothing}
+  related_name === nothing && return nothing
+  name = String(related_name)
+  _accessor_has_separator(name) &&
+    throw(_fielderr("$(field_type): the 'related_name' \e[4m\e[31m$(name)\e[0m cannot contain " *
+                    "\e[1m__\e[0m or \e[1m@\e[0m. $(_ACCESSOR_SEPARATOR_REASON)"))
+  return name
+end
+
 # ── BinaryField `default=` helpers (#296) ───────────────────────────────────
 # `_binary_default_bytes` is handed to `validate_default`, which only calls it when the value is
 # not already `Union{Vector{UInt8}, Nothing}` — so it normalizes the other byte-vector spellings
@@ -395,6 +418,7 @@ function ForeignKey(to::Union{String, PormGModel}; kwargs...)
   !(on_update isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'on_update' must be a String or nothing"))
   !(how isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'how' must be a String or nothing"))
   !(related_name isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'related_name' must be a String or nothing"))
+  related_name = _validate_related_name(related_name, "ForeignKey")
 
   # Resolve db_index based on db_constraint
   db_index = db_index || !db_constraint 
@@ -526,6 +550,7 @@ function ManyToManyField(to::Union{String, PormGModel}; kwargs...)
   !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
   !(through isa Union{Nothing, String, PormGModel}) && throw(_fielderr("The 'through' parameter must be a String, PormGModel, or nothing"))
   !(related_name isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'related_name' must be a String or nothing"))
+  related_name = _validate_related_name(related_name, "ManyToManyField")
   !(db_table isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'db_table' must be a String or nothing"))
   !(source_field isa Union{Nothing, AbstractString, Symbol}) && throw(_fielderr("The 'source_field' must be a String, Symbol, or nothing"))
   !(target_field isa Union{Nothing, AbstractString, Symbol}) && throw(_fielderr("The 'target_field' must be a String, Symbol, or nothing"))
@@ -535,7 +560,7 @@ function ManyToManyField(to::Union{String, PormGModel}; kwargs...)
     false,
     to,
     through,
-    related_name === nothing ? nothing : String(related_name),
+    related_name,  # already normalized to String/nothing by `_validate_related_name` (#420)
     # Case-PRESERVING (#59): this used to run through `format_model_name`, which silently lowercased
     # a user-supplied physical through-table name (and, until #317, stripped a leading underscore) — the
     # opposite policy from model-level `db_table`, which carries an arbitrary legacy spelling
@@ -758,6 +783,7 @@ function OneToOneField(to::Union{String, PormGModel}; kwargs...)
   !(on_update isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'on_update' must be a String or nothing"))
   !(how isa Union{Nothing, String}) && throw(_fielderr("The 'how' must be a String or nothing"))
   !(related_name isa Union{Nothing, String}) && throw(_fielderr("The 'related_name' must be a String or nothing"))
+  related_name = _validate_related_name(related_name, "OneToOneField")
 
   # Resolve on_delete using similar logic as ForeignKey
   on_delete = _get_on_delete_mode(on_delete)

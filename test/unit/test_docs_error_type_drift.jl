@@ -125,7 +125,15 @@ const ALLOWED_UNTYPED_ERROREXCEPTION = Dict(
     "src/ConnectionPool.jl"  => 1,  # SQLite async worker returned a malformed payload (internal)
 )
 const ALLOWED_UNTYPED_BARE_ERROR = Dict(
-    "src/querybuilder/deletion.jl"      => 1,  # empty generated SQL — internal invariant
+    # #452 took this from 1 to 2, and REWROTE the first rationale: the old keep was "empty generated
+    # SQL", a check on a `sql` variable that could only stay empty if neither branch of a two-branch
+    # if/else ran. Collapsing those branches into one render path made that unreachable in the
+    # trivial sense, so it was replaced by the condition that actually protects the same statement —
+    # `delete_objects` called with no keys, which would emit `WHERE` with nothing after it.
+    # Both keeps are genuinely internal: callers reach `delete_objects` only through
+    # `run_deletions`, which iterates non-empty collections, and `_affected_row_count` only after the
+    # `show_query !== :execute` return, where `conn` is the transaction's pinned connection.
+    "src/querybuilder/deletion.jl"      => 2,  # no keys / no conn to count on — internal invariants
     # #433 shrank this from 2 to 1. The "unmaterialized CTE" site was NOT an internal invariant:
     # `cte_dict["model"]` is written only by `build_cte_clause`, so its absence means the statement
     # emits no WITH clause — reachable from `update()` on a query that references a CTE. It is now a

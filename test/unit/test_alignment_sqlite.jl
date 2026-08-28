@@ -1272,6 +1272,20 @@ end
         @test haskey(step, :operation)
         @test haskey(step, :sql_text)
         @test step[:operation] in (:delete, :update)
+
+        # #452: every step binds exactly one value per rendered marker.
+        #
+        # This is the F1 fixture, and it reaches the multi-path shape for real: Just_a_test_deletion
+        # declares TWO CASCADE foreign keys to Result (test_result / test_result2), so the collector
+        # holds two entries for it and for Just_a_nested_roll_back below it. Before the fix those two
+        # steps rendered 2 markers against 4 bound values each — the plan the F1 models actually
+        # produce, not a synthetic one. It never fired against a live database only because nothing
+        # populates test_result2, so the `_exists` probe pruned the second path.
+        #
+        # Counted inline rather than through helper_marker_alignment.jl: this file predates that
+        # helper and does not include it, and the helper's own header says not to retrofit the
+        # hand-written counts already here.
+        @test count(==('?'), step[:sql_text]) == length(step[:parameters])
     end
 end
 

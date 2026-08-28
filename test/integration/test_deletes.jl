@@ -13,6 +13,7 @@ Scenarios covered:
     — Keyless related CASCADE: FK fallback is used when a child has no PK
   — DO_NOTHING: ORM defers to the database; PostgreSQL rejects, SQLite may permit
   — CASCADE: parent deletion removes dependent children through the collector
+    — Multi-path CASCADE: a dependent reachable by two FK paths, counted once (#452)
   — Nested CASCADE: multi-level dependency graph is walked recursively
   — SET_NULL: FK field on surviving child row is set to NULL
   — SET_NULL guard: deletion is rejected pre-mutation when FK is non-nullable
@@ -562,6 +563,144 @@ end
             @test M.Just_a_test_deletion.objects.filter("id__@in" => child_ids).count() == 0
         finally
             _cleanup_scratch_delete_graph!(scratch_result_id; deletion_ids=child_ids)
+        end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # MULTI-PATH CASCADE (#452): a dependent reachable by TWO cascade paths.
+    #
+    # Just_a_test_deletion declares two CASCADE foreign keys to Result — test_result and
+    # test_result2 — so a row that sets BOTH is collected twice, and `delete_objects` takes its
+    # multi-path branch. That branch used to render every path's scoping subquery into the shared
+    # parameter collector, throw the text away, and render the same subqueries again into the SAME
+    # collector: the statement carried twice as many bound values as it had placeholders. SQLite
+    # refuses that outright ("values should be provided for all query placeholders"), so a
+    # multi-path cascade delete could not execute at all.
+    #
+    # No fixture in this file combined the two columns before, which is why the defect survived:
+    # nothing populates test_result2, so `find_related_objects!`'s `_exists` probe always pruned the
+    # second path and every live delete took the single-key branch. Populating BOTH is the whole
+    # point of this testset — do not "simplify" it down to one FK.
+    #
+    # The row counts are asserted EXACTLY, not with `>=`. A row reachable by two paths must be
+    # counted once, and the nested descendant must be counted once too; a `>=` assertion would pass
+    # against double-counting, which is the other thing the multi-path branch could get wrong.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "Delete with multi-path CASCADE: two FK paths to one dependent (#452)" begin
+        scratch_result_id  = 990010   # the delete target
+        other_result_id    = 990011   # a second parent, never deleted — anchors the control row
+
+        both_id            = 990501   # sets BOTH test_result and test_result2 -> reachable twice
+        owner_only_id      = 990502   # test_result only
+        backup_only_id     = 990503   # test_result2 only
+        control_id         = 990504   # points at other_result_id -> must survive
+        nested_id          = 990601   # third level, below the two-path row
+
+        deletion_ids = [both_id, owner_only_id, backup_only_id, control_id]
+
+        _cleanup_scratch_delete_graph!(scratch_result_id; deletion_ids=deletion_ids, nested_ids=[nested_id])
+        _cleanup_scratch_delete_graph!(other_result_id)
+        _seed_scratch_result!(scratch_result_id)
+        _seed_scratch_result!(other_result_id)
+
+        try
+            M.Just_a_test_deletion.objects.create(
+                "id"           => both_id,
+                "name"         => "multipath-both",
+                "test_result"  => scratch_result_id,
+                "test_result2" => scratch_result_id
+            )
+            M.Just_a_test_deletion.objects.create(
+                "id"          => owner_only_id,
+                "name"        => "multipath-owner-only",
+                "test_result" => scratch_result_id
+            )
+            M.Just_a_test_deletion.objects.create(
+                "id"           => backup_only_id,
+                "name"         => "multipath-backup-only",
+                "test_result2" => scratch_result_id
+            )
+            M.Just_a_test_deletion.objects.create(
+                "id"          => control_id,
+                "name"        => "multipath-control",
+                "test_result" => other_result_id
+            )
+            # Hangs off the two-path row, so the third level is reached through both of its parent's
+            # collector entries — the recursion produces a multi-path statement here too.
+            M.Just_a_nested_roll_back.objects.create(
+                "id"          => nested_id,
+                "test"        => both_id,
+                "description" => "multipath-nested"
+            )
+
+            @test M.Just_a_test_deletion.objects.filter("id__@in" => deletion_ids).count() == 4
+            @test M.Just_a_nested_roll_back.objects.filter("id" => nested_id).count() == 1
+
+            # Both cascade paths carry live rows, so both survive the `_exists` probe and the plan
+            # really is multi-path. Asserted rather than assumed: if a future fixture change let one
+            # path go empty this testset would silently degrade into the single-key case it exists
+            # to complement.
+            inspect_q = M.Result.objects
+            inspect_q.filter("resultid" => scratch_result_id)
+            inspection = inspect_q.delete(show_query = :dict)
+            _mp_idx = findfirst(s -> s[:operation] == :delete &&
+                                     s[:model] == "just_a_test_deletion", inspection)
+            @assert _mp_idx !== nothing "no just_a_test_deletion delete step; got $([s[:model] for s in inspection])"
+            deletion_step = inspection[_mp_idx]
+            # Two ORed TOP-LEVEL fragments, one per foreign key — the shape the fix emits.
+            #
+            # Anchored on WHERE/OR, not a bare `occursin`. Both column names appear in the OLD
+            # merged-Qor render too (it nests `"Tb"."test_result2" IN (…) OR "Tb"."test_result" IN
+            # (…)` inside one outer fragment), so `occursin("test_result2", sql)` passes against the
+            # unfixed code and asserts nothing — and `occursin("test_result", sql)` is worse still,
+            # since "test_result" is a substring of "test_result2" and the check can never fail.
+            # What distinguishes fixed from unfixed is the COUNT of top-level fragments: two ORed
+            # `"id" IN (SELECT …)`, rather than one wrapping a nested OR. The unqualified column is
+            # what anchors it — every nested arm is written `"Tb"."id"`, so only the top-level
+            # fragments match. Naming the FK columns cannot do this job: both appear in either
+            # render, and "test_result" is a substring of "test_result2" besides.
+            #
+            # `\w+` assumes the key column is a word — a `db_column` like "race-id" would miss and
+            # drop the count. That fails loudly here rather than passing wrongly, which is the right
+            # direction for a brittle anchor, but it is an assumption about the F1 naming.
+            _mp_fragments = collect(eachmatch(r"(?:WHERE|OR)\s+\"\w+\" IN \(SELECT",
+                                              deletion_step[:sql_text]))
+            @test length(_mp_fragments) == 2
+            # #452's invariant, on the statement that used to violate it. Asserted here rather than
+            # only in unit coverage because this is the plan a live database is asked to execute.
+            # Per-backend marker syntax, as helper_marker_alignment.jl does it: a repeated `$1` is
+            # legal on PostgreSQL, so compare DISTINCT indices there and occurrences on SQLite.
+            _mp_sql    = deletion_step[:sql_text]
+            _mp_nparam = length(deletion_step[:parameters])
+            if PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
+                @test length(Set(m.match for m in eachmatch(r"\$\d+", _mp_sql))) == _mp_nparam
+            else
+                @test count(==('?'), _mp_sql) == _mp_nparam
+            end
+
+            delete_q = M.Result.objects
+            delete_q.filter("resultid" => scratch_result_id)
+            total_deleted, deleted_counter = delete_q.delete()
+
+            # 1 result + 3 just_a_test_deletion + 1 nested = 5. The two-path row counts ONCE.
+            @test deleted_counter["result"] == 1
+            @test deleted_counter["just_a_test_deletion"] == 3
+            @test deleted_counter["just_a_nested_roll_back"] == 1
+            @test total_deleted == 5
+
+            # Every row on either path is gone …
+            @test M.Result.objects.filter("resultid" => scratch_result_id).count() == 0
+            @test M.Just_a_test_deletion.objects.filter(
+                "id__@in" => [both_id, owner_only_id, backup_only_id]).count() == 0
+            @test M.Just_a_nested_roll_back.objects.filter("id" => nested_id).count() == 0
+
+            # … and the row pointing at the OTHER parent is untouched. This is what a wrong-keyed or
+            # misbound fragment would take with it.
+            @test M.Just_a_test_deletion.objects.filter("id" => control_id).count() == 1
+            @test M.Result.objects.filter("resultid" => other_result_id).count() == 1
+        finally
+            _cleanup_scratch_delete_graph!(scratch_result_id; deletion_ids=deletion_ids, nested_ids=[nested_id])
+            _cleanup_scratch_delete_graph!(other_result_id)
         end
     end
 

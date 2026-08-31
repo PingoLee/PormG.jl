@@ -293,9 +293,16 @@ function _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc::
   return formatted_value
 end
 
-function _resolve_having_filter_value(alias::String, raw_value, instruc::SQLInstruction)
+# `operator` (#411): this function has the SAME inverted formatter contract the three filter call
+# sites in `build_helpers.jl` had — it handed `raw_value` straight to a formatter, so a
+# membership list reached one whole. `filter("mx__@in" => [Date(...)])` on a `Max("happened")`
+# alias therefore died with `InvalidValueError` exactly as the plain-field path did. The operator
+# is what licenses mapping, for the same reason as there: a `Vector{UInt8}` is ONE binary value,
+# so the value's type cannot decide it.
+function _resolve_having_filter_value(alias::String, raw_value, instruc::SQLInstruction,
+                                      operator::AbstractString)
   if haskey(instruc.tab_field_cache, alias)
-    formatted_value = instruc.tab_field_cache[alias].formatter(raw_value)
+    formatted_value = _format_filter_value(instruc.tab_field_cache[alias].formatter, raw_value, operator)
     return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
   end
 
@@ -307,25 +314,25 @@ function _resolve_having_filter_value(alias::String, raw_value, instruc::SQLInst
       sql_function = selected_value.field
 
       if sql_function.formatter !== nothing
-        formatted_value = sql_function.formatter(raw_value)
+        formatted_value = _format_filter_value(sql_function.formatter, raw_value, operator)
         return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
       elseif sql_function.function_name == "AVG"
-        formatted_value = Models.format_number_sql(raw_value)
+        formatted_value = _format_filter_value(Models.format_number_sql, raw_value, operator)
         return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
       elseif haskey(PormGTypeField, sql_function.function_name)
-        formatted_value = getfield(Models, PormGTypeField[sql_function.function_name])(raw_value)
+        formatted_value = _format_filter_value(getfield(Models, PormGTypeField[sql_function.function_name]), raw_value, operator)
         return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
       elseif sql_function.function_name in ["SUM", "COUNT"]
-        formatted_value = Models.format_number_sql(raw_value)
+        formatted_value = _format_filter_value(Models.format_number_sql, raw_value, operator)
         return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
       elseif sql_function.function_name in ["MAX", "MIN"] && sql_function.column isa String && haskey(instruc.object.model.fields, sql_function.column)
-        formatted_value = instruc.object.model.fields[sql_function.column].formatter(raw_value)
+        formatted_value = _format_filter_value(instruc.object.model.fields[sql_function.column].formatter, raw_value, operator)
         return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
       end
     end
   end
 
-  formatted_value = IntegerField().formatter(raw_value)
+  formatted_value = _format_filter_value(IntegerField().formatter, raw_value, operator)
   return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
 end
 
@@ -350,17 +357,31 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
     elseif isa(v, SQLTypeOper)
       @pormg_debug false
       if isa(v.column, SQLTypeField) && isa(v.column.field, String) && !contains(v.column.field, "__") && !(v.column.field in instruc.object.model.field_names)
-        # @pormg_debug false
-        field = try
-          instruc.cache[v.column._as].field
-        catch e
-          # @pormg_debug
-          rethrow(e)
-        end
+        # #446. This branch is reached by a PLAIN filter key — no `__` — that is not a field on the
+        # model, which means it is either a projection alias (the documented HAVING spelling) or a
+        # name that does not exist. The `try`/`catch` here only rethrew: it was a debug hook, not a
+        # guard, so an unknown name escaped as a bare `KeyError` naming an internal dict. That made
+        # the simplest possible mistake — `filter("nope" => 1)` — the one PormG reported worst, and
+        # it shadowed the `UnknownFieldError` further down this same function, which could never be
+        # reached for a plain String column.
+        #
+        # Guard immediately above the raw index and leave the index plain, the shape #433 settled:
+        # the membership test is what makes it total.
+        haskey(instruc.cache, v.column._as) ||
+          throw(_unknown_field(instruc.object.model, v.column.field;
+                               aliases = collect(keys(instruc.cache))))
+        field = instruc.cache[v.column._as].field
         # Switch to having context for positional parameters
         set_context!(instruc, :having)
-        placeholder = add_parameter!(instruc, _resolve_having_filter_value(v.column._as, v.values, instruc))
-        push!(instruc.having, "$(field) $(v.operator) $(placeholder)")
+        placeholder = add_parameter!(instruc, _resolve_having_filter_value(v.column._as, v.values, instruc, v.operator))
+        # #411: `IN`/`NOT IN` need the dialect-aware renderer, not string concatenation. Concatenating
+        # produced `HAVING MAX(x) IN $1` on PostgreSQL and `HAVING MAX(x) IN ?, ?` on SQLite — no
+        # parentheses, no `= ANY` — which is a syntax error on both. Every other operator is a plain
+        # infix and stays that way.
+        push!(instruc.having,
+              v.operator in ("IN", "NOT IN") ?
+                _render_membership(string(field), v.operator, placeholder, instruc) :
+                "$(field) $(v.operator) $(placeholder)")
         set_context!(instruc, :where)
         continue
       end

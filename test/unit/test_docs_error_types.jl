@@ -407,6 +407,41 @@ const DOCERR_CASES = [
                 id       = IDField(),
                 parentid = ForeignKey("Docerr_Never_Declared", pk_field = "id"))),
     ),
+    # #446. `errors.md` has promised `UnknownFieldError` for "the field name does not exist on the
+    # model" since the taxonomy landed, and until now the code raised a bare `KeyError` for every one
+    # of these shapes — an untyped error naming an internal dict lookup, for the single most common
+    # mistake a user makes against this API. The claim was never pinned here, which is exactly how it
+    # drifted. All five shapes, because they reach four different raw dict accesses.
+    (
+        "errors.md — an unknown PLAIN field name in filter()",
+        UnknownFieldError,
+        () -> DOCERR_RESULT_PG.objects.filter("nope" => 1).list(show_query = :dict),
+    ),
+    (
+        "errors.md — an unknown field on a JOINED model in filter()",
+        UnknownFieldError,
+        () -> DOCERR_RESULT_PG.objects.filter("driverid__nope" => 1).list(show_query = :dict),
+    ),
+    (
+        "errors.md — an unknown joined field carrying an operator suffix",
+        UnknownFieldError,
+        () -> DOCERR_RESULT_PG.objects.filter("driverid__nope__@lt" => 1).list(show_query = :dict),
+    ),
+    (
+        "errors.md — an unknown field in values()",
+        UnknownFieldError,
+        () -> DOCERR_RESULT_PG.objects.values("driverid__nope").list(show_query = :dict),
+    ),
+    (
+        "errors.md — an unknown field in order_by()",
+        UnknownFieldError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.values("resultid")
+            q.order_by("driverid__nope")
+            q.list(show_query = :dict)
+        end,
+    ),
     (
         # #420. The page states BOTH halves of this rule; only the explicit one is a plain
         # constructor call and therefore pinnable here. The derived half — where the accessor
@@ -465,4 +500,45 @@ end
     @test err !== nothing
     @test err isa ModelDefinitionError
     @test occursin("All fields must be of type PormGField", error_message(err))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The unknown-field message itself: field, model, and SORTED choices (#446)
+#
+# The table above pins the TYPE for five shapes. This pins what the message says, which is the half
+# that makes the error useful — a bare `@test_throws UnknownFieldError` would pass on any unknown-name
+# error raised anywhere in the builder.
+#
+# Lives here rather than in `test_typed_exceptions.jl` beside #433's precedent, because these shapes
+# only fail at RENDER, and rendering needs a connection-bound model — which is what the DOCERR mocks
+# above already provide.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "unknown-field message names the field, the model and sorted choices (#446)" begin
+    err = try
+        DOCERR_RESULT_PG.objects.filter("driverid__no_such_column" => 1).list(show_query = :dict)
+        nothing
+    catch e
+        e
+    end
+    @test err isa PormG.UnknownFieldError
+    msg = sprint(showerror, err)
+    # The offending segment, and the model actually searched — the JOINED one, not the base model.
+    # Naming the base model would send the reader to the wrong table's column list.
+    @test occursin("no_such_column", msg)
+    @test occursin(PormG.model_table_name(DOCERR_DRIVER_PG), msg)
+    @test !occursin("not found in $(PormG.model_table_name(DOCERR_RESULT_PG))", msg)
+
+    # The choices are SORTED. `field_names` is declaration order, so on a wide model the name the
+    # user typo'd sits at an unpredictable offset; Django sorts the same list for the same reason.
+    # Asserting the PROPERTY, not a literal list, so adding a field to the fixture cannot break this
+    # for the wrong reason.
+    # Strip ANSI before parsing STRUCTURE out of the message. `_emsg` keeps the escapes when
+    # `Base.have_color` is set, so under `--color=yes` the captured names carry `\e[4m\e[32m` and a
+    # membership assertion silently fails — the exact local-passes/CI-fails split this repo has hit
+    # before. Content assertions above are matched on ANSI-free runs of text instead.
+    plain = replace(msg, r"\e\[[0-9;]*m" => "")
+    listed = [strip(x) for x in split(match(r"fields: ([^;]+)", plain).captures[1], ",")]
+    @test listed == sort(listed)
+    @test length(listed) > 1
+    @test "surname" in listed
 end

@@ -208,7 +208,7 @@ end
   - `OperObject`: An OperObject with the corresponding operator and values.
 
 """
-function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:Union{AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
+function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:Union{AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID}
   if haskey(PormGsuffix, x.first[end])
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
@@ -218,7 +218,10 @@ end
 function _get_pair_to_oper(x::Pair{String,T}) where T<:Union{AbstractString,Number,Bool,Dates.Date,Dates.DateTime,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
-function _get_pair_to_oper(x::Pair{String,Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
+# Widened alongside its `Pair{Vector{String},…}` twin below (#411). Not reachable from
+# `_check_filter`, which splits the key at `__@` first — but leaving one of a matched pair behind
+# is the drift that bites whoever calls it directly next.
+function _get_pair_to_oper(x::Pair{String,Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
 # Store SQLObject, to use __@in operator
@@ -255,7 +258,61 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeFunction
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
   end
 end
-function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
+# `Base.UUID` and `Vector{UInt8}` (#411): without them a `Vector{UUID}` or `Vector{Vector{UInt8}}`
+# right-hand side never reached this method at all, so `__@in` on a UUIDField or a BinaryField
+# failed at PARSE time with a MethodError — before any formatter ran, which is why mapping the
+# formatter at the call site does not fix those two on its own.
+# `Vector{Any}` (#411). `[]` — the way anyone writes an empty list, and what `ids = []` gives you
+# before the first `push!` — is `Vector{Any}`, and `Any` satisfies none of the element bounds the
+# methods below dispatch on. So the most natural spelling of an empty membership list raised a
+# `MethodError` naming `_get_pair_to_oper` and a tuple type nobody typed: the exact untyped-error
+# class this pair of issues exists to remove, on the one shape the documentation shows.
+#
+# `_normalize_filter_pair`'s comprehension already narrows a NON-empty `Any[…]` whose elements share
+# a type, which is why `Any[UInt8[1], UInt8[2]]` reaches the binary guard correctly. It cannot narrow
+# an empty one — there is nothing to infer from — so that case is handled here.
+function _get_pair_to_oper(x::Pair{Vector{String},Vector{Any}})
+  # Empty: no element type to preserve, because nothing is ever bound. `String[]` is as good as any.
+  isempty(x.second) && return _get_pair_to_oper(x.first => String[])
+  narrowed = identity.(x.second)
+  # Genuinely heterogeneous — narrowing changed nothing, so re-dispatching would recurse forever.
+  # Report it as what it is rather than looping or leaking a MethodError.
+  narrowed isa Vector{Any} && throw(FilterError(
+    "The filter \e[4m\e[31m$(join(x.first, "__"))\e[0m was given a list whose values do not share " *
+    "a type: \e[4m\e[31m$(join(unique(typeof.(x.second)), ", "))\e[0m. A membership list must be " *
+    "homogeneous — build it as a typed vector, e.g. \e[1mInt[…]\e[0m or \e[1mString[…]\e[0m."))
+  return _get_pair_to_oper(x.first => narrowed)
+end
+
+# A membership filter over BINARY values is refused, deliberately and by name (#411).
+#
+# `format_binary_sql` returns a `PormGBytes` wrapper, and the two ARRAY methods of `add_parameter!`
+# are the only ones that do not unwrap it — the scalar methods exist precisely to. So a mapped list
+# binds wrappers: SQLite stores a Julia-serialized blob that matches nothing (silently zero rows,
+# no error) and PostgreSQL emits a nonsense `bytea[]` literal. Supporting this properly means
+# teaching the array collectors to unwrap, which is a driver round-trip change and cannot be
+# validated without the integration suite.
+#
+# So it stays unsupported — but loudly, and naming the path the user wrote. It used to raise a
+# `MethodError` naming `_get_pair_to_oper` and a tuple type nobody typed; silently wrong rows would
+# have been worse still.
+function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:AbstractVector{UInt8}
+  # Only `@in`/`@nin` are refused HERE, for the binary-specific reason. Any other suffix — or none at
+  # all, `filter("blob" => [bytes...])` — is the ordinary "vector value, wrong operator" mistake, and
+  # the shared funnel already reports it with the list of operators that DO take a vector. Claiming
+  # "membership filter" for `blob__@gte`, or rendering `__@blob` for a path with no suffix at all,
+  # would undercut the one thing this guard is for: naming what the user actually wrote.
+  x.first[end] in ("in", "nin") ||
+    _raise_invalid_filter_operator(x.first, "binary vector", ["in", "nin"])
+  path = join(x.first[1:end-1], "__")
+  throw(FilterError(
+    "A membership filter over binary values is not supported: " *
+    "\e[4m\e[31m$(path)__@$(x.first[end])\e[0m. Binary values bind through a wrapper the list " *
+    "parameter path cannot unwrap, so this would match nothing rather than fail. Compare one value " *
+    "at a time (\e[1m\"$(path)\" => bytes\e[0m), combining them with \e[1mQor\e[0m if you need several."))
+end
+
+function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID}
   suffix = x.first[end]
   if suffix in ["in", "nin"]
     @pormg_debug false
@@ -507,12 +564,41 @@ end
 """
 This function checks if the given `field` is a valid field in the provided `model`. If the field is valid, it returns the field name, potentially modified based on certain conditions.
 """
+# The one place an unknown field name becomes a typed error (#446).
+#
+# Returns the exception; the call site throws it — the convention `test_docs_error_type_drift.jl`
+# pins for `_unsupported_conn` / `_write_not_allowed` / `_fielderr`. A helper that threw internally
+# would invite the mirror-image mistake at a returning one, where a forgotten `throw(` silently
+# constructs an exception and lets execution continue past the guard.
+#
+# The choices are SORTED, and that is not cosmetic: `field_names` is declaration order, so on a wide
+# model the name a user typo'd sits at an unpredictable offset in a 40-item line. Django sorts the
+# same list in `names_to_path` for the same reason. Reverse accessors are listed too — they are
+# addressable at exactly the same position in a path, so omitting them makes a legal name look
+# unavailable.
+function _unknown_field(model::PormGModel, name::AbstractString;
+                       aliases::Vector{String} = String[])::UnknownFieldError
+  choices = sort(collect(model.field_names))
+  accessors = sort(collect(keys(model.related_objects)))
+  tail = isempty(accessors) ? "" :
+    "; and the reverse accessors: \e[4m\e[32m$(join(accessors, ", "))\e[0m"
+  # A projection alias is addressable in exactly the same position as a field — `filter("tot__@gt")`
+  # over a `Sum(...)` alias is the documented way to write HAVING — so a message that omitted them
+  # would call a legal name unavailable. Django lists `annotation_select` alongside the fields for
+  # the same reason.
+  tail *= isempty(aliases) ? "" :
+    "; and the declared aliases: \e[4m\e[32m$(join(sort(aliases), ", "))\e[0m"
+  return UnknownFieldError(
+    "the column \e[4m\e[31m$(name)\e[0m not found in \e[4m\e[32m$(Models.model_table_name(model))\e[0m, " *
+    "that contains the fields: \e[4m\e[32m$(join(choices, ", "))\e[0m$(tail)")
+end
+
 function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction)
   # check if last_column a field from the model    
   if !(field in model.field_names)
     _check_if_field_is_a_operator(field)
     @pormg_debug false
-    throw(UnknownFieldError("The field \e[31m$(field)\e[0m not found in \e[34m$(model.name)\e[0m: \e[32m$(join(model.field_names, ", "))\e[0m"))
+    throw(_unknown_field(model, field))
   end
   # (instruct.django !== nothing && hasfield(model.fields[field] |> typeof, :to)) && (field = string(field, "_id"))
 
@@ -1395,6 +1481,74 @@ function _year_bucket_bounds(value)::Tuple{Dates.Date,Dates.Date}
   return first_of_period, first_of_period + Dates.Year(1)
 end
 
+# Apply a field's formatter to a filter's right-hand side (#411).
+#
+# Django's answer, in one function. `Field.get_prep_value` is scalar-only for EVERY Django field type;
+# `In` and `Range` inherit `FieldGetDbPrepValueIterableMixin`, whose `get_prep_lookup()` maps it over
+# the rhs itself. The iterable-aware layer belongs to the LOOKUP, not to the field. PormG had that
+# contract inverted — the three call sites below handed the whole vector to `field.formatter`, so
+# every formatter had to cope with an array individually, and only two of them did. `__@in` was
+# therefore broken on DateField, DateTimeField, BooleanField, DurationField, UUIDField and
+# BinaryField, and silently WRONG on JSONField.
+#
+# The operator is the discriminator, not the value's type, and that distinction is the whole point.
+# `format_binary_sql` and `format_json_sql` are the field types whose SCALAR value is itself a
+# collection: a `Vector{UInt8}` IS one binary value, and `[1, 2]` IS one JSON array. Dispatching on
+# `values isa AbstractArray` would map over the bytes of a BinaryField and destroy it. Only "this is a
+# MEMBERSHIP lookup, so the rhs is a list of values" licenses the map — which is exactly why Django
+# puts the mixin on the lookup class.
+#
+# Everything that is not `IN`/`NOT IN` passes through untouched, so `BETWEEN` (which indexes its two
+# operands separately, below) and every scalar comparison are unaffected.
+_format_filter_value(formatter, values, operator::AbstractString) =
+  operator in ("IN", "NOT IN") && values isa AbstractArray ? [formatter(v) for v in values] :
+                                                             formatter(values)
+
+# The single renderer for `IN` / `NOT IN` (#411). Extracted so the WHERE path and the HAVING path
+# cannot drift: `get_filter_query`'s aggregate-alias branch used to build its own
+# `"$(field) $(operator) $(placeholder)"`, which produced `HAVING MAX(x) IN $1` on PostgreSQL and
+# `HAVING MAX(x) IN ?, ?` on SQLite — no parentheses, no `= ANY`, a syntax error on both engines.
+# That was invisible because nothing asserted on the rendered HAVING text.
+#
+# `column` is the already-rendered left-hand side; `placeholders` is whatever `add_parameter!`
+# returned, which is dialect-dependent by design.
+function _render_membership(column::AbstractString, operator::AbstractString, placeholders,
+                            instruc::SQLInstruction)::String
+  # An EMPTY membership list, handled before the dialect split because only one dialect breaks.
+  # SQLite has no array type, so `add_parameter!` expands a vector into one `?` per element and binds
+  # them individually — for an empty vector that is ZERO parameters and an empty placeholder string,
+  # which rendered `IN ()`: a syntax error. PostgreSQL binds the whole vector as a single array
+  # parameter and rendered a valid `= ANY($1)` over `'{}'` that simply never matches. One query, a
+  # loud failure on one backend and correct behavior on the other.
+  #
+  # Render the constant the empty set means, so the two agree on BEHAVIOR — which is what the
+  # PG/SQLite alignment rule actually requires; their SQL text already differs here, `IN (?, ?)`
+  # against `= ANY($1)`. Nothing is a member of the empty set, and everything is not a member of it.
+  # Django reaches the same truth value from the other end, raising `EmptyResultSet` so the query is
+  # never sent; PormG has no such short-circuit and emits a predicate with the same meaning instead.
+  #
+  # Dropping `column` is safe because no filter-LHS renderer binds a parameter of its own — that is
+  # the real invariant, not "an empty placeholder means nothing was bound", and it is what keeps the
+  # parameter list in step. Registered joins live in `instruct.row_join`, not in the discarded string.
+  if isempty(placeholders)
+    return operator == "IN" ? "(1 = 0)" : "(1 = 1)"
+  end
+  if isa(placeholders, String)
+    # One placeholder for the whole list: PostgreSQL bound it as a single array parameter.
+    if instruc.connection isa PormGPostgres
+      return string(column, " ", operator == "IN" ? "= ANY" : "<> ALL", "(", placeholders, ")")
+    else
+      return string(column, " ", operator, " (", placeholders, ")")
+    end
+  elseif isa(placeholders, AbstractArray)
+    # SQLite and friends: one placeholder per element, so the list is spelled out.
+    return string(column, " ", operator, " (", join(placeholders, ", "), ")")
+  else
+    # Internal invariant: add_parameter! only ever returns a String or a Vector of placeholders.
+    error(_emsg("PormG internal error rendering $(operator): parameter placeholders must be a String or a Vector, got $(typeof(placeholders))."))
+  end
+end
+
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   @pormg_debug false
   # #352/#373: rewrite a non-sargable date-bucket comparison (to_char/EXTRACT on the column) into a
@@ -1428,14 +1582,25 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     return string(column, " ", v.operator, " ", placeholders)
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formatter !== nothing
     @pormg_debug false
-    placeholders = add_parameter!(instruc, v.column.field.formatter(v.values))
+    placeholders = add_parameter!(instruc,
+      _format_filter_value(v.column.field.formatter, v.values, v.operator))
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && haskey(PormGTypeField, v.column.field.function_name)
-    placeholders = add_parameter!(instruc, getfield(Models, PormGTypeField[v.column.field.function_name])(v.values))
+    # Through the same helper as the other sites (#411). These work today only because
+    # `PormGTypeField` maps to `format_number_sql` / `format_text_sql` — the two formatters that
+    # happen to carry an `AbstractArray` method, which is precisely the coincidence this issue is
+    # about. Leaving them raw would keep that coincidence load-bearing.
+    placeholders = add_parameter!(instruc,
+      _format_filter_value(getfield(Models, PormGTypeField[v.column.field.function_name]), v.values, v.operator))
     # value = getfield(Models, PormGTypeField[v.column.field.function_name])(v.values)
   elseif isa(v.column, SQLTypeFunction) && haskey(PormGTypeField, v.column.function_name)
     # Function with formatter
     @pormg_debug false
-    placeholders = add_parameter!(instruc, getfield(Models, PormGTypeField[v.column.function_name])(v.values))
+    # Through the same helper as the other sites (#411). These work today only because
+    # `PormGTypeField` maps to `format_number_sql` / `format_text_sql` — the two formatters that
+    # happen to carry an `AbstractArray` method, which is precisely the coincidence this issue is
+    # about. Leaving them raw would keep that coincidence load-bearing.
+    placeholders = add_parameter!(instruc,
+      _format_filter_value(getfield(Models, PormGTypeField[v.column.function_name]), v.values, v.operator))
   elseif isa(v.values, SQLObjectHandler)
     # Subqueries - these are safe since they're built through PormG.jl
     if !(v.operator in ["IN", "NOT IN"])
@@ -1487,10 +1652,26 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
         # Determine if this is a LIKE-based operator and which wildcard pattern to use
         is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith",
                                     "ncontains", "nicontains", "niunaccent_contains", "nstartswith", "nendswith"]
-        placeholders = add_parameter!(instruc, instruc.object.model.fields[v.column.field].formatter(v.values), contains=is_like_op, operator=v.operator)
+        placeholders = add_parameter!(instruc,
+          _format_filter_value(instruc.object.model.fields[v.column.field].formatter, v.values, v.operator),
+          contains=is_like_op, operator=v.operator)
       catch e
         @pormg_debug false
-        if contains(string(e), "The date") && contains(string(e), "is invalid")
+        # #411: this used to string-match `"The date"` && `"is invalid"`. That fired for exactly one
+        # case — `format_date_sql(::AbstractString)`, whose message is literally "The date $value is
+        # invalid" — and for nothing else. The `format_date_sql` CATCH-ALL says "The date must be a
+        # Date, DateTime, …", and no other field type's formatter mentions dates at all, so a
+        # wrong-typed value on any non-Date field escaped as a raw `InvalidValueError`, whose own
+        # docstring scopes it to the insert/update coercion helpers rather than to a filter.
+        #
+        # Widening it to a type check makes the filter path report its own house type consistently.
+        # It is a deliberate behavior change, not a no-op: `filter("n" => "abc")` on an IntegerField
+        # now raises `FilterError` where it raised `InvalidValueError`. Both are `PormGError`.
+        #
+        # `@range`/`@nrange` still escape as `InvalidValueError` because the BETWEEN branch formats
+        # its two operands OUTSIDE this `try`. Left alone deliberately: moving it is a separate change
+        # to a separate branch, and doing it here would widen an already-wide diff.
+        if e isa InvalidValueError
           throw(FilterError("The \e[4m\e[31m$(v.column.field)\e[0m field is the type \e[4m\e[32m$(instruc.object.model.fields[v.column.field].type)\e[0m. Please check the value: \e[4m\e[31m$(v.values)\e[0m"))
         end
         @pormg_debug false
@@ -1500,7 +1681,9 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       @pormg_debug false
       is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith",
                                   "ncontains", "nicontains", "niunaccent_contains", "nstartswith", "nendswith"]
-      placeholders = add_parameter!(instruc, instruc.tab_field_cache[v.column._as].formatter(v.values), contains=is_like_op, operator=v.operator)
+      placeholders = add_parameter!(instruc,
+        _format_filter_value(instruc.tab_field_cache[v.column._as].formatter, v.values, v.operator),
+        contains=is_like_op, operator=v.operator)
     elseif isa(v.column, SQLTypeField)
       @pormg_debug false
       is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith",
@@ -1515,23 +1698,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!="]
     return string(column, " ", v.operator, " ", placeholders)
   elseif v.operator in ["IN", "NOT IN"]
-    if isa(placeholders, String)
-      # Se placeholders for uma única string (ex: "$1" ou "?")
-      if instruc.connection isa PormGPostgres
-        return string(column, " ", v.operator == "IN" ? "= ANY" : "<> ALL", "(", placeholders, ")")
-      else
-        # Para SQLite e outros que não suportam ANY(array), precisamos que os placeholders
-        # tenham sido expandidos ou usar uma abordagem diferente.
-        # No PormG atual, se chegou aqui como String, é porque add_parameter! retornou um único "?"
-        # para o vetor inteiro.
-        return string(column, " ", v.operator, " (", placeholders, ")")
-      end
-    elseif isa(placeholders, AbstractArray)
-      return string(column, " ", v.operator, " (", join(placeholders, ", "), ")")
-    else
-      # Internal invariant: add_parameter! only ever returns a String or a Vector of placeholders.
-      error(_emsg("PormG internal error rendering $(v.operator): parameter placeholders must be a String or a Vector, got $(typeof(placeholders))."))
-    end
+    return _render_membership(column, v.operator, placeholders, instruc)
   elseif v.operator in ["contains", "icontains", "iunaccent_contains", "iunaccent_exact", "startswith", "endswith",
                         "ncontains", "nicontains", "niunaccent_contains", "niunaccent_exact", "nstartswith", "nendswith"]
     @pormg_debug false

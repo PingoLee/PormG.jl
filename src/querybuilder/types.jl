@@ -384,7 +384,11 @@ That is a internal function, please do not use it.
 """
 @kwdef mutable struct OperObject <: SQLTypeOper
   operator::String
-  values::Union{String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,SQLObjectHandler,SQLTypeF,SQLTypeFunction,SQLTypeCTE,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF}
+  # `Base.UUID` appears on BOTH arms (#411): the vector arm so `uid__@in` can hold a list, and the
+  # scalar arm so `filter("uid" => uuid)` can hold one value. Widening only the vector arm left plain
+  # equality on a UUIDField raising a `convert` MethodError — an untyped error on the most ordinary
+  # spelling there is, which is precisely what this pair of issues exists to remove.
+  values::Union{String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,SQLObjectHandler,SQLTypeF,SQLTypeFunction,SQLTypeCTE,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF,Base.UUID}
   column::ColumnPart # Vector{String} is needed
 end
 OP(column::String, value) = OperObject(operator="=", values=value, column=SQLField(column))

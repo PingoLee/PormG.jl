@@ -32,9 +32,35 @@ function PormG.backend_renew_connection(pool::PormGPostgres, conn::LibPQ.Connect
   end
 end
 
+# Liveness probe. `PQstatus` ALONE is not enough: it reports libpq's *cached* state, and libpq only
+# moves a connection to CONNECTION_BAD after an I/O attempt fails. An idle pooled connection attempts
+# no I/O, so a backend the server killed — a restart, a failover, a `pg_terminate_backend` sweep —
+# keeps reading CONNECTION_OK while its `FATAL: terminating connection due to administrator command`
+# sits unread in the socket buffer, and the pool serves the corpse until some later statement finally
+# pulls it out (#442).
+#
+# `PQconsumeInput` is that missing read: non-blocking, no round trip, and on EOF libpq sets
+# CONNECTION_BAD — so consuming *before* checking the status makes the status truthful for exactly
+# the case the pool cannot otherwise see. Consuming is safe: it only moves already-arrived socket
+# data into libpq's input buffer, so a legitimate pending result (the #315 case) is preserved rather
+# than discarded. What it does NOT catch is a silent drop that delivered no bytes at all; that one is
+# handled reactively by `ConnectionPool._sweep_stale_idle!` once any one slot has actually failed.
+#
+# `LibPQ.lock(conn)` mirrors `_drain_postgres_connection!` below. It cannot wedge the pool even
+# though all four call sites run under `pool.lock`: that semaphore is held for a query's whole life
+# by the result task, and a connection with a statement in flight is LEASED — the probe only ever
+# runs on a slot the acquirer owns or one whose `available[i]` is true. The abandoned-recovery
+# timeout branch is safe from the other side for the same reason: it nils the slot
+# (`_discard_connection!(...; close_handle = false)`), so the probe sees `nothing` and skips.
+#
+# SQLite diverges deliberately: its `backend_is_alive` runs a real `SELECT 1`, so it never had this
+# blind spot and needs no equivalent.
 function PormG.backend_is_alive(pool::PormGPostgres, conn::LibPQ.Connection)
   try
-    return LibPQ.status(conn) == LibPQ.libpq_c.CONNECTION_OK
+    return LibPQ.lock(conn) do
+      LibPQ.libpq_c.PQconsumeInput(conn.conn) != 0 &&
+        LibPQ.status(conn) == LibPQ.libpq_c.CONNECTION_OK
+    end
   catch
     return false
   end
@@ -50,11 +76,91 @@ function PormG.backend_execute_async(pool::PormGPostgres, conn::LibPQ.Connection
   return resolved === nothing ? LibPQ.async_execute(conn, sql) : LibPQ.async_execute(conn, sql, resolved)
 end
 
+# SQLSTATEs that mean THE BACKEND IS GONE AND THE STATEMENT NEVER RAN. That second half is the bar,
+# not just "the connection is broken": `backend_is_connection_error` gates `fetch`'s transparent
+# retry, so anything listed here may be silently re-executed.
+#
+# Deliberately EXCLUDED from class 08, which is not uniformly safe:
+#   08007 transaction_resolution_unknown — the commit outcome is UNKNOWN. Re-running double-applies.
+#   08P01 protocol_violation            — the wire is broken, but the statement may well have run.
+# And from class 57:
+#   57014 query_canceled  — the session is alive; retrying defeats statement_timeout / an explicit
+#                           pg_cancel_backend, and #315 already owns that path.
+#   57P04 database_dropped — retrying is futile.
+# Elsewhere:
+#   40001 / 40P01 serialization_failure / deadlock_detected — the caller must retry the whole
+#                           TRANSACTION; re-running one statement on a fresh autocommit session is
+#                           the data-corruption bug `fetch`'s retry comment already forbids.
+#   25P03 idle_in_transaction_session_timeout — only occurs inside a transaction, where `fetch`
+#                           does not retry anyway.
+# Every one of those still reaches the caller as an `OperationalError` where that is right, via
+# `_PG_OPERATIONAL_CLASSES` below — excluding them here costs no classification fidelity, only the
+# retry.
+const _PG_LOST_CONNECTION_ERRORS = Union{
+  LibPQ.Errors.ConnectionException,                            # 08000
+  LibPQ.Errors.SqlclientUnableToEstablishSqlconnection,        # 08001
+  LibPQ.Errors.ConnectionDoesNotExist,                         # 08003
+  LibPQ.Errors.SqlserverRejectedEstablishmentOfSqlconnection,  # 08004
+  LibPQ.Errors.ConnectionFailure,                              # 08006
+  LibPQ.Errors.AdminShutdown,                                  # 57P01 — pg_terminate_backend, fast shutdown
+  LibPQ.Errors.CrashShutdown,                                  # 57P02 — crash of another server process
+  LibPQ.Errors.CannotConnectNow,                               # 57P03 — server still starting up
+  LibPQ.Errors.IdleSessionTimeout,                             # 57P05 — the one that targets IDLE POOLED conns
+}
+
+# Is `e` a DROPPED connection (retryable by `fetch`, and the trigger for retiring the pool's other
+# idle connections) rather than a statement-level failure?
+#
+# SQLSTATE FIRST, message fingerprints only as the fallback. LibPQ parameterizes its result
+# exceptions on the code (`PQResultError{Class, Code}`), so when the server handed one back we
+# classify on it — exact, and impossible to spoof.
+#
+# That ordering is not cosmetic. `string(::PQResultError)` renders the full `PQresultErrorMessage`,
+# which embeds DETAIL/HINT and the `LINE n:` query excerpt — i.e. USER DATA. An app storing captured
+# PostgreSQL log text hits a unique violation whose DETAIL reads
+# `Key (msg)=(FATAL: terminating connection due to administrator command) already exists.`, and a
+# bare `occursin` over that message would classify an integrity error as a dropped connection:
+# `backend_classify_error` asks this function first, so the caller would get `OperationalError`
+# where the documented type is `IntegrityError`, and `fetch` would renew a healthy connection and
+# flush every idle slot on each occurrence.
+#
+# The message branch survives because the case that started #442 has NO usable SQLSTATE: a
+# connection dropped mid-query arrives as `PQResultError{CUN, EUNOWN}` — libpq returned no code, so
+# LibPQ synthesized the class "UN" — and so do `PQConnectionError` and friends. A real
+# `pg_terminate_backend` delivers exactly this, and it matched none of the pre-#442 patterns:
+#
+#   FATAL:  terminating connection due to administrator command
+#   SSL connection has been closed unexpectedly
+#
+# which is why `fetch`'s retry never fired and the error propagated to the caller — the mechanism
+# the #442 production report actually hit.
 function PormG.backend_is_connection_error(pool::PormGPostgres, e)
+  # (0) LibPQ raises `CompositeException` when several results in one execute errored, and
+  #     `_unwrap_async_exception` only unwraps the single-error case. Recurse, or a multi-result
+  #     failure would skip the SQLSTATE gate below and be judged on concatenated message text.
+  e isa CompositeException &&
+    return any(inner -> PormG.backend_is_connection_error(pool, inner), e.exceptions)
+
+  # (1) The server gave us a code — trust it over any text.
+  e isa _PG_LOST_CONNECTION_ERRORS && return true
+
+  # (2) A result error carrying a REAL SQLSTATE that is not one of the above is not a retryable
+  #     dropped connection, and must never reach the message matching below — that is the user-data
+  #     hazard above. `CUN` is LibPQ's synthetic "no code" class, so it deliberately falls through.
+  if e isa LibPQ.Errors.PQResultError && !(e isa LibPQ.Errors.PQResultError{LibPQ.Errors.CUN})
+    return false
+  end
+
+  # (3) No usable SQLSTATE: fall back to libpq's own message fingerprints. Every phrase here is text
+  #     libpq or the server generates about the SESSION, never a value an app would store.
   msg = lowercase(string(e))
   return (e isa LibPQ.Errors.UnknownError && string(e) == "LibPQ.Errors.UnknownError(\"\")") ||
          occursin("server closed the connection", msg) ||
-         occursin("connection not open", msg)
+         occursin("connection not open", msg) ||
+         occursin("terminating connection", msg) ||
+         occursin("connection to server was lost", msg) ||
+         occursin("ssl connection has been closed unexpectedly", msg) ||
+         occursin("no connection to the server", msg)
 end
 
 # Is `e` a *permanent* connect failure (won't succeed on retry) rather than transient? Scoped to

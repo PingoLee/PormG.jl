@@ -39,7 +39,7 @@ dev:
   ```
 
   Default is `true` (zero-config: a misconfigured deploy fails immediately instead of hanging every request for 30 s). `register_connection` accepts the same `fail_fast_on_connect` kwarg. Transient recovery is *not* retried inside the pool — retry the whole operation at the application layer (the same rule as lost connections inside a transaction).
-- **Idle reaping & max-lifetime (opt-in):** By default the pool never shrinks after a burst and reuses connections indefinitely (a dropped connection is caught reactively by the liveness check on the next checkout). For long-lived services — or databases/proxies that drop idle connections — you can enable a background reaper via `connection.yml` (both in **seconds**, `0`/absent = off):
+- **Idle reaping & max-lifetime (opt-in):** By default the pool never shrinks after a burst and reuses connections indefinitely (a dropped connection is caught by the liveness check on the next checkout — see *Dropped connections* below). For long-lived services — or databases/proxies that drop idle connections — you can enable a background reaper via `connection.yml` (both in **seconds**, `0`/absent = off):
 
   ```yaml
   dev:
@@ -51,6 +51,11 @@ dev:
   ```
 
   Reaping is **overflow-only** and never drops below the base `pool_size` (those stay warm), and never closes an in-use connection. It closes the connection and clears its slot in place — the pool's slot layout is unchanged, so a reaped slot simply opens a fresh connection on next use. Disabled by default: unset means zero behavior change. Programmatic pools accept the same `idle_timeout` / `max_lifetime` kwargs via `Configuration.register_connection`.
+- **Dropped connections:** Every checkout probes the connection before handing it out, and PostgreSQL's probe consumes any pending socket input before trusting the driver's status. That matters because `PQstatus` reports libpq's *cached* state: it only turns bad after an I/O attempt fails, and an idle pooled connection attempts none — so before this, a backend the server had terminated (a restart, a failover, an admin `pg_terminate_backend`) kept reporting a healthy connection while its `FATAL: terminating connection due to administrator command` sat unread in the socket buffer, and the pool went on serving it. A rejected connection is closed and its slot reopened. SQLite's probe already round-trips, so it never had the blind spot.
+
+  Whatever kills one pooled connection has usually killed all of them, so recovery is not per-slot either: when a failure is classified as a lost connection, `fetch` renews the connection that failed, retires every other **idle** one, and retries once. In-use connections are left alone — their borrower still holds the handle, and will recover the same way.
+
+  The remaining case is a connection dropped with no bytes delivered at all — a silently broken network path rather than a server that announced itself. Nothing can see that without a round trip, so it surfaces on first use and is retried as above; bound how long a connection can sit in that state with the `max_lifetime` reaper.
 - **Health snapshot (`pool_stats`):** `pool_stats` (exported) returns a `NamedTuple` for debugging saturation — pass a pool object or a connection key/path:
 
   ```julia

@@ -106,6 +106,7 @@ end
     @testset "Idle-Reaping + Max-Lifetime Pool (#125)" include("unit/test_connection_pool_reaping.jl")
     @testset "Pool Stats Snapshot (#127)" include("unit/test_connection_pool_stats.jl")
     @testset "Connection-Leak Detection (#127)" include("unit/test_connection_pool_leak.jl")
+    @testset "Pool Liveness After a Server-Side Kill (#442)" include("unit/test_connection_pool_liveness.jl")
     @testset "Savepoint Naming (#26)" include("unit/test_savepoint_naming.jl")
     @testset "Sequence Sync (Postgres + SQLite)" include("unit/test_sequence_sync.jl")
     @testset "Sequence Resync as an Operation (#358)" include("unit/test_resync_sequences.jl")

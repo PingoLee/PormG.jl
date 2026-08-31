@@ -78,3 +78,68 @@ end
         PormG.ConnectionPool.close_pool!(pool)
     end
 end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Liveness after a SERVER-SIDE kill (#442) — PostgreSQL only.
+#
+# THE ONLY TEST THAT REACHES THE #442 PROBE. The fix lives in `ext/PormGLibPQExt.jl`
+# (`PQconsumeInput` before trusting `PQstatus`), and every unit mock defines its own
+# `backend_is_alive` — so no mock can exercise it. It takes a real backend, really killed.
+#
+# `PQstatus` reports libpq's CACHED state, and libpq only moves a connection to CONNECTION_BAD
+# after an I/O attempt fails. An idle pooled connection attempts none, so a backend the server
+# terminated keeps reading CONNECTION_OK while its FATAL sits unread in the socket buffer, and the
+# pool serves the corpse. Observed in production: one restart, then three failures over six
+# minutes, two of them minutes after the server was healthy.
+#
+# The kill is scoped to THIS pool's own backend pid, taken from a dedicated pool_size=1 pool. A
+# blanket `pg_terminate_backend` sweep would kill every other session's connections too — this one
+# cannot disturb a parallel session.
+# ─────────────────────────────────────────────────────────────────────────────
+# Guarded OUTSIDE the testset rather than with a passing dummy assertion inside it: SQLite has no
+# server to restart, and its `backend_is_alive` already round-trips, so there is nothing here to
+# assert on that engine.
+if PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
+    @testset "pool detects a backend the server killed (#442)" begin
+        cfg = PormG.config[PORMG_DB_FOLDER].connections
+        pool = PormG.ConnectionPool.PostgresConnectionPool(cfg.connection_string; pool_size = 1)
+        try
+            # pool_size 1 → every fetch uses slot 1, so no pinning is needed to know which
+            # connection answered (a pinned `conn` is released by await_result's finally, which
+            # would double-release a lease we still hold).
+            pid = DataFrame(PormG.ConnectionPool.fetch(pool, "SELECT pg_backend_pid() AS pid;")).pid[1]
+            victim = pool.connections[1]
+            @test victim !== nothing             # idle in the pool, handle still open client-side
+
+            # Kill EXACTLY that backend, from the shared fixture pool's own connection.
+            killq = PormG.QueryBuilder.PgParameterizedQuery("", Any[], 0)
+            placeholder = PormG.QueryBuilder.add_parameter!(killq, pid)
+            PormG.ConnectionPool.fetch(cfg, "SELECT pg_terminate_backend($(placeholder));"; params = killq)
+
+            # MUTATION GATE. Bounded wait for the probe to SEE the death — a lower bound, so machine
+            # load makes this slower, never wrong. Looping rather than probing once is deliberate:
+            # the FATAL and the EOF can arrive in separate reads, and it is the read that hits EOF
+            # which flips the status. With the pre-#442 bare `PQstatus` probe this spins the whole
+            # budget and fails: a connection that attempts no I/O never changes status.
+            saw_death = false
+            t0 = time()
+            while time() - t0 < 10.0
+                if !PormG.backend_is_alive(pool, victim)
+                    saw_death = true
+                    break
+                end
+                sleep(0.01)
+            end
+            @test saw_death
+
+            # …and the pool retires the corpse instead of handing it out.
+            rows = DataFrame(PormG.ConnectionPool.fetch(pool, "SELECT 1 AS one;"))
+            @test rows.one[1] == 1               # the statement never saw the dead backend
+            @test pool.connections[1] !== victim # the slot holds a fresh connection
+            @test count(!, pool.available) == 0  # released, no leak
+        finally
+            try; PormG.ConnectionPool.close_pool!(pool); catch; end
+        end
+    end
+end

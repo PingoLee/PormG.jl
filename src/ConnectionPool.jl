@@ -809,6 +809,10 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
   while true
     attempts += 1
 
+    # Handles whose slot just FAILED the liveness probe. Collected under the lock, closed after it —
+    # a driver close can block on I/O, and on SQLite it defers behind the global worker (#327).
+    dead_handles = Any[]
+
     outcome = Base.lock(pool.lock) do
       # (A) Materialize a handed-off slot (already leased for us; #124 direct handoff).
       if owned !== nothing
@@ -819,6 +823,14 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
           return (:got, conn)                          # live handle handed over — reuse as-is
         end
         # Empty/dead slot (e.g. handed off by _discard_connection!): open a fresh connection.
+        # A handle the probe just REJECTED is retired here rather than silently overwritten — the old
+        # driver object would otherwise be dropped on the floor for a GC finalizer to close, and the
+        # #442 probe rejects far more often than the old bare `PQstatus` read did. Nil the slot with
+        # it, so the `:hook` detour below cannot re-enter and queue the same handle twice.
+        if conn !== nothing
+          push!(dead_handles, conn)
+          pool.connections[i] = nothing
+        end
         before_connect_done || return (:hook, nothing)
         try
           new_conn = backend_connect(pool)
@@ -845,6 +857,11 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
             return (:got, pool.connections[i])
           end
           # Slot is empty or dead: defer creation so the before_connect hook runs off the lock.
+          # Retire a handle the probe rejected instead of overwriting it (#442) — see branch (A).
+          if pool.connections[i] !== nothing
+            push!(dead_handles, pool.connections[i])
+            pool.connections[i] = nothing
+          end
           before_connect_done || return (:hook, nothing)
           try
             new_conn = backend_connect(pool)
@@ -892,6 +909,11 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
       w = PoolWaiter(:any)
       push!(_waiters_for(pool), w)
       return (:wait, w)
+    end
+
+    # Retire the probe-rejected handles OUTSIDE the pool lock (#442).
+    for dead in dead_handles
+      _close_driver_handle!(pool, dead)
     end
 
     kind = outcome[1]
@@ -959,6 +981,10 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
   while true
     attempts += 1
 
+    # Handles whose slot just FAILED the liveness probe. Collected under the lock, closed after it —
+    # a driver close can block on I/O, and on SQLite it defers behind the global worker (#327).
+    dead_handles = Any[]
+
     outcome = Base.lock(pool.lock) do
       # (A) Materialize a handed-off slot (already leased for us).
       if owned !== nothing
@@ -967,6 +993,11 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
         if conn !== nothing && backend_is_alive(pool, conn)
           _monitor_note_touch!(pool, i)                   # checkout timestamp (#125)
           return (:got, conn)
+        end
+        # Retire a handle the probe rejected instead of overwriting it — see the PormGPostgres twin.
+        if conn !== nothing
+          push!(dead_handles, conn)
+          pool.connections[i] = nothing
         end
         before_connect_done || return (:hook, nothing)
         try
@@ -992,6 +1023,11 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
             pool.available[i] = false
             _monitor_note_touch!(pool, i)                  # checkout timestamp (#125)
             return (:got, pool.connections[i])
+          end
+          # Retire a handle the probe rejected instead of overwriting it — see the PormGPostgres twin.
+          if pool.connections[i] !== nothing
+            push!(dead_handles, pool.connections[i])
+            pool.connections[i] = nothing
           end
           before_connect_done || return (:hook, nothing)
           try
@@ -1040,6 +1076,11 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
       w = PoolWaiter(mode)
       push!(_waiters_for(pool), w)
       return (:wait, w)
+    end
+
+    # Retire the probe-rejected handles OUTSIDE the pool lock (#442).
+    for dead in dead_handles
+      _close_driver_handle!(pool, dead)
     end
 
     kind = outcome[1]
@@ -1351,6 +1392,92 @@ function _discard_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn; clo
   close_handle && _close_driver_handle!(pool, conn)
   found || @warn "Connection to discard not found in the pool - it may already have been replaced"
   return found
+end
+
+"""
+    _claim_idle_slot!(pool, conn) -> Bool
+
+Take `conn`'s slot back OUT of circulation if it is currently idle. Returns whether this call is the
+one that claimed it (so only that caller releases it again).
+
+Exists for `fetch`'s reconnect-and-retry (#442). That path renews a connection `await_result`'s
+`finally` has ALREADY released, so the slot is `available` while the renewal runs — and
+[`reconnect_db`](@ref)'s comment fenced exactly this off: the swap re-check makes the SLOT safe, but
+*"a future caller wanting to close a handle it has already released needs more than this"*. Retiring
+the pool's other idle connections is such a caller, and so is the acquire scan's probe. Leasing the
+slot for the whole window is that "more".
+
+Two concrete hazards it closes, both requiring only two tasks and one server restart:
+
+  * `LibPQ.reset!` takes the connection's own semaphore and holds it across a synchronous `PQreset`
+    — unbounded against an unreachable host. The #442 liveness probe takes that same semaphore while
+    holding `pool.lock`, so probing a connection mid-renewal would park EVERY task on the pool
+    (#327 removed this exact stall from the other direction). A leased slot is never probed.
+  * Two tasks whose queries died together both reach this branch; one finishing first would sweep —
+    and close — the connection the other is still renewing, costing that task its retry and possibly
+    orphaning a live backend `reset!` had already re-opened.
+
+Returning `false` is not a failure: it means a concurrent borrower holds the lease, which shields the
+handle from both hazards above just as a claim would. It does NOT shield that borrower from having
+the session renewed under them — but that is the pre-existing window
+[`reconnect_db`](@ref) already documents as tolerable, unchanged here.
+"""
+function _claim_idle_slot!(pool::Union{PormGPostgres, PormGSQLite}, conn)::Bool
+  Base.lock(pool.lock) do
+    for i in 1:length(pool.connections)
+      if pool.connections[i] === conn
+        pool.available[i] || return false     # already leased — someone else is protecting it
+        pool.available[i] = false
+        return true
+      end
+    end
+    return false                              # slot already gone (discarded/reaped concurrently)
+  end
+end
+
+"""
+    _sweep_stale_idle!(pool, keep) -> Int
+
+Retire every **idle** pooled connection except `keep`, returning how many were removed.
+
+Called when a failure has just been CLASSIFIED as a lost connection (#442). A dropped connection is
+almost never solitary: a server restart, a failover or an admin `pg_terminate_backend` sweep kills
+every backend at once, and recovering only the slot that threw leaves the rest of the pool full of
+corpses to be discovered one failed statement at a time. This is SQLAlchemy's answer — one disconnect
+invalidates every other pooled connection — reached here by emptying the slots rather than versioning
+them, which is cheaper and needs no per-slot bookkeeping.
+
+Only slots whose `available[i]` is true are touched. A leased slot belongs to a borrower that still
+holds the handle; closing it underneath them would be a use-after-free, and that borrower will
+discover its own dead connection and route back through here anyway.
+
+`keep` is the connection the caller has just renewed — already released, so it *is* idle, and
+sweeping it would throw away the reconnect that was just paid for.
+
+The emptied slots keep `available[i] == true`, and no `_handoff_or_free!` is needed for the same
+reason as [`_reap_pool!`](@ref): a slot that was ALREADY available has no compatible waiter, or one
+would have taken it. The next `acquire_connection` materializes a fresh connection through the
+empty-slot path.
+"""
+function _sweep_stale_idle!(pool::Union{PormGPostgres, PormGSQLite}, keep)::Int
+  stale = Any[]
+  Base.lock(pool.lock) do
+    for i in 1:length(pool.connections)
+      pool.available[i] || continue          # leased — the borrower still owns that handle
+      conn = pool.connections[i]
+      (conn === nothing || conn === keep) && continue
+      pool.connections[i] = nothing          # available[i] STAYS true → next acquire opens fresh
+      push!(stale, conn)
+    end
+  end
+  # Close OUTSIDE the pool lock: a driver close can block on I/O, and on SQLite it defers behind the
+  # global worker (#327).
+  for conn in stale
+    _close_driver_handle!(pool, conn)
+  end
+  isempty(stale) ||
+    @debug "Retired idle pooled connections after a lost-connection error (#442)" count=length(stale)
+  return length(stale)
 end
 
 """
@@ -2041,11 +2168,32 @@ function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
     if conn === nothing && !fetch_task.in_transaction &&
        backend_is_connection_error(connection, _driver_cause(root))
       @warn "Lost connection to database. Attempting to reconnect..."
-      # Renew the dead handle in its slot, then retry through NORMAL pool acquisition —
-      # never by pinning `conn=new_conn`: the failed task's finally already marked the slot
-      # available, so a pinned retry would run on a connection a concurrent borrower can
-      # acquire at the same time. Acquisition flips the slot unavailable under the lock.
-      new_conn = reconnect_db(connection, fetch_task.conn)
+      # Renew the dead handle in its slot, then retry through NORMAL pool acquisition — never by
+      # pinning `conn=new_conn`, which would run the retry on a connection whose lease `await_result`
+      # would then release a second time. The claim below is not a substitute for that: it holds the
+      # slot only for the renew+sweep window and hands it back before the retry acquires.
+      # `await_result`'s finally already released this connection, so its slot is idle and both the
+      # renewal below and the sweep after it would be racing every other task on the pool. Take the
+      # slot back out of circulation for the whole window (#442) — see `_claim_idle_slot!` for the
+      # two hazards that closes. A `false` here means a borrower already holds the lease, which is
+      # equally protective, so the branch simply proceeds as it did before.
+      claimed = _claim_idle_slot!(connection, fetch_task.conn)
+      new_conn = nothing
+      try
+        new_conn = reconnect_db(connection, fetch_task.conn)
+        if new_conn !== nothing
+          # Whatever killed this connection has usually killed every other one too, and the retry
+          # below re-acquires through the NORMAL pool path — which would happily hand back another
+          # corpse. Retire the rest of the idle slots first so it cannot. Strictly AFTER
+          # `reconnect_db`: sweeping first would empty this very slot, leaving `_slot_index_of`
+          # nothing to renew.
+          _sweep_stale_idle!(connection, new_conn)
+        end
+      finally
+        # Put the slot back exactly once, whichever handle now occupies it. Renewal may return the
+        # SAME object (`LibPQ.reset!` resets in place), a new one, or nothing at all if it failed.
+        claimed && release_connection(connection, new_conn === nothing ? fetch_task.conn : new_conn)
+      end
       if new_conn !== nothing
         retry_task = fetch_async(connection, sql; params=params, ignore_tx=ignore_tx)
         return await_result(retry_task)

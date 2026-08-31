@@ -884,8 +884,9 @@ Team_radio = Models.Model(
 )
 ```
 
-A `related_name` may not contain `__` or `@`: `__` is the lookup-path separator and `@` opens an
-operator suffix, so such a name registers and is then permanently unaddressable. The same rule
+A `related_name` may not contain `__` or `@`, nor end with `_`: `__` is the lookup-path separator,
+`@` opens an operator suffix, and traversing an accessor appends the separator to it — so any of the
+three registers a name that can then never be written as a lookup-path segment. The same rule
 applies to a name PormG *derives* for you — see
 [Naming Reverse Relations](read/values_and_joins.md#Naming-Reverse-Relations).
 

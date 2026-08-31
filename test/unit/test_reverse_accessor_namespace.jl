@@ -509,8 +509,10 @@ end
     @test occursin(label, msg)
     # Names the ACCESSOR the user actually wrote — never a fragment such as a bare "a".
     @test occursin("a__b", msg)
-    # Says WHY, so the remedy is not a guess.
+    # Says WHY, so the remedy is not a guess — and specifically the SEPARATOR mechanism, not the
+    # trailing-underscore one (section 21 covers that, and they must not share a sentence).
     @test occursin("lookup-path separator", msg)
+    @test !occursin("traversing an accessor appends", msg)
   end
 
   # `@` is refused by the same rule and for the same reason: it opens an operator suffix, and an
@@ -785,4 +787,198 @@ end
   # accessor, and either would satisfy a bare type check.
   @test occursin("lookup-path separator", msg)
   @test !occursin("is a FIELD of that model", msg)
+end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# #420, second mechanism — an accessor that ENDS with `_`
+#
+# The same defect, reached the other way. An accessor is only ever looked up as one segment of a
+# `__`-split path, and traversing it APPENDS the separator: `incidents_` reached as
+# `incidents___lap` splits into `incidents` and `_lap`, so the registered key is never probed. The
+# user sees `the column incidents not found` — the identical truncated-fragment message the
+# `__`-containing case produces.
+#
+# Measured before this was implemented: `related_name = "incidents_"` registered as `incidents_`, and
+# BOTH `filter("incidents___lap")` and `filter("incidents__lap")` failed with that message.
+#
+# Django separates the two as `fields.E309` (must not contain) and `fields.E308` (must not end with
+# an underscore); PormG treats them as one rule because they have one consequence.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 21. An explicit `related_name` ending in `_`, refused at the constructor.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an explicit related_name ending in _ is refused at declaration (#420)" begin
+  for (label, build) in (
+        ("ForeignKey",      () -> Models.ForeignKey("Driver", pk_field = "id", related_name = "incidents_")),
+        ("OneToOneField",   () -> Models.OneToOneField("Driver", pk_field = "id", related_name = "incidents_")),
+        ("ManyToManyField", () -> Models.ManyToManyField("Driver", related_name = "incidents_")))
+    err = @test_throws PormG.FieldValidationError build()
+    msg = err.value.msg
+    @test occursin(label, msg)
+    @test occursin("incidents_", msg)
+    # The explanation is the TRAILING-underscore one, rendered with the user's own name, not the
+    # separator explanation — those are different mechanisms and a shared sentence would fit neither.
+    @test occursin("traversing an accessor appends the separator", msg)
+    @test occursin("incidents___<column>", msg)
+    @test !occursin("is the lookup-path separator", msg)
+  end
+
+  # A single trailing underscore is the whole rule — a name merely CONTAINING one is fine.
+  @test Models.ForeignKey("Driver", pk_field = "id", related_name = "in_ci_dents").related_name ==
+        "in_ci_dents"
+  # And a LEADING underscore is addressable: `_acc__lap` splits to ["_acc", "lap"], so it is legal.
+  @test Models.ForeignKey("Driver", pk_field = "id", related_name = "_incidents").related_name ==
+        "_incidents"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 22. A DERIVED accessor ending in `_`, from the field name.
+#
+# In a group, the accessor is `<model>_<field>`, so a field named `lap_` puts the underscore at the
+# end. The culprit is unambiguous here — the accessor ends with whatever the last component ends
+# with — which is why this branch of the message names it outright instead of listing candidates.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a derived accessor ending in _ names the field it came from (#420)" begin
+  err = @test_throws PormG.ModelDefinitionError _ran_module(:RanTrailFieldModels, quote
+    Driver = Models.Model("rantf_driver", id = Models.IDField(), surname = Models.CharField())
+    Incident = Models.Model("rantf_incident",
+      id   = Models.IDField(),
+      lap_ = Models.ForeignKey(Driver, pk_field = "id"),
+      b_id = Models.ForeignKey(Driver, pk_field = "id"),
+    )
+  end)
+
+  msg = err.value.msg
+  @test occursin("rantf_incident_lap_", msg)
+  @test occursin("The trailing", msg)
+  @test occursin("comes from the field name", msg)
+  @test !occursin("comes from the model name", msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 23. A DERIVED accessor ending in `_`, from the MODEL name, on one relation.
+#
+# The lone-relation accessor IS the model name, so this needs no group — the same widening the
+# `__`-in-a-model-name case has (section 16).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a model name ending in _ is refused with a single relation (#420)" begin
+  err = @test_throws PormG.ModelDefinitionError _ran_module(:RanTrailModelModels, quote
+    Driver = Models.Model("rantm_driver", id = Models.IDField(), surname = Models.CharField())
+    Incident = Models.Model("rantm_incident_",
+      id = Models.IDField(),
+      driverid = Models.ForeignKey(Driver, pk_field = "id"),
+    )
+  end)
+
+  msg = err.value.msg
+  @test occursin("rantm_incident_", msg)
+  @test occursin("comes from the model name", msg)
+  @test !occursin("comes from the field name", msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 24. CONTROL — a model named `..._` with NO relation still loads.
+#
+# The guard is on the ACCESSOR, so a trailing-underscore model name is only a problem when something
+# derives an accessor from it. This is also the fixture shape testset 19 uses for the cjoin
+# regression, so it pins that that testset's model stays constructible.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a model name ending in _ loads when nothing derives an accessor from it (#420)" begin
+  CTL = _ran_module(:RanTrailControlModels, quote
+    Circuit = Models.Model("rantc_circuit", id = Models.IDField(), name = Models.CharField())
+    Lap_ = Models.Model("rantc_lap_", id = Models.IDField(), circuit = Models.IntegerField())
+  end)
+
+  lap = Base.invokelatest(getfield, CTL, :Lap_)
+  circuit = Base.invokelatest(getfield, CTL, :Circuit)
+  @test lap.name == "rantc_lap_"
+  # Nothing points at Circuit, so it has no reverse accessors and nothing was refused.
+  @test isempty(circuit.related_objects)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 25. The trailing-underscore culprit is decided by the ACCESSOR's shape, not by which name
+#     happens to end in `_`.
+#
+# A lone relation whose model AND field both end in `_`. The accessor is the model name — the field
+# never enters it — so the model is the only thing worth renaming. The first implementation asked
+# `endswith(field_name, "_")`, which is a different question, and told the user to rename `caused_`;
+# doing that leaves the identical error in place because the accessor does not change.
+#
+# Paired with the group case below so the two cannot both be satisfied by a constant answer.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a trailing-underscore accessor names the component it actually ends with (#420)" begin
+  # (a) LONE relation, BOTH names end in `_` → the model is at fault.
+  lone = @test_throws PormG.ModelDefinitionError _ran_module(:RanTailLoneModels, quote
+    Driver = Models.Model("rantl_driver", id = Models.IDField(), surname = Models.CharField())
+    Incident = Models.Model("rantl_incident_",
+      id = Models.IDField(),
+      caused_ = Models.ForeignKey(Driver, pk_field = "id"),
+    )
+  end)
+  lone_msg = lone.value.msg
+  @test occursin("rantl_incident_", lone_msg)
+  @test occursin("comes from the model name", lone_msg)
+  # The load-bearing negative: `caused_` also ends in `_`, and blaming it is the bug this pins.
+  @test !occursin("comes from the field name", lone_msg)
+
+  # (b) GROUP, only the field ends in `_` → the field is at fault. Same guard, opposite answer, so a
+  #     constant "always blame the model" would fail here.
+  grp = @test_throws PormG.ModelDefinitionError _ran_module(:RanTailGroupModels, quote
+    Driver = Models.Model("rantg_driver", id = Models.IDField(), surname = Models.CharField())
+    Incident = Models.Model("rantg_incident",
+      id   = Models.IDField(),
+      lap_ = Models.ForeignKey(Driver, pk_field = "id"),
+      b_id = Models.ForeignKey(Driver, pk_field = "id"),
+    )
+  end)
+  grp_msg = grp.value.msg
+  @test occursin("rantg_incident_lap_", grp_msg)
+  @test occursin("comes from the field name", grp_msg)
+  @test !occursin("comes from the model name", grp_msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 26. The shape `Model_to_str` itself produces — a reserved-word relation column.
+#
+# `_julia_field_identifier` escapes a column named after a Julia keyword by APPENDING `_`, so a
+# column `end` is emitted as `end_ = Models.ForeignKey(…, db_column="end", …)`. In a group of two or
+# more relations to one target that derives `<model>_end_`, which this rule refuses — meaning a
+# GENERATED file can stop loading. That is the opposite of the `__` half, where `Model_to_str`'s
+# renaming makes a generated file safe by construction, and it is why the migration note tells
+# readers to run the field-name grep on generated code too.
+#
+# `end`, `local`, `do`, `for` and `if` are all in the escaped set and all plausible legacy columns.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a generator-escaped reserved-word relation column is refused in a group (#420)" begin
+  err = @test_throws PormG.ModelDefinitionError _ran_module(:RanReservedModels, quote
+    Driver = Models.Model("ranrw_driver", id = Models.IDField(), surname = Models.CharField())
+    # Exactly what Model_to_str emits for a FK column literally named `end`.
+    Incident = Models.Model("ranrw_incident",
+      id   = Models.IDField(),
+      end_ = Models.ForeignKey(Driver, db_column = "end", pk_field = "id"),
+      b_id = Models.ForeignKey(Driver, pk_field = "id"),
+    )
+  end)
+
+  msg = err.value.msg
+  @test occursin("ranrw_incident_end_", msg)
+  @test occursin("comes from the field name", msg)
+  # The remedy is actionable without renaming the physical column, which `db_column` still pins.
+  # Matched on a run with no ANSI in it — `related_name` is wrapped in \e[1m…\e[0m, so a substring
+  # spanning it passes under --color=no and fails under --color=yes.
+  @test occursin("Rename it, or give ranrw_incident.end_ an explicit ", msg)
+
+  # Control: the SAME escaped column with a single relation loads — the accessor is then the model
+  # name, which is clean. This is what keeps the refusal scoped to the group case.
+  OK = _ran_module(:RanReservedLoneModels, quote
+    Driver = Models.Model("ranrl_driver", id = Models.IDField(), surname = Models.CharField())
+    Incident = Models.Model("ranrl_incident",
+      id   = Models.IDField(),
+      end_ = Models.ForeignKey(Driver, db_column = "end", pk_field = "id"),
+    )
+  end)
+  driver = Base.invokelatest(getfield, OK, :Driver)
+  @test collect(keys(driver.related_objects)) == ["ranrl_incident"]
 end

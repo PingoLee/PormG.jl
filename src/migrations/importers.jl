@@ -3975,12 +3975,18 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     # so no project that passes `manage.py check` can reach this branch. That is why it does not go
     # through the recover-and-continue path the `choices`/`default` disagreement below uses.
     if haskey(options, :related_name) && options[:related_name] isa AbstractString &&
-       Models._accessor_has_separator(String(options[:related_name]))
+       Models._illegal_accessor_name(String(options[:related_name]))
       throw(InvalidMigrationError(
         "Error processing field '$field_name' in class '$class_label': " *
-        "related_name=\"$(options[:related_name])\" cannot contain \e[1m__\e[0m or \e[1m@\e[0m. " *
-        "$(Models._ACCESSOR_SEPARATOR_REASON) Django refuses the same name — system check " *
-        "\e[1mfields.E309\e[0m — so `manage.py check` would not have accepted this model either."))
+        "related_name=\"$(options[:related_name])\" cannot contain \e[1m__\e[0m or \e[1m@\e[0m, " *
+        "nor end with \e[1m_\e[0m. " *
+        "$(Models._accessor_illegality_reason(String(options[:related_name]))) Django refuses the " *
+        # Name the check that actually fired: E309 is "must not contain", E308 is "must not end
+        # with an underscore". Citing both would name one that did not apply, in the same message
+        # whose reason clause branches precisely to avoid that.
+        "same name — system check \e[1m" *
+        (occursin(r"__|@", String(options[:related_name])) ? "fields.E309" : "fields.E308") *
+        "\e[0m — so `manage.py check` would not have accepted this model either."))
     end
 
     # Instantiate the field

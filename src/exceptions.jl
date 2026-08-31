@@ -394,9 +394,10 @@ end
     ModelDefinitionError(msg) <: DefinitionError <: PormGError
 
 A model or schema definition is invalid — more than one primary key, a duplicate `related_name`,
-an illegal field name, a `UniqueConstraint` that names an unknown or many-to-many field, an
-unresolvable `ForeignKey` / `ManyToManyField` target, or a `Model(...)` call given something
-that is not a `PormGField`.
+a reverse accessor that shadows a field or contains `__` / `@`, an illegal field
+name, a `UniqueConstraint` that names an unknown or many-to-many field, an unresolvable
+`ForeignKey` / `ManyToManyField` target, or a `Model(...)` call given something that is not a
+`PormGField`.
 """
 struct ModelDefinitionError <: DefinitionError
   msg::String

@@ -407,6 +407,16 @@ const DOCERR_CASES = [
                 id       = IDField(),
                 parentid = ForeignKey("Docerr_Never_Declared", pk_field = "id"))),
     ),
+    (
+        # #420. The page states BOTH halves of this rule; only the explicit one is a plain
+        # constructor call and therefore pinnable here. The derived half — where the accessor
+        # inherits `__` from a legacy column name and `set_models` raises `ModelDefinitionError` —
+        # needs a registered model module, so it is pinned in
+        # `test_reverse_accessor_namespace.jl` -> "a derived accessor containing __ is refused …".
+        "read/values_and_joins.md — a related_name containing `__` is refused (#420)",
+        FieldValidationError,
+        () -> ForeignKey("Docerr_Driver", pk_field = "id", related_name = "incident__driver"),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -45,6 +45,107 @@ _Changes merged but not yet cut into a release. A consumer dev'ing PormG at HEAD
 and `PormG.upgrade_guide` surfaces them by default. When the maintainer next rolls changes into a
 consuming app, `/pormg-cut-release` stamps every entry below with `0.5.0`, dates them, and tags it._
 
+## A reverse accessor may not contain `__` or `@` (#420)
+
+- **Version**: Unreleased
+- **PormG ref**: #420; `src/Models.jl`, `src/models/fields.jl`, `src/migrations/importers.jl`,
+  `docs/src/read/values_and_joins.md`, `docs/src/fields.md`
+- **Recorded**: 2026-08-28
+- **Severity**: **breaking** — a new refusal. A model that loads today can stop loading. It is
+  narrow: the name it now rejects was never addressable in the first place. Part of the `0.5.x`
+  pre-publish wave.
+
+### What changed
+
+`__` is the lookup-path separator, so every resolver splits a path on it before looking any piece
+up. A reverse accessor whose own name contained `__` therefore registered cleanly and could never be
+written as a path segment — a query naming it failed with an `UnknownFieldError` about a **truncated
+fragment** that appears nowhere in the user's source. `@` has the same problem: it opens an operator
+suffix (`__@gt`).
+
+PormG now refuses both characters in a reverse accessor, on every route that can produce one:
+
+| Route | Before | Now |
+| --- | --- | --- |
+| An explicit `related_name` on `ForeignKey` / `OneToOneField` / `ManyToManyField` | accepted, unusable | `FieldValidationError` at the field constructor |
+| A **derived** name — the model name for a lone relation, `<model>_<field>` for a group of two or more to one target | accepted, unusable | `ModelDefinitionError` at `set_models`, naming where the separator comes from |
+| A Django `related_name='a__b'` read by `import_models_from_django` | accepted, unusable | `InvalidMigrationError` naming the Python class and attribute |
+
+Django refuses this shape too — system check `fields.E309` — so a Django project that passes
+`manage.py check` cannot produce the importer case at all. (Django's `fields.E002` additionally
+forbids a `__` in a *field* name; PormG deliberately does not, which is the divergence the next
+paragraph describes.)
+
+**What did NOT change:** a *column* named `caused__by_id` still loads. The guard is on the accessor,
+never on the column — a model carrying such a column is refused only if its derived **accessor**
+would contain the separator.
+
+Three shapes derive one, and the **first** row is the one most likely to surprise: **a single
+relation is enough**, because a lone relation's derived accessor *is* the model name.
+
+| Where the `__` sits | Reached by | Derived accessor |
+| --- | --- | --- |
+| the model name | any model named `…__…`, with **one** relation or more | `incident__log` |
+| a field name | a `__` column in a group of two or more relations to one target | `incident_caused__by_id` |
+| the boundary | a field named `_id` (or a model name ending in `_`) in such a group | `incident__id` |
+
+### How to find the calls to migrate
+
+```bash
+# 1. explicit names
+grep -rnE 'related_name\s*=\s*"[^"]*(__|@)' <your app>/
+
+# 2. MODEL names — the derived route, and the one a single relation is enough to trigger
+grep -rnE '(^|[^A-Za-z0-9_])(PormG\.)?(Models\.)?Model(_Type)?\([[:space:]]*(name[[:space:]]*=[[:space:]]*)?"[^"]*(__|@)' <your app>/
+
+# 3. field names — only ever hand-written; see the note below
+grep -rnE '(^|[[:space:],(])[A-Za-z0-9_]*(__|@)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*Models\.(ForeignKey|OneToOneField|ManyToManyField)' <your app>/
+```
+
+Recipe #2 is line-based, so it misses a declaration that puts the model name on its own line.
+`Model_to_str` never does that, so this only affects hand-written models. A `__` in **`db_table`** is
+exempt and needs no search: the accessor derives from the logical name only, so
+`Models.Model("internal", db_table = "dash__internal")` — the shape the Django importer emits under
+an app prefix — is unaffected.
+
+**Do not expect #3 to fire on a generated file.** `Model_to_str` renames an illegal column to a legal
+Julia identifier and pins the real name with `db_column`, so `caused__by_id` is emitted as
+`caused_by_id = Models.ForeignKey(…, db_column="caused__by_id", …)`. A generated model file therefore
+*cannot* contain a `__` field identifier; recipe #3 only finds a hand-written
+`Model_Type(; fields = Dict(...))`. Recipe #2 is the one that matters for generated code.
+
+All three returned nothing for `esus_back`. Run them against your own checkout rather than trusting
+a number recorded here — a count is only true of the tree it was measured on, and this file outlives
+any given snapshot.
+
+### Migrate your app
+
+```julia
+# ✗ before — registered, and then unreachable
+driverid = Models.ForeignKey(Driver, pk_field="id", related_name="incident__driver")
+
+# ✓ after
+driverid = Models.ForeignKey(Driver, pk_field="id", related_name="incident_driver")
+```
+
+For a derived name you cannot rename — a legacy column such as `caused__by_id` on a model with two
+foreign keys to `Driver` — name the accessor yourself instead of letting PormG derive it:
+
+```julia
+# ✗ before — the derived accessor was `incident_caused__by_id`
+caused__by_id  = Models.ForeignKey(Driver, pk_field="id"),
+affected_by_id = Models.ForeignKey(Driver, pk_field="id"),
+
+# ✓ after — the column keeps its name; only the accessor changes
+caused__by_id  = Models.ForeignKey(Driver, pk_field="id", related_name="incident_caused_by"),
+affected_by_id = Models.ForeignKey(Driver, pk_field="id"),
+```
+
+Then update any query that traversed the old accessor — though by definition none can exist, because
+the old name was never addressable.
+
+---
+
 ## CTE columns are referenced with `CTE(name, path)`, not with a `"<cte>__col"` string (#444)
 
 - **Version**: Unreleased

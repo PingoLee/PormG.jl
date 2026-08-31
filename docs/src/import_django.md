@@ -494,6 +494,7 @@ Django parameters are automatically converted to PormG equivalents:
 | `default=value` | `default=value` | Value conversion |
 | `on_delete=CASCADE` | `on_delete=CASCADE` | Direct mapping |
 | `choices=[…]` | `choices=(…)` | List to tuple; also resolves `TextChoices`/`IntegerChoices` — see [Choices](#Choices) |
+| `related_name='name'` | `related_name="name"` | Direct mapping. **Refused** if it contains `__` or `@`: `__` is PormG's lookup-path separator, so such an accessor would register and then be unaddressable. Django refuses the same name through system check `fields.E309`, so a project that passes `manage.py check` cannot hit this. |
 
 ### Meta Options
 

@@ -53,6 +53,19 @@ _unopenable_sqlite_pool(; kwargs...) =
   CP.SQLiteConnectionPool(joinpath(tempname(), "db.sqlite"); kwargs...)
 
 @testset "fast-fail raises PoolConnectError (not PoolTimeoutError) well under the deadline (#72)" begin
+  # Warm the connect→classify→raise path on a THROWAWAY pool before measuring (#382). Everything
+  # below the measurement is JIT-sensitive — SQLite's connect, the permanent-error classifier, the
+  # PoolConnectError construction — and none of it is what the assertion is about.
+  #
+  # Not a nicety: run this file on its own and the cold path took 1.33-1.41 s here, so `elapsed < 1.0`
+  # FAILED on unmodified main. It passes inside `test/runtests.jl` only because earlier testsets
+  # happen to warm it, which makes the rung-1 "run the one file" workflow report a phantom failure.
+  # Warm, the same call is ~0.2 s, so the 1.0 s bound recovers a real 5x margin against the 5 s
+  # deadline it exists to exclude.
+  warmup = _unopenable_sqlite_pool(pool_size = 1)
+  try; CP.acquire_connection(warmup; timeout_seconds = 5); catch; end
+  try; CP.close_pool!(warmup); catch; end
+
   pool = _unopenable_sqlite_pool(pool_size = 1)     # fail_fast_on_connect defaults to true
   try
     t0 = time()

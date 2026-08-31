@@ -102,15 +102,37 @@ end
   @test _wait_until(() -> length(CP._waiters_for(p)) == 1)
   CP.release_connection(p, held[1]); held[1] = fetch(warm)
 
-  # Measured (warm) handoff: park an acquirer, release, time the round-trip.
+  # Park an acquirer, release, and assert the handoff MECHANICALLY rather than by clock (#382).
+  #
+  # `_handoff_or_free!` runs synchronously inside `release_connection`, under `pool.lock`. So by the
+  # time that call returns, the waiter has already been marked `done` and removed from the FIFO — a
+  # busy-poll implementation could only have flipped `available[i] = true` and left both untouched.
+  # That is the claim this testset exists to make, and it is now stable state rather than a race
+  # against the scheduler: the old `elapsed_ms < 90` measured a task spawn, a channel `take!` and a
+  # `fetch`, on a unit suite that runs SINGLE-THREADED (no JULIA_NUM_THREADS in CI.yml) where
+  # `fetch(parked)` is the first point the parked green task can run at all. A GC pause or a loaded
+  # shared runner pushed it over a bound that had only 1.1× of margin.
+  #
+  # Do NOT assert `isready(w.chan)`: the parked task may already have taken the slot.
   parked = Threads.@spawn CP.acquire_connection(p; timeout_seconds = 5)
   @test _wait_until(() -> length(CP._waiters_for(p)) == 1)
+  w = CP._waiters_for(p)[1]              # capture the waiter BEFORE the release consumes it
   t0 = time()
   CP.release_connection(p, held[2])
+  @test w.done                           # handed a slot under pool.lock — not timed out, not polled
+  @test isempty(CP._waiters_for(p))      # …and dequeued synchronously by that same release
   got = fetch(parked)
   elapsed_ms = (time() - t0) * 1000
   @test got isa FakeHandoffConn
-  @test elapsed_ms < 90     # the old busy-poll floored every handoff at ~100ms; direct handoff is instant
+  # Loose sanity bound only — the two assertions above are the real gate.
+  #
+  # Measured warm handoff, 12 samples on the dev machine: 0.012-0.112 ms, median 0.021 ms. That
+  # needs `time_ns()`; plain `time()` returns a flat 0.0 here because the cost is below its
+  # resolution — which is the whole problem with the old bound. 90 ms was ~4000x the real figure,
+  # so it never discriminated a direct handoff from a poll; it only asserted that the machine had
+  # not stalled. The bound below keeps the "did it hang?" signal with the ~20x margin used in
+  # test_connection_pool_timeout.jl:103, and is not sensitive to load.
+  @test elapsed_ms < 5000
 
   # Clean up + no leak.
   held[2] = got
@@ -239,9 +261,12 @@ end
   @test _wait_until(() -> length(CP._waiters_for(p)) == 1)
 
   # Releasing the READER slot must NOT wake the :write waiter — the slot goes back to available.
+  # Read the waiter's own state instead of napping and hoping (#382): `_handoff_or_free!` decides
+  # under pool.lock inside `release_connection`, so `!w.done` right after it returns is exactly the
+  # "was not woken" claim — deterministic, and it does not cost 100ms.
+  wwaiter_w = CP._waiters_for(p)[1]
   CP.release_connection(p, rconn)
-  sleep(0.1)
-  @test !istaskdone(wwaiter)
+  @test !wwaiter_w.done                               # mode-incompatible slot → no handoff
   @test p.available[2] == true                        # reader slot freed, not handed to the writer
   @test length(CP._waiters_for(p)) == 1
 

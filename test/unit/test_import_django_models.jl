@@ -2413,8 +2413,10 @@ class Incident(models.Model):
         @test occursin("caused_by", msg)
         # The offending value verbatim, never a fragment.
         @test occursin("incident__driver", msg)
-        # Cites the Django check, so a reader can confirm their own project was already invalid.
+        # Cites the Django check, so a reader can confirm their own project was already invalid —
+        # and only the one that fired, which is what distinguishes this from the E308 case below.
         @test occursin("fields.E309", msg)
+        @test !occursin("fields.E308", msg)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end
@@ -2440,6 +2442,43 @@ class Incident(models.Model):
     generated, config_key, db_dir_existed = import_django_source(source; output_file = "django_420_ok.jl")
     try
         @test occursin("related_name=\"incident_driver\"", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #420, second mechanism at the importer: a Django `related_name` ending in `_`.
+#
+# Django separates the two as `fields.E308` (must not end with an underscore) and `fields.E309` (must
+# not contain `__`). PormG treats them as one rule because they have one consequence, but the
+# message must still cite the check that actually fired — naming both would name one that did not
+# apply, in the same sentence that branches to explain the right mechanism.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer refuses a related_name ending in _ and cites E308 (#420)" begin
+    source = """
+from django.db import models
+
+class Driver(models.Model):
+    surname = models.CharField(max_length=50)
+
+class Incident(models.Model):
+    lap = models.IntegerField()
+    caused_by = models.ForeignKey(Driver, on_delete=models.CASCADE, related_name='incidents_')
+"""
+    config_key, db_dir_existed = temp_import_config!()
+    try
+        err = @test_throws PormG.InvalidMigrationError import_models_from_django(
+            source; db = config_key, file = "django_420b_unit.jl", force_replace = true)
+        msg = err.value.msg
+        @test occursin("Incident", msg)
+        @test occursin("caused_by", msg)
+        @test occursin("incidents_", msg)
+        # The trailing-underscore explanation, not the separator one.
+        @test occursin("traversing an accessor appends the separator", msg)
+        # E308, and NOT E309 — the message names only the check that fired.
+        @test occursin("fields.E308", msg)
+        @test !occursin("fields.E309", msg)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end

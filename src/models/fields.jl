@@ -30,9 +30,10 @@ _fielderr(msg::AbstractString) = FieldValidationError(msg)
 function _validate_related_name(related_name, field_type::AbstractString)::Union{String, Nothing}
   related_name === nothing && return nothing
   name = String(related_name)
-  _accessor_has_separator(name) &&
+  _illegal_accessor_name(name) &&
     throw(_fielderr("$(field_type): the 'related_name' \e[4m\e[31m$(name)\e[0m cannot contain " *
-                    "\e[1m__\e[0m or \e[1m@\e[0m. $(_ACCESSOR_SEPARATOR_REASON)"))
+                    "\e[1m__\e[0m or \e[1m@\e[0m, nor end with \e[1m_\e[0m. " *
+                    "$(_accessor_illegality_reason(name))"))
   return name
 end
 

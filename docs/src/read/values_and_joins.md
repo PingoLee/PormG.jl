@@ -170,33 +170,48 @@ query = M.Result.objects
 query.values("resultid", "test_deletion__name")
 ```
 
-!!! warning "A reverse accessor cannot contain `__`"
-    `__` is the lookup-path separator, so PormG splits a path on it *before* looking any piece up.
-    A name containing `__` would therefore be registered and then never be addressable — a query
-    naming it could only ever report a truncated fragment. `@` is refused for the same reason: it
-    opens an operator suffix (`__@gt`).
+!!! warning "A reverse accessor cannot contain `__` or `@`, or end with `_`"
+    An accessor is only ever looked up as **one segment** of a `__`-split path, and two shapes break
+    that:
+
+    - **Containing `__` or `@`.** PormG splits a path on `__` *before* looking any piece up, so the
+      name is torn apart and never probed. `@` is refused for the same reason — it opens an operator
+      suffix (`__@gt`).
+    - **Ending with `_`.** Traversing an accessor *appends* the separator, so `incidents_` reached as
+      `incidents___lap` splits into `incidents` and `_lap` — again, the registered name is never the
+      key looked up.
+
+    Both register cleanly and can then never be written as a lookup-path segment: a query naming
+    one can only report a truncated fragment that appears nowhere in your source. (A reverse
+    many-to-many accessor stays reachable as a *property* — that lookup does not split — but the
+    path surface, which is what `filter`/`values`/`order_by` use, is gone.)
 
     ```julia
-    # ✗ refused at the field, with a FieldValidationError
+    # ✗ both refused at the field, with a FieldValidationError
     Models.ForeignKey(Driver, pk_field="id", related_name="incident__driver")
+    Models.ForeignKey(Driver, pk_field="id", related_name="incidents_")
 
-    # ✓
+    # ✓ — an underscore inside the name is fine, and so is a leading one
     Models.ForeignKey(Driver, pk_field="id", related_name="incident_driver")
+    Models.ForeignKey(Driver, pk_field="id", related_name="_incidents")
     ```
 
     The rule covers **derived** names too, and that is the case worth knowing about. A derived
     accessor is the **model name** for a lone relation and `<model>_<field>` for a group of two or
-    more to the same target, so the separator can arrive from three places:
+    more to the same target, so the fault can arrive from any of these:
 
-    | Where the `__` is | Example | Accessor |
+    | Where the fault is | Example | Accessor |
     |---|---|---|
-    | the model name | `Models.Model("incident__log", …)` with any one relation | `incident__log` |
-    | a field name | a legacy column `caused__by_id`, in a group of two or more | `incident_caused__by_id` |
-    | the boundary between them | a field named `_id`, in a group of two or more | `incident__id` |
+    | `__` in the model name | `Models.Model("incident__log", …)` with any one relation | `incident__log` |
+    | `__` in a field name | a legacy column `caused__by_id`, in a group of two or more | `incident_caused__by_id` |
+    | `__` at the boundary | a field named `_id`, in a group of two or more | `incident__id` |
+    | a trailing `_` on the model name | `Models.Model("incident_", …)` with any one relation | `incident_` |
+    | a trailing `_` on a field name | a column `lap_`, in a group of two or more | `incident_lap_` |
+    | a trailing `_` the generator added | a relation column named `end` / `local` / `do` …, in such a group | `incident_end_` |
 
-    PormG refuses all three at registration with a `ModelDefinitionError` that names the accessor
-    **and says where the separator comes from**, so the remedy is not a guess: rename whichever name
-    carries it, or give the field an explicit `related_name`.
+    PormG refuses all of them at registration with a `ModelDefinitionError` that names the accessor
+    **and says which name carries the fault**, so the remedy is not a guess: rename that one, or
+    give the field an explicit `related_name`.
 
     A `__` **column** is still perfectly legal on its own — only an accessor derived from it is
     illegal. `Model_to_str` renames such a column to a legal Julia identifier and pins the real name
@@ -205,9 +220,17 @@ query.values("resultid", "test_deletion__name")
     `Model_Type(; fields = Dict(...))` — the same shape introspection builds in memory, though
     introspection never registers those models, so it cannot trip this by itself.
 
-    Django enforces the same rule, and on the same derived name: `related_query_name()` falls back
-    to the model name when no `related_name` is given, and system check `fields.E309` refuses a `__`
-    in the result — so a Django class named `A__B` is rejected exactly as PormG now rejects it.
+    The **trailing-underscore** rows are the other way round. `Model_to_str` escapes a column
+    named after a Julia keyword or a model-option kwarg by *appending* `_`, so a column named
+    `end` is emitted as `end_ = Models.ForeignKey(…, db_column="end", …)`. In a group of two or
+    more relations to one target that derives `<model>_end_`, and the generated file stops
+    loading. The escaped set is PormG's `reserved_words` list; `end`, `local`, `do`, `for` and `if`
+    are all on it. Give such a field an explicit `related_name`, or rename the column.
+
+    Django enforces both rules, and on the same derived name: `related_query_name()` falls back to
+    the model name when no `related_name` is given, then `fields.E309` refuses a `__` in the result
+    and `fields.E308` refuses a trailing `_` — so a Django class named `A__B`, or one named `A_`, is
+    rejected exactly as PormG now rejects it.
     `fields.E002` additionally forbids a *field* name containing `__` outright, which is the one
     place PormG is deliberately more permissive: a legacy schema may hold such a column, and
     refusing it once aborted whole introspection imports.

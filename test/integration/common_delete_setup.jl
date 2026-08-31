@@ -180,3 +180,42 @@ if !@isdefined(SetDefaultGuardM)
     set_default_guard_scratch_models.Set_default_guard_child_scratch.fields["parent_id"].default = nothing
     const SetDefaultGuardM = set_default_guard_scratch_models
 end
+
+module multipath_set_null_scratch_models
+import PormG.Models
+
+# A SET_NULL child hanging off a MULTI-PATH parent (#459). The F1 fixture cannot express this: its
+# SET_NULL / SET_DEFAULT foreign keys point at `result`, which is the delete ROOT and therefore
+# single-path, while the only multi-path model there (`just_a_test_deletion`) has no SET_NULL child.
+#
+# `mp_mid_scratch` reaches `mp_root_scratch` twice, so `handle_on_delete!` resolves `mp_leaf_scratch`
+# once per path with a different scoping query each time. `collector.field_updates` used to ASSIGN
+# where `collector.objects` appends, so the second path silently replaced the first and one path's
+# leaves were never nulled.
+Mp_root_scratch = Models.Model("mp_root_scratch",
+    id   = Models.IDField(),
+    name = Models.CharField()
+)
+
+Mp_mid_scratch = Models.Model("mp_mid_scratch",
+    id     = Models.IDField(),
+    owner  = Models.ForeignKey(Mp_root_scratch, pk_field = "id", on_delete = "CASCADE",
+                 null = true, related_name = "mp_owned"),
+    backup = Models.ForeignKey(Mp_root_scratch, pk_field = "id", on_delete = "CASCADE",
+                 null = true, related_name = "mp_backups"),
+    label  = Models.CharField()
+)
+
+Mp_leaf_scratch = Models.Model("mp_leaf_scratch",
+    id    = Models.IDField(),
+    mid   = Models.ForeignKey(Mp_mid_scratch, pk_field = "id", on_delete = "SET_NULL",
+                null = true, related_name = "mp_leaves"),
+    label = Models.CharField()
+)
+
+end
+
+if !@isdefined(MultipathSetNullM)
+    Models.set_models(multipath_set_null_scratch_models, joinpath(@__DIR__, PORMG_DB_FOLDER))
+    const MultipathSetNullM = multipath_set_null_scratch_models
+end

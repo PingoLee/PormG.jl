@@ -1368,20 +1368,33 @@ mutable struct DeletionCollector{T}
   connection::Union{PormGPostgres,PormGSQLite}  # Database connection
   objects::Dict{PormGModel,Vector{Dict{Symbol,T}}}  # Models and their objects to delete
   dependencies::Dict{PormGModel,Set{PormGModel}}  # Model dependencies
-  field_updates::Dict{Tuple{String,Any},Dict{PormGModel,Dict{Symbol,T}}}  # Field updates for SET_NULL etc.
+  # One entry per cascade path, exactly like `objects` (#459 (a)). This used to hold a BARE
+  # `Dict{Symbol,T}` and `handle_on_delete!` ASSIGNED into it, so a SET_NULL/SET_DEFAULT child of a
+  # multi-path parent kept only the last path's scoping query and the other path's rows were never
+  # written. `update_field` ORs the fragments, the way `delete_objects` does for `objects`.
+  field_updates::Dict{Tuple{String,Any},Dict{PormGModel,Vector{Dict{Symbol,T}}}}  # Field updates for SET_NULL etc.
   fast_deletes::Dict{PormGModel,Vector{Dict{Symbol,T}}}  # Objects that can be deleted directly
   sorted_models::Vector{PormGModel}  # Models in deletion order
   show_query::Symbol  # Controls whether to execute or inspect; skips _exists during inspection
+  # Models on the CURRENT recursion path of `find_related_objects!`, pushed on entry and popped in a
+  # `finally`. Read only for its depth (`MAX_CASCADE_DEPTH`) and to name the path in the error —
+  # see the guard in `deletion.jl` for why membership is deliberately NOT what is checked (#459 (b)).
+  traversal_path::Vector{PormGModel}
 
+  # The seeded literals below must match the field annotations. They used to disagree for
+  # `field_updates` and `fast_deletes` (both were seeded `Dict{PormGModel,Dict{Symbol,String}}`),
+  # which compiled only because assignment converts — so the constructor documented a shape the
+  # struct did not have.
   DeletionCollector(model, settings, show_query=:execute) = new{Union{String,SQLObjectHandler}}(
     model,
     settings,
     settings.connections,
     Dict{PormGModel,Vector{Dict{Symbol,Union{String,SQLObjectHandler}}}}(),
     Dict{PormGModel,Set{PormGModel}}(),
-    Dict{Tuple{String,Any},Dict{PormGModel,Dict{Symbol,String}}}(),
-    Dict{PormGModel,Dict{Symbol,String}}(),
+    Dict{Tuple{String,Any},Dict{PormGModel,Vector{Dict{Symbol,Union{String,SQLObjectHandler}}}}}(),
+    Dict{PormGModel,Vector{Dict{Symbol,Union{String,SQLObjectHandler}}}}(),
     Vector{PormGModel}(),
-    show_query
+    show_query,
+    Vector{PormGModel}()
   )
 end

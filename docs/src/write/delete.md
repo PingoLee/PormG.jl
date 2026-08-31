@@ -178,6 +178,69 @@ WHERE "Tb"."name" = $1
 -- Parameters: ["Cancelled Grand Prix"]
 ```
 
+!!! warning "A cascade descends at most 50 levels"
+    Each level of the cascade nests one more subquery inside the statement below it, so the collector
+    refuses to descend past 50 with a `QueryBuildError` naming the models it walked. Almost always
+    that means a **foreign-key cycle** — two models declaring `on_delete = CASCADE` at each other, or
+    self-referencing rows that form a loop — which would otherwise make the walk run until the stack
+    ran out. Break the cycle, or give one side a different `on_delete` and clear its rows first.
+
+    A genuinely acyclic hierarchy more than 50 levels deep hits the same ceiling; there is no way to
+    raise it, so delete such a graph in stages, from the far end inward.
+
+### Concurrency: a cascade path can be pruned out from under you on PostgreSQL
+
+`delete()` plans the cascade by probing each declared path — "are there any `result` rows for these
+races?" — and **dropping** the paths that come back empty, so a delete only emits statements for
+relations that actually have rows. Planning and the statements it produces run inside the same
+transaction. What that is worth differs by backend:
+
+| Backend | Mechanism | A row inserted on a pruned path mid-delete |
+|---|---|---|
+| SQLite | `BEGIN IMMEDIATE` plus PormG's process-wide write lock | Impossible — no other writer can commit while planning runs |
+| PostgreSQL | `BEGIN` at READ COMMITTED | Possible — every statement takes a fresh snapshot, even inside a transaction |
+
+So on PostgreSQL two sessions can interleave like this:
+
+1. Session A calls `delete()` on a `race`. Planning probes `lap_times`, finds nothing, drops the path.
+2. Session B inserts a `lap_times` row for that race and commits.
+3. Session A's deletes run. The race goes; the new lap time was never in PormG's plan.
+
+**On a schema PormG's migrations built, the database is the backstop.** Migrations emit each
+`ForeignKey`'s own `on_delete` into the DDL — `ON DELETE CASCADE`, `SET NULL`, `SET DEFAULT`,
+`RESTRICT` — so whatever the collector skipped, the database still knows about. What that means
+depends on the action:
+
+- **`CASCADE` / `SET_NULL` / `SET_DEFAULT`** — the three that emit statements. PostgreSQL performs
+  the skipped action itself at `COMMIT` (these constraints are `DEFERRABLE INITIALLY DEFERRED`), so
+  the row is removed, nulled or defaulted anyway and the delete succeeds. What you lose is the
+  **accounting**, not the rows: the per-table counts in the returned `(total, Dict)` tally only
+  statements PormG issued, so work the database did on a pruned path is not counted. Treat those
+  counts as a report of what the ORM did, not an audit of the transaction.
+- **`PROTECT` / `RESTRICT`** — pruning applies here too, because the probe runs for *every* reverse
+  relation before PormG looks at the action at all; that is what makes `PROTECT` existence-driven.
+  So a row inserted after the probe means [`ProtectedError`](../errors.md) is *not* raised, and the
+  `DELETE` instead hits the DDL's `ON DELETE RESTRICT`, which PostgreSQL cannot defer. The delete
+  still fails — same refusal, but reported as the driver's foreign-key error rather than PormG's.
+
+An unset `on_delete` is unaffected either way: it builds no cascade path, so there is nothing to
+prune.
+
+Two shapes are genuinely exposed, because there is no database action to fall back on:
+
+- a `ForeignKey` declared `db_constraint = false`, which suppresses the constraint;
+- a hand-written model over a table PormG did not create — a legacy or unmanaged schema — whose
+  actual `ON DELETE` clause is absent or disagrees with what the model declares.
+
+In both, a row inserted on a pruned path simply survives with a dangling reference. If that is your
+situation, serialize the delete against the writer yourself — an
+[advisory lock](../advisory_lock.md) around both is the usual answer.
+
+PormG deliberately does **not** raise the isolation level or lock the probed rows on your behalf:
+either would change the failure modes of *every* delete — serialization failures the caller must
+retry, or blocking on rows another transaction holds — to close a window that the database already
+covers wherever the constraint is real.
+
 !!! warning "`PROTECT` and `RESTRICT` refuse the delete with `ProtectedError`"
     A `ForeignKey` declared `on_delete = PROTECT` (or `RESTRICT`) makes the referenced row
     undeletable while referencing rows exist. PormG checks this at the ORM layer and raises

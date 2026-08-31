@@ -77,8 +77,21 @@ An **unset** `on_delete` — the default for `ForeignKey` — produces no ORM st
 leaving the reference entirely to the database's own constraint. It renders `ON DELETE NO ACTION` in
 DDL, so a dependent row is *not* cascaded by PormG unless its field says so explicitly.
 
+A model reachable by several cascade paths is scoped by all of them: its statement carries one
+`IN (…)` fragment per path, `OR`ed together, and that holds for the `UPDATE` a `SET_NULL` /
+`SET_DEFAULT` emits just as it does for a `DELETE`.
+
+The cascade descends at most 50 levels. Beyond that it raises `QueryBuildError` naming the models it
+walked. Usually that means a foreign-key cycle — two models declaring `on_delete = CASCADE` at each
+other, or self-referencing rows that form a loop — which would otherwise make the collector descend
+forever. A genuinely acyclic hierarchy deeper than the ceiling hits it too, and the ceiling is fixed;
+delete such a graph in stages, from the far end inward.
+
 The collected statements then execute in dependency order inside a single transaction (`BEGIN` on
 PostgreSQL, `BEGIN IMMEDIATE TRANSACTION` on SQLite), so any failure rolls the whole set back.
+Planning happens inside that transaction too, but on PostgreSQL a concurrent writer can still insert
+onto a path the planner probed and pruned — see *Concurrency* in
+[Deleting Records](write/delete.md).
 
 # Examples
 
@@ -220,8 +233,42 @@ function delete(objct::SQLObjectHandler;
     #
     # On PostgreSQL it only NARROWS it, and the comment says so rather than implying otherwise:
     # READ COMMITTED gives every statement a fresh snapshot even inside a transaction, so a
-    # concurrent insert between a probe and its DELETE is still possible. Closing it there needs
-    # REPEATABLE READ / SERIALIZABLE or explicit row locks — a separate decision, not this fix.
+    # concurrent insert between a probe and its DELETE is still possible.
+    #
+    # #460 took that decision and it is CLOSED as accepted, not open: PormG keeps pruning and
+    # documents the window (`docs/src/write/delete.md`, "Concurrency").
+    #
+    # Read the reason carefully, because #460's own issue body gets it wrong and so did the first
+    # draft of this comment. Both said the deferred foreign key makes a pruned path RAISE at COMMIT.
+    # It does not.
+    #
+    # MEASURED here: `Dialect._foreign_key_on_delete_sql` emits the field's OWN on_delete into the
+    # DDL, and `db_constraint` defaults TRUE (`Models.ForeignKey`), so the constraint carries the
+    # action rather than a bare reference. Confirmed by reading the deployed fixture's schema —
+    # `lap_times.raceid` is `ON DELETE CASCADE`, `lap_times.driverid` is `ON DELETE RESTRICT`.
+    #
+    # INFERRED, not measured (no PostgreSQL was available): that the database then performs the
+    # skipped CASCADE / SET NULL / SET DEFAULT at COMMIT. That is PostgreSQL's documented
+    # deferred-referential-action behavior, and it is the half worth re-checking on a live two-session
+    # setup before anyone leans further on it. If it holds, a pruned path costs only the per-table
+    # count in the return value, which tallies statements PormG itself issued.
+    #
+    # Note pruning is NOT limited to the actions that emit statements. The `_exists` probe below runs
+    # for EVERY reverse relation, before `handle_on_delete!` sees the action — that is exactly what
+    # makes PROTECT existence-driven. So a pruned PROTECT path means ProtectedError is not raised and
+    # the DELETE meets the DDL's `ON DELETE RESTRICT` instead, which PostgreSQL cannot defer: still a
+    # refusal, reported as the driver's error rather than ours.
+    #
+    # The exposed shapes are the ones with no database action to fall back on: `db_constraint=false`,
+    # and hand-written models over tables PormG did not create. That is a much narrower surface than
+    # "every delete", which is what makes accepting it the right call at this stage rather than
+    # merely the cheap one.
+    #
+    # Do not "fix" this by reaching for one of the alternatives without re-reading #460: raising the
+    # isolation level to REPEATABLE READ does NOT close it (the DELETE then misses the row too, it
+    # merely agrees with the probe); SERIALIZABLE closes it by making every delete retryable by
+    # contract; parent-row FOR UPDATE closes it at the cost of a lock per collected level. Each was
+    # weighed there and rejected for this pre-publish stage.
     #
     # Two costs, both accepted deliberately: SQLite now holds the write lock across the probe
     # SELECTs, and a `ProtectedError` / `ModelDefinitionError` raised while planning now costs a
@@ -241,10 +288,12 @@ function delete(objct::SQLObjectHandler;
       delete!(collector.objects, fast_model)
     end
 
-    # Process field updates (for SET_NULL, SET_DEFAULT, etc.)
+    # Process field updates (for SET_NULL, SET_DEFAULT, etc.). `path_keys` is one entry per cascade
+    # path reaching this model (#459 (a)); `update_field` ORs them into a single UPDATE, so the
+    # statement count is still one per (field, value, model).
     for ((field, value), affected_models) in collector.field_updates
-      for (affected_model, keys) in affected_models
-        res = update_field(connection, affected_model, field, value, keys, show_query, conn)
+      for (affected_model, path_keys) in affected_models
+        res = update_field(connection, affected_model, field, value, path_keys, show_query, conn)
         push!(results, res)
       end
     end
@@ -328,6 +377,10 @@ function delete(objct::SQLObjectHandler;
 end
 delete(; kwargs...) = (objct) -> delete(objct; kwargs...)
 
+# Ceiling on how deep `find_related_objects!` will descend before refusing (#459). See the guard
+# itself for why this is a depth cap rather than a cycle-membership test.
+const MAX_CASCADE_DEPTH = 50
+
 # Sentinel returned by resolve_delete_key when a keyless model should be deleted directly
 # (bare DELETE FROM table, no WHERE clause). Chosen to be an impossible SQL identifier so
 # accidental equality checks against real column names always fail.
@@ -388,10 +441,32 @@ end
 
 
 function process_collector!(collector::DeletionCollector)
-  # Process each model and its objects
-  for (model, keys) in collector.objects
-    # Find related objects through foreign keys    
-    find_related_objects!(collector, model, keys)
+  # The SEED set: the models present before any traversal runs. Today that is exactly one — the root,
+  # put there by `delete()`'s `add_objects_to_collector!` call — but the snapshot is the contract,
+  # not an optimization for a one-element Dict.
+  #
+  # #459: this used to iterate `collector.objects` directly, while the body inserted into it
+  # (`find_related_objects!` -> `handle_on_delete!` -> `add_objects_to_collector!`). Julia neither
+  # raises nor snapshots on that, so the loop walked entries it had just created.
+  #
+  # RE-VISITING is the failure, not skipping, and the direction matters because it decides the fix.
+  # Every model inserted here was inserted BY the recursion at the `handle_on_delete!` CASCADE
+  # branch, which descends into it at insertion time — so an entry the outer loop never reaches has
+  # already been traversed and nothing is lost. Reaching it again re-walks it with its COMPLETE key
+  # vector, pushing a duplicate entry into each of its children, which then re-walk theirs. Measured
+  # on a 14-link CASCADE chain, mock connections: 105 collected entries where 14 are correct, the
+  # last statement rendering 14 `OR` arms and binding 67 values for a plan that needs 1. A second
+  # run gave 87 — the count is hash-order dependent, which is the whole complaint.
+  #
+  # NOT a `visited::Set{PormGModel}`, which is what the issue proposed. That would be a correctness
+  # regression: a model reachable by two cascade paths legitimately gets two entries, each carrying
+  # its own scoping query, and each needs its own descent. Suppressing the second descent leaves
+  # that path's grandchildren uncollected — the silent orphan #459 exists to prevent.
+  seeds = collect(collector.objects)
+  for (model, keys) in seeds
+    # `copy` because a self-referential CASCADE pushes into the very vector `find_related_objects!`
+    # enumerates in its `Qor` branch. Shallow on purpose: the entry Dicts are read, never mutated.
+    find_related_objects!(collector, model, copy(keys))
   end
 
   # Identify objects that can be fast-deleted
@@ -410,6 +485,45 @@ end
 function find_related_objects!(collector::DeletionCollector, model::PormGModel, dict::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}})
   # For each foreign key in the model (model has FK -> related_model)
   @pormg_debug false
+
+  push!(collector.traversal_path, model)
+  try
+    _find_related_objects!(collector, model, dict)
+  finally
+    pop!(collector.traversal_path)
+  end
+end
+
+function _find_related_objects!(collector::DeletionCollector, model::PormGModel, dict::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}})
+  # A cascade cannot descend forever. Measured before this guard, on two models with a CASCADE FK
+  # each way: `StackOverflowError` after ~5s, preceded by Julia's own
+  # "detected a stack overflow; program state may be corrupted" — inside the delete transaction, on
+  # a corrupted runtime. A `QueryBuildError` rolls back cleanly and names the loop instead.
+  #
+  # A DEPTH CAP, deliberately, and not the obvious "this model is already on the path" test:
+  #
+  #   - A self-referential CASCADE foreign key (category tree, org chart) is a legitimate Django
+  #     shape that PormG supports today, and it puts the same model on the path at every level. A
+  #     membership test refuses it outright.
+  #   - A membership test is not sufficient either. Termination is a property of the DATA, not the
+  #     schema: cyclic rows keep every `_exists` probe non-empty while the nested subquery grows
+  #     without bound, so even the probing path needs a ceiling.
+  #
+  # 50 is generous for anything real — every level adds one more nested SELECT, and both backends
+  # are planning badly long before that.
+  if length(collector.traversal_path) > MAX_CASCADE_DEPTH
+    tail = join([m.name for m in collector.traversal_path[max(1, end - 9):end]], " -> ")
+    throw(QueryBuildError(
+      "Error in delete: the cascade exceeded $(MAX_CASCADE_DEPTH) levels while collecting dependents of " *
+      "\e[4m\e[31m$(collector.model.name)\e[0m. The last models walked were " *
+      "\e[4m\e[31m$(tail)\e[0m. Usually a foreign-key cycle: two models declared " *
+      "\e[4m\e[32mon_delete = CASCADE\e[0m at each other, or self-referencing rows that form a " *
+      "loop, make the collector descend without end — break the cycle, or give one side a " *
+      "different on_delete and remove its rows first. If the chain above is genuinely acyclic, it " *
+      "is simply deeper than \e[4m\e[32mMAX_CASCADE_DEPTH\e[0m, the fixed ceiling in " *
+      "src/querybuilder/deletion.jl; delete it in stages, from the far end inward."
+    ))
+  end
 
   # For models with foreign keys pointing to this model (related_model has FK -> model)
   for (related_name, related_value) in model.related_objects
@@ -465,6 +579,27 @@ function find_related_objects!(collector::DeletionCollector, model::PormGModel, 
   end
 end
 
+# APPEND a SET_NULL / SET_DEFAULT path, never overwrite one (#459 (a)).
+#
+# `handle_on_delete!` fires once per cascade path, so a child of a MULTI-PATH parent reaches this
+# twice with two different scoping queries — the same shape `collector.objects` handles by pushing.
+# This slot assigned instead, so the second path silently replaced the first and its rows were never
+# written. Measured on `root -CASCADE(owner|backup)-> mid -SET_NULL-> leaf`: the emitted UPDATE
+# scoped through `"owner"` only, and which of the two survived was `related_objects` Dict order —
+# arbitrary, exactly like the `keys[1][:key]` defect #452 removed from `delete_objects`.
+#
+# Loud rather than silent wherever the FK constraint exists: the un-nulled rows still point at
+# `mid` rows the cascade then deletes, so PostgreSQL's DEFERRABLE INITIALLY DEFERRED check (and
+# SQLite's deferred pragma) raises at COMMIT and the whole delete rolls back. Silent only against a
+# table with no constraint.
+function _push_field_update!(collector::DeletionCollector, bucket::Tuple{String, Any},
+  related_model::PormGModel, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, field_name::Union{String, Symbol})
+  per_model = collector.field_updates[bucket]
+  entries = get!(() -> Vector{Dict{Symbol, Union{String, SQLObjectHandler}}}(), per_model, related_model)
+  push!(entries, prepare_related_query(keys, related_model, field_name))
+  return entries
+end
+
 function handle_on_delete!(collector::DeletionCollector, field_name::Union{String, Symbol}, field::PormGField, model::PormGModel, 
   keys::Dict{Symbol, Union{String, SQLObjectHandler}}, related_model::PormGModel)
   @pormg_debug false
@@ -498,11 +633,11 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     # Add field update to set field to NULL
     if !haskey(collector.field_updates, (field_name |> string, nothing))
       @pormg_debug false
-      collector.field_updates[(field_name |> string, nothing)] = Dict{PormGModel, Dict{Symbol, Union{String, SQLObjectHandler}}}()
+      collector.field_updates[(field_name |> string, nothing)] = Dict{PormGModel, Vector{Dict{Symbol, Union{String, SQLObjectHandler}}}}()
     end
     
-    # Add to field updates using _query object like CASCADE
-    collector.field_updates[(field_name |> string, nothing)][related_model] = prepare_related_query(keys, related_model, field_name)
+    # Add to field updates using _query object like CASCADE — one entry per cascade path.
+    _push_field_update!(collector, (field_name |> string, nothing), related_model, keys, field_name)
 
   elseif field.on_delete == SET_DEFAULT
     # check that there is a default to set — symmetric with the SET_NULL guard above (#287), and
@@ -516,11 +651,11 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     # Add field update to set field to default value
     default_value = field.default
     if !haskey(collector.field_updates, (field_name |> string, default_value))
-      collector.field_updates[(field_name |> string, default_value)] = Dict{PormGModel, Dict{Symbol, Union{String, SQLObjectHandler}}}()
+      collector.field_updates[(field_name |> string, default_value)] = Dict{PormGModel, Vector{Dict{Symbol, Union{String, SQLObjectHandler}}}}()
     end    
     
-    # Add to field updates using _query object like CASCADE
-    collector.field_updates[(field_name |> string, default_value)][related_model] = prepare_related_query(keys, related_model, field_name)
+    # Add to field updates using _query object like CASCADE — one entry per cascade path.
+    _push_field_update!(collector, (field_name |> string, default_value), related_model, keys, field_name)
   end
 end
 
@@ -708,22 +843,41 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
   return deleted_counter  # Return count of deleted objects
 end
 
-function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, field::String, value::Any, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, show_query::Symbol, conn)
+function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, field::String, value::Any, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}}, show_query::Symbol, conn)
   # Update field values using query object like CASCADE
   @pormg_debug false
-  pk_field = keys[:key]
-  pk_field == DIRECT_DELETE_KEY_SENTINEL && throw(QueryBuildError("Cannot update field on keyless model $(model.name); define a primary key"))
-  _query = keys[:objct]
+  isempty(keys) && error(_emsg("PormG internal error in delete(): update_field was called with no keys for $(model.name) — this should not happen; please report it."))
+
+  # Defensive, and unreachable today — do NOT copy `delete_objects`' rationale onto it. There the
+  # multi-entry sentinel check is load-bearing, because `add_objects_to_collector!` can store an
+  # entry whose key came from `resolve_delete_key(..., allow_direct=true)`. Here every entry is built
+  # by `prepare_related_query`, which always passes a `fallback` and never `allow_direct`, so
+  # `resolve_delete_key` returns a primary key, returns the fallback, or throws — it cannot yield the
+  # sentinel. Kept because the two renderers should fail the same way if that ever changes.
+  any(k -> k[:key] == DIRECT_DELETE_KEY_SENTINEL, keys) &&
+    throw(QueryBuildError("Cannot update field on keyless model $(model.name); define a primary key"))
+
   parameters = get_parameter(connection)
   value_sql = value === nothing ? "NULL" : model.fields[field].formatter(value)
-  # Same #432 wrap as delete_objects above. There is only one splice here, so the run is trivially in
-  # text order today — the wrap is what makes that a property of the code instead of a property of
-  # there happening to be only one.
-  nested_mark = nested_parameter_mark(parameters)
-  subquery = query(_query, parameters=parameters, own_contexts=true)
-  reattach_parameters!(parameters, detach_nested_run!(parameters, nested_mark))
-  # SET column and outer WHERE key both target the physical column (db_column) — #50.
-  sql = "UPDATE $(safe_table_identifier(Models.model_table_name(model), connection)) SET $(safe_column_identifier(Models.model_column(model, field), connection)) = $(value_sql) WHERE $(safe_column_identifier(Models.model_column(model, pk_field), connection)) IN ($(subquery))"
+
+  # One WHERE fragment per cascade path, ORed together — the same shape, and the same single
+  # renderer/single collector discipline, as `delete_objects` (#452). Before #459 (a) this function
+  # took ONE entry because the collector could only hold one: a SET_NULL child of a multi-path
+  # parent had its first path overwritten by its second.
+  _where = String[]
+  for key in keys
+    pk_field = key[:key]
+    # Same #432 mark/detach wrap as delete_objects: let the inner build file its values under its own
+    # clauses, then lift the run and re-emit it contiguously at this fragment's marker position.
+    nested_mark = nested_parameter_mark(parameters)
+    subquery = query(key[:objct], parameters=parameters, own_contexts=true)
+    reattach_parameters!(parameters, detach_nested_run!(parameters, nested_mark))
+    # Outer WHERE key targets the physical column (db_column) — #50.
+    push!(_where, """$(safe_column_identifier(Models.model_column(model, pk_field), connection)) IN ($(subquery))""")
+  end
+
+  # SET column is physical too (db_column) — #50.
+  sql = "UPDATE $(safe_table_identifier(Models.model_table_name(model), connection)) SET $(safe_column_identifier(Models.model_column(model, field), connection)) = $(value_sql) WHERE $(join(_where, " OR "))"
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model, :update, parameters=parameters)
   end

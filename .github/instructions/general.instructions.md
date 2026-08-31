@@ -87,6 +87,7 @@ and let the maintainer choose. Do not settle it silently in either direction.
 | Consuming PormG in a downstream app — setup, queries, examples (no internals) | `.github/skills/pormg-usage/SKILL.md` |
 | Pre-push / pre-PR review | `.github/skills/pormg-changed-code-review/SKILL.md` |
 | Managing the backlog — creating/updating/closing GitHub issues and curating labels | `.github/skills/pormg-issue-management/SKILL.md` |
+| Deciding **what to work on next** — batching open issues into single-sitting sessions, ranking them, recording it on the project board | `.github/skills/pormg-session-planning/SKILL.md` |
 | Tests failing, flaky, or environment-dependent (pool exhaustion, PG/SQLite divergence, fixture isolation) | `.github/skills/pormg-test-troubleshooting/SKILL.md` |
 | Cutting a release train — bump the version, stamp `## Unreleased`, tag (maintainer-invoked) | `.github/skills/pormg-cut-release/SKILL.md` |
 | **Writing any test** (all subsystems) — `@testset` headers, comment density, fixture isolation | `.github/instructions/test-writing.md` — an instruction file, not a skill; the subsystem skills link to it rather than restate it |

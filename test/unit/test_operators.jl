@@ -14,7 +14,8 @@ Why a dedicated file?
 
 using Test
 using PormG
-using PormG.Models: Model, CharField, IDField, IntegerField, DateField, DateTimeField
+using PormG.Models: Model, CharField, IDField, IntegerField, DateField, DateTimeField,
+                    BooleanField, DurationField, UUIDField, JSONField, BinaryField
 using PormG.QueryBuilder: Q
 using Dates
 import Logging
@@ -684,4 +685,274 @@ end  # end "PormGsuffix — Operator SQL Generation"
     @test occursin("requires a DATE/TIMESTAMP field", err.msg)
     @test occursin("surname", err.msg)
   end
+end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# #411 — `__@in` on every field type, not just the two whose formatter happened to take an array
+#
+# The call sites handed the WHOLE right-hand vector to `field.formatter`, so each formatter had to
+# cope with an array individually. Only `format_text_sql` and `format_number_sql` did. `__@in` was
+# therefore an error on DateField, DateTimeField, BooleanField, DurationField, UUIDField and
+# BinaryField — and silently WRONG on JSONField, where `[1, 2]` became the single JSON string
+# `"[1,2]"` and matched nothing.
+#
+# The fix maps the formatter per element, keyed on the OPERATOR rather than on the value's type.
+# That distinction is the whole design: `format_binary_sql` and `format_json_sql` are the field types
+# whose SCALAR value is itself a collection — a `Vector{UInt8}` is ONE binary value — so dispatching
+# on `values isa AbstractArray` would map over a BinaryField's bytes and destroy it. Only "this is a
+# membership lookup" licenses the map, which is exactly why Django puts its
+# `FieldGetDbPrepValueIterableMixin` on the lookup class and keeps `get_prep_value` scalar-only.
+#
+# UUIDField and BinaryField needed a second fix: their element types were absent from the parse-time
+# unions, so they failed with a MethodError BEFORE any formatter ran.
+# ═════════════════════════════════════════════════════════════════════════════
+
+if !isdefined(Main, :_In411Event)
+  # A model of its own rather than widening `_OperTestEvent`, which is deliberately shaped to match
+  # test_complex_queries.jl so the two files can be included together.
+  _In411Event = Model("in411_events",
+    id        = IDField(),
+    n         = IntegerField(),
+    code      = CharField(),
+    happened  = DateField(),
+    logged_at = DateTimeField(),
+    ok        = BooleanField(),
+    took      = DurationField(),
+    uid       = UUIDField(),
+    payload   = JSONField(),
+    blob      = BinaryField(),
+  )
+  _In411Event.connect_key = "default"
+
+  # A SQLite mock as well: the empty-list defect below is visible on ONE dialect only, because
+  # SQLite expands a membership vector into one `?` per element while PostgreSQL binds the whole
+  # vector as a single array parameter.
+  struct _MockSQLiteIn411 <: PormG.PormGSQLite end
+  PormG.config["in411_sl"] = PormG.Configuration.Settings(
+    connections = _MockSQLiteIn411(), change_data = true)
+end
+
+const _IN411 = _In411Event
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `__@in` renders and binds correctly for every field type.
+#
+# One case per formerly-broken type, because the point of the fix is that the CLASS is closed — a
+# test for `Date` alone would have passed with the one-method patch the issue proposed and left six
+# field types broken.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "IN binds every field type, not only text and numbers (#411)" begin
+  # Each entry: label, lookup, values, and the parameter vector expected inside the bound array.
+  cases = [
+    ("DateField",     "happened__@in",  [Date("2026-06-15"), Date("2026-06-16")], ["2026-06-15", "2026-06-16"]),
+    ("BooleanField",  "ok__@in",        [true, false],                             [true, false]),
+    ("DurationField", "took__@in",      [Dates.Hour(1), Dates.Hour(2)],            ["01:00:00", "02:00:00"]),
+    ("UUIDField",     "uid__@in",       [Base.UUID("11111111-1111-1111-1111-111111111111")],
+                                        ["11111111-1111-1111-1111-111111111111"]),
+  ]
+  for (label, lookup, values, expected) in cases
+    q = _IN411.objects.filter(lookup => values)
+    q.values("id")
+    res = q.list(show_query = :dict)
+    # PostgreSQL binds the list as ONE array parameter, so the payload is nested one deep.
+    @test res[:parameters] == [expected]
+    @test contains(res[:sql_text], "= ANY")
+  end
+
+  # DateTimeField renders through the timezone formatter, so assert the shape rather than an exact
+  # string — the canonicalization itself is `test_datetime_canonicalization.jl`'s subject.
+  q_dt = _IN411.objects.filter("logged_at__@in" => [DateTime("2026-06-15T10:00:00")])
+  q_dt.values("id")
+  res_dt = q_dt.list(show_query = :dict)
+  @test length(res_dt[:parameters]) == 1 && length(res_dt[:parameters][1]) == 1
+  @test startswith(res_dt[:parameters][1][1], "2026-06-15T10:00:00")
+
+  # JSONField was not an error — it was SILENTLY WRONG, which is why this asserts the value and not
+  # merely that the query built. The old contract produced the single string "[1,2]", so the query
+  # compared a JSON column against one document instead of two scalars and matched nothing.
+  q_js = _IN411.objects.filter("payload__@in" => [1, 2])
+  q_js.values("id")
+  res_js = q_js.list(show_query = :dict)
+  @test res_js[:parameters] == [["1", "2"]]
+  @test res_js[:parameters] != [["[1,2]"]]
+
+  # BinaryField is REFUSED, not supported, and that is the deliberate outcome — see the guard in
+  # `_get_pair_to_oper`. `format_binary_sql` returns a `PormGBytes` wrapper and the ARRAY methods of
+  # `add_parameter!` are the only ones that do not unwrap it, so a mapped list bound wrappers: SQLite
+  # stored a Julia-serialized blob that matched NOTHING with no error, and PostgreSQL emitted a
+  # nonsense `bytea[]` literal. Silently wrong rows are worse than the refusal.
+  #
+  # Asserting the message, not just the type: a bare `@test_throws FilterError` would pass on any
+  # filter misuse and would not notice the guard being replaced by an accidental one. The earlier
+  # version of this test asserted `length(params[1]) == 2`, which counted the wrappers and reported
+  # the silent-wrong-rows path as working.
+  bin_err = @test_throws PormG.FilterError _IN411.objects.filter(
+    "blob__@in" => [UInt8[0x01, 0x02], UInt8[0x03]]).list(show_query = :dict)
+  @test occursin("binary", bin_err.value.msg)
+  @test occursin("blob__@in", bin_err.value.msg)
+  # It points at the workaround rather than just refusing.
+  @test occursin("Qor", bin_err.value.msg)
+
+  # Only `@in`/`@nin` get the binary-specific sentence. Anything else is the ordinary "vector value,
+  # wrong operator" mistake and must go to the shared funnel — otherwise the guard claims
+  # "membership filter" for `@gte`, and renders a nonexistent `__@blob` lookup for a path with no
+  # suffix at all, which is the opposite of naming what the user wrote.
+  no_op = @test_throws PormG.FilterError _IN411.objects.filter(
+    "blob" => [UInt8[0x01], UInt8[0x02]]).list(show_query = :dict)
+  @test occursin("no operator", no_op.value.msg)
+  @test !occursin("membership filter", no_op.value.msg)
+
+  wrong_op = @test_throws PormG.FilterError _IN411.objects.filter(
+    "blob__@gte" => [UInt8[0x01], UInt8[0x02]]).list(show_query = :dict)
+  @test occursin("not valid", wrong_op.value.msg)
+  @test !occursin("membership filter", wrong_op.value.msg)
+
+  # A scalar UUID filter renders. Only the VECTOR union was widened at first, so plain equality on a
+  # UUIDField still raised a `convert` MethodError — an untyped error on the most ordinary spelling.
+  q_uid = _IN411.objects.filter("uid" => Base.UUID("11111111-1111-1111-1111-111111111111"))
+  q_uid.values("id")
+  @test contains(q_uid.list(show_query = :dict)[:sql_text], "=")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Non-membership operators are untouched — the control for the operator-keyed design.
+#
+# If the map were keyed on `values isa AbstractArray` instead, `BETWEEN` and a scalar comparison
+# against a collection-valued field would both change. They must not.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a non-membership operator never maps its value (#411)" begin
+  # BETWEEN indexes its two operands separately and formats each as a scalar.
+  q_r = _IN411.objects.filter("n__@range" => [1, 9])
+  q_r.values("id")
+  @test q_r.list(show_query = :dict)[:parameters] == [1, 9]
+
+  # A scalar Date comparison still formats as one value, not a one-element list.
+  q_s = _IN411.objects.filter("happened__@lte" => Date("2026-06-15"))
+  q_s.values("id")
+  @test q_s.list(show_query = :dict)[:parameters] == ["2026-06-15"]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A wrong-typed filter value reports the filter path's own error type (#411).
+#
+# The re-wrap here used to string-match `"The date"` && `"is invalid"`, which matched exactly one
+# formatter message — `format_date_sql(::AbstractString)` — and nothing else. Every other field type
+# leaked `InvalidValueError`, whose docstring scopes it to the insert/update coercion helpers.
+#
+# This is a deliberate behavior change and is pinned as one: both remain `PormGError`, so an app
+# catching the root is unaffected, but one catching `InvalidValueError` specifically will notice.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a wrong-typed filter value raises FilterError, not InvalidValueError (#411)" begin
+  # Scalar, non-Date field — the case that leaked before. Asserting the CAUSE as well as the type:
+  # `FilterError` is the filter path's long-tail bucket, so a bare `@test_throws` would also pass on
+  # an operator-validity error or the binary refusal, neither of which is what this pins.
+  scalar_err = @test_throws PormG.FilterError _IN411.objects.filter("n" => "abc").list(show_query = :dict)
+  @test occursin("field is the type", scalar_err.value.msg)
+  # And inside a membership list, where the map applies the formatter per element.
+  list_err = @test_throws PormG.FilterError _IN411.objects.filter("n__@in" => ["abc"]).list(show_query = :dict)
+  @test occursin("field is the type", list_err.value.msg)
+  # A Date field was already converted by the old substring match; it must stay converted.
+  @test_throws PormG.FilterError _IN411.objects.filter("happened" => "not-a-date").list(show_query = :dict)
+
+  # NOT converted: `@range` formats its two operands outside the `try`, so it still reports
+  # `InvalidValueError`. Pinned so the inconsistency is a recorded limit rather than an accident —
+  # if someone moves that branch inside the guard, this test tells them to update the note with it.
+  @test_throws PormG.InvalidValueError _IN411.objects.filter(
+    "happened__@range" => ["x", "y"]).list(show_query = :dict)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# An EMPTY membership list is valid SQL on both backends.
+#
+# SQLite bound zero parameters and rendered `IN ()` — a syntax error — while PostgreSQL rendered a
+# valid `= ANY('{}')` that never matches. One query, a hard failure on one engine only, which is the
+# divergence shape the ruleset calls a non-negotiable.
+#
+# The truth values are the point: nothing is a member of the empty set, and everything is not.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an empty IN list is valid on both dialects (#411)" begin
+  sl = Model("in411_sl_events", id = IDField(), n = IntegerField())
+  sl.connect_key = "in411_sl"
+
+  q_in = sl.objects.filter("n__@in" => Int[])
+  q_in.values("id")
+  res_in = q_in.list(show_query = :dict)
+  # No `IN ()` anywhere, and an always-false predicate instead.
+  @test !contains(res_in[:sql_text], "IN ()")
+  @test contains(res_in[:sql_text], "(1 = 0)")
+  @test isempty(res_in[:parameters])
+
+  # NOT IN over the empty set is always TRUE — everything is outside it. Asserting the opposite
+  # constant is what stops a fix that renders a constant without thinking about the negation.
+  q_nin = sl.objects.filter("n__@nin" => Int[])
+  q_nin.values("id")
+  res_nin = q_nin.list(show_query = :dict)
+  @test !contains(res_nin[:sql_text], "NOT IN ()")
+  @test contains(res_nin[:sql_text], "(1 = 1)")
+
+  # `[]` is `Vector{Any}`, which satisfies none of the element bounds the parse methods dispatch on —
+  # so the way anyone actually writes an empty list used to raise a `MethodError`, and it was the
+  # spelling the documentation showed. Both spellings must work, and `Int[]` must keep working.
+  for empty_value in (Int[], [], Any[])
+    q_e = _IN411.objects.filter("n__@in" => empty_value)
+    q_e.values("id")
+    @test contains(q_e.list(show_query = :dict)[:sql_text], "= ANY")
+  end
+
+  # A genuinely mixed list is reported, not looped over or leaked as a MethodError — the narrowing
+  # path re-dispatches, so it needs a terminating case.
+  mixed = @test_throws PormG.FilterError _IN411.objects.filter(
+    "n__@in" => Any[1, "a"]).list(show_query = :dict)
+  @test occursin("do not share", mixed.value.msg)
+
+  # PostgreSQL was already correct and must stay on its own spelling — the two dialects agree on
+  # BEHAVIOR, not on text, exactly as they already do for a non-empty list (`IN (?)` vs `= ANY($1)`).
+  q_pg = _IN411.objects.filter("n__@in" => Int[])
+  q_pg.values("id")
+  @test contains(q_pg.list(show_query = :dict)[:sql_text], "= ANY")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The HAVING path had the identical inverted contract, at a fourth call site.
+#
+# Filtering on an aggregate ALIAS promotes the predicate into HAVING and resolves its value through
+# `_resolve_having_filter_value`, which also handed the whole vector to a formatter. So
+# `filter("mx__@in" => [Date(...)])` over a `Max("happened")` alias failed with the same
+# `InvalidValueError` the plain-field path did. Found by probing rather than by reading — the fluent
+# surface has no `.having()`, so the shape is not obvious from the API.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an aggregate-alias IN filter formats per element too (#411)" begin
+  q = _IN411.objects
+  q.values("code", "mx" => PormG.Functions.Max("happened"))
+  q.filter("mx__@in" => [Date("2026-01-01"), Date("2026-02-01")])
+  res = q.list(show_query = :dict)
+  @test res[:parameters] == [["2026-01-01", "2026-02-01"]]
+
+  # And the rendered HAVING is VALID SQL. Asserting only the parameters reported this path as fixed
+  # while it emitted `HAVING MAX(x) IN $1` — no parentheses, no `= ANY` — a syntax error on both
+  # engines. The value formatting and the rendering are two different bugs on one path, and a test
+  # that checks one of them says nothing about the other.
+  # Anchored to the HAVING clause itself: `contains(sql, "= ANY")` alone would pass if the membership
+  # render leaked into WHERE and HAVING stayed broken.
+  @test occursin(r"HAVING\s+MAX\(.*?\)\s+= ANY", res[:sql_text])
+  @test !occursin(r"IN \$\d", res[:sql_text])
+
+  # SQLite too. The original defect was invisible because nothing asserted the rendered HAVING at
+  # all, and SQLite is where a membership render goes wrong differently — it expands to one `?` per
+  # element, so its failure was `IN ?, ?` rather than `IN $1`. Asserting one dialect would leave the
+  # same blind spot that hid this in the first place.
+  sl_h = Model("in411_sl_having", id = IDField(), n = IntegerField(), code = CharField())
+  sl_h.connect_key = "in411_sl"
+  q_sl = sl_h.objects
+  q_sl.values("code", "tot" => PormG.Functions.Sum("n"))
+  q_sl.filter("tot__@in" => [1, 2])
+  sql_sl = q_sl.list(show_query = :dict)[:sql_text]
+  @test occursin(r"HAVING\s+SUM\(.*?\)\s+IN \(\?, \?\)", sql_sl)
+  @test !occursin("IN ?, ?", sql_sl)
+
+  # A scalar aggregate comparison is unchanged.
+  q2 = _IN411.objects
+  q2.values("code", "tot" => PormG.Functions.Sum("n"))
+  q2.filter("tot__@gt" => 5)
+  @test q2.list(show_query = :dict)[:parameters] == [5]
 end

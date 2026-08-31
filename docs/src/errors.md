@@ -32,7 +32,7 @@ Catch the umbrella when you want a category, the concrete type when you want a r
 | `get(...)` | `MultipleObjectsReturned` | More than one row matched; carries `count` |
 | `earliest(...)` / `latest(...)` | `DoesNotExist` | Empty queryset — unlike `first()`/`last()`, which return `nothing` |
 | `row.driverid` on an unprojected `ForeignKey` / `OneToOneField` | `LazyTraversalError` | PormG never lazily loads a relation — project it with `values(...)` |
-| any filter or `values` | `UnknownFieldError` | The field name does not exist on the model (lookups are case-sensitive) |
+| any filter, `values` or `order_by` | `UnknownFieldError` | The field name does not exist on the model (lookups are case-sensitive). Names the table searched and its available fields |
 | any filter | `FilterError` | The predicate itself is malformed |
 | PostgreSQL-only features on SQLite | `BackendCapabilityError` | e.g. `iunaccent_*`, JSONB containment, window `frame=`, `with_advisory_lock(...; on_missing_lock = :error)` |
 | anything else about query shape | `QueryBuildError` | The long-tail default |

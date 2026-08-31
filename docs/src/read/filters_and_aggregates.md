@@ -50,6 +50,15 @@ without inverting the logic by hand.
 | `@niunaccent_contains` | `immutable_unaccent(col) NOT ILIKE immutable_unaccent('%val%')` | Accent- & case-insensitive substring absent (PostgreSQL only) | `"surname__@niunaccent_contains" => "raikkonen"` |
 | `@niunaccent_exact` | `LOWER(immutable_unaccent(col)) <> LOWER(immutable_unaccent(val))` | Accent- & case-insensitive inequality (PostgreSQL only) | `"surname__@niunaccent_exact" => "raikkonen"` |
 
+!!! note "An empty `@in` list"
+    `"field__@in" => []` is defined, not an error: nothing is a member of the empty set, so the
+    predicate is always false and the query returns no rows. `@nin` over an empty list is the
+    mirror — everything is outside the empty set — so it matches every row.
+
+    Both engines agree on that result. Their SQL differs, as it already does for a non-empty list
+    (`IN (?, ?)` on SQLite against `= ANY($1)` on PostgreSQL): the empty case renders a constant
+    predicate rather than an empty `IN ()`, which is a syntax error in SQLite.
+
 !!! note "NULL semantics"
     `NOT LIKE`, `<>`, and `NOT BETWEEN` follow SQL three-valued logic: when the column is `NULL` the
     predicate is UNKNOWN, so the **row is excluded** — exactly like `@ne` and `@nin`. If you also want

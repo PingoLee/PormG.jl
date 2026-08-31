@@ -16,7 +16,8 @@ nested INSIDE an `instruc.cache` hit, so for `order_by("s")` the cache lookup (k
 `"parent__sku"`) missed, control fell through to `_get_select_query("s")`, and `"s"` was resolved as
 a physical column of the base model. Two different symptoms came out of the same line:
 
-  - a name that matches no column raises `UnknownFieldError: The field s not found in ao_child`;
+  - a name that matches no column raises `UnknownFieldError: the column s not found in ao_child` (the
+    wording changed with #446, which routed every unknown-name site through one funnel);
   - a name that DOES match one silently sorts the wrong column — `values("note" => "qty")` projects
     `qty` under the name `note`, and `order_by("note")` emitted `ORDER BY "Tb"."note"`, ordering by
     the untouched `note` column while the output column called `note` holds `qty`. No error, wrong

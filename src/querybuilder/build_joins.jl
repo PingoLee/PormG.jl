@@ -303,7 +303,12 @@ function _apply_many_to_many_branch(
     msg = reverse ? "many-to-many reverse field" : "many-to-many field"
     throw(QueryBuildError("Invalid field path: $(vector[1]) is a $(msg), you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
   end
-  last_field = size(vector, 1) == 2 ? foreign_model.fields[vector[2]] : nothing
+  # `get(..., nothing)` rather than a raw index (#446). An unknown terminal column used to die here
+  # with a bare `KeyError` naming an internal dict lookup. Falling through leaves `last_field`
+  # unset and lets `_solve_field` at the end of this function raise the typed `UnknownFieldError`
+  # that names the column, the model and its available fields — one message for every hop shape
+  # instead of a KeyError here and a good error three lines later.
+  last_field = size(vector, 1) == 2 ? get(foreign_model.fields, vector[2], nothing) : nothing
   tb_alias = _insert_many_to_many_joins(relation, instruct, parent_table, parent_alias, join_path, previus_how=previus_how)
   row_join = _row_join_for_alias(instruct.row_join, tb_alias)
   # #74: the related table reached through a many-to-many is the "many-side". Flag the (deduped)
@@ -524,7 +529,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     @pormg_debug false
 
     foreign_table_name = cte_model
-    last_field = cte_model.fields[vector[2]]
+    last_field = get(cte_model.fields, vector[2], nothing)
    
   elseif haskey(instruct.object.model.fields, first_column) && Models.is_many_to_many_field(instruct.object.model.fields[first_column])
     relation = Models.get_many_to_many_relation(instruct.object.model, first_column)
@@ -550,7 +555,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     first_model = first_target isa PormGModel ? first_target :
       _forward_join_model(first_target, foreing_table_module, instruct.object.model, first_column)
     row_join["b"] = Models.model_table_name(first_model)
-    size(vector, 1) == 2 && (last_field = first_model.fields[vector[2]])
+    size(vector, 1) == 2 && (last_field = get(first_model.fields, vector[2], nothing))
     foreign_table_name = first_model
     # @pormg_debug
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
@@ -579,7 +584,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     row_join["alias_a"] = instruct.alias
     join_field = reverse_model.fields[String(rel.fk_field)]
     row_join["how"] = _determine_join_type(join_field, second_fild_name= vector[2])
-    size(vector, 1) == 2 && (last_field = reverse_model.fields[vector[2]])
+    size(vector, 1) == 2 && (last_field = get(reverse_model.fields, vector[2], nothing))
     # The LOGICAL name goes straight into the table fallback, which is the only thing that ever
     # wanted it — before #343 it was assigned to `foreign_table_name` and then overwritten below.
     row_join["b"] = _reverse_join_table(reverse_model, String(rel.model_name), instruct.django)
@@ -615,7 +620,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         "\e[4m\e[31m\"$(vector[1])__$(rest)\"\e[0m path — that spelling now means the model's own " *
         "\e[4m\e[31m$(vector[1])\e[0m field, which does not exist here."))
     end
-    throw(UnknownFieldError("the column \e[4m\e[31m$(vector[1])\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m, that contains the fields: \e[4m\e[32m$(join(instruct.object.model.field_names, ", "))\e[0m and the related objects: \e[4m\e[32m$(join(keys(instruct.object.model.related_objects), ", "))\e[0m"))
+    # #446: through the shared funnel. This site built the same sentence by hand with UNSORTED field
+    # names and a slightly different tail, so a user saw one format when they typo'd the first path
+    # segment and another when they typo'd a later one — for the same mistake.
+    throw(_unknown_field(instruct.object.model, vector[1]))
   end
 
   if !m2m_inserted
@@ -682,7 +690,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       next_model = next_target isa PormGModel ? next_target :
         _forward_join_model(next_target, foreing_table_module, new_object, first_column)
       row_join["b"] = Models.model_table_name(next_model)
-      size(vector, 1) == 2 && (last_field = next_model.fields[vector[2]])
+      size(vector, 1) == 2 && (last_field = get(next_model.fields, vector[2], nothing))
       foreign_table_name = next_model
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias) # TODO chage by row_join and test the speed
       # Local FK column and referenced parent column both honor db_column (#50). When `new_object`
@@ -711,7 +719,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       row_join["alias_a"] = tb_alias
       join_field = reverse_model.fields[String(rel.fk_field)]
       row_join["how"] = _determine_join_type(join_field, previus_how=prev_how, second_fild_name= vector[2])
-      size(vector, 1) == 2 && (last_field = reverse_model.fields[vector[2]])
+      size(vector, 1) == 2 && (last_field = get(reverse_model.fields, vector[2], nothing))
       row_join["b"] = _reverse_join_table(reverse_model, String(rel.model_name), instruct.django)
 
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
@@ -758,7 +766,11 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
 
   # println("$(join(field, "__"))")
   # functions must be processed here
-  instruct.tab_field_cache["$(join(field, "__"))"] = last_field
+  # `tab_field_cache` is `Dict{String,PormGField}`, so a `nothing` here would raise a MethodError
+  # BEFORE `_solve_field` below could report the real problem — which is the whole point of letting
+  # the lookups above fall through. Guarding the write is what makes that fall-through reach the
+  # typed error. Nothing depends on the entry existing: every reader is `haskey`-gated.
+  last_field !== nothing && (instruct.tab_field_cache["$(join(field, "__"))"] = last_field)
   return string(quote_identifier(tb_alias, instruct.connection), ".", _solve_field(vector[end], foreing_table_module, foreign_table_name, instruct))
   
 end

@@ -82,6 +82,44 @@ const DOCERR_LAP_PG = let m = Model("docerr_lap_docerr_pg",
     m.connect_key = "docerr_pg"; m._module = Main; m
 end
 
+# #459 — the cascade depth ceiling. Unlike every other fixture in this file, this one needs a real
+# `set_models` registration: the guard fires inside `find_related_objects!`, which walks
+# `model.related_objects`, and that map is populated by reverse-accessor registration. Hand-built
+# `Model(...)` values with `connect_key` assigned — the pattern above — have none, so a cascade
+# cannot traverse them at all.
+#
+# A two-model cycle rather than a 51-link chain: it reaches the ceiling by the shortest route, and a
+# cycle is the shape the error message names first.
+#
+# It also needs a config key of its own, carrying `db_def_folder`. `set_models(mod, key)` resolves
+# `key` through the registered settings and falls back to READING A connection.yml FROM DISK when no
+# entry matches; the two mock settings above omit `db_def_folder`, so passing "docerr_pg" here sends
+# it looking for a file that does not exist and raises MissingConfigurationError.
+PormG.config["docerr_cycle"] = PormG.Configuration.Settings(
+    connections = DocErrMockPostgres(), change_data = true, db_def_folder = "docerr_cycle")
+
+# The forward reference is by NAME because Julia cannot mention `Docerr_cycle_b` before it exists.
+# `module` must be top level — Julia rejects it inside `@testset`, `if` or `for`.
+module DocErrCycleModels
+import PormG
+import PormG.Models
+
+Docerr_cycle_a = Models.Model("docerr_cycle_a",
+    id   = Models.IDField(),
+    code = Models.CharField(),
+    b    = Models.ForeignKey("Docerr_cycle_b", on_delete = "CASCADE",
+               related_name = "docerr_cycle_as", null = true),
+)
+
+Docerr_cycle_b = Models.Model("docerr_cycle_b",
+    id = Models.IDField(),
+    a  = Models.ForeignKey(Docerr_cycle_a, on_delete = "CASCADE",
+             related_name = "docerr_cycle_bs", null = true),
+)
+
+PormG.Models.set_models(@__MODULE__, "docerr_cycle")
+end
+
 # (docs claim this test pins, expected type, the call that must raise it).
 # Keep the doc reference exact — it is how a maintainer finds the sentence to update when a type
 # legitimately changes.
@@ -310,6 +348,18 @@ const DOCERR_CASES = [
         "write/delete.md — a filterless delete() needs allow_delete_all = true",
         UnsafeMutationError,
         () -> DOCERR_RESULT_PG.objects.delete(show_query = :dict),
+    ),
+    # #459 — one entry, two documents. `write/delete.md`'s "A cascade descends at most 50 levels"
+    # warning and the `delete` docstring's "Beyond that it raises `QueryBuildError`" name the SAME
+    # throw site, so unlike the five guards above — which are five independent checks — splitting
+    # this in two would only run one closure twice. Both references are in the label so either
+    # sentence is findable from here.
+    (
+        "write/delete.md + src/querybuilder/deletion.jl delete docstring — " *
+            "a cascade past 50 levels raises",
+        QueryBuildError,
+        () -> DocErrCycleModels.Docerr_cycle_a.objects.filter("code" => "DELME").
+            delete(show_query = :dict),
     ),
     (
         "read/index.md — `.page(...)` takes one or two Integers; anything else raises",

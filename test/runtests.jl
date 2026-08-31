@@ -63,6 +63,7 @@ end
     @testset "Nested-render Parameter Alignment (#432)" include("unit/test_parameter_alignment_nested.jl")
     @testset "Projection Name Collapse and Refusal (#441)" include("unit/test_projection_names.jl")
     @testset "Multi-path Cascade Delete Alignment (#452)" include("unit/test_delete_multipath_alignment.jl")
+    @testset "Deletion Collector Traversal (#459)" include("unit/test_delete_collector_traversal.jl")
     @testset "CTE Ergonomics F() Reference (#44)" include("unit/test_cte_ergonomics.jl")
     @testset "CTE Columns Are Projection Aliases (#376)" include("unit/test_cte_db_column.jl")
     @testset "CTE Reference Namespace (#444/#431/#434)" include("unit/test_cte_reference.jl")

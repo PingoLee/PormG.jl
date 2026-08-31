@@ -133,7 +133,13 @@ const ALLOWED_UNTYPED_BARE_ERROR = Dict(
     # Both keeps are genuinely internal: callers reach `delete_objects` only through
     # `run_deletions`, which iterates non-empty collections, and `_affected_row_count` only after the
     # `show_query !== :execute` return, where `conn` is the transaction's pinned connection.
-    "src/querybuilder/deletion.jl"      => 2,  # no keys / no conn to count on — internal invariants
+    #
+    # #459 took it from 2 to 3, and the third is the same invariant as the first, on the other
+    # renderer: `update_field` now ORs one WHERE fragment per cascade path, so an empty key vector
+    # would emit `WHERE` with nothing after it exactly as `delete_objects` would. Internal for the
+    # same reason — the only writer of those vectors, `_push_field_update!`, creates each one and
+    # pushes into it in the same expression, so an empty one cannot reach `run_deletions`.
+    "src/querybuilder/deletion.jl"      => 3,  # no keys (x2) / no conn to count on — internal invariants
     # #433 shrank this from 2 to 1. The "unmaterialized CTE" site was NOT an internal invariant:
     # `cte_dict["model"]` is written only by `build_cte_clause`, so its absence means the statement
     # emits no WITH clause — reachable from `update()` on a query that references a CTE. It is now a

@@ -172,6 +172,53 @@ function _reset_do_nothing_delete_scratch_schema!()
     return nothing
 end
 
+# ── Schema helpers: multipath_set_null_scratch ───────────────────────────────
+
+function _drop_multipath_set_null_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"mp_leaf_scratch\";")
+    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"mp_mid_scratch\";")
+    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"mp_root_scratch\";")
+    return nothing
+end
+
+function _reset_multipath_set_null_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    _drop_multipath_set_null_scratch_schema!()
+
+    id_type = _scratch_id_type(pool)
+
+    PormG.ConnectionPool.fetch(pool, """
+    CREATE TABLE "mp_root_scratch" (
+        "id" $id_type PRIMARY KEY,
+        "name" TEXT NOT NULL
+    );
+    """)
+
+    # Two nullable foreign keys to the SAME parent — the shape that makes `mp_mid_scratch` reachable
+    # by two cascade paths, so its SET_NULL child is resolved twice.
+    PormG.ConnectionPool.fetch(pool, """
+    CREATE TABLE "mp_mid_scratch" (
+        "id" $id_type PRIMARY KEY,
+        "owner" INTEGER REFERENCES "mp_root_scratch" ("id"),
+        "backup" INTEGER REFERENCES "mp_root_scratch" ("id"),
+        "label" TEXT NOT NULL
+    );
+    """)
+
+    # The constraint is what makes the pre-fix failure loud rather than silent: a leaf the collector
+    # forgot to null still references an `mp_mid_scratch` row the same delete then removes.
+    PormG.ConnectionPool.fetch(pool, """
+    CREATE TABLE "mp_leaf_scratch" (
+        "id" $id_type PRIMARY KEY,
+        "mid" INTEGER REFERENCES "mp_mid_scratch" ("id"),
+        "label" TEXT NOT NULL
+    );
+    """)
+
+    return nothing
+end
+
 # ── Schema helpers: set_null_guard_scratch ────────────────────────────────────
 
 function _drop_set_null_guard_scratch_schema!()
@@ -749,6 +796,112 @@ end
             @test ismissing(survivor_row[:test_result_set_null]) || isnothing(survivor_row[:test_result_set_null])
         finally
             _cleanup_scratch_delete_graph!(scratch_result_id; deletion_ids=[survivor_id])
+        end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SET_NULL through a MULTI-PATH parent: every path's rows must be nullified.
+    #
+    # `mp_mid_scratch` reaches `mp_root_scratch` by two CASCADE foreign keys, so the collector
+    # resolves its SET_NULL child `mp_leaf_scratch` twice, with a different scoping query each time.
+    # `collector.field_updates` used to ASSIGN into a per-model slot where `collector.objects`
+    # appends, so the second path silently overwrote the first and the emitted UPDATE covered one of
+    # them (#459). Which one survived was `related_objects` Dict order — the same arbitrariness as
+    # the `keys[1][:key]` defect #452 removed from `delete_objects`.
+    #
+    # Run against a live database rather than only in unit coverage because the fix emits a statement
+    # shape that has never executed: an UPDATE whose WHERE is two ORed `IN (SELECT …)` fragments,
+    # each carrying its own bound value. #452's lesson is exactly that a statement which renders
+    # cleanly can still be refused by the driver.
+    #
+    # The assertions name BOTH leaves explicitly instead of counting nulled rows. Pre-fix the
+    # forgotten leaf still references an `mp_mid_scratch` row this delete removes, so the run raises
+    # on the foreign key rather than returning a wrong count — a count assertion would never be
+    # reached, and would not say which path was dropped if it were.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "Delete with SET_NULL through a multi-path parent (#459)" begin
+        root_id        = 934001
+        other_root_id  = 934002   # never deleted — anchors the control rows
+        owner_mid_id   = 934101   # reaches root through "owner"
+        backup_mid_id  = 934102   # reaches root through "backup"
+        control_mid_id = 934103   # hangs off the OTHER root
+        owner_leaf_id  = 934201
+        backup_leaf_id = 934202
+        control_leaf_id = 934203
+
+        _reset_multipath_set_null_scratch_schema!()
+
+        try
+            MultipathSetNullM.Mp_root_scratch.objects.create("id" => root_id, "name" => "mp-root")
+            MultipathSetNullM.Mp_root_scratch.objects.create("id" => other_root_id, "name" => "mp-other-root")
+
+            # One mid row per cascade path. Both must be collected, and each carries a leaf.
+            MultipathSetNullM.Mp_mid_scratch.objects.create(
+                "id" => owner_mid_id, "owner" => root_id, "label" => "via-owner")
+            MultipathSetNullM.Mp_mid_scratch.objects.create(
+                "id" => backup_mid_id, "backup" => root_id, "label" => "via-backup")
+            MultipathSetNullM.Mp_mid_scratch.objects.create(
+                "id" => control_mid_id, "owner" => other_root_id, "label" => "control")
+
+            MultipathSetNullM.Mp_leaf_scratch.objects.create(
+                "id" => owner_leaf_id, "mid" => owner_mid_id, "label" => "leaf-of-owner")
+            MultipathSetNullM.Mp_leaf_scratch.objects.create(
+                "id" => backup_leaf_id, "mid" => backup_mid_id, "label" => "leaf-of-backup")
+            MultipathSetNullM.Mp_leaf_scratch.objects.create(
+                "id" => control_leaf_id, "mid" => control_mid_id, "label" => "leaf-of-control")
+
+            # The plan really is multi-path — asserted, so a fixture change cannot silently degrade
+            # this into the single-path case the neighbouring testsets already cover.
+            inspect_q = MultipathSetNullM.Mp_root_scratch.objects
+            inspect_q.filter("id" => root_id)
+            inspection = inspect_q.delete(show_query = :dict)
+            _sn_idx = findfirst(s -> s[:operation] == :update && s[:model] == "mp_leaf_scratch",
+                                inspection)
+            @assert _sn_idx !== nothing "no mp_leaf_scratch update step; got $([s[:model] for s in inspection])"
+            update_step = inspection[_sn_idx]
+            # Two ORed TOP-LEVEL fragments, one per path to `mp_mid_scratch`. Anchored on WHERE/OR
+            # for the reason spelled out in the #452 testset above: every nested arm is written
+            # `"Tb"."id"`, so only the top-level fragments match the unqualified column.
+            _sn_fragments = collect(eachmatch(r"(?:WHERE|OR)\s+\"\w+\" IN \(SELECT",
+                                              update_step[:sql_text]))
+            @test length(_sn_fragments) == 2
+            # Both paths are present, not the same path twice.
+            @test occursin("\"owner\" IN", update_step[:sql_text])
+            @test occursin("\"backup\" IN", update_step[:sql_text])
+            # #452's invariant on a statement shape that did not exist before this fix.
+            if PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
+                @test length(Set(m.match for m in eachmatch(r"\$\d+", update_step[:sql_text]))) ==
+                      length(update_step[:parameters])
+            else
+                @test count(==('?'), update_step[:sql_text]) == length(update_step[:parameters])
+            end
+
+            delete_q = MultipathSetNullM.Mp_root_scratch.objects
+            delete_q.filter("id" => root_id)
+            total_deleted, deleted_counter = delete_q.delete()
+
+            @test deleted_counter["mp_root_scratch"] == 1
+            @test deleted_counter["mp_mid_scratch"] == 2
+            @test total_deleted == 3
+
+            # Both mid rows are gone …
+            @test MultipathSetNullM.Mp_mid_scratch.objects.filter(
+                "id__@in" => [owner_mid_id, backup_mid_id]).count() == 0
+
+            # … and BOTH leaves survived with a nulled FK. The `backup` leaf is the one the old code
+            # dropped; asserting it by id is what makes this test fail for the right reason.
+            for leaf_id in (owner_leaf_id, backup_leaf_id)
+                row = MultipathSetNullM.Mp_leaf_scratch.objects.filter("id" => leaf_id).get()
+                @test row !== nothing
+                @test ismissing(row[:mid]) || isnothing(row[:mid])
+            end
+
+            # The control graph under the other root is untouched.
+            @test MultipathSetNullM.Mp_mid_scratch.objects.filter("id" => control_mid_id).count() == 1
+            control_leaf = MultipathSetNullM.Mp_leaf_scratch.objects.filter("id" => control_leaf_id).get()
+            @test control_leaf[:mid] == control_mid_id
+        finally
+            _drop_multipath_set_null_scratch_schema!()
         end
     end
 

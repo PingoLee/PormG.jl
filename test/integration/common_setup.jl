@@ -84,6 +84,130 @@ let s = PormG.config[PORMG_DB_FOLDER]
     end
 end
 
+# ── Suite mutual exclusion: one integration run at a time (PORMG_TEST_LOCK) ────────────────────
+# The suite is destructive and assumes it is the only writer — it bootstraps schema, clears tables
+# and reseeds fixtures. Two runs interleaving those phases on `pormg_teste` produce failures that
+# read as real regressions; that is the most expensive diagnostic tax this repo has documented
+# (pormg-test-troubleshooting → *False regression from two sessions/worktrees sharing one live
+# database*). A PostgreSQL session-level advisory lock makes the second run QUEUE instead.
+#
+# It lives here, not in runtests.jl, on purpose: all 40 integration entry points include this file
+# (`if !isdefined(Main, :PormG) …`), and a single `test_*.jl` run is the normal target per
+# AGENTS.md — exactly the case a runtests.jl-only guard would leave unguarded.
+#
+# Why a dedicated pool instead of `PormG.with_advisory_lock`: that helper is scoped — it takes a
+# closure and releases on exit — and a prelude cannot wrap the includes that come after it. The
+# lock is pinned to its own 1-slot pool held for the life of the PROCESS instead. It must not ride
+# on the suite pool, which hands out a different connection per `fetch`, because a session-level
+# lock exists only on the connection that took it.
+#
+# PostgreSQL releases session-level advisory locks when the connection drops, so a normal exit, a
+# Ctrl-C and a hard crash all release it: there is no stale-lock state to reap, ever. That
+# self-healing is the reason to prefer this over a lock file or a lock table.
+#
+# The lock also covers the disposable migration database transitively: a queued session is stopped
+# here, before it can reach `db_test_migration_pg` and reset it under the run that is in progress.
+#
+#   PORMG_TEST_LOCK=0            skip the lock (concurrent runs will interleave; you own the result)
+#   PORMG_TEST_LOCK_WAIT=<secs>  how long to queue before giving up (default 900)
+#
+# SQLite is exempt: `f1.sqlite` is per-worktree (scripts/worktree_setup.sh), and
+# `with_advisory_lock` is a documented no-op on `PormGSQLite` anyway. Advisory locks are scoped per
+# database (verified on this server), so the key needs no database qualifier; `test_advisorylock.jl`
+# keys are UUID-suffixed and cannot collide with it.
+const _SUITE_LOCK_KEY  = "pormg::integration-suite"
+# Process-lifetime by design: the lock lives on this pool's single connection, so anything that
+# closed or dropped it would silently hand the database to a second run mid-suite.
+const _SUITE_LOCK_POOL = Ref{Any}(nothing)
+
+"""
+    release_suite_lock!()
+
+Drop this session's integration-suite lock early. Only needed in an INTERACTIVE session
+(`julia -i … common_setup.jl`), where the process outlives the run and would otherwise hold the
+database until you quit. A batch run needs nothing — process exit releases it.
+"""
+function release_suite_lock!()
+  p = _SUITE_LOCK_POOL[]
+  p === nothing && return nothing
+  try; PormG.Configuration.close_pool!(p); catch; end   # closing the connection IS the release
+  _SUITE_LOCK_POOL[] = nothing
+  return nothing
+end
+
+if get(ENV, "PORMG_TEST_LOCK", "1") ∉ ("0", "false", "off") &&
+   PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
+  let s = PormG.config[PORMG_DB_FOLDER]
+    dbname = string(s.db_config_settings["database"])
+    wait_s = parse(Float64, get(ENV, "PORMG_TEST_LOCK_WAIT", "900"))
+
+    cfg = copy(s.db_config_settings)
+    cfg["pool_size"] = 1
+    delete!(cfg, "url")   # a `url:` entry would win over the discrete params
+    lock_settings = PormG.Configuration.Settings(app_env = s.app_env, db_config_settings = cfg)
+    PormG.Configuration._build_connection_pool!(lock_settings, "pormg_test::suite_lock")
+    lock_pool = lock_settings.connections
+    _SUITE_LOCK_POOL[] = lock_pool
+
+    # Label the connection so a WAITING session can say who holds the lock. `application_name` is
+    # not in VALID_CONNECTION_KEYS, so it is set on the live connection rather than via the DSN.
+    # `set_config` rather than `SET`: the tag embeds PORMG_DB_FOLDER (an env var), and `SET` cannot
+    # bind its value — this keeps the house rule that nothing outside the source is interpolated
+    # into SQL. `is_local = false` makes it session-scoped, matching the lock's lifetime.
+    tag = "pormg-suite:$(PORMG_DB_FOLDER):pid$(getpid())"
+    try
+      tq = PormG.QueryBuilder.PgParameterizedQuery("", Any[], 0)
+      tph = PormG.QueryBuilder.add_parameter!(tq, tag)
+      PormG.ConnectionPool.fetch(lock_pool,
+        "SELECT set_config('application_name', $(tph), false);"; params=tq)
+    catch
+    end
+
+    # Parameterized, matching `AdvisoryLock.ADVISORY_KEY_EXPR` so both derive the same bigint from
+    # a key string. Built once and reused — `fetch` only reads the bound values.
+    kq  = PormG.QueryBuilder.PgParameterizedQuery("", Any[], 0)
+    kph = PormG.QueryBuilder.add_parameter!(kq, _SUITE_LOCK_KEY)
+    key_expr = "(( 'x' || substr(md5($(kph)), 1, 16))::bit(64))::bigint"
+
+    # Poll rather than block. `pg_advisory_lock` would wait server-side with no progress output and
+    # no way to name the holder — a queued session would be indistinguishable from a hung one. Same
+    # reason `with_advisory_lock` offers `strategy=:poll`.
+    holders() = try
+      who = DataFrame(PormG.ConnectionPool.fetch(lock_pool, """
+        SELECT string_agg(DISTINCT a.application_name, ', ') AS who
+        FROM pg_locks l JOIN pg_stat_activity a USING (pid)
+        WHERE l.locktype = 'advisory' AND l.granted
+          AND a.pid <> pg_backend_pid()
+          AND a.application_name LIKE 'pormg-suite:%';""")).who[1]
+      who === missing ? "unknown (another role's backend is not visible to this user)" : who
+    catch
+      "unknown (pg_stat_activity is restricted for this role)"
+    end
+
+    deadline    = time() + wait_s
+    last_report = 0.0
+    while true
+      got = DataFrame(PormG.ConnectionPool.fetch(lock_pool,
+              "SELECT pg_try_advisory_lock($(key_expr)) AS ok;"; params=kq)).ok[1]
+      got && break
+
+      if time() > deadline
+        release_suite_lock!()
+        error("Timed out after $(wait_s)s waiting for the integration-suite lock on database " *
+              "\"$(dbname)\" — another run is holding it ($(holders())). Wait for it to finish, " *
+              "raise PORMG_TEST_LOCK_WAIT, or set PORMG_TEST_LOCK=0 to run anyway (destructive: " *
+              "the two runs will interleave schema and fixture phases).")
+      end
+
+      if time() - last_report > 30
+        @info "Queued — another integration run holds database \"$(dbname)\"" holder=holders() waited_s=round(Int, wait_s - (deadline - time())) giving_up_in_s=round(Int, deadline - time())
+        last_report = time()
+      end
+      sleep(2)
+    end
+  end
+end
+
 # Load the models and expose the alias `M`
 # Using the new @import_models macro which handles registration automatically
 if PORMG_DB_FOLDER == "db_sl"
@@ -153,3 +277,9 @@ end
 # julia -t auto --project=. test/integration/runtests.jl
 # $env:PORMG_DB="db_sl"; julia -t 1 --project=. test/integration/runtests.jl
 # 2>&1 | Tee-Object -FilePath "test_sf_out.txt"
+#
+# Concurrent sessions queue on the per-database advisory lock above — nothing to set, and the
+# waiting session logs who holds it every 30s.
+#   $env:PORMG_TEST_LOCK_WAIT="1800"   # queue longer than the 900s default
+#   $env:PORMG_TEST_LOCK="0"           # opt out (destructive: the runs will interleave)
+#   release_suite_lock!()              # interactive sessions only, to free the DB before quitting

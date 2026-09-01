@@ -44,6 +44,8 @@ Environment variables that change test behavior:
 | `PORMG_DB` | Selects the integration DB folder: `db_2` (PostgreSQL, default) or `db_sl` (SQLite) |
 | `PORMG_INTEGRATION_TESTS` | `true` makes `test/runtests.jl` also run the integration suite |
 | `PORMG_TEST_POOL_SIZE` | Pre-sizes the PostgreSQL pool for the run (default `20`); see #37 below |
+| `PORMG_TEST_LOCK` | `0` opts out of the suite lock — concurrent runs will then interleave and corrupt each other |
+| `PORMG_TEST_LOCK_WAIT` | Seconds to queue behind another run before failing (default `900`) |
 | `PORMG_INFILTRATOR` | Rewires `@pormg_debug` to a live `Infiltrator.@infiltrate` breakpoint (non-interactive runs ignore this) |
 
 Threading: PostgreSQL integration tests are meant to run under `julia -t auto`. **SQLite does not
@@ -51,9 +53,10 @@ tolerate `-t auto` well** — run `db_sl` integration tests with `-t 1`
 (`test/integration/common_setup.jl` documents this directly above the connection setup).
 
 **Every integration command below needs the user's explicit permission, every time** — `db_2` is one
-shared PostgreSQL server, and a second session mid-issue on it is itself a documented cause of
-phantom failures (see *False regression from two sessions/worktrees* below). Diagnosis starts at the
-narrowest failing file, not at these: reach for a full suite only once *Diagnostic workflow* step 1
+shared PostgreSQL server and a full suite is minutes of load on it. Concurrent runs no longer
+*corrupt* each other (the suite lock queues them — see *False regression from two
+sessions/worktrees* below), but queuing behind someone else's run is still their time you are
+spending. Diagnosis starts at the narrowest failing file, not at these: reach for a full suite only once *Diagnostic workflow* step 1
 has isolated the failure, or when the rung-5 table in
 [`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md) → *Verify* says the diff owes one.
 
@@ -143,9 +146,67 @@ PostgreSQL integration suite.
 **Cause:** both processes point at the same live `db_2` database at the same time; the suite isn't
 designed to be safe under concurrent external writers.
 
-**Mitigation:** rule this out first — rerun the failing test alone with nothing else touching the
-same database — before treating it as a real bug. If you're routinely running parallel sessions,
-point one at a separate database/schema instead of debugging phantom failures.
+**Mitigation — automatic since the suite lock landed; there is nothing to remember.**
+`common_setup.jl` takes a PostgreSQL **session-level advisory lock** on the selected database, so a
+second run *queues* rather than interleaving its schema and fixture phases into the first. While it
+waits it logs the holder every 30s (`pormg-suite:<folder>:pid<N>`), so a queued session is visibly
+queued rather than apparently hung.
+
+Four properties worth knowing:
+
+- **It covers narrow runs, not just `runtests.jl`.** The lock is in `common_setup.jl` because all 40
+  integration entry points include it, and a single `test_*.jl` is the normal target per AGENTS.md —
+  a `runtests.jl`-only guard would leave the common case unguarded.
+- **It self-heals.** PostgreSQL drops session-level advisory locks when the connection closes, so a
+  normal exit, a Ctrl-C and a hard crash all release it. There is no stale lock to reap — unlike a
+  lock file or a lock table. In an *interactive* `julia -i` session the process outlives the run and
+  holds the database until you quit; call `release_suite_lock!()` to drop it early.
+- **It covers the disposable migration DB transitively.** A queued session is stopped before it can
+  reach `db_test_migration_pg` and reset it under the run in progress.
+- **It is advisory, so it only binds participants that take it.** A manual `psql`, a scratch script,
+  `steps_to_migrations.jl` or a downstream app still writes underneath you. The lock narrows this
+  failure class sharply; it does not close it — so when a failure still looks phantom, rule this out
+  first by rerunning the failing test alone with nothing else touching the database.
+
+Knobs: `PORMG_TEST_LOCK_WAIT=<secs>` bounds the queue (default `900`; on timeout it fails with the
+holder named). `PORMG_TEST_LOCK=0` opts out entirely — destructive by definition, you own the result.
+SQLite is exempt: `f1.sqlite` is per-worktree, and `with_advisory_lock` is a documented no-op on
+`PormGSQLite`.
+
+### If the queue ever proves too slow: isolate on the database NAME, never a new db folder
+
+The fallback to the queue is giving a session its own database (an empty `pormg_teste_s2` already
+exists on the server for this). Three things make that cheap or expensive depending on whether you
+know them — all of them cost real investigation once already:
+
+- **The isolation axis is the database name, never the config folder.** `Models.set_models` derives
+  a model's `connect_key` by matching `basename(v.db_def_folder) == basename(path)` against the
+  loaded config, and `@import_models` passes the models file's *directory*. So a sibling `db_3/`
+  folder importing `db_2/models.jl` binds back to key `"db_2"` and **silently queries the other
+  session's database** — no error. It is also what would force a duplicated models file per folder.
+  Keep the folder at `db_2`; change only `db_config_settings["database"]`.
+- **Editing `db_config_settings` is inert until the pool is rebuilt**, because
+  `_build_connection_pool!` freezes the DSN (same reason `hydrate_postgres_settings!` rebuilds), and
+  a surviving `url:` key wins over the discrete params — `delete!(cfg, "url")` or the rename is
+  ignored.
+- **Two databases move together, and the rename must be idempotent.** `pormg_migration_test` is
+  shared exactly like `pormg_teste`, and the edge suite DROPs it at teardown;
+  `hydrate_postgres_settings!` runs twice per bootstrap, so a naive append yields
+  `pormg_migration_test_s2_s2`.
+
+`ensure_postgres_database!` (in `common_migration_setup.jl`) already does the auto-create, and
+advisory locks are **per database** (verified on this server), so separate databases get separate
+locks for free. Budget first: `max_connections` is server-wide (measured `100`, ~1 client backend at
+idle) while `PORMG_TEST_POOL_SIZE` (default `20`, ×10 expansion) is per session.
+
+Decide by measurement, not feel: the queue is the wrong tool once you are routinely waiting minutes
+(i.e. running full suites concurrently rather than narrow slices), or hitting `PORMG_TEST_LOCK_WAIT`.
+
+Implementation note: the lock cannot use `PormG.with_advisory_lock` — that helper is scoped (it
+takes a closure and releases on exit) and a prelude cannot wrap the includes that follow it. It is
+pinned to its own 1-slot pool instead, which must not be the suite pool: that one hands out a
+different connection per `fetch`, and a session-level lock exists only on the connection that took
+it.
 
 ## Diagnostic workflow
 
@@ -155,7 +216,8 @@ point one at a separate database/schema instead of debugging phantom failures.
 3. Check thread count and pool size if it's a PostgreSQL integration failure — rerun with
    `-t 1` and a larger `PORMG_TEST_POOL_SIZE` to see if it's contention-shaped.
 4. Check whether anything else (another session, another worktree) is running integration tests
-   against the same live database right now.
+   against the same live database right now — something that did NOT take the suite lock (a manual
+   `psql`, a scratch script, a downstream app), since a competing *suite* run would have queued.
 5. Rerun the same narrow test 2-3 times — deterministic failure vs. intermittent failure points to
    different classes above.
 6. Only once the failure survives all of the above in isolation, treat it as a real regression and

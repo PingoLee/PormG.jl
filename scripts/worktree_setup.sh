@@ -77,3 +77,9 @@ julia --project="$WT" -e 'import Pkg; Pkg.instantiate()'
 
 echo "done — worktree ready for unit + SQLite(db_sl) tests."
 echo "  (docs only) julia --project=docs -e 'import Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'"
+echo
+echo "PostgreSQL (db_2) is a SHARED live database — the copied connection.yml points every worktree"
+echo "at the same pormg_teste. You do not have to coordinate that by hand: the suite takes an"
+echo "advisory lock on it, so a run started here QUEUES behind another session instead of"
+echo "corrupting it (PORMG_TEST_LOCK_WAIT bounds the wait, default 900s). SQLite needs nothing —"
+echo "f1.sqlite is copied per worktree above."

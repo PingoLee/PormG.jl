@@ -601,18 +601,122 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   # describing the state after relocation rather than the cause — and the accurate message never
   # ran. Two test files were padding their cases with a second predicate to route around exactly
   # that. Diagnosing before emitting makes the cause win regardless of ordering.
+  #
+  # #447 extended this loop to the KEYED half of the same collision rather than adding a second
+  # guard beside it. Both marks come from the same two arms of `_build_row_join` (`build_joins.jl`
+  # :472 / :515 set `"cte"`; only the unkeyed arm adds `"cross"`), and `row_join["b"]` is the CTE
+  # NAME on both — so one loop can diagnose both, and a future third CTE shape inherits the check.
+  #
+  # TWO distinct diagnoses, and the order below is load-bearing:
+  #
+  #   1. RELOCATION onto a CROSS entry — a predicate naming the CTE's alias was moved there by
+  #      Phase 1b without any name collision. CROSS-only, needs `on_clause_extras`, and keeps its
+  #      original #424 message. Checked FIRST **within an entry**, so a collision that also produced
+  #      extras reports the dropped predicate, which is the more specific story.
+  #
+  #      That precedence is per-entry only, and the distinction is not pedantic: with TWO colliding
+  #      CTEs the loop reports whichever comes first in `row_join`, so swapping the order the two
+  #      are REFERENCED swaps which message the user sees (measured). Both diagnoses are correct and
+  #      both remedies are "rename", so this is diagnosis quality rather than correctness — but do
+  #      not read the ordering as a global "relocation always wins".
+  #   2. NAME COLLISION — a `custom_join` key equal to the CTE name. Applies to BOTH kinds and does
+  #      NOT depend on extras: a `cjoin` with empty filters supplies none, yet still loses its whole
+  #      join. Measured on an unkeyed CTE: `CROSS JOIN "parent" AS "R1_1"` emitted and the cjoin's
+  #      own `JOIN "cj_parent"` silently absent, with only the generic #44 Cartesian warning to show
+  #      for it. Gating this on extras — as a first draft did — left that route unrefused while the
+  #      docs claimed otherwise.
+  #
+  # What the collision costs differs by kind, so the message says which:
+  #
+  #   CROSS  — the entry has no ON clause, so predicates that reach it are DROPPED.
+  #   KEYED  — the entry HAS one, so predicates are merged into it and the colliding entry's own
+  #            join is what disappears, leaving the statement naming a relation it never declares.
+  #
+  # Note this fires only for a CTE that is actually JOINED. Since #444 a CTE is joined when it is
+  # REFERENCED (`CTE(name, col)`), so a declared-but-unreferenced CTE has no `row_join` entry and no
+  # collision to have — its name is free. Say "joined", not "declared", when documenting this.
   for (idx, value) in enumerate(instruc.row_join)
-    get(value, "cross", nothing) === nothing && continue
-    haskey(on_clause_extras, idx) && throw(QueryBuildError(
-      "An ON predicate resolved onto \e[4m\e[31m$(value["alias_b"])\e[0m, the CROSS-joined CTE " *
-      "\e[4m\e[31m$(value["b"])\e[0m (a \e[4m\e[32m.with(...)\e[0m declared without " *
-      "\e[4m\e[32mjoin_field\e[0m). A CROSS JOIN has no ON clause to carry that predicate, so it " *
-      "would be dropped and the join would match every row.\n  A CROSS-joined CTE picks up an ON " *
-      "predicate when its NAME collides with a join key — a \e[4m\e[32mcjoin\e[0m path, a " *
-      "\e[4m\e[32mcjoin_on\e[0m alias, or an \e[4m\e[32mon()\e[0m path — or when a predicate " *
-      "naming its alias is relocated onto it.\n  Rename the CTE so it collides with nothing, give " *
-      "it a \e[4m\e[32mjoin_field\e[0m so it emits a real ON clause, or move the predicate to " *
-      "\e[4m\e[32m.filter(...)\e[0m (#44)."))
+    get(value, "cte", nothing) === nothing && continue
+    is_cross = get(value, "cross", nothing) !== nothing
+
+    if is_cross
+      haskey(on_clause_extras, idx) && throw(QueryBuildError(
+        "An ON predicate resolved onto \e[4m\e[31m$(value["alias_b"])\e[0m, the CROSS-joined CTE " *
+        "\e[4m\e[31m$(value["b"])\e[0m (a \e[4m\e[32m.with(...)\e[0m declared without " *
+        "\e[4m\e[32mjoin_field\e[0m). A CROSS JOIN has no ON clause to carry that predicate, so it " *
+        "would be dropped and the join would match every row.\n  A CROSS-joined CTE picks up an ON " *
+        "predicate when its NAME collides with a join key — a \e[4m\e[32mcjoin\e[0m path, a " *
+        "\e[4m\e[32mcjoin_on\e[0m alias, or an \e[4m\e[32mon()\e[0m path — or when a predicate " *
+        "naming its alias is relocated onto it.\n  Rename the CTE so it collides with nothing, or " *
+        "move the predicate to \e[4m\e[32m.filter(...)\e[0m (#44). Giving the CTE a " *
+        "\e[4m\e[32mjoin_field\e[0m does NOT resolve a name collision — it only moves it to the " *
+        "keyed case below, which is refused too (#447)."))
+    end
+
+    # #447 — ANY `custom_join` key equal to the CTE's name, with no test of what kind of entry it
+    # is and no dependence on `on_clause_extras`. `custom_join` is keyed by a `cjoin` path, a
+    # `cjoin_on` alias, or an `on()` path, and every one of them reaches this CTE's `row_join`
+    # through the same keyed lookups (`_get_join_filters`, `_get_join_type_override`), so the CTE's
+    # join silently inherits that entry's predicates and join type.
+    #
+    # A first draft carved out `on()`, reasoning that it only ADDS conditions to a join someone else
+    # materialized and so has no table of its own to lose. That is false, and measuring it is the
+    # only reason it is not still in the code. `.with("parent" => …, join_field = …,
+    # join_type = "INNER")` plus `.on("parent", "sku" => "S")` renders:
+    #
+    #   LEFT JOIN "parent"    AS "R1_1" ON "R1"."parent" = "R1_1"."id" AND "R1_1"."sku" = $1
+    #   LEFT JOIN "rv_parent" AS "R1_2" ON "R1"."parent" = "R1_2"."id" AND "R1_1"."sku" = $2
+    #
+    # — the declared INNER silently downgraded to LEFT, a SECOND join materialized (via
+    # `_prefix_join_filter` rewriting `"sku"` to `"parent__sku"`, which `_build_row_join` then
+    # resolves during Phase 1, bypassing both materialization loops below), that join's ON
+    # correlating against the CTE's alias, and the value bound twice.
+    #
+    # So the rule is the collision itself, not the shape of what collided. That also keeps this
+    # branch honest with its own message, which talks about a name collision rather than about which
+    # method the caller used — the same discipline the CROSS branch above states, having had its
+    # call-shape enumeration "written twice and wrong twice".
+    if haskey(instruc.object.custom_join, value["b"])
+      cte_kind = is_cross ?
+        "a \e[4m\e[32m.with(...)\e[0m declared WITHOUT \e[4m\e[32mjoin_field\e[0m, so CROSS-joined" :
+        "a \e[4m\e[32m.with(...)\e[0m declared WITH a \e[4m\e[32mjoin_field\e[0m"
+      # The consequence text claims ONLY what is true for every reachable shape, on purpose, and
+      # the history is the argument: three consecutive drafts asserted per-shape consequences and
+      # each shipped at least one measured-false clause, because the outcome varies along THREE
+      # axes — the CTE's kind (`is_cross`), whether the colliding entry owns a table (`cjoin`/
+      # `cjoin_on` vs `on()`), and whether it carries predicates that name the alias. First-order
+      # summary of what the review measured, cell by cell:
+      #
+      #                 | keyed CTE                            | CROSS CTE
+      #   cjoin/cjoin_on| table lost; alias-naming cjoin_on    | table lost -> valid SQL, silent
+      #                 | predicates -> INVALID SQL, DB errs;  |
+      #                 | other predicate forms -> valid SQL,  |
+      #                 | silent                               |
+      #   on()          | join type stolen (explicit, or       | inert for the CTE (a projected FK
+      #                 | on()'s silent LEFT default); with    | path may still take the type,
+      #                 | predicates, also a 2nd mis-          | correctly)
+      #                 | correlated join -> valid SQL, silent |
+      #
+      # ONE sub-shape is loud; everything else is silent wrong rows. That is why the message must
+      # never imply the database will catch this, and why it no longer diagnoses per shape: the
+      # remedy is "rename" regardless, and a diagnosis that is wrong for the reader's shape is
+      # worse than none. If you are tempted to reintroduce per-shape clauses, measure every cell of
+      # the table above first — including the predicate-less and default-join-type variants.
+      remedy_note = is_cross ?
+        ("Giving the CTE a \e[4m\e[32mjoin_field\e[0m does not help — that is the same collision " *
+         "against a keyed CTE, refused as well") :
+        ("Removing the CTE's \e[4m\e[32mjoin_field\e[0m does not help — that is the same collision " *
+         "against a CROSS-joined CTE, refused as well (#424)")
+      throw(QueryBuildError(
+        "The join key \e[4m\e[31m$(value["b"])\e[0m collides with the name of a CTE joined by " *
+        "this query ($(cte_kind)). Both are relation aliases in the same statement and the CTE's " *
+        "join claims the name first, so what you declared under " *
+        "\e[4m\e[31m$(value["b"])\e[0m cannot be relied on to take effect as written — usually with no error " *
+        "at all: in most of these shapes the SQL stays valid and silently returns rows other than " *
+        "the ones you asked for. A \e[4m\e[32mcjoin\e[0m path, a \e[4m\e[32mcjoin_on\e[0m alias " *
+        "and an \e[4m\e[32mon()\e[0m path are all keys into the same map, so any of the three " *
+        "collides (#447).\n  Rename one of the two so they no longer collide. $(remedy_note)."))
+    end
   end
 
   # --- Phase 2: emit JOIN SQL text in original order -------------------------
@@ -698,9 +802,14 @@ function build_row_join_sql_text(instruc::SQLInstruction)
              "\e[4m\e[32mF(\"$alias.<column>\") == F(\"<base column>\")\e[0m — or, if none of " *
              "these conditions was ever about this join, move them to " *
              "\e[4m\e[32m.filter(...)\e[0m and drop the \e[4m\e[32mcjoin_on\e[0m entirely.\n  " *
+             # #448 changed the tail of this sentence, and the change is the point: projecting used
+             # to RENDER the unconstrained join, which is why this warned so heavily. It is now
+             # refused, so the advice stands but the consequence is a second error rather than
+             # silent wrong rows. Do not restore the old wording — it describes behavior that no
+             # longer exists.
              "Do NOT instead project the path in \e[4m\e[32mvalues(...)\e[0m: that stops the " *
-             "relocation and the query renders, but with an ON clause that never mentions " *
-             "\e[4m\e[31m$alias\e[0m — an unconstrained join that multiplies rows silently.")
+             "relocation, but the ON clause then never mentions \e[4m\e[31m$alias\e[0m, and an " *
+             "unconstrained join is refused in its own right (#448).")
           throw(QueryBuildError(
             "Every ON predicate given for \e[4m\e[31m$alias\e[0m resolved onto $where_to instead, " *
             "leaving this join with no ON clause of its own.\n  A \e[4m\e[32mcjoin_on\e[0m " *
@@ -712,6 +821,45 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         throw(QueryBuildError("cjoin_on produced no ON conditions for alias '$(value["alias_b"])'."))
       end
       on_clause = join((e.sql for e in extras), " AND ")
+
+      # #448: having an ON clause is not the same as being CONSTRAINED by one. The check above only
+      # asks whether anything SURVIVED relocation; a predicate list that names this join nowhere —
+      # `on = ["note" => "Z"]`, or a path already built by `values(...)` so nothing relocated —
+      # passes it and renders a well-formed, unconstrained join. Every row of the joined table pairs
+      # with every matched base row, silently: the #44 Cartesian warning covers CROSS entries only.
+      #
+      # Same trailing-dot form as Phase 1b's relocation test (:550-567) and Phase 1's base remap, for
+      # the same reason spelled out there: every reference renders as `"alias"."col"`, so a bare
+      # alias test also matches the COLUMN half, and an alias sharing a column's name would look
+      # constrained when it is not.
+      #
+      # Fail closed rather than warn, matching #424 and #435 next door. Stricter than SQLAlchemy,
+      # Ecto and jOOQ, which all emit an unconstrained join without complaint; Django never has the
+      # question because it exposes no arbitrary ON clause. Deliberate: a silently row-multiplied
+      # result is the worst failure mode here, and there is an escape hatch.
+      #
+      # That escape hatch is an unkeyed `.with(...)` that is REFERENCED — `values("x" => CTE(n, c))`
+      # — which is what the message points at. NOT `.with(...)` + `.filter(...)`, which an earlier
+      # draft of this comment and of the message both claimed: since #444 a CTE is joined only when
+      # referenced, so that spelling emits no join at all (measured: JOIN COUNT 0) and silently
+      # returns N rows instead of N×M — the inverse of the bug this guard exists for.
+      if !occursin("$alias_b_quoted.", on_clause)
+        throw(QueryBuildError(
+          "The ON clause built for \e[4m\e[31m$(value["alias_b"])\e[0m never references " *
+          "\e[4m\e[31m$(value["alias_b"])\e[0m, so the join is not constrained by it: every " *
+          "\e[4m\e[31m$(value["b"])\e[0m row would pair with every matched base row.\n  " *
+          "This is not #435's case: there, EVERY predicate was relocated onto another join and this " *
+          "one was left with no ON clause at all. Here it has one — some of what you gave may well " *
+          "have relocated, but what remains never names this alias.\n  Give it a predicate naming its " *
+          "own alias, e.g. \e[4m\e[32mF(\"$(value["alias_b"]).<column>\") == F(\"<base column>\")\e[0m. " *
+          "If the conditions were never about this join, move them to " *
+          "\e[4m\e[32m.filter(...)\e[0m and drop the \e[4m\e[32mcjoin_on\e[0m; if you " *
+          "genuinely want a cross product, declare the table as an unkeyed " *
+          "\e[4m\e[32m.with(\"n\" => sub)\e[0m and REFERENCE it — e.g. " *
+          "\e[4m\e[32mvalues(\"x\" => CTE(\"n\", \"col\"))\e[0m — which emits a real " *
+          "\e[4m\e[32mCROSS JOIN\e[0m and warns that it is Cartesian (#44, #448)."))
+      end
+
       for extra in extras
         reattach_parameters!(instruc, extra.params)   # #421: bind in EMISSION order
       end

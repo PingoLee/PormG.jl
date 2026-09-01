@@ -337,11 +337,38 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     raises `FilterError`: an `ON` clause targets the joined *model*, and a CTE is joined by its own
     `.with(...)` declaration. Put the predicate in `.filter(...)` instead (#444).
 
-    One CTE-related collision still reaches the `ON` machinery: a `cjoin_on` **alias** spelled the
-    same as an unkeyed (CROSS-joined) CTE's name. That collision hands the CTE this join's
-    predicates, and a `CROSS JOIN` has no `ON` clause to carry them — so PormG raises
-    `QueryBuildError` rather than dropping them and matching every row (#424). Rename the alias,
-    give the CTE a `join_field`, or move the predicate to `.filter(...)` (#44).
+    **A join key may not share a name with a CTE the query joins.** A `cjoin_on` **alias**, a
+    `cjoin` **path** or an `on()` **path** spelled the same as such a CTE is refused with
+    `QueryBuildError`. Both are relation aliases in one statement, and the CTE's join claims the
+    name first.
+
+    Either way, **what you declared under that name cannot be relied on to take effect as
+    written** — and in
+    almost every shape the failure is *silent*: the SQL stays valid and returns rows other than the
+    ones you asked for. Exactly one sub-shape is loud (a `cjoin_on` whose predicate names its own
+    alias, against a keyed CTE, yields SQL the database rejects); do not count on being in it. The
+    varieties, briefly:
+
+    | The CTE was declared | What the collision did |
+    |---|---|
+    | **without** `join_field` (CROSS JOIN) | your join never materializes — the query runs and returns rows as though you had not declared it. Predicates it carried landed on the CTE, which has no `ON` clause to hold them (#424) |
+    | **with** `join_field` | a `cjoin`/`cjoin_on` loses its table into the CTE's `ON` clause; an `on()` hands the CTE its join type — explicit, or `on()`'s silent `LEFT` default — and any predicate it carries is rewritten onto a second, mis-correlated join (#447) |
+
+    **Rename one of the two.** Keying the CTE does *not* help — it only moves the collision from the
+    first row to the second. If the predicate was never about the join, `.filter(...)` takes it
+    instead (#44).
+
+    "A CTE the query *joins*" is the precise condition: since #444 a CTE is joined only when you
+    **reference** it (`CTE(name, col)`). A CTE you declare and never reference emits its `WITH` and
+    nothing else, so its name is free — but adding a reference later would then collide, so avoid
+    the clash regardless.
+
+    An `on(...)` path collides the same way and is refused too. It looks harmless — `on()` adds
+    conditions to a join something else materialized, so it appears to have no table of its own to
+    lose — but the CTE's join inherits its `join_type` (the one you set, or `on()`'s `LEFT` default
+    if you set none), and a predicate it carries is rewritten (`"sku"` → `"parent__sku"`) onto a
+    *second* join correlated against the CTE's alias. The rule is the name collision itself, not
+    the kind of call that caused it.
 
     `cjoin_on` works in reads and in the common `update()`/`delete()` (which scope rows via a
     subquery); only a **correlated** UPDATE-FROM/DELETE-USING (setting a column *from* a joined
@@ -371,10 +398,10 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     removing the call raises too.
 
     Here, **do not** "fix" it by projecting the path in `values(...)` first. That builds those
-    joins ahead of the `cjoin_on`, so nothing needs to move and the query renders — as
+    joins ahead of the `cjoin_on`, so nothing needs to move — and you get
     `INNER JOIN "driver" AS "d" ON "Tb_2"."country" = ?`, an `ON` clause that never mentions `d`.
-    That is an unconstrained join: every `driver` row against every qualifying base row, silently.
-    The error is the better outcome.
+    That is an unconstrained join: every `driver` row against every qualifying base row. PormG
+    refuses it too (#448), so projecting trades one error for another rather than fixing anything.
 
     *It names the alias and a deeper path* — `on = [F("d.nationality") == F("raceid__circuitid__country")]`,
     drivers racing in their home country — is a real correlation that moved only because the join
@@ -396,13 +423,29 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     query.cjoin_on("Driver", alias = "d2", on = [F("d2.surname") == F("d1.surname")])
     ```
 
-    (Which of two `cjoin_on` aliases is emitted first is currently decided by alias hashing rather
-    than declaration order — [#449](https://github.com/PingoLee/PormG.jl/issues/449).)
+    **Two `cjoin_on` joins are emitted in the order you declare them**, so "whichever PormG emits
+    later" is the one you wrote second — a rule you can apply without running the query. (Until
+    [#449](https://github.com/PingoLee/PormG.jl/issues/449) that order came from hashing the alias
+    *strings*, so renaming an alias could flip a working query into an error and reversing your
+    declarations changed nothing.)
 
-    More generally, PormG checks that the join *has* an `ON` clause, not that the clause
-    constrains it — `on = ["points__@gt" => 10]` renders and multiplies rows just the same
-    ([#448](https://github.com/PingoLee/PormG.jl/issues/448)). Make sure at least one predicate
-    names the alias you gave.
+    More generally, an `ON` clause that never names its own alias is **refused**
+    ([#448](https://github.com/PingoLee/PormG.jl/issues/448)): `on = ["points__@gt" => 10]` puts no
+    condition on the join at all, so every joined row would pair with every matched base row. Give
+    every `cjoin_on` at least one predicate naming its own alias.
+
+    If you genuinely want a cross product, declare the table as an **unkeyed** CTE and **reference
+    it** — declaring it alone emits no join at all:
+
+    ```julia
+    q.with("all_drivers" => M.Driver.objects.values("driverid", "surname"))  # no join_field
+    q.values("points", "who" => CTE("all_drivers", "surname"))               # the reference is
+                                                                             # what joins it
+    q.limit(100)   # illustrative: this is drivers × results, so bound it
+    ```
+
+    That renders a real `CROSS JOIN` and warns that it is Cartesian (#44), so the intent is visible
+    in the query and in the log rather than hidden in an `ON` clause.
 
 ## Use Cases
 

@@ -45,6 +45,158 @@ _Changes merged but not yet cut into a release. A consumer dev'ing PormG at HEAD
 and `PormG.upgrade_guide` surfaces them by default. When the maintainer next rolls changes into a
 consuming app, `/pormg-cut-release` stamps every entry below with `0.5.0`, dates them, and tags it._
 
+## `cjoin_on` joins follow declaration order, and two silent-wrong-result shapes are refused (#449, #448, #447)
+
+- **Version**: Unreleased
+- **PormG ref**: #449, #448, #447; `src/querybuilder/types.jl`, `src/querybuilder/build_query.jl`,
+  `docs/src/read/custom_joins.md`, `docs/src/read/subqueries_and_ctes.md`
+- **Recorded**: 2026-09-01
+- **Severity**: **behavior change** — one ordering semantic changes, and three shapes that
+  previously built a query now raise at query-build time. Every one of them produced wrong results or invalid
+  SQL, so nothing that was working stops working. Part of the `0.5.x` pre-publish wave.
+
+**Measured before adopting these**: `cjoin_on`, `.cjoin(`, `.on(` and `.with(` have **zero** call
+sites across `esus_back`, `PortalsusBack`, `LinkS`, `LinkSUS` and `work_server`. The whole
+custom-join / CTE surface has no consumer yet, which is why refusing these shapes outright was
+preferred over warning about them.
+
+### What changed
+
+**1. Emission order is declaration order (#449).** `custom_join` was an unordered `Dict`, and
+`build()` materializes joins by iterating it — so which of two `cjoin_on` joins was emitted first
+came from hashing the alias *strings*. A predicate is relocated onto the **last** join it names, so
+that hash decided which join kept its `ON` clause and which was left bare:
+
+```julia
+# BEFORE: both declaration orders produced [b3, b2]. Reversing the declarations changed nothing;
+#         renaming b2/b3 to aa/zz changed everything.
+q.cjoin_on("Parent", alias = "b3", on = [F("b2.sku") == F("note")])
+q.cjoin_on("Parent", alias = "b2", on = [F("b2.sku") == F("note")])
+```
+
+It is now an `OrderedDict`, matching `insert` on the same struct (ordered since #97). Joins are
+emitted in the order you declare them, so *"declare the predicate on whichever join PormG emits
+later"* is now a rule you can apply by reading your own code.
+
+**2. An `ON` clause that never names its own alias is refused (#448).** PormG checked that the join
+*had* an `ON` clause, never that the clause **constrained** it:
+
+```sql
+-- BEFORE: renders, and every "driver" row pairs with every matched base row. No error, no warning.
+INNER JOIN "driver" AS "d" ON "Tb"."points" > ?
+```
+
+Two routes reached it: a predicate list naming the alias nowhere, and — worse — a predicate naming a
+deep path that `values(...)` had already built, so nothing relocated and #435 never fired. That made
+the *loud* outcome depend on projection order rather than on whether the join was constrained.
+
+> This is stricter than SQLAlchemy, Ecto and jOOQ, which all emit an unconstrained join without
+> complaint; Django sidesteps the question by not exposing an arbitrary `ON` clause at all. The
+> departure is deliberate — a silently row-multiplied result set is the worst failure mode in the
+> package, and a genuine cross product is still expressible (below).
+
+**3. A join key colliding with a CTE name is refused, for both CTE kinds (#447).** #424 refused this
+against an **unkeyed** (CROSS-joined) CTE *when the colliding join carried predicates*. Two gaps are
+closed here: a **keyed** CTE fell through entirely, because that guard keyed on the `"cross"` marker
+which a keyed CTE never sets; and an unkeyed CTE colliding with a join that carries **no** predicates
+— `cjoin("x" => …)` with no `filters` — produced nothing for the old check to catch, so it built a
+query in which the colliding join was silently absent. Both now raise:
+
+```sql
+-- BEFORE: "ac_parent" is never joined, and "b2" names a relation the statement does not declare.
+WITH "b2" AS (SELECT "Tb"."id", "Tb"."code" FROM "ac_grand" AS "Tb" WHERE "Tb"."code" = $1)
+SELECT "R1"."note" FROM "ac_child" AS "R1"
+INNER JOIN "b2" AS "R1_1" ON "R1"."parent" = "R1_1"."id" AND ("b2"."sku" = "R1"."note")
+```
+
+The rule is the **name collision itself**, not the kind of call that produced it: a `cjoin` path, a
+`cjoin_on` alias and an `on(...)` path are all refused when they equal a CTE name. All three are
+keys into the same `custom_join` map, and the CTE's join reads that map by key — so it inherits
+whatever it finds. For `cjoin`/`cjoin_on` the entry loses its table; for `on()` the CTE's declared
+`join_type` is silently overridden (by the one you set, or by `on()`'s `LEFT` default) *and*, when
+the entry carries predicates, the rewritten path resolves into a second join correlated against the
+CTE's own alias, with the value bound twice.
+
+> ⚠️ **`join_field` is no longer a remedy for a name collision.** #424's message and the CTE docs
+> both used to suggest keying the CTE so it "emits a real `ON` clause". That moves the collision from
+> #424's case to #447's — it was never a fix. Rename one of the two names instead.
+
+### How to find the calls to migrate
+
+#449 and #448 need a `cjoin_on`; #447 also catches `cjoin` and `on()`, so all three writers matter:
+
+```bash
+rg -n 'cjoin_on\(|\.cjoin\(|\.on\(' .
+```
+
+For **#448**, check each `cjoin_on` for at least one predicate naming its own alias — `F("<alias>.…")`
+on either side of a comparison:
+
+```bash
+rg -n --multiline 'cjoin_on\([^)]*alias\s*=\s*"(\w+)"' .   # then read each `on = [...]` for "\1."
+```
+
+For **#447**, grep cannot see a name collision, so compare the two namespaces per query:
+
+```julia
+# ANY custom_join key equal to a CTE name collides — cjoin path, cjoin_on alias, or on() path.
+# Do not filter by entry shape: an on() entry overrides the CTE's join_type and materializes a
+# second, wrongly-correlated join, so it is refused too.
+for (name, _) in q.object.ctes
+    haskey(q.object.custom_join, name) &&
+        @warn "CTE name collides with a cjoin / cjoin_on / on() key" name
+end
+```
+
+For **#449**, nothing to grep: re-read any query declaring **two or more** `cjoin_on` joins and
+confirm the intended emission order is the order they are written.
+
+### Migrate your app
+
+**#448 — give the join a predicate that names it, or declare the cross product explicitly:**
+
+```julia
+# ✗ BEFORE — renders an unconstrained join; every driver against every matched result
+q.cjoin_on("Driver", alias = "d", on = ["points__@gt" => 10])
+
+# ✓ AFTER — correlate the join, and put the base-side condition where it belongs
+q.cjoin_on("Driver", alias = "d", on = [F("d.driverid") == F("driverid")])
+q.filter("points__@gt" => 10)
+
+# ✓ AFTER — if the cross product was genuinely intended, say so. NOTE the reference: since #444 a
+#   CTE is joined only when a `CTE(name, col)` handle is used, so `.with(...)` on its own emits no
+#   join at all and you would get N rows instead of N×M.
+q.with("all_drivers" => M.Driver.objects.values("driverid", "surname"))   # unkeyed => CROSS JOIN
+q.values("points", "who" => CTE("all_drivers", "surname"))                # <- this is what joins it
+q.filter("points__@gt" => 10)
+```
+
+That renders a real `CROSS JOIN` and emits the #44 Cartesian warning on every execution — the intent
+is then visible both in the SQL and in the log.
+
+**#447 — rename one of the colliding names:**
+
+```julia
+# ✗ BEFORE — the CTE and the join alias are both "b2"; the join's table is silently dropped
+q.with("b2" => M.Grand.objects.values("id", "code"), join_field = "parent" => "id")
+q.cjoin_on("Parent", alias = "b2", on = [F("b2.sku") == F("note")])
+
+# ✓ AFTER — two names, two relations
+q.with("grand_codes" => M.Grand.objects.values("id", "code"), join_field = "parent" => "id")
+q.cjoin_on("Parent", alias = "b2", on = [F("b2.sku") == F("note")])
+```
+
+**#449 — no code change is required**, but if you relied on the previous order, declare the joins in
+the order you want them emitted:
+
+```julia
+# ✓ the predicate references d1, which is declared FIRST, so it points backwards and nothing moves
+q.cjoin_on("Driver", alias = "d1", on = [F("d1.driverid") == F("driverid")])
+q.cjoin_on("Driver", alias = "d2", on = [F("d2.surname") == F("d1.surname")])
+```
+
+---
+
 ## A wrong-typed filter value raises `FilterError`, not `InvalidValueError` (#411)
 
 - **Version**: Unreleased
@@ -903,6 +1055,9 @@ for (name, cte) in q.object.ctes
     elseif haskey(q.object.custom_join, name)
         @warn "CTE name collides with a cjoin/cjoin_on/on() key" cte = name
     end
+    # NOTE (#447): the `cte["join_field"] === nothing || continue` above was written when keyed CTEs
+    # really were unaffected. They are not any more — see the #447 entry above, which refuses the
+    # collision for both kinds. Drop that line if you are auditing against a post-#447 pin.
 end
 ```
 

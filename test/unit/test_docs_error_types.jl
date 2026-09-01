@@ -222,6 +222,43 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        # #448. The neighbour of the case above, and the one that used to RENDER. `points` is a
+        # column of the base model, so this predicate resolves against the base alias and stays put
+        # — nothing relocates, so #435 cannot fire and `extras` is not empty. Before #448 that was
+        # enough: the join emitted with an ON clause naming everything except itself, pairing every
+        # `docerr_status` row with every matched base row. The docs use this exact `points__@gt`
+        # shape, so the case is the doc sentence made executable.
+        "read/custom_joins.md — a cjoin_on ON clause that never names its own alias is refused",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.values("resultid")
+            q.cjoin_on("DOCERR_STATUS_PG", alias = "d", on = ["points__@gt" => 10])
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #447. The KEYED half of the collision the #424 case above covers for CROSS. Same shape as
+        # that one plus `join_field`, which is precisely the difference: a keyed CTE emits a real ON
+        # clause, so #424's `"cross"`-marked guard never saw it. The predicates are not dropped here
+        # — the cjoin_on's own TABLE is, leaving `"d"` referenced but never joined.
+        #
+        # Keying the CTE used to be the documented remedy for #424, which is why both the message
+        # and `read/custom_joins.md` had to stop offering it.
+        "read/custom_joins.md — a join key colliding with a keyed CTE name is refused",
+        QueryBuildError,
+        () -> begin
+            ev = DOCERR_STATUS_PG.objects
+            ev.values("statusid", "status")
+            q = DOCERR_RESULT_PG.objects
+            q.with("d" => ev, join_field = "statusid" => "statusid")   # KEYED => real ON clause
+            q.values("resultid")
+            q.cjoin_on("DOCERR_DRIVER_PG", alias = "d", on = [F("d.surname") == F("resultid")])
+            q.filter(CTE("d", "status") => "Finished")   # forces the CTE join to be built
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
         # #433. A subquery consumed by @in / Subquery / Exists must not declare a CTE: the nested
         # WITH binds into the `:cte` bucket, which flattens ahead of `:select`/`:where`, so on
         # SQLite its values overtake any value whose text comes first. Refused on both backends so

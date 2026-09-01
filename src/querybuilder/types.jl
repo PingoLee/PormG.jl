@@ -270,11 +270,17 @@ mutable struct SQLObjectQuery <: SQLObject
   distinct::Bool # Add distinct field
   for_update::Union{Nothing,ForUpdateClause} # #26: row-level lock clause (nothing = no lock)
   ctes::Dict{String,CTEDict}
-  custom_join::Dict{String,Any}
+  # ORDERED, and load-bearing (#449). `build()` materializes row_join by ITERATING this container,
+  # so its order decides which of two `cjoin_on` joins is emitted first — and Phase 1b relocates an
+  # ON predicate onto the LAST join it names. Under a plain `Dict` that order came from hashing the
+  # ALIAS STRINGS, so renaming an alias for readability could flip a working query into a
+  # QueryBuildError, or the reverse, while reversing the DECLARATION changed nothing. Same reason
+  # `insert` above is ordered (#97).
+  custom_join::OrderedCollections.OrderedDict{String,Any}
   parameters::Union{Nothing,AbstractPormGParam}
 
   SQLObjectQuery(; model=nothing, connect_key=nothing, values=[], filter=[], insert=OrderedCollections.OrderedDict{String,Any}(), limit=0, offset=0,
-    order=[], group=[], having=[], list_joins=[], row_join=[], distinct=false, for_update=nothing, ctes=Dict{String,CTEDict}(), custom_join=Dict{String,Any}(), parameters=nothing) = # Add ctes and custom_join to constructor
+    order=[], group=[], having=[], list_joins=[], row_join=[], distinct=false, for_update=nothing, ctes=Dict{String,CTEDict}(), custom_join=OrderedCollections.OrderedDict{String,Any}(), parameters=nothing) = # Add ctes and custom_join to constructor
     new(model, connect_key, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, for_update, ctes, custom_join, parameters) # Add ctes and custom_join to new
 end
 
@@ -311,8 +317,12 @@ end
 # never mutates elements in place), share the "field" PormGField by reference (it holds
 # a Model_Type → Module that deepcopy cannot traverse — the very reason this copy was
 # shallow), and carry scalar entries ("join_type") as-is.
-function _copy_custom_join(custom_join::Dict{String,Any})::Dict{String,Any}
-  out = Dict{String,Any}()
+#
+# The container is ORDERED (#449) and the copy must stay ordered: this rebuilds `out` by insertion,
+# so an unordered accumulator here would silently re-hash declaration order back out on every
+# `.copy()` / `deepcopy` — i.e. the fluent chain would lose what the struct guarantees.
+function _copy_custom_join(custom_join::OrderedCollections.OrderedDict{String,Any})::OrderedCollections.OrderedDict{String,Any}
+  out = OrderedCollections.OrderedDict{String,Any}()
   for (path, config) in custom_join
     if config isa AbstractDict
       # AbstractDict (not just Dict{String,Any}) so a future writer storing a differently

@@ -445,11 +445,17 @@ Notes:
   Cartesian product; PormG emits a `@warn` naming the CTE. Add a correlating `filter(...)`, or
   pass `join_field`.
 - **A CTE name no longer has to avoid your model's field names** — that collision is gone with the
-  namespace split (see the note above). One collision still bites: a **join key**. If a `cjoin_on`
-  alias is spelled the same as an unkeyed (CROSS-joined) CTE, that join's predicates land on the
-  CTE, and PormG refuses the query rather than dropping them and matching every row
-  ([#424](https://github.com/PingoLee/PormG.jl/issues/424)) — a `CROSS JOIN` has no `ON` clause to
-  carry one. Rename the alias, or give the CTE a `join_field` so it emits a real `ON` clause.
+  namespace split (see the note above). One collision still bites: a **join key**. A `cjoin_on`
+  alias, a `cjoin` path or an `on()` path spelled the same as a CTE **the query joins** is refused,
+  whether or not that CTE has a `join_field`. What you declared under the colliding name cannot be
+  relied on to take effect as written, and in almost every shape the failure is **silent** — valid SQL that
+  returns rows other than the ones you asked for; only one sub-shape (an alias-naming `cjoin_on`
+  against a keyed CTE) is rejected by the database
+  ([#424](https://github.com/PingoLee/PormG.jl/issues/424),
+  [#447](https://github.com/PingoLee/PormG.jl/issues/447)). Since #444 a CTE is joined
+  only when you reference it, so one you declare and never use holds no name.
+  **Rename one of the two** — keying the CTE only moves the collision from the first case to the
+  second, so it is not a fix.
 
 ---
 

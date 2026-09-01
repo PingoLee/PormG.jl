@@ -33,6 +33,7 @@ pattern from `test_column_equivalence.jl`). The convergence half uses a hermetic
 using Test
 using PormG
 using DataFrames
+using JSON
 # The convergence testset opens a real (temporary) SQLite file, so it needs the weakdep extension.
 # `runtests.jl` loads it for the whole suite; this guard is what makes the file runnable on its own
 # (`julia --project=. test/unit/test_key_type_round_trip.jl`) without double-loading under the suite.
@@ -51,17 +52,26 @@ const SLK = MockSlKey()
 Dialect_get(f, conn) = PormG.Dialect._get_column_type(f, conn)
 
 # A one-row "introspection result" for the PostgreSQL reader, which takes a `DataFrameRow` and
-# nothing else. Same shape as `_introspection_row` in test_introspection_guards.jl; duplicated
-# rather than shared because the two files are included independently.
-function _key_row(; table_name, columns, primary_keys,
-                    foreign_keys = missing, foreign_tables = missing,
-                    referenced_primary_keys = missing, delete_rules = missing,
-                    index_columns = missing, index_names = missing)
+# nothing else. Since #455 the schema query transports every aggregate as
+# `json_agg(json_build_object(...))::text`, so these build that JSON. Same shape as
+# `_introspection_row` / `_col` / `_fk` in test_introspection_guards.jl; duplicated rather than
+# shared because the two files are included independently.
+_kcol(name, type; notnull = false, default = nothing, identity = "",
+      unique = false, non_negative_check = false, byte_limit = nothing) =
+  Dict{String, Any}("name" => name, "type" => type, "notnull" => notnull, "default" => default,
+                    "identity" => identity, "unique" => unique,
+                    "non_negative_check" => non_negative_check, "byte_limit" => byte_limit)
+
+_kfk(column, table, pk; on_delete = "a") =
+  Dict{String, Any}("column" => column, "table" => table, "pk" => pk, "on_delete" => on_delete)
+
+function _key_row(; table_name, columns, primary_keys, foreign_keys = missing, indexes = missing)
   DataFrames.DataFrame(
-    table_name = [table_name], columns = [columns], primary_keys = [primary_keys],
-    foreign_keys = [foreign_keys], foreign_tables = [foreign_tables],
-    referenced_primary_keys = [referenced_primary_keys], delete_rules = [delete_rules],
-    index_columns = [index_columns], index_names = [index_names])[1, :]
+    table_name   = [table_name],
+    columns      = [columns isa AbstractVector ? JSON.json(columns) : columns],
+    primary_keys = [primary_keys isa AbstractVector ? JSON.json(primary_keys) : primary_keys],
+    foreign_keys = [foreign_keys isa AbstractVector ? JSON.json(foreign_keys) : foreign_keys],
+    indexes      = [indexes isa AbstractVector ? JSON.json(indexes) : indexes])[1, :]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -222,13 +232,10 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "both readers classify one schema identically (#409)" begin
   pg_row = _key_row(
-    table_name              = "profile_t",
-    columns                 = "parent_id bigint NOT NULL",
-    primary_keys            = "parent_id",
-    foreign_keys            = "parent_id",
-    foreign_tables          = "parent_t",
-    referenced_primary_keys = "id",
-    delete_rules            = "c")
+    table_name   = "profile_t",
+    columns      = [_kcol("parent_id", "bigint"; notnull = true)],
+    primary_keys = ["parent_id"],
+    foreign_keys = [_kfk("parent_id", "parent_t", "id"; on_delete = "c")])
   pg_field = PormG.Migrations.convertSQLToModel(pg_row).fields["parent_id"]
 
   sl_field = mktempdir() do dir
@@ -280,13 +287,11 @@ end
   # names a DIFFERENT column on purpose — the whole point of this shape is that the FK is not the
   # key, which is what distinguishes it from the #409 case above.
   pg_row = _key_row(
-    table_name              = "o2o_profile_t",
-    columns                 = "id bigint NOT NULL, parent_id bigint UNIQUE NOT NULL",
-    primary_keys            = "id",
-    foreign_keys            = "parent_id",
-    foreign_tables          = "o2o_parent_t",
-    referenced_primary_keys = "id",
-    delete_rules            = "c")
+    table_name   = "o2o_profile_t",
+    columns      = [_kcol("id", "bigint"; notnull = true),
+                    _kcol("parent_id", "bigint"; notnull = true, unique = true)],
+    primary_keys = ["id"],
+    foreign_keys = [_kfk("parent_id", "o2o_parent_t", "id"; on_delete = "c")])
   pg_model = PormG.Migrations.convertSQLToModel(pg_row)
   pg_field = pg_model.fields["parent_id"]
 
@@ -328,13 +333,11 @@ end
   @test sl_model.fields["id"] isa Models.sIDField
 
   plain_fk_row = _key_row(
-    table_name              = "o2o_plain_t",
-    columns                 = "id bigint NOT NULL, parent_id bigint NOT NULL",
-    primary_keys            = "id",
-    foreign_keys            = "parent_id",
-    foreign_tables          = "o2o_parent_t",
-    referenced_primary_keys = "id",
-    delete_rules            = "c")
+    table_name   = "o2o_plain_t",
+    columns      = [_kcol("id", "bigint"; notnull = true),
+                    _kcol("parent_id", "bigint"; notnull = true)],
+    primary_keys = ["id"],
+    foreign_keys = [_kfk("parent_id", "o2o_parent_t", "id"; on_delete = "c")])
   plain_pg = PormG.Migrations.convertSQLToModel(plain_fk_row).fields["parent_id"]
   plain_sl = mktempdir() do dir
     pool = SQLiteConnectionPool(joinpath(dir, "plain417.sqlite"); pool_size = 1)
@@ -415,13 +418,10 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a UUID key that is also an FK stays a UUIDField (#334 × #409)" begin
   pg = PormG.Migrations.convertSQLToModel(_key_row(
-    table_name              = "uuid_profile",
-    columns                 = "uid uuid NOT NULL",
-    primary_keys            = "uid",
-    foreign_keys            = "uid",
-    foreign_tables          = "uuid_parent",
-    referenced_primary_keys = "uid",
-    delete_rules            = "c")).fields["uid"]
+    table_name   = "uuid_profile",
+    columns      = [_kcol("uid", "uuid"; notnull = true)],
+    primary_keys = ["uid"],
+    foreign_keys = [_kfk("uid", "uuid_parent", "uid"; on_delete = "c")])).fields["uid"]
   @test pg isa Models.sUUIDField
 
   sl = mktempdir() do dir
@@ -446,8 +446,8 @@ end
   # its arm may hardcode it.
   plain_uuid_pg = PormG.Migrations.convertSQLToModel(_key_row(
     table_name   = "uuid_key",
-    columns      = "uid uuid NOT NULL",
-    primary_keys = "uid")).fields["uid"]
+    columns      = [_kcol("uid", "uuid"; notnull = true)],
+    primary_keys = ["uid"])).fields["uid"]
   @test plain_uuid_pg isa Models.sUUIDField
   @test plain_uuid_pg.db_index == Models.UUIDField(primary_key = true).db_index
   @test plain_uuid_pg.db_index == false

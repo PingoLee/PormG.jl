@@ -53,7 +53,10 @@ end
               "pormg_it_uq_child", "pormg_it_uq_parent",
               "pormg_it_nopk_child", "pormg_it_nopk_parent",
               "pormg_it_natural_key", "pormg_it_numeric_key", "pormg_it_ignored",
-              "pormg_it_uniq")
+              "pormg_it_uniq",
+              # #455, child before parent as above. The parent's NAME carries the comma on purpose:
+              # that is what tore `foreign_tables`, which is a different aggregate from `columns`.
+              "pormg_it_comma_child", "pormg_it_comma, parent", "pormg_it_comma_key")
   drop_fixtures() = for t in fixtures
     try; ddl("DROP TABLE IF EXISTS \"$(t)\""); catch; end
   end
@@ -99,10 +102,12 @@ end
        )"""
 
   # #389 fixture: the ONLY mixed-case identifiers in this file. Every other fixture is lowercase,
-  # so PostgreSQL's `quote_ident` returns them unquoted and the whole quoting hazard is invisible —
-  # which is exactly why the bug survived here. A quoted mixed-case parent PK (`"Id"`) is what the
-  # `referenced_primary_keys` aggregate wraps in `"`, and the mixed-case CHILD column (`"ParentId"`)
-  # covers the `fk_cols` / `col_name` pairing that has to be normalized in the same change.
+  # so the quoting hazard was invisible in all of them — which is exactly why the bug survived here.
+  # When #389 landed, the schema query wrapped every aggregated identifier in `quote_ident`, and a
+  # mixed-case parent PK (`"Id"`) is one it quotes; the mixed-case CHILD column (`"ParentId"`)
+  # covered the `fk_cols` / `col_name` pairing that had to be normalized in the same change. Since
+  # #455 nothing is quoted on the wire, so what this fixture pins is the outcome rather than the
+  # transform: one identifier, one spelling, on every side.
   mixed_parent_ddl = is_pg ?
     """CREATE TABLE "pormg_it_MixedParent" ("Id" BIGINT PRIMARY KEY, "Label" VARCHAR(50))""" :
     """CREATE TABLE "pormg_it_MixedParent" ("Id" INTEGER PRIMARY KEY, "Label" TEXT)"""
@@ -117,11 +122,12 @@ end
        )"""
 
   # #414 fixture: an identifier CONTAINING A SPACE, on the two axes that used to disagree about it.
-  # The PostgreSQL `columns` aggregate is `quote_ident(name) || ' ' || format_type(…)`, and the
-  # reader split it on `" "` — so `"Parent Id" bigint` was torn into the phantom name `"Parent` and
-  # the non-type `Id"`. `fk_map`, `pk_set` and `index_map` all key on names that survive a space
-  # (they split on `", "`, or come from the one RAW aggregate), so the relation was LOST and every
-  # `makemigrations` proposed `ADD COLUMN "\"Parent"` plus a DROP of the real column.
+  # The PostgreSQL `columns` aggregate WAS `quote_ident(name) || ' ' || format_type(…)` and the
+  # reader split it on `" "`, so `"Parent Id" bigint` was torn into the phantom name `"Parent` and
+  # the non-type `Id"`. `fk_map`, `pk_set` and `index_map` all keyed on names that survived a space
+  # (they split on `", "`, or came from the one RAW aggregate), so the relation was LOST and every
+  # `makemigrations` proposed `ADD COLUMN "\"Parent"` plus a DROP of the real column. #455 replaced
+  # that wire format with JSON, so neither separator exists any more — see section 3i.
   #
   # `"Parent Id"` is the FK axis and `"driver ref"` the index axis; the latter is the exact spelling
   # #394's `Odd_identifier_scratch` fixture carries, and the reason that fixture could not use it as
@@ -278,6 +284,62 @@ end
     ddl("""CREATE INDEX "pormg_it_uniq_coll_idx" ON "pormg_it_uniq" (plain COLLATE "C", slug)""")
   end
 
+  # ── #455 fixtures: a comma-space is a legal substring of every identifier and of any
+  # `pg_get_expr` DEFAULT, so the old `array_to_string(array_agg(...), ', ')` aggregates could be
+  # torn BY THEIR OWN DATA. Four axes across two tables, because the four aggregates failed
+  # DIFFERENTLY and no single fixture reaches all four:
+  #
+  #   * `columns`      — the real column vanished and two phantoms appeared (#414's failure, new
+  #                      trigger), and `makemigrations` proposed add-phantom + drop-real forever.
+  #   * `primary_keys` — tore on the SAME name as `columns`, so both sides agreed on both WRONG
+  #                      names and BOTH phantoms came back marked as keys. Its own table below,
+  #                      since the two tears have to coincide.
+  #   * `foreign_keys` — six aggregates zipped POSITIONALLY. Measured on `main`: with the comma in
+  #                      the PARENT TABLE name only, `columns` parses cleanly and `plain_id` still
+  #                      comes back with `to_table == "parent\""`. `plain_parent` never appears.
+  #                      That is why `plain_id` is declared AFTER the comma-named FK.
+  #   * `indexes`      — the same zip; a shifted index NAME reaches `planner._drop_index`.
+  #
+  # Both engines: SQLite reads PRAGMA output raw and was never affected, which is what makes this
+  # an AGREEMENT rather than an assumption — the same framing as the #414 spaced-identifier fixture.
+  #
+  # Every expression default here sits on a TEXT column deliberately. The generic (non-FK) default
+  # arm has no `_fk_default_or_warn` equivalent and `validate_default` throws, so an expression
+  # default on a typed column would abort the whole read for reasons unrelated to #455.
+  ddl(is_pg ?
+      """CREATE TABLE "pormg_it_comma, parent" (
+           id BIGINT PRIMARY KEY,
+           "Ref, Key" VARCHAR(20) UNIQUE,
+           label VARCHAR(50))""" :
+      """CREATE TABLE "pormg_it_comma, parent" (
+           id INTEGER PRIMARY KEY,
+           "Ref, Key" TEXT UNIQUE,
+           label TEXT)""")
+
+  ddl(is_pg ?
+      """CREATE TABLE "pormg_it_comma_child" (
+           id BIGINT PRIMARY KEY,
+           "Race, Total" VARCHAR(20) REFERENCES "pormg_it_comma, parent"("Ref, Key") ON DELETE CASCADE,
+           plain_id      VARCHAR(20) REFERENCES "pormg_it_comma, parent"("Ref, Key") ON DELETE SET NULL,
+           "Idx, Col"    VARCHAR(30),
+           note          TEXT NOT NULL DEFAULT concat('a'::text, 'b'::text),
+           team          TEXT DEFAULT 'Ferrari, Scuderia')""" :
+      """CREATE TABLE "pormg_it_comma_child" (
+           id INTEGER PRIMARY KEY,
+           "Race, Total" TEXT REFERENCES "pormg_it_comma, parent"("Ref, Key") ON DELETE CASCADE,
+           plain_id      TEXT REFERENCES "pormg_it_comma, parent"("Ref, Key") ON DELETE SET NULL,
+           "Idx, Col"    TEXT,
+           note          TEXT NOT NULL DEFAULT 'ab',
+           team          TEXT DEFAULT 'Ferrari, Scuderia')""")
+
+  ddl("""CREATE INDEX "pormg_it_comma_idx" ON "pormg_it_comma_child" ("Idx, Col")""")
+
+  # The PK axis needs its own table: `pk_cols` and `columns` tore on the same name, so the two sides
+  # agreed on the same wrong names and the table came back with TWO phantom keys and no real one.
+  ddl(is_pg ?
+      """CREATE TABLE "pormg_it_comma_key" ("Key, Col" BIGINT PRIMARY KEY, label VARCHAR(20))""" :
+      """CREATE TABLE "pormg_it_comma_key" ("Key, Col" INTEGER PRIMARY KEY, label TEXT)""")
+
   saved_ignore = copy(PormG._EXTRA_IGNORE_TABLES[])
   try
     # ── 1. Introspection survives edge-case primary keys (Finding 3.1) ──────
@@ -433,9 +495,9 @@ end
     uniq_reloaded = Core.eval(uniq_mod, Meta.parse(uniq_src))
     @test uniq_reloaded.cache["composite_indexes"]["indexes"][1].fields == ["b", "a"]
 
-    # ── 3d. Mixed-case FK/PK identifiers survive quote_ident (#389) ──────────
-    # PostgreSQL aggregates `fk_cols`, `fk_tables` and `referenced_primary_keys` through
-    # `quote_ident`, so a mixed-case name arrives with the `"` characters as part of the string.
+    # ── 3d. Mixed-case FK/PK identifiers keep one spelling on every side (#389) ──────────
+    # PostgreSQL used to aggregate `fk_cols`, `fk_tables` and `referenced_primary_keys` through
+    # `quote_ident`, so a mixed-case name arrived with the `"` characters as part of the string.
     # #360 de-quoted the table half; the referenced PK stayed quoted and landed verbatim on
     # `pk_field` (an introspected field's `.to` is a String binding, so `fk_target_column` returns
     # it unchanged). That one value made `Dialect.add_foreign_key` emit
@@ -457,13 +519,17 @@ end
     mixed_child  = mixed_by_name["pormg_it_mixedchild"]
     mixed_parent = mixed_by_name["pormg_it_mixedparent"]
 
-    # The parent's mixed-case PRIMARY KEY is detected as the key. `pk_set` is `quote_ident`-ed too,
-    # and is compared against `col_name`; normalizing one without the other leaves the table keyless.
+    # The parent's mixed-case PRIMARY KEY is detected as the key. `pk_set` and `col_name` come from
+    # two different aggregates and are compared to each other, so they have to agree about spelling;
+    # they used to agree only because both were `quote_ident`-ed, and normalizing one without the
+    # other left the table keyless. Both are raw since #455.
     @test haskey(mixed_parent.fields, "Id")
     @test mixed_parent.fields["Id"] isa PormG.Models.sIDField
 
-    # The mixed-case CHILD column is still recognised as a foreign key — the mutation gate for
-    # moving `fk_cols` and `col_name` together.
+    # The mixed-case CHILD column is still recognised as a foreign key. `fk_map`'s keys and the
+    # column name come from two different aggregates and are compared to each other, so this is the
+    # mutation gate for any change that normalizes one side without the other — it was the
+    # `fk_cols` / `col_name` de-quoting pair in #389, and it is the raw-on-both-sides contract now.
     @test haskey(mixed_child.fields, "ParentId")
     @test mixed_child.fields["ParentId"] isa PormG.Models.sForeignKey
 
@@ -479,9 +545,9 @@ end
     # THE live half of this issue, and the only one that executes the PostgreSQL `columns`
     # aggregate. The reader split that aggregate on `" "` to separate the name from the type, so a
     # spaced identifier was destroyed before any de-quoting could help — the column arrived under
-    # the phantom name `"Parent` (the leading quote survives; `_unquote_ident` correctly refuses to
-    # strip a lone unbalanced one), its type read as `Id"` so it degraded to `TextField`, and the
-    # foreign key was LOST because `fk_map`'s key — from an aggregate split on `", "` — was the
+    # the phantom name `"Parent` (the leading quote survived, because the de-quoter correctly
+    # refused to strip a lone unbalanced one), its type read as `Id"` so it degraded to `TextField`,
+    # and the foreign key was LOST because `fk_map`'s key — from an aggregate split on `", "` — was the
     # correct `Parent Id` and no longer matched.
     #
     # Since #394 this was the last layer where a spaced `db_column` broke; `Dialect.field_to_column`
@@ -591,6 +657,76 @@ end
     @test nopk_child.fields["parent_key"].pk_field == "ukey"
     @test nopk_child.fields["parent_key"].to_table == "pormg_it_nopk_parent"
     @test nopk_child.fields["parent_key"].on_delete === PormG.Models.RESTRICT
+
+    # ── 3i. A comma-space in an identifier or a DEFAULT tears nothing (#455) ──
+    # THE LIVE HALF, and the only place the new `json_build_object` KEY NAMES are exercised at all:
+    # every unit fixture writes the same keys the reader reads, so a typo in the SQL is invisible
+    # there. This section is the mutation gate for the schema query itself.
+    #
+    # #414 fixed the FIELD separator inside one entry. The ENTRY separator was `", "`, which is a
+    # legal substring of every identifier and of any `pg_get_expr` DEFAULT — so the tear needed no
+    # unusual schema at all, and `makemigrations` never converged once it happened. The aggregates
+    # are JSON now, which makes it unrepresentable rather than guarded.
+    comma_models = PormG.Migrations.convert_schema_to_models(pool;
+        include_table = ["pormg_it_comma, parent", "pormg_it_comma_child", "pormg_it_comma_key"])
+    comma_by_name = Dict(lowercase(string(m.name)) => m for m in comma_models)
+    # `comma_child`, not `child`: section 3a binds `child` to the #292 fixture and section 4 READS
+    # it to derive a generated-module binding name, so reusing the name here silently repointed
+    # that lookup at this table — a failure that surfaces two sections away from its cause.
+    comma_child = comma_by_name["pormg_it_comma_child"]
+
+    # 1. The column keeps its real name. Measured pre-fix: `"Race` and `Total"`, with the real
+    #    column absent — so the key set, not just the presence of one key, is what to assert.
+    @test Set(keys(comma_child.fields)) ==
+          Set(["id", "Race, Total", "plain_id", "Idx, Col", "note", "team"])
+
+    # 2. …and its relation. The FK aggregates tore on the PARENT TABLE's name here, which `columns`
+    #    never sees, so this is a genuinely separate failure from the phantom column above.
+    @test comma_child.fields["Race, Total"] isa PormG.Models.sForeignKey
+    @test comma_child.fields["Race, Total"].pk_field == "Ref, Key"
+    @test comma_child.fields["Race, Total"].to_table == "pormg_it_comma, parent"
+    @test comma_child.fields["Race, Total"].on_delete === PormG.Models.CASCADE
+
+    # 3. THE MISALIGNMENT GATE. `plain_id` is declared AFTER the comma-named FK precisely so the
+    #    positional zip shifted it: measured on `main`, it came back with `to_table == "parent\""`
+    #    — a name no table has — while the real `pormg_it_comma, parent` never appeared for it.
+    #    A relation re-pointed at the wrong parent is worse than a phantom column: the planner
+    #    diffs a live, correct constraint and proposes DROP + ADD against a different table.
+    @test comma_child.fields["plain_id"].to_table == "pormg_it_comma, parent"
+    @test comma_child.fields["plain_id"].pk_field == "Ref, Key"
+    @test comma_child.fields["plain_id"].on_delete === PormG.Models.SET_NULL
+
+    # 4. The index pair, the other zip. A shifted index NAME reaches `planner._drop_index`.
+    @test comma_child.fields["Idx, Col"].db_index
+    @test comma_child.cache["index"]["Idx, Col"] == "pormg_it_comma_idx"
+
+    # 5. A DEFAULT containing `, `. Two distinct defects had to be fixed for this: the aggregate
+    #    tear (pre-fix this produced the phantom field key `Scuderia'::text`) AND the reader's
+    #    whitespace-terminated DEFAULT regex, which truncated the value to `'Ferrari` even from an
+    #    intact entry. Asserting the VALUE is what separates the two — a fix to the aggregate alone
+    #    still fails here.
+    @test comma_child.fields["team"].default == "Ferrari, Scuderia"
+
+    # 6. The silent case, and the one most likely in a real schema: PostgreSQL renders a
+    #    multi-argument default with a `, `, and such a column is usually NOT NULL. Scoped to the
+    #    COLUMN, not the default's value — PormG does not reproduce expression defaults, which is
+    #    pre-existing and out of scope here. SQLite has no `concat()` of this shape, so its fixture
+    #    carries the plain literal and only the NOT NULL half is cross-engine.
+    @test !comma_child.fields["note"].null
+    if is_pg
+      @test comma_child.fields["note"].default == "concat('a'::text, 'b'::text)"
+    end
+
+    # 7. The PK axis. `primary_keys` and `columns` tore on the SAME name, so the two sides agreed
+    #    on both wrong names and the table came back with two phantom keys and no real column.
+    comma_key = comma_by_name["pormg_it_comma_key"]
+    @test Set(keys(comma_key.fields)) == Set(["Key, Col", "label"])
+    @test comma_key.fields["Key, Col"] isa PormG.Models.sIDField
+    @test comma_key.fields["Key, Col"].primary_key
+
+    # 8. …and the name survives regeneration, as a legal Julia binding pinned by `db_column`
+    #    (#317/#394). That is what makes the recovered name usable rather than merely reported.
+    @test occursin("db_column=\"Race, Total\"", PormG.Models.Model_to_str(comma_child))
 
     # ── 4. The regenerated module registers via set_models (#287/#291) ───────
     # THE regression assertion. Before #292 this threw ModelDefinitionError ("declares on_delete

@@ -29,45 +29,53 @@ this is fully hermetic — no live database.
 
 using Test
 using DataFrames
+using JSON
+using Logging          # `@test_logs min_level = Logging.Warn` in the #455 block
 using PormG
 using PormG.Migrations: convertSQLToModel
 
-# One-row "introspection result" carrying the columns convertSQLToModel(row) reads. The optional
-# FK/index columns default to `missing`, matching a table that has none. The FK keywords let a test
-# describe a foreign key without a live database: `delete_rules` carries the raw
-# `pg_constraint.confdeltype` codes, comma-joined in the same order as `foreign_keys` (#292).
-function _introspection_row(; table_name, columns, primary_keys,
-                              foreign_keys = missing, foreign_tables = missing,
-                              referenced_primary_keys = missing, delete_rules = missing,
-                              index_columns = missing, index_names = missing)
-  df = DataFrame(
-    table_name              = [table_name],
-    columns                 = [columns],
-    primary_keys            = [primary_keys],
-    foreign_keys            = [foreign_keys],
-    foreign_tables          = [foreign_tables],
-    referenced_primary_keys = [referenced_primary_keys],
-    delete_rules            = [delete_rules],
-    index_columns           = [index_columns],
-    index_names             = [index_names],
-  )
-  return df[1, :]
-end
+# ── Fixture builders ────────────────────────────────────────────────────────────────────────────
+#
+# #455 moved the PostgreSQL schema query's wire format from `array_to_string(array_agg(...), ', ')`
+# to `json_agg(json_build_object(...))`, so these build the JSON the reader now parses.
+#
+# The fixtures are written as OBJECTS rather than as JSON string literals on purpose. Every marker
+# (`notnull`, `unique`, `non_negative_check`) used to be a space-delimited token inside the same
+# string that carried the column's DEFAULT, and a test could only assert on that string as a whole;
+# stating each one positively is what makes "a DEFAULT cannot forge a marker" testable at all.
+#
+# STATED LIMIT, so nobody mistakes this file for more coverage than it gives: these builders write
+# the same key names `convertSQLToModel` reads, so a typo in the SQL's own `json_build_object` keys
+# is INVISIBLE here — a `DataFrameRow` fixture executes no SQL. The live query is exercised only by
+# `test/integration/test_importers_introspection.jl`, which is therefore the mutation gate for the
+# key names, exactly as the #415 block near the end of this file already notes for FK pairing.
 
-# The same row WITHOUT a `delete_rules` column at all — the shape a schema query produced before
-# #292 added it. Used to prove the reader degrades instead of throwing on a missing column.
-function _introspection_row_without_delete_rules(; table_name, columns, primary_keys,
-                                                   foreign_keys, foreign_tables,
-                                                   referenced_primary_keys)
+# One entry of the `columns` aggregate.
+_col(name, type; notnull = false, default = nothing, identity = "",
+     unique = false, non_negative_check = false, byte_limit = nothing) =
+  Dict{String, Any}("name" => name, "type" => type, "notnull" => notnull, "default" => default,
+                    "identity" => identity, "unique" => unique,
+                    "non_negative_check" => non_negative_check, "byte_limit" => byte_limit)
+
+# One entry of the `foreign_keys` aggregate. `on_delete` carries the raw
+# `pg_constraint.confdeltype` code (#292); "a" is NO ACTION.
+_fk(column, table, pk; on_delete = "a") =
+  Dict{String, Any}("column" => column, "table" => table, "pk" => pk, "on_delete" => on_delete)
+
+# One entry of the `indexes` aggregate: the indexed column and the index's own name.
+_ix(column, name) = Dict{String, Any}("column" => column, "name" => name)
+
+# One-row "introspection result" carrying the columns convertSQLToModel(row) reads. `foreign_keys`
+# and `indexes` default to `missing`, matching a table that has none — which is what the schema
+# query's LEFT JOINs actually produce.
+function _introspection_row(; table_name, columns, primary_keys,
+                              foreign_keys = missing, indexes = missing)
   df = DataFrame(
-    table_name              = [table_name],
-    columns                 = [columns],
-    primary_keys            = [primary_keys],
-    foreign_keys            = [foreign_keys],
-    foreign_tables          = [foreign_tables],
-    referenced_primary_keys = [referenced_primary_keys],
-    index_columns           = [missing],
-    index_names             = [missing],
+    table_name   = [table_name],
+    columns      = [columns isa AbstractVector ? JSON.json(columns) : columns],
+    primary_keys = [primary_keys isa AbstractVector ? JSON.json(primary_keys) : primary_keys],
+    foreign_keys = [foreign_keys isa AbstractVector ? JSON.json(foreign_keys) : foreign_keys],
+    indexes      = [indexes isa AbstractVector ? JSON.json(indexes) : indexes],
   )
   return df[1, :]
 end
@@ -85,8 +93,9 @@ end
   @testset "VARCHAR(n) PRIMARY KEY reconstructs as a CharField key (#409)" begin
     row = _introspection_row(
       table_name   = "natural_key_tbl",
-      columns      = "code varchar(20) NOT NULL, name varchar(100)",
-      primary_keys = "code",
+      columns      = [_col("code", "varchar(20)"; notnull = true),
+                      _col("name", "varchar(100)")],
+      primary_keys = ["code"],
     )
     model = convertSQLToModel(row)   # must not throw — the original guard
 
@@ -110,13 +119,10 @@ end
   # ───────────────────────────────────────────────────────────────────────────
   @testset "a PRIMARY KEY that is also a FOREIGN KEY stays a relation (#409)" begin
     model = convertSQLToModel(_introspection_row(
-      table_name              = "driver_profile",
-      columns                 = "driver_id bigint NOT NULL",
-      primary_keys            = "driver_id",
-      foreign_keys            = "driver_id",
-      foreign_tables          = "driver",
-      referenced_primary_keys = "id",
-      delete_rules            = "c"))
+      table_name   = "driver_profile",
+      columns      = [_col("driver_id", "bigint"; notnull = true)],
+      primary_keys = ["driver_id"],
+      foreign_keys = [_fk("driver_id", "driver", "id"; on_delete = "c")]))
 
     f = model.fields["driver_id"]
     # A pk-fk is unique by the key constraint, so PostgreSQL records no separate UNIQUE marker —
@@ -138,8 +144,8 @@ end
   @testset "NUMERIC(p,s) PRIMARY KEY does not crash (max_digits guard)" begin
     row = _introspection_row(
       table_name   = "numeric_key_tbl",
-      columns      = "id numeric(10,0) NOT NULL",
-      primary_keys = "id",
+      columns      = [_col("id", "numeric(10,0)"; notnull = true)],
+      primary_keys = ["id"],
     )
     model = convertSQLToModel(row)   # must not throw
 
@@ -157,7 +163,8 @@ end
   @testset "every integer key width still reads as IDField (#408/#409)" begin
     for t in ("bigint", "integer", "smallint")
       model = convertSQLToModel(_introspection_row(
-        table_name = "int_key_tbl", columns = "id $t NOT NULL", primary_keys = "id"))
+        table_name = "int_key_tbl", columns = [_col("id", t; notnull = true)],
+        primary_keys = ["id"]))
       @test model.fields["id"] isa PormG.Models.sIDField
       @test model.fields["id"].primary_key
     end
@@ -166,7 +173,8 @@ end
     # (its constructor passes a literal `false`), and a bare `CharField` would invent
     # `max_length = 250`. It keeps the IDField fallback, deliberately and documented.
     model = convertSQLToModel(_introspection_row(
-      table_name = "text_key_tbl", columns = "id text NOT NULL", primary_keys = "id"))
+      table_name = "text_key_tbl", columns = [_col("id", "text"; notnull = true)],
+      primary_keys = ["id"]))
     @test model.fields["id"] isa PormG.Models.sIDField
   end
 
@@ -283,13 +291,14 @@ using PormG.Migrations: _pg_confdeltype_to_on_delete, _normalize_introspected_on
   # ───────────────────────────────────────────────────────────────────────────
   @testset "on_delete survives convertSQLToModel(::DataFrameRow)" begin
     row = _introspection_row(
-      table_name              = "results",
-      columns                 = "id bigint NOT NULL, driverid bigint, raceid bigint",
-      primary_keys            = "id",
-      foreign_keys            = "driverid, raceid",
-      foreign_tables          = "drivers, races",
-      referenced_primary_keys = "driverid, raceid",
-      delete_rules            = "c, n",          # CASCADE, SET NULL — order matches foreign_keys
+      table_name   = "results",
+      columns      = [_col("id", "bigint"; notnull = true), _col("driverid", "bigint"),
+                      _col("raceid", "bigint")],
+      primary_keys = ["id"],
+      # CASCADE and SET NULL. Each rule travels ON the constraint it belongs to since #455, where
+      # it used to be one entry of a parallel aggregate the reader zipped by position.
+      foreign_keys = [_fk("driverid", "drivers", "driverid"; on_delete = "c"),
+                      _fk("raceid", "races", "raceid"; on_delete = "n")],
     )
     model = convertSQLToModel(row)
 
@@ -311,35 +320,100 @@ using PormG.Migrations: _pg_confdeltype_to_on_delete, _normalize_introspected_on
   # ───────────────────────────────────────────────────────────────────────────
   @testset "NO ACTION introspects as no declaration, not DO_NOTHING" begin
     row = _introspection_row(
-      table_name              = "results",
-      columns                 = "id bigint NOT NULL, raceid bigint",
-      primary_keys            = "id",
-      foreign_keys            = "raceid",
-      foreign_tables          = "races",
-      referenced_primary_keys = "raceid",
-      delete_rules            = "a",
+      table_name   = "results",
+      columns      = [_col("id", "bigint"; notnull = true), _col("raceid", "bigint")],
+      primary_keys = ["id"],
+      foreign_keys = [_fk("raceid", "races", "raceid")],
     )
     model = convertSQLToModel(row)
     @test model.fields["raceid"].on_delete === nothing
   end
 
   # ───────────────────────────────────────────────────────────────────────────
-  # FK introspection: a schema-query row with no delete_rules column still converts
-  # `delete_rules` is new in #292. A caller holding an older row — or a unit fixture that predates
-  # it — must degrade to "no action recorded" rather than raising a KeyError mid-import.
+  # FK introspection: missing referential-action metadata degrades, it does not throw
+  #
+  # STATED HONESTLY, because #455 changed what this can still cover. The original premise was the
+  # pre-#292 DataFrame SHAPE — a row with no `delete_rules` COLUMN — which a caller holding an older
+  # row could still produce. That shape can no longer reach the reader at all: it carries
+  # `", "`-joined strings, and `_pg_json` would raise on the first `JSON.parse`.
+  #
+  # What survives is the POLICY, which is a real contract and is what the two testsets below pin:
+  # introspection never aborts a whole schema read over one field it cannot read (the same rule
+  # `_fk_default_or_warn` follows for defaults). Neither shape is emitted by the current query —
+  # `confdeltype` is NOT NULL — so these are belt-and-braces, and saying so is the point: a reader
+  # who thinks they reproduce a live shape will draw the wrong conclusion from them.
   # ───────────────────────────────────────────────────────────────────────────
-  @testset "a row without delete_rules degrades instead of throwing" begin
-    row = _introspection_row_without_delete_rules(
-      table_name              = "results",
-      columns                 = "id bigint NOT NULL, raceid bigint",
-      primary_keys            = "id",
-      foreign_keys            = "raceid",
-      foreign_tables          = "races",
-      referenced_primary_keys = "raceid",
+  @testset "an FK with no on_delete recorded degrades instead of throwing" begin
+    # No `on_delete` KEY at all. Built by hand rather than through `_fk`, which always writes it.
+    row = _introspection_row(
+      table_name   = "results",
+      columns      = [_col("id", "bigint"; notnull = true), _col("raceid", "bigint")],
+      primary_keys = ["id"],
+      foreign_keys = [Dict{String, Any}("column" => "raceid", "table" => "races", "pk" => "raceid")],
     )
     model = convertSQLToModel(row)     # must not throw
     @test model.fields["raceid"] isa PormG.Models.sForeignKey
     @test model.fields["raceid"].on_delete === nothing
+
+    # …and JSON `null`, which parses to `nothing`. `String(nothing)` is a MethodError, so this is
+    # the gate for the `something(...)` wrapper rather than a restatement of the case above.
+    null_row = _introspection_row(
+      table_name   = "results",
+      columns      = [_col("id", "bigint"; notnull = true), _col("raceid", "bigint")],
+      primary_keys = ["id"],
+      foreign_keys = [Dict{String, Any}("column" => "raceid", "table" => "races",
+                                        "pk" => "raceid", "on_delete" => nothing)],
+    )
+    @test convertSQLToModel(null_row).fields["raceid"].on_delete === nothing
+  end
+
+  @testset "an absent aggregate column degrades to 'none' (#455)" begin
+    # The other half of the same policy, and the one that IS still reachable: `convertSQLToModel`
+    # is exported, so a row may come from somewhere other than the current `get_database_schema`.
+    # A row with no `indexes` column at all must read as "no indexes", not raise.
+    df = DataFrame(
+      table_name   = ["results"],
+      columns      = [JSON.json([_col("id", "bigint"; notnull = true), _col("slug", "text")])],
+      primary_keys = [JSON.json(["id"])],
+    )
+    model = convertSQLToModel(df[1, :])       # must not throw on the absent :foreign_keys/:indexes
+    @test model.fields["id"] isa PormG.Models.sIDField
+    # `slug` is the discriminating one: a PK gets `db_index = true` from its own arm regardless, so
+    # asserting on `id` would pass whatever the index map contained.
+    @test model.fields["slug"].db_index == false
+    @test !haskey(model.cache, "index")
+  end
+
+  @testset "an OPTIONAL per-column key may be absent; name and type may not (#455)" begin
+    # Where the degrade policy stops, pinned in both directions so the boundary is a decision
+    # rather than an accident.
+    #
+    # Found in review: every optional key used to be read with `col[...]`, so a missing one raised
+    # `KeyError`. `non_negative_check` is the one that made that intolerable rather than merely
+    # untidy — it is only consulted for an `integer` column, so the SAME malformed row imported a
+    # `text` column fine and died on the next `integer` one. A type-dependent abort is the worst
+    # shape to debug, so the five optional keys now carry defaults.
+    bare = Dict{String, Any}("name" => "n", "type" => "integer")     # nothing but the two required
+    model = convertSQLToModel(_introspection_row(
+      table_name = "sparse", columns = [bare], primary_keys = ["n"]))
+    @test model.fields["n"] isa PormG.Models.sIDField
+
+    # …and specifically the integer arm, which is where the asymmetry lived.
+    plain = convertSQLToModel(_introspection_row(
+      table_name = "sparse2",
+      columns    = [_col("id", "bigint"; notnull = true),
+                    Dict{String, Any}("name" => "count", "type" => "integer")],
+      primary_keys = ["id"]))
+    @test plain.fields["count"] isa PormG.Models.sIntegerField   # not PositiveIntegerField
+    @test plain.fields["count"].null == true                     # absent `notnull` ⇒ nullable
+    @test plain.fields["count"].unique == false
+
+    # The other direction: an entry with no `name` (or no `type`) describes no column at all, so
+    # there is nothing to degrade TO and raising is the honest answer. A silent phantom here is the
+    # exact failure #414/#455 exist to remove.
+    @test_throws KeyError convertSQLToModel(_introspection_row(
+      table_name = "broken", columns = [Dict{String, Any}("type" => "bigint")],
+      primary_keys = String[]))
   end
 
   # ───────────────────────────────────────────────────────────────────────────
@@ -350,13 +424,11 @@ using PormG.Migrations: _pg_confdeltype_to_on_delete, _normalize_introspected_on
   # ───────────────────────────────────────────────────────────────────────────
   @testset "SET DEFAULT FK keeps its default so the model can register" begin
     row = _introspection_row(
-      table_name              = "results",
-      columns                 = "id bigint NOT NULL, statusid bigint DEFAULT 1",
-      primary_keys            = "id",
-      foreign_keys            = "statusid",
-      foreign_tables          = "status",
-      referenced_primary_keys = "statusid",
-      delete_rules            = "d",
+      table_name   = "results",
+      columns      = [_col("id", "bigint"; notnull = true),
+                      _col("statusid", "bigint"; default = "1")],
+      primary_keys = ["id"],
+      foreign_keys = [_fk("statusid", "status", "statusid"; on_delete = "d")],
     )
     model = convertSQLToModel(row)
 
@@ -449,9 +521,11 @@ end
 @testset "PostgreSQL UNIQUE marker is a token, not a substring (#318)" begin
   row = _introspection_row(
     table_name   = "uniq_guard",
-    columns      = "id bigint NOT NULL, slug character varying(120) NOT NULL UNIQUE, " *
-                   "token uuid NOT NULL UNIQUE, plain text",
-    primary_keys = "id")
+    columns      = [_col("id", "bigint"; notnull = true),
+                    _col("slug", "character varying(120)"; notnull = true, unique = true),
+                    _col("token", "uuid"; notnull = true, unique = true),
+                    _col("plain", "text")],
+    primary_keys = ["id"])
   model = convertSQLToModel(row)
 
   # Baseline, NOT a mutation gate: these three pass on main too, because this file feeds
@@ -468,8 +542,9 @@ end
   # the token match — so these two assertions, unlike the three above, go red on main.
   tricky = convertSQLToModel(_introspection_row(
     table_name   = "uniq_guard_tricky",
-    columns      = "id bigint NOT NULL, UNIQUE_CODE text, label text DEFAULT 'UNIQUE'",
-    primary_keys = "id"))
+    columns      = [_col("id", "bigint"; notnull = true), _col("UNIQUE_CODE", "text"),
+                    _col("label", "text"; default = "'UNIQUE'")],
+    primary_keys = ["id"]))
   @test !tricky.fields["UNIQUE_CODE"].unique
   @test !tricky.fields["label"].unique
 end
@@ -484,9 +559,10 @@ end
 @testset "PostgreSQL varchar(n > 255) keeps its length (#325)" begin
   model = convertSQLToModel(_introspection_row(
     table_name   = "long_varchar_guard",
-    columns      = "id bigint NOT NULL, canonical_url character varying(500) NOT NULL, " *
-                   "short character varying(120), body text",
-    primary_keys = "id"))
+    columns      = [_col("id", "bigint"; notnull = true),
+                    _col("canonical_url", "character varying(500)"; notnull = true),
+                    _col("short", "character varying(120)"), _col("body", "text")],
+    primary_keys = ["id"]))
 
   # THE mutation gate: on main this field is an `sTextField` and has no `max_length` at all.
   @test model.fields["canonical_url"] isa PormG.Models.sCharField
@@ -509,25 +585,27 @@ end
 # PostgreSQL column. Every `db_index=true` field therefore compared unequal to its own live table
 # forever, and `Dialect.alter_field` has no `db_index` branch, so the migration it triggered emitted
 # no DDL for it. The name half matters just as much: `index_map`'s key must equal the `fields_dict`
-# key, which is built from the `quote_ident`-ed `columns` aggregate and de-quoted on the way in.
-# `index_columns`, uniquely among the schema query's identifier aggregates, is `array_agg(a.attname)`
-# — RAW — so a mixed-case column (#57) arrives here ALREADY unquoted and the two sides meet in the
-# middle. This fixture used to spell it `"mixedCase"`, a shape production never emits, which meant
-# the mixed-case path was pinned against the wrong input (#389).
+# key. Those two came from different aggregates with different quoting until #455 — `columns` was
+# `quote_ident`-ed and `index_columns` was raw — so the reader de-quoted one side and not the other,
+# and this fixture used to spell the column `"mixedCase"`, a shape production never emits, which
+# pinned the mixed-case path against the wrong input (#389). Both sides are now raw.
 #
 # The CTE's own filters (non-unique, non-partial, single-column) run against a live database in
 # test/integration/test_migration_bootstrap.jl — nothing here executes SQL.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "PostgreSQL db_index is read back off the index map (#325)" begin
   model = convertSQLToModel(_introspection_row(
-    table_name    = "db_index_guard",
-    columns       = "id bigint NOT NULL, slug character varying(120), plain text, \"mixedCase\" text",
-    primary_keys  = "id",
-    # What the `indexes` CTE hands back: one entry per indexed column, RAW (`array_agg(a.attname)`,
-    # no `quote_ident` — verified against a live catalog), with the `quote_ident`-ed index names
-    # aligned positionally.
-    index_columns = "slug, mixedCase",
-    index_names   = "db_index_guard_slug_idx, db_index_guard_mixedcase_idx"))
+    table_name   = "db_index_guard",
+    columns      = [_col("id", "bigint"; notnull = true),
+                    _col("slug", "character varying(120)"), _col("plain", "text"),
+                    _col("mixedCase", "text")],
+    primary_keys = ["id"],
+    # What the `indexes` CTE hands back: one object per indexed column, carrying that column's
+    # physical name and its index's own name. Both raw since #455 — the aggregate used to emit the
+    # column raw and the index name quote_ident-ed, an asymmetry the reader had to undo on one
+    # side only.
+    indexes      = [_ix("slug", "db_index_guard_slug_idx"),
+                    _ix("mixedCase", "db_index_guard_mixedcase_idx")]))
 
   # THE mutation gate — all three are `false` on main.
   @test model.fields["slug"].db_index
@@ -589,21 +667,20 @@ end
     @test model.fields["fast_id"].to       == "Col_2fast"
     @test model.fields["fast_id"].to_table == "2fast"
   end
-
-  # `foreign_tables` is spelled the way the PRODUCTION schema query emits it — the CTE aggregates
-  # `quote_ident(cf.relname)`, so a name needing quotes arrives WRAPPED IN `"` while `table_name`
-  # comes from a bare `c.relname`. Feeding the unquoted form here would be a dead test: it passes
-  # against a reader that never de-quotes, while the live path stores `"\"driver profile\""` as
-  # `to_table`, matches no imported model, and skips the binding rewrite entirely.
+  # `foreign_keys` is spelled the way the PRODUCTION schema query emits it. Until #455 the CTE
+  # aggregated `quote_ident(cf.relname)`, so a name needing quotes arrived WRAPPED IN `"` while
+  # `table_name` came from a bare `c.relname`, and feeding the unquoted form here would have been a
+  # dead test — it passes against a reader that never de-quotes, while the live path stored
+  # `"\"driver profile\""` as `to_table`, matched no imported model, and skipped the binding
+  # rewrite entirely. Both sides are now the raw physical name, so the two agree by construction.
   @testset "the PostgreSQL path (convertSQLToModel(::DataFrameRow))" begin
     model = convertSQLToModel(_introspection_row(
-      table_name              = "pit_stop",
-      columns                 = "id bigint NOT NULL, plain_id bigint, spaced_id bigint",
-      primary_keys            = "id",
-      foreign_keys            = "plain_id, spaced_id",
-      foreign_tables          = "driver_profile, \"driver profile\"",
-      referenced_primary_keys = "id, id",
-      delete_rules            = "a, a"))
+      table_name   = "pit_stop",
+      columns      = [_col("id", "bigint"; notnull = true), _col("plain_id", "bigint"),
+                      _col("spaced_id", "bigint")],
+      primary_keys = ["id"],
+      foreign_keys = [_fk("plain_id", "driver_profile", "id"),
+                      _fk("spaced_id", "driver profile", "id")]))
 
     # `quote_ident` leaves an already-legal lowercase name alone, so this half is unquoted input.
     @test model.fields["plain_id"].to       == "Driver_profile"
@@ -622,13 +699,13 @@ end
   # agreement itself, are in `test_key_type_round_trip.jl`.
   @testset "a UNIQUE foreign key becomes a OneToOneField and still carries both" begin
     model = convertSQLToModel(_introspection_row(
-      table_name              = "driver_seat",
-      columns                 = "id bigint NOT NULL, profile_id bigint UNIQUE",
-      primary_keys            = "id",
-      foreign_keys            = "profile_id",
-      foreign_tables          = "\"driver profile\"",   # quote_ident form, as the live query emits
-      referenced_primary_keys = "id",
-      delete_rules            = "a"))
+      table_name   = "driver_seat",
+      columns      = [_col("id", "bigint"; notnull = true),
+                      _col("profile_id", "bigint"; unique = true)],
+      primary_keys = ["id"],
+      # The parent's PHYSICAL name, raw. The schema query no longer quote_ident's it (#455), so
+      # there is no de-quoting step left for a spaced name to be lost in.
+      foreign_keys = [_fk("profile_id", "driver profile", "id")]))
 
     @test model.fields["profile_id"] isa PormG.Models.sOneToOneField
     @test model.fields["profile_id"].to       == "Driver_profile"
@@ -637,11 +714,14 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #389: FK metadata arrives `quote_ident`-quoted, and every half must be de-quoted together
+# #389: every half of the FK metadata must spell an identifier the same way
 #
-# The PostgreSQL schema query aggregates `fk_cols`, `fk_tables` and `referenced_primary_keys`
-# through `quote_ident`, so a mixed-case identifier arrives with the `"` characters as part of the
-# Julia string. #360 (PR #386) de-quoted the TABLE half; this is the rest of it.
+# The PostgreSQL schema query used to aggregate `fk_cols`, `fk_tables` and
+# `referenced_primary_keys` through `quote_ident`, so a mixed-case identifier arrived with the `"`
+# characters as part of the Julia string and every consumer had to undo that. #360 (PR #386)
+# de-quoted the TABLE half; #389 was the rest of it. Since #455 the query transports each of them as
+# a JSON string and none is quoted at all — so what these testsets pin is no longer "the inverse is
+# applied" but the outcome it existed to produce: **one identifier, one spelling, on every side.**
 #
 # The one that bites is `referenced_primary_keys` → `pk_field`. Stored quoted, `fk_target_column`
 # returns it unchanged — an introspected field's `.to` is still a String binding, so the
@@ -652,11 +732,11 @@ end
 # builder addresses a column that does not exist. (It threw `InvalidValueError` when #389 was
 # written, because `SAFE_IDENTIFIER_PATTERN` forbade a `"`; since #394 a physical column is escaped
 # rather than validated, so the same bad value would now render as a column literally named `"Id"`.
-# Either way it is wrong — de-quoting at the source, which is what this testset pins, is the fix.)
+# Either way it is wrong.)
 #
-# `fk_cols` and `col_name` move in the SAME change on purpose: `fk_map`'s keys come from `fk_cols`
-# and are looked up with `col_name`, so normalizing one side alone would break FK detection for
-# every mixed-case column. Both are covered below — the second testset is that mutation gate.
+# `fk_map`'s keys and `col_name` still have to agree — the keys come from one aggregate and the
+# lookup from another — so a change that normalized one side alone would break FK detection for
+# every mixed-case column. The second testset below is that mutation gate.
 #
 # Fully hermetic: `convertSQLToModel(::DataFrameRow)` takes the metadata and nothing else.
 # The live-database half is test/integration/test_importers_introspection.jl.
@@ -666,18 +746,15 @@ end
 # test/unit/ (a struct inside a `@testset` body parses, but is not the house pattern).
 struct MockPg389 <: PormG.PormGPostgres end
 
-@testset "quote_ident-quoted FK metadata is de-quoted (#389)" begin
+@testset "FK metadata spells every identifier once (#389)" begin
   @testset "a mixed-case parent primary key lands unquoted on pk_field" begin
-    # Exactly what the production query emits for a parent keyed on `"Id"`: quote_ident quotes the
-    # mixed-case pk and the mixed-case table, and leaves the all-lowercase child column alone.
+    # The parent is keyed on `Id` and lives in a table named `MixedParent` — two mixed-case names
+    # that `quote_ident` used to wrap and the reader had to unwrap.
     model = convertSQLToModel(_introspection_row(
-      table_name              = "pit_stop",
-      columns                 = "id bigint NOT NULL, parent_id bigint",
-      primary_keys            = "id",
-      foreign_keys            = "parent_id",
-      foreign_tables          = "\"MixedParent\"",
-      referenced_primary_keys = "\"Id\"",
-      delete_rules            = "a"))
+      table_name   = "pit_stop",
+      columns      = [_col("id", "bigint"; notnull = true), _col("parent_id", "bigint")],
+      primary_keys = ["id"],
+      foreign_keys = [_fk("parent_id", "MixedParent", "Id")]))
 
     fk = model.fields["parent_id"]
     @test fk isa PormG.Models.sForeignKey
@@ -704,13 +781,10 @@ struct MockPg389 <: PormG.PormGPostgres end
     # which is a syntax error, not merely ugly. (The issue body says `"""Id"""`; the measured output
     # is two pairs, because the caller adds ONE pair around a value that already carries one.)
     model = convertSQLToModel(_introspection_row(
-      table_name              = "pit_stop",
-      columns                 = "id bigint NOT NULL, parent_id bigint",
-      primary_keys            = "id",
-      foreign_keys            = "parent_id",
-      foreign_tables          = "\"MixedParent\"",
-      referenced_primary_keys = "\"Id\"",
-      delete_rules            = "a"))
+      table_name   = "pit_stop",
+      columns      = [_col("id", "bigint"; notnull = true), _col("parent_id", "bigint")],
+      primary_keys = ["id"],
+      foreign_keys = [_fk("parent_id", "MixedParent", "Id")]))
 
     resolved_pk = PormG.Models.fk_target_column(model.fields["parent_id"])
     sql = PormG.Dialect.add_foreign_key(MockPg389(), "pit_stop", "\"pit_stop_parent_id_fk\"",
@@ -728,13 +802,10 @@ struct MockPg389 <: PormG.PormGPostgres end
     # forever, and on SQLite as a full table rebuild. Nothing above constrains this: those pin the
     # stored value, not the comparison that consumes it.
     live = convertSQLToModel(_introspection_row(
-      table_name              = "pit_stop",
-      columns                 = "id bigint NOT NULL, parent_id bigint",
-      primary_keys            = "id",
-      foreign_keys            = "parent_id",
-      foreign_tables          = "\"MixedParent\"",
-      referenced_primary_keys = "\"Id\"",
-      delete_rules            = "a")).fields["parent_id"]
+      table_name   = "pit_stop",
+      columns      = [_col("id", "bigint"; notnull = true), _col("parent_id", "bigint")],
+      primary_keys = ["id"],
+      foreign_keys = [_fk("parent_id", "MixedParent", "Id")])).fields["parent_id"]
 
     # What a hand-written or regenerated model file declares for that same column.
     declared = PormG.Models.ForeignKey("MixedParent", pk_field = "Id")
@@ -751,13 +822,10 @@ struct MockPg389 <: PormG.PormGPostgres end
     # and the column silently degrades from a ForeignKey to a plain BigIntegerField — FK detection
     # broken for every mixed-case column, which is strictly worse than the bug being fixed.
     model = convertSQLToModel(_introspection_row(
-      table_name              = "pit_stop",
-      columns                 = "id bigint NOT NULL, \"ParentId\" bigint",
-      primary_keys            = "id",
-      foreign_keys            = "\"ParentId\"",
-      foreign_tables          = "\"MixedParent\"",
-      referenced_primary_keys = "\"Id\"",
-      delete_rules            = "a"))
+      table_name   = "pit_stop",
+      columns      = [_col("id", "bigint"; notnull = true), _col("ParentId", "bigint")],
+      primary_keys = ["id"],
+      foreign_keys = [_fk("ParentId", "MixedParent", "Id")]))
 
     # `fields_dict` is keyed de-quoted, so this is the name the rest of PormG sees.
     @test haskey(model.fields, "ParentId")
@@ -767,13 +835,15 @@ struct MockPg389 <: PormG.PormGPostgres end
   end
 
   @testset "a mixed-case PRIMARY KEY column is still detected as the key" begin
-    # `pk_set` comes from `quote_ident(a.attname)` too, and is compared against `col_name`. The two
-    # used to agree only because BOTH were quoted; normalizing `col_name` without normalizing
-    # `pk_set` would leave the table keyless, which no other assertion in this file would catch.
+    # `pk_set` and the column name come from two different aggregates and are compared to each
+    # other, so they have to agree about spelling. They used to agree only because BOTH were
+    # `quote_ident`-ed; normalizing one side alone would leave the table KEYLESS, which no other
+    # assertion in this file would catch. Both are now raw, which is the same agreement by
+    # construction rather than by two matching transforms (#455).
     model = convertSQLToModel(_introspection_row(
       table_name   = "mixed_key",
-      columns      = "\"Id\" bigint NOT NULL, label character varying(50)",
-      primary_keys = "\"Id\""))
+      columns      = [_col("Id", "bigint"; notnull = true), _col("label", "character varying(50)")],
+      primary_keys = ["Id"]))
 
     @test haskey(model.fields, "Id")
     @test model.fields["Id"] isa PormG.Models.sIDField
@@ -781,47 +851,49 @@ struct MockPg389 <: PormG.PormGPostgres end
   end
 
   @testset "an embedded quote round-trips instead of being silently deleted" begin
-    # `quote_ident` DOUBLES an embedded `"`, so `Say"Hi` — a legal PostgreSQL column name — comes
-    # back as `"Say""Hi"`. The old `replace(s, "\"" => "")` deleted every quote and produced
-    # `SayHi`, a column that does not exist: `makemigrations` then proposed `ADD COLUMN "SayHi"`
-    # alongside a `DROP` of the real one, on every run, silently. `_unquote_ident` undoes the
-    # doubling instead, so the name survives: the existing table converges, and `Model_to_str`
-    # regenerates it as a legal binding plus `db_column="Say\"Hi"` — a rename of the BINDING, not
-    # of the column. As of #394 the name is usable end to end as well: `Dialect.create_table`
-    # escapes a column identifier the same way it has escaped `db_table` since #388, and the query
-    # path escapes rather than validates it (`safe_column_identifier`). Both halves are asserted in
+    # `Say"Hi` is a legal PostgreSQL column name. The original defect was a
+    # `replace(s, "\"" => "")` that deleted every quote and produced `SayHi`, a column that does not
+    # exist: `makemigrations` then proposed `ADD COLUMN "SayHi"` alongside a `DROP` of the real one,
+    # on every run, silently. #389 fixed it by undoing `quote_ident`'s doubling exactly; #455 made
+    # the doubling never happen, since a JSON string carries the name as-is.
+    #
+    # As of #394 the name is usable end to end as well: `Dialect.create_table` escapes a column
+    # identifier the same way it has escaped `db_table` since #388, and the query path escapes
+    # rather than validates it (`safe_column_identifier`). Both halves are asserted in
     # `test/unit/test_identifier_quoting.jl`; what this testset pins is the narrower and still
     # separate claim that introspection round-trips the spelling INTACT.
     model = convertSQLToModel(_introspection_row(
-      table_name              = "odd_names",
-      columns                 = "id bigint NOT NULL, \"Say\"\"Hi\" bigint",
-      primary_keys            = "id",
-      foreign_keys            = "\"Say\"\"Hi\"",
-      foreign_tables          = "\"Par\"\"ent\"",
-      referenced_primary_keys = "\"Sa\"\"y\"",
-      delete_rules            = "a"))
+      table_name   = "odd_names",
+      columns      = [_col("id", "bigint"; notnull = true), _col("Say\"Hi", "bigint")],
+      primary_keys = ["id"],
+      foreign_keys = [_fk("Say\"Hi", "Par\"ent", "Sa\"y")]))
 
     @test haskey(model.fields, "Say\"Hi")
     @test model.fields["Say\"Hi"].pk_field == "Sa\"y"
     @test model.fields["Say\"Hi"].to_table == "Par\"ent"
   end
 
-  @testset "the RAW index aggregate is not run through the quote_ident inverse" begin
-    # The mutation gate for the one identifier aggregate that is NOT `quote_ident`-ed:
-    # `indexes.index_columns` is a bare `array_agg(a.attname)`. Undoing a doubling that was never
-    # applied corrupts exactly one name class — a column whose real name IS quoted.
+  @testset "a name that is itself quoted keys fields_dict and index_map identically" begin
+    # ITS ORIGINAL PREMISE IS RETIRED, and the replacement is deliberate rather than a rename.
     #
-    # Real name `"x"` (three characters). `columns` carries `quote_ident("\"x\"")` = `"""x"""`,
-    # `index_columns` carries the raw `"x"`. De-quote both and they still agree; de-quote only the
-    # `columns` side, as it must be, and take the raw side verbatim, and they agree too. Run
-    # `_unquote_ident` on BOTH and the index key collapses to `x` while the field key stays `"x"`
-    # — the #325 db_index churn, reintroduced for that name class by the #389 fix itself.
+    # This testset used to be "the RAW index aggregate is not run through the quote_ident inverse":
+    # `index_columns` was the ONE identifier aggregate the schema query did not wrap in
+    # `quote_ident`, so the reader had to de-quote the `columns` side and take the index side
+    # verbatim. Get that asymmetry wrong in either direction and a column whose real name IS quoted
+    # lands under two different keys, reintroducing the #325 db_index churn for that name class.
+    #
+    # #455 removed the asymmetry itself: every aggregate carries the raw physical name, so there is
+    # no inverse to apply and no side to exempt. What survives is the OUTCOME that asymmetry existed
+    # to protect — the field key and the index key must be the same string — and that is what this
+    # now pins. It is still a live mutation gate: reintroducing any de-quoting step on either side
+    # collapses `"x"` to `x` on that side alone and fails here.
+    #
+    # Real name `"x"`, three characters including the quotes. A legal PostgreSQL column name.
     model = convertSQLToModel(_introspection_row(
-      table_name    = "d1_probe",
-      columns       = "id bigint NOT NULL, \"\"\"x\"\"\" bigint",
-      primary_keys  = "id",
-      index_columns = "\"x\"",
-      index_names   = "d1_probe_x_idx"))
+      table_name   = "d1_probe",
+      columns      = [_col("id", "bigint"; notnull = true), _col("\"x\"", "bigint")],
+      primary_keys = ["id"],
+      indexes      = [_ix("\"x\"", "d1_probe_x_idx")]))
 
     @test haskey(model.fields, "\"x\"")
     @test model.fields["\"x\""].db_index
@@ -829,17 +901,14 @@ struct MockPg389 <: PormG.PormGPostgres end
   end
 
   @testset "the all-lowercase case is unchanged (control)" begin
-    # quote_ident leaves a legal lowercase identifier alone, so this is the shape every existing
-    # fixture exercises. It is a NO-REGRESSION CONTROL for the common path, not a mutation gate:
-    # a lowercase name carries no quotes, so no partial normalization can make it fail.
+    # A legal lowercase identifier needs no quoting on either wire format, so this is the shape
+    # every existing fixture exercises. It is a NO-REGRESSION CONTROL for the common path, not a
+    # mutation gate: nothing about such a name can be mis-normalized.
     model = convertSQLToModel(_introspection_row(
-      table_name              = "results",
-      columns                 = "id bigint NOT NULL, driverid bigint",
-      primary_keys            = "id",
-      foreign_keys            = "driverid",
-      foreign_tables          = "drivers",
-      referenced_primary_keys = "driverid",
-      delete_rules            = "c"))
+      table_name   = "results",
+      columns      = [_col("id", "bigint"; notnull = true), _col("driverid", "bigint")],
+      primary_keys = ["id"],
+      foreign_keys = [_fk("driverid", "drivers", "driverid"; on_delete = "c")]))
 
     @test model.fields["driverid"] isa PormG.Models.sForeignKey
     @test model.fields["driverid"].pk_field == "driverid"
@@ -854,24 +923,27 @@ end
 # The reader used to `split(col, " ")` and take `[1]` as the name and `[2]` as the type, so
 # `"Parent Id" bigint` was torn in half before anything else could look at it. Three things went
 # wrong at once and this block gates all three: the phantom name `"Parent` (the leading quote
-# SURVIVES — `_unquote_ident` correctly refuses to strip a lone unbalanced one), the type `Id"`
-# which no lookup matches so the column degraded to `TextField`, and the LOST RELATION, because
-# `fk_map`'s key comes from an aggregate split on `", "` and therefore survived the space intact.
-# The two sides genuinely disagreed for exactly this class of name.
+# SURVIVED — the de-quoter correctly refused to strip a lone unbalanced one), the type `Id"` which
+# no lookup matches so the column degraded to `TextField`, and the LOST RELATION, because `fk_map`'s
+# key came from an aggregate split on `", "` and therefore survived the space intact. The two sides
+# genuinely disagreed for exactly this class of name.
 #
-# Since #394 this was the only layer where a spaced `db_column` still broke — the DDL and the
-# query builder both handle it — which is what made every `makemigrations` propose
-# `ADD COLUMN "\"Parent"` plus a DROP of the real column, forever.
+# Since #394 this was the only layer where a spaced `db_column` still broke — the DDL and the query
+# builder both handle it — which is what made every `makemigrations` propose `ADD COLUMN "\"Parent"`
+# plus a DROP of the real column, forever.
+#
+# #455 REPLACED THE MECHANISM this testset was written against. #414 recovered the name by scanning
+# `quote_ident`'s self-delimiting quoting; the schema query now transports the name as its own JSON
+# string, so there is no field separator to be torn by and `_split_leading_quoted_ident` is gone.
+# The CLAIM is unchanged and still worth pinning — a spaced name must survive whole — so the
+# assertions below are untouched; only the fixture moved to the new wire format.
 # ───────────────────────────────────────────────────────────────────────────
 @testset "a column name containing a space is not torn in half (#414)" begin
   model = convertSQLToModel(_introspection_row(
-    table_name              = "probe",
-    columns                 = "id bigint NOT NULL, \"Parent Id\" bigint",
-    primary_keys            = "id",
-    foreign_keys            = "\"Parent Id\"",
-    foreign_tables          = "\"MixedParent\"",
-    referenced_primary_keys = "\"Id\"",
-    delete_rules            = "a"))
+    table_name   = "probe",
+    columns      = [_col("id", "bigint"; notnull = true), _col("Parent Id", "bigint")],
+    primary_keys = ["id"],
+    foreign_keys = [_fk("Parent Id", "MixedParent", "Id")]))
 
   # The name, whole. `"Parent` — the measured pre-fix value — must not appear under any key.
   @test haskey(model.fields, "Parent Id")
@@ -889,15 +961,15 @@ end
 
 @testset "a spaced name reaches pk_set and index_map too (#414)" begin
   # The other two consumers keyed on `col_name`. Both already survived a space on their own side
-  # (`primary_keys` splits on `", "`; `index_columns` is the one RAW aggregate), so they were
-  # correct all along and only `col_name` disagreed with them — which is why repairing the one
-  # parse site is what makes all four agree. A spaced PRIMARY KEY left the table KEYLESS before.
+  # (`primary_keys` split on `", "`; `index_columns` was the one RAW aggregate), so they were
+  # correct all along and only `col_name` disagreed with them — which is why repairing the one parse
+  # site made all four agree. A spaced PRIMARY KEY left the table KEYLESS before. Under #455 all
+  # four read the same JSON strings, so there is no longer a normalization step to get half right.
   model = convertSQLToModel(_introspection_row(
-    table_name    = "probe2",
-    columns       = "\"Key Col\" bigint NOT NULL, \"Idx Col\" bigint",
-    primary_keys  = "\"Key Col\"",
-    index_columns = "Idx Col",
-    index_names   = "probe2_idx"))
+    table_name   = "probe2",
+    columns      = [_col("Key Col", "bigint"; notnull = true), _col("Idx Col", "bigint")],
+    primary_keys = ["Key Col"],
+    indexes      = [_ix("Idx Col", "probe2_idx")]))
 
   @test model.fields["Key Col"] isa PormG.Models.sIDField
   @test model.fields["Key Col"].primary_key
@@ -906,27 +978,31 @@ end
 end
 
 @testset "a column NAMED like a marker does not mark itself (#414)" begin
-  # The sibling class the same parse defect created, and the reason the flag/type scans moved off
-  # the whole entry and onto the post-name remainder.
+  # The sibling class the same parse defect created — and, since #455, a class that is
+  # UNREPRESENTABLE rather than guarded. Both halves of the mechanism are gone: the name no longer
+  # shares a string with the markers (each is its own JSON field), and the type no longer shares one
+  # with the name.
   #
   # Which shapes actually broke, measured rather than assumed — a bare reserved word did NOT.
-  # `quote_ident` wraps it, so `"UNIQUE" bigint` split to `["\"UNIQUE\"", "bigint"]`, and #318's
-  # token test (`"UNIQUE" in col_parts`) does not match the quoted form. That case was safe by
-  # accident of quoting, and is kept below as a control. The three that broke are the ones where a
-  # SPACE inside the name puts a bare marker token, or a rewritten type, into the split:
+  # `quote_ident` wrapped it, so `"UNIQUE" bigint` split to `["\"UNIQUE\"", "bigint"]` and #318's
+  # token test did not match the quoted form. That case was safe by accident of quoting, and is kept
+  # below as a control. The three that broke are the ones where a SPACE inside the name put a bare
+  # marker token, or a rewritten type, into the split:
   #
-  #   * `"has UNIQUE inside"` → `[…, "UNIQUE", …]`, so #318's token test fires on the NAME and the
-  #     column is read as carrying a uniqueness constraint it never had — inventing drift the
-  #     planner then proposes forever. #318 closed the `DEFAULT 'UNIQUE'` half of this; the name
-  #     half stayed open because the split it depends on was the defect underneath.
-  #   * `"NOT NULL"` → `occursin("NOT NULL", col)` fires on the name alone, so a nullable column
-  #     reads as NOT NULL.
-  #   * `"double precision"` → the reader rewrites that two-word TYPE to `double_precision` before
+  #   * `"has UNIQUE inside"` → `[…, "UNIQUE", …]`, so #318's token test fired on the NAME and the
+  #     column was read as carrying a uniqueness constraint it never had. #318 closed the
+  #     `DEFAULT 'UNIQUE'` half; the name half stayed open because the split it depended on was the
+  #     defect underneath.
+  #   * `"NOT NULL"` → `occursin("NOT NULL", col)` fired on the name alone, so a nullable column
+  #     read as NOT NULL.
+  #   * `"double precision"` → the reader rewrote that two-word TYPE to `double_precision` before
   #     splitting, and the rewrite hit a column so NAMED.
   model = convertSQLToModel(_introspection_row(
     table_name   = "marker_probe",
-    columns      = "id bigint NOT NULL, \"has UNIQUE inside\" bigint, \"NOT NULL\" bigint, \"double precision\" bigint, \"UNIQUE\" bigint",
-    primary_keys = "id"))
+    columns      = [_col("id", "bigint"; notnull = true),
+                    _col("has UNIQUE inside", "bigint"), _col("NOT NULL", "bigint"),
+                    _col("double precision", "bigint"), _col("UNIQUE", "bigint")],
+    primary_keys = ["id"]))
 
   @test Set(keys(model.fields)) ==
         Set(["id", "has UNIQUE inside", "NOT NULL", "double precision", "UNIQUE"])
@@ -940,8 +1016,10 @@ end
   # Control: the real markers still work, on a column whose name says nothing.
   plain = convertSQLToModel(_introspection_row(
     table_name   = "marker_control",
-    columns      = "id bigint NOT NULL, slug character varying(30) NOT NULL UNIQUE, dp double precision",
-    primary_keys = "id"))
+    columns      = [_col("id", "bigint"; notnull = true),
+                    _col("slug", "character varying(30)"; notnull = true, unique = true),
+                    _col("dp", "double precision")],
+    primary_keys = ["id"]))
   @test plain.fields["slug"].unique
   @test !plain.fields["slug"].null
   @test plain.fields["slug"].max_length == 30
@@ -963,15 +1041,15 @@ end
 # ───────────────────────────────────────────────────────────────────────────
 @testset "one entry per FK: every aggregate pairs by position (#415)" begin
   model = convertSQLToModel(_introspection_row(
-    table_name              = "child",
-    columns                 = "id bigint NOT NULL, a_id bigint, b_id bigint",
-    primary_keys            = "id",
-    foreign_keys            = "a_id, b_id",
-    foreign_tables          = "parent_a, parent_b",
-    # NOT the parents' primary keys: `parent_a` is referenced on a non-PK UNIQUE column. This is
-    # the value the old CTE could not produce at all, because it never selected `confkey`.
-    referenced_primary_keys = "some_unique_col, id",
-    delete_rules            = "c, n"))
+    table_name   = "child",
+    columns      = [_col("id", "bigint"; notnull = true), _col("a_id", "bigint"), _col("b_id", "bigint")],
+    primary_keys = ["id"],
+    # `some_unique_col` is NOT the parent's primary key: `parent_a` is referenced on a non-PK
+    # UNIQUE column. This is the value the old CTE could not produce at all, because it never
+    # selected `confkey`. Each referenced column now travels ON its own constraint (#455), so the
+    # pairing this testset checks is structural rather than positional.
+    foreign_keys = [_fk("a_id", "parent_a", "some_unique_col"; on_delete = "c"),
+                    _fk("b_id", "parent_b", "id"; on_delete = "n")]))
 
   @test model.fields["a_id"].pk_field == "some_unique_col"
   @test model.fields["a_id"].to_table == "parent_a"
@@ -994,13 +1072,10 @@ end
   # duplicate — badly — a fix that belongs in the SQL. The assertion is that the shape is
   # DEGENERATE, which is the argument for why the CTE must not produce it.
   model = convertSQLToModel(_introspection_row(
-    table_name              = "probe",
-    columns                 = "id bigint NOT NULL, parent_id bigint",
-    primary_keys            = "id",
-    foreign_keys            = "parent_id, parent_id",
-    foreign_tables          = "comp_parent, comp_parent",
-    referenced_primary_keys = "a, b",
-    delete_rules            = "a, a"))
+    table_name   = "probe",
+    columns      = [_col("id", "bigint"; notnull = true), _col("parent_id", "bigint")],
+    primary_keys = ["id"],
+    foreign_keys = [_fk("parent_id", "comp_parent", "a"), _fk("parent_id", "comp_parent", "b")]))
 
   # MEMBERSHIP, not the exact value. `== "b"` is what this actually returns today (last write wins),
   # but pinning it would freeze an answer the codebase calls wrong: anyone later adding a
@@ -1009,4 +1084,264 @@ end
   # of the parent's key columns arbitrarily and reports no problem, which is the argument for fixing
   # it upstream in the CTE.
   @test model.fields["parent_id"].pk_field in ("a", "b")
+end
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# #455 — the ENTRY separator, and the DEFAULT parser it hid
+#
+# #414 fixed the FIELD separator inside one entry of the `columns` aggregate. The ENTRY separator
+# was `", "`, chosen by `array_to_string`, and it is a legal substring of the data it delimited:
+# `quote_ident('Race, Total')` is `"Race, Total"`, and `pg_get_expr` renders
+# `DEFAULT concat('a', 'b')` with one too. One entry tore into two, the real column vanished, and
+# `makemigrations` proposed adding the phantoms and dropping the real column on every run — the
+# #414 failure reached by a different trigger, and one that needs no unusual identifier at all.
+#
+# Nothing could be fixed at the parse: the entry was already in two pieces before any parser saw
+# it. The aggregates are now `json_agg(json_build_object(...))`, so the tear is UNREPRESENTABLE.
+# That is what the four measured rows below assert — not that a guard catches them, but that the
+# shape they describe is now ordinary.
+#
+# THE SECOND DEFECT, and the reason acceptance needs more than the aggregate change: the DEFAULT
+# extractor was WHITESPACE-TERMINATED (`[^:\s]+`), so `DEFAULT 'Ferrari, Scuderia'::text` cleaned
+# to `'Ferrari` even from an entry that arrived INTACT. Moving where the string comes from does not
+# fix a parser that stops at the first space. `_pg_clean_default` is the fix, and it is pinned
+# directly below as well as through the reader.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+@testset "a comma-space in a name or a DEFAULT cannot tear an entry (#455)" begin
+  # Row 1 of the issue's measurement: `id bigint NOT NULL, "Race, Total" bigint` used to yield the
+  # field keys `"Race`, `Total"` and `id` — the real column GONE, two phantoms in its place.
+  model = convertSQLToModel(_introspection_row(
+    table_name   = "comma_name",
+    columns      = [_col("id", "bigint"; notnull = true), _col("Race, Total", "bigint")],
+    primary_keys = ["id"]))
+
+  @test Set(keys(model.fields)) == Set(["id", "Race, Total"])
+  @test model.fields["Race, Total"] isa PormG.Models.sBigIntegerField  # not the TextField degrade
+  @test !any(k -> occursin('"', k), keys(model.fields))                # no `"Race` / `Total"`
+
+  # Row 2: a DEFAULT containing `, ` on an ORDINARY lowercase column. This is the case that makes
+  # the issue more than a curiosity — no odd identifier is involved anywhere.
+  model2 = convertSQLToModel(_introspection_row(
+    table_name   = "comma_default",
+    columns      = [_col("id", "bigint"; notnull = true),
+                    _col("note", "text"; default = "'Ferrari, Scuderia'::text")],
+    primary_keys = ["id"]))
+
+  @test Set(keys(model2.fields)) == Set(["id", "note"])
+  # THE mutation gate for `_pg_clean_default`. The pre-fix reader produced `Scuderia'::text` as a
+  # phantom FIELD KEY; a reader that fixed only the aggregate produces the truncated `Ferrari`.
+  # Both fail here, and they fail differently, which is the point of asserting the value.
+  @test model2.fields["note"].default == "Ferrari, Scuderia"
+
+  # Row 3: a name carrying BOTH a space and a comma. Measured at ZERO warnings on `main` — the #414
+  # degrade warning fired only when the last torn fragment happened to contain no space, so this
+  # produced phantoms in complete silence.
+  model3 = convertSQLToModel(_introspection_row(
+    table_name   = "comma_spaced_name",
+    columns      = [_col("id", "bigint"; notnull = true), _col("Driver Ref, Total", "bigint")],
+    primary_keys = ["id"]))
+
+  @test Set(keys(model3.fields)) == Set(["id", "Driver Ref, Total"])
+
+  # Row 4, the one most likely to occur in a real schema and also silent: a multi-argument function
+  # default followed by a marker. `pg_get_expr` renders `concat('a','b')` with a `, `, and such a
+  # column is usually NOT NULL. Pre-fix field keys: `'b'::text)`, `id`, `note`.
+  #
+  # SCOPED DELIBERATELY: what is asserted is that the COLUMN round-trips and keeps its NOT NULL —
+  # not that PormG reproduces an expression default. It cannot; `note.default` is the literal
+  # string `concat('a'::text, 'b'::text)`, which PormG would re-emit as a quoted literal. That is
+  # pre-existing, out of scope here, and asserting otherwise would be asserting a bug.
+  model4 = convertSQLToModel(_introspection_row(
+    table_name   = "comma_fn_default",
+    columns      = [_col("id", "bigint"; notnull = true),
+                    _col("note", "text"; notnull = true, default = "concat('a'::text, 'b'::text)")],
+    primary_keys = ["id"]))
+
+  @test Set(keys(model4.fields)) == Set(["id", "note"])
+  @test model4.fields["note"].null == false
+end
+
+@testset "a comma-space in a KEY, an FK or an INDEX cannot misalign either (#455)" begin
+  # The aggregates #455 widened past the issue's own scope, because `", "` was the entry separator
+  # for ALL of them and three were consumed by zipping parallel splits.
+  #
+  # `primary_keys` tore on the SAME name as `columns`, so both sides agreed on both WRONG names and
+  # both phantoms came back marked as keys.
+  keyed = convertSQLToModel(_introspection_row(
+    table_name   = "comma_key",
+    columns      = [_col("Key, Col", "bigint"; notnull = true), _col("label", "text")],
+    primary_keys = ["Key, Col"]))
+
+  @test Set(keys(keyed.fields)) == Set(["Key, Col", "label"])
+  @test keyed.fields["Key, Col"] isa PormG.Models.sIDField
+  @test keyed.fields["Key, Col"].primary_key
+
+  # THE FK MISALIGNMENT GATE, and the worst of the four failures. Six parallel aggregates were
+  # zipped positionally and `zip` truncates to the shortest, so a `, ` in a PARENT TABLE name made
+  # `fk_tables` one entry longer than `fk_cols` and shifted every LATER foreign key onto a
+  # different parent. `plain_id` is declared AFTER the comma-named parent for exactly that reason:
+  # it is the column that came back pointing at the wrong — but real — table, which the planner
+  # then diffed into a DROP/ADD CONSTRAINT against a table the relation never named.
+  rel = convertSQLToModel(_introspection_row(
+    table_name   = "comma_child",
+    columns      = [_col("id", "bigint"; notnull = true), _col("first_id", "bigint"),
+                    _col("plain_id", "bigint")],
+    primary_keys = ["id"],
+    foreign_keys = [_fk("first_id", "comma, parent", "Ref, Key"; on_delete = "c"),
+                    _fk("plain_id", "plain_parent", "id"; on_delete = "n")]))
+
+  @test rel.fields["first_id"].to_table == "comma, parent"
+  @test rel.fields["first_id"].pk_field == "Ref, Key"
+  @test rel.fields["first_id"].on_delete === PormG.Models.CASCADE
+  # The shifted one. Pre-fix this named `comma` or `parent"`, never `plain_parent`.
+  @test rel.fields["plain_id"].to_table == "plain_parent"
+  @test rel.fields["plain_id"].pk_field == "id"
+  @test rel.fields["plain_id"].on_delete === PormG.Models.SET_NULL
+
+  # The index pair was the other zip. A shifted index NAME reaches `planner._drop_index`, so a
+  # model that stops declaring `db_index` on one column could emit `DROP INDEX` for another's.
+  idx = convertSQLToModel(_introspection_row(
+    table_name   = "comma_idx",
+    columns      = [_col("id", "bigint"; notnull = true), _col("Idx, Col", "bigint"),
+                    _col("plain", "bigint")],
+    primary_keys = ["id"],
+    indexes      = [_ix("Idx, Col", "comma_idx_first"), _ix("plain", "comma_idx_second")]))
+
+  @test idx.fields["Idx, Col"].db_index
+  @test idx.cache["index"]["Idx, Col"] == "comma_idx_first"
+  @test idx.cache["index"]["plain"]    == "comma_idx_second"
+end
+
+@testset "a DEFAULT can no longer forge a column marker (#455)" begin
+  # #318 moved the UNIQUE test from `occursin` to token membership, which fixed the single-word
+  # `DEFAULT 'UNIQUE'`; #414 removed the NAME's contribution. What neither could remove is that the
+  # DEFAULT still shared one string with every marker being scanned — so these two shapes, both
+  # legal and both silent, still produced fabricated constraints on `main`.
+  #
+  # They are structurally impossible now: `notnull` and `unique` are their own JSON fields. These
+  # are the anti-regression gates for anyone tempted to fold the markers back into the type string.
+  model = convertSQLToModel(_introspection_row(
+    table_name   = "forged_markers",
+    columns      = [_col("id", "bigint"; notnull = true),
+                    # A NULLABLE column whose default literal contains "NOT NULL".
+                    _col("nul", "text"; default = "'NOT NULL'::text"),
+                    # A NON-UNIQUE column whose default literal contains "UNIQUE" as its own word —
+                    # the multi-word form #318's token test cannot tell from a real marker.
+                    _col("uq", "text"; default = "'a UNIQUE b'::text")],
+    primary_keys = ["id"]))
+
+  @test model.fields["nul"].null == true            # `occursin("NOT NULL", …)` used to fire here
+  @test model.fields["nul"].default == "NOT NULL"
+  @test model.fields["uq"].unique == false          # `"UNIQUE" in col_parts` used to fire here
+  @test model.fields["uq"].default == "a UNIQUE b"
+end
+
+@testset "the #414 degrade path is gone rather than merely rare (#455)" begin
+  # Acceptance checkbox 4 is satisfied by DELETION, not by a guard — the strongest form the claim
+  # can take. `_split_leading_quoted_ident` peeled a `quote_ident`-ed name off a rendered entry and
+  # `_unquote_ident` was its inverse; the schema query emits neither a rendered entry nor a quoted
+  # identifier any more, so both are gone.
+  #
+  # The precedent for asserting a definition's absence is `!isdefined(Models, :sAutoField)` in
+  # test_key_type_round_trip.jl (#408): a lingering definition is a lingering code path.
+  @test !isdefined(PormG.Migrations, :_split_leading_quoted_ident)
+  @test !isdefined(PormG.Migrations, :_unquote_ident)
+
+  # …and the warning they degraded into is not merely unreached, it is unreachable: the row that
+  # used to produce it now reads cleanly. `min_level = Logging.Warn` fails on ANY warning, which is
+  # what makes this a gate rather than a formality.
+  @test_logs min_level = Logging.Warn convertSQLToModel(_introspection_row(
+    table_name   = "no_warn",
+    columns      = [_col("id", "bigint"; notnull = true), _col("Race, Total", "bigint"),
+                    _col("note", "text"; notnull = true, default = "concat('a'::text, 'b'::text)")],
+    primary_keys = ["id"]))
+end
+
+@testset "_pg_clean_default undoes pg_get_expr without truncating (#455)" begin
+  # Direct coverage for the helper, because the reader can only show a few of its branches and each
+  # of these was a distinct way the old three-line `replace` chain went wrong.
+  clean = PormG.Migrations._pg_clean_default
+
+  @test clean(nothing) === nothing
+  @test clean("1") == "1"
+  @test clean("(0)::numeric") == "0"                            # cast, then the paren wrapper
+  @test clean("'Ferrari, Scuderia'::character varying") == "Ferrari, Scuderia"
+  @test clean("'a, b'::character varying(40)") == "a, b"        # a cast that carries a modifier
+  @test clean("'it''s'::text") == "it's"                        # `''` is one escaped quote
+  @test clean("'x'::\"MyEnum\"") == "x"                         # a quoted user-defined type
+
+  # THE anchoring gate. The old cast strip was global, so it rewrote `'{1,2}'::integer[]` to
+  # `'{1,2}'[]` — losing the array default the issue names by example.
+  @test clean("'{1,2}'::integer[]") == "{1,2}"
+
+  # Balance-checked unwrapping, not regex-anchored. `r"^\((.+)\)$"` turned the first into `a) + (b`,
+  # and `r"^'(.+)'$"` would treat the second — a concatenation of two literals — as one literal.
+  @test clean("(a) + (b)") == "(a) + (b)"
+  @test clean("'a' || 'b'") == "'a' || 'b'"
+
+  # THE CONDITIONAL-RE-STRIP GATE, found in review. `pg_get_expr` parenthesizes every non-trivial
+  # expression, so after unwrapping those parens the inner text is usually a COMPOUND expression
+  # whose trailing cast belongs to its last OPERAND. Re-stripping unconditionally — which the first
+  # implementation did — turns these into MANGLED expressions rather than unrecognized ones, which
+  # is strictly worse: an unrecognized default is refused, a mangled one may be accepted.
+  @test clean("('x'::text || 'y'::text)") == "'x'::text || 'y'::text"
+  @test clean("(now() - '1 day'::interval)") == "now() - '1 day'::interval"
+  # …while the case the re-strip exists for still reduces, because it reduces to a LITERAL.
+  @test clean("('x'::text)") == "x"
+
+  # A bare NULL is "no default", not the four-character string. `_normalize_sqlite_default` gives
+  # the same answer for the same input, and the two engines have to agree (#455).
+  # `DEFAULT NULL::character varying` is a shape pg_dump emits routinely.
+  @test clean("NULL::text") === nothing
+  @test clean("NULL") === nothing
+  @test clean("'NULL'::text") == "NULL"        # the LITERAL string is still a real default
+
+  # An expression that cannot reduce to a literal is returned whole, for the field constructors to
+  # judge. `nextval(...)` is what `_fk_default_or_warn` above already refuses by name.
+  @test clean("concat('a'::text, 'b'::text)") == "concat('a'::text, 'b'::text)"
+  @test clean("nextval('s'::regclass)") == "nextval('s'::regclass)"
+end
+
+@testset "the type arrives whole, so no spelling needs rewriting (#455)" begin
+  # `format_type` output is its own JSON field now, which retires two workarounds at once: the
+  # `replace(col, "double precision" => "double_precision")` that ran over the whole rendered entry
+  # (and so also rewrote a column so NAMED), and the `character varying\((\d+)\)` re-match that
+  # existed because `col_parts[1]` was only ever `character`.
+  split_ft = PormG.Migrations._pg_split_format_type
+  tm = PormG.postgres_type_map
+
+  @test split_ft("character varying(120)", tm) == ("varchar", "120")
+  @test split_ft("double precision", tm)       == ("double_precision", nothing)
+  @test split_ft("numeric(10,2)", tm)          == ("numeric", "10,2")
+
+  # The modifier is the FIRST parenthesized group and is REMOVED rather than assumed to trail:
+  # `format_type` renders datetime precision in the MIDDLE. Applying it by pattern rather than by
+  # type is how `timestamp(3)` would have become a `max_length`.
+  @test split_ft("timestamp(3) without time zone", tm) == ("timestamp", "3")
+
+  # Unmatched long spellings fall back to the first word, exactly as `split(col_rest, " ")[1]` did,
+  # so an unknown type still degrades to TextField rather than being re-typed.
+  @test split_ft("interval day to second(3)", tm) == ("interval", "3")
+  @test split_ft("integer[]", tm)                 == ("integer[]", nothing)
+
+  # Through the reader: the modifier lands on the right slot for the right type, and nowhere for a
+  # type that has no such slot.
+  model = convertSQLToModel(_introspection_row(
+    table_name   = "types_probe",
+    columns      = [_col("id", "bigint"; notnull = true),
+                    _col("name", "character varying(40)"),
+                    _col("ratio", "double precision"),
+                    _col("amount", "numeric(9,3)"),
+                    _col("seen_at", "timestamp(3) without time zone")],
+    primary_keys = ["id"]))
+
+  @test model.fields["name"] isa PormG.Models.sCharField
+  @test model.fields["name"].max_length == 40
+  @test model.fields["ratio"] isa PormG.Models.sFloatField
+  @test model.fields["amount"] isa PormG.Models.sDecimalField
+  @test model.fields["amount"].max_digits == 9
+  @test model.fields["amount"].decimal_places == 3
+  # The one that would regress if the modifier were applied by pattern: a DateTimeField with a
+  # `max_length` of 3, or (pre-#455) a TextField, because `timestamp(3)` matched no type-map key.
+  @test model.fields["seen_at"] isa PormG.Models.sDateTimeField
 end

@@ -8,118 +8,14 @@
 # Shared identifier helpers
 # ---
 
-# The inverse of PostgreSQL's `quote_ident`, which is how the schema query emits every identifier
-# it aggregates. `quote_ident` wraps a name that needs quoting in `"` AND DOUBLES any `"` inside it,
-# so `Say"Hi` comes back as `"Say""Hi"`.
-#
-# `replace(s, "\"" => "")` — which this replaces at six call sites in `convertSQLToModel` — got the
-# common case right and the embedded-quote case silently WRONG: it rewrote `"Say""Hi"` to `SayHi`,
-# a name no column has, so `makemigrations` proposed `ADD COLUMN "SayHi"` plus a `DROP` of the real
-# one, forever, with no warning. Undoing the doubling makes the round trip exact instead.
-#
-# WHAT THAT DOES AND DOES NOT BUY, measured rather than assumed. The name now survives, so the
-# existing table converges and `Model_to_str` regenerates it faithfully — as a legal binding plus
-# `db_column="Say\"Hi"`, which is a rename of the BINDING, not of the column. What it does NOT do
-# is fail closed: `_validate_identifier` (querybuilder/sanitization.jl) guards the QUERY path only,
-# so a query naming that field still raises `InvalidValueError`, while `Dialect.create_table` will
-# happily emit `"Say"Hi"` and close the identifier early. That is the column-name half of the
-# `_quote_table_ddl` escaping #388/#59 applied to TABLE names, and it belongs with #394 — it is not
-# introduced here, but this function is what makes such a name reachable at all.
-#
-# A name with no surrounding pair is returned untouched — `quote_ident` leaves an already-legal
-# lowercase identifier bare. Note this is NOT a safe transform for a RAW producer: a column truly
-# named `"x"` reads back raw as `"x"` and would be stripped to `x`. The `indexes` CTE's
-# `index_columns` is the one raw identifier aggregate in the schema query, and it is deliberately
-# NOT passed through here (see its call site below).
-function _unquote_ident(name::AbstractString)::String
-  (length(name) >= 2 && startswith(name, '"') && endswith(name, '"')) || return String(name)
-  return replace(name[nextind(name, 1):prevind(name, lastindex(name))], "\"\"" => "\"")
-end
+# #455 retired this section's two functions, `_unquote_ident` and `_split_leading_quoted_ident`.
+# Both existed to undo `quote_ident` in the PostgreSQL schema query's string aggregates — one for
+# the quoting itself (#389), one for a name containing a SPACE that the field separator tore in
+# half (#414). That query now transports every identifier as a JSON string, which is not a SQL
+# identifier and needs no quoting, so there is nothing left to undo. `convertSQLToModel(::String)`
+# below reads DDL PormG itself emitted and deliberately never used either helper.
 
-# Peel the leading `quote_ident`-ed column name off one entry of the schema query's `columns`
-# aggregate, returning `(de-quoted name, everything after it)`.
-#
-# #414: the caller used to do `split(col, " ")` and take `[1]` as the name and `[2]` as the type. The
-# entry separator (`", "`) is unambiguous but the FIELD separator was not, so an identifier
-# CONTAINING a space was torn in half before anything else could look at it. `"Parent Id" bigint`
-# yielded the phantom name `"Parent` — the leading quote survives, because `_unquote_ident` correctly
-# refuses to strip a lone unbalanced one — and the type `Id"`, which no lookup matches, so the column
-# also degraded to `TextField`. `fk_map`, `pk_set` and `index_map` all key on names that survive a
-# space (they split on `", "`, or come from the one RAW aggregate), so the two sides genuinely
-# disagreed for exactly that class of name: the relation was lost and `makemigrations` proposed
-# `ADD COLUMN "\"Parent"` plus a DROP of the real column on every run, forever.
-#
-# The parse is the fix; the aggregate's FORMAT is untouched. `quote_ident` output is already
-# SELF-DELIMITING, which is what makes that sufficient: a name needing a space is always wrapped in
-# `"` (and any embedded `"` doubled), and a name left bare by `quote_ident` is a legal lowercase
-# identifier, which cannot contain a space. So the closing quote — not the first space — is where the
-# name ends, and scanning to it recovers every name that reaches this function whole.
-#
-# THE RESIDUAL, stated rather than implied. "Whole" is the operative word: the caller splits the
-# aggregate on `", "` BEFORE calling, so a name containing `, ` is already in two pieces and nothing
-# here can reassemble it — a column named `a, b` still yields two phantom fields. The same split is
-# what a DEFAULT expression containing `, ` breaks on (`DEFAULT 'Ferrari, Scuderia'`,
-# `DEFAULT concat('a', 'b')`, `DEFAULT '{1, 2}'::int[]`), and that one needs no odd column name at
-# all. Fixing THAT class means changing the aggregate's format — one row per column, or a
-# `json_agg(json_build_object(...))` — which is #414's Option 1 and a separate change.
-#
-# Two things fall out of returning the REMAINDER rather than re-splitting the whole entry, and the
-# caller depends on both. The name can no longer contribute a token to the flag scan, so a column
-# whose name CONTAINS a marker token (`"has UNIQUE inside"`, `"NOT NULL"`) stops inventing its own
-# constraint — the residue of #318, which fixed the `DEFAULT 'UNIQUE'` half by moving to a token test
-# but left the NAME contributing tokens; and the `double precision` → `double_precision` rewrite no
-# longer rewrites a column so named.
-#
-# Degrades rather than throws on a shape this cannot parse. Introspection never aborts a whole schema
-# read over one odd column (see `_fk_default_or_warn` below for the same policy on defaults). The two
-# degrade shapes are NOT treated alike, and the difference is deliberate:
-#
-#   * An entry with NO SEPARATOR AT ALL returns an empty remainder, and the caller WARNS on it —
-#     see the `isempty(col_rest)` guard at the parse site. That is a DELIBERATE CHANGE, not a
-#     preserved behaviour: the pre-#414 caller raised `BoundsError` on `col_parts[2]` here, killing
-#     the entire read. Trading a loud abort for a SILENT phantom column would swap one failure for
-#     the permanent `makemigrations` churn this issue exists to remove.
-#   * An UNTERMINATED QUOTE falls through to the space split and yields a non-empty remainder, so it
-#     does NOT warn. `quote_ident` cannot emit one — it always closes what it opens — so reaching
-#     this means the entry was already torn by the `", "` entry split upstream.
-#
-#     THE WARNING IS NOT A GUARANTEE, and the gap is worth stating rather than discovering. It fires
-#     only when the LAST torn fragment happens to contain no space, so a torn column can produce
-#     phantoms and stay silent: `"Driver Ref, Total"` (a name with a space AND a comma) tears into
-#     `"Driver Ref` and `Total"`, both of which have a space or land mid-entry, and warns zero times;
-#     so does a multi-argument function default followed by any marker
-#     (`DEFAULT concat('a', 'b') NOT NULL`). Measured, not assumed.
-#
-#     A tempting strengthening — warn whenever `col_name` still contains a `"` — is WRONG and was
-#     rejected: `Say"Hi` and a column genuinely named `"x"` both round-trip correctly through
-#     `quote_ident` and both legitimately carry a quote in the parsed name (each has a passing test
-#     in `test_introspection_guards.jl`). It would warn on two names that are perfectly fine. The
-#     real fix for the silent cases is the same one as for the residual above: change the
-#     aggregate's format so entries cannot be torn at all.
-function _split_leading_quoted_ident(entry::AbstractString)
-  if startswith(entry, '"')
-    i = nextind(entry, firstindex(entry))
-    while i <= lastindex(entry)
-      if entry[i] == '"'
-        j = nextind(entry, i)
-        # `""` is quote_ident's doubling of an embedded quote, not the end of the identifier.
-        if j <= lastindex(entry) && entry[j] == '"'
-          i = nextind(entry, j)
-          continue
-        end
-        name = _unquote_ident(entry[firstindex(entry):i])
-        rest = j <= lastindex(entry) ? lstrip(SubString(entry, j)) : SubString(entry, j)
-        return (name, rest)
-      end
-      i = nextind(entry, i)
-    end
-    # Unterminated: fall through to the space split, which is what the pre-#414 caller did.
-  end
-  sep = findfirst(' ', entry)
-  sep === nothing && return (_unquote_ident(entry), SubString(entry, nextind(entry, lastindex(entry))))
-  return (_unquote_ident(SubString(entry, firstindex(entry), prevind(entry, sep))),
-          SubString(entry, nextind(entry, sep)))
-end
+# ---
 
 # ---
 # Shared FK helpers (both backends)
@@ -165,9 +61,9 @@ function _fk_default_or_warn(default_val, table_name, column_name)
     # `Model_to_str` render-failure path uses (Models.jl), so Ctrl-C during a large
     # `convert_schema_to_models` run aborts instead of being reported as a bad default.
     (e isa InterruptException || e isa StackOverflowError) && rethrow()
-    # The value is shown as introspection received it. On PostgreSQL that is the column regex's
-    # already-cleaned form, so an expression default can appear truncated at a `::` cast — enough
-    # to identify the column, not a faithful reproduction of the DDL.
+    # The value is shown as introspection received it — on PostgreSQL, `_pg_clean_default`'s output,
+    # which strips a trailing cast and unwraps a literal. Enough to identify the column, not a
+    # faithful reproduction of the DDL.
     @warn "Foreign key default could not be represented as a field default; emitting the relation without it." table = string(table_name) column = string(column_name) default = string(default_val)
     return nothing
   end
@@ -775,9 +671,14 @@ both a per-field `db_index` and a model-level `Index`. `NOT indisunique` keeps a
 
 Run **once for the whole schema**, not per table, and joined to the models by name in
 `convert_schema_to_models`. It is a separate query rather than another CTE on the schema dump because
-that query returns one row per table and would need a second aggregation level — and any delimiter
-chosen to serialize `(index, columns)` pairs into one string is a legal character in a PostgreSQL
-identifier.
+that query returns one row per table and would need a second aggregation level.
+
+The other half of that rationale is **retired and must not be restored**: it used to say no delimiter
+could serialize `(index, columns)` pairs safely, because every candidate is a legal character in a
+PostgreSQL identifier. True of any *delimiter* — but #455 moved the schema query off delimiters
+entirely and onto `json_agg(json_build_object(...))`, which escapes its own. So folding this query in
+is now merely unnecessary work, not an impossibility, and the counter-example lives in this same
+file.
 
 Everything PormG cannot re-emit is excluded, never read partially or approximately. Reading it
 "close enough" would regenerate a **different** index under the developer's name, which is the one
@@ -951,25 +852,46 @@ function convert_schema_to_models(db::PormGPostgres; ignore_table::Vector{String
 end
 
 function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} = "public", table::Union{String, Nothing} = nothing)
-  # Get PostgreSQL version to check for attidentity support
-  version_df = DataFrame(fetch(db, "SELECT split_part(version(), ' ', 2) AS version"))
-  pg_version = version_df[1, :version]
-  major_version = parse(Int, split(pg_version, ".")[1])
-  
-  # Build the identity case conditionally
-  identity_case = if major_version >= 10
-    """
-            || CASE
-                WHEN a.attidentity = 'a' THEN ' GENE_ALWAYS_IDENTITY'
-                WHEN a.attidentity = 'd' THEN ' GENE_BY_DEF_IDENTITY'
-                ELSE ''
-               END
-    """
-  else
-    ""
-  end
-  
-  # Modified query that adds identity info (if supported) and checks single-column UNIQUE constraints
+  # ONE ROUND TRIP. There used to be a `SELECT split_part(version(), ' ', 2)` probe here, whose only
+  # consumer was a `major_version >= 10` gate around an `attidentity` SQL fragment. That gate was
+  # dead: the `indexes` CTE below uses `indnkeyatts`, which is PostgreSQL 11+, and it sits in THIS
+  # SAME STATEMENT — so 11 is the effective floor for every introspection and nothing could reach
+  # the `else` branch. #455 made `identity` a JSON field read straight from `a.attidentity`, which
+  # left the probe with no consumer at all. The floor is stated here rather than probed for.
+  #
+  # #455: every aggregate that is TRANSPORTED to the reader is `json_agg(...)::text`, not
+  # `array_to_string(array_agg(...), ', ')`. (`unique_constraints` and `non_negative_checks` still
+  # build plain `array_agg` arrays; those never leave the statement — they are consumed by `= ANY`
+  # in the outer SELECT, so no delimiter is ever chosen for them and none can be forged.)
+  # The old wire format chose `", "` as its entry separator, and `", "` is a legal substring of the
+  # data it delimited — `quote_ident('Race, Total')` is `"Race, Total"`, and `pg_get_expr` renders
+  # `DEFAULT concat('a', 'b')` with one too. A single tear did not merely split one column in two:
+  #
+  #   * `columns`      — the real column vanished and two phantoms appeared, so makemigrations
+  #                      proposed adding the phantoms and dropping the real column on every run.
+  #   * `primary_keys` — tore on the SAME name, so both sides AGREED on both wrong names and both
+  #                      phantoms came back as IDFields.
+  #   * `foreign_keys` — six parallel aggregates zipped POSITIONALLY, and `zip` truncates to the
+  #                      shortest, so every LATER foreign key shifted onto the wrong parent table,
+  #                      wrong referenced column and wrong ON DELETE. Worse than a phantom: the
+  #                      planner then diffed a live, correct constraint against a real table that is
+  #                      the wrong one.
+  #   * `indexes`      — the same zip shifted index NAMES onto other columns, and `cache["index"]`
+  #                      feeds `planner._drop_index`.
+  #
+  # JSON escapes its own delimiters, so no identifier and no DEFAULT expression can forge one. That
+  # makes the tear UNREPRESENTABLE rather than guarded, which is why #414's `_split_leading_quoted_ident`
+  # and `_unquote_ident` are gone rather than merely unused: `quote_ident` appears nowhere below,
+  # because a JSON string is not a SQL identifier and needs no quoting to survive transport.
+  #
+  # Parameterized rather than interpolated into single-quoted literals, matching
+  # `_pg_composite_indexes` above. Both are keyword arguments, so both are caller-supplied by
+  # contract even though every call site today passes `schema = "public"` and no `table`.
+  params = String[]
+  schema === nothing || push!(params, schema)
+  schema_clause = schema === nothing ? "" : "AND n.nspname = \$$(length(params))"
+  table === nothing || push!(params, table)
+  table_clause = table === nothing ? "" : "AND c.relname = \$$(length(params))"
   query = """
     WITH unique_constraints AS (
         SELECT
@@ -997,17 +919,26 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
     ),
     foreign_keys AS (
         SELECT
-            con.conrelid,
-            array_to_string(array_agg(quote_ident(att2.attname)), ', ') AS fk_cols,
-            array_to_string(array_agg(quote_ident(cf.relname)), ', ') AS fk_tables,
-            array_to_string(array_agg(quote_ident(pk_att.attname)), ', ') AS referenced_primary_keys,
-            array_to_string(array_agg(con.condeferrable::text), ', ') AS deferrable,
-            array_to_string(array_agg(con.condeferred::text), ', ') AS initially_deferred,
-            -- #292: the referential action was never selected, so every introspected PostgreSQL FK
-            -- came back claiming no ON DELETE. Single-char codes: a=NO ACTION, r=RESTRICT,
-            -- c=CASCADE, n=SET NULL, d=SET DEFAULT. Aggregated in the same order as fk_cols so the
-            -- zip in convertSQLToModel stays aligned.
-            array_to_string(array_agg(con.confdeltype::text), ', ') AS delete_rules
+            con.conrelid AS table_oid,
+            -- #455: ONE OBJECT PER CONSTRAINT, replacing six `", "`-joined aggregates that the
+            -- consumer zipped POSITIONALLY. Alignment used to be a property nothing enforced — it
+            -- held only while every one of the six produced the same number of entries in the same
+            -- order — and a parent table, child column or referenced column containing `, ` broke it
+            -- silently, shifting every LATER foreign key onto a different parent. Now each fact
+            -- travels attached to the constraint it belongs to, so there is no order to preserve.
+            --
+            -- `condeferrable` / `condeferred` are DROPPED, not converted: they were selected,
+            -- transported and grouped by from #292 onward and read by nothing — `convertSQLToModel`
+            -- never touched `row[:deferrable]`, and neither test helper built it.
+            --
+            -- #292: the referential action. Single-char codes: a=NO ACTION, r=RESTRICT, c=CASCADE,
+            -- n=SET NULL, d=SET DEFAULT.
+            json_agg(json_build_object(
+                'column',    att2.attname,
+                'table',     cf.relname,
+                'pk',        pk_att.attname,
+                'on_delete', con.confdeltype::text
+            ) ORDER BY att2.attnum)::text AS foreign_keys
         FROM pg_constraint con
         JOIN pg_class cf ON cf.oid = con.confrelid
         JOIN pg_namespace nf ON nf.oid = cf.relnamespace
@@ -1073,10 +1004,15 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
     -- An expression index joins no `pg_attribute` row (its `indkey` entry is 0) and so drops out
     -- on its own.
     indexes AS (
+        -- #455: one object per (column, index name) pair. These two aggregates were the other
+        -- positional zip, and they were the ASYMMETRIC one — `index_columns` was raw `attname`
+        -- while `index_names` was `quote_ident`-ed, so the consumer de-quoted one side and not the
+        -- other. JSON carries both raw, which is why that asymmetry (and the comment justifying it)
+        -- is gone rather than restated.
         SELECT
             i.indrelid AS table_oid,
-            array_to_string(array_agg(a.attname), ', ') AS index_columns,
-            array_to_string(array_agg(quote_ident(c.relname)), ', ') AS index_names
+            json_agg(json_build_object('column', a.attname, 'name', c.relname)
+                     ORDER BY a.attnum)::text AS indexes
         FROM pg_index i
         JOIN pg_class c ON c.oid = i.indexrelid
         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
@@ -1115,16 +1051,15 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             -- So 11 is the effective floor for this query and `regexp_match` (10+) would have been
             -- safe too. #415 leans on the same fact for multi-argument `unnest` in FROM (9.4+).
             --
-            -- Scope of that claim, deliberately narrow: it is about THIS statement. The
-            -- `major_version >= 10` gate on `identity_case` above therefore always evaluates TRUE,
-            -- so its `else ""` branch is unreachable — but removing the branch also retires the
-            -- `version()` probe that feeds the gate, which is a separate change and is not made
-            -- here.
+            -- Scope of that claim, deliberately narrow: it is about THIS statement. It used to be
+            -- the reason a `major_version >= 10` gate on an `identity_case` fragment could never
+            -- take its `else` branch; #455 acted on that and removed the gate, the fragment and the
+            -- `version()` probe that fed them, so the floor is now simply stated here.
             --
             -- min() collapses to ONE row per (table, column). This CTE is joined per-column, not
             -- per-table like non_negative_checks above, so without the GROUP BY two matching CHECKs
             -- on the same column (a hand-written extra bound, or a stale one) would fan the outer
-            -- row out and emit that column twice into the string_agg — after which the recovered
+            -- row out and emit that column twice into the columns aggregate — after which the recovered
             -- max_length would depend on row order, which is exactly the drift this CTE prevents.
             -- min() also picks the tightest bound, which is the one actually enforced.
             min(substring(pg_get_constraintdef(con.oid) from '<= ([0-9]+)')::bigint) AS byte_limit
@@ -1139,66 +1074,67 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
     SELECT
         n.nspname AS table_schema,
         c.relname AS table_name,
-        array_to_string(array_agg(
-            quote_ident(a.attname)
-            || ' ' || format_type(a.atttypid, a.atttypmod)
-            || CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END
-            || CASE WHEN ad.adbin IS NOT NULL THEN ' DEFAULT ' || pg_get_expr(ad.adbin, ad.adrelid) ELSE '' END
-            $(identity_case)
-            -- #318: plain membership now. `unique_cols` already holds ONLY single-column constraints
+        -- #455: one object per column. Every marker below used to be a SPACE-DELIMITED TOKEN that
+        -- the consumer looked for with `occursin`, which meant the DEFAULT expression — arbitrary
+        -- user text — sat in the same string being scanned. `note text DEFAULT 'NOT NULL'::text` on
+        -- a NULLABLE column read back `null=false`; `DEFAULT 'a UNIQUE b'::text` fabricated a
+        -- unique constraint (#318's move to a token test fixed only the single-word form). A field
+        -- cannot be forged by its own neighbour's value, so that whole class is gone.
+        json_agg(json_build_object(
+            'name',    a.attname,
+            'type',    format_type(a.atttypid, a.atttypmod),
+            'notnull', a.attnotnull,
+            'default', CASE WHEN ad.adbin IS NOT NULL
+                            THEN pg_get_expr(ad.adbin, ad.adrelid) END,
+            -- `attidentity` is the internal "char" type; cast so the JSON value is a predictable
+            -- ""/"a"/"d" rather than whatever json_build_object makes of an unknown scalar. This
+            -- replaces the version-gated GENE_*_IDENTITY marker fragment (see the note above the
+            -- query for why the version probe went with it).
+            'identity', a.attidentity::text,
+            -- #318: plain membership. `unique_cols` already holds ONLY single-column constraints
             -- (filtered per-constraint in the CTE above), so the old `array_length(...) = 1` guard
             -- here was testing the wrong thing — the merged per-table array — and rejected every
-            -- column on any table with more than one unique constraint. `unique_cols` is NULL when a
-            -- table has none (LEFT JOIN) and `x = ANY(NULL)` is NULL, so this still falls through.
-            || CASE WHEN a.attname = ANY(u.unique_cols) THEN ' UNIQUE' ELSE '' END
-            || CASE
-                WHEN nn.check_cols IS NOT NULL
-                     AND a.attname = ANY(nn.check_cols) THEN ' NON_NEGATIVE_CHECK'
-                ELSE ''
-               END
-            -- Space-delimited and comma-free by construction: the caller splits this aggregate on
-            -- ", " to get columns and then on " " to get tokens, so a marker containing either
-            -- separator would corrupt the parse.
-            || CASE
-                WHEN bl.byte_limit IS NOT NULL THEN ' BYTE_LIMIT_' || bl.byte_limit
-                ELSE ''
-               END
-        ), ', ') AS columns,
-        pk.pk_cols AS primary_keys,
-        fk.fk_cols AS foreign_keys,
-        fk.fk_tables AS foreign_tables,
-        fk.referenced_primary_keys AS referenced_primary_keys,
-        fk.deferrable AS deferrable,
-        fk.initially_deferred AS initially_deferred,
-        fk.delete_rules AS delete_rules,
-        ix.index_columns AS index_columns,
-        ix.index_names AS index_names
+            -- column on any table with more than one unique constraint. COALESCE because
+            -- `unique_cols` is NULL when a table has none (LEFT JOIN), `x = ANY(NULL)` is NULL, and
+            -- JSON null is not false.
+            'unique',             COALESCE(a.attname = ANY(u.unique_cols), false),
+            'non_negative_check', COALESCE(a.attname = ANY(nn.check_cols), false),
+            'byte_limit',         bl.byte_limit
+        ) ORDER BY a.attnum)::text AS columns,
+        pk.primary_keys AS primary_keys,
+        fk.foreign_keys AS foreign_keys,
+        ix.indexes      AS indexes
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     JOIN pg_attribute a ON a.attrelid = c.oid
     LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
     LEFT JOIN (
-        SELECT i.indrelid, array_to_string(array_agg(quote_ident(a.attname)), ', ') AS pk_cols
+        SELECT i.indrelid, json_agg(a.attname ORDER BY a.attnum)::text AS primary_keys
         FROM pg_index i
         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
         WHERE i.indisprimary
         GROUP BY i.indrelid
     ) pk ON pk.indrelid = c.oid
-    LEFT JOIN foreign_keys fk ON fk.conrelid = c.oid
+    LEFT JOIN foreign_keys fk ON fk.table_oid = c.oid
     LEFT JOIN indexes ix ON ix.table_oid = c.oid
     LEFT JOIN unique_constraints u ON u.table_oid = c.oid
     LEFT JOIN non_negative_checks nn ON nn.table_oid = c.oid
     LEFT JOIN byte_length_checks bl ON bl.table_oid = c.oid AND bl.col_name = a.attname
     WHERE c.relkind = 'r'
-      $(schema === nothing ? "" : "AND n.nspname = '$(schema)'")
-      $(table === nothing ? "" : "AND c.relname = '$(table)'")
+      $(schema_clause)
+      $(table_clause)
       AND a.attnum > 0
       AND NOT a.attisdropped
-    GROUP BY n.nspname, c.relname, pk.pk_cols, fk.fk_cols, fk.fk_tables, fk.referenced_primary_keys, fk.deferrable, fk.initially_deferred, fk.delete_rules, ix.index_columns, ix.index_names, u.unique_cols, nn.check_cols
+    -- The `::text` on every json_agg above is MANDATORY, not defensive: these three columns sit in
+    -- this GROUP BY, and PostgreSQL's `json` type has no equality operator — leaving any of them as
+    -- `json` fails the whole statement with "could not identify an equality operator for type json".
+    -- It also pins the Julia side to a String independently of LibPQ's user-extensible type map.
+    GROUP BY n.nspname, c.relname, pk.primary_keys, fk.foreign_keys, ix.indexes,
+             u.unique_cols, nn.check_cols
     ORDER BY table_schema, table_name;
     """
 
-  df = DataFrame(fetch(db, query))
+  df = DataFrame(fetch(db, query, params))
   # @pormg_debug false
   if nrow(df) == 0
       @warn("No tables found in the database.")
@@ -1698,211 +1634,302 @@ function get_sequence_name(conn::PormGPostgres, table_name::String, field_name::
   return result[1, :pg_get_serial_sequence]
 end
 
+# ---
+# PostgreSQL schema-query decoding (#455)
+#
+# `get_database_schema(::PormGPostgres)` transports every aggregate as `json_agg(...)::text`. The
+# three helpers below are the whole decode: one to parse an aggregate, one to normalize a
+# `format_type` spelling into a `postgres_type_map` key, one to undo `pg_get_expr`'s rendering of a
+# DEFAULT. They replaced a parse that split the same facts out of a rendered string, where the
+# delimiters were `", "` and `" "` — both legal inside the identifiers and DEFAULT expressions they
+# delimited.
+# ---
+
+# One aggregate, parsed. `missing` — which the LEFT JOINs produce for a table with no keys, no
+# foreign keys or no indexes — degrades to `nothing`, and every caller reads that as "none".
+#
+# An ABSENT column degrades the same way. `convertSQLToModel(::DataFrameRow)` is exported, so a row
+# may come from somewhere other than the current `get_database_schema` — that is how #292's addition
+# of `delete_rules` reached a caller holding an older row. No in-repo producer omits a column today;
+# this is the reader's "degrade, never abort a whole schema read" policy, not a live shape.
+#
+# Deliberately no rescue around `JSON.parse`. Under the old string format a malformed aggregate was
+# an ordinary consequence of an odd-but-legal schema, so the reader degraded and warned; under JSON
+# there is no legal schema that produces an unparseable aggregate, so one means PormG built bad SQL.
+# `makemigrations` already wraps this read in a try/catch and reports "no plan generated".
+function _pg_json(row, key::Symbol)
+  (key in propertynames(row) && !ismissing(row[key])) || return nothing
+  return JSON.parse(String(row[key]))
+end
+
+# `format_type` spellings that are not themselves `postgres_type_map` keys (src/constants.jl). Only
+# what PormG can CREATE, plus the datetime variants a foreign schema carries. Anything else falls
+# through to the first-word rule in `_pg_split_format_type`, which is what the old
+# `split(col_rest, " ")[1]` did — so an unknown type still degrades to TextField.
+const _PG_FORMAT_TYPE_ALIASES = Dict{String, String}(
+  "character varying"           => "varchar",
+  # Retires a `replace(col, "double precision" => "double_precision")` that ran over the whole
+  # rendered column string, and so also rewrote a column NAMED `double precision`.
+  "double precision"            => "double_precision",
+  "timestamp with time zone"    => "timestamp",
+  "timestamp without time zone" => "timestamp",
+  "time with time zone"         => "time",
+  "time without time zone"      => "time",
+)
+
+# (type-map key, modifier) from one `format_type` result.
+#
+# The modifier is the FIRST parenthesized group and is REMOVED rather than assumed to trail:
+# `format_type` renders a datetime precision in the MIDDLE — `timestamp(3) without time zone` — so
+# a trailing-anchored match would miss it and a global one would corrupt the base name. The caller
+# then applies the modifier BY TYPE, which is what stops that `(3)` becoming a `max_length`.
+function _pg_split_format_type(raw::AbstractString, type_map::Dict{String, Symbol})
+  s = strip(raw)
+  m = match(r"\(([^)]*)\)", s)
+  modifier = m === nothing ? nothing : String(m.captures[1])
+  base = lowercase(strip(m === nothing ? s : replace(s, r"\([^)]*\)" => "", count = 1)))
+  key = get(_PG_FORMAT_TYPE_ALIASES, base, base)
+  # `interval day to second` must stay a DurationField, exactly as `col_parts[1]` made it.
+  if !haskey(type_map, key)
+    first_word = String(first(split(key, ' ')))
+    haskey(type_map, first_word) && (key = first_word)
+  end
+  return (key, modifier)
+end
+
+# True when `s` is ONE parenthesized group, i.e. the outer `(` closes on the final character.
+# Balance-checked rather than regex-anchored: the `r"^\((.+)\)$"` this replaces rewrote `(a) + (b)`
+# to `a) + (b`. Parens inside a string literal do not count.
+function _pg_wrapped_in_parens(s::AbstractString)::Bool
+  (ncodeunits(s) >= 2 && first(s) == '(' && last(s) == ')') || return false
+  depth = 0
+  in_literal = false
+  last_i = lastindex(s)
+  i = firstindex(s)
+  while i <= last_i
+    ch = s[i]
+    if in_literal
+      if ch == '\''
+        j = nextind(s, i)
+        if j <= last_i && s[j] == '\''   # `''` is an escaped quote, not the end of the literal
+          i = nextind(s, j); continue
+        end
+        in_literal = false
+      end
+    elseif ch == '\''
+      in_literal = true
+    elseif ch == '('
+      depth += 1
+    elseif ch == ')'
+      depth -= 1
+      depth == 0 && return i == last_i
+    end
+    i = nextind(s, i)
+  end
+  return false
+end
+
+# True when `s` is ONE single-quoted literal — every interior quote doubled. The `r"^'(.+)'$"` this
+# replaces also matched `'a' || 'b'`, which is a concatenation of two.
+function _pg_single_quoted_literal(s::AbstractString)::Bool
+  (ncodeunits(s) >= 2 && first(s) == '\'' && last(s) == '\'') || return false
+  last_i = lastindex(s)
+  i = nextind(s, firstindex(s))
+  while i < last_i
+    if s[i] == '\''
+      j = nextind(s, i)
+      (j <= last_i && s[j] == '\'') || return false
+      i = nextind(s, j); continue
+    end
+    i = nextind(s, i)
+  end
+  return true
+end
+
+# A cast at the END of an expression: `::text`, `::character varying`, `::numeric(10,2)`,
+# `::integer[]`, `::"MyEnum"`, `::public.my_enum`. ANCHORED on purpose — the global
+# `r"::[a-zA-Z_]+"` this replaces turned `'{1,2}'::integer[]` into `'{1,2}'[]`, silently losing an
+# array default.
+const _PG_TRAILING_CAST = r"::(?:\"[^\"]*\"|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?(?:\s+[A-Za-z_][A-Za-z0-9_]*)*)(?:\s*\(\s*\d+(?:\s*,\s*\d+)?\s*\))?(?:\s*\[\s*\])*\s*$"
+
+function _pg_strip_trailing_casts(s::AbstractString)::String
+  out = String(strip(s))
+  for _ in 1:8   # `((x)::text)::varchar` — bounded so a pathological string cannot spin
+    stripped = String(strip(replace(out, _PG_TRAILING_CAST => "")))
+    stripped == out && break
+    out = stripped
+  end
+  return out
+end
+
+# Undo `pg_get_expr`'s rendering of a column DEFAULT.
+#
+# Takes the WHOLE expression. The regex this replaces was WHITESPACE-TERMINATED
+# (`r"DEFAULT\s+((?:\([^)]+\)|[^:\s]+)(?:::[a-zA-Z_]+)?)"`), so any default containing a space was
+# truncated before the unwrapping below ever saw it — `DEFAULT 'Ferrari, Scuderia'::text` cleaned to
+# `'Ferrari`. That is a SEPARATE defect from the aggregate tear #455 is about, and it survives the
+# JSON move on its own: fixing where the string comes from does not fix a parser that stops at the
+# first space.
+#
+# An expression this cannot reduce to a literal (`concat('a', 'b')`, `nextval('s'::regclass)`,
+# `now()`, `now() - '1 day'::interval`) is returned WHOLE, which is what the field constructors then
+# judge. "Whole" is load-bearing and is the reason the inner re-strip below is conditional — see
+# there.
+#
+# A bare `NULL` (`DEFAULT NULL::character varying`, which pg_dump emits routinely) is "no default",
+# not the four-character string `"NULL"`. That is the answer `_normalize_sqlite_default` already
+# gives for the same input, and the engines have to agree.
+function _pg_clean_default(expr)::Union{String, Nothing}
+  expr === nothing && return nothing
+  s = _pg_strip_trailing_casts(String(expr))
+  isempty(s) && return nothing
+  # `(0)::numeric` → strip the cast → `(0)` → unwrap → `0`.
+  #
+  # The inner value may carry its OWN cast (`('x'::text)`), but re-stripping unconditionally is
+  # wrong: `pg_get_expr` parenthesizes every non-trivial expression, so the inner text is usually a
+  # COMPOUND expression whose trailing cast belongs to its last OPERAND. Stripping it there turns
+  # `('x'::text || 'y'::text)` into `'x'::text || 'y'` — a mangled expression rather than an
+  # unrecognized one. So the re-stripped form is kept only when it actually reduced to a literal.
+  if _pg_wrapped_in_parens(s)
+    inner = s[nextind(s, firstindex(s)):prevind(s, lastindex(s))]
+    stripped = _pg_strip_trailing_casts(inner)
+    s = _pg_single_quoted_literal(stripped) ? stripped : String(strip(inner))
+  end
+  if _pg_single_quoted_literal(s)
+    inner = ncodeunits(s) == 2 ? "" : s[nextind(s, firstindex(s)):prevind(s, lastindex(s))]
+    return replace(inner, "''" => "'")
+  end
+  uppercase(s) == "NULL" && return nothing
+  return s
+end
+
+
 function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_map::Dict{String, Symbol} = postgres_type_map)
   table_name = row[:table_name]
-  columns = split(row[:columns], ", ")
-  # println("Table Name: ", table_name)
-  # println("Columns: ", columns)
-  # println("Row", row)
-    
+  columns = something(_pg_json(row, :columns), Any[])
+
   # Initialize fields dictionary
   fields_dict = Dict{String, PormGField}()
 
-  # Extract primary key constraints
-  # row[:primary_keys] is missing for keyless tables (e.g., Lap_times, Pit_stops that have no IDField)
-  # De-quoted (#389): the schema query aggregates these as `quote_ident(a.attname)`, and `col_name`
-  # — the only thing ever compared against this set — is normalized at parse time below.
-  pk_set = ismissing(row[:primary_keys]) ? Set{String}() :
-    Set(_unquote_ident(pk) for pk in split(row[:primary_keys], ", "))
-    
+  # Extract primary key constraints. `primary_keys` is missing for keyless tables (e.g. Lap_times,
+  # Pit_stops, which have no IDField).
+  #
+  # No de-quoting anywhere in this function since #455. The schema query used to aggregate every
+  # identifier through `quote_ident`, so each of these sites had to undo it with `_unquote_ident`,
+  # and the one aggregate that was RAW (`index_columns`) had to be exempted — an asymmetry that had
+  # to be explained at each site to stop someone "fixing" it. JSON carries a name as a string, not
+  # as a SQL identifier, so every name below is already the physical one.
+  pk_set = Set{String}(String.(something(_pg_json(row, :primary_keys), Any[])))
+
   # Extract foreign key constraints
   # Widened past `(table, pk)` for #292 to carry the referential action, which the schema query
   # never selected — so every introspected FK claimed no ON DELETE and a migration generated from
   # it silently dropped the action from the schema.
   fk_map = Dict{String, NamedTuple{(:table, :pk, :on_delete), Tuple{String, String, Union{String, Nothing}}}}()
-  if row[:foreign_keys] |> !ismissing
-    fk_columns = split(row[:foreign_keys], ", ")
-    fk_tables = split(row[:foreign_tables], ", ")
-    fk_pk_columns = split(row[:referenced_primary_keys], ", ")
-    # `delete_rules` is absent on a schema-query result produced before #292 (and on the synthetic
-    # rows some unit tests build), so degrade to "no action recorded" rather than throwing.
-    delete_rules = (:delete_rules in propertynames(row) && !ismissing(row[:delete_rules])) ?
-      split(row[:delete_rules], ", ") : fill("", length(fk_columns))
-    # This positional pairing is only as good as the CTE's aggregates, and #415 is what made it
-    # sound. The `foreign_keys` CTE now correlates the child and parent columns through
-    # `con.conkey`/`con.confkey` and admits only single-column constraints, so it emits EXACTLY ONE
-    # entry per foreign key and all six aggregates are fed the same row stream in the same order.
-    # Before that it derived the referenced column from the parent's PRIMARY KEY INDEX (so an FK
-    # pointing at a non-PK unique column reported the wrong column) and fanned every aggregate out
-    # once per parent PK column (so the last entry silently won the `fk_map[...]` assignment below,
-    # and the `delete_rules` alignment #292 established broke with it).
-    for (i, (fk_col, fk_table, fk_pk)) in enumerate(zip(fk_columns, fk_tables, fk_pk_columns))
-        rule = i <= length(delete_rules) ? delete_rules[i] : ""
-        # ALL THREE halves are DE-QUOTED. The schema query aggregates each through
-        # `quote_ident`, so any name that needs quoting — a space, punctuation, mixed case —
-        # arrives wrapped in `"` as part of the Julia string. Same treatment (and same reason) as
-        # `index_map` below, which has de-quoted since #325.
-        #
-        #   * `table` since #360: stored quoted, `to_table` matched no imported model, so the
-        #     pass-1 binding rewrite silently no-opped for exactly the names it exists to handle.
-        #   * `pk` and the dict KEY since #389, which is the rest of that same fix. A quoted `pk`
-        #     lands verbatim on the field as `pk_field`, and `Models.fk_target_column` returns it
-        #     unchanged — an introspected field's `.to` is still a String binding, so the
-        #     resolve-through-the-parent branch never runs (and once `set_models` DOES resolve it,
-        #     the lookup misses anyway, because `fields_dict` is keyed de-quoted below). Three
-        #     things broke on that one value: `Dialect.add_foreign_key` emitted
-        #     `REFERENCES "parent"(""Id"")`, `_compare_field_foreign_key` reported the key as
-        #     changed on every `makemigrations`, and the query builder threw `InvalidValueError`
-        #     because `SAFE_IDENTIFIER_PATTERN` forbids a `"`. The KEY moves in the SAME change on
-        #     purpose: it is looked up with `col_name`, so normalizing one side alone would break
-        #     FK detection outright for every mixed-case column.
-        fk_map[_unquote_ident(fk_col)] =
-          (table = _unquote_ident(fk_table),
-           pk = _unquote_ident(fk_pk),
-           on_delete = _pg_confdeltype_to_on_delete(rule))
-    end
+  for fk in something(_pg_json(row, :foreign_keys), Any[])
+    # #455: each fact reads off the object it belongs to. This used to zip four parallel `split`
+    # results, and #415's work went into making that pairing SOUND — one entry per foreign key, all
+    # six aggregates fed the same row stream in the same order. It was still only sound while every
+    # aggregate produced the same COUNT, and a `, ` in a parent table, child column or referenced
+    # column broke exactly that: `zip` truncates to the shortest, so one torn entry shifted every
+    # later foreign key onto a different parent. There is now no order to preserve.
+    #
+    # `on_delete` degrades to "none recorded" rather than throwing if it is absent or null. The
+    # query always emits it (`confdeltype` is NOT NULL), so this is belt-and-braces for the reader's
+    # stated policy — introspection never aborts a whole schema read over one field it cannot read
+    # — rather than a shape any producer emits. `something(...)` because JSON null parses to
+    # `nothing`, which `String` has no method for.
+    fk_map[String(fk["column"])] =
+      (table = String(fk["table"]),
+       pk = String(fk["pk"]),
+       on_delete = _pg_confdeltype_to_on_delete(something(get(fk, "on_delete", ""), "")))
   end
 
   # Extract index information — physical column ⇒ index name, for the single-column secondary
-  # indexes the `indexes` CTE keeps. Both halves end up UNQUOTED (#325), but they get there
-  # differently, and the asymmetry is in the SQL rather than here:
-  #
-  #   * the KEY comes from `array_agg(a.attname)` — RAW, the only identifier aggregate in the
-  #     schema query that is not wrapped in `quote_ident`. It is therefore already the physical
-  #     name and is taken verbatim. Running it through `_unquote_ident` would be actively wrong:
-  #     a column genuinely named `"x"` reads back raw as `"x"` and would be stripped to `x`, which
-  #     no longer matches the `fields_dict` key built from the `quote_ident`-ed `columns`
-  #     aggregate — reintroducing the #325 churn for that name class.
-  #   * the VALUE comes from `array_agg(quote_ident(c.relname))` and does need the inverse; it is
-  #     re-quoted by `_drop_index` on the way out.
-  #
-  # A mixed-case name (#57) used to arrive here and match neither half.
+  # indexes the `indexes` CTE keeps. Both halves are the raw physical name (#455); the value is
+  # re-quoted by `_drop_index` on the way out. A mixed-case name (#57) used to match neither half.
   index_map = Dict{String, String}()
-  if !ismissing(row[:index_columns])
-    indexes = split(row[:index_columns], ", ")
-    index_names = split(row[:index_names], ", ")
-    for (index, index_name) in zip(indexes, index_names)
-      index_map[String(index)] = _unquote_ident(index_name)
-    end
+  for ix in something(_pg_json(row, :indexes), Any[])
+    index_map[String(ix["column"])] = String(ix["name"])
   end
-   
+
   # Parse each column definition
-  for col in columns    
-      # De-quoted ONCE, here (#389). `columns` is aggregated as `quote_ident(a.attname)`, so a
-      # mixed-case name (or a reserved word) arrives wrapped in `"`. Every consumer below —
-      # `index_map`, `pk_set`, `fk_map`, `fields_dict` — is keyed on the de-quoted form, and
-      # normalizing at the single parse site is what keeps them agreeing. Before this the reader
-      # de-quoted at two of those four sites and left the other two quoted, which happened to work
-      # only because their counterparts were quoted too.
+  for col in columns
+      # #455: the name is a field, not a prefix to be peeled off a rendered string. #414 recovered
+      # a name containing a SPACE by scanning `quote_ident`'s self-delimiting quoting; that helper
+      # is gone, because a name can no longer be torn in the first place — and neither can the
+      # DEFAULT expression that used to share the same string. There is no degrade path and no
+      # warning here any more: under JSON no legal schema produces an entry this cannot read, so a
+      # malformed aggregate is a PormG bug and should surface as one. `makemigrations` already wraps
+      # this whole read in a try/catch and reports it as "no plan generated".
       #
-      # #414: the name is peeled off by SCANNING `quote_ident`'s own quoting rather than by splitting
-      # on the first space, which is what an identifier containing a space used to be destroyed by —
-      # see `_split_leading_quoted_ident` for the full account. The other three consumers already
-      # survived a space on their own side, so repairing `col_name` is what makes all four agree
-      # again.
-      #
-      # `col_rest` — the entry MINUS the name — is what every type/flag/marker test below reads.
-      # That is deliberate, not incidental: scanning the whole entry let a column NAMED `UNIQUE`,
-      # `NOT NULL` or `double precision` be read as carrying its own name as a constraint. The name
-      # can no longer contribute a token at all.
-      col_name, col_rest = _split_leading_quoted_ident(col)
-      # An entry with NOTHING after the name is not a column this reader can describe — every entry
-      # carries at least `quote_ident(name) || ' ' || format_type(...)`. It means the aggregate's
-      # `", "` entry split tore something: a name containing `, `, or far more likely a DEFAULT
-      # expression containing one (`DEFAULT 'Ferrari, Scuderia'`). Pre-#414 this raised `BoundsError`
-      # and killed the whole schema read; degrading is right, but SILENTLY degrading would emit a
-      # phantom column that `makemigrations` then proposes adding and dropping forever — the exact
-      # failure #414 exists to remove, moved to a new trigger. So name the table and the fragment,
-      # the same way `_fk_default_or_warn` names an unrepresentable default.
-      #
-      # The message deliberately does NOT promise what the field becomes. A torn fragment is fed to
-      # every map in this function, and `fk_map`/`pk_set` are built from aggregates split on the SAME
-      # `", "` — so the two sides can agree on the SAME wrong name and the phantom is imported as a
-      # ForeignKey (or an IDField), not as text. Claiming "bare text column" would be false in
-      # exactly the case a reader is most likely to be debugging.
-      if isempty(col_rest)
-        @warn "Introspection could not parse a column definition; the name, type and any relation on it are all unreliable. This usually means a column name or a DEFAULT expression contains a comma-space, which the schema query's entry separator cannot express." table=table_name fragment=col
-      end
-      col_parts = split(replace(col_rest, "double precision" => "double_precision"), " ")
-      col_type = lowercase(col_parts[1])
+      # `name` and `type` are REQUIRED, and that is the one place this reader's degrade policy
+      # stops: an entry without them describes no column, so there is nothing to degrade TO and a
+      # `KeyError` is the honest answer. Every OPTIONAL key below is read with `get` and a default,
+      # so a row that omits one still imports — which matters because a boolean read without a
+      # default fails ASYMMETRICALLY (`non_negative_check` is only consulted for an `integer`
+      # column, so the same malformed row would import a `text` column fine and die on the next one).
+      col_name = String(col["name"])
+      col_type, type_modifier = _pg_split_format_type(String(col["type"]), type_map)
       generated::Bool = false
       max_length = nothing
       max_digits = nothing
       decimal_places = nothing
+      byte_limit = get(col, "byte_limit", nothing)
 
       # Detect if the column is indexed. #325: this probed a `Dict{String,String}` with a `Symbol`
       # key, which `haskey` never matches — so `db_index` was a hard `false` for every plain
       # PostgreSQL column, and every `db_index=true` field re-proposed its own CREATE INDEX on every
-      # `makemigrations`. Both sides are de-quoted: `index_map`'s keys when it is built, and
-      # `col_name` at its single parse site above (#389).
+      # `makemigrations`. Both sides are the raw physical name and neither is normalized on the way
+      # in, so the lookup is an exact match by construction (#455); it used to depend on the reader
+      # de-quoting `columns` and NOT de-quoting `index_columns`, which was the #389 asymmetry.
       db_index = haskey(index_map, col_name)
 
       @pormg_debug false
 
-      # Extract max_length if it exists
-      if occursin(r"varchar\((\d+)\)", col_type) || occursin(r"char\((\d+)\)", col_type) 
-        max_length_match = match(r"\((\d+)\)", col_type)
-        if max_length_match !== nothing
-          max_length = parse(Int, max_length_match.captures[1])
-          col_type = "varchar"
+      # The type modifier is applied BY TYPE, not by pattern (#455). `format_type` renders a
+      # modifier for several types that mean entirely different things by it, and the old regexes
+      # matched on the rendered string — so `timestamp(3) without time zone` was one `(\d+)` away
+      # from being read as a `max_length`. Dispatching on the normalized type name instead means an
+      # unknown parameterized type carries its modifier nowhere rather than somewhere wrong.
+      if type_modifier !== nothing
+        if col_type == "varchar" || col_type == "character"
+          max_length = tryparse(Int, strip(type_modifier))
+        elseif col_type == "numeric" || col_type == "decimal"
+          # `numeric(p)` with the scale omitted is legal and leaves `decimal_places` unset, so both
+          # halves must parse before the type is narrowed.
+          scale_parts = split(type_modifier, ',')
+          if length(scale_parts) == 2
+            max_digits = tryparse(Int, strip(scale_parts[1]))
+            decimal_places = tryparse(Int, strip(scale_parts[2]))
+            if max_digits !== nothing && decimal_places !== nothing
+              col_type = "decimal"
+            end
+          end
         end
-      elseif occursin(r"character varying\((\d+)\)", col_rest)
-        max_length_match = match(r"character varying\((\d+)\)", col_rest)
-        if max_length_match !== nothing
-          max_length = parse(Int, max_length_match.captures[1])
-          col_type = "varchar"
-        end
-      elseif col_type == "bytea"
-        # A BinaryField's byte bound lives in its CHECK, not in the column type — the schema query
-        # surfaces it as a BYTE_LIMIT_<n> marker (#296).
-        byte_limit_match = match(r"BYTE_LIMIT_(\d+)", col_rest)
-        if byte_limit_match !== nothing
-          max_length = parse(Int, byte_limit_match.captures[1])
-        end
+      end
+      # A BinaryField's byte bound lives in its CHECK, not in the column type (#296).
+      if col_type == "bytea" && byte_limit !== nothing
+        max_length = Int(byte_limit)
       end
 
-      # Extract max_digits and decimal_places if it exists
-      if occursin(r"decimal\((\d+),(\d+)\)", col_type) || occursin(r"numeric\((\d+),(\d+)\)", col_type)
-        decimal_match = match(r"\((\d+),(\d+)\)", col_type)
-        if decimal_match !== nothing
-          max_digits = parse(Int, decimal_match.captures[1])
-          decimal_places = parse(Int, decimal_match.captures[2])
-          col_type = "decimal"
-        end
-      end
-      
-      # Determine field type. format_type() reports a PositiveIntegerField column as
-      # plain "integer", so the schema query appends a NON_NEGATIVE_CHECK marker when
-      # the column carries a `>= 0` CHECK constraint — that marker is what tells a
+      # Determine field type. format_type() reports a PositiveIntegerField column as plain
+      # "integer", so the schema query reports the `>= 0` CHECK separately — that is what tells a
       # PositiveIntegerField apart from an IntegerField on round-trip.
       field_type = getfield(Models, haskey(type_map, col_type) ? type_map[col_type] : :TextField)
-      if col_type == "integer" && occursin("NON_NEGATIVE_CHECK", col_rest)
+      if col_type == "integer" && get(col, "non_negative_check", false) === true
         field_type = Models.PositiveIntegerField
       end
-      
-      # Determine field constraints
+
+      # Determine field constraints. Every one of these is a FIELD READ since #455, where each used
+      # to be an `occursin` (or, for `unique` after #318, a token membership test) against the same
+      # string that carried the column's DEFAULT. That put arbitrary user text inside the thing being
+      # scanned: `DEFAULT 'NOT NULL'::text` on a nullable column read back `null=false`, and
+      # `DEFAULT 'a UNIQUE b'::text` fabricated a unique constraint that then churned forever.
       primary_key::Bool = col_name in pk_set
-      # #318: token match, not a substring test. `col` is the whole rendered column string, so
-      # `occursin` also fired on a column *named* `UNIQUE_CODE` (mixed-case names are supported, #57)
-      # or a `DEFAULT 'UNIQUE'` literal — inventing uniqueness that would then be diffed forever.
-      # The CTE appends ' UNIQUE' as its own space-separated token, so membership is exact.
-      unique::Bool = "UNIQUE" in col_parts
-      not_null::Bool = occursin("NOT NULL", col_rest)
-      default_value = nothing
-      if occursin("DEFAULT", col_rest)
-        # Match DEFAULT followed by value, handling type casts like ::numeric
-        default_match = match(r"DEFAULT\s+((?:\([^)]+\)|[^:\s]+)(?:::[a-zA-Z_]+)?)", col_rest)
-        if default_match !== nothing
-          raw_default = default_match.captures[1]
-          # Clean up the default value: remove type casts and parentheses for simple values
-          # e.g., "(0)::numeric" -> "0", "'value'::text" -> "value"
-          # TODO: store the type cast if necessary
-          cleaned_default = replace(raw_default, r"::[a-zA-Z_]+" => "")  # Remove type cast
-          cleaned_default = replace(cleaned_default, r"^\((.+)\)$" => s"\1")  # Remove outer parentheses
-          cleaned_default = replace(cleaned_default, r"^'(.+)'$" => s"\1")  # Remove quotes
-          default_value = cleaned_default
-        end
-      end
+      unique::Bool = get(col, "unique", false) === true
+      not_null::Bool = get(col, "notnull", false) === true
+      default_value = _pg_clean_default(get(col, "default", nothing))
 
       # A bytea DEFAULT survives the cleanup above as PostgreSQL's hex text (`\x0102`), and
       # `BinaryField(default = <String>)` raises — so without this, introspecting any BLOB column
@@ -1912,21 +1939,13 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
         default_value = _pg_bytea_literal_bytes(default_value)
       end
       if primary_key
-        if occursin("GENE_BY_DEF_IDENTITY", col_rest)
-          generated = true
-          generated_always = false
-        elseif occursin("GENE_ALWAYS_IDENTITY", col_rest)
-          generated = true
-          generated_always = true
-        else 
-          generated = false
-          generated_always = false
-        end
+        # `pg_attribute.attidentity` verbatim (#455): 'a' = GENERATED ALWAYS, 'd' = GENERATED BY
+        # DEFAULT, '' = neither. This replaces two GENE_*_IDENTITY marker strings the schema query
+        # appended and this loop scanned for with `occursin`.
+        identity_code = something(get(col, "identity", ""), "")
+        generated = identity_code == "a" || identity_code == "d"
+        generated_always = identity_code == "a"
       end
-
-      # @pormg_debug col == "qt_referencia bigint DEFAULT (0)::numeric"
-
-      # println(col)
 
       # Create field instance
       field = if primary_key && col_type == "uuid"

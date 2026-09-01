@@ -216,13 +216,16 @@ omission until `JULIA_NUM_THREADS` is set, so write it explicitly.
 A slice run does no DDL and no reseed — that is the point. Against a fresh or wiped database, run
 the full suite once to establish the state, then slice from there.
 
-**Four files are not slice-safe.** Run them through `runtests.jl`:
+**Three files are not slice-safe.** Run them through `runtests.jl`:
 
 | File | Why |
 |---|---|
 | `test_inserts.jl`, `test_updates.jl` | call `_seed_bulk_update_scratch_parents!` / `_clear_bulk_update_scratch_rows!` but never include `common_bulk_scratch_setup.jl` — `runtests.jl` does it for them at top level |
 | `test_migration_bootstrap.jl` | guards on `:reset_database!`, not `:PormG`, so `common_setup.jl` never loads |
-| `test_importers_introspection.jl` | no guard at all |
+
+(`test_importers_introspection.jl` was listed here as "no guard at all" until #455 noticed the row
+was stale: it gained a standalone guard with #414/#415 and creates and drops every fixture it uses,
+so it slices like any other file. Its own header says so.)
 
 (`test_sqlite_datetime_normalize.jl` is not in `runtests.jl` at all — an orphan with its own run
 instruction on line 2. Do not assume the suite covers it.)

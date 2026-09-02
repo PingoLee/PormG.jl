@@ -482,40 +482,24 @@ end
 # fragment the orphan disappears too, so the wrong query becomes perfectly well-formed. That is why
 # the two land together.
 #
-# ── #444 removed ONE of the four routes, not three. The arithmetic is worth recording ───────────
+# ── #424's producer table is gone: #474 made all three of them RENDER ────────────────────────────
 #
-# #444 gave CTE columns their own namespace (`CTE(name, path)`), so a `__`-separated STRING can no
-# longer name a CTE, and a `CTE(...)` handle is refused outright inside `on`/`cjoin`/`cjoin_on` —
-# including when it arrives as the operand of an `F` comparison (`F("sku") == CTE("ev","sku")`),
-# which is a `FilterType` and therefore an accepted element of all three.
+# The arithmetic, because it has been re-derived wrongly twice in this file already:
 #
-#   A  GONE — and the reason is an INVARIANT, not a list of spellings. This file already learned
-#      that lesson once: the note below records the shape list being "written twice and wrong twice".
-#      A first draft of this paragraph enumerated two spellings and review found a third
-#      (`"sku" => (F("note") == CTE("zz","sku"))`, a handle nested in a pair's RHS), which was
-#      accepted and did reach this guard. So state the property instead:
+#   A  went with #444 — a predicate could no longer NAME a CTE, which closed the Phase-1b
+#      relocation route.
+#   B, C, D  were the three NAME-COLLISION routes: a `.with()` label equal to a `cjoin` path, a
+#      `cjoin_on` alias, or an `on()` path. All three reached the guard because `_build_row_join`'s
+#      shared tail looked a CTE hop up in `custom_join` UNDER THE CTE'S OWN NAME and claimed that
+#      name in `row_path`. #474 removed that lookup, so the three are no longer collisions at all —
+#      they are two relations that happen to share a name, and both are emitted. Their coexistence
+#      is now pinned in `test/unit/test_relation_alias_namespace.jl`, which is where a reader
+#      looking for "what happened to #447/#424" should go.
 #
-#        a predicate can only name a CTE by carrying a `CTE(...)` handle, and every join clause
-#        refuses one — at any nesting depth, in any slot, whatever the surrounding expression.
-#
-#      `_guard_no_cte_reference` (ctes.jl) is what makes that true: it walks Pairs, Q/Qor, OperObject
-#      and FExpression recursively, and both `_prefix_join_filter` (on/cjoin) and `_cjoin_on` run it
-#      on every element. The pre-#444 string spelling is gone separately, so nothing else can name a
-#      CTE from inside a join. That closes the Phase-1b relocation-onto-a-CTE route entirely.
-#
-#   B, C, D  ALL SURVIVE, and are pinned below. The collision in each is between the `.with()` LABEL
-#      and a `custom_join` KEY — a `cjoin` path, a `cjoin_on` alias, an `on()` path — which is a
-#      different namespace question from the one #444 answered, and untouched by it.
-#
-# What DID change about B and D is what makes the CTE's join get built at all. Pre-#444 the string
-# `values("note","parent__sku")` was itself the CTE reference; now that path means the ForeignKey,
-# so each carries an explicit `CTE("parent","sku")` to reference the CTE. Without it the CTE is
-# declared and never joined, no CROSS entry exists, and the guard correctly does not fire — which is
-# exactly how an earlier draft of this file talked itself into deleting B and D as "unreachable".
-# They are reachable; the reconstruction was wrong. Verified by rendering all four.
-#
-# So the guard's message — "a cjoin path, a cjoin_on alias, or an on() path" — remains accurate on
-# all three thirds, and this block still pins each one.
+# What is left of the guard is a fail-closed backstop with NO constructible producer: nine shapes
+# were built against it after the change and none reached it (see the comment at Phase 1c in
+# `build_query.jl`). So what stays here is the control — the thing that would break loudly if the
+# guard were ever rewritten as an unconditional throw.
 # ─────────────────────────────────────────────────────────────────────────────
 _ob_cte() = begin
   c = OBJ.Cj_grand.objects
@@ -523,95 +507,10 @@ _ob_cte() = begin
   c
 end
 
-_ob_parent_cte() = begin
-  c = OBJ.Cj_parent.objects
-  c.values("id", "sku")
-  c
-end
-
-# (label, the CTE name the message must report, builder). Each must reach the SAME guard.
-const _OB_424_PRODUCERS = [
-  (
-    "B: CTE name collides with a cjoin PATH (a model field)", "parent",
-    () -> begin
-      q = OBJ.Cj_child.objects
-      # "parent" is a ForeignKey field of Cj_child AND the CTE's name. Since #444 those are separate
-      # namespaces, so the cjoin resolves to the ForeignKey and the CTE is a relation of its own —
-      # but the CTE is unkeyed, so referencing it CROSS JOINs it, and the cjoin's `custom_join` entry
-      # is keyed by the same string the CTE is named by. That is the collision this guard is for.
-      q.with("parent" => _ob_parent_cte())            # no join_field => CROSS JOIN (#44)
-      q.values("note", "c" => CTE("parent", "sku"))   # the reference that builds the CROSS entry
-      q.cjoin("parent" => "Cj_parent", filters = ["sku" => "S"], warn = false)
-      q
-    end,
-  ),
-  (
-    "C: CTE name collides with a cjoin_on ALIAS (no model field involved)", "b2",
-    () -> begin
-      q = OBJ.Cj_child.objects
-      # "b2" is NOT a field of Cj_child — nothing is shadowed, and no string path names the CTE.
-      # The collision is between the `.with()` label and the cjoin_on ALIAS, which is what
-      # `_cjoin_on` uses as its `custom_join` key.
-      q.with("b2" => _ob_cte())
-      q.values("note")
-      q.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("note")])
-      q.filter(CTE("b2", "code") => "X")                     # forces the CTE join to be built first
-      q
-    end,
-  ),
-  (
-    "D: CTE name collides with an on() PATH declared BEFORE the .with()", "parent",
-    () -> begin
-      q = OBJ.Cj_child.objects
-      # #434's ordering asymmetry is gone: `on("parent", …)` resolves to the ForeignKey in BOTH
-      # orderings now. What remains is the same key collision as B, reached through `on()` instead
-      # of `cjoin()`. Pinned in the declared-first order because that is the one that used to slip
-      # past `_resolve_join_target_model` entirely; the reverse order is pinned in the sibling
-      # testset below.
-      q.on("parent", "sku" => "S")
-      q.with("parent" => _ob_parent_cte())
-      q.values("note", "parent__sku", "c" => CTE("parent", "sku"))
-      q
-    end,
-  ),
-]
-
-@testset "an ON predicate landing on a CROSS-joined CTE is refused, not dropped (#424)" begin
-  for (label, cte_name, build_q) in _OB_424_PRODUCERS
-    @testset "$label" begin
-      for (backend, conn) in (("PostgreSQL", _OBJ_PG), ("SQLite", _OBJ_SL))
-        err = try
-          inspect_query(build_q(); connection = conn)
-          nothing
-        catch e
-          e
-        end
-        @test err isa PormG.QueryBuildError
-        msg = sprint(showerror, err)
-
-        # The message must describe the COLLISION, which is true of every producer — not the call
-        # method, which is true of at most one. An earlier draft asserted "shadows a field"; that
-        # passed here and was false for producer C.
-        @test occursin("CROSS", msg)
-        @test occursin("collides", msg)
-        @test occursin("#44", msg)                # points at where the correlation belongs
-        @test occursin(".filter(", msg)           # ...and at one of the three remedies
-        # Names the offending CTE by the name the caller wrote, so they can find the
-        # `.with(...)` to rename. This is per-producer on purpose: a message that named the CTE's
-        # TABLE instead would be useless for renaming, and a hardcoded name would not notice.
-        @test occursin(cte_name, msg)
-        # Never blames the caller for a PormG bug: these are user-writable shapes, and the first
-        # draft of this guard said "internal: ... please report" (review finding).
-        @test !occursin("internal", lowercase(msg))
-        @test !occursin("please report", lowercase(msg))
-      end
-    end
-  end
-
-  # Control: a CROSS-joined CTE that never acquired a predicate must still render. Without this, a
-  # guard written as an unconditional `throw` would satisfy every assertion above while breaking
-  # every #44 query. (`test/unit/test_cte_ergonomics.jl` owns the full #44 coverage; this is the
-  # local tripwire that the new `haskey` check did not turn every CROSS join into an error.)
+@testset "a CROSS-joined CTE carrying no predicate still renders (#424 control)" begin
+  # Without this, a guard written as an unconditional `throw` would break every #44 query while
+  # every other assertion in this file kept passing. (`test/unit/test_cte_ergonomics.jl` owns the
+  # full #44 coverage; this is the local tripwire.)
   ok = OBJ.Cj_child.objects
   ok.with("ev" => _ob_cte())
   ok.values("note")
@@ -1056,157 +955,3 @@ end
 end
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# A cjoin/cjoin_on name colliding with a KEYED CTE is refused too (#447)
-# #424 refuses this collision against an UNKEYED (CROSS-joined) CTE. The keyed half fell straight
-# through, because that guard keyed on the `"cross"` marker and a keyed CTE never sets one.
-#
-# The failure mode is different, which is why it needed its own branch rather than a widened test:
-# a CROSS entry has no ON clause, so a predicate landing on it is DROPPED; a keyed entry HAS one, so
-# the predicate is MERGED into it and nothing is dropped. What is lost instead is the colliding
-# entry's own join — `_insert_join` already pushed the name into `row_path`, so the materialization
-# loop skips it — leaving SQL that references a relation the statement never declares. PormG built
-# it without complaint and the database was the first thing to object.
-#
-# The guard keys on the COLLISION ITSELF — any `custom_join` key equal to the name of a CTE the
-# query joins — with no test of which method produced the entry and no dependence on relocation.
-# A draft did carve out `on()`, on the reasoning that it only adds conditions to a join something
-# else materialized; measuring it showed the CTE inherits `on()`'s join_type AND the rewritten path
-# resolves into a second join correlated against the CTE's own alias. `q3` below is that case.
-#
-# It also does not depend on the join having picked up predicates: an empty-filter `cjoin` supplies
-# none and still loses its whole table (`q4`). Keying the check on `on_clause_extras`, as the CROSS
-# branch does for its own relocation route, would leave that unrefused.
-#
-# The entry-is-a-CTE framing is the same call `execution.jl` made for #394 — "the check is on the
-# entry being a CTE rather than on the shape of its keys".
-# ─────────────────────────────────────────────────────────────────────────────
-@testset "a join key colliding with a KEYED CTE name is refused (#447)" begin
-  for (backend, conn) in (("PostgreSQL", _OBJ_PG), ("SQLite", _OBJ_SL))
-    @testset "$backend" begin
-
-      # ── cjoin_on alias vs keyed CTE — #447 as filed ───────────────────────
-      # Producer C of the #424 table with one word added: `join_field`. That one word used to be
-      # the documented REMEDY for the #424 collision, which is why it had to stop being one.
-      q1 = OBJ.Cj_child.objects
-      q1.with("b2" => _ob_cte(), join_field = "parent" => "id")
-      q1.values("note")
-      q1.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("note")])
-      q1.filter(CTE("b2", "code") => "X")
-      err1 = try
-        inspect_query(q1; connection = conn); nothing
-      catch e
-        e
-      end
-      @test err1 isa PormG.QueryBuildError
-      msg1 = _no_ansi(sprint(showerror, err1))
-      @test occursin("collides with the name of a CTE", msg1)
-      # The message claims only the SHARED truth. Three consecutive drafts asserted per-shape
-      # consequences and every one shipped a measured-false clause — the outcome varies along three
-      # axes (CTE kind, entry owns a table, entry carries alias-naming predicates), and only ONE
-      # sub-shape of the whole space is loud. The negative pin is the load-bearing one: the message
-      # must never promise the database will catch what is usually silent wrong rows.
-      @test occursin("take effect as written", msg1)
-      @test !occursin("database rejects", msg1)
-      @test occursin("b2", msg1)
-      # The message enumerates all three writers deliberately — it describes the collision, not the
-      # call — so this pins the enumeration's presence, not a per-case label.
-      @test occursin("cjoin_on", msg1)
-      @test occursin("#447", msg1)
-      # It must not be reported as the CROSS case — different cause, different remedy.
-      @test !occursin("CROSS JOIN has no ON clause", msg1)
-      # A user-writable shape is never PormG's fault to disclaim. The needle is the internal-error
-      # IDIOM ("please report it", `_emsg`'s wording), not the bare word "report" — this message
-      # legitimately says the DATABASE is what reports the failure.
-      @test !occursin("internal", lowercase(msg1))
-      @test !occursin("please report", lowercase(msg1))
-
-      # ── cjoin path vs keyed CTE — the same defect, not named by #447 ──────
-      # `cjoin` entries carry "field" and also materialize their own join, so the collision drops
-      # that join identically. Covered by the invariant rather than by a second case list.
-      q2 = OBJ.Cj_child.objects
-      q2.with("parent" => _ob_parent_cte(), join_field = "parent" => "id")
-      q2.values("note")
-      q2.cjoin("parent" => "Cj_parent", filters = ["sku" => "S"], warn = false)
-      q2.filter(CTE("parent", "sku") => "S")
-      err2 = try
-        inspect_query(q2; connection = conn); nothing
-      catch e
-        e
-      end
-      @test err2 isa PormG.QueryBuildError
-      msg2 = _no_ansi(sprint(showerror, err2))
-      @test occursin("collides with the name of a CTE", msg2)
-      @test occursin("#447", msg2)
-
-      # ── an UNKEYED CTE collision with no ON predicates at all ─────────────
-      # #424's branch fires on `on_clause_extras`, so a `cjoin` with EMPTY filters supplies nothing
-      # for it to catch — yet the cjoin's join is still silently dropped. Measured before this case
-      # existed: `CROSS JOIN "parent" AS "R1_1"` emitted and no `JOIN "cj_parent"` anywhere, with
-      # only the generic #44 Cartesian warning. This is why the collision check cannot be gated on
-      # extras the way the relocation route is.
-      q4 = OBJ.Cj_child.objects
-      q4.with("parent" => _ob_parent_cte())          # UNKEYED => CROSS JOIN
-      q4.cjoin("parent" => "Cj_parent", warn = false)   # no filters => no extras
-      q4.values("note", "c" => CTE("parent", "sku"))
-      err4 = try
-        inspect_query(q4; connection = conn); nothing
-      catch e
-        e
-      end
-      @test err4 isa PormG.QueryBuildError
-      msg4 = _no_ansi(sprint(showerror, err4))
-      @test occursin("collides with the name of a CTE", msg4)
-      @test occursin("#447", msg4)
-      # It names the CROSS shape, since that is what this CTE is.
-      @test occursin("WITHOUT", msg4)
-      # Same shared-truth pin as q1 — see the comment there. This shape (empty-filter cjoin + CROSS)
-      # is the one a merged draft told "the database is what reports it" when nothing reports it:
-      # the query runs and returns rows as though the cjoin had never been declared.
-      @test occursin("take effect as written", msg4)
-      @test !occursin("database rejects", msg4)
-
-      # ── control: a keyed CTE beside an UNRELATED cjoin_on still joins ─────
-      # The one assertion that stops the guard from being a blanket refusal of keyed CTEs. Without
-      # it, refusing every keyed CTE would satisfy both cases above.
-      ok = OBJ.Cj_child.objects
-      ok.with("gv" => _ob_cte(), join_field = "parent" => "id")
-      ok.values("note")
-      ok.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("note")])
-      ok.filter(CTE("gv", "code") => "X")
-      ok_sql = inspect_query(ok; connection = conn)[:sql_text]
-      # The cjoin_on's own table IS emitted — the exact thing the collision silently removed.
-      @test occursin("JOIN \"cj_parent\" AS \"b2\" ON ", ok_sql)
-      @test occursin("\"gv\"", ok_sql)
-
-      # ── an on() path colliding with a keyed CTE is refused too ────────────
-      # This began as a CONTROL asserting `on()` stayed legal, reasoning that it only adds conditions
-      # to a join something else materialized. Review measured otherwise and the carve-out is gone.
-      # `parent` is both an FK field of Cj_child and the CTE name here, which is what lets
-      # `_prefix_join_filter` rewrite `"sku"` into `"parent__sku"`; resolving that during Phase 1
-      # materialized a SECOND join correlated against the CTE's own alias, while the CTE's declared
-      # join_type was overridden by on()'s default and the value was bound twice.
-      #
-      # The old version asserted only that "b2" appeared in the SQL — which the `ok` control above
-      # already proves, and which passed against unfixed code. It constrained nothing it claimed to.
-      q3 = OBJ.Cj_child.objects
-      q3.with("parent" => _ob_parent_cte(), join_field = "parent" => "id", join_type = "INNER")
-      q3.on("parent", "sku" => "S")
-      q3.values("note", "c" => CTE("parent", "sku"))
-      err3 = try
-        inspect_query(q3; connection = conn); nothing
-      catch e
-        e
-      end
-      @test err3 isa PormG.QueryBuildError
-      msg3 = _no_ansi(sprint(showerror, err3))
-      @test occursin("collides with the name of a CTE", msg3)
-      @test occursin("#447", msg3)
-      # Same shared-truth pin as q1 — see the comment there. For THIS shape (on() + keyed) a draft
-      # message claimed the database would reject the statement; measured, the SQL is valid and the
-      # rows are silently wrong, which is exactly what the negative pin forbids promising.
-      @test occursin("take effect as written", msg3)
-      @test !occursin("database rejects", msg3)
-    end
-  end
-end

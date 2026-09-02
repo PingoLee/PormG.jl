@@ -45,6 +45,125 @@ _Changes merged but not yet cut into a release. A consumer dev'ing PormG at HEAD
 and `PormG.upgrade_guide` surfaces them by default. When the maintainer next rolls changes into a
 consuming app, `/pormg-cut-release` stamps every entry below with `0.5.0`, dates them, and tags it._
 
+## A CTE name may equal a join key, `on()` no longer forces `LEFT`, and `join_type` is validated (#474)
+
+- **Version**: Unreleased
+- **PormG ref**: #474 (withdraws the #447 half of the entry below; supersedes the #424 collision
+  route); `src/querybuilder/build_joins.jl`, `src/querybuilder/build_helpers.jl`,
+  `src/querybuilder/build_query.jl`, `src/querybuilder/ctes.jl`, `src/querybuilder/types.jl`,
+  `docs/src/read/custom_joins.md`, `docs/src/read/subqueries_and_ctes.md`
+- **Recorded**: 2026-09-02
+- **Severity**: **behavior change** - two shapes that raised now build, one query shape changes its
+  join type, and three that built now raise. Every one of the last three produced invalid SQL or
+  silently wrong rows. Part of the `0.5.x` pre-publish wave.
+
+**Measured before adopting these**: `cjoin_on`, `.cjoin(`, `.on(` and `.with(` have **zero** call
+sites across `esus_back`, `PortalsusBack`, `LinkS`, `LinkSUS` and `work_server`.
+
+### What changed
+
+**1. A CTE name may equal a join key.** `_build_row_join` set its `join_path` to the first path
+segment, which for a `CTE("b2", "sku")` reference *is* the CTE name - and then looked that name up
+in the base model's join-config map and claimed it in the resolved-path set. So a `.with()` label
+equal to a `cjoin` path, a `cjoin_on` alias or an `on()` path handed the CTE's join that entry's
+join type and predicates, and suppressed your own join entirely. #447 refused the collision; #474
+removes the lookup, which makes it unrepresentable:
+
+```julia
+q.with("b2" => grand_codes, join_field = "parent" => "id", join_type = "INNER")
+q.cjoin_on("Parent", alias = "b2", on = [F("b2.sku") == F("note")])
+q.values("note", "cte_code" => CTE("b2", "code"))
+```
+
+```sql
+-- BEFORE #447: "parent" is never joined and "b2" names a relation the statement never declares.
+-- WITH #447:   QueryBuildError, "rename one of the two".
+-- AFTER #474:  both emitted. The CTE's alias is GENERATED, so only ONE relation is named "b2".
+WITH "b2" AS (SELECT "Tb"."id", "Tb"."code" FROM "grand" AS "Tb")
+SELECT "R1"."note", "R1_1"."code" AS "cte_code" FROM "child" AS "R1"
+ INNER JOIN "b2" AS "R1_1" ON "R1"."parent" = "R1_1"."id"
+ INNER JOIN "parent" AS "b2" ON ("b2"."sku" = "R1"."note")
+```
+
+The same split closes a **second** collision that #447's guard never covered, because it needed no
+join at all. `instruct.cache` is keyed by a projection's output name, and #444 fixed a CTE
+reference's at `"<cte>__<path>"` on purpose - byte-identical to the field path `"<fk>__<col>"`.
+Whichever rendered first claimed the entry:
+
+```julia
+q.with("parent" => parent_cte, join_field = "parent" => "id")   # "parent" is also a ForeignKey
+q.values("note", "c" => CTE("parent", "sku"))
+q.filter("parent__sku" => "S")                                  # meant the ForeignKey
+```
+
+```sql
+-- BEFORE: filters the CTE's column; the ForeignKey's join is emitted and never used.
+... LEFT JOIN "parent" AS "R1_1" ... LEFT JOIN "cj_parent" AS "R1_2" ... WHERE "R1_1"."sku" = $1
+-- AFTER:  filters the ForeignKey's column, matching the same query with no CTE declared.
+...                                                              WHERE "R1_2"."product_sku" = $1
+```
+
+**2. `on()` no longer forces `LEFT` (#474).** With no `join_type` of its own, `on()` wrote
+`"LEFT"`, and that value is read as an *override* - so adding a predicate to a `NOT NULL`
+ForeignKey's join silently widened the result set:
+
+```sql
+-- BEFORE: q.values("note", "owner__sku")                     -> INNER JOIN "parent" ...
+--         q.on("owner", "sku" => "S"); q.values(...)         -> LEFT  JOIN "parent" ... AND ...
+-- AFTER:  both INNER. on() adds predicates; it does not retype the join.
+```
+
+The join now keeps what PormG derives for it - the field's own `how`, else `LEFT` for a nullable
+ForeignKey and `INNER` for a `NOT NULL` one, including the LEFT-propagation a deep path needs. An
+explicit `join_type` still wins and still persists for later `on()` calls on the same path.
+
+**3. `join_type` is validated on every writer, and `"CROSS"` is refused (#474).** Every join renders
+`<join_type> JOIN <table> AS <alias> ON <clause>`, so `"CROSS"` could only ever build
+`CROSS JOIN ... ON ...`, which PostgreSQL and SQLite both reject. It was accepted by `cjoin`,
+`cjoin_on` and `on()`, and never documented. Worse, `.with(..., join_type = ...)` was validated
+**nowhere** - the string went verbatim into the JOIN keyword slot:
+
+```julia
+# BEFORE: rendered `LEFT OUTER JOIN grand AS injected ON 1=1 -- JOIN "gg" AS "R1_1" ON ...`
+q.with("gg" => sub, join_field = "parent" => "id",
+       join_type = "LEFT OUTER JOIN grand AS injected ON 1=1 --")
+```
+
+All four writers now raise `QueryBuildError` at the call for anything outside `"INNER"`, `"LEFT"`,
+`"RIGHT"` and `"FULL"`.
+
+### How to find the calls to migrate
+
+Items 1 and 3 raise where they used to build (or vice versa), so a run of your test suite finds
+them. Item 2 is the silent one - it changes rows, not shapes:
+
+```bash
+rg -n '\.on\(' .        # then check each call for an explicit join_type=
+```
+
+Any `on()` **without** `join_type` on a `NOT NULL` ForeignKey path was rendering `LEFT JOIN` and
+will now render `INNER JOIN`. That is the join type the same path already had without the `on()`,
+so the fix is almost always nothing; if you were relying on the wider result set, say so:
+
+```julia
+# Keep the old rows explicitly.
+q.on("owner", "sku" => "S", join_type = "LEFT")
+```
+
+### Migrate your app
+
+```julia
+# CROSS: there is one supported cross product, and it is a CTE you REFERENCE.
+# (Declaring it alone emits no join at all since #444 - you would get N rows, not N x M.)
+q.with("all_drivers" => M.Driver.objects.values("driverid", "surname"))   # unkeyed
+q.values("points", "who" => CTE("all_drivers", "surname"))                # this is what joins it
+
+# A CTE name colliding with a join key needed a rename under #447. It does not any more; if you
+# renamed one to get past that error, the rename is no longer necessary (keeping it costs nothing).
+```
+
+---
+
 ## An expression column DEFAULT no longer aborts introspection (#472)
 
 - **Version**: Unreleased
@@ -91,10 +210,10 @@ ask for, naming the table. Full rules: `docs/src/schema_conventions.md` → *Col
 
 ---
 
-## `cjoin_on` joins follow declaration order, and two silent-wrong-result shapes are refused (#449, #448, #447)
+## `cjoin_on` joins follow declaration order, and two silent-wrong-result shapes are refused (#449, #448)
 
 - **Version**: Unreleased
-- **PormG ref**: #449, #448, #447; `src/querybuilder/types.jl`, `src/querybuilder/build_query.jl`,
+- **PormG ref**: #449, #448 (#447 withdrawn by #474); `src/querybuilder/types.jl`, `src/querybuilder/build_query.jl`,
   `docs/src/read/custom_joins.md`, `docs/src/read/subqueries_and_ctes.md`
 - **Recorded**: 2026-09-01
 - **Severity**: **behavior change** — one ordering semantic changes, and three shapes that
@@ -141,38 +260,23 @@ the *loud* outcome depend on projection order rather than on whether the join wa
 > departure is deliberate — a silently row-multiplied result set is the worst failure mode in the
 > package, and a genuine cross product is still expressible (below).
 
-**3. A join key colliding with a CTE name is refused, for both CTE kinds (#447).** #424 refused this
-against an **unkeyed** (CROSS-joined) CTE *when the colliding join carried predicates*. Two gaps are
-closed here: a **keyed** CTE fell through entirely, because that guard keyed on the `"cross"` marker
-which a keyed CTE never sets; and an unkeyed CTE colliding with a join that carries **no** predicates
-— `cjoin("x" => …)` with no `filters` — produced nothing for the old check to catch, so it built a
-query in which the colliding join was silently absent. Both now raise:
+**3. ~~A join key colliding with a CTE name is refused, for both CTE kinds (#447).~~ Withdrawn
+before release - see *A CTE name may equal a join key* below.** This train briefly refused a
+`.with()` label that equalled a `cjoin` path, a `cjoin_on` alias or an `on()` path. #474 removed the
+cause rather than the shape: join resolution no longer looks a CTE hop up in the join-config map
+under the CTE's own name, so the two names never meet and both relations are emitted. Nothing was
+released under the refusal, so there is no migration for it - the shape simply works.
 
-```sql
--- BEFORE: "ac_parent" is never joined, and "b2" names a relation the statement does not declare.
-WITH "b2" AS (SELECT "Tb"."id", "Tb"."code" FROM "ac_grand" AS "Tb" WHERE "Tb"."code" = $1)
-SELECT "R1"."note" FROM "ac_child" AS "R1"
-INNER JOIN "b2" AS "R1_1" ON "R1"."parent" = "R1_1"."id" AND ("b2"."sku" = "R1"."note")
-```
-
-The rule is the **name collision itself**, not the kind of call that produced it: a `cjoin` path, a
-`cjoin_on` alias and an `on(...)` path are all refused when they equal a CTE name. All three are
-keys into the same `custom_join` map, and the CTE's join reads that map by key — so it inherits
-whatever it finds. For `cjoin`/`cjoin_on` the entry loses its table; for `on()` the CTE's declared
-`join_type` is silently overridden (by the one you set, or by `on()`'s `LEFT` default) *and*, when
-the entry carries predicates, the rewritten path resolves into a second join correlated against the
-CTE's own alias, with the value bound twice.
-
-> ⚠️ **`join_field` is no longer a remedy for a name collision.** #424's message and the CTE docs
-> both used to suggest keying the CTE so it "emits a real `ON` clause". That moves the collision from
-> #424's case to #447's — it was never a fix. Rename one of the two names instead.
+> **`join_field` was never a remedy for a name collision.** #424's message and the CTE docs used to
+> suggest keying the CTE so it "emits a real `ON` clause"; that only moved the collision from
+> #424's case to #447's. Since #474 there is no collision to remedy.
 
 ### How to find the calls to migrate
 
-#449 and #448 need a `cjoin_on`; #447 also catches `cjoin` and `on()`, so all three writers matter:
+#449 and #448 both need a `cjoin_on`, so that is the only writer to grep for:
 
 ```bash
-rg -n 'cjoin_on\(|\.cjoin\(|\.on\(' .
+rg -n 'cjoin_on\(' .
 ```
 
 For **#448**, check each `cjoin_on` for at least one predicate naming its own alias — `F("<alias>.…")`
@@ -180,18 +284,6 @@ on either side of a comparison:
 
 ```bash
 rg -n --multiline 'cjoin_on\([^)]*alias\s*=\s*"(\w+)"' .   # then read each `on = [...]` for "\1."
-```
-
-For **#447**, grep cannot see a name collision, so compare the two namespaces per query:
-
-```julia
-# ANY custom_join key equal to a CTE name collides — cjoin path, cjoin_on alias, or on() path.
-# Do not filter by entry shape: an on() entry overrides the CTE's join_type and materializes a
-# second, wrongly-correlated join, so it is refused too.
-for (name, _) in q.object.ctes
-    haskey(q.object.custom_join, name) &&
-        @warn "CTE name collides with a cjoin / cjoin_on / on() key" name
-end
 ```
 
 For **#449**, nothing to grep: re-read any query declaring **two or more** `cjoin_on` joins and
@@ -219,18 +311,6 @@ q.filter("points__@gt" => 10)
 
 That renders a real `CROSS JOIN` and emits the #44 Cartesian warning on every execution — the intent
 is then visible both in the SQL and in the log.
-
-**#447 — rename one of the colliding names:**
-
-```julia
-# ✗ BEFORE — the CTE and the join alias are both "b2"; the join's table is silently dropped
-q.with("b2" => M.Grand.objects.values("id", "code"), join_field = "parent" => "id")
-q.cjoin_on("Parent", alias = "b2", on = [F("b2.sku") == F("note")])
-
-# ✓ AFTER — two names, two relations
-q.with("grand_codes" => M.Grand.objects.values("id", "code"), join_field = "parent" => "id")
-q.cjoin_on("Parent", alias = "b2", on = [F("b2.sku") == F("note")])
-```
 
 **#449 — no code change is required**, but if you relied on the previous order, declare the joins in
 the order you want them emitted:
@@ -1101,9 +1181,10 @@ for (name, cte) in q.object.ctes
     elseif haskey(q.object.custom_join, name)
         @warn "CTE name collides with a cjoin/cjoin_on/on() key" cte = name
     end
-    # NOTE (#447): the `cte["join_field"] === nothing || continue` above was written when keyed CTEs
-    # really were unaffected. They are not any more — see the #447 entry above, which refuses the
-    # collision for both kinds. Drop that line if you are auditing against a post-#447 pin.
+    # NOTE (#474): the `cte["join_field"] === nothing || continue` above is correct again, and now
+    # for good. #447 briefly refused this collision for BOTH CTE kinds; #474 withdrew that and
+    # removed the cause, so on any post-#474 pin neither arm can report anything and this whole
+    # snippet is pre-#444 archaeology.
 end
 ```
 

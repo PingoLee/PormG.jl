@@ -27,7 +27,7 @@ it attempts to build the join and cache it. Returns `true` if the field is in ca
 (either before or after the attempt), `false` otherwise.
 """
 function _cache_join(field::String, instruct::SQLInstruction)
-  haskey(instruct.cache, field) && return true
+  haskey(instruct.cache, (false, field)) && return true
   
   if contains(field, "__")
     try
@@ -35,7 +35,7 @@ function _cache_join(field::String, instruct::SQLInstruction)
       sql_selector = _build_row_join(split(field, "__") |> Vector{String}, instruct)
       
       # Populate the cache so it can be used immediately
-      instruct.cache[field] = SQLField(sql_selector, field)
+      instruct.cache[(false, field)] = SQLField(sql_selector, field)   # #474: base-model namespace
       return true
     catch e
       return false
@@ -171,6 +171,7 @@ function _insert_many_to_many_joins(
   parent_alias::String,
   join_path::String;
   previus_how::Union{String, Nothing}=nothing,
+  track_path::Bool=true,
 )
   join_type = previus_how == "LEFT" ? "LEFT" : "INNER"
 
@@ -206,7 +207,7 @@ function _insert_many_to_many_joins(
   through_row["key_b"] = relation.owner_column
   through_row["how"] = join_type
 
-  through_alias = _insert_join(instruct.row_join, through_row, instruct.row_path, "$(join_path)__through")
+  through_alias = _insert_join(instruct.row_join, through_row, instruct.row_path, "$(join_path)__through"; track_path=track_path)
 
   related_row = sizehint!(Dict{String, Union{String, Vector{FilterType}}}(), 8)
   related_row["a"] = relation.through_table
@@ -220,7 +221,7 @@ function _insert_many_to_many_joins(
   related_row["key_b"] = Models.model_column(related_model, relation.related_pk)
   related_row["how"] = join_type
 
-  return _insert_join(instruct.row_join, related_row, instruct.row_path, join_path)
+  return _insert_join(instruct.row_join, related_row, instruct.row_path, join_path; track_path=track_path)
 end
 
 function _row_join_for_alias(row_join::Vector{Dict{String, Union{String, Vector{FilterType}}}}, alias::String)
@@ -296,6 +297,7 @@ function _apply_many_to_many_branch(
   vector::Vector{String};
   previus_how::Union{String, Nothing}=nothing,
   reverse::Bool=false,
+  track_path::Bool=true,
 )
   foreing_table_module = instruct.object.model._module::Module
   foreign_model = _resolve_many_to_many_related_model(foreing_table_module, relation)
@@ -309,7 +311,7 @@ function _apply_many_to_many_branch(
   # that names the column, the model and its available fields — one message for every hop shape
   # instead of a KeyError here and a good error three lines later.
   last_field = size(vector, 1) == 2 ? get(foreign_model.fields, vector[2], nothing) : nothing
-  tb_alias = _insert_many_to_many_joins(relation, instruct, parent_table, parent_alias, join_path, previus_how=previus_how)
+  tb_alias = _insert_many_to_many_joins(relation, instruct, parent_table, parent_alias, join_path, previus_how=previus_how, track_path=track_path)
   row_join = _row_join_for_alias(instruct.row_join, tb_alias)
   # #74: the related table reached through a many-to-many is the "many-side". Flag the (deduped)
   # row_join entry so the fan-out guard can refuse silently-inflated aggregates over base columns.
@@ -342,11 +344,15 @@ end
 # a value path, not join hops. Records the resolved path in json_lookup_cache (so the filter-render
 # branch binds the RHS as plain text) and tab_field_cache (so downstream sees the base field type).
 function _render_json_lookup(instruct::SQLInstruction, alias::String, json_field::PormGField,
-    field_name::String, key_segments::Vector{String}, full_field::Vector{String})::String
+    field_name::String, key_segments::Vector{String}, full_field::Vector{String};
+    cte::Bool=false)::String
   segs = _validate_json_key_segments(key_segments)
   col = string(quote_identifier(alias, instruct.connection), ".",
                safe_column_identifier(Models.field_db_column(json_field, field_name), instruct.connection))
-  path = join(full_field, "__")
+  # #474: both caches below are keyed by the resolved path, so a CTE-rooted lookup namespaces it for
+  # the same reason `row_path` does — `CTE("ev", "meta__driver")` and a model path `ev__meta__driver`
+  # produce the same string and must not share an entry.
+  path = _join_path_key(join(full_field, "__"), cte)
   instruct.json_lookup_cache[path] = (json_field, segs)
   instruct.tab_field_cache[path] = json_field
   return Dialect._json_extract_expr(instruct.connection, col, segs)
@@ -499,8 +505,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         row_join["alias_a"] = instruct.alias
         # #64: resolve the main-model join field to its physical column (db_column).
         row_join["key_a"] = Models.model_column(instruct.object.model, main_table_key)
-      elseif haskey(instruct.cache, main_table_key) || _cache_join(main_table_key, instruct)
-        cache_item = instruct.cache[main_table_key]
+      elseif haskey(instruct.cache, (false, main_table_key)) || _cache_join(main_table_key, instruct)
+        # #474: the MAIN model's join field, so the base-model half of the namespace — never the
+        # CTE's, even though this branch sits inside the CTE arm.
+        cache_item = instruct.cache[(false, main_table_key)]
         v_split = split(cache_item.field |> x -> replace(x,  '"' => ""), ".")
         row_join["alias_a"] = v_split[1] |> string
         row_join["key_a"] = v_split[2] |> string
@@ -534,7 +542,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   elseif haskey(instruct.object.model.fields, first_column) && Models.is_many_to_many_field(instruct.object.model.fields[first_column])
     relation = Models.get_many_to_many_relation(instruct.object.model, first_column)
     tb_alias, row_join, foreign_model, last_field = _apply_many_to_many_branch(
-      relation, instruct, Models.model_table_name(instruct.object.model), instruct.alias, join_path, vector
+      relation, instruct, Models.model_table_name(instruct.object.model), instruct.alias,
+      join_path, vector; track_path = !cte
     )
     foreign_table_name = foreign_model
     m2m_inserted = true
@@ -567,7 +576,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     if related_object isa Models.ManyToManyRelation
       relation = related_object::Models.ManyToManyRelation
       tb_alias, row_join, foreign_model, last_field = _apply_many_to_many_branch(
-        relation, instruct, Models.model_table_name(instruct.object.model), instruct.alias, join_path, vector; reverse=true
+        relation, instruct, Models.model_table_name(instruct.object.model), instruct.alias,
+        join_path, vector; reverse=true, track_path = !cte
       )
       foreign_table_name = foreign_model
       m2m_inserted = true
@@ -627,16 +637,24 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   end
 
   if !m2m_inserted
-    join_type_override = _get_join_type_override(instruct.object, join_path)
+    # #474: `custom_join` is the BASE model's join-config registry, and this hop only has a config
+    # to inherit when it is rooted there. A CTE-rooted hop is not — `join_path` here is `field[1]`,
+    # i.e. the CTE NAME, so these two lookups read whatever `cjoin` / `cjoin_on` / `on()` entry
+    # happened to share that name and handed the CTE's join that entry's type and predicates. That
+    # was #447's first two symptoms; the third was `_insert_join` claiming the CTE name in
+    # `row_path`. Skipping the lookups and namespacing the key makes all three unrepresentable —
+    # a CTE has no join config by construction, and its join type comes from `cte_dict["join_type"]`
+    # set in the `cte` branch above.
+    join_type_override = cte ? nothing : _get_join_type_override(instruct.object, join_path)
     join_type_override !== nothing && (row_join["how"] = join_type_override)
 
-    join_filters = _get_join_filters(instruct.object, join_path)
+    join_filters = cte ? nothing : _get_join_filters(instruct.object, join_path)
     if join_filters !== nothing && !isempty(join_filters)
       @pormg_debug false
       row_join["on_conditions"] = join_filters
     end
 
-    tb_alias = _insert_join(instruct.row_join, row_join, instruct.row_path, join_path) 
+    tb_alias = _insert_join(instruct.row_join, row_join, instruct.row_path, join_path; track_path = !cte)
   end
   
   vector = vector[2:end]  
@@ -654,7 +672,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # extraction on the joined table's alias, not a further hop. size(vector) > 1 here, so the
     # trailing segments are a JSON path.
     if haskey(new_object.fields, first_column) && Models.is_json_field(new_object.fields[first_column])
-      return _render_json_lookup(instruct, tb_alias, new_object.fields[first_column], first_column, String.(vector[2:end]), field)
+      return _render_json_lookup(instruct, tb_alias, new_object.fields[first_column], first_column, String.(vector[2:end]), field; cte=cte)
     end
 
     # Create a new Dict for this join to avoid mutating previously inserted joins
@@ -669,7 +687,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     if haskey(new_object.fields, first_column) && Models.is_many_to_many_field(new_object.fields[first_column])
       relation = Models.get_many_to_many_relation(new_object, first_column)
       tb_alias, row_join, foreign_model, last_field = _apply_many_to_many_branch(
-        relation, instruct, prev_b, tb_alias, join_path, vector; previus_how=prev_how
+        relation, instruct, prev_b, tb_alias, join_path, vector; previus_how=prev_how, track_path = !cte
       )
       foreign_table_name = foreign_model
       _m2m_inserted = true
@@ -704,7 +722,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       if related_object isa Models.ManyToManyRelation
         relation = related_object::Models.ManyToManyRelation
         tb_alias, row_join, foreign_model, last_field = _apply_many_to_many_branch(
-          relation, instruct, prev_b, tb_alias, join_path, vector; previus_how=prev_how, reverse=true
+          relation, instruct, prev_b, tb_alias, join_path, vector; previus_how=prev_how, reverse=true, track_path = !cte
         )
         foreign_table_name = foreign_model
         _m2m_inserted = true
@@ -740,15 +758,20 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
 
     @pormg_debug false   
     if !_m2m_inserted
-      join_type_override = _get_join_type_override(instruct.object, join_path)
+      # #474: same gate as the first hop above, and it is needed here too rather than only there.
+      # `join_path` is recomputed as `"<root>__<seg>"`, so a CTE-rooted deep path produces
+      # `"ev__parent"` — which collides with an `on("ev__parent", …)` entry whenever the base model
+      # also has a relation named `ev`. Hops past the first also walk the CTE's OWN model, whose
+      # field names are a different namespace from the base model's join keys entirely.
+      join_type_override = cte ? nothing : _get_join_type_override(instruct.object, join_path)
       join_type_override !== nothing && (row_join["how"] = join_type_override)
 
-      join_filters = _get_join_filters(instruct.object, join_path)
+      join_filters = cte ? nothing : _get_join_filters(instruct.object, join_path)
       if join_filters !== nothing && !isempty(join_filters)
         row_join["on_conditions"] = join_filters
       end
-      
-      tb_alias = _insert_join(instruct.row_join, row_join, instruct.row_path, join_path)
+
+      tb_alias = _insert_join(instruct.row_join, row_join, instruct.row_path, join_path; track_path = !cte)
     end
 
     # Only advance vector for forward-FK joins; reverse joins already advanced above
@@ -766,11 +789,12 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
 
   # println("$(join(field, "__"))")
   # functions must be processed here
-  # `tab_field_cache` is `Dict{String,PormGField}`, so a `nothing` here would raise a MethodError
+  # `tab_field_cache` is `Dict{MemoKey,PormGField}` (#474), so a `nothing` here would raise a MethodError
   # BEFORE `_solve_field` below could report the real problem — which is the whole point of letting
   # the lookups above fall through. Guarding the write is what makes that fall-through reach the
   # typed error. Nothing depends on the entry existing: every reader is `haskey`-gated.
-  last_field !== nothing && (instruct.tab_field_cache["$(join(field, "__"))"] = last_field)
+  # #474: namespaced for a CTE-rooted path — same argument as `row_path` and `instruct.cache`.
+  last_field !== nothing && (instruct.tab_field_cache[_join_path_key(join(field, "__"), cte)] = last_field)
   return string(quote_identifier(tb_alias, instruct.connection), ".", _solve_field(vector[end], foreing_table_module, foreign_table_name, instruct))
   
 end

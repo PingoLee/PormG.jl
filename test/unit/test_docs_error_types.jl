@@ -170,27 +170,6 @@ const DOCERR_CASES = [
         () -> DOCERR_RESULT_PG.objects.values("*", "statusid" => "points").list(show_query = :dict),
     ),
     (
-        # #424, as #444 left it. The shape this case used to pin — a `cjoin_on` `on` list naming a
-        # CROSS-joined CTE — is no longer reachable: a `__` string cannot name a CTE any more, and a
-        # `CTE(...)` handle is refused at the call (the next case). What still reaches this guard is
-        # the ALIAS collision: `.with("d" => …)` unkeyed, and a `cjoin_on` whose alias is also "d",
-        # so the cjoin_on's predicates land on the CTE's CROSS entry — which has no ON clause to
-        # carry them. Nothing is shadowed and no reference spelling is involved, which is exactly
-        # why #444 did not touch it.
-        "read/custom_joins.md — an ON predicate on a CROSS-joined CTE is refused",
-        QueryBuildError,
-        () -> begin
-            ev = DOCERR_STATUS_PG.objects
-            ev.values("statusid", "status")
-            q = DOCERR_RESULT_PG.objects
-            q.with("d" => ev)                        # no join_field => CROSS JOIN (#44)
-            q.values("resultid")
-            q.cjoin_on("DOCERR_DRIVER_PG", alias = "d", on = [F("d.surname") == F("resultid")])
-            q.filter(CTE("d", "status") => "Finished")   # forces the CTE join to be built
-            q.list(show_query = :dict)
-        end,
-    ),
-    (
         # #444. A CTE column reference cannot appear in a JOIN's ON clause at all — `cjoin_on`'s
         # `on` is the whole ON clause, and a CTE is joined by its own `.with()` declaration, not by
         # someone else's join. Refused at the call, before any SQL is planned. FilterError rather
@@ -237,27 +216,21 @@ const DOCERR_CASES = [
             q.list(show_query = :dict)
         end,
     ),
-    (
-        # #447. The KEYED half of the collision the #424 case above covers for CROSS. Same shape as
-        # that one plus `join_field`, which is precisely the difference: a keyed CTE emits a real ON
-        # clause, so #424's `"cross"`-marked guard never saw it. The predicates are not dropped here
-        # — the cjoin_on's own TABLE is, leaving `"d"` referenced but never joined.
-        #
-        # Keying the CTE used to be the documented remedy for #424, which is why both the message
-        # and `read/custom_joins.md` had to stop offering it.
-        "read/custom_joins.md — a join key colliding with a keyed CTE name is refused",
-        QueryBuildError,
-        () -> begin
-            ev = DOCERR_STATUS_PG.objects
-            ev.values("statusid", "status")
-            q = DOCERR_RESULT_PG.objects
-            q.with("d" => ev, join_field = "statusid" => "statusid")   # KEYED => real ON clause
-            q.values("resultid")
-            q.cjoin_on("DOCERR_DRIVER_PG", alias = "d", on = [F("d.surname") == F("resultid")])
-            q.filter(CTE("d", "status") => "Finished")   # forces the CTE join to be built
-            q.list(show_query = :dict)
-        end,
-    ),
+    # #474 removed TWO cases that stood here, and the removals are the point rather than a
+    # tidy-up. Both pinned doc sentences about a CTE name colliding with a join key:
+    #
+    #   - "an ON predicate on a CROSS-joined CTE is refused" (#424) — its producer was the ALIAS
+    #     collision, `.with("d" => …)` unkeyed against a `cjoin_on` also aliased `"d"`.
+    #   - "a join key colliding with a keyed CTE name is refused" (#447) — the same shape, keyed.
+    #
+    # #474 made both RENDER: the CTE hop no longer reads the base model's join-config registry
+    # under its own name, so the two are simply two relations sharing a name and both are emitted.
+    # Their coexistence is pinned in `test/unit/test_relation_alias_namespace.jl`, and the doc
+    # sentences they mirrored are gone from `read/custom_joins.md` and `read/subqueries_and_ctes.md`.
+    #
+    # #424's `throw` still stands in `build_query.jl` as a fail-closed backstop for the relocation
+    # route, but nine shapes were built against it after the change and none reached it — so there
+    # is no producer to pin here. Re-add a case the moment one exists.
     (
         # #433. A subquery consumed by @in / Subquery / Exists must not declare a CTE: the nested
         # WITH binds into the `:cte` bucket, which flattens ahead of `:select`/`:where`, so on

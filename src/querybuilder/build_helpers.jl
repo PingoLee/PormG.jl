@@ -146,8 +146,24 @@ end
 function _retag_cte_field!(field::SQLField, name::String)
   field.field = _retag_cte_column(field.field, name)
   field._as === nothing || (field._as = _cte_as(name, field._as))
+  # #474 — the single site that marks an expression CTE-rooted. `_as` keeps the `name__path`
+  # spelling #444 pinned (it is the output column name); the MEMO moves to the other half of a
+  # `MemoKey`, so a field path spelled identically can no longer read or claim this entry.
+  field.cte_rooted = true
   return field
 end
+
+# #474 — read a projection's memo key. Every `instruct.cache` / `tab_field_cache` /
+# `json_lookup_cache` access that keys off a SQLField goes through here; keying off `_as` directly is
+# what let the two namespaces share one memo. `nothing` means the expression has no output name and
+# memoizes nowhere.
+_field_cache_key(v::SQLTypeField)::Union{Nothing,MemoKey} =
+  v._as === nothing ? nothing : (v.cte_rooted, v._as)
+
+# #474 — the same key from a handle rather than from a built SQLField, for the sites that resolve a
+# `CTE(...)` reference directly and then read back what `_build_row_join` cached for it.
+_cte_cache_key(ref::CTEReference)::MemoKey = (true, _cte_as(ref))
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Invalid filter-operator diagnostics (#98)
@@ -490,21 +506,27 @@ function _get_alias_name(row_join::Vector{Dict{String,Union{String,Vector{Filter
   end
 end
 
+# `track_path = false` (#474) records the join WITHOUT claiming its name in `row_path`. A CTE hop
+# uses it: `row_path` exists so `build()`'s two materialization loops can skip a `custom_join` entry
+# that traversal already built, and a CTE has no `custom_join` entry — so a CTE hop registering its
+# own name there could only ever suppress an unrelated user join that happened to share it. Nothing
+# indexes `row_path` positionally (both readers are `∉` membership tests), so the two vectors do not
+# have to stay the same length.
 function _insert_join(
   row_join::Vector{Dict{String,Union{String,Vector{FilterType}}}},
   row::Dict{String,Union{String,Vector{FilterType}}},
-  row_path::Vector{String}, join_path::String)
+  row_path::Vector{String}, join_path::String; track_path::Bool=true)
   @pormg_debug false
   if size(row_join, 1) == 0
     push!(row_join, row)
-    push!(row_path, join_path)
+    track_path && push!(row_path, join_path)
     return row["alias_b"]
   else
     check = filter(r -> r["a"] == row["a"] && r["b"] == row["b"] && r["key_a"] == row["key_a"] && r["key_b"] == row["key_b"] && r["alias_a"] == row["alias_a"], row_join)
     if size(check, 1) == 0
       @pormg_debug false
       push!(row_join, row)
-      push!(row_path, join_path)
+      track_path && push!(row_path, join_path)
       return row["alias_b"]
     else
       if size(check, 1) > 1
@@ -518,6 +540,15 @@ function _insert_join(
   end
 end
 
+# #474 — the memo key for one join hop. See `MemoKey` (`types.jl`) for why the namespace is a tuple
+# half rather than a string prefix.
+#
+# `row_path` does NOT go through here: a CTE hop is not tracked there at all (`_insert_join`'s
+# `track_path`). It is the membership set `build()`'s two materialization loops test `custom_join`
+# keys against, and a CTE hop has no `custom_join` entry to suppress — registering one under the
+# CTE's name is what silently dropped the user's own join before #474.
+_join_path_key(join_path::String, cte::Bool)::MemoKey = (cte, join_path)
+
 function _check_if_field_is_a_operator(field::String)
   common_operators = ["exact", "iexact", "contains", "icontains", "iunaccent_contains", "iunaccent_exact", "in", "gt", "gte", "lt", "lte",
     "startswith", "istartswith", "endswith", "iendswith", "range", "date",
@@ -529,10 +560,33 @@ function _check_if_field_is_a_operator(field::String)
   end
 end
 
+# #474: `"CROSS"` is NOT in this list, and its absence is the fix rather than an oversight. Every
+# consumer of this function feeds `row_join["how"]`, and Phase 2 of `build_row_join_sql_text` emits
+# `"$(value["how"]) JOIN $b AS $alias ON $on_clause"` unconditionally — so an accepted `"CROSS"`
+# could only ever render `CROSS JOIN … ON …`, which BOTH PostgreSQL and SQLite reject. Measured on
+# all three writers before removal: `cjoin_on(join_type="CROSS")`, `on(join_type="CROSS")` and a
+# `field.how` of `"CROSS"` each produced that statement. It was never documented either
+# (`docs/src/api.md` has always listed only the four below).
+#
+# The one real CROSS JOIN PormG emits is an UNKEYED `.with(...)` that is REFERENCED — that path sets
+# `row_join["cross"]` in `build_joins.jl` and short-circuits ahead of the `ON` render; it never comes
+# through here. That is also the only supported spelling for a deliberate cross product, so the
+# message points at it (and at the reference, not just the declaration: since #444 a `.with(...)`
+# alone emits no join at all).
 function _normalize_join_type(join_type::String)
-  valid_joins = ["INNER", "LEFT", "RIGHT", "FULL", "CROSS"]
+  valid_joins = ["INNER", "LEFT", "RIGHT", "FULL"]
   normalized = uppercase(strip(join_type))
-  normalized in valid_joins || throw(QueryBuildError("Invalid join type '$(join_type)'. Valid types: $(join(valid_joins, ", "))"))
+  if !(normalized in valid_joins)
+    cross_hint = normalized == "CROSS" ?
+      ("\n  A \e[4m\e[32mCROSS JOIN\e[0m cannot carry the \e[4m\e[32mON\e[0m clause this join " *
+       "renders. For a deliberate cross product, declare the table as an UNKEYED " *
+       "\e[4m\e[32m.with(\"n\" => sub)\e[0m and REFERENCE it — e.g. " *
+       "\e[4m\e[32mvalues(\"x\" => CTE(\"n\", \"col\"))\e[0m — which emits a real CROSS JOIN and " *
+       "warns that it is Cartesian (#44, #474).") : ""
+    throw(QueryBuildError(
+      "Invalid join type \e[4m\e[31m$(join_type)\e[0m. Valid types: " *
+      "\e[4m\e[32m$(join(valid_joins, ", "))\e[0m.$(cross_hint)"))
+  end
   return normalized
 end
 
@@ -676,10 +730,11 @@ function _get_select_query(v::String, instruc::SQLInstruction; _as::Union{Nothin
       return string(quoted_alias, ".*")
     end
     
-    if _as !== nothing && haskey(instruc.tab_field_cache, _as) && haskey(instruc.object.model.fields, v)
+    if _as !== nothing && haskey(instruc.tab_field_cache, (false, _as)) && haskey(instruc.object.model.fields, v)
       # The fields haskey guard matters: an invalid `v` must fall through to _solve_field's
       # UnknownFieldError below, not die here with a raw KeyError (audit finding).
-      instruc.tab_field_cache[_as] = instruc.object.model.fields[v]
+      # #474: `v` is a column of the BASE model here, so the base-model half of the namespace.
+      instruc.tab_field_cache[(false, _as)] = instruc.object.model.fields[v]
     end
     return string(quoted_alias, ".", _solve_field(v, instruc.object.model, instruc))
   end
@@ -1164,13 +1219,18 @@ end
 # end
 function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
   # check if SQLTypeField exists in cache
-  if v._as !== nothing && haskey(instruc.cache, v._as)
-    return instruc.cache[v._as].field
+  # #474: keyed by `_field_cache_key`, not `_as`. This is the site the measured defect went
+  # through — a CTE reference projected as `CTE("parent", "sku")` claimed the memo under
+  # `"parent__sku"`, and a later `filter("parent__sku" => …)` on the model's OWN ForeignKey read it
+  # back, filtering the CTE's column while the ForeignKey's join sat unused in the statement.
+  key = _field_cache_key(v)
+  if key !== nothing && haskey(instruc.cache, key)
+    return instruc.cache[key].field
   else
     v_copy = deepcopy(v)
     v_copy.field = _get_select_query(v_copy.field, instruc)
-    if v_copy._as !== nothing
-      instruc.cache[v_copy._as] = v_copy
+    if key !== nothing
+      instruc.cache[key] = v_copy
     end
     return v_copy.field
   end
@@ -1222,7 +1282,9 @@ end
 # SQLite throws PG-only).
 function _render_json_operator(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
   col_as = isa(v.column, SQLTypeField) ? v.column._as : nothing
-  if col_as !== nothing && haskey(instruc.json_lookup_cache, col_as)
+  # #474: the memo is keyed by namespace, the MESSAGE by what the caller wrote.
+  col_key = isa(v.column, SQLTypeField) ? _field_cache_key(v.column) : nothing
+  if col_key !== nothing && haskey(instruc.json_lookup_cache, col_key)
     throw(FilterError("The \e[31m@$(v.operator)\e[0m operator applies to a JSON column, not a nested key path (\e[31m$(col_as)\e[0m); this is not supported in v1."))
   end
   base = _resolve_json_operator_field(v, instruc)
@@ -1249,7 +1311,14 @@ function _resolve_json_operator_field(v::SQLTypeOper, instruc::SQLInstruction)
   if fld isa String && !contains(fld, "__")
     return get(instruc.object.model.fields, fld, nothing)
   end
-  return v.column._as === nothing ? nothing : get(instruc.tab_field_cache, v.column._as, nothing)
+  # #474: the memo key, like every other `tab_field_cache` reader. Missing this one made a JSONB
+  # containment operator over a CTE column — `filter(CTE("evc", "payload__@has_key") => "driver")` —
+  # miss the entry `_build_row_join` had just written under the namespaced key and fail closed with
+  # "evc__payload is not JSON", a shape that rendered before #474. The mirror hazard is worse: with
+  # a base-model path spelled the same, the un-namespaced lookup could return the OTHER namespace's
+  # field and license a jsonb operator against a CTE's text column.
+  key = _field_cache_key(v.column)
+  return key === nothing ? nothing : get(instruc.tab_field_cache, key, nothing)
 end
 
 # #352: sargable rewrite for `col__@yyyy_mm` / `col__@year` / `col__@date` comparisons.
@@ -1382,7 +1451,9 @@ function _resolve_bucket_column(raw_field::String, instruc::SQLInstruction)
   # closed and silently dropping the #352/#373 rewrite for every CTE date-bucket filter, with no
   # other symptom. That is why the fix belongs at construction.
   column_sql = _get_select_query(raw_field, instruc)
-  f_meta = get(instruc.tab_field_cache, raw_field, nothing)
+  # #474: a String path is base-model by construction — since #444 a string cannot name a CTE. Its
+  # CTE twin below asks for the same entry under the other half of the namespace.
+  f_meta = get(instruc.tab_field_cache, (false, raw_field), nothing)
   f_meta === nothing && return (nothing, "")
   return _checked_bucket_column(f_meta, String(last(split(raw_field, "__"))), column_sql, instruc)
 end
@@ -1396,7 +1467,7 @@ end
 # applies here unchanged.
 function _resolve_bucket_column(ref::CTEReference, instruc::SQLInstruction)
   column_sql = _get_select_query(ref, instruc)
-  f_meta = get(instruc.tab_field_cache, _cte_as(ref), nothing)
+  f_meta = get(instruc.tab_field_cache, _cte_cache_key(ref), nothing)   # #474: namespaced memo
   f_meta === nothing && return (nothing, "")
   return _checked_bucket_column(f_meta, String(last(split(ref.path, "__"))), column_sql, instruc)
 end
@@ -1566,7 +1637,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   # #27: comparison against a JSON path lookup (payload__key). Resolving `column` above populated
   # json_lookup_cache; the dedicated branch binds the RHS as plain text (the generic path would run
   # the JSON formatter on the RHS and throw on plain strings) and applies the PG numeric cast for </>.
-  if isa(v.column, SQLTypeField) && v.column._as !== nothing && haskey(instruc.json_lookup_cache, v.column._as)
+  if isa(v.column, SQLTypeField) && v.column._as !== nothing && haskey(instruc.json_lookup_cache, _field_cache_key(v.column))
     return _render_json_lookup_comparison(v, column, instruc)
   end
   if isa(v.values, Union{SQLTypeF,SQLTypeCTE})
@@ -1677,12 +1748,12 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
         @pormg_debug false
         rethrow(e)
       end
-    elseif haskey(instruc.tab_field_cache, v.column._as) # Check cache first
+    elseif (_vc_key = _field_cache_key(v.column)) !== nothing && haskey(instruc.tab_field_cache, _vc_key) # #474
       @pormg_debug false
       is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith",
                                   "ncontains", "nicontains", "niunaccent_contains", "nstartswith", "nendswith"]
       placeholders = add_parameter!(instruc,
-        _format_filter_value(instruc.tab_field_cache[v.column._as].formatter, v.values, v.operator),
+        _format_filter_value(instruc.tab_field_cache[_vc_key].formatter, v.values, v.operator),
         contains=is_like_op, operator=v.operator)
     elseif isa(v.column, SQLTypeField)
       @pormg_debug false

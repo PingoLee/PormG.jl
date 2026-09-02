@@ -86,11 +86,20 @@ const CJC = CustomJoinCopyModels
     # explicit join_type override, so both in-place writes of on() are exercised.
     q2.on("driverid", "driverid__nationality" => "Brazilian", join_type = "INNER")
 
-    # Original untouched: same vector object, same length, join_type still the
-    # default "LEFT" set by the first on(); the copy carries the extension alone.
+    # Original untouched: same vector object, same length, and NO join_type at all — the copy
+    # carries the extension alone.
+    #
+    # #474 moved this assertion. It read `["join_type"] == "LEFT"`, pinning the default `on()`
+    # invented when the caller named none; that default is gone, because it silently overrode the
+    # join type PormG derives from the relation itself (measured: the same NOT NULL ForeignKey path
+    # renders `INNER JOIN` on its own and rendered `LEFT JOIN` the moment an `on()` predicate was
+    # added). The absence assertion proves this testset's actual claim — that the copy's explicit
+    # `join_type = "INNER"` did not leak into the original — strictly more tightly than the old one:
+    # under the aliasing bug it would fail the same way, and it cannot be satisfied by a coincidence
+    # of two defaults agreeing.
     @test q.object.custom_join["driverid"]["filters"] === orig_filters
     @test length(q.object.custom_join["driverid"]["filters"]) == orig_n
-    @test q.object.custom_join["driverid"]["join_type"] == "LEFT"
+    @test !haskey(q.object.custom_join["driverid"], "join_type")
     @test length(q2.object.custom_join["driverid"]["filters"]) == orig_n + 1
     @test q2.object.custom_join["driverid"]["join_type"] == "INNER"
 

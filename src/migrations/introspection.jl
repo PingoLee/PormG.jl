@@ -69,6 +69,125 @@ function _fk_default_or_warn(default_val, table_name, column_name)
   end
 end
 
+# True when `s` is ONE parenthesized group, i.e. the outer `(` closes on the final character.
+# Balance-checked rather than regex-anchored: the `r"^\((.+)\)$"` this replaces rewrote `(a) + (b)`
+# to `a) + (b`. Parens inside a string literal do not count.
+#
+# Shared by BOTH engines and therefore kept with the other cross-backend helpers (#472). It was
+# `_pg_wrapped_in_parens`, next to the PostgreSQL cleaner it was written for, until the SQLite
+# default reader needed the identical predicate — at which point the prefix named an engine rather
+# than a contract. It is plain string logic; neither backend is in it.
+function _wrapped_in_parens(s::AbstractString)::Bool
+  (ncodeunits(s) >= 2 && first(s) == '(' && last(s) == ')') || return false
+  depth = 0
+  in_literal = false
+  last_i = lastindex(s)
+  i = firstindex(s)
+  while i <= last_i
+    ch = s[i]
+    if in_literal
+      if ch == '\''
+        j = nextind(s, i)
+        if j <= last_i && s[j] == '\''   # `''` is an escaped quote, not the end of the literal
+          i = nextind(s, j); continue
+        end
+        in_literal = false
+      end
+    elseif ch == '\''
+      in_literal = true
+    elseif ch == '('
+      depth += 1
+    elseif ch == ')'
+      depth -= 1
+      depth == 0 && return i == last_i
+    end
+    i = nextind(s, i)
+  end
+  return false
+end
+
+# Does the field type `field_type` builds carry the slot `slot`?
+#
+# Answered from the STRUCT, never by building a throwaway instance. The constructors are named
+# `CharField` and the structs `sCharField` (models/fields.jl) — the same `s`-prefix relation
+# `_field_or_drop_default`'s warning inverts to report a public type name — so the question needs no
+# object to ask it of. Verified for every field type reachable from either reader's type map: the
+# struct exists, `typeof(ctor())` is exactly it, and both slot answers agree with the instance.
+#
+# It replaces a per-column probe construction, and that was not only wasted work: a probe built with
+# the column's real default let `CharField()`'s INVENTED `max_length = 250` judge a value the
+# declared `varchar(500)` accepts, so the guard dropped a good default and blamed a width from
+# nowhere. Asking the type instead of an instance makes that mistake unavailable.
+_field_type_has_slot(field_type, slot::Symbol)::Bool =
+  hasfield(getfield(Models, Symbol(:s, nameof(field_type))), slot)
+
+# Build a field from an introspected column, dropping the column's DEFAULT if the field type
+# refuses it, or `nothing` never having been a default at all.
+#
+# THE SAME FAILURE POLICY AS `_fk_default_or_warn` (#292), applied to every OTHER arm (#472). That
+# helper covered the five foreign-key branches only; the seven generic/key branches still passed
+# `default=` straight into the constructor, where `validate_default` (Models.jl) THROWS. One such
+# column aborted the entire `convert_schema_to_models` read, so `inspectdb` produced nothing and
+# `makemigrations` reported "no plan generated" for the whole database — over a single column.
+# `DEFAULT now()` on a timestamptz is the most common expression default there is, so the practical
+# trigger was "point inspectdb at almost any third-party schema".
+#
+# WHY THIS TAKES A CLOSURE rather than a value the way `_fk_default_or_warn` does: the FK arms all
+# coerce to one target type (`Union{Int64, Nothing}`), so a value-in/value-out helper can decide
+# alone. Here the target is whatever field type the column mapped to — a dozen constructors with a
+# dozen different contracts — so the only honest test of "can this field hold this default" is to
+# build the field and see. The closure is that construction.
+#
+# WHY THE CATCH IS NARROW (`FieldValidationError`, not catch-all-with-carve-outs): a bare `catch`
+# here would swallow a genuine bug in the reader — a `MethodError` from a mistyped kwarg, an
+# `UndefVarError` — and silently report it as a bad column default. `FieldValidationError` is the
+# type every default rejection raises (`validate_default`, and the field types that check their own
+# defaults). InterruptException/StackOverflowError are therefore excluded BY CONSTRUCTION rather
+# than by an explicit carve-out — but only because `validate_default` no longer relabels them
+# (#472, Models.jl); before that fix a Ctrl-C arrived here disguised as a FieldValidationError.
+#
+# WHY IT RETRIES BEFORE WARNING. `FieldValidationError` is also what a bad `max_length` or another
+# non-default kwarg raises, and blaming the default for one of those would be a lie in a warning
+# the user cannot check. So the retry IS the proof of culprit: if `build(nothing)` succeeds, the
+# default was the problem and dropping it is the fix; if it throws too, the failure was never about
+# the default and that second exception propagates undisguised, with no warning emitted. (Julia
+# keeps the first exception on the stack, so it surfaces as the "caused by" of the second.)
+#
+# Same shape as the Django importer's retry-without-`:choices`/`:default` (importers.jl), which is
+# the in-repo precedent for degrade-instead-of-abort at an import boundary.
+#
+# CADENCE: one warning per column, per read — the house pattern (`@warn` with structured
+# `table`/`column` kwargs, as every degrade in `src/migrations/` does), NOT a once-per-table
+# summary. `convert_schema_to_models` is called by `makemigrations` and by the importers, so a
+# schema with `created_at DEFAULT now()` on every table warns once per such column on every run
+# until the default is representable or removed. That repetition is the intended signal: the
+# condition is standing, not transient. (`maxlog` is deliberately not used — see AdvisoryLock.jl
+# for why it is unreliable across the repeated calls this would need to survive.)
+function _field_or_drop_default(build::Function, table_name, column_name, default_val)
+  default_val === nothing && return build(nothing)
+
+  try
+    return build(default_val)
+  catch e
+    e isa FieldValidationError || rethrow()
+    field = build(nothing)
+    # The value is shown as introspection received it — post-`_pg_clean_default` on PostgreSQL,
+    # post-`_normalize_sqlite_default` on SQLite. Enough to identify the column, not a faithful
+    # reproduction of the DDL. PormG has no representation for an expression default, so the column
+    # imports with none; the database keeps its own (nothing here alters the live schema).
+    #
+    # `field_type` is the PUBLIC spelling — the struct is `sCharField`, the name a user declares is
+    # `CharField`, and naming a type they cannot type is no help. Same `x[2:end]` strip as
+    # `Model_to_str`'s own render-failure warning (Models.jl) and `querybuilder/types.jl`.
+    # `reason` carries the constructor's own complaint, using importers.jl's `_one_line` — the
+    # SAME call that file's twin degrade warning makes (`reason = _one_line(sprint(showerror, e),
+    # 160)`). Both files are included into `Migrations`, so it needs no import. Without it the
+    # warning says a default was dropped but never why.
+    @warn "Column default could not be represented as a field default; importing the column without it." table = string(table_name) column = string(column_name) default = string(default_val) field_type = string(nameof(typeof(field)))[2:end] reason = _one_line(sprint(showerror, e), 160)
+    return field
+  end
+end
+
 # PormG's `on_delete === nothing` and `DO_NOTHING` both render as SQL `ON DELETE NO ACTION`
 # (`_foreign_key_on_delete_sql`, Dialect.jl), so a "NO ACTION" read back out of a database is
 # ambiguous — and `NO ACTION` is also what a backend stores when no action was declared at all.
@@ -111,8 +230,15 @@ function _strip_sqlite_default_wrapper(default_val)
   ismissing(default_val) && return nothing
 
   stripped = strip(String(default_val))
-  while length(stripped) >= 2 && startswith(stripped, "(") && endswith(stripped, ")")
-    inner = strip(stripped[2:end-1])
+  # `_wrapped_in_parens` rather than `startswith("(") && endswith(")")` (#472). The textual test
+  # is true for `(a) + (b)`, where the opening paren does NOT close on the final character, so it
+  # unwrapped to `a) + (b` — two unbalanced fragments. That was survivable only while such a value
+  # went on to throw: SQLite defaults now degrade to a `String` and a text column KEEPS the value,
+  # so a mangled one would be written into the generated model as a literal default and re-rendered
+  # as `DEFAULT 'a) + (b'`. The PostgreSQL cleaner hit this exact bug and fixed it with this
+  # predicate; the SQLite twin was left behind.
+  while _wrapped_in_parens(stripped)
+    inner = strip(stripped[nextind(stripped, firstindex(stripped)):prevind(stripped, lastindex(stripped))])
     inner == stripped && break
     stripped = inner
   end
@@ -183,7 +309,14 @@ function _normalize_sqlite_default(default_val, type_sym::Symbol)
     return replace(stripped[2:end-1], "\"\"" => "\"")
   end
 
-  return stripped
+  # `String`, not the `SubString` `strip` produced (#472). `TextField`/`EmailField`/`ImageField`/
+  # `FileField` validate against `Union{String, Nothing}` and their converter is `parse(String, x)`,
+  # which has NO method for any input — so a `SubString` reached the throw path and an UNQUOTED
+  # default aborted the read even on a text column. The two branches above already widen to `String`
+  # (via `replace`), which is why every quoted-literal fixture passed and this went unnoticed.
+  # Widening here makes the engines agree: `_pg_clean_default` returns `Union{String, Nothing}`, so
+  # PostgreSQL has always kept an unrepresentable expression on a text column as a literal string.
+  return String(stripped)
 end
 
 function get_database_schema(db::PormGSQLite)
@@ -325,7 +458,15 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
       default=_fk_default_or_warn(normalized_default, table_name, column_name))
       field_instance.to_table = fk_parent_table
     else
-      field_instance = getfield(Models, type_sym)(null=(nullable === nothing), default=normalized_default)
+      # One construction carrying the declared width, for the same #472 reason as the two live
+      # readers: a width stamped on afterwards is never checked against the default.
+      ddl_len = (type_sym == :CharField && declared_length !== nothing) ?
+                parse(Int, declared_length) : nothing
+      field_instance = _field_or_drop_default(table_name, column_name, normalized_default) do d
+        ddl_len === nothing ? getfield(Models, type_sym)(null=(nullable === nothing), default=d) :
+                              getfield(Models, type_sym)(null=(nullable === nothing), default=d,
+                                                         max_length=ddl_len)
+      end
       # BLOB carries no length suffix, so a BinaryField's byte bound comes from its CHECK (#296).
       if type_sym == :BinaryField && haskey(byte_bounds, column_name)
         field_instance.max_length = byte_bounds[column_name]
@@ -443,8 +584,10 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
       # `UUIDField` column — pk or not — as bare `TEXT`, never as a literal `UUID` column type. This
       # branch exists for a hand-written or foreign SQLite schema that DOES declare a column type as
       # `UUID` (SQLite accepts any type name), and costs nothing to keep.
-      field = Models.UUIDField(null=false, primary_key=true,
-          default=_normalize_sqlite_default(default_val, :UUIDField))
+      field = _field_or_drop_default(table_name, col_name,
+          _normalize_sqlite_default(default_val, :UUIDField)) do d
+        Models.UUIDField(null=false, primary_key=true, default=d)
+      end
 
     elseif fk_hit
         fk_info = fk_map[col_name]
@@ -543,9 +686,12 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
         # (`TextField` does not accept it at all, so reconstructing one would yield a model with no
         # key). PormG never emits such a column itself; only a hand-written or foreign schema can.
         m_pk = match(r"\((\d+)\)", col_type)
-        field = Models.CharField(primary_key=true, null=false,
-            max_length = m_pk !== nothing ? parse(Int, m_pk.captures[1]) : 250,
-            default=_normalize_sqlite_default(default_val, :CharField))
+        field = _field_or_drop_default(table_name, col_name,
+            _normalize_sqlite_default(default_val, :CharField)) do d
+          Models.CharField(primary_key=true, null=false,
+              max_length = m_pk !== nothing ? parse(Int, m_pk.captures[1]) : 250,
+              default=d)
+        end
 
     elseif is_pk
         # In SQLite, INTEGER PRIMARY KEY often implies AUTOINCREMENT behavior. Correct BY
@@ -565,13 +711,19 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
             type_sym = :TextField
         end
         # Handle decimal precision if present
-      field = getfield(Models, type_sym)(null=nullable, default=_normalize_sqlite_default(default_val, type_sym))
-        if type_sym == :CharField && occursin("(", col_type)
-            m = match(r"\((\d+)\)", col_type)
-            if m !== nothing
-                field.max_length = parse(Int, m.captures[1])
-            end
-        elseif type_sym == :BinaryField && haskey(byte_bounds, col_name)
+      # Width first, then ONE construction that carries it (#472). Assigning `max_length` after
+      # the fact bypasses `CharField`'s "a default must fit max_length" check, which let an
+      # over-long default reach the generated models file and throw at load. `type_sym` is already
+      # known here, so unlike the PostgreSQL arm this needs no probe.
+      m_len = type_sym == :CharField ? match(r"\((\d+)\)", col_type) : nothing
+      char_len = m_len === nothing ? nothing : parse(Int, m_len.captures[1])
+      field = _field_or_drop_default(table_name, col_name,
+          _normalize_sqlite_default(default_val, type_sym)) do d
+        char_len === nothing ? getfield(Models, type_sym)(null=nullable, default=d) :
+                               getfield(Models, type_sym)(null=nullable, default=d,
+                                                          max_length=char_len)
+      end
+        if type_sym == :BinaryField && haskey(byte_bounds, col_name)
             # Byte bound recovered from the CHECK clause — `BLOB` carries no length suffix, so it
             # cannot come from `col_type` the way CharField's does (#296).
             field.max_length = byte_bounds[col_name]
@@ -1697,37 +1849,6 @@ function _pg_split_format_type(raw::AbstractString, type_map::Dict{String, Symbo
   return (key, modifier)
 end
 
-# True when `s` is ONE parenthesized group, i.e. the outer `(` closes on the final character.
-# Balance-checked rather than regex-anchored: the `r"^\((.+)\)$"` this replaces rewrote `(a) + (b)`
-# to `a) + (b`. Parens inside a string literal do not count.
-function _pg_wrapped_in_parens(s::AbstractString)::Bool
-  (ncodeunits(s) >= 2 && first(s) == '(' && last(s) == ')') || return false
-  depth = 0
-  in_literal = false
-  last_i = lastindex(s)
-  i = firstindex(s)
-  while i <= last_i
-    ch = s[i]
-    if in_literal
-      if ch == '\''
-        j = nextind(s, i)
-        if j <= last_i && s[j] == '\''   # `''` is an escaped quote, not the end of the literal
-          i = nextind(s, j); continue
-        end
-        in_literal = false
-      end
-    elseif ch == '\''
-      in_literal = true
-    elseif ch == '('
-      depth += 1
-    elseif ch == ')'
-      depth -= 1
-      depth == 0 && return i == last_i
-    end
-    i = nextind(s, i)
-  end
-  return false
-end
 
 # True when `s` is ONE single-quoted literal — every interior quote doubled. The `r"^'(.+)'$"` this
 # replaces also matched `'a' || 'b'`, which is a concatenation of two.
@@ -1790,7 +1911,7 @@ function _pg_clean_default(expr)::Union{String, Nothing}
   # COMPOUND expression whose trailing cast belongs to its last OPERAND. Stripping it there turns
   # `('x'::text || 'y'::text)` into `'x'::text || 'y'` — a mangled expression rather than an
   # unrecognized one. So the re-stripped form is kept only when it actually reduced to a literal.
-  if _pg_wrapped_in_parens(s)
+  if _wrapped_in_parens(s)
     inner = s[nextind(s, firstindex(s)):prevind(s, lastindex(s))]
     stripped = _pg_strip_trailing_casts(inner)
     s = _pg_single_quoted_literal(stripped) ? stripped : String(strip(inner))
@@ -1978,7 +2099,9 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
           # `true` here — the primary-key branch of `_NON_SCHEMA_FIELD_ATTRS`'s comparison (above in
           # `planner.jl`) has no exception for `:unique`, so that mismatch alone would keep
           # `makemigrations` proposing an alteration regardless of the `:auto_add` exemption below.
-          Models.UUIDField(primary_key=true, unique=unique, null=false, db_index=db_index, default=default_value)
+          _field_or_drop_default(table_name, col_name, default_value) do d
+            Models.UUIDField(primary_key=true, unique=unique, null=false, db_index=db_index, default=d)
+          end
       elseif haskey(fk_map, col_name)
         # #409: this branch now runs BEFORE the generic `primary_key` fallback below. It used to run
         # after, so a column that is both a PRIMARY KEY and a FOREIGN KEY — `OneToOneField(
@@ -2050,8 +2173,10 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
           # `:unique` has no exemption in `_NON_SCHEMA_FIELD_ATTRS` so it would alter; `:db_index`
           # does, so it would not — but it still costs the planner's fast-path early-out on every
           # varchar-keyed model, and a generated file that lies is a defect on its own terms.
-          Models.CharField(primary_key=true, max_length=max_length, unique=unique, null=false,
-              db_index=db_index, default=default_value)
+          _field_or_drop_default(table_name, col_name, default_value) do d
+            Models.CharField(primary_key=true, max_length=max_length, unique=unique, null=false,
+                db_index=db_index, default=d)
+          end
       elseif primary_key
           # The remaining keys: every integer width, and the types that are genuinely hazardous to
           # reconstruct. `IDField` is now correct BY CONSTRUCTION for the integer case rather than by
@@ -2066,7 +2191,33 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
           # one would produce a model with no key.
           Models.IDField(generated=generated, generated_always=generated_always, unique=true, null=false, db_index=true)
       else
-        field_type(unique=unique, null=!not_null, default=default_value, db_index=db_index)
+        # The column's width/precision is passed to the CONSTRUCTOR rather than assigned onto the
+        # field afterwards (#472). The post-loop `field.max_length = n` below is a plain struct
+        # write with no checks, so it bypassed `CharField`'s "a default must fit max_length" rule:
+        # a `varchar(5) DEFAULT concat('a','b')` imported as a field `CharField` itself refuses,
+        # and `inspectdb` wrote exactly that into the models file, where loading it threw. The
+        # abort moved out of introspection instead of going away.
+        #
+        # Which slot the type carries is a question about the TYPE, so `_field_type_has_slot` asks
+        # the struct rather than building a probe instance to interrogate. `hasfield` is the right
+        # gate either way: it matches exactly which constructors accept the kwarg silently, and
+        # every other field type warns "Unexpected parameter" on one.
+        _field_or_drop_default(table_name, col_name, default_value) do d
+          base = (unique = unique, null = !not_null, default = d, db_index = db_index)
+          if max_length !== nothing && _field_type_has_slot(field_type, :max_length)
+            field_type(; base..., max_length = max_length)
+          elseif max_digits !== nothing && decimal_places !== nothing &&
+                 _field_type_has_slot(field_type, :max_digits)
+            # `decimal_places !== nothing` is required, not defensive: `DecimalField` REFUSES a
+            # `max_digits` with no `decimal_places`, and that refusal would hit the retry too — so
+            # the second throw escapes and aborts the whole schema read, the exact #472 failure
+            # through a new door. `format_type` sets the pair together today; this keeps the arm
+            # honest if that ever changes 170 lines away.
+            field_type(; base..., max_digits = max_digits, decimal_places = decimal_places)
+          else
+            field_type(; base...)
+          end
+        end
       end
 
       # Only fields that actually carry these attributes get them. A primary-key column

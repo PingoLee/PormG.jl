@@ -1754,10 +1754,16 @@ function DateTimeField(; kwargs...)
     elseif value isa AbstractString
       try
         ZonedDateTime(value, DATETIME_FORMAT)
-      catch
+      catch e
+        # #472: these were bare `catch`es, so an interrupt raised mid-parse was absorbed here and
+        # the next attempt simply ran — `validate_default`'s carve-out never saw it. This is the
+        # converter EVERY DateTimeField default goes through, i.e. the `DEFAULT now()` path that
+        # introspection's warn-and-drop guard depends on not disguising a cancelled import.
+        (e isa InterruptException || e isa StackOverflowError) && rethrow()
         try
           DateTime(value, DATETIME_FORMAT)
-        catch
+        catch e2
+          (e2 isa InterruptException || e2 isa StackOverflowError) && rethrow()
           DateTime(value)
         end
       end

@@ -34,6 +34,23 @@ using Logging          # `@test_logs min_level = Logging.Warn` in the #455 block
 using PormG
 using PormG.Migrations: convertSQLToModel
 
+# #472 needs the LIVE SQLite reader as well as the hermetic PostgreSQL one: `convert_schema_to_models`
+# on SQLite goes through the PRAGMA path, which a `DataFrameRow` fixture cannot reach. The guard is
+# `test_key_type_round_trip.jl`'s — `test/runtests.jl` already loads the drivers for the whole
+# suite, so this only matters when the file is run on its own, which it now can be.
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+import PormG: PormGModel, PormGPostgres, PormGSQLite
+import PormG.ConnectionPool: SQLiteConnectionPool, fetch
+import PormG.Migrations: convert_schema_to_models, _field_or_drop_default
+
+# Mock connections for the planner assertion in the #472 block (the shape used by
+# `test_fk_to_table_planner.jl`). Prefixed with this file's own name because `test/runtests.jl`
+# includes every unit file into the same module, and a bare `MockPg` would collide.
+struct IntrospectionGuardMockPg <: PormGPostgres end
+struct IntrospectionGuardMockSQLite <: PormGSQLite end
+# The SQLite rebuild path asks the backend for its version to decide which DDL it may use.
+PormG.backend_sqlite_version(::IntrospectionGuardMockSQLite) = 3045000
+
 # ── Fixture builders ────────────────────────────────────────────────────────────────────────────
 #
 # #455 moved the PostgreSQL schema query's wire format from `array_to_string(array_agg(...), ', ')`
@@ -1344,4 +1361,680 @@ end
   # The one that would regress if the modifier were applied by pattern: a DateTimeField with a
   # `max_length` of 3, or (pre-#455) a TextField, because `timestamp(3)` matched no type-map key.
   @test model.fields["seen_at"] isa PormG.Models.sDateTimeField
+end
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# #472 — an unrepresentable column DEFAULT on a NON-FK column
+#
+# #292 gave the five foreign-key arms `_fk_default_or_warn`: warn, drop the default, never throw.
+# The seven other arms kept passing the introspected default straight into the constructor, where
+# `validate_default` THROWS — so one `created_at timestamptz DEFAULT now()` aborted the entire
+# `convert_schema_to_models` read and `inspectdb` produced nothing for the whole database.
+#
+# Measured on `main` before the fix (this row, this reader): `now()`, `CURRENT_DATE`,
+# `(random() * …)`, `time now()`, `random()` and `gen_random_uuid()` all raised
+# `FieldValidationError`. Only a `text` column survived, because `TextField` accepts any `String`.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Introspection: an unrepresentable column default is dropped, not fatal
+# The whole read must complete, every column must arrive, and every attribute OTHER than the
+# default must survive — the retry inside the guard rebuilds the field with the same kwargs, so a
+# `NOT NULL` that went missing would mean the guard dropped more than it was asked to.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an unrepresentable column default warns and is dropped, never throws (#472)" begin
+  # Type spellings are what `format_type` renders and defaults are what `pg_get_expr` renders —
+  # the reader sees exactly these strings from the live schema query.
+  expr_columns = [_col("id", "bigint"; notnull = true),
+                  _col("created_at", "timestamp with time zone"; notnull = true, default = "now()"),
+                  _col("d", "date"; default = "CURRENT_DATE"),
+                  _col("n", "integer"; default = "(random() * (10)::double precision)"),
+                  _col("tm", "time without time zone"; default = "now()"),
+                  _col("fl", "double precision"; default = "random()"),
+                  _col("u", "uuid"; default = "gen_random_uuid()"),
+                  # Controls, in the SAME row: a representable default must be untouched by a
+                  # sibling column's failure, which a per-row abort could never demonstrate.
+                  _col("ok", "integer"; default = "5"),
+                  _col("note", "text"; notnull = true, default = "concat('a'::text, 'b'::text)")]
+
+  logs, model = Test.collect_test_logs() do
+    convertSQLToModel(_introspection_row(
+      table_name = "expr_defaults", columns = expr_columns, primary_keys = ["id"]))
+  end
+
+  # 1. THE regression gate: the read completed at all. Pre-fix this line never ran — the
+  #    `@testset` reported an Error from `FieldValidationError`, not a failure.
+  @test Set(keys(model.fields)) ==
+        Set(["id", "created_at", "d", "n", "tm", "fl", "u", "ok", "note"])
+
+  # 2. Each unrepresentable default is gone, and the COLUMN is still its real type. Dropping the
+  #    default must not degrade `timestamptz` to text, which is the other way an importer could
+  #    "not crash" while still destroying the schema.
+  @test model.fields["created_at"] isa PormG.Models.sDateTimeField
+  @test model.fields["d"]  isa PormG.Models.sDateField
+  @test model.fields["n"]  isa PormG.Models.sIntegerField
+  @test model.fields["tm"] isa PormG.Models.sTimeField
+  @test model.fields["fl"] isa PormG.Models.sFloatField
+  @test model.fields["u"]  isa PormG.Models.sUUIDField
+  for c in ("created_at", "d", "n", "tm", "fl", "u")
+    @test model.fields[c].default === nothing
+  end
+
+  # 3. Every OTHER attribute survived the retry. `created_at` is NOT NULL in the fixture, and a
+  #    guard that rebuilt the field with defaulted kwargs would silently report it nullable —
+  #    which the planner would then propose "fixing" with an ALTER on every run.
+  @test model.fields["created_at"].null == false
+
+  # 4. Representable defaults are untouched, including on a row where six siblings failed.
+  @test model.fields["ok"].default == 5
+  # A text column still keeps an expression as a literal string. PormG has no representation for an
+  # expression default, and #455 scoped its acceptance to the COLUMN rather than the value; #472 is
+  # only about not aborting, so this stays exactly as it was (see docs/src/schema_conventions.md).
+  @test model.fields["note"].default == "concat('a'::text, 'b'::text)"
+  @test model.fields["note"].null == false
+
+  # 5. The failure is REPORTED, not silent — one warning per dropped column, each naming the table
+  #    and the column, so a large import says which columns lost a default and where.
+  warns = filter(l -> l.level == Logging.Warn &&
+                      occursin("could not be represented", l.message), logs)
+  @test length(warns) == 6
+
+  by_col = Dict(string(Dict(w.kwargs)[:column]) => Dict(w.kwargs) for w in warns)
+  @test Set(keys(by_col)) == Set(["created_at", "d", "n", "tm", "fl", "u"])
+  @test by_col["created_at"][:table] == "expr_defaults"
+  # The RAW value, as introspection received it: enough to find the column in the DDL.
+  @test by_col["created_at"][:default] == "now()"
+  @test by_col["d"][:default] == "CURRENT_DATE"
+  # …and the field type it ended up as, so the warning says what PormG imported instead — in the
+  # PUBLIC spelling the user declares (`DateTimeField`), not the private struct name
+  # (`sDateTimeField`), which is the convention `Model_to_str`'s own degrade warning follows.
+  @test by_col["created_at"][:field_type] == "DateTimeField"
+  # …and WHY, taken from the constructor's own complaint rather than restated here.
+  @test occursin("Invalid default value", by_col["created_at"][:reason])
+
+  # 6. The mirror image, and the reason `min_level` is used rather than a count: a row whose
+  #    defaults are ALL representable must produce no warning at all. Without this, a guard that
+  #    warned unconditionally would pass every assertion above.
+  @test_logs min_level = Logging.Warn convertSQLToModel(_introspection_row(
+    table_name   = "clean_defaults",
+    columns      = [_col("id", "bigint"; notnull = true),
+                    _col("ok", "integer"; default = "5"),
+                    _col("flag", "boolean"; default = "true"),
+                    _col("note", "text"; notnull = true, default = "concat('a'::text, 'b'::text)")],
+    primary_keys = ["id"]))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Introspection: the KEY arms drop an unrepresentable default too
+# `default=` reaches three PostgreSQL arms, not one. The issue named only the generic arm, but a
+# `uuid PRIMARY KEY DEFAULT gen_random_uuid()` is the single most common uuid-key declaration
+# there is, and it aborted the read exactly the same way.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the UUID and VARCHAR key arms drop an unrepresentable default too (#472)" begin
+  # UUID primary key. `gen_random_uuid()` is not a UUID literal, so `UUIDField` rejects it.
+  logs_uuid, uuid_model = Test.collect_test_logs() do
+    convertSQLToModel(_introspection_row(
+      table_name   = "uuid_keyed",
+      columns      = [_col("id", "uuid"; notnull = true, default = "gen_random_uuid()"),
+                      _col("label", "text")],
+      primary_keys = ["id"]))
+  end
+
+  key = uuid_model.fields["id"]
+  @test key isa PormG.Models.sUUIDField    # still reconstructed as its real type (#334)
+  @test key.primary_key
+  @test key.default === nothing
+  @test count(l -> l.level == Logging.Warn &&
+                   occursin("could not be represented", l.message), logs_uuid) == 1
+
+  # VARCHAR natural key (#409). `CharField` rejects a default longer than `max_length`, which is
+  # the only way this arm can refuse a string — and it is a real shape: a legacy key column with a
+  # computed default that does not fit the declared width.
+  logs_char, char_model = Test.collect_test_logs() do
+    convertSQLToModel(_introspection_row(
+      table_name   = "char_keyed",
+      columns      = [_col("code", "character varying(5)"; notnull = true,
+                           default = "concat('a'::text, 'b'::text)"),
+                      _col("label", "text")],
+      primary_keys = ["code"]))
+  end
+
+  code = char_model.fields["code"]
+  @test code isa PormG.Models.sCharField
+  @test code.primary_key
+  @test code.max_length == 5              # the declared width survived the retry
+  @test code.default === nothing
+  @test count(l -> l.level == Logging.Warn &&
+                   occursin("could not be represented", l.message), logs_char) == 1
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The guard blames the default only when the default IS the culprit
+# `FieldValidationError` is also what a bad `max_length` raises, so a guard that caught it and
+# reported "bad default" would lie about failures that have nothing to do with the default. The
+# retry is what separates the two: if the field cannot be built WITHOUT the default either, the
+# exception propagates undisguised and no warning is emitted.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a failure that is not about the default propagates undisguised (#472)" begin
+  # `max_length = 0` is rejected by CharField itself, with or without a default.
+  err = nothing
+  logs, _ = Test.collect_test_logs() do
+    err = try
+      _field_or_drop_default("t", "c", "anything") do d
+        PormG.Models.CharField(max_length = 0, default = d)
+      end
+      nothing
+    catch e
+      e
+    end
+  end
+
+  @test err isa PormG.FieldValidationError            # the REAL error, not a swallowed one
+  @test occursin("max_length", sprint(showerror, err))  # …and it still says what is wrong
+  # The gate: no warning. A guard that warned before retrying would have told the user the column
+  # default was at fault, sending them to look at a DEFAULT that is perfectly fine.
+  @test isempty(filter(l -> l.level == Logging.Warn, logs))
+
+  # And the ordinary path still works when the default IS the culprit: same constructor, legal
+  # `max_length`, a default that does not fit.
+  logs2, field = Test.collect_test_logs() do
+    _field_or_drop_default("t", "c", "way too long for five") do d
+      PormG.Models.CharField(max_length = 5, default = d)
+    end
+  end
+  @test field isa PormG.Models.sCharField
+  @test field.default === nothing
+  @test length(filter(l -> l.level == Logging.Warn, logs2)) == 1
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A cancelled import is not a bad column default
+# `_fk_default_or_warn` carries this carve-out explicitly (#292). The #472 guard gets it BY
+# CONSTRUCTION by catching only `FieldValidationError` — but that is only honest because
+# `validate_default` stopped relabelling an interrupt raised inside a converter, which it did
+# until this change. Both halves are pinned here; the first alone would pass with the relabelling
+# still in place.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an interrupt during a large import aborts rather than being a bad default (#472)" begin
+  # The guard itself: nothing but a FieldValidationError may be caught.
+  @test_throws InterruptException _field_or_drop_default("t", "c", "x") do d
+    throw(InterruptException())
+  end
+  @test_throws StackOverflowError _field_or_drop_default("t", "c", "x") do d
+    throw(StackOverflowError())
+  end
+
+  # …and the layer underneath, which is what made the narrow catch safe. Pre-fix BOTH of these
+  # returned a `FieldValidationError`, so a Ctrl-C mid-import reached the guard disguised as a bad
+  # default, got retried, and was reported as one.
+  @test_throws InterruptException PormG.Models.validate_default(
+      "x", Int64, "F", _ -> throw(InterruptException()))
+  @test_throws StackOverflowError PormG.Models.validate_default(
+      "x", Int64, "F", _ -> throw(StackOverflowError()))
+
+  # The control that keeps the carve-out from being a blanket rethrow: an ordinary converter
+  # failure is still a FieldValidationError, which is the entire contract the guard relies on.
+  @test_throws PormG.FieldValidationError PormG.Models.validate_default(
+      "x", Int64, "F", _ -> error("boom"))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite: an unquoted default is a String, so a text column behaves like PostgreSQL's
+# `_normalize_sqlite_default` ended with the `SubString` that `strip` produced. `TextField` (and
+# Email/Image/FileField) validate against `Union{String, Nothing}` with `parse(String, x)` as the
+# converter — which has no method for ANY input — so a `SubString` threw. SQLite was therefore
+# strictly worse than PostgreSQL: even `TEXT DEFAULT CURRENT_TIMESTAMP` aborted the read.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a SQLite unquoted default widens to String so a text column keeps it (#472)" begin
+  norm = PormG.Migrations._normalize_sqlite_default
+
+  # THE mutation gate. `== "CURRENT_TIMESTAMP"` alone passes on `main`, because a `SubString`
+  # compares equal to the `String` — only the type assertion fails there.
+  @test norm("CURRENT_TIMESTAMP", :TextField) isa String
+  @test norm("(datetime('now'))", :DateTimeField) isa String
+  @test norm("(random()*10)", :IntegerField) isa String
+  # The consequence, stated as the thing a user sees: the field builds at all.
+  @test PormG.Models.TextField(default = norm("CURRENT_TIMESTAMP", :TextField)).default ==
+        "CURRENT_TIMESTAMP"
+
+  # Values are unchanged — this widens the type, it does not reinterpret anything.
+  @test norm("'abc'", :TextField) == "abc"
+  @test norm("5", :IntegerField) == "5"
+  @test norm("NULL", :TextField) === nothing
+  @test norm(nothing, :TextField) === nothing
+  @test norm("1", :BooleanField) === true          # the Bool branch still short-circuits
+  @test norm("X'0102'", :BinaryField) == UInt8[0x01, 0x02]   # …and so does the bytes branch (#296)
+
+  # Through the DDL-regex reader (off the live route, but the one with unit coverage): a typed
+  # column drops the expression and warns, a text column keeps it. Same row, both outcomes.
+  logs, model = Test.collect_test_logs() do
+    convertSQLToModel("""CREATE TABLE "sl_expr" (
+        "id" INTEGER PRIMARY KEY,
+        "created" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "note" TEXT DEFAULT CURRENT_TIMESTAMP,
+        "ok" INTEGER DEFAULT 5)""")
+  end
+
+  @test model.fields["created"] isa PormG.Models.sDateTimeField
+  @test model.fields["created"].default === nothing
+  @test model.fields["note"].default == "CURRENT_TIMESTAMP"
+  @test model.fields["ok"].default == 5
+  warns = filter(l -> l.level == Logging.Warn &&
+                      occursin("could not be represented", l.message), logs)
+  @test length(warns) == 1
+  @test Dict(first(warns).kwargs)[:column] == "created"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite: the LIVE reader (PRAGMA) agrees with the PostgreSQL one
+# `convert_schema_to_models` on SQLite goes through the PRAGMA reader, not the DDL-regex one, so
+# the block above proves nothing about production. The two readers must also AGREE: one engine
+# dropping a default the other keeps is the two-readers-disagree failure #409/#417 exist to
+# prevent, and it shows up as `makemigrations` churn on whichever engine the model was written for.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the live SQLite reader drops the same defaults as PostgreSQL (#472)" begin
+  sl_model, sl_logs = mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "expr_defaults.sqlite"); pool_size = 1)
+    try
+      fetch(pool, """CREATE TABLE "expr_defaults" (
+          "id" INTEGER PRIMARY KEY,
+          "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "d" DATE DEFAULT CURRENT_DATE,
+          "n" INTEGER DEFAULT (abs(random()) % 10),
+          "ok" INTEGER DEFAULT 5,
+          "note" TEXT DEFAULT CURRENT_TIMESTAMP)""")
+      logs, models = Test.collect_test_logs() do
+        convert_schema_to_models(pool; include_table = ["expr_defaults"])
+      end
+      (only(m for m in models if lowercase(string(m.name)) == "expr_defaults"), logs)
+    finally
+      PormG.ConnectionPool.close_pool!(pool)
+    end
+  end
+
+  # The read completed — pre-fix this raised from inside the PRAGMA reader's generic arm.
+  @test Set(keys(sl_model.fields)) == Set(["id", "created_at", "d", "n", "ok", "note"])
+  @test sl_model.fields["created_at"] isa PormG.Models.sDateTimeField
+  @test sl_model.fields["created_at"].default === nothing
+  @test sl_model.fields["created_at"].null == false     # NOT NULL survived the retry here too
+  @test sl_model.fields["d"].default === nothing
+  @test sl_model.fields["n"].default === nothing
+  @test sl_model.fields["ok"].default == 5
+  @test sl_model.fields["note"].default == "CURRENT_TIMESTAMP"
+
+  warns = filter(l -> l.level == Logging.Warn &&
+                      occursin("could not be represented", l.message), sl_logs)
+  @test length(warns) == 3
+  @test Set(string(Dict(w.kwargs)[:column]) for w in warns) == Set(["created_at", "d", "n"])
+  @test all(string(Dict(w.kwargs)[:table]) == "expr_defaults" for w in warns)
+
+  # THE cross-engine assertion: the same logical column, read by two entirely separate
+  # implementations, produces the same field type and the same (absent) default.
+  pg_model = Test.collect_test_logs() do
+    convertSQLToModel(_introspection_row(
+      table_name   = "expr_defaults",
+      columns      = [_col("id", "bigint"; notnull = true),
+                      _col("created_at", "timestamp with time zone"; notnull = true,
+                           default = "now()"),
+                      _col("note", "text"; default = "now()")],
+      primary_keys = ["id"]))
+  end[2]
+
+  @test typeof(pg_model.fields["created_at"]) === typeof(sl_model.fields["created_at"])
+  @test pg_model.fields["created_at"].default === sl_model.fields["created_at"].default === nothing
+  # …including the deliberate half: BOTH engines keep an expression default on a text column as a
+  # literal string. That is #455's decision, unchanged by #472 and documented in
+  # docs/src/schema_conventions.md, and this is what makes it a decision rather than an accident.
+  @test pg_model.fields["note"].default isa String
+  @test sl_model.fields["note"].default isa String
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A dropped expression default is not schema drift
+# The consequence that decides whether this fix is usable: after it, a live `DEFAULT now()` reads
+# back as "no default". If the planner compared that against a model declaring no default and saw
+# a difference, every `makemigrations` would propose an ALTER — `DROP DEFAULT` on PostgreSQL, a
+# FULL TABLE REBUILD on SQLite — forever, and the fix would have traded a hard abort for permanent
+# churn. `:default` IS diffed (it is not in `_NON_SCHEMA_FIELD_ATTRS`), so this is asserted rather
+# than assumed.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a dropped expression default does not make makemigrations churn (#472)" begin
+  # Built outside the log-assertion below on purpose: the read itself warns, and that warning is
+  # not what this test is about.
+  # `identity = "d"` (GENERATED BY DEFAULT AS IDENTITY) is what a PormG-created key column really
+  # carries, and it is what a declared `IDField()` renders. Leaving it empty here would make the
+  # key itself differ (`generated`), and the resulting `ADD GENERATED BY DEFAULT AS IDENTITY` in
+  # the plan would be mistaken for the drift this testset exists to rule out.
+  live = convertSQLToModel(_introspection_row(
+    table_name   = "expr_defaults",
+    columns      = [_col("id", "bigint"; notnull = true, identity = "d"),
+                    _col("created_at", "timestamp with time zone"; notnull = true,
+                         default = "now()"),
+                    _col("d", "date"; default = "CURRENT_DATE"),
+                    _col("ok", "integer"; default = "5")],
+    primary_keys = ["id"]))
+
+  # The dropped defaults are the precondition for everything below.
+  @test live.fields["created_at"].default === nothing
+  @test live.fields["d"].default === nothing
+
+  settings = PormG.Configuration.Settings()
+  settings.change_db = true
+
+  # What a user would actually declare for `created_at timestamptz NOT NULL DEFAULT now()`: the
+  # Django-shaped answer, which carries no `default` at all (`auto_now_add` is applied by PormG on
+  # insert, never rendered into DDL, and is exempt from the diff via `_NON_SCHEMA_FIELD_ATTRS`).
+  # It is deliberately NOT the trivially-equal declaration: `auto_now_add` makes the fast path
+  # `Models._compare_model_field` report "changed", so the detailed per-attribute loop runs for
+  # real and has to filter it — which is the path a live schema actually takes.
+  declared = PormG.Models.Model("expr_defaults",
+      id         = PormG.Models.IDField(),
+      created_at = PormG.Models.DateTimeField(auto_now_add = true, null = false),
+      d          = PormG.Models.DateField(null = true),
+      ok         = PormG.Models.IntegerField(default = 5, null = true))
+
+  for conn in (IntrospectionGuardMockSQLite(), IntrospectionGuardMockPg())
+    current_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+      :expr_defaults => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared, :exist => false))
+
+    # `min_level = Logging.Warn` with no expected specs asserts ZERO warnings: planning over a
+    # model whose default was dropped at import time must be silent as well as empty.
+    plan = @test_logs min_level = Logging.Warn PormG.Migrations.get_migration_plan(
+        PormGModel[live], current_schema, conn, settings)
+
+    # THE assertion. A non-empty plan here is `ALTER COLUMN … DROP DEFAULT` on PostgreSQL and a
+    # full table rebuild on SQLite, proposed again on every single `makemigrations` — which would
+    # have made this fix a trade of one hard failure for permanent churn.
+    @test !haskey(plan, :expr_defaults) || isempty(plan[:expr_defaults])
+  end
+
+  # THE control, without which the assertion above would also pass on a planner that ignored
+  # `:default` entirely: a REAL default difference must still be proposed. PostgreSQL only —
+  # a genuine difference sends SQLite down `_sqlite_rebuild_preserving_indexes`, which queries the
+  # connection for secondary indexes and so needs a live database rather than a mock. Same
+  # restriction, for the same reason, as `test_fk_to_table_planner.jl`'s real-difference testset.
+  changed = PormG.Models.Model("expr_defaults",
+      id         = PormG.Models.IDField(),
+      created_at = PormG.Models.DateTimeField(auto_now_add = true, null = false),
+      d          = PormG.Models.DateField(null = true),
+      ok         = PormG.Models.IntegerField(default = 7, null = true))
+
+  current_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+    :expr_defaults => Dict{Symbol, Union{Bool, PormGModel}}(:model => changed, :exist => false))
+
+  plan = PormG.Migrations.get_migration_plan(
+      PormGModel[live], current_schema, IntrospectionGuardMockPg(), settings)
+
+  @test haskey(plan, :expr_defaults) && !isempty(plan[:expr_defaults])
+  @test any(occursin("DEFAULT", sql) for sql in values(plan[:expr_defaults]))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The width is validated against the default, not stamped on afterwards
+# The generic arms build the field and then ASSIGN `max_length`, which is a plain struct write
+# with no checks — so `CharField`'s own "a default must fit max_length" rule was bypassed and a
+# `varchar(5) DEFAULT concat('a','b')` imported as `CharField(max_length=5, default=<28 chars>)`.
+# That field is one `CharField` itself refuses, so `inspectdb` wrote a models file that threw at
+# `set_models`: the abort MOVED out of introspection instead of going away. Found in review.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a default too long for the column's width is dropped, not stamped past the check (#472)" begin
+  # NON-key, which is what makes this distinct from the `char_keyed` case above: the key arm
+  # passes `max_length` to the constructor and always validated; the generic arm did not.
+  logs, model = Test.collect_test_logs() do
+    convertSQLToModel(_introspection_row(
+      table_name   = "narrow_default",
+      columns      = [_col("id", "bigint"; notnull = true),
+                      _col("code", "character varying(5)";
+                           default = "concat('a'::text, 'b'::text)")],
+      primary_keys = ["id"]))
+  end
+
+  code = model.fields["code"]
+  @test code isa PormG.Models.sCharField
+  @test code.max_length == 5          # the real width, not CharField's invented 250
+  @test code.default === nothing      # …and the default that does not fit is gone
+  @test count(l -> l.level == Logging.Warn &&
+                   occursin("could not be represented", l.message), logs) == 1
+
+  # THE assertion that makes this a regression rather than a restatement: what `inspectdb` writes
+  # must LOAD. Pre-fix this field was `CharField(max_length=5, default=<28 chars>)`, and
+  # re-declaring it — which is exactly what the generated models file does — threw.
+  @test PormG.Models.CharField(max_length = code.max_length, null = true,
+                               default = code.default) isa PormG.Models.sCharField
+
+  # The control: a default that DOES fit is untouched, so the guard is not just dropping every
+  # default on a sized column.
+  fits = convertSQLToModel(_introspection_row(
+    table_name   = "narrow_default_ok",
+    columns      = [_col("id", "bigint"; notnull = true),
+                    _col("code", "character varying(5)"; default = "'abc'::character varying")],
+    primary_keys = ["id"]))
+  @test fits.fields["code"].max_length == 5
+  @test fits.fields["code"].default == "abc"
+
+  # And a DecimalField still gets its precision — the other modifier stamped after construction.
+  dec = convertSQLToModel(_introspection_row(
+    table_name   = "decimal_default",
+    columns      = [_col("id", "bigint"; notnull = true),
+                    _col("amount", "numeric(9,3)"; default = "1.5")],
+    primary_keys = ["id"]))
+  @test dec.fields["amount"] isa PormG.Models.sDecimalField
+  @test dec.fields["amount"].max_digits == 9
+  @test dec.fields["amount"].decimal_places == 3
+  @test dec.fields["amount"].default == 1.5
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite unwraps parentheses by BALANCE, so a compound default is not mangled
+# `_strip_sqlite_default_wrapper` tested `startswith("(") && endswith(")")`, which is true of
+# `(a) + (b)` even though the opening paren does not close on the final character — it unwrapped
+# to `a) + (b`. That was survivable only while such a value went on to throw. Now that SQLite
+# defaults degrade to a `String` and a text column KEEPS the value, a mangled one would be written
+# into the generated model and re-rendered as `DEFAULT 'a) + (b'`. Found in review.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a compound SQLite default is not mangled by paren unwrapping (#472)" begin
+  norm = PormG.Migrations._normalize_sqlite_default
+  clean_pg = PormG.Migrations._pg_clean_default
+
+  # Each of these has a `(` first and a `)` last WITHOUT being one parenthesized group. The second
+  # column is what the pre-fix code produced.
+  for expr in ["(a) + (b)",                              # -> "a) + (b"
+               "((x)+(y))",                              # -> "x)+(y"
+               "((strftime('%s','now')) * (1000))",      # -> "strftime('%s','now')) * (1000"
+               "(('a') || ('b'))"]                       # -> "a') || ('b"
+    got = norm(expr, :TextField)
+    # Balanced: as many `(` as `)`. The mangled forms all fail this.
+    @test count(==('('), got) == count(==(')'), got)
+    # THE cross-engine assertion, and the reason this is in scope for #472 at all: the diff claims
+    # the two engines agree on an unrepresentable default, and they did not.
+    @test got == clean_pg(expr)
+  end
+
+  # Genuine single-group wrapping still unwraps, including repeatedly — this is what the loop is
+  # FOR, and a fix that simply stopped unwrapping would pass every assertion above.
+  @test norm("(5)", :IntegerField) == "5"
+  @test norm("('abc')", :TextField) == "abc"
+  @test norm("(datetime('now'))", :DateTimeField) == "datetime('now')"
+  @test norm("((7))", :IntegerField) == "7"
+
+  # A paren inside a string literal must not be counted — the reason the predicate is shared with
+  # PostgreSQL rather than reimplemented.
+  @test norm("(')(')", :TextField) == ")("
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The SQLite PRAGMA reader's KEY arms are guarded too
+# The live SQLite reader has three arms that pass a default, and the two KEY ones had no test:
+# reverting both to their unguarded form left the whole unit suite green. Both are reachable from
+# a hand-written or foreign schema, which is precisely the `inspectdb` population. Found in review.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the SQLite PRAGMA reader guards its UUID and CharField key arms (#472)" begin
+  uuid_field, char_field, logs = mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "sl_keys.sqlite"); pool_size = 1)
+    try
+      # A UUID-typed primary key with a computed default. SQLite accepts any type name, so a
+      # foreign schema really can declare `UUID`; PormG's own DDL never emits it, which is why
+      # this arm existed untested.
+      fetch(pool, """CREATE TABLE "sl_uuid_key" (
+          "id" UUID PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+          "label" TEXT)""")
+      # A sized textual natural key whose default does not fit the declared width.
+      fetch(pool, """CREATE TABLE "sl_char_key" (
+          "code" TEXT(5) PRIMARY KEY DEFAULT (lower('abcdefghijkl')),
+          "label" TEXT)""")
+
+      lg, models = Test.collect_test_logs() do
+        convert_schema_to_models(pool; include_table = ["sl_uuid_key", "sl_char_key"])
+      end
+      by = Dict(lowercase(string(m.name)) => m for m in models)
+      (by["sl_uuid_key"].fields["id"], by["sl_char_key"].fields["code"], lg)
+    finally
+      PormG.ConnectionPool.close_pool!(pool)
+    end
+  end
+
+  # UUID key: reconstructed as its real type (#334), key intact, unrepresentable default gone.
+  @test uuid_field isa PormG.Models.sUUIDField
+  @test uuid_field.primary_key
+  @test uuid_field.default === nothing
+
+  # CharField key: the declared width survives and the over-long default is dropped.
+  @test char_field isa PormG.Models.sCharField
+  @test char_field.primary_key
+  @test char_field.max_length == 5
+  @test char_field.default === nothing
+
+  # Both reported, naming their own table — the arms are guarded independently, so one warning
+  # would mean only one of them is.
+  warns = filter(l -> l.level == Logging.Warn &&
+                      occursin("could not be represented", l.message), logs)
+  @test length(warns) == 2
+  @test Set(string(Dict(w.kwargs)[:table]) for w in warns) == Set(["sl_uuid_key", "sl_char_key"])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The width probe must not judge the default, and the warning must not cite a phantom width
+# The generic arms learn which slot a field type carries by building one first. That probe carried
+# the real default, so `CharField()`'s INVENTED `max_length = 250` judged it: a 300-character
+# default on a `varchar(500)` was dropped, and `reason` blamed a `max_length is 250` that appears
+# nowhere in the schema or the model. Found in delta review — introduced by the fix for the
+# opposite bug, which is why the probe now carries no default at all.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a default that fits the column's real width is kept, whatever CharField invents (#472)" begin
+  # 300 characters: comfortably over CharField's default 250, comfortably under the declared 500.
+  wide = "'" * repeat("x", 300) * "'::character varying"
+
+  logs, model = Test.collect_test_logs() do
+    convertSQLToModel(_introspection_row(
+      table_name   = "wide_default",
+      columns      = [_col("id", "bigint"; notnull = true),
+                      _col("note", "character varying(500)"; default = wide)],
+      primary_keys = ["id"]))
+  end
+
+  note = model.fields["note"]
+  @test note isa PormG.Models.sCharField
+  @test note.max_length == 500
+  # THE assertion: the column accepts this default, so it must survive. Pre-fix it was `nothing`.
+  @test note.default == repeat("x", 300)
+  # …and no warning, because nothing was dropped. This is what makes the test a gate rather than a
+  # restatement of the one above: a guard that dropped it would have warned.
+  @test isempty(filter(l -> l.level == Logging.Warn &&
+                            occursin("could not be represented", l.message), logs))
+
+  # The boundary in the other direction still drops — the fix widened the accepted range, it did
+  # not remove the rule.
+  logs2, model2 = Test.collect_test_logs() do
+    convertSQLToModel(_introspection_row(
+      table_name   = "narrow_again",
+      columns      = [_col("id", "bigint"; notnull = true),
+                      _col("note", "character varying(100)"; default = wide)],
+      primary_keys = ["id"]))
+  end
+  @test model2.fields["note"].max_length == 100
+  @test model2.fields["note"].default === nothing
+  warns2 = filter(l -> l.level == Logging.Warn &&
+                       occursin("could not be represented", l.message), logs2)
+  @test length(warns2) == 1
+  # And when it DOES drop, the reason must cite the column's real width — not the constructor's
+  # invented one. `250` appearing here is the phantom this testset exists to prevent.
+  @test occursin("max_length is 100", Dict(first(warns2).kwargs)[:reason])
+  @test !occursin("250", Dict(first(warns2).kwargs)[:reason])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A precision without a scale must not abort the whole read
+# `DecimalField` refuses `max_digits` with no `decimal_places`, and that refusal reaches the RETRY
+# as well — so both `build(default_val)` and `build(nothing)` throw and the second escapes, which
+# is the whole-schema abort #472 exists to remove, arriving through the guard itself. `format_type`
+# sets the pair together today, so this pins the arm rather than a reachable input.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a numeric precision with no scale cannot abort the read (#472)" begin
+  # The premise, stated so the testset explains itself if the constructor ever changes.
+  @test_throws PormG.FieldValidationError PormG.Models.DecimalField(max_digits = 10,
+                                                                    decimal_places = nothing)
+
+  # A numeric column carrying BOTH still gets them — the arm is guarded, not disabled.
+  model = convertSQLToModel(_introspection_row(
+    table_name   = "scaled",
+    columns      = [_col("id", "bigint"; notnull = true),
+                    _col("amount", "numeric(9,3)"; default = "1.5")],
+    primary_keys = ["id"]))
+  @test model.fields["amount"].max_digits == 9
+  @test model.fields["amount"].decimal_places == 3
+  @test model.fields["amount"].default == 1.5
+
+  # A bare `numeric` — no precision at all — imports without one rather than throwing.
+  bare = convertSQLToModel(_introspection_row(
+    table_name   = "unscaled",
+    columns      = [_col("id", "bigint"; notnull = true), _col("amount", "numeric")],
+    primary_keys = ["id"]))
+  @test bare.fields["amount"] isa PormG.Models.sDecimalField
+end
+
+# An `AbstractString` that raises `InterruptException` as soon as anything reads its contents.
+# That puts the throw INSIDE each converter's own `try`, which is where a Ctrl-C during a large
+# `convert_schema_to_models` run actually lands — a converter that catches broadly turns it into a
+# `FieldValidationError` and introspection then reports a cancelled import as a bad column default.
+struct InterruptOnRead <: AbstractString end
+Base.ncodeunits(::InterruptOnRead) = 19
+Base.codeunit(::InterruptOnRead) = UInt8
+Base.codeunit(::InterruptOnRead, ::Integer) = throw(InterruptException())
+Base.isvalid(::InterruptOnRead, ::Integer) = true
+Base.iterate(::InterruptOnRead, i::Integer = 1) = throw(InterruptException())
+Base.String(::InterruptOnRead) = throw(InterruptException())
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Every converter `validate_default` is handed lets a cancelled import through
+# The carve-out in `validate_default` is only half the contract: a converter with its own bare
+# `catch` swallows the interrupt before `validate_default` can ever see it. Three did —
+# `normalize_datetime_default` (two nested catches), `format_json_sql` and `format_date_sql` —
+# and between them they cover `DEFAULT now()` and `DEFAULT CURRENT_DATE`, i.e. the two defaults
+# every fixture in this file uses. Found in delta review.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "no field converter disguises a cancelled import as a bad default (#472)" begin
+  # An interrupt raised while the CONVERTER runs must reach the caller as an interrupt. Each of
+  # these reaches a different converter with its own internal try/catch:
+  #   DateTimeField -> normalize_datetime_default (two nested bare catches)
+  #   DateField     -> format_date_sql
+  #   JSONField     -> format_json_sql
+  # `InterruptOnRead` raises the moment its contents are read, which is inside each converter's
+  # own `try` — exactly where a real Ctrl-C during a large import would land.
+  #
+  # MEASURED COVERAGE, stated rather than implied. Reverting the three converter carve-outs fails
+  # the JSONField line ONLY: this fixture raises on every read, so the datetime converter exhausts
+  # all three of its parse attempts and the last throw escapes its `try` into `validate_default`'s
+  # carve-out, and `format_date_sql` raises at the `occursin` that sits outside its own `try`. The
+  # real hazard is the case a fixture cannot reproduce — ONE interrupt, swallowed by the first
+  # attempt, after which the next attempt parses normally and the cancellation is lost entirely.
+  # So two of these three lines are defence in depth against that, gated only by the JSON one.
+  @test_throws InterruptException PormG.Models.DateTimeField(default = InterruptOnRead())
+  @test_throws InterruptException PormG.Models.DateField(default = InterruptOnRead())
+  @test_throws InterruptException PormG.Models.JSONField(default = InterruptOnRead())
+
+  # The control that keeps the above from passing on a blanket rethrow: an ORDINARY bad default
+  # still becomes a FieldValidationError, which is the contract the introspection guard catches.
+  @test_throws PormG.FieldValidationError PormG.Models.DateField(default = "not-a-date")
+  @test_throws PormG.FieldValidationError PormG.Models.JSONField(default = "{not json")
+  @test_throws PormG.FieldValidationError PormG.Models.DateTimeField(default = "not-a-datetime")
 end

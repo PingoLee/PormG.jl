@@ -29,6 +29,11 @@ import PormG: PormGError, MigrationError, InvalidMigrationError, ModelDefinition
 # importers.jl reports a wrong-backend connection with the precise type rather than folding it
 # into MigrationError — an unknown key already fails earlier as InvalidConfigurationError.
 import PormG: BackendCapabilityError
+# #472: introspection catches this NARROWLY to drop a column default it cannot represent
+# (`_field_or_drop_default`, migrations/introspection.jl). Naming an unimported binding inside a
+# `catch` body is not a precompile error — it would surface as an `UndefVarError` raised INSTEAD
+# of the original, at the first bad default in a live import.
+import PormG: FieldValidationError
 # MissingConfigurationError lives in Configuration (its umbrella ConfigurationError is in Kernel);
 # it is NOT a PormG-level binding, so it must be imported from the owning module.
 import PormG.Configuration: MissingConfigurationError

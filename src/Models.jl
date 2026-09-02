@@ -2772,6 +2772,10 @@ function format_json_sql(value::AbstractString)
   try
     JSON.parse(value)
   catch e
+    # #472: a cancelled import is not invalid JSON. `JSON.parse` over a large value is a wide
+    # window, and this converter is handed to `validate_default`, so without the carve-out a Ctrl-C
+    # arrived at introspection's warn-and-drop guard disguised as a bad column default.
+    (e isa InterruptException || e isa StackOverflowError) && rethrow()
     throw(InvalidValueError("Invalid JSON string: $(sprint(showerror, e))"))
   end
   return value
@@ -2878,6 +2882,10 @@ function format_date_sql(value::AbstractString)
         Date(value)
         return value
     catch e
+        # #472, as in `format_json_sql`: `DateField` is exercised by every expression-default
+        # fixture (`d DATE DEFAULT CURRENT_DATE`), so this is squarely on the path the guard
+        # depends on not disguising a cancelled import.
+        (e isa InterruptException || e isa StackOverflowError) && rethrow()
         throw(InvalidValueError("The date $value is invalid: $(sprint(showerror, e))"))
     end
   else
@@ -3701,7 +3709,14 @@ Validate the default value for a field based on the expected type.
 # Returns
 - If the default value is of the expected type, it is returned as is.
 - If the default value can be converted to the expected type using the provided converter function, the converted value is returned.
-- If the default value is neither of the expected type nor convertible to it, an `ArgumentError` is thrown.
+- If the default value is neither of the expected type nor convertible to it, a
+  [`FieldValidationError`](@ref) is thrown. (It has never been an `ArgumentError`; the claim was
+  stale from before the #231/#239 error taxonomy. Nothing in the repo would have caught it:
+  `test_docs_error_type_drift.jl` scans `docs/src` prose and counts raise sites on non-comment
+  `src/` lines, and a stale type name in a docstring is neither.)
+
+An `InterruptException` or `StackOverflowError` raised *inside* the converter is NOT a bad
+default and propagates untouched — see the comment on the carve-out below.
 """
 function validate_default(default, expected_type::Type, field_name::String, converter::Function)
   if (default isa expected_type)
@@ -3710,6 +3725,12 @@ function validate_default(default, expected_type::Type, field_name::String, conv
     try
       return converter(default)
     catch e
+      # #472: a program-state failure is not "this value is not a valid default". Without this,
+      # Ctrl-C during a large `convert_schema_to_models` run reached the caller relabelled as a
+      # FieldValidationError — so introspection's warn-and-drop guard would swallow the interrupt,
+      # retry the constructor and report a cancelled import as a bad column default. Same carve-out
+      # as `_fk_default_or_warn` and the `Model_to_str` render-failure path.
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
       @pormg_debug false
       throw(FieldValidationError("Invalid default value for $field_name. Expected type: $expected_type, got: $(typeof(default)). Please provide a value of type $expected_type."))
     end

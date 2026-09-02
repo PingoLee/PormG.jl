@@ -164,6 +164,52 @@ q.values("points", "who" => CTE("all_drivers", "surname"))                # this
 
 ---
 
+## An expression column DEFAULT no longer aborts introspection (#472)
+
+- **Version**: Unreleased
+- **PormG ref**: #472, #292, #455; `src/migrations/introspection.jl`, `src/Models.jl`,
+  `src/models/fields.jl`, `docs/src/schema_conventions.md`
+- **Recorded**: 2026-09-02
+- **Severity**: **behavior change on SQLite only**, and only for a schema that previously could not
+  be read at all. Everything else here fixes something already broken. Part of the `0.5.x`
+  pre-publish wave.
+
+### What changed
+
+An expression `DEFAULT` the field type cannot represent — `now()`, `CURRENT_DATE`,
+`gen_random_uuid()` — used to abort the **entire** schema read, so `inspectdb` produced no models
+for any table. Such a column is now imported without the default, and the warning names it.
+
+One shape changes rather than starts working: a **SQLite textual column whose default is not a
+quoted literal**. `TextField` accepts any string, so the expression is now read back verbatim as a
+literal string rather than aborting (PostgreSQL has always done this; SQLite now agrees). A model
+declaring a plain `TextField()` therefore differs from the live column, and `makemigrations`
+proposes dropping the default on every run — a table rebuild on SQLite.
+
+### Migrate your app
+
+No call sites change. The edit is in your **model definitions**, and only for a textual column whose
+database default is an expression.
+
+```julia
+# ✗ the trap — renders DEFAULT 'CURRENT_TIMESTAMP' and stores that literal text in every new row
+note = Models.TextField(default="CURRENT_TIMESTAMP")
+
+# ✓ declare the intent; applied on insert, never rendered into DDL, and converges on both engines
+created_at = Models.DateTimeField(auto_now_add=true)     # live: TIMESTAMPTZ DEFAULT now()
+```
+
+Matching the expression as a literal is never the fix. Either declare `auto_now_add`, give the
+column a type that expresses the default (`DATETIME DEFAULT CURRENT_TIMESTAMP` reads back as a
+`DateTimeField` with no default and converges), or drop the database default. Left alone, the
+proposed rebuild is a no-op in intent but is re-proposed on every run.
+
+PormG does not surface this column for you: the warning names defaults it **dropped**, and this is
+the case where it kept one. What you see is `makemigrations` proposing an alteration you did not
+ask for, naming the table. Full rules: `docs/src/schema_conventions.md` → *Column defaults*.
+
+---
+
 ## `cjoin_on` joins follow declaration order, and two silent-wrong-result shapes are refused (#449, #448)
 
 - **Version**: Unreleased

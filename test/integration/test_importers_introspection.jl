@@ -56,7 +56,10 @@ end
               "pormg_it_uniq",
               # #455, child before parent as above. The parent's NAME carries the comma on purpose:
               # that is what tore `foreign_tables`, which is a different aggregate from `columns`.
-              "pormg_it_comma_child", "pormg_it_comma, parent", "pormg_it_comma_key")
+              "pormg_it_comma_child", "pormg_it_comma, parent", "pormg_it_comma_key",
+              # #472: expression defaults on NON-text columns, which is the shape section 3i
+              # deliberately avoided while the generic arm could still abort the read.
+              "pormg_it_expr_defaults")
   drop_fixtures() = for t in fixtures
     try; ddl("DROP TABLE IF EXISTS \"$(t)\""); catch; end
   end
@@ -303,9 +306,12 @@ end
   # Both engines: SQLite reads PRAGMA output raw and was never affected, which is what makes this
   # an AGREEMENT rather than an assumption — the same framing as the #414 spaced-identifier fixture.
   #
-  # Every expression default here sits on a TEXT column deliberately. The generic (non-FK) default
-  # arm has no `_fk_default_or_warn` equivalent and `validate_default` throws, so an expression
-  # default on a typed column would abort the whole read for reasons unrelated to #455.
+  # Every expression default here sits on a TEXT column deliberately, and that is now a scoping
+  # choice rather than a constraint: while #455 was written the generic (non-FK) arm had no
+  # `_fk_default_or_warn` equivalent, so an expression default on a TYPED column aborted the whole
+  # read for reasons unrelated to #455. #472 closed that (`_field_or_drop_default`) and covers the
+  # typed shape in its own fixture below — these columns stay TEXT so this section keeps testing
+  # the aggregate delimiters it is about, with the default's VALUE still asserted.
   ddl(is_pg ?
       """CREATE TABLE "pormg_it_comma, parent" (
            id BIGINT PRIMARY KEY,
@@ -339,6 +345,32 @@ end
   ddl(is_pg ?
       """CREATE TABLE "pormg_it_comma_key" ("Key, Col" BIGINT PRIMARY KEY, label VARCHAR(20))""" :
       """CREATE TABLE "pormg_it_comma_key" ("Key, Col" INTEGER PRIMARY KEY, label TEXT)""")
+
+  # #472: expression defaults on columns that are NOT text — the shape that aborted the entire
+  # `convert_schema_to_models` read, and therefore `inspectdb` and `makemigrations`, over a single
+  # column. `DEFAULT now()` on a timestamptz is the most common expression default in existence,
+  # so this is what pointing PormG at a third-party schema actually looks like.
+  #
+  # `ok` and `note` are controls in the SAME table: a representable default and a text column must
+  # be unaffected by a sibling column's failure, which no per-table assertion could show if the
+  # read aborted. The SQLite spellings are the same shapes in that engine's dialect (it has no
+  # `now()` or `gen_random_uuid()`); `u` is PostgreSQL-only because SQLite has no UUID type.
+  ddl(is_pg ?
+      """CREATE TABLE "pormg_it_expr_defaults" (
+           id BIGINT PRIMARY KEY,
+           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+           d          DATE DEFAULT CURRENT_DATE,
+           n          INTEGER DEFAULT (random() * 10)::integer,
+           u          UUID DEFAULT gen_random_uuid(),
+           ok         INTEGER DEFAULT 5,
+           note       TEXT DEFAULT 'Ferrari')""" :
+      """CREATE TABLE "pormg_it_expr_defaults" (
+           id INTEGER PRIMARY KEY,
+           created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           d          DATE DEFAULT CURRENT_DATE,
+           n          INTEGER DEFAULT (abs(random()) % 10),
+           ok         INTEGER DEFAULT 5,
+           note       TEXT DEFAULT 'Ferrari')""")
 
   saved_ignore = copy(PormG._EXTRA_IGNORE_TABLES[])
   try
@@ -815,6 +847,73 @@ end
     # And an unbounded binary column must NOT acquire a bound — the mirror-image drift, where
     # every regeneration would add a CHECK the user never asked for.
     @test scratch_model.fields["blob_payload"].max_length === nothing
+
+    # ── 6. An expression column DEFAULT does not abort the schema read (#472) ────
+    # THE regression this section exists for. Before #472 a single `created_at TIMESTAMPTZ
+    # DEFAULT now()` raised `FieldValidationError` from inside `convertSQLToModel`, which aborted
+    # `convert_schema_to_models` for the WHOLE database — `inspectdb` produced nothing and
+    # `makemigrations` reported "no plan generated". #292 had given the five foreign-key arms the
+    # warn-and-drop policy; the other seven arms never got it.
+    #
+    # Live rather than hermetic on purpose: the unit twin builds the row itself, so it cannot show
+    # that the value `pg_get_expr` ACTUALLY renders for `now()` / `CURRENT_DATE` / a parenthesized
+    # numeric expression is one the guard handles. Two entirely separate readers are covered here,
+    # a `json_agg` schema query on PostgreSQL and PRAGMA output on SQLite.
+    expr_logs, expr_models = Test.collect_test_logs() do
+      PormG.Migrations.convert_schema_to_models(pool;
+          include_table = ["pormg_it_expr_defaults"])
+    end
+    expr_by_name = Dict(lowercase(string(m.name)) => m for m in expr_models)
+    @test haskey(expr_by_name, "pormg_it_expr_defaults")
+    expr_model = expr_by_name["pormg_it_expr_defaults"]
+
+    # 1. Every column arrived. Pre-fix, none did — there was no model at all to look at.
+    expected_cols = is_pg ? ["id", "created_at", "d", "n", "u", "ok", "note"] :
+                            ["id", "created_at", "d", "n", "ok", "note"]
+    @test Set(keys(expr_model.fields)) == Set(expected_cols)
+
+    # 2. The unrepresentable defaults are dropped, and the COLUMN keeps its real type — dropping
+    #    the default must not degrade `timestamptz` to text, which would be a different way to
+    #    "not crash" while still corrupting the imported schema.
+    @test expr_model.fields["created_at"] isa PormG.Models.sDateTimeField
+    @test expr_model.fields["created_at"].default === nothing
+    @test expr_model.fields["d"].default === nothing
+    @test expr_model.fields["n"].default === nothing
+
+    # 3. …and NOT NULL survived. The guard rebuilds the field without the default, so a retry that
+    #    lost the other kwargs would report this column nullable and make every `makemigrations`
+    #    propose an ALTER to "fix" it.
+    @test expr_model.fields["created_at"].null == false
+
+    # 4. Controls in the same table: a representable default and a text default are untouched.
+    @test expr_model.fields["ok"].default == 5
+    @test expr_model.fields["note"].default == "Ferrari"
+
+    # 5. PostgreSQL-only: `gen_random_uuid()` on a UUID column, the most common uuid default there
+    #    is. It reaches a DIFFERENT arm from the generic one (the `uuid` branch), which is why the
+    #    fix covers seven call sites rather than the one the issue named.
+    if is_pg
+      @test expr_model.fields["u"] isa PormG.Models.sUUIDField
+      @test expr_model.fields["u"].default === nothing
+    end
+
+    # 6. The failure is REPORTED, naming the table and each column — not silent. This is the half
+    #    a "does not crash" assertion cannot reach.
+    expr_warns = filter(l -> l.level == Logging.Warn &&
+                             occursin("could not be represented", l.message), expr_logs)
+    @test length(expr_warns) == (is_pg ? 4 : 3)
+    expr_warned_cols = Set(string(Dict(w.kwargs)[:column]) for w in expr_warns)
+    @test expr_warned_cols == Set(is_pg ? ["created_at", "d", "n", "u"] : ["created_at", "d", "n"])
+    @test all(string(Dict(w.kwargs)[:table]) == "pormg_it_expr_defaults" for w in expr_warns)
+
+    # 7. The generated model file carries no default for the dropped columns. `Model_to_str` is
+    #    what `inspectdb` writes to disk, so this is the artifact the user actually gets — and a
+    #    `default=` re-emitted here would be a quoted literal, silently changing the semantics on
+    #    the next migration.
+    expr_src = PormG.Models.Model_to_str(expr_model)
+    @test occursin("created_at", expr_src)
+    @test !occursin(r"created_at\s*=[^\n]*default", expr_src)
+    @test occursin(r"ok\s*=[^\n]*default\s*=\s*5", expr_src)   # …while a real default IS emitted
   finally
     PormG._EXTRA_IGNORE_TABLES[] = saved_ignore   # never leak registry state
     drop_fixtures()

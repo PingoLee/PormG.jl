@@ -444,18 +444,22 @@ Notes:
 - **Cartesian-product guard.** Referencing a CTE column with *no* constraining filter is a
   Cartesian product; PormG emits a `@warn` naming the CTE. Add a correlating `filter(...)`, or
   pass `join_field`.
-- **A CTE name no longer has to avoid your model's field names** — that collision is gone with the
-  namespace split (see the note above). One collision still bites: a **join key**. A `cjoin_on`
-  alias, a `cjoin` path or an `on()` path spelled the same as a CTE **the query joins** is refused,
-  whether or not that CTE has a `join_field`. What you declared under the colliding name cannot be
-  relied on to take effect as written, and in almost every shape the failure is **silent** — valid SQL that
-  returns rows other than the ones you asked for; only one sub-shape (an alias-naming `cjoin_on`
-  against a keyed CTE) is rejected by the database
-  ([#424](https://github.com/PingoLee/PormG.jl/issues/424),
-  [#447](https://github.com/PingoLee/PormG.jl/issues/447)). Since #444 a CTE is joined
-  only when you reference it, so one you declare and never use holds no name.
-  **Rename one of the two** — keying the CTE only moves the collision from the first case to the
-  second, so it is not a fix.
+- **A CTE name may equal a model field** (since
+  [#444](https://github.com/PingoLee/PormG.jl/issues/444)) **or a join key** — a `cjoin_on` alias, a
+  `cjoin` path, an `on()` path — since
+  [#474](https://github.com/PingoLee/PormG.jl/issues/474). Each is addressable and neither shadows
+  the other: the CTE is joined under a generated alias, and a `CTE(name, col)` handle is the only
+  way to reach its columns. Before #474 the join-key case was refused; before that again it
+  silently returned wrong rows.
+- **One name a CTE must still avoid: the `db_table` of a relation the same query joins.** Join
+  de-duplication compares the physical table name, and a joined CTE occupies that slot under its own
+  name, so a CTE called `driver` alongside a join to the `driver` table collapses into one join and
+  the CTE is never emitted — silently. This is unrelated to #474 (it predates it and is unchanged by
+  it); it is tracked separately.
+- **`join_type` is validated at the call.** `.with(..., join_type = "CROSS")` — or any string
+  outside `"LEFT"` / `"INNER"` / `"RIGHT"` / `"FULL"` — raises `QueryBuildError` where you wrote it.
+  A CTE join renders `<join_type> JOIN … ON …`, which a `CROSS` cannot be. For a deliberate cross
+  product declare the CTE **without** `join_field` and reference it, as above (#44, #474).
 
 ---
 

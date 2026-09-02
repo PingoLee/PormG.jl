@@ -99,6 +99,31 @@ Base.show(io::IO, ::SubqueryObject) = print(io, "Subquery(…)")
 """Filter components: Operator objects, Q (AND), Qor (OR), F expressions, and EXISTS predicates."""
 const FilterType = Union{SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF,ExistsObject}
 
+"""
+Key for the per-build memos (`SQLInstruction.cache`, `tab_field_cache`, `json_lookup_cache`):
+`(is_cte_rooted, name)`.
+
+`row_path` is deliberately NOT one of these — it stays a `Vector{String}` and simply does not record
+CTE hops (`_insert_join`'s `track_path`). Do not "unify" it onto this key: a CTE hop has no
+`custom_join` entry for the materialization loops to skip, so recording one at all is what made a
+user's own join vanish.
+
+#474 — the two namespaces this discriminates are a CTE's own names and the base model's field/join
+names, and #444 fixed a CTE reference's output name at `"<cte>__<path>"`, which is byte-identical to
+the field path `"<fk>__<col>"`. Whichever expression memoized first therefore claimed the entry for
+both, which is how `.with("parent" => cte)` plus `filter("parent__sku" => "S")` filtered the CTE's
+column and left the ForeignKey's join unused.
+
+A `"cte:"` STRING PREFIX was tried first and is not sufficient, which is worth recording because it
+looks sufficient: `Models.Model(name, ::Dict{String,PormGField})` (the #317 import path) does not
+run `format_fild_name`, so a field may legitimately be named `cte:x` — and then a `cjoin` keyed
+`"cte:x"` collides with the prefixed key of a CTE named `x`, silently dropping the cjoin's whole
+join, and an FK named `cte:x` collides in the memo, reproducing the very defect above. A prefix over
+an unvalidated name space is a uniquifier; a tuple is a namespace. `Tuple` rather than a struct so
+`==`/`hash` come from Base with the right value semantics for the `String` half.
+"""
+const MemoKey = Tuple{Bool,String}
+
 """Field references in SQL: text, functions, string names, projected subqueries (Subquery/Exists, #92), or a CTE column handle (`CTE(name, path)`, #444)."""
 const FieldPart = Union{SQLTypeText,SQLTypeFunction,String,SQLTypeF,SubqueryObject,ExistsObject,SQLTypeCTE}
 
@@ -158,15 +183,15 @@ end
   row_join::Vector{JoinDict} = [] # array of dictionary to be used in join query
   row_path::Vector{String} = [] # array of path to map the row_join (model__model__ etc)
   # array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
-  tab_field_cache::Dict{String,PormGField} = sizehint!(Dict{String,PormGField}(), 12) # cache to be used in join query
+  tab_field_cache::Dict{MemoKey,PormGField} = sizehint!(Dict{MemoKey,PormGField}(), 12) # cache to be used in join query (#474: keyed by MemoKey)
   # #27: records each resolved JSON-lookup path (e.g. "payload__driver") → (JSON base field,
   # validated key segments). Set when the JSON-path gate renders an extraction; read by the
   # filter-render branch to bind the RHS as plain text (not through the JSON formatter) and to
   # reject containment operators on a nested key path.
-  json_lookup_cache::Dict{String,Tuple{PormGField,Vector{String}}} = Dict{String,Tuple{PormGField,Vector{String}}}()
+  json_lookup_cache::Dict{MemoKey,Tuple{PormGField,Vector{String}}} = Dict{MemoKey,Tuple{PormGField,Vector{String}}}()
   connection::ConnType = nothing
   # array_defs::SQLTypeArrays = SQLArrays()
-  cache::Dict{String,SQLTypeField} = sizehint!(Dict{String,SQLTypeField}(), 12)
+  cache::Dict{MemoKey,SQLTypeField} = sizehint!(Dict{MemoKey,SQLTypeField}(), 12)
   django::OptionalString = nothing
   parameters::Union{Nothing,AbstractPormGParam} = nothing # parameters to be used in the query
   outer::Union{Nothing,SQLInstruction} = nothing # parent query instruction for correlated subqueries
@@ -208,10 +233,16 @@ mutable struct SQLField <: SQLTypeField
   field::FieldPart
   _as::OptionalString
   custom_as::OptionalString
+  # #474 — is this expression rooted in a CTE? It selects the namespace half of the `MemoKey` this
+  # projection memoizes under. It cannot be derived from `_as`: #444 deliberately fixed a CTE
+  # reference's `_as` at `"<cte>__<path>"`, the same spelling a field path produces, and `_as` is the
+  # OUTPUT column name so it cannot change. `_retag_cte_field!` is the one place that sets this.
+  # Read it through `_field_cache_key`, never directly.
+  cte_rooted::Bool
 end
-SQLField(field::FieldPart; _as::OptionalString=nothing) = SQLField(field, _as, nothing)
-SQLField(field::FieldPart, _as::OptionalString) = SQLField(field, _as, nothing)
-Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as)
+SQLField(field::FieldPart; _as::OptionalString=nothing) = SQLField(field, _as, nothing, false)
+SQLField(field::FieldPart, _as::OptionalString) = SQLField(field, _as, nothing, false)
+Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as, x.cte_rooted)
 
 # `orientation` is interpolated into rendered SQL, so it is whitelisted here (#77) and stored
 # uppercase. Single whitelist for every orientation path — the window path
@@ -1302,10 +1333,15 @@ Each mutates the handler and returns it, so calls can be chained or accumulated 
   `.limit(...)` / `.offset(...)` (#272)
 - `.distinct()` — add `DISTINCT`
 - `.db("key")` — route the query to another connection pool
-- `.on(path, pairs...)` — add predicates to the `ON` clause of an existing join path
+- `.on(path, pairs...; join_type)` — add predicates to the `ON` clause of an existing join path.
+  Adds predicates only: without `join_type` the join keeps the type derived from the relation
+  itself, and an explicit one stays in effect for later `on()` calls on that path (#474)
 - `.cjoin("field" => "Model"; filters, join_type)` — custom join at query time
 - `.cjoin_on(model; alias, on, join_type)` — anchor-less join where `on` is the entire `ON` clause
-- `.with("name" => subquery; join_field, join_type)` — define a CTE; call again for a second one
+- `.with("name" => subquery; join_field, join_type)` — define a CTE; call again for a second one.
+  Its name may equal a model field or a join key; each stays addressable (#444, #474)
+- every `join_type` above accepts `"INNER"`, `"LEFT"`, `"RIGHT"` or `"FULL"`; anything else,
+  `"CROSS"` included, raises `QueryBuildError` at the call (#474)
 - `.select_for_update(; nowait, skip_locked, no_key)` — `SELECT … FOR UPDATE` row lock
 - `.copy()` — deep copy, to branch a chain without disturbing the original
 

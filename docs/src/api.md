@@ -34,7 +34,7 @@ These methods modify the query builder and return the handler for further chaini
 | `.page(limit)` / `.page(limit, offset)` | Limit, or limit and offset in one call. The one-argument form leaves any `.offset()` already set untouched. | `.page(20, 40)` / `.page(20)` |
 | `.distinct()` | Add `DISTINCT` to the SELECT. | `.distinct()` |
 | `.db("key")` | Route the query to a different connection pool. | `.db("tenant_42")` |
-| `.on("path", key => value)` | Add predicates to the ON clause of an existing join path. | `.on("driverid", "nationality" => "British")` |
+| `.on("path", key => value; join_type)` | Add predicates to the ON clause of an existing join path. Does **not** change the join type unless `join_type` is passed. | `.on("driverid", "nationality" => "British")` |
 | `.cjoin("field" => "Model", ...)` | Add a custom join at query time. | `.cjoin("driverid" => "Driver")` |
 | `.cjoin_on("Model"; alias, on, join_type)` | Anchor-less join: `on` is the **entire** ON clause. | `.cjoin_on("Driver"; alias = "d", on = [...])` |
 | `.with("name" => subquery; join_field, join_type)` | Define one CTE on the query; call again for a second. Its columns are then reached with [`CTE(name, path)`](@ref CTE). | `.with("fast" => sub)` |
@@ -372,7 +372,7 @@ df = M.Result.objects.cjoin(
 | :--- | :--- | :--- |
 | `main_join` | `Pair{String,String}` | `"field" => "TargetModel"` — the join path. |
 | `filters` | `Vector` | ON-clause predicates. Supports `Pair`, `Q()`, `Qor()`, F expressions. |
-| `join_type` | `String` | `"LEFT"` (default), `"INNER"`, `"RIGHT"`, or `"FULL"`. |
+| `join_type` | `String` | `"LEFT"` (default), `"INNER"`, `"RIGHT"`, or `"FULL"`. Anything else — `"CROSS"` included — raises `QueryBuildError`. |
 | `field` | `PormGField` | Optional custom field definition for non-FK joins. |
 | `warn` | `Bool` | Suppress auto-discovery warnings (default: `true`). |
 
@@ -387,6 +387,10 @@ query = M.Result.objects
 query.on("driverid", "nationality" => "Brazilian", "code" => "SEN")
 query.values("resultid", "driverid__surname", "points")
 ```
+
+`on()` adds predicates only. The join keeps the type PormG derives from the relation — the field's
+own `how`, else `LEFT` for a nullable ForeignKey and `INNER` for a `NOT NULL` one — unless you pass
+`join_type` yourself, which then stays in effect for later `on()` calls on the same path.
 
 ---
 

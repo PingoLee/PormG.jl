@@ -208,7 +208,7 @@ df = M.Result.objects.
     values("resultid", "test_deletion__name") |> DataFrame
 ```
 
-With the default `LEFT` semantics, all three `Result` rows remain, but only the matching reverse rows are attached. If you want only the matched base rows, switch to `join_type="INNER"` on the same `on()` call.
+The reverse join is `LEFT` here because that is what PormG derives for it, not because `on()` chose it — `on()` only adds the predicate. All three `Result` rows remain and only the matching reverse rows are attached. If you want only the matched base rows, pass `join_type="INNER"` on the same `on()` call.
 
 !!! tip
     **Chained Reverse Paths**: You can also use `on()` through chained reverse paths. For example, `query.on("test_deletion", "just_a_nested_roll_back__description" => "nested-value")` will correctly apply the `ON`-clause predicate deep within the reversed relationship traversal chain.
@@ -218,6 +218,13 @@ With the default `LEFT` semantics, all three `Result` rows remain, but only the 
 - `query.on("path", ...)` targets an existing join path, including reverse joins such as `"test_deletion"` and nested paths such as `"raceid__circuitid"`
 - multiple predicates are combined with `AND` unless you use `Qor(...)`
 - repeated `on()` calls for the same path merge additional predicates into the same `ON` clause
+- **`on()` does not change the join type unless you pass `join_type=`.** Without it the join keeps
+  the type PormG derives from the relation itself — the field's own `how`, else `LEFT` for a
+  nullable ForeignKey and `INNER` for a `NOT NULL` one. Before
+  [#474](https://github.com/PingoLee/PormG.jl/issues/474) an `on()` with no `join_type` forced
+  `LEFT`, so adding a predicate to a `NOT NULL` relation silently widened the result set
+- an explicit `join_type` on any `on()` call for a path stays in effect for later `on()` calls on
+  that same path
 - `.filter(...)` keeps its existing `WHERE` semantics and is not silently rewritten into `ON`
 
 ### When `.cjoin()` is Applied
@@ -337,38 +344,50 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     raises `FilterError`: an `ON` clause targets the joined *model*, and a CTE is joined by its own
     `.with(...)` declaration. Put the predicate in `.filter(...)` instead (#444).
 
-    **A join key may not share a name with a CTE the query joins.** A `cjoin_on` **alias**, a
-    `cjoin` **path** or an `on()` **path** spelled the same as such a CTE is refused with
-    `QueryBuildError`. Both are relation aliases in one statement, and the CTE's join claims the
-    name first.
+    **A join key may share a name with a CTE the query joins.** A `cjoin_on` **alias**, a `cjoin`
+    **path** and an `on()` **path** live in a different namespace from a `.with()` label, so a
+    query may use the same word for both and each stays addressable — the same coexistence
+    [#444](https://github.com/PingoLee/PormG.jl/issues/444) established for a CTE name and a model
+    field:
 
-    Either way, **what you declared under that name cannot be relied on to take effect as
-    written** — and in
-    almost every shape the failure is *silent*: the SQL stays valid and returns rows other than the
-    ones you asked for. Exactly one sub-shape is loud (a `cjoin_on` whose predicate names its own
-    alias, against a keyed CTE, yields SQL the database rejects); do not count on being in it. The
-    varieties, briefly:
+    ```julia
+    # "best" names both the CTE and the cjoin_on alias here.
+    best = M.Result.objects.values("driverid", "best" => Min("positionorder"))
 
-    | The CTE was declared | What the collision did |
-    |---|---|
-    | **without** `join_field` (CROSS JOIN) | your join never materializes — the query runs and returns rows as though you had not declared it. Predicates it carried landed on the CTE, which has no `ON` clause to hold them (#424) |
-    | **with** `join_field` | a `cjoin`/`cjoin_on` loses its table into the CTE's `ON` clause; an `on()` hands the CTE its join type — explicit, or `on()`'s silent `LEFT` default — and any predicate it carries is rewritten onto a second, mis-correlated join (#447) |
+    df = M.Result.objects.
+        with("best" => best, join_field = "driverid" => "driverid", join_type = "INNER").
+        cjoin_on("Driver", alias = "best", on = [F("best.driverid") == F("driverid")]).
+        values("points", "career_best" => CTE("best", "best")).
+        filter("raceid" => 18).
+        order_by("-points").
+        limit(5) |> DataFrame
+    ```
 
-    **Rename one of the two.** Keying the CTE does *not* help — it only moves the collision from the
-    first row to the second. If the predicate was never about the join, `.filter(...)` takes it
-    instead (#44).
+    ```sql
+    -- Both are emitted. The CTE is joined under a GENERATED alias, so only one relation in the
+    -- statement is actually named "best".
+    WITH "best" AS (
+      SELECT "Tb"."driverid" as "driverid", MIN("Tb"."positionorder") as "best"
+      FROM "result" as "Tb" GROUP BY 1
+    )
+    SELECT "R1"."points" as "points", "R1_1"."best" as "career_best"
+    FROM "result" as "R1"
+     INNER JOIN "best" AS "R1_1" ON "R1"."driverid" = "R1_1"."driverid"
+     INNER JOIN "driver" AS "best" ON ("best"."driverid" = "R1"."driverid")
+    WHERE "R1"."raceid" = ?
+    ORDER BY "points" DESC NULLS FIRST
+    LIMIT 5
+    ```
 
-    "A CTE the query *joins*" is the precise condition: since #444 a CTE is joined only when you
-    **reference** it (`CTE(name, col)`). A CTE you declare and never reference emits its `WITH` and
-    nothing else, so its name is free — but adding a reference later would then collide, so avoid
-    the clash regardless.
+    Until [#474](https://github.com/PingoLee/PormG.jl/issues/474) this was refused, because join
+    resolution looked a CTE hop up in the join-config map under the CTE's own name — so a collision
+    handed the CTE the other entry's join type and predicates and dropped your join. That lookup is
+    gone, so a join KEY no longer collides.
 
-    An `on(...)` path collides the same way and is refused too. It looks harmless — `on()` adds
-    conditions to a join something else materialized, so it appears to have no table of its own to
-    lose — but the CTE's join inherits its `join_type` (the one you set, or `on()`'s `LEFT` default
-    if you set none), and a predicate it carries is rewritten (`"sku"` → `"parent__sku"`) onto a
-    *second* join correlated against the CTE's alias. The rule is the name collision itself, not
-    the kind of call that caused it.
+    One name a CTE must still avoid is the **`db_table`** of a relation the same query joins: join
+    de-duplication compares physical table names, and a joined CTE occupies that slot under its own
+    name. A CTE called `driver` alongside a join to the `driver` table collapses into one join and
+    the CTE is silently never emitted. That predates #474 and is unchanged by it.
 
     `cjoin_on` works in reads and in the common `update()`/`delete()` (which scope rows via a
     subquery); only a **correlated** UPDATE-FROM/DELETE-USING (setting a column *from* a joined
@@ -447,6 +466,14 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     That renders a real `CROSS JOIN` and warns that it is Cartesian (#44), so the intent is visible
     in the query and in the log rather than hidden in an `ON` clause.
 
+    **`join_type = "CROSS"` is not the way to ask for this.** It raises `QueryBuildError` on
+    `cjoin`, `cjoin_on`, `on()` and `.with()` alike. Every one of those renders
+    `<join_type> JOIN <table> AS <alias> ON <clause>`, so a `CROSS` there could only ever build
+    `CROSS JOIN … ON …`, which PostgreSQL and SQLite both reject — and on `cjoin_on`, where at
+    least one `ON` predicate is required (#448), the alternative would have been to discard the
+    predicates you wrote. The unkeyed-and-referenced `.with(...)` above is the supported spelling
+    ([#474](https://github.com/PingoLee/PormG.jl/issues/474)).
+
 ## Use Cases
 
 ### 1. Legacy Databases Without Foreign Keys
@@ -516,7 +543,7 @@ query.cjoin(main_join; filters=[], field=nothing, join_type="LEFT")
 | `main_join` | `Pair{String, String}` | Field name => Target model name (e.g., `"result" => "Result"`) |
 | `filters` | `Vector` | Optional conditions for the ON clause. Supports `Pair`, `Q()`, `Qor()`, operator suffixes, or F expressions. Plain field names in filters are automatically prefixed with the join path. |
 | `field` | `PormGField` | Optional custom field definition |
-| `join_type` | `String` | Join type: `"LEFT"`, `"INNER"`, `"RIGHT"`, `"FULL"` (default: `"LEFT"`) |
+| `join_type` | `String` | Join type: `"LEFT"`, `"INNER"`, `"RIGHT"`, `"FULL"` (default: `"LEFT"`). `"CROSS"` raises `QueryBuildError`; see the cross-product note in the `cjoin_on` section above |
 
 ### Filter Types in `.cjoin()`
 

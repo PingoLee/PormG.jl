@@ -29,7 +29,8 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       alias = v_copy.custom_as !== nothing ? v_copy.custom_as : v_copy._as
       instruc.select[i] = SQLField(resolved, alias)
       if alias !== nothing
-        instruc.cache[alias] = instruc.select[i]
+        # #474: a `Value(x)` literal is never CTE-rooted — `Value(CTE(...))` is refused (#444).
+        instruc.cache[(false, alias)] = instruc.select[i]
       end
       continue
     end
@@ -61,7 +62,10 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
     # Reuse is only correct when the cached entry renders under the SAME output name. Otherwise
     # resolve independently, and leave the memo to whichever entry claimed the key first — the point
     # of the memo is to avoid re-resolving one expression, not to make two projections one.
-    cached = get(instruc.cache, v_copy._as, nothing)
+    # #474: the memo key, not the output name — see `_field_cache_key`. The output-name equality
+    # test below is unchanged and still decides REUSE; this only decides which entry is consulted.
+    cache_key = _field_cache_key(v_copy)
+    cached = get(instruc.cache, cache_key, nothing)
     if cached !== nothing && _projection_output_name(cached) == _projection_output_name(v_copy)
       instruc.select[i] = cached
     else
@@ -71,7 +75,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       if v_copy._as === nothing
         throw(QueryBuildError("Field requires an alias: \e[4m\e[31m$(v_copy.field)\e[0m must have a name using the format \e[4m\e[32m\"field_name\" => $(v_copy.field)\e[0m or use \e[4m\e[32mSQLField($(v_copy.field), \"alias_name\")\e[0m"))
       end
-      cached === nothing && (instruc.cache[v_copy._as] = instruc.select[i])
+      cached === nothing && (instruc.cache[cache_key] = instruc.select[i])
     end
   end
 
@@ -169,6 +173,10 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # (#231/#239). Skipping the scan keeps it on exactly that pre-existing path rather than
     # replacing one untyped failure with a different one. The leak is tracked separately.
     #
+    # #474 changed only the TARGET TYPE in that message — `… to an object of type Tuple{Bool, String}`
+    # rather than `… String`, since the memo key is now a `MemoKey`. Same site, same class, same
+    # tracked leak; recorded so the quoted text does not read as stale.
+    #
     # #441 also retired the ambiguity THROW that used to sit inside this loop. It refused
     # `order_by("x")` when `values(...)` projected `x` twice over two different expressions;
     # `values()` now refuses that declaration, so the throw was unreachable and was deleted rather
@@ -214,12 +222,17 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # `values()` itself, so this combination is now unreachable from here — the declaration throws
     # before `order_by` is ever consulted. Recorded because the branch inversion's "exactly one
     # combination" claim above was true only alongside it.
+    # #474: the memo key for this term, resolved once. It is `_as` for everything except a CTE
+    # handle, whose `_as` is deliberately spelled like a field path (#444) and must not share an
+    # entry with one. Note the branch below still emits `_as` — that is the SELECT alias the
+    # database sees, which is a different thing from the key this build memoizes under.
+    order_cache_key = _field_cache_key(v_field_copy)
     if found_in_select
       # Use the alias name instead of the expression to avoid double parameterization.
       # Most databases (PG, SQLite, MySQL) support aliases in ORDER BY.
       v_field_copy.field = quote_identifier(v_field_copy._as, instruc.connection)
-    elseif haskey(instruc.cache, v_field_copy._as)
-      v_field_copy.field = instruc.cache[v_field_copy._as].field
+    elseif haskey(instruc.cache, order_cache_key)
+      v_field_copy.field = instruc.cache[order_cache_key].field
     else
       v_field_copy.field = _get_select_query(v_field_copy.field, instruc)
     end
@@ -244,8 +257,8 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # known that reads `instruc.cache` under a `custom_as` alias, so removing this would probably
     # not turn the suite red. It costs one boolean, and a bare alias is legal in ORDER BY and
     # nowhere else, so it is never worth caching under any circumstances.
-    (found_in_select || haskey(instruc.cache, v_field_copy._as)) ||
-      (instruc.cache[v_field_copy._as] = v_field_copy)
+    (found_in_select || haskey(instruc.cache, order_cache_key)) ||
+      (instruc.cache[order_cache_key] = v_field_copy)
 
     if !found_in_select
       # #76: Under DISTINCT, an ORDER BY term that is not part of the projection is rejected by
@@ -299,7 +312,9 @@ end
 # alias therefore died with `InvalidValueError` exactly as the plain-field path did. The operator
 # is what licenses mapping, for the same reason as there: a `Vector{UInt8}` is ONE binary value,
 # so the value's type cannot decide it.
-function _resolve_having_filter_value(alias::String, raw_value, instruc::SQLInstruction,
+# #474: `alias` is a `MemoKey`. Its second half is the output name the fallback loop below compares
+# against `custom_as`/`_as`; the first half selects the namespace for the `tab_field_cache` hit.
+function _resolve_having_filter_value(alias::MemoKey, raw_value, instruc::SQLInstruction,
                                       operator::AbstractString)
   if haskey(instruc.tab_field_cache, alias)
     formatted_value = _format_filter_value(instruc.tab_field_cache[alias].formatter, raw_value, operator)
@@ -308,7 +323,10 @@ function _resolve_having_filter_value(alias::String, raw_value, instruc::SQLInst
 
   for selected_value in instruc.object.values
     selected_alias = selected_value.custom_as !== nothing ? selected_value.custom_as : selected_value._as
-    selected_alias == alias || continue
+    # #474: `alias` is a MemoKey; this loop matches on the OUTPUT name, which is its second half.
+    # Comparing the whole key here would never match — the review flagged the String-vs-key mismatch
+    # as latent, and typing the key is what turns it into a compile-visible one.
+    selected_alias == alias[2] || continue
 
     if isa(selected_value, SQLTypeField) && isa(selected_value.field, SQLTypeFunction)
       sql_function = selected_value.field
@@ -367,13 +385,21 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         #
         # Guard immediately above the raw index and leave the index plain, the shape #433 settled:
         # the membership test is what makes it total.
-        haskey(instruc.cache, v.column._as) ||
+        # #474: `_field_cache_key` here is uniform-with-its-neighbours, not CTE support. This
+        # branch is gated on `v.column.field isa String && !contains(field, "__")`, and
+        # `_retag_cte_field!` always replaces `field` with a `CTEReference` or an `SQLTypeFunction`,
+        # so `cte_rooted` is always false on this path. It is written through the key helper anyway
+        # so that a CTE arriving here later is namespaced like everywhere else rather than silently
+        # sharing a base-model entry.
+        haskey(instruc.cache, _field_cache_key(v.column)) ||
+          # #474: report the aliases the CALLER could have written. A `MemoKey`'s second half is
+          # exactly that spelling; its first half is the internal namespace and must not surface.
           throw(_unknown_field(instruc.object.model, v.column.field;
-                               aliases = collect(keys(instruc.cache))))
-        field = instruc.cache[v.column._as].field
+                               aliases = [k[2] for k in keys(instruc.cache)]))
+        field = instruc.cache[_field_cache_key(v.column)].field
         # Switch to having context for positional parameters
         set_context!(instruc, :having)
-        placeholder = add_parameter!(instruc, _resolve_having_filter_value(v.column._as, v.values, instruc, v.operator))
+        placeholder = add_parameter!(instruc, _resolve_having_filter_value(_field_cache_key(v.column), v.values, instruc, v.operator))
         # #411: `IN`/`NOT IN` need the dialect-aware renderer, not string concatenation. Concatenating
         # produced `HAVING MAX(x) IN $1` on PostgreSQL and `HAVING MAX(x) IN ?, ?` on SQLite — no
         # parentheses, no `= ANY` — which is a syntax error on both. Every other operator is a plain
@@ -576,147 +602,51 @@ function build_row_join_sql_text(instruc::SQLInstruction)
 
   # --- Phase 1c: refuse extras that landed where no ON clause can carry them --
   # #424: a CROSS-joined CTE is the one join shape with no ON clause to merge `on_clause_extras`
-  # into, so a predicate that lands there simply vanishes.
+  # into, so a predicate that lands there simply vanishes — row multiplication, no error. #421 made
+  # that worse before this made it better: once values travel with their text, the orphaned value
+  # disappears too and the wrong query becomes perfectly well-formed. Fail closed, the same posture
+  # `_get_join_condition_list` takes on this marker (#394).
   #
-  # Do NOT enumerate call shapes here. That list was written twice and was wrong twice — first
-  # "unreachable", then "two shapes", and both missed producers. State the INVARIANT instead:
-  # `on_clause_extras[idx]` reaches a CROSS entry either because Phase 1b relocated a fragment
-  # that names its alias, or because the entry carries its own `on_conditions` — and it carries
-  # those exactly when `custom_join[<cte name>]` exists with non-empty filters. `custom_join` is
-  # written at three unrelated sites, keyed by a `cjoin` PATH, a `cjoin_on` ALIAS, and an `on()`
-  # PATH, so any of the three colliding with an unkeyed CTE's name produces this — with or
-  # without a model-field collision, and with or without any relocation. A fourth writer would
-  # inherit the same behavior, which is why the message below talks about name collision rather
-  # than about which method the caller used.
+  # #435 hoisted this out of the Phase 2 CROSS branch. Phase 2 walks `row_join` in index order, so
+  # whether it fired depended on where the CROSS entry sat: a `no_anchor` join at a LOWER index
+  # reported its own symptom — "produced no ON conditions", the state after relocation rather than
+  # the cause — and the accurate message never ran. Diagnosing before emitting makes the cause win
+  # regardless of ordering.
   #
-  # Pre-fix every one of them emitted an unconstrained `CROSS JOIN` with the predicate gone — row
-  # multiplication, no error — while the orphaned value sat in the bucket with no `?` to consume
-  # it. #421 makes it worse before this makes it better: once values travel with the text, the
-  # orphan disappears too and the wrong query becomes perfectly well-formed. So fail closed, the
-  # same posture `_get_join_condition_list` takes on this marker (#394).
+  # #474 REMOVED the name-collision half of this loop, and with it the second, KEYED-CTE branch
+  # #447 had added. `on_clause_extras[idx]` used to reach a CROSS entry two ways: Phase 1b relocating
+  # a fragment that names its alias, or the entry carrying its own `on_conditions` — which it did
+  # exactly when `custom_join[<cte name>]` existed, because `_build_row_join`'s shared tail looked
+  # a CTE hop up in the base model's join-config registry under the CTE's own name. That lookup is
+  # gone (`build_joins.jl`, `_join_path_key`), so the second route is unrepresentable rather than
+  # diagnosed, and a CTE name colliding with a `cjoin` path / `cjoin_on` alias / `on()` path is now
+  # simply two relations that happen to share a name — both emitted, both addressable.
   #
-  # #435 hoisted this out of the Phase 2 CROSS branch, where it lived when it was written. Phase 2
-  # walks `row_join` in index order, so whether this fired depended on where the CROSS entry sat:
-  # a `no_anchor` join at a LOWER index reported its own symptom — "produced no ON conditions",
-  # describing the state after relocation rather than the cause — and the accurate message never
-  # ran. Two test files were padding their cases with a second predicate to route around exactly
-  # that. Diagnosing before emitting makes the cause win regardless of ordering.
+  # WHAT IS LEFT IS A BACKSTOP, NOT A DIAGNOSIS. The relocation route needs a predicate naming the
+  # CTE's alias, and that alias is GENERATED (`_get_alias_name` → `R1_1`): since #444 no predicate
+  # can name a CTE at all — a `__` string cannot reach one and a `CTE(...)` handle is refused in
+  # every join clause — so the only way to write that name is a `cjoin_on` alias that impersonates
+  # a generated one, and `row_join` always orders CTE joins ahead of `cjoin_on` entries, while
+  # Phase 1b only ever relocates FORWARD. Nine shapes were built against this after the change (the
+  # three former collision producers plus six relocation attempts, including two CROSS CTEs and an
+  # alias impersonating `R1_1`); none reached it.
   #
-  # #447 extended this loop to the KEYED half of the same collision rather than adding a second
-  # guard beside it. Both marks come from the same two arms of `_build_row_join` (`build_joins.jl`
-  # :472 / :515 set `"cte"`; only the unkeyed arm adds `"cross"`), and `row_join["b"]` is the CTE
-  # NAME on both — so one loop can diagnose both, and a future third CTE shape inherits the check.
-  #
-  # TWO distinct diagnoses, and the order below is load-bearing:
-  #
-  #   1. RELOCATION onto a CROSS entry — a predicate naming the CTE's alias was moved there by
-  #      Phase 1b without any name collision. CROSS-only, needs `on_clause_extras`, and keeps its
-  #      original #424 message. Checked FIRST **within an entry**, so a collision that also produced
-  #      extras reports the dropped predicate, which is the more specific story.
-  #
-  #      That precedence is per-entry only, and the distinction is not pedantic: with TWO colliding
-  #      CTEs the loop reports whichever comes first in `row_join`, so swapping the order the two
-  #      are REFERENCED swaps which message the user sees (measured). Both diagnoses are correct and
-  #      both remedies are "rename", so this is diagnosis quality rather than correctness — but do
-  #      not read the ordering as a global "relocation always wins".
-  #   2. NAME COLLISION — a `custom_join` key equal to the CTE name. Applies to BOTH kinds and does
-  #      NOT depend on extras: a `cjoin` with empty filters supplies none, yet still loses its whole
-  #      join. Measured on an unkeyed CTE: `CROSS JOIN "parent" AS "R1_1"` emitted and the cjoin's
-  #      own `JOIN "cj_parent"` silently absent, with only the generic #44 Cartesian warning to show
-  #      for it. Gating this on extras — as a first draft did — left that route unrefused while the
-  #      docs claimed otherwise.
-  #
-  # What the collision costs differs by kind, so the message says which:
-  #
-  #   CROSS  — the entry has no ON clause, so predicates that reach it are DROPPED.
-  #   KEYED  — the entry HAS one, so predicates are merged into it and the colliding entry's own
-  #            join is what disappears, leaving the statement naming a relation it never declares.
-  #
-  # Note this fires only for a CTE that is actually JOINED. Since #444 a CTE is joined when it is
-  # REFERENCED (`CTE(name, col)`), so a declared-but-unreferenced CTE has no `row_join` entry and no
-  # collision to have — its name is free. Say "joined", not "declared", when documenting this.
+  # It stays anyway, and the message below no longer mentions a collision, which would now be
+  # measurably wrong. Do not "clean up" the unreachability by deleting the throw: the failure it
+  # catches is a silently dropped predicate on a Cartesian join, and this file's own history is that
+  # the reachable-shape list here was "written twice and wrong twice". If you can construct a
+  # producer, it belongs in `test_order_by_joins.jl` next to the coexistence tests.
   for (idx, value) in enumerate(instruc.row_join)
     get(value, "cte", nothing) === nothing && continue
-    is_cross = get(value, "cross", nothing) !== nothing
+    get(value, "cross", nothing) === nothing && continue
 
-    if is_cross
-      haskey(on_clause_extras, idx) && throw(QueryBuildError(
-        "An ON predicate resolved onto \e[4m\e[31m$(value["alias_b"])\e[0m, the CROSS-joined CTE " *
-        "\e[4m\e[31m$(value["b"])\e[0m (a \e[4m\e[32m.with(...)\e[0m declared without " *
-        "\e[4m\e[32mjoin_field\e[0m). A CROSS JOIN has no ON clause to carry that predicate, so it " *
-        "would be dropped and the join would match every row.\n  A CROSS-joined CTE picks up an ON " *
-        "predicate when its NAME collides with a join key — a \e[4m\e[32mcjoin\e[0m path, a " *
-        "\e[4m\e[32mcjoin_on\e[0m alias, or an \e[4m\e[32mon()\e[0m path — or when a predicate " *
-        "naming its alias is relocated onto it.\n  Rename the CTE so it collides with nothing, or " *
-        "move the predicate to \e[4m\e[32m.filter(...)\e[0m (#44). Giving the CTE a " *
-        "\e[4m\e[32mjoin_field\e[0m does NOT resolve a name collision — it only moves it to the " *
-        "keyed case below, which is refused too (#447)."))
-    end
-
-    # #447 — ANY `custom_join` key equal to the CTE's name, with no test of what kind of entry it
-    # is and no dependence on `on_clause_extras`. `custom_join` is keyed by a `cjoin` path, a
-    # `cjoin_on` alias, or an `on()` path, and every one of them reaches this CTE's `row_join`
-    # through the same keyed lookups (`_get_join_filters`, `_get_join_type_override`), so the CTE's
-    # join silently inherits that entry's predicates and join type.
-    #
-    # A first draft carved out `on()`, reasoning that it only ADDS conditions to a join someone else
-    # materialized and so has no table of its own to lose. That is false, and measuring it is the
-    # only reason it is not still in the code. `.with("parent" => …, join_field = …,
-    # join_type = "INNER")` plus `.on("parent", "sku" => "S")` renders:
-    #
-    #   LEFT JOIN "parent"    AS "R1_1" ON "R1"."parent" = "R1_1"."id" AND "R1_1"."sku" = $1
-    #   LEFT JOIN "rv_parent" AS "R1_2" ON "R1"."parent" = "R1_2"."id" AND "R1_1"."sku" = $2
-    #
-    # — the declared INNER silently downgraded to LEFT, a SECOND join materialized (via
-    # `_prefix_join_filter` rewriting `"sku"` to `"parent__sku"`, which `_build_row_join` then
-    # resolves during Phase 1, bypassing both materialization loops below), that join's ON
-    # correlating against the CTE's alias, and the value bound twice.
-    #
-    # So the rule is the collision itself, not the shape of what collided. That also keeps this
-    # branch honest with its own message, which talks about a name collision rather than about which
-    # method the caller used — the same discipline the CROSS branch above states, having had its
-    # call-shape enumeration "written twice and wrong twice".
-    if haskey(instruc.object.custom_join, value["b"])
-      cte_kind = is_cross ?
-        "a \e[4m\e[32m.with(...)\e[0m declared WITHOUT \e[4m\e[32mjoin_field\e[0m, so CROSS-joined" :
-        "a \e[4m\e[32m.with(...)\e[0m declared WITH a \e[4m\e[32mjoin_field\e[0m"
-      # The consequence text claims ONLY what is true for every reachable shape, on purpose, and
-      # the history is the argument: three consecutive drafts asserted per-shape consequences and
-      # each shipped at least one measured-false clause, because the outcome varies along THREE
-      # axes — the CTE's kind (`is_cross`), whether the colliding entry owns a table (`cjoin`/
-      # `cjoin_on` vs `on()`), and whether it carries predicates that name the alias. First-order
-      # summary of what the review measured, cell by cell:
-      #
-      #                 | keyed CTE                            | CROSS CTE
-      #   cjoin/cjoin_on| table lost; alias-naming cjoin_on    | table lost -> valid SQL, silent
-      #                 | predicates -> INVALID SQL, DB errs;  |
-      #                 | other predicate forms -> valid SQL,  |
-      #                 | silent                               |
-      #   on()          | join type stolen (explicit, or       | inert for the CTE (a projected FK
-      #                 | on()'s silent LEFT default); with    | path may still take the type,
-      #                 | predicates, also a 2nd mis-          | correctly)
-      #                 | correlated join -> valid SQL, silent |
-      #
-      # ONE sub-shape is loud; everything else is silent wrong rows. That is why the message must
-      # never imply the database will catch this, and why it no longer diagnoses per shape: the
-      # remedy is "rename" regardless, and a diagnosis that is wrong for the reader's shape is
-      # worse than none. If you are tempted to reintroduce per-shape clauses, measure every cell of
-      # the table above first — including the predicate-less and default-join-type variants.
-      remedy_note = is_cross ?
-        ("Giving the CTE a \e[4m\e[32mjoin_field\e[0m does not help — that is the same collision " *
-         "against a keyed CTE, refused as well") :
-        ("Removing the CTE's \e[4m\e[32mjoin_field\e[0m does not help — that is the same collision " *
-         "against a CROSS-joined CTE, refused as well (#424)")
-      throw(QueryBuildError(
-        "The join key \e[4m\e[31m$(value["b"])\e[0m collides with the name of a CTE joined by " *
-        "this query ($(cte_kind)). Both are relation aliases in the same statement and the CTE's " *
-        "join claims the name first, so what you declared under " *
-        "\e[4m\e[31m$(value["b"])\e[0m cannot be relied on to take effect as written — usually with no error " *
-        "at all: in most of these shapes the SQL stays valid and silently returns rows other than " *
-        "the ones you asked for. A \e[4m\e[32mcjoin\e[0m path, a \e[4m\e[32mcjoin_on\e[0m alias " *
-        "and an \e[4m\e[32mon()\e[0m path are all keys into the same map, so any of the three " *
-        "collides (#447).\n  Rename one of the two so they no longer collide. $(remedy_note)."))
-    end
+    haskey(on_clause_extras, idx) && throw(QueryBuildError(
+      "An ON predicate resolved onto \e[4m\e[31m$(value["alias_b"])\e[0m, the CROSS-joined CTE " *
+      "\e[4m\e[31m$(value["b"])\e[0m (a \e[4m\e[32m.with(...)\e[0m declared without " *
+      "\e[4m\e[32mjoin_field\e[0m). A CROSS JOIN has no ON clause to carry that predicate, so it " *
+      "would be dropped and the join would match every row.\n  Move the predicate to " *
+      "\e[4m\e[32m.filter(...)\e[0m, which is where a CROSS-joined CTE's correlation belongs " *
+      "(#44, #424)."))
   end
 
   # --- Phase 2: emit JOIN SQL text in original order -------------------------

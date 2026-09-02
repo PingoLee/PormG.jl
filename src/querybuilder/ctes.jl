@@ -36,6 +36,21 @@ function _with(q::SQLObject, name::String, query::SQLObjectHandler;
   # of the contract. `join_field.first` is deliberately NOT checked: it names a field on the MAIN
   # model and is resolved through `Models.model_column`, i.e. it is genuinely physical.
   join_field !== nothing && _validate_identifier(join_field.second)
+  # #474: validate the join type HERE, for the same reason the two identifier checks above are here.
+  # A keyed CTE's `join_type` was the one join-type slot with NO validation anywhere on its path:
+  # `_preset_cte_fields` stored it verbatim, `_build_row_join` copied it into `row_join["how"]`, and
+  # Phase 2 interpolated it straight into `"$(value["how"]) JOIN …"`. So `join_type = "CROSS"` built
+  # `CROSS JOIN … ON …` (invalid on both engines), and an arbitrary string reached the SQL text
+  # unquoted — measured: `join_type = "LEFT OUTER JOIN cj_grand AS injected ON 1=1 --"` rendered
+  # that clause verbatim ahead of the CTE's own JOIN. `_normalize_join_type` also upcases and
+  # strips, so a lowercase `"inner"` now works here as it already did in `on()` and `cjoin_on()`.
+  # ...but only the KEYED arm of `_build_row_join` ever reads this value; an unkeyed CTE is
+  # CROSS-joined by construction and hardcodes `row_join["how"]` itself. So `join_type = "CROSS"`
+  # on an unkeyed `.with(...)` is a redundant statement of what already happens, and refusing it
+  # would be absurd — the error would recommend the exact call the caller just wrote. Everything
+  # else is still validated on both arms, so a typo is never silently swallowed.
+  join_type = (join_field === nothing && uppercase(strip(join_type)) == "CROSS") ?
+    "CROSS" : _normalize_join_type(join_type)
   cte_fields = _preset_cte_fields(name, query, join_field=join_field, join_type=join_type)
   if haskey(q.ctes, name)
     throw(QueryBuildError("CTE with name \"$(name)\" already exists in the query; please use a different name."))
@@ -178,7 +193,8 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
       new_oper.column = SQLField(
         _normalize_cjoin_filter_key(new_oper.column.field, prefix, foreign_model),
         new_oper.column._as,
-        new_oper.column.custom_as
+        new_oper.column.custom_as,
+        new_oper.column.cte_rooted   # #474: carry the namespace flag through the rewrite
       )
     elseif new_oper.column isa String
       new_oper.column = _normalize_cjoin_filter_key(new_oper.column, prefix, foreign_model)
@@ -211,7 +227,8 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
       new_filter.column = SQLField(
         _normalize_cjoin_filter_key(new_filter.column.field, prefix, foreign_model),
         new_filter.column._as,
-        new_filter.column.custom_as
+        new_filter.column.custom_as,
+        new_filter.column.cte_rooted   # #474: carry the namespace flag through the rewrite
       )
     end
 
@@ -329,20 +346,29 @@ function _on(q::SQLObject, join_path::String, filters::AbstractVector; join_type
     throw(QueryBuildError("on() requires at least one ON predicate or a join_type override."))
   end
 
-  existing_join_type = get(existing, "join_type", nothing)
-  join_type_normalized = if join_type === nothing
-    existing_join_type isa String ? existing_join_type : "LEFT"
-  else
-    _normalize_join_type(join_type)
-  end
-
   existing_filters = get(existing, "filters", FilterType[])
   if !(existing_filters isa Vector{FilterType})
     existing_filters = FilterType[]
   end
 
   existing["filters"] = vcat(existing_filters, parsed_filters)
-  existing["join_type"] = join_type_normalized
+  # #474: write this key ONLY when the caller passed a join type. It used to be written on every
+  # call, defaulting to `"LEFT"` when neither this call nor an earlier one supplied one — a join
+  # type nobody wrote, applied to a join `on()` did not create. `_get_join_type_override` reads this
+  # key as an OVERRIDE, so the invented `"LEFT"` silently downgraded a relation PormG would
+  # otherwise have typed itself. Measured on a NOT NULL ForeignKey: the same path renders
+  # `INNER JOIN` on its own and `LEFT JOIN` the moment an `on()` predicate is added — different
+  # rows, no error.
+  #
+  # Leaving the key absent is not a new shape: a `cjoin`-seeded entry has never carried it
+  # (`_cjoin` folds its join type into `field.how`), so `_get_join_type_override` already had to
+  # answer `nothing` here. With no override the join keeps `_determine_join_type`'s answer —
+  # `field.how`, else `field.null ? "LEFT" : "INNER"` — including the `previus_how` LEFT-propagation
+  # a deep path needs, which is knowledge this call site does not have and should not reproduce.
+  #
+  # An earlier explicit `join_type` still stands, because nothing overwrites it: `existing` is the
+  # same dict, so a second `on()` with no join type leaves the first call's value in place.
+  join_type === nothing || (existing["join_type"] = _normalize_join_type(join_type))
   q.custom_join[join_path] = existing
 
   return q
@@ -717,8 +743,10 @@ function _set_field_from_sql_function(func::SQLTypeFunction, field::String, inst
 
 end
 function _set_field_from_sql_function(func::String, field::String, instruct::SQLInstruction)
-  if haskey(instruct.tab_field_cache, field)
-    return instruct.tab_field_cache[field]
+  if haskey(instruct.tab_field_cache, (false, field))
+    # #474: the CTE BODY's own instruction, where an outer CTE cannot be referenced (#433) — so
+    # this is unambiguously the base-model half of that inner build's namespace.
+    return instruct.tab_field_cache[(false, field)]
   elseif haskey(instruct.object.model.fields, field)
     return instruct.object.model.fields[field]
   else

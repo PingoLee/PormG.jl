@@ -173,7 +173,14 @@ end
 
     # on() puts the predicate in the ON clause, so its parameter lands in the :join bucket.
     @test insp[:parameter_buckets][:join] == ["on-value"]
-    @test contains(sql, "LEFT JOIN")
+    # #474 moved this assertion, and the oracle is in THIS file: the testset above renders the same
+    # reverse hop with no on() at all and pins `INNER JOIN "dim_cnes" AS "Tb_1" ON ...`. It read
+    # `contains(sql, "LEFT JOIN")`, which passed only because on() used to write a "LEFT" nobody
+    # asked for — so the two testsets disagreed about the join type of one relation depending on
+    # whether a predicate had been added to it. on() adds predicates; the type comes from the
+    # relation. Pinned as the literal hop, matching the sibling testset, because a bare
+    # `contains(sql, "INNER JOIN")` would not notice which join it landed on.
+    @test occursin("INNER JOIN \"dim_cnes\" AS \"Tb_1\" ON \"Tb\".\"id\" = \"Tb_1\".\"unidade\"", sql)
     @test contains(sql, "dim_cnes")
 end
 
@@ -185,7 +192,10 @@ end
     insp = inspect_query(q)
 
     @test "chain-value" in insp[:parameter_buckets][:join]
-    @test contains(insp[:sql_text], "LEFT JOIN")
+    # #474, same adjudication as the testset above. Both hops keep the type the sibling no-on()
+    # testset pins for them; on() only contributes the predicate on the second one.
+    @test occursin("INNER JOIN \"dim_cnes\" AS \"Tb_1\" ON \"Tb\".\"id\" = \"Tb_1\".\"unidade\"", insp[:sql_text])
+    @test occursin("INNER JOIN \"customuser\" AS \"Tb_2\" ON \"Tb_1\".\"id\" = \"Tb_2\".\"cnes\"", insp[:sql_text])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

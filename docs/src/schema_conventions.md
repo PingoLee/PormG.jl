@@ -519,6 +519,80 @@ registration = Models.ForeignKey("driver_registry", pk_field="licence_no", on_de
     A **single**-column foreign key into a composite-keyed parent is unaffected and reads back
     normally — it names one column, and that column carries its own `UNIQUE`.
 
+## Column defaults
+
+A **literal** column default round-trips: introspection reads it back as the field's `default`, and
+a re-run of `makemigrations` proposes nothing.
+
+```julia
+# live: points INTEGER DEFAULT 0  |  status VARCHAR(10) DEFAULT 'active'
+points = Models.IntegerField(default=0)
+status = Models.CharField(max_length=10, default="active")
+```
+
+An **expression** default is different, because PormG has no field-level representation for one.
+`DEFAULT now()`, `DEFAULT CURRENT_DATE`, `DEFAULT gen_random_uuid()` and
+`DEFAULT (random() * 10)::integer` are all values a field constructor refuses.
+
+!!! note "An expression default is dropped, and says so"
+    `inspectdb` and `makemigrations` import the column **without** the default and emit a warning
+    naming the table and the column. Everything else about the column — its type, `NOT NULL`, its
+    length, whether it is a key — is preserved:
+
+    ```
+    ┌ Warning: Column default could not be represented as a field default; importing the column without it.
+    │   table = "race_results"
+    │   column = "created_at"
+    │   default = "now()"
+    │   field_type = "DateTimeField"
+    │   reason = "Invalid default value for DateTimeField. Expected type: Union{Nothing, DateTime, TimeZones.ZonedDateTime}, got: String. Please provide a value of type Union{Not"
+    ```
+
+    This is the same policy foreign keys have had since PormG 0.4: **introspection never fails over
+    a default it cannot express.** Before it applied to ordinary columns, one such column aborted
+    the entire schema read, so `inspectdb` produced nothing and `makemigrations` reported no plan
+    for the whole database.
+
+    The warning repeats on every `makemigrations` and every import, because the condition is
+    standing rather than transient — it stops when the default becomes representable or is removed
+    from the database.
+
+Two consequences worth knowing before you go looking for them:
+
+**PormG will not propose dropping a default it cannot see.** The column reads back as "no default"
+on both sides of the diff, so a model declaring no default *converges* — no migration is proposed,
+and no `DROP DEFAULT` is generated against your live `now()`. If you want the database default
+gone, remove it by hand.
+
+**For `created_at`, declare the intent rather than the expression.** The Django-shaped answer is
+`auto_now_add`, which PormG applies when the row is inserted and never renders into DDL, so it
+agrees with a live `DEFAULT now()` column instead of fighting it:
+
+```julia
+Race_result = Models.Model("race_result",
+  id         = Models.IDField(),
+  created_at = Models.DateTimeField(auto_now_add=true),   # live: TIMESTAMPTZ DEFAULT now()
+)
+```
+
+!!! warning "A text column keeps the expression as a literal string"
+    A textual column is the exception, on both engines: `TextField` accepts any string, so
+    `DEFAULT now()` on a `TEXT` column is read back as the **five-character string** `"now()"`, not
+    as an expression and not as "no default".
+
+    A sized `VARCHAR(n)` is the half-exception: the expression is kept when it fits the declared
+    width and **dropped with a warning when it does not**, because `CharField` refuses a default
+    longer than its `max_length`. So `varchar(10) DEFAULT now()` keeps `"now()"` while
+    `varchar(3) DEFAULT now()` imports with no default.
+
+    That is a faithful report of a column PormG cannot model, and it has a consequence: a model
+    declaring a plain `TextField()` for such a column differs from the live schema, so
+    `makemigrations` proposes dropping the default on every run — a full table rebuild on SQLite.
+
+    Do **not** silence it by declaring `default="now()"`. That renders `DEFAULT 'now()'` — a quoted
+    literal, which stores the text `now()` in every new row instead of a timestamp. Either remove
+    the database default, or use the correct column type for what the default computes.
+
 ## Timestamp fields
 
 PormG does **not** implicitly add `created` / `modified` columns. Auto-managed timestamps are

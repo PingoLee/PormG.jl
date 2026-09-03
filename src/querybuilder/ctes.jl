@@ -291,7 +291,7 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
         _normalize_cjoin_filter_key(new_oper.column.field, prefix, foreign_model),
         new_oper.column._as,
         new_oper.column.custom_as,
-        new_oper.column.cte_rooted   # #474: carry the namespace flag through the rewrite
+        new_oper.column.root   # #474: carry the namespace tag through the rewrite
       )
     elseif new_oper.column isa String
       new_oper.column = _normalize_cjoin_filter_key(new_oper.column, prefix, foreign_model)
@@ -325,7 +325,7 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
         _normalize_cjoin_filter_key(new_filter.column.field, prefix, foreign_model),
         new_filter.column._as,
         new_filter.column.custom_as,
-        new_filter.column.cte_rooted   # #474: carry the namespace flag through the rewrite
+        new_filter.column.root   # #474: carry the namespace tag through the rewrite
       )
     end
 
@@ -840,10 +840,10 @@ function _set_field_from_sql_function(func::SQLTypeFunction, field::String, inst
 
 end
 function _set_field_from_sql_function(func::String, field::String, instruct::SQLInstruction)
-  if haskey(instruct.tab_field_cache, (false, field))
+  if haskey(instruct.tab_field_cache, (:base,field))
     # #474: the CTE BODY's own instruction, where an outer CTE cannot be referenced (#433) — so
     # this is unambiguously the base-model half of that inner build's namespace.
-    return instruct.tab_field_cache[(false, field)]
+    return instruct.tab_field_cache[(:base,field)]
   elseif haskey(instruct.object.model.fields, field)
     return instruct.object.model.fields[field]
   else

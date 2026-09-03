@@ -101,7 +101,9 @@ const FilterType = Union{SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF,ExistsObject}
 
 """
 Key for the per-build memos (`SQLInstruction.cache`, `tab_field_cache`, `json_lookup_cache`):
-`(is_cte_rooted, name)`.
+`(root, name)`, where `root` names which namespace the name was drawn from —
+`:base` (the query's own model: field paths and join paths), `:cte` (a `.with(...)` label, #444) or
+`:joined` (a `cjoin_on` alias, #481).
 
 `row_path` is deliberately NOT one of these — it stays a `Vector{String}` and simply does not record
 CTE hops (`_insert_join`'s `track_path`). Do not "unify" it onto this key: a CTE hop has no
@@ -121,8 +123,15 @@ run `format_fild_name`, so a field may legitimately be named `cte:x` — and the
 join, and an FK named `cte:x` collides in the memo, reproducing the very defect above. A prefix over
 an unvalidated name space is a uniquifier; a tuple is a namespace. `Tuple` rather than a struct so
 `==`/`hash` come from Base with the right value semantics for the `String` half.
+
+#481 widened the namespace half from `Bool` to `Symbol` because a THIRD namespace joined it: a
+`cjoin_on` alias. `_cjoin_on` refuses only a duplicate alias, so an alias may legitimately equal a
+ForeignKey field name AND a CTE name (the #474 coexistence proof pins that shape), which makes
+`Joined("d", "surname")`'s output name `"d__surname"` byte-identical to both the field path and the
+CTE reference. A `Bool` cannot hold three values, and adding a second flag would put the same
+"which of these is set" question back into every reader — so the tag names the namespace outright.
 """
-const MemoKey = Tuple{Bool,String}
+const MemoKey = Tuple{Symbol,String}
 
 """Field references in SQL: text, functions, string names, projected subqueries (Subquery/Exists, #92), or a CTE column handle (`CTE(name, path)`, #444)."""
 const FieldPart = Union{SQLTypeText,SQLTypeFunction,String,SQLTypeF,SubqueryObject,ExistsObject,SQLTypeCTE}
@@ -233,16 +242,17 @@ mutable struct SQLField <: SQLTypeField
   field::FieldPart
   _as::OptionalString
   custom_as::OptionalString
-  # #474 — is this expression rooted in a CTE? It selects the namespace half of the `MemoKey` this
-  # projection memoizes under. It cannot be derived from `_as`: #444 deliberately fixed a CTE
-  # reference's `_as` at `"<cte>__<path>"`, the same spelling a field path produces, and `_as` is the
-  # OUTPUT column name so it cannot change. `_retag_cte_field!` is the one place that sets this.
+  # #474/#481 — which namespace is this expression rooted in? It selects the namespace half of the
+  # `MemoKey` this projection memoizes under: `:base`, `:cte` (#444) or `:joined` (#481). It cannot
+  # be derived from `_as`: #444 deliberately fixed a CTE reference's `_as` at `"<cte>__<path>"`, the
+  # same spelling a field path produces, and `_as` is the OUTPUT column name so it cannot change.
+  # `_retag_cte_field!` / `_retag_joined_field!` are the only places that set this.
   # Read it through `_field_cache_key`, never directly.
-  cte_rooted::Bool
+  root::Symbol
 end
-SQLField(field::FieldPart; _as::OptionalString=nothing) = SQLField(field, _as, nothing, false)
-SQLField(field::FieldPart, _as::OptionalString) = SQLField(field, _as, nothing, false)
-Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as, x.cte_rooted)
+SQLField(field::FieldPart; _as::OptionalString=nothing) = SQLField(field, _as, nothing, :base)
+SQLField(field::FieldPart, _as::OptionalString) = SQLField(field, _as, nothing, :base)
+Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as, x.root)
 
 # `orientation` is interpolated into rendered SQL, so it is whitelisted here (#77) and stored
 # uppercase. Single whitelist for every orientation path — the window path

@@ -27,7 +27,7 @@ it attempts to build the join and cache it. Returns `true` if the field is in ca
 (either before or after the attempt), `false` otherwise.
 """
 function _cache_join(field::String, instruct::SQLInstruction)
-  haskey(instruct.cache, (false, field)) && return true
+  haskey(instruct.cache, (:base,field)) && return true
   
   if contains(field, "__")
     try
@@ -35,7 +35,7 @@ function _cache_join(field::String, instruct::SQLInstruction)
       sql_selector = _build_row_join(split(field, "__") |> Vector{String}, instruct)
       
       # Populate the cache so it can be used immediately
-      instruct.cache[(false, field)] = SQLField(sql_selector, field)   # #474: base-model namespace
+      instruct.cache[(:base,field)] = SQLField(sql_selector, field)   # #474: base-model namespace
       return true
     catch e
       return false
@@ -524,10 +524,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         row_join["alias_a"] = instruct.alias
         # #64: resolve the main-model join field to its physical column (db_column).
         row_join["key_a"] = Models.model_column(instruct.object.model, main_table_key)
-      elseif haskey(instruct.cache, (false, main_table_key)) || _cache_join(main_table_key, instruct)
+      elseif haskey(instruct.cache, (:base,main_table_key)) || _cache_join(main_table_key, instruct)
         # #474: the MAIN model's join field, so the base-model half of the namespace — never the
         # CTE's, even though this branch sits inside the CTE arm.
-        cache_item = instruct.cache[(false, main_table_key)]
+        cache_item = instruct.cache[(:base,main_table_key)]
         v_split = split(cache_item.field |> x -> replace(x,  '"' => ""), ".")
         row_join["alias_a"] = v_split[1] |> string
         row_join["key_a"] = v_split[2] |> string

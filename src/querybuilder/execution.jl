@@ -1180,8 +1180,8 @@ function _is_date_field(field_name::String, instruc::SQLInstruction)
     return field_type in ["DATE", "TIMESTAMPTZ", "TIMESTAMP"]
   # #474: a raw String field name. Since #444 a string cannot name a CTE, so this is always the
   # base-model half of the memo namespace.
-  elseif haskey(instruc.tab_field_cache, (false, field_name))
-    field_type = instruc.tab_field_cache[(false, field_name)].type
+  elseif haskey(instruc.tab_field_cache, (:base,field_name))
+    field_type = instruc.tab_field_cache[(:base,field_name)].type
     return field_type in ["DATE", "TIMESTAMPTZ", "TIMESTAMP"]
   end 
   return false
@@ -1207,8 +1207,8 @@ function _date_field_type(field_name::String, instruc::SQLInstruction)::Union{St
   if haskey(model.fields, field_name)
     t = model.fields[field_name].type
     return t in ("DATE", "TIMESTAMPTZ", "TIMESTAMP") ? t : nothing
-  elseif haskey(instruc.tab_field_cache, (false, field_name))   # #474: base-model namespace
-    t = instruc.tab_field_cache[(false, field_name)].type
+  elseif haskey(instruc.tab_field_cache, (:base,field_name))   # #474: base-model namespace
+    t = instruc.tab_field_cache[(:base,field_name)].type
     return t in ("DATE", "TIMESTAMPTZ", "TIMESTAMP") ? t : nothing
   end
   return nothing
@@ -1217,7 +1217,7 @@ end
 # Whether a plain field reference resolves at all (so soft validation only fires when a field is
 # known to be a non-date column, never when its type is simply unknown — best-effort, fail-open).
 function _field_type_known(field_name::String, instruc::SQLInstruction)::Bool
-  return haskey(instruc.object.model.fields, field_name) || haskey(instruc.tab_field_cache, (false, field_name))
+  return haskey(instruc.object.model.fields, field_name) || haskey(instruc.tab_field_cache, (:base,field_name))
 end
 
 # Decompose a Period/CompoundPeriod into an ordered [(unit, magnitude)] list (largest → smallest),

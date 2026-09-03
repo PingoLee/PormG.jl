@@ -21,8 +21,9 @@
 #      `custom_join` anywhere, so #447's guard never saw it: on `origin/main`,
 #      `.with("parent" => cte)` plus `filter("parent__sku" => "S")` filtered the CTE's column and
 #      left the ForeignKey's join unused in the statement. The memos are now keyed by `MemoKey`
-#      (`(is_cte_rooted, name)`) and `SQLField.cte_rooted` carries the namespace half, so the two
-#      cannot share an entry while `_as` keeps the output spelling #444 pinned.
+#      (`(root, name)`, where `root` is `:base` / `:cte` / `:joined`) and `SQLField.root` carries the
+#      namespace half, so the two cannot share an entry while `_as` keeps the output spelling #444
+#      pinned.
 #
 # Everything renders through mock connections — no live database.
 #
@@ -522,7 +523,8 @@ end
   @test err isa PormG.UnknownFieldError
   msg = _ran_no_ansi(sprint(showerror, err))
   @test !occursin("cte:", msg)        # no internal decoration
-  @test !occursin("(true,", msg)      # ...and no raw MemoKey either
-  @test !occursin("(false,", msg)
+  @test !occursin("(:cte,", msg)      # ...and no raw MemoKey either
+  @test !occursin("(:base,", msg)
+  @test !occursin("(:joined,", msg)
   @test occursin("pp__sku", msg)      # the spelling the caller CAN reach, still offered
 end

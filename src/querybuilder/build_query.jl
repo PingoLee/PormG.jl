@@ -30,7 +30,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       instruc.select[i] = SQLField(resolved, alias)
       if alias !== nothing
         # #474: a `Value(x)` literal is never CTE-rooted — `Value(CTE(...))` is refused (#444).
-        instruc.cache[(false, alias)] = instruc.select[i]
+        instruc.cache[(:base,alias)] = instruc.select[i]
       end
       continue
     end
@@ -388,7 +388,7 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         # #474: `_field_cache_key` here is uniform-with-its-neighbours, not CTE support. This
         # branch is gated on `v.column.field isa String && !contains(field, "__")`, and
         # `_retag_cte_field!` always replaces `field` with a `CTEReference` or an `SQLTypeFunction`,
-        # so `cte_rooted` is always false on this path. It is written through the key helper anyway
+        # so `root` is always `:base` on this path. It is written through the key helper anyway
         # so that a CTE arriving here later is namespaced like everywhere else rather than silently
         # sharing a base-model entry.
         haskey(instruc.cache, _field_cache_key(v.column)) ||

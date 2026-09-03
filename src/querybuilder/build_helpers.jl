@@ -149,7 +149,7 @@ function _retag_cte_field!(field::SQLField, name::String)
   # #474 — the single site that marks an expression CTE-rooted. `_as` keeps the `name__path`
   # spelling #444 pinned (it is the output column name); the MEMO moves to the other half of a
   # `MemoKey`, so a field path spelled identically can no longer read or claim this entry.
-  field.cte_rooted = true
+  field.root = :cte
   return field
 end
 
@@ -158,11 +158,11 @@ end
 # what let the two namespaces share one memo. `nothing` means the expression has no output name and
 # memoizes nowhere.
 _field_cache_key(v::SQLTypeField)::Union{Nothing,MemoKey} =
-  v._as === nothing ? nothing : (v.cte_rooted, v._as)
+  v._as === nothing ? nothing : (v.root, v._as)
 
 # #474 — the same key from a handle rather than from a built SQLField, for the sites that resolve a
 # `CTE(...)` reference directly and then read back what `_build_row_join` cached for it.
-_cte_cache_key(ref::CTEReference)::MemoKey = (true, _cte_as(ref))
+_cte_cache_key(ref::CTEReference)::MemoKey = (:cte, _cte_as(ref))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -566,7 +566,7 @@ end
 # `track_path`). It is the membership set `build()`'s two materialization loops test `custom_join`
 # keys against, and a CTE hop has no `custom_join` entry to suppress — registering one under the
 # CTE's name is what silently dropped the user's own join before #474.
-_join_path_key(join_path::String, cte::Bool)::MemoKey = (cte, join_path)
+_join_path_key(join_path::String, cte::Bool)::MemoKey = (cte ? :cte : :base, join_path)
 
 function _check_if_field_is_a_operator(field::String)
   common_operators = ["exact", "iexact", "contains", "icontains", "iunaccent_contains", "iunaccent_exact", "in", "gt", "gte", "lt", "lte",
@@ -749,11 +749,11 @@ function _get_select_query(v::String, instruc::SQLInstruction; _as::Union{Nothin
       return string(quoted_alias, ".*")
     end
     
-    if _as !== nothing && haskey(instruc.tab_field_cache, (false, _as)) && haskey(instruc.object.model.fields, v)
+    if _as !== nothing && haskey(instruc.tab_field_cache, (:base,_as)) && haskey(instruc.object.model.fields, v)
       # The fields haskey guard matters: an invalid `v` must fall through to _solve_field's
       # UnknownFieldError below, not die here with a raw KeyError (audit finding).
       # #474: `v` is a column of the BASE model here, so the base-model half of the namespace.
-      instruc.tab_field_cache[(false, _as)] = instruc.object.model.fields[v]
+      instruc.tab_field_cache[(:base,_as)] = instruc.object.model.fields[v]
     end
     return string(quoted_alias, ".", _solve_field(v, instruc.object.model, instruc))
   end
@@ -1472,7 +1472,7 @@ function _resolve_bucket_column(raw_field::String, instruc::SQLInstruction)
   column_sql = _get_select_query(raw_field, instruc)
   # #474: a String path is base-model by construction — since #444 a string cannot name a CTE. Its
   # CTE twin below asks for the same entry under the other half of the namespace.
-  f_meta = get(instruc.tab_field_cache, (false, raw_field), nothing)
+  f_meta = get(instruc.tab_field_cache, (:base,raw_field), nothing)
   f_meta === nothing && return (nothing, "")
   return _checked_bucket_column(f_meta, String(last(split(raw_field, "__"))), column_sql, instruc)
 end

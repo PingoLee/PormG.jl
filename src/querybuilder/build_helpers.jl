@@ -483,27 +483,41 @@ function _check_filter(x::Pair)
   end
 end
 
-function _get_alias_name(df::DataFrames.DataFrame, alias::String)
-  array = vcat(df.alias_a, df.alias_b)
+# The next free generated alias (`<base>_<n>`) for a join row.
+#
+# #480 — it steps around every alias the caller DECLARED, not only the ones already materialized.
+# `cjoin_on` rows are built in `build()`'s second materialization loop, after `values()` /
+# `filter()` / `order_by()` have already resolved their joins, and `_build_cjoin_on_row_join`
+# writes the user's alias straight into `alias_b`. So when this function chose `R1_1` for a CTE or
+# ForeignKey join, no `cjoin_on(alias = "R1_1")` was in `row_join` yet to be avoided, and the
+# statement ended up with two range variables of one name — invalid on both engines, and where an
+# engine did resolve it, the projection and the ON clause named different relations. The declared
+# aliases all sit in `object.custom_join` before `build()` starts, which is early enough.
+function _get_alias_name(instruct::SQLInstruction)::String
+  return _get_alias_name(instruct.row_join, instruct.alias, _declared_join_aliases(instruct.object))
+end
+function _get_alias_name(row_join::Vector{Dict{String,Union{String,Vector{FilterType}}}}, alias::String,
+                         reserved::Vector{String}=String[])::String
+  taken = vcat([r["alias_a"] for r in row_join], [r["alias_b"] for r in row_join], reserved)
   count = 1
   while true
-    alias_name = alias * string("_", count) # TODO maybe when exist more then one sql, the alias must be different
-    if !in(alias_name, array)
-      return alias_name
-    end
+    alias_name = alias * string("_", count)
+    in(alias_name, taken) || return alias_name
     count += 1
   end
 end
-function _get_alias_name(row_join::Vector{Dict{String,Union{String,Vector{FilterType}}}}, alias::String)
-  array = vcat([r["alias_a"] for r in row_join], [r["alias_b"] for r in row_join])
-  count = 1
-  while true
-    alias_name = alias * string("_", count) # TODO maybe when exist more then one sql, the alias must be different
-    if !in(alias_name, array)
-      return alias_name
+
+# #480 — every `cjoin_on` alias declared on the query, materialized or not. `cjoin` and `on()`
+# entries share the container but are keyed by PATH, not by an alias they introduce, so they are
+# skipped: their joins get generated aliases like any ForeignKey hop.
+function _declared_join_aliases(object::SQLObject)::Vector{String}
+  out = String[]
+  for (_, config) in object.custom_join
+    if config isa Dict{String,Any} && get(config, "no_anchor", false) == true
+      push!(out, config["user_alias"]::String)
     end
-    count += 1
   end
+  return out
 end
 
 # `track_path = false` (#474) records the join WITHOUT claiming its name in `row_path`. A CTE hop
@@ -522,6 +536,11 @@ function _insert_join(
     track_path && push!(row_path, join_path)
     return row["alias_b"]
   else
+    # The tuple has no CTE-vs-physical discriminator on purpose (#479): a CTE row and a model row
+    # agree on `b` only when a CTE is named after a physical table, and `_with` refuses that at
+    # declaration for every table reachable from the registered models. SQL would resolve both
+    # joins to the CTE anyway, so keeping such rows apart here could only ever render a second
+    # join that reads the wrong relation — a discriminator would not fix the shape, only hide it.
     check = filter(r -> r["a"] == row["a"] && r["b"] == row["b"] && r["key_a"] == row["key_a"] && r["key_b"] == row["key_b"] && r["alias_a"] == row["alias_a"], row_join)
     if size(check, 1) == 0
       @pormg_debug false

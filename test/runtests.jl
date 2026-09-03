@@ -68,6 +68,7 @@ end
     @testset "CTE Columns Are Projection Aliases (#376)" include("unit/test_cte_db_column.jl")
     @testset "CTE Reference Namespace (#444/#431/#434)" include("unit/test_cte_reference.jl")
     @testset "Relation Alias Namespace (#474/#447/#424)" include("unit/test_relation_alias_namespace.jl")
+    @testset "CTE Table Names & Alias Reservation (#479/#480)" include("unit/test_cte_table_name_and_alias_reservation.jl")
     @testset "Nested CTE Guard (#433)" include("unit/test_nested_cte_guard.jl")
     @testset "JSON Path Lookups (#27)" include("unit/test_json_lookups.jl")
     @testset "JSON Containment Operators (#27)" include("unit/test_json_operators.jl")

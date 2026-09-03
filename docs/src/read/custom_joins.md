@@ -384,10 +384,11 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     handed the CTE the other entry's join type and predicates and dropped your join. That lookup is
     gone, so a join KEY no longer collides.
 
-    One name a CTE must still avoid is the **`db_table`** of a relation the same query joins: join
-    de-duplication compares physical table names, and a joined CTE occupies that slot under its own
-    name. A CTE called `driver` alongside a join to the `driver` table collapses into one join and
-    the CTE is silently never emitted. That predates #474 and is unchanged by it.
+    One name a CTE may never take is a **physical table name**: `.with("driver" => ...)` raises
+    `QueryBuildError` at the call when `driver` is the `db_table` of any registered model, or a
+    many-to-many join table. SQL resolves an unqualified table reference to a same-named CTE for the whole statement,
+    so the `driver` join PormG generates for `driverid__surname` would silently read the CTE
+    ([#479](https://github.com/PingoLee/PormG.jl/issues/479)). Pick a name that is not a table.
 
     `cjoin_on` works in reads and in the common `update()`/`delete()` (which scope rows via a
     subquery); only a **correlated** UPDATE-FROM/DELETE-USING (setting a column *from* a joined

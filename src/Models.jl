@@ -530,6 +530,21 @@ Base.deepcopy_internal(m::Model_Type, stackdict::IdDict) = get!(stackdict, m, m)
 
 const REGISTERED_MODULES = Dict{Module, String}()
 
+# #479 — `Base.binding_module` THROWS for a name a module imports from two places ("Constant
+# binding was imported from multiple modules", Julia 1.12), and both module walkers below called it
+# bare. That never surfaced while the walkers ran only inside `set_models` on a clean models module;
+# `_with`'s table-name check (#479) now walks the query's module on every `.with()` call, and a
+# module such as a test suite's `Main` — or any REPL session that `using`s two packages exporting
+# one name — carries such a binding. An ambiguous name cannot be a model, so it is skipped exactly
+# like a name whose `getfield` fails. Returns the owner module, or `nothing` when resolution throws.
+function _binding_owner_or_nothing(modules::Module, name::Symbol)::Union{Module,Nothing}
+  try
+    Base.binding_module(modules, name)
+  catch
+    nothing
+  end
+end
+
 """
 Returns a vector containing all the models defined in the given module.
 
@@ -562,7 +577,7 @@ function get_all_models(modules::Module; symbol::Bool=false)::Vector{Union{Symbo
   end
   # #354: Miss-path second pass for `using`-scoped models (invisible to `imported=true`).
   for name in names(modules; all=true, imported=true, usings=true)
-    Base.binding_module(modules, name) === Base && continue
+    _binding_owner_or_nothing(modules, name) === Base && continue
     name in seen_names && continue
     attr = try
         Base.invokelatest(getfield, modules, name)
@@ -621,7 +636,7 @@ function _collect_models_and_bindings(modules::Module)
   # #354: Miss-path second pass for `using`-scoped models (invisible to `imported=true`).
   # Filtered by `Base.binding_module` to exclude implicit `using Base` names.
   for name in names(modules; all=true, imported=true, usings=true)
-    Base.binding_module(modules, name) === Base && continue
+    _binding_owner_or_nothing(modules, name) === Base && continue
     name in seen_names && continue
     attr = try
         Base.invokelatest(getfield, modules, name)

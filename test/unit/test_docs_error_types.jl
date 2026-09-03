@@ -187,6 +187,19 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        # #479. A CTE named after a physical table is refused at the `.with()` call: SQL resolves an
+        # unqualified table reference to a same-named CTE for the whole statement, so every join
+        # PormG generates to that table would silently read the CTE. The CTE body here is the driver
+        # model itself, so the name is caught against the body's base model as well as the module walk.
+        "read/subqueries_and_ctes.md — a CTE named after a physical table is refused",
+        QueryBuildError,
+        () -> begin
+            best = DOCERR_DRIVER_PG.objects.values("driverid", "surname")
+            DOCERR_RESULT_PG.objects.with("docerr_driver_docerr_pg" => best,
+                                          join_field = "driverid" => "driverid")
+        end,
+    ),
+    (
         # #435. Resolving `driverid__surname` builds the driver join DURING Phase 1, so it lands at
         # a higher `row_join` index than `d` — a forward reference. Phase 1b moves the predicate
         # onto it, and since it is `d`'s only one, `d` is left with no ON clause. The doc note tells

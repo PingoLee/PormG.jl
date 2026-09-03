@@ -451,11 +451,14 @@ Notes:
   the other: the CTE is joined under a generated alias, and a `CTE(name, col)` handle is the only
   way to reach its columns. Before #474 the join-key case was refused; before that again it
   silently returned wrong rows.
-- **One name a CTE must still avoid: the `db_table` of a relation the same query joins.** Join
-  de-duplication compares the physical table name, and a joined CTE occupies that slot under its own
-  name, so a CTE called `driver` alongside a join to the `driver` table collapses into one join and
-  the CTE is never emitted — silently. This is unrelated to #474 (it predates it and is unchanged by
-  it); it is tracked separately.
+- **A CTE may not be named after a physical table.** `.with("driver" => ...)` raises
+  `QueryBuildError` at the call when `driver` is the `db_table` of any registered model, or a
+  many-to-many join table ([#479](https://github.com/PingoLee/PormG.jl/issues/479)). This one is
+  SQL's rule, not PormG's:
+  a `WITH` name hides any real table of the same name for the whole statement (PostgreSQL and
+  SQLite alike, and SQLite additionally rejects a CTE body that reads its own name as a circular
+  reference). PormG generates its joins unqualified from `db_table`, so such a CTE would silently
+  redirect every generated join to that table. Pick a name that is not a table.
 - **`join_type` is validated at the call.** `.with(..., join_type = "CROSS")` — or any string
   outside `"LEFT"` / `"INNER"` / `"RIGHT"` / `"FULL"` — raises `QueryBuildError` where you wrote it.
   A CTE join renders `<join_type> JOIN … ON …`, which a `CROSS` cannot be. For a deliberate cross

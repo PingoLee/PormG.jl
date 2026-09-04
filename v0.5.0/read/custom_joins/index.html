@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Custom Joins · PormG.jl: Django-like ORM for Julia</title><meta name="title" content="Custom Joins · PormG.jl: Django-like ORM for Julia"/><meta property="og:title" content="Custom Joins · PormG.jl: Django-like ORM for Julia"/><meta property="twitter:title" content="Custom Joins · PormG.jl: Django-like ORM for Julia"/><meta name="description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="og:description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="twitter:description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="og:url" content="https://pingolee.github.io/PormG.jl/read/custom_joins/"/><meta property="twitter:url" content="https://pingolee.github.io/PormG.jl/read/custom_joins/"/><link rel="canonical" href="https://pingolee.github.io/PormG.jl/read/custom_joins/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.63.2/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../">PormG.jl: Django-like ORM for Julia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><input class="collapse-toggle" id="menuitem-2" type="checkbox"/><label class="tocitem" for="menuitem-2"><span class="docs-label">Data Modeling</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../models/">Models</a></li><li><a class="tocitem" href="../../fields/">Fields</a></li><li><a class="tocitem" href="../../schema_conventions/">Schema Conventions</a></li><li><a class="tocitem" href="../../many_to_many/">Many-to-Many</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3" type="checkbox"/><label class="tocitem" for="menuitem-3"><span class="docs-label">Configuration</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../configuration/">Overview</a></li><li><a class="tocitem" href="../../configuration/setup/">Setup</a></li><li><a class="tocitem" href="../../configuration/connection_yml/">Connection YML</a></li><li><a class="tocitem" href="../../configuration/server/">Server Patterns</a></li><li><a class="tocitem" href="../../configuration/dynamic/">Dynamic &amp; Multi-Tenancy</a></li><li><a class="tocitem" href="../../configuration/advanced/">Advanced</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4" type="checkbox"/><label class="tocitem" for="menuitem-4"><span class="docs-label">Migrations</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../migrations/">Overview</a></li><li><a class="tocitem" href="../../migrations/workflow/">Workflow</a></li><li><a class="tocitem" href="../../migrations/stability/">Format Stability</a></li><li><a class="tocitem" href="../../migrations/advanced/">Advanced</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5" type="checkbox"/><label class="tocitem" for="menuitem-5"><span class="docs-label">Writing</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../write/">Overview</a></li><li><a class="tocitem" href="../../write/create/">Creating Records</a></li><li><a class="tocitem" href="../../write/update/">Updating Records</a></li><li><a class="tocitem" href="../../write/delete/">Deleting Records</a></li><li><a class="tocitem" href="../../write/bulk/">Bulk Insert, Copy, and Update</a></li><li><a class="tocitem" href="../../write/transaction/">Transactions</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-6" type="checkbox" checked/><label class="tocitem" for="menuitem-6"><span class="docs-label">Reading</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../">Overview</a></li><li><a class="tocitem" href="../values_and_joins/">Values and Joins</a></li><li class="is-active"><a class="tocitem" href>Custom Joins</a><ul class="internal"><li><a class="tocitem" href="#Overview"><span>Overview</span></a></li><li><a class="tocitem" href="#.cjoin()-Method"><span><code>.cjoin()</code> Method</span></a></li><li><a class="tocitem" href="#Key-Features"><span>Key Features</span></a></li><li><a class="tocitem" href="#Installation"><span>Installation</span></a></li><li><a class="tocitem" href="#Basic-Usage-with-.cjoin()"><span>Basic Usage with <code>.cjoin()</code></span></a></li><li class="toplevel"><a class="tocitem" href="#Output:"><span>Output:</span></a></li><li class="toplevel"><a class="tocitem" href="#3x3-DataFrame"><span>3x3 DataFrame</span></a></li><li class="toplevel"><a class="tocitem" href="#Row-result**statusid**status-description-result"><span>Row | result<strong>statusid</strong>status  description  result</span></a></li><li class="toplevel"><a class="tocitem" href="#String?-String?-Int32?"><span>| String?                   String?      Int32?</span></a></li><li class="toplevel"><a class="tocitem" href="#––-––––––––––––––––––––––––"><span>––-+––––––––––––––––––––––––</span></a></li><li class="toplevel"><a class="tocitem" href="#1-Finished-teste-1-1"><span>1 | Finished                  teste 1           1</span></a></li><li class="toplevel"><a class="tocitem" href="#2-Finished-teste-2-2"><span>2 | Finished                  teste 2           2</span></a></li><li class="toplevel"><a class="tocitem" href="#3-Finished-teste-3-3"><span>3 | Finished                  teste 3           3</span></a></li><li class="toplevel"><a class="tocitem" href="#Generated-SQL-(simplified):"><span>Generated SQL (simplified):</span></a></li><li class="toplevel"><a class="tocitem" href="#SELECT-...-FROM-result-AS-Tb"><span>SELECT ... FROM result AS Tb</span></a></li><li class="toplevel"><a class="tocitem" href="#LEFT-JOIN-driver-AS-Tb*1-ON-Tb.driverid-Tb*1.driverid"><span>LEFT JOIN driver AS Tb<em>1 ON Tb.driverid = Tb</em>1.driverid</span></a></li><li class="toplevel"><a class="tocitem" href="#AND-(Tb*1.nationality-?-AND-(Tb*1.forename-?-OR-Tb_1.forename-?))"><span>AND (Tb<em>1.nationality = ? AND (Tb</em>1.forename = ? OR Tb_1.forename = ?))</span></a></li><li class="toplevel"><a class="tocitem" href="#WHERE-Tb.points-?"><span>WHERE Tb.points = ?</span></a></li><li class="toplevel"><a class="tocitem" href="#cjoin-is-NOT-applied-no-join-path-used-in-values()"><span>cjoin is NOT applied - no join path used in values()</span></a></li><li class="toplevel"><a class="tocitem" href="#cjoin-IS-applied-accessing-result__*-fields"><span>cjoin IS applied - accessing result__* fields</span></a></li><li class="toplevel"><a class="tocitem" href="#Output:-2"><span>Output:</span></a></li><li class="toplevel"><a class="tocitem" href="#SELECT"><span>SELECT</span></a></li><li class="toplevel"><a class="tocitem" href="#&quot;Tb_2&quot;.&quot;status&quot;-as-result**statusid**status,"><span>&quot;Tb_2&quot;.&quot;status&quot; as result<strong>statusid</strong>status,</span></a></li><li class="toplevel"><a class="tocitem" href="#&quot;Tb&quot;.&quot;description&quot;-as-description,"><span>&quot;Tb&quot;.&quot;description&quot; as description,</span></a></li><li class="toplevel"><a class="tocitem" href="#&quot;Tb&quot;.&quot;result&quot;-as-result"><span>&quot;Tb&quot;.&quot;result&quot; as result</span></a></li><li class="toplevel"><a class="tocitem" href="#FROM-&quot;new*join*position&quot;-as-&quot;Tb&quot;"><span>FROM &quot;new<em>join</em>position&quot; as &quot;Tb&quot;</span></a></li><li class="toplevel"><a class="tocitem" href="#LEFT-JOIN-&quot;result&quot;-AS-&quot;Tb*1&quot;-ON-&quot;Tb&quot;.&quot;result&quot;-&quot;Tb*1&quot;.&quot;resultid&quot;"><span>LEFT JOIN &quot;result&quot; AS &quot;Tb<em>1&quot; ON &quot;Tb&quot;.&quot;result&quot; = &quot;Tb</em>1&quot;.&quot;resultid&quot;</span></a></li><li class="toplevel"><a class="tocitem" href="#AND-&quot;Tb_1&quot;.&quot;resultid&quot;-1"><span>AND &quot;Tb_1&quot;.&quot;resultid&quot; = <span>$</span>1</span></a></li><li class="toplevel"><a class="tocitem" href="#LEFT-JOIN-&quot;status&quot;-AS-&quot;Tb*2&quot;-ON-&quot;Tb*1&quot;.&quot;statusid&quot;-&quot;Tb_2&quot;.&quot;statusid&quot;"><span>LEFT JOIN &quot;status&quot; AS &quot;Tb<em>2&quot; ON &quot;Tb</em>1&quot;.&quot;statusid&quot; = &quot;Tb_2&quot;.&quot;statusid&quot;</span></a></li><li class="toplevel"><a class="tocitem" href="#Join-on-a-code-field-instead-of-ID"><span>Join on a code field instead of ID</span></a></li><li class="toplevel"><a class="tocitem" href="#Add-both-a-custom-join-condition-and-a-regular-filter"><span>Add both a custom join condition and a regular filter</span></a></li><li class="toplevel"><a class="tocitem" href="#Result:-Only-Brazilian-drivers-named-Ayrton-or-Nelson-with-points-0"><span>Result: Only Brazilian drivers named Ayrton or Nelson with points &gt; 0</span></a></li><li class="toplevel"><a class="tocitem" href="#This-parameter-goes-to-WHERE-clause,-cjoin-filters-go-to-ON-clause"><span>This parameter goes to WHERE clause, cjoin filters go to ON clause</span></a></li><li class="toplevel"><a class="tocitem" href="#Result-SQL:"><span>Result SQL:</span></a></li><li class="toplevel"><a class="tocitem" href="#...-ON-driver.driverid-result.driverid-AND-driver.nationality-?"><span>... ON driver.driverid = result.driverid AND driver.nationality = ?</span></a></li><li class="toplevel"><a class="tocitem" href="#WHERE-result.points-?"><span>WHERE result.points = ?</span></a></li><li class="toplevel"><a class="tocitem" href="#&quot;nationality&quot;-is-automatically-prefixed-to-&quot;driverid__nationality&quot;"><span>&quot;nationality&quot; is automatically prefixed to &quot;driverid__nationality&quot;</span></a></li><li class="toplevel"><a class="tocitem" href="#This-works-with-Q-and-Qor-too:"><span>This works with Q and Qor too:</span></a></li><li class="toplevel"><a class="tocitem" href="#All-three-fields-(nationality,-forename,-forename)-are-auto-prefixed"><span>All three fields (nationality, forename, forename) are auto-prefixed</span></a></li><li class="toplevel"><a class="tocitem" href="#This-works:-Result.driverid-FK-points-to-Driver"><span>This works: Result.driverid FK points to Driver</span></a></li><li class="toplevel"><a class="tocitem" href="#This-raises-an-error:-driverid-points-to-Driver,-not-Constructor"><span>This raises an error: driverid points to Driver, not Constructor</span></a></li><li class="toplevel"><a class="tocitem" href="#QueryBuildError:-Field-&#39;driverid&#39;-is-already-a-ForeignKey-pointing-to-&#39;Driver&#39;,"><span>QueryBuildError: Field &#39;driverid&#39; is already a ForeignKey pointing to &#39;Driver&#39;,</span></a></li><li class="toplevel"><a class="tocitem" href="#but-.cjoin()-attempted-to-join-with-&#39;Constructor&#39;..."><span>but <code>.cjoin()</code> attempted to join with &#39;Constructor&#39;...</span></a></li><li class="toplevel"><a class="tocitem" href="#Use-query.cjoin(&quot;driverid&quot;-&quot;Driver&quot;,-filters[...])-instead."><span>Use query.cjoin(&quot;driverid&quot; =&gt; &quot;Driver&quot;, filters=[...]) instead.</span></a></li><li class="toplevel"><a class="tocitem" href="#&quot;result&quot;-is-an-IntegerField,-not-a-ForeignKey"><span>&quot;result&quot; is an IntegerField, not a ForeignKey</span></a></li><li class="toplevel"><a class="tocitem" href="#cjoin-warns-and-auto-links:"><span>cjoin warns and auto-links:</span></a></li><li class="toplevel"><a class="tocitem" href="#main.result-Result.resultid-(or-the-model-PK)"><span>main.result -&gt; Result.resultid   (or the model PK)</span></a></li><li class="toplevel"><a class="tocitem" href="#Suppress-the-auto-discovery-warning"><span>Suppress the auto-discovery warning</span></a></li></ul></li><li><a class="tocitem" href="../filters_and_aggregates/">Filters and Aggregates</a></li><li><a class="tocitem" href="../functions_and_dates/">Functions and Dates</a></li><li><a class="tocitem" href="../subqueries_and_ctes/">Subqueries and CTEs</a></li><li><a class="tocitem" href="../field_expressions/">Field Expressions</a></li><li><a class="tocitem" href="../window_functions/">Window Functions</a></li><li><a class="tocitem" href="../q_objects/">Q Objects</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-7" type="checkbox"/><label class="tocitem" for="menuitem-7"><span class="docs-label">Guides</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../errors/">Error Handling</a></li><li><a class="tocitem" href="../../postgres/">PostgreSQL Guide</a></li><li><a class="tocitem" href="../../async/">Async &amp; Concurrency</a></li><li><a class="tocitem" href="../../advisory_lock/">Advisory Locks</a></li><li><a class="tocitem" href="../../import_django/">Import from Django</a></li><li><a class="tocitem" href="../../upgrading/">Upgrading PormG</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-8" type="checkbox"/><label class="tocitem" for="menuitem-8"><span class="docs-label">Internals</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../architecture/">Architecture</a></li><li><a class="tocitem" href="../../extending/">Extending PormG</a></li><li><a class="tocitem" href="../../contributing/">Contributing</a></li></ul></li><li><a class="tocitem" href="../../api/">API</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Reading</a></li><li class="is-active"><a href>Custom Joins</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Custom Joins</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl/blob/main/docs/src/read/custom_joins.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Custom-Join-Documentation"><a class="docs-heading-anchor" href="#Custom-Join-Documentation">Custom Join Documentation</a><a id="Custom-Join-Documentation-1"></a><a class="docs-heading-anchor-permalink" href="#Custom-Join-Documentation" title="Permalink"></a></h1><h2 id="Overview"><a class="docs-heading-anchor" href="#Overview">Overview</a><a id="Overview-1"></a><a class="docs-heading-anchor-permalink" href="#Overview" title="Permalink"></a></h2><p>PormG provides a way to create custom join conditions using the chainable <code>.cjoin()</code> method on query handlers.</p><p>The <code>.cjoin()</code> method is the recommended approach as it&#39;s more flexible and allows you to specify join conditions when building queries, rather than at model definition time.</p><h2 id=".cjoin()-Method"><a class="docs-heading-anchor" href="#.cjoin()-Method"><code>.cjoin()</code> Method</a><a id=".cjoin()-Method-1"></a><a class="docs-heading-anchor-permalink" href="#.cjoin()-Method" title="Permalink"></a></h2><p>The <code>.cjoin()</code> method allows you to add custom conditions to JOIN clauses at query time. This is particularly useful for:</p><ol><li><strong>Legacy databases</strong> where foreign key constraints don&#39;t exist</li><li><strong>Joining on non-ID fields</strong> (e.g., joining on codes, names, or other unique identifiers)</li><li><strong>Adding extra conditions to the ON clause</strong> beyond simple equality</li><li><strong>Complex multi-field joins</strong> (e.g., multi-tenant systems where you need to match both tenant_id and another field)</li></ol><h2 id="Key-Features"><a class="docs-heading-anchor" href="#Key-Features">Key Features</a><a id="Key-Features-1"></a><a class="docs-heading-anchor-permalink" href="#Key-Features" title="Permalink"></a></h2><ul><li><strong>Runtime flexibility</strong> - Add join conditions when building queries</li><li><strong>ON clause conditions</strong> - Restrict the joined table during the JOIN itself</li><li><strong>Full Q/Qor/operator suffix support</strong> - Use the same filter syntax as .filter() for conditions that belong to the joined model</li><li><strong>Automatic field prefixing</strong> - Plain joined-model field names in join filters are automatically prefixed with the join path</li><li><strong>F expressions</strong> - Field-to-field comparisons in joins</li><li><strong>Multi-tenant support</strong> - Perfect for tenant isolation at join level</li><li><strong>Nested joins</strong> - Apply conditions to any level of join</li></ul><h2 id="Installation"><a class="docs-heading-anchor" href="#Installation">Installation</a><a id="Installation-1"></a><a class="docs-heading-anchor-permalink" href="#Installation" title="Permalink"></a></h2><p>The <code>.cjoin()</code> method is built into the query builder handler, meaning no special function imports are required once you have loaded PormG:</p><pre><code class="language-julia hljs">using PormG, LibPQ   # load SQLite instead for a SQLite app
+# Q, Qor, and F are automatically exported by PormG</code></pre><h2 id="Basic-Usage-with-.cjoin()"><a class="docs-heading-anchor" href="#Basic-Usage-with-.cjoin()">Basic Usage with <code>.cjoin()</code></a><a id="Basic-Usage-with-.cjoin()-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Usage-with-.cjoin()" title="Permalink"></a></h2><h3 id="Setup:-Create-Test-Data"><a class="docs-heading-anchor" href="#Setup:-Create-Test-Data">Setup: Create Test Data</a><a id="Setup:-Create-Test-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Setup:-Create-Test-Data" title="Permalink"></a></h3><p>First, let&#39;s set up some test data. The <code>New_join_position</code> model has a <code>result</code> field (IntegerField) that we&#39;ll join to the <code>Result</code> model:</p><pre><code class="language-julia hljs"># Clear and populate test data
+delete(M.New_join_position.objects, allow_delete_all = true)
+
+M.New_join_position.objects.create(&quot;result&quot; =&gt; 1, &quot;description&quot; =&gt; &quot;teste 1&quot;)
+M.New_join_position.objects.create(&quot;result&quot; =&gt; 2, &quot;description&quot; =&gt; &quot;teste 2&quot;)
+M.New_join_position.objects.create(&quot;result&quot; =&gt; 3, &quot;description&quot; =&gt; &quot;teste 3&quot;)</code></pre><h3 id="Simple-Join"><a class="docs-heading-anchor" href="#Simple-Join">Simple Join</a><a id="Simple-Join-1"></a><a class="docs-heading-anchor-permalink" href="#Simple-Join" title="Permalink"></a></h3><p>Create a custom join from an IntegerField to another model:</p><pre><code class="language-julia hljs">df = M.New_join_position.objects.
+    cjoin(&quot;result&quot; =&gt; &quot;Result&quot;).
+    values(&quot;result__statusid__status&quot;, &quot;description&quot;, &quot;result&quot;) |&gt; DataFrame</code></pre><h1 id="Output:"><a class="docs-heading-anchor" href="#Output:">Output:</a><a id="Output:-1"></a><a class="docs-heading-anchor-permalink" href="#Output:" title="Permalink"></a></h1><h1 id="3x3-DataFrame"><a class="docs-heading-anchor" href="#3x3-DataFrame">3x3 DataFrame</a><a id="3x3-DataFrame-1"></a><a class="docs-heading-anchor-permalink" href="#3x3-DataFrame" title="Permalink"></a></h1><h1 id="Row-result**statusid**status-description-result"><a class="docs-heading-anchor" href="#Row-result**statusid**status-description-result">Row | result<strong>statusid</strong>status  description  result</a><a id="Row-result**statusid**status-description-result-1"></a><a class="docs-heading-anchor-permalink" href="#Row-result**statusid**status-description-result" title="Permalink"></a></h1><h1 id="String?-String?-Int32?"><a class="docs-heading-anchor" href="#String?-String?-Int32?">| String?                   String?      Int32?</a><a id="String?-String?-Int32?-1"></a><a class="docs-heading-anchor-permalink" href="#String?-String?-Int32?" title="Permalink"></a></h1><h1 id="––-––––––––––––––––––––––––"><a class="docs-heading-anchor" href="#––-––––––––––––––––––––––––">––-+––––––––––––––––––––––––</a><a id="––-––––––––––––––––––––––––-1"></a><a class="docs-heading-anchor-permalink" href="#––-––––––––––––––––––––––––" title="Permalink"></a></h1><h1 id="1-Finished-teste-1-1"><a class="docs-heading-anchor" href="#1-Finished-teste-1-1">1 | Finished                  teste 1           1</a><a id="1-Finished-teste-1-1-1"></a><a class="docs-heading-anchor-permalink" href="#1-Finished-teste-1-1" title="Permalink"></a></h1><h1 id="2-Finished-teste-2-2"><a class="docs-heading-anchor" href="#2-Finished-teste-2-2">2 | Finished                  teste 2           2</a><a id="2-Finished-teste-2-2-1"></a><a class="docs-heading-anchor-permalink" href="#2-Finished-teste-2-2" title="Permalink"></a></h1><h1 id="3-Finished-teste-3-3"><a class="docs-heading-anchor" href="#3-Finished-teste-3-3">3 | Finished                  teste 3           3</a><a id="3-Finished-teste-3-3-1"></a><a class="docs-heading-anchor-permalink" href="#3-Finished-teste-3-3" title="Permalink"></a></h1><pre><code class="nohighlight hljs">
+The `.cjoin()` call creates a LEFT JOIN from `new_join_position.result` to `Result.resultid`, allowing you to traverse the relationship chain `result__statusid__status`.
+
+### Join with Filter Conditions (LEFT JOIN)
+
+Add conditions to the ON clause using fields from the joined model. When a row doesn&#39;t match the ON condition, the joined fields will be `missing`:
+</code></pre><p>julia df = M.New<em>join</em>position.objects.     cjoin(&quot;result&quot; =&gt; &quot;Result&quot;, filters=[&quot;resultid&quot; =&gt; 1]).     values(&quot;result<strong>statusid</strong>status&quot;, &quot;description&quot;, &quot;result&quot;) |&gt; DataFrame</p><pre><code class="nohighlight hljs">
+# Output:
+# 3x3 DataFrame
+#  Row | result__statusid__status    description  result 
+#      | Union{Missing, String}      String?      Int32?
+# -----+--------------------------------------------------
+#    1 | Finished                    teste 1           1
+#    2 | missing                     teste 2           2
+#    3 | missing                     teste 3           3
+
+Notice that only the row whose joined `Result.resultid` is `1` has the status because the filter is applied in the ON clause, not WHERE. This returns all 3 rows, but only one row matches the join condition.
+
+### Join with Filter Conditions (INNER JOIN)
+
+Use `join_type=&quot;INNER&quot;` to only return rows that match the join condition:
+</code></pre><p>julia df = M.New<em>join</em>position.objects.     cjoin(&quot;result&quot; =&gt; &quot;Result&quot;,             filters=[&quot;resultid&quot; =&gt; 1],            join_type=&quot;INNER&quot;).     values(&quot;result<strong>statusid</strong>status&quot;, &quot;description&quot;, &quot;result&quot;) |&gt; DataFrame</p><pre><code class="nohighlight hljs">
+# Output:
+# 1x3 DataFrame
+#  Row | result__statusid__status  description  result 
+#      | String?                   String?      Int32?
+# -----+------------------------------------------------
+#    1 | Finished                  teste 1           1</code></pre><p>Only the row joined to <code>Result.resultid = 1</code> is returned because the INNER JOIN excludes non-matching rows.</p><h3 id="Join-with-Q/Qor-Filters-(AND/OR-Logic)"><a class="docs-heading-anchor" href="#Join-with-Q/Qor-Filters-(AND/OR-Logic)">Join with Q/Qor Filters (AND/OR Logic)</a><a id="Join-with-Q/Qor-Filters-(AND/OR-Logic)-1"></a><a class="docs-heading-anchor-permalink" href="#Join-with-Q/Qor-Filters-(AND/OR-Logic)" title="Permalink"></a></h3><p>Use <code>Q()</code> for AND logic and <code>Qor()</code> for OR logic in join conditions. Plain field names are automatically prefixed with the join path:</p><pre><code class="language-julia hljs"># Plain fields are auto-prefixed: &quot;statusid__status&quot; and nested fields work too
+df = M.New_join_position.objects.
+    cjoin(&quot;result&quot; =&gt; &quot;Result&quot;, filters=[
+        Q(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;, Qor(&quot;positionorder&quot; =&gt; 1, &quot;positionorder&quot; =&gt; 2))
+    ]).
+    values(&quot;result__statusid__status&quot;, &quot;description&quot;) |&gt; DataFrame</code></pre><h3 id="Join-with-Driver-Model-(Q/Qor-Example)"><a class="docs-heading-anchor" href="#Join-with-Driver-Model-(Q/Qor-Example)">Join with Driver Model (Q/Qor Example)</a><a id="Join-with-Driver-Model-(Q/Qor-Example)-1"></a><a class="docs-heading-anchor-permalink" href="#Join-with-Driver-Model-(Q/Qor-Example)" title="Permalink"></a></h3><p>Here&#39;s a complete example joining Result to Driver with complex filter logic:</p><pre><code class="language-julia hljs"># Add custom join with recursive Q/Qor filters + WHERE clause filter
+# Plain field names (&quot;nationality&quot;, &quot;forename&quot;) are automatically prefixed
+df = M.Result.objects.
+    cjoin(&quot;driverid&quot; =&gt; &quot;Driver&quot;, filters=[
+        Q(&quot;nationality&quot; =&gt; &quot;Brazilian&quot;, Qor(&quot;forename&quot; =&gt; &quot;Ayrton&quot;, &quot;forename&quot; =&gt; &quot;Nelson&quot;))
+    ]).
+    filter(&quot;points&quot; =&gt; 10).
+    values(&quot;driverid__surname&quot;, &quot;points&quot;) |&gt; DataFrame</code></pre><h1 id="Generated-SQL-(simplified):"><a class="docs-heading-anchor" href="#Generated-SQL-(simplified):">Generated SQL (simplified):</a><a id="Generated-SQL-(simplified):-1"></a><a class="docs-heading-anchor-permalink" href="#Generated-SQL-(simplified):" title="Permalink"></a></h1><h1 id="SELECT-...-FROM-result-AS-Tb"><a class="docs-heading-anchor" href="#SELECT-...-FROM-result-AS-Tb">SELECT ... FROM result AS Tb</a><a id="SELECT-...-FROM-result-AS-Tb-1"></a><a class="docs-heading-anchor-permalink" href="#SELECT-...-FROM-result-AS-Tb" title="Permalink"></a></h1><h1 id="LEFT-JOIN-driver-AS-Tb*1-ON-Tb.driverid-Tb*1.driverid"><a class="docs-heading-anchor" href="#LEFT-JOIN-driver-AS-Tb*1-ON-Tb.driverid-Tb*1.driverid">LEFT JOIN driver AS Tb<em>1 ON Tb.driverid = Tb</em>1.driverid</a><a id="LEFT-JOIN-driver-AS-Tb*1-ON-Tb.driverid-Tb*1.driverid-1"></a><a class="docs-heading-anchor-permalink" href="#LEFT-JOIN-driver-AS-Tb*1-ON-Tb.driverid-Tb*1.driverid" title="Permalink"></a></h1><h1 id="AND-(Tb*1.nationality-?-AND-(Tb*1.forename-?-OR-Tb_1.forename-?))"><a class="docs-heading-anchor" href="#AND-(Tb*1.nationality-?-AND-(Tb*1.forename-?-OR-Tb_1.forename-?))">AND (Tb<em>1.nationality = ? AND (Tb</em>1.forename = ? OR Tb_1.forename = ?))</a><a id="AND-(Tb*1.nationality-?-AND-(Tb*1.forename-?-OR-Tb_1.forename-?))-1"></a><a class="docs-heading-anchor-permalink" href="#AND-(Tb*1.nationality-?-AND-(Tb*1.forename-?-OR-Tb_1.forename-?))" title="Permalink"></a></h1><h1 id="WHERE-Tb.points-?"><a class="docs-heading-anchor" href="#WHERE-Tb.points-?">WHERE Tb.points = ?</a><a id="WHERE-Tb.points-?-1"></a><a class="docs-heading-anchor-permalink" href="#WHERE-Tb.points-?" title="Permalink"></a></h1><pre><code class="nohighlight hljs">
+Notice that the cjoin filter parameters (`&quot;Brazilian&quot;, &quot;Ayrton&quot;, &quot;Nelson&quot;`) appear in the ON clause, while the regular filter parameter (`10` for points) appears in the WHERE clause.
+
+## Understanding `.cjoin()` Behavior
+
+### Contract of `.cjoin(filters=...)`
+
+`.cjoin()` exists to modify the JOIN itself. Its `filters` are ON-clause predicates and should target fields on the joined model.
+
+Use `.cjoin(..., filters=...)` when you want SQL like:
+</code></pre><p>sql LEFT JOIN driver ON result.driverid = driver.driverid AND driver.nationality = ?</p><pre><code class="nohighlight hljs">
+Use `.filter(...)` when you want to filter the main query rows in `WHERE`:
+</code></pre><p>sql WHERE result.points &gt; ?</p><pre><code class="nohighlight hljs">
+This distinction matters:
+
+- `.cjoin(filters=...)` is for joined-model predicates that belong in `ON`
+- `.filter(...)` is for base-query predicates that belong in `WHERE`
+- Passing base-table fields to `.cjoin(filters=...)` is not a good API contract and should be treated as unsupported usage
+
+### Dedicated `on()` API for Existing Join Paths
+
+When the join path already exists through the model graph, you do not need to redefine it with `.cjoin()` just to add ON-clause predicates. Use the chainable `query.on()` method instead:
+</code></pre><p>julia df = M.Result.objects.     on(&quot;driverid&quot;, &quot;nationality&quot; =&gt; &quot;Brazilian&quot;, &quot;code&quot; =&gt; &quot;SEN&quot;).     values(&quot;resultid&quot;, &quot;driverid__surname&quot;, &quot;points&quot;) |&gt; DataFrame</p><pre><code class="nohighlight hljs">
+This keeps all base `Result` rows in the query tree while only attaching `Driver` rows that satisfy the ON predicates.
+
+You can also override the join type directly from `query.on()`:
+</code></pre><p>julia query = M.Result.objects.     on(&quot;driverid&quot;, &quot;nationality&quot; =&gt; &quot;Brazilian&quot;, join_type=&quot;INNER&quot;).     values(&quot;resultid&quot;, &quot;driverid__surname&quot;)</p><pre><code class="nohighlight hljs">
+This changes the join keyword to `INNER JOIN` while keeping the predicate in the `ON` clause instead of moving it to `WHERE`.
+
+### Reverse Join Example with `on()`
+
+Reverse joins are the main use case for the dedicated API because they let you preserve base rows while limiting which related rows attach.
+</code></pre><p>julia df = M.Result.objects.     on(&quot;test<em>deletion&quot;, &quot;name<strong>@in&quot; =&gt; [&quot;reverse-join-a&quot;, &quot;reverse-join-b&quot;]).     filter(&quot;resultid</strong>@in&quot; =&gt; [1, 2, 3]).     values(&quot;resultid&quot;, &quot;test</em>deletion__name&quot;) |&gt; DataFrame</p><pre><code class="nohighlight hljs">
+The reverse join is `LEFT` here because that is what PormG derives for it, not because `on()` chose it — `on()` only adds the predicate. All three `Result` rows remain and only the matching reverse rows are attached. If you want only the matched base rows, pass `join_type=&quot;INNER&quot;` on the same `on()` call.
+
+!!! tip
+    **Chained Reverse Paths**: You can also use `on()` through chained reverse paths. For example, `query.on(&quot;test_deletion&quot;, &quot;just_a_nested_roll_back__description&quot; =&gt; &quot;nested-value&quot;)` will correctly apply the `ON`-clause predicate deep within the reversed relationship traversal chain.
+
+### Contract of `on()`
+
+- `query.on(&quot;path&quot;, ...)` targets an existing join path, including reverse joins such as `&quot;test_deletion&quot;` and nested paths such as `&quot;raceid__circuitid&quot;`
+- multiple predicates are combined with `AND` unless you use `Qor(...)`
+- repeated `on()` calls for the same path merge additional predicates into the same `ON` clause
+- **`on()` does not change the join type unless you pass `join_type=`.** Without it the join keeps
+  the type PormG derives from the relation itself — the field&#39;s own `how`, else `LEFT` for a
+  nullable ForeignKey and `INNER` for a `NOT NULL` one. Before
+  [#474](https://github.com/PingoLee/PormG.jl/issues/474) an `on()` with no `join_type` forced
+  `LEFT`, so adding a predicate to a `NOT NULL` relation silently widened the result set
+- an explicit `join_type` on any `on()` call for a path stays in effect for later `on()` calls on
+  that same path
+- `.filter(...)` keeps its existing `WHERE` semantics and is not silently rewritten into `ON`
+
+### When `.cjoin()` is Applied
+
+The `.cjoin()` configuration is only applied when you access fields through the join path:
+</code></pre><p>julia</p><h1 id="cjoin-is-NOT-applied-no-join-path-used-in-values()"><a class="docs-heading-anchor" href="#cjoin-is-NOT-applied-no-join-path-used-in-values()">cjoin is NOT applied - no join path used in values()</a><a id="cjoin-is-NOT-applied-no-join-path-used-in-values()-1"></a><a class="docs-heading-anchor-permalink" href="#cjoin-is-NOT-applied-no-join-path-used-in-values()" title="Permalink"></a></h1><p>df = M.New<em>join</em>position.objects.     cjoin(&quot;result&quot; =&gt; &quot;Result&quot;, filters=[&quot;resultid&quot; =&gt; 1]) |&gt; DataFrame  # Returns all 3 rows with default columns</p><h1 id="cjoin-IS-applied-accessing-result__*-fields"><a class="docs-heading-anchor" href="#cjoin-IS-applied-accessing-result__*-fields">cjoin IS applied - accessing result__* fields</a><a id="cjoin-IS-applied-accessing-result__*-fields-1"></a><a class="docs-heading-anchor-permalink" href="#cjoin-IS-applied-accessing-result__*-fields" title="Permalink"></a></h1><p>df = M.New<em>join</em>position.objects.     cjoin(&quot;result&quot; =&gt; &quot;Result&quot;, filters=[&quot;resultid&quot; =&gt; 1]).     values(&quot;result<strong>statusid</strong>status&quot;, &quot;description&quot;, &quot;result&quot;) |&gt; DataFrame  # Join is created with ON conditions</p><pre><code class="nohighlight hljs">
+If you need to filter the base table at the same time, do it explicitly with `.filter(...)`:
+</code></pre><p>julia query = M.New<em>join</em>position.objects.     cjoin(&quot;result&quot; =&gt; &quot;Result&quot;, filters=[&quot;resultid&quot; =&gt; 1]).     filter(&quot;description&quot; =&gt; &quot;teste 1&quot;).     values(&quot;result<strong>statusid</strong>status&quot;, &quot;description&quot;, &quot;result&quot;)</p><pre><code class="nohighlight hljs">
+### Generated SQL
+
+You can inspect the generated SQL using `show_query`:
+</code></pre><p>julia query = M.New<em>join</em>position.objects.     cjoin(&quot;result&quot; =&gt; &quot;Result&quot;, filters=[&quot;resultid&quot; =&gt; 1]).     values(&quot;result<strong>statusid</strong>status&quot;, &quot;description&quot;, &quot;result&quot;)</p><p>@info query |&gt; show_query</p><h1 id="Output:-2"><a class="docs-heading-anchor" href="#Output:-2">Output:</a><a class="docs-heading-anchor-permalink" href="#Output:-2" title="Permalink"></a></h1><h1 id="SELECT"><a class="docs-heading-anchor" href="#SELECT">SELECT</a><a id="SELECT-1"></a><a class="docs-heading-anchor-permalink" href="#SELECT" title="Permalink"></a></h1><h1 id="&quot;Tb_2&quot;.&quot;status&quot;-as-result**statusid**status,"><a class="docs-heading-anchor" href="#&quot;Tb_2&quot;.&quot;status&quot;-as-result**statusid**status,">&quot;Tb_2&quot;.&quot;status&quot; as result<strong>statusid</strong>status,</a><a id="&quot;Tb_2&quot;.&quot;status&quot;-as-result**statusid**status,-1"></a><a class="docs-heading-anchor-permalink" href="#&quot;Tb_2&quot;.&quot;status&quot;-as-result**statusid**status," title="Permalink"></a></h1><h1 id="&quot;Tb&quot;.&quot;description&quot;-as-description,"><a class="docs-heading-anchor" href="#&quot;Tb&quot;.&quot;description&quot;-as-description,">&quot;Tb&quot;.&quot;description&quot; as description,</a><a id="&quot;Tb&quot;.&quot;description&quot;-as-description,-1"></a><a class="docs-heading-anchor-permalink" href="#&quot;Tb&quot;.&quot;description&quot;-as-description," title="Permalink"></a></h1><h1 id="&quot;Tb&quot;.&quot;result&quot;-as-result"><a class="docs-heading-anchor" href="#&quot;Tb&quot;.&quot;result&quot;-as-result">&quot;Tb&quot;.&quot;result&quot; as result</a><a id="&quot;Tb&quot;.&quot;result&quot;-as-result-1"></a><a class="docs-heading-anchor-permalink" href="#&quot;Tb&quot;.&quot;result&quot;-as-result" title="Permalink"></a></h1><h1 id="FROM-&quot;new*join*position&quot;-as-&quot;Tb&quot;"><a class="docs-heading-anchor" href="#FROM-&quot;new*join*position&quot;-as-&quot;Tb&quot;">FROM &quot;new<em>join</em>position&quot; as &quot;Tb&quot;</a><a id="FROM-&quot;new*join*position&quot;-as-&quot;Tb&quot;-1"></a><a class="docs-heading-anchor-permalink" href="#FROM-&quot;new*join*position&quot;-as-&quot;Tb&quot;" title="Permalink"></a></h1><h1 id="LEFT-JOIN-&quot;result&quot;-AS-&quot;Tb*1&quot;-ON-&quot;Tb&quot;.&quot;result&quot;-&quot;Tb*1&quot;.&quot;resultid&quot;"><a class="docs-heading-anchor" href="#LEFT-JOIN-&quot;result&quot;-AS-&quot;Tb*1&quot;-ON-&quot;Tb&quot;.&quot;result&quot;-&quot;Tb*1&quot;.&quot;resultid&quot;">LEFT JOIN &quot;result&quot; AS &quot;Tb<em>1&quot; ON &quot;Tb&quot;.&quot;result&quot; = &quot;Tb</em>1&quot;.&quot;resultid&quot;</a><a id="LEFT-JOIN-&quot;result&quot;-AS-&quot;Tb*1&quot;-ON-&quot;Tb&quot;.&quot;result&quot;-&quot;Tb*1&quot;.&quot;resultid&quot;-1"></a><a class="docs-heading-anchor-permalink" href="#LEFT-JOIN-&quot;result&quot;-AS-&quot;Tb*1&quot;-ON-&quot;Tb&quot;.&quot;result&quot;-&quot;Tb*1&quot;.&quot;resultid&quot;" title="Permalink"></a></h1><h1 id="AND-&quot;Tb_1&quot;.&quot;resultid&quot;-1"><a class="docs-heading-anchor" href="#AND-&quot;Tb_1&quot;.&quot;resultid&quot;-1">AND &quot;Tb_1&quot;.&quot;resultid&quot; = <span>$</span>1</a><a id="AND-&quot;Tb_1&quot;.&quot;resultid&quot;-1-1"></a><a class="docs-heading-anchor-permalink" href="#AND-&quot;Tb_1&quot;.&quot;resultid&quot;-1" title="Permalink"></a></h1><h1 id="LEFT-JOIN-&quot;status&quot;-AS-&quot;Tb*2&quot;-ON-&quot;Tb*1&quot;.&quot;statusid&quot;-&quot;Tb_2&quot;.&quot;statusid&quot;"><a class="docs-heading-anchor" href="#LEFT-JOIN-&quot;status&quot;-AS-&quot;Tb*2&quot;-ON-&quot;Tb*1&quot;.&quot;statusid&quot;-&quot;Tb_2&quot;.&quot;statusid&quot;">LEFT JOIN &quot;status&quot; AS &quot;Tb<em>2&quot; ON &quot;Tb</em>1&quot;.&quot;statusid&quot; = &quot;Tb_2&quot;.&quot;statusid&quot;</a><a id="LEFT-JOIN-&quot;status&quot;-AS-&quot;Tb*2&quot;-ON-&quot;Tb*1&quot;.&quot;statusid&quot;-&quot;Tb_2&quot;.&quot;statusid&quot;-1"></a><a class="docs-heading-anchor-permalink" href="#LEFT-JOIN-&quot;status&quot;-AS-&quot;Tb*2&quot;-ON-&quot;Tb*1&quot;.&quot;statusid&quot;-&quot;Tb_2&quot;.&quot;statusid&quot;" title="Permalink"></a></h1><pre><code class="nohighlight hljs">
+## Full-Control ON Clauses with `.cjoin_on()` (#45)
+
+`.cjoin()` and `.on()` always emit a base equi-anchor (`main.field = target.pk`) and AND-append
+filters that must target the **single joined model**. When you need the *entire* ON clause to be
+your own — an arbitrary boolean (top-level `OR`), field-to-field comparisons across **both** sides
+(a self-join), or SQL functions in the ON — use **`.cjoin_on()`**.
+</code></pre><p>julia query.cjoin<em>on(&quot;Model&quot;; alias=&quot;b2&quot;, on=[ ... ], join</em>type=&quot;INNER&quot;)</p><pre><code class="nohighlight hljs">
+- **`&quot;Model&quot;`** — the model to join (may be the query&#39;s **own** model, for a self-join).
+- **`alias`** — the SQL alias for the joined copy. Reference its columns as `Joined(alias, &quot;column&quot;)`.
+- **`on`** — the expressions that form the **entire** ON clause. No equi-anchor is added.
+- **`join_type`** — defaults to `&quot;INNER&quot;`.
+
+### Reference convention
+
+Inside `on`, the two sides of the join are named by how you write the reference:
+
+| You write | Resolves to |
+|-----------|-------------|
+| `F(&quot;col&quot;)` (bare) | the **base/main** table (the query&#39;s own alias) |
+| `Joined(&quot;b2&quot;, &quot;col&quot;)` | the **joined copy** declared by this `cjoin_on` (its `alias`) |
+
+This is unambiguous even in a self-join, where both sides share every column name.
+
+[`Joined(alias, path)`](@ref Joined) is a reference **object**, not a string, and it works in every
+clause rather than only inside `on`: project it in `values(...)`, compare it in `filter(...)`, sort
+by it in `order_by(...)`, and name **another** `cjoin_on`&#39;s alias from inside one `on` list.
+
+!!! warning &quot;The dotted-string spelling was removed&quot;
+    `F(&quot;alias.col&quot;)` is gone (#481). It could not carry an operator suffix, the bare string form
+    could not be projected (`values(&quot;b2.sku&quot;)` raised), and a typo in the alias reported an unknown
+    *field* called `&quot;typo.col&quot;` instead of an unknown alias. Rewrite `F(&quot;b2.sku&quot;)` as
+    `Joined(&quot;b2&quot;, &quot;sku&quot;)`; see [Upgrading](../upgrading.md).
+
+### Self-join example
+
+Find, for each lap, other laps in the same race — or the same driver+lap — or the same calendar
+year of the timestamp:
+</code></pre><p>julia query = M.Lap.objects query.cjoin<em>on(&quot;Lap&quot;; alias=&quot;b2&quot;, join</em>type=&quot;INNER&quot;, on=[   Qor(     Joined(&quot;b2&quot;, &quot;raceid&quot;) == F(&quot;raceid&quot;),     Q(Joined(&quot;b2&quot;, &quot;driverid&quot;) == F(&quot;driverid&quot;), Joined(&quot;b2&quot;, &quot;lap&quot;) == F(&quot;lap&quot;)),     Joined(&quot;b2&quot;, &quot;dt<strong>@year&quot;) == F(&quot;dt</strong>@year&quot;),  # year() on both sides — dialect-aware   ), ]) query.values(&quot;id&quot;)</p><pre><code class="nohighlight hljs">
+**Generated SQL (SQLite** — PostgreSQL renders `$n` placeholders and `EXTRACT(YEAR FROM …)`**):**
+</code></pre><p>sql SELECT &quot;Tb&quot;.&quot;id&quot; as &quot;id&quot; FROM &quot;laps&quot; as &quot;Tb&quot;  INNER JOIN &quot;laps&quot; AS &quot;b2&quot; ON (        (&quot;b2&quot;.&quot;raceid&quot; = &quot;Tb&quot;.&quot;raceid&quot;)     OR ((&quot;b2&quot;.&quot;driverid&quot; = &quot;Tb&quot;.&quot;driverid&quot;) AND (&quot;b2&quot;.&quot;lap&quot; = &quot;Tb&quot;.&quot;lap&quot;))     OR (CAST(strftime(&#39;%Y&#39;, &quot;b2&quot;.&quot;dt&quot;) AS INTEGER) = CAST(strftime(&#39;%Y&#39;, &quot;Tb&quot;.&quot;dt&quot;) AS INTEGER))  )</p><pre><code class="nohighlight hljs">
+No `main.field = target.pk` anchor is emitted — the `on` expression **is** the ON clause. Bound
+parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
+
+!!! note &quot;What a `Joined(...)` reference can do&quot;
+    Since #481 the joined copy is referenced by a typed handle, and three limitations this note used
+    to list are gone:
+
+    - **Alias-qualified operator pairs work.** `filter(Joined(&quot;b2&quot;, &quot;col__@gte&quot;) =&gt; 3)` compares the
+      joined side against a literal; every operator the ordinary pair path accepts works here, since
+      it *is* that path.
+    - **A third table can be referenced.** One `cjoin_on`&#39;s `on` may name another&#39;s alias —
+      `Joined(&quot;d2&quot;, &quot;surname&quot;) == Joined(&quot;d1&quot;, &quot;surname&quot;)`. Emission order still decides where a
+      predicate lands; see the warning below.
+    - **A joined column projects in every form.** `values(&quot;who&quot; =&gt; Joined(&quot;d&quot;, &quot;surname&quot;))` and the
+      bare `values(Joined(&quot;d&quot;, &quot;surname&quot;))` both work; the bare dotted string never did.
+
+    Still true: a predicate that all relocates onto a later join leaves this one with no `ON` clause
+    of its own, which raises `QueryBuildError` (#435).
+
+    **A CTE cannot be referenced from an `ON` clause at all.** A `CTE(name, path)` inside `on`
+    raises `FilterError`: an `ON` clause targets the joined *model*, and a CTE is joined by its own
+    `.with(...)` declaration. Put the predicate in `.filter(...)` instead (#444).
+
+    **A join key may share a name with a CTE the query joins.** A `cjoin_on` **alias**, a `cjoin`
+    **path** and an `on()` **path** live in a different namespace from a `.with()` label, so a
+    query may use the same word for both and each stays addressable — the same coexistence
+    [#444](https://github.com/PingoLee/PormG.jl/issues/444) established for a CTE name and a model
+    field:
+
+    ```julia
+    # &quot;best&quot; names both the CTE and the cjoin_on alias here.
+    best = M.Result.objects.values(&quot;driverid&quot;, &quot;best&quot; =&gt; Min(&quot;positionorder&quot;))
+
+    df = M.Result.objects.
+        with(&quot;best&quot; =&gt; best, join_field = &quot;driverid&quot; =&gt; &quot;driverid&quot;, join_type = &quot;INNER&quot;).
+        cjoin_on(&quot;Driver&quot;, alias = &quot;best&quot;, on = [Joined(&quot;best&quot;, &quot;driverid&quot;) == F(&quot;driverid&quot;)]).
+        values(&quot;points&quot;, &quot;career_best&quot; =&gt; CTE(&quot;best&quot;, &quot;best&quot;)).
+        filter(&quot;raceid&quot; =&gt; 18).
+        order_by(&quot;-points&quot;).
+        limit(5) |&gt; DataFrame
+    ```
+
+    ```sql
+    -- Both are emitted. The CTE is joined under a GENERATED alias, so only one relation in the
+    -- statement is actually named &quot;best&quot;.
+    WITH &quot;best&quot; AS (
+      SELECT &quot;Tb&quot;.&quot;driverid&quot; as &quot;driverid&quot;, MIN(&quot;Tb&quot;.&quot;positionorder&quot;) as &quot;best&quot;
+      FROM &quot;result&quot; as &quot;Tb&quot; GROUP BY 1
+    )
+    SELECT &quot;R1&quot;.&quot;points&quot; as &quot;points&quot;, &quot;R1_1&quot;.&quot;best&quot; as &quot;career_best&quot;
+    FROM &quot;result&quot; as &quot;R1&quot;
+     INNER JOIN &quot;best&quot; AS &quot;R1_1&quot; ON &quot;R1&quot;.&quot;driverid&quot; = &quot;R1_1&quot;.&quot;driverid&quot;
+     INNER JOIN &quot;driver&quot; AS &quot;best&quot; ON (&quot;best&quot;.&quot;driverid&quot; = &quot;R1&quot;.&quot;driverid&quot;)
+    WHERE &quot;R1&quot;.&quot;raceid&quot; = ?
+    ORDER BY &quot;points&quot; DESC NULLS FIRST
+    LIMIT 5
+    ```
+
+    Until [#474](https://github.com/PingoLee/PormG.jl/issues/474) this was refused, because join
+    resolution looked a CTE hop up in the join-config map under the CTE&#39;s own name — so a collision
+    handed the CTE the other entry&#39;s join type and predicates and dropped your join. That lookup is
+    gone, so a join KEY no longer collides.
+
+    **A `cjoin_on` alias may also equal a relation name on the base model**, or an `on()` / `cjoin()`
+    join path. Both joins are emitted — the relation&#39;s under a generated alias, the joined copy&#39;s
+    under the alias you declared — and each stays addressable: `Joined(alias, column)` reaches the
+    copy, `&quot;relation__column&quot;` reaches the relation. `on(...)` and `cjoin(...)` decorate the
+    *relation&#39;s* join, never the copy&#39;s, in either declaration order.
+
+    ```julia
+    # &quot;driverid&quot; names both the ForeignKey on Result and the cjoin_on alias.
+    df = M.Result.objects.
+        cjoin_on(&quot;Driver&quot;, alias = &quot;driverid&quot;, join_type = &quot;LEFT&quot;,
+                 on = [Joined(&quot;driverid&quot;, &quot;driverid&quot;) == F(&quot;driverid&quot;)]).
+        filter(&quot;raceid&quot; =&gt; 841).
+        values(&quot;points&quot;, &quot;fk&quot; =&gt; &quot;driverid__surname&quot;,
+               &quot;copy&quot; =&gt; Joined(&quot;driverid&quot;, &quot;surname&quot;)) |&gt; DataFrame
+    ```
+
+    ```sql
+    -- Two joins, each with its own alias, its own ON clause and its own join type: the ForeignKey&#39;s
+    -- keeps what PormG derives from the relation (INNER — `driverid` is NOT NULL), the joined copy
+    -- keeps the LEFT it declared. Neither adopts the other&#39;s.
+    SELECT &quot;Tb&quot;.&quot;points&quot; as &quot;points&quot;, &quot;Tb_1&quot;.&quot;surname&quot; as &quot;fk&quot;, &quot;driverid&quot;.&quot;surname&quot; as &quot;copy&quot;
+    FROM &quot;result&quot; as &quot;Tb&quot;
+     INNER JOIN &quot;driver&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_1&quot;.&quot;driverid&quot;
+     LEFT JOIN &quot;driver&quot; AS &quot;driverid&quot; ON (&quot;driverid&quot;.&quot;driverid&quot; = &quot;Tb&quot;.&quot;driverid&quot;)
+    WHERE &quot;Tb&quot;.&quot;raceid&quot; = ?
+    ```
+
+    Before [#484](https://github.com/PingoLee/PormG.jl/issues/484) this shape was silently wrong
+    whenever the relation was *also* traversed: the alias&#39;s predicates were AND-appended to the
+    ForeignKey&#39;s `ON`, its join type adopted, its own join never emitted — leaving the statement
+    referencing a range variable it never declared (PostgreSQL: *missing FROM-clause entry*). A
+    `cjoin_on` alias and a join path are now two namespaces, so the overlap is simply two relations
+    that happen to share a name.
+
+    One name a CTE may never take is a **physical table name**: `.with(&quot;driver&quot; =&gt; ...)` raises
+    `QueryBuildError` at the call when `driver` is the `db_table` of any registered model, or a
+    many-to-many join table. SQL resolves an unqualified table reference to a same-named CTE for the whole statement,
+    so the `driver` join PormG generates for `driverid__surname` would silently read the CTE
+    ([#479](https://github.com/PingoLee/PormG.jl/issues/479)). Pick a name that is not a table.
+
+    `cjoin_on` works in reads and in the common `update()`/`delete()` (which scope rows via a
+    subquery); only a **correlated** UPDATE-FROM/DELETE-USING (setting a column *from* a joined
+    table) is unsupported and raises. Finally, a `cjoin_on` join is not tracked by the #74
+    aggregate fan-out guard — if the join is to-many, aggregate the base table with `distinct=true`
+    (or over the joined table&#39;s own column) to avoid silent row multiplication.
+
+!!! warning &quot;Give the join a predicate that names its own alias&quot;
+    Every predicate in `on` that references a join emitted *after* this one is moved onto that
+    join — it has to be, because a join cannot reference an alias that has not appeared yet. If
+    **all** of them move, your join is left with no `ON` clause and PormG raises, naming the alias
+    they went to (#435):
+
+    ```julia
+    query = M.Result.objects
+    query.values(&quot;points&quot;)
+    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d&quot;, on = [&quot;raceid__circuitid__country&quot; =&gt; &quot;Italy&quot;])
+    # ERROR: Every ON predicate given for d resolved onto Tb_2 instead, …
+    ```
+
+    **The fix depends on whether your predicates name the alias at all**, and the two cases pull
+    in opposite directions. The error message tells you which one you are in.
+
+    *Nothing names it* — as above. The join has nothing correlating it. Add a predicate that does
+    (`Joined(&quot;d&quot;, &quot;driverid&quot;) == F(&quot;driverid&quot;)`), or move the conditions to `.filter(...)` and drop the
+    `cjoin_on` entirely — it needs at least one `on` predicate, so moving them all out without
+    removing the call raises too.
+
+    Here, **do not** &quot;fix&quot; it by projecting the path in `values(...)` first. That builds those
+    joins ahead of the `cjoin_on`, so nothing needs to move — and you get
+    `INNER JOIN &quot;driver&quot; AS &quot;d&quot; ON &quot;Tb_2&quot;.&quot;country&quot; = ?`, an `ON` clause that never mentions `d`.
+    That is an unconstrained join: every `driver` row against every qualifying base row. PormG
+    refuses it too (#448), so projecting trades one error for another rather than fixing anything.
+
+    *It names the alias and a deeper path* — `on = [Joined(&quot;d&quot;, &quot;nationality&quot;) == F(&quot;raceid__circuitid__country&quot;)]`,
+    drivers racing in their home country — is a real correlation that moved only because the join
+    on its other side is built later. Projecting **is** the fix here: add
+    `raceid__circuitid__country` to `values(...)` and the clause renders exactly as written.
+
+    *It names the alias and another `cjoin_on` alias* — there is no path to project, so declare
+    the predicate on whichever of the two PormG emits **later**; the reference then points
+    backwards and nothing moves. The error message names that join for you. Give the first join an
+    `ON` predicate of its own as well — it is still joined, and `cjoin_on` requires at least one:
+
+    ```julia
+    # ✗ before — d1&#39;s only predicate names d2, which is emitted after it
+    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d1&quot;, on = [Joined(&quot;d1&quot;, &quot;surname&quot;) == Joined(&quot;d2&quot;, &quot;surname&quot;)])
+    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d2&quot;, on = [Joined(&quot;d2&quot;, &quot;driverid&quot;) == F(&quot;driverid&quot;)])
+
+    # ✓ after — the shared predicate moves to d2, and d1 gets one of its own
+    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d1&quot;, on = [Joined(&quot;d1&quot;, &quot;driverid&quot;) == F(&quot;driverid&quot;)])
+    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d2&quot;, on = [Joined(&quot;d2&quot;, &quot;surname&quot;) == Joined(&quot;d1&quot;, &quot;surname&quot;)])
+    ```
+
+    **Two `cjoin_on` joins are emitted in the order you declare them**, so &quot;whichever PormG emits
+    later&quot; is the one you wrote second — a rule you can apply without running the query. (Until
+    [#449](https://github.com/PingoLee/PormG.jl/issues/449) that order came from hashing the alias
+    *strings*, so renaming an alias could flip a working query into an error and reversing your
+    declarations changed nothing.)
+
+    More generally, an `ON` clause that never names its own alias is **refused**
+    ([#448](https://github.com/PingoLee/PormG.jl/issues/448)): `on = [&quot;points__@gt&quot; =&gt; 10]` puts no
+    condition on the join at all, so every joined row would pair with every matched base row. Give
+    every `cjoin_on` at least one predicate naming its own alias.
+
+    If you genuinely want a cross product, declare the table as an **unkeyed** CTE and **reference
+    it** — declaring it alone emits no join at all:
+
+    ```julia
+    q.with(&quot;all_drivers&quot; =&gt; M.Driver.objects.values(&quot;driverid&quot;, &quot;surname&quot;))  # no join_field
+    q.values(&quot;points&quot;, &quot;who&quot; =&gt; CTE(&quot;all_drivers&quot;, &quot;surname&quot;))               # the reference is
+                                                                             # what joins it
+    q.limit(100)   # illustrative: this is drivers × results, so bound it
+    ```
+
+    That renders a real `CROSS JOIN` and warns that it is Cartesian (#44), so the intent is visible
+    in the query and in the log rather than hidden in an `ON` clause.
+
+    **`join_type = &quot;CROSS&quot;` is not the way to ask for this.** It raises `QueryBuildError` on
+    `cjoin`, `cjoin_on`, `on()` and `.with()` alike. Every one of those renders
+    `&lt;join_type&gt; JOIN &lt;table&gt; AS &lt;alias&gt; ON &lt;clause&gt;`, so a `CROSS` there could only ever build
+    `CROSS JOIN … ON …`, which PostgreSQL and SQLite both reject — and on `cjoin_on`, where at
+    least one `ON` predicate is required (#448), the alternative would have been to discard the
+    predicates you wrote. The unkeyed-and-referenced `.with(...)` above is the supported spelling
+    ([#474](https://github.com/PingoLee/PormG.jl/issues/474)).
+
+## Use Cases
+
+### 1. Legacy Databases Without Foreign Keys
+
+When your database doesn&#39;t have proper foreign key constraints:
+</code></pre><p>julia</p><h1 id="Join-on-a-code-field-instead-of-ID"><a class="docs-heading-anchor" href="#Join-on-a-code-field-instead-of-ID">Join on a code field instead of ID</a><a id="Join-on-a-code-field-instead-of-ID-1"></a><a class="docs-heading-anchor-permalink" href="#Join-on-a-code-field-instead-of-ID" title="Permalink"></a></h1><p>query = M.Order.objects.     cjoin(&quot;product<em>code&quot; =&gt; &quot;Product&quot;).  # Joins on product</em>code = Product.code     values(&quot;product_code__name&quot;, &quot;quantity&quot;)</p><pre><code class="nohighlight hljs">
+### 2. Multi-Tenant Systems
+
+Add tenant isolation at the join level:
+</code></pre><p>julia query = M.Invoice.objects.     cjoin(&quot;customer<em>id&quot; =&gt; &quot;Customer&quot;,              filters=[&quot;tenant</em>id&quot; =&gt; current<em>tenant</em>id]).     values(&quot;customer_id__name&quot;, &quot;amount&quot;)</p><pre><code class="nohighlight hljs">
+### 3. Conditional Joins with Complex Logic
+
+Join only when certain conditions are met using Q/Qor:
+</code></pre><p>julia query = M.Result.objects.     cjoin(&quot;driverid&quot; =&gt; &quot;Driver&quot;,             filters=[Q(&quot;nationality&quot; =&gt; &quot;British&quot;, Qor(&quot;code&quot; =&gt; &quot;HAM&quot;, &quot;code&quot; =&gt; &quot;BUT&quot;))],             join_type=&quot;INNER&quot;).     values(&quot;driverid<strong>forename&quot;, &quot;driverid</strong>surname&quot;, &quot;points&quot;)</p><pre><code class="nohighlight hljs">
+This creates: `ON ... AND (driver.nationality = ? AND (driver.code = ? OR driver.code = ?))`
+
+### 4. Driver Filtering (Real-World Example)
+
+Find results for drivers of a specific nationality with specific names:
+</code></pre><p>julia</p><h1 id="Add-both-a-custom-join-condition-and-a-regular-filter"><a class="docs-heading-anchor" href="#Add-both-a-custom-join-condition-and-a-regular-filter">Add both a custom join condition and a regular filter</a><a id="Add-both-a-custom-join-condition-and-a-regular-filter-1"></a><a class="docs-heading-anchor-permalink" href="#Add-both-a-custom-join-condition-and-a-regular-filter" title="Permalink"></a></h1><p>query = M.Result.objects.     cjoin(&quot;driverid&quot; =&gt; &quot;Driver&quot;, filters=[         Q(&quot;nationality&quot; =&gt; &quot;Brazilian&quot;, Qor(&quot;forename&quot; =&gt; &quot;Ayrton&quot;, &quot;forename&quot; =&gt; &quot;Nelson&quot;))     ]).     filter(&quot;points<strong>@gt&quot; =&gt; 0).  # Regular WHERE clause filter     values(&quot;driverid</strong>forename&quot;, &quot;driverid__surname&quot;, &quot;points&quot;)</p><p>df = query |&gt; DataFrame</p><h1 id="Result:-Only-Brazilian-drivers-named-Ayrton-or-Nelson-with-points-0"><a class="docs-heading-anchor" href="#Result:-Only-Brazilian-drivers-named-Ayrton-or-Nelson-with-points-0">Result: Only Brazilian drivers named Ayrton or Nelson with points &gt; 0</a><a id="Result:-Only-Brazilian-drivers-named-Ayrton-or-Nelson-with-points-0-1"></a><a class="docs-heading-anchor-permalink" href="#Result:-Only-Brazilian-drivers-named-Ayrton-or-Nelson-with-points-0" title="Permalink"></a></h1><pre><code class="nohighlight hljs">
+## API Reference
+</code></pre><p>julia query.cjoin(main<em>join; filters=[], field=nothing, join</em>type=&quot;LEFT&quot;)</p><pre><code class="nohighlight hljs">
+### Arguments
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `main_join` | `Pair{String, String}` | Field name =&gt; Target model name (e.g., `&quot;result&quot; =&gt; &quot;Result&quot;`) |
+| `filters` | `Vector` | Optional conditions for the ON clause. Supports `Pair`, `Q()`, `Qor()`, operator suffixes, or F expressions. Plain field names in filters are automatically prefixed with the join path. |
+| `field` | `PormGField` | Optional custom field definition |
+| `join_type` | `String` | Join type: `&quot;LEFT&quot;`, `&quot;INNER&quot;`, `&quot;RIGHT&quot;`, `&quot;FULL&quot;` (default: `&quot;LEFT&quot;`). `&quot;CROSS&quot;` raises `QueryBuildError`; see the cross-product note in the `cjoin_on` section above |
+
+### Filter Types in `.cjoin()`
+
+- **Pair filters**: `&quot;field&quot; =&gt; value` - Plain field names are automatically prefixed (e.g., `&quot;nationality&quot;` → `&quot;driverid__nationality&quot;`)
+- **Q filters**: `Q(&quot;field1&quot; =&gt; val1, &quot;field2&quot; =&gt; val2)` - AND logic; plain field names are prefixed recursively
+- **Qor filters**: `Qor(&quot;field1&quot; =&gt; val1, &quot;field2&quot; =&gt; val2)` - OR logic; plain field names are prefixed recursively
+- **Operator suffix filters**: Complex operator-based filters using the suffix operator system (e.g., `&quot;nationality__@ne&quot; =&gt; &quot;British&quot;`)
+- **F expressions**: Field-to-field comparisons (e.g., `F(&quot;field1&quot;) == F(&quot;field2&quot;)`)
+
+## Important Notes
+
+### Parameter Placement
+
+When using `.cjoin()` with filters:
+- **Join filter parameters** (from `filters=`) are placed in the **ON clause** of the JOIN and should reference joined-model fields
+- **Regular filter parameters** (from `.filter()`) are placed in the **WHERE clause**
+
+This is important for query efficiency and correctness:
+</code></pre><p>julia</p><h1 id="This-parameter-goes-to-WHERE-clause,-cjoin-filters-go-to-ON-clause"><a class="docs-heading-anchor" href="#This-parameter-goes-to-WHERE-clause,-cjoin-filters-go-to-ON-clause">This parameter goes to WHERE clause, cjoin filters go to ON clause</a><a id="This-parameter-goes-to-WHERE-clause,-cjoin-filters-go-to-ON-clause-1"></a><a class="docs-heading-anchor-permalink" href="#This-parameter-goes-to-WHERE-clause,-cjoin-filters-go-to-ON-clause" title="Permalink"></a></h1><p>query = M.Result.objects.     filter(&quot;points&quot; =&gt; 10).     cjoin(&quot;driverid&quot; =&gt; &quot;Driver&quot;, filters=[&quot;nationality&quot; =&gt; &quot;Brazilian&quot;])</p><h1 id="Result-SQL:"><a class="docs-heading-anchor" href="#Result-SQL:">Result SQL:</a><a id="Result-SQL:-1"></a><a class="docs-heading-anchor-permalink" href="#Result-SQL:" title="Permalink"></a></h1><h1 id="...-ON-driver.driverid-result.driverid-AND-driver.nationality-?"><a class="docs-heading-anchor" href="#...-ON-driver.driverid-result.driverid-AND-driver.nationality-?">... ON driver.driverid = result.driverid AND driver.nationality = ?</a><a id="...-ON-driver.driverid-result.driverid-AND-driver.nationality-?-1"></a><a class="docs-heading-anchor-permalink" href="#...-ON-driver.driverid-result.driverid-AND-driver.nationality-?" title="Permalink"></a></h1><h1 id="WHERE-result.points-?"><a class="docs-heading-anchor" href="#WHERE-result.points-?">WHERE result.points = ?</a><a id="WHERE-result.points-?-1"></a><a class="docs-heading-anchor-permalink" href="#WHERE-result.points-?" title="Permalink"></a></h1><pre><code class="nohighlight hljs">
+### Field Name Normalization
+
+When you provide plain field names in `.cjoin()` filters, they are automatically prefixed with the join field to resolve them against the joined model:
+</code></pre><p>julia</p><h1 id="&quot;nationality&quot;-is-automatically-prefixed-to-&quot;driverid__nationality&quot;"><a class="docs-heading-anchor" href="#&quot;nationality&quot;-is-automatically-prefixed-to-&quot;driverid__nationality&quot;">&quot;nationality&quot; is automatically prefixed to &quot;driverid__nationality&quot;</a><a id="&quot;nationality&quot;-is-automatically-prefixed-to-&quot;driverid__nationality&quot;-1"></a><a class="docs-heading-anchor-permalink" href="#&quot;nationality&quot;-is-automatically-prefixed-to-&quot;driverid__nationality&quot;" title="Permalink"></a></h1><p>query = M.Result.objects.cjoin(&quot;driverid&quot; =&gt; &quot;Driver&quot;, filters=[&quot;nationality&quot; =&gt; &quot;Brazilian&quot;])</p><h1 id="This-works-with-Q-and-Qor-too:"><a class="docs-heading-anchor" href="#This-works-with-Q-and-Qor-too:">This works with Q and Qor too:</a><a id="This-works-with-Q-and-Qor-too:-1"></a><a class="docs-heading-anchor-permalink" href="#This-works-with-Q-and-Qor-too:" title="Permalink"></a></h1><p>query = M.Result.objects.cjoin(&quot;driverid&quot; =&gt; &quot;Driver&quot;, filters=[   Q(&quot;nationality&quot; =&gt; &quot;Brazilian&quot;, Qor(&quot;forename&quot; =&gt; &quot;Ayrton&quot;, &quot;forename&quot; =&gt; &quot;Nelson&quot;)) ])</p><h1 id="All-three-fields-(nationality,-forename,-forename)-are-auto-prefixed"><a class="docs-heading-anchor" href="#All-three-fields-(nationality,-forename,-forename)-are-auto-prefixed">All three fields (nationality, forename, forename) are auto-prefixed</a><a id="All-three-fields-(nationality,-forename,-forename)-are-auto-prefixed-1"></a><a class="docs-heading-anchor-permalink" href="#All-three-fields-(nationality,-forename,-forename)-are-auto-prefixed" title="Permalink"></a></h1><pre><code class="nohighlight hljs">
+If a field belongs to the base model instead, keep it in `.filter(...)` rather than `.cjoin(...)`:
+</code></pre><p>julia query = M.New<em>join</em>position.objects.     cjoin(&quot;result&quot; =&gt; &quot;Result&quot;, filters=[&quot;resultid&quot; =&gt; 1]).     filter(&quot;description&quot; =&gt; &quot;teste 1&quot;)</p><pre><code class="nohighlight hljs">
+### ForeignKey Target Validation
+
+When a join field already has a defined `ForeignKey` on the model, `.cjoin()` validates that the target model matches:
+</code></pre><p>julia</p><h1 id="This-works:-Result.driverid-FK-points-to-Driver"><a class="docs-heading-anchor" href="#This-works:-Result.driverid-FK-points-to-Driver">This works: Result.driverid FK points to Driver</a><a id="This-works:-Result.driverid-FK-points-to-Driver-1"></a><a class="docs-heading-anchor-permalink" href="#This-works:-Result.driverid-FK-points-to-Driver" title="Permalink"></a></h1><p>query = M.Result.objects.     cjoin(&quot;driverid&quot; =&gt; &quot;Driver&quot;, filters=[&quot;nationality&quot; =&gt; &quot;Brazilian&quot;]).     values(&quot;driverid__surname&quot;)</p><h1 id="This-raises-an-error:-driverid-points-to-Driver,-not-Constructor"><a class="docs-heading-anchor" href="#This-raises-an-error:-driverid-points-to-Driver,-not-Constructor">This raises an error: driverid points to Driver, not Constructor</a><a id="This-raises-an-error:-driverid-points-to-Driver,-not-Constructor-1"></a><a class="docs-heading-anchor-permalink" href="#This-raises-an-error:-driverid-points-to-Driver,-not-Constructor" title="Permalink"></a></h1><p>query = M.Result.objects.     cjoin(&quot;driverid&quot; =&gt; &quot;Constructor&quot;, filters=[&quot;name&quot; =&gt; &quot;Ferrari&quot;])  </p><h1 id="QueryBuildError:-Field-&#39;driverid&#39;-is-already-a-ForeignKey-pointing-to-&#39;Driver&#39;,"><a class="docs-heading-anchor" href="#QueryBuildError:-Field-&#39;driverid&#39;-is-already-a-ForeignKey-pointing-to-&#39;Driver&#39;,">QueryBuildError: Field &#39;driverid&#39; is already a ForeignKey pointing to &#39;Driver&#39;,</a><a id="QueryBuildError:-Field-&#39;driverid&#39;-is-already-a-ForeignKey-pointing-to-&#39;Driver&#39;,-1"></a><a class="docs-heading-anchor-permalink" href="#QueryBuildError:-Field-&#39;driverid&#39;-is-already-a-ForeignKey-pointing-to-&#39;Driver&#39;," title="Permalink"></a></h1><h1 id="but-.cjoin()-attempted-to-join-with-&#39;Constructor&#39;..."><a class="docs-heading-anchor" href="#but-.cjoin()-attempted-to-join-with-&#39;Constructor&#39;...">but <code>.cjoin()</code> attempted to join with &#39;Constructor&#39;...</a><a id="but-.cjoin()-attempted-to-join-with-&#39;Constructor&#39;...-1"></a><a class="docs-heading-anchor-permalink" href="#but-.cjoin()-attempted-to-join-with-&#39;Constructor&#39;..." title="Permalink"></a></h1><h1 id="Use-query.cjoin(&quot;driverid&quot;-&quot;Driver&quot;,-filters[...])-instead."><a class="docs-heading-anchor" href="#Use-query.cjoin(&quot;driverid&quot;-&quot;Driver&quot;,-filters[...])-instead.">Use query.cjoin(&quot;driverid&quot; =&gt; &quot;Driver&quot;, filters=[...]) instead.</a><a id="Use-query.cjoin(&quot;driverid&quot;-&quot;Driver&quot;,-filters[...])-instead.-1"></a><a class="docs-heading-anchor-permalink" href="#Use-query.cjoin(&quot;driverid&quot;-&quot;Driver&quot;,-filters[...])-instead." title="Permalink"></a></h1><pre><code class="nohighlight hljs">
+**Why this validation exists:** If a ForeignKey target is mismatched, field prefixing would resolve against the wrong model, silently breaking your filters. By enforcing target model matching, `.cjoin()` ensures ON-condition filters always apply to the correct joined model.
+
+### Auto-Discovery Warning (No Explicit FK Link)
+
+If the source field in `main_join` is **not** a ForeignKey field and you do not pass `field=...`, `.cjoin()` auto-discovers the target model primary key and logs a **warning by default** to ensure you are joining intentionally.
+
+Example:
+</code></pre><p>julia</p><h1 id="&quot;result&quot;-is-an-IntegerField,-not-a-ForeignKey"><a class="docs-heading-anchor" href="#&quot;result&quot;-is-an-IntegerField,-not-a-ForeignKey">&quot;result&quot; is an IntegerField, not a ForeignKey</a><a id="&quot;result&quot;-is-an-IntegerField,-not-a-ForeignKey-1"></a><a class="docs-heading-anchor-permalink" href="#&quot;result&quot;-is-an-IntegerField,-not-a-ForeignKey" title="Permalink"></a></h1><p>query = M.New<em>join</em>position.objects.cjoin(&quot;result&quot; =&gt; &quot;Result&quot;)</p><h1 id="cjoin-warns-and-auto-links:"><a class="docs-heading-anchor" href="#cjoin-warns-and-auto-links:">cjoin warns and auto-links:</a><a id="cjoin-warns-and-auto-links:-1"></a><a class="docs-heading-anchor-permalink" href="#cjoin-warns-and-auto-links:" title="Permalink"></a></h1><h1 id="main.result-Result.resultid-(or-the-model-PK)"><a class="docs-heading-anchor" href="#main.result-Result.resultid-(or-the-model-PK)">main.result -&gt; Result.resultid   (or the model PK)</a><a id="main.result-Result.resultid-(or-the-model-PK)-1"></a><a class="docs-heading-anchor-permalink" href="#main.result-Result.resultid-(or-the-model-PK)" title="Permalink"></a></h1><pre><code class="nohighlight hljs">
+#### If your intended link is not the target model PK
+
+Pass an explicit field mapping:
+</code></pre><p>julia query = M.New<em>join</em>position.objects.cjoin(&quot;result&quot; =&gt; &quot;Result&quot;,       field=Models.ForeignKey(&quot;Result&quot;, pk<em>field=&quot;your</em>target_field&quot;))</p><pre><code class="nohighlight hljs">
+This keeps behavior explicit and avoids accidental joins to the wrong target column.
+
+#### If you intentionally want auto-discovery without the warning
+
+You can suppress the warning using the `warn` parameter:
+</code></pre><p>julia</p><h1 id="Suppress-the-auto-discovery-warning"><a class="docs-heading-anchor" href="#Suppress-the-auto-discovery-warning">Suppress the auto-discovery warning</a><a id="Suppress-the-auto-discovery-warning-1"></a><a class="docs-heading-anchor-permalink" href="#Suppress-the-auto-discovery-warning" title="Permalink"></a></h1><p>query = M.New<em>join</em>position.objects.cjoin(&quot;result&quot; =&gt; &quot;Result&quot;, warn=false) ```</p><p>This is useful when you&#39;re confident about the join link and don&#39;t want the informational message in production logs.</p><h3 id="Other-features-are-in-development-and-will-be-documented-soon."><a class="docs-heading-anchor" href="#Other-features-are-in-development-and-will-be-documented-soon.">Other features are in development and will be documented soon.</a><a id="Other-features-are-in-development-and-will-be-documented-soon.-1"></a><a class="docs-heading-anchor-permalink" href="#Other-features-are-in-development-and-will-be-documented-soon." title="Permalink"></a></h3><script type="module">import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+    startOnLoad: true,
+    theme: "neutral"
+});
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Friday 4 September 2026 17:52">Friday 4 September 2026</span>. Using Julia version 1.12.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

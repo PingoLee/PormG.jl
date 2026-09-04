@@ -16,7 +16,7 @@
 
 using Test
 using PormG
-import PormG.QueryBuilder: F, Q, Qor
+import PormG.QueryBuilder: F, Q, Qor, Joined
 
 struct CJoinOnMockPG <: PormG.PormGPostgres end
 struct CJoinOnMockSL <: PormG.PormGSQLite end
@@ -72,8 +72,8 @@ const SL = CJoinOnSLModels
   q = SL.Lap.objects
   q.cjoin_on("Lap", alias = "b2", on = [
     Qor(
-      F("b2.raceid") == F("raceid"),
-      Q(F("b2.driverid") == F("driverid"), F("b2.lap") == F("lap")),
+      Joined("b2", "raceid") == F("raceid"),
+      Q(Joined("b2", "driverid") == F("driverid"), Joined("b2", "lap") == F("lap")),
     ),
   ], join_type = "INNER")
   q.values("id")
@@ -97,8 +97,8 @@ end
   # Anchor-less entries share key_a/key_b, and _insert_join's dedup ignores alias_b — so both joins
   # to the same table must be distinguished (by the unique alias) or one is silently dropped.
   q = SL.Lap.objects
-  q.cjoin_on("Lap", alias = "b2", on = [F("b2.raceid") == F("raceid")])
-  q.cjoin_on("Lap", alias = "b3", on = [F("b3.driverid") == F("driverid")])
+  q.cjoin_on("Lap", alias = "b2", on = [Joined("b2", "raceid") == F("raceid")])
+  q.cjoin_on("Lap", alias = "b3", on = [Joined("b3", "driverid") == F("driverid")])
   q.values("id")
   sql = q.list(show_query = :dict)[:sql_text]
   @test occursin("AS \"b2\" ON", sql)
@@ -108,7 +108,7 @@ end
 @testset "Non-self join to a different model + INNER default" begin
   q = SL.Lap.objects
   # No join_type ⇒ defaults to INNER; join a different table, correlate on a base column.
-  q.cjoin_on("Circuit", alias = "c", on = [F("c.raceid") == F("raceid")])
+  q.cjoin_on("Circuit", alias = "c", on = [Joined("c", "raceid") == F("raceid")])
   q.values("id")
   sql = q.list(show_query = :dict)[:sql_text]
   @test occursin("INNER JOIN \"circuits\" AS \"c\" ON", sql)
@@ -120,7 +120,7 @@ end
   # A base-side operator predicate (bare `lap` = main table) binds a value inside the ON. Combined
   # with cross-side F, it proves ON params land in the :join bucket, ahead of WHERE params.
   q.cjoin_on("Lap", alias = "b2", on = [
-    Q(F("b2.raceid") == F("raceid"), "lap__@gte" => 3),
+    Q(Joined("b2", "raceid") == F("raceid"), "lap__@gte" => 3),
   ])
   q.filter("driverid" => 44)
   q.values("id")
@@ -132,7 +132,7 @@ end
 
 @testset "SQL function (year) in ON — SQLite strftime" begin
   q = SL.Lap.objects
-  q.cjoin_on("Lap", alias = "b2", on = [F("b2.dt__@year") == F("dt__@year")])
+  q.cjoin_on("Lap", alias = "b2", on = [Joined("b2", "dt__@year") == F("dt__@year")])
   q.values("id")
   sql = q.list(show_query = :dict)[:sql_text]
   @test occursin("strftime('%Y', \"b2\".\"dt\")", sql)
@@ -141,7 +141,7 @@ end
 
 @testset "SQL function (year) in ON — PostgreSQL EXTRACT (dialect divergence)" begin
   q = PG.Lap.objects
-  q.cjoin_on("Lap", alias = "b2", on = [F("b2.dt__@year") == F("dt__@year")])
+  q.cjoin_on("Lap", alias = "b2", on = [Joined("b2", "dt__@year") == F("dt__@year")])
   q.values("id")
   sql = q.list(show_query = :dict)[:sql_text]
   @test occursin("EXTRACT(YEAR FROM \"b2\".\"dt\")", sql)
@@ -150,21 +150,21 @@ end
 
 @testset "Validation" begin
   # Unknown target model.
-  @test_throws PormGError SL.Lap.objects.cjoin_on("Nope", alias = "b2", on = [F("b2.raceid") == F("raceid")])
+  @test_throws PormGError SL.Lap.objects.cjoin_on("Nope", alias = "b2", on = [Joined("b2", "raceid") == F("raceid")])
   # Duplicate alias.
   @test_throws PormGError begin
     q = SL.Lap.objects
-    q.cjoin_on("Lap", alias = "b2", on = [F("b2.raceid") == F("raceid")])
-    q.cjoin_on("Circuit", alias = "b2", on = [F("b2.raceid") == F("raceid")])
+    q.cjoin_on("Lap", alias = "b2", on = [Joined("b2", "raceid") == F("raceid")])
+    q.cjoin_on("Circuit", alias = "b2", on = [Joined("b2", "raceid") == F("raceid")])
   end
   # Invalid alias identifier (fail-closed).
-  @test_throws PormGError SL.Lap.objects.cjoin_on("Lap", alias = "b2; DROP", on = [F("b2.raceid") == F("raceid")])
+  @test_throws PormGError SL.Lap.objects.cjoin_on("Lap", alias = "b2; DROP", on = [Joined("b2", "raceid") == F("raceid")])
   # Empty ON list.
   @test_throws PormGError SL.Lap.objects.cjoin_on("Lap", alias = "b2", on = [])
   # Unknown column on the aliased model surfaces at render time.
   @test_throws PormGError begin
     q = SL.Lap.objects
-    q.cjoin_on("Lap", alias = "b2", on = [F("b2.nonexistent") == F("raceid")])
+    q.cjoin_on("Lap", alias = "b2", on = [Joined("b2", "nonexistent") == F("raceid")])
     q.values("id")
     q.list(show_query = :sql)
   end
@@ -174,7 +174,7 @@ end
   # A plain update filters rows via a subquery (WHERE pk IN (SELECT … JOIN …)); that subquery renders
   # the cjoin_on join correctly (anchor-less), so ON conditions are NOT dropped.
   q = PG.Lap.objects
-  q.cjoin_on("Lap", alias = "b2", on = [F("b2.raceid") == F("raceid")])
+  q.cjoin_on("Lap", alias = "b2", on = [Joined("b2", "raceid") == F("raceid")])
   q.filter("driverid" => 1)
   sql = q.update("position" => 0, show_query = :sql)
   @test occursin("INNER JOIN \"laps\" AS \"b2\" ON (\"b2\".\"raceid\" = \"Tb\".\"raceid\")", sql)

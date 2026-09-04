@@ -387,16 +387,20 @@ end
 Value(x::CTEReference) = throw(QueryBuildError(
   "\e[4m\e[32mValue\e[0m wraps a literal, not a column. Project the CTE column directly — " *
   "\e[4m\e[32mvalues(\"x\" => CTE(\"$(x.name)\", \"$(x.path)\"))\e[0m (#444)."))
+# #481: the joined-copy handle is a column too, and reaches `Value(x::Any)` the same way.
+Value(x::JoinedReference) = throw(QueryBuildError(
+  "\e[4m\e[32mValue\e[0m wraps a literal, not a column. Project the joined column directly — " *
+  "\e[4m\e[32mvalues(\"x\" => Joined(\"$(x.alias)\", \"$(x.path)\"))\e[0m (#481)."))
 
 """
     Cast(expression, type)
 
 Casts a column or expression to a specific SQL type.
 """
-function Cast(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE}, type::String)
+function Cast(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, type::String)
   return FObject(function_name = "CAST", column = x, kwargs = Dict{String, Any}("type" => type))
 end
-function Cast(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE}, type::PormGField)
+function Cast(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, type::PormGField)
   return Cast(x, type.type)
 end
 
@@ -419,12 +423,12 @@ Concat(args...; kwargs...) = Concat(collect(args); kwargs...)
 
 Extracts a component (YEAR, MONTH, DAY, etc.) from a date/time column.
 """
-function Extract(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, Vector{String}}, part::String; formatter::Union{Nothing, Function, PormGField} = nothing)
+function Extract(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined, Vector{String}}, part::String; formatter::Union{Nothing, Function, PormGField} = nothing)
   isa(formatter, PormGField) && (formatter = formatter.formatter)
   return FObject(function_name = "EXTRACT", column = x, formatter = formatter, kwargs = Dict{String, Any}("part" => part))
 end
 
-function Extract(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, Vector{String}}, part::String, format::String; formatter::Union{Nothing, Function, PormGField} = nothing)
+function Extract(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined, Vector{String}}, part::String, format::String; formatter::Union{Nothing, Function, PormGField} = nothing)
   isa(formatter, PormGField) && (formatter = formatter.formatter)
   return FObject(function_name = "EXTRACT", column = x, formatter = formatter, kwargs = Dict{String, Any}("part" => part, "format" => format))
 end
@@ -472,6 +476,10 @@ end
 # new method rather than a widened union — and it is the one function in the family with no
 # alternative spelling, since a CASE over a CTE column cannot be written any other way.
 function When(x::Pair{CTEReference, T}; then::Any = 0, otherwise::Any = missing) where T
+  return When(_check_filter(x); then = then, otherwise = otherwise)
+end
+# #481: the same for a joined-copy column, for the same dispatch-on-key-type reason.
+function When(x::Pair{JoinedReference, T}; then::Any = 0, otherwise::Any = missing) where T
   return When(_check_filter(x); then = then, otherwise = otherwise)
 end
 function When(x::Pair{String, T}; then::Any = 0, otherwise::Any = missing) where T
@@ -552,7 +560,7 @@ Named `ToChar` since `0.3.0` (previously `To_char`, with a `formater` keyword).
 
 See also [Functions and Dates](@ref).
 """
-function ToChar(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, Vector{String}}, format::String; formatter::Union{Nothing, Function, PormGField} = nothing)
+function ToChar(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined, Vector{String}}, format::String; formatter::Union{Nothing, Function, PormGField} = nothing)
   isa(formatter, PormGField) && (formatter = formatter.formatter)
   return FObject(function_name = "EXTRACT_DATE", column = x, formatter = formatter, kwargs = Dict{String, Any}("format" => format))
 end
@@ -604,7 +612,7 @@ end
 
 Converts a string to lowercase.
 """
-function Lower(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE})
+function Lower(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
   return FObject(function_name = "LOWER", column = x)
 end
 
@@ -613,7 +621,7 @@ end
 
 Converts a string to uppercase.
 """
-function Upper(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE})
+function Upper(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
   return FObject(function_name = "UPPER", column = x)
 end
 
@@ -622,7 +630,7 @@ end
 
 Returns the length of a string.
 """
-function Length(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE})
+function Length(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
   return FObject(function_name = "LENGTH", column = x, formatter = Models.format_number_sql)
 end
 
@@ -631,7 +639,7 @@ end
 
 Returns the absolute value of a number.
 """
-function Abs(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE})
+function Abs(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
   return FObject(function_name = "ABS", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
@@ -640,7 +648,7 @@ end
 
 Rounds a number to the specified precision.
 """
-function Round(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE}, precision::Integer = 0)
+function Round(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, precision::Integer = 0)
   return FObject(function_name = "ROUND", column = x, aggregate = _is_agg(x), kwargs = Dict{String, Any}("precision" => precision), formatter = Models.format_number_sql)
 end
 
@@ -672,7 +680,7 @@ end
 
 Removes leading and trailing whitespace from a string.
 """
-function Trim(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE})
+function Trim(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
   return FObject(function_name = "TRIM", column = x)
 end
 
@@ -681,7 +689,7 @@ end
 
 Removes leading whitespace from a string.
 """
-function LTrim(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE})
+function LTrim(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
   return FObject(function_name = "LTRIM", column = x)
 end
 
@@ -690,7 +698,7 @@ end
 
 Removes trailing whitespace from a string.
 """
-function RTrim(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE})
+function RTrim(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
   return FObject(function_name = "RTRIM", column = x)
 end
 
@@ -699,7 +707,7 @@ end
 
 Returns the largest integer less than or equal to a number.
 """
-function Floor(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE})
+function Floor(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
   return FObject(function_name = "FLOOR", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
@@ -708,7 +716,7 @@ end
 
 Returns the smallest integer greater than or equal to a number.
 """
-function Ceil(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE})
+function Ceil(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
   return FObject(function_name = "CEIL", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
@@ -719,7 +727,7 @@ end
 
 Returns the square root of a number.
 """
-function Sqrt(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE})
+function Sqrt(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
   return FObject(function_name = "SQRT", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
@@ -728,7 +736,7 @@ end
 
 Returns the exponential value (e^x) of a number.
 """
-function Exp(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE})
+function Exp(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
   return FObject(function_name = "EXP", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
@@ -737,7 +745,7 @@ end
 
 Returns the natural logarithm of a number.
 """
-function Ln(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE})
+function Ln(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
   return FObject(function_name = "LN", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 

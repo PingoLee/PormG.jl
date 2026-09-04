@@ -30,7 +30,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       instruc.select[i] = SQLField(resolved, alias)
       if alias !== nothing
         # #474: a `Value(x)` literal is never CTE-rooted — `Value(CTE(...))` is refused (#444).
-        instruc.cache[(false, alias)] = instruc.select[i]
+        instruc.cache[(:base,alias)] = instruc.select[i]
       end
       continue
     end
@@ -388,7 +388,7 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         # #474: `_field_cache_key` here is uniform-with-its-neighbours, not CTE support. This
         # branch is gated on `v.column.field isa String && !contains(field, "__")`, and
         # `_retag_cte_field!` always replaces `field` with a `CTEReference` or an `SQLTypeFunction`,
-        # so `cte_rooted` is always false on this path. It is written through the key helper anyway
+        # so `root` is always `:base` on this path. It is written through the key helper anyway
         # so that a CTE arriving here later is namespaced like everywhere else rather than silently
         # sharing a base-model entry.
         haskey(instruc.cache, _field_cache_key(v.column)) ||
@@ -499,7 +499,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         condition_sql = _get_filter_query(condition, instruc)
         condition_params = detach_parameters!(mark)
         # #45: anchor-less cjoin_on conditions already carry explicit aliases (bare F = base alias,
-        # F("b2.col") = the joined copy), so skip the single-side base-alias remap the FK path needs.
+        # Joined("b2","col") = the joined copy), so skip the single-side base-alias remap the FK path needs.
         if !no_anchor
           condition_sql = replace(condition_sql, "\"$(original_alias)\"." => "$alias_a_quoted.")
         end
@@ -548,7 +548,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   # …and whether any predicate that left ALSO named the join it left. That single bit decides which
   # advice is true when a `cjoin_on` is emptied, and the two are opposites:
   #
-  #   named its own alias  — `F("b2.sku") == F("parent__grandparent__code")` — is a real
+  #   named its own alias  — `Joined("b2","sku") == F("parent__grandparent__code")` — is a real
   #     correlation that moved only because its other side is not built yet. Projecting that path
   #     in `values(...)` builds it first, nothing relocates, and the join renders CORRECTLY
   #     (`ON ("b2"."sku" = "Tb_2"."code")`). Telling this caller to "add a predicate naming b2"
@@ -729,7 +729,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
           remedy = idx in relocated_self_ref ? self_ref_remedy :
             ("No predicate you gave names \e[4m\e[31m$alias\e[0m at all, so there is nothing to " *
              "correlate it. Add one — for example " *
-             "\e[4m\e[32mF(\"$alias.<column>\") == F(\"<base column>\")\e[0m — or, if none of " *
+             "\e[4m\e[32mJoined(\"$alias\", \"<column>\") == F(\"<base column>\")\e[0m — or, if none of " *
              "these conditions was ever about this join, move them to " *
              "\e[4m\e[32m.filter(...)\e[0m and drop the \e[4m\e[32mcjoin_on\e[0m entirely.\n  " *
              # #448 changed the tail of this sentence, and the change is the point: projecting used

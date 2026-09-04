@@ -135,7 +135,7 @@ PormG.Models.set_models(@__MODULE__, "obj_join_mock")
 end
 
 const OBJ = ObjJoinModels
-import PormG.QueryBuilder: inspect_query, Q, F
+import PormG.QueryBuilder: inspect_query, Q, F, Joined
 
 # `count` over a literal String, not a Regex — a needle carrying regex syntax would otherwise
 # silently change what is matched. "JOIN" is a substring of "LEFT JOIN", so this counts joins.
@@ -356,7 +356,7 @@ end
     q = OBJ.Cj_child.objects
     q.values("note", "parent__grandparent__code")
     q.cjoin("parent" => "Cj_parent", filters = ["grandparent__code" => "Z"], warn = false)
-    q.cjoin_on("Cj_grand", alias = alias, join_type = "INNER", on = [Q(F("$alias.id") == F("id"))])
+    q.cjoin_on("Cj_grand", alias = alias, join_type = "INNER", on = [Q(Joined(alias, "id") == F("id"))])
     inspect_query(q)[:sql_text]
   end
 
@@ -605,7 +605,7 @@ _no_ansi(s::AbstractString) = replace(s, r"\e\[[0-9;]*m" => "")
       q = OBJ.Cj_child.objects
       q.values("note")
       q.cjoin_on("Cj_parent", alias = "b2",
-                 on = [F("b2.sku") == F("note"), "parent__grandparent__code" => "Z"])
+                 on = [Joined("b2", "sku") == F("note"), "parent__grandparent__code" => "Z"])
       r = inspect_query(q; connection = conn)
       sql = r[:sql_text]
       @test occursin("JOIN \"cj_parent\" AS \"b2\" ON ", sql)
@@ -636,7 +636,7 @@ _no_ansi(s::AbstractString) = replace(s, r"\e\[[0-9;]*m" => "")
     # self-referencing: predicate names b2 AND the deeper join
     q = OBJ.Cj_child.objects
     q.values("note")
-    q.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("parent__grandparent__code")])
+    q.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == F("parent__grandparent__code")])
     msg = try
       inspect_query(q; connection = _OBJ_SL); ""
     catch e
@@ -655,7 +655,7 @@ _no_ansi(s::AbstractString) = replace(s, r"\e\[[0-9;]*m" => "")
     # …and projecting really does render it as written, which is what the advice promises
     ok = OBJ.Cj_child.objects
     ok.values("note", "parent__grandparent__code")
-    ok.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("parent__grandparent__code")])
+    ok.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == F("parent__grandparent__code")])
     ok_sql = inspect_query(ok; connection = _OBJ_SL)[:sql_text]
     @test occursin("JOIN \"cj_parent\" AS \"b2\" ON (\"b2\".\"sku\" = \"Tb_2\".\"code\")", ok_sql)
 
@@ -684,8 +684,8 @@ _no_ansi(s::AbstractString) = replace(s, r"\e\[[0-9;]*m" => "")
   @testset "a cjoin_on destination gets the reorder remedy, not 'project it'" begin
     q = OBJ.Cj_child.objects
     q.values("note")
-    q.cjoin_on("Cj_parent", alias = "b3", on = [F("b3.sku") == F("b2.sku")])
-    q.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("note")])
+    q.cjoin_on("Cj_parent", alias = "b3", on = [Joined("b3", "sku") == Joined("b2", "sku")])
+    q.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == F("note")])
     msg = try
       inspect_query(q; connection = _OBJ_SL); ""
     catch e
@@ -711,8 +711,8 @@ _no_ansi(s::AbstractString) = replace(s, r"\e\[[0-9;]*m" => "")
     # on the LATER join, and `b3` given a predicate of its own.
     ok = OBJ.Cj_child.objects
     ok.values("note")
-    ok.cjoin_on("Cj_parent", alias = "b3", on = [F("b3.sku") == F("note")])
-    ok.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("b3.sku")])
+    ok.cjoin_on("Cj_parent", alias = "b3", on = [Joined("b3", "sku") == F("note")])
+    ok.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == Joined("b3", "sku")])
     ok_sql = inspect_query(ok; connection = _OBJ_SL)[:sql_text]
     @test occursin("JOIN \"cj_parent\" AS \"b3\" ON (\"b3\".\"sku\" = \"Tb\".\"note\")", ok_sql)
     @test occursin("JOIN \"cj_parent\" AS \"b2\" ON (\"b2\".\"sku\" = \"b3\".\"sku\")", ok_sql)
@@ -727,8 +727,8 @@ _no_ansi(s::AbstractString) = replace(s, r"\e\[[0-9;]*m" => "")
     q = OBJ.Cj_child.objects
     q.values("note")
     q.cjoin_on("Cj_parent", alias = "b3",
-               on = [F("b3.sku") == F("b2.sku"), F("b3.sku") == F("parent__grandparent__code")])
-    q.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("note")])
+               on = [Joined("b3", "sku") == Joined("b2", "sku"), Joined("b3", "sku") == F("parent__grandparent__code")])
+    q.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == F("note")])
     msg = try
       inspect_query(q; connection = _OBJ_SL); ""
     catch e
@@ -748,7 +748,7 @@ _no_ansi(s::AbstractString) = replace(s, r"\e\[[0-9;]*m" => "")
   @testset "no predicates passed keeps its own message" begin
     q = OBJ.Cj_child.objects
     q.values("note")
-    q.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("note")])
+    q.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == F("note")])
     empty!(q.object.custom_join["b2"]["filters"])
 
     err = try
@@ -769,7 +769,7 @@ _no_ansi(s::AbstractString) = replace(s, r"\e\[[0-9;]*m" => "")
   # breaking the feature — the same trap the #424 testset's control covers.
   ok = OBJ.Cj_child.objects
   ok.values("note")
-  ok.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("note")])
+  ok.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == F("note")])
   ok_sql = inspect_query(ok; connection = _OBJ_SL)[:sql_text]
   @test occursin("JOIN \"cj_parent\" AS \"b2\" ON ", ok_sql)
 end
@@ -814,8 +814,8 @@ end
       # independent, and this fixture must isolate the first.
       q = OBJ.Cj_child.objects
       q.values("note")
-      q.cjoin_on("Cj_parent", alias = first_alias,  on = [F("$(first_alias).sku") == F("note")])
-      q.cjoin_on("Cj_parent", alias = second_alias, on = [F("$(second_alias).sku") == F("note")])
+      q.cjoin_on("Cj_parent", alias = first_alias,  on = [Joined(first_alias, "sku") == F("note")])
+      q.cjoin_on("Cj_parent", alias = second_alias, on = [Joined(second_alias, "sku") == F("note")])
       sql = inspect_query(q; connection = _OBJ_PG)[:sql_text]
 
       first_at  = findfirst("AS \"$(first_alias)\"", sql)
@@ -835,8 +835,8 @@ end
       # only thing under test here is that the FIRST one loses its predicate to relocation.
       q2 = OBJ.Cj_child.objects
       q2.values("note")
-      q2.cjoin_on("Cj_parent", alias = first_alias,  on = [F("$(second_alias).sku") == F("note")])
-      q2.cjoin_on("Cj_parent", alias = second_alias, on = [F("$(second_alias).sku") == F("note")])
+      q2.cjoin_on("Cj_parent", alias = first_alias,  on = [Joined(second_alias, "sku") == F("note")])
+      q2.cjoin_on("Cj_parent", alias = second_alias, on = [Joined(second_alias, "sku") == F("note")])
 
       err = try
         inspect_query(q2; connection = _OBJ_PG)
@@ -939,7 +939,7 @@ end
       # Without this, the guard could refuse everything and every assertion above would still pass.
       ok = OBJ.Cj_child.objects
       ok.values("note")
-      ok.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("note")])
+      ok.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == F("note")])
       ok_sql = inspect_query(ok; connection = conn)[:sql_text]
       @test occursin("JOIN \"cj_parent\" AS \"b2\" ON ", ok_sql)
 
@@ -947,7 +947,7 @@ end
       # The mirror of the discrimination case — here the alias IS named, qualified, so it passes.
       ok2 = OBJ.Cj_child.objects
       ok2.values("note")
-      ok2.cjoin_on("Cj_parent", alias = "sku", on = [F("sku.sku") == F("note")])
+      ok2.cjoin_on("Cj_parent", alias = "sku", on = [Joined("sku", "sku") == F("note")])
       ok2_sql = inspect_query(ok2; connection = conn)[:sql_text]
       @test occursin("JOIN \"cj_parent\" AS \"sku\" ON ", ok2_sql)
     end

@@ -21,8 +21,9 @@
 #      `custom_join` anywhere, so #447's guard never saw it: on `origin/main`,
 #      `.with("parent" => cte)` plus `filter("parent__sku" => "S")` filtered the CTE's column and
 #      left the ForeignKey's join unused in the statement. The memos are now keyed by `MemoKey`
-#      (`(is_cte_rooted, name)`) and `SQLField.cte_rooted` carries the namespace half, so the two
-#      cannot share an entry while `_as` keeps the output spelling #444 pinned.
+#      (`(root, name)`, where `root` is `:base` / `:cte` / `:joined`) and `SQLField.root` carries the
+#      namespace half, so the two cannot share an entry while `_as` keeps the output spelling #444
+#      pinned.
 #
 # Everything renders through mock connections — no live database.
 #
@@ -88,7 +89,7 @@ PormG.Models.set_models(@__MODULE__, "ran_mock")
 end
 
 const RAN = RanModels
-import PormG.QueryBuilder: F, inspect_query
+import PormG.QueryBuilder: F, inspect_query, Joined
 using PormG: CTE
 
 _ran_sql(q; conn = _RAN_SL) = inspect_query(q; connection = conn)[:sql_text]
@@ -121,7 +122,7 @@ _ran_parent() = begin c = RAN.Ran_parent.objects; c.values("id", "sku");  c end
       # two never actually competed in SQL — the collision was entirely internal.
       q1 = RAN.Ran_child.objects
       q1.with("b2" => _ran_grand(), join_field = "parent" => "id", join_type = "INNER")
-      q1.cjoin_on("Ran_parent", alias = "b2", on = [F("b2.sku") == F("note")])
+      q1.cjoin_on("Ran_parent", alias = "b2", on = [Joined("b2", "sku") == F("note")])
       q1.values("note", "cte_code" => CTE("b2", "code"))
       sql1 = _ran_sql(q1; conn = conn)
 
@@ -275,7 +276,7 @@ end
     producers = [
       ("cjoin_on", () -> begin
         q = RAN.Ran_child.objects
-        q.cjoin_on("Ran_parent", alias = "b2", on = [F("b2.sku") == F("note")], join_type = "CROSS")
+        q.cjoin_on("Ran_parent", alias = "b2", on = [Joined("b2", "sku") == F("note")], join_type = "CROSS")
         q.values("note"); q
       end),
       ("on()", () -> begin
@@ -522,7 +523,8 @@ end
   @test err isa PormG.UnknownFieldError
   msg = _ran_no_ansi(sprint(showerror, err))
   @test !occursin("cte:", msg)        # no internal decoration
-  @test !occursin("(true,", msg)      # ...and no raw MemoKey either
-  @test !occursin("(false,", msg)
+  @test !occursin("(:cte,", msg)      # ...and no raw MemoKey either
+  @test !occursin("(:base,", msg)
+  @test !occursin("(:joined,", msg)
   @test occursin("pp__sku", msg)      # the spelling the caller CAN reach, still offered
 end

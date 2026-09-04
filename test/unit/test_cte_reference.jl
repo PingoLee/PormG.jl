@@ -73,7 +73,7 @@ PormG.Models.set_models(@__MODULE__, "cte_ref_mock")
 end
 
 const CR = CteRefModels
-import PormG.QueryBuilder: F, inspect_query
+import PormG.QueryBuilder: F, inspect_query, Joined
 
 # CTE bodies reused across cases.
 _parent_cte()  = (c = CR.Cj_parent.objects; c.values("id", "sku"); c)
@@ -192,6 +192,25 @@ _sql(q; conn = _CR_SL) = inspect_query(q; connection = conn)[:sql_text]
       @test !occursin("to_char", r[:sql_text])          # the function call is GONE from the predicate
       @test occursin("\"seen\" <", r[:sql_text])        # ranged directly on the column
       @test r[:parameters] == Any["1991-11-01"]         # first day of the FOLLOWING period
+    end
+
+    @testset "B2c — a COMPOSITE transform over a CTE column renders (#481)" begin
+      # `@quarter` and `@quadrimester` do not build one function over the column: they expand to
+      # `Concat([Cast(Year(x)), Value("-Q"), Case([When(...)])])`, so the retag walk meets an
+      # `SQLText` literal, an `SQLField` wrapper and the `OperObject` inside each `When`. The walk
+      # handled only functions and vectors, so both keys raised
+      # `QueryBuildError("Internal: a CTE reference resolved to an unexpected column expression")`
+      # — telling the caller to report a bug for a documented transform. Found while building the
+      # `Joined` twin (#481), which had inherited the same hole; fixed on both.
+      for key in ("quarter", "quadrimester")
+        q = CR.Cj_child.objects
+        q.with("ev" => _full_cte(), join_field = "id" => "id")
+        q.values("note", "bucket" => CTE("ev", "seen__@$(key)"))
+        sql = inspect_query(q; connection = _CR_PG)[:sql_text]
+        # It reads the CTE's own column under the CTE's generated alias, not the base model's.
+        @test occursin("\"R1_1\".\"seen\"", sql)
+        @test occursin("as \"bucket\"", sql)
+      end
     end
 
     @testset "B3 — JSON sub-path inside the path" begin
@@ -477,7 +496,7 @@ _sql(q; conn = _CR_SL) = inspect_query(q; connection = conn)[:sql_text]
         ("cjoin_on()", () -> (q = CR.Cj_child.objects;
                               q.with("ev" => _parent_cte());
                               q.cjoin_on("Cj_parent", alias = "b2",
-                                         on = [F("b2.sku") == CTE("ev", "sku")]))),
+                                         on = [Joined("b2", "sku") == CTE("ev", "sku")]))),
         ("!= operator", () -> (q = CR.Cj_child.objects;
                               q.with("ev" => _parent_cte(), join_field = "id" => "id");
                               q.on("parent", F("sku") != CTE("ev", "sku")))),

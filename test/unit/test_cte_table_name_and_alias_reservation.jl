@@ -163,7 +163,7 @@ PormG.Models.set_models(@__MODULE__, "cts_mock")
 end
 
 const CTS = CtsModels
-import PormG.QueryBuilder: F, inspect_query
+import PormG.QueryBuilder: F, inspect_query, Joined
 using PormG: CTE
 
 _cts_sql(q; conn = _CTS_SL) = inspect_query(q; connection = conn)[:sql_text]
@@ -350,7 +350,7 @@ end
         q.with("evs" => _cts_grand())
         q.filter("grand" => CTE("evs", "id"))               # correlate the CROSS JOIN (#44)
         q.values("note", "c" => CTE("evs", "code"))
-        q.cjoin_on("Cts_parent", alias = "R1_1", on = [F("R1_1.sku") == F("note")])
+        q.cjoin_on("Cts_parent", alias = "R1_1", on = [Joined("R1_1", "sku") == F("note")])
         sql = _cts_sql(q; conn = conn)
         # The CTE stepped around the declared alias...
         @test occursin("CROSS JOIN \"evs\" AS \"R1_2\"", sql)
@@ -364,7 +364,7 @@ end
         # Declaration order does not matter: `custom_join` is complete before `build()` starts, so
         # the reservation holds whichever side the caller wrote first.
         q = CTS.Cts_child.objects
-        q.cjoin_on("Cts_parent", alias = "R1_1", on = [F("R1_1.sku") == F("note")])
+        q.cjoin_on("Cts_parent", alias = "R1_1", on = [Joined("R1_1", "sku") == F("note")])
         q.with("evs" => _cts_grand(), join_field = "grand" => "id", join_type = "INNER")
         q.values("note", "c" => CTE("evs", "code"))
         sql = _cts_sql(q; conn = conn)
@@ -378,7 +378,7 @@ end
         # CTE the base alias is `Tb`, so the ForeignKey join would have been `Tb_1`.
         q = CTS.Cts_child.objects
         q.values("note", "parent__sku")
-        q.cjoin_on("Cts_grand", alias = "Tb_1", on = [F("Tb_1.code") == F("note")])
+        q.cjoin_on("Cts_grand", alias = "Tb_1", on = [Joined("Tb_1", "code") == F("note")])
         sql = _cts_sql(q; conn = conn)
         @test occursin("LEFT JOIN \"cts_parent\" AS \"Tb_2\" ON \"Tb\".\"parent\" = \"Tb_2\".\"id\"", sql)
         @test occursin("\"Tb_2\".\"product_sku\" as \"parent__sku\"", sql)
@@ -393,7 +393,7 @@ end
         # exercised and the assertion is on the message, not the spelling.
         plain = CTS.Cts_child.objects
         plain.values("note")
-        plain.cjoin_on("Cts_grand", alias = "Tb", on = [F("Tb.code") == F("note")])
+        plain.cjoin_on("Cts_grand", alias = "Tb", on = [Joined("Tb", "code") == F("note")])
         err = _cts_catch(() -> _cts_sql(plain; conn = conn))
         @test err isa PormG.QueryBuildError
         @test occursin("already the alias of \"cts_child\"", _cts_no_ansi(sprint(showerror, err)))
@@ -401,7 +401,7 @@ end
         with_cte = CTS.Cts_child.objects
         with_cte.with("evs" => _cts_grand(), join_field = "grand" => "id")
         with_cte.values("note", "c" => CTE("evs", "code"))
-        with_cte.cjoin_on("Cts_parent", alias = "R1", on = [F("R1.sku") == F("note")])
+        with_cte.cjoin_on("Cts_parent", alias = "R1", on = [Joined("R1", "sku") == F("note")])
         err2 = _cts_catch(() -> _cts_sql(with_cte; conn = conn))
         @test err2 isa PormG.QueryBuildError
         @test occursin("already the alias of \"cts_child\"", _cts_no_ansi(sprint(showerror, err2)))
@@ -412,7 +412,7 @@ end
         # base alias is `Tb`, so `R1` is simply a free name.
         q = CTS.Cts_child.objects
         q.values("note")
-        q.cjoin_on("Cts_grand", alias = "R1", on = [F("R1.code") == F("note")])
+        q.cjoin_on("Cts_grand", alias = "R1", on = [Joined("R1", "code") == F("note")])
         sql = _cts_sql(q; conn = conn)
         @test occursin("INNER JOIN \"cts_grand\" AS \"R1\" ON (\"R1\".\"code\" = \"Tb\".\"note\")", sql)
       end

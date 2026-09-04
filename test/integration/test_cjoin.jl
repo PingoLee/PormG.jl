@@ -215,9 +215,9 @@ end
 
         q = M.Result.objects
         q.cjoin_on("Result", alias = "b2", join_type = "INNER", on = [
-            Q(F("b2.raceid") == F("raceid"),
-              F("b2.constructorid") == F("constructorid"),
-              F("b2.driverid") != F("driverid")),
+            Q(Joined("b2", "raceid") == F("raceid"),
+              Joined("b2", "constructorid") == F("constructorid"),
+              Joined("b2", "driverid") != F("driverid")),
         ])
         q.filter("raceid" => raceid)
         q.values("driverid")

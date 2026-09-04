@@ -649,6 +649,7 @@ PormG's type hierarchy provides the foundation for the query builder and model s
 | `SQLTypeF` | F-expression type (field references). |
 | `SQLTypeFunction` | SQL function type. |
 | `SQLTypeCTE` | Supertype of [`CTE`](@ref)'s reference object — a CTE column handle. |
+| `SQLTypeJoined` | Supertype of [`Joined`](@ref)'s reference object — a `cjoin_on` joined-copy column handle. |
 | `PormGModel` | Base for model types. |
 | `PormGField` | Base for field type definitions. |
 | `PormGError` | Root of the semantic error taxonomy (`<: Exception`). Every PormG misuse — querying, model definition, configuration, migrations, the pool — raises a subtype (see [Error taxonomy](#Error-taxonomy)); `catch PormGError` catches them all. |
@@ -662,7 +663,7 @@ scope — the SQL function constructors are *not* among them (see
 [SQL function library](#sql-function-library-pormgfunctions)).
 
 ### Query Builder
-`object`, `get`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery`, `CTE`, `Interval`, `show_query`, `inspect_query`
+`object`, `get`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery`, `CTE`, `Joined`, `Interval`, `show_query`, `inspect_query`
 
 ### Rows & exceptions
 `PormGRow`, `pk`, `DoesNotExist`, `MultipleObjectsReturned`
@@ -862,7 +863,7 @@ M.Result.objects.values(              # …or qualify without importing
     "n" => PormG.Functions.Count("resultid"))
 ```
 
-`bulk_*`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery`, `CTE`, `Interval` stay at the top level —
+`bulk_*`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery`, `CTE`, `Joined`, `Interval` stay at the top level —
 they are query primitives, not part of the function library.
 
 The library in full — the same index `?PormG.Functions` prints in the REPL:

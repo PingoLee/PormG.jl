@@ -285,20 +285,30 @@ query.cjoin_on("Model"; alias="b2", on=[ ... ], join_type="INNER")
 ```
 
 - **`"Model"`** — the model to join (may be the query's **own** model, for a self-join).
-- **`alias`** — the SQL alias for the joined copy. Reference its columns as `F("alias.column")`.
+- **`alias`** — the SQL alias for the joined copy. Reference its columns as `Joined(alias, "column")`.
 - **`on`** — the expressions that form the **entire** ON clause. No equi-anchor is added.
 - **`join_type`** — defaults to `"INNER"`.
 
 ### Reference convention
 
-Inside `on`, the two sides of the join are named by how you write `F(...)`:
+Inside `on`, the two sides of the join are named by how you write the reference:
 
 | You write | Resolves to |
 |-----------|-------------|
 | `F("col")` (bare) | the **base/main** table (the query's own alias) |
-| `F("b2.col")` | the **joined copy** declared by this `cjoin_on` (its `alias`) |
+| `Joined("b2", "col")` | the **joined copy** declared by this `cjoin_on` (its `alias`) |
 
 This is unambiguous even in a self-join, where both sides share every column name.
+
+[`Joined(alias, path)`](@ref Joined) is a reference **object**, not a string, and it works in every
+clause rather than only inside `on`: project it in `values(...)`, compare it in `filter(...)`, sort
+by it in `order_by(...)`, and name **another** `cjoin_on`'s alias from inside one `on` list.
+
+!!! warning "The dotted-string spelling was removed"
+    `F("alias.col")` is gone (#481). It could not carry an operator suffix, the bare string form
+    could not be projected (`values("b2.sku")` raised), and a typo in the alias reported an unknown
+    *field* called `"typo.col"` instead of an unknown alias. Rewrite `F("b2.sku")` as
+    `Joined("b2", "sku")`; see [Upgrading](../upgrading.md).
 
 ### Self-join example
 
@@ -309,9 +319,9 @@ year of the timestamp:
 query = M.Lap.objects
 query.cjoin_on("Lap"; alias="b2", join_type="INNER", on=[
   Qor(
-    F("b2.raceid") == F("raceid"),
-    Q(F("b2.driverid") == F("driverid"), F("b2.lap") == F("lap")),
-    F("b2.dt__@year") == F("dt__@year"),          # year() on both sides — dialect-aware
+    Joined("b2", "raceid") == F("raceid"),
+    Q(Joined("b2", "driverid") == F("driverid"), Joined("b2", "lap") == F("lap")),
+    Joined("b2", "dt__@year") == F("dt__@year"),  # year() on both sides — dialect-aware
   ),
 ])
 query.values("id")
@@ -332,13 +342,21 @@ FROM "laps" as "Tb"
 No `main.field = target.pk` anchor is emitted — the `on` expression **is** the ON clause. Bound
 parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
 
-!!! note "Cross-side references use `F()`"
-    Reference the joined copy with `F("alias.col")`. Alias-qualified **operator pairs**
-    (`"b2.col__@gte" => 3`) are not supported yet — express a joined-side comparison-to-literal by
-    restructuring, or filter the base side with a bare pair (`"col__@gte" => 3`). Referencing a
-    *third* table (another join's alias) inside one `cjoin_on` is also out of scope for now, and a
-    predicate that all relocates onto a later join leaves this one with no `ON` clause of its own,
-    which raises `QueryBuildError` (#435).
+!!! note "What a `Joined(...)` reference can do"
+    Since #481 the joined copy is referenced by a typed handle, and three limitations this note used
+    to list are gone:
+
+    - **Alias-qualified operator pairs work.** `filter(Joined("b2", "col__@gte") => 3)` compares the
+      joined side against a literal; every operator the ordinary pair path accepts works here, since
+      it *is* that path.
+    - **A third table can be referenced.** One `cjoin_on`'s `on` may name another's alias —
+      `Joined("d2", "surname") == Joined("d1", "surname")`. Emission order still decides where a
+      predicate lands; see the warning below.
+    - **A joined column projects in every form.** `values("who" => Joined("d", "surname"))` and the
+      bare `values(Joined("d", "surname"))` both work; the bare dotted string never did.
+
+    Still true: a predicate that all relocates onto a later join leaves this one with no `ON` clause
+    of its own, which raises `QueryBuildError` (#435).
 
     **A CTE cannot be referenced from an `ON` clause at all.** A `CTE(name, path)` inside `on`
     raises `FilterError`: an `ON` clause targets the joined *model*, and a CTE is joined by its own
@@ -356,7 +374,7 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
 
     df = M.Result.objects.
         with("best" => best, join_field = "driverid" => "driverid", join_type = "INNER").
-        cjoin_on("Driver", alias = "best", on = [F("best.driverid") == F("driverid")]).
+        cjoin_on("Driver", alias = "best", on = [Joined("best", "driverid") == F("driverid")]).
         values("points", "career_best" => CTE("best", "best")).
         filter("raceid" => 18).
         order_by("-points").
@@ -413,7 +431,7 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     in opposite directions. The error message tells you which one you are in.
 
     *Nothing names it* — as above. The join has nothing correlating it. Add a predicate that does
-    (`F("d.driverid") == F("driverid")`), or move the conditions to `.filter(...)` and drop the
+    (`Joined("d", "driverid") == F("driverid")`), or move the conditions to `.filter(...)` and drop the
     `cjoin_on` entirely — it needs at least one `on` predicate, so moving them all out without
     removing the call raises too.
 
@@ -423,7 +441,7 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     That is an unconstrained join: every `driver` row against every qualifying base row. PormG
     refuses it too (#448), so projecting trades one error for another rather than fixing anything.
 
-    *It names the alias and a deeper path* — `on = [F("d.nationality") == F("raceid__circuitid__country")]`,
+    *It names the alias and a deeper path* — `on = [Joined("d", "nationality") == F("raceid__circuitid__country")]`,
     drivers racing in their home country — is a real correlation that moved only because the join
     on its other side is built later. Projecting **is** the fix here: add
     `raceid__circuitid__country` to `values(...)` and the clause renders exactly as written.
@@ -435,12 +453,12 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
 
     ```julia
     # ✗ before — d1's only predicate names d2, which is emitted after it
-    query.cjoin_on("Driver", alias = "d1", on = [F("d1.surname") == F("d2.surname")])
-    query.cjoin_on("Driver", alias = "d2", on = [F("d2.driverid") == F("driverid")])
+    query.cjoin_on("Driver", alias = "d1", on = [Joined("d1", "surname") == Joined("d2", "surname")])
+    query.cjoin_on("Driver", alias = "d2", on = [Joined("d2", "driverid") == F("driverid")])
 
     # ✓ after — the shared predicate moves to d2, and d1 gets one of its own
-    query.cjoin_on("Driver", alias = "d1", on = [F("d1.driverid") == F("driverid")])
-    query.cjoin_on("Driver", alias = "d2", on = [F("d2.surname") == F("d1.surname")])
+    query.cjoin_on("Driver", alias = "d1", on = [Joined("d1", "driverid") == F("driverid")])
+    query.cjoin_on("Driver", alias = "d2", on = [Joined("d2", "surname") == Joined("d1", "surname")])
     ```
 
     **Two `cjoin_on` joins are emitted in the order you declare them**, so "whichever PormG emits

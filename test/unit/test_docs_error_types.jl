@@ -187,6 +187,20 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        # #481. A `Joined(...)` handle names a `cjoin_on` joined copy, so it cannot appear in
+        # `on(...)` / `cjoin(...)` — those add predicates to a join derived from a relation, and
+        # every reference in them targets that joined model. The mirror of #444's CTE refusal above,
+        # and documented in the same admonition.
+        "read/custom_joins.md — a Joined(...) reference inside on()/cjoin() is refused",
+        FilterError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.on("driverid", Joined("d", "surname") == F("resultid"))
+            q.values("resultid")
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
         # #479. A CTE named after a physical table is refused at the `.with()` call: SQL resolves an
         # unqualified table reference to a same-named CTE for the whole statement, so every join
         # PormG generates to that table would silently read the CTE. The CTE body here is the driver

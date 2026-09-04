@@ -116,38 +116,56 @@ your own — an arbitrary boolean (top-level `OR`), field-to-field comparisons a
 (a self-join), or SQL functions in the ON — use **`.cjoin_on()`**.
 </code></pre><p>julia query.cjoin<em>on(&quot;Model&quot;; alias=&quot;b2&quot;, on=[ ... ], join</em>type=&quot;INNER&quot;)</p><pre><code class="nohighlight hljs">
 - **`&quot;Model&quot;`** — the model to join (may be the query&#39;s **own** model, for a self-join).
-- **`alias`** — the SQL alias for the joined copy. Reference its columns as `F(&quot;alias.column&quot;)`.
+- **`alias`** — the SQL alias for the joined copy. Reference its columns as `Joined(alias, &quot;column&quot;)`.
 - **`on`** — the expressions that form the **entire** ON clause. No equi-anchor is added.
 - **`join_type`** — defaults to `&quot;INNER&quot;`.
 
 ### Reference convention
 
-Inside `on`, the two sides of the join are named by how you write `F(...)`:
+Inside `on`, the two sides of the join are named by how you write the reference:
 
 | You write | Resolves to |
 |-----------|-------------|
 | `F(&quot;col&quot;)` (bare) | the **base/main** table (the query&#39;s own alias) |
-| `F(&quot;b2.col&quot;)` | the **joined copy** declared by this `cjoin_on` (its `alias`) |
+| `Joined(&quot;b2&quot;, &quot;col&quot;)` | the **joined copy** declared by this `cjoin_on` (its `alias`) |
 
 This is unambiguous even in a self-join, where both sides share every column name.
+
+[`Joined(alias, path)`](@ref Joined) is a reference **object**, not a string, and it works in every
+clause rather than only inside `on`: project it in `values(...)`, compare it in `filter(...)`, sort
+by it in `order_by(...)`, and name **another** `cjoin_on`&#39;s alias from inside one `on` list.
+
+!!! warning &quot;The dotted-string spelling was removed&quot;
+    `F(&quot;alias.col&quot;)` is gone (#481). It could not carry an operator suffix, the bare string form
+    could not be projected (`values(&quot;b2.sku&quot;)` raised), and a typo in the alias reported an unknown
+    *field* called `&quot;typo.col&quot;` instead of an unknown alias. Rewrite `F(&quot;b2.sku&quot;)` as
+    `Joined(&quot;b2&quot;, &quot;sku&quot;)`; see [Upgrading](../upgrading.md).
 
 ### Self-join example
 
 Find, for each lap, other laps in the same race — or the same driver+lap — or the same calendar
 year of the timestamp:
-</code></pre><p>julia query = M.Lap.objects query.cjoin<em>on(&quot;Lap&quot;; alias=&quot;b2&quot;, join</em>type=&quot;INNER&quot;, on=[   Qor(     F(&quot;b2.raceid&quot;) == F(&quot;raceid&quot;),     Q(F(&quot;b2.driverid&quot;) == F(&quot;driverid&quot;), F(&quot;b2.lap&quot;) == F(&quot;lap&quot;)),     F(&quot;b2.dt<strong>@year&quot;) == F(&quot;dt</strong>@year&quot;),          # year() on both sides — dialect-aware   ), ]) query.values(&quot;id&quot;)</p><pre><code class="nohighlight hljs">
+</code></pre><p>julia query = M.Lap.objects query.cjoin<em>on(&quot;Lap&quot;; alias=&quot;b2&quot;, join</em>type=&quot;INNER&quot;, on=[   Qor(     Joined(&quot;b2&quot;, &quot;raceid&quot;) == F(&quot;raceid&quot;),     Q(Joined(&quot;b2&quot;, &quot;driverid&quot;) == F(&quot;driverid&quot;), Joined(&quot;b2&quot;, &quot;lap&quot;) == F(&quot;lap&quot;)),     Joined(&quot;b2&quot;, &quot;dt<strong>@year&quot;) == F(&quot;dt</strong>@year&quot;),  # year() on both sides — dialect-aware   ), ]) query.values(&quot;id&quot;)</p><pre><code class="nohighlight hljs">
 **Generated SQL (SQLite** — PostgreSQL renders `$n` placeholders and `EXTRACT(YEAR FROM …)`**):**
 </code></pre><p>sql SELECT &quot;Tb&quot;.&quot;id&quot; as &quot;id&quot; FROM &quot;laps&quot; as &quot;Tb&quot;  INNER JOIN &quot;laps&quot; AS &quot;b2&quot; ON (        (&quot;b2&quot;.&quot;raceid&quot; = &quot;Tb&quot;.&quot;raceid&quot;)     OR ((&quot;b2&quot;.&quot;driverid&quot; = &quot;Tb&quot;.&quot;driverid&quot;) AND (&quot;b2&quot;.&quot;lap&quot; = &quot;Tb&quot;.&quot;lap&quot;))     OR (CAST(strftime(&#39;%Y&#39;, &quot;b2&quot;.&quot;dt&quot;) AS INTEGER) = CAST(strftime(&#39;%Y&#39;, &quot;Tb&quot;.&quot;dt&quot;) AS INTEGER))  )</p><pre><code class="nohighlight hljs">
 No `main.field = target.pk` anchor is emitted — the `on` expression **is** the ON clause. Bound
 parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
 
-!!! note &quot;Cross-side references use `F()`&quot;
-    Reference the joined copy with `F(&quot;alias.col&quot;)`. Alias-qualified **operator pairs**
-    (`&quot;b2.col__@gte&quot; =&gt; 3`) are not supported yet — express a joined-side comparison-to-literal by
-    restructuring, or filter the base side with a bare pair (`&quot;col__@gte&quot; =&gt; 3`). Referencing a
-    *third* table (another join&#39;s alias) inside one `cjoin_on` is also out of scope for now, and a
-    predicate that all relocates onto a later join leaves this one with no `ON` clause of its own,
-    which raises `QueryBuildError` (#435).
+!!! note &quot;What a `Joined(...)` reference can do&quot;
+    Since #481 the joined copy is referenced by a typed handle, and three limitations this note used
+    to list are gone:
+
+    - **Alias-qualified operator pairs work.** `filter(Joined(&quot;b2&quot;, &quot;col__@gte&quot;) =&gt; 3)` compares the
+      joined side against a literal; every operator the ordinary pair path accepts works here, since
+      it *is* that path.
+    - **A third table can be referenced.** One `cjoin_on`&#39;s `on` may name another&#39;s alias —
+      `Joined(&quot;d2&quot;, &quot;surname&quot;) == Joined(&quot;d1&quot;, &quot;surname&quot;)`. Emission order still decides where a
+      predicate lands; see the warning below.
+    - **A joined column projects in every form.** `values(&quot;who&quot; =&gt; Joined(&quot;d&quot;, &quot;surname&quot;))` and the
+      bare `values(Joined(&quot;d&quot;, &quot;surname&quot;))` both work; the bare dotted string never did.
+
+    Still true: a predicate that all relocates onto a later join leaves this one with no `ON` clause
+    of its own, which raises `QueryBuildError` (#435).
 
     **A CTE cannot be referenced from an `ON` clause at all.** A `CTE(name, path)` inside `on`
     raises `FilterError`: an `ON` clause targets the joined *model*, and a CTE is joined by its own
@@ -165,7 +183,7 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
 
     df = M.Result.objects.
         with(&quot;best&quot; =&gt; best, join_field = &quot;driverid&quot; =&gt; &quot;driverid&quot;, join_type = &quot;INNER&quot;).
-        cjoin_on(&quot;Driver&quot;, alias = &quot;best&quot;, on = [F(&quot;best.driverid&quot;) == F(&quot;driverid&quot;)]).
+        cjoin_on(&quot;Driver&quot;, alias = &quot;best&quot;, on = [Joined(&quot;best&quot;, &quot;driverid&quot;) == F(&quot;driverid&quot;)]).
         values(&quot;points&quot;, &quot;career_best&quot; =&gt; CTE(&quot;best&quot;, &quot;best&quot;)).
         filter(&quot;raceid&quot; =&gt; 18).
         order_by(&quot;-points&quot;).
@@ -222,7 +240,7 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     in opposite directions. The error message tells you which one you are in.
 
     *Nothing names it* — as above. The join has nothing correlating it. Add a predicate that does
-    (`F(&quot;d.driverid&quot;) == F(&quot;driverid&quot;)`), or move the conditions to `.filter(...)` and drop the
+    (`Joined(&quot;d&quot;, &quot;driverid&quot;) == F(&quot;driverid&quot;)`), or move the conditions to `.filter(...)` and drop the
     `cjoin_on` entirely — it needs at least one `on` predicate, so moving them all out without
     removing the call raises too.
 
@@ -232,7 +250,7 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     That is an unconstrained join: every `driver` row against every qualifying base row. PormG
     refuses it too (#448), so projecting trades one error for another rather than fixing anything.
 
-    *It names the alias and a deeper path* — `on = [F(&quot;d.nationality&quot;) == F(&quot;raceid__circuitid__country&quot;)]`,
+    *It names the alias and a deeper path* — `on = [Joined(&quot;d&quot;, &quot;nationality&quot;) == F(&quot;raceid__circuitid__country&quot;)]`,
     drivers racing in their home country — is a real correlation that moved only because the join
     on its other side is built later. Projecting **is** the fix here: add
     `raceid__circuitid__country` to `values(...)` and the clause renders exactly as written.
@@ -244,12 +262,12 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
 
     ```julia
     # ✗ before — d1&#39;s only predicate names d2, which is emitted after it
-    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d1&quot;, on = [F(&quot;d1.surname&quot;) == F(&quot;d2.surname&quot;)])
-    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d2&quot;, on = [F(&quot;d2.driverid&quot;) == F(&quot;driverid&quot;)])
+    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d1&quot;, on = [Joined(&quot;d1&quot;, &quot;surname&quot;) == Joined(&quot;d2&quot;, &quot;surname&quot;)])
+    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d2&quot;, on = [Joined(&quot;d2&quot;, &quot;driverid&quot;) == F(&quot;driverid&quot;)])
 
     # ✓ after — the shared predicate moves to d2, and d1 gets one of its own
-    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d1&quot;, on = [F(&quot;d1.driverid&quot;) == F(&quot;driverid&quot;)])
-    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d2&quot;, on = [F(&quot;d2.surname&quot;) == F(&quot;d1.surname&quot;)])
+    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d1&quot;, on = [Joined(&quot;d1&quot;, &quot;driverid&quot;) == F(&quot;driverid&quot;)])
+    query.cjoin_on(&quot;Driver&quot;, alias = &quot;d2&quot;, on = [Joined(&quot;d2&quot;, &quot;surname&quot;) == Joined(&quot;d1&quot;, &quot;surname&quot;)])
     ```
 
     **Two `cjoin_on` joins are emitted in the order you declare them**, so &quot;whichever PormG emits
@@ -365,4 +383,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Thursday 3 September 2026 21:35">Thursday 3 September 2026</span>. Using Julia version 1.12.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Friday 4 September 2026 12:33">Friday 4 September 2026</span>. Using Julia version 1.12.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

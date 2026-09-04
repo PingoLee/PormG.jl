@@ -90,7 +90,7 @@ PormG.Models.set_models(@__MODULE__, "pan_mock")
 end
 
 const PAN = PanModels
-import PormG.QueryBuilder: F, Exists, Subquery, inspect_query, Sum
+import PormG.QueryBuilder: F, Exists, Subquery, inspect_query, Sum, Joined
 
 const _PAN_BACKENDS = (("PostgreSQL", _PAN_PG, :postgres), ("SQLite", _PAN_SL, :sqlite))
 
@@ -230,7 +230,7 @@ end
       q = PAN.Pan_child.objects
       q.values("note")
       q.cjoin_on("Pan_parent", alias = "b2",
-                 on = [F("b2.sku") == F("note"), "id__@gt" => 7,
+                 on = [Joined("b2", "sku") == F("note"), "id__@gt" => 7,
                        "parent__@in" => sub_with_cte()])
       inspect_query(q; connection = conn)
       nothing

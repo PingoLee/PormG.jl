@@ -29,6 +29,21 @@ function _values_field(ref::CTEReference)
   return _retag_cte_field!(SQLField(_check_function(check), join(check, "__")), ref.name)
 end
 
+# #481 — the joined-copy twin. The removed dotted spelling reached only the FILTER resolver, so the
+# bare string `values("d.surname")` resolved `"d.surname"` as a field name of the base model and
+# raised; `values("x" => F("d.surname"))` did work, because `F` routes through that resolver. What
+# is new here is the bare handle — `values(Joined("d","surname"))` — and a uniform spelling across
+# every clause.
+function _values_field(ref::JoinedReference)
+  _reject_joined_desc(ref, "values(...)")
+  check = String.(split(ref.path, "__@"))
+  if size(check, 1) > 1 && haskey(PormGsuffix, check[end])
+    throw(QueryBuildError("Invalid values() field \e[4m\e[31mJoined(\"$(ref.alias)\", \"$(ref.path)\")\e[0m: operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in a projection — use them in filter() instead."))
+  end
+  @pormg_debug false
+  return _retag_joined_field!(SQLField(_check_function(check), join(check, "__")), ref.alias)
+end
+
 # Backs `query.values(...)` through ChainCaller. Each call RESETS `q.values` — last-call-wins,
 # Django parity (#199) — unlike `_filter!`, which accumulates.
 #
@@ -71,22 +86,23 @@ function _values!(q::SQLObject, values)
         # Support Value(x) as an aliased pair: "label" => Value("hello")
         v.second.custom_as = v.first
         push!(q.values, v.second)
-      elseif isa(v.second, Union{String,CTEReference})
-        # #444: `"alias" => CTE("ev","sku")` takes the same route as `"alias" => "path"` — the
-        # CTEReference method of `_values_field` does the peel and the retag.
+      elseif isa(v.second, Union{String,CTEReference,JoinedReference})
+        # #444/#481: `"alias" => CTE("ev","sku")` and `"who" => Joined("d","surname")` take the same
+        # route as `"alias" => "path"` — the handle's `_values_field` method peels and retags.
         z = _values_field(v.second)
         z.custom_as = v.first
         push!(q.values, z)
       else
         # #92: previously an unhandled pair value was silently dropped — the column just vanished from
         # the result. Fail loud instead so a wrong projection surfaces at build time.
-        throw(QueryBuildError("Invalid values pair \"$(v.first)\" => ::$(typeof(v.second)): the right side must be a field name, a function (Count, Sum, …), Value(x), Subquery(inner), or Exists(inner)."))
+        throw(QueryBuildError("Invalid values pair \"$(v.first)\" => ::$(typeof(v.second)): the right side must be a field name, a function (Count, Sum, …), Value(x), Subquery(inner), Exists(inner), CTE(\"name\", \"path\"), or Joined(\"alias\", \"column\")."))
       end
-    elseif isa(v, Union{String,CTEReference})
+    elseif isa(v, Union{String,CTEReference,JoinedReference})
       # #444: a bare `CTE("parent","sku")` projects as `parent__sku` — see `_values_field`.
+      # #481: a bare `Joined("d","surname")` projects as `d__surname`, likewise.
       push!(q.values, _values_field(v))
     else
-      throw(QueryBuildError("Invalid argument: $(v) (::$(typeof(v)))); use a string field name, a CTE(\"name\", \"path\") reference, a function (Count, Sum, Day, …), or an aliased pair \"alias\" => expr (e.g. \"total\" => Subquery(inner))."))
+      throw(QueryBuildError("Invalid argument: $(v) (::$(typeof(v)))); use a string field name, a CTE(\"name\", \"path\") or Joined(\"alias\", \"column\") reference, a function (Count, Sum, Day, …), or an aliased pair \"alias\" => expr (e.g. \"total\" => Subquery(inner))."))
     end
   end
 
@@ -165,6 +181,7 @@ function _describe_projection(v)
   # #444: spell a CTE handle as the caller typed it. Falling through to `nameof(typeof(f))` printed
   # a bare `CTEReference`, which is exactly the useless bare-type-name this function exists to avoid.
   f isa CTEReference && return "CTE(\"$(f.name)\", \"$(f.path)\")"
+  f isa JoinedReference && return "Joined(\"$(f.alias)\", \"$(f.path)\")"
   hasproperty(f, :function_name) && f.function_name isa String && return "$(f.function_name)(...)"
   return string(nameof(typeof(f)))
 end
@@ -398,7 +415,7 @@ end
 #
 # No docstring on purpose (#281) — see the note on `_values!` above. The user-facing contract
 # lives on the `object` docstring's `.order_by(...)` bullet.
-function _order_by!(q::SQLObject, values::NTuple{N,Union{String,SQLTypeOrder,CTEReference}} where N)
+function _order_by!(q::SQLObject, values::NTuple{N,Union{String,SQLTypeOrder,CTEReference,JoinedReference}} where N)
   q.order = [] # every call of order_by, reset the order
   for v in values
     if isa(v, String)
@@ -423,6 +440,16 @@ function _order_by!(q::SQLObject, values::NTuple{N,Union{String,SQLTypeOrder,CTE
       end
       field = _retag_cte_field!(SQLField(_check_function(check), join(check, "__")), v.name)
       push!(q.order, SQLOrder(field, orientation=orientation))
+    elseif isa(v, JoinedReference)
+      # #481: `order_by(Joined("d", "surname"; desc = true))` — the joined-copy twin of the branch
+      # above, and the other site where `desc` is meaningful.
+      orientation = v.desc ? "DESC" : "ASC"
+      check = String.(split(v.path, "__@"))
+      if size(check, 1) > 1 && haskey(PormGsuffix, check[end])
+        throw(QueryBuildError("Invalid order_by() field \e[4m\e[31mJoined(\"$(v.alias)\", \"$(v.path)\")\e[0m: operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in ordering."))
+      end
+      field = _retag_joined_field!(SQLField(_check_function(check), join(check, "__")), v.alias)
+      push!(q.order, SQLOrder(field, orientation=orientation))
     else
       push!(q.order, v)
     end
@@ -430,7 +457,7 @@ function _order_by!(q::SQLObject, values::NTuple{N,Union{String,SQLTypeOrder,CTE
   return q
 end
 function _order_by!(q::SQLObject, values)
-  throw(QueryBuildError("Invalid order_by() argument: $(values) (::$(typeof(values))) — use field-name Strings (\"-field\" for DESC), CTE(\"name\", \"path\"; desc = true) references, or SQLTypeOrder values."))
+  throw(QueryBuildError("Invalid order_by() argument: $(values) (::$(typeof(values))) — use field-name Strings (\"-field\" for DESC), CTE(\"name\", \"path\"; desc = true) or Joined(\"alias\", \"column\"; desc = true) references, or SQLTypeOrder values."))
 end
 
 

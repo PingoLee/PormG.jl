@@ -128,6 +128,7 @@ abstract type SQLTypeArrays <: SQLType end # Arrays to orgnize the query informa
 abstract type SQLTypeField <: SQLType end # Field to be used in the query (values, filters, etc)
 abstract type SQLTypeOrder <: SQLTypeField end # Order to be used in the query
 abstract type SQLTypeCTE <: SQLType end # Common Table Expression (WITH clause)
+abstract type SQLTypeJoined <: SQLType end # a column of a `cjoin_on` joined copy (#481)
 
 
 """
@@ -352,7 +353,7 @@ export PormGAbstractType, PormGSettings, PormGBackend, PormGPostgres, PormGSQLit
        AbstractPormGParam, PormGPostgresParam, PormGSQLiteParam, PormGBytes,
        SQLObject, SQLObjectHandler, SQLTableAlias, SQLInstruction,
        SQLType, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeFunction, SQLTypeOper,
-       SQLTypeText, SQLTypeArrays, SQLTypeField, SQLTypeOrder, SQLTypeCTE,
+       SQLTypeText, SQLTypeArrays, SQLTypeField, SQLTypeOrder, SQLTypeCTE, SQLTypeJoined,
        PormGModel, PormGField, Migration
 
 # Error taxonomy (#231, #239) — root, the query-builder subtypes, and the schema/config/migration

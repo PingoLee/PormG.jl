@@ -1322,8 +1322,9 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     return _set_update_query(operand, instruc)
   elseif isa(operand, SQLTypeFunction)
     return _get_select_query(operand, instruc)
-  elseif isa(operand, SQLTypeCTE)
-    # #444: a CTE handle is a COLUMN reference, exactly like the `F("<cte>__col")` it replaces.
+  elseif isa(operand, Union{SQLTypeCTE,SQLTypeJoined})
+    # #444/#481: a CTE or joined-copy handle is a COLUMN reference, exactly like the
+    # `F("<cte>__col")` / `F("d.col")` spelling each replaces.
     # Without this arm it falls through to the `add_parameter!` at the bottom of this chain and
     # binds as a VALUE — `F("note") == CTE("ev","code")` rendered `"R1"."note" = ?` with no join
     # emitted at all, which is valid SQL comparing a column against a stringified handle.
@@ -1378,6 +1379,11 @@ end
 # what makes `update()`'s no-WITH-clause refusal (#433) fire with its own accurate message instead of
 # a `MethodError` from the field formatter.
 _set_update_query(v::CTEReference, instruc::SQLInstruction) = _get_select_query(v, instruc)
+
+# #481: the same for a joined-copy handle. This is also the recursion target that renders the LEFT
+# side of `Joined("d","x") == F("y")`, since `_set_update_query(::FExpression)` forwards a
+# non-String `field_name` here.
+_set_update_query(v::JoinedReference, instruc::SQLInstruction) = _get_select_query(v, instruc)
 
 function _set_update_query(v::FExpression, instruc::SQLInstruction)
   if v.operation === nothing
@@ -1624,6 +1630,17 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     # Routed here, it resolves as a column and `update()`'s own "this statement emits no WITH
     # clause" refusal (#433) fires with the accurate message, which is exactly what the pre-#444
     # `F("<cte>__col")` spelling produced.
+    # #481: a `Joined(...)` handle is admitted here so it does NOT reach the field formatter as a
+    # bare MethodError — and is then refused with an accurate message. Setting a column FROM a
+    # joined copy is the correlated UPDATE-FROM path, which this statement shape cannot express
+    # (it scopes rows through a subquery); that remains #174's fourth deferred edge.
+    if isa(objct.insert[field], SQLTypeJoined)
+      throw(QueryBuildError(
+        "update(\"$(field)\" => Joined(\"$(objct.insert[field].alias)\", \"$(objct.insert[field].path)\")) is not supported: " *
+        "the common update path scopes rows with a subquery, so a cjoin_on joined copy is not " *
+        "visible to SET. Setting a column FROM a joined table needs the correlated UPDATE ... FROM " *
+        "path, which is not implemented (#174)."))
+    end
     if isa(objct.insert[field], SQLTypeF) || isa(objct.insert[field], SQLTypeFunction) ||
        isa(objct.insert[field], SQLTypeCTE)
       f_value = _set_update_query(objct.insert[field], instruction)

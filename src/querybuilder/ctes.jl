@@ -210,47 +210,74 @@ function _reject_cte_in_join(ref::CTEReference, context::String)
     "Put the predicate in \e[4m\e[32m.filter(...)\e[0m instead (#444)."))
 end
 
-# Recursive CTE-handle sweep for a filter element that has NOT been through `_prefix_join_filter`.
+# #481 — a joined-copy handle cannot appear in `on(...)` or `cjoin(...)`. Those clauses add
+# predicates to a join PormG derives from a relation, and every reference in them is forced onto
+# that single joined model (`_prefix_join_filter`); a `cjoin_on` alias names a different join
+# entirely. It IS legal in `cjoin_on`'s own `on` list — that is the clause it was built for.
+function _reject_joined_in_join(ref::JoinedReference, context::String)
+  throw(FilterError(
+    "\e[4m\e[31mJoined(\"$(ref.alias)\", \"$(ref.path)\")\e[0m cannot be used in $(context). That " *
+    "clause adds predicates to a join derived from a relation, and every reference in it targets " *
+    "that joined model; a \e[4m\e[32mcjoin_on\e[0m alias names a different join.\n  " *
+    "Write the predicate in the \e[4m\e[32mcjoin_on(...; on = [...])\e[0m that declares the alias (#481)."))
+end
+
+# Recursive handle sweep for a filter element that has NOT been through `_prefix_join_filter`.
 # `_cjoin_on` is the one such caller: it skips that helper on purpose, because the helper forces
 # every reference onto a single joined model and `cjoin_on` must reference both sides.
-function _guard_no_cte_reference(filter, context::String, depth::Int = 0)
+#
+# #481 made it generic over the handle type rather than duplicating the walk: `on()`/`cjoin()` refuse
+# BOTH handle kinds, `cjoin_on` refuses only the CTE one. The two wrappers below name which.
+_guard_no_cte_reference(filter, context::String, depth::Int = 0) =
+  _guard_no_handle(filter, CTEReference, _reject_cte_in_join, context, depth)
+
+# Both kinds, for `on()` / `cjoin()`.
+function _guard_no_join_handles(filter, context::String, depth::Int = 0)
+  _guard_no_handle(filter, CTEReference, _reject_cte_in_join, context, depth)
+  _guard_no_handle(filter, JoinedReference, _reject_joined_in_join, context, depth)
+  return nothing
+end
+
+function _guard_no_handle(filter, ::Type{T}, reject::Function, context::String, depth::Int = 0) where T
   # `Base.:(==)(f::FExpression, ::FExpression)` MUTATES `f` in place when `f.operation === nothing`,
   # so `f = F("x"); g = (f == f)` builds a genuine self-cycle (`g.operand === g`). Walking that
   # unbounded is a StackOverflowError — which Julia reports with "program state may be corrupted".
   # A depth cap is enough: no legitimate predicate nests anywhere near this deep, and stopping the
   # walk only means the guard declines to look further, never that it accepts something it saw.
   depth > 32 && return nothing
-  if filter isa CTEReference
-    _reject_cte_in_join(filter, context)
+  if filter isa T
+    reject(filter, context)
   elseif filter isa Pair
-    # RECURSE into both sides rather than testing `isa CTEReference`. A pair's RHS is very often an
-    # expression — `"sku" => (F("note") == CTE("ev","sku"))` — and a flat test walked straight past
+    # RECURSE into both sides rather than testing the handle type flatly. A pair's RHS is very often
+    # an expression — `"sku" => (F("note") == CTE("ev","sku"))` — and a flat test walked straight past
     # it, letting the handle reach the ON clause after all. The rendered SQL was not merely on the
     # wrong join, it compared a varchar to a boolean:
     #   ON … AND "R1_1"."product_sku" = ("R1"."note" = "R1_2"."sku")
-    _guard_no_cte_reference(filter.first, context, depth + 1)
-    _guard_no_cte_reference(filter.second, context, depth + 1)
+    _guard_no_handle(filter.first, T, reject, context, depth + 1)
+    _guard_no_handle(filter.second, T, reject, context, depth + 1)
   elseif filter isa QObject
-    for f in filter.filters; _guard_no_cte_reference(f, context, depth + 1); end
+    for f in filter.filters; _guard_no_handle(f, T, reject, context, depth + 1); end
   elseif filter isa QorObject
-    for f in filter.or; _guard_no_cte_reference(f, context, depth + 1); end
+    for f in filter.or; _guard_no_handle(f, T, reject, context, depth + 1); end
   elseif filter isa OperObject
-    filter.column isa CTEReference && _reject_cte_in_join(filter.column, context)
-    filter.column isa SQLField && filter.column.field isa CTEReference &&
-      _reject_cte_in_join(filter.column.field, context)
-    filter.values isa CTEReference && _reject_cte_in_join(filter.values, context)
-    _guard_no_cte_reference(filter.values, context, depth + 1)
+    filter.column isa T && reject(filter.column, context)
+    filter.column isa SQLField && filter.column.field isa T &&
+      reject(filter.column.field, context)
+    filter.values isa T && reject(filter.values, context)
+    _guard_no_handle(filter.values, T, reject, context, depth + 1)
   elseif filter isa FExpression
     # #444: the comparison overloads (`F("sku") == CTE("ev","sku")`) put the handle in `.operand`,
     # and an `FExpression` is a `FilterType`, so `on`/`cjoin`/`cjoin_on` accept it as an element.
     # Without this arm the predicate was ACCEPTED and then resolved onto the CTE's own join instead
     # of the one the caller named — silently the wrong join, which is the whole defect class #444
     # exists to close. Every slot that can hold a handle is swept, including nested F expressions.
-    filter.field_name isa CTEReference && _reject_cte_in_join(filter.field_name, context)
-    filter.column     isa CTEReference && _reject_cte_in_join(filter.column, context)
-    filter.operand    isa CTEReference && _reject_cte_in_join(filter.operand, context)
-    _guard_no_cte_reference(filter.field_name, context, depth + 1)
-    _guard_no_cte_reference(filter.operand, context, depth + 1)
+    # #481 added `field_name` as a slot a handle can occupy on its own account, since a joined
+    # reference on the LEFT of a comparison lands there.
+    filter.field_name isa T && reject(filter.field_name, context)
+    filter.column     isa T && reject(filter.column, context)
+    filter.operand    isa T && reject(filter.operand, context)
+    _guard_no_handle(filter.field_name, T, reject, context, depth + 1)
+    _guard_no_handle(filter.operand, T, reject, context, depth + 1)
   end
   return nothing
 end
@@ -265,7 +292,8 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
     # The sweep is RECURSIVE on both sides. A flat `isa CTEReference` test missed the common shape
     # `"sku" => (F("note") == CTE("ev","sku"))`, where the handle sits inside an F expression on the
     # RHS — accepted, then resolved onto the CTE's own join instead of the one the caller named.
-    _guard_no_cte_reference(filter, "a join ON clause (on(...) / cjoin(...))")
+    # #481: both handle kinds — a joined-copy reference names a `cjoin_on` join, not this one.
+    _guard_no_join_handles(filter, "a join ON clause (on(...) / cjoin(...))")
     if key isa String
       return _normalize_cjoin_filter_key(key, prefix, foreign_model) => filter.second
     end
@@ -277,14 +305,9 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
   elseif filter isa OperObject
     new_oper = deepcopy(filter)
 
-    # A `Q(...)`/`Qor(...)` element arrives here already converted, so the CTE handle is inside the
-    # OperObject rather than on a raw Pair. Same refusal, same reason (#444).
-    new_oper.column isa SQLField && new_oper.column.field isa CTEReference &&
-      _reject_cte_in_join(new_oper.column.field, "a join ON clause (on(...) / cjoin(...))")
-    new_oper.column isa CTEReference &&
-      _reject_cte_in_join(new_oper.column, "a join ON clause (on(...) / cjoin(...))")
-    new_oper.values isa CTEReference &&
-      _reject_cte_in_join(new_oper.values, "a join ON clause (on(...) / cjoin(...))")
+    # A `Q(...)`/`Qor(...)` element arrives here already converted, so the handle is inside the
+    # OperObject rather than on a raw Pair. Same refusal, same reason (#444/#481).
+    _guard_no_join_handles(new_oper, "a join ON clause (on(...) / cjoin(...))")
 
     if new_oper.column isa SQLField && new_oper.column.field isa String
       new_oper.column = SQLField(
@@ -306,8 +329,8 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
     # #444: sweep the F expression BEFORE prefixing. `F("sku") == CTE("ev","sku")` is a `FilterType`,
     # so `on()`/`cjoin()` accept it, and the arms below only rewrite `String` slots — a handle rode
     # through untouched and its predicate then resolved onto the CTE's join rather than the join the
-    # caller named. Same refusal as a raw pair; `_guard_no_cte_reference` walks the nested slots.
-    _guard_no_cte_reference(filter, "a join ON clause (on(...) / cjoin(...))")
+    # caller named. Same refusal as a raw pair; the sweep walks the nested slots (#481: both kinds).
+    _guard_no_join_handles(filter, "a join ON clause (on(...) / cjoin(...))")
     new_filter = deepcopy(filter)
 
     if new_filter.field_name isa String
@@ -838,6 +861,19 @@ function _set_field_from_sql_function(func::SQLTypeFunction, field::String, inst
     end
   end
 
+end
+# #481 — a CTE body that projects a joined-copy column. The body is its own build with its own
+# `custom_join`, so the alias resolves against that inner query; without this method the projection
+# reaches the `::String` method below as a `JoinedReference` and dies with a MethodError.
+function _set_field_from_sql_function(func::JoinedReference, field::String, instruct::SQLInstruction)
+  config = get(instruct.object.custom_join, func.alias, nothing)
+  if config isa Dict{String,Any} && get(config, "no_anchor", false) == true
+    target_model = getfield(instruct.object.model._module, Symbol(config["target_model"]::String))::PormGModel
+    haskey(target_model.fields, func.path) && return target_model.fields[func.path]
+  end
+  throw(UnknownFieldError(
+    "Error in _set_field_from_sql_function, Joined(\"$(func.alias)\", \"$(func.path)\") names no " *
+    "cjoin_on alias on this CTE body"))
 end
 function _set_field_from_sql_function(func::String, field::String, instruct::SQLInstruction)
   if haskey(instruct.tab_field_cache, (:base,field))

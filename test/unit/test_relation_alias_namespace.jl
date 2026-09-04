@@ -89,7 +89,7 @@ PormG.Models.set_models(@__MODULE__, "ran_mock")
 end
 
 const RAN = RanModels
-import PormG.QueryBuilder: F, inspect_query
+import PormG.QueryBuilder: F, inspect_query, Joined
 using PormG: CTE
 
 _ran_sql(q; conn = _RAN_SL) = inspect_query(q; connection = conn)[:sql_text]
@@ -122,7 +122,7 @@ _ran_parent() = begin c = RAN.Ran_parent.objects; c.values("id", "sku");  c end
       # two never actually competed in SQL — the collision was entirely internal.
       q1 = RAN.Ran_child.objects
       q1.with("b2" => _ran_grand(), join_field = "parent" => "id", join_type = "INNER")
-      q1.cjoin_on("Ran_parent", alias = "b2", on = [F("b2.sku") == F("note")])
+      q1.cjoin_on("Ran_parent", alias = "b2", on = [Joined("b2", "sku") == F("note")])
       q1.values("note", "cte_code" => CTE("b2", "code"))
       sql1 = _ran_sql(q1; conn = conn)
 
@@ -276,7 +276,7 @@ end
     producers = [
       ("cjoin_on", () -> begin
         q = RAN.Ran_child.objects
-        q.cjoin_on("Ran_parent", alias = "b2", on = [F("b2.sku") == F("note")], join_type = "CROSS")
+        q.cjoin_on("Ran_parent", alias = "b2", on = [Joined("b2", "sku") == F("note")], join_type = "CROSS")
         q.values("note"); q
       end),
       ("on()", () -> begin

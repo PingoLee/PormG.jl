@@ -125,9 +125,26 @@ _check_function(x::CTEReference) = x
 # recursive rewrite: descend `.column` / `.field` only, NEVER `kwargs`. That boundary is load-bearing
 # here — `Y_M(["seen"])` is `ToChar(x, "YYYY-MM", …)` (functions.jl), so the format literal sits in
 # kwargs and retagging it would corrupt the rendered function.
+#
+# #481 widened the walk. A COMPOSITE transform does not build a bare function over the column: the
+# `@quarter` / `@quadrimester` keys expand to `Concat([Cast(Year(x)), Value("-Q"), Case([When(...)])])`
+# (`functions.jl`), so the walk also meets an `SQLText` literal, an `SQLField` wrapper and the
+# `OperObject` inside each `When`. Without these three arms `CTE("ev","seen__@quarter")` — and the
+# `Joined` twin below — died on the catch-all with an "Internal … please report" message for a
+# documented transform. An `SQLText` is a LITERAL (the `"-Q"` separator) and must never be retagged,
+# which is the same boundary the `kwargs` rule above draws.
 _retag_cte_column(x::String, name::String) = CTEReference(name=name, path=x)
 _retag_cte_column(x::CTEReference, ::String) = x
+_retag_cte_column(x::SQLTypeText, ::String) = x
 function _retag_cte_column(x::SQLTypeFunction, name::String)
+  x.column = _retag_cte_column(x.column, name)
+  return x
+end
+function _retag_cte_column(x::SQLTypeField, name::String)
+  x.field = _retag_cte_column(x.field, name)
+  return x
+end
+function _retag_cte_column(x::SQLTypeOper, name::String)
   x.column = _retag_cte_column(x.column, name)
   return x
 end
@@ -163,6 +180,46 @@ _field_cache_key(v::SQLTypeField)::Union{Nothing,MemoKey} =
 # #474 — the same key from a handle rather than from a built SQLField, for the sites that resolve a
 # `CTE(...)` reference directly and then read back what `_build_row_join` cached for it.
 _cte_cache_key(ref::CTEReference)::MemoKey = (:cte, _cte_as(ref))
+
+# #481 — the joined-copy twin of the helpers above, arm for arm (see the composite-transform note
+# there for why `SQLTypeText` / `SQLTypeField` / `SQLTypeOper` are walked).
+#
+# Never actually reached today: every entry point (`_check_filter`, `_values_field`, `_order_by!`)
+# delegates on `ref.path`, which is a `String`, so `_check_function` sees the path and not the
+# handle. Defined for symmetry with the CTE twin, and so a future caller that does pass a handle
+# gets the identity rather than a MethodError.
+_check_function(x::JoinedReference) = x
+
+_retag_joined_column(x::String, alias::String) = JoinedReference(alias, x, false)
+_retag_joined_column(x::JoinedReference, ::String) = x
+_retag_joined_column(x::SQLTypeText, ::String) = x
+function _retag_joined_column(x::SQLTypeFunction, alias::String)
+  x.column = _retag_joined_column(x.column, alias)
+  return x
+end
+function _retag_joined_column(x::SQLTypeField, alias::String)
+  x.field = _retag_joined_column(x.field, alias)
+  return x
+end
+function _retag_joined_column(x::SQLTypeOper, alias::String)
+  x.column = _retag_joined_column(x.column, alias)
+  return x
+end
+_retag_joined_column(x::Vector, alias::String) = Any[_retag_joined_column(v, alias) for v in x]
+function _retag_joined_column(x, ::String)
+  throw(QueryBuildError(
+    "Internal: a Joined reference resolved to an unexpected column expression (::$(typeof(x))). " *
+    "Please report this (#481)."))
+end
+
+function _retag_joined_field!(field::SQLField, alias::String)
+  field.field = _retag_joined_column(field.field, alias)
+  field._as === nothing || (field._as = _joined_as(alias, field._as))
+  field.root = :joined
+  return field
+end
+
+_joined_cache_key(ref::JoinedReference)::MemoKey = (:joined, _joined_as(ref))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -253,6 +310,16 @@ end
 # Same shape as the SQLTypeF method below it (that is the idiom `F("r91__raceid")` used pre-#444).
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeCTE
   _reject_cte_desc(x.second, "a filter comparison")
+  if haskey(PormGsuffix, x.first[end])
+    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  else
+    return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
+  end
+end
+# #481 — the same shape for a joined-copy handle on the RHS:
+# `filter("driverid" => Joined("d", "driverid"))` compares two columns.
+function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeJoined
+  _reject_joined_desc(x.second, "a filter comparison")
   if haskey(PormGsuffix, x.first[end])
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
@@ -466,6 +533,16 @@ function _check_filter(x::Pair)
     isa(oper, SQLTypeOper) && isa(oper.column, SQLField) && _retag_cte_field!(oper.column, ref.name)
     return oper
   end
+  # #481: the joined-copy twin, for exactly the reason above. Delegating on `ref.path` is also what
+  # makes an ALIAS-QUALIFIED OPERATOR PAIR work — `filter(Joined("d","points__@gte") => 3)` — which
+  # the removed `F("d.points")` spelling could never express: the `__@` peel and the RHS-typed
+  # `_get_pair_to_oper` ladder run on the path, and only the column it produced is retagged.
+  if isa(x.first, JoinedReference)
+    ref = _reject_joined_desc(x.first, "filter(...)")
+    oper = _check_filter(ref.path => x.second)
+    isa(oper, SQLTypeOper) && isa(oper.column, SQLField) && _retag_joined_field!(oper.column, ref.alias)
+    return oper
+  end
   if isa(x.first, AbstractString)
     key = String(x.first)
     check = String.(split(key, "__@"))
@@ -661,6 +738,19 @@ function _unknown_field(model::PormGModel, name::AbstractString;
   # the same reason.
   tail *= isempty(aliases) ? "" :
     "; and the declared aliases: \e[4m\e[32m$(join(sort(aliases), ", "))\e[0m"
+  # #481 — a dotted name is almost always the removed `F("alias.col")` spelling rather than a column
+  # anyone believes exists. Without this the reader is sent looking for a field named `d.surname`,
+  # which is exactly the misdirection the fail-open resolver used to produce. It is a HINT on the
+  # message, not a resolver: the name still does not exist and the error is still the same type.
+  # Shaped like an alias reference — exactly one dot, with an identifier on each side. A looser
+  # `occursin('.', name)` also fired on `"1.5"`, `"a.b.c"`, `".note"` and `"note."`, none of which
+  # anyone wrote meaning a joined copy. A schema-qualified `"public.result"` still matches, and
+  # that is accepted: it is indistinguishable from an alias reference by shape alone, and the hint
+  # is additive text on an error the name earns either way.
+  looks_like_alias_ref = occursin(r"^[\p{L}_][\p{L}\p{M}\p{N}_]*\.[\p{L}_][\p{L}\p{M}\p{N}_]*$", name)
+  tail *= looks_like_alias_ref ?
+    "\n  If you meant a \e[4m\e[32mcjoin_on\e[0m joined copy: \e[4m\e[31mF(\"alias.column\")\e[0m " *
+    "was removed in #481 — write \e[4m\e[32mJoined(\"alias\", \"column\")\e[0m instead." : ""
   return UnknownFieldError(
     "the column \e[4m\e[31m$(name)\e[0m not found in \e[4m\e[32m$(Models.model_table_name(model))\e[0m, " *
     "that contains the fields: \e[4m\e[32m$(join(choices, ", "))\e[0m$(tail)")
@@ -801,6 +891,11 @@ end
 function _resolve_window_order(v::CTEReference, instruc::SQLInstruction)::String
   orientation = v.desc ? "DESC" : "ASC"
   return string(_get_select_query(CTEReference(name=v.name, path=v.path), instruc), " ", orientation)
+end
+# #481 — the joined-copy twin: consume `desc` here, then render through the same resolver.
+function _resolve_window_order(v::JoinedReference, instruc::SQLInstruction)::String
+  orientation = v.desc ? "DESC" : "ASC"
+  return string(_get_select_query(JoinedReference(v.alias, v.path, false), instruc), " ", orientation)
 end
 
 function _build_over_clause(over::WindowSpec, instruc::SQLInstruction)::String
@@ -1036,6 +1131,11 @@ end
 function _get_select_query(v::CTEReference, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   return _build_row_join(_cte_join_path(v), instruc, cte=true)
 end
+# #481 — unlike a CTE reference, a joined-copy reference does NOT materialize a join: `cjoin_on`
+# already declared it, and `build()`'s second loop emits it. This only has to render the column.
+function _get_select_query(v::JoinedReference, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
+  return _resolve_joined(v, instruc)
+end
 function _get_select_query(v::SubqueryObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   # #92: scalar single-column correlated subquery projected as a SELECT-list column.
   _guard_no_nested_projection(instruc, "Subquery")
@@ -1174,13 +1274,10 @@ end
 function _get_filter_query(v::String, instruc::SQLInstruction)
   # V does not have be suffix
   contains(v, "@") && return _get_filter_query(split(v, "__@"), instruc)
-  # #45: alias-qualified reference "alias.column" for a cjoin_on joined copy. Only attempted when a
-  # dot is present and there is no join-path "__"; returns nothing (falls through) when the prefix is
-  # not a registered anchor-less alias, so ordinary field/path resolution is unaffected.
-  if occursin('.', v) && !occursin("__", v)
-    resolved = _resolve_cjoin_on_alias_column(v, instruc)
-    resolved !== nothing && return resolved
-  end
+  # #481 removed the `"alias.column"` branch that used to sit here. It resolved FAIL-OPEN — an
+  # unknown prefix fell through to ordinary field resolution and reported an unknown field named
+  # `"typo.col"` — and it existed on this resolver only, which is why the same spelling never
+  # worked in `values(...)` or in an operator pair. `Joined(alias, path)` replaces it.
   parts = split(v, "__")
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc, as=false)
@@ -1190,20 +1287,64 @@ function _get_filter_query(v::String, instruc::SQLInstruction)
   end
 end
 
-# #45: resolve "alias.column" against a `cjoin_on` (no_anchor) join declared on the query. Returns
-# the quoted "alias"."db_column" or nothing when `alias` is not a registered anchor-less alias.
-# Reads the target model from the custom_join config (row_join is String-typed and can't hold it).
-function _resolve_cjoin_on_alias_column(v::String, instruc::SQLInstruction)
-  parts = split(v, '.')
-  length(parts) == 2 || return nothing
-  alias, col = String(parts[1]), String(parts[2])
-  config = get(instruc.object.custom_join, alias, nothing)
-  (config isa Dict{String,Any} && get(config, "no_anchor", false) == true) || return nothing
+# #481 — resolve a `Joined(alias, path)` reference to `"alias"."db_column"`. It replaces #45's
+# `_resolve_cjoin_on_alias_column`, which took a `"alias.column"` String and returned `nothing` for
+# an unknown prefix so the caller could fall through. Every exit here is loud: a reference that
+# names no declared alias is the caller's typo, and reporting it as an unknown *field* (what the
+# fail-open path did) sent people looking for a column that was never the problem.
+#
+# The lookup is `object.custom_join`, NOT `instruct.row_join`: `cjoin_on` rows materialize in
+# `build()`'s second loop, after `values()` / `filter()` / `order_by()` have already rendered, so at
+# the moment a projection resolves the row may not exist yet — but the declaration always does.
+# Rendering needs only the alias and the target model, both of which the config carries.
+#
+# The rendered text is byte-identical to what the dotted-string path produced, which is what keeps
+# the #435 relocation guard, the #448 self-reference guard and Phase 1b working: all three
+# substring-match `"alias".` in the emitted ON clause.
+function _resolve_joined(ref::JoinedReference, instruc::SQLInstruction)::String
+  _reject_joined_desc(ref, "a projection or predicate")
+  # A `__@` segment is one of two different things, and they end differently.
+  #
+  # A TRANSFORM (`@year`, `@yyyy_mm`, …) is part of the column expression: the removed
+  # `F("b2.dt__@year")` spelling supported it inside an ON clause — `_get_filter_query(::String)`
+  # peeled it before reaching the alias branch — and dropping that would be a capability
+  # regression, the exact failure #444 recorded when it swapped in a typed handle without widening
+  # the paths around it. So it is built here, over the bare reference, through the same
+  # `_check_function` ladder every other clause uses.
+  #
+  # An operator SUFFIX (`@gte`, `@in`, …) is a comparison, not a column, and belongs on the LEFT of
+  # a filter pair where `_check_filter` peels it. Reaching here with one means the caller wrote it
+  # somewhere that cannot carry it.
+  if occursin("__@", ref.path)
+    segments = String.(split(ref.path, "__@"))
+    haskey(PormGsuffix, segments[end]) && throw(QueryBuildError(
+      "Joined(\"$(ref.alias)\", \"$(ref.path)\") carries an operator suffix, which is only meaningful " *
+      "on the left of a filter pair — write filter(Joined(\"$(ref.alias)\", \"$(ref.path)\") => value)."))
+    transformed = _retag_joined_column(_check_function(segments), ref.alias)
+    return _get_select_query(transformed, instruc)
+  end
+  occursin("__", ref.path) && throw(QueryBuildError(
+    "Joined(\"$(ref.alias)\", \"$(ref.path)\") cannot traverse a relation: a cjoin_on joined copy is " *
+    "one table, so its reference is a single column on that model. Declare another cjoin_on for the " *
+    "next hop and reference its alias."))
+  config = get(instruc.object.custom_join, ref.alias, nothing)
+  if !(config isa Dict{String,Any} && get(config, "no_anchor", false) == true)
+    declared = [k for (k, c) in instruc.object.custom_join
+                if c isa Dict{String,Any} && get(c, "no_anchor", false) == true]
+    throw(QueryBuildError(
+      "Joined(\"$(ref.alias)\", …) names no cjoin_on alias on this query. " *
+      (isempty(declared) ? "This query declares no cjoin_on at all." :
+       "Declared aliases: $(join(declared, ", ")).")))
+  end
   target_model = getfield(instruc.object.model._module, Symbol(config["target_model"]::String))::PormGModel
-  (col in target_model.field_names) || throw(UnknownFieldError(
-    "cjoin_on: column '$(col)' not found on aliased model '$(target_model.name)' (alias '$(alias)')."))
-  return string(quote_identifier(alias, instruc.connection), ".",
-                safe_column_identifier(Models.field_db_column(target_model.fields[col], col), instruc.connection))
+  (ref.path in target_model.field_names) ||
+    throw(_unknown_field(target_model, ref.path))
+  # Memoize the joined field so a filter's RHS formats through it (the same service
+  # `tab_field_cache` performs for a base-model column), under the `:joined` namespace so an
+  # identically spelled field path or CTE reference cannot read or claim the entry.
+  instruc.tab_field_cache[_joined_cache_key(ref)] = target_model.fields[ref.path]
+  return string(quote_identifier(ref.alias, instruc.connection), ".",
+                safe_column_identifier(Models.field_db_column(target_model.fields[ref.path], ref.path), instruc.connection))
 end
 function _get_filter_query(v::SQLTypeFunction, instruc::SQLInstruction)
   return _get_select_query(v, instruc) # Does this have any coletaral efect?
@@ -1217,6 +1358,11 @@ function _get_filter_query(v::OuterRefObject, instruc::SQLInstruction)
 end
 function _get_filter_query(v::CTEReference, instruc::SQLInstruction)
   return _build_row_join(_cte_join_path(v), instruc, as=false, cte=true)
+end
+# #481 — see `_get_select_query(::JoinedReference, …)`: the join already exists, so only the column
+# is rendered, and both clauses share one resolver.
+function _get_filter_query(v::JoinedReference, instruc::SQLInstruction)
+  return _resolve_joined(v, instruc)
 end
 
 # #444 — lower a CTE handle to the segment vector `_build_row_join` walks. It is byte-for-byte the
@@ -1379,7 +1525,8 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
   # different route. Measured against main by rendering both spellings: without this line
   # `filter(CTE("ev","seen__@yyyy_mm__@lte") => "1991-10")` degraded from `"seen" < '1991-11-01'`
   # back to `to_char("seen",'YYYY-MM') <= '1991-10'`.
-  isa(raw_field, Union{String,CTEReference}) || return nothing
+  # #481: `JoinedReference` for the same reason, one namespace over.
+  isa(raw_field, Union{String,CTEReference,JoinedReference}) || return nothing
   v.operator in ("=", ">=", ">", "<=", "<") || return nothing
   (v.values isa AbstractString || v.values isa Number) || return nothing
 
@@ -1489,6 +1636,15 @@ function _resolve_bucket_column(ref::CTEReference, instruc::SQLInstruction)
   f_meta = get(instruc.tab_field_cache, _cte_cache_key(ref), nothing)   # #474: namespaced memo
   f_meta === nothing && return (nothing, "")
   return _checked_bucket_column(f_meta, String(last(split(ref.path, "__"))), column_sql, instruc)
+end
+
+# #481 — the joined-copy twin. `_resolve_joined` writes the memo entry as it renders, so the read
+# below always hits; the same drift guard then applies.
+function _resolve_bucket_column(ref::JoinedReference, instruc::SQLInstruction)
+  column_sql = _get_select_query(ref, instruc)
+  f_meta = get(instruc.tab_field_cache, _joined_cache_key(ref), nothing)
+  f_meta === nothing && return (nothing, "")
+  return _checked_bucket_column(f_meta, ref.path, column_sql, instruc)
 end
 
 # Drift guard: the rewrite may only range on a column that IS the one `f_meta` describes. That holds
@@ -1659,7 +1815,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   if isa(v.column, SQLTypeField) && v.column._as !== nothing && haskey(instruc.json_lookup_cache, _field_cache_key(v.column))
     return _render_json_lookup_comparison(v, column, instruc)
   end
-  if isa(v.values, Union{SQLTypeF,SQLTypeCTE})
+  if isa(v.values, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
     @pormg_debug false
     # F expressions are safe since they reference model fields; a CTE handle (#444) is the same
     # thing scoped to a CTE — `filter("raceid" => CTE("r91", "raceid"))` is a column comparison,

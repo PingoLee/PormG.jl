@@ -133,24 +133,26 @@ CTE reference. A `Bool` cannot hold three values, and adding a second flag would
 """
 const MemoKey = Tuple{Symbol,String}
 
-"""Field references in SQL: text, functions, string names, projected subqueries (Subquery/Exists, #92), or a CTE column handle (`CTE(name, path)`, #444)."""
-const FieldPart = Union{SQLTypeText,SQLTypeFunction,String,SQLTypeF,SubqueryObject,ExistsObject,SQLTypeCTE}
+"""Field references in SQL: text, functions, string names, projected subqueries (Subquery/Exists, #92), a CTE column handle (`CTE(name, path)`, #444), or a joined-copy column handle (`Joined(alias, path)`, #481)."""
+const FieldPart = Union{SQLTypeText,SQLTypeFunction,String,SQLTypeF,SubqueryObject,ExistsObject,SQLTypeCTE,SQLTypeJoined}
 
-"""Column references: fields, functions, strings, CTE column handles, or vectors of operations."""
-const ColumnPart = Union{SQLTypeField,SQLTypeFunction,String,SQLTypeF,SQLTypeCTE,Vector{Union{String,SQLTypeF}}}
+"""Column references: fields, functions, strings, CTE or joined-copy column handles, or vectors of operations."""
+const ColumnPart = Union{SQLTypeField,SQLTypeFunction,String,SQLTypeF,SQLTypeCTE,SQLTypeJoined,Vector{Union{String,SQLTypeF}}}
 
 """Window PARTITION BY expressions."""
 # #444: `SQLTypeCTE` — PARTITION BY a CTE column worked before the change (the reference was a
-# plain String, already admitted here) and must keep working.
-const WindowPartitionPart = Union{String,SQLTypeField,SQLTypeFunction,SQLTypeF,SQLTypeCTE}
+# plain String, already admitted here) and must keep working. #481: `SQLTypeJoined` for the same
+# reason one level up — `F("d.col")` was a plain String here too.
+const WindowPartitionPart = Union{String,SQLTypeField,SQLTypeFunction,SQLTypeF,SQLTypeCTE,SQLTypeJoined}
 
 """Window ORDER BY expressions."""
 # #444: `SQLTypeCTE` — a window ORDER BY over a CTE column worked before the change; it is also
-# the second site (after the fluent `order_by`) where `CTE(...; desc = true)` is meaningful.
-const WindowOrderPart = Union{String,SQLTypeOrder,SQLTypeCTE}
+# the second site (after the fluent `order_by`) where `CTE(...; desc = true)` is meaningful. #481:
+# `SQLTypeJoined` likewise.
+const WindowOrderPart = Union{String,SQLTypeOrder,SQLTypeCTE,SQLTypeJoined}
 
 """Window function argument expressions."""
-const WindowColumnPart = Union{Nothing,String,SQLTypeField,SQLTypeText,SQLTypeFunction,SQLTypeF,SQLTypeCTE}
+const WindowColumnPart = Union{Nothing,String,SQLTypeField,SQLTypeText,SQLTypeFunction,SQLTypeF,SQLTypeCTE,SQLTypeJoined}
 
 """Optional strings (often used for aliases or configs)."""
 const OptionalString = Union{String,Nothing}
@@ -439,7 +441,7 @@ That is a internal function, please do not use it.
   # scalar arm so `filter("uid" => uuid)` can hold one value. Widening only the vector arm left plain
   # equality on a UUIDField raising a `convert` MethodError — an untyped error on the most ordinary
   # spelling there is, which is precisely what this pair of issues exists to remove.
-  values::Union{String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,SQLObjectHandler,SQLTypeF,SQLTypeFunction,SQLTypeCTE,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF,Base.UUID}
+  values::Union{String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,SQLObjectHandler,SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF,Base.UUID}
   column::ColumnPart # Vector{String} is needed
 end
 OP(column::String, value) = OperObject(operator="=", values=value, column=SQLField(column))
@@ -537,11 +539,14 @@ const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 # `F(field_name)` (documented below) and the Base.:+/-/*// overloads further down; the struct
 # itself is internal.
 @kwdef mutable struct FExpression <: SQLTypeF
-  field_name::Union{String,Integer,SQLTypeF,SQLTypeFunction}
+  # #481: `SQLTypeJoined` so a joined-copy reference can be the LEFT side of a comparison
+  # (`Joined("d","driverid") == F("driverid")`). It renders through `_set_update_query`, the same
+  # seam a `String` field_name uses.
+  field_name::Union{String,Integer,SQLTypeF,SQLTypeFunction,SQLTypeJoined}
   operation::OptionalString = nothing  # +, -, *, /, etc.
-  # #444: `SQLTypeCTE` so `F("note") == CTE("ev","code")` builds a comparison instead of
+  # #444/#481: `SQLTypeCTE`/`SQLTypeJoined` so `F("note") == CTE("ev","code")` builds a comparison instead of
   # falling through to `Base.==` and silently yielding a Bool.
-  operand::Union{String,Integer,Float64,SQLTypeF,SQLTypeFunction,SQLTypeCTE,Dates.Period,Dates.CompoundPeriod,Interval,Nothing} = nothing
+  operand::Union{String,Integer,Float64,SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,Dates.Period,Dates.CompoundPeriod,Interval,Nothing} = nothing
   function_name::String = "F"
   column::Union{String,SQLTypeField,Vector{String}} = ""
   aggregate::Bool = false
@@ -687,7 +692,7 @@ end
 Base.:+(operand::_DurationOperand, f::FExpression) = f + operand
 
 # Comparison operations for F expressions
-function Base.:(==)(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE})
+function Base.:(==)(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined})
   if f.operation === nothing
     f.operation = "="
     f.operand = operand
@@ -696,7 +701,7 @@ function Base.:(==)(f::FExpression, operand::Union{Integer,Float64,String,Dates.
     return FExpression(field_name=f, operation="=", operand=operand, function_name="F", column="", aggregate=f.aggregate)
   end
 end
-function Base.:(!=)(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE})
+function Base.:(!=)(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined})
   if f.operation === nothing
     f.operation = "!="
     f.operand = operand
@@ -705,7 +710,7 @@ function Base.:(!=)(f::FExpression, operand::Union{Integer,Float64,String,Dates.
     return FExpression(field_name=f, operation="!=", operand=operand, function_name="F", column="", aggregate=f.aggregate)
   end
 end
-function Base.:>(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE})
+function Base.:>(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined})
   if f.operation === nothing
     f.operation = ">"
     f.operand = operand
@@ -715,7 +720,7 @@ function Base.:>(f::FExpression, operand::Union{Integer,Float64,String,Dates.Dat
   end
 end
 
-function Base.:<(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE})
+function Base.:<(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined})
   if f.operation === nothing
     f.operation = "<"
     f.operand = operand
@@ -725,7 +730,7 @@ function Base.:<(f::FExpression, operand::Union{Integer,Float64,String,Dates.Dat
   end
 end
 
-function Base.:>=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE})
+function Base.:>=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined})
   if f.operation === nothing
     f.operation = ">="
     f.operand = operand
@@ -735,7 +740,7 @@ function Base.:>=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Da
   end
 end
 
-function Base.:<=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE})
+function Base.:<=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined})
   if f.operation === nothing
     f.operation = "<="
     f.operand = operand
@@ -744,6 +749,7 @@ function Base.:<=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Da
     return FExpression(field_name=f, operation="<=", operand=operand, function_name="F", column="", aggregate=f.aggregate)
   end
 end
+
 # function Base.:>(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
 #   return OperObject(operator = ">", values = operand, column = f)
 # end
@@ -913,6 +919,124 @@ function _reject_cte_desc(ref::CTEReference, context::AbstractString)
   return ref
 end
 
+# #481 — a column of a `cjoin_on` joined copy. Same shape and the same reasoning as `CTEReference`
+# one level up: NOT `<: SQLTypeF`, so it is not auto-admitted into `FilterType`, `FObject.column`
+# and the ~18 `functions.jl` unions; every admission is a named seam. It is also NOT `<: SQLTypeCTE`,
+# because the two are opposites at the one place it matters — a CTE handle is REFUSED inside a join
+# ON clause (`_guard_no_cte_reference`), which is exactly where a joined-copy reference belongs.
+#
+# Immutable: nothing rewrites a reference in place, and the retag walker replaces rather than
+# mutates. That also makes it safe to share between a `deepcopy`'d field and its original.
+struct JoinedReference <: SQLTypeJoined
+  alias::String       # the `cjoin_on(...; alias = ...)` label this column belongs to
+  path::String        # a column ON THAT MODEL (optionally with an operator suffix)
+  desc::Bool          # order_by only; refused everywhere else
+end
+
+"""
+    Joined(alias::AbstractString, path::AbstractString; desc::Bool = false) -> JoinedReference
+
+Reference a column of the joined copy declared by [`.cjoin_on(...)`](@ref object). The joined copy's
+columns live in their **own namespace**, so an alias may share a name with a model field or with a
+CTE and neither shadows the other (#481):
+
+```julia
+q = M.Result.objects
+q.cjoin_on("Driver", alias = "d", on = [Joined("d", "driverid") == F("driverid")])
+q.values("points", "who" => Joined("d", "surname"))
+q.filter(Joined("d", "nationality") => "Brazilian")
+```
+
+Inside a `cjoin_on` `on` list the two sides of the join are named by how you write the reference:
+
+| You write | Resolves to |
+|-----------|-------------|
+| `F("col")` (bare) | the **base** table — the query's own model |
+| `Joined("d", "col")` | the **joined copy** declared under `alias = "d"` |
+
+A reference may name **another** `cjoin_on`'s alias, which is how a join correlates against a third
+table; the emission-order rule in [Custom Joins](read/custom_joins.md) still applies. Operator
+suffixes work in `filter(...)`, so a comparison against a literal on the joined side is an ordinary
+pair — `filter(Joined("d", "points__@gte") => 3)`.
+
+`desc = true` is meaningful in `order_by(...)` and in a window's `order_by`; anywhere else it raises
+a `QueryBuildError`. An unaliased projection is named by joining the two with a double underscore,
+so `values(Joined("d", "surname"))` emits the output column `d__surname`.
+
+This replaces the `F("d.surname")` dotted-string spelling, which was removed in the same change: it
+resolved fail-open (a typo in the alias reported an unknown *field* named `"typo.col"`), it could not
+carry an operator suffix, and the bare string form could not be projected — `values("d.surname")`
+raised, because the dotted branch lived on the filter resolver only. (Wrapped in `F(...)` it did
+project, since `F` routes through that resolver.)
+
+See also [Custom Joins](read/custom_joins.md).
+"""
+function Joined(alias::AbstractString, path::AbstractString; desc::Bool=false)
+  normalized_alias = String(alias)
+  normalized_path = String(path)
+  isempty(normalized_alias) && throw(QueryBuildError("Joined requires a non-empty cjoin_on alias"))
+  isempty(normalized_path) && throw(QueryBuildError(
+    "Joined(\e[4m\e[31m$(normalized_alias)\e[0m, \"\") requires a column on the joined model. " *
+    "Example: \e[4m\e[32mJoined(\"$(normalized_alias)\", \"surname\")\e[0m."))
+  # The alias is not identifier-validated here on purpose: `_cjoin_on` already validates it
+  # fail-closed at declaration, and an alias that could not pass that check can never match a
+  # declared one — so it reports as an unknown alias, naming the ones that exist.
+  return JoinedReference(normalized_alias, normalized_path, desc)
+end
+Base.deepcopy(x::JoinedReference) = JoinedReference(x.alias, x.path, x.desc)
+Base.show(io::IO, x::JoinedReference) = print(io, "Joined(\"", x.alias, "\", \"", x.path, "\")")
+# `Base.:(==)` on this type builds a PREDICATE (see the comparison methods below), so the generic
+# `isequal` fallback — which calls `==` and expects a Bool — would throw a TypeError on any value
+# comparison: `isequal(a, b)`, `a in [b]`, `findfirst(==(a), v)`. The struct is immutable and every
+# field is compared by value in `hash`, so identity is the right answer here and it keeps
+# `Dict`/`Set`/`unique` behaving. `FExpression` carries the same hazard without this guard; adding
+# it there is a separate change with its own blast radius.
+Base.isequal(a::JoinedReference, b::JoinedReference) = a === b
+# ...and against anything else. The comparison methods below accept several operand types, so
+# without this a HETEROGENEOUS container (`isequal(handle, "d__x")`, `isequal(handle, CTE(...))`)
+# would still route through `==` and throw. First argument is ours, so this is not piracy.
+#
+# The `::Missing` arm is NOT redundant: Base defines `isequal(::Any, ::Missing)` (missing.jl), so
+# the `::Any` method alone is ambiguous with it for `isequal(handle, missing)` — Aqua's method
+# ambiguity check caught exactly that. Answering `false` matches what Base's method would have
+# returned, so the disambiguation changes no result.
+Base.isequal(::JoinedReference, ::Any) = false
+Base.isequal(::JoinedReference, ::Missing) = false
+
+# The output/cache spelling of a joined-copy reference — `alias__path`, matching `_cte_as`'s shape
+# one level up, so every `_as`-keyed consumer downstream reads a name the caller can recognise.
+_joined_as(alias::AbstractString, path::AbstractString) = string(alias, "__", path)
+_joined_as(ref::JoinedReference) = _joined_as(ref.alias, ref.path)
+
+# Guard for every site that accepts a joined reference but cannot express an ordering direction.
+function _reject_joined_desc(ref::JoinedReference, context::AbstractString)
+  ref.desc && throw(QueryBuildError(
+    "\e[4m\e[31mdesc = true\e[0m on \e[4m\e[31mJoined(\"$(ref.alias)\", \"$(ref.path)\")\e[0m is only " *
+    "meaningful in \e[4m\e[32morder_by(...)\e[0m, not in $(context). Drop it here."))
+  return ref
+end
+
+# #481 — the six comparisons with a JOINED-COPY reference on the LEFT, which is the spelling a
+# `cjoin_on` ON clause is written in: `Joined("d","driverid") == F("driverid")`.
+#
+# Defined HERE, after the struct, because a method signature is evaluated when the method is
+# defined — not lazily like its body — so these cannot sit beside the `FExpression` comparisons
+# further up the file.
+#
+# They build an `FExpression` so the result is a `FilterType` and takes the identical render path as
+# the `F(...)`-on-the-left form: `_set_update_query` resolves the `field_name` slot, which admits
+# `SQLTypeJoined`. Unlike the `F` methods there is no in-place arm — a `JoinedReference` is
+# immutable and has no `operation` slot to fill, so every comparison constructs, which also means
+# `j == j` cannot build the self-cycle `f == f` does. `_reject_joined_desc` fires because an
+# ordering direction cannot mean anything in a predicate.
+for (op, sym) in ((:(==), "="), (:(!=), "!="), (:(>), ">"), (:(<), "<"), (:(>=), ">="), (:(<=), "<="))
+  @eval function Base.$op(j::JoinedReference,
+                          operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined})
+    _reject_joined_desc(j, "a comparison")
+    return FExpression(field_name=j, operation=$sym, operand=operand, function_name="F", column="", aggregate=false)
+  end
+end
+
 #
 # SQLTypeFunction Objects (functions from sql)
 #
@@ -923,7 +1047,7 @@ end
   # builds a `ToChar` over the CTE's column, and the retag puts the handle here. It does NOT open the
   # aggregate door: `Sum`/`Avg`/`Count`/`Max`/`Min` refuse a `CTEReference` at the constructor
   # (functions.jl), so no aggregate FObject can ever be built holding one.
-  column::Union{String,SQLTypeField,SQLTypeText,SQLTypeCTE,N,Vector{N},Vector{T},SQLTypeOper,SQLTypeQ,SQLTypeQor,SQLTypeF} where {N<:SQLTypeFunction,T}
+  column::Union{String,SQLTypeField,SQLTypeText,SQLTypeCTE,SQLTypeJoined,N,Vector{N},Vector{T},SQLTypeOper,SQLTypeQ,SQLTypeQor,SQLTypeF} where {N<:SQLTypeFunction,T}
   aggregate::Bool = false
   formatter::Union{Nothing,Function} = nothing # function to format the value
   _as::OptionalString = nothing
@@ -1347,7 +1471,8 @@ Each mutates the handler and returns it, so calls can be chained or accumulated 
   Adds predicates only: without `join_type` the join keeps the type derived from the relation
   itself, and an explicit one stays in effect for later `on()` calls on that path (#474)
 - `.cjoin("field" => "Model"; filters, join_type)` — custom join at query time
-- `.cjoin_on(model; alias, on, join_type)` — anchor-less join where `on` is the entire `ON` clause
+- `.cjoin_on(model; alias, on, join_type)` — anchor-less join where `on` is the entire `ON` clause;
+  reference its columns with [`Joined(alias, column)`](@ref Joined) in any clause
 - `.with("name" => subquery; join_field, join_type)` — define a CTE; call again for a second one.
   Its name may equal a model field or a join key; each stays addressable (#444, #474)
 - every `join_type` above accepts `"INNER"`, `"LEFT"`, `"RIGHT"` or `"FULL"`; anything else,

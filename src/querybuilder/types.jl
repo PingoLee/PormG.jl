@@ -106,9 +106,9 @@ Key for the per-build memos (`SQLInstruction.cache`, `tab_field_cache`, `json_lo
 `:joined` (a `cjoin_on` alias, #481).
 
 `row_path` is deliberately NOT one of these — it stays a `Vector{String}` and simply does not record
-CTE hops (`_insert_join`'s `track_path`). Do not "unify" it onto this key: a CTE hop has no
-`custom_join` entry for the materialization loops to skip, so recording one at all is what made a
-user's own join vanish.
+CTE hops, nor (since #484) `cjoin_on` aliases (`_insert_join`'s `track_path`). Do not "unify" it onto
+this key: it is the PATH namespace's membership set, a CTE hop has no `custom_join` entry for the
+path materialization loop to skip, and recording one at all is what made a user's own join vanish.
 
 #474 — the two namespaces this discriminates are a CTE's own names and the base model's field/join
 names, and #444 fixed a CTE reference's output name at `"<cte>__<path>"`, which is byte-identical to
@@ -297,6 +297,39 @@ struct ForUpdateClause
   no_key::Bool                 # PostgreSQL: FOR NO KEY UPDATE (weaker lock, allows FK-referencing inserts)
 end
 
+# #484 — one `cjoin(...)` / `on(...)` entry, keyed in `custom_join` by a JOIN PATH on the base model.
+#
+# Typed rather than an entry in a `Dict{String,Any}` bag, because the bag is what let three writers
+# share one keyspace: `_cjoin`/`_on` key by path, `_cjoin_on` keyed by user alias, and every reader
+# had to guess which it had found from a tag inside the value (`"no_anchor"`). The type IS the
+# namespace now — a reader that wants a path config asks `custom_join` and cannot be handed an
+# alias config — so the `isa Dict` / `get(config, "…", nothing) isa T` probes are gone.
+#
+# Immutable, replace-on-update: `_on` builds a fresh entry and reassigns the key rather than editing
+# one in place, which is what #112 was about. Note the limit of that — `filters` is a `Vector`, so an
+# entry is only as immutable as what it points at, and `Base.deepcopy(::SQLObjectQuery)` copies that
+# vector rather than relying on every future writer to remember not to mutate it.
+struct PathJoin
+  filters::Vector{FilterType}          # ON predicates, already prefixed onto the path
+  field::Union{PormGField,Nothing}     # `cjoin`'s link (its join type folded into `field.how`); `nothing` for an `on()`-only entry
+  join_type::Union{String,Nothing}     # explicit `on(join_type = …)` override; `nothing` = derived from the relation (#474)
+end
+
+# #484 — one `cjoin_on(...)` entry, keyed in `alias_join` by its USER ALIAS.
+#
+# Its own map rather than a tagged entry in `custom_join`, because an alias and a join path are
+# genuinely different namespaces: while they shared one, a `cjoin_on(alias = "driver")` on a model
+# with a ForeignKey named `driver` was absorbed by that FK's join — the alias's predicates
+# AND-appended to the FK's ON, its `join_type` adopted, its own join never emitted, and the
+# statement left naming a range variable it never declared. The two relations render under
+# different SQL aliases, so SQL has no conflict; the collision was ours. Same move #474 made for
+# CTE names. (#479 refused its overlap instead, correctly — there SQL itself merges the namespaces.)
+struct AliasJoin
+  target::PormGModel                   # resolved once at declaration (was a model NAME re-looked-up at three render sites)
+  filters::Vector{FilterType}          # the ENTIRE ON clause — no equi-anchor is emitted (#45)
+  join_type::String                    # normalized; "INNER" by default
+end
+
 mutable struct SQLObjectQuery <: SQLObject
   model::PormGModel
   connect_key::OptionalString # Override for multi-tenant scenarios
@@ -313,18 +346,24 @@ mutable struct SQLObjectQuery <: SQLObject
   distinct::Bool # Add distinct field
   for_update::Union{Nothing,ForUpdateClause} # #26: row-level lock clause (nothing = no lock)
   ctes::Dict{String,CTEDict}
+  # The PATH namespace (#484): `cjoin` / `on()` entries, keyed by a join path on the base model.
+  # Ordered because materialization order decides generated alias numbering (#449).
+  custom_join::OrderedCollections.OrderedDict{String,PathJoin}
+  # The ALIAS namespace (#484): `cjoin_on` entries, keyed by the alias the caller declared.
+  #
   # ORDERED, and load-bearing (#449). `build()` materializes row_join by ITERATING this container,
   # so its order decides which of two `cjoin_on` joins is emitted first — and Phase 1b relocates an
   # ON predicate onto the LAST join it names. Under a plain `Dict` that order came from hashing the
   # ALIAS STRINGS, so renaming an alias for readability could flip a working query into a
   # QueryBuildError, or the reverse, while reversing the DECLARATION changed nothing. Same reason
   # `insert` above is ordered (#97).
-  custom_join::OrderedCollections.OrderedDict{String,Any}
+  alias_join::OrderedCollections.OrderedDict{String,AliasJoin}
   parameters::Union{Nothing,AbstractPormGParam}
 
   SQLObjectQuery(; model=nothing, connect_key=nothing, values=[], filter=[], insert=OrderedCollections.OrderedDict{String,Any}(), limit=0, offset=0,
-    order=[], group=[], having=[], list_joins=[], row_join=[], distinct=false, for_update=nothing, ctes=Dict{String,CTEDict}(), custom_join=OrderedCollections.OrderedDict{String,Any}(), parameters=nothing) = # Add ctes and custom_join to constructor
-    new(model, connect_key, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, for_update, ctes, custom_join, parameters) # Add ctes and custom_join to new
+    order=[], group=[], having=[], list_joins=[], row_join=[], distinct=false, for_update=nothing, ctes=Dict{String,CTEDict}(),
+    custom_join=OrderedCollections.OrderedDict{String,PathJoin}(), alias_join=OrderedCollections.OrderedDict{String,AliasJoin}(), parameters=nothing) =
+    new(model, connect_key, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, for_update, ctes, custom_join, alias_join, parameters)
 end
 
 function Base.deepcopy(obj::SQLObjectHandler)
@@ -352,32 +391,36 @@ function _copy_ctes(ctes::Dict{String,CTEDict})::Dict{String,CTEDict}
   return out
 end
 
-# #112: custom_join is the build-time sibling of the #43 CTE aliasing. A shallow
-# `copy(custom_join)` shares the inner per-join Dicts, and on() mutates those in place
-# ("filters" / "join_type") — so extending a join path on a copy rewrote the original's
-# join definition. Rebuild a fresh inner dict per path: copy the "filters" vector into a
-# new Vector (its FilterType elements are shared — on() replaces the whole vector, it
-# never mutates elements in place), share the "field" PormGField by reference (it holds
-# a Model_Type → Module that deepcopy cannot traverse — the very reason this copy was
-# shallow), and carry scalar entries ("join_type") as-is.
+# #112: a copy must share no MUTABLE state with its original.
 #
-# The container is ORDERED (#449) and the copy must stay ordered: this rebuilds `out` by insertion,
-# so an unordered accumulator here would silently re-hash declaration order back out on every
-# `.copy()` / `deepcopy` — i.e. the fluent chain would lose what the struct guarantees.
-function _copy_custom_join(custom_join::OrderedCollections.OrderedDict{String,Any})::OrderedCollections.OrderedDict{String,Any}
-  out = OrderedCollections.OrderedDict{String,Any}()
-  for (path, config) in custom_join
-    if config isa AbstractDict
-      # AbstractDict (not just Dict{String,Any}) so a future writer storing a differently
-      # typed inner dict still gets an independent copy instead of silently re-aliasing.
-      fresh = Dict{String,Any}()
-      for (k, v) in config
-        fresh[k] = v isa Vector ? copy(v) : v
-      end
-      out[path] = fresh
-    else
-      out[path] = config  # non-dict config: nothing produces one today (cjoin/on store Dicts)
-    end
+# Before #484 the entries were `Dict{String,Any}` and `on()` rewrote them in place, so a shallow
+# `copy` let a copy's `on()` rewrite the original's join definition. #484 made the entries immutable
+# structs and every writer replace-on-update, which closes that route — but an immutable struct is
+# only as immutable as what it points at, and `filters` is a `Vector`. Measured on this branch before
+# the vector copy went in: `push!(q2.object.custom_join["owner"].filters, …)` after `q2 = q.copy()`
+# added a predicate to the ORIGINAL's rendered ON clause. Grepped at the time of writing, no `src/`
+# reader of a stored filters vector mutates it — but that is a snapshot, not an invariant, and
+# keeping the guarantee a PROPERTY of the copy rather than a convention every future writer has to
+# remember is the whole point of #112. `test_order_by_joins.jl` already reaches for that idiom
+# white-box.
+#
+# What stays shared, deliberately: the vector's `FilterType` ELEMENTS (every writer replaces the
+# whole vector; none edits an element), and `PathJoin.field` / `AliasJoin.target`, which hold a
+# Model_Type → Module that `deepcopy` cannot traverse — the very reason the original copy was shallow.
+#
+# Both containers are ORDERED (#449) and rebuilt by insertion, so declaration order survives a
+# `.copy()`; an unordered accumulator here would silently re-hash it out on every copy.
+function _copy_path_joins(m::OrderedCollections.OrderedDict{String,PathJoin})::OrderedCollections.OrderedDict{String,PathJoin}
+  out = OrderedCollections.OrderedDict{String,PathJoin}()
+  for (path, config) in m
+    out[path] = PathJoin(copy(config.filters), config.field, config.join_type)
+  end
+  return out
+end
+function _copy_alias_joins(m::OrderedCollections.OrderedDict{String,AliasJoin})::OrderedCollections.OrderedDict{String,AliasJoin}
+  out = OrderedCollections.OrderedDict{String,AliasJoin}()
+  for (alias, config) in m
+    out[alias] = AliasJoin(config.target, copy(config.filters), config.join_type)
   end
   return out
 end
@@ -400,7 +443,8 @@ function Base.deepcopy(obj::SQLObjectQuery)
       distinct=obj.distinct,
       for_update=obj.for_update,  # #26: immutable/set-once lock clause — share by reference (like distinct)
       ctes=_copy_ctes(obj.ctes),  # #43: independent CTE state (deep sub-query, drop transient "model")
-      custom_join=_copy_custom_join(obj.custom_join)  # #112: fresh per-join dicts; "field" shared by ref (Module — deepcopy can't traverse)
+      custom_join=_copy_path_joins(obj.custom_join),  # #112/#484: fresh map, fresh filters vectors
+      alias_join=_copy_alias_joins(obj.alias_join)    # (`field` / `target` shared by ref — see above)
     )
   catch e
     @pormg_debug false
@@ -1472,7 +1516,9 @@ Each mutates the handler and returns it, so calls can be chained or accumulated 
   itself, and an explicit one stays in effect for later `on()` calls on that path (#474)
 - `.cjoin("field" => "Model"; filters, join_type)` — custom join at query time
 - `.cjoin_on(model; alias, on, join_type)` — anchor-less join where `on` is the entire `ON` clause;
-  reference its columns with [`Joined(alias, column)`](@ref Joined) in any clause
+  reference its columns with [`Joined(alias, column)`](@ref Joined) in any clause. Its alias may
+  equal a relation name on the base model or an `on()`/`cjoin()` join path; each stays addressable,
+  and both joins are emitted (#484)
 - `.with("name" => subquery; join_field, join_type)` — define a CTE; call again for a second one.
   Its name may equal a model field or a join key; each stays addressable (#444, #474)
 - every `join_type` above accepts `"INNER"`, `"LEFT"`, `"RIGHT"` or `"FULL"`; anything else,

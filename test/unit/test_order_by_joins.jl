@@ -471,8 +471,9 @@ end
 #     a CROSS-joined CTE acquires an ON predicate when its NAME collides with a join key, or when
 #     Phase 1b relocates a fragment that names its alias.
 #
-# "Join key" means a `custom_join` key, and `custom_join` is written at three unrelated sites —
-# keyed by a `cjoin` PATH, a `cjoin_on` ALIAS, and an `on()` PATH.
+# "Join key" means a join-config key, and those were written at three unrelated sites — keyed by a
+# `cjoin` PATH, a `cjoin_on` ALIAS, and an `on()` PATH. #484 split the alias half into its own map
+# (`alias_join`), so `custom_join` is now the PATH namespace alone.
 #
 # Measured pre-fix (the deleted route A), this rendered:
 #     INNER JOIN "cj_parent" AS "b2" ON ("b2"."sku" = "R1"."note")
@@ -749,7 +750,7 @@ _no_ansi(s::AbstractString) = replace(s, r"\e\[[0-9;]*m" => "")
     q = OBJ.Cj_child.objects
     q.values("note")
     q.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == F("note")])
-    empty!(q.object.custom_join["b2"]["filters"])
+    empty!(q.object.alias_join["b2"].filters)   # #484: cjoin_on entries live in `alias_join` now
 
     err = try
       inspect_query(q; connection = _OBJ_PG)
@@ -777,10 +778,11 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # cjoin_on emission order follows DECLARATION order, not alias hashing (#449)
-# `build()` materializes `row_join` by iterating `custom_join`, and Phase 1b relocates an ON
-# predicate onto the LAST join it names — so the container's order decides which of two `cjoin_on`
-# aliases keeps its predicate and which is left bare. While `custom_join` was a plain `Dict` that
-# order came from hashing the ALIAS STRINGS: measured across five name pairs, the first-listed of
+# `build()` materializes `row_join` by iterating `alias_join` (`custom_join` before #484 split the
+# two namespaces), and Phase 1b relocates an ON predicate onto the LAST join it names — so the
+# container's order decides which of two `cjoin_on` aliases keeps its predicate and which is left
+# bare. While it was a plain `Dict` that order came from hashing the ALIAS STRINGS: measured across
+# five name pairs, the first-listed of
 # each pair was emitted first no matter which was declared first, so renaming an alias for
 # readability could flip a working query into a QueryBuildError or the reverse.
 #

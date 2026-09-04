@@ -460,36 +460,33 @@ function _on(q::SQLObject, join_path::String, filters::AbstractVector; join_type
     end
   end
 
-  existing = get(q.custom_join, join_path, Dict{String,Any}())
-
   if isempty(parsed_filters) && join_type === nothing
     throw(QueryBuildError("on() requires at least one ON predicate or a join_type override."))
   end
 
-  existing_filters = get(existing, "filters", FilterType[])
-  if !(existing_filters isa Vector{FilterType})
-    existing_filters = FilterType[]
-  end
+  # #484: the PATH namespace only. A `cjoin_on` alias equal to this path lives in `q.alias_join` and
+  # is untouched here, so `on("driver", …)` decorates the ForeignKey `driver`'s join whether or not
+  # a `cjoin_on(alias = "driver")` was also declared, and in either declaration order.
+  existing = get(q.custom_join, join_path, nothing)
 
-  existing["filters"] = vcat(existing_filters, parsed_filters)
-  # #474: write this key ONLY when the caller passed a join type. It used to be written on every
-  # call, defaulting to `"LEFT"` when neither this call nor an earlier one supplied one — a join
-  # type nobody wrote, applied to a join `on()` did not create. `_get_join_type_override` reads this
-  # key as an OVERRIDE, so the invented `"LEFT"` silently downgraded a relation PormG would
-  # otherwise have typed itself. Measured on a NOT NULL ForeignKey: the same path renders
-  # `INNER JOIN` on its own and `LEFT JOIN` the moment an `on()` predicate is added — different
-  # rows, no error.
+  # #474: carry a join type ONLY when the caller passed one, here or on an earlier `on()` for this
+  # path. It used to be written on every call, defaulting to `"LEFT"` when nobody supplied one — a
+  # join type nobody wrote, applied to a join `on()` did not create. `_get_join_type_override` reads
+  # it as an OVERRIDE, so the invented `"LEFT"` silently downgraded a relation PormG would otherwise
+  # have typed itself. Measured on a NOT NULL ForeignKey: the same path renders `INNER JOIN` on its
+  # own and `LEFT JOIN` the moment an `on()` predicate is added — different rows, no error.
   #
-  # Leaving the key absent is not a new shape: a `cjoin`-seeded entry has never carried it
-  # (`_cjoin` folds its join type into `field.how`), so `_get_join_type_override` already had to
-  # answer `nothing` here. With no override the join keeps `_determine_join_type`'s answer —
-  # `field.how`, else `field.null ? "LEFT" : "INNER"` — including the `previus_how` LEFT-propagation
-  # a deep path needs, which is knowledge this call site does not have and should not reproduce.
+  # `nothing` is not a new shape: a `cjoin`-seeded entry has never carried one (`_cjoin` folds its
+  # join type into `field.how`), so `_get_join_type_override` already had to answer `nothing` here.
+  # With no override the join keeps `_determine_join_type`'s answer — `field.how`, else
+  # `field.null ? "LEFT" : "INNER"` — including the `previus_how` LEFT-propagation a deep path
+  # needs, which is knowledge this call site does not have and should not reproduce.
   #
-  # An earlier explicit `join_type` still stands, because nothing overwrites it: `existing` is the
-  # same dict, so a second `on()` with no join type leaves the first call's value in place.
-  join_type === nothing || (existing["join_type"] = _normalize_join_type(join_type))
-  q.custom_join[join_path] = existing
+  # An earlier explicit `join_type` still stands: a call with none carries the existing one forward.
+  q.custom_join[join_path] = PathJoin(
+    existing === nothing ? parsed_filters : vcat(existing.filters, parsed_filters),
+    existing === nothing ? nothing : existing.field,
+    join_type === nothing ? (existing === nothing ? nothing : existing.join_type) : _normalize_join_type(join_type))
 
   return q
 end
@@ -627,9 +624,14 @@ function _cjoin(
   end
 
 
-  # Store in custom_join dict
+  # Store in the PATH namespace (#484). A `cjoin_on` alias spelled the same sits in `q.alias_join`
+  # and does not trip this guard — before #484 it did, with a message naming a join path the caller
+  # never declared.
+  #
+  # No join type of its own: `_cjoin` folded it into `field.how` above, which is why `PathJoin`'s
+  # `join_type` (the `on(join_type = …)` override) stays `nothing` here.
   if !haskey(q.custom_join, main_join.first)
-    q.custom_join[main_join.first] = Dict{String,Any}("filters" => parsed_filters, "field" => field)
+    q.custom_join[main_join.first] = PathJoin(parsed_filters, field, nothing)
   else
     throw(QueryBuildError("Join path '$(main_join.first)' already exists"))
   end
@@ -671,9 +673,17 @@ _cjoin(q::SQLObjectHandler; kwargs...) = _cjoin(q, nothing; kwargs...)
 # what makes self-joins and cross-side predicates expressible without raw SQL.
 #
 # Reference convention inside `on`:
-#   * bare `F("col")`        → the BASE/main table (b1)
-#   * `F("<alias>.col")`     → the joined copy declared here (b2)
+#   * bare `F("col")`            → the BASE/main table (b1)
+#   * `Joined("<alias>", "col")` → the joined copy declared here (b2), #481
 # A self-join is `_cjoin_on(q, "<BaseModelName>"; alias="b2", on=[...])`.
+#
+# #484 — the entry goes in `q.alias_join`, its own namespace, NOT in `q.custom_join` alongside the
+# `cjoin` / `on()` PATH entries. Sharing one map is what made an alias equal to a ForeignKey field
+# name unrepresentable-as-written: `_build_row_join` asked that map for the FK hop's config under
+# the hop's path, found this entry, and folded the alias's whole ON clause into the FK's join. The
+# alias is therefore refused only when it duplicates ANOTHER alias; it may equal a relation name, a
+# `cjoin` path or an `on()` path, in any declaration order, and both joins are emitted under their
+# own SQL aliases (they always did have different ones — the collision was only ever internal).
 function _cjoin_on(q::SQLObject, target_model::String, on::AbstractVector; alias::String, join_type::Union{String,Nothing}="INNER")
   isempty(strip(target_model)) && throw(QueryBuildError("cjoin_on requires a target model name."))
   # Fail-closed identifier check on the user alias (it is interpolated into SQL as a quoted alias).
@@ -681,8 +691,8 @@ function _cjoin_on(q::SQLObject, target_model::String, on::AbstractVector; alias
   if !isdefined(q.model._module, Symbol(target_model))
     throw(QueryBuildError("cjoin_on target model '$(target_model)' not found in module. Model names are case-sensitive."))
   end
-  if haskey(q.custom_join, alias)
-    throw(QueryBuildError("cjoin_on alias '$(alias)' already exists as a join path. Choose a distinct alias."))
+  if haskey(q.alias_join, alias)
+    throw(QueryBuildError("cjoin_on alias '$(alias)' is already declared on this query. Choose a distinct alias."))
   end
 
   # Collect + validate element types. Crucially we DO NOT run `_prefix_join_filter` here: that helper
@@ -705,13 +715,14 @@ function _cjoin_on(q::SQLObject, target_model::String, on::AbstractVector; alias
   end
   isempty(parsed) && throw(QueryBuildError("cjoin_on requires at least one `on` predicate."))
 
-  q.custom_join[alias] = Dict{String,Any}(
-    "filters" => parsed,
-    "target_model" => target_model,
-    "user_alias" => alias,
-    "join_type" => join_type === nothing ? "INNER" : _normalize_join_type(join_type),
-    "no_anchor" => true,
-  )
+  # The target model is resolved HERE, once, rather than re-looked-up from a stored name at each of
+  # the three render sites that need it (#484). `isdefined` was checked above, so this cannot throw.
+  # The map key carries the alias and the map itself carries "anchor-less", so the old
+  # `"user_alias"` / `"no_anchor"` tags have nothing left to say.
+  q.alias_join[alias] = AliasJoin(
+    getfield(q.model._module, Symbol(target_model))::PormGModel,
+    parsed,
+    join_type === nothing ? "INNER" : _normalize_join_type(join_type))
   return q
 end
 
@@ -863,13 +874,12 @@ function _set_field_from_sql_function(func::SQLTypeFunction, field::String, inst
 
 end
 # #481 — a CTE body that projects a joined-copy column. The body is its own build with its own
-# `custom_join`, so the alias resolves against that inner query; without this method the projection
+# `alias_join`, so the alias resolves against that inner query; without this method the projection
 # reaches the `::String` method below as a `JoinedReference` and dies with a MethodError.
 function _set_field_from_sql_function(func::JoinedReference, field::String, instruct::SQLInstruction)
-  config = get(instruct.object.custom_join, func.alias, nothing)
-  if config isa Dict{String,Any} && get(config, "no_anchor", false) == true
-    target_model = getfield(instruct.object.model._module, Symbol(config["target_model"]::String))::PormGModel
-    haskey(target_model.fields, func.path) && return target_model.fields[func.path]
+  config = get(instruct.object.alias_join, func.alias, nothing)
+  if config !== nothing
+    haskey(config.target.fields, func.path) && return config.target.fields[func.path]
   end
   throw(UnknownFieldError(
     "Error in _set_field_from_sql_function, Joined(\"$(func.alias)\", \"$(func.path)\") names no " *

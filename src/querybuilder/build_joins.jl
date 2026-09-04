@@ -45,27 +45,29 @@ function _cache_join(field::String, instruct::SQLInstruction)
 end
 
 # #45 — materialize a `cjoin_on` entry into a row_join WITHOUT the FK-driven anchor path. The ON
-# clause is entirely user-provided (config["filters"]); no `main.key_a = joined.key_b` equi-anchor
+# clause is entirely user-provided (`config.filters`); no `main.key_a = joined.key_b` equi-anchor
 # is emitted (build_row_join_sql_text skips it when "no_anchor" == "1"). key_a/key_b are never
 # rendered for an anchor-less entry, but `_insert_join`'s dedup keys on (a, b, key_a, key_b, alias_a)
 # and NOT alias_b — so we set key_a to the unique user alias, otherwise two cjoin_on joins to the
 # same target model would collide and one would be silently dropped.
-function _build_cjoin_on_row_join(config::Dict{String,Any}, join_path::String, instruct::SQLInstruction)::Nothing
-  target_model = getfield(instruct.object.model._module, Symbol(config["target_model"]::String))::PormGModel
-  user_alias = config["user_alias"]::String
+#
+# The row-level `"no_anchor" => "1"` string flag stays: it drives RENDERING (skip the equi-anchor,
+# #435's relocation diagnosis, the correlated-UPDATE refusal), which is a different question from
+# which namespace the config came from. #484 removed only the CONFIG-level tag — `AliasJoin`'s type
+# and its map now answer that.
+function _build_cjoin_on_row_join(config::AliasJoin, user_alias::String, instruct::SQLInstruction)::Nothing
   row_join = Dict{String,Union{String,Vector{FilterType}}}(
     "a"         => Models.model_table_name(instruct.object.model),
     "alias_a"   => instruct.alias,
-    "b"         => Models.model_table_name(target_model),
+    "b"         => Models.model_table_name(config.target),
     "alias_b"   => user_alias,
     "key_a"     => user_alias,   # dedup discriminator (never rendered for no_anchor)
     "key_b"     => "",
-    "how"       => (get(config, "join_type", "INNER"))::String,
+    "how"       => config.join_type,
     "no_anchor" => "1",
   )
-  filters = get(config, "filters", nothing)
-  if filters isa Vector{FilterType} && !isempty(filters)
-    row_join["on_conditions"] = filters
+  if !isempty(config.filters)
+    row_join["on_conditions"] = config.filters
   end
   # #480 — fail closed on a range variable the statement already has. `_get_alias_name` now steps
   # around every declared `cjoin_on` alias, so a GENERATED alias can no longer take this one; what
@@ -86,7 +88,9 @@ function _build_cjoin_on_row_join(config::Dict{String,Any}, join_path::String, i
       "cjoin_on alias \"$(user_alias)\" is already the alias of \"$(holder)\" in this statement; " *
       "two range variables cannot share a name. Choose another alias."))
   end
-  _insert_join(instruct.row_join, row_join, instruct.row_path, join_path)
+  # #484 — `track_path = false`: an alias is not a join path, so it must not claim a name in
+  # `row_path`, which is the PATH loop's membership set. Same argument #474 made for a CTE hop.
+  _insert_join(instruct.row_join, row_join, instruct.row_path, user_alias; track_path = false)
   return nothing
 end
 
@@ -656,14 +660,19 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   end
 
   if !m2m_inserted
-    # #474: `custom_join` is the BASE model's join-config registry, and this hop only has a config
-    # to inherit when it is rooted there. A CTE-rooted hop is not — `join_path` here is `field[1]`,
-    # i.e. the CTE NAME, so these two lookups read whatever `cjoin` / `cjoin_on` / `on()` entry
+    # #474: `custom_join` is the BASE model's PATH-keyed join-config registry, and this hop only has
+    # a config to inherit when it is rooted there. A CTE-rooted hop is not — `join_path` here is
+    # `field[1]`, i.e. the CTE NAME, so these two lookups read whatever `cjoin` / `on()` entry
     # happened to share that name and handed the CTE's join that entry's type and predicates. That
     # was #447's first two symptoms; the third was `_insert_join` claiming the CTE name in
     # `row_path`. Skipping the lookups and namespacing the key makes all three unrepresentable —
     # a CTE has no join config by construction, and its join type comes from `cte_dict["join_type"]`
     # set in the `cte` branch above.
+    #
+    # #484: the registry no longer holds `cjoin_on` entries either, so the same reasoning now covers
+    # a MODEL hop whose path equals a declared alias. That was the third instance of this family —
+    # here, with `cte == false`, the lookups fired and folded the alias's whole ON clause into a
+    # ForeignKey's join.
     join_type_override = cte ? nothing : _get_join_type_override(instruct.object, join_path)
     join_type_override !== nothing && (row_join["how"] = join_type_override)
 

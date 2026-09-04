@@ -887,25 +887,31 @@ function build(object::SQLObject;
   get_order_query(object, instruct)
   set_contexts && set_context!(instruct, :where)
 
-  # Materialize explicit custom joins that weren't discovered by traversal.
-  # This ensures cjoin filters are applied even in UPDATE/DELETE without explicit field paths.
-  # We check against instruct.row_path to avoid redundant materialization (forcing them twice).
-  for c_j in object.custom_join
-    config = c_j |> Base.last
-    if c_j |> Base.first ∉ instruct.row_path && config isa Dict{String,Any} && haskey(config, "field") && config["field"] isa PormGField
-      array = split(c_j |> Base.first, "__")
-      push!(array, config["field"].pk_field)
+  # PATH loop — materialize `cjoin` joins that traversal did not already discover. This ensures
+  # cjoin filters are applied even in UPDATE/DELETE without explicit field paths. `row_path` is the
+  # membership test that avoids materializing one twice; an `on()`-only entry has no `field` to link
+  # through and decorates whatever join traversal built for that path.
+  for (path, config) in object.custom_join
+    if path ∉ instruct.row_path && config.field !== nothing
+      array = split(path, "__")
+      push!(array, config.field.pk_field)
       _build_row_join(array, instruct)
     end
   end
 
-  # #45: materialize anchor-less cjoin_on entries. They carry no FK "field", so the loop above skips
-  # them; build their row_join directly (no equi-anchor, explicit alias, user-supplied ON).
-  for c_j in object.custom_join
-    config = c_j |> Base.last
-    if (c_j |> Base.first) ∉ instruct.row_path && config isa Dict{String,Any} && get(config, "no_anchor", false) == true
-      _build_cjoin_on_row_join(config, c_j |> Base.first, instruct)
-    end
+  # ALIAS loop (#45) — materialize the anchor-less `cjoin_on` joins: no equi-anchor, explicit alias,
+  # user-supplied ON.
+  #
+  # It does NOT consult `row_path` (#484). `row_path` records JOIN PATHS, and an alias is not one —
+  # while both namespaces shared `custom_join`, an alias equal to a traversed ForeignKey path was
+  # found there and the join was skipped entirely, leaving the statement naming a range variable it
+  # never declared. The path loop above still needs the test, because a `cjoin` path IS what
+  # traversal records. Two loops rather than one because the two namespaces materialize differently
+  # — and the alias loop runs second, which is what keeps a `cjoin_on` join's generated-alias
+  # numbering behind the joins traversal built (#480 reserves the declared aliases so they cannot
+  # collide in either direction).
+  for (user_alias, config) in object.alias_join
+    _build_cjoin_on_row_join(config, user_alias, instruct)
   end
 
   set_contexts && set_context!(instruct, :join)

@@ -273,7 +273,7 @@ for (backend, conn) in (("PostgreSQL", _JN_PG), ("SQLite", _JN_SL))
     # ─────────────────────────────────────────────────────────────────────────
     # Third-table references (#174 edge 2, closed by #481)
     # `_resolve_cjoin_on_alias_column` matched only the SINGLE owning entry, so one cjoin_on's ON
-    # could not name another's alias. A handle resolves from `custom_join` by alias, so it can — and
+    # could not name another's alias. A handle resolves from `alias_join` by alias, so it can — and
     # the #449 declaration-order rule then decides which join carries the predicate.
     # ─────────────────────────────────────────────────────────────────────────
     @testset "one cjoin_on may reference another's alias (#174 edge 2)" begin

@@ -234,6 +234,55 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# A cjoin_on alias equal to a ForeignKey field name executes on a live engine (#484)
+# Top-level rather than inside "cjoin error paths" above: this executes a query, it does not assert
+# a refusal. (The sibling `cjoin_on self-join` testset sits in that block for historical reasons and
+# is left where it is — moving someone else's test is not this change's business.)
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a cjoin_on alias equal to a ForeignKey field name executes (#484)" begin
+    # The user-visible half of #484 — the half a rendering test cannot show. `driverid` is both
+    # a ForeignKey on Result and, here, the alias of a joined copy of Driver. Before the fix the
+    # alias was absorbed by the ForeignKey's join whenever the FK path was ALSO traversed: its
+    # own join was never emitted, and the statement referenced the range variable `driverid`
+    # without declaring it. Measured by executing that exact statement on both engines:
+    # PostgreSQL answers `UndefinedTable: missing FROM-clause entry for table "driverid"` and
+    # SQLite `no such column: driverid.surname`. So this testset did not merely assert the wrong
+    # rows before — it could not run at all, on either engine.
+    #
+    # The root-cause coverage (which join carries which predicate, and in which order the two
+    # were declared) is `test/unit/test_relation_alias_namespace.jl`; this asserts only that the
+    # statement is valid on a live engine and that the two relations agree row for row.
+    raceid = 841
+    q = M.Result.objects
+    q.cjoin_on("Driver", alias = "driverid",
+               on = [Joined("driverid", "driverid") == F("driverid")])
+    q.filter("raceid" => raceid)
+    q.values("driverid__surname", "who" => Joined("driverid", "surname"))
+    got = q |> DataFrame
+
+    # The joined copy is keyed on the same driver, so it neither multiplies nor drops rows.
+    base_n = nrow(M.Result.objects.filter("raceid" => raceid).values("resultid") |> DataFrame)
+    @test base_n > 0                       # guards against a vacuous 0 == 0
+    @test nrow(got) == base_n
+    # The ForeignKey path and the joined copy resolve to the SAME driver on every row.
+    @test got.driverid__surname == got.who
+
+    # Equal columns alone cannot tell coexistence from SHADOWING — if both projections collapsed
+    # onto one relation they would also be equal. So assert the statement the engine accepted
+    # actually declares two range variables: the caller's alias, and a generated one for the
+    # ForeignKey's own join. `q |> DataFrame` deepcopies before building, so `q` is untouched and
+    # this renders the same statement that just executed.
+    #
+    # The regex keys on the ALIAS because both joins target the same table. It cannot stray into the
+    # SELECT list: PormG renders a projection alias with lowercase `as` and a join alias with
+    # uppercase `AS`, so `AS "` appears only in join clauses.
+    sql = q.list(show_query = :sql)
+    @test occursin("AS \"driverid\"", sql)          # the joined copy, under the declared alias
+    @test occursin(r"JOIN\s+\"driver\"\s+AS\s+\"(?!driverid\")", sql)  # …and the FK's, generated
+    @test length(collect(eachmatch(r"\bJOIN\b", sql))) == 2
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # cjoin ON filters at two join depths bind the right values (#421)
 # `build_row_join_sql_text` bound ON conditions in `row_join` order (Phase 1) but emitted them in
 # relocated order (Phase 1b/2). PostgreSQL was unaffected — `$N` numbering travels with the text —

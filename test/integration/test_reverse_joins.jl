@@ -130,6 +130,14 @@ end
 # on() can also be applied to forward FK paths (not just reverse relations).
 # The ON predicate is placed in the JOIN clause, so all base rows are preserved
 # even when the joined partner does not satisfy the extra predicate.
+#
+# #474 — the `join_type = "LEFT"` in this block is REQUIRED, not decorative. `Result.driverid` is a
+# NOT NULL ForeignKey, so PormG derives INNER for it; before #474 an `on()` with no join_type of its
+# own silently wrote "LEFT" and that value was read as an OVERRIDE, retyping a join the caller never
+# asked to retype. #474 removed that, so "all base rows preserved" is now something the test has to
+# ASK for — exactly as `UPGRADING.md` tells consuming apps to. Without it these testsets do not fail
+# loudly everywhere: the accumulation testset below goes green while its `populated` subset silently
+# becomes the whole result (#489).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "on() forward FK" begin
 
@@ -139,7 +147,7 @@ end
         # Using .on("driverid", ...) places the predicate on the ON clause,
         # keeping ALL winner rows while only populating surname for Brazilian drivers.
         query = M.Result.objects
-        query.on("driverid", "nationality" => "Brazilian")
+        query.on("driverid", "nationality" => "Brazilian", join_type = "LEFT")
         query.filter("positionorder" => 1)
         query.values("resultid", "driverid__surname")
         df = query |> DataFrame
@@ -162,8 +170,14 @@ end
         # Two on() calls on the same join path accumulate as AND conditions in the ON clause.
         # British AND code HAM means only Lewis Hamilton satisfies both predicates.
         # (Ayrton Senna's code is stored as "\\N" in the dataset, so he cannot be used here.)
+        #
+        # The join_type goes on the FIRST call only — #474's other half: a later on() with no
+        # join_type inherits the earlier explicit one rather than resetting it. Measured without it
+        # (#489): INNER, 105 rows, ZERO missing surnames, which makes the `populated` subset below
+        # the identity operation and every assertion in this testset trivially true. With it: 1128
+        # rows, 1023 missing — so `populated` is a real subset and the test measures something.
         query = M.Result.objects
-        query.on("driverid", "nationality" => "British")
+        query.on("driverid", "nationality" => "British", join_type = "LEFT")
         query.on("driverid", "code" => "HAM")
         query.filter("positionorder" => 1)
         query.values("resultid", "driverid__surname", "driverid__code")
@@ -178,9 +192,11 @@ end
         @test all(populated.driverid__code .== "HAM")
         @test all(populated.driverid__surname .== "Hamilton")
 
-        # Compare with single predicate: double predicate yields ≤ rows populated
+        # Compare with single predicate: double predicate yields ≤ rows populated.
+        # Same join_type as the two-predicate query above — the comparison is only meaningful if
+        # both sides are the same kind of join.
         query_single = M.Result.objects
-        query_single.on("driverid", "nationality" => "British")
+        query_single.on("driverid", "nationality" => "British", join_type = "LEFT")
         query_single.filter("positionorder" => 1)
         query_single.values("resultid", "driverid__surname")
         df_single = query_single |> DataFrame

@@ -402,6 +402,40 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     handed the CTE the other entry's join type and predicates and dropped your join. That lookup is
     gone, so a join KEY no longer collides.
 
+    **A `cjoin_on` alias may also equal a relation name on the base model**, or an `on()` / `cjoin()`
+    join path. Both joins are emitted — the relation's under a generated alias, the joined copy's
+    under the alias you declared — and each stays addressable: `Joined(alias, column)` reaches the
+    copy, `"relation__column"` reaches the relation. `on(...)` and `cjoin(...)` decorate the
+    *relation's* join, never the copy's, in either declaration order.
+
+    ```julia
+    # "driverid" names both the ForeignKey on Result and the cjoin_on alias.
+    df = M.Result.objects.
+        cjoin_on("Driver", alias = "driverid", join_type = "LEFT",
+                 on = [Joined("driverid", "driverid") == F("driverid")]).
+        filter("raceid" => 841).
+        values("points", "fk" => "driverid__surname",
+               "copy" => Joined("driverid", "surname")) |> DataFrame
+    ```
+
+    ```sql
+    -- Two joins, each with its own alias, its own ON clause and its own join type: the ForeignKey's
+    -- keeps what PormG derives from the relation (INNER — `driverid` is NOT NULL), the joined copy
+    -- keeps the LEFT it declared. Neither adopts the other's.
+    SELECT "Tb"."points" as "points", "Tb_1"."surname" as "fk", "driverid"."surname" as "copy"
+    FROM "result" as "Tb"
+     INNER JOIN "driver" AS "Tb_1" ON "Tb"."driverid" = "Tb_1"."driverid"
+     LEFT JOIN "driver" AS "driverid" ON ("driverid"."driverid" = "Tb"."driverid")
+    WHERE "Tb"."raceid" = ?
+    ```
+
+    Before [#484](https://github.com/PingoLee/PormG.jl/issues/484) this shape was silently wrong
+    whenever the relation was *also* traversed: the alias's predicates were AND-appended to the
+    ForeignKey's `ON`, its join type adopted, its own join never emitted — leaving the statement
+    referencing a range variable it never declared (PostgreSQL: *missing FROM-clause entry*). A
+    `cjoin_on` alias and a join path are now two namespaces, so the overlap is simply two relations
+    that happen to share a name.
+
     One name a CTE may never take is a **physical table name**: `.with("driver" => ...)` raises
     `QueryBuildError` at the call when `driver` is the `db_table` of any registered model, or a
     many-to-many join table. SQL resolves an unqualified table reference to a same-named CTE for the whole statement,

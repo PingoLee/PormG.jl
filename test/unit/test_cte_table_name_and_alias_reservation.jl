@@ -361,7 +361,7 @@ end
       end
 
       @testset "a keyed CTE, cjoin_on declared FIRST" begin
-        # Declaration order does not matter: `custom_join` is complete before `build()` starts, so
+        # Declaration order does not matter: `alias_join` is complete before `build()` starts, so
         # the reservation holds whichever side the caller wrote first.
         q = CTS.Cts_child.objects
         q.cjoin_on("Cts_parent", alias = "R1_1", on = [Joined("R1_1", "sku") == F("note")])

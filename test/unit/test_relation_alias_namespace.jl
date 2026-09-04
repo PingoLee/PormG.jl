@@ -263,7 +263,7 @@ end
     for (given, expected) in (("INNER", "INNER"), ("left", "LEFT"), ("  Right  ", "RIGHT"), ("full", "FULL"))
       q = RAN.Ran_child.objects
       q.on("owner", "sku" => "S", join_type = given)
-      @test q.object.custom_join["owner"]["join_type"] == expected
+      @test q.object.custom_join["owner"].join_type == expected
       q.values("note", "owner__sku")
       @test occursin("$(expected) JOIN \"ran_parent\"", _ran_sql(q))
     end
@@ -352,10 +352,11 @@ end
     sql = _ran_sql(q)
     @test occursin("INNER JOIN \"ran_parent\"", sql)     # pre-fix: LEFT JOIN
     @test occursin("\"product_sku\" = ", sql)            # ...and the predicate still lands
-    # The key is absent, not set to a computed value: deciding the type HERE would have to
+    # The override is `nothing`, not a computed value: deciding the type HERE would have to
     # reproduce `_determine_join_type`'s `previus_how` LEFT-propagation for deep paths, which this
     # call site cannot see. Not overriding is what leaves that knowledge where it lives.
-    @test !haskey(q.object.custom_join["owner"], "join_type")
+    # (#484 typed the entry: what was an absent `"join_type"` key is now a `nothing` field.)
+    @test q.object.custom_join["owner"].join_type === nothing
   end
 
   @testset "a nullable ForeignKey keeps LEFT" begin
@@ -370,7 +371,7 @@ end
     q.on("owner", "sku" => "S", join_type = "LEFT")
     q.values("note", "owner__sku")
     @test occursin("LEFT JOIN \"ran_parent\"", _ran_sql(q))
-    @test q.object.custom_join["owner"]["join_type"] == "LEFT"
+    @test q.object.custom_join["owner"].join_type == "LEFT"
   end
 
   @testset "a later on() inherits the first call's explicit join_type" begin
@@ -380,8 +381,8 @@ end
     q.values("note", "owner__sku")
     sql = _ran_sql(q)
     @test occursin("LEFT JOIN \"ran_parent\"", sql)
-    @test q.object.custom_join["owner"]["join_type"] == "LEFT"
-    @test length(q.object.custom_join["owner"]["filters"]) == 2
+    @test q.object.custom_join["owner"].join_type == "LEFT"
+    @test length(q.object.custom_join["owner"].filters) == 2
   end
 
   # `on()` still needs SOMETHING to do. Unchanged by #474, pinned here because the refusal now
@@ -405,7 +406,7 @@ end
     q.on("parent", join_type = "INNER")
     q.values("note", "parent__sku")
     @test occursin("INNER JOIN \"ran_parent\"", _ran_sql(q))
-    @test isempty(q.object.custom_join["parent"]["filters"])
+    @test isempty(q.object.custom_join["parent"].filters)
   end
 end
 
@@ -527,4 +528,175 @@ end
   @test !occursin("(:base,", msg)
   @test !occursin("(:joined,", msg)
   @test occursin("pp__sku", msg)      # the spelling the caller CAN reach, still offered
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A cjoin_on ALIAS may equal a ForeignKey field name, and BOTH joins are emitted (#484)
+# The third instance of the family above, and the one that needed no CTE at all. `cjoin_on` keyed
+# its config by USER ALIAS into the very map `cjoin` / `on()` key by JOIN PATH, so when a query both
+# declared `cjoin_on(alias = "owner")` and traversed the ForeignKey `owner`, `_build_row_join` asked
+# that map for the FK hop's config, was handed the ALIAS's, and folded it in: the alias's predicates
+# AND-appended to the FK's ON clause, its `join_type` adopted, its own join never emitted — leaving
+# `"owner"` a range variable the statement never declares. PostgreSQL: "missing FROM-clause entry".
+#
+# #484 splits the two namespaces into two typed maps (`custom_join` / `alias_join`), which makes the
+# collision UNREPRESENTABLE rather than guarded — the direction #444/#474 established, and what the
+# `Joined` docstring shipped by #481 already promised. Refusing it (#479's move) would have been
+# wrong here: the two relations render under DIFFERENT SQL aliases — `Tb_1` generated for the
+# ForeignKey, `owner` declared by the caller — so SQL never had a conflict. The collision was ours.
+#
+# `owner` is the NOT NULL ForeignKey (INNER) and every `cjoin_on` below asks for LEFT. That pairing
+# is deliberate: under the defect the alias's join type was ADOPTED by the ForeignKey's join, so the
+# symptom shows as an INNER→LEFT flip on a join the caller never named — a row-count change — and
+# not merely as an appended predicate that a reader might dismiss as cosmetic.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The range variables a statement DECLARES: the FROM alias plus every `JOIN … AS "x"`. Deliberately
+# not `as "x"` in general — that spelling also ends every SELECT output column, and counting those
+# as declared relations would let the undeclared-range-variable check below pass on a qualifier that
+# merely happens to match a result-column name.
+function _ran_declared_relations(sql::AbstractString)
+  out = Set{String}()
+  for m in eachmatch(r"FROM\s+\"[^\"]+\"\s+as\s+\"([^\"]+)\"", sql)
+    push!(out, m.captures[1])
+  end
+  for m in eachmatch(r"JOIN\s+\"[^\"]+\"\s+AS\s+\"([^\"]+)\"", sql)
+    push!(out, m.captures[1])
+  end
+  return out
+end
+# Every `"x".` qualifier appearing anywhere in the statement.
+_ran_qualifiers(sql::AbstractString) = Set(m.captures[1] for m in eachmatch(r"\"([^\"]+)\"\.", sql))
+# The one emitted line that declares `alias`, trimmed — for byte-comparing a join across queries.
+_ran_join_line(sql::AbstractString, alias::AbstractString) =
+  strip(only(filter(l -> occursin("AS \"$(alias)\"", l), split(sql, "\n"))))
+
+@testset "a cjoin_on alias may equal a ForeignKey field name (#484)" begin
+  for (backend, conn) in (("PostgreSQL", _RAN_PG), ("SQLite", _RAN_SL))
+    @testset "$backend" begin
+
+      # ── the issue as filed: two joins, each with its own alias and its own ON ──
+      q = RAN.Ran_child.objects
+      q.cjoin_on("Ran_parent", alias = "owner", join_type = "LEFT",
+                 on = [Joined("owner", "id") == F("owner")])
+      q.values("note", "fk" => "owner__sku")
+      sql = _ran_sql(q; conn = conn)
+
+      # Two joins, not one. Pre-fix this was 1 — the alias's join was never emitted.
+      @test count("JOIN", sql) == 2
+      # The ForeignKey's own join: generated alias, INNER (from `null = false`), and NO `AND` —
+      # the alias's predicate did not ride into it.
+      @test occursin("INNER JOIN \"ran_parent\" AS \"Tb_1\" ON \"Tb\".\"owner\" = \"Tb_1\".\"id\"", sql)
+      @test !occursin("AND", _ran_join_line(sql, "Tb_1"))
+      # The cjoin_on's own join: the alias it declared, the join type IT asked for, its own ON.
+      @test occursin("LEFT JOIN \"ran_parent\" AS \"owner\" ON (\"owner\".\"id\" = \"Tb\".\"owner\")", sql)
+
+      # ── differential control (the #444/#474 coexistence-proof pattern) ────────
+      # The SAME query without the cjoin_on must render the ForeignKey's join line BYTE-IDENTICALLY.
+      # This is what catches the absorption and the INNER→LEFT flip in one assertion, without
+      # restating the expected text: the FK join is not the cjoin_on's business at all.
+      qc = RAN.Ran_child.objects
+      qc.values("note", "fk" => "owner__sku")
+      sql_control = _ran_sql(qc; conn = conn)
+      @test _ran_join_line(sql, "Tb_1") == _ran_join_line(sql_control, "Tb_1")
+      @test count("JOIN", sql_control) == 1
+
+      # ── no statement names a range variable it does not declare ──────────────
+      # The issue's third acceptance bullet, as a generic check rather than a spelling: pre-fix,
+      # `owner` appeared as a qualifier with no `AS "owner"` anywhere to declare it.
+      @test issubset(_ran_qualifiers(sql), _ran_declared_relations(sql))
+
+      # ── the two reference namespaces stay disjoint (#481 memo tags) ──────────
+      # `Joined("owner", "sku")` and the field path `"owner__sku"` both spell `owner__sku` as an
+      # output name, and both resolve to the physical column `product_sku`.
+      #
+      # The two `occursin` assertions below are NOT the discriminating ones and are not left here
+      # under the impression that they are: measured against unmodified origin/main, BOTH already
+      # rendered exactly these strings — #481's memo namespaces were never the broken half. What
+      # was broken is that `"owner"` named nothing, so the projection referenced an undeclared
+      # relation. They are kept as the readable statement of what each handle resolves to; the
+      # claim that the two land on DIFFERENT relations is carried by the join assertions after
+      # them, which do fail pre-fix.
+      qj = RAN.Ran_child.objects
+      qj.cjoin_on("Ran_parent", alias = "owner", join_type = "LEFT",
+                  on = [Joined("owner", "id") == F("owner")])
+      qj.values("note", "fk" => "owner__sku", "al" => Joined("owner", "sku"))
+      sql_j = _ran_sql(qj; conn = conn)
+      @test occursin("\"Tb_1\".\"product_sku\" as \"fk\"", sql_j)
+      @test occursin("\"owner\".\"product_sku\" as \"al\"", sql_j)
+      # Both qualifiers name a relation this statement actually declares, and there are two of them.
+      # Split rather than `&&`-ed on purpose: only the second is red pre-fix, and a conjunction
+      # reports `false` without saying which half, which would point a future reader at the wrong one.
+      @test count("JOIN", sql_j) == 2
+      @test occursin("AS \"Tb_1\"", sql_j)
+      @test occursin("AS \"owner\"", sql_j)
+      @test issubset(_ran_qualifiers(sql_j), _ran_declared_relations(sql_j))
+
+      # ── declaration order does not matter, and on() decorates the RELATION ───
+      # `on("owner", …)` targets the join path; `cjoin_on(alias = "owner")` targets its own copy.
+      # Before #484 the second-declared one either merged into the first (`on()` after `cjoin_on`)
+      # or was refused outright ("Join path 'owner' already exists"), so the two orders disagreed.
+      qab = RAN.Ran_child.objects
+      qab.on("owner", "sku" => "S")
+      qab.cjoin_on("Ran_parent", alias = "owner", join_type = "LEFT",
+                   on = [Joined("owner", "id") == F("owner")])
+      qab.values("note", "fk" => "owner__sku")
+
+      qba = RAN.Ran_child.objects
+      qba.cjoin_on("Ran_parent", alias = "owner", join_type = "LEFT",
+                   on = [Joined("owner", "id") == F("owner")])
+      qba.on("owner", "sku" => "S")
+      qba.values("note", "fk" => "owner__sku")
+
+      sql_ab = _ran_sql(qab; conn = conn)
+      @test sql_ab == _ran_sql(qba; conn = conn)
+      # The on() predicate landed on the ForeignKey's join…
+      @test occursin("\"Tb_1\".\"product_sku\" = ", _ran_join_line(sql_ab, "Tb_1"))
+      # …and the alias's ON is exactly what the caller wrote, no more.
+      @test _ran_join_line(sql_ab, "owner") ==
+            "LEFT JOIN \"ran_parent\" AS \"owner\" ON (\"owner\".\"id\" = \"Tb\".\"owner\")"
+      # White-box: one predicate in each namespace, neither borrowing from the other.
+      @test length(qab.object.custom_join["owner"].filters) == 1
+      @test length(qab.object.alias_join["owner"].filters) == 1
+      @test length(qba.object.custom_join["owner"].filters) == 1
+      @test length(qba.object.alias_join["owner"].filters) == 1
+
+      # ── the sibling shape `_cjoin` used to refuse ────────────────────────────
+      # `cjoin("owner" => …)` after `cjoin_on(alias = "owner")` raised "Join path 'owner' already
+      # exists" — naming a join path the caller had never declared. Now the two simply coexist.
+      qcj = RAN.Ran_child.objects
+      qcj.cjoin_on("Ran_parent", alias = "owner", join_type = "LEFT",
+                   on = [Joined("owner", "id") == F("owner")])
+      qcj.cjoin("owner" => "Ran_parent", warn = false)
+      qcj.values("note", "fk" => "owner__sku")
+      sql_cj = _ran_sql(qcj; conn = conn)
+      @test count("JOIN", sql_cj) == 2
+      @test issubset(_ran_qualifiers(sql_cj), _ran_declared_relations(sql_cj))
+    end
+  end
+
+  # ── bound parameters stay aligned across both backends ────────────────────
+  # A literal inside the alias's ON clause plus one in WHERE. PostgreSQL numbers placeholders as it
+  # binds, so walking its `$N` markers left to right through its parameter vector gives the true
+  # TEXT order; SQLite's flat vector must equal that (the QueryBuilder skill's oracle).
+  #
+  # A FORWARD guard, not a regression test — stated plainly because the obvious framing is wrong.
+  # This passes on unmodified origin/main too: pre-fix the alias's literal was already in the join
+  # bucket, folded into the ForeignKey's ON clause, so #484 moved which JOIN carries it, not which
+  # bucket. What is new is that the same statement now emits two join fragments instead of one, and
+  # #421/#432 are the record of what that costs when text order and binding order drift apart.
+  _mk484() = begin
+    qq = RAN.Ran_child.objects
+    qq.cjoin_on("Ran_parent", alias = "owner", join_type = "LEFT",
+                on = [Joined("owner", "id") == F("owner"), "note" => "n1"])
+    qq.filter("note" => "w1")
+    qq.values("note", "fk" => "owner__sku")
+    qq
+  end
+  pg = inspect_query(_mk484(); connection = _RAN_PG)
+  sl = inspect_query(_mk484(); connection = _RAN_SL)
+  idx = [parse(Int, m.match[2:end]) for m in eachmatch(r"\$\d+", pg[:sql_text])]
+  text_order = [pg[:parameters][i] for i in idx]
+  @test text_order == ["n1", "w1"]          # the join's literal renders before WHERE's
+  @test sl[:parameters] == text_order       # SQLite's flattened vector agrees
 end

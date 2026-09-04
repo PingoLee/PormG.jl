@@ -563,13 +563,13 @@ end
 # The next free generated alias (`<base>_<n>`) for a join row.
 #
 # #480 — it steps around every alias the caller DECLARED, not only the ones already materialized.
-# `cjoin_on` rows are built in `build()`'s second materialization loop, after `values()` /
+# `cjoin_on` rows are built in `build()`'s ALIAS materialization loop, after `values()` /
 # `filter()` / `order_by()` have already resolved their joins, and `_build_cjoin_on_row_join`
 # writes the user's alias straight into `alias_b`. So when this function chose `R1_1` for a CTE or
 # ForeignKey join, no `cjoin_on(alias = "R1_1")` was in `row_join` yet to be avoided, and the
 # statement ended up with two range variables of one name — invalid on both engines, and where an
 # engine did resolve it, the projection and the ON clause named different relations. The declared
-# aliases all sit in `object.custom_join` before `build()` starts, which is early enough.
+# aliases all sit in `object.alias_join` before `build()` starts, which is early enough.
 function _get_alias_name(instruct::SQLInstruction)::String
   return _get_alias_name(instruct.row_join, instruct.alias, _declared_join_aliases(instruct.object))
 end
@@ -584,25 +584,20 @@ function _get_alias_name(row_join::Vector{Dict{String,Union{String,Vector{Filter
   end
 end
 
-# #480 — every `cjoin_on` alias declared on the query, materialized or not. `cjoin` and `on()`
-# entries share the container but are keyed by PATH, not by an alias they introduce, so they are
-# skipped: their joins get generated aliases like any ForeignKey hop.
-function _declared_join_aliases(object::SQLObject)::Vector{String}
-  out = String[]
-  for (_, config) in object.custom_join
-    if config isa Dict{String,Any} && get(config, "no_anchor", false) == true
-      push!(out, config["user_alias"]::String)
-    end
-  end
-  return out
-end
+# #480 — every `cjoin_on` alias declared on the query, materialized or not. Since #484 that is
+# exactly `alias_join`'s key set: `cjoin` and `on()` entries live in `custom_join`, keyed by PATH
+# rather than by an alias they introduce, and their joins get generated aliases like any ForeignKey
+# hop.
+_declared_join_aliases(object::SQLObject)::Vector{String} = collect(keys(object.alias_join))
 
 # `track_path = false` (#474) records the join WITHOUT claiming its name in `row_path`. A CTE hop
-# uses it: `row_path` exists so `build()`'s two materialization loops can skip a `custom_join` entry
+# uses it: `row_path` exists so `build()`'s PATH materialization loop can skip a `custom_join` entry
 # that traversal already built, and a CTE has no `custom_join` entry — so a CTE hop registering its
-# own name there could only ever suppress an unrelated user join that happened to share it. Nothing
-# indexes `row_path` positionally (both readers are `∉` membership tests), so the two vectors do not
-# have to stay the same length.
+# own name there could only ever suppress an unrelated user join that happened to share it. A
+# `cjoin_on` row uses it for the same reason since #484 — an alias is not a path, so it has no
+# business claiming a name in the PATH membership set. Nothing indexes `row_path` positionally (its
+# one remaining reader is an `∉` membership test), so the two vectors do not have to stay the same
+# length.
 function _insert_join(
   row_join::Vector{Dict{String,Union{String,Vector{FilterType}}}},
   row::Dict{String,Union{String,Vector{FilterType}}},
@@ -640,9 +635,10 @@ end
 # half rather than a string prefix.
 #
 # `row_path` does NOT go through here: a CTE hop is not tracked there at all (`_insert_join`'s
-# `track_path`). It is the membership set `build()`'s two materialization loops test `custom_join`
-# keys against, and a CTE hop has no `custom_join` entry to suppress — registering one under the
-# CTE's name is what silently dropped the user's own join before #474.
+# `track_path`). It is the membership set `build()`'s PATH materialization loop tests `custom_join`
+# keys against — since #484 the alias loop does not consult it at all — and a CTE hop has no
+# `custom_join` entry to suppress, so registering one under the CTE's name is what silently dropped
+# the user's own join before #474.
 _join_path_key(join_path::String, cte::Bool)::MemoKey = (cte ? :cte : :base, join_path)
 
 function _check_if_field_is_a_operator(field::String)
@@ -686,30 +682,28 @@ function _normalize_join_type(join_type::String)
   return normalized
 end
 
-function _get_join_config(q::SQLObject, join_path::String)
-  haskey(q.custom_join, join_path) || return nothing
-  config = q.custom_join[join_path]
-  return config isa Dict{String,Any} ? config : nothing
-end
+# The three readers below resolve a MODEL JOIN PATH, so they read the path namespace and only that
+# (#484). A `cjoin_on` alias is unreachable from here by construction — it is not in this map — which
+# is what makes the alias-equals-ForeignKey-name collision unrepresentable rather than guarded: this
+# is the site that used to hand a ForeignKey hop the alias's ON clause and join type.
+_get_join_config(q::SQLObject, join_path::String)::Union{PathJoin,Nothing} = get(q.custom_join, join_path, nothing)
 
 function _get_join_field(q::SQLObject, join_path::String)
   config = _get_join_config(q, join_path)
   config === nothing && return nothing
-  return get(config, "field", nothing)
+  return config.field
 end
 
 function _get_join_filters(q::SQLObject, join_path::String)
   config = _get_join_config(q, join_path)
   config === nothing && return nothing
-  filters = get(config, "filters", nothing)
-  return filters isa Vector{FilterType} ? filters : nothing
+  return config.filters
 end
 
 function _get_join_type_override(q::SQLObject, join_path::String)
   config = _get_join_config(q, join_path)
   config === nothing && return nothing
-  join_type = get(config, "join_type", nothing)
-  return join_type isa String ? join_type : nothing
+  return config.join_type
 end
 """
 This function checks if the given `field` is a valid field in the provided `model`. If the field is valid, it returns the field name, potentially modified based on certain conditions.
@@ -1132,7 +1126,7 @@ function _get_select_query(v::CTEReference, instruc::SQLInstruction; _as::Union{
   return _build_row_join(_cte_join_path(v), instruc, cte=true)
 end
 # #481 — unlike a CTE reference, a joined-copy reference does NOT materialize a join: `cjoin_on`
-# already declared it, and `build()`'s second loop emits it. This only has to render the column.
+# already declared it, and `build()`'s ALIAS loop emits it. This only has to render the column.
 function _get_select_query(v::JoinedReference, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   return _resolve_joined(v, instruc)
 end
@@ -1293,8 +1287,8 @@ end
 # names no declared alias is the caller's typo, and reporting it as an unknown *field* (what the
 # fail-open path did) sent people looking for a column that was never the problem.
 #
-# The lookup is `object.custom_join`, NOT `instruct.row_join`: `cjoin_on` rows materialize in
-# `build()`'s second loop, after `values()` / `filter()` / `order_by()` have already rendered, so at
+# The lookup is `object.alias_join`, NOT `instruct.row_join`: `cjoin_on` rows materialize in
+# `build()`'s alias loop, after `values()` / `filter()` / `order_by()` have already rendered, so at
 # the moment a projection resolves the row may not exist yet — but the declaration always does.
 # Rendering needs only the alias and the target model, both of which the config carries.
 #
@@ -1327,16 +1321,15 @@ function _resolve_joined(ref::JoinedReference, instruc::SQLInstruction)::String
     "Joined(\"$(ref.alias)\", \"$(ref.path)\") cannot traverse a relation: a cjoin_on joined copy is " *
     "one table, so its reference is a single column on that model. Declare another cjoin_on for the " *
     "next hop and reference its alias."))
-  config = get(instruc.object.custom_join, ref.alias, nothing)
-  if !(config isa Dict{String,Any} && get(config, "no_anchor", false) == true)
-    declared = [k for (k, c) in instruc.object.custom_join
-                if c isa Dict{String,Any} && get(c, "no_anchor", false) == true]
+  config = get(instruc.object.alias_join, ref.alias, nothing)
+  if config === nothing
+    declared = collect(keys(instruc.object.alias_join))
     throw(QueryBuildError(
       "Joined(\"$(ref.alias)\", …) names no cjoin_on alias on this query. " *
       (isempty(declared) ? "This query declares no cjoin_on at all." :
        "Declared aliases: $(join(declared, ", ")).")))
   end
-  target_model = getfield(instruc.object.model._module, Symbol(config["target_model"]::String))::PormGModel
+  target_model = config.target
   (ref.path in target_model.field_names) ||
     throw(_unknown_field(target_model, ref.path))
   # Memoize the joined field so a filter's RHS formats through it (the same service

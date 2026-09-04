@@ -211,6 +211,40 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     handed the CTE the other entry&#39;s join type and predicates and dropped your join. That lookup is
     gone, so a join KEY no longer collides.
 
+    **A `cjoin_on` alias may also equal a relation name on the base model**, or an `on()` / `cjoin()`
+    join path. Both joins are emitted — the relation&#39;s under a generated alias, the joined copy&#39;s
+    under the alias you declared — and each stays addressable: `Joined(alias, column)` reaches the
+    copy, `&quot;relation__column&quot;` reaches the relation. `on(...)` and `cjoin(...)` decorate the
+    *relation&#39;s* join, never the copy&#39;s, in either declaration order.
+
+    ```julia
+    # &quot;driverid&quot; names both the ForeignKey on Result and the cjoin_on alias.
+    df = M.Result.objects.
+        cjoin_on(&quot;Driver&quot;, alias = &quot;driverid&quot;, join_type = &quot;LEFT&quot;,
+                 on = [Joined(&quot;driverid&quot;, &quot;driverid&quot;) == F(&quot;driverid&quot;)]).
+        filter(&quot;raceid&quot; =&gt; 841).
+        values(&quot;points&quot;, &quot;fk&quot; =&gt; &quot;driverid__surname&quot;,
+               &quot;copy&quot; =&gt; Joined(&quot;driverid&quot;, &quot;surname&quot;)) |&gt; DataFrame
+    ```
+
+    ```sql
+    -- Two joins, each with its own alias, its own ON clause and its own join type: the ForeignKey&#39;s
+    -- keeps what PormG derives from the relation (INNER — `driverid` is NOT NULL), the joined copy
+    -- keeps the LEFT it declared. Neither adopts the other&#39;s.
+    SELECT &quot;Tb&quot;.&quot;points&quot; as &quot;points&quot;, &quot;Tb_1&quot;.&quot;surname&quot; as &quot;fk&quot;, &quot;driverid&quot;.&quot;surname&quot; as &quot;copy&quot;
+    FROM &quot;result&quot; as &quot;Tb&quot;
+     INNER JOIN &quot;driver&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_1&quot;.&quot;driverid&quot;
+     LEFT JOIN &quot;driver&quot; AS &quot;driverid&quot; ON (&quot;driverid&quot;.&quot;driverid&quot; = &quot;Tb&quot;.&quot;driverid&quot;)
+    WHERE &quot;Tb&quot;.&quot;raceid&quot; = ?
+    ```
+
+    Before [#484](https://github.com/PingoLee/PormG.jl/issues/484) this shape was silently wrong
+    whenever the relation was *also* traversed: the alias&#39;s predicates were AND-appended to the
+    ForeignKey&#39;s `ON`, its join type adopted, its own join never emitted — leaving the statement
+    referencing a range variable it never declared (PostgreSQL: *missing FROM-clause entry*). A
+    `cjoin_on` alias and a join path are now two namespaces, so the overlap is simply two relations
+    that happen to share a name.
+
     One name a CTE may never take is a **physical table name**: `.with(&quot;driver&quot; =&gt; ...)` raises
     `QueryBuildError` at the call when `driver` is the `db_table` of any registered model, or a
     many-to-many join table. SQL resolves an unqualified table reference to a same-named CTE for the whole statement,
@@ -383,4 +417,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Friday 4 September 2026 12:33">Friday 4 September 2026</span>. Using Julia version 1.12.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Friday 4 September 2026 16:49">Friday 4 September 2026</span>. Using Julia version 1.12.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

@@ -39,15 +39,17 @@ Tracks **breaking / behavior changes in PormG** that require source-code changes
 
 ---
 
-## Unreleased — next `0.5.0`
+## Unreleased — next `0.6.0`
 
 _Changes merged but not yet cut into a release. A consumer dev'ing PormG at HEAD is running these,
 and `PormG.upgrade_guide` surfaces them by default. When the maintainer next rolls changes into a
-consuming app, `/pormg-cut-release` stamps every entry below with `0.5.0`, dates them, and tags it._
+consuming app, `/pormg-cut-release` stamps every entry below with `0.6.0`, dates them, and tags it._
+
+## 0.5.0 — 2026-09-04
 
 ## `F("alias.col")` is removed; reference a `cjoin_on` joined copy with `Joined(alias, col)` (#481)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #481 (closes two of #174's deferred edges); `src/Kernel.jl`,
   `src/querybuilder/types.jl`, `src/querybuilder/build_helpers.jl`,
   `src/querybuilder/object_manager.jl`, `src/querybuilder/ctes.jl`,
@@ -116,7 +118,7 @@ q.filter(Joined("d", "points__@gte") => 3)            # alias-qualified operator
 
 ## A CTE may not be named after a physical table, and a `cjoin_on` alias cannot take a generated alias (#479, #480)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #479, #480; `src/querybuilder/ctes.jl`, `src/querybuilder/build_helpers.jl`,
   `src/querybuilder/build_joins.jl`, `docs/src/read/custom_joins.md`,
   `docs/src/read/subqueries_and_ctes.md`
@@ -205,7 +207,7 @@ q.values("points", "career_best" => CTE("best_by_driver", "best"))
 
 ## A CTE name may equal a join key, `on()` no longer forces `LEFT`, and `join_type` is validated (#474)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #474 (withdraws the #447 half of the entry below; supersedes the #424 collision
   route); `src/querybuilder/build_joins.jl`, `src/querybuilder/build_helpers.jl`,
   `src/querybuilder/build_query.jl`, `src/querybuilder/ctes.jl`, `src/querybuilder/types.jl`,
@@ -324,7 +326,7 @@ q.values("points", "who" => CTE("all_drivers", "surname"))                # this
 
 ## An expression column DEFAULT no longer aborts introspection (#472)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #472, #292, #455; `src/migrations/introspection.jl`, `src/Models.jl`,
   `src/models/fields.jl`, `docs/src/schema_conventions.md`
 - **Recorded**: 2026-09-02
@@ -370,7 +372,7 @@ ask for, naming the table. Full rules: `docs/src/schema_conventions.md` → *Col
 
 ## `cjoin_on` joins follow declaration order, and two silent-wrong-result shapes are refused (#449, #448)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #449, #448 (#447 withdrawn by #474); `src/querybuilder/types.jl`, `src/querybuilder/build_query.jl`,
   `docs/src/read/custom_joins.md`, `docs/src/read/subqueries_and_ctes.md`
 - **Recorded**: 2026-09-01
@@ -483,7 +485,7 @@ q.cjoin_on("Driver", alias = "d2", on = [F("d2.surname") == F("d1.surname")])
 
 ## A wrong-typed filter value raises `FilterError`, not `InvalidValueError` (#411)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #411, #446; `src/querybuilder/build_helpers.jl`, `src/querybuilder/build_query.jl`,
   `src/querybuilder/types.jl`, `src/querybuilder/build_joins.jl`
 - **Recorded**: 2026-08-31
@@ -580,7 +582,7 @@ end
 
 ## A reverse accessor may not contain `__` or `@`, or end with `_` (#420)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #420; `src/Models.jl`, `src/models/fields.jl`, `src/migrations/importers.jl`,
   `docs/src/read/values_and_joins.md`, `docs/src/fields.md`
 - **Recorded**: 2026-08-28
@@ -701,11 +703,12 @@ the old name was never addressable.
 
 ## CTE columns are referenced with `CTE(name, path)`, not with a `"<cte>__col"` string (#444)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #444 (supersedes #431, #434); `src/querybuilder/types.jl`,
   `src/querybuilder/object_manager.jl`, `src/querybuilder/build_helpers.jl`,
   `src/querybuilder/build_joins.jl`, `src/querybuilder/ctes.jl`, `src/querybuilder/functions.jl`,
   `docs/src/read/subqueries_and_ctes.md`
+- **Recorded**: 2026-08-27
 - **Severity**: **breaking** — every reference to a CTE column changes spelling. The old string form
   is deleted outright, not deprecated. It also FIXES two silent-wrong-result bugs (#431, #434) by
   making them unrepresentable. Part of the `0.5.x` pre-publish wave.
@@ -877,7 +880,7 @@ necessary — though keeping it costs nothing.
 
 ## Schema introspection reads two column shapes differently — spaced identifiers, and multi-column foreign keys (#414, #415)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #414, #415; `src/migrations/introspection.jl`, `docs/src/schema_conventions.md`
 - **Recorded**: 2026-08-26
 - **Severity**: **behavior change (narrow — only apps whose live schema has one of these two shapes)**.
@@ -993,9 +996,10 @@ M.Driver.objects.filter("driver_ref" => "senna")
 
 ## `values()` refuses two projections that would render the same output name (#441)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #441; `src/querybuilder/object_manager.jl`, `src/querybuilder/build_query.jl`,
   `docs/src/read/values_and_joins.md`
+- **Recorded**: 2026-08-26
 - **Severity**: **behavior change (narrow)** — two shapes that render today stop building, and one
   of them (`Value(...)` literals sharing a name) was working correctly rather than silently wrong.
   Part of the `0.5.x` pre-publish wave.
@@ -1099,10 +1103,11 @@ star never emits `sku`.
 
 ## A subquery consumed by `@in` / `Subquery` / `Exists` may no longer declare its own CTE (#433)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #433; `src/querybuilder/build_helpers.jl`, `src/querybuilder/build_joins.jl`,
   `src/querybuilder/deletion.jl`, `src/querybuilder/ctes.jl`, `src/querybuilder/build_query.jl`,
   `docs/src/read/subqueries_and_ctes.md`
+- **Recorded**: 2026-08-26
 - **Severity**: **behavior change (narrow, but `delete()` is the wide part)** — one shape that raised
   an internal error now raises a typed one; two subquery shapes that **worked correctly on
   PostgreSQL** are refused on both backends; and **`delete()` now refuses any queryset that declares
@@ -1243,7 +1248,7 @@ query.update("points" => 0)
 
 ## An ON predicate that lands on a CROSS-joined CTE is refused instead of being dropped (#424)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #424 (landed with #421); `src/querybuilder/build_query.jl`,
   `docs/src/read/custom_joins.md`
 - **Recorded**: 2026-08-25
@@ -1399,7 +1404,7 @@ q.filter("ev__year" => 2009)
 
 ## A CTE joined in a correlated `UPDATE … FROM` is refused instead of emitting broken SQL (#394)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #394; `src/querybuilder/sanitization.jl`, `src/querybuilder/execution.jl`,
   `src/Dialect.jl`, `src/Generator.jl`, `src/migrations/planner.jl`,
   `docs/src/schema_conventions.md`
@@ -1475,7 +1480,7 @@ M.Result.objects.
 
 ## Reverse accessors — every relation in a multi-relation group is disambiguated (#396)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #396; `src/Models.jl`, `docs/src/many_to_many.md`,
   `docs/src/read/values_and_joins.md`, `docs/src/fields.md`, `src/models/fields.jl`
 - **Recorded**: 2026-08-24
@@ -1575,7 +1580,7 @@ co_localidade_endereco = Models.ForeignKey(Tb_localidade, …, related_name = "c
 
 ## `AutoField` is retired, and introspection reports the real field type (#408, #409, #417)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **Recorded**: 2026-08-25
 - **PormG ref**: #408, #409, #417; `src/models/fields.jl`, `src/Dialect.jl`,
   `src/migrations/introspection.jl`, `src/migrations/importers.jl`, `docs/src/fields.md`,
@@ -1773,7 +1778,7 @@ stop it.
 
 ## `bulk_update` — a `match_on` key PormG would auto-populate is refused, not bound (#379)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #379; `src/querybuilder/execution_bulk.jl`, `docs/src/write/bulk.md`,
   `docs/src/api.md`
 - **Recorded**: 2026-08-21
@@ -1886,7 +1891,7 @@ the field can actually read.
 
 ## Foreign keys — an unresolved `to` target is refused, not lowercased into a table name (#388)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #388; `src/Models.jl` (`fk_target_table`), `src/querybuilder/build_joins.jl`,
   `docs/src/schema_conventions.md`
 - **Recorded**: 2026-08-18
@@ -1963,7 +1968,7 @@ Tb_dia_semana = Models.Model("tb_dia_semana", co_dia_semana = Models.IDField())
 
 ## Bulk writes — `columns=` refuses two different source columns for one model field (#380)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #380; `src/querybuilder/execution_bulk.jl`, `docs/src/write/bulk.md`
 - **Recorded**: 2026-08-14
 - **Severity**: **behavior change (narrow)** — a `columns=` list that names the same model field twice
@@ -2039,7 +2044,7 @@ in the `DataFrame` first (`df[!, :laps] = coalesce.(df.c1, df.c2)`) and map that
 
 ## `indexes` becomes a model-level option, so a field of that name needs `db_column` (#347)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #347; `src/constants.jl`, `src/Models.jl`, `src/migrations/planner.jl`,
   `src/migrations/introspection.jl`, `src/migrations/importers.jl`, `docs/src/models.md`,
   `docs/src/import_django.md`
@@ -2091,7 +2096,7 @@ and therefore every schema, is untouched, so no migration is generated.
 
 ## Multi-app Django import: `ignore_table` removed, `Model_to_str` drops `settings`, unresolvable relations degrade (#346)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #346; `src/Models.jl`, `src/migrations/importers.jl`, `docs/src/import_django.md`,
   `docs/src/schema_conventions.md`, `docs/src/configuration/connection_yml.md`
 - **Recorded**: 2026-08-14
@@ -2283,7 +2288,7 @@ a marker each. That is the intended way in for a project that never subclassed `
 
 ## The Django app prefix moves to `db_table`, and short-form join paths stop needing it (#345)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #345; `src/Models.jl`, `src/migrations/importers.jl`,
   `src/querybuilder/build_joins.jl`, `src/querybuilder/build_query.jl`,
   `docs/src/schema_conventions.md`, `docs/src/import_django.md`,
@@ -2404,7 +2409,7 @@ rename the `related_name` for the reverse.
 
 ## Row-level writes no longer auto-resync PostgreSQL sequences (#358)
 
-- **Version**: Unreleased
+- **Version**: 0.5.0
 - **PormG ref**: #358; `src/querybuilder/execution.jl`, `src/querybuilder/execution_bulk.jl`,
   `src/QueryBuilder.jl`, `src/PormG.jl`, `docs/src/schema_conventions.md`, `docs/src/postgres.md`
 - **Recorded**: 2026-08-13

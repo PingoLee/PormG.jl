@@ -380,13 +380,19 @@ end
         # they must not interfere with each other's parameter routing.
         # CTE: constructors with id ≤ 5 — LEFT joined to results by constructorid.
         # on(): only Brazilian drivers get their surname populated (LEFT JOIN on driverid).
+        #
+        # #474/#489 — `join_type = "LEFT"` is load-bearing here. `Result.driverid` is NOT NULL, so
+        # PormG derives INNER and `on()` no longer overrides that on its own. Both assertions at the
+        # end of this testset depend on the non-Brazilian rows surviving: without the explicit LEFT
+        # the result narrows to Brazilian winners, `df.driverid__surname` has no missing values at
+        # all, and `df.tc__name` came back all-missing too.
         top_const = M.Constructor.objects
         top_const.filter("constructorid__@lte" => 5)
         top_const.values("constructorid", "name")
 
         query = M.Result.objects
         query.with("tc" => top_const, join_field="constructorid" => "constructorid")
-        query.on("driverid", "nationality" => "Brazilian")
+        query.on("driverid", "nationality" => "Brazilian", join_type = "LEFT")
         query.filter("positionorder" => 1, "resultid__@lte" => 200)
         query.values("resultid", CTE("tc", "name"), "driverid__surname")
         df = query |> DataFrame
@@ -486,8 +492,10 @@ end
         warn=false)
 
     # on(): attach Driver but only for drivers born before 1985 (LEFT JOIN).
-    # join bucket param 2.
-    query.on("driverid", "dob__@year__@lt" => 1985)           # join param 2
+    # join bucket param 2. The explicit join_type keeps that "(LEFT JOIN)" true after #474 — this
+    # testset is about parameter-bucket saturation and its assertions do not depend on the join
+    # type, but a comment describing a join the query does not emit is how #489 stayed invisible.
+    query.on("driverid", "dob__@year__@lt" => 1985, join_type = "LEFT")   # join param 2
 
     # WHERE filters:
     #   - positionorder = 1  (only race winners)                 where param 1

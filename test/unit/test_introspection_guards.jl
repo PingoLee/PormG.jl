@@ -43,6 +43,13 @@ import PormG: PormGModel, PormGPostgres, PormGSQLite
 import PormG.ConnectionPool: SQLiteConnectionPool, fetch
 import PormG.Migrations: convert_schema_to_models, _field_or_drop_default
 
+# The cleaners return `_ExpressionDefault` for a DEFAULT that is a SQL expression rather than a
+# literal value (#475). Aliased so assertions read as the expression they are about rather than as a
+# constructor call. Named `sql_expr` rather than `expr` because `test/runtests.jl` includes every
+# unit file into ONE module, and this file already carries `expr_columns`/`expr_defaults`/`expr_warns`
+# locals that a bare `expr` would sit confusingly beside.
+const sql_expr = PormG.Migrations._ExpressionDefault
+
 # Mock connections for the planner assertion in the #472 block (the shape used by
 # `test_fk_to_table_planner.jl`). Prefixed with this file's own name because `test/runtests.jl`
 # includes every unit file into the same module, and a bare `MockPg` would collide.
@@ -1267,10 +1274,15 @@ end
   # …and the warning they degraded into is not merely unreached, it is unreachable: the row that
   # used to produce it now reads cleanly. `min_level = Logging.Warn` fails on ANY warning, which is
   # what makes this a gate rather than a formality.
+  #
+  # The `note` default is a QUOTED literal (#475). It was `concat('a'::text, 'b'::text)` — chosen
+  # here for the `, ` this file's #455 fixtures are about — but an expression default now warns on
+  # every column type, which would fail this zero-warning gate for a reason that has nothing to do
+  # with identifier tearing. A quoted literal carrying the same `, ` tests the tear just as well.
   @test_logs min_level = Logging.Warn convertSQLToModel(_introspection_row(
     table_name   = "no_warn",
     columns      = [_col("id", "bigint"; notnull = true), _col("Race, Total", "bigint"),
-                    _col("note", "text"; notnull = true, default = "concat('a'::text, 'b'::text)")],
+                    _col("note", "text"; notnull = true, default = "'Ferrari, Scuderia'::text")],
     primary_keys = ["id"]))
 end
 
@@ -1293,16 +1305,20 @@ end
 
   # Balance-checked unwrapping, not regex-anchored. `r"^\((.+)\)$"` turned the first into `a) + (b`,
   # and `r"^'(.+)'$"` would treat the second — a concatenation of two literals — as one literal.
-  @test clean("(a) + (b)") == "(a) + (b)"
-  @test clean("'a' || 'b'") == "'a' || 'b'"
+  #
+  # Both are EXPRESSIONS, so since #475 they come back tagged rather than as bare Strings. What this
+  # block is testing is unchanged: that the TEXT survives unmangled. `_ExpressionDefault` compares
+  # by its `.sql`, so the assertion still reads as the expression it is about.
+  @test clean("(a) + (b)") == sql_expr("(a) + (b)")
+  @test clean("'a' || 'b'") == sql_expr("'a' || 'b'")
 
   # THE CONDITIONAL-RE-STRIP GATE, found in review. `pg_get_expr` parenthesizes every non-trivial
   # expression, so after unwrapping those parens the inner text is usually a COMPOUND expression
   # whose trailing cast belongs to its last OPERAND. Re-stripping unconditionally — which the first
   # implementation did — turns these into MANGLED expressions rather than unrecognized ones, which
   # is strictly worse: an unrecognized default is refused, a mangled one may be accepted.
-  @test clean("('x'::text || 'y'::text)") == "'x'::text || 'y'::text"
-  @test clean("(now() - '1 day'::interval)") == "now() - '1 day'::interval"
+  @test clean("('x'::text || 'y'::text)") == sql_expr("'x'::text || 'y'::text")
+  @test clean("(now() - '1 day'::interval)") == sql_expr("now() - '1 day'::interval")
   # …while the case the re-strip exists for still reduces, because it reduces to a LITERAL.
   @test clean("('x'::text)") == "x"
 
@@ -1313,10 +1329,20 @@ end
   @test clean("NULL") === nothing
   @test clean("'NULL'::text") == "NULL"        # the LITERAL string is still a real default
 
-  # An expression that cannot reduce to a literal is returned whole, for the field constructors to
-  # judge. `nextval(...)` is what `_fk_default_or_warn` above already refuses by name.
-  @test clean("concat('a'::text, 'b'::text)") == "concat('a'::text, 'b'::text)"
-  @test clean("nextval('s'::regclass)") == "nextval('s'::regclass)"
+  # An expression that cannot reduce to a literal is returned WHOLE and TAGGED (#475), so the reader
+  # arms drop it on every column type instead of asking each field constructor to judge it.
+  # `nextval(...)` is what `_fk_default_or_warn` above already refuses by name.
+  @test clean("concat('a'::text, 'b'::text)") == sql_expr("concat('a'::text, 'b'::text)")
+  @test clean("nextval('s'::regclass)") == sql_expr("nextval('s'::regclass)")
+
+  # …and every literal above is still a bare String, not a tag. Asserted as a type, because `==`
+  # on `_ExpressionDefault` is deliberately not defined against `AbstractString`: if the classifier
+  # ever mistook one of these for an expression, the `==` assertions above would keep passing while
+  # the reader silently dropped a real default.
+  for lit in ("1", "(0)::numeric", "'Ferrari, Scuderia'::character varying", "'{1,2}'::integer[]",
+              "('x'::text)", "'NULL'::text")
+    @test clean(lit) isa String
+  end
 end
 
 @testset "the type arrives whole, so no spelling needs rewriting (#455)" begin
@@ -1425,22 +1451,29 @@ end
   #    which the planner would then propose "fixing" with an ALTER on every run.
   @test model.fields["created_at"].null == false
 
-  # 4. Representable defaults are untouched, including on a row where six siblings failed.
+  # 4. Representable defaults are untouched, including on a row where seven siblings failed.
   @test model.fields["ok"].default == 5
-  # A text column still keeps an expression as a literal string. PormG has no representation for an
-  # expression default, and #455 scoped its acceptance to the COLUMN rather than the value; #472 is
-  # only about not aborting, so this stays exactly as it was (see docs/src/schema_conventions.md).
-  @test model.fields["note"].default == "concat('a'::text, 'b'::text)"
+  # THE #475 REVERSAL, and the headline assertion of this file. A text column used to KEEP an
+  # expression as a quoted literal — `TextField` validates against `Union{String, Nothing}` and
+  # accepts anything, so the same `concat(…)` that aborted a `date` column slipped through here
+  # silently, and `Model_to_str` wrote `default="concat('a'::text, 'b'::text)"` into the generated
+  # models file, where re-applying it renders `DEFAULT 'concat(...)'` and stores that TEXT in every
+  # new row. The outcome is now decided by the schema, not by which field type happens to refuse a
+  # String, so `text` and `date` reach the same answer.
+  @test model.fields["note"].default === nothing
+  # …and the column is otherwise untouched: still text, still NOT NULL. Dropping a default must not
+  # cost the column anything else.
+  @test model.fields["note"] isa PormG.Models.sTextField
   @test model.fields["note"].null == false
 
   # 5. The failure is REPORTED, not silent — one warning per dropped column, each naming the table
   #    and the column, so a large import says which columns lost a default and where.
   warns = filter(l -> l.level == Logging.Warn &&
                       occursin("could not be represented", l.message), logs)
-  @test length(warns) == 6
+  @test length(warns) == 7          # six typed columns + `note`, which used to be kept silently
 
   by_col = Dict(string(Dict(w.kwargs)[:column]) => Dict(w.kwargs) for w in warns)
-  @test Set(keys(by_col)) == Set(["created_at", "d", "n", "tm", "fl", "u"])
+  @test Set(keys(by_col)) == Set(["created_at", "d", "n", "tm", "fl", "u", "note"])
   @test by_col["created_at"][:table] == "expr_defaults"
   # The RAW value, as introspection received it: enough to find the column in the DDL.
   @test by_col["created_at"][:default] == "now()"
@@ -1449,18 +1482,33 @@ end
   # PUBLIC spelling the user declares (`DateTimeField`), not the private struct name
   # (`sDateTimeField`), which is the convention `Model_to_str`'s own degrade warning follows.
   @test by_col["created_at"][:field_type] == "DateTimeField"
-  # …and WHY, taken from the constructor's own complaint rather than restated here.
-  @test occursin("Invalid default value", by_col["created_at"][:reason])
+  # …and WHY. Since #475 an expression never reaches a constructor at all — it is classified by the
+  # cleaner and dropped before one is asked — so there is no `FieldValidationError` to quote and the
+  # reason names the actual condition instead.
+  @test occursin("SQL expression", by_col["created_at"][:reason])
+  @test occursin("SQL expression", by_col["note"][:reason])
+  # The kwarg SET is identical on both arms, so no consumer has to branch on which one fired.
+  @test by_col["note"][:table] == "expr_defaults"
+  @test by_col["note"][:field_type] == "TextField"
+  @test by_col["note"][:default] == "concat('a'::text, 'b'::text)"
 
   # 6. The mirror image, and the reason `min_level` is used rather than a count: a row whose
   #    defaults are ALL representable must produce no warning at all. Without this, a guard that
   #    warned unconditionally would pass every assertion above.
+  #
+  #    Since #475 this is also THE gate on the classifier's cheapest way to be wrong. `ok` and
+  #    `flag` arrive at the cleaner as the BARE tokens `5` and `true` — the very same unquoted
+  #    fallthrough branch that carries `now()` — and they are literals only because
+  #    `_is_sql_literal_token` says so. A fix that dropped that branch wholesale, rather than
+  #    classifying it, would take every unquoted numeric and boolean default with it and fail here.
+  #    `note` is a quoted literal that CONTAINS an expression's spelling, which no classifier
+  #    working on the cleaner's unquoted OUTPUT could tell from the real thing.
   @test_logs min_level = Logging.Warn convertSQLToModel(_introspection_row(
     table_name   = "clean_defaults",
     columns      = [_col("id", "bigint"; notnull = true),
                     _col("ok", "integer"; default = "5"),
                     _col("flag", "boolean"; default = "true"),
-                    _col("note", "text"; notnull = true, default = "concat('a'::text, 'b'::text)")],
+                    _col("note", "text"; notnull = true, default = "'concat(a, b)'::text")],
     primary_keys = ["id"]))
 end
 
@@ -1579,25 +1627,29 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SQLite: an unquoted default is a String, so a text column behaves like PostgreSQL's
-# `_normalize_sqlite_default` ended with the `SubString` that `strip` produced. `TextField` (and
-# Email/Image/FileField) validate against `Union{String, Nothing}` with `parse(String, x)` as the
-# converter — which has no method for ANY input — so a `SubString` threw. SQLite was therefore
-# strictly worse than PostgreSQL: even `TEXT DEFAULT CURRENT_TIMESTAMP` aborted the read.
+# SQLite: an unquoted default is classified, not kept
+# #472 widened this branch from the `SubString` that `strip` produced to a `String`, because
+# `TextField`'s converter is `parse(String, x)` — which has no method for ANY input — so a
+# `SubString` threw and even `TEXT DEFAULT CURRENT_TIMESTAMP` aborted the read. That made SQLite
+# agree with PostgreSQL, but at the wrong answer: BOTH then kept an expression as a quoted literal
+# on a textual column. #475 keeps the widening (a literal still has to be a `String`) and adds the
+# question that was missing — is this unquoted token a LITERAL or an EXPRESSION?
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "a SQLite unquoted default widens to String so a text column keeps it (#472)" begin
+@testset "a SQLite unquoted default is classified as literal or expression (#475)" begin
   norm = PormG.Migrations._normalize_sqlite_default
 
-  # THE mutation gate. `== "CURRENT_TIMESTAMP"` alone passes on `main`, because a `SubString`
-  # compares equal to the `String` — only the type assertion fails there.
-  @test norm("CURRENT_TIMESTAMP", :TextField) isa String
-  @test norm("(datetime('now'))", :DateTimeField) isa String
-  @test norm("(random()*10)", :IntegerField) isa String
-  # The consequence, stated as the thing a user sees: the field builds at all.
-  @test PormG.Models.TextField(default = norm("CURRENT_TIMESTAMP", :TextField)).default ==
-        "CURRENT_TIMESTAMP"
+  # THE reversal. These reach the cleaner's unquoted fallthrough and are now tagged, so every reader
+  # arm drops them — a `text` column no longer gets a different answer from a `date` one.
+  @test norm("CURRENT_TIMESTAMP", :TextField) == sql_expr("CURRENT_TIMESTAMP")
+  @test norm("(datetime('now'))", :DateTimeField) == sql_expr("datetime('now')")
+  @test norm("(random()*10)", :IntegerField) == sql_expr("random()*10")
 
-  # Values are unchanged — this widens the type, it does not reinterpret anything.
+  # …and the half of #472 that must NOT regress: a genuine literal is still a `String`, never the
+  # `SubString` `strip` produces, because `parse(String, ::SubString)` has no method.
+  @test norm("'abc'", :TextField) isa String
+  @test norm("5", :IntegerField) isa String
+
+  # Values are unchanged — this classifies, it does not reinterpret anything.
   @test norm("'abc'", :TextField) == "abc"
   @test norm("5", :IntegerField) == "5"
   @test norm("NULL", :TextField) === nothing
@@ -1605,8 +1657,16 @@ end
   @test norm("1", :BooleanField) === true          # the Bool branch still short-circuits
   @test norm("X'0102'", :BinaryField) == UInt8[0x01, 0x02]   # …and so does the bytes branch (#296)
 
+  # THE mutation gate for #475, and the one assertion no post-hoc classifier can pass. Both cleaners
+  # UNQUOTE a literal, so after that step these two inputs are the SAME BYTES — a classifier reading
+  # the cleaner's RESULT must either keep the expression or drop the string a user deliberately
+  # quoted. Only a decision made inside the cleaner, while the quoting is still visible, gets both.
+  @test norm("'CURRENT_TIMESTAMP'", :TextField) == "CURRENT_TIMESTAMP"
+  @test norm("'CURRENT_TIMESTAMP'", :TextField) isa String
+  @test norm("CURRENT_TIMESTAMP", :TextField) == sql_expr("CURRENT_TIMESTAMP")
+
   # Through the DDL-regex reader (off the live route, but the one with unit coverage): a typed
-  # column drops the expression and warns, a text column keeps it. Same row, both outcomes.
+  # column and a text column now reach the SAME outcome. Same row, one answer.
   logs, model = Test.collect_test_logs() do
     convertSQLToModel("""CREATE TABLE "sl_expr" (
         "id" INTEGER PRIMARY KEY,
@@ -1617,12 +1677,13 @@ end
 
   @test model.fields["created"] isa PormG.Models.sDateTimeField
   @test model.fields["created"].default === nothing
-  @test model.fields["note"].default == "CURRENT_TIMESTAMP"
-  @test model.fields["ok"].default == 5
+  @test model.fields["note"].default === nothing          # #475: was "CURRENT_TIMESTAMP"
+  @test model.fields["note"] isa PormG.Models.sTextField  # …and it is still a text column
+  @test model.fields["ok"].default == 5                   # the unquoted-LITERAL control
   warns = filter(l -> l.level == Logging.Warn &&
                       occursin("could not be represented", l.message), logs)
-  @test length(warns) == 1
-  @test Dict(first(warns).kwargs)[:column] == "created"
+  @test length(warns) == 2
+  @test Set(string(Dict(w.kwargs)[:column]) for w in warns) == Set(["created", "note"])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1660,12 +1721,13 @@ end
   @test sl_model.fields["d"].default === nothing
   @test sl_model.fields["n"].default === nothing
   @test sl_model.fields["ok"].default == 5
-  @test sl_model.fields["note"].default == "CURRENT_TIMESTAMP"
+  @test sl_model.fields["note"].default === nothing        # #475: was "CURRENT_TIMESTAMP"
 
   warns = filter(l -> l.level == Logging.Warn &&
                       occursin("could not be represented", l.message), sl_logs)
-  @test length(warns) == 3
-  @test Set(string(Dict(w.kwargs)[:column]) for w in warns) == Set(["created_at", "d", "n"])
+  @test length(warns) == 4
+  @test Set(string(Dict(w.kwargs)[:column]) for w in warns) ==
+        Set(["created_at", "d", "n", "note"])
   @test all(string(Dict(w.kwargs)[:table]) == "expr_defaults" for w in warns)
 
   # THE cross-engine assertion: the same logical column, read by two entirely separate
@@ -1682,11 +1744,13 @@ end
 
   @test typeof(pg_model.fields["created_at"]) === typeof(sl_model.fields["created_at"])
   @test pg_model.fields["created_at"].default === sl_model.fields["created_at"].default === nothing
-  # …including the deliberate half: BOTH engines keep an expression default on a text column as a
-  # literal string. That is #455's decision, unchanged by #472 and documented in
-  # docs/src/schema_conventions.md, and this is what makes it a decision rather than an accident.
-  @test pg_model.fields["note"].default isa String
-  @test sl_model.fields["note"].default isa String
+  # …and the half #475 reversed. This used to assert that BOTH engines KEEP an expression default on
+  # a text column as a literal string — two engines agreeing on the wrong answer, which is what made
+  # it look like a decision rather than an accident of `TextField` accepting any `String`. They now
+  # agree on "no default", so the text column and the timestamptz column above are indistinguishable
+  # in outcome. That is the whole of #475.
+  @test pg_model.fields["note"].default === sl_model.fields["note"].default === nothing
+  @test typeof(pg_model.fields["note"]) === typeof(sl_model.fields["note"])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1843,18 +1907,24 @@ end
                "((strftime('%s','now')) * (1000))",      # -> "strftime('%s','now')) * (1000"
                "(('a') || ('b'))"]                       # -> "a') || ('b"
     got = norm(expr, :TextField)
+    # Every one of these is an EXPRESSION, so since #475 the cleaners tag it rather than returning
+    # a bare String — which is itself worth asserting here: the mangling this testset is about was
+    # only ever survivable because a text column KEPT the mangled value.
+    @test got isa PormG.Migrations._ExpressionDefault
     # Balanced: as many `(` as `)`. The mangled forms all fail this.
-    @test count(==('('), got) == count(==(')'), got)
+    @test count(==('('), got.sql) == count(==(')'), got.sql)
     # THE cross-engine assertion, and the reason this is in scope for #472 at all: the diff claims
     # the two engines agree on an unrepresentable default, and they did not.
     @test got == clean_pg(expr)
   end
 
   # Genuine single-group wrapping still unwraps, including repeatedly — this is what the loop is
-  # FOR, and a fix that simply stopped unwrapping would pass every assertion above.
+  # FOR, and a fix that simply stopped unwrapping would pass every assertion above. The unwrapping
+  # runs BEFORE the #475 classification, so `(5)` reduces to a literal and `(datetime('now'))` to a
+  # tagged expression: the paren handling is what decides which question is even asked.
   @test norm("(5)", :IntegerField) == "5"
   @test norm("('abc')", :TextField) == "abc"
-  @test norm("(datetime('now'))", :DateTimeField) == "datetime('now')"
+  @test norm("(datetime('now'))", :DateTimeField) == sql_expr("datetime('now')")
   @test norm("((7))", :IntegerField) == "7"
 
   # A paren inside a string literal must not be counted — the reason the predicate is shared with
@@ -2037,4 +2107,379 @@ Base.String(::InterruptOnRead) = throw(InterruptException())
   @test_throws PormG.FieldValidationError PormG.Models.DateField(default = "not-a-date")
   @test_throws PormG.FieldValidationError PormG.Models.JSONField(default = "{not json")
   @test_throws PormG.FieldValidationError PormG.Models.DateTimeField(default = "not-a-datetime")
+end
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# #475 — a non-literal DEFAULT is treated the same on every column type
+#
+# #472 made an unrepresentable default survivable (drop + warn) and left one shape alone: a TEXTUAL
+# column kept an expression as a quoted literal, because `TextField` validates against
+# `Union{String, Nothing}` and accepts anything. So the outcome was decided by whether the field
+# type happened to REFUSE the string rather than by anything about the schema — `text DEFAULT
+# now()` and `timestamptz DEFAULT now()` reached opposite answers, and the textual one was silent.
+#
+# The fix classifies the DEFAULT inside the two cleaners, where the quoting is still visible, and
+# routes an expression to the same drop-and-warn path every other column type already took. The
+# testsets above carry the reversal itself; these five cover the ways the fix could be WRONG.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The unquoted fallthrough carries LITERALS too
+# The trap in this issue, and the reason the fix is not "drop the fallthrough". Both cleaners route
+# an unquoted token down one branch, and `5`, `-1` and `true` travel it alongside `now()`:
+# `DEFAULT 5` reaches `IntegerField` as the STRING "5" and only becomes 5 because the converter is
+# `format2int64`; `DEFAULT true` reaches `BooleanField` as "true" and is parsed there. A fix that
+# dropped the branch wholesale would silently delete every unquoted numeric and boolean default in
+# the schema — which no #472 testset would have caught, since they all use `DEFAULT 5` as a control
+# and would simply have started failing without saying why.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the unquoted fallthrough keeps literals and tags only expressions (#475)" begin
+  is_lit   = PormG.Migrations._is_sql_literal_token
+  clean_pg = PormG.Migrations._pg_clean_default
+  norm     = PormG.Migrations._normalize_sqlite_default
+
+  # The predicate itself. Deliberately narrow because of WHERE it is called — every quoted form,
+  # `NULL`, the SQLite blob literal and the SQLite booleans are claimed by a branch above it, so
+  # the only inputs it ever judges are bare tokens.
+  for lit in ("5", "-1", "+2", "0", "1.5", ".5", "1.", "1e10", "1E+10", "-2.5e-3",
+              "true", "false", "TRUE", "False")
+    @test is_lit(lit)
+  end
+  for ex in ("now()", "CURRENT_TIMESTAMP", "CURRENT_DATE", "nextval('s'::regclass)",
+             "gen_random_uuid()", "random()*10", "a", "", "5 + 1", "1,2")
+    @test !is_lit(ex)
+  end
+
+  # `0x1F` and `1_000` are EXPRESSIONS by decision, not by oversight: `parse(Int64, "0x1F")` would
+  # succeed in Julia, but the same token on a FloatField column would not, and importing 31 as a
+  # default the user never wrote is worse than reporting one PormG declined to read.
+  @test !is_lit("0x1F")
+  @test !is_lit("1_000")
+
+  # …and the same answers through both cleaners, which is what the readers actually call.
+  for (input, engine_type) in (("5", :IntegerField), ("-1", :IntegerField), ("1.5", :FloatField))
+    @test clean_pg(input) isa String
+    @test norm(input, engine_type) isa String
+  end
+  @test clean_pg("true") == "true"                    # PostgreSQL renders a boolean default bare
+  @test clean_pg("now()") == sql_expr("now()")
+  @test norm("CURRENT_TIMESTAMP", :DateTimeField) == sql_expr("CURRENT_TIMESTAMP")
+
+  # THE consequence, through the reader rather than the helper: the literals still land on the
+  # field, so the classifier bought the fix without costing an ordinary schema anything.
+  logs, model = Test.collect_test_logs() do
+    convertSQLToModel(_introspection_row(
+      table_name   = "lit_defaults",
+      columns      = [_col("id", "bigint"; notnull = true),
+                      _col("n",    "integer";          default = "5"),
+                      _col("neg",  "integer";          default = "-1"),
+                      _col("f",    "double precision"; default = "1.5"),
+                      _col("flag", "boolean";          default = "true"),
+                      _col("off",  "boolean";          default = "false")],
+      primary_keys = ["id"]))
+  end
+  @test model.fields["n"].default    == 5
+  @test model.fields["neg"].default  == -1
+  @test model.fields["f"].default    == 1.5
+  @test model.fields["flag"].default === true
+  @test model.fields["off"].default  === false
+  @test isempty(filter(l -> l.level == Logging.Warn, logs))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A quoted literal that LOOKS like an expression is still a literal
+# THE mutation gate for the whole issue, and the assertion that pins the one design decision that
+# cannot be walked back later. Both cleaners UNQUOTE a literal, so after that step `'now()'::text`
+# and `now()` are the SAME BYTES — the string "now()". A classifier applied to the cleaner's RESULT
+# is therefore forced to be wrong in one direction: keep the real expression, or drop the
+# five-character string a user deliberately quoted and stored. Only a decision made INSIDE the
+# cleaner, while the quoting is still there, answers both correctly.
+#
+# Without this testset the fix could be implemented the wrong way — a `_is_sql_literal_token` call
+# in the reader arms instead of in the cleaners — and pass every other assertion in this file.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a quoted literal spelled like an expression is kept, not dropped (#475)" begin
+  clean_pg = PormG.Migrations._pg_clean_default
+  norm     = PormG.Migrations._normalize_sqlite_default
+
+  # PostgreSQL: same output bytes, opposite classifications.
+  @test clean_pg("'now()'::text") == "now()"
+  @test clean_pg("'now()'::text") isa String
+  @test clean_pg("now()")         == sql_expr("now()")
+
+  @test clean_pg("'CURRENT_TIMESTAMP'::text") isa String
+  @test clean_pg("CURRENT_TIMESTAMP")         == sql_expr("CURRENT_TIMESTAMP")
+
+  # SQLite, both quoting styles it accepts.
+  @test norm("'CURRENT_TIMESTAMP'", :TextField)  == "CURRENT_TIMESTAMP"
+  @test norm("\"CURRENT_TIMESTAMP\"", :TextField) == "CURRENT_TIMESTAMP"
+  @test norm("CURRENT_TIMESTAMP", :TextField)    == sql_expr("CURRENT_TIMESTAMP")
+
+  # …and through the readers, which is where it would actually cost a user data: the quoted form
+  # must still arrive on the field, on both engines.
+  pg_model = Test.collect_test_logs() do
+    convertSQLToModel(_introspection_row(
+      table_name   = "quoted_defaults",
+      columns      = [_col("id", "bigint"; notnull = true),
+                      _col("kept",    "text"; default = "'now()'::text"),
+                      _col("dropped", "text"; default = "now()")],
+      primary_keys = ["id"]))
+  end[2]
+  @test pg_model.fields["kept"].default    == "now()"
+  @test pg_model.fields["dropped"].default === nothing
+
+  sl_model = mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "quoted_defaults.sqlite"); pool_size = 1)
+    try
+      fetch(pool, """CREATE TABLE "quoted_defaults" (
+          "id" INTEGER PRIMARY KEY,
+          "kept" TEXT DEFAULT 'CURRENT_TIMESTAMP',
+          "dropped" TEXT DEFAULT CURRENT_TIMESTAMP)""")
+      models = Test.collect_test_logs() do
+        convert_schema_to_models(pool; include_table = ["quoted_defaults"])
+      end[2]
+      only(m for m in models if lowercase(string(m.name)) == "quoted_defaults")
+    finally
+      PormG.ConnectionPool.close_pool!(pool)
+    end
+  end
+  @test sl_model.fields["kept"].default    == "CURRENT_TIMESTAMP"
+  @test sl_model.fields["dropped"].default === nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The FK arms are unchanged by the classifier
+# `_fk_default_or_warn` coerces through `format2int64`, so no expression ever survived it — the
+# `catch` already warned and dropped `nextval(...)` (asserted in the #292 block above). The tag it
+# now receives is neither an `Integer` nor something `format2int64` accepts, so this pins that the
+# routing added for it is behaviour-preserving rather than a second, differently-worded drop.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the classifier does not change what the FK arms do (#475)" begin
+  fk = PormG.Migrations._fk_default_or_warn
+
+  # The tagged form and the raw form reach the same answer, each with exactly one warning.
+  for val in (sql_expr("nextval('s'::regclass)"), "nextval('s'::regclass)")
+    logs, got = Test.collect_test_logs() do
+      fk(val, "race_result", "driverid")
+    end
+    @test got === nothing
+    warns = filter(l -> l.level == Logging.Warn &&
+                        occursin("could not be represented", l.message), logs)
+    @test length(warns) == 1
+    @test Dict(first(warns).kwargs)[:column] == "driverid"
+    # The expression text survives into the warning, so the column is findable in the DDL.
+    @test Dict(first(warns).kwargs)[:default] == "nextval('s'::regclass)"
+  end
+
+  # …and a representable FK default is still converted, not swept up by the new arm.
+  @test @test_logs(min_level = Logging.Warn, fk("7", "race_result", "driverid")) == 7
+  @test @test_logs(min_level = Logging.Warn, fk(7, "race_result", "driverid")) == 7
+  @test fk(nothing, "race_result", "driverid") === nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The newly-dropped textual shape converges, and the declared-literal shape is the upgrade hazard
+# Two halves of one question, and they must be asserted together.
+#
+# POSITIVE: a live `TEXT DEFAULT CURRENT_TIMESTAMP` now reads back as "no default", so a model
+# declaring a plain `TextField()` must plan NOTHING. Before #475 the live side read back the
+# STRING "CURRENT_TIMESTAMP", which differed from the declared `nothing` and made `makemigrations`
+# propose an alteration on every run — a full table rebuild on SQLite. That churn is the #2
+# consequence in the issue, and this is what proves it is gone rather than merely relocated.
+#
+# NEGATIVE: the same fix breaks the app that FOLLOWED the old advice and declared a default
+# matching the expression to make the churn stop. The declared literal must be what the live side
+# USED to read back — `"now()"` for a `text DEFAULT now()` column — or the fixture proves nothing:
+# a declared value that never equalled the old live value never converged, so the plan it produces
+# is the same before and after the fix and the assertion below would pass on unfixed code too.
+# With the values matched, the pre-fix planner saw `"now()" == "now()"` and proposed NOTHING, while
+# the post-fix one sees `"now()"` against `nothing` and proposes `SET DEFAULT 'now()'` — a quoted
+# literal written over the database's real expression default, after which every INSERT stores
+# those five characters. Pinned rather than merely documented, because the UPGRADING entry claims
+# it and a claim about the planner that no test holds is a claim that rots.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a dropped textual expression default converges, but a declared literal does not (#475)" begin
+  live = convertSQLToModel(_introspection_row(
+    table_name   = "lap_note",
+    columns      = [_col("id", "bigint"; notnull = true, identity = "d"),
+                    _col("note", "text"; default = "now()"),
+                    _col("ok", "integer"; default = "5")],
+    primary_keys = ["id"]))
+
+  # The precondition, restated locally so a failure here is not mistaken for a planner bug.
+  @test live.fields["note"].default === nothing
+
+  settings = PormG.Configuration.Settings()
+  settings.change_db = true
+
+  # POSITIVE — what a user should declare for such a column: nothing at all.
+  declared = PormG.Models.Model("lap_note",
+      id   = PormG.Models.IDField(),
+      note = PormG.Models.TextField(null = true),
+      ok   = PormG.Models.IntegerField(default = 5, null = true))
+
+  for conn in (IntrospectionGuardMockSQLite(), IntrospectionGuardMockPg())
+    current_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+      :lap_note => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared, :exist => false))
+    plan = @test_logs min_level = Logging.Warn PormG.Migrations.get_migration_plan(
+        PormGModel[live], current_schema, conn, settings)
+    @test !haskey(plan, :lap_note) || isempty(plan[:lap_note])
+  end
+
+  # NEGATIVE — the upgrade hazard. PostgreSQL only, for the same reason as the #472 control above:
+  # a real difference sends SQLite down `_sqlite_rebuild_preserving_indexes`, which queries the
+  # connection for secondary indexes and so needs a live database rather than a mock.
+  matched = PormG.Models.Model("lap_note",
+      id   = PormG.Models.IDField(),
+      note = PormG.Models.TextField(null = true, default = "now()"),
+      ok   = PormG.Models.IntegerField(default = 5, null = true))
+
+  current_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+    :lap_note => Dict{Symbol, Union{Bool, PormGModel}}(:model => matched, :exist => false))
+  plan = PormG.Migrations.get_migration_plan(
+      PormGModel[live], current_schema, IntrospectionGuardMockPg(), settings)
+
+  @test haskey(plan, :lap_note) && !isempty(plan[:lap_note])
+  # The exact statement the UPGRADING entry warns about: a quoted literal written over a live
+  # expression default. `SET DEFAULT` is not a destructive pattern, so nothing gates it.
+  @test any(occursin("SET DEFAULT 'now()'", sql) for sql in values(plan[:lap_note]))
+
+  # …and the discriminator, spelled out: reconstruct what the PRE-fix reader produced for this
+  # column — the retained literal `"now()"` — and confirm the SAME declared model planned NOTHING
+  # against it. This is what makes the assertion above evidence of a behaviour CHANGE rather than
+  # of a difference that was always there.
+  pre_fix_live = PormG.Models.Model("lap_note",
+      id   = PormG.Models.IDField(auto_increment = true),
+      note = PormG.Models.TextField(null = true, default = "now()"),
+      ok   = PormG.Models.IntegerField(default = 5, null = true))
+  pre_fix_plan = PormG.Migrations.get_migration_plan(
+      PormGModel[pre_fix_live],
+      Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+        :lap_note => Dict{Symbol, Union{Bool, PormGModel}}(:model => matched, :exist => false)),
+      IntrospectionGuardMockPg(), settings)
+  @test !haskey(pre_fix_plan, :lap_note) || isempty(pre_fix_plan[:lap_note])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A concatenation is not a literal, on EITHER engine
+# Found in review. `_normalize_sqlite_default` tested `startswith(s, "'") && endswith(s, "'")`,
+# which is true of `'a' || 'b'` — a concatenation of TWO literals whose first and last characters
+# merely happen to be quotes. It unquoted to the mangled `a' || 'b`, and a textual column KEPT it,
+# so `inspectdb` wrote `default="a' || 'b"` and re-rendering produced `DEFAULT 'a'' || ''b'`.
+# PostgreSQL has used a balanced predicate since #455, so this was also a live PG/SQLite divergence
+# on exactly the shape #475 exists to make the engines agree on.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a quoted concatenation is an expression, not a mangled literal (#475)" begin
+  norm     = PormG.Migrations._normalize_sqlite_default
+  clean_pg = PormG.Migrations._pg_clean_default
+
+  for concat in ("'a' || 'b'", "'a'||'b'", "'Ferrari, ' || 'Scuderia'")
+    got = norm(concat, :TextField)
+    @test got isa PormG.Migrations._ExpressionDefault
+    # Unmangled: the text is carried whole, quotes and all.
+    @test got.sql == concat
+    # THE cross-engine assertion. This is what was divergent.
+    @test got == clean_pg(concat)
+  end
+
+  # …and a genuine single literal is still unquoted, including one whose CONTENT is a quote — the
+  # case that makes a naive `startswith`/`endswith` test look adequate.
+  @test norm("'Ferrari'", :TextField) == "Ferrari"
+  @test norm("'it''s'", :TextField) == "it's"
+  @test norm("''", :TextField) == ""
+  @test norm("\"it\"\"s\"", :TextField) == "it\"s"
+  for lit in ("'Ferrari'", "'it''s'", "''")
+    @test norm(lit, :TextField) isa String
+    @test norm(lit, :TextField) == clean_pg(lit)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A BLOB column's expression default is reported, not swallowed
+# Found in review. The `:BinaryField` branch returns `_sqlite_blob_literal_bytes`, i.e. `nothing`
+# for anything that is not `X'…'` — and it runs BEFORE the classification, so
+# `BLOB DEFAULT (randomblob(16))` was dropped in total silence while PostgreSQL's `bytea` twin
+# warned. That is a hole in the "uniform on every column type" rule this issue establishes.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a SQLite BLOB expression default is classified, not silently swallowed (#475)" begin
+  norm = PormG.Migrations._normalize_sqlite_default
+
+  @test norm("(randomblob(16))", :BinaryField) == sql_expr("randomblob(16)")
+  @test norm("randomblob(16)", :BinaryField) == sql_expr("randomblob(16)")
+
+  # #296's contract, deliberately UNCHANGED: a real blob literal decodes to bytes, and a LITERAL
+  # that simply is not valid blob syntax still degrades to "no default" with no warning. It is a
+  # literal the field type refuses, not an expression — a different axis, and the one #296 decided.
+  @test norm("X'0102'", :BinaryField) == UInt8[0x01, 0x02]
+  @test norm("x'0102'", :BinaryField) == UInt8[0x01, 0x02]
+  @test norm("X''", :BinaryField) == UInt8[]
+  @test norm("'not a blob'", :BinaryField) === nothing
+  @test norm("5", :BinaryField) === nothing
+  # …including an `X'…'`-SHAPED token that is MALFORMED. Found in review: the first version of this
+  # fix carved out only quoted literals, so odd-length and non-hex blob literals fell through to
+  # the expression path and were reported with the reason "the DEFAULT is a SQL expression" — a
+  # false diagnosis in a warning the user cannot check.
+  @test norm("X'010'", :BinaryField) === nothing     # odd-length hex
+  @test norm("X'0G'", :BinaryField) === nothing      # not hex
+
+  # …and the shape that separates a malformed LITERAL from an EXPRESSION that merely starts and
+  # ends like one. Found in review, after the first draft of the line above was written as
+  # `startswith(s, "X'") && endswith(s, "'")` — the same naive predicate this whole issue exists to
+  # remove — which swallowed this concatenation in silence.
+  @test norm("X'0102' || X'03'", :BinaryField) == sql_expr("X'0102' || X'03'")
+  @test norm("x'0102' || 'a'", :BinaryField) == sql_expr("x'0102' || 'a'")
+
+  # …and end to end: the column imports without the default, and the drop is REPORTED.
+  logs, model = Test.collect_test_logs() do
+    convertSQLToModel("""CREATE TABLE "sl_blob" (
+        "id" INTEGER PRIMARY KEY,
+        "payload" BLOB DEFAULT (randomblob(16)))""")
+  end
+  @test model.fields["payload"].default === nothing
+  warns = filter(l -> l.level == Logging.Warn &&
+                      occursin("could not be represented", l.message), logs)
+  @test length(warns) == 1
+  @test Dict(first(warns).kwargs)[:column] == "payload"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A non-ASCII default does not abort the schema read
+# Found in review. The SQLite cleaner unquoted with `stripped[2:end-1]` — BYTE offsets — so `end-1`
+# landed on a UTF-8 continuation byte whenever the character before the closing quote was multibyte.
+# `DEFAULT 'São José'` raised `StringIndexError` from inside the cleaner and aborted the WHOLE
+# `convert_schema_to_models` read: #472's failure mode exactly, reachable from an ordinary column,
+# and newly reachable through `check()` — the read-only command this issue tells users to run
+# BEFORE upgrading. PostgreSQL always used the `nextind`/`prevind` form and never had it.
+#
+# `'Räikkönen'` is the near-miss that made this survive review-by-reading: it ends in an ASCII `n`,
+# so the byte slice happens to land correctly.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a non-ASCII default is read, not a StringIndexError (#475)" begin
+  norm     = PormG.Migrations._normalize_sqlite_default
+  clean_pg = PormG.Migrations._pg_clean_default
+
+  for (lit, want) in ("'São José'" => "São José", "'café'" => "café", "'日本語'" => "日本語",
+                      "'Räikkönen'" => "Räikkönen", "'é'" => "é",
+                      "'it''s café'" => "it's café")
+    @test norm(lit, :TextField) == want
+    @test norm(lit, :TextField) == clean_pg(lit * "::text")   # and the engines agree
+  end
+  @test norm("\"São José\"", :TextField) == "São José"       # the double-quoted branch too
+
+  # End to end through the live SQLite reader: the read completes and the value arrives intact.
+  model = mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "utf8.sqlite"); pool_size = 1)
+    try
+      fetch(pool, """CREATE TABLE "driver" (
+          "id" INTEGER PRIMARY KEY,
+          "hometown" TEXT DEFAULT 'São José',
+          "team" TEXT DEFAULT 'Ferrari')""")
+      models = convert_schema_to_models(pool; include_table = ["driver"])
+      only(m for m in models if lowercase(string(m.name)) == "driver")
+    finally
+      PormG.ConnectionPool.close_pool!(pool)
+    end
+  end
+  @test model.fields["hometown"].default == "São José"
+  @test model.fields["team"].default == "Ferrari"
 end

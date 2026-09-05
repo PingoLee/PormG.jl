@@ -75,9 +75,9 @@ export get_migration_plan
 # keeps resolving; re-exporting them from Migrations only duplicated the name.
 
 # Exports — new migration lifecycle APIs (Phases 1–7)
-export init_migrations, status, dry_run
+export init_migrations, status, dry_run, check
 export migrate_to, mark_applied, mark_failed, remove_migration_record, discard_pending_migration
-export MigrationStatus, DryRunResult
+export MigrationStatus, DryRunResult, SchemaCheckResult, SchemaCheckFinding
 
 # `public` (Julia 1.11+) — user-facing but not exported (#289). `docs/src/migrations/stability.md`
 # tells users to read `PormG.Migrations.MIGRATION_FORMAT_VERSION` to check plan compatibility.

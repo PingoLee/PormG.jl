@@ -355,6 +355,13 @@ end
   # be unaffected by a sibling column's failure, which no per-table assertion could show if the
   # read aborted. The SQLite spellings are the same shapes in that engine's dialect (it has no
   # `now()` or `gen_random_uuid()`); `u` is PostgreSQL-only because SQLite has no UUID type.
+  #
+  # `note_expr` is #475's shape and the one this table deliberately lacked: a TEXTUAL column whose
+  # default is an EXPRESSION. It is the case that used to be silent — `TextField` accepts any
+  # `String`, so the expression was kept as a quoted literal and no warning was emitted — which is
+  # exactly why a live fixture is worth having for it. The PostgreSQL spelling is `concat(...)`
+  # rather than `now()` because PostgreSQL REFUSES `text DEFAULT now()`: there is no implicit cast
+  # from timestamptz to text, so the fixture would fail to create.
   ddl(is_pg ?
       """CREATE TABLE "pormg_it_expr_defaults" (
            id BIGINT PRIMARY KEY,
@@ -363,14 +370,16 @@ end
            n          INTEGER DEFAULT (random() * 10)::integer,
            u          UUID DEFAULT gen_random_uuid(),
            ok         INTEGER DEFAULT 5,
-           note       TEXT DEFAULT 'Ferrari')""" :
+           note       TEXT DEFAULT 'Ferrari',
+           note_expr  TEXT DEFAULT concat('a'::text, 'b'::text))""" :
       """CREATE TABLE "pormg_it_expr_defaults" (
            id INTEGER PRIMARY KEY,
            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
            d          DATE DEFAULT CURRENT_DATE,
            n          INTEGER DEFAULT (abs(random()) % 10),
            ok         INTEGER DEFAULT 5,
-           note       TEXT DEFAULT 'Ferrari')""")
+           note       TEXT DEFAULT 'Ferrari',
+           note_expr  TEXT DEFAULT CURRENT_TIMESTAMP)""")
 
   saved_ignore = copy(PormG._EXTRA_IGNORE_TABLES[])
   try
@@ -741,12 +750,20 @@ end
 
     # 6. The silent case, and the one most likely in a real schema: PostgreSQL renders a
     #    multi-argument default with a `, `, and such a column is usually NOT NULL. Scoped to the
-    #    COLUMN, not the default's value — PormG does not reproduce expression defaults, which is
-    #    pre-existing and out of scope here. SQLite has no `concat()` of this shape, so its fixture
-    #    carries the plain literal and only the NOT NULL half is cross-engine.
+    #    COLUMN, not the default's value — PormG has no representation for an expression default.
+    #    SQLite has no `concat()` of this shape, so its fixture carries the plain literal and only
+    #    the NOT NULL half is cross-engine.
+    #
+    #    The tear evidence is that the column is HERE, under its real name, with `NOT NULL` intact:
+    #    the aggregate tear produced the phantom key `Scuderia'::text` and lost `note` entirely, so
+    #    a surviving `note` is what rules it out. This used to also assert the retained default
+    #    value, which #475 removed — an expression default is now dropped on every column type,
+    #    textual ones included. Item 5 above is the assertion that still pins the VALUE through a
+    #    `, `, and it is the stronger one for a tear because it compares the text byte for byte.
+    @test haskey(comma_child.fields, "note")
     @test !comma_child.fields["note"].null
     if is_pg
-      @test comma_child.fields["note"].default == "concat('a'::text, 'b'::text)"
+      @test comma_child.fields["note"].default === nothing
     end
 
     # 7. The PK axis. `primary_keys` and `columns` tore on the SAME name, so the two sides agreed
@@ -848,7 +865,7 @@ end
     # every regeneration would add a CHECK the user never asked for.
     @test scratch_model.fields["blob_payload"].max_length === nothing
 
-    # ── 6. An expression column DEFAULT does not abort the schema read (#472) ────
+    # ── 6. An expression column DEFAULT is dropped uniformly (#472, #475) ────────
     # THE regression this section exists for. Before #472 a single `created_at TIMESTAMPTZ
     # DEFAULT now()` raised `FieldValidationError` from inside `convertSQLToModel`, which aborted
     # `convert_schema_to_models` for the WHOLE database — `inspectdb` produced nothing and
@@ -868,8 +885,8 @@ end
     expr_model = expr_by_name["pormg_it_expr_defaults"]
 
     # 1. Every column arrived. Pre-fix, none did — there was no model at all to look at.
-    expected_cols = is_pg ? ["id", "created_at", "d", "n", "u", "ok", "note"] :
-                            ["id", "created_at", "d", "n", "ok", "note"]
+    expected_cols = is_pg ? ["id", "created_at", "d", "n", "u", "ok", "note", "note_expr"] :
+                            ["id", "created_at", "d", "n", "ok", "note", "note_expr"]
     @test Set(keys(expr_model.fields)) == Set(expected_cols)
 
     # 2. The unrepresentable defaults are dropped, and the COLUMN keeps its real type — dropping
@@ -885,9 +902,18 @@ end
     #    propose an ALTER to "fix" it.
     @test expr_model.fields["created_at"].null == false
 
-    # 4. Controls in the same table: a representable default and a text default are untouched.
+    # 4. Controls in the same table: a representable default and a text LITERAL are untouched.
     @test expr_model.fields["ok"].default == 5
     @test expr_model.fields["note"].default == "Ferrari"
+
+    # 4b. #475: and the textual column whose default is an EXPRESSION is dropped like any other.
+    #     This used to be kept as a quoted literal, silently — decided by `TextField` accepting any
+    #     `String` rather than by anything about the schema, so the same expression reached opposite
+    #     outcomes on `note_expr` and on `created_at` in this very table. The pair of assertions is
+    #     the point: one column of each kind, same type, same table, and they now differ only in
+    #     whether the DDL quoted the value.
+    @test expr_model.fields["note_expr"] isa PormG.Models.sTextField
+    @test expr_model.fields["note_expr"].default === nothing
 
     # 5. PostgreSQL-only: `gen_random_uuid()` on a UUID column, the most common uuid default there
     #    is. It reaches a DIFFERENT arm from the generic one (the `uuid` branch), which is why the
@@ -901,9 +927,10 @@ end
     #    a "does not crash" assertion cannot reach.
     expr_warns = filter(l -> l.level == Logging.Warn &&
                              occursin("could not be represented", l.message), expr_logs)
-    @test length(expr_warns) == (is_pg ? 4 : 3)
+    @test length(expr_warns) == (is_pg ? 5 : 4)
     expr_warned_cols = Set(string(Dict(w.kwargs)[:column]) for w in expr_warns)
-    @test expr_warned_cols == Set(is_pg ? ["created_at", "d", "n", "u"] : ["created_at", "d", "n"])
+    @test expr_warned_cols == Set(is_pg ? ["created_at", "d", "n", "u", "note_expr"] :
+                                          ["created_at", "d", "n", "note_expr"])
     @test all(string(Dict(w.kwargs)[:table]) == "pormg_it_expr_defaults" for w in expr_warns)
 
     # 7. The generated model file carries no default for the dropped columns. `Model_to_str` is
@@ -914,6 +941,27 @@ end
     @test occursin("created_at", expr_src)
     @test !occursin(r"created_at\s*=[^\n]*default", expr_src)
     @test occursin(r"ok\s*=[^\n]*default\s*=\s*5", expr_src)   # …while a real default IS emitted
+
+    # 7b. #475, at the artifact the user actually gets. The generated file must carry NO default
+    #     for the textual expression column — that line used to read `default="CURRENT_TIMESTAMP"`
+    #     (or `default="concat(...)"`), which re-renders as `DEFAULT '<text>'` and stores those
+    #     characters in every new row. And it must STILL carry the textual literal, because the two
+    #     assertions together are what distinguish "fixed" from "dropped every text default".
+    @test !occursin(r"note_expr\s*=[^\n]*default", expr_src)
+    @test occursin(r"note\s*=[^\n]*default\s*=\s*\"Ferrari\"", expr_src)
+
+    # ── 6b. check() reports the same columns, against the live engine (#475) ─────
+    # The unit twin proves the two agree on a temp SQLite database. This proves it on whichever
+    # engine the suite is running, through the real schema query rather than PRAGMA output alone —
+    # and it is the only coverage of `check`'s PostgreSQL arm against a live server.
+    chk = PormG.Migrations.check(pool, settings; include_table = ["pormg_it_expr_defaults"])
+    @test chk.backend === (is_pg ? :postgres : :sqlite)
+    chk_cols = Set(only(f.columns) for f in chk.findings)
+    @test chk_cols == expr_warned_cols            # the importer and the report cannot disagree
+    @test all(f.kind === :expression_default for f in chk.findings)
+    @test all(f.table == "pormg_it_expr_defaults" for f in chk.findings)
+    # The literal-defaulted columns are absent from the report, not merely outnumbered by it.
+    @test isempty(intersect(chk_cols, Set(["ok", "note", "id"])))
   finally
     PormG._EXTRA_IGNORE_TABLES[] = saved_ignore   # never leak registry state
     drop_fixtures()

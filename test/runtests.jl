@@ -132,6 +132,7 @@ end
     @testset "Error Message ANSI (TTY-aware)" include("unit/test_error_message_ansi.jl")
     @testset "SQLite Advisory-Lock Signalling (#277)" include("unit/test_advisory_lock_sqlite.jl")
     @testset "Migration Runner (checksum, guardrails)" include("unit/test_migrations_runner.jl")
+    @testset "Migration Schema Check (#475)" include("unit/test_migrations_check.jl")
     @testset "SQLite Rebuild Index Filter (#116)" include("unit/test_sqlite_index_filter.jl")
     @testset "FK Rename Rebuild Gate (#150)" include("unit/test_fk_rename_rebuild.jl")
     @testset "Migration Diff Fail-Safe (#69)" include("unit/test_migration_diff_failsafe.jl")

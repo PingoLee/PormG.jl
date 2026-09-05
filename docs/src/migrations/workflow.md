@@ -59,6 +59,22 @@ println(result)
 ```
 This shows the SQL statements that will be executed and detects any destructive operations.
 
+### Checking What the Models Cannot Express
+
+`dry_run()` reports what PormG *will do*. `check()` reports what PormG *cannot describe* — facts
+about the live schema that no model can faithfully carry, so they never appear in a plan at all:
+
+```julia
+result = PormG.Migrations.check("db")
+println(result)
+```
+
+It is read-only, works on both engines, and needs no migration history — so it is also useful before
+you have run `makemigrations` even once. Today it reports columns whose `DEFAULT` is a SQL
+expression (`now()`, `CURRENT_TIMESTAMP`, `gen_random_uuid()`): those columns import **without** a
+default, and a model that declares one anyway will propose overwriting the database's expression
+with a quoted literal. Full rules: [Column defaults](../schema_conventions.md#Column-defaults).
+
 
 ### Discarding a Pending Migration
 

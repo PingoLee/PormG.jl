@@ -239,11 +239,36 @@ function _guard_no_join_handles(filter, context::String, depth::Int = 0)
 end
 
 function _guard_no_handle(filter, ::Type{T}, reject::Function, context::String, depth::Int = 0) where T
-  # `Base.:(==)(f::FExpression, ::FExpression)` MUTATES `f` in place when `f.operation === nothing`,
-  # so `f = F("x"); g = (f == f)` builds a genuine self-cycle (`g.operand === g`). Walking that
-  # unbounded is a StackOverflowError — which Julia reports with "program state may be corrupted".
-  # A depth cap is enough: no legitimate predicate nests anywhere near this deep, and stopping the
-  # walk only means the guard declines to look further, never that it accepts something it saw.
+  # A cycle in the expression graph would make this walk a StackOverflowError — which Julia reports
+  # with "program state may be corrupted". #457 closed ONE route into that: the comparison overloads
+  # used to mutate their left operand, so `f = F("x"); g = (f == f)` returned an object containing
+  # itself. They build a new expression now, so the F-expression self-cycle is gone.
+  #
+  # It did NOT make every cycle unreachable, and the cap is not merely defence against internal
+  # mistakes: a CONTAINER cycle is still one exported spelling away — `q = Q("note" => "x");
+  # push!(q, q)` — and the `QObject`/`QorObject` arms below walk straight into it. That is the cap's
+  # live customer.
+  #
+  # A second reason it stays: `FExpression` is a mutable struct, so `g.operand = g` on an internal
+  # object is one assignment away too. Be precise about what it buys, though: it protects **`cjoin_on`**, the
+  # one caller that reaches this sweep WITHOUT going through `_prefix_join_filter`. It does NOT make
+  # the `on()` / `cjoin()` route cycle-safe, and the three arms of `_prefix_join_filter` fail
+  # differently, so do not read a uniform rule into it:
+  #
+  #   - `FExpression` — this guard runs, returns cleanly under the cap, and the very next line
+  #     `deepcopy`s the same filter. `Base.deepcopy(::FExpression)` is uncapped, so the overflow just
+  #     moves one line down.
+  #   - `OperObject` — `deepcopy` runs FIRST, before this guard is called at all, so an internal cycle
+  #     there never even reaches the cap.
+  #   - `Pair` — this guard runs and nothing is copied; a cycle rides through untouched and overflows
+  #     later, once something actually renders that ON clause. (If the join is pruned — nothing
+  #     projects or filters through it — the predicate is never walked and the query completes.)
+  #
+  # Capping those walks too is deliberately not done: the shapes that reach them are built inside the
+  # builder, and a cycle there is a defect to fix at its source rather than absorb downstream.
+  #
+  # No legitimate predicate nests anywhere near this deep, and stopping the walk only means the guard
+  # declines to look further, never that it accepts something it saw.
   depth > 32 && return nothing
   if filter isa T
     reject(filter, context)

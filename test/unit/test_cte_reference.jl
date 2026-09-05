@@ -540,13 +540,19 @@ _sql(q; conn = _CR_SL) = inspect_query(q; connection = conn)[:sql_text]
     end
 
     @testset "the join guard terminates on a self-referential F expression" begin
-      # `Base.:(==)(f::FExpression, ::FExpression)` mutates in place when `f.operation === nothing`,
-      # so `f = F("x"); g = (f == f)` is a genuine self-cycle (`g.operand === g`). The recursive
-      # sweep needs a depth cap or it is a StackOverflowError — which Julia reports as "program state
-      # may be corrupted". `cjoin_on` is the path that matters: it never recursed before #444, so
-      # this exposure is new here. (`on`/`cjoin` overflow on `main` too, with no CTE involved, via
-      # `_prefix_join_filter`'s own uncapped recursion — pre-existing, tracked separately.)
-      f = F("sku"); g = (f == f)
+      # A cycle in the expression graph makes the recursive sweep a StackOverflowError — which Julia
+      # reports as "program state may be corrupted" — so it needs a depth cap. `cjoin_on` is the path
+      # that matters: it never recursed before #444, so this exposure is new here.
+      #
+      # #457 changed how the cycle has to be BUILT, not whether the cap is needed. The comparison
+      # overloads used to mutate their left operand, so `f = F("x"); g = (f == f)` returned an object
+      # containing itself and any user could write one by accident. They build a new expression now,
+      # so that route is gone (`test_f_expression_immutability.jl` owns it) — but `FExpression` is a
+      # mutable struct, so an internal `g.operand = g` is still one assignment away. Hand-build it,
+      # which is the only thing the cap defends against any more.
+      g = F("sku")
+      g.operation = "="
+      g.operand = g
       @test g.operand === g          # the cycle really is a cycle, or this test proves nothing
       q = CR.Cj_child.objects
       q.with("ev" => _parent_cte())

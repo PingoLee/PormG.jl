@@ -627,6 +627,14 @@ M.Result.objects.filter("resultid" => 1).update("position" => F("positionorder")
 Prefer a plain lookup when the predicate compares against a *scalar*: write
 `filter("points__@gt" => 20)`, not `filter(F("points") > 20)`.
 
+Every operator builds a **new** expression and leaves its operands untouched, so one handle can be
+bound to a name and reused across as many predicates as you like:
+
+```julia
+pts = F("points")
+M.Result.objects.filter(pts > 10, pts < 25)   # two independent predicates on the same column
+```
+
 See also [Field Expressions](read/field_expressions.md).
 """
 function F(field_name::String)
@@ -736,79 +744,72 @@ end
 Base.:+(operand::_DurationOperand, f::FExpression) = f + operand
 
 # Comparison operations for F expressions
-function Base.:(==)(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined})
+#
+# #457 — a comparison RETURNS a new expression; it NEVER mutates `f`. Until this, all six wrote
+# `f.operation`/`f.operand` onto the left-hand object and handed the same object back whenever
+# `f.operation === nothing`, which cost two things:
+#
+#   - **A self-cycle.** `f = F("sku"); g = (f == f)` stored `f` on `f`, so `g.operand === g`. Every
+#     UNCAPPED recursive walker over an expression then ran forever. On the `on()`/`cjoin()` route that is
+#     `Base.deepcopy(::FExpression)`: the depth-capped handle sweep in `_prefix_join_filter` runs and
+#     returns cleanly, and the `deepcopy` beside it is what overflows — the guard was reached, it just
+#     was never the thing that could help. `.filter(g)` overflowed in the render walker instead. Julia
+#     reports either as "program state may be corrupted", from ordinary user code.
+#   - **Silent wrong SQL on a reused handle.** `f = F("note"); f > "a"; f < "z"` rendered
+#     `(("note" > ?) < ?)`: the second comparison found the operation the first had written and
+#     nested it. A handle bound to a name was single-use, and nothing said so.
+#
+# Arithmetic (`+ - * /` above) has always built a new expression; this brings comparisons in line, and
+# matches every comparable ORM — Django's `Combinable`, SQLAlchemy's `ClauseElement`, Ecto's query
+# AST, jOOQ and peewee all return a new node and leave the operand untouched. Making THIS cycle
+# unrepresentable is why no depth guard was added for it. It is not the only cycle a user can build —
+# `q = Q("x" => 1); push!(q, q)` is a container cycle from exported spellings, and the depth cap in
+# `_guard_no_handle` (ctes.jl) is what absorbs that one.
+#
+# The operand union is the dispatch contract for a `CTE(...)` / `Joined(...)` right-hand side
+# (#444/#481) — narrowing it would make those comparisons fall through to `Base.==` and silently
+# yield a `Bool`. It is reproduced verbatim from the six pre-#457 signatures; #457 named it, it did
+# not redraw it.
+#
+# Two of its members are NOT honoured, and predate this: `Dates.Date` and `Dates.DateTime` dispatch
+# through this union — in BOTH families that share it, the `F` comparisons below and the
+# `JoinedReference` ones further down — and then die in the constructor, because
+# `FExpression.operand` (the struct field, above) admits
+# `Period`/`CompoundPeriod`/`Interval` but neither `Date` nor `DateTime`. So `F("date") == Date(2020)`
+# raises a bare `MethodError`, outside the #231 taxonomy. Left alone deliberately — widening the field
+# is a behaviour change with its own tests, not part of #457 — but recorded here so the next reader
+# does not take this union as proof the shapes work.
+const _CompareOperand = Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined}
+
+function _compare(f::FExpression, operation::String, operand)
   if f.operation === nothing
-    f.operation = "="
-    f.operand = operand
-    return f
-  else
-    return FExpression(field_name=f, operation="=", operand=operand, function_name="F", column="", aggregate=f.aggregate)
+    # A bare handle: carry every other slot across unchanged, so the built expression is identical to
+    # what the mutating form left behind and the rendered SQL is byte-for-byte the same.
+    #
+    # `kwargs` is copied defensively, not because anything needs it: no builder or render path
+    # CONSUMES an `FExpression`'s `kwargs` — every `.kwargs` reader in the builder is typed
+    # `SQLTypeFunction` / `WindowFunction` / `FObject`, and the only code touching this one is
+    # `Base.deepcopy` and this function. `column` is NOT copied, and that is not a claim that it
+    # could not be — `SQLField` and `Vector{String}` are mutable too. It is simply left as the
+    # pre-#457 object left it, sharing by reference, which keeps the built expression byte-identical
+    # to what the mutating form produced. So the guarantee this makes is narrow and exact — the
+    # HANDLE comes back with no operation of its own — not that the two objects share no structure.
+    return FExpression(field_name=f.field_name, operation=operation, operand=operand,
+                       function_name=f.function_name, column=f.column,
+                       aggregate=f.aggregate, _as=f._as, kwargs=copy(f.kwargs))
   end
-end
-function Base.:(!=)(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined})
-  if f.operation === nothing
-    f.operation = "!="
-    f.operand = operand
-    return f
-  else
-    return FExpression(field_name=f, operation="!=", operand=operand, function_name="F", column="", aggregate=f.aggregate)
-  end
-end
-function Base.:>(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined})
-  if f.operation === nothing
-    f.operation = ">"
-    f.operand = operand
-    return f
-  else
-    return FExpression(field_name=f, operation=">", operand=operand, function_name="F", column="", aggregate=f.aggregate)
-  end
+  # Already carries an operation, so this comparison is over the whole expression: nest it, exactly as
+  # the previous `else` branch did.
+  return FExpression(field_name=f, operation=operation, operand=operand,
+                     function_name="F", column="", aggregate=f.aggregate)
 end
 
-function Base.:<(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined})
-  if f.operation === nothing
-    f.operation = "<"
-    f.operand = operand
-    return f
-  else
-    return FExpression(field_name=f, operation="<", operand=operand, function_name="F", column="", aggregate=f.aggregate)
-  end
-end
-
-function Base.:>=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined})
-  if f.operation === nothing
-    f.operation = ">="
-    f.operand = operand
-    return f
-  else
-    return FExpression(field_name=f, operation=">=", operand=operand, function_name="F", column="", aggregate=f.aggregate)
-  end
-end
-
-function Base.:<=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined})
-  if f.operation === nothing
-    f.operation = "<="
-    f.operand = operand
-    return f
-  else
-    return FExpression(field_name=f, operation="<=", operand=operand, function_name="F", column="", aggregate=f.aggregate)
-  end
-end
-
-# function Base.:>(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
-#   return OperObject(operator = ">", values = operand, column = f)
-# end
-
-# function Base.:<(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
-#   return OperObject(operator = "<", values = operand, column = f)
-# end
-
-# function Base.:>=(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
-#   return OperObject(operator = ">=", values = operand, column = f)
-# end
-
-# function Base.:<=(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
-#   return OperObject(operator = "<=", values = operand, column = f)
-# end
+Base.:(==)(f::FExpression, operand::_CompareOperand) = _compare(f, "=", operand)
+Base.:(!=)(f::FExpression, operand::_CompareOperand) = _compare(f, "!=", operand)
+Base.:>(f::FExpression, operand::_CompareOperand)    = _compare(f, ">", operand)
+Base.:<(f::FExpression, operand::_CompareOperand)    = _compare(f, "<", operand)
+Base.:>=(f::FExpression, operand::_CompareOperand)   = _compare(f, ">=", operand)
+Base.:<=(f::FExpression, operand::_CompareOperand)   = _compare(f, "<=", operand)
 
 # Allow arithmetic operations with F expressions on the right side
 function Base.:+(operand::Union{Integer,Float64}, f::FExpression)
@@ -1071,11 +1072,14 @@ end
 # the `F(...)`-on-the-left form: `_set_update_query` resolves the `field_name` slot, which admits
 # `SQLTypeJoined`. Unlike the `F` methods there is no in-place arm — a `JoinedReference` is
 # immutable and has no `operation` slot to fill, so every comparison constructs, which also means
-# `j == j` cannot build the self-cycle `f == f` does. `_reject_joined_desc` fires because an
+# `j == j` cannot build the self-cycle `f == f` did (#457). `_reject_joined_desc` fires because an
 # ordering direction cannot mean anything in a predicate.
+#
+# The operand type is the SHARED `_CompareOperand`, not a second copy of the same union: the two
+# families must admit exactly the same right-hand sides, and a union spelled twice drifts silently —
+# a member added to one side would make `Joined(...) == CTE(...)` and `F(...) == CTE(...)` disagree.
 for (op, sym) in ((:(==), "="), (:(!=), "!="), (:(>), ">"), (:(<), "<"), (:(>=), ">="), (:(<=), "<="))
-  @eval function Base.$op(j::JoinedReference,
-                          operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined})
+  @eval function Base.$op(j::JoinedReference, operand::_CompareOperand)
     _reject_joined_desc(j, "a comparison")
     return FExpression(field_name=j, operation=$sym, operand=operand, function_name="F", column="", aggregate=false)
   end

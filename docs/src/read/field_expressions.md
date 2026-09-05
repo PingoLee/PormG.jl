@@ -58,6 +58,30 @@ Sum("points") / Count("resultid") # Aggregate ratios
 
 These are most useful when the comparison involves **two columns** or a **computed expression** — cases where the suffix filter API cannot help.
 
+### Expressions are values, not builders
+
+Every operator — comparison and arithmetic alike — returns a **new** expression and leaves its operands untouched. So an `F()` handle can be bound to a name and reused across as many predicates, queries and projections as you like:
+
+```julia
+pts = F("points")
+
+query = M.Result.objects
+query.filter(pts > 10, pts < 25)          # two independent predicates on the same column
+query.values("driverid__surname", "bonus" => pts * 0.1)
+df = query |> DataFrame
+```
+
+Generated SQL:
+```sql
+SELECT "Tb_1"."surname" as "driverid__surname",
+       ("Tb"."points" * $1::double precision) as "bonus"
+FROM "result" as "Tb"
+ INNER JOIN "driver" AS "Tb_1" ON "Tb"."driverid" = "Tb_1"."driverid"
+WHERE ("Tb"."points" > $2::bigint) AND ("Tb"."points" < $3::bigint)
+```
+
+Each use of `pts` renders as the bare column it names — three independent references, not one nested inside another. This is the same contract as Django's `F()` and SQLAlchemy's column expressions.
+
 ---
 
 ## F Expressions in Filters

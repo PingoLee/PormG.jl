@@ -532,7 +532,9 @@ status = Models.CharField(max_length=10, default="active")
 
 An **expression** default is different, because PormG has no field-level representation for one.
 `DEFAULT now()`, `DEFAULT CURRENT_DATE`, `DEFAULT gen_random_uuid()` and
-`DEFAULT (random() * 10)::integer` are all values a field constructor refuses.
+`DEFAULT (random() * 10)::integer` are recognised as expressions while the schema is being read, and
+dropped on **every** column type — textual ones included, which accept any string and so used to
+keep them.
 
 !!! note "An expression default is dropped, and says so"
     `inspectdb` and `makemigrations` import the column **without** the default and emit a warning
@@ -545,7 +547,7 @@ An **expression** default is different, because PormG has no field-level represe
     │   column = "created_at"
     │   default = "now()"
     │   field_type = "DateTimeField"
-    │   reason = "Invalid default value for DateTimeField. Expected type: Union{Nothing, DateTime, TimeZones.ZonedDateTime}, got: String. Please provide a value of type Union{Not"
+    │   reason = "the DEFAULT is a SQL expression, not a literal value; PormG has no field-level representation for one"
     ```
 
     This is the same policy foreign keys have had since PormG 0.4: **introspection never fails over
@@ -575,23 +577,75 @@ Race_result = Models.Model("race_result",
 )
 ```
 
-!!! warning "A text column keeps the expression as a literal string"
-    A textual column is the exception, on both engines: `TextField` accepts any string, so
-    `DEFAULT now()` on a `TEXT` column is read back as the **five-character string** `"now()"`, not
-    as an expression and not as "no default".
+### Literal or expression is decided by the DDL, not by the column type
 
-    A sized `VARCHAR(n)` is the half-exception: the expression is kept when it fits the declared
-    width and **dropped with a warning when it does not**, because `CharField` refuses a default
-    longer than its `max_length`. So `varchar(10) DEFAULT now()` keeps `"now()"` while
-    `varchar(3) DEFAULT now()` imports with no default.
+The rule is uniform: **every** column type reaches the same answer on both engines, and what
+decides it is the shape of the `DEFAULT` in the database — not whether the Julia field type the
+column maps to happens to accept the value as a string.
 
-    That is a faithful report of a column PormG cannot model, and it has a consequence: a model
-    declaring a plain `TextField()` for such a column differs from the live schema, so
-    `makemigrations` proposes dropping the default on every run — a full table rebuild on SQLite.
+That distinction is worth stating with an example, because it is not guessable. Quoting is the
+whole of it:
 
-    Do **not** silence it by declaring `default="now()"`. That renders `DEFAULT 'now()'` — a quoted
-    literal, which stores the text `now()` in every new row instead of a timestamp. Either remove
-    the database default, or use the correct column type for what the default computes.
+```sql
+note_a TEXT DEFAULT 'now()',   -- a LITERAL: the five-character string. Kept.
+note_b TEXT DEFAULT now()      -- an EXPRESSION. Dropped, with a warning.
+```
+
+`note_a` imports as `Models.TextField(default="now()")` and round-trips exactly. `note_b` imports as
+`Models.TextField()` — the database keeps its own default, and PormG does not describe it.
+
+Numbers and booleans are literals wherever they appear, so `DEFAULT 5`, `DEFAULT -1` and
+`DEFAULT true` all survive on the columns that accept them.
+
+**Primary keys are the one exception**, and it predates this rule: a key column that imports as an
+`IDField` — the ordinary integer/`serial` case — is reconstructed from the key itself, and *any*
+default on it is discarded without a warning. `IDField`'s `default` is an integer or nothing, so an
+expression is not something you could declare there and then be asked to remove; `check()` stays
+quiet about these for the same reason. A key that imports as a `UUIDField`, a `CharField` or a
+relation follows the normal rule above.
+
+!!! warning "Do not declare a default that matches the expression"
+    Copying the reported expression into your model is the one response that causes damage:
+
+    ```julia
+    # ✗ never
+    created_at = Models.DateTimeField(default="now()")
+    note       = Models.TextField(default="CURRENT_TIMESTAMP")
+    ```
+
+    PormG reads the live column as having **no** default, so a model that declares one is a
+    difference — and `makemigrations` proposes `ALTER TABLE … SET DEFAULT 'now()'`, a **quoted
+    literal**. Applied, that replaces the database's real expression default with a constant string,
+    and every new row stores those characters instead of a timestamp. On PostgreSQL that statement
+    is not classified as destructive, so nothing prompts before it runs.
+
+    Declare `auto_now_add` (above), give the column a type that expresses what the default computes,
+    or drop the database default. Matching the expression as a literal is never the fix.
+
+### Listing the columns: `check()`
+
+The warnings above appear only while a read is running, and only for the columns of the tables that
+read touched. To ask the question directly — at any time, against the live database, without a
+models file or a migration history:
+
+```julia
+julia> PormG.Migrations.check("db_2")
+Schema Check (postgres):
+  2 finding(s)
+
+  expression_default (2)
+    ⚠ lap_note.created_at  DEFAULT now()
+    ⚠ lap_note.note  DEFAULT concat('a'::text, 'b'::text)
+      the DEFAULT is a SQL expression; the column imports without it and your model must declare no `default=`
+```
+
+`check()` is read-only and works on both engines. It reports the facts about the live schema that
+your models cannot faithfully express, so it is the pre-flight step before writing models against an
+existing database — and before upgrading PormG, since a model that declares a matching literal
+default is exactly what the warning above is about. `isempty(result)` is true when there is nothing
+to report; `result.findings` carries a `SchemaCheckFinding` per column for programmatic use.
+
+It sits alongside `status()` and `dry_run()` in the operator flow.
 
 ## Timestamp fields
 

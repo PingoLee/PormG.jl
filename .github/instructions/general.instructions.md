@@ -115,6 +115,7 @@ The subsystem map below is also the review **architecture checkpoint**: when a n
 | `src/Dialect.jl` | Backend SQL rendering |
 | `src/AdvisoryLock.jl` | `with_advisory_lock` — cross-process advisory locking (migrations serialize on it) |
 | `src/QueryBuilder.jl`, `src/querybuilder/` | Query builder (incl. `many_to_many.jl`) |
+| `src/querybuilder/memos.jl` | The sole accessor for the three per-build memos — `memo_key` plus the typed verbs. Build a key with `memo_key`, never inline: restating the keying rule at a call site is the #474 defect, and it type-checks. `test/unit/test_memo_interface.jl` scans `src/`/`ext/` for both (a direct field access and an inline `(:base, …)` tuple), and a bare-`String` lookup is a `MethodError` by dispatch (#478) |
 | `src/Migrations.jl`, `src/migrations/` | State-based schema reconciliation |
 | `src/tools.jl` | Layer 4: user-facing lifecycle helpers (`setup`, `install_ai_skills`, `upgrade_guide`) |
 | `test/integration/` | DB integration tests (`db_2` = PostgreSQL, `db_sl` = SQLite via `PORMG_DB`) |

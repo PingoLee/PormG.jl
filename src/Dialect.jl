@@ -14,6 +14,8 @@ import PormG.ConnectionPool: fetch
 import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
 import PormG: get_constraints_pk, get_constraints_unique, get_constraints_check, get_constraints_byte_length_check
 import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column, format_timezone_sql, model_table_name, fk_target_table
+# `_foreign_key_on_delete_sql` lives in `Models` since #498 — see the note where it used to be defined.
+import PormG.Models: _foreign_key_on_delete_sql
 
 import PormG: @pormg_debug
 
@@ -869,26 +871,10 @@ function create_table(conn::PormGSQLite, table_name::String, columns::Vector{Str
     );"""
 end
 
-function _foreign_key_on_delete_sql(on_delete::Nothing)::String
-  return "NO ACTION"
-end
-
-function _foreign_key_on_delete_sql(on_delete)::String
-  action = string(on_delete) |> x -> split(x, ".")[end] |> uppercase |> strip
-  action = replace(action, " " => "_")
-
-  if action == "SET_NULL"
-    return "SET NULL"
-  elseif action == "SET_DEFAULT"
-    return "SET DEFAULT"
-  elseif action == "DO_NOTHING"
-    return "NO ACTION"
-  elseif action == "PROTECT"
-    return "RESTRICT"
-  else
-    return replace(action, "_" => " ")
-  end
-end
+# `_foreign_key_on_delete_sql` moved to `Models` (#498) and is imported at the top of this module, so
+# `Dialect._foreign_key_on_delete_sql` still resolves for every existing caller. It had to move: it is
+# also the CANONICAL COMPARISON of two `on_delete` values, and `Models._compare_model_field` — which is
+# included BEFORE this module — needs it. See `Models._fk_on_delete_equal`.
 
 function create_table(conn::PormGPostgres, model::PormGModel)
   columns::Vector{String} = []
@@ -1153,6 +1139,14 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   # none, which silenced the warning for three attributes that genuinely could not be applied. They
   # are now filtered upstream by `planner._NON_SCHEMA_FIELD_ATTRS` — they alter no schema at all —
   # so if one reaches this point it IS an unhandled request and deserves the warning (#325).
+  #
+  # There is a SECOND upstream filter with a different meaning: `planner._FK_IDENTITY_ATTRS` (#498).
+  # Those attributes DO alter the schema — they are the foreign-key constraint — but no column ALTER
+  # can say them, so the planner expresses them as DROP + ADD CONSTRAINT and keeps them out of the
+  # vector this function receives. Do NOT "fix" that by adding `:to` / `:pk_field` / `:on_delete` to
+  # IMPLEMENTED below: this function would then silently accept an attribute it renders nothing for,
+  # which is precisely the failure #498 was — a re-pointed foreign key that planned no DDL at all and
+  # reported it as a warning that never went away.
   IMPLEMENTED::Vector{Symbol} = [:type, :max_length, :max_digits, :decimal_places, :null, :unique, :default, :primary_key, :generated, :generated_always]
   if any(attr -> !(attr in IMPLEMENTED), colect_not_equal)
     not_in = [attr for attr in colect_not_equal if !(attr in IMPLEMENTED)]

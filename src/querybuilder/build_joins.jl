@@ -27,15 +27,15 @@ it attempts to build the join and cache it. Returns `true` if the field is in ca
 (either before or after the attempt), `false` otherwise.
 """
 function _cache_join(field::String, instruct::SQLInstruction)
-  haskey(instruct.cache, (:base,field)) && return true
-  
+  memo_projection(instruct, memo_key(:base, field)) === nothing || return true
+
   if contains(field, "__")
     try
       # Build the join and get the SQL selector (e.g., "Tb.column")
       sql_selector = _build_row_join(split(field, "__") |> Vector{String}, instruct)
-      
+
       # Populate the cache so it can be used immediately
-      instruct.cache[(:base,field)] = SQLField(sql_selector, field)   # #474: base-model namespace
+      memo_projection!(instruct, memo_key(:base, field), SQLField(sql_selector, field))   # #474: base-model namespace
       return true
     catch e
       return false
@@ -364,7 +364,7 @@ end
 
 # #27: render a JSON path lookup (e.g. `payload__driver`, `payload__0__name`) as a TEXT extraction
 # on the resolved column. The base field is a non-terminal JSONField, so the trailing segments are
-# a value path, not join hops. Records the resolved path in json_lookup_cache (so the filter-render
+# a value path, not join hops. Records the resolved path in json_lookup_paths (so the filter-render
 # branch binds the RHS as plain text) and tab_field_cache (so downstream sees the base field type).
 function _render_json_lookup(instruct::SQLInstruction, alias::String, json_field::PormGField,
     field_name::String, key_segments::Vector{String}, full_field::Vector{String};
@@ -375,9 +375,9 @@ function _render_json_lookup(instruct::SQLInstruction, alias::String, json_field
   # #474: both caches below are keyed by the resolved path, so a CTE-rooted lookup namespaces it for
   # the same reason `row_path` does — `CTE("ev", "meta__driver")` and a model path `ev__meta__driver`
   # produce the same string and must not share an entry.
-  path = _join_path_key(join(full_field, "__"), cte)
-  instruct.json_lookup_cache[path] = (json_field, segs)
-  instruct.tab_field_cache[path] = json_field
+  path = memo_key(cte ? :cte : :base, join(full_field, "__"))
+  memo_json_lookup!(instruct, path)
+  memo_field!(instruct, path, json_field)
   return Dialect._json_extract_expr(instruct.connection, col, segs)
 end
 
@@ -528,10 +528,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         row_join["alias_a"] = instruct.alias
         # #64: resolve the main-model join field to its physical column (db_column).
         row_join["key_a"] = Models.model_column(instruct.object.model, main_table_key)
-      elseif haskey(instruct.cache, (:base,main_table_key)) || _cache_join(main_table_key, instruct)
+      elseif memo_projection(instruct, memo_key(:base, main_table_key)) !== nothing || _cache_join(main_table_key, instruct)
         # #474: the MAIN model's join field, so the base-model half of the namespace — never the
         # CTE's, even though this branch sits inside the CTE arm.
-        cache_item = instruct.cache[(:base,main_table_key)]
+        cache_item = memo_projection(instruct, memo_key(:base, main_table_key))
         v_split = split(cache_item.field |> x -> replace(x,  '"' => ""), ".")
         row_join["alias_a"] = v_split[1] |> string
         row_join["key_a"] = v_split[2] |> string
@@ -817,12 +817,12 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
 
   # println("$(join(field, "__"))")
   # functions must be processed here
-  # `tab_field_cache` is `Dict{MemoKey,PormGField}` (#474), so a `nothing` here would raise a MethodError
+  # `memo_field!` is typed on `PormGField` (#474/#478), so a `nothing` here would raise a MethodError
   # BEFORE `_solve_field` below could report the real problem — which is the whole point of letting
   # the lookups above fall through. Guarding the write is what makes that fall-through reach the
-  # typed error. Nothing depends on the entry existing: every reader is `haskey`-gated.
+  # typed error. Nothing depends on the entry existing: every reader tolerates a miss.
   # #474: namespaced for a CTE-rooted path — same argument as `row_path` and `instruct.cache`.
-  last_field !== nothing && (instruct.tab_field_cache[_join_path_key(join(field, "__"), cte)] = last_field)
+  last_field !== nothing && memo_field!(instruct, memo_key(cte ? :cte : :base, join(field, "__")), last_field)
   return string(quote_identifier(tb_alias, instruct.connection), ".", _solve_field(vector[end], foreing_table_module, foreign_table_name, instruct))
   
 end

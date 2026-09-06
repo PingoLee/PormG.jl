@@ -30,7 +30,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       instruc.select[i] = SQLField(resolved, alias)
       if alias !== nothing
         # #474: a `Value(x)` literal is never CTE-rooted — `Value(CTE(...))` is refused (#444).
-        instruc.cache[(:base,alias)] = instruc.select[i]
+        memo_projection!(instruc, memo_key(:base, alias), instruc.select[i])
       end
       continue
     end
@@ -62,10 +62,10 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
     # Reuse is only correct when the cached entry renders under the SAME output name. Otherwise
     # resolve independently, and leave the memo to whichever entry claimed the key first — the point
     # of the memo is to avoid re-resolving one expression, not to make two projections one.
-    # #474: the memo key, not the output name — see `_field_cache_key`. The output-name equality
-    # test below is unchanged and still decides REUSE; this only decides which entry is consulted.
-    cache_key = _field_cache_key(v_copy)
-    cached = get(instruc.cache, cache_key, nothing)
+    # #474: the memo key, not the output name — see `memo_key`. The output-name equality test below
+    # is unchanged and still decides REUSE; this only decides which entry is consulted.
+    cache_key = memo_key(v_copy)
+    cached = memo_projection(instruc, cache_key)
     if cached !== nothing && _projection_output_name(cached) == _projection_output_name(v_copy)
       instruc.select[i] = cached
     else
@@ -75,7 +75,9 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       if v_copy._as === nothing
         throw(QueryBuildError("Field requires an alias: \e[4m\e[31m$(v_copy.field)\e[0m must have a name using the format \e[4m\e[32m\"field_name\" => $(v_copy.field)\e[0m or use \e[4m\e[32mSQLField($(v_copy.field), \"alias_name\")\e[0m"))
       end
-      cached === nothing && (instruc.cache[cache_key] = instruc.select[i])
+      # `cache_key` is non-`nothing` here: it is `nothing` exactly when `_as` is, which the throw
+      # above has already ruled out.
+      cached === nothing && memo_projection!(instruc, cache_key, instruc.select[i])
     end
   end
 
@@ -173,9 +175,12 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # (#231/#239). Skipping the scan keeps it on exactly that pre-existing path rather than
     # replacing one untyped failure with a different one. The leak is tracked separately.
     #
-    # #474 changed only the TARGET TYPE in that message — `… to an object of type Tuple{Bool, String}`
-    # rather than `… String`, since the memo key is now a `MemoKey`. Same site, same class, same
-    # tracked leak; recorded so the quoted text does not read as stale.
+    # The message has moved twice and the leak has not. #474 made the target type a `MemoKey`; #481
+    # widened its namespace half to a `Symbol`; and #478 put the write behind `memo_projection!`,
+    # which is typed on `::MemoKey` and so has no method for `nothing` at all. It now reads
+    # `MethodError: no method matching memo_projection!(::InstructionObject, ::Nothing, ::SQLField)`
+    # — no longer a `convert` error, and raised one frame higher. Same site, same class, same
+    # tracked leak; re-quoted so the text does not read as stale.
     #
     # #441 also retired the ambiguity THROW that used to sit inside this loop. It refused
     # `order_by("x")` when `values(...)` projected `x` twice over two different expressions;
@@ -226,13 +231,18 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # handle, whose `_as` is deliberately spelled like a field path (#444) and must not share an
     # entry with one. Note the branch below still emits `_as` — that is the SELECT alias the
     # database sees, which is a different thing from the key this build memoizes under.
-    order_cache_key = _field_cache_key(v_field_copy)
+    order_cache_key = memo_key(v_field_copy)
     if found_in_select
       # Use the alias name instead of the expression to avoid double parameterization.
       # Most databases (PG, SQLite, MySQL) support aliases in ORDER BY.
       v_field_copy.field = quote_identifier(v_field_copy._as, instruc.connection)
-    elseif haskey(instruc.cache, order_cache_key)
-      v_field_copy.field = instruc.cache[order_cache_key].field
+    # #478: bound INSIDE the condition, so the hit cannot outlive the branch that consumes it. The
+    # `else` arm below resolves through `_get_select_query`, which reaches
+    # `_get_filter_query(::SQLTypeField)` and can write this very key — so a read hoisted above the
+    # branch would be stale by the time the write guard further down consults it. Keeping the
+    # binding scoped is what makes that mistake unavailable rather than merely commented against.
+    elseif (order_cached = memo_projection(instruc, order_cache_key)) !== nothing
+      v_field_copy.field = order_cached.field
     else
       v_field_copy.field = _get_select_query(v_field_copy.field, instruc)
     end
@@ -245,7 +255,7 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # `found_in_select` branch above deliberately degrades `field` to the bare SELECT alias — legal
     # in ORDER BY, invalid anywhere else — and since #404 moved this call ahead of
     # `build_row_join_sql_text`, that render reads this cache: Phase 1 resolves cjoin ON conditions
-    # through `_get_filter_query(::SQLTypeField)`, which returns `instruc.cache[_as].field`
+    # through `_get_filter_query(::SQLTypeField)`, which returns the memoized projection's `.field`
     # verbatim. Clobbering here put `"parent__sku"` (a projection alias) into an ON clause, which
     # both backends reject. The existing entry is the fully-qualified selector and is strictly
     # better for every reader; only a freshly resolved path has nothing to preserve.
@@ -257,8 +267,17 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # known that reads `instruc.cache` under a `custom_as` alias, so removing this would probably
     # not turn the suite red. It costs one boolean, and a bare alias is legal in ORDER BY and
     # nowhere else, so it is never worth caching under any circumstances.
-    (found_in_select || haskey(instruc.cache, order_cache_key)) ||
-      (instruc.cache[order_cache_key] = v_field_copy)
+    #
+    # #478: this reads the memo HERE rather than reusing the branch's hit. The `else` arm above
+    # resolves through `_get_select_query`, which reaches `_get_filter_query(::SQLTypeField)`
+    # (`build_helpers.jl`) and can write this very key as it goes — so any read taken before the
+    # branch is stale by now, and reusing one would clobber a fresh entry with the possibly-degraded
+    # `v_field_copy`. That is exactly the poisoned-entry class the #404 and #423 clauses above exist
+    # to prevent. One extra lookup on a path already doing several.
+    # A `nothing` key reaching the write is a MethodError, deliberately: see the writer note in
+    # `memos.jl`.
+    (found_in_select || memo_projection(instruc, order_cache_key) !== nothing) ||
+      memo_projection!(instruc, order_cache_key, v_field_copy)
 
     if !found_in_select
       # #76: Under DISTINCT, an ORDER BY term that is not part of the projection is rejected by
@@ -316,8 +335,9 @@ end
 # against `custom_as`/`_as`; the first half selects the namespace for the `tab_field_cache` hit.
 function _resolve_having_filter_value(alias::MemoKey, raw_value, instruc::SQLInstruction,
                                       operator::AbstractString)
-  if haskey(instruc.tab_field_cache, alias)
-    formatted_value = _format_filter_value(instruc.tab_field_cache[alias].formatter, raw_value, operator)
+  memoized = memo_field(instruc, alias)
+  if memoized !== nothing
+    formatted_value = _format_filter_value(memoized.formatter, raw_value, operator)
     return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
   end
 
@@ -385,21 +405,22 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         #
         # Guard immediately above the raw index and leave the index plain, the shape #433 settled:
         # the membership test is what makes it total.
-        # #474: `_field_cache_key` here is uniform-with-its-neighbours, not CTE support. This
-        # branch is gated on `v.column.field isa String && !contains(field, "__")`, and
-        # `_retag_cte_field!` always replaces `field` with a `CTEReference` or an `SQLTypeFunction`,
-        # so `root` is always `:base` on this path. It is written through the key helper anyway
-        # so that a CTE arriving here later is namespaced like everywhere else rather than silently
-        # sharing a base-model entry.
-        haskey(instruc.cache, _field_cache_key(v.column)) ||
-          # #474: report the aliases the CALLER could have written. A `MemoKey`'s second half is
-          # exactly that spelling; its first half is the internal namespace and must not surface.
+        # #474: `memo_key` here is uniform-with-its-neighbours, not CTE support. This branch is gated
+        # on `v.column.field isa String && !contains(field, "__")`, and `_retag_cte_field!` always
+        # replaces `field` with a `CTEReference` or an `SQLTypeFunction`, so `root` is always `:base`
+        # on this path. It is read through the key helper anyway so that a CTE arriving here later is
+        # namespaced like everywhere else rather than silently sharing a base-model entry.
+        having_key = memo_key(v.column)
+        having_cached = memo_projection(instruc, having_key)
+        having_cached === nothing &&
+          # #474: report the aliases the CALLER could have written — `memo_projection_names` yields
+          # exactly that spelling, and never the internal namespace half.
           throw(_unknown_field(instruc.object.model, v.column.field;
-                               aliases = [k[2] for k in keys(instruc.cache)]))
-        field = instruc.cache[_field_cache_key(v.column)].field
+                               aliases = memo_projection_names(instruc)))
+        field = having_cached.field
         # Switch to having context for positional parameters
         set_context!(instruc, :having)
-        placeholder = add_parameter!(instruc, _resolve_having_filter_value(_field_cache_key(v.column), v.values, instruc, v.operator))
+        placeholder = add_parameter!(instruc, _resolve_having_filter_value(having_key, v.values, instruc, v.operator))
         # #411: `IN`/`NOT IN` need the dialect-aware renderer, not string concatenation. Concatenating
         # produced `HAVING MAX(x) IN $1` on PostgreSQL and `HAVING MAX(x) IN ?, ?` on SQLite — no
         # parentheses, no `= ANY` — which is a syntax error on both. Every other operator is a plain
@@ -618,7 +639,8 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   # a fragment that names its alias, or the entry carrying its own `on_conditions` — which it did
   # exactly when `custom_join[<cte name>]` existed, because `_build_row_join`'s shared tail looked
   # a CTE hop up in the base model's join-config registry under the CTE's own name. That lookup is
-  # gone (`build_joins.jl`, `_join_path_key`), so the second route is unrepresentable rather than
+  # gone (`build_joins.jl`, the `cte` gates in `_build_row_join`'s shared tail), so the second route
+  # is unrepresentable rather than
   # diagnosed, and a CTE name colliding with a `cjoin` path / `cjoin_on` alias / `on()` path is now
   # simply two relations that happen to share a name — both emitted, both addressable.
   #

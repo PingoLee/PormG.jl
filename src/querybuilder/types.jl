@@ -100,7 +100,7 @@ Base.show(io::IO, ::SubqueryObject) = print(io, "Subquery(…)")
 const FilterType = Union{SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF,ExistsObject}
 
 """
-Key for the per-build memos (`SQLInstruction.cache`, `tab_field_cache`, `json_lookup_cache`):
+Key for the per-build memos (`SQLInstruction.cache`, `tab_field_cache`, `json_lookup_paths`):
 `(root, name)`, where `root` names which namespace the name was drawn from —
 `:base` (the query's own model: field paths and join paths), `:cte` (a `.with(...)` label, #444) or
 `:joined` (a `cjoin_on` alias, #481).
@@ -123,6 +123,10 @@ run `format_fild_name`, so a field may legitimately be named `cte:x` — and the
 join, and an FK named `cte:x` collides in the memo, reproducing the very defect above. A prefix over
 an unvalidated name space is a uniquifier; a tuple is a namespace. `Tuple` rather than a struct so
 `==`/`hash` come from Base with the right value semantics for the `String` half.
+
+#478 — build one with `memo_key` and read the memos through the verbs in `memos.jl`, which is the
+only file that may name the three fields. Constructing a key inline is what restated the keying rule
+at forty sites and made #474's defect reachable; `test/unit/test_memo_interface.jl` enforces it.
 
 #481 widened the namespace half from `Bool` to `Symbol` because a THIRD namespace joined it: a
 `cjoin_on` alias. `_cjoin_on` refuses only a duplicate alias, so an alias may legitimately equal a
@@ -195,11 +199,18 @@ end
   row_path::Vector{String} = [] # array of path to map the row_join (model__model__ etc)
   # array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
   tab_field_cache::Dict{MemoKey,PormGField} = sizehint!(Dict{MemoKey,PormGField}(), 12) # cache to be used in join query (#474: keyed by MemoKey)
-  # #27: records each resolved JSON-lookup path (e.g. "payload__driver") → (JSON base field,
-  # validated key segments). Set when the JSON-path gate renders an extraction; read by the
-  # filter-render branch to bind the RHS as plain text (not through the JSON formatter) and to
-  # reject containment operators on a nested key path.
-  json_lookup_cache::Dict{MemoKey,Tuple{PormGField,Vector{String}}} = Dict{MemoKey,Tuple{PormGField,Vector{String}}}()
+  # #27: the membership set of resolved JSON-lookup paths (e.g. "payload__driver"). Added when the
+  # JSON-path gate renders an extraction; tested by the filter-render branch to bind the RHS as
+  # plain text (not through the JSON formatter) and to reject containment operators on a nested key
+  # path.
+  #
+  # #478 — this was a `Dict` mapping to `(JSON base field, validated key segments)`, and both halves
+  # of that value were dead. The base field is separately written to `tab_field_cache` on the very
+  # next line of `_render_json_lookup`, the segments are consumed by `Dialect._json_extract_expr`
+  # BEFORE the write, and both readers were `haskey` membership tests — `_render_json_lookup_comparison`
+  # re-derives everything it needs from the filter expression it is handed. It was a `Set` wearing a
+  # `Dict`'s allocation, so it is spelled as one now. Reach it through `memo_json_lookup` (`memos.jl`).
+  json_lookup_paths::Set{MemoKey} = Set{MemoKey}()
   connection::ConnType = nothing
   # array_defs::SQLTypeArrays = SQLArrays()
   cache::Dict{MemoKey,SQLTypeField} = sizehint!(Dict{MemoKey,SQLTypeField}(), 12)
@@ -249,7 +260,7 @@ mutable struct SQLField <: SQLTypeField
   # be derived from `_as`: #444 deliberately fixed a CTE reference's `_as` at `"<cte>__<path>"`, the
   # same spelling a field path produces, and `_as` is the OUTPUT column name so it cannot change.
   # `_retag_cte_field!` / `_retag_joined_field!` are the only places that set this.
-  # Read it through `_field_cache_key`, never directly.
+  # Read it through `memo_key` (`memos.jl`), never directly.
   root::Symbol
 end
 SQLField(field::FieldPart; _as::OptionalString=nothing) = SQLField(field, _as, nothing, :base)

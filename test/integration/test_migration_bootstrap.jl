@@ -889,6 +889,160 @@ end
     end
   end
 
+  # ── Phase 4h: Re-point an FK at a different parent (#498) ─────────
+  # The 4-series covers every way a foreign key can APPEAR or DISAPPEAR — 4b flips db_constraint off,
+  # 4c/4f delete the field, 4e renames it while flipping the constraint. None of them changes a key
+  # that stays a key, which is exactly the state #498 was about: both sides constrained, definition
+  # moved. PostgreSQL planned nothing at all for it and reported that as a warning; SQLite silently
+  # did the right thing through its rebuild. This phase is the cross-backend proof that they agree.
+  #
+  # Asserted with `foreign_key_target`, not `foreign_key_count`: the count is 1 before AND after a
+  # re-point, so a count assertion here would pass against the unfixed code.
+  #
+  # Self-contained tables (RepointParentA / RepointParentB / RepointChild), carrying the 4-series
+  # models forward so this phase adds rather than drops. Phase 5 redefines the model set and sweeps
+  # them away, as it does for 4c-4g's leftovers.
+  @testset "Phase 4h: Re-point a Foreign Key at a Different Parent (#498)" begin
+    carried = """
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        name = Models.CharField()
+    )
+    SecondTable = Models.Model(
+        id = Models.IDField(),
+        test_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, db_constraint=false),
+        description = Models.CharField(null=true)
+    )
+    ChildFKTable = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=false)
+    )
+    RenameFKChild = Models.Model(
+        id = Models.IDField(),
+        new_parent_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true, db_index=true, db_constraint=false),
+        note = Models.CharField(null=true)
+    )
+    RenameDelChild = Models.Model(
+        id = Models.IDField(),
+        link_ref_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true, db_constraint=false),
+        note = Models.CharField(null=true)
+    )
+    UniqueDelChild = Models.Model(
+        id = Models.IDField(),
+        keeper = Models.CharField(null=true)
+    )
+    """
+    # `PkGuardChild` exists only on SQLite — Phase 4g's PK loud-fail branch is SQLite-only, and its
+    # final (throwing) makemigrations applied nothing, so the table is still there with `pk_code`.
+    carried *= adapter_name == "SQLite" ? """
+    PkGuardChild = Models.Model(
+        pk_code = Models.CharField(primary_key=true, null=false),
+        payload = Models.CharField(null=true)
+    )
+    """ : ""
+
+    repoint_models(parent, on_delete) = carried * """
+    RepointParentA = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=true)
+    )
+    RepointParentB = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=true)
+    )
+    RepointChild = Models.Model(
+        id = Models.IDField(),
+        parent_ref_id = Models.ForeignKey("$parent", on_delete=Models.$on_delete, null=true),
+        note = Models.CharField(null=true)
+    )
+    """
+
+    # ── Baseline: the key points at A, with ON DELETE CASCADE ──
+    write_edge_models(repoint_models("RepointParentA", "CASCADE"))
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    baseline = foreign_key_target(pool, "repointchild", "parent_ref_id")
+    @assert baseline !== nothing "Phase 4h requires a live FK on repointchild.parent_ref_id"
+    @test baseline.parent == "repointparenta"
+    @test baseline.on_delete == "CASCADE"
+
+    # Seed a row on EACH parent plus a child pointing at A. The child's value (970) exists in both
+    # parents, so the re-pointed constraint is satisfiable — the deferred check at COMMIT would
+    # otherwise roll the whole migration back, which is the documented failure mode, not this test's.
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "repointparenta" ("id", "label") VALUES (970, 'parent-a-498');""")
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "repointparentb" ("id", "label") VALUES (970, 'parent-b-498');""")
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "repointchild" ("id", "parent_ref_id", "note") VALUES (971, 970, 'child-498');""")
+
+    # ── The re-point: same column, same type, different parent ──
+    write_edge_models(repoint_models("RepointParentB", "CASCADE"))
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+
+    # The plan must not embed its own transaction control (composes with the runner tx), as every
+    # sibling phase asserts.
+    pending = read(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"), String)
+    @test !occursin("BEGIN TRANSACTION", pending)
+    # PostgreSQL expresses this as DROP + ADD CONSTRAINT; SQLite as a whole-table rebuild. Assert the
+    # shape each backend actually owes, so a plan that reverted to "nothing at all" cannot pass.
+    @test occursin("REFERENCES \"repointparentb\"", pending)
+    if adapter_name != "SQLite"
+      @test occursin("DROP CONSTRAINT", pending)
+    end
+
+    # `destructive=true` is REQUIRED on PostgreSQL and is the documented cost of a re-point: the plan
+    # carries `DROP CONSTRAINT`, which `_DESTRUCTIVE_PATTERNS` classifies as destructive.
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    # THE ASSERTION #498 EXISTS FOR — and it is the target, not the count.
+    repointed = foreign_key_target(pool, "repointchild", "parent_ref_id")
+    @test repointed !== nothing
+    @test repointed.parent == "repointparentb"
+    @test repointed.column == "id"
+    @test foreign_key_count(pool, "repointchild") == 1   # re-pointed, not duplicated
+
+    # Data fidelity: the child row survived (a rebuild on SQLite, a constraint swap on PostgreSQL).
+    surviving = PormG.ConnectionPool.fetch(pool,
+      """SELECT "parent_ref_id", "note" FROM "repointchild" WHERE "id" = 971;""") |> DataFrame
+    @test nrow(surviving) == 1
+    # `isequal` (not `==`) so a would-be NULL never propagates `missing` into `@test` (house convention).
+    @test isequal(surviving[1, :parent_ref_id], 970)
+    @test isequal(surviving[1, :note], "child-498")
+
+    # ── The referential ACTION alone, with the parent left untouched ──
+    # Before #498 this planned nothing on EITHER backend: `:on_delete` sat in the planner's
+    # `_NON_SCHEMA_FIELD_ATTRS` and was skipped outright by `Models._compare_model_field`, so a
+    # genuine `ON DELETE` change was discarded before it could reach the alteration gate.
+    write_edge_models(repoint_models("RepointParentB", "SET_NULL"))
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    after_action = foreign_key_target(pool, "repointchild", "parent_ref_id")
+    @test after_action !== nothing
+    @test after_action.on_delete == "SET NULL"
+    @test after_action.parent == "repointparentb"   # unchanged by an on_delete-only migration
+
+    # And it converges: re-running makemigrations against the SAME models must now plan nothing for
+    # this table. This is the churn control — comparing `on_delete` wrongly does not fail loudly, it
+    # proposes a destructive DROP + ADD on every single run, forever.
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    # Scoped to THIS table, not to the whole plan. On SQLite the 4-series leaves three unrelated
+    # tables churning a rebuild on every makemigrations (`secondtable`, `renamefkchild`,
+    # `renamedelchild`) — all three declare `db_constraint=false` foreign keys, which SQLite
+    # introspects as `sIntegerField` while the planner's #408 escape only recognises
+    # `sBigIntegerField`, so the diff falls through to `push!(:type)` forever. MEASURED as
+    # pre-existing: the same probe against unmodified `src/` produces the identical plan, and
+    # PostgreSQL converges completely. It is a separate bug, filed separately — asserting an
+    # empty PLAN here would fail on it rather than on anything this phase is about.
+    pending_path = joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl")
+    settled = isfile(pending_path) ? read(pending_path, String) : ""
+    @test !occursin("repointchild", lowercase(settled))
+
+    # Cleanup: drop the seeded rows; the tables go with Phase 5's model redefinition.
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "repointchild" WHERE "id" = 971;""")
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "repointparenta" WHERE "id" = 970;""")
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "repointparentb" WHERE "id" = 970;""")
+  end
+
   # ── Phase 5: Indexes and unique constraints ───────────────────────
   @testset "Phase 5: Indexes and Unique Constraints" begin
     write_edge_models("""

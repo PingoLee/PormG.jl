@@ -106,6 +106,17 @@ Then:
   *Superseding an open issue*). A superseded issue is not work.
 - **2–3 issues.** Three has closed in one sitting repeatedly; four has not been tried.
 
+**Third strike → design issue, not a fourth patch.** When the issue you are grouping is the third to
+land in a cause-cluster that two merged fixes already touched, stop scheduling patches: file (or
+find) the design issue that makes the cluster unrepresentable, mark the open members *Superseded*
+([`pormg-issue-management`](../pormg-issue-management/SKILL.md) → *Superseding an open issue*), and
+plan the design issue as the session. The evidence is the last two clusters: the join/CTE namespace
+took **seven** PRs (#444 → #447 → #474 → #477 → #480 → #481 → #484/#486) before the config map was
+split into typed namespaces, and relational column identity took three "converges forever" fixes
+(#417 → #437 → #503) before #507 was filed. Each patch was correct and each was local; the cluster
+kept reopening because the cause was a representation, not a branch. A design issue ranks by the sum
+of what it supersedes — see *Leverage* below.
+
 Record the **order inside** the session, and say which kind it is:
 
 - **Forced** — reversing it costs rework. *"#414 fixes the `fk_map` keying that #415's CTE rewrite

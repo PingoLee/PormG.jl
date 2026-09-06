@@ -107,12 +107,53 @@ Follow the canonical [PormG Test Writing Standard](../../instructions/test-writi
 - Keep limitations explicit, especially for destructive rollback and unsupported targeted execution paths
 - Build docs when migration-facing public behavior or examples change
 
+## Planner internals: column identity
+
+The planner has no representation of "a column". `makemigrations` diffs two `PormGField` structs —
+one from the models file, one *reconstructed* from the live schema by the readers through
+`postgres_type_map` / `sqlite_type_map` — and decides *changed / unchanged* by comparing the structs.
+Know this before touching `_alter_table_fields`, because every recent convergence bug lives in it.
+
+**Three comparators, in order, each with its own reconciliations** (`src/migrations/planner.jl`):
+
+1. **Fast path** — `Models.are_model_fields_equal` → `_compare_model_field` (`src/Models.jl`):
+   attribute-wise; skips `:to` (via `_compare_field_foreign_key`), `:on_delete`, `:to_table`;
+   fails *closed* on an exception (#69).
+2. **Attribute-wise** — `_diffs_attribute_wise`: same struct type, or the FK/O2O pair (#437);
+   reconciles `:to` and `:pk_field` (#50), skips `_NON_SCHEMA_FIELD_ATTRS`.
+3. **Physical signature** — `Dialect.describes_same_column` (#325): different struct types, same
+   `_column_signature` (rendered type + the two CHECK bounds); refuses any relational or PK field.
+4. **Else** — the #408 `db_constraint=false` escape, otherwise `push!(:type)` — on SQLite, a full
+   table rebuild.
+
+The reader side is lossy by construction: a type map returns *one* struct per rendered type, so
+`CharField` / `URLField` / `SlugField` come back as one struct and SQLite `BIGINT` comes back as
+`IntegerField` (#503). Comparator 3 exists to paper over exactly that.
+
+**The churn class, and where it goes.** "`makemigrations` plans DDL forever" / "plans nothing" for
+a column nobody changed is one bug shape, seen as #325 → #408 → #409 → #417 → #437 → #498 → #503.
+Each fix was a new `isa` escape, a new `_NON_SCHEMA_FIELD_ATTRS` entry or a new reconciliation
+branch, and the planner's own comment block (`planner.jl:44-72`) records why the next one moves the
+churn rather than ending it. **The agreed direction is #507** — both sides compile to a canonical
+column IR and the diff runs on that. A new issue in this class is routed to #507 and batched under
+it, not fixed with another escape ([`pormg-session-planning`](../pormg-session-planning/SKILL.md)
+→ *Third strike*). This section describes the code as it stands until #507 lands; #507's
+acceptance list is what replaces it.
+
+**The missing-subtype shape.** `sForeignKey` and `sOneToOneField` are sibling structs, not a
+subtype pair. Four subsystems have each missed the second one behind an `isa sForeignKey` gate —
+the DDL renderer (#408), the schema readers (#409), the query builder (#418), the planner (#437).
+Spell the pair once: `Models.sRelationalColumn` (`src/models/fields.jl`). A new bare
+`isa sForeignKey` gate is a review flag.
+
 ## Triage
 
-Identify which stage the issue lives in — **planning, execution, introspection, or history
-tracking** — before editing. That choice picks both the file and the test layer, and the four fail
+Identify which stage the issue lives in — **planning, execution, introspection, history tracking,
+or convergence** — before editing. That choice picks both the file and the test layer, and they fail
 in different ways: a planner bug produces wrong SQL, an introspection bug produces a wrong *diff*
-from correct SQL, and a history bug leaves the DB right and `pormg_migrations` wrong.
+from correct SQL, a history bug leaves the DB right and `pormg_migrations` wrong — and a
+convergence bug leaves the DB right *and* the SQL right, yet the next `makemigrations` plans it
+again. Convergence is the class described above: route it to #507 rather than patching a comparator.
 
 ## Verification Commands
 

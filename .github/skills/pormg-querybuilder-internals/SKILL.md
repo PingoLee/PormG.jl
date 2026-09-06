@@ -123,6 +123,39 @@ Core — consistent with *Design stance* in
 [`general.instructions.md`](../../instructions/general.instructions.md), since a bucket is implicit
 reconciliation and a one-pass compile is not.
 
+### Expression nodes: construct, never mutate
+
+An operator or a build step takes an expression node and **returns a new one**; it never writes into
+the node it was handed. `F("points") > 10`, `Sum("points")`, `Value("x")`, `CTE("ev", "sku")` and
+`Joined("d", "col")` are values a user may bind to a name and reuse across queries, and the `F`
+docstring promises exactly that.
+
+The contract is held by convention, not by the type system: every node except `JoinedReference` is
+still a `mutable struct` (`types.jl`), which is what let each of these happen —
+
+- **#457 / #493** — the six `F` comparisons wrote `operation` / `operand` onto their left operand:
+  `f == f` built a self-cycle that overflowed the stack, and `f > "a"; f < "z"` rendered
+  `(("note" > ?) < ?)`. Fixed by making comparisons construct, as arithmetic always had.
+- **#508** — `_values!`'s `Value` arm writes `custom_as` onto the user's node, so a `Value` handle
+  shared by two queries rewrites the first query's alias when the second is built. The function arm a
+  few lines above wraps in a fresh `SQLField` instead — that is the pattern.
+
+Rules while the structs stay mutable:
+
+- **Operators construct.** `_compare` (`types.jl`) is the template: copy every slot, set the new
+  operation, return.
+- **Walkers replace.** `_check_function` / `_retag_cte_column` / `_retag_joined_column`
+  (`build_helpers.jl`) may rewrite a *build product* (the `SQLField` a String-path parse produced),
+  never a node that arrived through the public API. `JoinedReference`'s comment says why: *the retag
+  walker replaces rather than mutates … safe to share between a deepcopy'd field and its original.*
+- **Containers are the exception, and they are named.** `QObject` / `QorObject` support `push!` as a
+  documented API (`docs/src/read/q_objects.md`), and `WindowSpec` documents in-place assembly. They
+  are containers, not nodes; do not extend that affordance to the node types.
+- **A hand-written `deepcopy` is a symptom.** `Base.deepcopy(::FExpression / ::FObject / ::SQLText)`
+  and the #112 copy discipline (`types.jl` → *a copy must share no MUTABLE state*) exist because nodes
+  are mutable. #508 phase 2 makes the seven node types `struct` and deletes them; until then, a new
+  mutable node needs a `deepcopy` method and a #112 test.
+
 ### Identifier sanitization contract
 
 `sanitization.jl` has **two rules, one per axis** (#394). Neither ever strips characters silently.

@@ -707,6 +707,13 @@ _column_signature(field::PormGField, conn::Union{PormGPostgres,PormGSQLite}) = (
 # planner's `isempty(colect_not_equal)` early-out. `sForeignKey` and `sBigIntegerField` both render
 # `bigint`, so calling them the same column would silently stop planning FK add/drop on an existing
 # column. Excluded here rather than at the call site so the predicate is safe wherever it is used.
+#
+# #437 kept this blanket refusal deliberately. The pair it was blamed for — a declared
+# `ForeignKey(…, unique = true)` against the `sOneToOneField` its own live column reads back as — is
+# handled one branch EARLIER in the planner instead (`Migrations._diffs_attribute_wise`), because the
+# two structs share an attribute vocabulary and so can be diffed attribute by attribute. Relaxing the
+# predicate to admit them would have skipped the `:to` / `:pk_field` reconciliations that branch
+# carries and merely swapped which symbol lands in `colect_not_equal`. Nothing here changed.
 _is_relational_field(field::PormGField)::Bool = hasfield(typeof(field), :to)
 _declares_primary_key(field::PormGField)::Bool =
   hasfield(typeof(field), :primary_key) && getfield(field, :primary_key)::Bool
@@ -717,12 +724,15 @@ _declares_primary_key(field::PormGField)::Bool =
 Whether `a` and `b` materialize the same physical column on `conn` — the same rendered column type
 *and* the same CHECK-expressed bounds (#325).
 
-Used by the migration planner for the cross-type case only: when two fields have the same Julia
-struct type the planner compares them attribute by attribute as before, so this predicate can only
-ever turn a spurious "changed" into "unchanged", never the reverse.
+Used by the migration planner for the cross-type case only, and not even all of it: two fields the
+planner can diff attribute by attribute never reach here — the same Julia struct type, or the
+`sForeignKey`/`sOneToOneField` pair since #437 (`Migrations._diffs_attribute_wise`). So this
+predicate can only ever turn a spurious "changed" into "unchanged", never the reverse.
 
 Relational fields (anything with a `to`) and primary keys are always `false`: their identity is not
-carried by the column type alone.
+carried by the column type alone. See the comment above `_is_relational_field` for why #437 did not
+narrow that — an `sForeignKey` and an `sBigIntegerField` both render `bigint`, and equating them
+would silently stop planning the FK constraint add/drop.
 """
 function describes_same_column(conn::Union{PormGPostgres,PormGSQLite}, a::PormGField, b::PormGField)::Bool
   (_is_relational_field(a) || _is_relational_field(b)) && return false

@@ -764,11 +764,16 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
         if is_pk
           # A pk-fk reconstructs as a `OneToOneField`, the SAME type the PostgreSQL reader produces
           # for it, and the two readers must agree or #409 simply moves rather than closes: whichever
-          # type a model DECLARES, the other backend's reader would report the other one, the planner
-          # would see two different structs, `describes_same_column` would short-circuit on
-          # `_is_relational_field`, and `:type` would be pushed on every `makemigrations` — a full
-          # table rebuild here, forever. That is the defect this issue is about, so a per-backend
-          # answer is not an option.
+          # type a model DECLARES, the other backend's reader would report the other one — so the two
+          # backends would disagree about one schema, which is the defect this issue is about. A
+          # per-backend answer is not an option.
+          #
+          # The CHURN half of that argument is no longer live: the planner used to see two different
+          # structs, short-circuit `describes_same_column` on `_is_relational_field`, and push
+          # `:type` on every `makemigrations` — a full table rebuild here, forever. #437 fixed that
+          # in the planner (`_diffs_attribute_wise` diffs the FK/O2O pair attribute by attribute), so
+          # the alignment below now rests on reader FIDELITY and #409 symmetry alone. That is reason
+          # enough: a reader should report what the schema says regardless of what the diff tolerates.
           #
           # A PRIMARY KEY needs no uniqueness lookup: it is unique by definition, so `is_pk` is a
           # signal #318 never had to weigh. And since #408 an `sOneToOneField` renders the
@@ -802,9 +807,14 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
           # Leaving it diverged was not free. `Models._compare_model_field` compares attribute-wise
           # and the two structs have identical field-name sets, so a declared `OneToOneField` against
           # a live `ForeignKey` compared EQUAL and the planner's fast path returned early — but
-          # `Dialect.describes_same_column` answers `false` for any relational field, so the moment
+          # `Dialect.describes_same_column` answered `false` for any relational field, so the moment
           # any OTHER column in the table changed, the detailed loop ran, `typeof` differed, and
           # `:type` swept this column into a full SQLite table rebuild it had nothing to do with.
+          #
+          # PAST TENSE since #437: the planner's attribute-wise branch now admits the FK/O2O pair
+          # (`Migrations._diffs_attribute_wise`), so that sweep no longer happens for EITHER reader's
+          # output. This arm stays as it is regardless — it is here so the two readers describe one
+          # schema the same way (#409), which was always the stronger half of the argument.
           #
           # No `primary_key=` here: the `is_pk` arm above already claimed that case, so this arm is
           # reachable only for a NON-key foreign key — the same reasoning the PostgreSQL reader

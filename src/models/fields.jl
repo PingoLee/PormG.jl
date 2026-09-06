@@ -740,12 +740,14 @@ user = OneToOneField("User")
 user = ForeignKey("User", unique=true)
 ```
 
-`OneToOneField` is nonetheless the spelling to declare, and not only for readability: it is what
-**introspection reports** for such a column, on both PostgreSQL and SQLite (#417). Declaring
-`ForeignKey(..., unique=true)` leaves the models file naming a different struct than the live
-schema reads back, and while the two compare equal attribute-for-attribute, the migration planner
-falls back to a struct-type comparison as soon as any other column in that table changes — which
-proposes an `ALTER` that re-renders the column unchanged (a full table rebuild on SQLite).
+`OneToOneField` is nonetheless the spelling to prefer, for readability and because it is what
+**introspection reports** for such a column, on both PostgreSQL and SQLite (#417).
+
+It is a preference, not a requirement. Since #437 the migration planner converges the two spellings
+against the same live column — it diffs them attribute by attribute rather than by struct type — so
+an existing `ForeignKey(..., unique=true)` declaration needs no rewrite and proposes no migration.
+(Before #437 it proposed one on every `makemigrations` as soon as any other column in that table
+changed: an `ALTER` that re-rendered the column unchanged, and a full table rebuild on SQLite.)
 
 # Validation
 - The `to` parameter must be a valid model name or PormGModel instance

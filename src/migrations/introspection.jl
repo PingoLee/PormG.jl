@@ -316,8 +316,9 @@ function _field_or_drop_default(build::Function, table_name, column_name, defaul
 end
 
 # PormG's `on_delete === nothing` and `DO_NOTHING` both render as SQL `ON DELETE NO ACTION`
-# (`_foreign_key_on_delete_sql`, Dialect.jl), so a "NO ACTION" read back out of a database is
-# ambiguous — and `NO ACTION` is also what a backend stores when no action was declared at all.
+# (`_foreign_key_on_delete_sql`, Models.jl since #498), so a "NO ACTION" read back out of a
+# database is ambiguous — and `NO ACTION` is also what a backend stores when no action was declared
+# at all.
 # Introspecting it as `DO_NOTHING` would therefore stamp an explicit `on_delete=DO_NOTHING` onto
 # EVERY plain foreign key in every generated model. Mapping it to `nothing` is lossless (the
 # re-emitted DDL is identical either way) and keeps the two backends agreeing: PostgreSQL stores
@@ -1493,21 +1494,45 @@ function get_database_schema(;pickup::Union{PormGSQLite, PormGPostgres} = connec
   return get_database_schema(pickup)
 end
 
+# #498: hardened to match `get_constraints_pk` / `get_constraints_unique` / `get_constraints_check`
+# below, which were fixed and left this one behind. Four defects, all of which the caller acts on by
+# DROPPING whatever name comes back:
+#
+#   * The `kcu` join matched on `constraint_name` ALONE. PostgreSQL scopes a constraint name to its
+#     TABLE (`pg_constraint`'s unique index is `(conrelid, contypid, conname)`), not to the schema and
+#     certainly not to the database — two tables may each carry `orders_fk`, in the same schema — so
+#     joining on the name alone could return a name that belongs to a DIFFERENT table's constraint,
+#     which the caller then drops off this one. Fixed by joining on `table_schema` AND `table_name`.
+#     (The sibling `get_constraints_pk` / `get_constraints_unique` comments say "unique per SCHEMA";
+#     that is wrong, and they carry the same missing `table_name` predicate. Left alone here rather
+#     than edited blind — this function is the one #498 puts on a hot path.)
+#   * No `search_path` restriction, unlike `get_constraints_unique`. `current_schemas(false)` rather
+#     than a literal `public` on purpose: the DDL this feeds (`ALTER TABLE "x" DROP CONSTRAINT`) is
+#     emitted UNQUALIFIED and so resolves through the search path, and the lookup has to agree with
+#     the statement it is arming.
+#   * The `constraint_column_usage` join earned nothing — this function returns only
+#     `constraint_name` — and fanned out one row per referenced column for a multi-column key.
+#   * Unordered, then `result[1, …]`. With the filters above a second row is already pathological,
+#     but "whichever PostgreSQL returned first" is not an answer.
+#
+# Parameterized, per this file's own rule: the unparameterized siblings predate it and are left
+# alone, but an edited query does not inherit the exemption. That was cosmetic while this ran only
+# for a `db_constraint` flip; #498 puts it on the ordinary re-point path.
 function get_constraints_fk(conn::PormGPostgres, table_name::Symbol, field_name::String )
   query = """
-  SELECT
-      tc.constraint_name, kcu.column_name,
-      ccu.table_name AS foreign_table_name,
-      ccu.column_name AS foreign_column_name
-  FROM 
-      information_schema.table_constraints AS tc 
-      JOIN information_schema.key_column_usage AS kcu
-        ON tc.constraint_name = kcu.constraint_name
-      JOIN information_schema.constraint_column_usage AS ccu
-        ON ccu.constraint_name = tc.constraint_name
-  WHERE tc.table_name = '$table_name' AND tc.constraint_type = 'FOREIGN KEY' AND kcu.column_name = '$field_name';
+  SELECT tc.constraint_name
+  FROM information_schema.table_constraints AS tc
+  JOIN information_schema.key_column_usage AS kcu
+    ON tc.constraint_name = kcu.constraint_name
+   AND tc.table_schema   = kcu.table_schema
+   AND tc.table_name     = kcu.table_name
+  WHERE tc.table_name = \$1
+    AND tc.constraint_type = 'FOREIGN KEY'
+    AND kcu.column_name = \$2
+    AND tc.table_schema = ANY(current_schemas(false))
+  ORDER BY tc.constraint_name, tc.table_schema;
   """
-  result = fetch(conn, query) |> DataFrame
+  result = fetch(conn, query, [string(table_name), field_name]) |> DataFrame
   if nrow(result) == 0
       return nothing
   end

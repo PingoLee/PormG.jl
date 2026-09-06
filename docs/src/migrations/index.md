@@ -66,6 +66,30 @@ Filesystem archives (`applied_migrations/`) remain useful for version control an
 
 The exact on-disk file layout, checksum algorithm, and tracking-table columns are a stability contract — see [Migration Format Stability](stability.md).
 
+## Changing a Foreign Key
+
+Changing what a foreign key points at is a change to the **constraint**, not to the column. PormG plans it when you change any of:
+
+- the target model — `ForeignKey(Status)` → `ForeignKey(RaceStatus)` (a model bound `RaceStatus` maps to table `racestatus`; set `db_table` if you want another name)
+- the target column — a different `pk_field`, or a parent whose key is renamed through `db_column`
+- the referential action — `on_delete = CASCADE` → `on_delete = SET_NULL`
+
+On PostgreSQL a constraint cannot be re-pointed in place, so the plan drops it and adds it back. Re-pointing `Result.statusid` from `Status` to a new `RaceStatus` model, with `on_delete = CASCADE`, generates:
+
+```sql
+ALTER TABLE "result" DROP CONSTRAINT "result_statusid_a1b2c3d4_fk";
+ALTER TABLE "result" ADD CONSTRAINT "result_statusid_zmidlrtp_fk" FOREIGN KEY ("statusid") REFERENCES "racestatus" ("statusid") ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED;
+```
+
+The dropped constraint is named from the live catalog; the new one gets a fresh random suffix, so the two never collide.
+
+On SQLite the same change goes through the [table rebuild](#SQLite:-Table-Recreation) described below, which re-renders the whole `FOREIGN KEY ... REFERENCES ... ON DELETE` clause from your model. The two backends therefore agree on the outcome; only the DDL differs.
+
+!!! warning "Re-pointing a foreign key needs `destructive = true`"
+    The PostgreSQL plan contains `DROP CONSTRAINT`, so `dry_run()` classifies the migration as destructive and `migrate()` refuses it until you opt in with `migrate(path, destructive = true)`. Nothing is dropped except the constraint itself — no column, no data.
+
+    The new constraint is `DEFERRABLE INITIALLY DEFERRED`, so it is validated when the migration **commits**. If any existing row holds a value that does not exist in the new parent, the commit fails and the whole migration rolls back. Re-point the data first, or make the column nullable and clear it, before changing the model.
+
 ## Database-Specific Behavior
 
 ### SQLite: Table Recreation

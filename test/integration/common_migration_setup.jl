@@ -420,6 +420,55 @@ function foreign_key_count(pool::PormG.PormGPostgres, table_name::String)::Int
 end
 
 """
+    foreign_key_target(pool, table_name, column_name) → NamedTuple or nothing
+
+The parent a live FOREIGN KEY actually points at: `(parent = "…", column = "…", on_delete = "…")`,
+or `nothing` when the column carries no foreign key. `foreign_key_count` above answers "is there a
+constraint"; this answers "and where does it point", which is what a RE-POINT changes (#498) — a
+count assertion passes unchanged across a re-point and so proves nothing about it.
+
+`on_delete` is normalized to the SQL words on both backends so one assertion covers them: SQLite's
+`PRAGMA foreign_key_list` already reports them that way, and PostgreSQL's single-char
+`pg_constraint.confdeltype` is mapped here ('a' → "NO ACTION", matching what PormG renders for both
+`on_delete = nothing` and `DO_NOTHING`).
+"""
+function foreign_key_target(pool::PormG.PormGSQLite, table_name::String, column_name::String)
+  conn = PormG.ConnectionPool.acquire_connection(pool)
+  try
+    fks = PormG.ConnectionPool.fetch(pool, "PRAGMA foreign_key_list('$table_name')", conn=conn) |> DataFrame
+    nrow(fks) == 0 && return nothing
+    row = findfirst(==(column_name), String.(fks[!, :from]))
+    row === nothing && return nothing
+    return (parent = String(fks[row, :table]),
+            column = String(fks[row, :to]),
+            on_delete = uppercase(strip(String(fks[row, :on_delete]))))
+  finally
+    PormG.ConnectionPool.release_connection(pool, conn)
+  end
+end
+
+function foreign_key_target(pool::PormG.PormGPostgres, table_name::String, column_name::String)
+  rows = PormG.ConnectionPool.fetch(pool, """
+    SELECT c.confrelid::regclass::text AS parent,
+           pa.attname::text            AS parent_column,
+           c.confdeltype::text         AS on_delete_code
+    FROM pg_constraint c
+    JOIN pg_attribute a  ON a.attrelid  = c.conrelid  AND a.attnum = ANY(c.conkey)
+    JOIN pg_attribute pa ON pa.attrelid = c.confrelid AND pa.attnum = ANY(c.confkey)
+    WHERE c.contype = 'f'
+      AND c.conrelid = '$table_name'::regclass
+      AND a.attname  = '$column_name';
+  """) |> DataFrame
+  nrow(rows) == 0 && return nothing
+  code = String(rows[1, :on_delete_code])
+  on_delete = code == "c" ? "CASCADE" : code == "r" ? "RESTRICT" :
+              code == "n" ? "SET NULL" : code == "d" ? "SET DEFAULT" : "NO ACTION"
+  return (parent = String(rows[1, :parent]),
+          column = String(rows[1, :parent_column]),
+          on_delete = on_delete)
+end
+
+"""
     all_table_names(pool) → Vector{String}
 
 Return the names of all user tables in the database.

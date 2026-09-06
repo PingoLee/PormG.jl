@@ -42,6 +42,8 @@
 
 using Test
 using Logging
+# `DataFrames` since #498: the PostgreSQL marker below now has to answer a catalog lookup.
+using DataFrames
 using PormG
 using PormG.Models
 using PormG.Migrations
@@ -55,6 +57,20 @@ import PormG.ConnectionPool: SQLiteConnectionPool, fetch
 import PormG.Migrations: convert_schema_to_models
 
 struct FkToTablePlannerMockPg <: PormGPostgres end
+
+# #498: testset 5b's repoint now reaches `_drop_fk_constraint_in_alteration`, which asks the catalog
+# for the live constraint's name — so the marker has to answer with a NAME. An empty frame would not
+# be a neutral stand-in: a `:repoint` whose DROP cannot be planned is refused outright (adding
+# without dropping would leave two constraints on one column), so testset 5b's subject would quietly
+# become a no-op. The DROP + ADD pair proper is asserted in test_fk_repoint_planner.jl.
+function fetch(connection::FkToTablePlannerMockPg, sql::String;
+  conn = nothing,
+  params = nothing,
+  ignore_tx::Bool = false)
+  occursin("constraint_type = 'FOREIGN KEY'", sql) &&
+    return DataFrames.DataFrame(constraint_name = ["pit_stop_driverid_live390_fk"])
+  return DataFrames.DataFrame()
+end
 struct FkToTablePlannerMockSQLite <: PormGSQLite end
 # The SQLite rebuild path asks the backend for its version to decide which DDL it may use.
 PormG.backend_sqlite_version(::FkToTablePlannerMockSQLite) = 3045000
@@ -370,8 +386,10 @@ end
     @test Models._compare_field_foreign_key(declared_upper, live_upper)
 
     # And end to end, so this is not confined to the comparator: the repoint reaches the planner.
-    # `:to` is not in `alter_field`'s IMPLEMENTED list, so it warns rather than rendering DDL (#498);
-    # the assertion is that the difference is DETECTED, which is what #390 is about.
+    # This asserted a WARNING until #498 — back then `:to` was absent from `alter_field`'s
+    # IMPLEMENTED list, so a repoint rendered no DDL and the warning was the only evidence the
+    # difference had been detected at all. It is now planned as DROP + ADD CONSTRAINT, so the
+    # evidence is the plan itself, which is a strictly better witness for what #390 is about.
     settings = PormG.Configuration.Settings()
     settings.change_db = true
     declared_model = Models.Model("pit_stop", id = Models.IDField(), driver_id = declared_lower)
@@ -379,22 +397,24 @@ end
     current_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
       :pit_stop => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared_model, :exist => false))
 
-    logs, _ = Test.collect_test_logs() do
-      Migrations.get_migration_plan(PormGModel[live_model], current_schema, FkToTablePlannerMockPg(), settings)
-    end
-    # `"[:to]"`, not `":to"`. The bare substring also matches `:to_table` — the very attribute
-    # testset 2 exists to keep OUT of `colect_not_equal` — so a regression that let the breadcrumb
-    # ride along would have kept this assertion green. Match the rendered vector exactly.
-    @test any(l -> l.level == Logging.Warn && occursin("[:to]", string(l.message)), logs)
+    plan = @test_logs min_level = Logging.Warn Migrations.get_migration_plan(
+      PormGModel[live_model], current_schema, FkToTablePlannerMockPg(), settings)
+    # The repoint is planned, and planned as a CONSTRAINT change rather than a column one — an
+    # `Alter field:` key here would mean `:to` had leaked through to `Dialect.alter_field`, which
+    # renders nothing for it. `_quote_table_ddl` preserves the case, so `"Driver"` -> `"driver"` is
+    # visible in the DDL, which is the #390 difference made concrete.
+    @test haskey(plan, :pit_stop)
+    @test occursin("DROP CONSTRAINT \"pit_stop_driverid_live390_fk\"", plan[:pit_stop]["Remove foreign key: driver_id"])
+    @test occursin("REFERENCES \"driver\" (\"id\")", plan[:pit_stop]["New foreign key: driver_id"])
+    @test !haskey(plan[:pit_stop], "Alter field: driver_id")
 
-    # Negative control for the planner half: the MATCHING pair must reach the planner silently, or
-    # the assertion above would be satisfied by a planner that warns about everything.
+    # Negative control for the planner half: the MATCHING pair must reach the planner silently AND
+    # plan nothing, or the assertion above would be satisfied by a planner that repoints everything.
     matched_model = Models.Model("pit_stop", id = Models.IDField(), driver_id = live_lower)
     matched_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
       :pit_stop => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared_model, :exist => false))
-    quiet_logs, _ = Test.collect_test_logs() do
-      Migrations.get_migration_plan(PormGModel[matched_model], matched_schema, FkToTablePlannerMockPg(), settings)
-    end
-    @test !any(l -> l.level >= Logging.Warn, quiet_logs)
+    matched_plan = @test_logs min_level = Logging.Warn Migrations.get_migration_plan(
+      PormGModel[matched_model], matched_schema, FkToTablePlannerMockPg(), settings)
+    @test !haskey(matched_plan, :pit_stop)
   end
 end

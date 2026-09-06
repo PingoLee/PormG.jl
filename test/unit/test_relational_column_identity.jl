@@ -53,6 +53,21 @@ PormG.backend_sqlite_version(::RelColMockSQLite) = 3045000
 const RC_PG = RelColMockPg()
 const RC_SL = RelColMockSQLite()
 
+# #498: the re-point case in testset 4 now reaches `_drop_fk_constraint_in_alteration`, which asks the
+# catalog for the live constraint's name — so the marker has to answer. It must answer with a NAME,
+# not an empty frame: a `:repoint` whose DROP cannot be planned is refused outright (adding without
+# dropping would leave two constraints on one column), so an empty answer would silently turn this
+# testset's subject into a no-op and assert nothing. This file's subject is the FK/OneToOne column
+# IDENTITY (#437); the DDL itself is asserted in test_fk_repoint_planner.jl.
+function fetch(connection::RelColMockPg, sql::String;
+  conn = nothing,
+  params = nothing,
+  ignore_tx::Bool = false)
+  occursin("constraint_type = 'FOREIGN KEY'", sql) &&
+    return DataFrames.DataFrame(constraint_name = ["child_t_parent_id_live437_fk"])
+  return DataFrames.DataFrame()
+end
+
 # A one-row "introspection result" for the PostgreSQL reader, which takes a `DataFrameRow` and
 # nothing else. Same shape as `_kcol`/`_kfk`/`_key_row` in test_key_type_round_trip.jl and
 # `_col`/`_fk`/`_introspection_row` in test_introspection_guards.jl — duplicated rather than shared
@@ -238,42 +253,41 @@ _rc_parent_sql(plan) =
     @test occursin("SET NOT NULL", sql_null)
     @test !occursin("TYPE bigint", sql_null)
 
-    # A DIFFERENT PARENT — and this one is asserted through the WARNING rather than a plan key,
-    # because measuring it turned up a pre-existing gap worth stating plainly (now tracked as #498):
+    # A DIFFERENT PARENT. This block asserted the OPPOSITE until #498, and deliberately so: it was
+    # written to RECORD a gap it had just measured rather than to pin behaviour anyone wanted. What
+    # it recorded was that an FK re-pointed at another parent planned no DDL on either path — `:to`
+    # landed in `colect_not_equal`, `Dialect.alter_field` had no `:to` branch, so it emitted nothing
+    # and `_configure_order_dict_migration_plan` dropped the empty string, while both FK helpers
+    # declined because their guards only knew "constraint appearing / disappearing". The only signal
+    # was a permanent `[:to] are not implemented` warning, which is what this testset matched on.
+    # #498 replaced those two guards with `_fk_constraint_action`, so the re-point is now planned as
+    # DROP + ADD CONSTRAINT and the warning is gone. Flipping these assertions is that issue's
+    # acceptance criterion, not a stale test being bent to fit.
     #
-    #   an FK re-pointed at another parent is NOT planned as DDL, on EITHER path. `:to` lands in
-    #   `colect_not_equal`, but `Dialect.alter_field` has no `:to` branch, so it emits no SQL and
-    #   `_configure_order_dict_migration_plan` drops the empty string; `_drop_fk_constraint_in_alteration`
-    #   declines too (both sides still carry a live `db_constraint`, so this is a RE-POINT, not a
-    #   drop). Measured for a same-type `sForeignKey`-vs-`sForeignKey` pair as well — the plan is
-    #   empty there too, on unmodified code. The gap is pre-existing and orthogonal to #437.
-    #
-    # What #437 changed is that the cross-type pair now behaves EXACTLY like the same-type pair.
-    # Before, it fell to the planner's final `else` and pushed `:type`, so it emitted a no-op
-    # `ALTER COLUMN TYPE bigint` cast — noise, not a re-point. The assertion is therefore the
-    # invariant (`:to` is what reaches `alter_field`, on both paths alike), not a plan key that
-    # cannot exist.
+    # What #437 established, and what this block still guards, is that the cross-type pair behaves
+    # EXACTLY like the same-type one. Before #437 it fell to the planner's final `else` and pushed
+    # `:type`, emitting a no-op `ALTER COLUMN TYPE bigint` cast — noise, not a re-point. So the
+    # assertion is the EQUIVALENCE of the two pairs; the DDL itself is asserted in
+    # test_fk_repoint_planner.jl, against a mock that can serve a live constraint name.
     declared_other = Models.ForeignKey(_rc_parent(), unique = true, pk_field = "id", null = true)
     live_other     = _rc_live_o2o(to_table = "other_parent_t")
     @test !Models._compare_field_foreign_key(declared_other, live_other)
 
-    cross_logs, _ = Test.collect_test_logs() do
-      _rc_plan_keys(RC_PG, declared_other, live_other)
-    end
-    # `:to` reached `alter_field` — i.e. the difference WAS detected and carried into the diff.
-    # Matched as `"[:to]"` rather than `":to"`: the bare substring also matches `:to_table`, the
-    # breadcrumb `_NON_SCHEMA_FIELD_ATTRS` exists to filter out, so a regression that let IT ride
-    # along would keep a `":to"` assertion green. Match the rendered vector.
-    @test any(l -> l.level == Logging.Warn && occursin("[:to]", string(l.message)), cross_logs)
+    cross_keys = @test_logs min_level = Logging.Warn _rc_plan_keys(RC_PG, declared_other, live_other)
 
     # The same-type baseline, for the same parent change. Identical outcome — which is the point.
     same_live = Models.ForeignKey("Parent_t", pk_field = "id", unique = true, null = true)
     same_live.to_table = "other_parent_t"
-    same_logs, _ = Test.collect_test_logs() do
-      _rc_plan_keys(RC_PG,
-        Models.ForeignKey(_rc_parent(), unique = true, pk_field = "id", null = true), same_live)
-    end
-    @test any(l -> l.level == Logging.Warn && occursin("[:to]", string(l.message)), same_logs)
+    same_keys = @test_logs min_level = Logging.Warn _rc_plan_keys(RC_PG,
+      Models.ForeignKey(_rc_parent(), unique = true, pk_field = "id", null = true), same_live)
+
+    # Both pairs plan the re-point, and plan it the SAME way. `Alter field:` is absent from both:
+    # only the constraint moved, not the column, and `_FK_IDENTITY_ATTRS` keeps `:to` away from
+    # `alter_field` — which is also why neither call above emits a warning any more.
+    @test cross_keys == same_keys
+    @test "Remove foreign key: parent_id" in cross_keys
+    @test "New foreign key: parent_id" in cross_keys
+    @test !("Alter field: parent_id" in cross_keys)
   end
 
   # ───────────────────────────────────────────────────────────────────────────

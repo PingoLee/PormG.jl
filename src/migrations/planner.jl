@@ -12,8 +12,14 @@
 # `colect_not_equal` — on SQLite that vector being non-empty means a full table rebuild.
 #
 #   * `blank`, `editable`, `verbose_name`, `related_name`, `how`, `formatter` are model-layer only.
-#   * `on_delete` and the FK identity are planned by `_add_fk_constraint_in_alteration` /
-#     `_drop_fk_constraint_in_alteration`.
+#   * `on_delete` is NOT in this tuple, and the distinction is the whole of #498. It DOES alter the
+#     schema — it is part of the FK constraint — so it belongs in `colect_not_equal`, and it is
+#     `_FK_IDENTITY_ATTRS` below (a different filter, applied later) that keeps it away from
+#     `Dialect.alter_field`, which cannot express it. Being listed here meant a genuine `ON DELETE`
+#     change was DISCARDED, on both engines, with no signal at all. The comment this replaces claimed
+#     the FK add/drop helpers planned it instead; they did not — their guards only ever asked whether
+#     a constraint was appearing or disappearing. `Models._fk_on_delete_equal` at the diff loop now
+#     absorbs the only pairs that needed absorbing (PROTECT/RESTRICT, DO_NOTHING/nothing).
 #   * `db_column` never alters the live schema by itself — the column identity is already proven
 #     equal by the matched (column-keyed) field, and the introspected side carries
 #     `db_column=nothing` (#50).
@@ -38,9 +44,23 @@
 #     it. Left out, EVERY foreign key would report a difference on EVERY `makemigrations` — an empty
 #     alteration forever, and a full table rebuild on SQLite. Same shape as `auto_now`/`auto_add`
 #     above: no DDL anywhere expresses it, so it can never be a real schema change.
-const _NON_SCHEMA_FIELD_ATTRS = (:blank, :on_delete, :related_name, :verbose_name, :editable,
+const _NON_SCHEMA_FIELD_ATTRS = (:blank, :related_name, :verbose_name, :editable,
                                  :how, :formatter, :db_column, :db_index,
                                  :auto_now, :auto_now_add, :auto_add, :to_table)
+
+# #498: the FK IDENTITY attributes — the ones a `FOREIGN KEY` constraint carries and a column
+# `ALTER` cannot say. They are a genuinely different category from `_NON_SCHEMA_FIELD_ATTRS` above,
+# and collapsing the two would reintroduce the bug: these DO express schema, so they MUST enter
+# `colect_not_equal` (that vector is the difference set, and it is what opens the alteration gate);
+# they are filtered out only where `colect_not_equal` is handed to `Dialect.alter_field`, which has
+# no branch for any of them and would otherwise warn and emit nothing. `_fk_constraint_action`
+# expresses them instead, as DROP + ADD CONSTRAINT.
+#
+# `on_update`, `deferrable` and `initially_deferred` are deliberately NOT here. A re-add would not
+# satisfy a change in them: `Dialect.add_foreign_key` renders no `ON UPDATE` clause at all and
+# hardcodes `DEFERRABLE INITIALLY DEFERRED`. They keep reaching `alter_field` and warning honestly,
+# which is the accurate report until the renderer learns them.
+const _FK_IDENTITY_ATTRS = (:to, :pk_field, :on_delete)
 
 # #437: the first branch of `_alter_table_fields`' field diff is NOT "the same Julia type" — it is
 # "these two structs share an attribute vocabulary, so diff them attribute by attribute". A declared
@@ -142,11 +162,44 @@ function _fk_definition_changed(new_field::PormGField, old_field::PormGField)::B
   return !Models._compare_field_foreign_key(new_field, old_field) ||
          Models.fk_target_column(new_field) != Models.fk_target_column(old_field) ||
          (hasfield(typeof(new_field), :on_delete) && hasfield(typeof(old_field), :on_delete) &&
-          new_field.on_delete != old_field.on_delete)
+          # #498: `Models._fk_on_delete_equal`, not the raw `!=` this used to be. The raw form agreed
+          # for CASCADE/SET_NULL/nothing (the slot normalizes an introspected string to the declared
+          # sentinel) but not for the PROTECT->RESTRICT or DO_NOTHING->nothing folds — so renaming a
+          # key declared `on_delete = PROTECT` forced a whole-table rebuild on SQLite that a plain
+          # `RENAME COLUMN` covers. Benign (a rebuild is correct, just wasteful) and invisible,
+          # because this predicate had exactly one consumer.
+          !Models._fk_on_delete_equal(new_field, old_field))
+end
+
+# #498: the four things that can happen to one column's FOREIGN KEY constraint. This used to live as
+# two MIRRORED XOR GUARDS, one inside `_drop_fk_constraint_in_alteration` and its inverse inside
+# `_add_fk_constraint_in_alteration` — each asking only "is a constraint appearing / disappearing?".
+# Between them they could not express the fourth state, so a foreign key re-pointed at a different
+# parent (both sides still carrying `db_constraint = true`) satisfied NEITHER guard and planned
+# nothing at all on PostgreSQL, forever. Stating the decision once makes `:repoint` representable
+# rather than a special case bolted onto two guards that disagree by construction.
+#
+# `new_field === nothing` is the field-DELETION path (`_resolve_table_fields`), which is a `:drop`
+# for the same reason a `db_constraint` flip is: the constraint is going away.
+function _fk_constraint_action(new_field::Union{PormGField, Nothing}, old_field::PormGField)::Symbol
+  old_fk = hasfield(typeof(old_field), :to) && old_field.db_constraint
+  new_fk = new_field !== nothing && hasfield(typeof(new_field), :to) && new_field.db_constraint
+  old_fk && !new_fk && return :drop
+  new_fk && !old_fk && return :add
+  (new_fk && old_fk) || return :none
+  # Both sides are live, constrained foreign keys. PostgreSQL has no way to re-point a constraint in
+  # place (`ALTER TABLE … ALTER CONSTRAINT` only changes deferrability), so a changed definition —
+  # different parent table, different parent column, or a different `ON DELETE` — can only be
+  # expressed by dropping and re-adding it. Reuses the #150 predicate rather than a second opinion.
+  return _fk_definition_changed(new_field, old_field) ? :repoint : :none
 end
 
 function _drop_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::Union{PormGField, Nothing}, old_field::PormGField)::Nothing
-  if hasfield(old_field |> typeof, :to) && old_field.db_constraint && (new_field === nothing || !hasfield(new_field |> typeof, :to) || !new_field.db_constraint)
+  # #498: the precondition is `_fk_constraint_action`, not a locally-spelled XOR. Both `:drop` (the
+  # constraint is going away) and `:repoint` (it stays, but must be re-issued against a new
+  # definition) need the live one dropped first. Deriving it rather than accepting it as an argument
+  # keeps a caller from passing an action that disagrees with the fields it also passes.
+  if _fk_constraint_action(new_field, old_field) in (:drop, :repoint)
     if conn isa PormGSQLite
       # SQLite has no `ALTER TABLE DROP CONSTRAINT`; an FK can only be removed by rebuilding the
       # table. On the field-alteration path this is a no-op ON PURPOSE: `_alter_table_fields`
@@ -202,9 +255,43 @@ end
 
 function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, old_field::PormGField, name::String)::Nothing
   # to alterations
-  if hasfield(new_field |> typeof, :to) && new_field.db_constraint && (!hasfield(old_field |> typeof, :to) || !old_field.db_constraint)
+  # #498: the mirror of the drop above, and derived from the same single decision. `:add` is a
+  # constraint that did not exist; `:repoint` is one that did and has just been dropped a few lines
+  # earlier in the same plan — both end in the identical `ADD CONSTRAINT`, against the DESIRED field.
+  action = _fk_constraint_action(new_field, old_field)
+  # #498: on PostgreSQL a `:repoint` re-adds ONLY if the matching DROP was actually planned. The drop
+  # side returns silently when `get_constraints_fk` finds no live constraint name — harmless for a
+  # plain `:drop` (nothing follows it) but not here: adding without dropping leaves the OLD constraint
+  # in place and a SECOND one beside it, so every row would have to satisfy both parents and the next
+  # `makemigrations` would see a converged model with a stale constraint it can never remove. That
+  # state is reachable whenever introspection and the catalog lookup disagree about which table is
+  # meant — a `search_path` that excludes `public` is the obvious way, since `get_database_schema`
+  # reads `public` explicitly while the lookup restricts to `current_schemas(false)`.
+  #
+  # SCOPED to PostgreSQL, and that is load-bearing rather than defensive: SQLite's drop side is a
+  # no-op that writes no plan key at all, so an unscoped check would be true for EVERY SQLite
+  # `:repoint` and return here — leaving the branch below documenting a state it could never reach.
+  # The guard is about a DROP that was expected and did not happen; on SQLite none is ever expected.
+  #
+  # Only `:repoint` needs this. An `:add` by definition had no constraint to drop.
+  if conn isa PormGPostgres && action === :repoint &&
+     !(haskey(migration_plan, model_name) && haskey(migration_plan[model_name], "Remove foreign key: $field_name"))
+    @warn "Foreign key on $(model_name).$(field_name) changed, but its live constraint could not be found; skipping the re-point rather than adding a duplicate" action
+    return nothing
+  end
+  if action in (:add, :repoint)
     if conn isa PormGSQLite
-       @warn "Adding foreign keys to existing SQLite tables requires recreation. This is not fully automated yet."
+       # `:repoint` is a SILENT no-op here, exactly as it is in `_drop_fk_constraint_in_alteration`:
+       # `_alter_table_fields` already emits a full rebuild from the desired model, and that rebuild
+       # re-renders the whole `FOREIGN KEY … REFERENCES … ON DELETE` clause — so the key IS
+       # re-pointed on SQLite, with no separate DDL to emit and nothing for a user to act on.
+       #
+       # The `:add` warning is left ALONE, not endorsed. Measured on a real temp SQLite file: the
+       # rebuild renders the `FOREIGN KEY … REFERENCES` clause for a newly-declared key too, so this
+       # warning looks spurious by the very argument that silences `:repoint` above. It is
+       # pre-existing, it is the only caller's single call site, and silencing it is a behaviour
+       # change with its own blast radius — so it is filed rather than folded into #498.
+       action === :add && @warn "Adding foreign keys to existing SQLite tables requires recreation. This is not fully automated yet."
        return nothing
     end
     constraint_name = "$(name)_fk" |> lowercase
@@ -458,6 +545,20 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
               # the code side matches the introspected physical column when the parent pk is
               # renamed via db_column (#50). No-op when the referenced column isn't renamed.
               attr == :pk_field && Models.fk_target_column(field) == Models.fk_target_column(old_field) && continue
+              # #498: the third sibling of the two reconciliations above, and the same shape — the raw
+              # `!=` just above is wrong for two `on_delete` pairs that MEAN the same clause
+              # (PROTECT/RESTRICT, DO_NOTHING/nothing), so compare what they RENDER
+              # (`Models._fk_on_delete_equal`). With this here, a genuine `ON DELETE` change reaches
+              # `colect_not_equal` and opens the alteration gate below on its own — which is why #498
+              # needed no special case in that gate.
+              #
+              # It is NOT reachable from a diff where `on_delete` is the only difference:
+              # `are_model_fields_equal` folds through the same comparator and returns early. What it
+              # guards is an on_delete fold riding ALONGSIDE another changed column on the same table
+              # — where, without it, a `PROTECT` key against its own live `RESTRICT` would be swept
+              # into a destructive DROP + ADD CONSTRAINT on every run. Pinned by the mixed-change
+              # testset in test_fk_repoint_planner.jl, not by the equivalence controls.
+              attr == :on_delete && Models._fk_on_delete_equal(field, old_field) && continue
               attr in _NON_SCHEMA_FIELD_ATTRS && continue
               push!(colect_not_equal, attr)
             end
@@ -510,10 +611,21 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
           # table overwrite each other, producing exactly one recreation statement
           # instead of one per changed field.
           alter_key = conn isa PormGSQLite ? "Alter table: $model_name" : "Alter field: $field_name_stripped"
+          # #498: `colect_not_equal` is the DIFFERENCE SET; `column_attrs` is what a column ALTER can
+          # actually render. Conflating the two is where the bug lived — the FK identity attributes
+          # have to be IN the difference set (they are real schema changes, and they are what opens
+          # this gate) but must never reach `Dialect.alter_field`, which has no branch for any of them
+          # and answered a re-pointed foreign key with an empty string plus a permanent
+          # "[:to] are not implemented" warning. They are planned as DROP + ADD CONSTRAINT by the two
+          # calls straddling this one. Every branch in `alter_field` is gated on a symbol being
+          # present in the vector it receives, so an emptied one is a true no-op: it returns "" and
+          # `_configure_order_dict_migration_plan` drops the step. SQLite ignores the vector entirely
+          # and rebuilds from the desired model regardless, which is what re-points the key there.
+          column_attrs = filter(attr -> !(attr in _FK_IDENTITY_ATTRS), colect_not_equal)
           # #82: on SQLite this preserves the table's secondary indexes across the rebuild and gates on
           # foreign_key_check (no-op on PostgreSQL). See _sqlite_rebuild_preserving_indexes.
           alter_sql = _sqlite_rebuild_preserving_indexes(conn, model_table_name(model),
-            Dialect.alter_field(conn, current_schema[model_name][:model], field_name_stripped, field, old_field, colect_not_equal);
+            Dialect.alter_field(conn, current_schema[model_name][:model], field_name_stripped, field, old_field, column_attrs);
             surviving_columns = _model_physical_columns(current_schema[model_name][:model]))
           _configure_order_dict_migration_plan(migration_plan, model_name, alter_key, alter_sql)
 

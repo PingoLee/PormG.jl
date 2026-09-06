@@ -1420,6 +1420,57 @@ end
 # above — live in `Kernel` and are imported at the top of this module, because layer-2
 # `Configuration` needs them and is included before `Models`. See Kernel.jl for the definitions.
 
+# The `ON DELETE` clause a field's `on_delete` MEANS, as SQL. Lives here rather than in `Dialect`
+# (where it was defined until #498) for one reason: it is also the only correct way to COMPARE two
+# `on_delete` values, and `_compare_model_field` below — in a module `Dialect` is included after —
+# needs that comparison. Backend-agnostic by construction: it takes no connection and both the
+# PostgreSQL and SQLite renderers call this one definition, so it is field vocabulary, not dialect.
+#
+# The two FOLDS are the point, and are why a second copy of this mapping must never be written:
+#   * `DO_NOTHING` and `nothing` both render `NO ACTION` — a database cannot tell them apart, and
+#     `_pg_confdeltype_to_on_delete` reads `confdeltype = 'a'` back as `nothing` for exactly that.
+#   * `PROTECT` renders `RESTRICT` and is one-way: a round trip can only ever return `RESTRICT`
+#     (see the comment above `_pg_confdeltype_to_on_delete` in `migrations/introspection.jl`).
+function _foreign_key_on_delete_sql(on_delete::Nothing)::String
+  return "NO ACTION"
+end
+
+function _foreign_key_on_delete_sql(on_delete)::String
+  action = string(on_delete) |> x -> split(x, ".")[end] |> uppercase |> strip
+  action = replace(action, " " => "_")
+
+  if action == "SET_NULL"
+    return "SET NULL"
+  elseif action == "SET_DEFAULT"
+    return "SET DEFAULT"
+  elseif action == "DO_NOTHING"
+    return "NO ACTION"
+  elseif action == "PROTECT"
+    return "RESTRICT"
+  else
+    return replace(action, "_" => " ")
+  end
+end
+
+# #498: do two fields mean the same `ON DELETE`? Compare what they RENDER, through the very function
+# that emits the clause, so the comparison cannot drift from the DDL. Equal renderings mean the
+# database cannot tell the two apart, which is exactly the question a schema diff is asking.
+#
+# A raw `==` gets MOST pairs right and that is what makes it dangerous. The slot is typed
+# `Union{Function, Nothing}` and `_get_on_delete_mode(::AbstractString)` normalizes an introspected
+# `"CASCADE"` to the same `Kernel.CASCADE` sentinel a models file declares, so declared-vs-live
+# agrees for CASCADE, RESTRICT, SET_NULL, SET_DEFAULT and `nothing` on identity alone. It is exactly
+# the two FOLDS above that it gets wrong, and both are silent rather than loud (measured here):
+#
+#     declared PROTECT    vs live RESTRICT   raw ==  ->  false, render ==  ->  true
+#     declared DO_NOTHING vs live nothing    raw ==  ->  false, render ==  ->  true
+#
+# A schema diff that answers "changed" for either proposes a destructive DROP + ADD CONSTRAINT on
+# every single `makemigrations`, forever, for a key nobody touched. Hence a rendered comparison
+# everywhere `on_delete` is diffed, not just where it looked necessary.
+_fk_on_delete_equal(new_field::PormGField, old_field::PormGField)::Bool =
+  _foreign_key_on_delete_sql(new_field.on_delete) == _foreign_key_on_delete_sql(old_field.on_delete)
+
 # Referenced (parent) physical column for a ForeignKey (#50). `pk_field` names a
 # field on the target model; resolve it to that field's `db_column` when the target
 # model is in scope (the normal query/migration path, where `to` is a resolved
@@ -3013,8 +3064,19 @@ function _compare_model_field(new_field::PormGField, old_field::PormGField)::Boo
         return false
       elseif field_name == :to && _compare_field_foreign_key(new_field, old_field)
         continue
-      elseif field_name == :on_delete
-        continue  # Skip comparison for :on_delete attribute
+      elseif field_name == :on_delete && _fk_on_delete_equal(new_field, old_field)
+        # #498: was an UNCONDITIONAL `continue` ("Skip comparison for :on_delete attribute"), which
+        # made this fast path structurally unable to report an `on_delete` change. That mattered more
+        # than it looks: this function backs `are_model_fields_equal`, the early-out `_alter_table_fields`
+        # takes BEFORE its per-attribute diff loop — so an on_delete-only change made the two models
+        # compare equal and the planner returned without ever reaching the code that plans DDL for it.
+        # Fixing the planner alone would have left that half dead.
+        #
+        # Skipping was never the right answer, but it was suppressing a REAL signal rather than noise:
+        # the slot normalizes an introspected string to the declared sentinel, so a plain `!=` already
+        # agreed for CASCADE/SET_NULL/nothing. What it could not do is the PROTECT->RESTRICT and
+        # DO_NOTHING->nothing folds, which is the whole job `_fk_on_delete_equal` does here.
+        continue
       elseif field_name == :to_table
         # #360: an introspection-only breadcrumb, asymmetric by construction — introspection sets the
         # live parent table, the models-file side is always `nothing` because `Model_to_str` never

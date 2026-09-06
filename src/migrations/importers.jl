@@ -3084,6 +3084,132 @@ end
 # Django derives an omitted label from the member name: `IN_PROGRESS` -> "In Progress".
 _django_enum_label(member::AbstractString)::String = titlecase(replace(String(member), "_" => " "))
 
+# ── One Python string literal: the balance test and the unquoter (#497) ───────────────────────────
+# These two are the Python twins of `introspection.jl`'s `_quoted_literal` / `_unquote_literal`
+# (#475), and they are deliberately NOT that pair reused. The balance question has a different answer
+# in each language: SQL doubles an interior quote (`'it''s'` is one literal meaning `it's`), while
+# Python BACKSLASH-escapes it (`'it\\'s'`) and reads `'it''s'` as two ADJACENT literals concatenated,
+# meaning `its`. Handing Python text to the SQL predicate therefore accepts a concatenation as one
+# literal — the very defect being fixed — so the convention is spelled out here instead of inherited.
+#
+# True when `s` is ONE Python string literal. False for a CONCATENATION (`'a' + 'b'`), whose first
+# and last characters merely happen to be quotes — which `startswith`/`endswith` could never tell
+# apart, and which `parse_value` therefore unquoted to the mangled `a' + 'b` and stored as a default.
+# Also false for a triple-quoted string, whose interior quotes are undoubled and unescaped, and for a
+# LONE quote — which satisfied both `startswith` and `endswith`, and which the byte slice then
+# reduced to the empty string in silence.
+#
+# A LINEAR SCAN, and not the `r"^'(?:[^'\\]|\\.)*'$"` pair `_is_py_literal` used to carry inline.
+# That alternation recurses per character in PCRE and throws `PCRE.exec error: JIT stack limit
+# reached` at ~43_700 characters — an uncaught `ErrorException` out of `parse_value`, which would
+# abort the entire import over one long `TextField` default. That is the failure mode #497 exists to
+# remove, so trading it for a different door into the same room is not a fix. `introspection.jl`'s
+# `_quoted_literal` (#475) walks the same way and for the same reason; only the escape rule differs.
+function _py_quoted_literal(s::AbstractString)::Bool
+  t = strip(s)
+  ncodeunits(t) >= 2 || return false
+  q = first(t)
+  (q == '"' || q == '\'') || return false
+  last(t) == q || return false          # cheap reject before walking
+  last_i = lastindex(t)
+  i = nextind(t, firstindex(t))
+  while i <= last_i
+    c = t[i]
+    if c == '\\'
+      j = nextind(t, i)
+      # A trailing backslash escapes the CLOSING quote, so the literal never terminates: `'tail\`.
+      j > last_i && return false
+      i = nextind(t, j)                 # skip the escaped character, whatever it is
+      continue
+    end
+    # An unescaped delimiter ends the literal. Only the final character may do so — anywhere else
+    # and what follows is a second literal or an operator, i.e. an expression.
+    c == q && return i == last_i
+    i = nextind(t, i)
+  end
+  return false                          # ran off the end without closing
+end
+
+# The single-character backslash escapes Python defines. Deliberately NOT `Base.unescape_string`:
+# Julia's `\xHH` is a BYTE (it can build invalid UTF-8), Python's is a code point, and Julia decodes
+# octal `\101` where a Python `\0` followed by digits would then collide with it.
+const _PY_SIMPLE_ESCAPES = Dict{Char, Char}(
+  '\\' => '\\', '\'' => '\'', '"'  => '"',
+  'n'  => '\n', 'r'  => '\r', 't'  => '\t',
+  'a'  => '\a', 'b'  => '\b', 'f'  => '\f', 'v' => '\v',
+)
+
+# Decode the escapes above; leave every OTHER backslash sequence — `\xHH`, `\uXXXX`, `\UXXXXXXXX`,
+# `\N{…}` and octal `\ooo` — byte-for-byte as written, backslash included.
+#
+# That boundary is a choice, not an oversight. A half-decoded value is the silent-wrong-data outcome
+# this importer exists to prevent, and the numeric forms are the ones where a hand-rolled decoder can
+# be wrong (surrogates, invalid code points, the octal/`\0` ambiguity). Leaving them visible in the
+# generated file is recoverable; guessing them is not. A `models.py` reaching PormG carries accented
+# text far more often than it carries `caf\u00e9` — and accented text needs no escape at all.
+function _py_unescape(s::AbstractString)::String
+  occursin('\\', s) || return String(s)     # the overwhelmingly common case, untouched
+  out = IOBuffer()
+  i = firstindex(s)
+  stop = lastindex(s)
+  while i <= stop
+    c = s[i]
+    # `i < stop` is "a character follows": a trailing lone backslash is data, not an escape.
+    if c == '\\' && i < stop
+      j = nextind(s, i)
+      rep = get(_PY_SIMPLE_ESCAPES, s[j], nothing)
+      if rep === nothing
+        # Unknown escape: emit the backslash and let the loop re-read its follower normally, so
+        # `\u00e9` survives whole rather than losing its backslash.
+        print(out, c)
+        i = j
+        continue
+      end
+      print(out, rep)
+      i = nextind(s, j)
+      continue
+    end
+    print(out, c)
+    i = nextind(s, i)
+  end
+  return String(take!(out))
+end
+
+# Does `s` OPEN like a Python string literal — a quote, or one of Python's `f`/`r`/`b`/`u` prefixes
+# and then a quote? Paired with `_py_quoted_literal`, this is what separates "meant to be a string
+# and is not one PormG can read" from "not a string at all", so that only the first is reported.
+#
+# The prefixed forms are deliberately in: an f-string's value depends on names that exist at runtime
+# and nowhere in a `models.py`, and a raw or bytes literal has escape rules of its own. Each is a
+# string whose VALUE this importer cannot know — the same standing as a concatenation, and the same
+# treatment. No valid Python name opens this way, so there is no legitimate value to catch by
+# mistake: `uuid.uuid4` consumes its two leading `u`s and then finds `i`, not a quote.
+function _py_opens_string(s::AbstractString)::Bool
+  t = strip(s)
+  isempty(t) && return false
+  stop = lastindex(t)
+  i = firstindex(t)
+  consumed = 0
+  while consumed < 2 && i <= stop && t[i] in ('f', 'F', 'r', 'R', 'b', 'B', 'u', 'U')
+    i = nextind(t, i)
+    consumed += 1
+  end
+  return i <= stop && (t[i] == '"' || t[i] == '\'')
+end
+
+# The content of one Python string literal (as judged by `_py_quoted_literal`), escapes decoded.
+#
+# `nextind`/`prevind`, never `s[2:end-1]` (#475, #497). Those are BYTE offsets, so `end-1` lands on a
+# UTF-8 continuation byte whenever the character before the closing quote is multibyte — and
+# `default='São José'` then raised `StringIndexError` from inside `parse_value`, aborting the whole
+# import over one ordinary Brazilian fixture. `'Räikkönen'` is the near-miss that let this survive a
+# read-through: it ends in an ASCII `n`, so the byte slice happens to land correctly.
+function _py_unquote(s::AbstractString)::String
+  t = strip(s)
+  inner = ncodeunits(t) == 2 ? "" : t[nextind(t, firstindex(t)):prevind(t, lastindex(t))]
+  return _py_unescape(inner)
+end
+
 # True when the text is a plain Python literal the importer can carry into PormG. Anything else —
 # `auto()`, `uuid.uuid4()`, a concatenation — is an expression whose VALUE this importer cannot know.
 # Keeping such a value verbatim is worse than dropping it: `CARRO = auto()` gives every member the
@@ -3095,7 +3221,7 @@ function _is_py_literal(v::AbstractString)::Bool
   t in ("None", "True", "False") && return true
   _py_number(t) === nothing || return true
   # A quoted string, with no unescaped quote of the same kind inside it.
-  return occursin(r"^\"(?:[^\"\\]|\\.)*\"$", t) || occursin(r"^'(?:[^'\\]|\\.)*'$", t)
+  return _py_quoted_literal(t)
 end
 
 """
@@ -4223,6 +4349,35 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
             # round-trips into the generated file as a literal `choices=()`.
             isempty(parsed) || (options[Symbol(key)] = parsed)
           else
+            # A `default` written as a string but not readable as ONE literal — `default='a' + 'b'`,
+            # the adjacent-literal `default='it''s'`, an f-string, a raw or bytes literal, a
+            # triple-quoted one — has a value this importer cannot compute (#497). It is kept
+            # verbatim, exactly as a dotted `default=uuid.uuid4` is above, and reported for the same
+            # reason: source text landing in the schema as a literal default is not something to
+            # discover later.
+            #
+            # Emitted HERE and not inside `parse_value`, which has no class, field or marker list —
+            # and which runs under a `NullLogger` with a throwaway `markers` vector for an
+            # unimplemented field type, where a warning would vanish (see `process_class_fields!`).
+            #
+            # Only `default`, matching the dotted-default rule above: `related_name` and friends are
+            # not schema, and a quoted-looking one is caught by its own validator. A TYPED field
+            # (Integer, FK, Boolean, Date) will additionally report the constructor rejection below —
+            # the same double-report `default=uuid.uuid4` already produces. `CharField` with no
+            # `choices` and `TextField` accept any string, so for those two this is the only report
+            # that will ever be made, which is what makes it necessary rather than decorative.
+            #
+            # NOT extended to a `choices` ENTRY, which travels `parse_choices`/`_strip_py_quotes` and
+            # keeps its quotes just as visibly, but earns no marker of its own — that channel's only
+            # message says "not a (value, label) pair", which would state the wrong reason. Filed
+            # rather than bent.
+            if key == "default" && _py_opens_string(value) && !_py_quoted_literal(value)
+              @warn "import: default is not one readable string literal; kept verbatim" class=class_label field=field_name value=_one_line(value)
+              push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' has " *
+                             "`default=$(_one_line(value))`, which the importer cannot read as one " *
+                             "string literal — kept verbatim as text. The stored default is that " *
+                             "source text, not the value it denotes.")
+            end
             options[Symbol(key)] = parse_value(value)
           end
       else
@@ -4485,8 +4640,13 @@ function parse_value(value::AbstractString)
       return "{}"
   elseif occursin(r"^\d+$", value)
       return parse(Int, value)
-  elseif (startswith(value, "\"") && endswith(value, "\"")) || (startswith(value, "'") && endswith(value, "'"))
-      return String(value[2:end-1])  # Remove surrounding quotes
+  elseif _py_quoted_literal(value)
+      # ONE quoted literal, unquoted UTF-8-safely with its escapes decoded (#497). The test this
+      # replaces was `startswith(value, "'") && endswith(value, "'")`, which is equally true of a
+      # CONCATENATION — so `default='a' + 'b'` was unquoted to the mangled `a' + 'b` and stored as a
+      # literal default. A value that is not one literal now falls through to the verbatim branch
+      # below, where `parse_field_args` reports it rather than passing off an expression as a string.
+      return _py_unquote(value)
   elseif startswith(value, "(") && endswith(value, ")")
       # Handle nested tuples (e.g., choices)
       return parse_choices(value)
@@ -4498,18 +4658,22 @@ end
 """
     _strip_py_quotes(s) -> String
 
-Strip one layer of matching Python quotes, if present. `"UP"` -> `UP`; `UP` -> `UP`.
+Strip one layer of matching Python quotes, if present, and decode the literal's escapes.
+`"UP"` -> `UP`; `UP` -> `UP`; `'it\\'s'` -> `it's`.
 
 Not folded into `parse_value`: this is for text that is already known to be a bare literal, where
 `parse_value`'s type inference (`True`, `None`, integers, nested tuples) would be wrong.
+
+Shares `_py_quoted_literal` with `parse_value` since #497. It was UTF-8 safe already, but it tested
+the quotes with `startswith`/`endswith` — true of a concatenation as well as of a literal — so
+`choices=[('a' + 'b', 'Label')]` stored the mangled `a' + 'b` as a choice value. Its other three
+callers are pre-gated by [`_is_py_literal`](@ref) and could never reach that; `parse_choices` was
+not. A non-literal now keeps its quotes, which is still not the value Python would compute, but is
+visibly the source text rather than a plausible-looking string.
 """
 function _strip_py_quotes(s::AbstractString)::String
   t = strip(s)
-  if length(t) >= 2 &&
-     ((startswith(t, '"') && endswith(t, '"')) || (startswith(t, '\'') && endswith(t, '\'')))
-    return String(t[nextind(t, firstindex(t)):prevind(t, lastindex(t))])
-  end
-  return String(t)
+  return _py_quoted_literal(t) ? _py_unquote(t) : String(t)
 end
 
 """
@@ -4678,9 +4842,11 @@ function _meta_string_literal(raw::AbstractString)::Union{String, Nothing}
   v = parse_value(s)
   v isa AbstractString || return nothing
   # A residual quote or a newline means the text was not a well-formed single-line literal, whatever
-  # produced it. The case this actually catches is the TRIPLE-quoted one: `parse_value` strips
-  # exactly one character per side, so `\"\"\"arq_legado\"\"\"` comes back as `\"\"arq_legado\"\"` —
-  # a value that passes a naive starts-with-a-quote test and names a table no database has.
+  # produced it. The case this actually catches is the TRIPLE-quoted one, which passes a naive
+  # starts-with-a-quote test and names a table no database has. Since #497 `parse_value` returns it
+  # untouched — `\"\"\"arq_legado\"\"\"` verbatim, quotes and all — rather than stripping one
+  # character per side into `\"\"arq_legado\"\"`; both forms carry a quote, so this gate is what
+  # refuses it either way, and it is still the gate doing the work.
   (occursin('\n', v) || occursin('"', v) || occursin('\'', v)) && return nothing
   return String(v)
 end

@@ -491,7 +491,7 @@ Django parameters are automatically converted to PormG equivalents:
 | `null=True` | `null=true` | Boolean conversion |
 | `blank=True` | `blank=true` | Boolean conversion |
 | `unique=True` | `unique=true` | Boolean conversion |
-| `default=value` | `default=value` | Value conversion |
+| `default=value` | `default=value` | Value conversion — `True`/`False`/`None`, numbers, and one quoted string literal. A value written as a string but not readable as one (a concatenation, an f-string, a raw or triple-quoted literal) is kept verbatim as text and reported. See [String defaults](#String-defaults). |
 | `on_delete=CASCADE` | `on_delete=CASCADE` | Direct mapping |
 | `choices=[…]` | `choices=(…)` | List to tuple; also resolves `TextChoices`/`IntegerChoices` — see [Choices](#Choices) |
 | `related_name='name'` | `related_name="name"` | Direct mapping. **Refused** if it contains `__` or `@`, or ends with `_` — `__` is PormG's lookup-path separator, and traversing an accessor appends it, so any of the three registers a name that can then never be written as a lookup-path segment. Django refuses the same names through system checks `fields.E309` and `fields.E308`, so a project that passes `manage.py check` cannot hit this. |
@@ -791,6 +791,9 @@ an enumeration it cannot verify. The test is the attribute's *shape*: `.choices`
 verbatim as text**, exactly as before — and reported, because an expression landing in the schema as
 a literal default is not something to discover later.
 
+The same treatment reaches a `default` that is not dotted at all but still is not one value — a
+concatenation such as `default='a' + 'b'`. See [String defaults](#String-defaults).
+
 A `choices` naming a module-level constant (`choices=STATUS_CHOICES`) has nothing to read: the
 option is dropped and reported rather than becoming an empty enumeration.
 
@@ -812,6 +815,61 @@ dropped and reported, and the well-formed entries beside it survive.
 The field itself may be wrapped across several lines — that is what `black` produces, and it is read
 correctly. A field whose declaration the importer cannot read is reported with a warning naming the
 field and its source line; it is never dropped silently.
+
+### String defaults
+
+A quoted `default` is imported when it is **one Python string literal**, and only then. Accented and
+non-Latin text is ordinary content and needs nothing special:
+
+```python
+cidade  = models.CharField(max_length=60, default='São José')
+apelido = models.CharField(max_length=60, default='Räikkönen')
+cidade_jp = models.CharField(max_length=60, default='日本語')
+```
+
+```julia
+cidade    = Models.CharField(max_length=60, default="São José")
+apelido   = Models.CharField(max_length=60, default="Räikkönen")
+cidade_jp = Models.CharField(max_length=60, default="日本語")
+```
+
+**Escapes.** The literal's own escapes are decoded: `\\`, `\'`, `\"`, `\n`, `\r`, `\t`, `\a`, `\b`,
+`\f`, `\v`. So `default='it\'s quick'` imports as `it's quick`. The numeric and named forms —
+`\xHH`, `\uXXXX`, `\UXXXXXXXX`, `\N{…}` and octal `\ooo` — are **left exactly as written**, backslash
+included, so `default='caf\u00e9'` imports as the nine characters `caf\u00e9` rather than as `café`.
+That boundary is deliberate: a visible escape in the generated file is something you can correct,
+whereas a decoder guessing wrong about surrogates or octal is silent wrong data. Write the character
+itself and there is nothing to decode.
+
+**One literal, or nothing.** A value whose first and last characters happen to be quotes is not
+necessarily one string. None of these has a value PormG can compute:
+
+```python
+codigo  = models.TextField(default='a' + 'b')       # explicit concatenation
+sigla   = models.TextField(default='it''s')         # ADJACENT literals — Python reads this as "its"
+rotulo  = models.TextField(default=f'{prefixo}-x')  # an f-string: its value lives at runtime
+caminho = models.TextField(default=r'C:\temp')      # raw and bytes literals escape differently
+bloco   = models.TextField(default="""tres""")      # triple-quoted
+```
+
+Each is kept verbatim as text and reported, the same way `default=uuid.uuid4` is (markers are one
+line each; wrapped here to fit):
+
+```julia
+# PormG: field 'codigo' on 'Piloto' has `default='a' + 'b'`, which the importer cannot read as
+#   one string literal — kept verbatim as text. The stored default is that source text, not the
+#   value it denotes.
+codigo = Models.TextField(default="'a' + 'b'")
+```
+
+This matters most on `CharField` without `choices` and on `TextField`, the two types that accept any
+string: every other field type also rejects the value at construction and reports that separately.
+
+!!! warning "`'it''s'` is not an escaped quote here"
+    SQL doubles an interior quote, so `'it''s'` is one SQL literal meaning `it's`. **Python is not
+    SQL**: it reads the same text as two adjacent literals concatenated, meaning `its`. PormG applies
+    Python's rule when reading a `models.py` and SQL's rule when reading a live schema. Write
+    `'it\'s'` — or `"it's"` — for an apostrophe in a Django default.
 
 ### Automatic Additions
 
@@ -870,7 +928,7 @@ field and its source line; it is never dropped silently.
 | | |
 |---|---|
 | **Imported** | Fields (including definitions wrapped across lines; Django's `BigAutoField` maps to `IDField`, an exact match), `ForeignKey` / `OneToOneField` / `ManyToManyField` — including `"self"`, `"<app_label>.<Class>"` and `settings.AUTH_USER_MODEL` targets, `Meta.db_table`, `Meta.unique_together`, `Meta.constraints`, `Meta.indexes`, `Meta.index_together` (the last three: see the whitelists above), abstract-base inheritance, `AbstractUser` auth columns, `TextChoices` / `IntegerChoices` enumerations |
-| **Imported, but degraded and annotated** | An `AutoField` or `SmallAutoField` — imported as `IDField`, because `IDField` is PormG's only integer key type (see the note under *Supported Django Fields*); the key is faithful, the declared width is not. A model whose base lives in another file — its own fields only. A relation whose target is not in this import — the column survives as a `BigIntegerField`, the relation does not (a `ManyToManyField` has no column, so it is dropped); `strict_relations = true` raises instead. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import. A field whose enum this file cannot see — the column survives, the enumeration does not. A field whose `choices` and/or `default` the field type rejects at construction — including a lone `default` on a field with no choices at all, such as one longer than `max_length` — the column survives without them. A `primary_key=True` on a field type PormG cannot key on — the column survives, the key does not, and no `id` is substituted; the model is then unusable by relations until you re-declare the key (see the warning above). A class-declared field named `id` that is **not** the primary key — the declared column is kept and Django's implicit `id` is not substituted over it, so the model has no key until you declare one |
+| **Imported, but degraded and annotated** | An `AutoField` or `SmallAutoField` — imported as `IDField`, because `IDField` is PormG's only integer key type (see the note under *Supported Django Fields*); the key is faithful, the declared width is not. A model whose base lives in another file — its own fields only. A relation whose target is not in this import — the column survives as a `BigIntegerField`, the relation does not (a `ManyToManyField` has no column, so it is dropped); `strict_relations = true` raises instead. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import. A field whose enum this file cannot see — the column survives, the enumeration does not. A field whose `choices` and/or `default` the field type rejects at construction — including a lone `default` on a field with no choices at all, such as one longer than `max_length` — the column survives without them. A `default` the importer cannot read as one value (`uuid.uuid4`, `'a' + 'b'`, an f-string) — kept verbatim as text, so the stored default is that source text rather than what it denotes (see [String defaults](#String-defaults)). A `primary_key=True` on a field type PormG cannot key on — the column survives, the key does not, and no `id` is substituted; the model is then unusable by relations until you re-declare the key (see the warning above). A class-declared field named `id` that is **not** the primary key — the declared column is kept and Django's implicit `id` is not substituted over it, so the model has no key until you declare one |
 | **Reported and skipped** | `Meta.ordering` and every other option with no PormG equivalent; a `UniqueConstraint` or an `Index` PormG cannot express; multi-table inheritance; proxy models; a field-shaped call the importer cannot read (`tags = ArrayField(...)`); a field whose Django type PormG does not implement (`GenericIPAddressField`, `SmallIntegerField`, …) — the field, its class and its `models.py` line are named, and every other field, class and app in the call still imports, with `strict_fields = true` raising instead. Both leave the live column addressable by nothing in the model, so `makemigrations` reads it as drift |
 | **Not supported** | Model methods, managers, signals and validators are Python and have no PormG counterpart |
 

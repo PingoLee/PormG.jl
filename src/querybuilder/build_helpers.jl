@@ -157,7 +157,7 @@ end
 
 # Top-level entry: retag the SQLField a String-path parse produced, and restore the `name__path`
 # spelling on `_as`. Keeping `_as` byte-identical to the pre-#444 string form is what lets every
-# `_as`-keyed consumer downstream keep working untouched — `instruct.cache`, `tab_field_cache`,
+# `_as`-keyed consumer downstream keep working untouched — the projection memo, the field memo,
 # ORDER BY alias matching, the #352/#373 sargable date rewrite, the #441 duplicate-projection guard,
 # and the result-column names users index DataFrames by.
 function _retag_cte_field!(field::SQLField, name::String)
@@ -169,17 +169,6 @@ function _retag_cte_field!(field::SQLField, name::String)
   field.root = :cte
   return field
 end
-
-# #474 — read a projection's memo key. Every `instruct.cache` / `tab_field_cache` /
-# `json_lookup_cache` access that keys off a SQLField goes through here; keying off `_as` directly is
-# what let the two namespaces share one memo. `nothing` means the expression has no output name and
-# memoizes nowhere.
-_field_cache_key(v::SQLTypeField)::Union{Nothing,MemoKey} =
-  v._as === nothing ? nothing : (v.root, v._as)
-
-# #474 — the same key from a handle rather than from a built SQLField, for the sites that resolve a
-# `CTE(...)` reference directly and then read back what `_build_row_join` cached for it.
-_cte_cache_key(ref::CTEReference)::MemoKey = (:cte, _cte_as(ref))
 
 # #481 — the joined-copy twin of the helpers above, arm for arm (see the composite-transform note
 # there for why `SQLTypeText` / `SQLTypeField` / `SQLTypeOper` are walked).
@@ -218,8 +207,6 @@ function _retag_joined_field!(field::SQLField, alias::String)
   field.root = :joined
   return field
 end
-
-_joined_cache_key(ref::JoinedReference)::MemoKey = (:joined, _joined_as(ref))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -631,16 +618,6 @@ function _insert_join(
   end
 end
 
-# #474 — the memo key for one join hop. See `MemoKey` (`types.jl`) for why the namespace is a tuple
-# half rather than a string prefix.
-#
-# `row_path` does NOT go through here: a CTE hop is not tracked there at all (`_insert_join`'s
-# `track_path`). It is the membership set `build()`'s PATH materialization loop tests `custom_join`
-# keys against — since #484 the alias loop does not consult it at all — and a CTE hop has no
-# `custom_join` entry to suppress, so registering one under the CTE's name is what silently dropped
-# the user's own join before #474.
-_join_path_key(join_path::String, cte::Bool)::MemoKey = (cte ? :cte : :base, join_path)
-
 function _check_if_field_is_a_operator(field::String)
   common_operators = ["exact", "iexact", "contains", "icontains", "iunaccent_contains", "iunaccent_exact", "in", "gt", "gte", "lt", "lte",
     "startswith", "istartswith", "endswith", "iendswith", "range", "date",
@@ -833,11 +810,11 @@ function _get_select_query(v::String, instruc::SQLInstruction; _as::Union{Nothin
       return string(quoted_alias, ".*")
     end
     
-    if _as !== nothing && haskey(instruc.tab_field_cache, (:base,_as)) && haskey(instruc.object.model.fields, v)
+    # #474: `v` is a column of the BASE model here, so the base-model half of the namespace.
+    if _as !== nothing && memo_field(instruc, memo_key(:base, _as)) !== nothing && haskey(instruc.object.model.fields, v)
       # The fields haskey guard matters: an invalid `v` must fall through to _solve_field's
       # UnknownFieldError below, not die here with a raw KeyError (audit finding).
-      # #474: `v` is a column of the BASE model here, so the base-model half of the namespace.
-      instruc.tab_field_cache[(:base,_as)] = instruc.object.model.fields[v]
+      memo_field!(instruc, memo_key(:base, _as), instruc.object.model.fields[v])
     end
     return string(quoted_alias, ".", _solve_field(v, instruc.object.model, instruc))
   end
@@ -1335,7 +1312,7 @@ function _resolve_joined(ref::JoinedReference, instruc::SQLInstruction)::String
   # Memoize the joined field so a filter's RHS formats through it (the same service
   # `tab_field_cache` performs for a base-model column), under the `:joined` namespace so an
   # identically spelled field path or CTE reference cannot read or claim the entry.
-  instruc.tab_field_cache[_joined_cache_key(ref)] = target_model.fields[ref.path]
+  memo_field!(instruc, memo_key(ref), target_model.fields[ref.path])
   return string(quote_identifier(ref.alias, instruc.connection), ".",
                 safe_column_identifier(Models.field_db_column(target_model.fields[ref.path], ref.path), instruc.connection))
 end
@@ -1377,18 +1354,19 @@ end
 # end
 function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
   # check if SQLTypeField exists in cache
-  # #474: keyed by `_field_cache_key`, not `_as`. This is the site the measured defect went
+  # #474: keyed by `memo_key`, not `_as`. This is the site the measured defect went
   # through — a CTE reference projected as `CTE("parent", "sku")` claimed the memo under
   # `"parent__sku"`, and a later `filter("parent__sku" => …)` on the model's OWN ForeignKey read it
   # back, filtering the CTE's column while the ForeignKey's join sat unused in the statement.
-  key = _field_cache_key(v)
-  if key !== nothing && haskey(instruc.cache, key)
-    return instruc.cache[key].field
+  key = memo_key(v)
+  cached = memo_projection(instruc, key)
+  if cached !== nothing
+    return cached.field
   else
     v_copy = deepcopy(v)
     v_copy.field = _get_select_query(v_copy.field, instruc)
     if key !== nothing
-      instruc.cache[key] = v_copy
+      memo_projection!(instruc, key, v_copy)
     end
     return v_copy.field
   end
@@ -1441,8 +1419,8 @@ end
 function _render_json_operator(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
   col_as = isa(v.column, SQLTypeField) ? v.column._as : nothing
   # #474: the memo is keyed by namespace, the MESSAGE by what the caller wrote.
-  col_key = isa(v.column, SQLTypeField) ? _field_cache_key(v.column) : nothing
-  if col_key !== nothing && haskey(instruc.json_lookup_cache, col_key)
+  col_key = isa(v.column, SQLTypeField) ? memo_key(v.column) : nothing
+  if memo_json_lookup(instruc, col_key)
     throw(FilterError("The \e[31m@$(v.operator)\e[0m operator applies to a JSON column, not a nested key path (\e[31m$(col_as)\e[0m); this is not supported in v1."))
   end
   base = _resolve_json_operator_field(v, instruc)
@@ -1475,8 +1453,7 @@ function _resolve_json_operator_field(v::SQLTypeOper, instruc::SQLInstruction)
   # "evc__payload is not JSON", a shape that rendered before #474. The mirror hazard is worse: with
   # a base-model path spelled the same, the un-namespaced lookup could return the OTHER namespace's
   # field and license a jsonb operator against a CTE's text column.
-  key = _field_cache_key(v.column)
-  return key === nothing ? nothing : get(instruc.tab_field_cache, key, nothing)
+  return memo_field(instruc, memo_key(v.column))
 end
 
 # #352: sargable rewrite for `col__@yyyy_mm` / `col__@year` / `col__@date` comparisons.
@@ -1612,7 +1589,7 @@ function _resolve_bucket_column(raw_field::String, instruc::SQLInstruction)
   column_sql = _get_select_query(raw_field, instruc)
   # #474: a String path is base-model by construction — since #444 a string cannot name a CTE. Its
   # CTE twin below asks for the same entry under the other half of the namespace.
-  f_meta = get(instruc.tab_field_cache, (:base,raw_field), nothing)
+  f_meta = memo_field(instruc, memo_key(:base, raw_field))
   f_meta === nothing && return (nothing, "")
   return _checked_bucket_column(f_meta, String(last(split(raw_field, "__"))), column_sql, instruc)
 end
@@ -1626,7 +1603,7 @@ end
 # applies here unchanged.
 function _resolve_bucket_column(ref::CTEReference, instruc::SQLInstruction)
   column_sql = _get_select_query(ref, instruc)
-  f_meta = get(instruc.tab_field_cache, _cte_cache_key(ref), nothing)   # #474: namespaced memo
+  f_meta = memo_field(instruc, memo_key(ref))   # #474: namespaced memo
   f_meta === nothing && return (nothing, "")
   return _checked_bucket_column(f_meta, String(last(split(ref.path, "__"))), column_sql, instruc)
 end
@@ -1635,7 +1612,7 @@ end
 # below always hits; the same drift guard then applies.
 function _resolve_bucket_column(ref::JoinedReference, instruc::SQLInstruction)
   column_sql = _get_select_query(ref, instruc)
-  f_meta = get(instruc.tab_field_cache, _joined_cache_key(ref), nothing)
+  f_meta = memo_field(instruc, memo_key(ref))
   f_meta === nothing && return (nothing, "")
   return _checked_bucket_column(f_meta, ref.path, column_sql, instruc)
 end
@@ -1803,9 +1780,11 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     return _render_json_operator(v, column, instruc)
   end
   # #27: comparison against a JSON path lookup (payload__key). Resolving `column` above populated
-  # json_lookup_cache; the dedicated branch binds the RHS as plain text (the generic path would run
+  # json_lookup_paths; the dedicated branch binds the RHS as plain text (the generic path would run
   # the JSON formatter on the RHS and throw on plain strings) and applies the PG numeric cast for </>.
-  if isa(v.column, SQLTypeField) && v.column._as !== nothing && haskey(instruc.json_lookup_cache, _field_cache_key(v.column))
+  # The `_as !== nothing` test this used to carry was redundant — `memo_key` answers `nothing` for an
+  # unnamed expression and `memo_json_lookup` answers `false` for a `nothing` key.
+  if isa(v.column, SQLTypeField) && memo_json_lookup(instruc, memo_key(v.column))
     return _render_json_lookup_comparison(v, column, instruc)
   end
   if isa(v.values, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
@@ -1916,12 +1895,12 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
         @pormg_debug false
         rethrow(e)
       end
-    elseif (_vc_key = _field_cache_key(v.column)) !== nothing && haskey(instruc.tab_field_cache, _vc_key) # #474
+    elseif (_vc_field = memo_field(instruc, memo_key(v.column))) !== nothing # #474
       @pormg_debug false
       is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith",
                                   "ncontains", "nicontains", "niunaccent_contains", "nstartswith", "nendswith"]
       placeholders = add_parameter!(instruc,
-        _format_filter_value(instruc.tab_field_cache[_vc_key].formatter, v.values, v.operator),
+        _format_filter_value(_vc_field.formatter, v.values, v.operator),
         contains=is_like_op, operator=v.operator)
     elseif isa(v.column, SQLTypeField)
       @pormg_debug false

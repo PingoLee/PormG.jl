@@ -48,6 +48,10 @@ import Base: first, last, get
 # SQL Sanitization
 include("querybuilder/types.jl")
 
+# #478 — the only legitimate accessor for the three per-build memos. Must follow `types.jl`: it
+# names `MemoKey` in method SIGNATURES, which are evaluated at definition time.
+include("querybuilder/memos.jl")
+
 include("querybuilder/error_funnels.jl")
 
 include("querybuilder/sanitization.jl")

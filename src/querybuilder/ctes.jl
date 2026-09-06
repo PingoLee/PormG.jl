@@ -911,10 +911,11 @@ function _set_field_from_sql_function(func::JoinedReference, field::String, inst
     "cjoin_on alias on this CTE body"))
 end
 function _set_field_from_sql_function(func::String, field::String, instruct::SQLInstruction)
-  if haskey(instruct.tab_field_cache, (:base,field))
-    # #474: the CTE BODY's own instruction, where an outer CTE cannot be referenced (#433) — so
-    # this is unambiguously the base-model half of that inner build's namespace.
-    return instruct.tab_field_cache[(:base,field)]
+  # #474: the CTE BODY's own instruction, where an outer CTE cannot be referenced (#433) — so this is
+  # unambiguously the base-model half of that inner build's namespace.
+  memoized = memo_field(instruct, memo_key(:base, field))
+  if memoized !== nothing
+    return memoized
   elseif haskey(instruct.object.model.fields, field)
     return instruct.object.model.fields[field]
   else

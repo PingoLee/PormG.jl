@@ -42,6 +42,35 @@ const _NON_SCHEMA_FIELD_ATTRS = (:blank, :on_delete, :related_name, :verbose_nam
                                  :how, :formatter, :db_column, :db_index,
                                  :auto_now, :auto_now_add, :auto_add, :to_table)
 
+# #437: the first branch of `_alter_table_fields`' field diff is NOT "the same Julia type" — it is
+# "these two structs share an attribute vocabulary, so diff them attribute by attribute". A declared
+# `ForeignKey(parent, unique = true)` and the `sOneToOneField` that BOTH readers report for its own
+# live column since #417 are exactly that shape: different structs whose `fieldnames` SETS are
+# identical, both carrying `type = "BIGINT"` and `formatter = format_number_sql`. (The `fieldnames`
+# TUPLES are not equal — `unique` is declared first on `sOneToOneField` and third on `sForeignKey` —
+# which is why the loop below iterates by NAME and why the test asserts set equality, not tuple.)
+#
+# Measured on that pair, the ONLY attributes that differ are `:to` and `:to_table`. `:to_table` is in
+# the tuple above; `:to` is reconciled by branch 1's `_compare_field_foreign_key` call, because a
+# declared `.to` is a resolved `PormGModel` while an introspected one is the target's binding STRING,
+# so raw `==` is always false for a foreign key. Branch 1 therefore returns an empty
+# `colect_not_equal` and the column converges.
+#
+# Branch 2 (`Dialect.describes_same_column`, #325) carries NEITHER that reconciliation nor the
+# `:pk_field` one (#50), so relaxing that predicate instead would merely swap `push!(:type)` for
+# `push!(:to)` — the churn would move, not go away. `describes_same_column` consequently still
+# refuses EVERY relational field, which is what keeps `_add_fk_constraint_in_alteration` /
+# `_drop_fk_constraint_in_alteration` reachable for an `sForeignKey`-vs-`sBigIntegerField` pair: both
+# render `bigint`, and the FK constraint is planned AFTER the `isempty(colect_not_equal)` early-out.
+#
+# `Models.sRelationalColumn` rather than a fresh `isa` pair on purpose: `src/models/fields.jl` spells
+# the FK/O2O pair ONCE so that a gate cannot silently miss half of it. This is the FOURTH SUBSYSTEM
+# to hit that missing-subtype shape — the DDL renderer (#408), the schema readers (#409), the query
+# builder (#418), and now the planner's field diff. (The alias itself already has plenty of callers,
+# two of them further down this same file; what is new here is the subsystem, not the spelling.)
+_diffs_attribute_wise(a::PormGField, b::PormGField)::Bool =
+  typeof(a) === typeof(b) || (a isa Models.sRelationalColumn && b isa Models.sRelationalColumn)
+
 function _hash_field_name(model_name::Symbol, field_name::Union{String, Symbol}; apend_number::Int64=5)::String
   _hash = randstring(8) 
   name = "$(model_name)_$field_name"
@@ -414,8 +443,12 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
 
         # check if the field is diferent
         colect_not_equal::Vector{Symbol} = []
-        if old_field |> typeof == field |> typeof
-          # Check if all attributes are equal
+        if _diffs_attribute_wise(field, old_field)
+          # Check if all attributes are equal. `fieldnames(typeof(field))` is safe to index into
+          # `old_field` unguarded: `_diffs_attribute_wise` admits either the same struct or the
+          # FK/O2O pair, whose attribute NAME SETS are identical (#437). A `hasfield` guard here
+          # would silently skip a genuinely missing attribute instead of failing loudly, so the
+          # invariant is pinned by a test rather than defended by a `continue`.
           for attr in fieldnames(typeof(field))
             new_var = getfield(field, attr)
             old_var = getfield(old_field, attr)

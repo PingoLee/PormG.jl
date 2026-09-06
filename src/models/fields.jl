@@ -275,6 +275,24 @@ mutable struct sForeignKey <: PormGField
   # importers can rewrite `.to` to the target's FINAL, collision-deduped binding before rendering —
   # `uppercasefirst` is lossy (`Driver` and `driver` both produce `Driver`), so the physical table
   # cannot be recovered from `.to` afterwards. Set post-construction; see `_plan_inspectdb_bindings!`.
+  #
+  # INVARIANT (#390): when set, this is the CANONICAL table name — the spelling the catalog itself
+  # uses, not whatever a `REFERENCES` clause happened to say. `Models._compare_field_foreign_key`
+  # compares it EXACTLY (case included), which is only correct while its producers honor that.
+  # Three write here, and one of them does NOT:
+  #
+  #   * the PostgreSQL reader — `cf.relname` from `pg_class`, canonical by construction;
+  #   * the SQLite PRAGMA reader — resolves `PRAGMA foreign_key_list`'s REFERENCES spelling through
+  #     `Migrations._sqlite_canonical_table_name`, EXCEPT for a parent that is not in `sqlite_master`
+  #     at read time (a dangling foreign key, which SQLite permits). That one keeps the REFERENCES
+  #     spelling. Self-healing rather than perpetual: the first `migrate` creates the parent and the
+  #     next read canonicalizes it;
+  #   * the DDL-regex reader `convertSQLToModel(::String)` — writes the REFERENCES spelling verbatim
+  #     and has no connection to resolve it with. It is OFF the live introspection path (see the NOTE
+  #     at the top of that function), which is the only reason the exact comparison is safe; putting
+  #     it back on that path means closing this gap first.
+  #
+  # A NEW producer that writes a non-canonical name here reintroduces #390's churn.
   to_table::Union{String, Nothing}
 end
 
@@ -740,12 +758,14 @@ user = OneToOneField("User")
 user = ForeignKey("User", unique=true)
 ```
 
-`OneToOneField` is nonetheless the spelling to declare, and not only for readability: it is what
-**introspection reports** for such a column, on both PostgreSQL and SQLite (#417). Declaring
-`ForeignKey(..., unique=true)` leaves the models file naming a different struct than the live
-schema reads back, and while the two compare equal attribute-for-attribute, the migration planner
-falls back to a struct-type comparison as soon as any other column in that table changes — which
-proposes an `ALTER` that re-renders the column unchanged (a full table rebuild on SQLite).
+`OneToOneField` is nonetheless the spelling to prefer, for readability and because it is what
+**introspection reports** for such a column, on both PostgreSQL and SQLite (#417).
+
+It is a preference, not a requirement. Since #437 the migration planner converges the two spellings
+against the same live column — it diffs them attribute by attribute rather than by struct type — so
+an existing `ForeignKey(..., unique=true)` declaration needs no rewrite and proposes no migration.
+(Before #437 it proposed one on every `makemigrations` as soon as any other column in that table
+changed: an `ALTER` that re-rendered the column unchanged, and a full table rebuild on SQLite.)
 
 # Validation
 - The `to` parameter must be a valid model name or PormGModel instance

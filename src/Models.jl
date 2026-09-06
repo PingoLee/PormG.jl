@@ -3077,26 +3077,48 @@ function _compare_field_foreign_key(new_field::PormGField, old_field::PormGField
   # about how `.to` was spelled. Only when one of them cannot (an unresolved String target) does this
   # fall back to the logical-name comparison below.
   #
-  # Still compared CASE-INSENSITIVELY, exactly as the logical-name path below always has been
-  # (`format_model_name` is a plain `lowercase`). SQLite identifiers are case-insensitive and
-  # `PRAGMA foreign_key_list` reports the parent AS SPELLED IN THE `REFERENCES` CLAUSE, so
-  # `REFERENCES DRIVER(id)` against a table declared `driver` is legal and lands here as "DRIVER"
-  # against "driver". Comparing exactly would propose an alteration for that key on every
-  # `makemigrations` — a full table rebuild on SQLite.
+  # #390 — THE DECISION, recorded here because this line is where it is visible.
   #
-  # The cost is that two tables differing only in case are conflated, which on PostgreSQL (where
-  # identifiers ARE case-sensitive) can be two real tables. Undecidable here: this function receives
-  # no connection. The planner does, so that is where a conditional fold would belong.
+  # Compared EXACTLY, case included. It was not always: this branch used to `lowercase` both sides,
+  # because SQLite's `PRAGMA foreign_key_list` reports a parent AS SPELLED IN THE `REFERENCES`
+  # CLAUSE rather than as `CREATE TABLE` spelled it, so `REFERENCES DRIVER(id)` against a table
+  # created as `driver` landed here as "DRIVER" against "driver". Comparing exactly then meant that
+  # key reporting as changed on EVERY `makemigrations` — a full table rebuild on SQLite.
   #
-  # Note this moved the comparison from the LOGICAL axis to the PHYSICAL one, which is a change in
-  # its own right, not just a change of normalization: two parents with different logical names whose
-  # tables differ only in case used to compare unequal on the names alone and now fold together.
+  # The fold was safe on SQLite and WRONG on PostgreSQL, where identifiers are case-sensitive and
+  # `Driver` and `driver` can be two distinct tables in one schema: a key repointed from one to the
+  # other was not detected and no migration was generated. It also conflated two declared parents
+  # whose physical tables differ only in case.
+  #
+  # Fixed at the SOURCE instead of here, which is why this function needs no connection and no
+  # engine flag. `Migrations._sqlite_canonical_table_name` now resolves the `REFERENCES` spelling
+  # back to the `sqlite_master` spelling inside the SQLite reader, where the engine is already known;
+  # the PostgreSQL reader has always returned the catalog spelling (`cf.relname`). Both sides of the
+  # comparison are therefore canonical on both engines, and an exact match is the correct test.
+  #
+  # This also matches how table identity is decided EVERYWHERE ELSE: `get_migration_plan` keys the
+  # live schema by `Symbol(model_table_name(model))` and looks models up with an exact `haskey`, so
+  # a case-differing table is already a different table. Folding only the FK-target axis made this
+  # one comparison disagree with that.
+  #
+  # Prior art: SQLAlchemy puts identifier-case knowledge in the dialect at reflection time
+  # (`requires_name_normalize` / `normalize_name` / `denormalize_name`) so nothing above the
+  # reflection layer has to know which engine it is on. Same shape.
+  #
+  # Note #360 moved the comparison from the LOGICAL axis to the PHYSICAL one, which is a change in
+  # its own right, not just a change of normalization.
   new_table = _fk_reference_table(new_field)
   old_table = _fk_reference_table(old_field)
   if new_table !== nothing && old_table !== nothing
-    return lowercase(new_table) == lowercase(old_table) &&
+    return new_table == old_table &&
            fk_target_column(new_field) == fk_target_column(old_field)
   end
+  # The fallback compares a different AXIS, and #390 deliberately left its `format_model_name` fold
+  # in place. These are Julia BINDINGS, not physical tables: `_model_binding_name` applies
+  # `uppercasefirst`, so an introspected `.to` is `Driver` where a models file may hold `driver`.
+  # Folding is what makes those the same binding, and no engine's case rules are involved — so the
+  # argument that removed the fold above (both sides are canonical physical names) simply does not
+  # apply here.
   new_to = new_field.to isa PormGModel ? new_field.to.name : new_field.to
   old_to = old_field.to isa PormGModel ? old_field.to.name : old_field.to
   normalized_new_to = isnothing(new_to) ? nothing : format_model_name(string(new_to))

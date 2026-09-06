@@ -120,6 +120,18 @@ const SL325 = MockSQLite325()
     # IDField renders `bigint` on PostgreSQL exactly like BigIntegerField.
     @test !describes_same_column(PG325, Models.IDField(), Models.BigIntegerField())
     @test !describes_same_column(PG325, Models.CharField(max_length = 50, primary_key = true), Models.SlugField(max_length = 50))
+
+    # #437 did NOT narrow this predicate, and the assertion is here rather than only in
+    # test_relational_column_identity.jl because THIS file is where a future editor of
+    # `describes_same_column` will look. The `ForeignKey(unique=true)` / `OneToOneField` pair that
+    # issue is about renders the same column and is genuinely equal — but it is reconciled one
+    # branch EARLIER in the planner (`Migrations._diffs_attribute_wise`), where the `:to` and
+    # `:pk_field` reconciliations live. Admitting it here would skip those and merely swap which
+    # symbol lands in `colect_not_equal`, so the answer stays `false` on both backends.
+    for conn in (PG325, SL325)
+      @test !describes_same_column(conn, Models.ForeignKey("Races", unique = true), Models.OneToOneField("Races"))
+      @test !describes_same_column(conn, Models.OneToOneField("Races"), Models.ForeignKey("Races", unique = true))
+    end
   end
 
   # ───────────────────────────────────────────────────────────────────────────

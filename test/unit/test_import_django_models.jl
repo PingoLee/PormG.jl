@@ -2483,3 +2483,209 @@ class Incident(models.Model):
         cleanup_import_test!(config_key, db_dir_existed)
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: one Python string literal, told apart from an expression (#497)
+# `parse_value` tested its quotes with `startswith`/`endswith` and unquoted with the BYTE slice
+# `value[2:end-1]` — the third copy of the two defects #475 fixed in the introspection cleaners.
+# So `'São José'` threw `StringIndexError` and `'a' + 'b'` was unquoted to the mangled `a' + 'b`
+# and stored as a literal default. Asserted on the helpers directly because the table below is a
+# grid of one-input discriminations — an escape decoded or not, a delimiter counted or not — and
+# routing each through a whole `models.py` would say the same thing at a tenth of the resolution.
+# The end-to-end consequence is the next testset's job.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "parse_value reads one Python literal and refuses an expression (#497)" begin
+    pv = PormG.Migrations.parse_value
+    sp = PormG.Migrations._strip_py_quotes
+    ql = PormG.Migrations._py_quoted_literal
+    # A real backslash, built rather than escaped. These assertions are ABOUT backslashes, and
+    # `Char(92)` keeps the source unambiguous about how many each input actually holds.
+    B = string(Char(92))
+
+    # Controls first: ordinary quoted values, both quote styles, and the empty string are unchanged.
+    # These are what a fix could plausibly break, so they are pinned before anything else.
+    @test pv("'Ferrari'") == "Ferrari"
+    @test pv("\"Ferrari\"") == "Ferrari"
+    @test pv("''") == ""
+    @test pv("\"\"") == ""
+
+    # The crash. `end-1` is a BYTE offset, so it lands on a UTF-8 continuation byte whenever the
+    # character before the closing quote is multibyte — and the throw was not local to the field,
+    # it aborted the whole import. `'Räikkönen'` is the near-miss that let this survive a
+    # read-through: it ends in an ASCII `n`, so the byte slice happened to land correctly.
+    for (lit, want) in ("'São José'" => "São José", "'café'" => "café", "'日本語'" => "日本語",
+                        "'é'" => "é", "'Räikkönen'" => "Räikkönen")
+        @test pv(lit) == want
+        @test sp(lit) == want              # the sibling helper agrees
+    end
+    @test pv("\"São José\"") == "São José" # the double-quoted branch too
+
+    # The mangling. A concatenation's first and last characters are quotes, which is why
+    # `startswith`/`endswith` could never tell it from a literal. It is now kept VERBATIM — still
+    # not the value Python would compute, but visibly the source expression rather than a
+    # plausible-looking string, and `parse_field_args` reports it (next testset).
+    @test !ql("'a' + 'b'")
+    @test pv("'a' + 'b'") == "'a' + 'b'"
+    @test pv("\"a\" + \"b\"") == "\"a\" + \"b\""
+    @test sp("'a' + 'b'") == "'a' + 'b'"   # the `parse_choices` path, ungated before #497
+
+    # Python's escape convention, NOT SQL's — the one semantic difference from #475's helpers.
+    # Python backslash-escapes an interior quote, and reads `'it''s'` as two ADJACENT literals
+    # concatenated (`its`), so borrowing SQL's doubled-quote rule would accept it as one literal
+    # and unquote it to `it's` — a value the source never denotes.
+    @test pv("'it" * B * "'s'") == "it's"
+    @test !ql("'it''s'")
+    @test pv("'it''s'") == "'it''s'"
+    @test pv("'a" * B * B * "b'") == "a" * B * "b"      # a doubled backslash collapses to one
+    @test pv("'line" * B * "nend'") == "line" * Char(10) * "end"
+    # Numeric and unicode escapes are left verbatim on purpose — a hand-rolled decoder is where
+    # surrogates and the octal/`\0` ambiguity go wrong, and a visible `é` is recoverable.
+    @test pv("'caf" * B * "u00e9'") == "caf" * B * "u00e9"
+    # A trailing backslash escapes the closing quote, so the literal is unterminated, not one value.
+    @test !ql("'tail" * B * "'")
+    # The three places a hand-written index walk actually goes wrong, all at the CLOSING quote —
+    # the assertions above put their backslashes mid-string, where an off-by-one is masked by the
+    # characters that follow. An escaped backslash there terminates the literal; a third backslash
+    # escapes the quote again and it does not; and a mismatched delimiter never closes at all.
+    @test ql("'tail" * B * B * "'")
+    @test pv("'tail" * B * B * "'") == "tail" * B
+    @test !ql("'tail" * B * B * B * "'")
+    @test ql("'a" * B * "''")               # an escaped quote immediately before the closing one
+    @test pv("'a" * B * "''") == "a'"
+    @test !ql("'abc\"")                     # opens with ' and ends with " — never closed
+
+    # A LONE quote is not a literal. It used to satisfy both `startswith` and `endswith`, and the
+    # byte slice then reduced it to the empty string with no warning at all.
+    @test pv("'") == "'"
+    @test pv("\"") == "\""
+
+    # A TRIPLE-quoted string is not one literal either — its interior quotes are neither doubled nor
+    # escaped. `_meta_string_literal`'s residual-quote gate depends on this staying rejected, which
+    # is what keeps a triple-quoted `db_table` refused rather than applied.
+    @test !ql("\"\"\"arq_legado\"\"\"")
+    @test pv("\"\"\"arq_legado\"\"\"") == "\"\"\"arq_legado\"\"\""
+
+    # A LONG literal is read, not thrown at. Found in review: the first fix expressed this predicate
+    # as `r"^'(?:[^'\\]|\\.)*'$"`, whose per-character recursion raises `PCRE.exec error: JIT stack
+    # limit reached` at roughly 43_700 characters — an uncaught error out of `parse_value` that would
+    # abort the whole import over one long `TextField` default, i.e. the exact failure this issue
+    # exists to remove, reached through a different door. The scan that replaced it is linear.
+    long_value = "'" * repeat("Interlagos ", 20_000) * "'"
+    @test ql(long_value)
+    @test length(pv(long_value)) == 220_000
+
+    # Python's STRING PREFIXES. An f-string's value depends on names that exist only at runtime, and
+    # raw and bytes literals carry their own escape rules, so none of the three is a value PormG can
+    # know. The pair that DISCRIMINATES is `op`/`!ql` — that combination is what routes the value to
+    # the report in `parse_field_args`, and the next testset pins that it actually lands. `pv` is a
+    # control here, not a guard: a prefixed literal never started with a quote, so the pre-#497 code
+    # already fell through to the verbatim branch and would pass this line unchanged.
+    op = PormG.Migrations._py_opens_string
+    for prefixed in ("f'{p}-x'", "r'C:" * B * "temp'", "b'bytes'", "rb'raw'", "u'unicode'")
+        @test op(prefixed)
+        @test !ql(prefixed)
+        @test pv(prefixed) == prefixed        # control: verbatim, quotes and prefix intact
+    end
+    # ...and the opener test must not claim an ordinary dotted name. `uuid.uuid4` consumes its two
+    # leading `u`s and then finds `i` rather than a quote, which is the case that makes a naive
+    # "starts with a string prefix" test wrong.
+    @test !op("uuid.uuid4")
+    @test !op("update")
+    @test !op("None")
+    @test !op("")
+    @test op("'plain'")                        # a bare quote still opens a string
+
+    # The non-string branches of `parse_value` are untouched by all of the above.
+    @test pv("True") === true
+    @test pv("False") === false
+    @test pv("None") === nothing
+    @test pv("42") === 42
+    @test pv("uuid.uuid4") == "uuid.uuid4"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: an accented models.py imports, and an expression default is reported (#497)
+# End to end, because the failure this issue is about was never local to one value: the
+# `StringIndexError` escaped `parse_field_args` uncaught and killed the entire import, so no file
+# was written for any model in it. The importer's whole purpose is reading a `models.py` PormG did
+# not write, which is exactly the population carrying accented text.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer reads accented values and reports an expression default (#497)" begin
+    source = """
+from django.db import models
+
+class Piloto(models.Model):
+    # The crash: the character before the closing quote is multibyte.
+    cidade = models.CharField(max_length=60, default='São José')
+    # The near-miss that read fine before the fix — kept so the two stay distinguishable.
+    apelido = models.CharField(max_length=60, default='Räikkönen')
+    # An escaped interior quote is Python's spelling, not SQL's doubled one.
+    lema = models.CharField(max_length=60, default='it%BS%'s quick')
+    # The mangling: kept verbatim and reported, never passed off as the string a' + 'b.
+    codigo = models.TextField(default='a' + 'b')
+    # An f-string is a string literal whose value lives at runtime. `TextField` accepts any string,
+    # so without this report its own source text becomes the default with nothing saying so.
+    rotulo = models.TextField(default=f'{prefixo}-x')
+
+    class Meta:
+        # The byte slice also reached Meta, and `_meta_string_literal`'s callers for a constraint
+        # `name=` sit OUTSIDE their try blocks — so an accented name aborted the import too.
+        db_table = 'inscrição'
+        constraints = [
+            models.UniqueConstraint(fields=['cidade'], name='única_cidade'),
+        ]
+
+class Posterior(models.Model):
+    # Declared last on purpose: it proves one degrade does not cost the rest of the file.
+    nome = models.CharField(max_length=30)
+"""
+    config_key, db_dir_existed = temp_import_config!()
+    output_file = "django_497_unit.jl"
+    # `lema`'s Python source must carry a REAL backslash before its interior quote — that is the
+    # whole point of the case, and writing it as a Julia escape would put a bare `'` in the fixture.
+    source = replace(source, "%BS%" => string(Char(92)))
+
+    try
+        # The warning carries the field as STRUCTURED metadata, so assert on `kwargs` — a
+        # message-only matcher would silently stop discriminating.
+        logs, _ = Test.collect_test_logs() do
+            import_models_from_django(
+                source; db = config_key, file = output_file, force_replace = true,
+            )
+        end
+        kept = [r for r in logs
+                if r.level == Logging.Warn &&
+                   occursin("default is not one readable string literal", string(r.message))]
+        # Exactly the two unreadable defaults, and no more — a report that fires on `cidade` or
+        # `lema` would mean the literal test had gone back to being a quote count.
+        @test Set(Dict(r.kwargs)[:field] for r in kept) == Set(["codigo", "rotulo"])
+        @test length(kept) == 2
+
+        generated = read(joinpath(config_key, output_file), String)
+
+        # The accented values arrive intact, and the import completed.
+        @test occursin("cidade = Models.CharField(max_length=60, default=\"São José\")", generated)
+        @test occursin("apelido = Models.CharField(max_length=60, default=\"Räikkönen\")", generated)
+        @test occursin("lema = Models.CharField(max_length=60, default=\"it's quick\")", generated)
+
+        # The expression default: verbatim, WITH its quotes, plus the marker. Assert the mangled
+        # form is absent by name — that string is what shipped into a generated model file before.
+        @test occursin("# PormG: field 'codigo' on 'Piloto' has `default='a' + 'b'`", generated)
+        @test occursin("cannot read as one string literal", generated)
+        @test occursin("# PormG: field 'rotulo' on 'Piloto' has `default=f'{prefixo}-x'`", generated)
+        @test occursin("rotulo = Models.TextField(default=\"f'{prefixo}-x'\")", generated)
+        @test !occursin("default=\"a' + 'b\"", generated)
+
+        # Accented Meta values: the table name and the constraint name both survive.
+        @test occursin("db_table = \"inscrição\"", generated)
+        @test occursin("name = \"única_cidade\"", generated)
+        @test !occursin("Meta.db_table on 'Piloto' is not a string literal", generated)
+
+        # Every model in the file is still there. Before the fix this whole file produced nothing.
+        @test occursin("Piloto = Models.Model(", generated)
+        @test occursin("Posterior = Models.Model(", generated)
+        @test occursin("nome = Models.CharField(max_length=30)", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end

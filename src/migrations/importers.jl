@@ -55,10 +55,16 @@ function _plan_inspectdb_bindings!(models_array)::Dict{String, String}
       binding = get(binding_by_table, target_table, nothing)
       if binding === nothing
         # The parent is not in this generated file — filtered out by `ignore_table`/`include_table`,
-        # in another schema, or (on SQLite, whose identifiers are case-insensitive) spelled in the
-        # `REFERENCES` clause with a case the `CREATE TABLE` did not use. `.to` keeps its derived
-        # spelling, which is the pre-#360 behaviour: it will not resolve, and `set_models` says so
-        # loudly.
+        # or in another schema. `.to` keeps its derived spelling, which is the pre-#360 behaviour:
+        # it will not resolve, and `set_models` says so loudly.
+        #
+        # The SQLite case-spelling arm of that list is GONE since #390: a parent named in the
+        # `REFERENCES` clause with a case `CREATE TABLE` did not use used to arrive here as an
+        # unresolvable miss, because `to_table` carried the REFERENCES spelling. The reader now
+        # resolves it against `sqlite_master` before the breadcrumb is set
+        # (`Migrations._sqlite_canonical_table_name`), so such a key matches its imported model like
+        # any other. Fixed at the source rather than by loosening this lookup — see below for why
+        # loosening it was never an option.
         #
         # Deliberately NOT a case-insensitive fallback. "Exactly one case-insensitive candidate
         # among the IMPORTED models" is not the same question as "exactly one in the schema" — a

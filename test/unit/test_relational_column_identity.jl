@@ -261,7 +261,10 @@ _rc_parent_sql(plan) =
       _rc_plan_keys(RC_PG, declared_other, live_other)
     end
     # `:to` reached `alter_field` — i.e. the difference WAS detected and carried into the diff.
-    @test any(l -> l.level == Logging.Warn && occursin(":to", string(l.message)), cross_logs)
+    # Matched as `"[:to]"` rather than `":to"`: the bare substring also matches `:to_table`, the
+    # breadcrumb `_NON_SCHEMA_FIELD_ATTRS` exists to filter out, so a regression that let IT ride
+    # along would keep a `":to"` assertion green. Match the rendered vector.
+    @test any(l -> l.level == Logging.Warn && occursin("[:to]", string(l.message)), cross_logs)
 
     # The same-type baseline, for the same parent change. Identical outcome — which is the point.
     same_live = Models.ForeignKey("Parent_t", pk_field = "id", unique = true, null = true)
@@ -270,7 +273,7 @@ _rc_parent_sql(plan) =
       _rc_plan_keys(RC_PG,
         Models.ForeignKey(_rc_parent(), unique = true, pk_field = "id", null = true), same_live)
     end
-    @test any(l -> l.level == Logging.Warn && occursin(":to", string(l.message)), same_logs)
+    @test any(l -> l.level == Logging.Warn && occursin("[:to]", string(l.message)), same_logs)
   end
 
   # ───────────────────────────────────────────────────────────────────────────

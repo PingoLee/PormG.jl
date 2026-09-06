@@ -46,6 +46,13 @@ using PormG
 using PormG.Models
 using PormG.Migrations
 import PormG: PormGModel, PormGPostgres, PormGSQLite
+# Testset 5 (#390) opens a real temporary SQLite file — its reader is PRAGMA-driven, and the
+# REFERENCES-spelling behaviour under test is the engine's, so a marker struct cannot stand in.
+# `runtests.jl` loads the driver extension for the whole suite; this guard keeps the file runnable
+# on its own without double-loading under the suite.
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+import PormG.ConnectionPool: SQLiteConnectionPool, fetch
+import PormG.Migrations: convert_schema_to_models
 
 struct FkToTablePlannerMockPg <: PormGPostgres end
 struct FkToTablePlannerMockSQLite <: PormGSQLite end
@@ -175,10 +182,25 @@ end
     settings.change_db = true
 
     # (declared positional name, declared db_table, live physical table as introspection sees it)
+    #
+    # #390 REMOVED a fourth row here: `("driver", nothing, "DRIVER")`, the SQLite `REFERENCES DRIVER`
+    # spelling. It pinned the CASE FOLD this comparison used to apply, and the fold is gone — the
+    # SQLite reader now resolves that spelling against `sqlite_master` before recording `to_table`
+    # (`Migrations._sqlite_canonical_table_name`), so introspection can no longer PRODUCE
+    # `to_table = "DRIVER"` for a table created as `driver` — provided that parent EXISTS in
+    # `sqlite_master` at read time. A dangling foreign key (SQLite permits one) still keeps the
+    # REFERENCES spelling; that is self-healing, since the first `migrate` creates the parent and the
+    # next read canonicalizes. The row pinned a state the system does
+    # not reach any more, and keeping it would have pinned the defect instead: on PostgreSQL, where
+    # identifiers are case-sensitive, folding hides a key genuinely repointed between two real tables.
+    #
+    # The guard relocated rather than vanished — it is now `#390: the SQLite REFERENCES spelling is
+    # canonicalized at the reader` below, asserted against a real SQLite file where the engine
+    # behaviour is observable, plus a PostgreSQL counterpart proving the case-distinct pair is now
+    # DETECTED. Verified by measurement before the row was touched, not inferred.
     parents = [("driver profile",  nothing,          "driver profile"),
                ("driver_profile",  nothing,          "driver_profile"),
-               ("driver_profile",  "Driver_Profile", "Driver_Profile"),  # mixed case, pinned (#59)
-               ("driver",          nothing,          "DRIVER")]          # SQLite REFERENCES case (#360 re-review)
+               ("driver_profile",  "Driver_Profile", "Driver_Profile")]  # mixed case, pinned (#59)
 
     for (declared_name, declared_db_table, live_table) in parents
       # The kwargs form on purpose — it is what a generated models file emits, and it ENFORCES the
@@ -214,5 +236,165 @@ end
     live_other = Models.ForeignKey("Driver_profile", pk_field = "id", null = true)
     live_other.to_table = "driver_profile"
     @test !Models._compare_field_foreign_key(live_other, declared_other)
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 5. #390: the SQLite `REFERENCES` spelling is canonicalized AT THE READER.
+  #
+  #    `PRAGMA foreign_key_list` reports a foreign key's parent table as the `REFERENCES` clause
+  #    spelled it, not as `CREATE TABLE` did — SQLite identifiers are case-insensitive, so
+  #    `REFERENCES DRIVER(id)` against a table created as `driver` is legal and used to introspect
+  #    as `DRIVER`. `_compare_field_foreign_key` absorbed that by folding case unconditionally,
+  #    which was safe here and WRONG on PostgreSQL, where `Driver` and `driver` can be two distinct
+  #    tables and a key repointed between them then generated no migration at all.
+  #
+  #    The engine's case rules now live in the reader, which is the only layer that knows the
+  #    engine — the same division SQLAlchemy draws with `normalize_name`/`denormalize_name` at
+  #    reflection. Both readers therefore hand the comparison a canonical name, and the comparison
+  #    is exact on both engines.
+  #
+  #    A REAL SQLite file, not a mock: the whole point is what the engine reports, and a marker
+  #    struct cannot answer a PRAGMA.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "#390: a REFERENCES spelling is resolved to the sqlite_master spelling" begin
+    mktempdir() do dir
+      pool = SQLiteConnectionPool(joinpath(dir, "case390.sqlite"); pool_size = 1)
+      try
+        # Created lowercase; referenced in caps. Both legal, and they disagree on purpose.
+        fetch(pool, """CREATE TABLE "driver" ("id" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL)""")
+        fetch(pool, """CREATE TABLE "pit_stop" (
+                         "id"        INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,
+                         "driver_id" INTEGER NULL,
+                         FOREIGN KEY ("driver_id") REFERENCES "DRIVER"("id"))""")
+
+        # The engine really does report the REFERENCES spelling — the premise of the whole issue.
+        # Without this the assertions below could pass on a database that never posed the problem.
+        fk_rows = fetch(pool, """PRAGMA foreign_key_list("pit_stop")""")
+        @test String(first(fk_rows).table) == "DRIVER"
+
+        models = convert_schema_to_models(pool; include_table = ["driver", "pit_stop"])
+        by = Dict(lowercase(string(m.name)) => m for m in models)
+        live_fk = by["pit_stop"].fields["driver_id"]
+
+        # THE assertion: the breadcrumb carries the CATALOG spelling, and `.to` the binding derived
+        # from it — not `DRIVER` / `DRIVER` as before.
+        @test live_fk.to_table == "driver"
+        @test live_fk.to == "Driver"
+
+        # …so an exact comparison against the declared model succeeds with no fold in sight.
+        parent = Models.Model("driver"; id = Models.IDField())
+        declared_fk = Models.ForeignKey(parent, pk_field = "id", null = true)
+        @test Models._compare_field_foreign_key(declared_fk, live_fk)
+        @test Models._compare_field_foreign_key(live_fk, declared_fk)   # order-independent
+      finally
+        # Windows will not remove the temp dir while the handle is open; same leak as
+        # test_key_type_round_trip.jl, not copied here.
+        PormG.ConnectionPool.close_pool!(pool)
+      end
+    end
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 5c. The IMPORTER half of #390, which the issue names as a reason to fix this at the reader:
+  #     `_plan_inspectdb_bindings!` resolves each foreign key's target by looking `to_table` up in a
+  #     PHYSICAL-TABLE ⇒ binding map. A `REFERENCES` spelling the catalog does not use missed that
+  #     lookup, and `.to` was deliberately left unresolvable — a loud `set_models` failure was
+  #     preferred to a case-insensitive guess that could silently bind the wrong table.
+  #
+  #     Two parents that COLLIDE on their derived binding, so `_dedupe_taken` has to suffix one.
+  #     That makes the assertion sharp: the expected `.to` is a binding no naive derivation from the
+  #     REFERENCES spelling could produce, so this cannot pass by string coincidence.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "#390: a case-differing REFERENCES target now resolves to its imported binding" begin
+    mktempdir() do dir
+      pool = SQLiteConnectionPool(joinpath(dir, "bindings390.sqlite"); pool_size = 1)
+      try
+        # `driver_profile` and `driver profile` both derive the binding `Driver_profile`, so the
+        # second one imported gets the dedupe suffix.
+        fetch(pool, """CREATE TABLE "driver_profile" ("id" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL)""")
+        fetch(pool, """CREATE TABLE "driver profile" ("id" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL)""")
+        # …and the child references the SPACE-BEARING one in a case it was not created with.
+        fetch(pool, """CREATE TABLE "pit_stop" (
+                         "id"         INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,
+                         "profile_id" INTEGER NULL,
+                         FOREIGN KEY ("profile_id") REFERENCES "DRIVER PROFILE"("id"))""")
+
+        models = Migrations.convert_schema_to_models(pool;
+                   include_table = ["driver_profile", "driver profile", "pit_stop"])
+        Migrations._plan_inspectdb_bindings!(models)
+
+        fk = only(m for m in models if lowercase(string(m.name)) == "pit_stop").fields["profile_id"]
+
+        # The breadcrumb is canonical, which is what let the lookup hit at all.
+        @test fk.to_table == "driver profile"
+        # And `.to` is the target's FINAL, collision-deduped binding — resolvable, not a dead string.
+        # Pre-#390 this stayed "DRIVER_PROFILE": the lookup missed and `.to` was left as derived.
+        @test fk.to == "Driver_profile2"
+        @test fk.to != "DRIVER_PROFILE"
+      finally
+        PormG.ConnectionPool.close_pool!(pool)
+      end
+    end
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 5b. The PostgreSQL half #390 asks for, and the reason the fold had to go rather than be kept.
+  #
+  #     PostgreSQL identifiers ARE case-sensitive: `Driver` and `driver` can be two distinct tables
+  #     in one schema, and its reader has always reported the catalog spelling (`cf.relname`). With
+  #     the fold in place, a key repointed from one to the other compared EQUAL and `makemigrations`
+  #     generated nothing — a migration silently not proposed, which is worse than a spurious one.
+  #
+  #     This is the mutation gate for removing the fold: restore the `lowercase(...)` in
+  #     `_compare_field_foreign_key` and the first assertion flips to `true`.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "#390: a case-distinct PostgreSQL parent is a different table" begin
+    # Mixed case reaches the declared side through `db_table`, never through the positional name —
+    # `Model(...)` validates that lowercase (#300), as testset 4's header explains.
+    lower_parent = Models.Model("driver"; id = Models.IDField())
+    upper_parent = Models.Model("driver"; db_table = "Driver", id = Models.IDField())
+
+    declared_lower = Models.ForeignKey(lower_parent, pk_field = "id", null = true)
+    declared_upper = Models.ForeignKey(upper_parent, pk_field = "id", null = true)
+
+    # Two live keys, each pointing at one of the two real tables.
+    live_lower = Models.ForeignKey("Driver", pk_field = "id", null = true); live_lower.to_table = "driver"
+    live_upper = Models.ForeignKey("Driver", pk_field = "id", null = true); live_upper.to_table = "Driver"
+
+    # THE assertion #390 exists for: repointing between them is a genuine change and is detected.
+    @test !Models._compare_field_foreign_key(declared_lower, live_upper)
+    @test !Models._compare_field_foreign_key(declared_upper, live_lower)
+
+    # Positive controls — each still matches its OWN table, so the above is not "always unequal".
+    @test Models._compare_field_foreign_key(declared_lower, live_lower)
+    @test Models._compare_field_foreign_key(declared_upper, live_upper)
+
+    # And end to end, so this is not confined to the comparator: the repoint reaches the planner.
+    # `:to` is not in `alter_field`'s IMPLEMENTED list, so it warns rather than rendering DDL (#498);
+    # the assertion is that the difference is DETECTED, which is what #390 is about.
+    settings = PormG.Configuration.Settings()
+    settings.change_db = true
+    declared_model = Models.Model("pit_stop", id = Models.IDField(), driver_id = declared_lower)
+    live_model     = Models.Model("pit_stop", id = Models.IDField(), driver_id = live_upper)
+    current_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+      :pit_stop => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared_model, :exist => false))
+
+    logs, _ = Test.collect_test_logs() do
+      Migrations.get_migration_plan(PormGModel[live_model], current_schema, FkToTablePlannerMockPg(), settings)
+    end
+    # `"[:to]"`, not `":to"`. The bare substring also matches `:to_table` — the very attribute
+    # testset 2 exists to keep OUT of `colect_not_equal` — so a regression that let the breadcrumb
+    # ride along would have kept this assertion green. Match the rendered vector exactly.
+    @test any(l -> l.level == Logging.Warn && occursin("[:to]", string(l.message)), logs)
+
+    # Negative control for the planner half: the MATCHING pair must reach the planner silently, or
+    # the assertion above would be satisfied by a planner that warns about everything.
+    matched_model = Models.Model("pit_stop", id = Models.IDField(), driver_id = live_lower)
+    matched_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+      :pit_stop => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared_model, :exist => false))
+    quiet_logs, _ = Test.collect_test_logs() do
+      Migrations.get_migration_plan(PormGModel[matched_model], matched_schema, FkToTablePlannerMockPg(), settings)
+    end
+    @test !any(l -> l.level >= Logging.Warn, quiet_logs)
   end
 end

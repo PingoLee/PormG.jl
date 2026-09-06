@@ -516,6 +516,13 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
   # reaches the PRAGMA method, so this one is off the production introspection path. Reading it here
   # would mean regex-parsing inline and table-level UNIQUE clauses out of the DDL text — strictly
   # worse than the pragma. If this path is ever put back on the live route, close that gap first.
+  #
+  # SECOND gap since #390, same condition: the `to_table` this sets below is the `REFERENCES`-clause
+  # spelling, NOT the canonical `sqlite_master` one. The PRAGMA reader resolves that through
+  # `_sqlite_canonical_table_name`; this method takes no connection and cannot. Since #390
+  # `Models._compare_field_foreign_key` compares `to_table` EXACTLY, so a non-canonical value here
+  # would churn — harmless only while this stays off the live route. Put it back on, and this gap
+  # closes with the `unique` one (see the `to_table` invariant in `src/models/fields.jl`).
 
   # Extract table name
   table_name_match = match(r"CREATE TABLE \"(.+?)\"", sql)
@@ -690,6 +697,8 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
 
   fields_dict = Dict{Symbol, Any}()
   fk_map = Dict{String, Any}()
+  # #390: REFERENCES-clause spelling ⇒ `sqlite_master` spelling, filled below alongside `fk_map`.
+  parent_table_canon = Dict{String, String}()
   if !isempty(fks)
     # #415: keyed on the CHILD column (`from`), which is what the per-column branches below look up —
     # but a MULTI-COLUMN foreign key is skipped rather than split. `PRAGMA foreign_key_list` returns
@@ -709,6 +718,15 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
     for fk_row in eachrow(fks)
       columns_per_fk[fk_row.id] > 1 && continue
       fk_map[fk_row.from] = fk_row
+    end
+    # #390: resolve each DISTINCT parent table to its `sqlite_master` spelling once, here, rather
+    # than once per foreign-key column below. `PRAGMA foreign_key_list` reports the parent as the
+    # `REFERENCES` clause spelled it, which need not match `CREATE TABLE` — see
+    # `_sqlite_canonical_table_name` for why that is legal and why the fold is done in SQL.
+    for fk_row in values(fk_map)
+      parent = String(fk_row.table)
+      haskey(parent_table_canon, parent) && continue
+      parent_table_canon[parent] = _sqlite_canonical_table_name(db, parent)
     end
   end
 
@@ -755,7 +773,12 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
         # `convert_schema_to_models(::PormGSQLite)` actually reaches. The FK column's declared type
         # drives normalization the same way a non-FK column's does.
         fk_type_sym = get(type_map, base_type, :TextField)
-        fk_parent_table = String(fk_info.table)
+        # #390: the CANONICAL parent table, not the `REFERENCES` spelling `PRAGMA foreign_key_list`
+        # hands back. Both `.to` and `to_table` are derived from it, so a `REFERENCES DRIVER(id)`
+        # against a table created as `driver` records `Driver` / `driver` — matching what the
+        # PostgreSQL reader has always produced, and what `_plan_inspectdb_bindings!` needs to
+        # resolve the target to its imported model.
+        fk_parent_table = get(parent_table_canon, String(fk_info.table), String(fk_info.table))
         # #360: `.to` is the target's BINDING and `to_table` the physical parent table — see the
         # `convertSQLToModel(::String)` path above for why both are needed. `fk_info.to` here is the
         # parent COLUMN from `PRAGMA foreign_key_list`, unrelated to a field's `.to`.
@@ -1586,6 +1609,43 @@ function _sqlite_single_column_unique_columns(conn::PormGSQLite, table_name)::Se
   # An empty frame's column is eltype Missing, so guard before touching `rows.col`.
   nrow(rows) == 0 && return Set{String}()
   return Set{String}(string(c) for c in rows.col if c !== missing)
+end
+
+"""
+    _sqlite_canonical_table_name(conn::PormGSQLite, name) -> String
+
+The `sqlite_master` spelling of table `name`, or `name` unchanged when nothing matches (#390).
+
+`PRAGMA foreign_key_list` reports a foreign key's parent table **as spelled in the `REFERENCES`
+clause**, not as `CREATE TABLE` spelled it. SQLite identifiers are case-insensitive, so
+
+    CREATE TABLE driver (id INTEGER PRIMARY KEY);
+    CREATE TABLE pit_stop (…, driver_id INTEGER REFERENCES DRIVER(id));
+
+is legal and introspects as `DRIVER` against a table the catalog calls `driver`. Resolving that back
+here is what lets the live-vs-declared foreign-key comparison be EXACT on both engines: the
+PostgreSQL reader has always returned the catalog spelling (`cf.relname` in `get_database_schema`),
+so this reader was the one producer of a non-canonical name. Before #390, `Models._compare_field_foreign_key`
+absorbed the difference by folding case unconditionally — which was safe here and wrong on
+PostgreSQL, where `Driver` and `driver` can be two distinct tables.
+
+The fold happens **in SQL** (`COLLATE NOCASE`), deliberately not in Julia. Julia's `lowercase` is
+Unicode-aware while SQLite's built-in identifier matching is ASCII-only, so folding here could
+canonicalize to a table SQLite would not consider the same one. Letting the engine answer keeps the
+two in step by construction.
+
+Returns `name` unchanged when the lookup finds nothing — a view, a temp table, or a table in an
+ATTACHed database, none of which the main schema's `sqlite_master` lists. That is exactly the
+pre-#390 value, so a parent this cannot resolve is no worse off than before.
+
+ONE query per DISTINCT parent table per introspected table (callers memoize), not one per column —
+the same discipline as `_sqlite_single_column_unique_columns` above.
+"""
+function _sqlite_canonical_table_name(conn::PormGSQLite, name)::String
+  rows = fetch(conn, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE",
+               [string(name)]) |> DataFrame
+  nrow(rows) == 0 && return string(name)
+  return string(rows[1, :name])
 end
 
 """

@@ -1122,11 +1122,14 @@ end
     )
     """ : ""
 
-    # A plain, NON-UNIQUE foreign key with a long column name, deliberately. `_drop_index` fires
-    # unconditionally on the rename path: on a UNIQUE column it drops the constraint's backing index
-    # (destroying the constraint on PostgreSQL, aborting the migration on SQLite), and
-    # `get_constraints_index` matches `indexdef LIKE '%<col>%'` unanchored, so a short name can hit a
-    # neighbouring index. Both are pre-existing bugs; either would fail this phase as if it were #504.
+    # A plain, NON-UNIQUE foreign key with a long column name. That was originally a dodge: when this
+    # phase was written, `_drop_index` fired unconditionally on the rename path and would drop a
+    # UNIQUE column's backing index — destroying the constraint on PostgreSQL, aborting the migration
+    # on SQLite — while `get_constraints_index` matched `indexdef LIKE '%<col>%'` unanchored, so a
+    # short name could hit a neighbouring index. Either would have failed this phase as if it were
+    # #504. Both are fixed (#515), and Phase 4j below is the coverage that keeps them fixed. The
+    # fixture is left exactly as it was regardless: this phase is #504's, and re-scoping it to also
+    # exercise UNIQUE would blur which bug a failure belongs to.
     dup_models(ref_column) = carried * """
     DupFkParent = Models.Model(
         id = Models.IDField(),
@@ -1227,6 +1230,361 @@ end
     # cleanly either way, populated ones need not.
     PormG.ConnectionPool.fetch(pool, """DELETE FROM "dupfkchild" WHERE "id" = 981;""")
     PormG.ConnectionPool.fetch(pool, """DELETE FROM "dupfkparent" WHERE "id" = 980;""")
+  end
+
+  # ── Phase 4j: Rename a UNIQUE field, constraint must survive (#515) ─────
+  # The gap Phase 4i explicitly dodged, and says so in its own fixture comment. Every 4-series phase
+  # so far renames or moves a FOREIGN key; none renames a column carrying a UNIQUE constraint, which
+  # is the one the rename path used to destroy.
+  #
+  # `_drop_index` fires on the rename path for any non-PK column, to remove an index whose name
+  # embeds the OLD column so `_add_constrains` can re-create it under the new one. It asked
+  # `get_constraints_index` which index that was, and got back the index BACKING the constraint —
+  # PostgreSQL implements a UNIQUE constraint AS an index of the same name, and SQLite calls it
+  # `sqlite_autoindex_…`. PostgreSQL then dropped the constraint first (that is the only way to drop
+  # such an index) and nothing put it back; SQLite refused the DROP INDEX and rolled the whole
+  # migration back. Same input, opposite failures, and the PostgreSQL one is silent: introspection
+  # reads `unique` back correctly afterwards, so the model compares converged and `makemigrations`
+  # never mentions it again.
+  #
+  # BOTH backends run every assertion here — this is not a PostgreSQL phase with a SQLite control.
+  # The two engines failed differently and both have to be shown fixed, so the only branch below is
+  # the SQLite-only `sqlite_autoindex` plan check.
+  #
+  # Uniqueness is verified BEHAVIORALLY, by a duplicate INSERT that must raise — the Phase 4g
+  # technique. Introspection cannot confirm uniqueness on SQLite, and a plan-shape assertion cannot
+  # tell a constraint that survived from one that was never created.
+  #
+  # Carries every prior table forward, INCLUDING Phase 4i's DupFkParent/DupFkChild at their
+  # post-rename `new_ref_id` state, for the reason 4i spells out at length: a table left out of
+  # `carried` is a live model with no declared counterpart, which the planner turns into `Drop table`
+  # and the `migrate(destructive=true)` below APPLIES — silently destroying state Phase 5 inherits.
+  @testset "Phase 4j: Rename a Unique Field, Constraint Survives (#515)" begin
+    carried4j = """
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        name = Models.CharField()
+    )
+    SecondTable = Models.Model(
+        id = Models.IDField(),
+        test_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, db_constraint=false),
+        description = Models.CharField(null=true)
+    )
+    ChildFKTable = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=false)
+    )
+    RenameFKChild = Models.Model(
+        id = Models.IDField(),
+        new_parent_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true, db_index=true, db_constraint=false),
+        note = Models.CharField(null=true)
+    )
+    RenameDelChild = Models.Model(
+        id = Models.IDField(),
+        link_ref_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true, db_constraint=false),
+        note = Models.CharField(null=true)
+    )
+    UniqueDelChild = Models.Model(
+        id = Models.IDField(),
+        keeper = Models.CharField(null=true)
+    )
+    RepointParentA = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=true)
+    )
+    RepointParentB = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=true)
+    )
+    RepointChild = Models.Model(
+        id = Models.IDField(),
+        parent_ref_id = Models.ForeignKey("RepointParentB", on_delete=Models.SET_NULL, null=true),
+        note = Models.CharField(null=true)
+    )
+    DupFkParent = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=true)
+    )
+    DupFkChild = Models.Model(
+        id = Models.IDField(),
+        new_ref_id = Models.ForeignKey("DupFkParent", on_delete=Models.CASCADE, null=true),
+        note = Models.CharField(null=true)
+    )
+    """
+    # `PkGuardChild` exists only on SQLite — see Phase 4h's note; 4g's throwing makemigrations
+    # applied nothing, so the table is still there.
+    carried4j *= adapter_name == "SQLite" ? """
+    PkGuardChild = Models.Model(
+        pk_code = Models.CharField(primary_key=true, null=false),
+        payload = Models.CharField(null=true)
+    )
+    """ : ""
+
+    # A UNIQUE column and nothing else — no `db_index`, so the ONLY index covering it is the one
+    # backing the constraint. That is the shape the bug needed: with `db_index=true` as well, the
+    # lookup has a legitimate plain index to return and could pass for the wrong reason.
+    uq_models(code_column) = carried4j * """
+    UniqueRenameChild = Models.Model(
+        id = Models.IDField(),
+        $code_column = Models.CharField(unique=true, null=true),
+        note = Models.CharField(null=true)
+    )
+    """
+
+    # ── Baseline: a live UNIQUE constraint on old_code ──
+    write_edge_models(uq_models("old_code"))
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    # `destructive=true` for Phase 4i's reason: 4h left an unapplied plan for the three churning
+    # `db_constraint=false` tables it documents, and those are whole-table rebuilds (DROP TABLE).
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    @assert "old_code" in column_names(pool, "uniquerenamechild") "Phase 4j requires the pre-rename column"
+
+    # The constraint is live BEFORE the rename — otherwise the assertion after it proves nothing.
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "uniquerenamechild" ("id", "old_code", "note") VALUES (990, 'uq-515', 'keep-me');""")
+    pre_dup = try
+      PormG.ConnectionPool.fetch(pool, """INSERT INTO "uniquerenamechild" ("id", "old_code", "note") VALUES (991, 'uq-515', 'dup');""")
+      nothing
+    catch e; e; end
+    @assert pre_dup !== nothing "Phase 4j requires a live UNIQUE constraint before the rename"
+
+    # ── The rename, with nothing else about the column changed ──
+    write_edge_models(uq_models("new_code"))
+
+    # Field-rename detection is interactive: feed "1" (old_code is the sole rename candidate).
+    # EOF would yield "no" ⇒ an ADD + DROP instead of a rename ⇒ a loud failure below, never a hang.
+    mktemp() do _path, io
+      write(io, "1\n"); flush(io); seekstart(io)
+      redirect_stdin(io) do
+        makemigrations(joinpath(@__DIR__, edge_db_name), interactive=true)
+      end
+    end
+
+    pending = read(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"), String)
+    # AC2: the generated block carries no embedded transaction control (composes with the runner tx).
+    @test !occursin("BEGIN TRANSACTION", pending)
+
+    # THE PLAN-SHAPE GATE. Asserted on the plan KEY `_drop_index` writes, which names the column it
+    # acted on — not on `DROP INDEX` in the DDL, which the co-carried tables can legitimately emit.
+    @test occursin("RENAME COLUMN", pending)
+    @test !occursin("Remove index on old_code", pending)
+    if adapter_name == "SQLite"
+      # The exact statement that used to abort the migration: SQLite refuses to drop an auto-index.
+      @test !occursin("sqlite_autoindex", pending)
+    end
+
+    # Must NOT raise. Pre-fix on SQLite this is where the migration died with "index associated with
+    # UNIQUE or PRIMARY KEY constraint cannot be dropped" and rolled everything back.
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    cols = column_names(pool, "uniquerenamechild")
+    @test !("old_code" in cols)
+    @test "new_code" in cols
+
+    # ── THE ASSERTION #515 EXISTS FOR ──
+    # Pre-fix PostgreSQL renames the column and reports success with the constraint gone.
+    dup_err = try
+      PormG.ConnectionPool.fetch(pool, """INSERT INTO "uniquerenamechild" ("id", "new_code", "note") VALUES (992, 'uq-515', 'dup');""")
+      nothing
+    catch e; e; end
+    @test dup_err !== nothing
+    @test any(tok -> occursin(tok, lowercase(string(dup_err))), ["unique", "constraint", "duplicate"])
+
+    # …and that raise is the constraint, not collateral damage — a DISTINCT value still inserts.
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "uniquerenamechild" ("id", "new_code", "note") VALUES (993, 'uq-515-other', 'other');""")
+
+    # Data fidelity: the pre-rename row survived with its (renamed) value intact.
+    surviving = PormG.ConnectionPool.fetch(pool,
+      """SELECT "new_code", "note" FROM "uniquerenamechild" WHERE "id" = 990;""") |> DataFrame
+    @test nrow(surviving) == 1
+    # `isequal` (not `==`) so a would-be NULL never propagates `missing` into `@test` (house convention).
+    @test isequal(surviving[1, :new_code], "uq-515")
+    @test isequal(surviving[1, :note], "keep-me")
+
+    # Convergence, SCOPED to this table for the reason Phase 4h spells out.
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    pending_path_4j = joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl")
+    settled_4j = isfile(pending_path_4j) ? read(pending_path_4j, String) : ""
+    @test !occursin("uniquerenamechild", lowercase(settled_4j))
+
+    # Cleanup. Phase 5 drops these tables and populated ones need not drop cleanly on SQLite.
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "uniquerenamechild" WHERE "id" IN (990, 993);""")
+  end
+
+  # ── Phase 4k: A new ForeignKey column on an existing table (#514) ───────
+  # Every other 4-series phase acts on a key whose COLUMN already exists — 4b/4c/4f remove one, 4e
+  # renames and flips one, 4h re-points one, 4i renames one. A key arriving as a brand-new column
+  # takes a different path entirely (`_add_new_field` → `Dialect.add_field`), and on SQLite that path
+  # emitted a bare `ADD COLUMN` with no `REFERENCES`: the key existed in the models file and not in
+  # the database. PostgreSQL added it normally, so this was a backend divergence rather than a shared
+  # limitation, which is why the count below is asserted identically on both engines.
+  #
+  # Runs on BOTH backends: PostgreSQL is the control that must not change (its key still arrives as a
+  # separate ADD CONSTRAINT), SQLite is the regression.
+  @testset "Phase 4k: Add a New ForeignKey Column to an Existing Table (#514)" begin
+    # Reuses Phase 4j's carried set, plus 4j's own table at its post-rename state.
+    carried4k = """
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        name = Models.CharField()
+    )
+    SecondTable = Models.Model(
+        id = Models.IDField(),
+        test_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, db_constraint=false),
+        description = Models.CharField(null=true)
+    )
+    ChildFKTable = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=false)
+    )
+    RenameFKChild = Models.Model(
+        id = Models.IDField(),
+        new_parent_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true, db_index=true, db_constraint=false),
+        note = Models.CharField(null=true)
+    )
+    RenameDelChild = Models.Model(
+        id = Models.IDField(),
+        link_ref_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true, db_constraint=false),
+        note = Models.CharField(null=true)
+    )
+    UniqueDelChild = Models.Model(
+        id = Models.IDField(),
+        keeper = Models.CharField(null=true)
+    )
+    RepointParentA = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=true)
+    )
+    RepointParentB = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=true)
+    )
+    RepointChild = Models.Model(
+        id = Models.IDField(),
+        parent_ref_id = Models.ForeignKey("RepointParentB", on_delete=Models.SET_NULL, null=true),
+        note = Models.CharField(null=true)
+    )
+    DupFkParent = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=true)
+    )
+    DupFkChild = Models.Model(
+        id = Models.IDField(),
+        new_ref_id = Models.ForeignKey("DupFkParent", on_delete=Models.CASCADE, null=true),
+        note = Models.CharField(null=true)
+    )
+    UniqueRenameChild = Models.Model(
+        id = Models.IDField(),
+        new_code = Models.CharField(unique=true, null=true),
+        note = Models.CharField(null=true)
+    )
+    """
+    carried4k *= adapter_name == "SQLite" ? """
+    PkGuardChild = Models.Model(
+        pk_code = Models.CharField(primary_key=true, null=false),
+        payload = Models.CharField(null=true)
+    )
+    """ : ""
+
+    # ── Baseline: parent and child exist, and the child has NO key ──
+    write_edge_models(carried4k * """
+    FreshFkParent = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=true)
+    )
+    FreshFkChild = Models.Model(
+        id = Models.IDField(),
+        note = Models.CharField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    @assert foreign_key_count(pool, "freshfkchild") == 0 "Phase 4k requires a child table with no live FK"
+
+    # Seed a parent and a keyless child row — both must survive whichever path the backend takes.
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "freshfkparent" ("id", "label") VALUES (970, 'fresh-parent-514');""")
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "freshfkchild" ("id", "note") VALUES (971, 'child-514');""")
+
+    # ── The change: a NEW ForeignKey column, nullable with no default ──
+    # Nullable on purpose — that is the shape SQLite will accept an inline `REFERENCES` for, and the
+    # one #514 measured. The ineligible shapes (NOT NULL, defaulted, unique) route through the table
+    # rebuild instead and are covered hermetically in `test/unit/test_rename_unique_index.jl`.
+    write_edge_models(carried4k * """
+    FreshFkParent = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=true)
+    )
+    FreshFkChild = Models.Model(
+        id = Models.IDField(),
+        fresh_ref_id = Models.ForeignKey("FreshFkParent", on_delete=Models.CASCADE, null=true),
+        note = Models.CharField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+
+    pending = read(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"), String)
+    @test !occursin("BEGIN TRANSACTION", pending)
+    # The plan shape differs by backend and that difference is the point: SQLite declares the key
+    # WITH the column, PostgreSQL as a separate named constraint.
+    if adapter_name == "SQLite"
+      @test occursin("ADD COLUMN", pending)
+      @test occursin("REFERENCES \"freshfkparent\"(\"id\")", pending)
+    else
+      @test occursin("ADD CONSTRAINT", pending)
+      @test occursin("FOREIGN KEY", pending)
+    end
+
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    # ── THE ASSERTION #514 EXISTS FOR ──
+    # Pre-fix SQLite reads 0 here: the column landed, the constraint did not.
+    @test "fresh_ref_id" in column_names(pool, "freshfkchild")
+    @test foreign_key_count(pool, "freshfkchild") == 1
+    # …and the key is the real thing, not a count that passed on some other constraint.
+    fresh_fk = foreign_key_target(pool, "freshfkchild", "fresh_ref_id")
+    @test fresh_fk !== nothing
+    @test fresh_fk.parent == "freshfkparent"
+    @test fresh_fk.column == "id"
+    @test fresh_fk.on_delete == "CASCADE"
+
+    # Data fidelity: the pre-existing child row survived (SQLite's ineligible path rebuilds the
+    # table, and this phase's eligible path must not).
+    surviving = PormG.ConnectionPool.fetch(pool,
+      """SELECT "note", "fresh_ref_id" FROM "freshfkchild" WHERE "id" = 971;""") |> DataFrame
+    @test nrow(surviving) == 1
+    @test isequal(surviving[1, :note], "child-514")
+
+    # The constraint is ENFORCED, not merely catalogued: an orphan child must be refused. SQLite
+    # only enforces foreign keys when `PRAGMA foreign_keys` is on, which is why this is asserted
+    # rather than assumed — and if it is off, the INSERT succeeds and this test says so.
+    if adapter_name == "SQLite"
+      fk_on = PormG.ConnectionPool.fetch(pool, "PRAGMA foreign_keys;") |> DataFrame
+      @test nrow(fk_on) == 1 && fk_on[1, 1] == 1
+    end
+    orphan_err = try
+      PormG.ConnectionPool.fetch(pool, """INSERT INTO "freshfkchild" ("id", "fresh_ref_id", "note") VALUES (972, 99999, 'orphan');""")
+      nothing
+    catch e; e; end
+    @test orphan_err !== nothing
+    @test any(tok -> occursin(tok, lowercase(string(orphan_err))), ["foreign key", "violates", "constraint"])
+
+    # A VALID reference still inserts — so the raise above is the key, not a broken table.
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "freshfkchild" ("id", "fresh_ref_id", "note") VALUES (973, 970, 'valid');""")
+
+    # Convergence, SCOPED to this table. This is the half #514's own diagnosis got wrong: it expected
+    # the constraint-less column to compare converged, but introspection reads it back as a plain
+    # integer while the model declares a ForeignKey, so the NEXT makemigrations planned a whole-table
+    # rebuild. Measured on a temp SQLite file while writing the unit coverage. Nothing should be
+    # left to re-propose now.
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    pending_path_4k = joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl")
+    settled_4k = isfile(pending_path_4k) ? read(pending_path_4k, String) : ""
+    @test !occursin("freshfkchild", lowercase(settled_4k))
+
+    # Cleanup child-then-parent.
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "freshfkchild" WHERE "id" IN (971, 973);""")
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "freshfkparent" WHERE "id" = 970;""")
   end
 
   # ── Phase 5: Indexes and unique constraints ───────────────────────

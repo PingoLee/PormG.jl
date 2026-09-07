@@ -97,18 +97,53 @@ Renaming the field is **not** a change to the constraint. On PostgreSQL `ALTER T
 ```sql
 ALTER TABLE "result" RENAME COLUMN "statusid" TO "racestatusid";
 
-ALTER TABLE "result" DROP CONSTRAINT IF EXISTS "result_statusid_a1b2c3d4_idx";
 DROP INDEX IF EXISTS "result_statusid_a1b2c3d4_idx";
 
 CREATE INDEX IF NOT EXISTS "result_racestatusid_wpkbcx73_idx" ON "result" ("racestatusid");
 ```
 
-The **index** is re-created rather than carried over — `ForeignKey` sets `db_index = true` by default, and PormG names indexes with a random suffix it cannot re-derive, so it drops the old one and creates a fresh one against the new column. The `DROP CONSTRAINT IF EXISTS` names that **index**, not the foreign key: it is there because a `UNIQUE` constraint is *implemented by* an index of the same name, and PostgreSQL refuses to drop that index while the constraint owns it — so the constraint goes first. For an ordinary indexed column it is a no-op — a `NOTICE`, nothing more. SQLite emits the bare `DROP INDEX IF EXISTS` and no `ALTER TABLE` for that step.
+The **index** is re-created rather than carried over — `ForeignKey` sets `db_index = true` by default, and PormG names indexes with a random suffix it cannot re-derive, so it drops the old one and creates a fresh one against the new column. Both backends emit the same bare `DROP INDEX IF EXISTS` for that step.
+
+Only an index PormG may actually drop is ever chosen. A `UNIQUE` constraint is *implemented by* an index, and a `PRIMARY KEY` likewise — PostgreSQL refuses to drop such an index while the constraint owns it, and SQLite refuses to drop its `sqlite_autoindex_…` at all — so those are never selected, and a rename leaves them exactly where they are. The index is matched by real column membership, not by a substring of its definition, so a neighbouring index cannot be caught up in it either.
 
 What the plan does **not** contain is any `DROP CONSTRAINT`/`ADD CONSTRAINT` for the *foreign key*: it is untouched, and keeps its **pre-rename** name. That is harmless — PormG looks a foreign key up by its table and column, never by a name convention, so a later drop or re-point finds it normally. Rename the field *and* change what the key points at in the same migration and you get both: the rename runs first, then the drop, then the add.
 
-!!! warning "Renaming an indexed field needs `destructive = true`"
-    The plan contains `DROP INDEX`, which `dry_run()` classifies as destructive — so `migrate()` refuses it until you opt in with `migrate(path, destructive = true)`. Only the field's index is dropped, and the same migration re-creates it against the new column name; no column and no data are removed.
+### Renaming a `unique` field
+
+Nothing is planned for the constraint, and nothing needs to be. Both backends carry a `UNIQUE` constraint across `ALTER TABLE ... RENAME COLUMN` with the column, exactly as they carry a foreign key, so renaming a `unique = true` field generates only the `RENAME COLUMN` itself:
+
+```sql
+ALTER TABLE "driver" RENAME COLUMN "driverref" TO "driverslug";
+```
+
+A field that is **both** `unique = true` and `db_index = true` carries two indexes — the one backing the constraint and the plain one — and only the plain one is dropped and re-created, as above.
+
+!!! warning "Renaming an *indexed* field needs `destructive = true`"
+    When the field carries a plain index (`db_index = true`, which `ForeignKey` sets by default), the plan contains `DROP INDEX`, which `dry_run()` classifies as destructive — so `migrate()` refuses it until you opt in with `migrate(path, destructive = true)`. Only the field's index is dropped, and the same migration re-creates it against the new column name; no column and no data are removed.
+
+    A field that is only `unique = true`, with no `db_index`, plans no `DROP INDEX` and so needs no opt-in.
+
+!!! warning "Repairing a `UNIQUE` constraint dropped by an older PormG"
+    Before this behavior was fixed, renaming a `unique = true` field **destroyed the constraint on PostgreSQL** and **aborted the migration on SQLite**. The plan dropped the index backing the constraint, and on PostgreSQL that meant dropping the constraint first — successfully, and with nothing to put it back.
+
+    PostgreSQL is the case worth checking, because it is silent: the migration reported success, and introspection reads `unique` back correctly afterwards, so the model compares converged and `makemigrations` will never propose restoring it. SQLite failed loudly and rolled back, so a SQLite database was never left in this state.
+
+    Check any table where you renamed a `unique` field, then re-add what is missing:
+
+    ```sql
+    -- What UNIQUE constraints does the table actually have?
+    SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint
+    WHERE conrelid = 'driver'::regclass AND contype = 'u';
+
+    -- Look for duplicates FIRST — re-adding the constraint fails on dirty data,
+    -- and the window in which it was missing is when duplicates could arrive.
+    SELECT "driverslug", count(*) FROM "driver"
+    GROUP BY "driverslug" HAVING count(*) > 1;
+
+    ALTER TABLE "driver" ADD CONSTRAINT "driver_driverslug_key" UNIQUE ("driverslug");
+    ```
+
+    On SQLite there is no `ALTER TABLE ... ADD CONSTRAINT`; if you need to add one by hand, `CREATE UNIQUE INDEX "driver_driverslug_key" ON "driver" ("driverslug");` enforces the same rule.
 
 !!! warning "Repairing a duplicate left by an older PormG"
     Before this behavior was fixed, a rename that left the foreign key unchanged **added a second, identical constraint** beside the one the rename carried along. Both point at the same parent with the same action, so inserts and deletes behave identically and nothing surfaces the problem — the model compares converged, so `makemigrations` will never propose removing it.
@@ -143,10 +178,22 @@ This process is transparent to the user but may take longer on very large tables
 
 **Adding a foreign key to an existing table.** When the column already exists — a `db_constraint = false` key flipped back on, say — the rebuild renders the `FOREIGN KEY` clause from your model, so the constraint really is created, and PormG logs an `@info` noting that the table is being rebuilt, because that cost is worth knowing about on a large table. Re-pointing a key that already exists takes the same rebuild but logs nothing.
 
-!!! warning "A foreign key arriving as a *new* column is not created on SQLite"
-    Adding a **new** `ForeignKey` field to an existing table is a plain `ALTER TABLE ... ADD COLUMN`, and SQLite can only declare a foreign key inside `CREATE TABLE`. PormG emits the column without the constraint and does not rebuild the table, so the key exists in your models and not in the database. PostgreSQL adds it normally with `ADD CONSTRAINT`, so this is a backend divergence, not a shared limitation.
+**A foreign key arriving as a *new* column** is created too, and usually without a rebuild. SQLite accepts an inline `REFERENCES` clause on `ALTER TABLE ... ADD COLUMN` provided the column is nullable and has no default, which is the ordinary shape of a new `ForeignKey`:
 
-    Until this is automated, create the table with the key (a fresh database), or make the change by hand on SQLite.
+```sql
+ALTER TABLE "result" ADD COLUMN "circuitid" INTEGER NULL REFERENCES "circuit"("circuitid") ON DELETE CASCADE;
+```
+
+Give the column a `default` and SQLite will not take the clause inline — PormG then adds the column and rebuilds the table from your model, which renders the `FOREIGN KEY` clause the same way `CREATE TABLE` does. PostgreSQL is unaffected either way: it adds a separate named constraint with `ADD CONSTRAINT`, as it always has.
+
+!!! warning "Two column shapes SQLite refuses outright"
+    Independently of foreign keys, SQLite will not `ADD COLUMN` a `UNIQUE` column at all, nor a `NOT NULL` column without a default — the refusal is about the column. So adding a **new** `OneToOneField` (which is `unique = true`), or a **new** `null = false` field that ends up with no `DEFAULT`, fails on SQLite when the table already exists. It fails on the `ADD COLUMN` itself, before any rebuild PormG queued behind it, and the migration rolls back rather than doing anything silently.
+
+    `DateTimeField` and `DateField` are the exception to the second half: PormG synthesizes a temporary default for those two, adds the column with it, and then rebuilds the table to drop it — so a new required timestamp needs none of the below.
+
+    PostgreSQL accepts the `UNIQUE` column, but shares the `NOT NULL` restriction: `ADD COLUMN … NOT NULL` with no default is rejected on a table that already has rows, because the existing rows would violate it.
+
+    For every other required column, add it in two steps on either backend: declare it nullable with no default, migrate, backfill the values, then tighten it — the tightening is an alteration of an existing column, which takes the table rebuild on SQLite and an `ALTER COLUMN` on PostgreSQL.
 
 !!! warning "Dropping a primary key: PostgreSQL vs SQLite"
     Removing a column that is the table's **only** primary key diverges by backend. PostgreSQL's `DROP COLUMN` drops the column and its `PRIMARY KEY` constraint natively, leaving a table with no primary key. SQLite cannot express that without silently degrading the table to a rowid table, so PormG **fails `makemigrations` loudly** instead — declare a replacement primary key, or make the change manually. Dropping a primary-key column while the model still declares a primary key (the key moved to another column) rebuilds normally on both backends.

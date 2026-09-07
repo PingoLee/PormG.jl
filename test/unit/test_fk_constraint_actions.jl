@@ -25,15 +25,18 @@ so the false claim cannot come back untested.
 TWO THINGS ABOUT THIS HARNESS, both load-bearing:
 
   * The PostgreSQL mock needs a `fetch` with a CATCH-ALL, not just an answer for the FK catalog
-    probe. `_drop_index` fires unconditionally on the rename path and issues a NON-parameterized
+    probe. `_drop_index` fires unconditionally on the rename path and issues its own
     `get_constraints_index` query; a mock that matches only `get_constraints_fk` raises a
     `MethodError` from inside `makemigrations`.
   * Every fixture below uses a plain, NON-UNIQUE `ForeignKey` with a long column name, on purpose.
-    `_drop_index` on a `unique` renamed column drops the constraint's backing index — which
-    silently destroys the UNIQUE constraint on PostgreSQL and aborts the migration on SQLite — and
-    `get_constraints_index`'s `indexdef LIKE '%<col>%'` is unanchored, so a short name can match a
-    neighbouring index. Both are pre-existing bugs and out of scope here; either would fail these
-    tests in a way that looks like #504.
+    When this file was written that was a dodge: `_drop_index` on a `unique` renamed column dropped
+    the constraint's backing index — silently destroying the UNIQUE constraint on PostgreSQL and
+    aborting the migration on SQLite — and `get_constraints_index` matched `indexdef LIKE '%<col>%'`
+    unanchored, so a short name could match a neighbouring index. Either would have failed these
+    tests in a way that looked like #504. Both are fixed (#515), and
+    `test/unit/test_rename_unique_index.jl` plus integration Phase 4j are what keep them fixed. The
+    fixtures stay as they are anyway — this file is #504/#505's, and widening it would blur which
+    bug a failure belongs to.
 
 MOCK LIMIT, stated rather than papered over. Both SQLite testsets need a real temp file, for
 DIFFERENT reasons: testset 6 because `_drop_index` asks the connection for `PRAGMA index_list`, and
@@ -81,8 +84,9 @@ function fetch(connection::FkConstraintActionsMockPg504, sql::String;
     return DataFrame()
   end
 
-  # The catch-all. `get_constraints_index(::PormGPostgres)` lands here (unparameterized `pg_indexes`
-  # query) and an empty frame means "no live index", which keeps these plans to the FK story.
+  # The catch-all. `get_constraints_index(::PormGPostgres)` lands here — since #515 a parameterized
+  # `pg_index` join, so its values arrive in `params` and are ignored along with everything else —
+  # and an empty frame means "no live index", which keeps these plans to the FK story.
   return DataFrame()
 end
 

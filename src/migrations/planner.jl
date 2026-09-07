@@ -182,21 +182,34 @@ function _drop_index(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::Or
   if index_name === nothing
     return nothing
   end
-  # PostgreSQL: a UNIQUE constraint creates a backing index with the same name.
-  # DROP INDEX fails when the index backs a constraint, so drop the constraint first.
-  if conn isa PormGPostgres
-    # `model_name` is already the RESOLVED physical table name (db_table when set, #59) — every
-    # producer of this Symbol keys on `model_table_name`. Do NOT re-normalize it through
-    # `format_model_name`, which would lowercase a mixed-case db_table back into a different table.
-    # Escaped ONCE here; the interpolations below must NOT escape it again (#394).
-    table_name = Dialect._quote_table_ddl(string(model_name))
-    drop_sql = """ALTER TABLE \"$table_name\" DROP CONSTRAINT IF EXISTS \"$(Dialect._quote_table_ddl(index_name))\";\nDROP INDEX IF EXISTS \"$(Dialect._quote_table_ddl(index_name))\";"""
-    _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name", drop_sql)
-  else
-    _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name",
-    Dialect.drop_index(conn, index_name))
-  end
-  return nothing    
+  # #515: this used to emit, on PostgreSQL only, an `ALTER TABLE … DROP CONSTRAINT IF EXISTS` ahead
+  # of the `DROP INDEX`, because a `UNIQUE` constraint is IMPLEMENTED BY an index of the same name
+  # and PostgreSQL refuses to drop that index while the constraint owns it. It worked. That is the
+  # problem: on an ordinary indexed column it was a harmless `NOTICE`, and on a `unique = true`
+  # column it silently destroyed the constraint — with nothing on any of this function's three call
+  # sites (the rename branch, the deleted-`db_index` flush, the field-deletion loop) to put it back,
+  # and introspection reading `unique` correctly afterwards, so the model compared converged and
+  # `makemigrations` never mentioned it again.
+  #
+  # It is gone rather than gated, and the gate is one level up instead: `get_constraints_index` now
+  # refuses to return any constraint-backing index on either backend (`NOT indisunique` plus a
+  # `pg_constraint` probe; `origin = 'c' AND "unique" = 0`), so the lookup path cannot reach here
+  # with such a name. The one caller passing an explicit `index_name` — the deleted-`db_index` flush
+  # in `_alter_table_fields` — reads it from `model.cache["index"]`, which introspection populates
+  # from a CTE that already filters `NOT indisunique`.
+  #
+  # Removing it also changes the failure mode for anything that slips past both: a constraint-backed
+  # name now makes `DROP INDEX` fail LOUDLY (*"cannot drop index … because constraint … requires
+  # it"*, and the runner's transaction rolls the migration back) instead of quietly succeeding by
+  # destroying the constraint first. Loud beats silent — keeping the statement would leave the bug
+  # armed for the next caller to re-discover.
+  #
+  # Both backends now render the same single statement, so there is no longer a backend branch here.
+  # `model_name` is already the RESOLVED physical table name (db_table when set, #59) and needs no
+  # re-normalization through `format_model_name`; `Dialect.drop_index` does the quoting (#394).
+  _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name",
+  Dialect.drop_index(conn, index_name))
+  return nothing
 end
 function _drop_index(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol; index_name::Union{String, Nothing} = nothing)
   _drop_index(conn, migration_plan, model_name, field_name |> string, index_name=index_name)
@@ -244,15 +257,18 @@ function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite
        # not fully automated yet."), which is why it is gone rather than merely quieter.
        #
        # The message is deliberately scoped to THIS call site instead of claiming that adding a
-       # foreign key rebuilds the table on SQLite generally — which would be FALSE. A key gained by
-       # a column that already exists reaches here; a key arriving as a NEW column never does. That
-       # path is `_add_new_field` → `Dialect.add_field(::PormGSQLite, …)`, a bare `ADD COLUMN` whose
-       # `field_to_column` renders no `REFERENCES` at all (the only three renderers are
-       # `create_table`, this rebuild, and PostgreSQL's `add_foreign_key`), and `_add_constrains`'
-       # own FK block is PostgreSQL-only — see its comment saying exactly that. So a new SQLite
-       # column declared `ForeignKey` silently gets no constraint. That gap is real and OUT OF SCOPE
-       # here; it is written up under *SQLite: Table Recreation* in `docs/src/migrations/index.md`.
-       # Do not let this message imply it is handled.
+       # foreign key rebuilds the table on SQLite generally — which would still be FALSE, though for
+       # a smaller reason than it was. A key gained by a column that already exists reaches here; a
+       # key arriving as a NEW column never does, and takes `_add_new_field` instead.
+       #
+       # #514 closed that second path, so the sentence this block used to end with — "a new SQLite
+       # column declared `ForeignKey` silently gets no constraint" — is no longer true. A nullable,
+       # defaultless new column now carries an INLINE `REFERENCES` on its `ADD COLUMN`, and every
+       # other shape is routed by `_add_new_field` through a rebuild of its own. What survives of the
+       # old warning is narrower and lives there: SQLite refuses `ADD COLUMN … UNIQUE` and
+       # `ADD COLUMN … NOT NULL`-without-a-default outright, so those two shapes still fail. Do not
+       # let this message imply it covers the new-column path either way — it does not, and the two
+       # paths report differently on purpose.
        #
        # It stays a log line rather than nothing at all (option 1 in #505) because the rebuild is a
        # real cost on a large table, and a line at plan time is cheaper to notice than the DDL
@@ -317,8 +333,13 @@ function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan
       _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name",
       # Referenced table escaped as in `_add_fk_constraint_in_alteration` above (#388).
       Dialect.add_foreign_key(conn, model_table_name(model), "\"$(Dialect._quote_table_ddl(constraint_name))\"", "\"$(Dialect._quote_table_ddl(local_col))\"",  "\"$(Dialect._quote_table_ddl(fk_target_table(field; column = field_name, model = model)))\"", "\"$(Dialect._quote_table_ddl(resolved_pk))\"", on_delete=on_delete_sql))
-    # For SQLite, FKs are added in CREATE TABLE, so if we are adding a field to an existing table, 
-    # we might need recreation if it's a FK.
+    # No `else`, and that is now correct rather than a gap. SQLite has no `ALTER TABLE ADD
+    # CONSTRAINT`, so it cannot express this statement at all — its foreign key is declared with the
+    # column. #514 put both spellings where the column is written: `Dialect.add_field` renders an
+    # inline `REFERENCES` when SQLite will accept one, and `_add_new_field` routes every other shape
+    # through the table rebuild. This block stays PostgreSQL-only because PostgreSQL is the only
+    # backend with a separate constraint to add. (Prior comment here read "we might need recreation
+    # if it's a FK" — a `# TODO` in prose, and the only record the gap had.)
     end
   end
 
@@ -433,9 +454,28 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
   field = model.fields[field_name]
   Models.is_many_to_many_field(field) && return nothing
   name = _hash_field_name(model_name, field_name)
-  _configure_order_dict_migration_plan(migration_plan, model_name, "Add field: $field_name", Dialect.add_field(conn, model_name, field_name, field, temporary_default = temporary_default_value))
+  # #514: `model` lets `Dialect.add_field` resolve the parent table and render SQLite's `REFERENCES`
+  # clause inline. PostgreSQL accepts and ignores it — its key is added separately, by
+  # `_add_constrains` on the next line.
+  _configure_order_dict_migration_plan(migration_plan, model_name, "Add field: $field_name", Dialect.add_field(conn, model_name, field_name, field, temporary_default = temporary_default_value, model = model))
   _add_constrains(conn, migration_plan, model_name, model, field_name, field, name)
-  if temporary_default_value !== nothing
+  # #514: the other half. SQLite takes the inline clause only for a nullable, defaultless, non-unique
+  # column (`sqlite_add_column_can_inline_fk` — SQLite's own `ADD COLUMN` rule, and Django's test
+  # before it falls back to `_remake_table`). Any other shape has to reach its constraint through the
+  # rebuild below, which re-renders every `FOREIGN KEY` clause from the DESIRED model and so needs no
+  # new renderer. One predicate, asked here and in `add_field`, so the two halves cannot disagree.
+  #
+  # STATED LIMIT, because this repairs less than it looks like: the rebuild is queued AFTER the
+  # `ADD COLUMN`, and SQLite refuses `ADD COLUMN … UNIQUE` and `ADD COLUMN … NOT NULL` without a
+  # default whether or not a foreign key is involved. So of the ineligible shapes only NOT NULL WITH
+  # a default is actually fixed here; a `unique` key (an `sOneToOneField`) and a NOT NULL key with no
+  # default still abort on the first statement — exactly as they did before #514, since that refusal
+  # is about the column, not the constraint. Pre-existing, unchanged, and filed separately rather
+  # than widened into here.
+  needs_sqlite_fk_rebuild = conn isa PormGSQLite && field isa Models.sRelationalColumn &&
+                            field.db_constraint &&
+                            !Dialect.sqlite_add_column_can_inline_fk(field, temporary_default_value)
+  if temporary_default_value !== nothing || needs_sqlite_fk_rebuild
     # SQLite requires a full table recreation to drop the temporary default.
     # Use the same stable "Alter table:" key so multiple datetime fields being
     # added at once don't produce duplicate recreation statements.
@@ -448,10 +488,39 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
     end
     # #82: this add-NOT-NULL-with-default path also rebuilds the table on SQLite, so it must preserve the
     # existing secondary indexes too (no-op on PostgreSQL).
+    #
+    # `[:default]` still describes the temporary-default caller and is left as-is for the #514 one:
+    # `Dialect.alter_field(::PormGSQLite, …)` reads neither `old_field` nor this vector, rebuilding
+    # from the desired model outright (verified — the SQLite method's body names neither). Only
+    # PostgreSQL's method consults it, and PostgreSQL never reaches here for the #514 reason.
     _configure_order_dict_migration_plan(migration_plan, model_name, alter_key,
       _sqlite_rebuild_preserving_indexes(conn, model_table_name(model),
         Dialect.alter_field(conn, model, field_name, field, nothing, [:default]);
         surviving_columns = _model_physical_columns(model)))
+  elseif conn isa PormGSQLite
+    # The other half of the same invariant, and the reason the block above was not enough. The
+    # rebuild's `CREATE TABLE` is rendered from the DESIRED model, so it already declares every new
+    # column, and its `INSERT … SELECT` reads every model column from the OLD table — which means
+    # EVERY `ADD COLUMN` for this table has to run BEFORE it, not merely every *rebuilding* one.
+    #
+    # The delete-and-reinsert above maintains that only while the field being processed is itself
+    # rebuild-triggering. A plain new column processed AFTERWARDS appended its `Add field:` step past
+    # the rebuild, and `ALTER TABLE … ADD COLUMN` then hit `duplicate column name` on a column the
+    # rebuild had just created — aborting the migration and rolling it back. `colect_addition` is
+    # built from a `Set`, so which field lands first is hash order: the same two-column migration
+    # failed or passed depending on the column names.
+    #
+    # Pre-existing (the only trigger was a new `sDateTimeField`/`sDateField`), but #514 widened the
+    # trigger set to every new SQLite foreign key that cannot be inlined, and "add a keyed column and
+    # an ordinary column in one migration" is routine — so it is fixed here rather than left for the
+    # wider trigger to find. Moving the SAME statement keeps the plan otherwise identical; the SQL
+    # needs no regeneration because it was always rendered from the whole desired model.
+    alter_key = "Alter table: $model_name"
+    if haskey(migration_plan, model_name) && haskey(migration_plan[model_name], alter_key)
+      queued_rebuild = migration_plan[model_name][alter_key]
+      delete!(migration_plan[model_name], alter_key)
+      _configure_order_dict_migration_plan(migration_plan, model_name, alter_key, queued_rebuild)
+    end
   end
   return nothing
 end
@@ -686,6 +755,11 @@ function _resolve_table_fields(
           # be dropped), and a second rename/addition on the same table is unsupported (the rebuild copies by
           # `current_model`'s names, which the other change hasn't applied to the old table yet) — both rare,
           # and both fail safely (the runner transaction rolls back). Tracked as a #150 follow-up.
+          #
+          # #514 added a THIRD producer of this same "Alter table:" key — `_add_new_field`, for a new
+          # foreign key SQLite cannot inline — so it falls under the first limitation above: a rename
+          # and such an addition on one table in one migration leaves whichever registered last, and
+          # that one carries no `column_renames`. Same rarity, same safe failure, same follow-up.
           old_phys = Models.field_db_column(old_field, old_field_name)
           _configure_order_dict_migration_plan(migration_plan, model_name, "Rename field: $field_name",
           Dialect.rename_field(conn, model_name, old_field_name, field_name))
@@ -696,6 +770,13 @@ function _resolve_table_fields(
             column_renames = Dict(old_phys => field_name)))
         else
           _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, old_field_name, new_field, old_field)
+          # #515: still gated only on `primary_key`, and deliberately so. The hazard was never the
+          # unconditional CALL — it was that `get_constraints_index` answered with an index backing a
+          # UNIQUE constraint, which `_drop_index` then destroyed on PostgreSQL and choked on with
+          # SQLite. That is fixed where the answer is produced, so this line is safe as written and a
+          # second local opinion here would be worse than none: a `!new_field.unique` guard reads as
+          # the fix while missing a `CREATE UNIQUE INDEX` column, which sets no `field.unique` at all
+          # and is the same hazard. Same reasoning as #504 one line below — one decision, one place.
           !new_field.primary_key && _drop_index(conn, migration_plan, model_name, old_field_name)
           _configure_order_dict_migration_plan(migration_plan, model_name, "Rename field: $field_name",
           Dialect.rename_field(conn, model_name, old_field_name, field_name))

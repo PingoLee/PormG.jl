@@ -834,6 +834,34 @@ function create_table(conn::PormGPostgres, model::PormGModel)
   return create_table(conn, model_table_name(model), columns)
 end
 
+"""
+    _foreign_key_references_sql(field::PormGField; column, model) -> String
+
+The `REFERENCES "<parent>"("<pk>") ON DELETE <action>` tail of a foreign-key declaration, for a
+`field` that has already been established to be an `sRelationalColumn` with `db_constraint = true`.
+
+Three callers, all SQLite: `create_table`, the `alter_field` table rebuild, and — since #514 — the
+inline clause `add_field` attaches to an `ALTER TABLE … ADD COLUMN`. The first two hold the whole
+clause and prefix their own `FOREIGN KEY ("<local column>") `, because SQLite writes those at the
+table level; `add_field` writes it at the column level and so uses this tail on its own.
+
+Extracted rather than copied a third time: the two existing renderings were already byte-identical,
+and the reason they must STAY identical is convergence, not tidiness. What `add_field` emits is what
+a later rebuild re-renders and what introspection reads back, so a clause that differed by so much
+as a `DEFERRABLE` would make `makemigrations` propose the same column forever.
+
+Resolvers, all preserved from the sites this replaces: the referenced parent TABLE honors `db_table`
+(#59) via `fk_target_table` and is ESCAPED (#388) — an unescaped `db_table` holding a `"` closed the
+identifier early, rendering `REFERENCES "Ev"il"("id")`, which is malformed SQL and a DDL-injection
+seam — and the referenced parent COLUMN honors `db_column` (#50) via `fk_target_column`.
+"""
+function _foreign_key_references_sql(field::PormGField; column::Union{String,Symbol}, model::PormGModel)::String
+  on_delete_str = _foreign_key_on_delete_sql(field.on_delete)
+  target_tbl = fk_target_table(field; column = column, model = model)
+  target_pk = fk_target_column(field)
+  return "REFERENCES \"$(_quote_table_ddl(target_tbl))\"(\"$(_quote_table_ddl(target_pk))\") ON DELETE $on_delete_str"
+end
+
 function create_table(conn::PormGSQLite, model::PormGModel)
   columns::Vector{String} = []
   for (field_name, field) in model.fields
@@ -847,15 +875,10 @@ function create_table(conn::PormGSQLite, model::PormGModel)
     # `isa sForeignKey` gate silently emitted no constraint for a one-to-one. The ALTER paths in
     # `planner.jl` already gate on `hasfield(:to)` and so always covered both.
     if field isa sRelationalColumn && field.db_constraint
-      on_delete_str = _foreign_key_on_delete_sql(field.on_delete)
-      # Local FK column and referenced parent column both honor db_column (#50).
+      # Local FK column honors db_column (#50); the referenced half is the shared tail above.
       local_col = field_db_column(field, string(field_name))
-      target_pk = fk_target_column(field)
-      # Referenced (parent) TABLE honors db_table (#59) via fk_target_table, and is ESCAPED (#388) —
-      # the table being CREATED goes through `_quote_table_ddl` while the table being REFERENCED did
-      # not, so a `db_table` holding a `"` closed the identifier early: a parent pinned to `Ev"il`
-      # rendered `REFERENCES "Ev"il"("id")`, which is malformed SQL and a DDL-injection seam.
-      push!(columns, "FOREIGN KEY (\"$(_quote_table_ddl(local_col))\") REFERENCES \"$(_quote_table_ddl(fk_target_table(field; column = field_name, model = model)))\"(\"$(_quote_table_ddl(target_pk))\") ON DELETE $on_delete_str")
+      push!(columns, "FOREIGN KEY (\"$(_quote_table_ddl(local_col))\") " *
+                     _foreign_key_references_sql(field; column = field_name, model = model))
     end
   end
 
@@ -1134,12 +1157,75 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   return join(sql_statements, "\n")
 end
 
-function add_field(conn::PormGPostgres, table_name::Union{String,Symbol}, field_name::String, field::PormGField; temporary_default::Any=nothing)
+"""
+    sqlite_add_column_can_inline_fk(field, temporary_default) -> Bool
+
+Whether SQLite will accept this field's `FOREIGN KEY` as an inline `REFERENCES` clause on an
+`ALTER TABLE … ADD COLUMN` (#514). `false` means the key has to arrive through a table rebuild
+instead; `false` for a non-relational or `db_constraint = false` field means there is no key to add.
+
+The predicate is SQLite's own `ALTER TABLE ADD COLUMN` rule, which is also, term for term, what
+Django's SQLite schema editor tests before falling back to `_remake_table`:
+
+  * *"If foreign key constraints are enabled and a column with a REFERENCES clause is added, the
+    column must have a default value of NULL"* — hence `null` and no default, `temporary_default`
+    included, since that is a real `DEFAULT` in the emitted DDL.
+  * *"The column may not have a PRIMARY KEY or UNIQUE constraint"* — hence the last two. Those two
+    make SQLite refuse the `ADD COLUMN` outright, foreign key or not.
+
+`sRelationalColumn`, never a bare `isa sForeignKey`: `sOneToOneField` is a sibling struct rather
+than a subtype, and four subsystems have each shipped that bug (#408, #409, #418, #437). A
+one-to-one is `unique = true` and so is ineligible here anyway — but for the stated reason, not by
+accident of the gate.
+"""
+function sqlite_add_column_can_inline_fk(field::PormGField, temporary_default::Any)::Bool
+  return field isa sRelationalColumn && field.db_constraint &&
+         field.null && field.default === nothing && temporary_default === nothing &&
+         !field.unique && !field.primary_key
+end
+
+# `model` is accepted and IGNORED on PostgreSQL, so the planner has one call to make rather than a
+# backend branch. PostgreSQL adds its key separately and must keep doing so: `_add_constrains` emits
+# a named `ALTER TABLE … ADD CONSTRAINT … DEFERRABLE INITIALLY DEFERRED`, which an inline clause here
+# would duplicate.
+function add_field(conn::PormGPostgres, table_name::Union{String,Symbol}, field_name::String, field::PormGField; temporary_default::Any=nothing, model::Union{PormGModel,Nothing}=nothing)
   return """ALTER TABLE "$(_quote_table_ddl(table_name))" ADD COLUMN $(field_to_column(field_name, field, conn, temporary_default=temporary_default));"""
 end
 
-function add_field(conn::PormGSQLite, table_name::Union{String,Symbol}, field_name::String, field::PormGField; temporary_default::Any=nothing)
-  return """ALTER TABLE "$(_quote_table_ddl(table_name))" ADD COLUMN $(field_to_column(field_name, field, conn, temporary_default=temporary_default));"""
+# #514: SQLite can only declare a foreign key inside a `CREATE TABLE` — or, in the one case above,
+# inline on the `ADD COLUMN` itself. Without this the column arrived with NO constraint at all and
+# nothing said so: `field_to_column` renders no `REFERENCES` on either backend and `_add_constrains`'
+# FK block is PostgreSQL-only.
+#
+# What happened NEXT is not what #514 assumed, and the difference is worth recording because it is
+# the reason this is a correctness fix and not merely a tidiness one. #514 reasoned that
+# `makemigrations` converges afterwards, so nothing would ever propose repairing the column.
+# Measured on a real temp SQLite file, it does the opposite: introspection reads the constraint-less
+# column back as `sIntegerField`, the declared side is still `sForeignKey`, no comparator reconciles
+# that pair, and the SECOND `makemigrations` plans a whole-table rebuild — which does create the key.
+# So the pre-fix behaviour was a constraint-less window followed by a surprise rebuild on a later,
+# unrelated run. Both halves are gone now: the key is created by the migration that declares it, and
+# nothing is left over to re-propose.
+#
+# When the clause cannot be inlined, this still emits the bare column and the PLANNER routes the key
+# through a table rebuild — `_add_new_field` owns that decision, calling the same predicate. Passing
+# `model = nothing` therefore means "caller has no model to resolve the parent from", and yields the
+# pre-#514 bare column; every in-tree caller passes one.
+#
+# NEWLY REACHABLE THROW, stated rather than discovered later. `_foreign_key_references_sql` resolves
+# the parent through `Models.fk_target_table`, which raises `ModelDefinitionError` when a key's `.to`
+# is still an unresolved binding string with no `to_table` breadcrumb — the state a models file
+# generated with `include_table`/`ignore_table` is left in when the parent was filtered out. This
+# path never called it before and emitted a bare column instead. That is a divergence REMOVED, not
+# added: PostgreSQL already raised from `_add_constrains` for the same models file, and SQLite
+# silently producing a constraint-less column was the #514 bug in its purest form. It fires only for
+# `db_constraint = true`, and the rebuild branch reaches the same resolver anyway.
+function add_field(conn::PormGSQLite, table_name::Union{String,Symbol}, field_name::String, field::PormGField; temporary_default::Any=nothing, model::Union{PormGModel,Nothing}=nothing)
+  column_sql = field_to_column(field_name, field, conn, temporary_default=temporary_default)
+  if model !== nothing && sqlite_add_column_can_inline_fk(field, temporary_default)
+    column_sql *= " " * _foreign_key_references_sql(field; column = field_name, model = model)
+  end
+  return """ALTER TABLE "$(_quote_table_ddl(table_name))" ADD COLUMN $(column_sql);"""
 end
 
 function drop_field(conn::PormGPostgres, table_name::Union{String,Symbol}, field_name::Union{String,Symbol})
@@ -1171,12 +1257,11 @@ function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Sym
   # Add foreign key constraints (local + referenced columns honor db_column — #50)
   for (f_name, f) in model.fields
     if f isa sRelationalColumn && f.db_constraint   # #408, as in `create_table`
-      on_delete_str = _foreign_key_on_delete_sql(f.on_delete)
+      # Local FK column honors db_column (#50); the referenced half is `_foreign_key_references_sql`,
+      # shared with `create_table` and `add_field` so all three render one clause (#514).
       local_col = field_db_column(f, string(f_name))
-      target_pk = fk_target_column(f)
-      # Referenced (parent) TABLE honors db_table (#59) via fk_target_table, escaped as in
-      # `create_table` above (#388).
-      push!(columns_defs, "FOREIGN KEY (\"$(_quote_table_ddl(local_col))\") REFERENCES \"$(_quote_table_ddl(fk_target_table(f; column = f_name, model = model)))\"(\"$(_quote_table_ddl(target_pk))\") ON DELETE $on_delete_str")
+      push!(columns_defs, "FOREIGN KEY (\"$(_quote_table_ddl(local_col))\") " *
+                          _foreign_key_references_sql(f; column = f_name, model = model))
     end
   end
 

@@ -1542,13 +1542,79 @@ function get_constraints_fk(conn::PormGPostgres, table_name::Symbol, field_name:
   return result[1, :constraint_name]
 end
 
+"""
+    get_constraints_index(conn, table_name::Symbol, field_name::String) -> Union{String,Nothing}
+
+Name of a live index on `table_name` that covers `field_name` **and that PormG may drop**, or
+`nothing`. Both backends answer the same question, and it is deliberately NARROWER than "an index
+touching this column".
+
+#515: the main caller is `planner._drop_index`, which exists to remove an index so a `RENAME COLUMN`
+can re-create it under the new name, or — on SQLite, which refuses `DROP COLUMN` on an indexed
+column — so a deletion is not refused. (PostgreSQL never refuses a `DROP COLUMN` over an index; it
+drops the index with the column. The second errand is SQLite's alone.) An index that *backs a
+constraint* serves neither errand and cannot survive the attempt:
+
+  * PostgreSQL implements a `UNIQUE` constraint AS an index of the same name and refuses to drop
+    that index while the constraint owns it. `_drop_index` used to work around that by emitting
+    `ALTER TABLE … DROP CONSTRAINT IF EXISTS` first — which succeeded, and silently destroyed the
+    constraint. Nothing re-added it: `_add_constrains` has no `unique` half, and `alter_field`'s
+    `:unique` branch is unreachable from the rename path.
+  * SQLite names the same thing `sqlite_autoindex_<table>_<n>` and refuses outright — *"index
+    associated with UNIQUE or PRIMARY KEY constraint cannot be dropped"* — so the migration aborts
+    and rolls back.
+
+Same input, opposite failures, neither of them right. Filtering HERE rather than at `_drop_index`'s
+call sites is what makes it safe by construction for all of them, and it settles the third half of
+#515 in the same move: the PostgreSQL query below matches on real column MEMBERSHIP instead of
+`indexdef LIKE '%<field_name>%'`, which was unanchored (a short name matched a neighbouring index's
+definition text), unparameterized, and unordered under a `result[1, …]`.
+
+THE FOURTH CALLER is not a drop at all, and the narrowing changed it — deliberately, and for the
+better. `_alter_table_fields`' `index_actions` `:create` flush probes this function to avoid queuing
+a `CREATE INDEX` beside one a SQLite rebuild is about to re-create (the random name suffix defeats
+`IF NOT EXISTS`). It is asking "does a plain index already cover this column?", which is what this
+function now answers and is not what it answered before: a column carrying only a UNIQUE index and
+newly declared `db_index = true` used to see that index, skip the CREATE, and be re-proposed on
+every `makemigrations` forever, because the rebuild renders `UNIQUE` inline rather than as the
+separate index `db_index` means. It now gets its plain index once and converges.
+
+NOT narrowed to single-column, non-partial indexes, unlike the `db_index` reader
+[`_sqlite_single_column_indexed_columns`](@ref) whose filter this otherwise mirrors. That reader
+answers *"is this column `db_index = true`?"*; this one answers *"may PormG drop this index?"*, and
+a composite or partial index is both droppable and blocking — SQLite refuses `DROP COLUMN` on ANY
+indexed column, so the planner's field-deletion loop needs those found. Do not collapse the two.
+"""
 function get_constraints_index(conn::PormGPostgres, table_name::Symbol, field_name::String)
+  # Parameterized, per this file's own rule (see `get_constraints_fk` above): the unparameterized
+  # siblings predate it and are left alone, but an EDITED query does not inherit the exemption.
+  #
+  # `NOT indisunique` / `NOT indisprimary` is the constraint-backing index in its two ordinary
+  # shapes. The `pg_constraint` probe closes the residual one they miss — an EXCLUDE constraint owns
+  # an index that is not unique — so what comes back is provably owned by no constraint, which is
+  # what lets `_drop_index` emit a bare `DROP INDEX` with no `DROP CONSTRAINT` ahead of it.
+  #
+  # `indkey` covers INCLUDE columns as well as key columns, on purpose: a non-key column still makes
+  # PostgreSQL refuse to drop the column, and this lookup's job is to find what stands in the way.
+  # Scoped through `current_schemas(false)` for `get_constraints_fk`'s reason — the DDL this arms is
+  # emitted UNQUALIFIED and so resolves through the search path, and the lookup has to agree with the
+  # statement it is arming. Ordered, because "whichever PostgreSQL returned first" is not an answer.
   query = """
-  SELECT indexname
-  FROM pg_indexes
-  WHERE tablename = '$table_name' AND indexdef LIKE '%$field_name%';
+  SELECT ic.relname AS indexname
+  FROM pg_index i
+  JOIN pg_class ic    ON ic.oid = i.indexrelid
+  JOIN pg_class tc    ON tc.oid = i.indrelid
+  JOIN pg_namespace n ON n.oid  = tc.relnamespace
+  JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey::int2[])
+  WHERE tc.relname = \$1
+    AND a.attname  = \$2
+    AND NOT i.indisunique
+    AND NOT i.indisprimary
+    AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = ic.oid)
+    AND n.nspname = ANY(current_schemas(false))
+  ORDER BY ic.relname;
   """
-  result = fetch(conn, query) |> DataFrame
+  result = fetch(conn, query, [string(table_name), field_name]) |> DataFrame
   if nrow(result) == 0
       return nothing
   end
@@ -1556,21 +1622,28 @@ function get_constraints_index(conn::PormGPostgres, table_name::Symbol, field_na
 end
 
 function get_constraints_index(conn::PormGSQLite, table_name::Symbol, field_name::String)
-  # table_name is Symbol like :migrationtest
-  tname = string(table_name)
-  idx_list = fetch(conn, "PRAGMA index_list(\"$tname\")") |> DataFrame
-  if isempty(idx_list)
-    return nothing
-  end
-  
-  for row in eachrow(idx_list)
-    idx_name = row.name
-    idx_info = fetch(conn, "PRAGMA index_info(\"$idx_name\")") |> DataFrame
-    if !isempty(idx_info) && field_name in idx_info.name
-      return idx_name
-    end
-  end
-  return nothing
+  # The SQLite half of #515. `il.origin = 'c'` is the `sqlite_autoindex_…` skip: an auto-index
+  # created by a `UNIQUE` or `PRIMARY KEY` clause carries origin `'u'` or `'pk'`, never `'c'`.
+  # `il."unique" = 0` excludes the case origin alone would let through — a `CREATE UNIQUE INDEX`,
+  # which IS origin `'c'` and yet is the same hazard: dropping it destroys uniqueness on a column
+  # that never set `field.unique`. That second filter is also why a declared-side guard at the call
+  # site would not have been enough.
+  #
+  # One parameterized query, in the shape `_sqlite_single_column_indexed_columns` established — the
+  # `pragma_index_list(?)` / `pragma_index_info(…)` table-valued join, rather than a `fetch` per
+  # index in a Julia loop. Ordered so a table carrying two eligible indexes on one column answers
+  # the same way twice.
+  rows = fetch(conn, """
+    SELECT il.name AS idx
+    FROM pragma_index_list(?) AS il
+    JOIN pragma_index_info(il.name) AS ii
+    WHERE il."unique" = 0 AND il.origin = 'c' AND ii.name = ?
+    ORDER BY il.name
+    """, [string(table_name), field_name]) |> DataFrame
+  # An empty frame's columns are eltype Missing, so guard before touching them.
+  nrow(rows) == 0 && return nothing
+  rows[1, :idx] === missing && return nothing
+  return string(rows[1, :idx])
 end
 
 # #151: probe the live schema for a UNIQUE index of ANY arity covering `field_name`. That covers the

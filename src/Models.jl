@@ -3081,8 +3081,10 @@ function _compare_model_field(new_field::PormGField, old_field::PormGField)::Boo
         # #360: an introspection-only breadcrumb, asymmetric by construction — introspection sets the
         # live parent table, the models-file side is always `nothing` because `Model_to_str` never
         # emits it. It expresses no schema, so comparing it would report EVERY foreign key as changed.
-        # This function is the fast-path early-out for `_alter_table_fields`; the detailed diff below
-        # it filters the same attribute via `planner._NON_SCHEMA_FIELD_ATTRS`. Both are needed —
+        # This function is the fast-path early-out for `_alter_table_fields`; the column IR below it
+        # reaches the same result differently — `to_table` is in `Migrations.SCHEMA_ATTRS`, because
+        # `column_spec` READS it to resolve the foreign key's physical parent, and simply never
+        # compares it on its own (#507). Both are needed —
         # without this one the cheap "nothing changed" answer is never reachable for a model with FKs.
         continue
       elseif getfield(new_field, field_name) != getfield(old_field, field_name)
@@ -3169,31 +3171,48 @@ function _compare_field_foreign_key(new_field::PormGField, old_field::PormGField
   #
   # Note #360 moved the comparison from the LOGICAL axis to the PHYSICAL one, which is a change in
   # its own right, not just a change of normalization.
-  new_table = _fk_reference_table(new_field)
-  old_table = _fk_reference_table(old_field)
-  if new_table !== nothing && old_table !== nothing
-    return new_table == old_table &&
-           fk_target_column(new_field) == fk_target_column(old_field)
-  end
-  # The fallback compares a different AXIS, and #390 deliberately left its `format_model_name` fold
-  # in place. These are Julia BINDINGS, not physical tables: `_model_binding_name` applies
-  # `uppercasefirst`, so an introspected `.to` is `Driver` where a models file may hold `driver`.
-  # Folding is what makes those the same binding, and no engine's case rules are involved — so the
-  # argument that removed the fold above (both sides are canonical physical names) simply does not
-  # apply here.
-  new_to = new_field.to isa PormGModel ? new_field.to.name : new_field.to
-  old_to = old_field.to isa PormGModel ? old_field.to.name : old_field.to
-  normalized_new_to = isnothing(new_to) ? nothing : format_model_name(string(new_to))
-  normalized_old_to = isnothing(old_to) ? nothing : format_model_name(string(old_to))
   # Compare the referenced column by its RESOLVED physical name (fk_target_column), so a
   # field-name pk_field on the code side matches the introspected physical column when the
   # parent's pk field is renamed via db_column (#50). With no db_column this equals the
   # field name, so behavior is unchanged for existing schemas.
-  if normalized_new_to == normalized_old_to && fk_target_column(new_field) == fk_target_column(old_field)
-    return true
-  end
-  return false
+  return _fk_targets_equal(_fk_reference_table(new_field), _fk_target_binding(new_field),
+                           _fk_reference_table(old_field), _fk_target_binding(old_field)) &&
+         fk_target_column(new_field) == fk_target_column(old_field)
 end
+
+"""
+    _fk_target_binding(field) -> Union{String, Nothing}
+
+The foreign key's target as a FOLDED JULIA BINDING — the fallback axis of `_fk_targets_equal`.
+
+These are bindings, not physical tables: `_model_binding_name` applies `uppercasefirst`, so an
+introspected `.to` is `Driver` where a models file may hold `driver`. Folding is what makes those the
+same binding, and no engine's case rules are involved — which is why #390 removed the fold from the
+physical-table axis and deliberately left it here.
+"""
+_fk_target_binding(field::PormGField)::Union{String, Nothing} =
+  (to = field.to; to === nothing ? nothing :
+                  format_model_name(string(to isa PormGModel ? to.name : to)))
+
+"""
+    _fk_targets_equal(new_table, new_binding, old_table, old_binding) -> Bool
+
+Whether two foreign keys point at the same parent, given each side's resolved physical table (or
+`nothing` when it cannot be named) and its folded Julia binding.
+
+**The one definition of that rule.** `_compare_field_foreign_key` calls it with two fields'
+resolutions; `Migrations.reference_delta` calls it with the two `ForeignKeyRef`s a `ColumnSpec`
+carries (#507). Holding one copy each would let the planner's fast path and the column IR drift
+apart, and that drift is precisely the defect class #507 exists to end — so the rule is stated here
+and nowhere else.
+
+When BOTH sides can name their physical table, that is the comparison (#360). Only when one cannot —
+an unresolved String target — does it fall back to the binding axis.
+"""
+_fk_targets_equal(new_table::Union{String, Nothing}, new_binding::Union{String, Nothing},
+                  old_table::Union{String, Nothing}, old_binding::Union{String, Nothing})::Bool =
+  (new_table !== nothing && old_table !== nothing) ? new_table == old_table :
+                                                     new_binding == old_binding
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Fields

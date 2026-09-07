@@ -122,7 +122,14 @@ Entry.connect_key = "default"
     # constructor makes that true for ANY same-arity tuple (measured: it also accepts N `Int`s),
     # so it detects nothing except an arity change. `SQLOrder` in `querybuilder/types.jl` shows a
     # same-arity inner constructor is a shape this repo actually uses.
-    concrete = filter(isconcretetype, subtypes(PormG.PormGField))
+    #
+    # Scoped to types PormG itself owns. `subtypes` walks the WHOLE type tree, and
+    # `test_migration_diff_failsafe.jl` defines throwaway `<: PormGField` structs to probe the #69
+    # error path (`_ThrowingField`, `_ThrowingFKField`) — under `runtests.jl` every file shares one
+    # module, so an unscoped count passed only because this file happens to be included before it. Filtering by `parentmodule` keeps exactly the failure this guard wants (a real
+    # field type added or removed) and drops an ordering dependency that was silent until it broke.
+    concrete = filter(T -> isconcretetype(T) && parentmodule(T) === PormG.Models,
+                      subtypes(PormG.PormGField))
     @test length(concrete) == 25                        # fails loudly when a field type is added or
                                                         # removed (26 until #408 retired sAutoField) —
     for T in concrete                                   # exactly when this helper wants re-reading

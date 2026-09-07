@@ -4364,11 +4364,14 @@ end
 #   * `introspection.jl` force-converts every non-UUID primary key it reads to `IDField` (the
 #     `elseif primary_key` branch — deliberate, see #334), so `IDField` is what the database will
 #     ALWAYS appear to hold, whatever the column's real width;
-#   * `Dialect.describes_same_column` returns `false` outright when either side declares a key, so
-#     the "different Julia type, same physical column" escape hatch is closed for exactly this case;
-#   * a model declaring anything else therefore never equals what introspection reports,
-#     `planner.jl` pushes `:type`, and `makemigrations` proposes the same ALTER on that column on
-#     every single run, forever.
+#   * a model declaring anything else therefore never equals what introspection reports, and
+#     `makemigrations` proposes the same ALTER on that column on every single run, forever.
+#
+# Still true after #507, for a different reason. The canonical column IR compares a key column
+# properly instead of refusing to (`Dialect.describes_same_column` used to return `false` outright
+# whenever either side declared a key), but `IDField` and a plain integer field do not compile alike:
+# `IDField` carries `unique = true` and a `ColumnIdentity`, an `sBigIntegerField` carries neither. So
+# the churn this table avoids is avoided the same way — declare what the reader will report.
 #
 # `AutoField` (#399) was the counter-intuitive entry while PormG still HAD a field by that name:
 # mapping the Django type onto it looked obvious and was wrong, because `sAutoField` was not a fixed

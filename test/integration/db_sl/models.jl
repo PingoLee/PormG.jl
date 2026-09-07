@@ -251,9 +251,7 @@ Bulk_update_payload_scratch = Models.Model("bulk_update_payload_scratch",
 # oversight. SQLite collapses UUIDField, TextField, JSONField and ImageField all onto bare `TEXT`
 # (see the comment in `src/migrations/introspection.jl`'s SQLite reader — CharField is NOT in this
 # group, it keeps a length suffix, `TEXT(n)`), so a UUID primary key is indistinguishable from a
-# TextField/JSONField/ImageField primary key by introspection alone — and
-# `Dialect.describes_same_column` refuses its usual "different declared type, same physical
-# column" leniency for ANY primary key, on either backend, on purpose. Declaring this
+# TextField/JSONField/ImageField primary key by introspection alone. Declaring this
 # fixture here would make `assert_no_schema_drift` propose the same bogus alteration forever, for
 # a reason that has nothing to do with #334's actual bug (which is fully backend-agnostic and
 # already covered by the DB-free unit tests). The #334 integration coverage that needs a real

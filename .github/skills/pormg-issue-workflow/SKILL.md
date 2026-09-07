@@ -166,6 +166,8 @@ you touched. Before running the full suite, ask which of these your diff could r
 | `test_public_exports.jl` | export anything, or change what a submodule exports |
 | `test_error_taxonomy.jl` | add or reparent an exception type |
 | `test_kernel_layering.jl` | add a file to `src/` or move shared vocabulary |
+| `test_column_spec.jl` | add or remove a `PormGField` slot or field struct — the compiler's classification must cover every slot (#507) |
+| `test_db_column.jl` | add or remove a field struct, or give one an inner constructor |
 
 **When your fix makes an EXISTING test fail, adjudicate — do not assume either side.** Two reflexes
 are available and both are wrong. *"The test is older, so my fix must be broken"* leaves the bug half

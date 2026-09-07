@@ -673,74 +673,22 @@ _byte_length_check_clause(col_name, max_length::Int, ::PormGPostgres)::String =
 _byte_length_check_clause(col_name, max_length::Int, ::PormGSQLite)::String =
   "CHECK (length(\"$(_quote_table_ddl(col_name))\") <= $(max_length))"
 
-# ── Physical-column identity (#325) ──────────────────────────────────────────────────────────────
+# ── Physical-column identity ── moved out (#507) ───────────────────────────────────────
 #
-# Several Julia field types materialize the SAME column. On PostgreSQL `CharField`, `URLField` and
-# `SlugField` all render `varchar(n)`, and `EmailField`/`PasswordField`/`ImageField` all fall through
-# `_get_column_type`'s `else` to `text`; on SQLite the collapse is wider still — `UUIDField`,
-# `JSONField`, `TextField` and `ImageField` are all bare `TEXT`.
-# (`AutoField` and `OneToOneField` used to be in that `else` list too. #408 gave `OneToOneField` its
-# own branch and retired `AutoField`, so neither is a text-renderer any more.)
+# `describes_same_column` and `_column_signature` lived here: a predicate the migration planner used
+# to ask whether two DIFFERENT Julia field structs materialize the same physical column (#325), built
+# from the lower-cased rendered type plus the two CHECK-expressed bounds.
 #
-# Introspection therefore CANNOT reproduce the declared Julia type: the information is not in the
-# schema to read. Making it reproducible would mean encoding the type into the DDL (extra CHECK
-# markers on PostgreSQL, non-standard declared types on SQLite — which also changes SQLite's column
-# affinity) and rebuilding every existing table. So the migration diff compares the PHYSICAL COLUMN
-# instead: if two fields render the same column, an ALTER between them is by construction a no-op,
-# and proposing one is the perpetual churn #325 is about.
+# #507 replaced them. That predicate was one of four code paths answering "same column?", each with
+# its own reconciliations, and it had to refuse every relational field and every primary key outright
+# because it could not express their identity — which is what left the FK/O2O pair and the
+# `db_constraint = false` escape to two other branches. `Migrations.column_spec` now compiles BOTH
+# sides of the diff to a `ColumnSpec` that carries the reference, the identity and the key flag, so
+# there is nothing left to refuse: the pairs this used to reject are answered rather than declined.
 #
-# `_get_column_type` alone is not the whole column: two bounds are expressible only as a CHECK, and
-# a signature built from the type string alone would call `IntegerField` and `PositiveIntegerField`
-# the same column on PostgreSQL (both render `integer`).
-#
-# Case-folded because SQL type names are case-insensitive and PormG's own rendering is not
-# self-consistent about it: the `else` fallthrough shared by ImageField/FileField/EmailField/
-# PasswordField returns the literal `"TEXT"`, while `TextField` goes through
-# the map and returns `"text"` on PostgreSQL. Both produce the same `text` column — comparing the
-# strings verbatim would call them different and churn forever, which is the very bug being fixed.
-_column_signature(field::PormGField, conn::Union{PormGPostgres,PormGSQLite}) = (
-  lowercase(_get_column_type(field, conn)),
-  _requires_non_negative_check(field),
-  _requires_byte_length_check(field) ? getfield(field, :max_length) : nothing,
-)
-
-# A relational field's column type is only half of it — the FK constraint is planned separately, by
-# `_add_fk_constraint_in_alteration` / `_drop_fk_constraint_in_alteration`, which run AFTER the
-# planner's `isempty(colect_not_equal)` early-out. `sForeignKey` and `sBigIntegerField` both render
-# `bigint`, so calling them the same column would silently stop planning FK add/drop on an existing
-# column. Excluded here rather than at the call site so the predicate is safe wherever it is used.
-#
-# #437 kept this blanket refusal deliberately. The pair it was blamed for — a declared
-# `ForeignKey(…, unique = true)` against the `sOneToOneField` its own live column reads back as — is
-# handled one branch EARLIER in the planner instead (`Migrations._diffs_attribute_wise`), because the
-# two structs share an attribute vocabulary and so can be diffed attribute by attribute. Relaxing the
-# predicate to admit them would have skipped the `:to` / `:pk_field` reconciliations that branch
-# carries and merely swapped which symbol lands in `colect_not_equal`. Nothing here changed.
-_is_relational_field(field::PormGField)::Bool = hasfield(typeof(field), :to)
-_declares_primary_key(field::PormGField)::Bool =
-  hasfield(typeof(field), :primary_key) && getfield(field, :primary_key)::Bool
-
-"""
-    describes_same_column(conn, a::PormGField, b::PormGField) -> Bool
-
-Whether `a` and `b` materialize the same physical column on `conn` — the same rendered column type
-*and* the same CHECK-expressed bounds (#325).
-
-Used by the migration planner for the cross-type case only, and not even all of it: two fields the
-planner can diff attribute by attribute never reach here — the same Julia struct type, or the
-`sForeignKey`/`sOneToOneField` pair since #437 (`Migrations._diffs_attribute_wise`). So this
-predicate can only ever turn a spurious "changed" into "unchanged", never the reverse.
-
-Relational fields (anything with a `to`) and primary keys are always `false`: their identity is not
-carried by the column type alone. See the comment above `_is_relational_field` for why #437 did not
-narrow that — an `sForeignKey` and an `sBigIntegerField` both render `bigint`, and equating them
-would silently stop planning the FK constraint add/drop.
-"""
-function describes_same_column(conn::Union{PormGPostgres,PormGSQLite}, a::PormGField, b::PormGField)::Bool
-  (_is_relational_field(a) || _is_relational_field(b)) && return false
-  (_declares_primary_key(a) || _declares_primary_key(b)) && return false
-  return _column_signature(a, conn) == _column_signature(b, conn)
-end
+# The two CHECK predicates it read — `_requires_non_negative_check` and `_requires_byte_length_check`,
+# just above — stayed here. They are still the single definition of "does this column carry that
+# CHECK", now shared by `field_to_column`, `alter_field` and the IR's `checks` slot.
 
 function field_to_column(col_name::String, field::PormGField, conn::PormGPostgres; temporary_default::Any=nothing)::String
   # Resolve the physical column name (db_column when set, else the field name) — #50.
@@ -1033,6 +981,35 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
     constraint !== nothing && push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(_quote_table_ddl(constraint))";""")
   end
 
+  # DROP IDENTITY comes BEFORE the type change, and that ordering is load-bearing.
+  #
+  # `new_is_identity` is read through `hasproperty`, NOT as `new_field.generated`: only `sIDField`
+  # carries that slot, and the diff legitimately reports an identity difference for a pair whose
+  # DECLARED side is any other field type. Introspection force-converts every non-UUID primary key
+  # to `IDField` (see the table in `migrations/importers.jl`), so a models file declaring a
+  # `UUIDField` or a natural `CharField` key over a live identity column is an ordinary, reachable
+  # state — and a bare field access there is a `FieldError` that kills the whole `makemigrations`,
+  # not a caught comparison failure (#507). An absent slot means "the declared column is not an
+  # identity", which is exactly what this DROP renders.
+  #
+  # PostgreSQL restricts an identity column to smallint / integer / bigint and enforces it DURING
+  # `ALTER COLUMN … TYPE`, so retyping a live identity column to `uuid` or `varchar(n)` fails with
+  # *"identity column type must be smallint, integer, or bigint"* — the later `DROP IDENTITY` never
+  # gets to run. The reachable shape is a models file declaring a natural key (`UUIDField`, a
+  # `CharField` code) over a column the database holds as an identity, which introspection reports
+  # as `IDField` for every non-UUID primary key.
+  #
+  # The same statement stays AFTER the type change in the `ADD GENERATED` direction below, for the
+  # mirror-image reason: a column can only BECOME an identity once it is already an integer type.
+  # Same shape as the two CHECK drops above, which precede the type change for the same class of
+  # reason. (drizzle-kit shipped and fixed this exact ordering bug —
+  # drizzle-team/drizzle-orm#4178.)
+  identity_changing = :generated in colect_not_equal || :generated_always in colect_not_equal
+  new_is_identity = hasproperty(new_field, :generated) && getfield(new_field, :generated)::Bool
+  if identity_changing && !new_is_identity
+    push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" DROP IDENTITY;""")
+  end
+
   # Alter column type
   if any(attr -> attr in colect_not_equal, [:type, :max_length, :max_digits, :decimal_places])
     if new_field isa sCharField
@@ -1121,23 +1098,25 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
     end
   end
 
-  # generated
-  if :generated in colect_not_equal || :generated_always in colect_not_equal
-    if new_field.generated
-      if new_field.generated_always
-        push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" ADD GENERATED ALWAYS AS IDENTITY;""")
-      else
-        push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" ADD GENERATED BY DEFAULT AS IDENTITY;""")
-      end
+  # generated — only the ADD direction; the DROP was emitted before the type change above, and a
+  # column can only BECOME an identity once it is already an integer type.
+  #
+  # Before #507 this whole block was unreachable for a declared non-`IDField` over a live identity
+  # column: the diff reported `:type` alone, so no identity statement was emitted at all, the
+  # identity survived, and the same ALTER was re-proposed forever — while the bare TYPE change it
+  # did emit could not have succeeded against a non-integer target anyway.
+  if identity_changing && new_is_identity
+    if hasproperty(new_field, :generated_always) && getfield(new_field, :generated_always)::Bool
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" ADD GENERATED ALWAYS AS IDENTITY;""")
     else
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" DROP IDENTITY;""")
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" ADD GENERATED BY DEFAULT AS IDENTITY;""")
     end
   end
 
   # Warn for any requested attribute this function emits no SQL for. Every entry below has a
   # statement branch above it; `:blank`, `:auto_now` and `:auto_now_add` used to be listed here with
   # none, which silenced the warning for three attributes that genuinely could not be applied. They
-  # are now filtered upstream by `planner._NON_SCHEMA_FIELD_ATTRS` — they alter no schema at all —
+  # are now filtered upstream by `Migrations.NON_DB_ATTRS` (#507) — they alter no schema at all —
   # so if one reaches this point it IS an unhandled request and deserves the warning (#325).
   #
   # There is a SECOND upstream filter with a different meaning: `planner._FK_IDENTITY_ATTRS` (#498).

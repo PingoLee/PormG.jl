@@ -795,8 +795,10 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
           # The CHURN half of that argument is no longer live: the planner used to see two different
           # structs, short-circuit `describes_same_column` on `_is_relational_field`, and push
           # `:type` on every `makemigrations` — a full table rebuild here, forever. #437 fixed that
-          # in the planner (`_diffs_attribute_wise` diffs the FK/O2O pair attribute by attribute), so
-          # the alignment below now rests on reader FIDELITY and #409 symmetry alone. That is reason
+          # in the planner, and #507 removed the possibility: both sides now compile to a
+          # `ColumnSpec` (`migrations/column_spec.jl`), where an FK and a one-to-one over the same
+          # parent are the same column. The alignment below now rests on reader FIDELITY and #409
+          # symmetry alone. That is reason
           # enough: a reader should report what the schema says regardless of what the diff tolerates.
           #
           # A PRIMARY KEY needs no uniqueness lookup: it is unique by definition, so `is_pk` is a
@@ -835,9 +837,10 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
           # any OTHER column in the table changed, the detailed loop ran, `typeof` differed, and
           # `:type` swept this column into a full SQLite table rebuild it had nothing to do with.
           #
-          # PAST TENSE since #437: the planner's attribute-wise branch now admits the FK/O2O pair
-          # (`Migrations._diffs_attribute_wise`), so that sweep no longer happens for EITHER reader's
-          # output. This arm stays as it is regardless — it is here so the two readers describe one
+          # PAST TENSE since #437, and unrepresentable since #507: the planner no longer compares
+          # field structs at all — both sides compile to a `ColumnSpec` (`migrations/column_spec.jl`)
+          # in which the FK/O2O pair over one parent is one column — so that sweep cannot happen for
+          # EITHER reader's output. This arm stays as it is regardless — it is here so the two readers describe one
           # schema the same way (#409), which was always the stronger half of the argument.
           #
           # No `primary_key=` here: the `is_pk` arm above already claimed that case, so this arm is
@@ -2347,8 +2350,8 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
           # defaults `unique=false` (uniqueness on a pk column comes from the PRIMARY KEY constraint
           # itself, not a separate `UNIQUE` one), so a declared `UUIDField(primary_key=true, ...)`
           # with no explicit `unique=true` would otherwise permanently disagree with a hardcoded
-          # `true` here — the primary-key branch of `_NON_SCHEMA_FIELD_ATTRS`'s comparison (above in
-          # `planner.jl`) has no exception for `:unique`, so that mismatch alone would keep
+          # `true` here — `:unique` is a schema fact the column IR compares (it is a `ColumnSpec`
+          # field, not a `NON_DB_ATTRS` entry), so that mismatch alone would keep
           # `makemigrations` proposing an alteration regardless of the `:auto_add` exemption below.
           _field_or_drop_default(table_name, col_name, default_value) do d
             Models.UUIDField(primary_key=true, unique=unique, null=false, db_index=db_index, default=d)
@@ -2397,10 +2400,13 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       elseif primary_key && col_type == "varchar" && max_length !== nothing
           # #409: a natural VARCHAR key — `matricula = CharField(primary_key=true)` over a legacy
           # table — reconstructed as its real type instead of being flattened to `IDField`. Flattened,
-          # the declared model could never equal what introspection reported: `describes_same_column`
-          # refuses to equate two field types when either declares a key (Dialect.jl), so the planner
-          # fell to its final `else` and pushed `:type` on EVERY `makemigrations` — a full table
-          # rebuild each time on SQLite.
+          # the declared model could never equal what introspection reported: the planner's
+          # cross-type escape refused to equate two field types when either declared a key, so it fell
+          # to its final `else` and pushed `:type` on EVERY `makemigrations` — a full table rebuild
+          # each time on SQLite. (#507 replaced that escape with the column IR, which compares a key
+          # column by its type, `primary_key` and identity rather than declining to compare it — but
+          # a flattened `IDField` still differs from a declared `CharField` there, so reconstructing
+          # the real type remains the fix.)
           #
           # `max_length` is required, not defaulted: `CharField()` INVENTS `max_length = 250`
           # (models/fields.jl), which would render `varchar(250)` and never match a `varchar(20)`
@@ -2421,8 +2427,8 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
           #     here would manufacture the very disagreement this branch exists to remove, and bake
           #     an untrue `db_index=true` into the file `Model_to_str` regenerates.
           #
-          # `:unique` has no exemption in `_NON_SCHEMA_FIELD_ATTRS` so it would alter; `:db_index`
-          # does, so it would not — but it still costs the planner's fast-path early-out on every
+          # `:unique` is a `ColumnSpec` field so it would alter; `:db_index` is in `NON_DB_ATTRS`
+          # and not in the IR at all, so it would not — but it still costs the fast-path early-out on every
           # varchar-keyed model, and a generated file that lies is a defect on its own terms.
           _field_or_drop_default(table_name, col_name, default_value) do d
             Models.CharField(primary_key=true, max_length=max_length, unique=unique, null=false,

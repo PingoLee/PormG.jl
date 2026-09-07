@@ -13,8 +13,11 @@
 # `makemigrations`, forever. That is the same shape as `auto_now`/`auto_now_add`/`auto_add`, and it
 # is excluded the same way. Two places had to learn it, not one:
 #
-#   1. `Migrations._NON_SCHEMA_FIELD_ATTRS` — the detailed per-attribute loop in
-#      `_alter_table_fields`, which is what actually builds `colect_not_equal`.
+#   1. The detailed diff in `_alter_table_fields`, which is what actually builds `colect_not_equal`.
+#      That was `Migrations._NON_SCHEMA_FIELD_ATTRS` until #507 replaced the attribute loop with the
+#      column IR; `to_table` is now in `Migrations.SCHEMA_ATTRS` because the compiler READS it — it
+#      resolves `ForeignKeyRef.table` — and simply never compares it on its own. Testset 2 asserts
+#      both the classification and the behaviour it is there for.
 #   2. `Models._compare_model_field` — the `are_model_fields_equal` FAST PATH that runs BEFORE it.
 #      That one has no access to the tuple and skips `:on_delete` by hand; `:to_table` joins it.
 #      Missing here, the cheap "nothing changed" answer is simply never reachable for a model with
@@ -29,8 +32,9 @@
 #
 #   * revert the `Models._compare_model_field` skip alone -> testset 1 fails; the plan stays empty,
 #     because the detailed loop then runs and the tuple filters `:to_table` out anyway.
-#   * revert the `_NON_SCHEMA_FIELD_ATTRS` entry alone   -> testset 2 fails; the plan stays empty,
-#     because the fast path short-circuits before the detailed loop is ever reached.
+#   * make the column IR compare `to_table`             -> testset 2 fails; the plan stays empty,
+#     because the fast path short-circuits before the detailed diff is ever reached. (Pre-#507 the
+#     equivalent mutation was reverting the `_NON_SCHEMA_FIELD_ATTRS` entry.)
 #
 # (Both verified by hand, reverting one at a time.) So testsets 1 and 2 are the real gates, one per
 # exclusion. Testset 3 is what makes the TUPLE behaviourally load-bearing: it pairs the `to_table`
@@ -109,11 +113,29 @@ end
   end
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 2. The detailed loop's exclusion tuple — a direct membership check, the same mutation gate
-  #    `test_migration_planner_auto_add.jl` uses for `:auto_add`.
+  # 2. The mutation gate, retargeted by #507. It used to be a membership check on the planner's
+  #    `_NON_SCHEMA_FIELD_ATTRS`; that tuple is gone, and the classification now lives beside the
+  #    column compiler as `NON_DB_ATTRS` / `SCHEMA_ATTRS`. `to_table` is in the SCHEMA half because
+  #    the compiler READS it — it resolves `ForeignKeyRef.table`, the physical parent — but it is
+  #    never compared on its own, which is the property #360 needs and this gate protects.
+  #
+  #    So the membership check is paired with the BEHAVIOURAL form of the same claim: two fields
+  #    differing only in `to_table` compile to the same `ColumnSpec`. Unlike a membership check,
+  #    that fails if the compiler ever starts comparing the slot, whatever list it appears on.
   # ───────────────────────────────────────────────────────────────────────────
-  @testset "to_table is excluded from the per-attribute diff" begin
-    @test :to_table in Migrations._NON_SCHEMA_FIELD_ATTRS
+  @testset "to_table is read to resolve the parent, never compared on its own" begin
+    @test :to_table in Migrations.SCHEMA_ATTRS
+    @test !(:to_table in Migrations.NON_DB_ATTRS)
+
+    # The asymmetry the planner actually faces: introspection records the live parent table, a
+    # models file never does (`Model_to_str` emits no such kwarg).
+    declared_fk, introspected_fk = _fk_pair()
+    @test declared_fk.to_table === nothing && introspected_fk.to_table == "driver profile"
+
+    for conn in (FkToTablePlannerMockPg(), FkToTablePlannerMockSQLite())
+      @test Migrations.column_spec(declared_fk, conn) == Migrations.column_spec(introspected_fk, conn)
+      @test isempty(Migrations.column_attrs_changed(declared_fk, introspected_fk, conn; name = "profile_id"))
+    end
   end
 
   # ───────────────────────────────────────────────────────────────────────────

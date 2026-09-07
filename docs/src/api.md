@@ -673,7 +673,7 @@ Every PormG misuse raises a subtype of `PormGError` (`<: Exception`) so callers 
 **type** instead of matching on a message string. Catch `PormGError` for any PormG failure, or a
 specific subtype for a specific reaction (#231, completed in #239):
 
-`PormGError`, `FieldAccessError`, `UnknownFieldError`, `LazyTraversalError`, `FilterError`, `QueryBuildError`, `UnsafeMutationError`, `InvalidValueError`, `WritesDisabledError`, `UnsupportedConnectionError`, `BackendCapabilityError`, `ProtectedError`, `DefinitionError`, `FieldValidationError`, `ModelDefinitionError`, `ConfigurationError`, `InvalidConfigurationError`, `MigrationError`, `InvalidMigrationError`, `PoolError`, `DatabaseError`, `IntegrityError`, `OperationalError`, `StatementError`, `TransactionError`, `error_message`
+`PormGError`, `FieldAccessError`, `UnknownFieldError`, `AmbiguousFieldError`, `LazyTraversalError`, `FilterError`, `QueryBuildError`, `UnsafeMutationError`, `InvalidValueError`, `WritesDisabledError`, `UnsupportedConnectionError`, `BackendCapabilityError`, `ProtectedError`, `DefinitionError`, `FieldValidationError`, `ModelDefinitionError`, `ConfigurationError`, `InvalidConfigurationError`, `MigrationError`, `InvalidMigrationError`, `PoolError`, `DatabaseError`, `IntegrityError`, `OperationalError`, `StatementError`, `TransactionError`, `error_message`
 
 !!! note "Database failures are wrapped too"
     The taxonomy has two halves. Most of it reports **misuse of PormG**, caught before anything is
@@ -713,8 +713,9 @@ field, and for the few with their own `showerror` it returns the richer renderin
 
 | Type | Raised when |
 | :--- | :--- |
-| `FieldAccessError` *(abstract)* | Umbrella for field/accessor lookup failures — `catch` it to get both cases below. |
+| `FieldAccessError` *(abstract)* | Umbrella for field/accessor lookup failures — `catch` it to get all three cases below. |
 | `UnknownFieldError` | A field, alias, column, or `__` lookup path does not exist on the model or projected row. |
+| `AmbiguousFieldError` | A `__` path's first segment names both a declared CTE and something on the model, so it has no single meaning. Spell the CTE side `CTE("<name>", "<path>")`, or rename the CTE to reach the model side (#492). |
 | `LazyTraversalError` | An unprojected `ForeignKey` or `OneToOneField` was read off a fetched row — project it in `values(...)` first. |
 | `FilterError` | Invalid filter argument/shape, or an operator misused on a JSON/subquery column. |
 | `QueryBuildError` | Structural/API misuse while building a query (joins, CTEs, projection, ordering, window/bulk config). **The long-tail default** — it is the bucket for query-shape misuse that isn't one of the sharper categories, so `catch QueryBuildError` says little beyond "PormG rejected the query shape". Catch a sharper subtype when you need to branch on the cause. |

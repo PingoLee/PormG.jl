@@ -902,20 +902,28 @@ end
 """
     CTE(name::AbstractString, path::AbstractString; desc::Bool = false) -> CTEReference
 
-Reference a column of a CTE declared with [`.with(...)`](@ref object). The CTE's columns live in
-their **own namespace**, separate from the model's field paths, so a CTE may legally share a name
-with a field and neither shadows the other (#444):
+Reference a column of a CTE declared with [`.with(...)`](@ref object) as an **object** rather than
+as the ordinary `"<name>__<path>"` string. Both spellings mean the same column and render identical
+SQL; the object is the **disambiguator** (#444, #492).
+
+A CTE name that collides with nothing needs no object — `values("ev__sku")` is the idiomatic
+spelling. Write the handle when the CTE's name *also* names something on the model, because then the
+shared `__` path has two readings and PormG refuses to choose:
 
 ```julia
-parent_cte = M.Cj_parent.objects
-parent_cte.values("id", "sku")
+driver_totals = M.Result.objects
+driver_totals.values("driverid", "n" => Count("resultid"))
 
-q = M.Cj_child.objects
-q.with("parent" => parent_cte)          # "parent" is ALSO a ForeignKey of Cj_child
-q.values("note",
-         "parent__sku",                 # the ForeignKey's column — unambiguous
-         "fk" => CTE("parent", "sku"))  # the CTE's column        — unambiguous
+q = M.Result.objects
+q.with("driverid" => driver_totals)       # "driverid" is ALSO a ForeignKey of Result
+q.values("points", "driverid__surname")   # → AmbiguousFieldError: the FK, or the CTE?
+q.values("points", "n" => CTE("driverid", "n"))   # the CTE's column, explicitly
 ```
+
+It is also required on the **right** of a filter pair, where a bare string is a value rather than a
+column: `filter("surname" => CTE("d91", "surname"))` correlates, while
+`filter("surname" => "d91__surname")` compares `surname` against that literal text — quietly
+matching nothing on a text column, and raising `FilterError` on a numeric one.
 
 The second argument is a **path**, not a bare column, and carries the same `__` vocabulary the rest
 of PormG uses — a hop out of the CTE through a projected ForeignKey, a JSON sub-path, or an operator
@@ -926,19 +934,20 @@ q.filter(CTE("ev", "sku") => "ABC")                       # plain column
 q.values("s" => CTE("ev", "parent__sku"))                 # hop through a projected FK
 q.filter(CTE("ev", "meta__driver") => "senna")            # JSON sub-path
 q.filter(CTE("ev", "seen__@yyyy_mm__@lte") => "1991-10")  # operator suffix
-q.filter("raceid" => CTE("r91", "raceid"))                # correlate an unkeyed CTE (#44)
 q.order_by(CTE("monaco_stats", "total_points"; desc = true))
 ```
 
 An unaliased projection is named by joining the two with a double underscore —
-`values(CTE("parent", "sku"))` emits the output column `parent__sku`.
+`values(CTE("parent", "sku"))` emits the output column `parent__sku`, byte-identical to what
+`values("parent__sku")` produces.
 
 SQL functions, aggregates and window clauses accept a handle wherever they accept a field path —
 `Lower(CTE("ev","sku"))`, `Cast(CTE("ev","qty"), "text")`, `Sum(CTE("ev","qty"))`,
 `Rank(over = WindowOver(partition_by = CTE("ev","sku")))`.
 
 `desc = true` is meaningful in `order_by(...)` and in a window's `order_by`; anywhere else it raises
-a `QueryBuildError`. A CTE column cannot be referenced from `on(...)`, `cjoin(...)` or
+a `QueryBuildError`. Both take the string's `-` prefix too, so it is a convenience rather than the
+only way to order descending. A CTE column cannot be referenced from `on(...)`, `cjoin(...)` or
 `cjoin_on(...)` — those clauses target model relations — however it is spelled, including as the
 operand of an `F` comparison.
 
@@ -1535,7 +1544,9 @@ Each mutates the handler and returns it, so calls can be chained or accumulated 
   equal a relation name on the base model or an `on()`/`cjoin()` join path; each stays addressable,
   and both joins are emitted (#484)
 - `.with("name" => subquery; join_field, join_type)` — define a CTE; call again for a second one.
-  Its name may equal a model field or a join key; each stays addressable (#444, #474)
+  Reference its columns as `"name__column"`, or as [`CTE(name, path)`](@ref CTE). Its name may equal
+  a join key and each stays addressable (#474); a name equal to a **model field** makes the shared
+  `__` path raise `AmbiguousFieldError`, and the handle selects the CTE side (#492)
 - every `join_type` above accepts `"INNER"`, `"LEFT"`, `"RIGHT"` or `"FULL"`; anything else,
   `"CROSS"` included, raises `QueryBuildError` at the call (#474)
 - `.select_for_update(; nowait, skip_locked, no_key)` — `SELECT … FOR UPDATE` row lock

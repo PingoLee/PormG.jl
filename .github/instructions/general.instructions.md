@@ -67,8 +67,14 @@ Two deliberate departures from that default:
   - **#74** — Django's `annotate(Count(…))` silently row-multiplies when two annotations combine.
     PormG ships **only** the explicit `Subquery`/`OuterRef` path and makes the silent-fan-out form a
     hard error; correlation is always spelled out, never inferred.
-  - **#444** — CTE names moved out of the field-path namespace into a CTE object with its own
-    namespace, which is why #431/#434 became *unrepresentable* rather than guarded.
+  - **#444 → #492** — CTE columns have their own namespace, out of the field-path namespace. #431/#434
+    were briefly *unrepresentable* and are now **guarded** instead: #492 restored the
+    `"<cte>__<col>"` spelling, because the `__` dialect was never the magic — first-match-wins
+    *precedence* was — and an ambiguous first segment now raises `AmbiguousFieldError` rather than
+    being resolved. This is the one place the two halves of this stance pulled apart, and the
+    maintainer settled it toward **Django familiarity** on the record in #492, with the silent
+    failure mode kept impossible: the collision is loud, never guessed. `CTE(name, path)` remains
+    the explicit object, now as the disambiguator.
   - **Migrations** — no dependency graph, no file replay; `applied_migrations/` is an inert audit trail.
 
   The worked statement is `docs/src/read/subqueries_and_ctes.md` → *Positioning: explicit, not magic*.

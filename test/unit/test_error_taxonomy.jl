@@ -21,7 +21,7 @@ const QB = PormG.QueryBuilder
 
 # Every concrete member of the taxonomy (the two get()-cardinality types included).
 const TAXONOMY_TYPES = (
-    PormG.UnknownFieldError, PormG.LazyTraversalError, PormG.FilterError,
+    PormG.UnknownFieldError, PormG.AmbiguousFieldError, PormG.LazyTraversalError, PormG.FilterError,
     PormG.QueryBuildError, PormG.UnsafeMutationError, PormG.InvalidValueError,
     PormG.WritesDisabledError, PormG.UnsupportedConnectionError,
     # #268 audit: capability limits split out of UnsupportedConnectionError; PROTECT-delete refusal
@@ -97,6 +97,7 @@ end
         # the field-access mid-node groups the two field-lookup errors, so
         # `catch FieldAccessError` catches both "no such field" and "no lazy traversal".
         @test PormG.UnknownFieldError <: PormG.FieldAccessError
+        @test PormG.AmbiguousFieldError <: PormG.FieldAccessError
         @test PormG.LazyTraversalError <: PormG.FieldAccessError
         # get() cardinality errors were reparented from Exception to PormGError.
         @test PormG.DoesNotExist <: PormG.PormGError
@@ -156,6 +157,7 @@ end
         @test PormGError === PormG.PormGError
         @test FieldAccessError === PormG.FieldAccessError
         @test UnknownFieldError === PormG.UnknownFieldError
+        @test AmbiguousFieldError === PormG.AmbiguousFieldError
         @test LazyTraversalError === PormG.LazyTraversalError
         @test FilterError === PormG.FilterError
         @test QueryBuildError === PormG.QueryBuildError

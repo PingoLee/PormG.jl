@@ -187,6 +187,62 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        # #492 restored the `"<cte>__<column>"` string, which re-opens the route the entry above
+        # closes, so the same admonition now claims the refusal for BOTH spellings and both are
+        # pinned. The check runs at build time rather than at the `.cjoin_on()` call: the CTE
+        # registry is complete only then, and a call-time check was order-dependent — `.with()`
+        # before `.on()` refused while the reverse sailed past, which was #434.
+        "read/custom_joins.md — a CTE-rooted string inside a join ON clause is refused",
+        FilterError,
+        () -> begin
+            ev = DOCERR_STATUS_PG.objects
+            ev.values("statusid", "status")
+            q = DOCERR_RESULT_PG.objects
+            q.with("ev" => ev)
+            q.values("resultid")
+            q.cjoin_on("DOCERR_DRIVER_PG", alias = "d", on = ["ev__status" => "Finished"])
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #492. The docs warn that a CTE-rooted string on the RIGHT of a filter pair is a VALUE and
+        # not a column. On a TEXT column that is silent (it matches the literal, i.e. nothing), which
+        # is exactly why the sentence exists; on a NUMERIC one the field's type check catches it, and
+        # that is the half with an error type to pin. Measured against the F1 data before it was
+        # written: `filter("raceid" => "r91__raceid")` raises, `filter("surname" => "d91__surname")`
+        # returns zero rows.
+        "read/subqueries_and_ctes.md — a CTE-rooted string on a filter's right is a value, not a column",
+        FilterError,
+        () -> begin
+            ev = DOCERR_STATUS_PG.objects
+            ev.values("statusid", "status")
+            q = DOCERR_RESULT_PG.objects
+            q.with("ev" => ev)
+            q.values("resultid")
+            q.filter("statusid" => "ev__statusid")   # an integer field, so the value is type-checked
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #492. With the string spelling back as the default, a CTE named after a model field gives
+        # the shared `__` path two readings, and PormG refuses instead of choosing — choosing is the
+        # #431 defect, whose symptom was wrong rows and no error. `driverid` is a ForeignKey of the
+        # result model, so `"driverid__surname"` could mean the FK hop or the CTE's column.
+        #
+        # Its own type rather than UnknownFieldError, and the doc says so: the name is known TWICE,
+        # not unknown, and an app's typo handler should not also fire when a schema change makes an
+        # existing CTE name collide.
+        "read/subqueries_and_ctes.md — a CTE name colliding with a model field makes the path ambiguous",
+        AmbiguousFieldError,
+        () -> begin
+            totals = DOCERR_DRIVER_PG.objects.values("driverid", "surname")
+            q = DOCERR_RESULT_PG.objects
+            q.with("driverid" => totals)
+            q.values("resultid", "driverid__surname")
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
         # #481. A `Joined(...)` handle names a `cjoin_on` joined copy, so it cannot appear in
         # `on(...)` / `cjoin(...)` — those add predicates to a join derived from a relation, and
         # every reference in them targets that joined model. The mirror of #444's CTE refusal above,

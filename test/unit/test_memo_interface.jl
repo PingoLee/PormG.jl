@@ -246,9 +246,16 @@ end
                "is the #474 defect." unexpected
     end
     @test isempty(unexpected)
-    # Pinned, not bounded — the same contract as `allowed_hits` above. Six sites today:
-    # build_helpers ×2 (the two `_retag_*` writers), ctes ×2 (rewrite carriers), memos ×1, types ×1.
-    @test length(sites) == 6
+    # Pinned, not bounded — the same contract as `allowed_hits` above. Seven sites today:
+    # build_helpers ×2 (the `_retag_cte_field!` / `_retag_joined_field!` writers), ctes ×3
+    # (#492's `_bind_cte_string!` writer, plus the two #474 rewrite carriers), memos ×1, types ×1.
+    #
+    # The seventh arrived with #492 and was admitted deliberately: `_bind_cte_string!` is the
+    # string-spelling twin of `_retag_cte_field!` — it WRITES the tag for a path the resolution pass
+    # rewrote into a `CTEReference`. A writer is not the hazard this guard exists for; a hand-built
+    # key reading `(v.root, v._as)` is. That the count forced this note rather than absorbing the
+    # change silently is the point of pinning it.
+    @test length(sites) == 7
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

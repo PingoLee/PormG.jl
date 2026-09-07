@@ -359,7 +359,7 @@ export PormGAbstractType, PormGSettings, PormGBackend, PormGPostgres, PormGSQLit
 # Error taxonomy (#231, #239) — root, the query-builder subtypes, and the schema/config/migration
 # subtypes. `PormGError` first so `catch PormGError` is the one name a caller has to remember.
 export PormGError,
-       FieldAccessError, UnknownFieldError, LazyTraversalError,
+       FieldAccessError, UnknownFieldError, AmbiguousFieldError, LazyTraversalError,
        FilterError, QueryBuildError, UnsafeMutationError, InvalidValueError,
        WritesDisabledError, UnsupportedConnectionError,
        DoesNotExist, MultipleObjectsReturned,

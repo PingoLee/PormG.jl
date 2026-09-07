@@ -11,7 +11,7 @@ This section covers the read side of PormG — querying, filtering, joining, agg
 | [Values and Joins](values_and_joins.md) | Column selection, `__` join traversal, multi-level joins, reverse joins, wildcard `*`, and aliases. |
 | [Filters and Aggregates](filters_and_aggregates.md) | `filter()`, lookup operators (`@gt`, `@in`, `@contains`, …), grouping, and `HAVING` clauses. |
 | [Functions and Dates](functions_and_dates.md) | SQL functions (`Case`, `Coalesce`, `Concat`, …), date extraction, and math transforms. |
-| [Subqueries and CTEs](subqueries_and_ctes.md) | `IN` subqueries, scalar `Subquery`/`Exists` columns, `.with(...)` CTEs and the `CTE(name, path)` column reference, deep join paths, and CTE + cjoin combinations. |
+| [Subqueries and CTEs](subqueries_and_ctes.md) | `IN` subqueries, scalar `Subquery`/`Exists` columns, `.with(...)` CTEs and their `"<cte>__<column>"` columns, deep join paths, and CTE + cjoin combinations. |
 | [Field Expressions](field_expressions.md) | `F()` for field-to-field comparisons, arithmetic, aggregate ratios, aliasing, and atomic updates. |
 | [Window Functions](window_functions.md) | `Rank`, `RowNumber`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` — per-row analytics without collapsing rows. |
 | [Q Objects](q_objects.md) | Complex boolean logic with `Q` (AND), `Qor` (OR), nesting, dynamic construction, and `F()` integration. |
@@ -198,7 +198,7 @@ These methods modify the query builder and return the handler for further chaini
 | `.page(limit)` / `.page(limit, offset)` | Pagination in one call. `.page(n)` sets `LIMIT` only and leaves `.offset()` untouched; `.page(n, m)` sets both. Any other shape raises `QueryBuildError`. | Last value wins |
 | `.distinct()` | Add `SELECT DISTINCT` to the query. | Last value wins |
 | `.db("key")` | Route the query to a different connection pool. | Last value wins |
-| `.with("name" => subquery)` | Attach a Common Table Expression (CTE); reference its columns with `CTE(name, path)`. | Adds another CTE |
+| `.with("name" => subquery)` | Attach a Common Table Expression (CTE); reference its columns as `"name__column"`, or with `CTE(name, path)` when the name collides with a model field. | Adds another CTE |
 | `.cjoin("field" => "Model")` | Add a custom join at query time. | Adds another join |
 | `.on("path", key => value)` | Add predicates to the ON clause of an existing join. | Adds more predicates |
 | `.copy()` | Deep-copy the query object for reuse. | — |

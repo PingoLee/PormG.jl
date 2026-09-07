@@ -454,15 +454,17 @@ Two consequences worth noting:
   !!! note "A CTE exposes aliases, not columns"
       A CTE (or any `values()`-projected subquery) is a **derived table**: its columns are the
       projection *aliases*, because the physical name is consumed inside the `WITH` body
-      (`"product_sku" AS "sku"`). So `CTE("ev", "sku")` names the **field** (or its custom alias),
+      (`"product_sku" AS "sku"`). So `"ev__sku"` names the **field** (or its custom alias),
       never the `db_column` ([#376](https://github.com/PingoLee/PormG.jl/issues/376)) — the
       column-side half of the join-key rule above. Fields on real tables reached *through* the CTE
       are unaffected and still resolve their own `db_column`.
 
-      That reference is a `CTE(name, path)` object rather than a `"<cte>__col"` string, because a
-      CTE's columns are a namespace of their own — separate from the model's field paths, so a CTE
-      may share a name with a field without shadowing it
-      ([#444](https://github.com/PingoLee/PormG.jl/issues/444)). See
+      That column can be written either way — `"ev__sku"` or `CTE("ev", "sku")` — and both name the
+      projection alias. The object is the disambiguator: a CTE's columns are a namespace of their
+      own, but both namespaces are reached by a `__` path, so a CTE name that *also* names a model
+      field makes the shared path raise `AmbiguousFieldError` and `CTE(name, path)` is how you
+      select the CTE side ([#444](https://github.com/PingoLee/PormG.jl/issues/444),
+      [#492](https://github.com/PingoLee/PormG.jl/issues/492)). See
       [Subqueries and CTEs](read/subqueries_and_ctes.md#Referencing-a-CTE's-columns).
 
 !!! note "Imported models differ"

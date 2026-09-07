@@ -478,6 +478,44 @@ end
     end
     @test err isa PormG.FilterError
   end
+
+  # #492 restored the `"<cte>__<col>"` string spelling, which re-opens the route the handle refusal
+  # above closes — so the string is refused in the same clause, for the same reason, and is pinned
+  # HERE next to its twin because the two are one contract: a joined reference belongs in an ON
+  # clause and a CTE reference never does, whichever way it is spelled.
+  #
+  # The alias deliberately EQUALS the CTE name, which is the case most likely to be got wrong.
+  # `_segment1_on_model` does not consult the `cjoin_on` alias keyspace — #484 gave an alias its own
+  # namespace, reachable only through `Joined(alias, path)`, so a `__` string can never mean an
+  # alias. `"ev__surname"` is therefore unambiguously the CTE: the alias neither rescues the string
+  # nor makes it ambiguous, and the refusal still fires.
+  @testset "a CTE-rooted STRING is refused there too (#492)" begin
+    err = _jn_catch() do
+      ev = JN.Jn_driver.objects
+      ev.values("id", "surname")
+      q = JN.Jn_result.objects
+      q.with("ev" => ev)
+      q.cjoin_on("Jn_driver", alias = "ev", on = ["ev__surname" => "Senna"])
+      q.values("points")
+      _jn_sql(q)
+    end
+    @test err isa PormG.FilterError
+    msg = _jn_no_ansi(sprint(showerror, err))
+    # The caller sees THEIR token as the offending one — `_reject_cte_in_join`'s `spelled` keyword.
+    # Being told to fix a `CTE(...)` handle they never wrote is worse than no message at all.
+    @test occursin("\"ev__surname\"", msg)
+    @test occursin("cannot be used in", msg)
+
+    # Control, same alias and same clause: `Joined("ev", ...)` is ACCEPTED and renders against the
+    # joined copy. The refusal is about the CTE reading of the name, not about the name.
+    q = JN.Jn_result.objects
+    ev = JN.Jn_driver.objects
+    ev.values("id", "surname")
+    q.with("ev" => ev)
+    q.cjoin_on("Jn_driver", alias = "ev", on = [Joined("ev", "id") == F("driver")])
+    q.values("points", "who" => Joined("ev", "surname"))
+    @test occursin("\"ev\".\"family_name\" as \"who\"", _jn_sql(q))
+  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

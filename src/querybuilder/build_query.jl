@@ -645,9 +645,11 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   # simply two relations that happen to share a name — both emitted, both addressable.
   #
   # WHAT IS LEFT IS A BACKSTOP, NOT A DIAGNOSIS. The relocation route needs a predicate naming the
-  # CTE's alias, and that alias is GENERATED (`_get_alias_name` → `R1_1`): since #444 no predicate
-  # can name a CTE at all — a `__` string cannot reach one and a `CTE(...)` handle is refused in
-  # every join clause — so the only way to write that name is a `cjoin_on` alias that impersonates
+  # CTE's alias, and that alias is GENERATED (`_get_alias_name` → `R1_1`): no predicate in a join
+  # clause can name a CTE — a `CTE(...)` handle is refused there (#444), and since #492 restored the
+  # `__` string spelling, a CTE-rooted string is refused in the same three clauses too, at build
+  # time (`_refuse_cte_string_in_join`) — so the only way to write that name is a `cjoin_on` alias
+  # that impersonates
   # a generated one, and `row_join` always orders CTE joins ahead of `cjoin_on` entries, while
   # Phase 1b only ever relocates FORWARD. Nine shapes were built against this after the change (the
   # three former collision producers plus six relocation attempts, including two CROSS CTEs and an
@@ -871,6 +873,14 @@ function build(object::SQLObject;
     parameters=parameters,
     outer=outer,
   )
+
+  # #492: resolve `"<cte>__<col>"` string paths into `CTE(...)` handles, and refuse a name that is
+  # ambiguous. This runs HERE — after the instruction exists, before anything reads a projection or
+  # a predicate — because it is the first moment the CTE registry is final. Doing it at `.filter()` /
+  # `.values()` / `.on()` time instead makes the answer depend on whether `.with()` was called first,
+  # which is precisely the #434 defect whose call-time check `_on` records removing. Read entry
+  # points deepcopy the handler before `build()`, so this mutates a per-call copy.
+  _resolve_cte_string_paths!(object)
 
   # Switch context for each SQL section so positional-parameter backends
   # (SQLite) push values into the correct bucket.

@@ -202,9 +202,15 @@ end
 # spelling `"<cte>__col"` inside `on`/`cjoin`/`cjoin_on`, and it was caught only downstream, by
 # #424's CROSS-join guard, with a message about a name collision. Now the reference is typed, so
 # refuse it where it is written, naming the clause the caller used.
-function _reject_cte_in_join(ref::CTEReference, context::String)
+#
+# #492 restored the string spelling, which re-opens that route — so `spelled` lets a caller who wrote
+# `"ev__sku"` see their OWN token as the offending one while the body and the remedy stay byte-
+# identical to the handle form. One message, both spellings: every existing assertion on the tail
+# keeps matching, and the reader is not told to fix a spelling they did not use.
+function _reject_cte_in_join(ref::CTEReference, context::String;
+                             spelled::AbstractString = "CTE(\"$(ref.name)\", \"$(ref.path)\")")
   throw(FilterError(
-    "\e[4m\e[31mCTE(\"$(ref.name)\", \"$(ref.path)\")\e[0m cannot be used in $(context). A JOIN's " *
+    "\e[4m\e[31m$(spelled)\e[0m cannot be used in $(context). A JOIN's " *
     "ON clause targets the joined MODEL; a CTE is joined by its own \e[4m\e[32m.with(...)\e[0m " *
     "declaration (\e[4m\e[32mjoin_field=\e[0m keys it, \e[4m\e[32mjoin_type=\e[0m sets how).\n  " *
     "Put the predicate in \e[4m\e[32m.filter(...)\e[0m instead (#444)."))
@@ -303,6 +309,371 @@ function _guard_no_handle(filter, ::Type{T}, reject::Function, context::String, 
     filter.operand    isa T && reject(filter.operand, context)
     _guard_no_handle(filter.field_name, T, reject, context, depth + 1)
     _guard_no_handle(filter.operand, T, reject, context, depth + 1)
+  end
+  return nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #492 — the `"<cte>__<col>"` string spelling, resolved at BUILD time
+#
+# #444 removed this spelling outright because the CTE registry was consulted FIRST, ahead of the
+# many-to-many / forward-FK / reverse arms, so `.with("parent" => …)` silently took over the path of
+# a `parent` ForeignKey. The magic was that first-match-wins PRECEDENCE, not the string — and
+# removing the precedence does not require removing the string. It requires refusing to ANSWER the
+# ambiguity instead of guessing at it.
+#
+# WHY A REWRITE PASS AND NOT A GATE INSIDE `_build_row_join`. The issue proposes the gate. A gate
+# there can decide which relation a path means, but it receives a `Vector{String}` and has no handle
+# on the caller's `SQLField`, so it cannot fix four things that all fail SILENTLY:
+#
+#   1. It sets `cte = true` internally, so the join builder writes `(:cte, "ev__sku")` while the
+#      caller's `SQLField.root` stays `:base` and every reader looks under `(:base, …)`. That is a
+#      guaranteed memo miss — the #474 defect, reintroduced by the fix meant to prevent it.
+#   2. The #352/#373 sargable date rewrite dispatches on the TYPE of `FObject.column`. A string that
+#      stays a string takes `_resolve_bucket_column(::String, …)`, which reads the `:base` half, so
+#      `filter("ev__seen__@yyyy_mm__@lte" => …)` would quietly lose the rewrite while the handle form
+#      kept it. Two spellings, two query plans, no error.
+#   3. JSON: the writer keys `:cte`, the reader `:base` — the miss drops the comparison to the
+#      generic branch, which runs the JSON formatter on a plain-string RHS and throws.
+#   4. RHS formatting reads `tab_field_cache` under the field's own key; a miss binds an unformatted
+#      Date or number, on one spelling only.
+#
+# Rewriting the string into a real `CTEReference` makes all four vanish, because afterwards the two
+# spellings are LITERALLY THE SAME EXPRESSION OBJECT. `_as` already agrees byte-for-byte between them
+# (`_cte_as` is `string(name, "__", path)`, and the parse sets `_as` to the joined full string), so
+# the rewrite touches only the terminal `String` → `CTEReference` and `root` — never `_as` — which
+# also makes it idempotent.
+#
+# WHY BUILD TIME. The registry is complete only once `build()` runs; `.filter()` / `.values()` /
+# `.on()` are call time, and a check there is order-dependent — `.with()` then `.filter()` refused
+# while the reverse sailed past. That is exactly the #434 defect whose removal is recorded above in
+# `_on`. Every read entry point `deepcopy`s the handler before `build()`, so this mutates a per-call
+# copy and never the user's query object.
+#
+# THAT DEEPCOPY IS ALSO WHAT KEEPS THIS INSIDE THE #493/#508 CONTRACT (construct, never mutate —
+# `pormg-querybuilder-internals` → *Expression nodes*). The arms below assign into `.column` /
+# `.field` / a `WindowSpec` vector, which on a node that arrived through the public API would be the
+# #508 defect: `agg = Sum("ev__sku")` bound to a name and reused across two queries would carry the
+# first query's rewrite into the second. It does not, because by the time this runs every node is a
+# per-build copy — the same standing this skill grants `_retag_cte_column` / `_retag_joined_column`,
+# which rewrite a build product rather than a user node. Measured: after building a query that uses
+# it, a shared `Sum("ev__sku")` still holds a `String`, and re-using it in a query with no `ev` CTE
+# still fails as a field path rather than as a stale handle. Move this pass ahead of the deepcopy and
+# that stops being true.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Segment 1 of `path`, if this is a CTE COLUMN reference on this query; `nothing` otherwise.
+#
+# Naming a declared CTE is necessary but NOT sufficient, and getting that wrong cost both halves of
+# the defect this guard exists to prevent. A CTE reference is `"<name>__<column path>"`: there has to
+# be a column INSIDE the CTE for it to name. So the remainder after `<name>__` must carry at least
+# one ordinary segment — an operator/transform token (`@isnull`, `@yyyy_mm`) is a suffix ON a column,
+# never a column itself, which is why they do not count.
+#
+# Without that test, segment 1 alone made `"parent"` mean `CTE("parent", "parent")` (`chopprefix` is
+# a no-op when there is no prefix to chop), and:
+#
+#   • `filter("parent" => 1)` and `values("parent")` on a model whose `parent` is a ForeignKey
+#     started raising `AmbiguousFieldError` the moment a CTE was named `parent` — a REGRESSION on one
+#     of the commonest calls an app makes, and against #492's own "everything legal today stays
+#     legal". The message was incoherent too: with no remainder it printed `CTE("parent", "column")`,
+#     a spelling that cannot exist.
+#   • worse, where the model had NO such field but the CTE projected a column of its own name,
+#     `values("pcte")` resolved SILENTLY to the CTE's column — first-match-wins resolution surviving
+#     in the single-segment namespace, which is the exact class #492 removes.
+#
+# `_build_row_join`'s own `rest = length(vector) > 1 ? … : "column"` fallback is the tell that a
+# one-segment path was never meant to reach a CTE.
+function _cte_string_root(q::SQLObject, path::AbstractString)::Union{Nothing,String}
+  segs = split(path, "__")
+  length(segs) > 1 || return nothing
+  any(!isempty(s) && !startswith(s, "@") for s in segs[2:end]) || return nothing
+  seg1 = String(first(segs))
+  return haskey(q.ctes, seg1) ? seg1 : nothing
+end
+
+# THE AMBIGUITY PROBE. It must agree with `_build_row_join`'s arms exactly, or the gate disagrees
+# with the cascade it is protecting — so it consults the same registries, in the same forms:
+#
+#   • `_resolve_fk_short_form`'s OUTPUT for the field lookups (the m2m arm, the JSON base guard and
+#     the forward-FK arm all test the resolved column);
+#   • the RAW segment for `related_objects` (the reverse arm tests it unresolved) and for
+#     `custom_join` (a join path is a literal key).
+#
+# The join-path arm is the easy one to miss — it is #474's `cjoin`/`on()` PATH keyspace, not a
+# model field, and a path there is reached by segment 1 just like a relation. It asks
+# `_get_join_config` rather than the `_get_join_field` the issue named, because
+# `_get_join_field` returns `config.field`, and that is `nothing` for an `on()`-only entry
+# (`cjoin` sets the link, `on()` does not) — so the obvious spelling skips silently over every
+# path declared with `on()` alone.
+#
+# Belt and braces either way, and worth saying so rather than implying a hole: `on()` and
+# `cjoin()` both validate their path against the model at declaration, so a join-config key is
+# ALWAYS also a field or a reverse accessor and one of the arms above has already fired. It is
+# kept because a future join writer accepting a key that is not a relation would otherwise
+# re-open a silent resolution, and this probe's whole job is to be never narrower than the
+# cascade it protects.
+#
+# `alias_join` is deliberately NOT consulted. #484 gave a `cjoin_on` alias its own namespace,
+# reachable only through `Joined(alias, path)` — a `__` string cannot mean an alias at all, so an
+# alias sharing a CTE's name is not an ambiguity for a string.
+#
+# OR-ing every arm makes the gate never NARROWER than the cascade, which is the safe direction: a
+# false refusal is loud and one edit away, a false resolution is silent wrong rows.
+function _segment1_on_model(q::SQLObject, seg1::AbstractString)::Bool
+  resolved = _resolve_fk_short_form(q.model, String(seg1))
+  return haskey(q.model.fields, resolved) ||
+         resolved in q.model.field_names ||
+         haskey(q.model.related_objects, String(seg1)) ||
+         _get_join_config(q, String(seg1)) !== nothing
+end
+
+# Name both readings and print the spelling that selects each. The CTE side has a spelling; the model
+# side does not, and saying so plainly is better than implying one exists — a base-namespace handle
+# is deliberately deferred (#492), so renaming the CTE is the honest remedy today.
+function _refuse_ambiguous_cte_path(q::SQLObject, path::AbstractString, seg1::AbstractString)
+  rest = length(split(path, "__")) > 1 ? join(split(path, "__")[2:end], "__") : "column"
+  throw(AmbiguousFieldError(
+    "\e[4m\e[31m$(path)\e[0m is ambiguous: \e[4m\e[31m$(seg1)\e[0m names both a CTE declared by " *
+    "\e[4m\e[32m.with(\"$(seg1)\" => …)\e[0m and something on " *
+    "\e[4m\e[32m$(q.model.name)\e[0m (a field, reverse accessor, or join path), so this path has " *
+    "two meanings and PormG will not choose one.\n  " *
+    "For the CTE's column, write \e[4m\e[32mCTE(\"$(seg1)\", \"$(rest)\")\e[0m.\n  " *
+    "For the model's own \e[4m\e[32m$(seg1)\e[0m, rename the CTE — a `__` path cannot select it " *
+    "while the name is taken (#492)."))
+end
+
+# The expression walk. Mirrors `_retag_cte_column` (`build_helpers.jl`) arm for arm, because the shape
+# space is the same one; the only difference is that a `String` here may or may not name a CTE, so
+# each terminal is TESTED rather than converted unconditionally.
+#
+# `kwargs` is deliberately never descended — it holds format literals (`Y_M`) and the composite
+# transform's own expansion, not column references.
+_retag_cte_string(x::CTEReference, ::SQLObject, ::Set{String}) = x
+_retag_cte_string(x::SQLTypeText, ::SQLObject, ::Set{String}) = x
+_retag_cte_string(x::JoinedReference, ::SQLObject, ::Set{String}) = x
+function _retag_cte_string(x::String, q::SQLObject, rewrote::Set{String})
+  seg1 = _cte_string_root(q, x)
+  seg1 === nothing && return x
+  _segment1_on_model(q, seg1) && _refuse_ambiguous_cte_path(q, x, seg1)
+  # The full OUTPUT spelling, not just the CTE name — `_bind_cte_string!` needs to tell "this field
+  # IS that CTE column" from "this field merely has an alias starting with that CTE's name".
+  push!(rewrote, _cte_as(seg1, chopprefix(x, seg1 * "__")))
+  return CTEReference(name = seg1, path = chopprefix(x, seg1 * "__"))
+end
+function _retag_cte_string(x::SQLTypeFunction, q::SQLObject, rewrote::Set{String})
+  x.column = _retag_cte_string(x.column, q, rewrote)
+  return x
+end
+function _retag_cte_string(x::SQLTypeField, q::SQLObject, rewrote::Set{String})
+  x.field = _retag_cte_string(x.field, q, rewrote)
+  return x
+end
+# A window function hides column paths in TWO slots the arm above cannot see. `WindowFunction` is a
+# `SQLTypeFunction`, so without this method it takes that arm, its `column` is rewritten and its
+# `OVER (...)` clause is not — and `partition_by` / `order_by` are fields of `over::WindowSpec`,
+# never of `column`.
+#
+# Both halves of #492 failed there, in opposite directions. `partition_by = "ev__sku"` threw the
+# scope diagnostic, breaking the acceptance item that names window clauses; and with a SHADOWING
+# name it was worse than a missing feature — `partition_by = "parent__sku"` resolved silently to the
+# ForeignKey and rendered, while the identical string in `values()` raised `AmbiguousFieldError`.
+# One query, one string, refused in one clause and guessed in the other: that is exactly the
+# first-match precedence #492 exists to remove, surviving in a corner.
+#
+# The vectors are mutated IN PLACE, not rebuilt. They are typed `Vector{WindowPartitionPart}` /
+# `Vector{WindowOrderPart}` while the `::Vector` arm below returns an `Any[]`, which neither field
+# will accept; element assignment type-checks because `SQLTypeCTE` is a member of both unions.
+function _retag_cte_string(x::WindowFunction, q::SQLObject, rewrote::Set{String})
+  x.column = _retag_cte_string(x.column, q, rewrote)
+  for i in eachindex(x.over.partition_by)
+    x.over.partition_by[i] = _retag_cte_string(x.over.partition_by[i], q, rewrote)
+  end
+  for i in eachindex(x.over.order_by)
+    x.over.order_by[i] = _retag_cte_string_window_order(x.over.order_by[i], q, rewrote)
+  end
+  return x
+end
+
+# A window's ORDER BY stores each entry AS GIVEN — `"-ev__seen"` keeps its `-`, and the prefix is
+# resolved to DESC at render time (`WindowSpec`). So the sign has to come off before segment 1 can be
+# tested and go back on as `desc = true`, which is what makes `order_by = "-ev__seen"` render
+# byte-identically to `order_by = CTE("ev", "seen"; desc = true)`.
+#
+# Reporting the STRIPPED path in an ambiguity message is deliberate, not sloppy: the fluent
+# `order_by("-parent__sku")` also strips the prefix into an orientation before the gate ever sees a
+# path, so both spellings of the same mistake produce the same sentence.
+function _retag_cte_string_window_order(x::String, q::SQLObject, rewrote::Set{String})
+  desc = startswith(x, "-")
+  path = desc ? chopprefix(x, "-") : x
+  seg1 = _cte_string_root(q, path)
+  seg1 === nothing && return x
+  _segment1_on_model(q, seg1) && _refuse_ambiguous_cte_path(q, path, seg1)
+  push!(rewrote, _cte_as(seg1, chopprefix(path, seg1 * "__")))
+  return CTEReference(name = seg1, path = chopprefix(path, seg1 * "__"), desc = desc)
+end
+# An `SQLOrder` entry is left ALONE, and that is a scope decision rather than an oversight.
+# `SQLOrder.field` is `Union{SQLTypeField,String}` and `SQLTypeCTE` is not a `SQLTypeField`, so the
+# wrapper cannot hold a CTE column in EITHER spelling — `SQLOrder(CTE("ev","seen"))` is a
+# `MethodError` today and was one under #444 too. Rewriting into a bare `CTEReference` would work
+# (the vector's element type admits one) but would silently drop the entry's `nulls` placement, and
+# firing the ambiguity gate here would print a `CTE(...)` remedy that this wrapper cannot accept.
+# Both are new design, not #492's, so the shape keeps its pre-existing behaviour and the gap is
+# tracked separately in #509, together with the three distinct ways the shape currently fails.
+_retag_cte_string_window_order(x, q::SQLObject, rewrote::Set{String}) = x
+function _retag_cte_string(x::SQLTypeOper, q::SQLObject, rewrote::Set{String})
+  x.column = _retag_cte_string(x.column, q, rewrote)
+  return x
+end
+_retag_cte_string(x::Vector, q::SQLObject, rewrote::Set{String}) =
+  Any[_retag_cte_string(v, q, rewrote) for v in x]
+# Anything else — a bound value, a subquery, a number — is not a column path and is left alone.
+_retag_cte_string(x, ::SQLObject, ::Set{String}) = x
+
+# Per-`SQLField` entry. `root` must land wherever the HANDLE form lands, or the two spellings memoize
+# under different `MemoKey`s and one query using both gets two cache entries for one column. The
+# handle rule is simple — `_retag_cte_field!` sets `:cte` exactly when the projection or predicate
+# WAS a bare `CTE(...)`, and not when one was nested inside a function — but by the time this pass
+# runs the string equivalent has already been parsed, so "was it one whole path" cannot be read off
+# the terminal's type. Two drafts got this wrong in opposite directions:
+#
+#   • keying off `_as`'s FIRST SEGMENT retagged `values("ev__sku" => Sum("ev__id"))` to `:cte`, where
+#     the handle twin `values("ev__sku" => Sum(CTE("ev","id")))` stays `:base`. That `_as` is a user
+#     ALIAS that merely looks like a CTE path.
+#   • requiring the terminal to still BE a `CTEReference` missed every `__@` path: `"ev__seen__@year"`
+#     is parsed into an `FObject` before this runs, so it read `:base` while the handle read `:cte` —
+#     four shapes, including the sargable-date one this pass exists to protect.
+#
+# So `rewrote` carries the full `<name>__<path>` OUTPUT spelling of everything rewritten, and the
+# test is whether this field's `_as` IS one of them, or is one of them plus a transform suffix
+# (`"ev__seen"` → `"ev__seen__year"`). That is exactly "the output name is this CTE column's name",
+# which separates the two cases above: the alias `"ev__sku"` is not `"ev__id"` nor a suffix of it.
+#
+# `values("x" => Concat("note", CTE("ev","sku")))` stays `:base` on both sides for free — `_as` is
+# `"x"`, which matches nothing.
+function _bind_cte_string!(field::SQLField, q::SQLObject)
+  rewrote = Set{String}()
+  field.field = _retag_cte_string(field.field, q, rewrote)
+  if field._as !== nothing
+    as = String(field._as)
+    any(as == r || startswith(as, r * "__") for r in rewrote) && (field.root = :cte)
+  end
+  return field
+end
+
+# Refuse a CTE-rooted STRING inside a JOIN's ON clause, at build time.
+#
+# `_reject_cte_in_join` is typed on `CTEReference`, so under #444 this was unrepresentable; the
+# restored string re-opens it and #434 comes back with it unless the refusal is order-independent.
+# It runs here, over the STORED join configs, rather than at `.on()` / `.cjoin_on()` call time — the
+# registry is complete now and was not then.
+#
+# `alias_join` is the live route: `_cjoin_on` skips `_prefix_join_filter` on purpose, so
+# `cjoin_on(…, on = ["ev__sku" => 1])` reaches `_check_filter` raw and stores a `:base`-rooted field.
+# `custom_join` is swept too — `_normalize_cjoin_filter_key` appears to make it unreachable by
+# prefixing the key, but that is a negative about a helper with four rewrite arms, and one extra loop
+# is cheaper than proving it.
+function _refuse_cte_string_in_join(x, q::SQLObject, context::String, depth::Int = 0)
+  depth > 32 && return nothing
+  if x isa String
+    seg1 = _cte_string_root(q, x)
+    seg1 !== nothing && !_segment1_on_model(q, seg1) &&
+      _reject_cte_in_join(CTEReference(name = seg1, path = chopprefix(x, seg1 * "__")),
+                          context; spelled = "\"$(x)\"")
+  elseif x isa Pair
+    _refuse_cte_string_in_join(x.first, q, context, depth + 1)
+    _refuse_cte_string_in_join(x.second, q, context, depth + 1)
+  elseif x isa QObject
+    for f in x.filters; _refuse_cte_string_in_join(f, q, context, depth + 1); end
+  elseif x isa QorObject
+    for f in x.or; _refuse_cte_string_in_join(f, q, context, depth + 1); end
+  elseif x isa OperObject
+    _refuse_cte_string_in_join(x.column, q, context, depth + 1)
+    # The RHS, swept the same as everything else — including a bare `String`.
+    #
+    # That is deliberate OVER-refusal, and it is worth being explicit about because the same shape
+    # means something different one clause over: in `.filter()`, `"note" => "ev__sku"` is a VALUE
+    # (measured — it binds the literal text). Here it is refused. Three reasons: the `Pair` arm above
+    # already refuses it, so exempting only this slot made the walk disagree with itself depending on
+    # whether `_check_filter` had folded the pair into an `OperObject` yet; nobody compares a column
+    # against the literal text of a CTE path they just declared; and the pass's standing policy is
+    # that a false refusal is loud and one edit away while a false resolution is silent wrong rows.
+    #
+    # There is no in-clause escape for someone who genuinely meant the literal, and an earlier draft
+    # of this comment claimed `Value("ev__sku")` was one — it is not: a `Value` on the RHS of an ON
+    # pair is a `MethodError` out of `_get_pair_to_oper`, independently of anything #492 did. The
+    # remedy is the one the message already prints: move the predicate into `.filter(...)`, where the
+    # same pair IS a value comparison. Failing that, rename the CTE.
+    _refuse_cte_string_in_join(x.values, q, context, depth + 1)
+  elseif x isa SQLTypeField
+    _refuse_cte_string_in_join(x.field, q, context, depth + 1)
+  elseif x isa FExpression
+    # All three slots, `operand` INCLUDED. An earlier draft excluded it on the grounds that a bare
+    # `String` there is a literal — which is false, and measurably so: with no CTE anywhere,
+    # `filter(F("note") == "parent__sku")` emits `LEFT JOIN "cj_parent" … WHERE "Tb"."note" =
+    # "Tb_1"."product_sku"`. The resolver tries the COLUMN reading first; `F("sku") == "ABC"` binds a
+    # parameter only because `"ABC"` does not resolve as a path. So `operand` is a column slot that
+    # falls back to a literal, not the other way round.
+    #
+    # Sweeping it cannot over-refuse: a string here that names a declared CTE plus a real column path
+    # is already an error today, so the only thing that changes is WHICH error. Without it,
+    # `on("parent", F("sku") == "ev__sku")` died with the scope `UnknownFieldError` telling the caller
+    # to write `CTE("ev","sku")` — advice this very clause refuses, and contrary to what
+    # `read/custom_joins.md` promises. `_guard_no_handle` sweeps all three for the same reason.
+    _refuse_cte_string_in_join(x.field_name, q, context, depth + 1)
+    _refuse_cte_string_in_join(x.column, q, context, depth + 1)
+    _refuse_cte_string_in_join(x.operand, q, context, depth + 1)
+  elseif x isa FObject
+    _refuse_cte_string_in_join(x.column, q, context, depth + 1)
+  end
+  return nothing
+end
+
+# The pass entry, called from `build()` once the registry is final.
+function _resolve_cte_string_paths!(q::SQLObject)
+  # A query with no CTE cannot have a CTE-rooted path, so it pays one `isempty` and nothing else.
+  # That is most of the neutrality argument for this pass, for free.
+  isempty(q.ctes) && return q
+
+  for v in q.values
+    v isa SQLField && _bind_cte_string!(v, q)
+  end
+  for f in q.filter
+    _bind_cte_filter!(f, q)
+  end
+  for o in q.order
+    o.field isa SQLField && _bind_cte_string!(o.field, q)
+  end
+
+  # Opposite policy, same registry: a CTE reached from a join's ON clause is refused, not resolved.
+  for (path, cfg) in q.custom_join
+    for f in cfg.filters
+      _refuse_cte_string_in_join(f, q, "a join ON clause (on(...) / cjoin(...))")
+    end
+  end
+  for (alias, cfg) in q.alias_join
+    for f in cfg.filters
+      _refuse_cte_string_in_join(f, q, "a cjoin_on `on` expression")
+    end
+  end
+  return q
+end
+
+# Filter elements are containers, not `SQLField`s, so they get their own shallow walk down to the
+# fields that carry a column. A handle on the RHS (`filter("x" => CTE("ev","sku"))`) is already legal
+# and already typed, so only the LHS positions need testing.
+function _bind_cte_filter!(f, q::SQLObject, depth::Int = 0)
+  depth > 32 && return nothing
+  if f isa Pair
+    _bind_cte_filter!(f.first, q, depth + 1)
+  elseif f isa QObject
+    for x in f.filters; _bind_cte_filter!(x, q, depth + 1); end
+  elseif f isa QorObject
+    for x in f.or; _bind_cte_filter!(x, q, depth + 1); end
+  elseif f isa OperObject
+    f.column isa SQLField && _bind_cte_string!(f.column, q)
+  elseif f isa SQLField
+    _bind_cte_string!(f, q)
   end
   return nothing
 end

@@ -73,7 +73,7 @@ PormG.Models.set_models(@__MODULE__, "cte_ref_mock")
 end
 
 const CR = CteRefModels
-import PormG.QueryBuilder: F, inspect_query, Joined
+import PormG.QueryBuilder: F, inspect_query, Joined, Concat, Sum, Value, Rank, WindowOver, Lower
 
 # CTE bodies reused across cases.
 _parent_cte()  = (c = CR.Cj_parent.objects; c.values("id", "sku"); c)
@@ -84,17 +84,21 @@ _sql(q; conn = _CR_SL) = inspect_query(q; connection = conn)[:sql_text]
 @testset "CTE reference object — CTE(name, path) (#444)" begin
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # #431: a CTE and a ForeignKey may share a name — THE test for this issue.
-  # `.with("parent" => …)` on a model whose `parent` IS a ForeignKey. Both references appear in one
-  # projection: `"parent__sku"` must emit the FK's join to `cj_parent`, and `CTE("parent","sku")`
-  # must emit the join to the CTE. Two joins, two distinct aliases, no error, no CROSS JOIN.
-  # Pre-#444 the CTE won outright and the FK's join was never emitted at all.
+  # #431: a CTE and a ForeignKey coexist — THE test for this issue, on a NON-colliding CTE name.
+  #
+  # What #431 actually fixed is that the FK's join gets emitted at all: pre-#444 the CTE won the
+  # name outright and the ForeignKey's join was silently never emitted. That fix is what this pins,
+  # and it survives #492 unchanged — so the case is kept, with the CTE renamed to `pcte`.
+  #
+  # #492 changed only the SHADOWING case: when the CTE and the FK share a name, the `__` string can
+  # no longer select the FK side and the query is refused rather than resolved. That is the sibling
+  # testset below; the two together are the whole of the new contract.
   # ─────────────────────────────────────────────────────────────────────────────
-  @testset "#431: a CTE and a ForeignKey may share a name" begin
+  @testset "#431: a CTE and a ForeignKey coexist in one projection" begin
     for (backend, conn) in (("PostgreSQL", _CR_PG), ("SQLite", _CR_SL))
       q = CR.Cj_child.objects
-      q.with("parent" => _parent_cte(), join_field = "id" => "id")
-      q.values("note", "parent__sku", "cte_sku" => CTE("parent", "sku"))
+      q.with("pcte" => _parent_cte(), join_field = "id" => "id")
+      q.values("note", "parent__sku", "cte_sku" => CTE("pcte", "sku"))
       sql = _sql(q; conn = conn)
 
       # Both assertions name the JOIN keyword deliberately. `occursin("\"parent\" AS", sql)` alone
@@ -102,7 +106,7 @@ _sql(q; conn = _CR_SL) = inspect_query(q; connection = conn)[:sql_text]
       # never joined at all (measured: that query gives `true` with zero JOINs). An assertion that
       # cannot fail is worse than no assertion, because it reads as coverage.
       @test occursin("JOIN \"cj_parent\" AS", sql)   # the ForeignKey's join — #431's missing one
-      @test occursin("JOIN \"parent\" AS", sql)      # the CTE's join, separately
+      @test occursin("JOIN \"pcte\" AS", sql)        # the CTE's join, separately
       # Two joins, not one: the FK hop and the CTE hop are distinct relations.
       @test length(collect(eachmatch(r"LEFT JOIN", sql))) == 2
       # #44's Cartesian shape must NOT appear — the CTE is keyed by join_field here.
@@ -122,10 +126,10 @@ _sql(q; conn = _CR_SL) = inspect_query(q; connection = conn)[:sql_text]
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "#431: filters route to the side they name" begin
     q = CR.Cj_child.objects
-    q.with("parent" => _parent_cte(), join_field = "id" => "id")
+    q.with("pcte" => _parent_cte(), join_field = "id" => "id")
     q.values("note")
     q.filter("parent__sku" => "FK-SIDE")
-    q.filter(CTE("parent", "sku") => "CTE-SIDE")
+    q.filter(CTE("pcte", "sku") => "CTE-SIDE")
     r = inspect_query(q; connection = _CR_PG)
 
     # Both values bind, in the order they were declared — neither predicate was dropped or merged.
@@ -349,13 +353,31 @@ _sql(q; conn = _CR_SL) = inspect_query(q; connection = conn)[:sql_text]
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # #434/#431 control: `on()` on a path that names a real ForeignKey now WORKS even when a CTE of
-  # the same name is declared. Pre-#444 this exact call was refused outright ("on() does not target
-  # CTE names") — the field was unreachable because the CTE had taken its name.
+  # #434/#431 control, in two halves since #492.
+  #
+  # `on()` names a RELATION, not a column, and it is resolved in its own PATH keyspace — so
+  # declaring a CTE called `parent` does not stop `on("parent", …)` reaching the ForeignKey. That is
+  # still true and is asserted against the registry directly, with no SQL: the projection that used
+  # to prove it (`values("note", "parent__sku")`) is exactly the shadowed spelling #492 now refuses,
+  # so rendering would fail for a reason unrelated to what this case is about.
+  #
+  # The render half moves to a non-colliding CTE name, where the ON predicate is still observable.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "#434: on() reaches a ForeignKey whose name a CTE also uses" begin
     q = CR.Cj_child.objects
     q.with("parent" => _parent_cte())
+    q.on("parent", "sku" => "S")
+    # The join config was claimed by the RELATION, under the path keyspace — the CTE of the same
+    # name did not absorb it (#474/#484 keep those namespaces apart).
+    @test haskey(q.object.custom_join, "parent")
+    # `field` is `cjoin`'s link and is `nothing` for an `on()`-only entry (see `PathJoin`); what
+    # proves the relation claimed the key is that the ON predicate landed under it.
+    @test !isempty(q.object.custom_join["parent"].filters)
+  end
+
+  @testset "#434: on()'s predicate renders onto the ForeignKey's join" begin
+    q = CR.Cj_child.objects
+    q.with("pcte" => _parent_cte())
     q.on("parent", "sku" => "S")
     q.values("note", "parent__sku")
     r = inspect_query(q; connection = _CR_SL)
@@ -680,30 +702,59 @@ _sql(q; conn = _CR_SL) = inspect_query(q; connection = conn)[:sql_text]
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Migration diagnostic. The `"<cte>__col"` spelling is DELETED, not aliased — it now resolves as
-  # an ordinary field path and fails. The generic "column not found" would send the reader looking
-  # for a missing model field rather than at the spelling that changed, so the CTE case gets its own
-  # message. It still THROWS: nothing here re-opens the ambiguous resolution.
+  # #492 INVERTED this case. `"<cte>__col"` resolves again — it is the dialect, and the object form
+  # is the disambiguator. What #444 actually removed was first-match-wins PRECEDENCE, and #492 keeps
+  # that removed: an unambiguous name resolves, a shadowed one is refused (the testset below).
+  #
+  # The assertion is the RENDER, not merely the absence of a throw: a string that resolved to the
+  # base model instead of the CTE would also "not throw", and would silently be the wrong column.
   # ─────────────────────────────────────────────────────────────────────────────
-  @testset "the old \"cte__col\" string spelling throws a migration diagnostic" begin
-    err = try
+  @testset "the \"cte__col\" string spelling resolves to the CTE column" begin
+    for (backend, conn) in (("PostgreSQL", _CR_PG), ("SQLite", _CR_SL))
       q = CR.Cj_child.objects
       q.with("ev" => _parent_cte(), join_field = "id" => "id")
       q.values("note", "s" => "ev__sku")
+      sql = _sql(q; conn = conn)
+      # Joined to the CTE, and the OUTER query projects the CTE's alias. #376: the physical
+      # `product_sku` appears once, inside the CTE body that selects it from the real table — the
+      # outer reference must name `sku`, the projection alias the CTE exposes.
+      @test occursin("JOIN \"ev\" AS", sql)
+      @test occursin("\"R1_1\".\"sku\" as \"s\"", sql)
+      @test !occursin("JOIN \"cj_parent\" AS", sql)
+      # The physical name is confined to the CTE body — it must not reach the outer SELECT.
+      @test !occursin("\"R1_1\".\"product_sku\"", sql)
+    end
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # `F(...)` is deliberately OUT of #492's scope: `FExpression`'s slots do not admit a CTE handle, a
+  # type widening #444 declined. So the fall-through diagnostic in `_build_row_join` survives, now
+  # naming the scope rather than announcing a removal — the clauses that DO take a `__` path, and
+  # the handle to write here instead.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "F() does not accept a CTE-rooted string, and says where the path is legal" begin
+    err = try
+      q = CR.Cj_child.objects
+      q.with("ev" => _parent_cte(), join_field = "id" => "id")
+      q.values("note")
+      q.filter(F("ev__sku") == F("note"))
       inspect_query(q; connection = _CR_SL)
       nothing
     catch e; e end
     @test err isa PormG.UnknownFieldError
     @test occursin("CTE(\"ev\", \"sku\")", err.msg)
-    @test occursin("#444", err.msg)
+    @test occursin("#492", err.msg)
+    # It must name the clauses that DO take the string, or the reader cannot tell scope from removal.
+    @test occursin("values", err.msg) && occursin("order_by", err.msg)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # A CTE name that shadows a model field no longer changes ANY string path's meaning. With
-  # `.with("parent" => …)` declared, `"parent__sku"` and a plain `.filter("parent" => 1)` behave
-  # exactly as they do with no CTE at all — this is #431 stated as an invariant rather than a case.
+  # #492 SPLIT this invariant in two, and the split is the whole trade the issue makes.
+  #
+  # A NON-shadowing CTE still changes nothing about any field path — that is the invariant #431
+  # stated, and it is what holds for every CTE name that is not also a model name.
   # ─────────────────────────────────────────────────────────────────────────────
-  @testset "#431: declaring a shadowing CTE does not alter any field path" begin
+  @testset "#431: declaring a non-shadowing CTE does not alter any field path" begin
     without = begin
       q = CR.Cj_child.objects
       q.values("note", "parent__sku")
@@ -712,7 +763,7 @@ _sql(q; conn = _CR_SL) = inspect_query(q; connection = conn)[:sql_text]
     end
     with = begin
       q = CR.Cj_child.objects
-      q.with("parent" => _parent_cte(), join_field = "id" => "id")
+      q.with("pcte" => _parent_cte(), join_field = "id" => "id")
       q.values("note", "parent__sku")
       q.filter("parent__sku" => "V")
       inspect_query(q; connection = _CR_PG)
@@ -723,6 +774,63 @@ _sql(q; conn = _CR_SL) = inspect_query(q; connection = conn)[:sql_text]
     @test occursin("\"product_sku\"", with[:sql_text])
     @test !occursin("WITH ", without[:sql_text])
     @test occursin("WITH ", with[:sql_text])
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # A SHADOWING CTE makes the shared string path a hard error — the cost #492 accepts, stated as a
+  # case rather than left to prose. `parent` is a real ForeignKey on `Cj_child`, so declaring a CTE
+  # by that name gives `"parent__sku"` two readings and PormG refuses to pick one.
+  #
+  # Note what is NOT claimed: the model side has no spelling while the collision stands. The error
+  # says so, and the fix is to rename the CTE. A base-namespace handle is deferred, deliberately.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "#492: a shadowing CTE makes the shared string path a hard error" begin
+    # Every clause that accepts a column path refuses it, not just the one that happened to be
+    # tested first — the gate is at resolution, so it cannot be clause-specific by accident.
+    cases = Dict(
+      "values"   => () -> (q = CR.Cj_child.objects;
+                           q.with("parent" => _parent_cte(), join_field = "id" => "id");
+                           q.values("note", "parent__sku"); q),
+      "filter"   => () -> (q = CR.Cj_child.objects;
+                           q.with("parent" => _parent_cte(), join_field = "id" => "id");
+                           q.values("note"); q.filter("parent__sku" => "V"); q),
+      "order_by" => () -> (q = CR.Cj_child.objects;
+                           q.with("parent" => _parent_cte(), join_field = "id" => "id");
+                           q.values("note"); q.order_by("-parent__sku"); q),
+      "nested"   => () -> (q = CR.Cj_child.objects;
+                           q.with("parent" => _parent_cte(), join_field = "id" => "id");
+                           q.values("note", "c" => Concat("note", Value("-"), "parent__sku")); q),
+      # The window slots are pinned HERE and not only in the parity testset above, because the two
+      # halves failed in OPPOSITE directions and only one of them is loud. Before the `WindowFunction`
+      # arm existed, `partition_by = "ev__sku"` threw (a missing feature, visible), while the
+      # SHADOWED spelling below RENDERED, silently resolving to the ForeignKey and joining
+      # `cj_parent` — the same string that `values()` refuses two lines up. A parity test cannot
+      # catch that: the handle form has no ambiguity to disagree about.
+      "window part"  => () -> (q = CR.Cj_child.objects;
+                               q.with("parent" => _parent_cte(), join_field = "id" => "id");
+                               q.values("note",
+                                        "rk" => Rank(over = WindowOver(partition_by = "parent__sku"))); q),
+      "window order" => () -> (q = CR.Cj_child.objects;
+                               q.with("parent" => _parent_cte(), join_field = "id" => "id");
+                               q.values("note",
+                                        "rk" => Rank(over = WindowOver(order_by = "-parent__sku"))); q),
+    )
+    for (clause, mk) in cases
+      err = try; inspect_query(mk(); connection = _CR_SL); nothing; catch e; e end
+      @test err isa PormG.AmbiguousFieldError
+      # It is a FieldAccessError, so an app catching the umbrella still catches it — additive.
+      @test err isa PormG.FieldAccessError
+      # Both readings named, and the spelling that selects the CTE side printed verbatim.
+      @test occursin("parent", err.msg)
+      @test occursin("CTE(\"parent\", \"sku\")", err.msg)
+      @test occursin("#492", err.msg)
+    end
+
+    # The handle form is unaffected — it was never ambiguous, and #492 deletes nothing.
+    q = CR.Cj_child.objects
+    q.with("parent" => _parent_cte(), join_field = "id" => "id")
+    q.values("note", "s" => CTE("parent", "sku"))
+    @test occursin("JOIN \"parent\" AS", _sql(q))
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -742,5 +850,411 @@ _sql(q; conn = _CR_SL) = inspect_query(q; connection = conn)[:sql_text]
     copy_q = deepcopy(q)
     @test _sql(copy_q) == first_render
     @test _sql(q) == first_render
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #492 — the string spelling, clause by clause
+#
+# The dialect restored. Each case asserts the string form renders IDENTICALLY to the handle form
+# rather than merely rendering: a string that resolved to the base model would also "work", and
+# would silently be the wrong column. Byte-equality against the handle is the only assertion that
+# distinguishes those two outcomes.
+#
+# `ev` is not a field of `Cj_child`, so none of these is ambiguous — the shadowed case has its own
+# testset above.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#492: the \"<cte>__<col>\" string spelling" begin
+
+  @testset "renders identically to the handle form" begin
+    shapes = Dict(
+      "values"        => (s = () -> (q = CR.Cj_child.objects;
+                                     q.with("ev" => _full_cte(), join_field = "id" => "id");
+                                     q.values("note", "x" => "ev__sku"); q),
+                          h = () -> (q = CR.Cj_child.objects;
+                                     q.with("ev" => _full_cte(), join_field = "id" => "id");
+                                     q.values("note", "x" => CTE("ev", "sku")); q)),
+      "filter"        => (s = () -> (q = CR.Cj_child.objects;
+                                     q.with("ev" => _full_cte(), join_field = "id" => "id");
+                                     q.values("note"); q.filter("ev__sku" => "S"); q),
+                          h = () -> (q = CR.Cj_child.objects;
+                                     q.with("ev" => _full_cte(), join_field = "id" => "id");
+                                     q.values("note"); q.filter(CTE("ev", "sku") => "S"); q)),
+      # #492 gets `order_by("-<cte>__<col>")` back, so DESC has ONE dialect again instead of the
+      # string form for fields and `desc = true` for CTEs.
+      "order_by desc" => (s = () -> (q = CR.Cj_child.objects;
+                                     q.with("ev" => _full_cte(), join_field = "id" => "id");
+                                     q.values("note", "x" => "ev__sku"); q.order_by("-ev__sku"); q),
+                          h = () -> (q = CR.Cj_child.objects;
+                                     q.with("ev" => _full_cte(), join_field = "id" => "id");
+                                     q.values("note", "x" => CTE("ev", "sku"));
+                                     q.order_by(CTE("ev", "sku"; desc = true)); q)),
+      # #444 recorded this class as having ZERO occurrences, so nothing regresses either way — it
+      # simply stops being a special case.
+      "Sum"           => (s = () -> (q = CR.Cj_child.objects;
+                                     q.with("ev" => _full_cte(), join_field = "id" => "id");
+                                     q.values("note", "t" => Sum("ev__sku")); q),
+                          h = () -> (q = CR.Cj_child.objects;
+                                     q.with("ev" => _full_cte(), join_field = "id" => "id");
+                                     q.values("note", "t" => Sum(CTE("ev", "sku"))); q)),
+      # The memo hazard #492 section 2 names. A miss here does not error — it drops the #352/#373
+      # sargable rewrite on one spelling only, so the two produce DIFFERENT plans with no symptom.
+      "sargable date" => (s = () -> (q = CR.Cj_child.objects;
+                                     q.with("ev" => _full_cte(), join_field = "id" => "id");
+                                     q.values("note");
+                                     q.filter("ev__seen__@yyyy_mm__@lte" => "1991-10"); q),
+                          h = () -> (q = CR.Cj_child.objects;
+                                     q.with("ev" => _full_cte(), join_field = "id" => "id");
+                                     q.values("note");
+                                     q.filter(CTE("ev", "seen__@yyyy_mm__@lte") => "1991-10"); q)),
+      # #492's acceptance list names window clauses, and they are the slot a walk most easily
+      # misses: `partition_by` and `order_by` hang off `over::WindowSpec`, not off the function's
+      # `column`, so the ordinary `SQLTypeFunction` arm never reaches them.
+      "window part"   => (s = () -> (q = CR.Cj_child.objects;
+                                     q.with("ev" => _full_cte(), join_field = "id" => "id");
+                                     q.values("note",
+                                              "rk" => Rank(over = WindowOver(partition_by = "ev__sku"))); q),
+                          h = () -> (q = CR.Cj_child.objects;
+                                     q.with("ev" => _full_cte(), join_field = "id" => "id");
+                                     q.values("note",
+                                              "rk" => Rank(over = WindowOver(partition_by = CTE("ev", "sku")))); q)),
+      # A window's ORDER BY stores its entry AS GIVEN, `-` and all, so this is the one slot where
+      # the string form has to carry the direction itself. `-ev__seen` must land on the same
+      # `desc = true` the handle spells explicitly.
+      "window order"  => (s = () -> (q = CR.Cj_child.objects;
+                                     q.with("ev" => _full_cte(), join_field = "id" => "id");
+                                     q.values("note",
+                                              "rk" => Rank(over = WindowOver(order_by = "-ev__seen"))); q),
+                          h = () -> (q = CR.Cj_child.objects;
+                                     q.with("ev" => _full_cte(), join_field = "id" => "id");
+                                     q.values("note",
+                                              "rk" => Rank(over = WindowOver(order_by = CTE("ev", "seen"; desc = true)))); q)),
+      # Same hazard, the `json_lookup_paths` half.
+      "json lookup"   => (s = () -> (q = CR.Cj_child.objects;
+                                     q.with("ev" => _full_cte(), join_field = "id" => "id");
+                                     q.values("note"); q.filter("ev__meta__driver" => "senna"); q),
+                          h = () -> (q = CR.Cj_child.objects;
+                                     q.with("ev" => _full_cte(), join_field = "id" => "id");
+                                     q.values("note");
+                                     q.filter(CTE("ev", "meta__driver") => "senna"); q)),
+    )
+    for (clause, pair) in shapes, (backend, conn) in (("PostgreSQL", _CR_PG), ("SQLite", _CR_SL))
+      str = inspect_query(pair.s(); connection = conn)
+      hdl = inspect_query(pair.h(); connection = conn)
+      @test str[:sql_text] == hdl[:sql_text]
+      @test str[:parameters] == hdl[:parameters]
+      # Guard against both sides being vacuously empty — a shape that stopped joining the CTE would
+      # otherwise "match" its twin.
+      @test occursin("JOIN \"ev\" AS", str[:sql_text])
+    end
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Both spellings for the SAME column in ONE query — #492's acceptance item for the memo keying.
+  #
+  # A string that keyed `(:base, "ev__sku")` while the handle keyed `(:cte, "ev__sku")` produces two
+  # cache entries for one column: no error, and the CTE joined twice. The join count is what makes
+  # this fail on a divergence, so it is asserted rather than the column names alone.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "both spellings of one column share a single memo entry" begin
+    for (backend, conn) in (("PostgreSQL", _CR_PG), ("SQLite", _CR_SL))
+      q = CR.Cj_child.objects
+      q.with("ev" => _full_cte(), join_field = "id" => "id")
+      q.values("note", "a" => "ev__sku", "b" => CTE("ev", "sku"))
+      sql = _sql(q; conn = conn)
+      @test length(collect(eachmatch(r"JOIN \"ev\" AS", sql))) == 1
+      @test occursin("as \"a\"", sql) && occursin("as \"b\"", sql)
+    end
+
+    # The rendered SQL above CANNOT see the memo key, and an earlier version of this testset claimed
+    # it could. Forcing the divergence by hand — terminal rewritten to a `CTEReference` while `root`
+    # stays `:base` — renders byte-identically, join count still 1, because after the rewrite both
+    # spellings are the same expression type and the render no longer depends on the tag. So the key
+    # is asserted directly, on the pass's own output.
+    #
+    # The OBSERVABLE consequences of a wrong `root` are covered separately, by the sargable-date and
+    # JSON shapes in the parity testset above — those DO change the SQL on a memo miss. This
+    # assertion covers the tag itself; that one covers what the tag is for.
+    probe = CR.Cj_child.objects
+    probe.with("ev" => _full_cte(), join_field = "id" => "id")
+    probe.values("note", "a" => "ev__sku", "b" => CTE("ev", "sku"))
+    resolved = PormG.QueryBuilder._resolve_cte_string_paths!(deepcopy(probe.object))
+    fields = [v for v in resolved.values if v isa PormG.QueryBuilder.SQLField]
+    str_side, hdl_side = fields[2], fields[3]
+    # Same namespace half, same expression type, same output name: one MemoKey, not two.
+    @test str_side.root == hdl_side.root == :cte
+    @test str_side.field isa PormG.QueryBuilder.CTEReference
+    @test typeof(str_side.field) == typeof(hdl_side.field)
+    @test PormG.QueryBuilder.memo_key(str_side.root, str_side._as) ==
+          PormG.QueryBuilder.memo_key(hdl_side.root, hdl_side._as)
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # #434 regression, on the restored spelling. The old refusal was ORDER-DEPENDENT — it read the CTE
+  # registry as it stood at `.on()` time, so `.with()` then `.on()` was refused while the reverse
+  # sailed past. #444 dissolved that by making the shape unrepresentable; #492 makes it representable
+  # again, so the refusal has to come back WITHOUT the order dependence. It runs at build time, when
+  # the registry is final, which is what makes both orderings identical.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "#434: a CTE-rooted string is refused in a join ON clause, either ordering" begin
+    with_first = try
+      q = CR.Cj_child.objects
+      q.with("ev" => _parent_cte(), join_field = "id" => "id")
+      q.cjoin_on("Cj_parent", alias = "p2", on = ["ev__sku" => 1])
+      q.values("note"); _sql(q); nothing
+    catch e; e end
+
+    on_first = try
+      q = CR.Cj_child.objects
+      q.cjoin_on("Cj_parent", alias = "p2", on = ["ev__sku" => 1])
+      q.with("ev" => _parent_cte(), join_field = "id" => "id")
+      q.values("note"); _sql(q); nothing
+    catch e; e end
+
+    @test with_first isa PormG.FilterError
+    @test on_first isa PormG.FilterError
+    # Same message, not merely the same type: an order-dependent guard would produce two different
+    # ones (or one and an UnknownFieldError), which is how #434 presented.
+    @test with_first.msg == on_first.msg
+    # The caller sees THEIR spelling as the offending token, while the remedy tail stays the one the
+    # handle form prints — `_reject_cte_in_join`'s `spelled` keyword.
+    @test occursin("\"ev__sku\"", with_first.msg)
+    @test occursin(".filter(", with_first.msg)
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────────
+  # The gate consults FOUR registries and every case above exercises only the forward-FK one. A
+  # REVERSE accessor is the arm that is independently reachable: `cj_kids` is `Cj_child.parent`'s
+  # `related_name`, so on `Cj_parent` it is addressable at exactly the position segment 1 occupies —
+  # and it is not in `model.fields`, so both field arms miss it. Drop `related_objects` from the
+  # probe and this query resolves to the CTE silently, which is #431 with the roles swapped.
+  #
+  # The other two arms need no case of their own, and saying why beats a test that cannot fail: a
+  # `ManyToManyField` IS in `model.fields`, so the same arm covers it as any field; and a
+  # `cjoin`/`on()` join path is validated against the model when declared, so a join-config key is
+  # always also a field or a reverse accessor and an earlier arm has already fired.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "#492: a CTE shadowing a REVERSE accessor is ambiguous too" begin
+    # The fixture's own relation, so the collision under test is real rather than staged.
+    @test !haskey(CR.Cj_parent.fields, "cj_kids")
+    @test haskey(CR.Cj_parent.related_objects, "cj_kids")
+
+    q = CR.Cj_parent.objects
+    q.with("cj_kids" => (k = CR.Cj_child.objects; k.values("parent", "note"); k),
+           join_field = "id" => "parent")
+    q.values("sku", "cj_kids__note")
+    err = try; inspect_query(q; connection = _CR_SL); nothing; catch e; e end
+    @test err isa PormG.AmbiguousFieldError
+    @test occursin("CTE(\"cj_kids\", \"note\")", err.msg)
+
+    # Control: rename the CTE and the identical string path resolves to it — so what the gate
+    # refused was the collision, not the shape.
+    ok = CR.Cj_parent.objects
+    ok.with("kcte" => (k = CR.Cj_child.objects; k.values("parent", "note"); k),
+            join_field = "id" => "parent")
+    ok.values("sku", "kcte__note")
+    @test occursin("JOIN \"kcte\" AS", _sql(ok))
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────────
+  # A CTE name is only half of a CTE reference — the regression this pins is that segment 1 alone
+  # used to be enough. `_cte_string_root` matched on segment 1 without requiring a column path after
+  # it, so `"parent"` became `CTE("parent", "parent")` and BOTH failure directions were live at once:
+  #
+  #   • over-refusal, on one of the commonest calls an app makes. `filter("<fk>" => id)` and
+  #     `values("<fk>")` started raising the moment a CTE happened to share that name — against
+  #     #492's own promise that everything legal stays legal. The message could not even be written
+  #     correctly: with no remainder it printed `CTE("parent", "column")`, a spelling that cannot
+  #     exist.
+  #   • SILENT resolution, where the model has no such field but the CTE projects a column of its
+  #     own name. That one returned the CTE's column with no error at all, which is precisely the
+  #     first-match-wins class #492 exists to delete.
+  #
+  # An operator/transform suffix does not count as the column path, because it is a suffix ON a
+  # column rather than a column: `"parent__@isnull"` is the model's field, not `CTE("parent", "@isnull")`.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "#492: a CTE name alone is not a CTE column reference" begin
+    # Every one of these names the MODEL, with a CTE of the same name declared on the query.
+    for (label, mk) in (
+      ("bare projection", () -> (q = CR.Cj_child.objects;
+                                 q.with("parent" => _parent_cte(), join_field = "id" => "id");
+                                 q.values("note", "parent"); q)),
+      ("bare filter",     () -> (q = CR.Cj_child.objects;
+                                 q.with("parent" => _parent_cte(), join_field = "id" => "id");
+                                 q.values("note"); q.filter("parent" => 1); q)),
+      ("operator suffix", () -> (q = CR.Cj_child.objects;
+                                 q.with("parent" => _parent_cte(), join_field = "id" => "id");
+                                 q.values("note"); q.filter("parent__@isnull" => true); q)),
+      ("bare order_by",   () -> (q = CR.Cj_child.objects;
+                                 q.with("parent" => _parent_cte(), join_field = "id" => "id");
+                                 q.values("note"); q.order_by("parent"); q)),
+    )
+      @testset "$label" begin
+        sql = _sql(mk())
+        # Resolved against the base model, exactly as with no CTE declared. Both halves are needed:
+        # `occursin("\"parent\"", sql)` alone is VACUOUS — the `WITH "parent" AS (` header satisfies
+        # it on its own, so it would pass even while the path resolved to the CTE. The qualified
+        # reference says WHICH relation answered, and the join assertion says the CTE did not.
+        @test occursin("\"R1\".\"parent\"", sql)
+        @test !occursin("JOIN \"parent\" AS", sql)
+      end
+    end
+
+    # The silent half: the model has NO `pcte` field, and the CTE projects a column called `pcte`.
+    # Declaring the CTE must not make a bare `"pcte"` mean that column — it must fail exactly as it
+    # does with no CTE at all.
+    silent = try
+      body = CR.Cj_parent.objects
+      body.values("id", "pcte" => "sku")
+      q = CR.Cj_child.objects
+      q.with("pcte" => body, join_field = "parent" => "id")
+      q.values("note", "pcte")
+      _sql(q); nothing
+    catch e; e end
+    @test silent isa PormG.UnknownFieldError
+
+    # ...and the genuine two-segment ambiguity is untouched by the narrowing.
+    still = try
+      q = CR.Cj_child.objects
+      q.with("parent" => _parent_cte(), join_field = "id" => "id")
+      q.values("note", "parent__sku")
+      _sql(q); nothing
+    catch e; e end
+    @test still isa PormG.AmbiguousFieldError
+
+    # A trailing separator leaves an EMPTY remainder, which is no more a column than an operator is.
+    # Without the `isempty` half of the test it became `CTE("ev", "")` and died as
+    # "the column  not found in ," — an empty column against an empty model.
+    empty_tail = try
+      q = CR.Cj_child.objects
+      q.with("ev" => _full_cte(), join_field = "id" => "id")
+      q.values("note", "x" => "ev__")
+      _sql(q); nothing
+    catch e; e end
+    @test empty_tail isa PormG.UnknownFieldError
+  end
+
+  # ────────────────────────────────────────────────────────────────────────
+  # `root` parity, shape by shape — the memo tag must land where the HANDLE form lands
+  #
+  # This is the invariant the `MemoKey` split exists to protect, and it is invisible in rendered SQL:
+  # after the rewrite both spellings are the same expression type, so a wrong tag still renders
+  # correctly (see the note in the memo testset above). It is therefore asserted structurally, and
+  # the `__@` rows are the ones two earlier drafts of the rule got wrong — a transform path is parsed
+  # into an `FObject` before the pass runs, so "is the terminal still a CTEReference" reads `:base`
+  # for it while the handle side reads `:cte`.
+  # ────────────────────────────────────────────────────────────────────────
+  @testset "#492: root parity between the two spellings" begin
+    _roots(mk) = begin
+      o = PormG.QueryBuilder._resolve_cte_string_paths!(deepcopy(mk().object))
+      [v.root for v in o.values if v isa PormG.QueryBuilder.SQLField]
+    end
+    _base() = (q = CR.Cj_child.objects;
+               q.with("ev" => _full_cte(), join_field = "id" => "id"); q)
+
+    shapes = Dict(
+      # A whole projection that IS one CTE path → `:cte` on both sides.
+      "plain"            => (s = () -> (q = _base(); q.values("note", "ev__sku"); q),
+                             h = () -> (q = _base(); q.values("note", CTE("ev", "sku")); q)),
+      "aliased"          => (s = () -> (q = _base(); q.values("note", "a" => "ev__sku"); q),
+                             h = () -> (q = _base(); q.values("note", "a" => CTE("ev", "sku")); q)),
+      "json sub-path"    => (s = () -> (q = _base(); q.values("note", "j" => "ev__meta__driver"); q),
+                             h = () -> (q = _base(); q.values("note", "j" => CTE("ev", "meta__driver")); q)),
+      # Transform paths — parsed into a function before the pass sees them.
+      "transform @year"  => (s = () -> (q = _base(); q.values("note", "y" => "ev__seen__@year"); q),
+                             h = () -> (q = _base(); q.values("note", "y" => CTE("ev", "seen__@year")); q)),
+      "composite @quarter" => (s = () -> (q = _base(); q.values("note", "ev__seen__@quarter"); q),
+                               h = () -> (q = _base(); q.values("note", CTE("ev", "seen__@quarter")); q)),
+      # A CTE column NESTED in a function is `:base` on both sides — the handle form goes through the
+      # function branch, not `_values_field(::CTEReference)`.
+      "nested in Concat" => (s = () -> (q = _base();
+                                        q.values("note", "x" => Concat("note", Value("-"), "ev__sku")); q),
+                             h = () -> (q = _base();
+                                        q.values("note", "x" => Concat("note", Value("-"), CTE("ev", "sku"))); q)),
+      # A user ALIAS that merely looks like a CTE path. `:base` on both sides — the trap for any rule
+      # that reads `_as`'s first segment alone.
+      "alias resembling a cte path" =>
+                            (s = () -> (q = _base(); q.values("note", "ev__sku" => Sum("ev__id")); q),
+                             h = () -> (q = _base(); q.values("note", "ev__sku" => Sum(CTE("ev", "id"))); q)),
+    )
+    for (label, pair) in shapes
+      @testset "$label" begin
+        @test _roots(pair.s) == _roots(pair.h)
+      end
+    end
+
+    # Not merely equal — equal to the RIGHT value, or a rule that returned `:base` everywhere would
+    # pass the whole table above.
+    @test :cte in _roots(() -> (q = _base(); q.values("note", "ev__sku"); q))
+    @test :cte in _roots(() -> (q = _base(); q.values("note", "y" => "ev__seen__@year"); q))
+    @test _roots(() -> (q = _base(); q.values("note", "ev__sku" => Sum("ev__id")); q)) == [:base, :base]
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # `F(...)` reaches a `cjoin_on` ON clause intact — `_cjoin_on` skips `_prefix_join_filter` — so a
+  # CTE-rooted string inside one is a live route into the clause that must refuse it. Before the
+  # `FExpression` arm it still failed, but as `UnknownFieldError` carrying the SCOPE message, which
+  # tells the caller to write `CTE("ev","sku")` — advice that is refused in this very clause, and
+  # contrary to what `read/custom_joins.md` promises. The refusal, not merely the failure, is pinned.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "#492: every slot of a join ON clause refuses a CTE-rooted string" begin
+    # One slot at a time, because the walk grew an arm per slot and each was found missing
+    # separately. `operand` is the one worth naming: an earlier draft skipped it on the theory that a
+    # bare String there is a literal. It is not — with no CTE anywhere,
+    # `filter(F("note") == "parent__sku")` emits a real join against `cj_parent` and compares the
+    # columns, so `operand` is a column slot that merely falls back to a literal when the string does
+    # not resolve. Skipping it left the same defect this testset exists for, one slot over.
+    onclause(on) = begin
+      q = CR.Cj_child.objects
+      q.with("ev" => _parent_cte(), join_field = "id" => "id")
+      q.cjoin_on("Cj_parent", alias = "p2", on = on)
+      q.values("note")
+      q
+    end
+    slots = Dict(
+      "F(...) operand"      => [F("note") == "ev__sku"],
+      "F(...) field_name"   => [F("ev__sku") == F("note")],
+      "a function on the RHS" => ["note" => Lower("ev__sku")],
+      "a plain LHS pair"    => ["ev__sku" => 1],
+      # Refused too, deliberately: `.filter()` would read this as a VALUE, but the `Pair` arm already
+      # refused it and exempting one slot made the walk disagree with itself. Over-refusal here is
+      # loud and one edit away; the alternative is a silent literal where a column was meant.
+      "a bare string on the RHS" => ["note" => "ev__sku"],
+    )
+    for (label, on) in slots
+      @testset "$label" begin
+        err = try; _sql(onclause(on)); nothing; catch e; e end
+        @test err isa PormG.FilterError
+        @test occursin("cannot be used in", err.msg)
+      end
+    end
+
+    # The `on()` route as well, which reaches `_check_filter` by a different path than `cjoin_on`.
+    err_on = try
+      q = CR.Cj_child.objects
+      q.with("ev" => _parent_cte(), join_field = "id" => "id")
+      q.on("parent", F("sku") == "ev__sku")
+      q.values("note", "parent__sku")
+      _sql(q); nothing
+    catch e; e end
+    @test err_on isa PormG.FilterError
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # The rewrite is idempotent and does not consume the caller's query. `_retag_cte_string` returns a
+  # `CTEReference` unchanged and never touches `_as`, so a second build sees the already-rewritten
+  # tree; and every read entry point deepcopies before `build()`, so the handler is not mutated.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "#43: rendering a string-spelled CTE path twice is stable" begin
+    q = CR.Cj_child.objects
+    q.with("ev" => _full_cte(), join_field = "id" => "id")
+    q.values("note", "s" => "ev__sku")
+    q.filter("ev__sku" => "X")
+
+    first_render = _sql(q)
+    @test _sql(q) == first_render
+    @test _sql(deepcopy(q)) == first_render
   end
 end

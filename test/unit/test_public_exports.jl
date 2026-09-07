@@ -28,7 +28,7 @@ const EXPECTED_TOPLEVEL = Set([
     # Rows & exceptions
     :PormGRow, :pk, :DoesNotExist, :MultipleObjectsReturned, :PoolTimeoutError, :PoolConnectError, :pool_stats,
     # Semantic error taxonomy (#231): PormGError root + query-builder subtypes
-    :PormGError, :FieldAccessError, :UnknownFieldError, :LazyTraversalError, :FilterError,
+    :PormGError, :FieldAccessError, :UnknownFieldError, :AmbiguousFieldError, :LazyTraversalError, :FilterError,
     :QueryBuildError, :UnsafeMutationError, :InvalidValueError, :WritesDisabledError, :UnsupportedConnectionError,
     # Taxonomy completion (#239): schema, configuration and migration errors. ConfigurationError
     # and MigrationError are abstract umbrellas (like FieldAccessError).

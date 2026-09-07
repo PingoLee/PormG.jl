@@ -89,7 +89,7 @@ fast_laps.values("raceid", "milliseconds")
 
 inner = M.Result.objects
 inner.with("fast" => fast_laps, join_field = "raceid" => "raceid")   # ← CTE inside the subquery
-inner.filter(CTE("fast", "milliseconds__@lt") => 90_000)
+inner.filter("fast__milliseconds__@lt" => 90_000)
 inner.values("driverid")
 
 query = M.Driver.objects
@@ -121,7 +121,7 @@ Likewise, a CTE can only be referenced by a statement that actually emits a `WIT
 # ✗ refused
 query = M.Result.objects
 query.with("fast" => fast_laps, join_field = "raceid" => "raceid")
-query.filter(CTE("fast", "milliseconds__@lt") => 90_000)
+query.filter("fast__milliseconds__@lt" => 90_000)
 query.delete()
 
 # ✓ filter on the ids instead
@@ -301,14 +301,15 @@ main_query = M.Result.objects
 main_query.with("stats" => driver_stats, join_field="driverid" => "driverid")
 
 main_query.filter("resultid__@lte" => 100)
-main_query.values("resultid", "driverid", CTE("stats", "total_results"))
+main_query.values("resultid", "driverid", "stats__total_results")
 df = main_query |> DataFrame
 ```
 
 The `.with()` method:
 1. Emits the subquery as a `WITH stats AS (SELECT ...)` clause.
 2. Creates a `LEFT JOIN stats ON result.driverid = stats.driverid`.
-3. Makes the CTE's columns reachable as [`CTE("stats", ...)`](#Referencing-a-CTE's-columns).
+3. Makes the CTE's columns reachable as [`"stats__<column>"` paths](#Referencing-a-CTE's-columns)
+   (or `CTE("stats", ...)`, which is the same column).
 
 The projected column is named `stats__total_results` — the CTE name and the column path joined by
 a double underscore — so that is what the DataFrame column is called.
@@ -327,12 +328,12 @@ a double underscore — so that is what the DataFrame column is called.
 
     q = M.Result.objects
     q.with("r91" => races_91, join_field="raceid" => "raceid")
-    q.filter(CTE("r91", "name") => "Brazilian Grand Prix")  # → the CTE's "name", not "race_name"
-    q.values("resultid", "race" => CTE("r91", "name"))
+    q.filter("r91__name" => "Brazilian Grand Prix")   # → the CTE's "name", not "race_name"
+    q.values("resultid", "race" => "r91__name")
     ```
 
     Give the projection a custom alias (`values("rname" => "name")`) and *that* becomes the name to
-    reference (`CTE("r91", "rname")`). The `join_field` follows the same split: its **second** element names a
+    reference (`"r91__rname"`). The `join_field` follows the same split: its **second** element names a
     CTE column and is a field name, while the first names a real column on the main table and does
     resolve through `db_column`.
 
@@ -340,65 +341,108 @@ a double underscore — so that is what the DataFrame column is called.
 
 ## Referencing a CTE's columns
 
-A CTE's columns live in **their own namespace**, reached with `CTE(name, path)` — the same kind of
-reference object as [`F`](@ref), [`OuterRef`](@ref) and [`Subquery`](@ref):
+A CTE's columns are reached with a **`"<cte>__<column>"` path** — the same `__` dialect every other
+column reference in PormG speaks:
 
 ```julia
-q.values("note", "parent_sku" => CTE("parent", "sku"))
-q.filter(CTE("parent", "sku") => "S")
-q.order_by(CTE("parent", "sku"; desc = true))
+q.with("fast" => fast_laps, join_field = "raceid" => "raceid")
+
+q.values("resultid", "best_lap" => "fast__milliseconds")
+q.filter("fast__milliseconds__@lt" => 90_000)
+q.order_by("-fast__milliseconds")
 ```
 
-The second argument is a **path**, not a bare column, and it speaks the same `__` vocabulary the
-rest of PormG does — a hop out of the CTE through a projected ForeignKey, a JSON sub-path, or an
+The part after the CTE's name is a **path**, not a bare column, and it carries the full `__`
+vocabulary — a hop out of the CTE through a projected ForeignKey, a JSON sub-path, or an
 operator/transform suffix:
 
 ```julia
-q.values("s"  => CTE("ev", "parent__sku"))                # through a projected FK
-q.filter(CTE("ev", "meta__driver") => "senna")            # JSON sub-path
-q.filter(CTE("ev", "seen__@yyyy_mm__@lte") => "1991-10")  # operator suffix
+q.values("s" => "ev__parent__sku")                 # through a projected FK
+q.filter("ev__meta__driver" => "senna")            # JSON sub-path
+q.filter("ev__seen__@yyyy_mm__@lte" => "1991-10")  # operator suffix
 ```
 
 An **unaliased** projection is named by joining the two halves with a double underscore, so
-`values(CTE("tb_dup", "dias"))` produces a column called `tb_dup__dias`.
+`values("tb_dup__dias")` produces a column called `tb_dup__dias`.
 
-!!! note "Why a reference object and not a `\"cte__col\"` string"
-    Until [#444](https://github.com/PingoLee/PormG.jl/issues/444) a CTE column *was* spelled as a
-    plain path, and that put CTE names and model field paths in one namespace. Join resolution
-    consulted the CTE registry **first**, so `.with("parent" => …)` on a model that has a `parent`
-    ForeignKey silently took that field's path over and the real join was never emitted.
-
-    Separate namespaces make the collision unrepresentable rather than merely refused: a CTE may
-    now share a name with a field, and both stay addressable in the same query.
-
-    ```julia
-    q.with("parent" => parent_cte)
-    q.values("note",
-             "parent__sku",                     # the ForeignKey — unambiguous
-             "cte_sku" => CTE("parent", "sku")) # the CTE       — unambiguous
-    ```
-
-    Ordering direction is a keyword (`desc = true`) because a reference object cannot carry the
-    string form's leading `-`.
-
-**SQL functions, aggregates and window clauses take a CTE reference** wherever they take a field
-path:
+**SQL functions, aggregates and window clauses take the path** wherever they take a field path:
 
 ```julia
-q.values("l"   => Lower(CTE("ev", "sku")),
-         "c"   => Cast(CTE("ev", "qty"), "text"),
-         "tot" => Sum(CTE("ev", "qty")),
-         "rk"  => Rank(over = WindowOver(partition_by = CTE("ev", "sku"),
-                                         order_by     = CTE("ev", "seen"; desc = true))))
+q.values("l"   => Lower("ev__sku"),
+         "c"   => Cast("ev__qty", "text"),
+         "tot" => Sum("ev__qty"),
+         "rk"  => Rank(over = WindowOver(partition_by = "ev__sku",
+                                         order_by     = "-ev__seen")))
 ```
 
-A window's `order_by` is the second place `desc = true` is meaningful; everywhere other than there
-and the fluent `order_by(...)` it raises.
+### `CTE(name, path)` — the disambiguator
 
-**Where a CTE reference may not appear.** Inside `on(...)`, `cjoin(...)` or `cjoin_on(...)` — a
+The same column, written as a reference **object** — the same kind as [`F`](@ref),
+[`OuterRef`](@ref) and [`Subquery`](@ref). The two spellings render byte-identical SQL and share one
+join, so a query may mix them freely:
+
+```julia
+q.values("x" => "ev__sku")           # ≡
+q.values("x" => CTE("ev", "sku"))
+```
+
+Reach for the object in two places:
+
+1. **When the CTE's name also names something on the model.** That is what it exists for — see the
+   warning below.
+2. **On the right of a `filter` pair**, where a bare string is a *value*, not a column. A
+   correlation has to be written as a handle (or an [`F`](@ref)):
+
+   ```julia
+   q.filter("surname" => CTE("d91", "surname"))   # the CTE's column — a correlation
+   q.filter("surname" => "d91__surname")          # a VALUE: the literal text "d91__surname"
+   ```
+
+   The second line is **not** an error on a text column — it compares `surname` against that
+   literal and quietly matches nothing. (On a numeric column the field's type check catches it and
+   raises `FilterError`.) The handle is the only spelling that correlates, whatever the type.
+
+Ordering direction needs no object: the ordinary `-` prefix works in both `order_by(...)` and a
+window's `order_by`, so there is one DESC dialect rather than two. `desc = true` is the object's
+equivalent, and is meaningful in exactly those two places; anywhere else it raises.
+
+!!! warning "A CTE name that also names a model field is an error, not a guess"
+    Until [#444](https://github.com/PingoLee/PormG.jl/issues/444) the CTE registry was consulted
+    **first**, so `.with("driverid" => …)` on a model whose `driverid` is a ForeignKey silently took
+    that field's path over and the real join was never emitted — wrong rows, no error. #444 removed
+    the string spelling outright to make the collision unrepresentable;
+    [#492](https://github.com/PingoLee/PormG.jl/issues/492) restored the string and removed the
+    **precedence** instead:
+
+    ```julia
+    q.with("driverid" => driver_totals)      # "driverid" is ALSO a ForeignKey of Result
+    q.values("points", "driverid__surname")  # → AmbiguousFieldError
+    ```
+
+    The message names both readings and prints the spelling that selects the CTE side —
+    `CTE("driverid", "surname")`. There is no string that selects the **model** side while the
+    collision stands; to get that back, rename the CTE.
+
+    A CTE name that does *not* collide changes nothing about any field path, and both references
+    coexist in one query:
+
+    ```julia
+    q.with("totals" => driver_totals)
+    q.values("points",
+             "driverid__surname",                    # the ForeignKey
+             "n" => "totals__total_results")         # the CTE — or CTE("totals", "total_results")
+    ```
+
+    The cost is a **deferred** break: adding a `driverid` ForeignKey to a model that already has
+    `.with("driverid" => …)` somewhere turns a query nobody touched into an error. It is loud and
+    one edit away, and Django lives with the same collision between an annotation and a field.
+
+**Where a CTE column may not appear.** Inside `on(...)`, `cjoin(...)` or `cjoin_on(...)` — a
 JOIN's `ON` clause targets the joined *model*, and a CTE is joined by its own `.with()` declaration.
-That holds however the reference is spelled, including as the operand of an `F` comparison
-(`F("sku") == CTE("ev", "sku")`). Put the predicate in `.filter(...)` instead.
+That holds however it is spelled: the `CTE(...)` handle, the `"<cte>__<column>"` string, and the
+handle as the operand of an `F` comparison (`F("sku") == CTE("ev", "sku")`) all raise `FilterError`.
+Put the predicate in `.filter(...)` instead. [`F`](@ref) itself accepts no CTE column at all, in any
+clause.
 
 ---
 
@@ -444,13 +488,18 @@ Notes:
 - **Cartesian-product guard.** Referencing a CTE column with *no* constraining filter is a
   Cartesian product; PormG emits a `@warn` naming the CTE. Add a correlating `filter(...)`, or
   pass `join_field`.
-- **A CTE name may equal a model field** (since
-  [#444](https://github.com/PingoLee/PormG.jl/issues/444)) **or a join key** — a `cjoin_on` alias, a
-  `cjoin` path, an `on()` path — since
-  [#474](https://github.com/PingoLee/PormG.jl/issues/474). Each is addressable and neither shadows
-  the other: the CTE is joined under a generated alias, and a `CTE(name, col)` handle is the only
-  way to reach its columns. Before #474 the join-key case was refused; before that again it
-  silently returned wrong rows.
+- **A CTE name may equal a `cjoin_on` alias.** An alias has its own namespace and is reached only
+  through `Joined(alias, column)`, never as a `__` path, so nothing is ambiguous: both relations are
+  emitted, the CTE under a generated alias, and each stays addressable
+  ([#474](https://github.com/PingoLee/PormG.jl/issues/474),
+  [#484](https://github.com/PingoLee/PormG.jl/issues/484)). Before #474 that case was refused;
+  before that again it silently returned wrong rows.
+- **A CTE name that equals anything reached by a `__` path is different** — a model field, a reverse
+  accessor, a many-to-many field, or a `cjoin`/`on()` **join path** (those name model relations, so
+  they collide just as a field does). The shared path then has two readings and raises
+  `AmbiguousFieldError`; `CTE(name, col)` selects the CTE side
+  ([#492](https://github.com/PingoLee/PormG.jl/issues/492)). A CTE name that collides with
+  nothing changes no field path at all.
 - **A CTE may not be named after a physical table.** `.with("driver" => ...)` raises
   `QueryBuildError` at the call when `driver` is the `db_table` of any registered model, or a
   many-to-many join table ([#479](https://github.com/PingoLee/PormG.jl/issues/479)). This one is
@@ -489,8 +538,8 @@ query.values(
     "driverid",
     "forename",
     "surname",
-    CTE("driver_stats", "total_results"),
-    CTE("driver_stats", "total_grid_positions"),
+    "driver_stats__total_results",
+    "driver_stats__total_grid_positions",
 )
 df = query |> DataFrame
 ```
@@ -517,8 +566,8 @@ query = M.Result.objects
 query.with("recent" => recent_races, join_field="raceid" => "raceid")
 query.with("top_d" => top_drivers, join_field="driverid" => "driverid")
 
-query.values("resultid", CTE("recent", "name"), CTE("top_d", "forename"), "points")
-query.filter(CTE("recent", "name__@isnull") => false, CTE("top_d", "forename__@isnull") => false)
+query.values("resultid", "recent__name", "top_d__forename", "points")
+query.filter("recent__name__@isnull" => false, "top_d__forename__@isnull" => false)
 df = query |> DataFrame
 ```
 
@@ -544,7 +593,7 @@ query.with(
     join_type="INNER"   # Only include drivers who have high scores
 )
 
-query.values("driverid", "forename", "max_points" => CTE("high_scorers", "max_points"))
+query.values("driverid", "forename", "max_points" => "high_scorers__max_points")
 query.filter("driverid__@lte" => 100)
 df = query |> DataFrame
 ```
@@ -576,7 +625,7 @@ query = M.Result.objects
 query.with("stats" => nat_stats, join_field="driverid__nationality" => "nationality")
 
 query.filter("raceid__year" => 2023)
-query.values("raceid__name", "driverid__surname", CTE("stats", "driver_count"))
+query.values("raceid__name", "driverid__surname", "stats__driver_count")
 df = query |> DataFrame
 ```
 
@@ -627,7 +676,7 @@ df = M.Result.objects.
     with("tc" => top_const, join_field="constructorid" => "constructorid").
     cjoin("driverid" => "Driver", filters=["nationality" => "German"]).
     filter("positionorder" => 1).
-    values("resultid", CTE("tc", "name"), "driverid__surname") |> DataFrame
+    values("resultid", "tc__name", "driverid__surname") |> DataFrame
 ```
 
 ### Chaining Multiple Custom Joins
@@ -652,8 +701,9 @@ See [Custom Joins](custom_joins.md) for the full `.cjoin()` and `.on()` document
 | Scalar subquery column | `values("n" => Subquery(inner))` | Fan-out-safe per-row aggregate / latest value. |
 | Boolean subquery column | `values("has_x" => Exists(inner))` | Per-row existence flag. |
 | CTE with JOIN | `.with("name" => subq, join_field=...)` | Pre-aggregate data and join it. |
-| CTE column reference | `CTE("name", "path")` | Project, filter or order on a CTE's column. |
-| CTE column, descending | `CTE("name", "path"; desc = true)` | Ordering direction (no `-` prefix). |
+| CTE column | `"name__path"` | Project, filter or order on a CTE's column — the default spelling. |
+| CTE column, descending | `"-name__path"` | Ordering direction, same `-` prefix as any field path. |
+| CTE column reference | `CTE("name", "path")` | The same column as an object: needed when the CTE's name collides with a model field, and on the right of a `filter` pair. |
 | CTE without JOIN | `.with("name" => subq)` | Declare for use in filters only. |
 | CTE INNER JOIN | `join_type="INNER"` | Only keep matching rows. |
 | Deep join path | `join_field="a__b" => "field"` | Link CTE via multi-level relationships. |

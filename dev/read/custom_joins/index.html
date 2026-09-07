@@ -167,15 +167,35 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     Still true: a predicate that all relocates onto a later join leaves this one with no `ON` clause
     of its own, which raises `QueryBuildError` (#435).
 
-    **A CTE cannot be referenced from an `ON` clause at all.** A `CTE(name, path)` inside `on`
-    raises `FilterError`: an `ON` clause targets the joined *model*, and a CTE is joined by its own
-    `.with(...)` declaration. Put the predicate in `.filter(...)` instead (#444).
+    !!! warning &quot;A `cjoin` path or an `on()` path is not the same case&quot;
+        Only a `cjoin_on` **alias** is free of the collision. A `cjoin` **path** and an `on()`
+        **path** name a relation *on the model*, so a CTE sharing that name collides with the
+        relation exactly as it would with any field, and the shared `__` path raises
+        `AmbiguousFieldError` ([#492](https://github.com/PingoLee/PormG.jl/issues/492)):
 
-    **A join key may share a name with a CTE the query joins.** A `cjoin_on` **alias**, a `cjoin`
-    **path** and an `on()` **path** live in a different namespace from a `.with()` label, so a
-    query may use the same word for both and each stays addressable — the same coexistence
-    [#444](https://github.com/PingoLee/PormG.jl/issues/444) established for a CTE name and a model
-    field:
+        ```julia
+        driver_totals = M.Result.objects.values(&quot;driverid&quot;, &quot;n&quot; =&gt; Count(&quot;resultid&quot;))
+
+        q = M.Result.objects
+        q.with(&quot;driverid&quot; =&gt; driver_totals, join_field = &quot;driverid&quot; =&gt; &quot;driverid&quot;)
+        q.cjoin(&quot;driverid&quot; =&gt; &quot;Driver&quot;)           # a `cjoin` PATH — a relation on Result
+        q.values(&quot;points&quot;, &quot;driverid__surname&quot;)   # → AmbiguousFieldError
+        ```
+
+        Here the projection wants the ForeignKey&#39;s `surname`, so the fix is to **rename the CTE** —
+        while the name is taken there is no string that selects the model side. Had you wanted the
+        CTE&#39;s own column instead, that one does have a spelling: `CTE(&quot;driverid&quot;, &quot;n&quot;)`.
+
+    **A CTE cannot be referenced from an `ON` clause at all.** A `CTE(name, path)` inside `on`
+    raises `FilterError`, and so does the equivalent `&quot;&lt;cte&gt;__&lt;column&gt;&quot;` string
+    ([#492](https://github.com/PingoLee/PormG.jl/issues/492)): an `ON` clause targets the joined
+    *model*, and a CTE is joined by its own `.with(...)` declaration. Put the predicate in
+    `.filter(...)` instead (#444).
+
+    **A `cjoin_on` alias may share a name with a CTE the query joins.** An alias lives in its own
+    namespace ([#484](https://github.com/PingoLee/PormG.jl/issues/484)) and is reached *only*
+    through `Joined(alias, column)` — never as a `__` path — so a `&quot;&lt;cte&gt;__&lt;column&gt;&quot;` string is
+    unambiguously the CTE, and both relations are emitted and addressable:
 
     ```julia
     # &quot;best&quot; names both the CTE and the cjoin_on alias here.
@@ -184,7 +204,7 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     df = M.Result.objects.
         with(&quot;best&quot; =&gt; best, join_field = &quot;driverid&quot; =&gt; &quot;driverid&quot;, join_type = &quot;INNER&quot;).
         cjoin_on(&quot;Driver&quot;, alias = &quot;best&quot;, on = [Joined(&quot;best&quot;, &quot;driverid&quot;) == F(&quot;driverid&quot;)]).
-        values(&quot;points&quot;, &quot;career_best&quot; =&gt; CTE(&quot;best&quot;, &quot;best&quot;)).
+        values(&quot;points&quot;, &quot;career_best&quot; =&gt; CTE(&quot;best&quot;, &quot;best&quot;)).      # or &quot;best__best&quot;
         filter(&quot;raceid&quot; =&gt; 18).
         order_by(&quot;-points&quot;).
         limit(5) |&gt; DataFrame
@@ -417,4 +437,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Sunday 6 September 2026 18:31">Sunday 6 September 2026</span>. Using Julia version 1.12.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Monday 7 September 2026 02:10">Monday 7 September 2026</span>. Using Julia version 1.12.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

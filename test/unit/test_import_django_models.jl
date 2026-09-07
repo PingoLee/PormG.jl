@@ -2689,3 +2689,338 @@ class Posterior(models.Model):
         cleanup_import_test!(config_key, db_dir_existed)
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: the three shapes that stored a value the source never denotes (#501)
+# #497 gave the importer a "is this exactly one Python string literal" predicate and a report for a
+# `default` it cannot evaluate. Three shapes still slipped past that contract, each storing a value
+# the source never wrote, and two of them saying nothing at all. Asserted on the helpers here — this
+# is a grid of one-input discriminations, and routing every row through a whole `models.py` would
+# say the same thing at a tenth of the resolution. The end-to-end consequence is the next testset.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the importer reads a call, a continuation and a non-literal choices entry (#501)" begin
+    lc = PormG.Migrations._py_looks_like_call
+    pc = PormG.Migrations.parse_choices
+    ll = PormG.Migrations._py_logical_lines
+    # A real backslash, built rather than escaped. Every assertion below is ABOUT backslashes, and
+    # `Char(92)` keeps the source unambiguous about how many each input actually holds.
+    B = string(Char(92))
+    NL = string(Char(10))
+
+    # -- (b) "looks like a call" -----------------------------------------------------------------
+    # The shape that fell between the two reports that already existed: `_ENUM_REF_RE` rejects
+    # anything containing a paren, so the dotted-default report never fired, and #497's report needs
+    # the value to OPEN like a string, which `uuid.uuid4()` does not.
+    @test lc("uuid.uuid4()")
+    @test lc("os.getenv('X')")
+    @test lc("Decimal('0.00')")
+    @test lc("timezone.now()")
+    @test lc("_('Azul')")                  # a leading underscore is a valid Python identifier
+    @test lc("f( a, b )")
+    # ...and it must not claim anything the other channels already own, or any plain value. The
+    # BARE dotted name is the discriminating pair with the first row: identical but for the parens,
+    # and reported by a different channel, so a predicate matching both would double-report it.
+    @test !lc("uuid.uuid4")
+    @test !lc("None"); @test !lc("True"); @test !lc("42"); @test !lc("")
+    @test !lc("'a' + 'b'")                 # opens with a quote - #497's channel
+    @test !lc("f'{p}-x'")                  # an f-string is not a call, whatever it looks like
+    @test !lc("(1, 2)")                    # a tuple has no callee
+    @test !lc("[1, 2]")
+    @test !lc("uuid.uuid4() + 1")          # a call is not the WHOLE value, so it is not one value
+
+    # -- (a) a choices entry that is not one literal ---------------------------------------------
+    # `skipped` and `verbatim` are two different problems: the first was DROPPED, the second was
+    # KEPT carrying source text. Reusing one message for both would state the wrong reason, which is
+    # why #497 filed this rather than bending the existing channel.
+    skipped = String[]; verbatim = String[]
+    got = pc("[('a' + 'b', 'Rotulo'), ('c', 'Cee')]", skipped, verbatim)
+    @test got == (("'a' + 'b'", "Rotulo"), ("c", "Cee"))   # the sibling entry survives intact
+    @test isempty(skipped)                                 # it IS a (value, label) pair
+    @test verbatim == ["('a' + 'b', 'Rotulo')"]            # ...whose value half is not one literal
+
+    # A gettext-wrapped LABEL is unwrapped first, matching `_parse_enum` - so Django's commonest
+    # label spelling neither earns a report nor stores `_("Alpha")` as the display text.
+    skipped = String[]; verbatim = String[]
+    @test pc("[('x', _('Alpha')), ('y', 'Bee')]", skipped, verbatim) == (("x", "Alpha"), ("y", "Bee"))
+    @test isempty(verbatim) && isempty(skipped)
+
+    # Numbers are literals. Without this the report would fire on every IntegerChoices-shaped inline
+    # list - the false positive that would make the new channel noise rather than signal.
+    skipped = String[]; verbatim = String[]
+    @test pc("[(1, 'One'), (2, 'Two')]", skipped, verbatim) == (("1", "One"), ("2", "Two"))
+    @test isempty(verbatim) && isempty(skipped)
+
+    # ...and a number is stored as what it DENOTES, matching the enum path. Carrying `0x1F` and
+    # `1_000` as source text declared an enumeration no row can match, and made one generated file
+    # hold two spellings of the same concept - the inline list saying `"0x1F"` where the
+    # `IntegerChoices` spelling of the identical enumeration says `"31"`. Silent, because a `default`
+    # written the same way agrees with it and passes validation.
+    skipped = String[]; verbatim = String[]
+    @test pc("[(0x1F, 'Hex'), (1_000, 'Mil')]", skipped, verbatim) == (("31", "Hex"), ("1000", "Mil"))
+    @test isempty(verbatim) && isempty(skipped)
+    @test PormG.Migrations._py_scalar_text("0x1F") == "31"   # the shared canonicalizer, named
+
+    # The pre-existing channel is unchanged: a bare name has nothing to read at all.
+    skipped = String[]; verbatim = String[]
+    @test pc("STATUS_CHOICES", skipped, verbatim) == ()
+    @test skipped == ["STATUS_CHOICES"] && isempty(verbatim)
+
+    # -- (c) a line continuation inside a string literal ------------------------------------------
+    # Python joins the lines: the value is `linha1linha2`, with the backslash and the newline both
+    # denoting nothing. Verify the fixture's BYTES before asserting on them - a literal backslash
+    # written through tool input loses an escape level, and these tests mean nothing if it did.
+    fold_src = "x = 'linha1" * B * NL * "linha2'" * NL
+    @test count(==(UInt8(92)), collect(codeunits(fold_src))) == 1   # exactly one backslash
+    @test count(==(UInt8(10)), collect(codeunits(fold_src))) == 2   # its newline, plus the trailing one
+    @test [s.text for s in ll(fold_src)] == ["x = 'linha1linha2'"]
+
+    # Inside a call - the shape #501 filed. It was SILENTLY wrong rather than merely wrong: the
+    # folded value was a WELL-FORMED literal (a backslash-space reads as an unknown escape), so
+    # `_py_quoted_literal` accepted it and the "kept verbatim" report never fired.
+    call_src = "n = models.CharField(max_length=60, default='linha1" * B * NL * "linha2')" * NL
+    @test [s.text for s in ll(call_src)] ==
+          ["n = models.CharField(max_length=60, default='linha1linha2')"]
+
+    # The continuation line's leading whitespace is string CONTENT, not indentation.
+    @test [s.text for s in ll("x = 'a" * B * NL * "      b'" * NL)] == ["x = 'a      b'"]
+
+    # An ESCAPED backslash is data followed by a real newline, not a continuation. Only a
+    # triple-quoted literal may legally span a newline that way, so that is the fixture.
+    Q3 = repeat(string(Char(34)), 3)
+    esc = [s.text for s in ll("x = " * Q3 * "a" * B * B * NL * "b" * Q3 * NL)]
+    @test esc == ["x = " * Q3 * "a" * B * B * NL * "b" * Q3]
+    # ...while an UNescaped one folds there too, as Python does.
+    @test [s.text for s in ll("x = " * Q3 * "a" * B * NL * "b" * Q3 * NL)] == ["x = " * Q3 * "ab" * Q3]
+
+    # A RAW literal is the one place the fold must NOT happen, and it absorbs the newline instead.
+    # Measured against CPython 3: both `r'a\<NL>b'` and the triple-quoted form are legal and
+    # evaluate to the four code points `a`, backslash, newline, `b` - a raw literal has no line
+    # continuation to consume the pair, so both characters are content. Reproducing that exactly is
+    # what keeps the importer from FABRICATING `ab`.
+    # The prefix test itself, directly: two of its details are load-bearing and neither shows up in
+    # the end-to-end fixtures. Python allows at most TWO prefix letters, so a one-letter lookback
+    # misses `rb'…'`; and the run must start at a token boundary, or a name ending in `r` in front
+    # of a quote would be read as a raw literal.
+    hrp = PormG.Migrations._has_raw_prefix
+    for s in ("r'x'", "R'x'", "rb'x'", "br'x'", "Rb'x'", "fr'x'", "rf'x'")
+        @test hrp(s, findfirst(==('\''), s))          # the quote index, whatever the prefix width
+    end
+    # `1r'x'` is what covers the `isdigit` half of the boundary test; `myvar'x'`/`char'x'` cover
+    # `isletter` and `_r'x'` the underscore.
+    for s in ("'x'", "f'x'", "u'x'", "b'x'", "myvar'x'", "char'x'", "_r'x'", "1r'x'")
+        @test !hrp(s, findfirst(==('\''), s))
+    end
+    # A quote at the very start has nothing before it - the index guard, not an exception.
+    @test !hrp("'x'", 1)
+    # ...and a multibyte character immediately before a REAL prefix is what exercises the byte-
+    # indexed step back. `á'x'` would not: with no prefix letter the function returns before ever
+    # reaching `prevind`, so it proves nothing about the line this is here to cover.
+    @test !hrp("ár'x'", findfirst(==('\''), "ár'x'"))
+    @test !hrp("ébr'x'", findfirst(==('\''), "ébr'x'"))
+
+    raw_call = "n = models.CharField(default=r'a" * B * NL * "b')" * NL
+    @test [s.text for s in ll(raw_call)] == ["n = models.CharField(default=r'a" * B * NL * "b')"]
+    # ...and the value is still never mistaken for something readable: a raw literal fails the
+    # one-literal test and passes the opens-like-a-string test, which is the pair that routes it to
+    # the "kept verbatim" report (the next testset pins that it lands).
+    @test !PormG.Migrations._py_quoted_literal("r'a" * B * NL * "b'")
+    @test PormG.Migrations._py_opens_string("r'a" * B * NL * "b'")
+
+    # The two STRUCTURAL cases, which are why absorbing the newline matters more than the value
+    # does. Both cost a *sibling field*, and both did so with nothing in the artifact to show it.
+    #
+    # At bracket depth 0 the raw literal used to split into two statements, the second at indent 0 -
+    # which closes the enclosing class, dropping every field declared after it. No warning at all
+    # fired, because the scan ends balanced.
+    depth0_raw = "class B(models.Model):" * NL * "    HELP = r'a" * B * NL * "b'" * NL *
+                 "    depois = models.CharField(max_length=5)" * NL
+    @test [(s.indent, s.text) for s in ll(depth0_raw)] ==
+          [(0, "class B(models.Model):"), (4, "HELP = r'a" * B * NL * "b'"),
+           (4, "depois = models.CharField(max_length=5)")]
+
+    # And a backslash immediately before the CLOSING quote used to leave `st.escaped` set across the
+    # newline, so the quote was swallowed, the literal never terminated, and the next field was
+    # merged into this statement and lost. Letting the scanner consume the newline clears the flag.
+    trail_raw = "n = models.CharField(default=r'trail" * B * NL * "')" * NL *
+                "depois = models.CharField(max_length=5)" * NL
+    @test [s.text for s in ll(trail_raw)] ==
+          ["n = models.CharField(default=r'trail" * B * NL * "')",
+           "depois = models.CharField(max_length=5)"]
+
+    # The raw rule is narrower than the triple-quoted one, and the difference is load-bearing. A raw
+    # literal absorbs a newline ONLY behind an unescaped backslash - measured against CPython 3:
+    #
+    #     r'a\<NL>b'     legal, denotes a, backslash, newline, b
+    #     r'a<NL>b'      SyntaxError: unterminated string literal
+    #     r'a\\<NL>b'    SyntaxError too - the backslash is escaped, so it continues nothing
+    #
+    # So a BARE newline inside a raw literal must still end the statement, degrading exactly as the
+    # identical non-raw shape does. Absorbing every newline in a raw string instead is broader than
+    # Python and merges the rest of the file into one statement - which no other assertion here
+    # would catch, because every other raw fixture has the backslash.
+    bare_raw = "x = r'abc" * NL * "y = models.CharField(max_length=5)" * NL
+    @test [s.text for s in ll(bare_raw)] == ["x = r'abc", "y = models.CharField(max_length=5)"]
+    # ...and the same degrade for the non-raw spelling, which is the comparison that shows the raw
+    # path is not being given a rule of its own.
+    @test [s.text for s in ll("x = 'abc" * NL * "y = models.CharField(max_length=5)" * NL)] ==
+          ["x = 'abc", "y = models.CharField(max_length=5)"]
+    # An ESCAPED backslash before the newline is not a continuation in a raw literal either.
+    esc_raw = "x = r'a" * B * B * NL * "b'" * NL
+    @test [s.text for s in ll(esc_raw)] == ["x = r'a" * B * B, "b'"]
+
+    # A triple-quoted docstring still absorbs a BARE newline - the pre-existing rule this shares its
+    # guard with, so a change to one cannot quietly move the other.
+    doc = "class B(models.Model):" * NL * "    " * Q3 * "doc" * NL * "more" * Q3 * NL *
+          "    depois = models.CharField(max_length=5)" * NL
+    @test [s.text for s in ll(doc)] == ["class B(models.Model):", Q3 * "doc" * NL * "more" * Q3,
+                                        "depois = models.CharField(max_length=5)"]
+
+    # CRLF reaches the same place: `_py_logical_lines` normalizes line endings before the scan.
+    CR = string(Char(13))
+    @test [s.text for s in ll("x = 'a" * B * CR * NL * "b'" * NL)] == ["x = 'ab'"]
+
+    # CONTROLS. The fold-to-a-single-space that this branch sits in front of must not move: it is
+    # what makes a wrapped call arrive as one statement, and what an ordinary continuation does.
+    wrapped = "a = models.ForeignKey(" * NL * "    Other," * NL * "    on_delete=models.CASCADE," * NL * ")" * NL
+    @test [s.text for s in ll(wrapped)] == ["a = models.ForeignKey( Other, on_delete=models.CASCADE, )"]
+    @test [s.text for s in ll("x = 1 + " * B * NL * "    2" * NL)] == ["x = 1 +  2"]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: a call, a continuation and a non-literal choices entry reach both channels (#501)
+# End to end, because the contract these three broke is a property of the ARTIFACT, not of a helper:
+# a `@warn` at import time AND a `# PormG:` marker in the generated file. Two of the three were
+# reported by neither channel, and the third stored a backslash and a space that exist in neither
+# the Python source nor the value Python computes - while looking well-formed enough that #497's
+# report never fired. On CharField-without-choices and TextField the string is ACCEPTED, so
+# `DEFAULT 'uuid.uuid4()'` is what a later migrate() would write.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer reports a call default and folds a continuation (#501)" begin
+    # A double quote, built rather than escaped. The expectations below quote GENERATED Julia
+    # source, which is dense in `"` - and the one thing this testset must not do is lose an escape
+    # level while asserting about escapes.
+    QQ = string(Char(34))
+    # The continuation must be a REAL backslash immediately before a REAL newline. Written through
+    # a marker and substituted, the way the #497 fixture above does it, because a literal backslash
+    # loses an escape level passing through tooling.
+    source = """
+from django.db import models
+
+class B(models.Model):
+    # (c) Python joins these lines: the value is `linha1linha2`.
+    n = models.CharField(max_length=60, default='linha1%BS%
+linha2')
+    # (b) a call - reported by neither channel before this change.
+    x = models.TextField(default=uuid.uuid4())
+    d = models.TextField(default=Decimal('0.00'))
+    e = models.TextField(default=os.getenv('X'))
+    # The BARE name, reported by the pre-existing dotted channel. Adding parens is the only
+    # difference between this line and `x`, so it pins that exactly one channel claims each.
+    y = models.TextField(default=uuid.uuid4)
+    # (a) one entry is not a literal; its sibling is, and must survive.
+    a = models.CharField(max_length=20, choices=[('a' + 'b', 'Rotulo'), ('c', 'Cee')])
+    # Django's i18n label spelling: unwrapped, stored clean, and NOT reported.
+    g = models.CharField(max_length=20, choices=[('x', _('Alpha')), ('y', 'Bee')])
+    # Numeric choices must not trip the new report either.
+    i = models.CharField(max_length=20, choices=[(1, 'One'), (2, 'Two')])
+    # Controls from #497: these must be reported exactly as they were before.
+    ctrl1 = models.CharField(max_length=60, default='São José')
+    ctrl2 = models.TextField(default='a' + 'b')
+    ctrl3 = models.TextField(default=f'{p}')
+
+class Posterior(models.Model):
+    # Declared last on purpose: it proves one degrade does not cost the rest of the file.
+    nome = models.CharField(max_length=30)
+"""
+    source = replace(source, "%BS%" => string(Char(92)))
+    # Assert on the BYTES before asserting on behaviour: exactly one backslash in the whole fixture,
+    # and the character right after it is a newline. If tooling ate an escape level this fails here
+    # rather than silently turning the assertions below into tautologies.
+    units = collect(codeunits(source))
+    bs_positions = findall(==(UInt8(92)), units)
+    @test length(bs_positions) == 1
+    @test units[bs_positions[1] + 1] == UInt8(10)
+
+    config_key, db_dir_existed = temp_import_config!()
+    output_file = "django_501_unit.jl"
+    try
+        # The warnings carry the field as STRUCTURED metadata, so assert on `kwargs` - a
+        # message-only matcher would silently stop discriminating.
+        logs, _ = Test.collect_test_logs() do
+            import_models_from_django(
+                source; db = config_key, file = output_file, force_replace = true,
+            )
+        end
+        warns(needle) = [r for r in logs
+                         if r.level == Logging.Warn && occursin(needle, string(r.message))]
+        fields_of(rs) = Set(Dict(r.kwargs)[:field] for r in rs)
+
+        # (b) EXACTLY the three calls, and the bare name is NOT among them - the two channels must
+        # partition the dotted defaults rather than both claiming one.
+        calls = warns("default is a call the importer cannot evaluate")
+        @test fields_of(calls) == Set(["x", "d", "e"])
+        @test length(calls) == 3
+        dotted = warns("dotted default kept verbatim")
+        @test fields_of(dotted) == Set(["y"])
+
+        # (a) exactly one choices entry is reported, and it is the non-literal one. `g` or `i`
+        # appearing here would mean the predicate had become noise rather than signal.
+        entries = warns("a choices entry is not one literal")
+        @test fields_of(entries) == Set(["a"])
+        @test occursin("'a' + 'b'", string(Dict(entries[1].kwargs)[:entry]))
+
+        generated = read(joinpath(config_key, output_file), String)
+
+        # (c) Python's value, carrying neither the backslash nor a space the source never wrote.
+        # The old wrong forms are asserted absent BY NAME: one of them shipped into a generated file.
+        @test occursin("n = Models.CharField(max_length=60, default=" * QQ * "linha1linha2" * QQ * ")",
+                       generated)
+        @test !occursin("linha1" * string(Char(92)), generated)
+        @test !occursin("linha1 linha2", generated)
+        # ...and it is reported by nothing, because it is not a degrade - it is now read correctly.
+        @test !occursin("field 'n' on 'B'", generated)
+
+        # (b) markers name the field, the class and the value, and say what was stored.
+        @test occursin("# PormG: field 'x' on 'B' has `default=uuid.uuid4()`, a call the importer " *
+                       "cannot evaluate", generated)
+        @test occursin("not the value the call returns", generated)
+        @test occursin("x = Models.TextField(default=" * QQ * "uuid.uuid4()" * QQ * ")", generated)
+        # The bare name keeps its own, differently-worded marker.
+        @test occursin("# PormG: field 'y' on 'B' has `default=uuid.uuid4`, an expression", generated)
+
+        # (a) the marker states the TRUE reason. The old channel's wording - "not a (value, label)
+        # pair" - is a true sentence about a different defect and must not appear for this entry.
+        @test occursin("# PormG: field 'a' on 'B' has a choices entry the importer cannot read as " *
+                       "literals", generated)
+        @test occursin("not the value it denotes: ('a' + 'b', 'Rotulo')", generated)
+        @test !occursin("field 'a' on 'B' has a choices entry that is not a (value, label) pair",
+                        generated)
+        # The sibling entry survived, and the whole option was not dropped.
+        @test occursin("a = Models.CharField(max_length=20, choices=((" * QQ * "'a' + 'b'" * QQ *
+                       ", " * QQ * "Rotulo" * QQ * "), (" * QQ * "c" * QQ * ", " * QQ * "Cee" * QQ *
+                       ")))", generated)
+
+        # The gettext label is unwrapped and carries no marker; numbers are untouched by both.
+        @test occursin("g = Models.CharField(max_length=20, choices=((" * QQ * "x" * QQ * ", " * QQ *
+                       "Alpha" * QQ * "), (" * QQ * "y" * QQ * ", " * QQ * "Bee" * QQ * ")))",
+                       generated)
+        @test !occursin("field 'g' on 'B'", generated)
+        @test occursin("i = Models.CharField(max_length=20, choices=((" * QQ * "1" * QQ * ", " * QQ *
+                       "One" * QQ * "), (" * QQ * "2" * QQ * ", " * QQ * "Two" * QQ * ")))",
+                       generated)
+        @test !occursin("field 'i' on 'B'", generated)
+
+        # #497's controls, unchanged by all of the above.
+        @test occursin("ctrl1 = Models.CharField(max_length=60, default=" * QQ * "São José" * QQ *
+                       ")", generated)
+        @test occursin("# PormG: field 'ctrl2' on 'B' has `default='a' + 'b'`", generated)
+        @test occursin("# PormG: field 'ctrl3' on 'B' has `default=f'{p}'`", generated)
+
+        # Every model in the file is still there. Before #497 an unreadable value could cost them all.
+        @test occursin("B = Models.Model(", generated)
+        @test occursin("Posterior = Models.Model(", generated)
+        @test occursin("nome = Models.CharField(max_length=30)", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end

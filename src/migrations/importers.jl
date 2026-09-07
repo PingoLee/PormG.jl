@@ -339,7 +339,20 @@ end
 
 Character-level state for reading Python source: bracket `depth` outside strings, the active
 string delimiter `delim` (`'\\0'` when not in a string), whether that string is `triple`-quoted,
-and whether the previous character was an escaping backslash.
+whether the previous character was an escaping backslash, and whether the literal carries a `r`/`R`
+prefix.
+
+`raw` exists for `_py_logical_lines`, which asks it **twice** about the same backslash-newline pair
+(#501). A non-raw literal treats the pair as Python's line continuation, denoting nothing, so it is
+folded away; a raw literal has no line continuation, so both characters are content — the fold is
+skipped **and** the newline must not end the statement.
+
+Neither reading fails safe, which is why it is tracked rather than guessed. A missed `r` folds a raw
+literal *and* lets the newline terminate the statement — at bracket depth zero that closes the
+enclosing class, dropping every field declared after it, silently. A false `r` makes the pair
+content and merges what follows into that statement. Both failure modes cost a whole field or more,
+so the prefix test is deliberately narrow: at most Python's two prefix letters, and only at a token
+boundary (see [`_has_raw_prefix`](@ref)).
 
 `delim` rather than the obvious `quote`: `quote` is a Julia keyword, so `quote::Char` in a struct
 body opens a `quote ... end` block and silently swallows the rest of the file.
@@ -349,8 +362,9 @@ mutable struct _PyScan
   delim::Char
   triple::Bool
   escaped::Bool
+  raw::Bool
 end
-_PyScan() = _PyScan(0, '\0', false, false)
+_PyScan() = _PyScan(0, '\0', false, false, false)
 
 _in_string(st::_PyScan)::Bool = st.delim != '\0'
 
@@ -369,6 +383,30 @@ function _skip(s::AbstractString, i::Int, n::Int)::Int
     i = nextind(s, i)
   end
   return i
+end
+
+# Does the literal whose opening quote sits at `i` carry a RAW prefix? Python allows at most two
+# prefix letters (`rb`, `Rb`, `br`, `fr`, plus the single `f`/`u`/`b`/`r` forms), immediately before
+# the quote and preceded by something that is not part of an identifier.
+#
+# The boundary test is checked once, AFTER the whole prefix run — not per letter, which would
+# reject `rb'…'` by reading the `r` as an identifier character in front of the `b`. It is what stops
+# a malformed `char'x'` from being read as a raw literal.
+function _has_raw_prefix(s::AbstractString, i::Int)::Bool
+  found = false
+  j = i
+  for _ in 1:2                                  # Python allows at most two prefix letters
+    j <= firstindex(s) && break                 # nothing before the run
+    p = prevind(s, j)
+    c = s[p]
+    (c in ('r', 'R', 'b', 'B', 'u', 'U', 'f', 'F')) || break
+    (c == 'r' || c == 'R') && (found = true)
+    j = p
+  end
+  found || return false
+  j <= firstindex(s) && return true             # the run starts the string: nothing can precede it
+  prev = s[prevind(s, j)]
+  return !(isletter(prev) || isdigit(prev) || prev == '_')
 end
 
 """
@@ -391,10 +429,12 @@ function _py_step!(st::_PyScan, s::AbstractString, i::Int)::Int
         if _run_of(s, i, c, 3)
           st.delim = '\0'
           st.triple = false
+          st.raw = false
           return _skip(s, i, 3)
         end
       else
         st.delim = '\0'
+        st.raw = false
       end
     end
     return nextind(s, i)
@@ -403,6 +443,9 @@ function _py_step!(st::_PyScan, s::AbstractString, i::Int)::Int
   if c == '"' || c == '\''
     st.triple = _run_of(s, i, c, 3)
     st.delim = c
+    # Python's string prefixes sit immediately before the quote, at most two of them (`rb`, `Rb`,
+    # `br`, `f`, `u`, …). Only `r`/`R` changes what a backslash MEANS, so only that is tracked.
+    st.raw = _has_raw_prefix(s, i)
     return st.triple ? _skip(s, i, 3) : nextind(s, i)
   elseif c == '(' || c == '[' || c == '{'
     st.depth += 1
@@ -418,8 +461,16 @@ end
     PyStmt
 
 One logical Python statement: its `text` (comments stripped, continuation lines folded to a single
-space), the `indent` of its first physical line in spaces (a tab counts as four), and the 1-based
-`lineno` it started on. `lineno` is what lets a diagnostic point at a line the author can open.
+space — or to **nothing** where the continuation is inside a string literal, which is what Python's
+own rule makes it denote), the `indent` of its first physical line in spaces (a tab counts as four),
+and the 1-based `lineno` it started on. `lineno` is what lets a diagnostic point at a line the author
+can open, and it counts physical lines whether or not their breaks survive into `text`.
+
+`text` **may contain a real newline**, and a consumer that interpolates it has to say so. Two shapes
+put one there: a triple-quoted literal, where every newline is content, and a raw literal continued
+with a backslash, where the pair is content too. Diagnostics run it through [`_one_line`](@ref)
+before interpolating, because a `# PormG:` marker carrying a newline would break the module it is
+written into.
 """
 struct PyStmt
   indent::Int
@@ -432,8 +483,12 @@ end
 
 Split Python source into logical statements.
 
-A physical newline ends a statement only at bracket depth zero, outside any string, and with no
-trailing line-continuation backslash — so a wrapped `models.ForeignKey(\\n … \\n)` arrives whole.
+A physical newline ends a statement only at bracket depth zero, with no trailing line-continuation
+backslash, and outside any string that can legally contain one — so a wrapped
+`models.ForeignKey(\\n … \\n)` arrives whole. Three kinds of string hold a newline rather than being
+ended by it: a triple-quoted literal, where it is content; a **raw** literal, same (a raw literal has
+no line continuation, so both the backslash and the newline are content); and any literal continued
+with a backslash, where Python's own rule is that the pair denotes nothing and it is dropped (#501).
 
 `#` starts a comment only *outside* a string. The regex this replaces stripped from the first `#`
 unconditionally, so `default="#fff"` lost its value.
@@ -465,7 +520,26 @@ function _py_logical_lines(src::AbstractString)::Vector{PyStmt}
       lineno += 1
       # A newline inside a triple-quoted string is content, not a terminator: fall through so the
       # scanner consumes it and the docstring stays one statement.
-      if !(_in_string(st) && st.triple)
+      #
+      # A RAW string absorbs it only when an unescaped backslash precedes it (#501) — which is
+      # exactly what `st.escaped` records at this point. That is CPython's rule, measured, not an
+      # analogy with the triple-quoted case:
+      #
+      #     r'a\<newline>b'    legal, and denotes `a`, backslash, newline, `b` — a raw literal has
+      #                        no line continuation, so the pair it would consume is content
+      #     r'a<newline>b'     SyntaxError: unterminated string literal
+      #     r'a\\<newline>b'   SyntaxError too — the backslash is escaped, so it continues nothing
+      #
+      # Absorbing EVERY newline in a raw string instead would be broader than Python: an
+      # unterminated `x = r'abc` would merge the rest of the file into one statement rather than
+      # degrading the way the identical non-raw shape already does.
+      #
+      # Terminating on the legal shape was how a raw default became two statements, the second at
+      # indent 0, which closed the enclosing class and dropped every field after it with no warning
+      # at all. Falling through also hands the newline to `_py_step!`, which clears `st.escaped` —
+      # and that is what stops a trailing `r'tail\<newline>'` from swallowing its own closing quote
+      # and merging the next field into this statement.
+      if !(_in_string(st) && (st.triple || (st.raw && st.escaped)))
         in_comment = false
         if st.depth > 0 || continued
           started && print(buf, ' ')   # fold the break into a single separator
@@ -504,6 +578,38 @@ function _py_logical_lines(src::AbstractString)::Vector{PyStmt}
       in_comment = true
       i = nextind(src, i)
       continue
+    end
+
+    # A line continuation INSIDE a string literal (#501). Python's `'linha1\<newline>linha2'` is the
+    # single value `linha1linha2`: the backslash and the newline both denote nothing. Without this
+    # branch the backslash reaches the buffer through `_py_step!` and the newline is then folded to
+    # a space by the `st.depth > 0` arm above, storing `linha1\ linha2` — two characters that exist
+    # neither in the source nor in the value it denotes. Worse, the result is a WELL-FORMED literal
+    # (`\<space>` reads as an unknown escape), so `_py_quoted_literal` accepts it and the
+    # "kept verbatim" report never fires: a silent wrong default, the one outcome this file exists
+    # to prevent.
+    #
+    # Two further defects on the same lines go with it, both strictly worse than the filed one:
+    #
+    #   * `default='linha1\<newline>'` — the newline arm below never hands its `\n` to `_py_step!`,
+    #     so `st.escaped` (set at the backslash) survives and swallows the CLOSING QUOTE. The
+    #     literal never terminates, `_in_string` stays true for the rest of the file, and the next
+    #     field is merged into this statement and lost. Consuming both characters here means
+    #     `escaped` is never set in the first place.
+    #   * `HELP = 'linha1\<newline>linha2'` at bracket depth 0 split into TWO statements, the second
+    #     at indent 0 — which closes the enclosing class, so every field declared after it was
+    #     dropped without a word.
+    #
+    # `!st.escaped` keeps an escaped backslash (`'a\\` then a newline) out: that is data followed by
+    # a real newline, not a continuation. `!st.raw` keeps raw literals out, where Python retains
+    # both characters.
+    if c == '\\' && _in_string(st) && !st.escaped && !st.raw
+      j = nextind(src, i)
+      if j <= stop && src[j] == '\n'
+        lineno += 1               # the physical line still ended; diagnostics must keep pointing right
+        i = nextind(src, j)
+        continue                  # emit nothing, and do NOT touch `measuring`: the next line's
+      end                         # leading whitespace is string CONTENT, not indentation
     end
 
     if c == '\\' && !_in_string(st)
@@ -2987,6 +3093,37 @@ function _django_graph_from_scopes(scopes::Vector{_AppScope}, self::Int)
   for (i, t) in enumerate(per_app), (scope, members) in t
     enums[(i, scope)] = members
   end
+  # A base addressed through an `as` alias (#425). `_lookup_enum`'s qualified fallback resolves
+  # `CoreBase.Status` by looking the OWNER half up as a scope name — and `_collect_enums` keys a
+  # class scope by the class's own name, which an alias makes a different string entirely. So
+  # `from core.models import Base as CoreBase` + `choices=CoreBase.Status.choices` dropped the
+  # option and told the reader to import a module they had already imported.
+  #
+  # Registered HERE rather than in `_enum_scopes` because this is a MODULE-level binding, which is
+  # exactly what an `as` alias is in Python — and because `st.resolved` already holds the answer for
+  # every base token the classifier resolved, keyed by the token as written (`:2818`). It is the
+  # class-scope twin of the module-scope alias loop directly below, which has registered imported
+  # enums under their local name since #370.
+  #
+  # Three guards, each load-bearing:
+  #
+  #   * `a == self` — only tokens THIS module bound. An alias written in `access` must not resolve
+  #     from `shop`, which never wrote that name; Python raises `NameError` there.
+  #   * `token == pc.name` — not an alias at all. Skipping it is what leaves the un-aliased
+  #     `Base.Status` form resolving through the ancestor entries alone, so `_enum_scopes`' contract
+  #     and #402's coverage of it are untouched by this change.
+  #   * `get!` — never overwrite. A class this app declares itself outranks an import of that name,
+  #     as it does in Python and as `_resolve_base` already decides for bases.
+  #
+  # Reachability stays narrow: `_lookup_enum`'s FIRST pass walks the scope list, which never contains
+  # an `(app, token)` key, so a bare `Status` can never resolve through an alias entry. Only the
+  # qualified fallback reads these — i.e. only a reference the source actually wrote with a dot.
+  for ((a, token), (pa, pc)) in st.resolved
+    a == self || continue
+    token == pc.name && continue
+    sc = get(enums, (pa, pc.name), nothing)
+    sc === nothing || get!(enums, (a, token), sc)
+  end
   mod_scope = Dict{String, _PyEnum}()
   own_mod = get(per_app[self], "", nothing)
   own_mod === nothing || merge!(mod_scope, own_mod)      # own declarations always win
@@ -3197,6 +3334,22 @@ function _py_opens_string(s::AbstractString)::Bool
   return i <= stop && (t[i] == '"' || t[i] == '\'')
 end
 
+# Does the value read as a CALL — `uuid.uuid4()`, `os.getenv('X')`, `Decimal('0.00')`? A name (dotted
+# or not) followed by an argument list, and nothing after it.
+#
+# This is the third discriminator in the same family as `_py_opens_string` and `_py_quoted_literal`,
+# and it exists because a call fell between the two reports that already existed (#501): the dotted
+# `default=` report is gated on `_ENUM_REF_RE`, which rejects anything containing a paren, and #497's
+# report requires the value to OPEN like a string, which `uuid.uuid4()` does not. So the source text
+# became the stored default with neither channel saying so — and on `TextField` and `CharField`
+# without `choices` the string is ACCEPTED, which is `DEFAULT 'uuid.uuid4()'` in a later `migrate()`.
+#
+# Deliberately not folded into `_ENUM_REF_RE`: that regex gates enum RESOLUTION, and widening it
+# would start sending call expressions through the enum lookup to be reported as enumerations —
+# the exact wrong-diagnostic failure `_looks_like_enum_attr` was added to stop.
+_py_looks_like_call(s::AbstractString)::Bool =
+  (t = strip(s); occursin(r"^[A-Za-z_][\w.]*\s*\(", t) && endswith(t, ")"))
+
 # The content of one Python string literal (as judged by `_py_quoted_literal`), escapes decoded.
 #
 # `nextind`/`prevind`, never `s[2:end-1]` (#475, #497). Those are BYTE offsets, so `end-1` lands on a
@@ -3376,7 +3529,10 @@ qualified fallback resolves `Base.Status` by looking up `Status` inside the scop
 `Base.Status.choices` IS valid Python, since attribute access on the base is not name lookup. That
 fallback scans this list for its **app** half only, so what it needs is the base's APP to appear
 here, not the base's own entry; the two coincide except when the base lives in another app, which is
-exactly when it matters. The other is a deliberate leniency: a bare name
+exactly when it matters. That covers the base addressed by its OWN name only — a base reached through
+an `as` alias is served instead by an alias entry in `enums`, registered once per module in
+`_django_graph_from_scopes` (#425), because the alias is a module-level binding rather than anything
+this ancestor walk knows about. The other is a deliberate leniency: a bare name
 that matches nothing in the owner's class or module still falls through to a base's nested enum,
 where Python would raise `NameError`. That is narrower than what it replaced (before, bases outranked
 the module outright) and it fails toward resolving rather than toward a wrong-value silent import,
@@ -4331,7 +4487,19 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
             # by `Models.parse_choices`, which still keeps the quote characters — so one generated
             # model carried both spellings, the very thing the normalization exists to prevent.
             bad = String[]
-            parsed = parse_choices(value, bad)
+            kept_verbatim = String[]
+            parsed = parse_choices(value, bad, kept_verbatim)
+            for k in kept_verbatim
+              # A SEPARATE message from the `skipped` loop below, and that separation is the point
+              # (#501). This entry was not dropped — it is in the generated `choices` tuple, holding
+              # the source text of an expression Python would have computed. Saying "not a
+              # (value, label) pair" about it would be a true sentence about a different defect,
+              # which is why #497 filed this rather than reusing that channel.
+              @warn "import: a choices entry is not one literal; kept as source text" class=class_label field=field_name entry=_one_line(k)
+              push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' has a choices " *
+                             "entry the importer cannot read as literals — kept as the source " *
+                             "text, not the value it denotes: $(_one_line(k))")
+            end
             for b in bad
               # Two shapes share this channel and a reader must be able to tell them apart: the
               # WHOLE option was unreadable (a bare name, nothing parsed), or ONE entry inside a
@@ -4367,16 +4535,32 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
             # `choices` and `TextField` accept any string, so for those two this is the only report
             # that will ever be made, which is what makes it necessary rather than decorative.
             #
-            # NOT extended to a `choices` ENTRY, which travels `parse_choices`/`_strip_py_quotes` and
-            # keeps its quotes just as visibly, but earns no marker of its own — that channel's only
-            # message says "not a (value, label) pair", which would state the wrong reason. Filed
-            # rather than bent.
+            # A `choices` ENTRY travels `parse_choices`/`_strip_py_quotes` instead and is reported on
+            # its own channel, in the `key == "choices"` branch above (#501). It used to earn no
+            # marker at all, because the only channel available said "not a (value, label) pair",
+            # which states the wrong reason; #497 filed that rather than bending the message.
             if key == "default" && _py_opens_string(value) && !_py_quoted_literal(value)
               @warn "import: default is not one readable string literal; kept verbatim" class=class_label field=field_name value=_one_line(value)
               push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' has " *
                              "`default=$(_one_line(value))`, which the importer cannot read as one " *
                              "string literal — kept verbatim as text. The stored default is that " *
                              "source text, not the value it denotes.")
+            elseif key == "default" && _py_looks_like_call(value)
+              # A CALL (#501). `default=uuid.uuid4` — the bare name — is reported above by
+              # `_resolve_enum_reference`'s dotted branch; add the parentheses and that branch stops
+              # matching, while the branch above never starts, so the call was the one shape both
+              # reports missed. `elseif` and not a second `if`: the two are mutually exclusive by
+              # construction (a value cannot both open with a quote and start with a name), and
+              # chaining them keeps it that way if either predicate is ever widened.
+              #
+              # `default=timezone.now()` on a date/time field never reaches here — it is mapped to
+              # `auto_now_add` and `continue`d far above. On any other field type it does, and
+              # should: there is no current-timestamp default to give a CharField.
+              @warn "import: default is a call the importer cannot evaluate; kept verbatim" class=class_label field=field_name value=_one_line(value)
+              push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' has " *
+                             "`default=$(_one_line(value))`, a call the importer cannot evaluate — " *
+                             "kept verbatim as text. The stored default is that source text, not " *
+                             "the value the call returns.")
             end
             options[Symbol(key)] = parse_value(value)
           end
@@ -4677,7 +4861,7 @@ function _strip_py_quotes(s::AbstractString)::String
 end
 
 """
-    parse_choices(choices_str, skipped = String[]) -> NTuple{N, Tuple{String, String}}
+    parse_choices(choices_str, skipped = String[], verbatim = String[]) -> NTuple{N, Tuple{String, String}}
 
 Django `choices=((value, label), …)` -> PormG's choices tuple. Both `(...)` and `[...]` containers,
 and both bracket styles for the inner pairs.
@@ -4694,6 +4878,15 @@ A genuinely malformed element (a bare value where a pair belongs, or a 3-tuple) 
 `choices=[["A", "Alpha"]]` — a list of *lists*, valid Django — import correctly, where it used to
 yield an empty `choices=()` with no warning.
 
+Two output channels, because they are two different problems and one message cannot state both.
+`skipped` takes an element that is not a `(value, label)` pair at all — it is DROPPED. `verbatim`
+takes a well-formed pair one of whose halves is not a single Python literal (`('a' + 'b', 'Rotulo')`)
+— that entry is KEPT, carrying source text rather than the value it denotes, and the caller reports
+it with that reason (#501).
+
+A gettext-wrapped LABEL is unwrapped before that test, matching `_parse_enum`, so the mainstream
+`("A", _("Alpha"))` neither earns a report nor stores `_("Alpha")` as its display text.
+
 Quotes are STRIPPED from both halves. They used to be kept as part of the value, so a Django
 `("UP", "Upload")` imported as the four-character string `"UP"` — quote marks included. Nothing
 downstream broke, because `choices` is Julia-side metadata that never reaches DDL and
@@ -4701,7 +4894,8 @@ downstream broke, because `choices` is Julia-side metadata that never reaches DD
 enum resolution produces the clean form, so one generated model would otherwise have carried two
 spellings of the same concept.
 """
-function parse_choices(choices_str::AbstractString, skipped::Vector{String} = String[])
+function parse_choices(choices_str::AbstractString, skipped::Vector{String} = String[],
+                       verbatim::Vector{String} = String[])
   inner = _balanced_group(choices_str)
   if inner === nothing
     # `choices=STATUS_CHOICES` — a module-level constant, not a literal. There is nothing to read,
@@ -4728,7 +4922,31 @@ function parse_choices(choices_str::AbstractString, skipped::Vector{String} = St
       push!(skipped, el)
       continue
     end
-    choices = (choices..., (_strip_py_quotes(parts[1]), _strip_py_quotes(parts[2])))
+    value_raw = String(strip(parts[1]))
+    # The LABEL is unwrapped from `_()` / `gettext_lazy()` first, exactly as `_parse_enum` does for
+    # a `TextChoices` label (#501). Django's i18n spelling is the commonest label form there is, it
+    # carries no schema meaning, and leaving it wrapped put the source text `_("Azul")` into the
+    # generated file as the display string. Only the label: a VALUE is schema, and unwrapping one
+    # would silently change what a row has to contain to match.
+    label_raw = _unwrap_gettext(parts[2])
+    # Anything still not ONE literal is kept as source text by `_strip_py_quotes` below — visibly
+    # the source rather than a plausible-looking string, but not the value Python computes either.
+    # Reported through its OWN channel: `skipped`'s only message says "not a (value, label) pair",
+    # which is a true statement about a different problem, and #497 declined to bend it.
+    (_is_py_literal(value_raw) && _is_py_literal(label_raw)) || push!(verbatim, el)
+    # `_py_scalar_text` for the VALUE and `_strip_py_quotes` for the label — mirroring what
+    # `_parse_enum` does with an enum member's value, which is the point. (Only that half: the two
+    # diverge on purpose elsewhere, since `_parse_enum` can fall back to a label derived from the
+    # member NAME and drops the option outright on a non-literal value, and an inline entry has
+    # neither a name to derive from nor a sibling to lose.)
+    #
+    # A numeric value is stored as the number it DENOTES, so an inline `[(0x1F, "Hex")]` gives `"31"`
+    # exactly as the `IntegerChoices` spelling of that enumeration does, rather than the source text
+    # `"0x1F"`. Carrying the spelling is the defect `_py_number`'s docstring describes — an
+    # enumeration no row can ever match, agreeing with a `default` that is wrong in the same way, so
+    # `CharField`'s default-in-choices check passes and nothing is reported. It is also the second
+    # spelling of one concept that this function's own docstring, just above, promises not to emit.
+    choices = (choices..., (_py_scalar_text(value_raw), _strip_py_quotes(label_raw)))
   end
   return choices
 end

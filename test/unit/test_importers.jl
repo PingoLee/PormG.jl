@@ -12,12 +12,18 @@ pins the resulting contract:
     regression guard for the old hardcoded-`"db"` routing bug (the importer must follow
     the passed key, not a fixed key/path).
 
-The round-trip uses a hermetic temp SQLite database (in-process; SQLite is a hard
-dependency of PormG), so it needs no external DB setup and runs in the default suite.
+The round-trip uses a hermetic temp SQLite database (in-process), so it needs no external DB
+setup and runs in the default suite.
 """
 
 using Test
 using PormG
+# Three of the testsets below open a real (temporary) SQLite file, so they need the weakdep
+# extension. SQLite is NOT a hard dependency of PormG — it has been a `[weakdeps]` since #34, and
+# this file's own header used to say otherwise, which is why the guard was never written (#430).
+# `runtests.jl` loads the drivers for the whole suite; this line is what makes the file runnable on
+# its own (`julia --project=. test/unit/test_importers.jl`) without double-loading under the suite.
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 import PormG: Configuration
 import PormG.ConnectionPool: SQLiteConnectionPool, fetch, close_pool!
 

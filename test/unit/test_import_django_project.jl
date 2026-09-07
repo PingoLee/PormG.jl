@@ -4256,3 +4256,283 @@ class Thing(models.Model):
         cleanup_project_test!(key_two, existed_two)
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#425): a qualified enum reference resolves through the `as` alias it was
+# imported under. `Base.Status.choices` worked only when the base was addressed by its OWN class
+# name, because `_lookup_enum`'s qualified fallback looks the owner half up as a SCOPE NAME and
+# `_collect_enums` keys a class scope by the declared name — which an alias makes a different
+# string entirely. `CoreBase.Status.choices` is equally valid Python, and it was dropped with a
+# marker whose advice the reader had already followed ("import the module defining it alongside
+# this one" — the pair list is exactly that).
+#
+# The fix registers the aliased token as an enum key in `_django_graph_from_scopes`, next to the
+# module-scope alias loop that has done the same for imported module-level enums since #370. The
+# fixture below is shared by the whole group: `core` declares an abstract `Base` with a nested
+# `Status`, and a SECOND abstract class `Outra` whose nested `Status` has different members. That
+# second class is not decoration — it is what makes the collision testset able to fail.
+# ─────────────────────────────────────────────────────────────────────────────
+const ALIAS_ENUM_CORE = """
+from django.db import models
+
+class Base(models.Model):
+    class Status(models.TextChoices):
+        NESTED = "n", "Nested"
+
+    class Meta:
+        abstract = True
+
+class Outra(models.Model):
+    class Status(models.TextChoices):
+        WRONG = "w", "Wrong"
+
+    class Meta:
+        abstract = True
+"""
+
+@testset "a qualified enum resolves through an `as` alias for a base in another app (#425)" begin
+    # The issue's own reproduction. `shop` binds `core`'s `Base` under the name `CoreBase`, uses it
+    # as a base, and addresses its nested enum through that name.
+    shop = """
+from django.db import models
+from core.models import Base as CoreBase
+
+class Pedido(CoreBase):
+    situacao = models.CharField(max_length=1, choices=CoreBase.Status.choices)
+"""
+    generated, key, existed = import_project(["core" => ALIAS_ENUM_CORE, "shop" => shop];
+                                             output_file = "enum_alias_qualified.jl")
+    try
+        # The same result the un-aliased spelling produces — that equivalence IS the issue.
+        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+                       generated)
+        # And the marker whose advice was unfollowable is gone. Asserted on the specific reference,
+        # not on `# PormG:` at all: this fixture legitimately carries an unrelated marker (`core`
+        # contributes no model of its own), so a bare marker probe would pass no matter what.
+        @test !occursin("references `CoreBase.Status`", generated)
+        @test !occursin("`choices` dropped", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "the un-aliased qualified form still resolves, single-app and cross-app (#425)" begin
+    # The regression guard for #402's coverage. The alias fix must not disturb the path that
+    # already worked, in either arity — and the cross-app arity is the load-bearing one, since a
+    # single-app project has the owning app in the scope list anyway.
+    shop = """
+from django.db import models
+from core.models import Base
+
+class Pedido(Base):
+    situacao = models.CharField(max_length=1, choices=Base.Status.choices)
+"""
+    generated, key, existed = import_project(["core" => ALIAS_ENUM_CORE, "shop" => shop];
+                                             output_file = "enum_unaliased_xapp.jl")
+    try
+        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+                       generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+
+    single = """
+from django.db import models
+
+class Base(models.Model):
+    class Status(models.TextChoices):
+        NESTED = "n", "Nested"
+
+    class Meta:
+        abstract = True
+
+class Pedido(Base):
+    situacao = models.CharField(max_length=1, choices=Base.Status.choices)
+"""
+    generated2, key2, existed2 = import_project(single; output_file = "enum_unaliased_single.jl")
+    try
+        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+                       generated2)
+    finally
+        cleanup_project_test!(key2, existed2)
+    end
+end
+
+@testset "an alias that collides with a real class name resolves to the class it names (#425)" begin
+    # The case that decided the design. `shop` binds `core`'s `Base` under the name `Outra` — and
+    # `core` also DECLARES an `Outra`, with a different `Status`. Python's answer is unambiguous:
+    # `Outra` is a name in `shop`'s module and it is bound to `Base`, so `Outra.Status` is
+    # `NESTED`.
+    #
+    # An earlier candidate fix carried the alias alongside each scope entry and retried it only
+    # AFTER the pre-existing lenient key, which looks `Outra` up as a scope name in any app already
+    # in scope — so it found `core`'s real `Outra` first and imported `WRONG` in silence. This
+    # assertion is what rejected that design: the alias key lands under `shop`, which sorts ahead
+    # of every ancestor entry, so the module binding wins the way Python makes it win.
+    shop = """
+from django.db import models
+from core.models import Base as Outra
+
+class Pedido(Outra):
+    situacao = models.CharField(max_length=1, choices=Outra.Status.choices)
+"""
+    generated, key, existed = import_project(["core" => ALIAS_ENUM_CORE, "shop" => shop];
+                                             output_file = "enum_alias_collision.jl")
+    try
+        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+                       generated)
+        # The wrong enumeration, named explicitly. A silent wrong value is the one outcome this
+        # importer exists to prevent, so it is asserted absent rather than merely not asserted.
+        @test !occursin("(\"w\", \"Wrong\")", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "an alias resolves even when the base is reachable through another token first (#425)" begin
+    # The diamond. `Pedido` reaches `core.Base` twice: through `access.Mixin` and directly through
+    # its own `CoreBase` alias. `_enum_scopes`' `seen` set makes the FIRST token to reach an
+    # ancestor win, and the walk descends `Mixin` first — so any fix that records the alias inside
+    # that walk records `access`'s token and discards `shop`'s own. Registering the binding from
+    # `st.resolved` instead is immune: every base token is resolved independently of the order the
+    # ancestor walk happens to visit them in.
+    access = """
+from django.db import models
+from core.models import Base
+
+class Mixin(Base):
+    class Meta:
+        abstract = True
+"""
+    shop = """
+from django.db import models
+from access.models import Mixin
+from core.models import Base as CoreBase
+
+class Pedido(Mixin, CoreBase):
+    situacao = models.CharField(max_length=1, choices=CoreBase.Status.choices)
+"""
+    generated, key, existed = import_project(["core" => ALIAS_ENUM_CORE, "access" => access,
+                                              "shop" => shop];
+                                             output_file = "enum_alias_diamond.jl")
+    try
+        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+                       generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "an alias another module bound is not in scope here, and stays reported (#425)" begin
+    # The failure direction, and the reason the registration is gated on the module that WROTE the
+    # binding. `access` is the module that bound `CoreBase`; `shop` merely inherits `Mixin` and
+    # never wrote that name, so `CoreBase.Status` is a `NameError` in Python and must not resolve
+    # here. An alias table keyed by anything looser than "this module's own bindings" resolves it,
+    # which would be a wrong enumeration reached through a name the source never mentions — #370's
+    # defect one level down.
+    access = """
+from django.db import models
+from core.models import Base as CoreBase
+
+class Mixin(CoreBase):
+    class Meta:
+        abstract = True
+"""
+    shop = """
+from django.db import models
+from access.models import Mixin
+
+class Pedido(Mixin):
+    situacao = models.CharField(max_length=1, choices=CoreBase.Status.choices)
+"""
+    generated, key, existed = import_project(["core" => ALIAS_ENUM_CORE, "access" => access,
+                                              "shop" => shop];
+                                             output_file = "enum_alias_grandparent.jl")
+    try
+        @test !occursin("(\"n\", \"Nested\")", generated)
+        @test occursin("references `CoreBase.Status`", generated)
+        @test occursin("which this file does not define", generated)
+        # The column is real and survives; only the enumeration is dropped.
+        @test occursin("situacao = Models.CharField(max_length=1)", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "a genuinely undefined qualified reference is still dropped and reported (#425)" begin
+    # Two shapes that must keep failing closed: an owner nothing defines, and a real owner asked
+    # for a member it does not declare. Both share the fixture with the resolving cases above, so
+    # a fix that resolved by widening the search rather than by following the binding would show
+    # up here as a resolution instead of a report.
+    shop_unknown_owner = """
+from django.db import models
+from core.models import Base as CoreBase
+
+class Pedido(CoreBase):
+    situacao = models.CharField(max_length=1, choices=Nada.Status.choices)
+"""
+    generated, key, existed = import_project(["core" => ALIAS_ENUM_CORE,
+                                              "shop" => shop_unknown_owner];
+                                             output_file = "enum_alias_unknown_owner.jl")
+    try
+        @test !occursin("(\"n\", \"Nested\")", generated)
+        @test occursin("references `Nada.Status`", generated)
+        @test occursin("situacao = Models.CharField(max_length=1)", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+
+    shop_unknown_member = """
+from django.db import models
+from core.models import Base as CoreBase
+
+class Pedido(CoreBase):
+    situacao = models.CharField(max_length=1, choices=CoreBase.Nope.choices)
+"""
+    generated2, key2, existed2 = import_project(["core" => ALIAS_ENUM_CORE,
+                                                 "shop" => shop_unknown_member];
+                                                output_file = "enum_alias_unknown_member.jl")
+    try
+        @test !occursin("(\"n\", \"Nested\")", generated2)
+        @test occursin("references `CoreBase.Nope`", generated2)
+        @test occursin("situacao = Models.CharField(max_length=1)", generated2)
+    finally
+        cleanup_project_test!(key2, existed2)
+    end
+end
+
+@testset "an alias never used as a base is not resolved either (#425)" begin
+    # A boundary this change deliberately does NOT cross, pinned so the next reader knows it was
+    # decided rather than missed.
+    #
+    # (There is a second property worth stating and NOT worth asserting: an alias entry is reachable
+    # only from `_lookup_enum`'s QUALIFIED fallback, because the first pass walks the scope list and
+    # an alias key is never in it. That is structural — the key shape `(app, token)` simply does not
+    # appear in what `_enum_scopes` returns — and no fixture can distinguish it, since an alias token
+    # would have to BE the owning class's name to collide, which the inheritance-cycle guard refuses.
+    # A testset asserting it would pass identically before and after the change, which is worse than
+    # saying so here.)
+    #
+    # A name imported but never used as a base ANYWHERE in the app. `st.resolved` only
+    # holds tokens the classifier resolved as bases, so this one is not registered and the option
+    # is still dropped and reported. It is a real gap — Python resolves it fine — but a wider one
+    # than #425 asks for, and it fails loudly rather than silently. Recorded here so the follow-up
+    # issue has a pinned starting point instead of a claim.
+    shop_never_inherited = """
+from django.db import models
+from core.models import Base as CoreBase
+
+class Pedido(models.Model):
+    situacao = models.CharField(max_length=1, choices=CoreBase.Status.choices)
+"""
+    generated2, key2, existed2 = import_project(["core" => ALIAS_ENUM_CORE,
+                                                 "shop" => shop_never_inherited];
+                                                output_file = "enum_alias_never_inherited.jl")
+    try
+        @test !occursin("(\"n\", \"Nested\")", generated2)
+        @test occursin("references `CoreBase.Status`", generated2)
+        @test occursin("situacao = Models.CharField(max_length=1)", generated2)
+    finally
+        cleanup_project_test!(key2, existed2)
+    end
+end

@@ -90,6 +90,42 @@ On SQLite the same change goes through the [table rebuild](#SQLite:-Table-Recrea
 
     The new constraint is `DEFERRABLE INITIALLY DEFERRED`, so it is validated when the migration **commits**. If any existing row holds a value that does not exist in the new parent, the commit fails and the whole migration rolls back. Re-point the data first, or make the column nullable and clear it, before changing the model.
 
+### Renaming a foreign-key field
+
+Renaming the field is **not** a change to the constraint. On PostgreSQL `ALTER TABLE ... RENAME COLUMN` carries the existing `FOREIGN KEY` along with the column, and on SQLite the stored `FOREIGN KEY ... REFERENCES` clause is rewritten as part of the rename — so PormG renames the column and re-creates its index, and never re-issues the key. Renaming `Result.statusid` to `Result.racestatusid`, with everything else about the key unchanged, generates this on PostgreSQL, in execution order:
+
+```sql
+ALTER TABLE "result" RENAME COLUMN "statusid" TO "racestatusid";
+
+ALTER TABLE "result" DROP CONSTRAINT IF EXISTS "result_statusid_a1b2c3d4_idx";
+DROP INDEX IF EXISTS "result_statusid_a1b2c3d4_idx";
+
+CREATE INDEX IF NOT EXISTS "result_racestatusid_wpkbcx73_idx" ON "result" ("racestatusid");
+```
+
+The **index** is re-created rather than carried over — `ForeignKey` sets `db_index = true` by default, and PormG names indexes with a random suffix it cannot re-derive, so it drops the old one and creates a fresh one against the new column. The `DROP CONSTRAINT IF EXISTS` names that **index**, not the foreign key: it is there because a `UNIQUE` constraint is *implemented by* an index of the same name, and PostgreSQL refuses to drop that index while the constraint owns it — so the constraint goes first. For an ordinary indexed column it is a no-op — a `NOTICE`, nothing more. SQLite emits the bare `DROP INDEX IF EXISTS` and no `ALTER TABLE` for that step.
+
+What the plan does **not** contain is any `DROP CONSTRAINT`/`ADD CONSTRAINT` for the *foreign key*: it is untouched, and keeps its **pre-rename** name. That is harmless — PormG looks a foreign key up by its table and column, never by a name convention, so a later drop or re-point finds it normally. Rename the field *and* change what the key points at in the same migration and you get both: the rename runs first, then the drop, then the add.
+
+!!! warning "Renaming an indexed field needs `destructive = true`"
+    The plan contains `DROP INDEX`, which `dry_run()` classifies as destructive — so `migrate()` refuses it until you opt in with `migrate(path, destructive = true)`. Only the field's index is dropped, and the same migration re-creates it against the new column name; no column and no data are removed.
+
+!!! warning "Repairing a duplicate left by an older PormG"
+    Before this behavior was fixed, a rename that left the foreign key unchanged **added a second, identical constraint** beside the one the rename carried along. Both point at the same parent with the same action, so inserts and deletes behave identically and nothing surfaces the problem — the model compares converged, so `makemigrations` will never propose removing it.
+
+    It is worth cleaning up rather than ignoring, because the *next* change to that key only removes one of the two. A re-point would drop one constraint and add the new one, leaving a stale constraint still pointing at the **old** parent, permanently and invisibly.
+
+    List the foreign keys on the table and drop the extras by name:
+
+    ```sql
+    SELECT conname FROM pg_constraint
+    WHERE conrelid = 'result'::regclass AND contype = 'f';
+
+    ALTER TABLE "result" DROP CONSTRAINT "result_statusid_a1b2c3d4_fk";
+    ```
+
+    SQLite is unaffected — it has no `ALTER TABLE ADD CONSTRAINT`, so the duplicate was never possible there.
+
 ## Database-Specific Behavior
 
 ### SQLite: Table Recreation
@@ -104,6 +140,13 @@ To handle any of those changes, PormG automatically rebuilds the table from your
 The rebuild is emitted as plain DDL that composes with the migration's transaction, so no data is lost and the remaining indexes and constraints are preserved. This is what makes **removing a foreign-key field or constraint, a `UNIQUE` column, or a `PRIMARY KEY` column** work on SQLite even though `DROP COLUMN`/`DROP CONSTRAINT` alone cannot express it. Changes SQLite *can* do in place — adding a column, or dropping an *ordinary* column (not part of a `FOREIGN KEY`, `UNIQUE`, or `PRIMARY KEY`) — use `ALTER TABLE` directly, without a rebuild.
 
 This process is transparent to the user but may take longer on very large tables.
+
+**Adding a foreign key to an existing table.** When the column already exists — a `db_constraint = false` key flipped back on, say — the rebuild renders the `FOREIGN KEY` clause from your model, so the constraint really is created, and PormG logs an `@info` noting that the table is being rebuilt, because that cost is worth knowing about on a large table. Re-pointing a key that already exists takes the same rebuild but logs nothing.
+
+!!! warning "A foreign key arriving as a *new* column is not created on SQLite"
+    Adding a **new** `ForeignKey` field to an existing table is a plain `ALTER TABLE ... ADD COLUMN`, and SQLite can only declare a foreign key inside `CREATE TABLE`. PormG emits the column without the constraint and does not rebuild the table, so the key exists in your models and not in the database. PostgreSQL adds it normally with `ADD CONSTRAINT`, so this is a backend divergence, not a shared limitation.
+
+    Until this is automated, create the table with the key (a fresh database), or make the change by hand on SQLite.
 
 !!! warning "Dropping a primary key: PostgreSQL vs SQLite"
     Removing a column that is the table's **only** primary key diverges by backend. PostgreSQL's `DROP COLUMN` drops the column and its `PRIMARY KEY` constraint natively, leaving a table with no primary key. SQLite cannot express that without silently degrading the table to a rowid table, so PormG **fails `makemigrations` loudly** instead — declare a replacement primary key, or make the change manually. Dropping a primary-key column while the model still declares a primary key (the key moved to another column) rebuilds normally on both backends.

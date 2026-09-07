@@ -286,12 +286,32 @@ function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite
        # re-renders the whole `FOREIGN KEY … REFERENCES … ON DELETE` clause — so the key IS
        # re-pointed on SQLite, with no separate DDL to emit and nothing for a user to act on.
        #
-       # The `:add` warning is left ALONE, not endorsed. Measured on a real temp SQLite file: the
-       # rebuild renders the `FOREIGN KEY … REFERENCES` clause for a newly-declared key too, so this
-       # warning looks spurious by the very argument that silences `:repoint` above. It is
-       # pre-existing, it is the only caller's single call site, and silencing it is a behaviour
-       # change with its own blast radius — so it is filed rather than folded into #498.
-       action === :add && @warn "Adding foreign keys to existing SQLite tables requires recreation. This is not fully automated yet."
+       # #505: `:add` says the same thing at `@info`, because the same argument applies to it. This
+       # function has ONE call site, inside `_alter_table_fields`' `if !isempty(colect_not_equal)`
+       # block — so by construction the rebuild has already been planned, twenty lines earlier, by
+       # the time this line runs. Measured on a real temp SQLite file: the rebuild renders the
+       # `FOREIGN KEY … REFERENCES` clause for a newly-declared key too. The old text told the
+       # operator to do by hand something that had already happened ("requires recreation. This is
+       # not fully automated yet."), which is why it is gone rather than merely quieter.
+       #
+       # The message is deliberately scoped to THIS call site instead of claiming that adding a
+       # foreign key rebuilds the table on SQLite generally — which would be FALSE. A key gained by
+       # a column that already exists reaches here; a key arriving as a NEW column never does. That
+       # path is `_add_new_field` → `Dialect.add_field(::PormGSQLite, …)`, a bare `ADD COLUMN` whose
+       # `field_to_column` renders no `REFERENCES` at all (the only three renderers are
+       # `create_table`, this rebuild, and PostgreSQL's `add_foreign_key`), and `_add_constrains`'
+       # own FK block is PostgreSQL-only — see its comment saying exactly that. So a new SQLite
+       # column declared `ForeignKey` silently gets no constraint. That gap is real and OUT OF SCOPE
+       # here; it is written up under *SQLite: Table Recreation* in `docs/src/migrations/index.md`.
+       # Do not let this message imply it is handled.
+       #
+       # It stays a log line rather than nothing at all (option 1 in #505) because the rebuild is a
+       # real cost on a large table, and a line at plan time is cheaper to notice than the DDL
+       # itself — which IS visible either way, in `pending_migrations.jl` under the `Alter table:`
+       # key and in `dry_run()`. The drop counterpart (#83) rebuilds just as much and reports
+       # nothing; that asymmetry is a choice, not a difference in cost, and #505 deliberately did
+       # not go re-open it.
+       action === :add && @info "SQLite adds this foreign key through the table rebuild already planned for this alteration" table=model_name column=field_name
        return nothing
     end
     constraint_name = "$(name)_fk" |> lowercase
@@ -308,12 +328,37 @@ function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite
   return nothing
 end
 
-function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Union{String, Symbol}, field::PormGField, name::String)::Nothing
+function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Union{String, Symbol}, field::PormGField, name::String; old_field::Union{PormGField, Nothing} = nothing)::Nothing
   Models.is_many_to_many_field(field) && return nothing
 
   # to new fields
   # If the new field is a foreign key
-  if hasfield(field |> typeof, :to) && field.db_constraint
+  #
+  # #504: `old_field` is the PRE-RENAME field, and only the rename caller passes it. `nothing` means
+  # a brand-new column (`_add_new_table` / `_add_new_field`), which has no live constraint to
+  # inherit, so the key is always added there. On a RENAME it is: PostgreSQL's
+  # `ALTER TABLE ... RENAME COLUMN` carries the existing FOREIGN KEY along with the column, so when
+  # nothing about the definition moved (`_fk_constraint_action` -> `:none`) the live constraint is
+  # already correct and adding a second one leaves TWO on one column -- identical, so inserts and
+  # deletes behave the same and only a doubled `information_schema` row shows it. The DROP a few
+  # lines above the rename call site is already gated on this same decision; this is the missing
+  # half of that pairing, derived from the SAME function rather than a second local opinion (#498).
+  #
+  # NOT confirmed against the catalog first, deliberately. `get_constraints_fk` would answer "no
+  # constraint" in exactly one real scenario -- a `search_path` that hides the table from
+  # `current_schemas(false)` while `get_database_schema` reads `public` explicitly (see
+  # `_add_fk_constraint_in_alteration` above) -- and falling through to ADD there would re-create
+  # precisely the duplicate this guard exists to prevent. The `:none` skip needs no lookup at all,
+  # which is what makes it immune to that skew.
+  #
+  # SCOPE, stated so this does not read as broader than it is: the `:repoint` half of the rename
+  # path is NOT covered. It still ADDs unconditionally, so under that same skew -- where the DROP
+  # above silently declines because the catalog shows no constraint -- a rename that also re-points
+  # can still leave two constraints on the column. `_add_fk_constraint_in_alteration` guards its own
+  # `:repoint` for exactly that reason; the rename path has no equivalent. Pre-existing, unchanged
+  # by #504, and deliberately left alone rather than widened into.
+  if hasfield(field |> typeof, :to) && field.db_constraint &&
+     (old_field === nothing || _fk_constraint_action(field, old_field) !== :none)
     if conn isa PormGPostgres
       constraint_name = name * "_fk" |> lowercase
       # Local FK column and referenced parent column both honor db_column (#50).
@@ -747,7 +792,9 @@ function _resolve_table_fields(
           !new_field.primary_key && _drop_index(conn, migration_plan, model_name, old_field_name)
           _configure_order_dict_migration_plan(migration_plan, model_name, "Rename field: $field_name",
           Dialect.rename_field(conn, model_name, old_field_name, field_name))
-          _add_constrains(conn, migration_plan, model_name, current_model, field_name, new_field, _hash_field_name(model_name, field_name))
+          # #504: `old_field` makes the ADD as action-aware as the DROP above it. Without it a rename
+          # whose FK definition did not change planned an unconditional second constraint.
+          _add_constrains(conn, migration_plan, model_name, current_model, field_name, new_field, _hash_field_name(model_name, field_name); old_field = old_field)
         end
         # Update model.fields to reflect rename to avoid double processing if needed
         model.fields[model_fields_map[old_field_name]] = model.fields[model_fields_map[old_field_name]] # effectively stays same but we can update key if we want to sync

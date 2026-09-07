@@ -388,11 +388,12 @@ _fr_add(plan)  = _fr_step(plan, "New foreign key: parent_id")
   #    false` answers "no" to the prompt and takes the add-a-new-field path instead (planner.jl).
   #    Same technique as integration Phase 4e.
   #
-  #    NOT COVERED HERE, and deliberately: a rename whose FK definition is UNCHANGED still emits an
-  #    ADD with no DROP, so PostgreSQL ends up with two constraints on the column. Measured on this
-  #    same harness. That is pre-existing, `_fk_constraint_action` correctly answers `:none` for it,
-  #    and fixing it means changing what `_add_constrains` does on a rename — a different bug in a
-  #    different function, filed separately rather than folded in here.
+  #    NOT COVERED HERE: a rename whose FK definition is UNCHANGED. It was measured on this same
+  #    harness while #498 was being written — `_fk_constraint_action` answered `:none` correctly,
+  #    the DROP declined correctly, and `_add_constrains` ADDed anyway, leaving PostgreSQL with two
+  #    constraints on the column. It was filed as #504 rather than folded in here, because fixing it
+  #    meant changing a different function. #504 has since landed; that case, and the rest of the
+  #    action truth table on the rename path, live in `test_fk_constraint_actions.jl`.
   # ───────────────────────────────────────────────────────────────────────────
   @testset "a rename that also re-points drops the old constraint first" begin
     settings = PormG.Configuration.Settings()

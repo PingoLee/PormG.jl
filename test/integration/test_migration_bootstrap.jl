@@ -1043,6 +1043,192 @@ end
     PormG.ConnectionPool.fetch(pool, """DELETE FROM "repointparentb" WHERE "id" = 970;""")
   end
 
+  # ── Phase 4i: Rename an FK field whose constraint does NOT change (#504) ─
+  # The gap the rest of the 4-series left. 4b/4c/4f make a key DISAPPEAR, 4e renames one while
+  # flipping the constraint off, 4h moves one that stays. None of them renames a key and leaves its
+  # DEFINITION alone — which is the one case PostgreSQL gets for free, because `ALTER TABLE …
+  # RENAME COLUMN` carries the FOREIGN KEY along with the column. The planner added a second one
+  # anyway: `_fk_constraint_action` answered `:none` so the DROP declined, while `_add_constrains`
+  # asked nothing and ADDed unconditionally. Two identical constraints, one under a name nothing
+  # will ever drop, and a converged model so `makemigrations` never mentions it again.
+  #
+  # SQLite is the cross-backend control, not a second regression: it could never duplicate. The
+  # rename's cheap branch is reachable there only when `_fk_definition_changed` is false — exactly
+  # when `_fk_constraint_action` says `:none`, since the action function delegates to that same
+  # predicate — `_add_constrains`' FK block is PostgreSQL-only regardless, and SQLite rewrites the
+  # stored `FOREIGN KEY … REFERENCES` clause as part of `RENAME COLUMN`. So the count is 1 before
+  # and after on SQLite, which is why the plan-SHAPE assertions below carry the weight there.
+  #
+  # Carries EVERY prior table forward unchanged, including 4h's final state (RepointParentB /
+  # SET_NULL). That is not tidiness, and the reason is NOT a stray prompt: `get_migration_plan`'s
+  # second prompt ("The table … is a new table?") needs a DECLARED model whose table does not exist
+  # live, and every model here has its table, so `:exist` is set true in the first loop and that
+  # prompt cannot fire whatever `carried` omits. The hazard is quieter and worse. A table left out
+  # of `carried` is a live model with no declared counterpart, which the planner turns into
+  # `Drop table` — and the `migrate(destructive=true)` two lines below APPLIES it. Omitting one
+  # would silently destroy Phase 4h state that Phase 5 and everything after it inherits (on
+  # PostgreSQL, `DROP TABLE … CASCADE` takes its FK'd children with it), with nothing in this phase
+  # failing to say so. Exactly one prompt is asked here — the field rename — and it gets the one
+  # fed answer.
+  @testset "Phase 4i: Rename an FK Field, Constraint Unchanged (#504)" begin
+    carried = """
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        name = Models.CharField()
+    )
+    SecondTable = Models.Model(
+        id = Models.IDField(),
+        test_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, db_constraint=false),
+        description = Models.CharField(null=true)
+    )
+    ChildFKTable = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=false)
+    )
+    RenameFKChild = Models.Model(
+        id = Models.IDField(),
+        new_parent_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true, db_index=true, db_constraint=false),
+        note = Models.CharField(null=true)
+    )
+    RenameDelChild = Models.Model(
+        id = Models.IDField(),
+        link_ref_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true, db_constraint=false),
+        note = Models.CharField(null=true)
+    )
+    UniqueDelChild = Models.Model(
+        id = Models.IDField(),
+        keeper = Models.CharField(null=true)
+    )
+    RepointParentA = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=true)
+    )
+    RepointParentB = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=true)
+    )
+    RepointChild = Models.Model(
+        id = Models.IDField(),
+        parent_ref_id = Models.ForeignKey("RepointParentB", on_delete=Models.SET_NULL, null=true),
+        note = Models.CharField(null=true)
+    )
+    """
+    # `PkGuardChild` exists only on SQLite — see Phase 4h's note; 4g's throwing makemigrations
+    # applied nothing, so the table is still there.
+    carried *= adapter_name == "SQLite" ? """
+    PkGuardChild = Models.Model(
+        pk_code = Models.CharField(primary_key=true, null=false),
+        payload = Models.CharField(null=true)
+    )
+    """ : ""
+
+    # A plain, NON-UNIQUE foreign key with a long column name, deliberately. `_drop_index` fires
+    # unconditionally on the rename path: on a UNIQUE column it drops the constraint's backing index
+    # (destroying the constraint on PostgreSQL, aborting the migration on SQLite), and
+    # `get_constraints_index` matches `indexdef LIKE '%<col>%'` unanchored, so a short name can hit a
+    # neighbouring index. Both are pre-existing bugs; either would fail this phase as if it were #504.
+    dup_models(ref_column) = carried * """
+    DupFkParent = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=true)
+    )
+    DupFkChild = Models.Model(
+        id = Models.IDField(),
+        $ref_column = Models.ForeignKey("DupFkParent", on_delete=Models.CASCADE, null=true),
+        note = Models.CharField(null=true)
+    )
+    """
+
+    # ── Baseline: one live FK on old_ref_id ──
+    write_edge_models(dup_models("old_ref_id"))
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    # `destructive=true` is genuinely needed on SQLite even here: 4h's last makemigrations left an
+    # unapplied plan for the three churning `db_constraint=false` tables it documents, and those are
+    # whole-table rebuilds (DROP TABLE).
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    @assert foreign_key_count(pool, "dupfkchild") == 1 "Phase 4i requires exactly one live FK on dupfkchild"
+    @assert "old_ref_id" in column_names(pool, "dupfkchild") "Phase 4i requires the pre-rename column"
+
+    # Seed a parent + child row whose FK value must survive the rename.
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "dupfkparent" ("id", "label") VALUES (980, 'dup-parent-504');""")
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "dupfkchild" ("id", "old_ref_id", "note") VALUES (981, 980, 'child-504');""")
+
+    # ── The rename, with the FK definition left completely alone ──
+    # Same parent, same target column, same ON DELETE, `db_constraint` still true. Only the name moves,
+    # so `_fk_constraint_action` answers `:none` and there is nothing for the planner to re-issue.
+    write_edge_models(dup_models("new_ref_id"))
+
+    # Field-rename detection is interactive: feed "1" (old_ref_id is the sole rename candidate).
+    # EOF would yield "no" ⇒ an ADD + DROP instead of a rename ⇒ a loud failure below, never a hang.
+    mktemp() do _path, io
+      write(io, "1\n"); flush(io); seekstart(io)
+      redirect_stdin(io) do
+        makemigrations(joinpath(@__DIR__, edge_db_name), interactive=true)
+      end
+    end
+
+    pending = read(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"), String)
+    # AC2: the generated block carries no embedded transaction control (composes with the runner tx).
+    @test !occursin("BEGIN TRANSACTION", pending)
+
+    # THE PLAN-SHAPE GATE, and on PostgreSQL it is the real regression assertion — the count below
+    # tells you the outcome, this tells you which half produced it. Pre-fix the plan carried both a
+    # RENAME COLUMN and an ADD CONSTRAINT for the same column.
+    @test occursin("RENAME COLUMN", pending)
+    @test !occursin("FOREIGN KEY (\"new_ref_id\")", pending)
+    if adapter_name == "SQLite"
+      # And SQLite took the CHEAP path, not a whole-table rebuild — the phase must not pass by
+      # quietly rebuilding, since a rebuild renders exactly one clause and satisfies the count too.
+      # Asserted on the PLAN KEY the rebuild is emitted under, not on the `<table>_new` staging
+      # name: `"dupfkchild_new"` is a SUBSTRING of this very migration's new index
+      # (`dupfkchild_new_ref_id_<hash>_idx`), so the obvious spelling is a false positive that
+      # fails on a correct plan. Measured, not theorised.
+      @test !occursin("Alter table: dupfkchild", pending)
+      @test !occursin("CREATE TABLE \"dupfkchild_new\"", pending)
+    end
+
+    # Destructive because the rename plan carries DROP INDEX — `ForeignKey` defaults db_index=true.
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    cols = column_names(pool, "dupfkchild")
+    @test !("old_ref_id" in cols)
+    @test "new_ref_id" in cols
+
+    # ── THE ASSERTION #504 EXISTS FOR ──
+    # Pre-fix PostgreSQL reads 2: the constraint `RENAME COLUMN` carried along, plus the one the
+    # planner added beside it.
+    @test foreign_key_count(pool, "dupfkchild") == 1
+    # …and the survivor is the real thing, not a count that passed because the key vanished.
+    surviving_fk = foreign_key_target(pool, "dupfkchild", "new_ref_id")
+    @test surviving_fk !== nothing
+    @test surviving_fk.parent == "dupfkparent"
+    @test surviving_fk.column == "id"
+    @test surviving_fk.on_delete == "CASCADE"
+
+    # Data fidelity: the child row survived with its (renamed) FK value intact.
+    surviving = PormG.ConnectionPool.fetch(pool,
+      """SELECT "new_ref_id", "note" FROM "dupfkchild" WHERE "id" = 981;""") |> DataFrame
+    @test nrow(surviving) == 1
+    # `isequal` (not `==`) so a would-be NULL never propagates `missing` into `@test` (house convention).
+    @test isequal(surviving[1, :new_ref_id], 980)
+    @test isequal(surviving[1, :note], "child-504")
+
+    # Convergence, SCOPED to this table for the reason Phase 4h spells out: the 4-series leaves three
+    # unrelated SQLite tables churning a rebuild on every makemigrations, so an empty-plan assertion
+    # would fail on them rather than on anything this phase is about.
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    pending_path = joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl")
+    settled = isfile(pending_path) ? read(pending_path, String) : ""
+    @test !occursin("dupfkchild", lowercase(settled))
+
+    # Cleanup child-then-parent. Phase 5 drops these tables, and its `Drop table` steps come from a
+    # plain Dict (arbitrary order) while SQLite's drop_table renders no CASCADE — empty tables drop
+    # cleanly either way, populated ones need not.
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "dupfkchild" WHERE "id" = 981;""")
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "dupfkparent" WHERE "id" = 980;""")
+  end
+
   # ── Phase 5: Indexes and unique constraints ───────────────────────
   @testset "Phase 5: Indexes and Unique Constraints" begin
     write_edge_models("""

@@ -271,7 +271,8 @@ mutable struct sForeignKey <: PormGField
   initially_deferred::Bool
   # Physical parent TABLE this key points at, when `.to` came from introspection (#360). NOT declared
   # API: no constructor kwarg accepts it, `Model_to_str` never emits it, and the migration planner
-  # filters it out of the column diff (`_NON_SCHEMA_FIELD_ATTRS`). It exists so the inspectdb
+  # reads it only to resolve the parent table, never as a difference of its own
+  # (`Migrations.SCHEMA_ATTRS`, #507). It exists so the inspectdb
   # importers can rewrite `.to` to the target's FINAL, collision-deduped binding before rendering —
   # `uppercasefirst` is lossy (`Driver` and `driver` both produce `Driver`), so the physical table
   # cannot be recovered from `.to` afterwards. Set post-construction; see `_plan_inspectdb_bindings!`.
@@ -628,12 +629,12 @@ end
 # #408 in the DDL renderer and the planner guard, #409 in the schema readers, #418 in the query
 # builder. Spelling the pair ONCE is what stops a fourth.
 #
-# NOT the same set as `Dialect._is_relational_field`, which is `hasfield(typeof(f), :to)` and so also
-# admits `sManyToManyField`. An M2M declares no column here — no `pk_field`, no `on_delete`, no
-# `null` — so widening one of these gates to that predicate instead would trade a `MethodError`
-# for a crash one field access later. When a gate genuinely wants "any relation, M2M included", the
-# existing spelling is `Models.foreign_keys_in_model`'s: `hasfield(typeof(f), :to)` paired with
-# `!is_many_to_many_field(f)`.
+# NOT the same set as a bare `hasfield(typeof(f), :to)`, which also admits `sManyToManyField`. An
+# M2M declares no column here — no `pk_field`, no `on_delete`, no `null` — so widening one of these
+# gates to that test would trade a `MethodError` for a crash one field access later. When a gate
+# genuinely wants "any relation, M2M included", the existing spelling is
+# `Models.foreign_keys_in_model`'s: `hasfield(typeof(f), :to)` paired with `!is_many_to_many_field(f)`.
+# (`Dialect._is_relational_field` was that bare test, and is gone with #507's column IR.)
 #
 # The `s` prefix follows the field-struct family this aliases, but it is a `Union`, not a struct:
 # `subtypes(PormGField)` never yields it, and `Model_to_str`'s `nameof(typeof(f))[2:end]` constructor-

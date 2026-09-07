@@ -50,6 +50,9 @@ import PormG.AdvisoryLock
 import PormG.Generator: generate_models_from_db, generate_migration_plan
 
 # Include submodules logic
+# column_spec.jl first: it defines the canonical column IR the planner's field diff runs on (#507),
+# and it depends only on Models/Dialect, both of which PormG has already included by this point.
+include("migrations/column_spec.jl")
 include("migrations/introspection.jl")
 include("migrations/importers.jl")
 include("migrations/planner.jl")

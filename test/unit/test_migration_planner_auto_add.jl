@@ -42,10 +42,18 @@ struct MigrationPlannerAutoAddMockPg <: PormGPostgres end
     settings = PormG.Configuration.Settings()
     settings.change_db = true
 
-    # 1. THE mutation gate: direct membership check on the tuple #334 actually changed. Reverting
-    # the fix fails this immediately and unconditionally, independent of `alter_field`/`Dialect`
-    # downstream behavior.
-    @test :auto_add in Migrations._NON_SCHEMA_FIELD_ATTRS
+    # 1. THE mutation gate: a direct membership check on the classification #334 changed. #507 moved
+    # that classification out of the planner's `_NON_SCHEMA_FIELD_ATTRS` and in beside the column
+    # compiler as `NON_DB_ATTRS`, so the check follows it. The claim is unchanged: `auto_add` is
+    # minted in Julia on write (`UUIDs.uuid4()`), never as a column DEFAULT, so no DDL expresses it
+    # and introspection always reads it back as `false` whatever was declared.
+    @test :auto_add in Migrations.NON_DB_ATTRS
+    @test !(:auto_add in Migrations.SCHEMA_ATTRS)
+
+    # The behavioural form of the same claim, which a membership check alone cannot give: two UUID
+    # keys differing ONLY in `auto_add` compile to one column.
+    @test Migrations.column_spec(Models.UUIDField(primary_key = true, auto_add = true), mock_conn_pg) ==
+          Migrations.column_spec(Models.UUIDField(primary_key = true, auto_add = false), mock_conn_pg)
 
     live_table = Models.Model("uuid_pk_test",
         token = Models.UUIDField(primary_key=true, auto_add=false, unique=false, null=false, db_index=true),

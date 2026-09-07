@@ -13,6 +13,10 @@ no branch for that pair:
     db_constraint escape (planner.jl)                     -> false
     => push!(colect_not_equal, :type)
 
+(That four-way table is history since #507: all four paths are gone, replaced by one column IR —
+`Migrations.column_spec` — that both sides compile to. The pair below is now equal because it
+compiles to one `ColumnSpec`, not because a fifth branch was added for it.)
+
 `INTEGER -> INTEGER`, so churn rather than data damage — but a permanent, unavoidable table-rebuild
 proposal an operator cannot tell apart from a real one.
 
@@ -167,9 +171,18 @@ _rc_parent_sql(plan) =
 
     @test Models._compare_model_field(declared, live)
     @test Models._compare_field_foreign_key(declared, live)
-    # And the predicate that disagreed with it — unchanged by #437, deliberately. See testset 5.
-    @test !PormG.Dialect.describes_same_column(RC_PG, declared, live)
-    @test !PormG.Dialect.describes_same_column(RC_SL, declared, live)
+
+    # #507 retargeted the two assertions that used to sit here. They pinned
+    # `Dialect.describes_same_column` answering `false` for this pair while the fast path answered
+    # `true` — the DISAGREEMENT was the point, and it was the reason the bug could hide. There is
+    # now one comparator, so the property worth pinning is the opposite one: the fast path and the
+    # column IR must AGREE. That is what makes keeping `_compare_model_field` as a speed path safe
+    # (it may only answer `true` when the IR would too); the general form of this invariant, over a
+    # corpus, is in `test_column_spec.jl`.
+    for conn in (RC_PG, RC_SL)
+      @test Migrations.column_spec(declared, conn) == Migrations.column_spec(live, conn)
+      @test isempty(Migrations.column_attrs_changed(declared, live, conn; name = "parent_id"))
+    end
   end
 
   # ───────────────────────────────────────────────────────────────────────────
@@ -318,20 +331,30 @@ _rc_parent_sql(plan) =
   end
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 5. THE TRAP the issue names explicitly. `describes_same_column` must STAY `false` for a
-  #    relational-vs-NON-relational pair: `sForeignKey` and `sBigIntegerField` both render `bigint`,
-  #    and the FK constraint add/drop is planned AFTER the planner's `isempty(colect_not_equal)`
-  #    early-out — so equating them would silently stop planning the constraint entirely.
+  # 5. THE TRAP the issue names explicitly, restated against the column IR (#507). A
+  #    relational-vs-NON-relational pair must still report a change: `sForeignKey` and
+  #    `sBigIntegerField` both render `bigint`, and the FK constraint add/drop is planned AFTER the
+  #    planner's `isempty(colect_not_equal)` early-out — so equating them would silently stop
+  #    planning the constraint entirely.
   #
-  #    #437 routed the relational PAIR one branch earlier instead of narrowing this predicate, and
-  #    this testset is what pins that decision: it fails if a future change "simplifies" the fix by
-  #    relaxing `describes_same_column` after all.
+  #    What changed is WHY the answer is "different". `describes_same_column` refused to compare any
+  #    relational field at all, which is a blanket refusal that also swallowed the #437 pair.
+  #    `ColumnSpec` carries the `reference`, so it ANSWERS this pair: a constrained foreign key has
+  #    one and a plain integer does not. Same verdict, from a stated reason rather than a decline —
+  #    and this testset fails if that reason is ever dropped from the IR.
   # ───────────────────────────────────────────────────────────────────────────
   @testset "a relational vs non-relational pair still reports a change" begin
     for conn in (RC_PG, RC_SL)
-      @test !PormG.Dialect.describes_same_column(conn, Models.ForeignKey("Parent_t"), Models.BigIntegerField())
-      @test !PormG.Dialect.describes_same_column(conn, Models.BigIntegerField(), Models.ForeignKey("Parent_t"))
-      @test !PormG.Dialect.describes_same_column(conn, Models.OneToOneField("Parent_t"), Models.BigIntegerField())
+      @test Migrations.column_spec(Models.ForeignKey("Parent_t"), conn) != Migrations.column_spec(Models.BigIntegerField(), conn)
+      @test Migrations.column_spec(Models.BigIntegerField(), conn) != Migrations.column_spec(Models.ForeignKey("Parent_t"), conn)
+      @test Migrations.column_spec(Models.OneToOneField("Parent_t"), conn) != Migrations.column_spec(Models.BigIntegerField(), conn)
+
+      # The reason, named. A blanket refusal would pass the three assertions above while telling us
+      # nothing; this pins that the difference is the CONSTRAINT, which is what the FK add/drop
+      # helpers key on.
+      @test Migrations.column_spec(Models.ForeignKey("Parent_t"), conn).reference !== nothing
+      @test Migrations.column_spec(Models.BigIntegerField(), conn).reference === nothing
+      @test :to in Migrations.column_attrs_changed(Models.ForeignKey("Parent_t"), Models.BigIntegerField(), conn; name = "parent_id")
     end
 
     # And end to end: a declared foreign key over a column the database holds as a plain integer is

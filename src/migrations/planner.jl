@@ -8,88 +8,37 @@
 # Internal Helpers
 # ---
 
-# Field attributes a column ALTER can never express, so a difference in one must not enter
-# `colect_not_equal` — on SQLite that vector being non-empty means a full table rebuild.
-#
-#   * `blank`, `editable`, `verbose_name`, `related_name`, `how`, `formatter` are model-layer only.
-#   * `on_delete` is NOT in this tuple, and the distinction is the whole of #498. It DOES alter the
-#     schema — it is part of the FK constraint — so it belongs in `colect_not_equal`, and it is
-#     `_FK_IDENTITY_ATTRS` below (a different filter, applied later) that keeps it away from
-#     `Dialect.alter_field`, which cannot express it. Being listed here meant a genuine `ON DELETE`
-#     change was DISCARDED, on both engines, with no signal at all. The comment this replaces claimed
-#     the FK add/drop helpers planned it instead; they did not — their guards only ever asked whether
-#     a constraint was appearing or disappearing. `Models._fk_on_delete_equal` at the diff loop now
-#     absorbs the only pairs that needed absorbing (PROTECT/RESTRICT, DO_NOTHING/nothing).
-#   * `db_column` never alters the live schema by itself — the column identity is already proven
-#     equal by the matched (column-keyed) field, and the introspected side carries
-#     `db_column=nothing` (#50).
-#   * `db_index` is materialized by CREATE/DROP INDEX, planned separately in `_alter_table_fields`
-#     BEFORE the column diff. It was never in `Dialect.alter_field`'s implemented list either, so
-#     before #325 a `db_index` difference emitted the "attributes not implemented" warning plus a
-#     pointless ALTER (a full rebuild on SQLite).
-#   * `auto_now` / `auto_now_add` emit NO DDL anywhere — PormG stamps the timestamp in Julia on
-#     write, it is not a column DEFAULT and not a trigger. So introspection cannot read them back
-#     and `alter_field` has nothing to emit for them: every `DateTimeField(auto_now_add=true)`
-#     produced an empty alteration on every `makemigrations`, forever (#325). On SQLite that empty
-#     alteration was still a full table rebuild.
-#   * `auto_add` (UUIDField) is the same story as `auto_now`/`auto_now_add` just above: PormG
-#     mints the UUID in Julia on write (`UUIDs.uuid4()`), never as a column DEFAULT, so
-#     introspection always reads it back as `false` regardless of the declared value. Left out of
-#     this tuple until #334 — unnoticed only because no fixture had ever declared `auto_add=true`
-#     on a field introspection also had to reconstruct (a primary key, or any column round-tripped
-#     through `assert_no_schema_drift`).
-#   * `to_table` (FK/O2O) is a Julia-side introspection breadcrumb (#360) that is ASYMMETRIC BY
-#     CONSTRUCTION, which is exactly why it has to be listed here: introspection sets it to the live
-#     parent table, while the models-file side is always `nothing` because `Model_to_str` never emits
-#     it. Left out, EVERY foreign key would report a difference on EVERY `makemigrations` — an empty
-#     alteration forever, and a full table rebuild on SQLite. Same shape as `auto_now`/`auto_add`
-#     above: no DDL anywhere expresses it, so it can never be a real schema change.
-const _NON_SCHEMA_FIELD_ATTRS = (:blank, :related_name, :verbose_name, :editable,
-                                 :how, :formatter, :db_column, :db_index,
-                                 :auto_now, :auto_now_add, :auto_add, :to_table)
+# The attribute classification that used to live here — `_NON_SCHEMA_FIELD_ATTRS` — moved to
+# `src/migrations/column_spec.jl` as `NON_DB_ATTRS` / `SCHEMA_ATTRS` when #507 replaced the
+# attribute-wise field diff with the canonical column IR. It is stated ONCE there, next to the
+# compiler that reads it, and a drift guard fails the suite when a `PormGField` gains a slot the
+# compiler neither reads nor classifies. Do not reintroduce a skip list here: three lists that
+# disagreed with each other is the defect #507 closed.
 
 # #498: the FK IDENTITY attributes — the ones a `FOREIGN KEY` constraint carries and a column
-# `ALTER` cannot say. They are a genuinely different category from `_NON_SCHEMA_FIELD_ATTRS` above,
+# `ALTER` cannot say. They are a genuinely different category from `NON_DB_ATTRS` (column_spec.jl),
 # and collapsing the two would reintroduce the bug: these DO express schema, so they MUST enter
 # `colect_not_equal` (that vector is the difference set, and it is what opens the alteration gate);
 # they are filtered out only where `colect_not_equal` is handed to `Dialect.alter_field`, which has
 # no branch for any of them and would otherwise warn and emit nothing. `_fk_constraint_action`
 # expresses them instead, as DROP + ADD CONSTRAINT.
 #
-# `on_update`, `deferrable` and `initially_deferred` are deliberately NOT here. A re-add would not
-# satisfy a change in them: `Dialect.add_foreign_key` renders no `ON UPDATE` clause at all and
-# hardcodes `DEFERRABLE INITIALLY DEFERRED`. They keep reaching `alter_field` and warning honestly,
-# which is the accurate report until the renderer learns them.
+# `on_update`, `deferrable` and `initially_deferred` are not here either, and since #507 they are not
+# anywhere on this path: `Dialect.add_foreign_key` renders no `ON UPDATE` clause and hardcodes
+# `DEFERRABLE INITIALLY DEFERRED`, so nothing emits them and they cannot be a schema delta. They are
+# classified in `NON_DB_ATTRS` (column_spec.jl), which reports a declared non-default value once
+# rather than letting it churn an empty ALTER — a full table rebuild on SQLite — on every run.
+# Rendering them (or refusing them at declaration) is #516.
 const _FK_IDENTITY_ATTRS = (:to, :pk_field, :on_delete)
 
-# #437: the first branch of `_alter_table_fields`' field diff is NOT "the same Julia type" — it is
-# "these two structs share an attribute vocabulary, so diff them attribute by attribute". A declared
-# `ForeignKey(parent, unique = true)` and the `sOneToOneField` that BOTH readers report for its own
-# live column since #417 are exactly that shape: different structs whose `fieldnames` SETS are
-# identical, both carrying `type = "BIGINT"` and `formatter = format_number_sql`. (The `fieldnames`
-# TUPLES are not equal — `unique` is declared first on `sOneToOneField` and third on `sForeignKey` —
-# which is why the loop below iterates by NAME and why the test asserts set equality, not tuple.)
+# #437 / #507: `_diffs_attribute_wise` lived here — the predicate that decided whether two field
+# structs shared an attribute vocabulary and could be diffed attribute by attribute. It is gone with
+# the rest of the struct-comparison machinery: `Migrations.column_spec` compiles BOTH sides to a
+# `ColumnSpec` and the FK/O2O pair it existed to admit is simply two fields that compile the same.
 #
-# Measured on that pair, the ONLY attributes that differ are `:to` and `:to_table`. `:to_table` is in
-# the tuple above; `:to` is reconciled by branch 1's `_compare_field_foreign_key` call, because a
-# declared `.to` is a resolved `PormGModel` while an introspected one is the target's binding STRING,
-# so raw `==` is always false for a foreign key. Branch 1 therefore returns an empty
-# `colect_not_equal` and the column converges.
-#
-# Branch 2 (`Dialect.describes_same_column`, #325) carries NEITHER that reconciliation nor the
-# `:pk_field` one (#50), so relaxing that predicate instead would merely swap `push!(:type)` for
-# `push!(:to)` — the churn would move, not go away. `describes_same_column` consequently still
-# refuses EVERY relational field, which is what keeps `_add_fk_constraint_in_alteration` /
-# `_drop_fk_constraint_in_alteration` reachable for an `sForeignKey`-vs-`sBigIntegerField` pair: both
-# render `bigint`, and the FK constraint is planned AFTER the `isempty(colect_not_equal)` early-out.
-#
-# `Models.sRelationalColumn` rather than a fresh `isa` pair on purpose: `src/models/fields.jl` spells
-# the FK/O2O pair ONCE so that a gate cannot silently miss half of it. This is the FOURTH SUBSYSTEM
-# to hit that missing-subtype shape — the DDL renderer (#408), the schema readers (#409), the query
-# builder (#418), and now the planner's field diff. (The alias itself already has plenty of callers,
-# two of them further down this same file; what is new here is the subsystem, not the spelling.)
-_diffs_attribute_wise(a::PormGField, b::PormGField)::Bool =
-  typeof(a) === typeof(b) || (a isa Models.sRelationalColumn && b isa Models.sRelationalColumn)
+# The missing-subtype shape it warned about still stands, though, and now has a sharper form: the
+# planner's field diff performs NO `isa` dispatch on field structs at all. A new one here is a
+# regression against the IR, not a fix — `column_spec` is where a field type is interpreted.
 
 function _hash_field_name(model_name::Symbol, field_name::Union{String, Symbol}; apend_number::Int64=5)::String
   _hash = randstring(8) 
@@ -573,80 +522,38 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
 
         name::String = _hash_field_name(model_name, field_name_stripped)
 
-        # check if the field is diferent
-        colect_not_equal::Vector{Symbol} = []
-        if _diffs_attribute_wise(field, old_field)
-          # Check if all attributes are equal. `fieldnames(typeof(field))` is safe to index into
-          # `old_field` unguarded: `_diffs_attribute_wise` admits either the same struct or the
-          # FK/O2O pair, whose attribute NAME SETS are identical (#437). A `hasfield` guard here
-          # would silently skip a genuinely missing attribute instead of failing loudly, so the
-          # invariant is pinned by a test rather than defended by a `continue`.
-          for attr in fieldnames(typeof(field))
-            new_var = getfield(field, attr)
-            old_var = getfield(old_field, attr)
-            if new_var != old_var
-              attr == :to && Models._compare_field_foreign_key(field, old_field) && continue
-              # pk_field is compared by RESOLVED referenced column: a field-name pk_field on
-              # the code side matches the introspected physical column when the parent pk is
-              # renamed via db_column (#50). No-op when the referenced column isn't renamed.
-              attr == :pk_field && Models.fk_target_column(field) == Models.fk_target_column(old_field) && continue
-              # #498: the third sibling of the two reconciliations above, and the same shape — the raw
-              # `!=` just above is wrong for two `on_delete` pairs that MEAN the same clause
-              # (PROTECT/RESTRICT, DO_NOTHING/nothing), so compare what they RENDER
-              # (`Models._fk_on_delete_equal`). With this here, a genuine `ON DELETE` change reaches
-              # `colect_not_equal` and opens the alteration gate below on its own — which is why #498
-              # needed no special case in that gate.
-              #
-              # It is NOT reachable from a diff where `on_delete` is the only difference:
-              # `are_model_fields_equal` folds through the same comparator and returns early. What it
-              # guards is an on_delete fold riding ALONGSIDE another changed column on the same table
-              # — where, without it, a `PROTECT` key against its own live `RESTRICT` would be swept
-              # into a destructive DROP + ADD CONSTRAINT on every run. Pinned by the mixed-change
-              # testset in test_fk_repoint_planner.jl, not by the equivalence controls.
-              attr == :on_delete && Models._fk_on_delete_equal(field, old_field) && continue
-              attr in _NON_SCHEMA_FIELD_ATTRS && continue
-              push!(colect_not_equal, attr)
-            end
-          end
-        elseif Dialect.describes_same_column(conn, field, old_field)
-          # #325: DIFFERENT Julia field types, SAME physical column. Introspection cannot reproduce
-          # the declared type — PostgreSQL renders CharField/URLField/SlugField all as `varchar(n)`,
-          # SQLite renders UUIDField/JSONField/ImageField/TextField all as bare `TEXT` — so demanding
-          # struct identity here proposed an ALTER whose SQL re-rendered the column unchanged, on
-          # every single `makemigrations`. Compare what the database can actually hold instead: the
-          # rendered column type (already proven equal) plus the attributes BOTH structs carry.
-          # `:type` is excluded because the signature supersedes it; the attributes only one side has
-          # (CharField's `choices`, UUIDField's `auto_add`) are Julia-side and never in the schema.
-          for attr in fieldnames(typeof(field))
-            hasfield(typeof(old_field), attr) || continue
-            attr == :type && continue
-            attr in _NON_SCHEMA_FIELD_ATTRS && continue
-            getfield(field, attr) == getfield(old_field, attr) && continue
-            push!(colect_not_equal, attr)
-          end
-        else
-          # check is db_constraint is false in field
-          # `sOneToOneField` is included since #408: it is NOT a subtype of `sForeignKey` (both are
-          # bare `PormGField`), and now that it renders `bigint` rather than `text`, a
-          # `db_constraint=false` one-to-one introspects as `sBigIntegerField` exactly like a
-          # `db_constraint=false` ForeignKey does — so without it here the pair lands in the `else`
-          # below and pushes `:type` on every makemigrations, forever.
-          if field isa Models.sRelationalColumn && !field.db_constraint &&  old_field |> typeof == Models.sBigIntegerField
-            continue
-          else
-            push!(colect_not_equal, :type)
-          end
-        end
+        # #507: ONE comparator. Both fields compile to a `ColumnSpec` — what the database can hold —
+        # and the difference is read off that. This replaced four code paths that each answered
+        # "same column?" with their own reconciliations and disagreed at the edges: the attribute-wise
+        # loop, `Dialect.describes_same_column` (#325), the `db_constraint = false` escape (#408) and
+        # the `push!(:type)` fallthrough. Its symbol VOCABULARY is a subset of what those paths
+        # produced, so everything below this line is untouched — but the per-pair SETS are not
+        # identical, deliberately: a cross-struct pair that used to collapse to a bare `:type` now
+        # reports what actually differs (`IDField` vs `IntegerField` was `[:type]`, is
+        # `[:type, :unique, :primary_key, :generated]`), and `:choices` / `:db_constraint` /
+        # `:deferrable` / `:auto_hash` are no longer produced at all. Richer is the point — the old
+        # `:type` re-rendered the column and left the identity and the UNIQUE in place, forever.
+        colect_not_equal::Vector{Symbol} =
+          column_attrs_changed(field, old_field, conn; name = field_name_stripped)
 
         # if field_name == "time"
         #   @pormg_debug
         # end
 
-        # #325: the column ALTER is CONDITIONAL, but the index blocks below are not. `db_index` is
-        # in `_NON_SCHEMA_FIELD_ATTRS`, so an index-only difference leaves `colect_not_equal` empty —
-        # which is the point (on SQLite a non-empty vector means a FULL TABLE REBUILD, for something
-        # a CREATE/DROP INDEX expresses on its own). Before #325 this was an early `continue`, so an
-        # index-only difference would now be planned as nothing at all.
+        # #325: the column ALTER is CONDITIONAL, but the index blocks below are not. `db_index` is in
+        # `NON_DB_ATTRS` and is not a `ColumnSpec` field at all, so an index-only difference leaves
+        # `colect_not_equal` empty — which is the point (on SQLite a non-empty vector means a FULL
+        # TABLE REBUILD, for something a CREATE/DROP INDEX expresses on its own). Before #325 this
+        # was an early `continue`, so an index-only difference would now be planned as nothing at all.
+        #
+        # #507 note: the index blocks are now reachable for one pair that never reached them. The
+        # retired #408 escape answered a `db_constraint = false` relational field against a live
+        # `sBigIntegerField` with `continue`, which skipped the REST OF THE LOOP BODY — the two index
+        # blocks included — so such a column could neither gain nor lose an index here. That was an
+        # accident of the escape's shape, not a decision. It is expected to be inert in practice:
+        # the FK constructors force `db_index = db_index || !db_constraint`, so a
+        # `db_constraint = false` key always declares an index, and introspection reports the one
+        # PormG created for it — both sides `true`, no action.
         if !isempty(colect_not_equal)
           # Check if is needed remove the foreign key
           _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name_stripped, field, old_field)

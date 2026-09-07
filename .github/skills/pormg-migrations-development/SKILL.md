@@ -109,42 +109,79 @@ Follow the canonical [PormG Test Writing Standard](../../instructions/test-writi
 
 ## Planner internals: column identity
 
-The planner has no representation of "a column". `makemigrations` diffs two `PormGField` structs —
-one from the models file, one *reconstructed* from the live schema by the readers through
-`postgres_type_map` / `sqlite_type_map` — and decides *changed / unchanged* by comparing the structs.
-Know this before touching `_alter_table_fields`, because every recent convergence bug lives in it.
+`makemigrations` decides *changed / unchanged* by compiling **both** sides of the diff to a canonical
+column IR and comparing that — never by comparing `PormGField` structs. The IR is
+`Migrations.ColumnSpec` (`src/migrations/column_spec.jl`); the compiler is
+`column_spec(field, conn)`; the planner's whole field diff is one call to `column_attrs_changed`
+inside `_alter_table_fields`.
 
-**Three comparators, in order, each with its own reconciliations** (`src/migrations/planner.jl`):
+**Why an IR at all.** Introspection reconstructs a `PormGField` from the live schema through a type
+map that returns *one* struct per rendered type, so the declared struct can never be recovered:
+`CharField` / `URLField` / `SlugField` all come back as one struct, and on SQLite a `BIGINT` column
+comes back as `sIntegerField`. Struct identity is therefore not column identity. The IR closes the
+gap by construction rather than by reconciliation — `column_spec` renders through
+`Dialect._get_column_type`, the same function the DDL path uses, so **every struct that renders the
+same column compiles to the same spec**.
 
-1. **Fast path** — `Models.are_model_fields_equal` → `_compare_model_field` (`src/Models.jl`):
-   attribute-wise; skips `:to` (via `_compare_field_foreign_key`), `:on_delete`, `:to_table`;
-   fails *closed* on an exception (#69).
-2. **Attribute-wise** — `_diffs_attribute_wise`: same struct type, or the FK/O2O pair (#437);
-   reconciles `:to` and `:pk_field` (#50), skips `_NON_SCHEMA_FIELD_ATTRS`.
-3. **Physical signature** — `Dialect.describes_same_column` (#325): different struct types, same
-   `_column_signature` (rendered type + the two CHECK bounds); refuses any relational or PK field.
-4. **Else** — the #408 `db_constraint=false` escape, otherwise `push!(:type)` — on SQLite, a full
-   table rebuild.
+**Three rules worth knowing before editing it:**
 
-The reader side is lossy by construction: a type map returns *one* struct per rendered type, so
-`CharField` / `URLField` / `SlugField` come back as one struct and SQLite `BIGINT` comes back as
-`IntegerField` (#503). Comparator 3 exists to paper over exactly that.
+1. **Engine equivalence is decided in `parse_canonical_type`, once** — Atlas's per-driver normalizer,
+   run on both sides before the diff. A collapse belongs there only when it is *forced*: two
+   spellings become one `CanonicalType` when PormG renders both as the same string, so the database
+   cannot tell them apart. SQLite `BIGINT ≡ INTEGER` qualifies (`sqlite_type_map_reverse` maps both
+   to `INTEGER`); SQLite `SMALLINT` vs `INTEGER UNSIGNED` does **not**, because PormG writes both
+   verbatim and a change between them is observable. Collapsing what the engine merely *stores*
+   alike would silently stop planning a real change.
+2. **`on_delete` is a schema fact**, carried in `ForeignKeyRef(table, binding, column, on_delete)`.
+   A change there is a **constraint delta, never a column ALTER** — it reaches the plan as DROP +
+   ADD CONSTRAINT. This used to be answered three different ways (`_compare_model_field` skipped it,
+   `_NON_SCHEMA_FIELD_ATTRS` skipped it, `_fk_constraint_action` diffed it); the compiler answers it
+   once. It matches Django: `on_delete` is not in `Field.non_db_attrs`, and on Django `main`
+   `ForeignObject` skips it only when the action is *not* a `DatabaseOnDelete` variant — *"Database-
+   level on_delete options are part of the column definition."* PormG renders `ON DELETE` into every
+   constraint (#292), so it only ever has that flavour.
+3. **`db_index` is not in the IR at all.** `index_actions` owns it, and on SQLite a non-empty column
+   delta means a full table rebuild that re-emits every secondary index — so an index-only
+   difference must leave the delta empty or the rebuild would duplicate the `CREATE INDEX` beside it
+   (#82/#325).
 
-**The churn class, and where it goes.** "`makemigrations` plans DDL forever" / "plans nothing" for
-a column nobody changed is one bug shape, seen as #325 → #408 → #409 → #417 → #437 → #498 → #503.
-Each fix was a new `isa` escape, a new `_NON_SCHEMA_FIELD_ATTRS` entry or a new reconciliation
-branch, and the planner's own comment block (`planner.jl:44-72`) records why the next one moves the
-churn rather than ending it. **The agreed direction is #507** — both sides compile to a canonical
-column IR and the diff runs on that. A new issue in this class is routed to #507 and batched under
-it, not fixed with another escape ([`pormg-session-planning`](../pormg-session-planning/SKILL.md)
-→ *Third strike*). This section describes the code as it stands until #507 lands; #507's
-acceptance list is what replaces it.
+**One classification, one place.** `NON_DB_ATTRS` (no DDL expresses it) and `SCHEMA_ATTRS` (the
+compiler reads it) replace `_NON_SCHEMA_FIELD_ATTRS` and the two other lists that disagreed with it.
+Named after Django's `Field.non_db_attrs`. `test/unit/test_column_spec.jl` fails when a `PormGField`
+gains a slot in neither — the same guarantee `field_kwargs_snapshot.txt` gives `Model_to_str`, with
+no snapshot to regenerate.
 
-**The missing-subtype shape.** `sForeignKey` and `sOneToOneField` are sibling structs, not a
-subtype pair. Four subsystems have each missed the second one behind an `isa sForeignKey` gate —
-the DDL renderer (#408), the schema readers (#409), the query builder (#418), the planner (#437).
-Spell the pair once: `Models.sRelationalColumn` (`src/models/fields.jl`). A new bare
-`isa sForeignKey` gate is a review flag.
+**The seam to the action code.** Phase 1 changed how the answer is *decided*, not what is emitted
+once it is "changed". `column_delta` returns the typed facets (`:type`, `:nullable`, `:reference`,
+`:checks`, `:identity`, …); `alter_attrs` adapts those back to the `colect_not_equal::Vector{Symbol}`
+that `Dialect.alter_field`, the FK helpers and `_FK_IDENTITY_ATTRS` already consume. **#507 phase 2
+deletes that adapter** and derives plan actions from `column_delta` directly, which is what makes
+#504 unrepresentable.
+
+**Two review flags, both sharper than what they replace:**
+
+- **A new `isa` on a field struct inside the planner's field diff.** There is now none: the planner
+  does no field-type dispatch at all. A new one is a regression against the IR, not a fix —
+  `column_spec` is where a field type is interpreted. (Its predecessor rule was "route it to #507";
+  #507 phase 1 has landed, so the routing is into the compiler.)
+- **A new entry in `NON_DB_ATTRS` that hides a real fact.** The list is legitimate for things no DDL
+  path emits. It is *not* a place to park an inconvenient difference — check that no renderer writes
+  it before adding one, and say so in the comment, as the `on_update` / `deferrable` /
+  `initially_deferred` entry does.
+
+**The churn class this closed.** "`makemigrations` plans DDL forever" / "plans nothing" for a column
+nobody changed was one bug shape seen seven times — #325 → #408 → #409 → #417 → #437 → #498 → #503 —
+each fixed with a new `isa` escape, a new skip-list entry or a new reconciliation branch. A new issue
+in this class is now a **defect in the compiler or in `parse_canonical_type`**, and it is fixed
+there. If you find yourself adding a fifth comparator, that is the signal the IR is missing a fact,
+not that it needs an exception.
+
+**The missing-subtype shape.** `sForeignKey` and `sOneToOneField` are sibling structs, not a subtype
+pair. Four subsystems each missed the second one behind an `isa sForeignKey` gate — the DDL renderer
+(#408), the schema readers (#409), the query builder (#418), the planner (#437). Spell the pair once:
+`Models.sRelationalColumn` (`src/models/fields.jl`). A new bare `isa sForeignKey` gate is a review
+flag. (In the planner's diff the shape is now unrepresentable: the FK/O2O pair over one parent simply
+compiles to one `ColumnSpec`.)
 
 ## Triage
 
@@ -153,7 +190,8 @@ or convergence** — before editing. That choice picks both the file and the tes
 in different ways: a planner bug produces wrong SQL, an introspection bug produces a wrong *diff*
 from correct SQL, a history bug leaves the DB right and `pormg_migrations` wrong — and a
 convergence bug leaves the DB right *and* the SQL right, yet the next `makemigrations` plans it
-again. Convergence is the class described above: route it to #507 rather than patching a comparator.
+again. Convergence is the class described above, and since #507 it has a single home: fix it in
+`column_spec` / `parse_canonical_type`, never by adding a comparator or an escape to the planner.
 
 ## Verification Commands
 

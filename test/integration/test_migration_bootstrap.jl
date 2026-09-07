@@ -1025,17 +1025,32 @@ end
     # this table. This is the churn control — comparing `on_delete` wrongly does not fail loudly, it
     # proposes a destructive DROP + ADD on every single run, forever.
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-    # Scoped to THIS table, not to the whole plan. On SQLite the 4-series leaves three unrelated
-    # tables churning a rebuild on every makemigrations (`secondtable`, `renamefkchild`,
-    # `renamedelchild`) — all three declare `db_constraint=false` foreign keys, which SQLite
-    # introspects as `sIntegerField` while the planner's #408 escape only recognises
-    # `sBigIntegerField`, so the diff falls through to `push!(:type)` forever. MEASURED as
-    # pre-existing: the same probe against unmodified `src/` produces the identical plan, and
-    # PostgreSQL converges completely. It is a separate bug, filed separately — asserting an
-    # empty PLAN here would fail on it rather than on anything this phase is about.
+    # WIDENED BY #507 from "nothing pending for `repointchild`" back to "nothing pending AT ALL",
+    # which is what this assertion wanted in the first place.
+    #
+    # It had to be scoped to one table because the 4-series left three unrelated SQLite tables
+    # churning a rebuild on every makemigrations — `secondtable`, `renamefkchild` and
+    # `renamedelchild`, all three declaring `db_constraint=false` foreign keys. SQLite introspects
+    # such a column as `sIntegerField` while the planner's #408 escape only recognised
+    # `sBigIntegerField`, so the diff fell through to `push!(:type)` forever (#503, measured as
+    # pre-existing at the time). The canonical column IR removed the escape and the pair with it:
+    # both sides compile to one `CInt64` with no reference, so there is nothing left to churn.
+    #
+    # This is the strongest convergence statement the suite makes, and the reason it is worth the
+    # widening: a scoped assertion cannot tell "this phase converged" apart from "everything else is
+    # still broken". Whole-plan emptiness can.
+    #
+    # Mechanically: `makemigrations` writes this file ONLY when it has something to plan
+    # (`planner.jl` skips `generate_migration_plan` on an empty plan) and the `migrate` above
+    # archived the previous one into `applied_migrations/`. So "converged" is precisely "no plan
+    # entry was produced" — asserted on the `# table:` marker rather than on file emptiness, because
+    # the generator always wraps its entries in a module skeleton.
     pending_path = joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl")
     settled = isfile(pending_path) ? read(pending_path, String) : ""
-    @test !occursin("repointchild", lowercase(settled))
+    if occursin("# table:", settled)
+      @error "A second makemigrations with no model change planned something (#507 convergence)" plan=settled
+    end
+    @test !occursin("# table:", settled)
 
     # Cleanup: drop the seeded rows; the tables go with Phase 5's model redefinition.
     PormG.ConnectionPool.fetch(pool, """DELETE FROM "repointchild" WHERE "id" = 971;""")
@@ -1214,13 +1229,17 @@ end
     @test isequal(surviving[1, :new_ref_id], 980)
     @test isequal(surviving[1, :note], "child-504")
 
-    # Convergence, SCOPED to this table for the reason Phase 4h spells out: the 4-series leaves three
-    # unrelated SQLite tables churning a rebuild on every makemigrations, so an empty-plan assertion
-    # would fail on them rather than on anything this phase is about.
+    # Convergence. This was SCOPED to one table for the reason Phase 4h spelled out — three
+    # unrelated SQLite tables churning a rebuild on every makemigrations (#503) — and #507 removed
+    # that churn, so it is widened here too rather than left citing a rationale that no longer
+    # holds. Same mechanism as 4h: an empty plan writes no file at all.
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
     pending_path = joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl")
     settled = isfile(pending_path) ? read(pending_path, String) : ""
-    @test !occursin("dupfkchild", lowercase(settled))
+    if occursin("# table:", settled)
+      @error "A second makemigrations with no model change planned something (#507 convergence)" plan=settled
+    end
+    @test !occursin("# table:", settled)
 
     # Cleanup child-then-parent. Phase 5 drops these tables, and its `Drop table` steps come from a
     # plain Dict (arbitrary order) while SQLite's drop_table renders no CASCADE — empty tables drop

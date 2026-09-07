@@ -41,8 +41,9 @@
 """
     FieldAccessError <: PormGError  (abstract)
 
-Umbrella for field/accessor lookup failures — `catch` it to get both
-[`UnknownFieldError`](@ref) ("no such field") and [`LazyTraversalError`](@ref)
+Umbrella for field/accessor lookup failures — `catch` it to get
+[`UnknownFieldError`](@ref) ("no such field"), [`AmbiguousFieldError`](@ref)
+("that name has two meanings here") and [`LazyTraversalError`](@ref)
 ("unsupported lazy traversal").
 """
 abstract type FieldAccessError <: PormGError end
@@ -55,6 +56,23 @@ A field, alias, column, or `__` lookup path does not exist on the model or the p
 struct UnknownFieldError <: FieldAccessError
   msg::String
   UnknownFieldError(msg::AbstractString) = new(_emsg(msg))
+end
+
+"""
+    AmbiguousFieldError(msg) <: FieldAccessError <: PormGError
+
+A `__` path's first segment names **two** things on this query at once — a declared CTE and a
+model field, reverse accessor, many-to-many field, JSONField or `cjoin`/`on()` join path — so it has
+no single meaning and PormG refuses to guess (#492).
+
+Deliberately its own type rather than an [`UnknownFieldError`](@ref): the name is known *twice*, not
+unknown, and the remedy differs. A consuming app's typo handler should not also fire when a schema
+change makes an existing CTE name collide. The message names both readings and prints the
+`CTE("<name>", "<path>")` spelling that selects the CTE side.
+"""
+struct AmbiguousFieldError <: FieldAccessError
+  msg::String
+  AmbiguousFieldError(msg::AbstractString) = new(_emsg(msg))
 end
 
 """

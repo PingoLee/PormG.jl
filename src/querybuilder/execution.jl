@@ -1178,8 +1178,10 @@ function _is_date_field(field_name::String, instruc::SQLInstruction)
   if haskey(model.fields, field_name)
     field_type = model.fields[field_name].type
     return field_type in ["DATE", "TIMESTAMPTZ", "TIMESTAMP"]
-  # #474: a raw String field name. Since #444 a string cannot name a CTE, so this is always the
-  # base-model half of the memo namespace.
+  # #474: a raw String field name, and always the base-model half of the memo namespace. #492 gave
+  # `"<cte>__<col>"` its meaning back, but a CTE-rooted string is rewritten into a `CTEReference` by
+  # `_resolve_cte_string_paths!` before `build()` renders — so a String still standing here named no
+  # CTE.
   else
     memoized = memo_field(instruc, memo_key(:base, field_name))
     memoized === nothing || return memoized.type in ["DATE", "TIMESTAMPTZ", "TIMESTAMP"]

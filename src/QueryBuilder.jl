@@ -19,7 +19,7 @@ import PormG: PormGBytes  # binary payloads bind as one blob, not as an array of
 # Semantic error taxonomy (#231, #239). The types are defined in `src/exceptions.jl`, included by
 # `Kernel` (layer 1) so every subsystem can reach them; only the message-composing funnels
 # (`_unsupported_conn`, `_write_not_allowed`) live in `querybuilder/error_funnels.jl`.
-import PormG: PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError,
+import PormG: PormGError, FieldAccessError, UnknownFieldError, AmbiguousFieldError, LazyTraversalError, FilterError,
   QueryBuildError, UnsafeMutationError, InvalidValueError, WritesDisabledError, UnsupportedConnectionError, BackendCapabilityError, ProtectedError,
   InvalidConfigurationError,   # thrown by the model-not-bound guards (audit: was UnsupportedConnectionError)
   DoesNotExist, MultipleObjectsReturned,
@@ -123,7 +123,7 @@ export get
 # export status only governs the bare-`using` dump.
 export PormGRow, pk, DoesNotExist, MultipleObjectsReturned
 # Semantic error taxonomy (#231): every query-builder misuse throws a PormGError subtype.
-export PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError,
+export PormGError, FieldAccessError, UnknownFieldError, AmbiguousFieldError, LazyTraversalError, FilterError,
   QueryBuildError, UnsafeMutationError, InvalidValueError, WritesDisabledError, UnsupportedConnectionError, BackendCapabilityError, ProtectedError
 # _count and _exists are un-exported (#202); the public form is the fluent query.count() /
 # query.exists(). They still have internal callers — deletion.jl uses both.

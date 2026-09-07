@@ -358,15 +358,35 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     Still true: a predicate that all relocates onto a later join leaves this one with no `ON` clause
     of its own, which raises `QueryBuildError` (#435).
 
-    **A CTE cannot be referenced from an `ON` clause at all.** A `CTE(name, path)` inside `on`
-    raises `FilterError`: an `ON` clause targets the joined *model*, and a CTE is joined by its own
-    `.with(...)` declaration. Put the predicate in `.filter(...)` instead (#444).
+    !!! warning "A `cjoin` path or an `on()` path is not the same case"
+        Only a `cjoin_on` **alias** is free of the collision. A `cjoin` **path** and an `on()`
+        **path** name a relation *on the model*, so a CTE sharing that name collides with the
+        relation exactly as it would with any field, and the shared `__` path raises
+        `AmbiguousFieldError` ([#492](https://github.com/PingoLee/PormG.jl/issues/492)):
 
-    **A join key may share a name with a CTE the query joins.** A `cjoin_on` **alias**, a `cjoin`
-    **path** and an `on()` **path** live in a different namespace from a `.with()` label, so a
-    query may use the same word for both and each stays addressable — the same coexistence
-    [#444](https://github.com/PingoLee/PormG.jl/issues/444) established for a CTE name and a model
-    field:
+        ```julia
+        driver_totals = M.Result.objects.values("driverid", "n" => Count("resultid"))
+
+        q = M.Result.objects
+        q.with("driverid" => driver_totals, join_field = "driverid" => "driverid")
+        q.cjoin("driverid" => "Driver")           # a `cjoin` PATH — a relation on Result
+        q.values("points", "driverid__surname")   # → AmbiguousFieldError
+        ```
+
+        Here the projection wants the ForeignKey's `surname`, so the fix is to **rename the CTE** —
+        while the name is taken there is no string that selects the model side. Had you wanted the
+        CTE's own column instead, that one does have a spelling: `CTE("driverid", "n")`.
+
+    **A CTE cannot be referenced from an `ON` clause at all.** A `CTE(name, path)` inside `on`
+    raises `FilterError`, and so does the equivalent `"<cte>__<column>"` string
+    ([#492](https://github.com/PingoLee/PormG.jl/issues/492)): an `ON` clause targets the joined
+    *model*, and a CTE is joined by its own `.with(...)` declaration. Put the predicate in
+    `.filter(...)` instead (#444).
+
+    **A `cjoin_on` alias may share a name with a CTE the query joins.** An alias lives in its own
+    namespace ([#484](https://github.com/PingoLee/PormG.jl/issues/484)) and is reached *only*
+    through `Joined(alias, column)` — never as a `__` path — so a `"<cte>__<column>"` string is
+    unambiguously the CTE, and both relations are emitted and addressable:
 
     ```julia
     # "best" names both the CTE and the cjoin_on alias here.
@@ -375,7 +395,7 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     df = M.Result.objects.
         with("best" => best, join_field = "driverid" => "driverid", join_type = "INNER").
         cjoin_on("Driver", alias = "best", on = [Joined("best", "driverid") == F("driverid")]).
-        values("points", "career_best" => CTE("best", "best")).
+        values("points", "career_best" => CTE("best", "best")).      # or "best__best"
         filter("raceid" => 18).
         order_by("-points").
         limit(5) |> DataFrame

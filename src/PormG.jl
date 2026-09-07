@@ -166,7 +166,7 @@ end
 # live in `PormG.Functions` and are reached via `using PormG.Functions` / `PormG.Functions.X`.
 export object, get, PormGRow, pk, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Subquery, CTE, Joined, Interval, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys, resync_sequences
 # Semantic error taxonomy (#231): catch `PormGError` for any query-builder misuse, or a specific subtype.
-export PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError, QueryBuildError, UnsafeMutationError, InvalidValueError, WritesDisabledError, UnsupportedConnectionError, BackendCapabilityError, ProtectedError
+export PormGError, FieldAccessError, UnknownFieldError, AmbiguousFieldError, LazyTraversalError, FilterError, QueryBuildError, UnsafeMutationError, InvalidValueError, WritesDisabledError, UnsupportedConnectionError, BackendCapabilityError, ProtectedError
 # Schema / configuration / migration errors (#239). These complete the taxonomy: `catch PormGError`
 # now covers field-constructor and model-definition mistakes, connection config, and the migration
 # engine — not just the query builder.

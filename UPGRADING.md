@@ -45,6 +45,83 @@ _Changes merged but not yet cut into a release. A consumer dev'ing PormG at HEAD
 and `PormG.upgrade_guide` surfaces them by default. When the maintainer next rolls changes into a
 consuming app, `/pormg-cut-release` stamps every entry below with `0.6.0`, dates them, and tags it._
 
+## The `"<cte>__<col>"` string is back, and a CTE name that shadows a model field is now an error (#492)
+
+- **Version**: Unreleased
+- **PormG ref**: #492 (partially reverses #444 — its namespace split stays, only the *spelling*
+  changes; #431/#434 stay fixed, by a loud guard instead of by construction);
+  `src/querybuilder/ctes.jl`, `src/querybuilder/build_query.jl`, `src/querybuilder/build_joins.jl`,
+  `src/exceptions.jl`, `docs/src/read/subqueries_and_ctes.md`, `docs/src/read/custom_joins.md`,
+  `docs/src/schema_conventions.md`
+- **Recorded**: 2026-09-06
+- **Severity**: **behavior change** — additive for almost every app. It forces an edit in exactly one
+  shape: a `.with()` label that both (a) also names a model field, reverse accessor, many-to-many
+  field or `cjoin`/`on()` join path, **and** (b) is referenced somewhere as a `"<label>__…"` string.
+  Declaring such a label breaks nothing on its own — the gate fires on the reference. Part of the
+  `0.6.x` pre-publish wave.
+
+### What changed
+
+#444 deleted the `"<cte>__col"` spelling outright and made `CTE(name, path)` the only way to reach a
+CTE column. #492 restores the string as the **default** and keeps #444's namespace split. What #444
+actually removed was first-match-wins **precedence** — the CTE registry being consulted ahead of the
+model's own fields — and removing the precedence never required removing the string. It required
+refusing to *answer* an ambiguous name instead of guessing at it.
+
+```julia
+# Both spellings work now, and render byte-identical SQL sharing one join:
+q.values("points", "best" => "fast__milliseconds")
+q.values("points", "best" => CTE("fast", "milliseconds"))
+
+# `order_by` gets its `-` back, so DESC has ONE dialect again rather than two:
+q.order_by("-fast__milliseconds")          # was: order_by(CTE("fast", "milliseconds"; desc = true))
+
+# and `Sum("fast__milliseconds")` works where `Sum(CTE("fast", "milliseconds"))` was required.
+```
+
+`CTE(name, path)` is unchanged and nothing is deleted. It becomes the **disambiguator** rather than
+the only spelling, and it is still required on the **right** of a filter pair, where a bare string is
+a value and not a column (`filter("raceid" => CTE("r91", "raceid"))`).
+
+**The one shape that breaks.** When a `.with()` label equals something on the model, the shared `__`
+path has two readings and raises the new `AmbiguousFieldError`:
+
+```julia
+q.with("driverid" => driver_totals)      # "driverid" is ALSO a ForeignKey of Result
+q.values("points", "driverid__surname")  # → AmbiguousFieldError, where #444 resolved it to the FK
+```
+
+`AmbiguousFieldError <: FieldAccessError <: PormGError`, so an app already catching either umbrella
+catches it with no edit; only a handler matching `UnknownFieldError` specifically will miss it, which
+is deliberate — the name is known *twice*, not unknown, and the remedy is different.
+
+A CTE name that collides with **nothing** changes no field path at all, and a colliding label that is
+only ever referenced through `CTE(...)` — never as a `"<label>__…"` string — also keeps working: the
+gate fires on the string, not on the declaration.
+
+### How to find the calls to migrate
+
+```bash
+# Every CTE declaration. Check each label against its model's field names, reverse accessors,
+# many-to-many fields and cjoin/on() join paths — only a collision needs anything.
+grep -rn "\.with(" --include="*.jl" .
+```
+
+### Migrate your app
+
+```julia
+# ✗ BEFORE (#444) — the string meant the ForeignKey, and the CTE needed the handle. Both worked.
+q.with("driverid" => driver_totals)
+q.values("points", "driverid__surname", "n" => CTE("driverid", "n"))
+
+# ✓ AFTER — rename the CTE. While the name is taken there is no string that selects the MODEL side,
+#   so renaming is the remedy the error message prints; the CTE side then has both spellings back.
+q.with("totals" => driver_totals)
+q.values("points", "driverid__surname", "n" => "totals__n")
+```
+
+---
+
 ## `migrate()` on a changed foreign key now needs `destructive = true` (#498)
 
 - **Version**: Unreleased
@@ -477,7 +554,8 @@ q.on("owner", "sku" => "S", join_type = "LEFT")
 
 ```julia
 # CROSS: there is one supported cross product, and it is a CTE you REFERENCE.
-# (Declaring it alone emits no join at all since #444 - you would get N rows, not N x M.)
+# (Declaring it alone emits no join at all since #444 - you would get N rows, not N x M.
+#  Since #492 either spelling references it: "all_drivers__surname" or CTE("all_drivers","surname").)
 q.with("all_drivers" => M.Driver.objects.values("driverid", "surname"))   # unkeyed
 q.values("points", "who" => CTE("all_drivers", "surname"))                # this is what joins it
 
@@ -603,8 +681,9 @@ q.cjoin_on("Driver", alias = "d", on = [F("d.driverid") == F("driverid")])
 q.filter("points__@gt" => 10)
 
 # ✓ AFTER — if the cross product was genuinely intended, say so. NOTE the reference: since #444 a
-#   CTE is joined only when a `CTE(name, col)` handle is used, so `.with(...)` on its own emits no
-#   join at all and you would get N rows instead of N×M.
+#   CTE is joined only when one of its COLUMNS is referenced, so `.with(...)` on its own emits no
+#   join at all and you would get N rows instead of N×M. Since #492 the reference may be written
+#   either way — `"all_drivers__surname"` or the handle below.
 q.with("all_drivers" => M.Driver.objects.values("driverid", "surname"))   # unkeyed => CROSS JOIN
 q.values("points", "who" => CTE("all_drivers", "surname"))                # <- this is what joins it
 q.filter("points__@gt" => 10)
@@ -843,6 +922,12 @@ the old name was never addressable.
 ---
 
 ## CTE columns are referenced with `CTE(name, path)`, not with a `"<cte>__col"` string (#444)
+
+> **Partially reversed by #492 — see *The `"<cte>__<col>"` string is back* in the current wave.**
+> The namespace split below stands, and #431/#434 stay fixed. Only the *spelling* changed back: the
+> `"<cte>__col"` string resolves again, and `CTE(name, path)` is now the disambiguator rather than
+> the only form. Upgrading across both entries at once, you can skip the rewrite this one asks for —
+> except where a `.with()` label collides with a model field, which #492 turns into a hard error.
 
 - **Version**: 0.5.0
 - **PormG ref**: #444 (supersedes #431, #434); `src/querybuilder/types.jl`,

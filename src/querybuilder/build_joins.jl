@@ -417,8 +417,14 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       instruct.object.model.fields[first_column], first_column, String.(vector[2:end]), field)
   end
 
-  # #444: a CTE is reached ONLY through `CTE(name, path)`, which sets `cte=true`. It is no longer
+  # #444: a CTE is reached here ONLY through `CTE(name, path)`, which sets `cte=true`. It is not
   # discovered by testing `haskey(instruct.object.ctes, vector[1])` on a plain field path.
+  #
+  # #492 restored the `"<cte>__<col>"` string spelling, and that does NOT re-open this test: the
+  # string is resolved into a `CTEReference` upstream, by `_resolve_cte_string_paths!` (`ctes.jl`),
+  # which runs once in `build()` when the registry is final. So both spellings arrive here as a
+  # handle, and this branch keeps exactly one entry condition. What #444 removed and #492 kept
+  # removed is the PRECEDENCE described below — not the string.
   #
   # That test WAS this branch's condition, and it sat ahead of the many-to-many, forward-FK and
   # reverse-relation arms below — so for any first segment naming both a CTE and something on the
@@ -639,19 +645,27 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
   else
     @pormg_debug false
-    # #444 migration diagnostic. `"ev__sku"` used to resolve to the CTE `ev`; it now resolves as a
-    # field path and lands here. This is a THROW, not a resolution — the string spelling is gone, not
-    # aliased — but the generic "column not found" below would send the reader looking for a missing
-    # model field rather than at the spelling that changed.
+    # #492: a CTE-rooted string reaches this branch only when the resolution pass did not walk it.
+    # The gate does NOT live here, deliberately — `_resolve_cte_string_paths!` (`ctes.jl`) owns it,
+    # because a decision made here has only a `Vector{String}` to work with and cannot retag the
+    # caller's `SQLField`; leaving `root` at `:base` while the join builder keys `:cte` is a silent
+    # memo miss that costs the sargable date rewrite and the JSON branch. Do not "simplify" the gate
+    # back into this cascade. See the pass's own header for the four failure modes.
+    #
+    # What survives here is the SCOPE message. A `__` path names a CTE column wherever a column path
+    # is accepted — `values()`, `filter()` keys, `order_by()`, function arguments — but `F(...)` is
+    # not one of those: `FExpression`'s slots do not admit `SQLTypeCTE`, a widening #444 declined and
+    # #492 did not revisit. Without this the reader gets "column not found" and goes looking for a
+    # model field that was never the point.
     if haskey(instruct.object.ctes, vector[1])
       rest = length(vector) > 1 ? join(vector[2:end], "__") : "column"
       throw(UnknownFieldError(
         "\e[4m\e[31m$(join(vector, "__"))\e[0m is not a field path on " *
         "\e[4m\e[32m$(instruct.object.model.name)\e[0m, and \e[4m\e[31m$(vector[1])\e[0m is a CTE " *
-        "declared on this query.\n  Since #444 a CTE column has its own namespace and is referenced " *
-        "with \e[4m\e[32mCTE(\"$(vector[1])\", \"$(rest)\")\e[0m, not with a " *
-        "\e[4m\e[31m\"$(vector[1])__$(rest)\"\e[0m path — that spelling now means the model's own " *
-        "\e[4m\e[31m$(vector[1])\e[0m field, which does not exist here."))
+        "declared on this query.\n  A \e[4m\e[32m__\e[0m path reaches a CTE column in " *
+        "\e[4m\e[32mvalues(...)\e[0m, \e[4m\e[32mfilter(...)\e[0m keys, " *
+        "\e[4m\e[32morder_by(...)\e[0m and function arguments — but not here.\n  " *
+        "Write \e[4m\e[32mCTE(\"$(vector[1])\", \"$(rest)\")\e[0m instead (#492)."))
     end
     # #446: through the shared funnel. This site built the same sentence by hand with UNSORTED field
     # names and a slightly different tail, so a user saw one format when they typo'd the first path

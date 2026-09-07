@@ -48,9 +48,12 @@ pre-existing and neither was caused by #404:
     `on_clause_extras`, so a predicate that landed there was silently dropped and the join stopped
     filtering. A CROSS-joined CTE acquires one when its NAME collides with a join key (a `cjoin`
     path, a `cjoin_on` alias, or an `on()` path) or when Phase 1b relocates a fragment naming its
-    alias. **#444 removed the relocation route** — a `__` string can no longer name a CTE and a
-    `CTE(...)` handle is refused inside every join clause, including as an `F` comparison operand —
-    so this file pins three producers where it once pinned four. The testset carries the arithmetic.
+    alias. **#444 removed the relocation route** — a predicate could no longer NAME a CTE, since a
+    `CTE(...)` handle is refused inside every join clause, including as an `F` comparison operand.
+    **#492 restored the `__` string spelling and left that route closed**: a CTE-rooted string is
+    refused in `on()` / `cjoin()` / `cjoin_on()` as well, at build time
+    (`_refuse_cte_string_in_join`), so the producer count is unchanged — this file pins three where
+    it once pinned four. The testset carries the arithmetic.
 
 All assertions render through mock PostgreSQL/SQLite connections — no live database. The execution
 half (the query actually returning rows on both backends) lives in
@@ -488,7 +491,9 @@ end
 # The arithmetic, because it has been re-derived wrongly twice in this file already:
 #
 #   A  went with #444 — a predicate could no longer NAME a CTE, which closed the Phase-1b
-#      relocation route.
+#      relocation route. #492 restored the `__` string spelling wherever a COLUMN path is accepted,
+#      but deliberately not here: a CTE-rooted string inside `on()` / `cjoin()` / `cjoin_on()` is
+#      refused at build time, so A stays closed and this arithmetic is unchanged.
 #   B, C, D  were the three NAME-COLLISION routes: a `.with()` label equal to a `cjoin` path, a
 #      `cjoin_on` alias, or an `on()` path. All three reached the guard because `_build_row_join`'s
 #      shared tail looked a CTE hop up in `custom_join` UNDER THE CTE'S OWN NAME and claimed that

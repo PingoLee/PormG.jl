@@ -169,14 +169,20 @@ _ran_parent() = begin c = RAN.Ran_parent.objects; c.values("id", "sku");  c end
       # `on()` decorates a join something else materializes, so here it decorates the ForeignKey's
       # join — NOT the CTE's. Pre-fix the CTE inherited `on()`'s join_type and its predicate was
       # rewritten onto a second, mis-correlated join with the value bound twice.
+      #
+      # #492: the CTE is `pcte` here, not `parent`. Reaching the ForeignKey needs the string path
+      # `"parent__sku"`, and a CTE that shadows the FK's name now makes that path a hard error — so
+      # the two could not appear in one query. What this case is about (on() decorates the FK's
+      # join, the CTE keeps its own join_type) is unchanged by the rename; the shadowed spelling is
+      # covered by its own refusal case below.
       q4 = RAN.Ran_child.objects
-      q4.with("parent" => _ran_grand(), join_field = "parent" => "id", join_type = "INNER")
+      q4.with("pcte" => _ran_grand(), join_field = "parent" => "id", join_type = "INNER")
       q4.on("parent", "sku" => "S")
-      q4.values("note", "parent__sku", "cte_code" => CTE("parent", "code"))
+      q4.values("note", "parent__sku", "cte_code" => CTE("pcte", "code"))
       insp4 = inspect_query(q4; connection = conn)
       sql4 = insp4[:sql_text]
 
-      @test occursin("INNER JOIN \"parent\" AS", sql4)                       # the CTE keeps INNER
+      @test occursin("INNER JOIN \"pcte\" AS", sql4)                         # the CTE keeps INNER
       @test occursin("\"product_sku\" = ", sql4)                             # on()'s predicate landed
       @test count("JOIN", sql4) == 2                                          # no phantom third join
       # The value is bound ONCE. Pre-fix the rewritten predicate materialized a second join and the
@@ -193,13 +199,13 @@ end
 # first claimed the entry, and every later reader got it. Reachable with no `custom_join` at all,
 # which is why #447's guard never covered it.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "a CTE column and a like-named field path keep separate memo entries (#474)" begin
+@testset "a handle and a like-named field path keep separate memo entries (#474/#481)" begin
   for (backend, conn) in (("PostgreSQL", _RAN_PG), ("SQLite", _RAN_SL))
     @testset "$backend" begin
 
       # The control first, so the expected column name is established by something that cannot be
-      # affected by a CTE: with no CTE in the query, `parent__sku` is the ForeignKey's physical
-      # `product_sku`.
+      # affected by a handle: with no CTE and no alias in the query, `parent__sku` is the
+      # ForeignKey's physical `product_sku`.
       ctrl = RAN.Ran_child.objects
       ctrl.values("note", "parent__sku")
       ctrl.filter("parent__sku" => "S")
@@ -207,44 +213,68 @@ end
       @test occursin("\"product_sku\" = ", ctrl_sql)
       @test !occursin("\"sku\" = ", ctrl_sql)
 
-      # ── the measured defect: CTE projected first, field path filtered after ──
-      # On origin/main this rendered `WHERE "R1_1"."sku" = ?` — the CTE's projection alias — while
-      # the ForeignKey's join sat in the statement unused. Both spellings claim `"parent__sku"`.
+      # ── the shape the memo namespace exists for, in the `:joined` half ────
+      #
+      # #492 moved this proof one namespace over, and the reason is worth stating: the original was
+      # `CTE("parent","sku")` projected alongside a `"parent__sku"` FILTER, both spelling
+      # `"parent__sku"` as their memo name. That query is now REFUSED (a CTE may not shadow a model
+      # field for the string spelling), so the `:cte`-vs-`:base` collision is unrepresentable and
+      # cannot be tested — the refusal case below is what replaces it.
+      #
+      # A `cjoin_on` ALIAS is different: #484 gave it its own namespace reachable only through
+      # `Joined(alias, path)`, so a `__` string can never mean an alias and there is nothing for
+      # #492 to refuse. The collision therefore stays live here, and it is the SAME defect — two
+      # expressions whose `_as` is byte-identical, discriminated only by the namespace half of the
+      # `MemoKey`. Whichever rendered first used to claim the entry for both.
+      q = RAN.Ran_child.objects
+      q.cjoin_on("Ran_parent", alias = "parent", on = [Joined("parent", "id") == F("parent")])
+      q.values("note", "j" => Joined("parent", "sku"))
+      q.filter("parent__sku" => "S")
+      sql = _ran_sql(q; conn = conn)
+
+      # The FILTER must name the ForeignKey's own join, exactly as the control does...
+      @test occursin("\"product_sku\" = ", sql)
+      # ...and the PROJECTION must come from the aliased copy `parent`. Asserting only the first
+      # half would pass for a fix that simply stopped the alias from caching at all.
+      @test occursin("\"parent\".\"product_sku\" as \"j\"", sql)
+      @test occursin("JOIN \"ran_parent\" AS \"parent\"", sql)   # the aliased copy
+      @test count("JOIN", sql) == 2                                  # and the ForeignKey's own
+
+      # ── the mirror: field path first, handle after ────────────────────────
+      # Pinned so the fix cannot be "swap which one wins", which moves the bug rather than removes it.
+      q2 = RAN.Ran_child.objects
+      q2.cjoin_on("Ran_parent", alias = "parent", on = [Joined("parent", "id") == F("parent")])
+      q2.values("note", "parent__sku")
+      q2.filter(Joined("parent", "sku") => "S")
+      sql2 = _ran_sql(q2; conn = conn)
+      @test occursin("\"product_sku\" as \"parent__sku\"", sql2)   # projection = the ForeignKey
+      @test occursin("\"parent\".\"product_sku\" = ", sql2)        # filter = the aliased copy
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #492: the `:cte`-vs-`:base` collision this file was written for is now REFUSED, not resolved
+# The memo namespace still exists and is still load-bearing — `test_joined_reference.jl` proves the
+# `:cte`/`:joined` half with two handles, and the testset above proves `:joined`/`:base`. What
+# changed is that a CTE may no longer shadow a MODEL name for the string spelling, so the original
+# reproduction is unrepresentable rather than merely fixed. Pinning the refusal keeps the shape
+# under test instead of letting it vanish from the file that owns it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#492: a CTE shadowing a ForeignKey refuses the shared string path" begin
+  for (backend, conn) in (("PostgreSQL", _RAN_PG), ("SQLite", _RAN_SL))
+    err = try
       q = RAN.Ran_child.objects
       q.with("parent" => _ran_parent(), join_field = "parent" => "id")
       q.values("note", "c" => CTE("parent", "sku"))
       q.filter("parent__sku" => "S")
-      sql = _ran_sql(q; conn = conn)
-
-      # The FILTER must name the ForeignKey's physical column, exactly as the control does.
-      @test occursin("\"product_sku\" = ", sql)
-      # ...and the PROJECTION must still name the CTE's alias. Asserting only the first half would
-      # pass for a fix that simply stopped the CTE from caching at all.
-      @test occursin("\"sku\" as \"c\"", sql)
-      @test occursin("JOIN \"parent\" AS", sql)          # the CTE is joined
-      @test occursin("JOIN \"ran_parent\" AS", sql)      # so is the ForeignKey
-
-      # ── the mirror: field path first, CTE reference after ─────────────────
-      # This ordering was CORRECT on main — the field path claimed the memo first. It is pinned so
-      # the fix cannot be "swap which one wins", which would move the bug rather than remove it.
-      q2 = RAN.Ran_child.objects
-      q2.with("parent" => _ran_parent(), join_field = "parent" => "id")
-      q2.values("note", "parent__sku")
-      q2.filter(CTE("parent", "sku") => "S")
-      sql2 = _ran_sql(q2; conn = conn)
-      @test occursin("\"product_sku\" as \"parent__sku\"", sql2)   # projection = the ForeignKey
-      @test occursin("\"sku\" = ", sql2)                            # filter = the CTE's alias
-
-      # ── order_by reads the same memo ──────────────────────────────────────
-      q3 = RAN.Ran_child.objects
-      q3.with("parent" => _ran_parent(), join_field = "parent" => "id")
-      q3.values("note", "c" => CTE("parent", "sku"))
-      q3.order_by("parent__sku")
-      sql3 = _ran_sql(q3; conn = conn)
-      @test occursin("ORDER BY", sql3)
-      # The ordered column is the ForeignKey's, not the CTE's projection alias.
-      @test occursin("product_sku", split(sql3, "ORDER BY")[2])
-    end
+      _ran_sql(q; conn = conn)
+      nothing
+    catch e; e end
+    @test err isa PormG.AmbiguousFieldError
+    msg = _ran_no_ansi(err.msg)
+    @test occursin("CTE(\"parent\", \"sku\")", msg)
+    @test occursin("#492", msg)
   end
 end
 
@@ -438,24 +468,25 @@ end
   @test occursin("INNER JOIN \"gj\" AS", sql)
   @test occursin("\"payload\" ? ", sql)
 
-  # ...and the mirror, which is the one that would have been SILENT. TWO things make it
-  # discriminate, and BOTH are required — a version of this test missing either passes on
-  # `origin/main` and proves nothing:
+  # ...and the mirror, which is the one that would have been SILENT. It needed TWO things, and #492
+  # removed the first:
   #
-  #   1. the CTE is named `grand`, the SAME as the ForeignKey field, so both namespaces produce the
-  #      memo name `"grand__payload"`. Name it anything else and the strings differ, so even a
-  #      shared keyspace resolves each correctly;
-  #   2. the CTE's `payload` is a DIFFERENT TYPE from the ForeignKey target's — `_ran_char_payload()`
-  #      projects the CharField `code` under that alias, while `Ran_grand.payload` is the JSONField.
-  #      With both JSON, an un-namespaced reader returns a JSONField either way and validation passes
-  #      either way.
+  #   1. the CTE named `grand`, the SAME as the ForeignKey field, so both namespaces produce the
+  #      memo name `"grand__payload"`. That combination is now a hard error the moment a `__` string
+  #      names the shadowed path, so the ORDERING half — FK path claims the memo, CTE reads it back
+  #      — is unrepresentable and is asserted as a refusal below rather than as a render;
+  #   2. the CTE's `payload` being a DIFFERENT TYPE from the ForeignKey target's —
+  #      `_ran_char_payload()` projects the CharField `code` under that alias, while
+  #      `Ran_grand.payload` is the JSONField. That half survives, and it is what still proves the
+  #      operator is validated against the column the CALLER named rather than a same-named one.
   #
-  # Measured on `origin/main` with both in place: this renders `WHERE "R1_1"."payload" ? $1` against
-  # the FOREIGN KEY's join, while the CTE named `grand` is declared and never joined — the `?` JSONB
-  # operator licensed by the other namespace's field.
+  # Measured on `origin/main` with BOTH in place — that is, on the shape `q3` below now builds, not
+  # on `q2`: it rendered `WHERE "R1_1"."payload" ? $1` against the FOREIGN KEY's join, while the CTE
+  # named `grand` was declared and never joined — the `?` JSONB operator licensed by the other
+  # namespace's field. `q2` keeps only half of it and is now a #474 guard (the operator validated
+  # against the CTE's own text column); `q3` carries the ordering half, as a refusal.
   q2 = RAN.Ran_child.objects
   q2.with("grand" => _ran_char_payload(), join_field = "grand" => "id", join_type = "INNER")
-  q2.values("note", "fk" => "grand__payload")     # the FK path claims `grand__payload` first
   err = try
     q2.filter(CTE("grand", "payload__@has_key") => "driver")
     _ran_sql(q2; conn = _RAN_PG)
@@ -463,10 +494,26 @@ end
   catch e
     e
   end
-  # Refused, because the CTE's OWN `payload` is text — which is the whole point: the operator is now
-  # validated against the column the caller named, not the one that happened to claim the memo.
+  # Refused, because the CTE's OWN `payload` is text — the operator is validated against the column
+  # the caller named. Note the CTE still SHADOWS a ForeignKey here: that is legal on its own, and
+  # only becomes an error when a `__` string tries to select the shadowed path.
   @test err isa PormG.FilterError
   @test occursin("is not JSON", _ran_no_ansi(sprint(showerror, err)))
+
+  # The ordering half, as far as it can now be taken: adding the FK's string path to the SAME query
+  # is what #492 refuses, and the refusal must arrive before any JSON validation can misfire.
+  q3 = RAN.Ran_child.objects
+  q3.with("grand" => _ran_char_payload(), join_field = "grand" => "id", join_type = "INNER")
+  q3.values("note", "fk" => "grand__payload")
+  err3 = try
+    q3.filter(CTE("grand", "payload__@has_key") => "driver")
+    _ran_sql(q3; conn = _RAN_PG)
+    nothing
+  catch e
+    e
+  end
+  @test err3 isa PormG.AmbiguousFieldError
+  @test occursin("#492", _ran_no_ansi(err3.msg))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

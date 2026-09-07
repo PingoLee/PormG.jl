@@ -319,7 +319,7 @@ This documentation is organized into the following sections:
 |  [Custom Joins](read/custom_joins.md) | `.cjoin()` for runtime join conditions and `.on()` for ON-clause predicates. |
 |  [Filters and Aggregates](read/filters_and_aggregates.md) | Lookup operators, grouping, and `HAVING`. |
 |  [Functions and Dates](read/functions_and_dates.md) | SQL functions and date-oriented querying. |
-|  [Subqueries and CTEs](read/subqueries_and_ctes.md) | `IN` subqueries, `.with(...)` CTEs, and the `CTE(name, path)` column reference. |
+|  [Subqueries and CTEs](read/subqueries_and_ctes.md) | `IN` subqueries, `.with(...)` CTEs, and their `"<cte>__<column>"` columns. |
 |  [Field Expressions](read/field_expressions.md) | `F()` expressions, column arithmetic, aggregate ratios. |
 |  [Q Objects](read/q_objects.md) | Complex boolean logic with `Q`, `Qor`, and `NOT`. |
 | [Import from Django](import_django.md) | Migrating models and data from Django projects. |

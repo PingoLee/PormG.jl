@@ -588,30 +588,88 @@ const SPEC_CORPUS = [
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Decision 6: classified non-schema, but never silent
-  # `on_update` / `deferrable` / `initially_deferred` are declared API no renderer emits, so they
-  # cannot be a schema delta — before #507 a declared `deferrable = true` churned an empty ALTER on
-  # PostgreSQL and a full rebuild on SQLite, forever. Dropping a declared intent WITHOUT a report is
-  # the shape #501 just closed in the importer, so the compiler says so once.
+  # Decision 6, as #516 settled it: the three unrendered options are GONE
+  # `on_update` / `deferrable` / `initially_deferred` were declared API no renderer emitted. #507
+  # classified them non-schema and warned once, to stop a declared `deferrable = true` churning an
+  # empty ALTER on PostgreSQL and a full rebuild on SQLite forever. #516 removed the keywords
+  # instead, so there is no slot left to classify and nothing left to warn about — the declaration
+  # is refused at construction. Refused rather than ignored on purpose: `Model_to_str` files reload
+  # through the same kwargs form, so the `@warn "Unexpected parameter"` arm would have loaded an old
+  # generated file as a quietly different model (the #501 silent-drop shape).
   # ─────────────────────────────────────────────────────────────────────────────
-  @testset "unrendered foreign-key options converge, and are reported" begin
-    plain = Models.ForeignKey("Races", on_delete = "CASCADE")
-    deferred = Models.ForeignKey("Races", on_delete = "CASCADE", deferrable = true)
+  @testset "the unrendered foreign-key options are refused, not classified" begin
+    # No slot survives, on either relational struct — the drift guard elsewhere in this file asserts
+    # every slot is classified, so a leftover slot would fail there rather than here.
+    for T in (Models.sForeignKey, Models.sOneToOneField)
+      for attr in (:on_update, :deferrable, :initially_deferred)
+        @test !(attr in fieldnames(T))
+      end
+    end
 
+    # Nothing to classify means nothing on either list.
     for attr in (:on_update, :deferrable, :initially_deferred)
-      @test attr in NON_DB_ATTRS
+      @test !(attr in NON_DB_ATTRS)
+      @test !(attr in SCHEMA_ATTRS)
     end
 
-    # They converge: no churn.
+    # Declaring one is a hard error on both constructors, not a dropped kwarg.
+    for ctor in (Models.ForeignKey, Models.OneToOneField)
+      @test_throws PormG.FieldValidationError ctor("Races", on_delete = "CASCADE", on_update = "CASCADE")
+      @test_throws PormG.FieldValidationError ctor("Races", on_delete = "CASCADE", deferrable = true)
+      @test_throws PormG.FieldValidationError ctor("Races", on_delete = "CASCADE", initially_deferred = true)
+    end
+
+    # The MESSAGE is the whole migration story of a breaking change, so pin it rather than only the
+    # type — a regression that truncated it to one word would otherwise stay green. Both keywords are
+    # named in one message: fixing a field that declares two should take one edit, not two re-runs.
+    both = try
+      Models.ForeignKey("Races", on_delete = "CASCADE", deferrable = true, on_update = "CASCADE")
+      nothing
+    catch e
+      e
+    end
+    @test both isa PormG.FieldValidationError
+    msg = sprint(showerror, both)
+    @test occursin("removed in #516", msg)
+    # Split, not `&&`: a failure has to say WHICH keyword the message stopped naming. Together these
+    # discriminate a regression to first-match-only reporting, which would name `on_update` alone.
+    @test occursin("`on_update`", msg)
+    @test occursin("`deferrable`", msg)
+    @test occursin("UPGRADING.md", msg)
+    # It tells the user the two things they need: the edit is a deletion that changes no schema, and
+    # a generated file is regenerated rather than hand-patched. The first is matched loosely on
+    # purpose — the CLAIM is load-bearing, the exact wording is not, so a reword should not redden a
+    # suite when no behavior moved. `generate_models_from_db` is pinned tightly because it is an API
+    # name: if it were renamed, this message would be wrong and a red test is the correct outcome.
+    @test occursin(r"byte-identical|forces no migration", msg)
+    @test occursin("generate_models_from_db", msg)
+
+    # The refusal is scoped to the two constructors that accepted them. A non-relational field keeps
+    # the pre-existing "unexpected parameter" warning — #516 argued for removing three FK keywords,
+    # not for turning every stray kwarg on every field into an error.
+    @test_logs (:warn, r"Unexpected parameter") match_mode = :any Models.CharField(
+      max_length = 10, deferrable = true)
+
+    # A plain foreign key still compiles to the constraint it always did: the removal took API
+    # surface, not behavior. Asserted on the spec's CONTENT — comparing two identically-constructed
+    # fields to each other would only prove `column_spec` is deterministic.
+    plain = Models.ForeignKey("Races", on_delete = "CASCADE")
     for conn in (PG507, SL507)
-      @test column_spec(plain, conn) == column_spec(deferred, conn)
-      @test isempty(column_delta(plain, deferred, conn; name = "race_id"))
+      spec = column_spec(plain, conn; name = "race_id")
+      @test spec.reference isa ForeignKeyRef
+      # A DECLARED field carries the target binding, not a physical table — `to_table` is the
+      # introspection-only breadcrumb (#360) and is absent here, which is what `table === nothing`
+      # records. Getting these two backwards is the whole reason this asserts by name.
+      #
+      # Lowercase `"races"` against a declared `ForeignKey("Races")` is CORRECT, not a typo: the
+      # binding is normalized to the table-name spelling the compiler compares on. Left unexplained,
+      # this is the kind of line a future reader "fixes" into a failure.
+      @test spec.reference.binding == "races"
+      @test spec.reference.table === nothing
+      @test spec.reference.column == "id"
+      # `ON DELETE` is the one referential action PormG renders, and it survives the removal.
+      @test spec.reference.on_delete == "CASCADE"
     end
-
-    # And the declaration is reported rather than dropped in silence. `maxlog` means the warning is
-    # once per session, so this asserts the message exists rather than counting occurrences.
-    @test_logs (:warn, r"does not render") match_mode = :any column_spec(
-      Models.ForeignKey("Races", on_delete = "CASCADE", initially_deferred = true), PG507)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

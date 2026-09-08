@@ -26,11 +26,11 @@
 # branch renders nothing, and `_fk_constraint_action` below renders it as DROP + ADD CONSTRAINT off
 # the same slot. A filter someone has to remember became an absence that cannot be forgotten.
 #
-# `on_update`, `deferrable` and `initially_deferred` are not on this path at all: `add_foreign_key`
-# renders no `ON UPDATE` clause and hardcodes `DEFERRABLE INITIALLY DEFERRED`, so nothing emits them
-# and they cannot be a schema delta. They are classified in `NON_DB_ATTRS` (column_spec.jl), which
-# reports a declared non-default value once rather than letting it churn an empty ALTER — a full
-# table rebuild on SQLite — on every run. Rendering them (or refusing them at declaration) is #516.
+# `on_update`, `deferrable` and `initially_deferred` are not on this path, and since #516 they do not
+# exist: `add_foreign_key` renders no `ON UPDATE` clause and hardcodes `DEFERRABLE INITIALLY
+# DEFERRED`, so nothing ever emitted them and neither reader read them back. #507 classified them
+# non-schema to stop them churning an empty ALTER — a full table rebuild on SQLite — on every run;
+# #516 removed the keywords instead, so `_common_kwargs` now refuses them at declaration time.
 
 # #437 / #507: `_diffs_attribute_wise` lived here — the predicate that decided whether two field
 # structs shared an attribute vocabulary and could be diffed attribute by attribute. It is gone with

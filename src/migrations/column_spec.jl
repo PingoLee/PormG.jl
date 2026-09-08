@@ -61,20 +61,16 @@ Field attributes no DDL path expresses, so a difference in one can never be a co
   * `auto_now`, `auto_now_add`, `auto_add`, `auto_hash` — PormG computes these in Julia on write.
     None is a column DEFAULT and none is a trigger, so introspection always reads them back as the
     constructor default no matter what was declared (#325, #334).
-  * `on_update`, `deferrable`, `initially_deferred` — declared API that **no renderer emits**:
-    `Dialect.add_foreign_key` writes no `ON UPDATE` clause and hardcodes
-    `DEFERRABLE INITIALLY DEFERRED`, and neither reader reads them back. They therefore cannot be a
-    schema delta. Before #507 a declared `deferrable = true` churned forever — an empty `ALTER` plus
-    a permanent "not implemented" warning on PostgreSQL, a full table rebuild on SQLite. Silence here
-    is the lesser evil, not the right answer: **#516** tracks rendering them or rejecting them at
-    declaration time, and removes the warning below when it lands.
   * `through`, `db_table`, `source_field`, `target_field` — `sManyToManyField` only, which is not a
     physical column at all (`column_spec` refuses it).
+
+`on_update`, `deferrable` and `initially_deferred` were on this list from #507 until **#516** removed
+the three keywords outright. There is no slot left to classify — they are gone from `sForeignKey` and
+`sOneToOneField`, and `_common_kwargs` refuses them at declaration time instead.
 """
 const NON_DB_ATTRS = (:blank, :choices, :db_index, :editable, :verbose_name, :related_name,
                       :how, :formatter,
                       :auto_now, :auto_now_add, :auto_add, :auto_hash,
-                      :on_update, :deferrable, :initially_deferred,
                       :through, :db_table, :source_field, :target_field)
 
 """
@@ -287,31 +283,6 @@ function _column_reference(field::PormGField)::Union{Nothing, ForeignKeyRef}
                        Models._foreign_key_on_delete_sql(field.on_delete))
 end
 
-# Decision 6 of #507, and the reason it is not silent. These three slots are declared API that no
-# renderer emits: `Dialect.add_foreign_key` writes no `ON UPDATE` clause and hardcodes
-# `DEFERRABLE INITIALLY DEFERRED` regardless of what was declared, and SQLite's rebuild renders no
-# deferrability clause at all. Classifying them as non-schema stops them churning a plan forever —
-# but dropping a declared intent WITHOUT a report is the exact shape #501 just closed in the
-# importer, so the classification says it out loud instead. Tracked by #516.
-#
-# Only a NON-DEFAULT value warns. The introspected side always carries the constructor defaults
-# (`on_update = nothing`, `deferrable = false`, `initially_deferred = false`) because neither reader
-# reads these back, so this can only ever fire for something a models file actually declared.
-# `maxlog` keeps a wide schema from emitting one line per foreign key.
-function _warn_unrendered_fk_options(field::PormGField, name::AbstractString)
-  field isa Models.sRelationalColumn || return nothing
-  declared = Symbol[]
-  field.on_update === nothing || push!(declared, :on_update)
-  field.deferrable && push!(declared, :deferrable)
-  field.initially_deferred && push!(declared, :initially_deferred)
-  isempty(declared) && return nothing
-  @warn "Foreign-key options declared that PormG does not render; they cannot appear in a migration " *
-        "plan and are ignored by the schema diff. Every constraint is emitted DEFERRABLE INITIALLY " *
-        "DEFERRED on PostgreSQL and with no deferrability clause on SQLite, and no ON UPDATE clause " *
-        "is rendered on either." declared column=(name === "" ? "<unnamed>" : name) maxlog = 1
-  return nothing
-end
-
 """
     column_spec(field::PormGField, conn; name = "") -> ColumnSpec
 
@@ -330,7 +301,6 @@ function column_spec(field::PormGField, conn::Union{PormGPostgres, PormGSQLite};
   Models.is_many_to_many_field(field) &&
     throw(InvalidMigrationError("a ManyToManyField declares a join table, not a column, so it has " *
                                 "no ColumnSpec (field: $(name === "" ? "<unnamed>" : name))"))
-  _warn_unrendered_fk_options(field, name)
   raw = _render_column_type(field, conn)
   return ColumnSpec(Models.field_db_column(field, String(name)),
                     parse_canonical_type(raw, conn),

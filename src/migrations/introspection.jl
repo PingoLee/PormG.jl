@@ -555,10 +555,19 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
   # Extract any foreign key constraints
   foreign_key_matches = eachmatch(r"FOREIGN KEY\(\"(\w+)\"\) REFERENCES \"(\w+)\"\(\"(\w+)\"\)(?: ON DELETE (CASCADE|SET NULL|NO ACTION|RESTRICT|SET DEFAULT))?(?: ON UPDATE (CASCADE|SET NULL|NO ACTION|RESTRICT|SET DEFAULT))?(?: DEFERRABLE INITIALLY (DEFERRED|IMMEDIATE))?", sql)
   for match in foreign_key_matches
-    column_name, fk_table, fk_column, on_delete, on_update, on_deferable = match.captures
+    # #516 removed the `on_update` / `deferrable` keywords, so the last two groups have no reader:
+    # threading them into `fk_map` would reconstruct a field the constructor now refuses, and
+    # `Model_to_str` would write them into a generated file that cannot be loaded back.
+    #
+    # The groups stay in the PATTERN, but not because the match needs them — the regex is unanchored,
+    # so a trimmed pattern matches the same DDL and yields a byte-identical `fk_map` (measured, both
+    # forms, against a constraint carrying both clauses). They are kept so the pattern still documents
+    # the full constraint grammar SQLite stores, and so re-capturing them is a one-line change if
+    # deferrability ever becomes a rendered feature.
+    column_name, fk_table, fk_column, on_delete, _, _ = match.captures
     # println(match.captures)
     # typeof(column_name |> String) |> println
-    fk_map[column_name |> String] = Dict("column_name" => column_name, "fk_table" => fk_table, "fk_column" => fk_column, "on_delete" => on_delete, "on_update" => on_update, "on_deferable" => on_deferable)
+    fk_map[column_name |> String] = Dict("column_name" => column_name, "fk_table" => fk_table, "fk_column" => fk_column, "on_delete" => on_delete)
   end
 
   
@@ -621,7 +630,7 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
       fk_parent_table = fk_map[column_name]["fk_table"] |> string
       field_instance = Models.ForeignKey(Models._model_binding_name(fk_parent_table); pk_field=fk_map[column_name]["fk_column"] |> string,
       on_delete=_normalize_introspected_on_delete(fk_map[column_name]["on_delete"]),
-      on_update=fk_map[column_name]["on_update"], deferrable=!(fk_map[column_name]["on_deferable"] === nothing), null=(nullable === nothing),
+      null=(nullable === nothing),
       default=_fk_default_or_warn(normalized_default, table_name, column_name))
       field_instance.to_table = fk_parent_table
     else

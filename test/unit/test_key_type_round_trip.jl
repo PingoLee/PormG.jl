@@ -205,10 +205,21 @@ end
                 bio       = Models.CharField(max_length = 80))
 
     # THE assertion #409 asks for: declared == live, so the planner proposes nothing.
-    @test Models.are_model_fields_equal(natural, by["natural_key"])
-    @test Models.are_model_fields_equal(profile, by["profile_t"])
+    #
+    # #507 phase 2 retired `Models.are_model_fields_equal` (the whole-model early-out), so this
+    # asserts convergence the way the planner now decides it — every column compiles to the same
+    # `ColumnSpec` on both sides, and an empty delta per column IS the "nothing to plan" answer.
+    # Strictly stronger than the old form: the comparator could only say "the models differ
+    # somewhere", while this names the column and the facet when it fails.
+    converged(declared, live, conn) = all(
+      isempty(PormG.Migrations.column_delta(f, live.fields[k], conn; name = string(k)).changed)
+      for (k, f) in declared.fields)
+    @test Set(keys(natural.fields)) == Set(keys(by["natural_key"].fields))
+    @test converged(natural, by["natural_key"], pool)
+    @test Set(keys(profile.fields)) == Set(keys(by["profile_t"].fields))
+    @test converged(profile, by["profile_t"], pool)
     # The plain integer key is the control — it converged before this change and must still.
-    @test Models.are_model_fields_equal(parent, by["parent_t"])
+    @test converged(parent, by["parent_t"], pool)
     finally
       # Windows will not remove the temp dir while the file handle is open, so `mktempdir` prints a
       # cleanup error and leaks the directory. `test_ignore_tables_registry.jl` — the pattern this
@@ -356,14 +367,19 @@ end
   @test plain_sl isa Models.sForeignKey && !(plain_sl isa Models.sOneToOneField)
   @test !plain_pg.unique && !plain_sl.unique
 
-  # Convergence, which is what #417 is FOR. A model declaring the ordinary Django shape must reach
-  # the planner's first branch — `typeof(old_field) == typeof(field)`, the attribute-wise compare —
-  # on BOTH engines. Before this fix that branch failed on SQLite, the `describes_same_column`
-  # fallback answered `false` (it refuses any field carrying a `.to`), and `:type` was pushed.
+  # Convergence, which is what #417 is FOR. A model declaring the ordinary Django shape must compare
+  # equal to what each reader reconstructs, on BOTH engines. Before this fix the planner's
+  # attribute-wise branch failed on SQLite, the `describes_same_column` fallback answered `false`
+  # (it refused any field carrying a `.to`), and `:type` was pushed — a full table rebuild for a
+  # column nobody had changed.
+  #
+  # Asserted through the column IR since #507: `Models._compare_model_field` is gone, and the
+  # question "is this the same physical column?" now has exactly one answer. The struct-identity
+  # assertion above it stays as the reader-level claim it always was.
   declared = Models.OneToOneField("O2o_parent_t", pk_field = "id", on_delete = Models.CASCADE)
   @test typeof(declared) === typeof(pg_field) === typeof(sl_field)
-  @test Models._compare_model_field(declared, pg_field)
-  @test Models._compare_model_field(declared, sl_field)
+  @test isempty(PormG.Migrations.column_delta(declared, pg_field, MockPgKey(); name = "parent_id").changed)
+  @test isempty(PormG.Migrations.column_delta(declared, sl_field, MockSlKey(); name = "parent_id").changed)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

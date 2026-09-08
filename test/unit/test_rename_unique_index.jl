@@ -214,20 +214,39 @@ end
   end
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 2. The control that stops the fix from being a blanket "never drop anything". A PLAIN
-  #    `CREATE INDEX` column is still found, still dropped, and still re-created against the new
-  #    name — which is the whole reason `_drop_index` is on the rename path. Index names carry a
-  #    `randstring(8)` suffix nothing can re-derive, so an index left behind keeps a name embedding
-  #    the OLD column forever.
+  # 2. What a rename does to a plain `CREATE INDEX` column — RE-ADJUDICATED BY #507 phase 2.
   #
-  #    A CONTROL, not a regression gate: it passes against the unfixed lookup too, and that is the
-  #    point — it is what would catch the fix over-reaching. Stated because the reason it passes both
-  #    ways is easy to get wrong. `PRAGMA index_list` returns explicit indexes ahead of
-  #    `sqlite_autoindex_…`, so the old unfiltered walk happened to pick the plain index here anyway;
-  #    the column is `unique = true` AND `db_index = true` precisely so both indexes coexist and an
-  #    over-eager filter would show up as the plain one going missing.
+  #    This testset used to require that the index be found, DROPPED, and RE-CREATED against the new
+  #    name, on the stated grounds that index names carry a `randstring(8)` suffix nothing can
+  #    re-derive, so an index left behind keeps a name embedding the OLD column forever.
+  #
+  #    Phase 2 removed the `_drop_index` call from the rename path (decision 5: an empty column
+  #    delta means RENAME COLUMN and nothing else), so the drop-and-recreate is gone. That was a
+  #    deliberate call by the maintainer, and the reasoning is not "the old test was wrong" — it is
+  #    that the exchange bought a cosmetic name at a real price:
+  #
+  #      * `ALTER TABLE … RENAME COLUMN` updates a column's indexes on BOTH engines, so the index
+  #        was never actually lost. Only its NAME went stale. Django behaves the same way (a
+  #        renamed field keeps its auto-named index), so this is also the less surprising answer for
+  #        someone arriving from there.
+  #      * DROP + CREATE INDEX rebuilds the index from scratch — on a large table, minutes of work
+  #        to change a name nothing reads.
+  #      * And it was the mechanism of #515: `get_constraints_index` answered with the index BACKING
+  #        a UNIQUE constraint, which the drop then destroyed. That is fixed where the answer is
+  #        produced, but a path that drops no index cannot re-open it at all.
+  #
+  #    So the assertions below now pin the CURRENT contract, and they pin it BY EXECUTION — the plan
+  #    is applied to a real SQLite file and the surviving index is interrogated afterwards. The one
+  #    thing that would be a genuine regression, the UNIQUE constraint disappearing, is asserted
+  #    exactly as before.
+  #
+  #    STATED LIMIT, and the reason the stale name is acceptable rather than merely tolerated: the
+  #    index still covers the renamed column, so introspection reads `db_index = true` and the model
+  #    converges. The only visible residue is the name. A rename that ALSO flips `db_index` is
+  #    planned one run later, when the column appears on both sides of the diff — self-healing, and
+  #    tracked in the phase-3 follow-up.
   # ───────────────────────────────────────────────────────────────────────────
-  @testset "SQLite: a plain db_index is still found, dropped and re-created" begin
+  @testset "SQLite: a rename leaves a plain db_index alone (it follows the column)" begin
     mktempdir() do dir
       pool = SQLiteConnectionPool(joinpath(dir, "ruq515idx.sqlite"); pool_size = 1)
       try
@@ -249,20 +268,27 @@ end
                      note = Models.CharField(max_length = 40))
         plan = _ruq_plan(pool, livem, declared; interactive = true)
 
-        @test "Remove index on old_code" in _ruq_steps(plan, :child_t)
-        @test occursin("child_t_old_code_ruq00001_idx",
-                       _ruq_step(plan, :child_t, "Remove index on old_code"))
-        @test "Create index on new_code" in _ruq_steps(plan, :child_t)
+        # The rename plans the rename, and nothing about the index in either direction.
+        @test "Rename field: new_code" in _ruq_steps(plan, :child_t)
+        @test !("Remove index on old_code" in _ruq_steps(plan, :child_t))
+        @test !("Create index on new_code" in _ruq_steps(plan, :child_t))
 
         _ruq_apply!(pool, plan, :child_t)
 
         names = string.((fetch(pool, """PRAGMA index_list("child_t")""") |> DataFrame).name)
-        # The stale-named index is gone…
-        @test !("child_t_old_code_ruq00001_idx" in names)
-        # …a fresh plain one covers the renamed column…
+        # The index SURVIVES the rename, under its original name…
+        @test "child_t_old_code_ruq00001_idx" in names
+        # …and it covers the renamed column, which is the part that matters: SQLite rewrote the
+        # index definition when the column was renamed, so the lookup by COLUMN still finds it and
+        # introspection will read `db_index = true` back for `new_code`. Proven by execution here,
+        # not asserted from the plan text.
         plain = get_constraints_index(pool, :child_t, "new_code")
-        @test plain !== nothing
-        @test occursin("new_code", plain)
+        @test plain == "child_t_old_code_ruq00001_idx"
+        idx_cols = string.((fetch(pool, """SELECT name FROM pragma_index_info('child_t_old_code_ruq00001_idx')""") |> DataFrame).name)
+        @test idx_cols == ["new_code"]
+        # The stale NAME is the whole cost of not re-creating it, and it is named so that anyone
+        # tempted to "fix" it has to weigh a full index rebuild against a cosmetic string.
+        @test !occursin("new_code", plain)
         # …and the UNIQUE constraint came through the whole exchange untouched.
         dup_err = try
           fetch(pool, """INSERT INTO "child_t" ("id", "new_code", "note") VALUES (2, 'X', 'dup')""")

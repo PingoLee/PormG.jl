@@ -29,6 +29,24 @@ using PormG
         @test parentmodule(PormG._levenshtein) === PormG.Kernel
         @test parentmodule(PormG._suggest_name) === PormG.Kernel
 
+        # The canonical column IR (#507 phase 2). These are here for a reason that is *live* rather
+        # than tidy: `Dialect.alter_field` takes a `ColumnDelta` and decides which ALTER fragments to
+        # emit from it, and `Dialect` is include step 10 while `Migrations` — which compiles a
+        # `PormGField` into a `ColumnSpec` — is step 11. Phase 1 sited these types in `Migrations`
+        # under an explicitly stated condition ("`Dialect` does not render from it in phase 1"), and
+        # phase 2 is what broke that condition. Move them back and `Dialect` cannot name them: the
+        # #239 failure verbatim, and it fails at precompile time with an `UndefVarError`.
+        #
+        # The COMPILER deliberately stays at layer 3 — it calls `Dialect._get_column_type` and
+        # `Models._fk_reference_table` — which is the split this file exists to keep honest: Kernel
+        # holds the nouns, the submodules keep the verbs.
+        @test parentmodule(PormG.ColumnSpec) === PormG.Kernel
+        @test parentmodule(PormG.ColumnDelta) === PormG.Kernel
+        @test parentmodule(PormG.CanonicalType) === PormG.Kernel
+        @test parentmodule(PormG.ForeignKeyRef) === PormG.Kernel
+        @test parentmodule(PormG._fk_targets_equal) === PormG.Kernel
+        @test parentmodule(PormG.Migrations.column_spec) === PormG.Migrations
+
         # Kernel must not reach back into PormG — that is what makes it safe to include first.
         # `using PormG` inside Kernel would create the cycle this design removes.
         @test !isdefined(PormG.Kernel, :PormG)

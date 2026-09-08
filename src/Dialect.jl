@@ -12,6 +12,12 @@ import PormG: backend_sqlite_version  # SQLite library-version probe (driver bod
 import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError
 import PormG.ConnectionPool: fetch
 import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
+# The canonical column IR (#507). `alter_field` renders an ALTER from a `ColumnDelta`, which is why
+# these types live in `Kernel` (layer 1) rather than in `Migrations` — this module is included
+# BEFORE it, and a submodule resolves `import PormG: …` at include time. `_has_non_negative` and
+# `_byte_bound` are underscore-private, hence named explicitly.
+import PormG: ColumnDelta, LiteralDefault, ExpressionDefault
+import PormG: _has_non_negative, _byte_bound
 import PormG: get_constraints_pk, get_constraints_unique, get_constraints_check, get_constraints_byte_length_check
 import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column, format_timezone_sql, model_table_name, fk_target_table
 # `_foreign_key_on_delete_sql` lives in `Models` since #498 — see the note where it used to be defined.
@@ -821,8 +827,11 @@ end
 
 # `_foreign_key_on_delete_sql` moved to `Models` (#498) and is imported at the top of this module, so
 # `Dialect._foreign_key_on_delete_sql` still resolves for every existing caller. It had to move: it is
-# also the CANONICAL COMPARISON of two `on_delete` values, and `Models._compare_model_field` — which is
-# included BEFORE this module — needs it. See `Models._fk_on_delete_equal`.
+# also the CANONICAL COMPARISON of two `on_delete` values, and a module included BEFORE this one
+# needs it: `Models._fk_on_delete_equal`, in the file it moved to. `Models._compare_model_field` was
+# the caller that established that until #507 phase 2 retired it. (`Migrations.column_spec` renders
+# through it too, but `Migrations` is included AFTER this module, so that use would not by itself
+# require the move.)
 
 function create_table(conn::PormGPostgres, model::PormGModel)
   columns::Vector{String} = []
@@ -961,7 +970,24 @@ end
 #   return add_foreign_key(model.name, model.name, constraint_name, field_name, ref_model.name, ref_field_name)
 # end
 
-function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, colect_not_equal::Vector{Symbol})::String # TODO add old_field
+# ONE FRAGMENT PER CHANGED SLOT (#507 phase 2).
+#
+# `delta` is the whole input to every decision below: which statements are emitted comes from
+# `delta.changed`, and which DIRECTION each takes (SET vs DROP NOT NULL, ADD vs DROP a CHECK,
+# add-an-identity vs drop-one) comes from `delta.new_spec` / `delta.old_spec`. The fields are still
+# read — but only to render TEXT a spec does not carry: a column type, a USING cast expression, a
+# decimal precision. Reading a field to re-decide whether to emit something is the regression this
+# change exists to prevent; #498, #504, #514 and #515 were four action sites doing exactly that.
+#
+# There is no allowlist and no "not implemented" warning any more. `delta.changed` is a subset of
+# `COLUMN_DELTA_SLOTS` (validated by `ColumnDelta`'s constructor), so an unrenderable symbol cannot
+# arrive; what used to be a runtime warning is now a closed type plus a test that walks the slot set
+# and asserts each one reaches a branch here. `:reference` is the one slot with no branch, and needs
+# none: a FOREIGN KEY is not part of a column ALTER on PostgreSQL, so `Migrations` plans it as DROP +
+# ADD CONSTRAINT off the same slot. An empty `delta` — or one carrying only `:reference` — therefore
+# returns `""`, which `_configure_order_dict_migration_plan` drops from the plan entirely. That is
+# what the `_FK_IDENTITY_ATTRS` filter used to arrange by hand, one call site at a time.
+function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, delta::ColumnDelta)::String
   # Resolve to the physical column (db_column when set) so every ALTER targets the real
   # column even when called with the field-name key (e.g. the temporary-default cleanup in
   # _add_new_field). Idempotent when callers already pass the physical column (#50).
@@ -976,6 +1002,26 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   # silently do nothing, and `makemigrations` would re-propose the same no-op on every run.
   raw_table_name = string(table_name)
   table_name = _quote_table_ddl(raw_table_name)
+
+  # THE COLUMN THE CATALOG KNOWS, which is not always the column being altered.
+  #
+  # Four statements below name a constraint they can only learn by ASKING the catalog — the two CHECK
+  # drops, the UNIQUE drop and the PRIMARY KEY drop — because those names are the database's, not
+  # PormG's. At plan time nothing has executed yet, so on a RENAME the catalog still knows the column
+  # by its PRE-rename name while `field_name` above is already the post-rename one. Asking for the
+  # new name returns `nothing`, and each of those statements then silently does not get emitted.
+  #
+  # That is not hypothetical and it is not merely a missing statement: #507 phase 2 made a rename
+  # carry its column change, so a renamed `PositiveIntegerField` becoming a `TextField` emitted
+  # `ALTER COLUMN … TYPE text` with the stale `>= 0` CHECK still in place — which PostgreSQL rejects,
+  # for the reason the DROP-before-TYPE comment above states. Found in review, reproduced, and fixed
+  # by reading the fact off the delta: `old_spec.name` IS the live column, because
+  # `Migrations.column_delta` compiles the old side with `old_name`.
+  #
+  # The fallback covers a hand-built delta with unnamed specs (several unit tests construct one to
+  # aim at a single branch); for every planner-built delta the spec name is always set.
+  live_column = isempty(delta.old_spec.name) ? string(field_name) : delta.old_spec.name
+
   sql_statements = []
 
   # Non-negative CHECK constraint diffing on a type transition (Django-style).
@@ -984,10 +1030,19 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   # field we add or drop that CHECK so it tracks the model rather than only the original
   # CREATE TABLE. The DROP must precede the TYPE change (an incompatible cast would
   # otherwise be blocked by the stale `>= 0` clause); the ADD must follow it.
-  new_needs_check = _requires_non_negative_check(new_field)
-  old_needs_check = old_field !== nothing && _requires_non_negative_check(old_field)
-  if :type in colect_not_equal && old_needs_check && !new_needs_check
-    constraint = get_constraints_check(conn, raw_table_name, string(field_name))
+  #
+  # Read off the SPECS, not off the fields. `_has_non_negative` asks the same question
+  # `_requires_non_negative_check` does — `column_spec` built the spec's `checks` with that very
+  # predicate — but asking the delta is what keeps this function from holding a second opinion. It
+  # also narrows the trigger correctly: the gate is now `:checks`, so a transition that changes the
+  # CHECK without changing the column TYPE no longer drags a redundant `ALTER … TYPE` along with it
+  # (on PostgreSQL `IntegerField` and `PositiveIntegerField` both render `integer`, so that pair is
+  # a checks-only delta — see the golden-plan corpus, which carries the before and after).
+  checks_changed = :checks in delta
+  new_needs_check = _has_non_negative(delta.new_spec)
+  old_needs_check = _has_non_negative(delta.old_spec)
+  if checks_changed && old_needs_check && !new_needs_check
+    constraint = get_constraints_check(conn, raw_table_name, live_column)
     constraint !== nothing && push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(_quote_table_ddl(constraint))";""")
   end
 
@@ -996,24 +1051,30 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   # replaced when `max_length` merely CHANGES (4 → 8) with no type transition at all. Hence the
   # trigger is `:type` *or* `:max_length`, and the DROP fires whenever an old bound existed and the
   # new one differs, rather than only on the bounded → unbounded edge.
-  new_byte_bound = _requires_byte_length_check(new_field) ? new_field.max_length : nothing
-  old_byte_bound = (old_field !== nothing && _requires_byte_length_check(old_field)) ? old_field.max_length : nothing
-  byte_bound_changed = any(attr -> attr in colect_not_equal, [:type, :max_length]) && new_byte_bound != old_byte_bound
+  #
+  # `_byte_bound` carries the bound the CHECK enforces, so both halves of this decision come from
+  # the delta. The old `[:type, :max_length]` trigger is exactly `:checks`: a bound that changes
+  # changes `ByteLengthCheck`, and nothing else can.
+  new_byte_bound = _byte_bound(delta.new_spec)
+  old_byte_bound = _byte_bound(delta.old_spec)
+  byte_bound_changed = checks_changed && new_byte_bound != old_byte_bound
   if byte_bound_changed && old_byte_bound !== nothing
-    constraint = get_constraints_byte_length_check(conn, raw_table_name, string(field_name))
+    constraint = get_constraints_byte_length_check(conn, raw_table_name, live_column)
     constraint !== nothing && push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(_quote_table_ddl(constraint))";""")
   end
 
   # DROP IDENTITY comes BEFORE the type change, and that ordering is load-bearing.
   #
-  # `new_is_identity` is read through `hasproperty`, NOT as `new_field.generated`: only `sIDField`
-  # carries that slot, and the diff legitimately reports an identity difference for a pair whose
-  # DECLARED side is any other field type. Introspection force-converts every non-UUID primary key
-  # to `IDField` (see the table in `migrations/importers.jl`), so a models file declaring a
-  # `UUIDField` or a natural `CharField` key over a live identity column is an ordinary, reachable
-  # state — and a bare field access there is a `FieldError` that kills the whole `makemigrations`,
-  # not a caught comparison failure (#507). An absent slot means "the declared column is not an
-  # identity", which is exactly what this DROP renders.
+  # `new_is_identity` is the SPEC's answer, and that is now the only way to get it right. Only
+  # `sIDField` carries a `generated` slot, and the diff legitimately reports an identity difference
+  # for a pair whose DECLARED side is any other field type: introspection force-converts every
+  # non-UUID primary key to `IDField` (see the table in `migrations/importers.jl`), so a models file
+  # declaring a `UUIDField` or a natural `CharField` key over a live identity column is an ordinary,
+  # reachable state. Phase 1 shipped a `hasproperty(new_field, :generated)` guard here after a bare
+  # field access turned out to be a `FieldError` that killed the whole `makemigrations` rather than a
+  # caught comparison failure; `delta.new_spec.identity === nothing` says the same thing without the
+  # guard, because `_column_identity` already asked the engine-appropriate question when it compiled
+  # the spec — PostgreSQL reads `generated`, SQLite reads the renderer's `sIDField && primary_key`.
   #
   # PostgreSQL restricts an identity column to smallint / integer / bigint and enforces it DURING
   # `ALTER COLUMN … TYPE`, so retyping a live identity column to `uuid` or `varchar(n)` fails with
@@ -1027,14 +1088,21 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   # Same shape as the two CHECK drops above, which precede the type change for the same class of
   # reason. (drizzle-kit shipped and fixed this exact ordering bug —
   # drizzle-team/drizzle-orm#4178.)
-  identity_changing = :generated in colect_not_equal || :generated_always in colect_not_equal
-  new_is_identity = hasproperty(new_field, :generated) && getfield(new_field, :generated)::Bool
+  identity_changing = :identity in delta
+  new_is_identity = delta.new_spec.identity !== nothing
   if identity_changing && !new_is_identity
     push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" DROP IDENTITY;""")
   end
 
-  # Alter column type
-  if any(attr -> attr in colect_not_equal, [:type, :max_length, :max_digits, :decimal_places])
+  # Alter column type.
+  #
+  # ONE gate where there were four. `:type` covers everything the old
+  # `[:type, :max_length, :max_digits, :decimal_places]` list did — a `CVarChar` whose length moved,
+  # a `CDecimal` whose precision or scale moved, and an outright change of `CanonicalType` are all a
+  # difference in `ColumnSpec.type`, because the spec's type is parsed from the RENDERED column. The
+  # statements below still read the field for their text: the spec says *that* the type changed, not
+  # how PostgreSQL should be told to change it.
+  if :type in delta
     if new_field isa sCharField
       max_length = hasproperty(new_field, :max_length) ? new_field.max_length : 255
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE VARCHAR($max_length);""")
@@ -1055,13 +1123,12 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
       cast_expression = _postgres_interval_cast_expression(field_name, old_field)
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE INTERVAL USING $cast_expression;""")
     elseif new_field isa sBinaryField
-      # Only emit the TYPE change when the type actually moved. `max_length` alone lands in this
-      # block too (it is in the trigger list above), and a redundant `TYPE bytea USING …` would
-      # rewrite the whole table for nothing.
-      if :type in colect_not_equal
-        cast_expression = _postgres_bytea_cast_expression(field_name, old_field)
-        push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE bytea USING $cast_expression;""")
-      end
+      # The inner `if :type in colect_not_equal` this used to carry is gone, and nothing replaced it:
+      # a `BinaryField` whose `max_length` alone moved is a `:checks` delta, not a `:type` one, so it
+      # never enters this branch at all. Same outcome — no redundant `TYPE bytea USING …` rewriting
+      # the whole table for nothing — reached by the slot being right rather than by a second guard.
+      cast_expression = _postgres_bytea_cast_expression(field_name, old_field)
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE bytea USING $cast_expression;""")
     else
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE $(_get_column_type(new_field, conn));""")
     end
@@ -1069,7 +1136,7 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
 
   # Add the non-negative CHECK after the type change when the column became a positive
   # integer field (see the DROP counterpart above for the rationale and ordering).
-  if :type in colect_not_equal && new_needs_check && !old_needs_check
+  if checks_changed && new_needs_check && !old_needs_check
     push!(sql_statements, """ALTER TABLE "$table_name" ADD $(_non_negative_check_clause(field_name));""")
   end
 
@@ -1078,9 +1145,11 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
     push!(sql_statements, """ALTER TABLE "$table_name" ADD $(_byte_length_check_clause(field_name, new_byte_bound, conn));""")
   end
 
-  # Set NOT NULL if specified
-  if :null in colect_not_equal
-    if !new_field.null
+  # Set NOT NULL if specified. The spec's `nullable` IS `field.null` — `column_spec` copies it — so
+  # reading it here is not a longer way to say the same thing: it is the difference between an action
+  # that reads the delta and one that re-reads the struct the delta was built from.
+  if :nullable in delta
+    if !delta.new_spec.nullable
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" SET NOT NULL;""")
     else
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" DROP NOT NULL;""")
@@ -1088,33 +1157,47 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   end
 
   # Set unique if specified
-  if :unique in colect_not_equal
-    if new_field.unique
+  if :unique in delta
+    if delta.new_spec.unique
       push!(sql_statements, """ALTER TABLE "$table_name" ADD UNIQUE ("$(_quote_table_ddl(field_name))");""")
     else
-      contrains = get_constraints_unique(conn, raw_table_name, string(field_name))
+      contrains = get_constraints_unique(conn, raw_table_name, live_column)
       if contrains !== nothing
         push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(_quote_table_ddl(contrains))";""")
       end
     end
   end
 
-  # Set default value if specified
-  if :default in colect_not_equal
-    if new_field.default !== nothing
-      default_value = _format_default_sql_value(new_field.default, conn)
+  # Set default value if specified. The delta's `ColumnDefault` is a three-way classification (#475),
+  # so this branches on the variant rather than on `!== nothing`:
+  #
+  #   * `LiteralDefault` — a value PormG renders, exactly as before (`_format_default_sql_value` on
+  #     `.value`, which IS `field.default`).
+  #   * `ExpressionDefault` — a database-side expression, emitted verbatim. `column_spec` cannot
+  #     produce one yet: no `PormGField` has a slot that spells it, and introspection drops an
+  #     expression default it cannot represent (#472/#475). #496 is the change that makes it
+  #     reachable, and the branch is here so that #496 is a pure addition to the compiler rather
+  #     than a re-shaping of the renderer. It is covered by a unit test that hands `alter_field` a
+  #     hand-built delta, because nothing else can reach it.
+  #   * `NoDefault` — DROP.
+  if :default in delta
+    new_default = delta.new_spec.default
+    if new_default isa LiteralDefault
+      default_value = _format_default_sql_value(new_default.value, conn)
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" SET DEFAULT $default_value;""")
+    elseif new_default isa ExpressionDefault
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" SET DEFAULT $(new_default.sql);""")
     else
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" DROP DEFAULT;""")
     end
   end
 
   # Set primary key if specified
-  if :primary_key in colect_not_equal
-    if new_field.primary_key
+  if :primary_key in delta
+    if delta.new_spec.primary_key
       push!(sql_statements, """ALTER TABLE "$table_name" ADD PRIMARY KEY ("$(_quote_table_ddl(field_name))");""")
     else
-      contrains = get_constraints_pk(conn, raw_table_name, string(field_name))
+      contrains = get_constraints_pk(conn, raw_table_name, live_column)
       if contrains !== nothing
         push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(_quote_table_ddl(contrains))";""")
       end
@@ -1129,31 +1212,31 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   # identity survived, and the same ALTER was re-proposed forever — while the bare TYPE change it
   # did emit could not have succeeded against a non-integer target anyway.
   if identity_changing && new_is_identity
-    if hasproperty(new_field, :generated_always) && getfield(new_field, :generated_always)::Bool
+    if delta.new_spec.identity.always
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" ADD GENERATED ALWAYS AS IDENTITY;""")
     else
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" ADD GENERATED BY DEFAULT AS IDENTITY;""")
     end
   end
 
-  # Warn for any requested attribute this function emits no SQL for. Every entry below has a
-  # statement branch above it; `:blank`, `:auto_now` and `:auto_now_add` used to be listed here with
-  # none, which silenced the warning for three attributes that genuinely could not be applied. They
-  # are now filtered upstream by `Migrations.NON_DB_ATTRS` (#507) — they alter no schema at all —
-  # so if one reaches this point it IS an unhandled request and deserves the warning (#325).
+  # No `IMPLEMENTED` allowlist and no "are not implemented in alter_field" warning: #507 phase 2
+  # deleted both, because there is nothing left for them to catch. That warning existed while this
+  # function received an OPEN vocabulary of field-attribute symbols and had to say so when handed one
+  # it could not render — and it was load-bearing twice (#325 for `:blank`-class attributes, #498 for
+  # a re-pointed foreign key that planned nothing at all). Both causes are gone by construction:
   #
-  # There is a SECOND upstream filter with a different meaning: `planner._FK_IDENTITY_ATTRS` (#498).
-  # Those attributes DO alter the schema — they are the foreign-key constraint — but no column ALTER
-  # can say them, so the planner expresses them as DROP + ADD CONSTRAINT and keeps them out of the
-  # vector this function receives. Do NOT "fix" that by adding `:to` / `:pk_field` / `:on_delete` to
-  # IMPLEMENTED below: this function would then silently accept an attribute it renders nothing for,
-  # which is precisely the failure #498 was — a re-pointed foreign key that planned no DDL at all and
-  # reported it as a warning that never went away.
-  IMPLEMENTED::Vector{Symbol} = [:type, :max_length, :max_digits, :decimal_places, :null, :unique, :default, :primary_key, :generated, :generated_always]
-  if any(attr -> !(attr in IMPLEMENTED), colect_not_equal)
-    not_in = [attr for attr in colect_not_equal if !(attr in IMPLEMENTED)]
-    @warn "The attributes $(not_in) are not implemented in alter_field function ($(table_name).$(field_name))"
-  end
+  #   * the vocabulary is CLOSED — `ColumnDelta` validates every facet against `COLUMN_DELTA_SLOTS`,
+  #     so an unknown symbol cannot reach here (it raises at the delta, naming the closed set);
+  #   * the two upstream FILTERS it warned around are gone with it. `NON_DB_ATTRS` still keeps
+  #     model-layer attributes out of the IR, and `:reference` — the `_FK_IDENTITY_ATTRS` case —
+  #     needs no filter at all, because a slot with no branch here simply renders nothing while
+  #     `Migrations._fk_constraint_action` renders it as DROP + ADD CONSTRAINT.
+  #
+  # What replaces the warning is a test, not a promise: `test_plan_actions_golden.jl` walks
+  # `COLUMN_DELTA_SLOTS` and asserts each slot either reaches a statement here or is the documented
+  # `:reference` exception. A list inside a test was the old guard's shape too — and it passed while
+  # this function raised, because `:generated` was ON the list and membership is not a branch. The
+  # new one calls `alter_field` for every slot and reads the SQL.
   return join(sql_statements, "\n")
 end
 
@@ -1237,11 +1320,39 @@ function drop_field(conn::PormGSQLite, table_name::Union{String,Symbol}, field_n
   return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP COLUMN "$(_quote_table_ddl(field_name))";"""
 end
 
-function alter_field(conn::PormGPostgres, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, colect_not_equal::Vector{Symbol})
-  return alter_field(conn, model_table_name(model), field_name, new_field, old_field, colect_not_equal)
+function alter_field(conn::PormGPostgres, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, delta::ColumnDelta)
+  return alter_field(conn, model_table_name(model), field_name, new_field, old_field, delta)
 end
 
-function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, colect_not_equal::Vector{Symbol})
+# SQLite alters a column by rebuilding the whole table from the DESIRED model, so it reads none of
+# the arguments that describe the change: not the field pair, not the delta. It keeps them because
+# the planner calls one `alter_field` for both engines. The signature is the only thing #507 phase 2
+# changed here.
+#
+# `rebuild_table` below is that body, reachable on its own — see the note there for why the planner
+# needs both spellings.
+function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, delta::ColumnDelta)
+  return rebuild_table(conn, model)
+end
+
+"""
+    rebuild_table(conn::PormGSQLite, model) -> String
+
+Re-create `model`'s table from the model itself: `CREATE TABLE … _new`, copy every column across,
+drop the original, rename the copy into place.
+
+This is how SQLite performs *any* schema change to an existing column, and it is what
+`alter_field(::PormGSQLite, …)` returns. It is exposed separately because one planner call site is a
+rebuild with **no column diff at all** — a field DELETION, where the table is re-created precisely
+because the desired model no longer has that column. That site used to call `alter_field` with an
+empty `Vector{Symbol}` and, in its own comment, "a representative deleted field … only to satisfy
+the shared signature". Handing it a fabricated empty `ColumnDelta` instead would have been worse
+than the old wart rather than better: since #507 phase 2 an empty delta means "this column did not
+change, plan nothing", which is the opposite of what that call site is asking for.
+
+The emitted SQL is identical either way — this function IS the body `alter_field` used to hold.
+"""
+function rebuild_table(conn::PormGSQLite, model::PormGModel)
   # SQLite implementation using table recreation.
   # Escaped ONCE here (#59) — this function interpolates the name into five statements below, and
   # `new_table_name` is derived from it. A no-op for every name without an embedded quote.

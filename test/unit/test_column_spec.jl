@@ -1,5 +1,5 @@
 """
-The canonical column IR (#507 phase 1) — `Migrations.column_spec` and the diff that runs on it.
+The canonical column IR (#507) — `Migrations.column_spec` and the diff that runs on it.
 
 `makemigrations` used to decide "did this column change?" by comparing two `PormGField` structs, one
 of which introspection had RECONSTRUCTED from the live schema through a type map that returns one
@@ -12,6 +12,14 @@ to the same spec, and two that render different columns do not.** That is what m
 lossiness stop mattering, and it is true by construction rather than by a lookup table someone has to
 maintain, because `column_spec` renders through `Dialect._get_column_type` — the same function the
 DDL path uses.
+
+WHAT PHASE 2 CHANGED HERE. The compiler and its guards are unchanged; what moved is the SHAPE of
+the answer. Phase 1 handed the typed facets to an `alter_attrs` adapter that translated them back
+into the field-attribute symbols the plan actions consumed, and several testsets pinned that
+translation. Phase 2 deleted the adapter — every action reads the facets — so those testsets now pin
+the facet vocabulary itself. The IR value types also moved to `Kernel` (`src/column_ir.jl`), because
+`Dialect.alter_field` renders from a `ColumnDelta` and is included before `Migrations`; the compiler
+stayed here, where `Models` and `Dialect` are reachable.
 
 Fully hermetic. `PormGPostgres`/`PormGSQLite` are abstract markers (src/Kernel.jl) and both the
 renderer and the compiler dispatch on them alone, so a bare marker struct is a sufficient `conn` for
@@ -31,9 +39,12 @@ using PormG.Migrations: ColumnSpec, ForeignKeyRef, ColumnIdentity,
                         NonNegativeCheck, ByteLengthCheck,
                         CInt16, CInt32, CInt64, CFloat64, CDecimal, CBool, CText, CVarChar,
                         CDate, CDateTime, CTime, CInterval, CUUID, CJSON, CBytes, CUnsupported,
-                        column_spec, column_delta, alter_attrs, column_attrs_changed,
+                        column_spec, column_delta,
                         parse_canonical_type, reference_delta,
                         NON_DB_ATTRS, SCHEMA_ATTRS
+# The delta's own vocabulary, and the table it is derived from — Kernel-owned since #507 phase 2,
+# because `Dialect.alter_field` renders from a `ColumnDelta` and is included before `Migrations`.
+import PormG: ColumnDelta, COLUMN_DELTA_SLOTS, COLUMN_DELTA_COMPARATORS
 using InteractiveUtils: subtypes
 using Logging
 
@@ -102,7 +113,7 @@ const SPEC_CORPUS = [
   Models.OneToOneField("Races"),
 ]
 
-@testset "Canonical column IR (#507 phase 1)" begin
+@testset "Canonical column IR (#507)" begin
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Compiler totality: every field kind compiles on both engines
@@ -213,12 +224,12 @@ const SPEC_CORPUS = [
 
     # SQLite reads that column back as sIntegerField (BIGINT and INTEGER are one word here) …
     @test column_spec(declared, SL507) == column_spec(Models.IntegerField(), SL507)
-    @test isempty(column_attrs_changed(declared, Models.IntegerField(), SL507; name = "test_id"))
+    @test isempty(column_delta(declared, Models.IntegerField(), SL507; name = "test_id"))
 
     # … and PostgreSQL reads it back as sBigIntegerField. Both converge, which is what #503 asked
     # for ("the escape recognises whatever both readers actually produce").
     @test column_spec(declared, PG507) == column_spec(Models.BigIntegerField(), PG507)
-    @test isempty(column_attrs_changed(declared, Models.BigIntegerField(), PG507; name = "test_id"))
+    @test isempty(column_delta(declared, Models.BigIntegerField(), PG507; name = "test_id"))
 
     # THE REASON, pinned so a future change cannot keep the verdict while losing the mechanism:
     # `db_constraint = false` means no CONSTRAINT exists, so the IR carries no reference at all.
@@ -229,7 +240,7 @@ const SPEC_CORPUS = [
     # db_constraint back on and the constraint is a difference again.
     constrained = Models.ForeignKey("Migrationtest", on_delete = "CASCADE")
     @test column_spec(constrained, SL507) != column_spec(Models.IntegerField(), SL507)
-    @test :to in column_attrs_changed(constrained, Models.IntegerField(), SL507; name = "test_id")
+    @test :reference in column_delta(constrained, Models.IntegerField(), SL507; name = "test_id").changed
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -252,11 +263,14 @@ const SPEC_CORPUS = [
                                                 Models.SlugField(max_length = len))]
         @test allequal(specs)
       end
-      # Different lengths are a real change, and it is reported as `:max_length` rather than `:type`.
+      # Different lengths are a real change, reported as `:type` — the IR's type IS the rendered
+      # column, so `CVarChar(40)` and `CVarChar(250)` are different types. (Phase 1 reported the
+      # narrow `:max_length` here, to keep `alter_field`'s old field-attribute gate firing; phase 2
+      # deleted that adapter and the renderer gates on `:type` for every width and precision.)
       @test column_spec(Models.CharField(max_length = 40), conn) !=
             column_spec(Models.CharField(max_length = 250), conn)
-      @test column_attrs_changed(Models.URLField(max_length = 250), Models.CharField(max_length = 40),
-                                 conn; name = "url") == [:max_length]
+      @test column_delta(Models.URLField(max_length = 250), Models.CharField(max_length = 40),
+                         conn; name = "url").changed == [:type]
     end
   end
 
@@ -331,95 +345,120 @@ const SPEC_CORPUS = [
     # …and a genuine action change is still a change (#498).
     cascade = Models.ForeignKey("Races", on_delete = "CASCADE")
     setnull = Models.ForeignKey("Races", on_delete = "SET_NULL")
-    @test column_attrs_changed(cascade, setnull, PG507; name = "race_id") == [:on_delete]
+    # `:reference` is the whole constraint as ONE facet since phase 2 — the planner reads
+    # `:add` / `:drop` / `:repoint` off it, and `reference_delta` (asserted above) is what names the
+    # part that moved. Phase 1 surfaced the planner's `:on_delete` symbol here so that the pre-IR
+    # action code kept working.
+    @test column_delta(cascade, setnull, PG507; name = "race_id").changed == [:reference]
+    @test reference_delta(column_spec(cascade, PG507).reference,
+                          column_spec(setnull, PG507).reference) == [:on_delete]
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # The adapter: the typed delta back to the symbols the action code already consumes
-  # Phase 1 changes how changed/unchanged is DECIDED, not what is emitted once the answer is
-  # "changed". Every symbol below is one the action path received before the IR existed.
+  # The delta names the FACET that differs — the planner's only input
+  #
+  # Phase 1 translated these facets back into the field-attribute symbols the action code consumed
+  # (`:null`, `:max_length`, `:generated`, `:to`, …) through an `alter_attrs` adapter. #507 phase 2
+  # deleted the adapter: `Dialect.alter_field` and the FK helpers read the facets directly, so this
+  # vocabulary IS the contract rather than an intermediate representation. One facet per row, and
+  # each is asserted as the WHOLE delta so a pair cannot quietly start reporting two things.
   # ─────────────────────────────────────────────────────────────────────────────
-  @testset "alter_attrs emits the symbols the existing action code expects" begin
-    chg(a, b, conn) = column_attrs_changed(a, b, conn; name = "c")
+  @testset "the delta names the facet that differs" begin
+    chg(a, b, conn) = column_delta(a, b, conn; name = "c").changed
 
-    @test chg(Models.IntegerField(null = true), Models.IntegerField(), PG507) == [:null]
+    @test chg(Models.IntegerField(null = true), Models.IntegerField(), PG507) == [:nullable]
     @test chg(Models.IntegerField(unique = true), Models.IntegerField(), PG507) == [:unique]
     @test chg(Models.CharField(max_length = 40, default = "x"), Models.CharField(max_length = 40), PG507) == [:default]
     @test chg(Models.BigIntegerField(), Models.IntegerField(), PG507) == [:type]
 
-    # A length-only or precision-only change emits the NARROW symbol, matching what the pre-#507
-    # attribute loop produced for the same change (both sides were one struct, so only `max_length`
-    # / `max_digits` differed). `Dialect.alter_field` gates its char and decimal branches on either.
-    @test chg(Models.CharField(max_length = 40), Models.CharField(max_length = 250), PG507) == [:max_length]
+    # A width or precision change is a `:type` change, because the IR's type is the RENDERED column:
+    # `CVarChar(40)` vs `CVarChar(250)`, `CDecimal(12,2)` vs `CDecimal(10,2)`. Phase 1 split these
+    # into `:max_length` / `:max_digits` / `:decimal_places` for the renderer's benefit; there is one
+    # gate now, and the renderer still reads the field for the width it writes.
+    @test chg(Models.CharField(max_length = 40), Models.CharField(max_length = 250), PG507) == [:type]
     @test chg(Models.DecimalField(max_digits = 12, decimal_places = 2),
-              Models.DecimalField(max_digits = 10, decimal_places = 2), PG507) == [:max_digits]
+              Models.DecimalField(max_digits = 10, decimal_places = 2), PG507) == [:type]
     @test chg(Models.DecimalField(max_digits = 10, decimal_places = 4),
-              Models.DecimalField(max_digits = 10, decimal_places = 2), PG507) == [:decimal_places]
+              Models.DecimalField(max_digits = 10, decimal_places = 2), PG507) == [:type]
 
-    # Each CHECK maps to the symbol `alter_field` gates that constraint's DROP/ADD on: the
-    # non-negative CHECK moves with `:type`, the byte-length CHECK with `:max_length` (#296).
-    @test chg(Models.PositiveIntegerField(), Models.IntegerField(), PG507) == [:type]
-    @test chg(Models.BinaryField(max_length = 8), Models.BinaryField(max_length = 4), PG507) == [:max_length]
+    # A CHECK-expressed fact is `:checks`, and on PostgreSQL a positive-integer transition is ONLY
+    # that: `IntegerField` and `PositiveIntegerField` both render `integer`. Phase 1 reported `:type`
+    # here, which is how a redundant `ALTER COLUMN … TYPE integer` came to ride along with the CHECK.
+    @test chg(Models.PositiveIntegerField(), Models.IntegerField(), PG507) == [:checks]
+    @test chg(Models.BinaryField(max_length = 8), Models.BinaryField(max_length = 4), PG507) == [:checks]
 
-    # FK identity reaches the difference set (it must open the alteration gate) and is filtered out
-    # of `column_attrs` by `_FK_IDENTITY_ATTRS` before `alter_field` sees it — unchanged by #507.
-    @test chg(Models.ForeignKey("Races"), Models.ForeignKey("Drivers"), PG507) == [:to]
-    @test all(s -> s in Migrations._FK_IDENTITY_ATTRS,
-              chg(Models.ForeignKey("Races", on_delete = "CASCADE"),
-                  Models.ForeignKey("Drivers", on_delete = "SET_NULL"), PG507))
+    # The whole foreign-key constraint is ONE facet. It opens the alteration gate (a moved key IS a
+    # column change on SQLite, where the table is rebuilt) while `alter_field` has no branch for it
+    # — which is what retired the `_FK_IDENTITY_ATTRS` filter: a slot with no branch renders nothing,
+    # and `_fk_constraint_action` renders it as DROP + ADD CONSTRAINT instead.
+    @test chg(Models.ForeignKey("Races"), Models.ForeignKey("Drivers"), PG507) == [:reference]
+    @test chg(Models.ForeignKey("Races", on_delete = "CASCADE"),
+              Models.ForeignKey("Drivers", on_delete = "SET_NULL"), PG507) == [:reference]
+
+    # And every facet a delta can carry is one the closed set declares — the property that let
+    # `alter_field` drop its allowlist and its "not implemented" warning.
+    for (a, b) in Iterators.product(SPEC_CORPUS, SPEC_CORPUS)
+      for conn in (PG507, SL507)
+        @test all(f -> f in COLUMN_DELTA_SLOTS, column_delta(a, b, conn; name = "c").changed)
+      end
+    end
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # The adapter cannot emit a symbol the renderer chokes on
+  # No delta the compiler can produce makes the renderer choke
   #
   # THE ORACLE IS `alter_field` ITSELF, not a copy of its allowlist. An earlier version of this
   # testset compared the emitted symbols against a hand-transcribed `IMPLEMENTED` list, and it
-  # passed while `column_attrs_changed` was emitting `:generated` for a declared `BigIntegerField`
-  # over a live identity column — `:generated` IS on that list, but `alter_field` reads
-  # `new_field.generated` and only `sIDField` has the slot, so the call raised a `FieldError` and
-  # killed the whole `makemigrations`. Membership was the wrong property; being CALLABLE is the
-  # right one. Found by review, and this is the shape of test that would have caught it.
+  # passed while the diff was emitting `:generated` for a declared `BigIntegerField` over a live
+  # identity column — `:generated` IS on that list, but `alter_field` read `new_field.generated` and
+  # only `sIDField` has the slot, so the call raised a `FieldError` and killed the whole
+  # `makemigrations`. Membership was the wrong property; being CALLABLE is the right one. Found by
+  # review, and this is the shape of test that would have caught it.
   #
-  # PostgreSQL only, deliberately: SQLite's `alter_field` ignores the vector entirely and rebuilds
+  # #507 phase 2 removed the list this was paired with, and with it the last reason to check
+  # membership at all: `ColumnDelta` validates every facet against `COLUMN_DELTA_SLOTS` at
+  # construction, so an unknown facet cannot reach the renderer — it raises at the delta. What is
+  # left is the half that was always load-bearing: 729 real pairs, through the real renderer, on the
+  # real corpus. Slot COVERAGE (each facet reaching a statement) is asserted in
+  # `test_plan_actions_golden.jl`, which walks `COLUMN_DELTA_SLOTS` and reads the SQL back.
+  #
+  # PostgreSQL only, deliberately: SQLite's `alter_field` ignores the delta entirely and rebuilds
   # from the model (`src/Dialect.jl` — the parameter appears in its signature and nowhere in its
-  # body), so invoking it would assert nothing about the symbols.
+  # body), so invoking it would assert nothing about the facets. The SQLite half is covered instead
+  # by the last assertion here, and by the golden plan corpus.
   # ─────────────────────────────────────────────────────────────────────────────
-  @testset "every emitted symbol survives a real alter_field call" begin
+  @testset "every delta the compiler produces survives a real alter_field call" begin
     for (a, b) in Iterators.product(SPEC_CORPUS, SPEC_CORPUS)
-      attrs = column_attrs_changed(a, b, PG507; name = "c")
-      isempty(attrs) && continue
-      # `column_attrs` is what the planner actually hands over — FK identity is filtered out by
-      # `_FK_IDENTITY_ATTRS` before `alter_field` sees it, so the test must filter it too or it
-      # would be checking a vector the renderer never receives.
-      column_attrs = filter(x -> !(x in Migrations._FK_IDENTITY_ATTRS), attrs)
-      isempty(column_attrs) && continue
-      # No exception, and no "not implemented" warning — the renderer's own verdict on whether it
-      # can express what the adapter asked for.
-      @test_logs min_level = Logging.Warn PormG.Dialect.alter_field(PG507, "t", "c", a, b, column_attrs)
+      delta = column_delta(a, b, PG507; name = "c")
+      isempty(delta) && continue
+      # No exception, and no warning — the renderer's own verdict on whether it can express what the
+      # compiler reported. The FULL delta is handed over, `:reference` included: phase 1 had to
+      # filter that facet out first, and needing no filter is the point of the change.
+      @test_logs min_level = Logging.Warn PormG.Dialect.alter_field(PG507, "t", "c", a, b, delta)
     end
 
-    # The cheap membership check is kept as a second, independent statement of the same contract:
-    # it localises a failure to "the adapter grew a symbol" rather than to a raised call.
-    implemented = [:type, :max_length, :max_digits, :decimal_places, :null,
-                   :unique, :default, :primary_key, :generated, :generated_always]
-    allowed_pg = Set(vcat(implemented, collect(Migrations._FK_IDENTITY_ATTRS)))
-    # SQLite gets one more: `:auto_increment`, which is safe there precisely because its
-    # `alter_field` never inspects the vector. It cannot be emitted on PostgreSQL —
-    # `_column_identity(::PormGPostgres)` never sets that flag — which the last assertion pins.
-    allowed_sl = Set(vcat(collect(allowed_pg), [:auto_increment]))
+    # The one facet with no rendering branch must also be the only one that renders NOTHING — that
+    # is what makes "a slot with no branch is harmless" true rather than hopeful. A reference-only
+    # delta returns "" and `_configure_order_dict_migration_plan` drops the step; the constraint is
+    # planned by `_fk_constraint_action` instead.
+    ref_only = 0
+    for (a, b) in Iterators.product(SPEC_CORPUS, SPEC_CORPUS)
+      delta = column_delta(a, b, PG507; name = "c")
+      delta.changed == [:reference] || continue
+      ref_only += 1
+      @test PormG.Dialect.alter_field(PG507, "t", "c", a, b, delta) == ""
+    end
+    # Guard the guard: a corpus that produced no reference-only pair would pass the loop vacuously.
+    @test ref_only > 0
 
-    for (conn, allowed) in ((PG507, allowed_pg), (SL507, allowed_sl))
-      offenders = Set{Symbol}()
-      for a in SPEC_CORPUS, b in SPEC_CORPUS
-        for sym in column_attrs_changed(a, b, conn; name = "c")
-          sym in allowed || push!(offenders, sym)
-        end
+    # SQLite's identity facet is reachable (`PRIMARY KEY AUTOINCREMENT`) and PostgreSQL's is a
+    # different fact (`GENERATED … AS IDENTITY`), so the same pair can differ per engine. Both are
+    # inside the closed set, which is the only property either renderer relies on.
+    for conn in (PG507, SL507)
+      for (a, b) in Iterators.product(SPEC_CORPUS, SPEC_CORPUS)
+        @test all(f -> f in COLUMN_DELTA_SLOTS, column_delta(a, b, conn; name = "c").changed)
       end
-      @test isempty(offenders)
     end
-
-    @test !(:auto_increment in Set(Iterators.flatten(
-      column_attrs_changed(a, b, PG507; name = "c") for a in SPEC_CORPUS, b in SPEC_CORPUS)))
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -438,12 +477,11 @@ const SPEC_CORPUS = [
     for declared in (Models.UUIDField(primary_key = true),
                      Models.CharField(max_length = 40, primary_key = true))
       live = Models.IDField()
-      attrs = column_attrs_changed(declared, live, PG507; name = "c")
-      @test :generated in attrs
-      @test :type in attrs
+      delta = column_delta(declared, live, PG507; name = "c")
+      @test :identity in delta
+      @test :type in delta
 
-      lines = split(strip(PormG.Dialect.alter_field(PG507, "t", "c", declared, live, attrs)), "
-")
+      lines = split(strip(PormG.Dialect.alter_field(PG507, "t", "c", declared, live, delta)), string(Char(10)))
       type_at = findfirst(l -> occursin("TYPE", l), lines)
       drop_at = findfirst(l -> occursin("DROP IDENTITY", l), lines)
       @test type_at !== nothing
@@ -452,11 +490,12 @@ const SPEC_CORPUS = [
     end
 
     # The mirror direction must stay AFTER the type change: a column can only BECOME an identity
-    # once it is already an integer type.
-    attrs = [:type, :generated]
+    # once it is already an integer type. Diffed rather than hand-named, so the pair really does
+    # report both facets.
+    add_delta = column_delta(Models.IDField(), Models.CharField(max_length = 40), PG507; name = "c")
+    @test :identity in add_delta && :type in add_delta
     lines = split(strip(PormG.Dialect.alter_field(PG507, "t", "c", Models.IDField(),
-                                                  Models.CharField(max_length = 40), attrs)), "
-")
+                                                  Models.CharField(max_length = 40), add_delta)), string(Char(10)))
     add_at = findfirst(l -> occursin("ADD GENERATED", l), lines)
     type_at = findfirst(l -> occursin("TYPE", l), lines)
     @test add_at !== nothing && type_at !== nothing
@@ -504,57 +543,21 @@ const SPEC_CORPUS = [
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # `_compare_model_field` survives as a SPEED PATH, and this is what makes that safe
-  # `_alter_table_fields` still short-circuits on `Models.are_model_fields_equal`. Keeping a second
-  # comparator is only defensible while it is CONSERVATIVE: it may answer "equal" only when the IR
-  # agrees, so it can skip work but never suppress a real change. Asserted over the corpus, plus the
-  # three pairs where the two could most plausibly disagree — a fast path tested only on easy cases
-  # is not tested.
+  # THE SPEED PATH IS GONE, and its conservativeness test with it
+  #
+  # A testset here used to assert that `Models._compare_model_field` — the whole-model early-out
+  # `_alter_table_fields` consulted before its diff loop — could only ever answer "equal" when the
+  # IR agreed, so it could skip work but never suppress a real change. That was the licence for
+  # keeping a second comparator through phase 1.
+  #
+  # #507 phase 2 retired the early-out, so the licence is not needed and the test would have nothing
+  # to compare: `_alter_table_fields` always runs its per-column loop, and an empty `ColumnDelta` is
+  # the "nothing changed" answer. The three pairs it exercised were the ones where two comparators
+  # could most plausibly disagree — a genuine `on_delete` change, a `PROTECT`/`RESTRICT` fold, and a
+  # `:to` pair with a resolved model on one side and a binding string on the other. All three are
+  # still covered, as claims about the IR alone, in "the foreign-key comparison rule has one
+  # definition" above and in `test_fk_rename_rebuild.jl`.
   # ─────────────────────────────────────────────────────────────────────────────
-  @testset "the fast path may only be conservative" begin
-    violations = Any[]
-    for a in SPEC_CORPUS, b in SPEC_CORPUS, conn in (PG507, SL507)
-      Models._compare_model_field(a, b) || continue    # it said "changed": nothing to check
-      column_spec(a, conn) == column_spec(b, conn) ||
-        push!(violations, (nameof(typeof(a)), nameof(typeof(b)), conn, column_attrs_changed(a, b, conn)))
-    end
-    @test isempty(violations)
-
-    # 1. A GENUINE on_delete change. The fast path must report it (#498 made it able to) and so must
-    #    the IR — this is the direction where a silent agreement would hide a real schema change.
-    cascade = Models.ForeignKey("Races", on_delete = "CASCADE")
-    setnull = Models.ForeignKey("Races", on_delete = "SET_NULL")
-    @test !Models._compare_model_field(cascade, setnull)
-    @test column_spec(cascade, PG507) != column_spec(setnull, PG507)
-
-    # 2. An on_delete FOLD — two spellings of one clause. Both must call it unchanged, or a
-    #    PROTECT key against its own live RESTRICT churns a DROP + ADD CONSTRAINT on every run.
-    protect = Models.ForeignKey("Races", on_delete = "PROTECT")
-    restrict = Models.ForeignKey("Races", on_delete = "RESTRICT")
-    @test Models._compare_model_field(protect, restrict)
-    @test column_spec(protect, PG507) == column_spec(restrict, PG507)
-    @test column_spec(protect, SL507) == column_spec(restrict, SL507)
-
-    # 3. A `:to` pair where the declared side is a RESOLVED MODEL and the live side is the binding
-    #    string introspection produces. This is the asymmetry both comparators have to reconcile,
-    #    and the one place a second copy of the rule would have drifted.
-    parent = Models.Model("races", id = Models.IDField())
-    declared = Models.ForeignKey(parent, on_delete = "CASCADE")
-    live = Models.ForeignKey("Races", on_delete = "CASCADE")
-    live.to_table = "races"
-    @test Models._compare_model_field(declared, live)
-    @test Models._compare_field_foreign_key(declared, live)
-    for conn in (PG507, SL507)
-      @test column_spec(declared, conn) == column_spec(live, conn)
-      @test isempty(column_attrs_changed(declared, live, conn; name = "race_id"))
-    end
-
-    # …and repointing that live key elsewhere is still a change on both.
-    other = Models.ForeignKey("Drivers", on_delete = "CASCADE")
-    other.to_table = "drivers"
-    @test !Models._compare_model_field(declared, other)
-    @test column_spec(declared, PG507) != column_spec(other, PG507)
-  end
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Fail SAFE, not open (#69) — restated on the IR path
@@ -570,14 +573,18 @@ const SPEC_CORPUS = [
     # referential action is rendered.
     @test_throws ErrorException column_spec(boom_a, PG507)
 
-    # The rule: changed, not equal — and audibly.
-    result = @test_logs (:warn,) match_mode = :any column_attrs_changed(boom_a, boom_b, PG507; name = "boom")
+    # The rule: changed, not equal — and audibly. `column_delta` degrades the uncompilable side to a
+    # `CUnsupported` marker, which can never equal a rendered type, so the ordinary diff reports
+    # `:type`. That is the same answer phase 1 returned as a bare `[:type]` vector; what changed is
+    # that the actions now get SPECS on this path too, which they need since they read the delta.
+    # The full contract, including the two-failing-sides case, is `test_migration_diff_failsafe.jl`.
+    result = @test_logs (:warn,) match_mode = :any column_delta(boom_a, boom_b, PG507; name = "boom")
     @test !isempty(result)
-    @test result == [:type]
+    @test result.changed == [:type]
 
     # An ordinary pair does not warn, so the guard above is not passing on background noise.
-    @test_logs min_level = Logging.Warn column_attrs_changed(Models.IntegerField(),
-                                                             Models.IntegerField(), PG507; name = "n")
+    @test_logs min_level = Logging.Warn column_delta(Models.IntegerField(),
+                                                     Models.IntegerField(), PG507; name = "n")
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -598,7 +605,7 @@ const SPEC_CORPUS = [
     # They converge: no churn.
     for conn in (PG507, SL507)
       @test column_spec(plain, conn) == column_spec(deferred, conn)
-      @test isempty(column_attrs_changed(plain, deferred, conn; name = "race_id"))
+      @test isempty(column_delta(plain, deferred, conn; name = "race_id"))
     end
 
     # And the declaration is reported rather than dropped in silence. `maxlog` means the warning is
@@ -638,11 +645,17 @@ const SPEC_CORPUS = [
     @test column_spec(Models.BinaryField(max_length = 8), PG507).checks == [ByteLengthCheck(8)]
     @test isempty(column_spec(Models.IntegerField(), PG507).checks)
 
-    # `column_delta` names the FACET; `alter_attrs` translates to the action code's vocabulary.
-    # Phase 2 consumes the former directly, so its names are part of the contract.
+    # `column_delta` names the FACET, and since phase 2 the actions consume those names directly —
+    # there is no adapter left to translate them into anything else, so this vocabulary is the
+    # contract.
     a = column_spec(Models.IntegerField(null = true), PG507)
     b = column_spec(Models.IntegerField(), PG507)
     @test column_delta(a, b) == [:nullable]
-    @test alter_attrs(a, b, column_delta(a, b)) == [:null]
+    # And the delta the planner passes around wraps both specs with that facet list, validated
+    # against the closed set at construction.
+    wrapped = ColumnDelta(a, b, column_delta(a, b))
+    @test wrapped.changed == [:nullable]
+    @test :nullable in wrapped
+    @test !isempty(wrapped)
   end
 end

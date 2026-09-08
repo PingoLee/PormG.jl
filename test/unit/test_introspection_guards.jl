@@ -820,11 +820,13 @@ struct MockPg389 <: PormG.PormGPostgres end
 
   @testset "a declared key compares EQUAL to the introspected one (no perpetual ALTER)" begin
     # The consequence the issue leads with and the one a user actually notices, reached through a
-    # DIFFERENT path than the two above: `planner.jl` asks `_compare_field_foreign_key(declared,
-    # live)`, which compares `fk_target_column` on both sides. Declared `Id` vs live `"Id"` is
-    # `false`, so the planner pushes an alteration for that column on EVERY `makemigrations` —
-    # forever, and on SQLite as a full table rebuild. Nothing above constrains this: those pin the
-    # stored value, not the comparison that consumes it.
+    # DIFFERENT path than the two above: the planner compares the two columns, and that comparison
+    # reads `fk_target_column` on both sides (today inside `Migrations.column_spec`, which stores it
+    # as `ForeignKeyRef.column`; when this test was written, inside
+    # `Models._compare_field_foreign_key`). Declared `Id` vs live `"Id"` compares unequal, so the
+    # planner proposes an alteration for that column on EVERY `makemigrations` — forever, and on
+    # SQLite as a full table rebuild. Nothing above constrains this: those pin the stored value, not
+    # the comparison that consumes it.
     live = convertSQLToModel(_introspection_row(
       table_name   = "pit_stop",
       columns      = [_col("id", "bigint"; notnull = true), _col("parent_id", "bigint")],

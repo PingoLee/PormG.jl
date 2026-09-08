@@ -138,6 +138,14 @@ _fca_step(plan, key) = haskey(plan, :child_t) ? get(plan[:child_t], key, "") : "
 _fca_drop(plan) = _fca_step(plan, "Remove foreign key: old_ref_id")
 _fca_add(plan)  = _fca_step(plan, "New foreign key: new_ref_id")
 
+# #507 phase 2: `_fk_constraint_action` reads the canonical column IR rather than two field
+# structs, so the preconditions below compile their pair first. That compile step is what the
+# planner itself now does, and it is why the decision cannot disagree with the delta the same
+# action path renders from.
+_fca_action(declared, live) =
+  _fk_constraint_action(PormG.Migrations.column_spec(declared, FCA_PG; name = "new_ref_id"),
+                        PormG.Migrations.column_spec(live, FCA_PG; name = "old_ref_id"))
+
 @testset "#504/#505: foreign-key constraint actions on the rename and alteration paths" begin
 
   # ───────────────────────────────────────────────────────────────────────────
@@ -146,6 +154,14 @@ _fca_add(plan)  = _fca_step(plan, "New foreign key: new_ref_id")
   #    before the fix — the DROP declined correctly and `_add_constrains` ADDed anyway, so
   #    PostgreSQL ended up with the carried-along original plus a fresh duplicate. Against the
   #    unfixed code the "no ADD" assertion below fails.
+  #
+  #    #507 phase 2 changed WHY it passes, and this testset is the reason to record that. #504
+  #    fixed it by teaching `_add_constrains` to consult the pre-rename field; phase 2 removed the
+  #    caller instead. The rename branch routes through `_plan_column_change!` — the same ordered
+  #    path the alteration loop uses — so the ADD is `_fk_constraint_action`'s `:none` and emits
+  #    nothing, and `_add_constrains` no longer has a parameter for a live column at all. The
+  #    assertions are unchanged because the behaviour is; what moved is that there is now no way to
+  #    express the bug.
   # ───────────────────────────────────────────────────────────────────────────
   @testset "a rename with an unchanged FK definition adds no second constraint" begin
     # Same parent, same target column, same (absent) ON DELETE — only the column NAME moves.
@@ -153,7 +169,7 @@ _fca_add(plan)  = _fca_step(plan, "New foreign key: new_ref_id")
     live     = _fca_live_fk()
     # Precondition, asserted rather than assumed: this pair really is the `:none` state. If the
     # comparators ever stopped agreeing, the testset below would pass for the wrong reason.
-    @test _fk_constraint_action(declared, live) === :none
+    @test _fca_action(declared, live) === :none
 
     plan = _fca_rename_plan(FCA_PG, declared, live)
 
@@ -174,7 +190,7 @@ _fca_add(plan)  = _fca_step(plan, "New foreign key: new_ref_id")
   @testset "a rename that also re-points still plans DROP + ADD" begin
     declared = _fca_declared_fk(_fca_other_parent())
     live     = _fca_live_fk()
-    @test _fk_constraint_action(declared, live) === :repoint
+    @test _fca_action(declared, live) === :repoint
 
     plan = _fca_rename_plan(FCA_PG, declared, live)
 
@@ -196,7 +212,7 @@ _fca_add(plan)  = _fca_step(plan, "New foreign key: new_ref_id")
   @testset "a rename that turns a plain column into a foreign key still adds the constraint" begin
     declared = _fca_declared_fk()
     live     = Models.BigIntegerField(null = true)
-    @test _fk_constraint_action(declared, live) === :add
+    @test _fca_action(declared, live) === :add
 
     plan = _fca_rename_plan(FCA_PG, declared, live)
 
@@ -213,7 +229,7 @@ _fca_add(plan)  = _fca_step(plan, "New foreign key: new_ref_id")
   @testset "a rename that drops the constraint plans the DROP and no ADD" begin
     declared = _fca_declared_fk(; db_constraint = false)
     live     = _fca_live_fk()
-    @test _fk_constraint_action(declared, live) === :drop
+    @test _fca_action(declared, live) === :drop
 
     plan = _fca_rename_plan(FCA_PG, declared, live)
 
@@ -222,11 +238,14 @@ _fca_add(plan)  = _fca_step(plan, "New foreign key: new_ref_id")
   end
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 5. THE GATE FOR THE KEYWORD'S DEFAULT. `_add_constrains` has three callers and only the rename
-  #    passes `old_field`; `_add_new_table` and `_add_new_field` keep `nothing`, which must mean
-  #    "always add" — a brand-new column has no live constraint to inherit. A gate that answered
-  #    `:none` for a missing old field would silently stop creating foreign keys on ADD COLUMN,
-  #    which no other testset here would notice.
+  # 5. THE GATE FOR A BRAND-NEW COLUMN. `_add_constrains` must always add the key for a column this
+  #    migration is creating — there is no live constraint to inherit. #504 expressed that as the
+  #    default of an `old_field` keyword; #507 phase 2 deleted the keyword, because after the rename
+  #    branch moved to `_plan_column_change!` every remaining caller (`_add_new_table`,
+  #    `_add_new_field`) is creating the column. So the property is no longer "the default means
+  #    always add" but "this function only ever sees new columns" — and it still needs pinning,
+  #    because a regression here silently stops creating foreign keys on ADD COLUMN, which no other
+  #    testset in this file would notice.
   #
   #    No rename is offered: there is an addition and NO deletion, so this runs non-interactively.
   # ───────────────────────────────────────────────────────────────────────────

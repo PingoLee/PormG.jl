@@ -339,6 +339,18 @@ include("exceptions.jl")
 include("constants.jl")
 
 #═══════════════════════════════════════════════════════════════════════════════
+# SECTION: Canonical column IR (#507)
+#
+# The nouns of the migration diff — what a column IS and how two of them differ. Layer 1 because
+# BOTH `Dialect` (step 10, which renders an ALTER from a `ColumnDelta`) and `Migrations` (step 11,
+# which compiles a `PormGField` into a `ColumnSpec`) must name these types, and a submodule cannot
+# name a type defined after it. Must follow `exceptions.jl`: `ColumnDelta`'s constructor validates
+# its facet list and raises `InvalidMigrationError`.
+#═══════════════════════════════════════════════════════════════════════════════
+
+include("column_ir.jl")
+
+#═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Exports
 #
 # Kernel exports its whole vocabulary — that is the module's entire purpose. `PormG` does
@@ -397,6 +409,13 @@ export sqlite_type_map, postgres_type_map, sqlite_type_map_reverse, postgres_typ
 
 # on_delete handlers
 export CASCADE, RESTRICT, PROTECT, SET_NULL, SET_DEFAULT, DO_NOTHING
+
+# The canonical column IR (#507) is deliberately NOT exported. `Dialect` and `Migrations` reach it
+# with `import PormG: …`, which only needs the names BOUND in `PormG` — `src/PormG.jl` does that
+# with an explicit `import .Kernel: …`, the same way `model_table_name` and the underscore-private
+# helpers are bound. Exporting a migration-internal vocabulary would additionally put `CText`,
+# `CDate`, `CBool` and two dozen siblings into the namespace of anything that says
+# `using PormG.Kernel`, for no benefit.
 
 # Generated-module boilerplate registry (#338) — single source for Generator.jl's `import
 # PormG.Models: ...` line and Model_to_str's per-file binding-collision dedup seed.

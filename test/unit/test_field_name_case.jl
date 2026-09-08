@@ -17,7 +17,7 @@ All assertions render via a mock PostgreSQL connection (no live database require
 
 using Test
 using PormG
-using PormG.Models: Model, CharField, IDField, ForeignKey, format_fild_name, are_model_fields_equal
+using PormG.Models: Model, CharField, IDField, ForeignKey, format_fild_name, field_db_column
 using PormG.QueryBuilder: inspect_query
 
 # Dedicated mock connection — uniquely named so it never clashes with other unit files'
@@ -136,8 +136,19 @@ LegacyEntryCase.connect_key = "default"
       forename = CharField(),
       raceid   = ForeignKey("LegacyRaceCase", pk_field="raceid", on_delete="CASCADE", null=true),
     )
-    @test are_model_fields_equal(LegacyEntryCase, same)      # identical case → no diff
-    @test !are_model_fields_equal(LegacyEntryCase, lowered)  # case differs → not equal
+    # #507 phase 2 retired `are_model_fields_equal`, so this asserts the axis the answer now comes
+    # from. Case-sensitivity was never decided by comparing two fields: it is decided by the
+    # PHYSICAL COLUMN NAME each side is keyed by, and `_alter_table_fields` builds exactly this set
+    # for both sides before it diffs anything. `ColumnSpec.name` is deliberately excluded from
+    # column equality (a name change is a RENAME, planned from these key sets rather than by the
+    # column diff), which is why the name axis has to be asserted here rather than through
+    # `column_delta`.
+    physical(m) = Set(field_db_column(f, string(k)) for (k, f) in m.fields)
+    @test physical(LegacyEntryCase) == physical(same)      # identical case → the same columns
+    @test physical(LegacyEntryCase) != physical(lowered)   # case differs → different columns
+    # And the case really is preserved rather than folded on either side.
+    @test "driverId" in physical(same)
+    @test "driverid" in physical(lowered)
   end
 
 end

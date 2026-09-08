@@ -145,6 +145,7 @@ end
     @testset "Migration Diff: a re-pointed foreign key plans DROP + ADD CONSTRAINT (#498)" include("unit/test_fk_repoint_planner.jl")
     @testset "Migration Diff: FK constraint actions on rename + SQLite add (#504/#505)" include("unit/test_fk_constraint_actions.jl")
     @testset "Migration Diff: a unique rename keeps its constraint, a new SQLite FK gets one (#515/#514)" include("unit/test_rename_unique_index.jl")
+    @testset "Migration Plan: actions derive from the typed delta (#507 phase 2)" include("unit/test_plan_actions_golden.jl")
     @testset "Model_to_str Render Failure (#70/#134)" include("unit/test_model_to_str_render_failure.jl")
     @testset "Migration Format Stability (v1)" include("unit/test_migration_format_v1.jl")
     @testset "Schema Conventions Freeze (#33)" include("unit/test_schema_conventions.jl")

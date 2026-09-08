@@ -15,21 +15,22 @@
 # compiler neither reads nor classifies. Do not reintroduce a skip list here: three lists that
 # disagreed with each other is the defect #507 closed.
 
-# #498: the FK IDENTITY attributes — the ones a `FOREIGN KEY` constraint carries and a column
-# `ALTER` cannot say. They are a genuinely different category from `NON_DB_ATTRS` (column_spec.jl),
-# and collapsing the two would reintroduce the bug: these DO express schema, so they MUST enter
-# `colect_not_equal` (that vector is the difference set, and it is what opens the alteration gate);
-# they are filtered out only where `colect_not_equal` is handed to `Dialect.alter_field`, which has
-# no branch for any of them and would otherwise warn and emit nothing. `_fk_constraint_action`
-# expresses them instead, as DROP + ADD CONSTRAINT.
+# #498 defined `_FK_IDENTITY_ATTRS = (:to, :pk_field, :on_delete)` here — the attributes a FOREIGN
+# KEY constraint carries and a column ALTER cannot say. They had to enter the difference set (they
+# ARE schema, and they are what opened the alteration gate) but never reach `Dialect.alter_field`,
+# which has no branch for any of them, so every call site that handed the vector to the renderer had
+# to remember to filter them out first.
 #
-# `on_update`, `deferrable` and `initially_deferred` are not here either, and since #507 they are not
-# anywhere on this path: `Dialect.add_foreign_key` renders no `ON UPDATE` clause and hardcodes
-# `DEFERRABLE INITIALLY DEFERRED`, so nothing emits them and they cannot be a schema delta. They are
-# classified in `NON_DB_ATTRS` (column_spec.jl), which reports a declared non-default value once
-# rather than letting it churn an empty ALTER — a full table rebuild on SQLite — on every run.
-# Rendering them (or refusing them at declaration) is #516.
-const _FK_IDENTITY_ATTRS = (:to, :pk_field, :on_delete)
+# #507 phase 2 deleted the constant because there is nothing left to filter. The IR carries the whole
+# constraint as ONE facet, `:reference`, and `alter_field` simply has no branch for it: a slot with no
+# branch renders nothing, and `_fk_constraint_action` below renders it as DROP + ADD CONSTRAINT off
+# the same slot. A filter someone has to remember became an absence that cannot be forgotten.
+#
+# `on_update`, `deferrable` and `initially_deferred` are not on this path at all: `add_foreign_key`
+# renders no `ON UPDATE` clause and hardcodes `DEFERRABLE INITIALLY DEFERRED`, so nothing emits them
+# and they cannot be a schema delta. They are classified in `NON_DB_ATTRS` (column_spec.jl), which
+# reports a declared non-default value once rather than letting it churn an empty ALTER — a full
+# table rebuild on SQLite — on every run. Rendering them (or refusing them at declaration) is #516.
 
 # #437 / #507: `_diffs_attribute_wise` lived here — the predicate that decided whether two field
 # structs shared an attribute vocabulary and could be diffed attribute by attribute. It is gone with
@@ -98,57 +99,59 @@ end
 _model_physical_columns(model::PormGModel)::Set{String} =
   Set(Models.field_db_column(f, string(k)) for (k, f) in model.fields)
 
-# #150: true when the FK definition differs between the old and the desired field — the signal that a
-# renamed FK field also needs a SQLite table rebuild (RENAME COLUMN alone keeps the old FK clause). Covers
-# an FK being added/removed by the rename (incl. a db_constraint true⇄false flip) and, when both sides are
-# live FKs, a change of target model, target column, or on_delete. Reuses the same FK comparison the
-# alteration path uses (`Models._compare_field_foreign_key` / `Models.fk_target_column`).
-function _fk_definition_changed(new_field::PormGField, old_field::PormGField)::Bool
-  new_fk = hasfield(typeof(new_field), :to) && new_field.db_constraint
-  old_fk = hasfield(typeof(old_field), :to) && old_field.db_constraint
-  new_fk != old_fk && return true
-  (new_fk && old_fk) || return false
-  return !Models._compare_field_foreign_key(new_field, old_field) ||
-         Models.fk_target_column(new_field) != Models.fk_target_column(old_field) ||
-         (hasfield(typeof(new_field), :on_delete) && hasfield(typeof(old_field), :on_delete) &&
-          # #498: `Models._fk_on_delete_equal`, not the raw `!=` this used to be. The raw form agreed
-          # for CASCADE/SET_NULL/nothing (the slot normalizes an introspected string to the declared
-          # sentinel) but not for the PROTECT->RESTRICT or DO_NOTHING->nothing folds — so renaming a
-          # key declared `on_delete = PROTECT` forced a whole-table rebuild on SQLite that a plain
-          # `RENAME COLUMN` covers. Benign (a rebuild is correct, just wasteful) and invisible,
-          # because this predicate had exactly one consumer.
-          !Models._fk_on_delete_equal(new_field, old_field))
+"""
+    _fk_constraint_action(new_spec, old_spec) -> Symbol
+
+The four things that can happen to one column's FOREIGN KEY constraint: `:add`, `:drop`, `:repoint`
+or `:none` (#498).
+
+**Read off the column IR, and therefore stated once for the whole planner** (#507 phase 2). Every
+caller — the alteration path, the rename branch, the field-deletion loop — asks this one function,
+so no two of them can disagree about whether a reference moved:
+
+  * a reference that **appears** is `:add`;
+  * one that **disappears** is `:drop`, which is also what `new_spec === nothing` means (the
+    field-DELETION path: the column is going, so its constraint is going with it);
+  * two references present whose [`reference_delta`](@ref) is non-empty is `:repoint` — a different
+    parent table, a different parent column, or a different `ON DELETE`. PostgreSQL has no way to
+    re-point a constraint in place (`ALTER TABLE … ALTER CONSTRAINT` only changes deferrability), so
+    that can only be expressed as DROP followed by ADD;
+  * anything else is `:none`.
+
+This replaced TWO functions that computed the same thing independently. `_fk_definition_changed`
+(#150, the SQLite rename-rebuild gate) was `_compare_field_foreign_key` + `fk_target_column` +
+`_fk_on_delete_equal` — which is `reference_delta` by another name, reached through three field reads
+instead of one spec comparison. Before that, the decision lived as two MIRRORED XOR GUARDS inside the
+drop and add helpers, each asking only "is a constraint appearing or disappearing?"; between them
+they could not express the fourth state, so a key re-pointed at a different parent satisfied neither
+and planned nothing at all on PostgreSQL, forever.
+
+`db_constraint` is not consulted here and does not need to be: `column_spec` gives a
+`db_constraint = false` key no reference at all, because there is no constraint in the database to
+compare (#503/#408). A flip either way therefore lands as `:add` or `:drop` on its own.
+"""
+function _fk_constraint_action(new_spec::Union{ColumnSpec, Nothing}, old_spec::ColumnSpec)::Symbol
+  old_ref = old_spec.reference
+  new_ref = new_spec === nothing ? nothing : new_spec.reference
+  old_ref !== nothing && new_ref === nothing && return :drop
+  new_ref !== nothing && old_ref === nothing && return :add
+  (new_ref !== nothing && old_ref !== nothing) || return :none
+  return isempty(reference_delta(new_ref, old_ref)) ? :none : :repoint
 end
 
-# #498: the four things that can happen to one column's FOREIGN KEY constraint. This used to live as
-# two MIRRORED XOR GUARDS, one inside `_drop_fk_constraint_in_alteration` and its inverse inside
-# `_add_fk_constraint_in_alteration` — each asking only "is a constraint appearing / disappearing?".
-# Between them they could not express the fourth state, so a foreign key re-pointed at a different
-# parent (both sides still carrying `db_constraint = true`) satisfied NEITHER guard and planned
-# nothing at all on PostgreSQL, forever. Stating the decision once makes `:repoint` representable
-# rather than a special case bolted onto two guards that disagree by construction.
-#
-# `new_field === nothing` is the field-DELETION path (`_resolve_table_fields`), which is a `:drop`
-# for the same reason a `db_constraint` flip is: the constraint is going away.
-function _fk_constraint_action(new_field::Union{PormGField, Nothing}, old_field::PormGField)::Symbol
-  old_fk = hasfield(typeof(old_field), :to) && old_field.db_constraint
-  new_fk = new_field !== nothing && hasfield(typeof(new_field), :to) && new_field.db_constraint
-  old_fk && !new_fk && return :drop
-  new_fk && !old_fk && return :add
-  (new_fk && old_fk) || return :none
-  # Both sides are live, constrained foreign keys. PostgreSQL has no way to re-point a constraint in
-  # place (`ALTER TABLE … ALTER CONSTRAINT` only changes deferrability), so a changed definition —
-  # different parent table, different parent column, or a different `ON DELETE` — can only be
-  # expressed by dropping and re-adding it. Reuses the #150 predicate rather than a second opinion.
-  return _fk_definition_changed(new_field, old_field) ? :repoint : :none
-end
+# The delta-shaped spelling, for the call sites that hold one. Same decision, one argument.
+_fk_constraint_action(delta::ColumnDelta)::Symbol =
+  _fk_constraint_action(delta.new_spec, delta.old_spec)
 
-function _drop_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::Union{PormGField, Nothing}, old_field::PormGField)::Nothing
+function _drop_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_spec::Union{ColumnSpec, Nothing}, old_spec::ColumnSpec)::Nothing
   # #498: the precondition is `_fk_constraint_action`, not a locally-spelled XOR. Both `:drop` (the
   # constraint is going away) and `:repoint` (it stays, but must be re-issued against a new
   # definition) need the live one dropped first. Deriving it rather than accepting it as an argument
-  # keeps a caller from passing an action that disagrees with the fields it also passes.
-  if _fk_constraint_action(new_field, old_field) in (:drop, :repoint)
+  # keeps a caller from passing an action that disagrees with the specs it also passes.
+  #
+  # `field_name` is the column to look the LIVE constraint up by, which on a rename is the PRE-rename
+  # name: nothing has run yet when the plan is built, so the catalog still knows the old column.
+  if _fk_constraint_action(new_spec, old_spec) in (:drop, :repoint)
     if conn isa PormGSQLite
       # SQLite has no `ALTER TABLE DROP CONSTRAINT`; an FK can only be removed by rebuilding the
       # table. On the field-alteration path this is a no-op ON PURPOSE: `_alter_table_fields`
@@ -170,8 +173,8 @@ function _drop_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLit
   end
   return nothing
 end
-function _drop_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol, new_field::Union{PormGField, Nothing}, old_field::PormGField)
-  _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name |> string, new_field, old_field)
+function _drop_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol, new_spec::Union{ColumnSpec, Nothing}, old_spec::ColumnSpec)
+  _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name |> string, new_spec, old_spec)
 end
 
 function _drop_index(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String; index_name::Union{String, Nothing} = nothing)::Nothing
@@ -215,12 +218,16 @@ function _drop_index(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::Or
   _drop_index(conn, migration_plan, model_name, field_name |> string, index_name=index_name)
 end
 
-function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, old_field::PormGField, name::String)::Nothing
+# `drop_key_column` is the column the matching DROP was keyed by, which differs from `field_name`
+# only on the rename path (the drop looks the live constraint up by the PRE-rename name, while the
+# ADD must name the column as it will exist once the RENAME above it has run). Defaulting it to
+# `field_name` keeps every other call site reading as it did.
+function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, delta::ColumnDelta, name::String; drop_key_column::String = field_name)::Nothing
   # to alterations
   # #498: the mirror of the drop above, and derived from the same single decision. `:add` is a
   # constraint that did not exist; `:repoint` is one that did and has just been dropped a few lines
   # earlier in the same plan — both end in the identical `ADD CONSTRAINT`, against the DESIRED field.
-  action = _fk_constraint_action(new_field, old_field)
+  action = _fk_constraint_action(delta)
   # #498: on PostgreSQL a `:repoint` re-adds ONLY if the matching DROP was actually planned. The drop
   # side returns silently when `get_constraints_fk` finds no live constraint name — harmless for a
   # plain `:drop` (nothing follows it) but not here: adding without dropping leaves the OLD constraint
@@ -237,7 +244,7 @@ function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite
   #
   # Only `:repoint` needs this. An `:add` by definition had no constraint to drop.
   if conn isa PormGPostgres && action === :repoint &&
-     !(haskey(migration_plan, model_name) && haskey(migration_plan[model_name], "Remove foreign key: $field_name"))
+     !(haskey(migration_plan, model_name) && haskey(migration_plan[model_name], "Remove foreign key: $drop_key_column"))
     @warn "Foreign key on $(model_name).$(field_name) changed, but its live constraint could not be found; skipping the re-point rather than adding a duplicate" action
     return nothing
   end
@@ -249,9 +256,10 @@ function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite
        # re-pointed on SQLite, with no separate DDL to emit and nothing for a user to act on.
        #
        # #505: `:add` says the same thing at `@info`, because the same argument applies to it. This
-       # function has ONE call site, inside `_alter_table_fields`' `if !isempty(colect_not_equal)`
-       # block — so by construction the rebuild has already been planned, twenty lines earlier, by
-       # the time this line runs. Measured on a real temp SQLite file: the rebuild renders the
+       # function is called from ONE place, `_plan_column_change!`, which emits the rebuild a few
+       # lines earlier in the same call whenever the delta is non-empty — and a non-empty delta is
+       # exactly what an `:add` or a `:repoint` implies, since a reference that moved IS a delta. So
+       # by construction the rebuild has already been planned by the time this line runs. Measured on a real temp SQLite file: the rebuild renders the
        # `FOREIGN KEY … REFERENCES` clause for a newly-declared key too. The old text told the
        # operator to do by hand something that had already happened ("requires recreation. This is
        # not fully automated yet."), which is why it is gone rather than merely quieter.
@@ -293,37 +301,34 @@ function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite
   return nothing
 end
 
-function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Union{String, Symbol}, field::PormGField, name::String; old_field::Union{PormGField, Nothing} = nothing)::Nothing
+# Constraints and indexes for a column that is being CREATED — `_add_new_table` and
+# `_add_new_field`, and nothing else.
+#
+# #504 gave this function an `old_field` kwarg so that the rename branch, which also called it,
+# could skip adding a second FOREIGN KEY when nothing about the reference had moved (PostgreSQL's
+# `RENAME COLUMN` carries the existing constraint along with the column, so an unconditional ADD
+# left TWO identical constraints on one column — inserts and deletes behaved the same and only a
+# doubled `information_schema` row showed it).
+#
+# #507 phase 2 DELETED that parameter instead of making it delta-aware, because the rename branch no
+# longer calls this function at all: it routes through `_plan_column_change!`, the same ordered path
+# the alteration loop uses, whose `_add_fk_constraint_in_alteration` already derives `:add` /
+# `:repoint` / `:none` from the delta. So there is no longer a caller that CAN hand this function a
+# column with a live constraint — #504 is unrepresentable by construction rather than declined by a
+# guard. Every remaining caller is creating the column in this same migration, which is exactly why
+# the key is added unconditionally here.
+function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Union{String, Symbol}, field::PormGField, name::String)::Nothing
   Models.is_many_to_many_field(field) && return nothing
 
   # to new fields
-  # If the new field is a foreign key
+  # If the new field is a foreign key.
   #
-  # #504: `old_field` is the PRE-RENAME field, and only the rename caller passes it. `nothing` means
-  # a brand-new column (`_add_new_table` / `_add_new_field`), which has no live constraint to
-  # inherit, so the key is always added there. On a RENAME it is: PostgreSQL's
-  # `ALTER TABLE ... RENAME COLUMN` carries the existing FOREIGN KEY along with the column, so when
-  # nothing about the definition moved (`_fk_constraint_action` -> `:none`) the live constraint is
-  # already correct and adding a second one leaves TWO on one column -- identical, so inserts and
-  # deletes behave the same and only a doubled `information_schema` row shows it. The DROP a few
-  # lines above the rename call site is already gated on this same decision; this is the missing
-  # half of that pairing, derived from the SAME function rather than a second local opinion (#498).
-  #
-  # NOT confirmed against the catalog first, deliberately. `get_constraints_fk` would answer "no
-  # constraint" in exactly one real scenario -- a `search_path` that hides the table from
-  # `current_schemas(false)` while `get_database_schema` reads `public` explicitly (see
-  # `_add_fk_constraint_in_alteration` above) -- and falling through to ADD there would re-create
-  # precisely the duplicate this guard exists to prevent. The `:none` skip needs no lookup at all,
-  # which is what makes it immune to that skew.
-  #
-  # SCOPE, stated so this does not read as broader than it is: the `:repoint` half of the rename
-  # path is NOT covered. It still ADDs unconditionally, so under that same skew -- where the DROP
-  # above silently declines because the catalog shows no constraint -- a rename that also re-points
-  # can still leave two constraints on the column. `_add_fk_constraint_in_alteration` guards its own
-  # `:repoint` for exactly that reason; the rename path has no equivalent. Pre-existing, unchanged
-  # by #504, and deliberately left alone rather than widened into.
-  if hasfield(field |> typeof, :to) && field.db_constraint &&
-     (old_field === nothing || _fk_constraint_action(field, old_field) !== :none)
+  # `sRelationalColumn`, not `hasfield(typeof(field), :to)`: the FK/O2O pair is spelled once in
+  # `src/models/fields.jl` (#408/#409/#418/#437), and the `hasfield` form was also true for
+  # `sManyToManyField` — which has a `.to` but NO `db_constraint` slot, so it only avoided a
+  # `FieldError` here because of the early return above it. One predicate, no reliance on the order
+  # of two guards.
+  if field isa Models.sRelationalColumn && field.db_constraint
     if conn isa PormGPostgres
       constraint_name = name * "_fk" |> lowercase
       # Local FK column and referenced parent column both honor db_column (#50).
@@ -489,13 +494,47 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
     # #82: this add-NOT-NULL-with-default path also rebuilds the table on SQLite, so it must preserve the
     # existing secondary indexes too (no-op on PostgreSQL).
     #
-    # `[:default]` still describes the temporary-default caller and is left as-is for the #514 one:
-    # `Dialect.alter_field(::PormGSQLite, …)` reads neither `old_field` nor this vector, rebuilding
-    # from the desired model outright (verified — the SQLite method's body names neither). Only
-    # PostgreSQL's method consults it, and PostgreSQL never reaches here for the #514 reason.
+    # THE ONE DECLARED DELTA in the planner, and the only place a `ColumnDelta` is constructed rather
+    # than diffed. Everywhere else the delta answers "what differs between the models file and the
+    # live schema?"; here it states an instruction: *the column this migration just added carries a
+    # TEMPORARY default, and the declared column does not want it.* That fact is real — the
+    # `ADD COLUMN` a few lines up wrote it — but no `ColumnSpec` can hold it, because neither side of
+    # the diff has a temporary default. So `old_spec` is the new column's own spec with the temporary
+    # value substituted in, and `:default` is forced rather than derived.
+    #
+    # Forcing it is what keeps the plan byte-identical: were it diffed, a declared default that
+    # happened to EQUAL the temporary one would produce an empty delta and no cleanup step at all.
+    # That case is vanishingly unlikely (`_get_temporary_default_value` returns `now()` / `today()`)
+    # and harmless if it happened — but "unlikely and harmless" is a reason to keep the behaviour
+    # pinned, not a reason to let it drift.
+    #
+    # PostgreSQL DOES reach here (a new `sDateTimeField` / `sDateField` gets a temporary default on
+    # both engines) and renders `DROP DEFAULT` from `new_spec.default`, which is `NoDefault` for a
+    # defaultless declared field. SQLite ignores the delta and rebuilds from the desired model.
+    # `_spec_or_degraded`, not `column_spec`: every other planner site compiles through the #69
+    # fail-safe, and this one is reachable with an unresolved foreign key (the SQLite
+    # `needs_sqlite_fk_rebuild` path), where a raise would abort `makemigrations` at a call site that
+    # previously compiled nothing at all. Flagged in review.
+    temp_spec = _spec_or_degraded(field, conn, "<uncompilable:new>"; name = field_name)
+    # `NoDefault` when there is no temporary value to undo — the #514 SQLite-FK-rebuild caller, which
+    # reaches this block with `temporary_default_value === nothing` and never reads the delta at all.
+    # Writing `LiteralDefault(nothing)` there would be inert but false, and a false spec is the kind
+    # of thing a later reader believes.
+    live_default = temporary_default_value === nothing ? NoDefault() : LiteralDefault(temporary_default_value)
+    # NOTE, because `Dialect.alter_field` now trusts `old_spec.name` as "the column the catalog
+    # knows": this is the one `ColumnSpec` in the codebase whose name is NOT a live column — the
+    # column is being CREATED by this same migration, so at plan time the catalog has never heard of
+    # it. Harmless by construction rather than by luck: the delta's only facet is `:default`, and
+    # none of the four constraint-name lookups sits in that branch.
     _configure_order_dict_migration_plan(migration_plan, model_name, alter_key,
       _sqlite_rebuild_preserving_indexes(conn, model_table_name(model),
-        Dialect.alter_field(conn, model, field_name, field, nothing, [:default]);
+        Dialect.alter_field(conn, model, field_name, field, nothing,
+          ColumnDelta(temp_spec,
+                      ColumnSpec(temp_spec.name, temp_spec.type, temp_spec.nullable,
+                                 temp_spec.primary_key, temp_spec.unique,
+                                 live_default, temp_spec.reference,
+                                 temp_spec.checks, temp_spec.identity, temp_spec.raw),
+                      [:default]));
         surviving_columns = _model_physical_columns(model)))
   elseif conn isa PormGSQLite
     # The other half of the same invariant, and the reason the block above was not enough. The
@@ -528,171 +567,291 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
   _add_new_field(conn, migration_plan, model_name, model, field_name |> string, temporary_default_value=temporary_default_value)
 end
 
+"""
+    _plan_column_change!(conn, migration_plan, model_name, declared_model, field_name,
+                         new_field, old_field, delta, hashed_name;
+                         old_column = nothing, column_renames = Dict{String,String}())
+
+Plan everything one existing column needs, in the one order that works, from the one delta.
+
+**There is exactly one of these, and that is the point of #507 phase 2.** Two call sites reach it —
+the alteration loop in [`_alter_table_fields`](@ref) and the rename branch of
+[`_resolve_table_fields`](@ref) — and before this function existed the second one carried its own
+copy of the sequence, with its own opinion of when a constraint had moved. #504 (a rename adding a
+second FOREIGN KEY) and #515 (a rename destroying the index backing a UNIQUE constraint) both lived
+in that copy, and #150 needed a third predicate to decide when a rename also had to rebuild a SQLite
+table. A rename is not a different kind of change; it is the same column change with a new name.
+
+The order is fixed and each step's reason is a different one:
+
+ 1. **FK DROP**, keyed by the PRE-rename column, because at plan time the catalog still holds the old
+    name and `get_constraints_fk` is what learns the live constraint's generated name.
+ 2. **RENAME COLUMN**, so that everything after it can name the column as it will then exist.
+ 3. **The column ALTER** — a real `ALTER COLUMN` on PostgreSQL, a whole-table rebuild on SQLite —
+    only when the delta is non-empty.
+ 4. **FK ADD**, keyed by the new column, since a `:repoint`'s constraint must reference it.
+
+`old_column === nothing` means "not a rename": step 2 is skipped. Pass it and the same four steps
+plan a rename, which is how decision 5 of #507 gets its two halves for free:
+
+  * an **empty** delta reduces this to `RENAME COLUMN` and nothing else — steps 1 and 4 are `:none`
+    by construction (equal specs cannot have an unequal reference) and step 3 is gated on the delta;
+  * a **non-empty** delta emits the same alteration the loop would have emitted for a column that
+    kept its name. Measured on the base commit, that is a genuine fix: a rename that also retyped
+    the column used to plan the `RENAME` alone and drop the type change on the floor, converging only
+    on the NEXT `makemigrations`.
+
+**ONE source for "the column the live catalog knows": `delta.old_spec.name`.** Steps 1 and 4 key on
+it, and so do the four `get_constraints_*` lookups inside `Dialect.alter_field` — which is the point,
+because on a rename that is the PRE-rename column and nothing has executed when the plan is built.
+A fifth statement that needs a constraint name must read the same field; asking for `field_name`
+there is the defect this function was reshaped to prevent (a renamed column silently lost its UNIQUE
+/ PRIMARY KEY / CHECK drop, and a renamed `PositiveIntegerField` becoming a `TextField` emitted the
+retype with the stale `>= 0` CHECK in place, which PostgreSQL rejects). `column_delta`'s `old_name`
+is what puts it there.
+
+`column_renames` is passed through to the SQLite rebuild so a renamed column's secondary indexes are
+re-created against the new name (#150), and `_resolve_table_fields` ACCUMULATES it across the rename
+loop so a table renaming two columns keeps both indexes. On SQLite the rebuild entry is also
+relocated to the end of the table's plan on every registration, because it copies by the DESIRED
+column names and so must follow every `RENAME COLUMN` and every `ADD COLUMN`.
+
+`db_index` deliberately plays no part here — `index_actions` in `_alter_table_fields` owns it,
+because on SQLite a non-empty delta means a rebuild that re-emits every live index, and a
+`CREATE INDEX` beside it would duplicate what the rebuild just made (#82/#325).
+"""
+function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
+                              migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
+                              model_name::Symbol,
+                              declared_model::PormGModel,
+                              field_name::String,
+                              new_field::PormGField,
+                              old_field::PormGField,
+                              delta::ColumnDelta,
+                              hashed_name::String;
+                              old_column::Union{String, Nothing} = nothing,
+                              column_renames::Dict{String, String} = Dict{String, String}())::Nothing
+  isempty(delta) && old_column === nothing && return nothing
+  # ONE source for "the column the live catalog knows", shared with the four constraint-name lookups
+  # inside `Dialect.alter_field` (which read `delta.old_spec.name` for the same reason). On a rename
+  # that is the PRE-rename column, because nothing has executed when the plan is built. The
+  # `old_column` fallback covers a delta whose specs were built without names.
+  drop_column = !isempty(delta.old_spec.name) ? delta.old_spec.name :
+                (old_column === nothing ? field_name : old_column)
+
+  # 1. Drop the live constraint when it is going away or has to be re-issued.
+  _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, drop_column,
+                                    delta.new_spec, delta.old_spec)
+
+  # 2. The rename itself.
+  old_column === nothing ||
+    _configure_order_dict_migration_plan(migration_plan, model_name, "Rename field: $field_name",
+                                         Dialect.rename_field(conn, model_name, old_column, field_name))
+
+  # 3. The column change. On SQLite this is a full table rebuild from the DESIRED model, which is
+  #    also what re-points a foreign key there; on PostgreSQL it is the per-slot ALTER. An empty
+  #    delta means there is no column change — only a rename — so nothing is emitted.
+  if !isempty(delta)
+    # For SQLite every field alteration requires a full table recreation. Use a single stable key
+    # ("Alter table: <model>") so repeated calls for the same table overwrite each other, producing
+    # exactly one recreation statement instead of one per changed field.
+    alter_key = conn isa PormGSQLite ? "Alter table: $model_name" : "Alter field: $field_name"
+    # …but on SQLite the rebuild's POSITION matters as much as its content, and a rename is what
+    # makes that bite. The rebuild is rendered from the DESIRED model and its `INSERT … SELECT`
+    # copies by the NEW column names, so it can only execute after every RENAME on this table — and
+    # `_configure_order_dict_migration_plan` overwrites a key IN PLACE, keeping the position of the
+    # FIRST registration. So the entry is deleted and re-registered here, which moves it to the end
+    # of the table's plan.
+    #
+    # That is the same delete-and-reinsert `_add_new_field` performs for the same reason (its
+    # `ADD COLUMN`s must all precede the rebuild), and it replaced a plan-time refusal I had written
+    # first. The refusal was never wrong, but it was ORDER-DEPENDENT: `colect_addition` is a `Set`,
+    # so a rename co-occurring with a new NOT NULL column planned correctly or raised depending on
+    # field-name hash order — the same logical change, two outcomes. Relocating is deterministic and
+    # strictly better, because it makes the case CORRECT rather than refused: once the rebuild is
+    # last, every RENAME and every `ADD COLUMN` has run, so the columns it copies all exist.
+    #
+    # Pre-phase-2 only an FK-definition change registered a rebuild from the rename path, which is
+    # why two renames on one table could be documented as unsupported; any non-empty delta reaches
+    # here now, so it is fixed instead.
+    #
+    # The surviving rebuild is whichever registration lands LAST, and it carries only the
+    # `column_renames` THAT call was given. `_resolve_table_fields` accumulates them across the
+    # rename loop, so a table renaming two columns keeps both indexes — but the alteration loop in
+    # `_alter_table_fields` and `_add_new_field` register the same key with no rename map at all, so
+    # a rename combined with one of those can still lose the renamed column's index. Index loss, not
+    # a broken plan; the limitation is stated in full at the rename call site. (This comment claimed
+    # "every renamed column keeps its secondary indexes" until review falsified it by execution —
+    # inside the very function that fixed the previous overstatement.)
+    if conn isa PormGSQLite && haskey(migration_plan, model_name) &&
+       haskey(migration_plan[model_name], alter_key)
+      delete!(migration_plan[model_name], alter_key)
+    end
+    # #82: on SQLite this preserves the table's secondary indexes across the rebuild and gates on
+    # foreign_key_check (no-op on PostgreSQL). See _sqlite_rebuild_preserving_indexes.
+    alter_sql = _sqlite_rebuild_preserving_indexes(conn, model_table_name(declared_model),
+      Dialect.alter_field(conn, declared_model, field_name, new_field, old_field, delta);
+      surviving_columns = _model_physical_columns(declared_model),
+      column_renames = column_renames)
+    _configure_order_dict_migration_plan(migration_plan, model_name, alter_key, alter_sql)
+  end
+
+  # 4. Add the constraint for an `:add` or a `:repoint`.
+  _add_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name, new_field, delta,
+                                   hashed_name; drop_key_column = drop_column)
+  return nothing
+end
+
 function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::PormGSettings; interactive::Bool = true)::Nothing
   # @pormg_debug model_name == :new_join_position
-  if Models.are_model_fields_equal(current_schema[model_name][:model], model)
-    # println("Model $model_name are equal")
-  else        
-    # Compare fields
-    @pormg_debug false
-    # Convert keys(model.fields) to an array of stripped strings and keep mapping to original key
-    model_fields_map = Dict(String(strip(key, '"')) => String(key) for key in keys(model.fields))
-    stripped_model_fields = Set(keys(model_fields_map))
+  # #507 phase 2: NO whole-model early-out. `Models.are_model_fields_equal` used to short-circuit
+  # this whole function when every field compared equal, and it was a second answer to a question
+  # the column IR already answers per column — kept in phase 1 only because it was conservative by
+  # construction. It is gone: the loop below always runs, and an EMPTY `ColumnDelta` is the
+  # "nothing changed" answer. One comparator, one place, and no fast path left that could disagree
+  # with it.
+  #
+  # The cost is a compilation per column on every run — a couple of dictionary lookups and one
+  # rendered type string each. What it buys is that a converged schema and a changed one travel
+  # the same code path, so "converged" can no longer be right by accident.
+  # Compare fields
+  @pormg_debug false
+  # Convert keys(model.fields) to an array of stripped strings and keep mapping to original key
+  model_fields_map = Dict(String(strip(key, '"')) => String(key) for key in keys(model.fields))
+  stripped_model_fields = Set(keys(model_fields_map))
 
-    # Do the same for current_schema model fields, but key by the PHYSICAL column name
-    # (db_column when set, else the field name) so the code side aligns with the
-    # column-keyed introspected DB side — otherwise a field whose db_column differs from
-    # its name would churn as a spurious DROP + ADD (#50). The value stays the real
-    # field-name key for accessing model.fields.
-    current_fields_map = Dict(Models.field_db_column(field, String(strip(String(key), '"'))) => String(key) for (key, field) in current_schema[model_name][:model].fields)
-    stripped_current_fields = Set(keys(current_fields_map))
+  # Do the same for current_schema model fields, but key by the PHYSICAL column name
+  # (db_column when set, else the field name) so the code side aligns with the
+  # column-keyed introspected DB side — otherwise a field whose db_column differs from
+  # its name would churn as a spurious DROP + ADD (#50). The value stays the real
+  # field-name key for accessing model.fields.
+  current_fields_map = Dict(Models.field_db_column(field, String(strip(String(key), '"'))) => String(key) for (key, field) in current_schema[model_name][:model].fields)
+  stripped_current_fields = Set(keys(current_fields_map))
 
-    # check the field are not in current_schema (deletion)
-    colect_deletion::Vector{Symbol} = []
-    for field_name in stripped_model_fields
-      if !(field_name in stripped_current_fields)
-        push!(colect_deletion, Symbol(field_name))
+  # check the field are not in current_schema (deletion)
+  colect_deletion::Vector{Symbol} = []
+  for field_name in stripped_model_fields
+    if !(field_name in stripped_current_fields)
+      push!(colect_deletion, Symbol(field_name))
+    end
+  end
+
+  colect_addition::Vector{Symbol} = []
+  for field_name in stripped_current_fields
+    if !(field_name in stripped_model_fields)
+      push!(colect_addition, Symbol(field_name))
+    end
+  end    
+
+  @pormg_debug false
+  # Pass maps to resolve fields so original keys can be used for accessing model.fields
+  _resolve_table_fields(conn, model_name, model, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive)
+
+  # #325: index create/drop is DEFERRED to after the whole field loop, not emitted inline.
+  # `stripped_current_fields` is a `Set`, so field order is arbitrary — and on SQLite the table
+  # rebuild re-creates every live secondary index verbatim (#82). A `DROP INDEX` emitted before
+  # the rebuild is therefore undone by it, and whether that happened depended on which field the
+  # Set yielded first. Collecting the actions here and flushing them below puts them after any
+  # rebuild, deterministically. Each entry is `(:create | :drop, physical column, hashed name,
+  # live index name or nothing)`.
+  index_actions = Tuple{Symbol, String, String, Union{String, Nothing}}[]
+
+  for field_name_stripped in stripped_current_fields
+    original_code_key = current_fields_map[field_name_stripped]
+    if haskey(model_fields_map, field_name_stripped)
+      original_db_key = model_fields_map[field_name_stripped]
+
+      field = current_schema[model_name][:model].fields[original_code_key]
+      old_field = model.fields[original_db_key]
+
+      # A ManyToManyField is not a physical column and `sManyToManyField` is the one field struct
+      # with no `db_index` at all, so the index blocks below would raise on it. It cannot normally
+      # be matched here (it is never a live column), but the guard is what makes that explicit —
+      # `_add_new_field` / `_add_constrains` both early-return on m2m for the same reason.
+      (Models.is_many_to_many_field(field) || Models.is_many_to_many_field(old_field)) && continue
+
+      name::String = _hash_field_name(model_name, field_name_stripped)
+
+      # #507: ONE comparator. Both fields compile to a `ColumnSpec` — what the database can hold —
+      # and the difference is read off that. This replaced four code paths that each answered
+      # "same column?" with their own reconciliations and disagreed at the edges: the attribute-wise
+      # loop, `Dialect.describes_same_column` (#325), the `db_constraint = false` escape (#408) and
+      # the `push!(:type)` fallthrough.
+      #
+      # Phase 2 made the delta TYPED and made it the only input to what follows. Phase 1 adapted it
+      # back into field-attribute symbols so the action code could stay untouched; that adapter is
+      # gone, and with it every action site's private opinion of a fact decided right here.
+      delta = column_delta(field, old_field, conn; name = field_name_stripped)
+
+      # if field_name == "time"
+      #   @pormg_debug
+      # end
+
+      # #325: the column ALTER is CONDITIONAL, but the index blocks below are not. `db_index` is in
+      # `NON_DB_ATTRS` and is not a `ColumnSpec` field at all, so an index-only difference leaves the
+      # delta EMPTY — which is the point (on SQLite a non-empty delta means a FULL TABLE REBUILD, for
+      # something a CREATE/DROP INDEX expresses on its own). Before #325 this was an early
+      # `continue`, so an index-only difference would now be planned as nothing at all.
+      #
+      # #507 note: the index blocks are now reachable for one pair that never reached them. The
+      # retired #408 escape answered a `db_constraint = false` relational field against a live
+      # `sBigIntegerField` with `continue`, which skipped the REST OF THE LOOP BODY — the two index
+      # blocks included — so such a column could neither gain nor lose an index here. That was an
+      # accident of the escape's shape, not a decision. It is expected to be inert in practice:
+      # the FK constructors force `db_index = db_index || !db_constraint`, so a
+      # `db_constraint = false` key always declares an index, and introspection reports the one
+      # PormG created for it — both sides `true`, no action.
+      # The FK drop, the column ALTER (or SQLite rebuild) and the FK add, in that order, all from
+      # `delta` — and through the SAME function the rename branch calls, which is what stops the two
+      # from drifting apart again (#504/#515). An empty delta plans nothing.
+      #
+      # There is no `column_attrs` filter here any more. `_FK_IDENTITY_ATTRS` existed because the
+      # difference set had to carry the foreign key (it is real schema, and it is what opened this
+      # gate) while `Dialect.alter_field` had no branch for it and would otherwise warn and emit
+      # nothing. The IR carries the whole constraint as one `:reference` facet, `alter_field` has no
+      # branch for that facet and needs none, and `_fk_constraint_action` reads it directly — so the
+      # filter has nothing left to remove.
+      _plan_column_change!(conn, migration_plan, model_name, current_schema[model_name][:model],
+                           field_name_stripped, field, old_field, delta, name)
+
+      # Index differences are RECORDED here and emitted after the loop — see `index_actions`.
+
+      # Check if the field is also indexed
+      if !field.primary_key && field.db_index && !old_field.db_index
+        @pormg_debug false
+        push!(index_actions, (:create, field_name_stripped, name, nothing))
+      end
+
+      # Check if is need to remove the index
+      if !field.primary_key && old_field.db_index && !field.db_index
+        @pormg_debug
+        # The live model's index cache maps physical column ⇒ index name. `db_index=true` on the
+        # live side means introspection saw exactly such an index, so the key is present; the
+        # `nothing` fallback routes `_drop_index` through `get_constraints_index` rather than
+        # raising a KeyError from inside makemigrations.
+        live_index_name = get(get(model.cache, "index", Dict{String,Any}()), original_db_key, nothing)
+        push!(index_actions, (:drop, field_name_stripped, name, live_index_name === nothing ? nothing : string(live_index_name)))
       end
     end
+  end
 
-    colect_addition::Vector{Symbol} = []
-    for field_name in stripped_current_fields
-      if !(field_name in stripped_model_fields)
-        push!(colect_addition, Symbol(field_name))
+  # Flush the deferred index actions — always after any "Alter table:"/"Alter field:" step the
+  # loop above registered, whichever field produced it.
+  for (kind, col, hashed, live_index_name) in index_actions
+    if kind === :create
+      # #82/#325: the SQLite rebuild already re-emits every existing index, so a CREATE INDEX
+      # alongside one would duplicate it (the random suffix defeats IF NOT EXISTS). Introspection
+      # now reads `db_index` back on both backends, so this branch no longer fires merely because
+      # SQLite could not see the index — but the probe stays: the rebuild is emitted from the
+      # DECLARED model, which can carry an index the live schema is only about to gain.
+      # Genuinely-new indexes still get created.
+      if !(conn isa PormGSQLite && get_constraints_index(conn, model_name, col) !== nothing)
+        index_name = "$(hashed)_idx"
+        _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $col",
+        Dialect.create_index(conn, "\"$(Dialect._quote_table_ddl(index_name))\"", "\"$(Dialect._quote_table_ddl(model_table_name(model)))\"", ["\"$(Dialect._quote_table_ddl(col))\""]))
       end
-    end    
-    
-    @pormg_debug false
-    # Pass maps to resolve fields so original keys can be used for accessing model.fields
-    _resolve_table_fields(conn, model_name, model, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive)
-      
-    # #325: index create/drop is DEFERRED to after the whole field loop, not emitted inline.
-    # `stripped_current_fields` is a `Set`, so field order is arbitrary — and on SQLite the table
-    # rebuild re-creates every live secondary index verbatim (#82). A `DROP INDEX` emitted before
-    # the rebuild is therefore undone by it, and whether that happened depended on which field the
-    # Set yielded first. Collecting the actions here and flushing them below puts them after any
-    # rebuild, deterministically. Each entry is `(:create | :drop, physical column, hashed name,
-    # live index name or nothing)`.
-    index_actions = Tuple{Symbol, String, String, Union{String, Nothing}}[]
-
-    for field_name_stripped in stripped_current_fields
-      original_code_key = current_fields_map[field_name_stripped]
-      if haskey(model_fields_map, field_name_stripped)
-        original_db_key = model_fields_map[field_name_stripped]
-
-        field = current_schema[model_name][:model].fields[original_code_key]
-        old_field = model.fields[original_db_key]
-
-        # A ManyToManyField is not a physical column and `sManyToManyField` is the one field struct
-        # with no `db_index` at all, so the index blocks below would raise on it. It cannot normally
-        # be matched here (it is never a live column), but the guard is what makes that explicit —
-        # `_add_new_field` / `_add_constrains` both early-return on m2m for the same reason.
-        (Models.is_many_to_many_field(field) || Models.is_many_to_many_field(old_field)) && continue
-
-        name::String = _hash_field_name(model_name, field_name_stripped)
-
-        # #507: ONE comparator. Both fields compile to a `ColumnSpec` — what the database can hold —
-        # and the difference is read off that. This replaced four code paths that each answered
-        # "same column?" with their own reconciliations and disagreed at the edges: the attribute-wise
-        # loop, `Dialect.describes_same_column` (#325), the `db_constraint = false` escape (#408) and
-        # the `push!(:type)` fallthrough. Its symbol VOCABULARY is a subset of what those paths
-        # produced, so everything below this line is untouched — but the per-pair SETS are not
-        # identical, deliberately: a cross-struct pair that used to collapse to a bare `:type` now
-        # reports what actually differs (`IDField` vs `IntegerField` was `[:type]`, is
-        # `[:type, :unique, :primary_key, :generated]`), and `:choices` / `:db_constraint` /
-        # `:deferrable` / `:auto_hash` are no longer produced at all. Richer is the point — the old
-        # `:type` re-rendered the column and left the identity and the UNIQUE in place, forever.
-        colect_not_equal::Vector{Symbol} =
-          column_attrs_changed(field, old_field, conn; name = field_name_stripped)
-
-        # if field_name == "time"
-        #   @pormg_debug
-        # end
-
-        # #325: the column ALTER is CONDITIONAL, but the index blocks below are not. `db_index` is in
-        # `NON_DB_ATTRS` and is not a `ColumnSpec` field at all, so an index-only difference leaves
-        # `colect_not_equal` empty — which is the point (on SQLite a non-empty vector means a FULL
-        # TABLE REBUILD, for something a CREATE/DROP INDEX expresses on its own). Before #325 this
-        # was an early `continue`, so an index-only difference would now be planned as nothing at all.
-        #
-        # #507 note: the index blocks are now reachable for one pair that never reached them. The
-        # retired #408 escape answered a `db_constraint = false` relational field against a live
-        # `sBigIntegerField` with `continue`, which skipped the REST OF THE LOOP BODY — the two index
-        # blocks included — so such a column could neither gain nor lose an index here. That was an
-        # accident of the escape's shape, not a decision. It is expected to be inert in practice:
-        # the FK constructors force `db_index = db_index || !db_constraint`, so a
-        # `db_constraint = false` key always declares an index, and introspection reports the one
-        # PormG created for it — both sides `true`, no action.
-        if !isempty(colect_not_equal)
-          # Check if is needed remove the foreign key
-          _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name_stripped, field, old_field)
-
-          # For SQLite every field alteration requires a full table recreation. Use a
-          # single stable key ("Alter table: <model>") so repeated calls for the same
-          # table overwrite each other, producing exactly one recreation statement
-          # instead of one per changed field.
-          alter_key = conn isa PormGSQLite ? "Alter table: $model_name" : "Alter field: $field_name_stripped"
-          # #498: `colect_not_equal` is the DIFFERENCE SET; `column_attrs` is what a column ALTER can
-          # actually render. Conflating the two is where the bug lived — the FK identity attributes
-          # have to be IN the difference set (they are real schema changes, and they are what opens
-          # this gate) but must never reach `Dialect.alter_field`, which has no branch for any of them
-          # and answered a re-pointed foreign key with an empty string plus a permanent
-          # "[:to] are not implemented" warning. They are planned as DROP + ADD CONSTRAINT by the two
-          # calls straddling this one. Every branch in `alter_field` is gated on a symbol being
-          # present in the vector it receives, so an emptied one is a true no-op: it returns "" and
-          # `_configure_order_dict_migration_plan` drops the step. SQLite ignores the vector entirely
-          # and rebuilds from the desired model regardless, which is what re-points the key there.
-          column_attrs = filter(attr -> !(attr in _FK_IDENTITY_ATTRS), colect_not_equal)
-          # #82: on SQLite this preserves the table's secondary indexes across the rebuild and gates on
-          # foreign_key_check (no-op on PostgreSQL). See _sqlite_rebuild_preserving_indexes.
-          alter_sql = _sqlite_rebuild_preserving_indexes(conn, model_table_name(model),
-            Dialect.alter_field(conn, current_schema[model_name][:model], field_name_stripped, field, old_field, column_attrs);
-            surviving_columns = _model_physical_columns(current_schema[model_name][:model]))
-          _configure_order_dict_migration_plan(migration_plan, model_name, alter_key, alter_sql)
-
-          # Check if the field is a foreign key
-          _add_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name_stripped, field, old_field, name)
-        end
-
-        # Index differences are RECORDED here and emitted after the loop — see `index_actions`.
-
-        # Check if the field is also indexed
-        if !field.primary_key && field.db_index && !old_field.db_index
-          @pormg_debug false
-          push!(index_actions, (:create, field_name_stripped, name, nothing))
-        end
-
-        # Check if is need to remove the index
-        if !field.primary_key && old_field.db_index && !field.db_index
-          @pormg_debug
-          # The live model's index cache maps physical column ⇒ index name. `db_index=true` on the
-          # live side means introspection saw exactly such an index, so the key is present; the
-          # `nothing` fallback routes `_drop_index` through `get_constraints_index` rather than
-          # raising a KeyError from inside makemigrations.
-          live_index_name = get(get(model.cache, "index", Dict{String,Any}()), original_db_key, nothing)
-          push!(index_actions, (:drop, field_name_stripped, name, live_index_name === nothing ? nothing : string(live_index_name)))
-        end
-      end
-    end
-
-    # Flush the deferred index actions — always after any "Alter table:"/"Alter field:" step the
-    # loop above registered, whichever field produced it.
-    for (kind, col, hashed, live_index_name) in index_actions
-      if kind === :create
-        # #82/#325: the SQLite rebuild already re-emits every existing index, so a CREATE INDEX
-        # alongside one would duplicate it (the random suffix defeats IF NOT EXISTS). Introspection
-        # now reads `db_index` back on both backends, so this branch no longer fires merely because
-        # SQLite could not see the index — but the probe stays: the rebuild is emitted from the
-        # DECLARED model, which can carry an index the live schema is only about to gain.
-        # Genuinely-new indexes still get created.
-        if !(conn isa PormGSQLite && get_constraints_index(conn, model_name, col) !== nothing)
-          index_name = "$(hashed)_idx"
-          _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $col",
-          Dialect.create_index(conn, "\"$(Dialect._quote_table_ddl(index_name))\"", "\"$(Dialect._quote_table_ddl(model_table_name(model)))\"", ["\"$(Dialect._quote_table_ddl(col))\""]))
-        end
-      else
-        _drop_index(conn, migration_plan, model_name, col, index_name=live_index_name)
-      end
+    else
+      _drop_index(conn, migration_plan, model_name, col, index_name=live_index_name)
     end
   end
 end
@@ -710,6 +869,11 @@ function _resolve_table_fields(
                                 current_fields_map::Dict{String, String};
                                 interactive::Bool = true
                               )::Nothing
+  # #150/#507: the SQLite rebuild that a renamed-and-altered column needs is registered under ONE
+  # key per table, so a second rename has to re-render it rather than add another — and to preserve
+  # both columns' secondary indexes it needs BOTH renames. Accumulated here and passed whole to
+  # every `_plan_column_change!` call, so whichever registration lands last carries all of them.
+  sqlite_rename_map = Dict{String, String}()
   # Check by rename field  
   while !isempty(colect_addition)
     field_name_sym = colect_addition[1]
@@ -741,49 +905,64 @@ function _resolve_table_fields(
         old_field_name = old_field_sym |> string
         new_field = current_model.fields[current_fields_map[field_name]]
         old_field = model.fields[model_fields_map[old_field_name]]
-        if conn isa PormGSQLite && _fk_definition_changed(new_field, old_field)
-          # #150: on SQLite the FK clause lives inside CREATE TABLE and `RENAME COLUMN` keeps the OLD clause,
-          # so a rename whose FK definition ALSO changes needs the same model-based table rebuild the
-          # alteration (#83) and deletion (#116) paths use. RENAME COLUMN is emitted FIRST so the rebuild's
-          # INSERT..SELECT — which copies by the NEW physical name — finds the column; the rebuild then
-          # re-creates the table from `current_model` with the new FK clause, preserving the secondary
-          # indexes (renamed via `column_renames`) under the stable "Alter table:" key. A plain FK rename
-          # (no FK change) takes the cheap path below — SQLite updates the FK's local column reference
-          # natively. Co-occurring field DELETIONS on this table are handled: the deletion loop below defers
-          # to this rebuild (which already drops every removed column). Residual limitation: a co-occurring
-          # field ALTERATION re-emits "Alter table:" WITHOUT column_renames (the renamed column's index may
-          # be dropped), and a second rename/addition on the same table is unsupported (the rebuild copies by
-          # `current_model`'s names, which the other change hasn't applied to the old table yet) — both rare,
-          # and both fail safely (the runner transaction rolls back). Tracked as a #150 follow-up.
-          #
-          # #514 added a THIRD producer of this same "Alter table:" key — `_add_new_field`, for a new
-          # foreign key SQLite cannot inline — so it falls under the first limitation above: a rename
-          # and such an addition on one table in one migration leaves whichever registered last, and
-          # that one carries no `column_renames`. Same rarity, same safe failure, same follow-up.
-          old_phys = Models.field_db_column(old_field, old_field_name)
-          _configure_order_dict_migration_plan(migration_plan, model_name, "Rename field: $field_name",
-          Dialect.rename_field(conn, model_name, old_field_name, field_name))
-          _configure_order_dict_migration_plan(migration_plan, model_name, "Alter table: $model_name",
-          _sqlite_rebuild_preserving_indexes(conn, model_table_name(current_model),
-            Dialect.alter_field(conn, current_model, field_name, new_field, old_field, Symbol[]);
-            surviving_columns = _model_physical_columns(current_model),
-            column_renames = Dict(old_phys => field_name)))
-        else
-          _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, old_field_name, new_field, old_field)
-          # #515: still gated only on `primary_key`, and deliberately so. The hazard was never the
-          # unconditional CALL — it was that `get_constraints_index` answered with an index backing a
-          # UNIQUE constraint, which `_drop_index` then destroyed on PostgreSQL and choked on with
-          # SQLite. That is fixed where the answer is produced, so this line is safe as written and a
-          # second local opinion here would be worse than none: a `!new_field.unique` guard reads as
-          # the fix while missing a `CREATE UNIQUE INDEX` column, which sets no `field.unique` at all
-          # and is the same hazard. Same reasoning as #504 one line below — one decision, one place.
-          !new_field.primary_key && _drop_index(conn, migration_plan, model_name, old_field_name)
-          _configure_order_dict_migration_plan(migration_plan, model_name, "Rename field: $field_name",
-          Dialect.rename_field(conn, model_name, old_field_name, field_name))
-          # #504: `old_field` makes the ADD as action-aware as the DROP above it. Without it a rename
-          # whose FK definition did not change planned an unconditional second constraint.
-          _add_constrains(conn, migration_plan, model_name, current_model, field_name, new_field, _hash_field_name(model_name, field_name); old_field = old_field)
-        end
+        # #507 phase 2: a rename is the SAME column change with a new name, so it goes through the
+        # same `_plan_column_change!` the alteration loop uses — FK drop (by the pre-rename column,
+        # because the catalog has not been renamed yet), RENAME COLUMN, the column ALTER or SQLite
+        # rebuild if the delta is non-empty, then the FK add. This branch used to hold a private copy
+        # of that sequence, split in two by a `_fk_definition_changed` test, and three of the four
+        # action-path bugs of the last week lived in the copy:
+        #
+        #   * #504 — the ADD was unconditional, so a rename whose reference had NOT moved left two
+        #     identical FOREIGN KEYs on one column. Now the ADD is `_fk_constraint_action`'s `:none`
+        #     and emits nothing; the pre-rename field is not even passed to `_add_constrains` any
+        #     more, which is what makes the bug unrepresentable rather than declined.
+        #   * #515 — the `_drop_index(old_field_name)` that stood here dropped the index BACKING a
+        #     UNIQUE constraint (PostgreSQL implements one with the other), destroying the constraint
+        #     silently. It is gone entirely, not merely guarded: on both engines RENAME COLUMN takes
+        #     the column's existing indexes with it, so there was never anything to re-create. The
+        #     narrow fix in `get_constraints_index` stays where it is, for the other callers.
+        #   * #150 — `_fk_definition_changed` existed to decide when a rename ALSO needed the SQLite
+        #     rebuild. A non-empty delta is that answer, and a strictly wider one: it is now also
+        #     true when the rename changes the column's TYPE, which the old branch missed. Measured
+        #     on the base commit, a rename-plus-retype planned the RENAME alone and dropped the type
+        #     change on the floor until the next `makemigrations` re-proposed it.
+        #
+        # STATED LIMIT (#507 phase 2, deliberate): a rename that ALSO flips `db_index` plans no index
+        # action in this migration. `db_index` is outside the IR on purpose — `index_actions` owns
+        # it, because on SQLite a non-empty delta means a rebuild that re-emits every live index —
+        # and a renamed column never reaches the loop that reads it. The next `makemigrations` sees
+        # the column on both sides and plans the CREATE/DROP INDEX normally, so this self-heals one
+        # run later. The common case (an unchanged `db_index`) now correctly plans nothing at all,
+        # where the old code dropped and re-created the index under a fresh hashed name.
+        #
+        # The SQLite rebuild receives the ACCUMULATED `column_renames`, so every renamed-but-surviving
+        # column keeps its secondary indexes (#150) — and `_plan_column_change!` relocates the entry
+        # to the end of the table's plan, so it executes after every RENAME. That closes what #150
+        # documented as unsupported: two renames on one table now plan one correct rebuild, and a
+        # rename co-occurring with a new column does too (whichever registers last, both relocate).
+        #
+        # What REMAINS a limitation, narrower than before: a co-occurring column ALTERATION on the
+        # same table (a field present on both sides, handled by the loop in `_alter_table_fields`)
+        # re-registers the same key with an EMPTY rename map, so a renamed column can still lose its
+        # index to that. And `_add_new_field`'s own rebuild (#514, or a temporary default) carries no
+        # rename map either. Both are index loss on a rare combination, not a broken plan — the
+        # rebuild itself is correct in every ordering — and both are a #150 follow-up.
+        # `old_name` is what makes the alteration correct rather than merely present: the live
+        # catalog knows this column by its PRE-rename name, and four statements in
+        # `Dialect.alter_field` can only learn a constraint's name by asking it. Found in review —
+        # before this, a renamed column's UNIQUE / PRIMARY KEY / CHECK drop was silently omitted, and
+        # a renamed `PositiveIntegerField` becoming a `TextField` emitted the retype with the stale
+        # `>= 0` CHECK still in place, which PostgreSQL rejects.
+        delta = column_delta(new_field, old_field, conn; name = field_name, old_name = old_field_name)
+        # `delta.old_spec.name` IS `field_db_column(old_field, old_field_name)` — the pre-rename
+        # physical column — so the rename map reads it off the same single source the constraint
+        # lookups use rather than recomputing it.
+        sqlite_rename_map[delta.old_spec.name] = field_name
+        _plan_column_change!(conn, migration_plan, model_name, current_model, field_name,
+                             new_field, old_field, delta,
+                             _hash_field_name(model_name, field_name);
+                             old_column = old_field_name,
+                             column_renames = sqlite_rename_map)
         # Update model.fields to reflect rename to avoid double processing if needed
         model.fields[model_fields_map[old_field_name]] = model.fields[model_fields_map[old_field_name]] # effectively stays same but we can update key if we want to sync
         # remove the old field from colect_deletion
@@ -848,16 +1027,20 @@ function _resolve_table_fields(
       end
     end
     if rebuild_delete_idx !== nothing
-      # `alter_field(::PormGSQLite, model, …)` rebuilds the table purely from `model.fields`; its
-      # field_name/new_field/old_field/colect_not_equal arguments are unused for the SQLite recreation, so a
-      # representative deleted field is passed only to satisfy the shared signature. `surviving_columns` keeps
-      # the dropped columns' indexes off the preserved set (see _sqlite_rebuild_preserving_indexes). The
-      # stable "Alter table:" key means a co-occurring alteration/add-default collapses into this one
-      # idempotent recreation from the same desired model.
-      rebuild_field = model.fields[model_fields_map[string(colect_deletion[rebuild_delete_idx])]]
+      # `Dialect.rebuild_table` rather than `alter_field`: this is a rebuild with NO column diff at
+      # all — the table is re-created precisely because `current_model` no longer has these columns.
+      # It used to call `alter_field` with an empty `Symbol[]` plus, in this comment's own words, "a
+      # representative deleted field … only to satisfy the shared signature". #507 phase 2 made that
+      # spelling untenable rather than merely ugly: an empty `ColumnDelta` now MEANS "this column did
+      # not change, plan nothing", so fabricating one here would say the opposite of what is meant.
+      # `rebuild_table` is the same body and emits identical SQL, minus the three fake arguments.
+      #
+      # `surviving_columns` keeps the dropped columns' indexes off the preserved set (see
+      # _sqlite_rebuild_preserving_indexes). The stable "Alter table:" key means a co-occurring
+      # alteration/add-default collapses into this one idempotent recreation from the same desired model.
       _configure_order_dict_migration_plan(migration_plan, model_name, "Alter table: $model_name",
         _sqlite_rebuild_preserving_indexes(conn, model_table_name(current_model),
-          Dialect.alter_field(conn, current_model, string(colect_deletion[rebuild_delete_idx]), rebuild_field, rebuild_field, Symbol[]);
+          Dialect.rebuild_table(conn, current_model);
           surviving_columns = _model_physical_columns(current_model)))
     else
       # PostgreSQL, or SQLite with no FK-column deletions: plain DROP COLUMN works (the FK drop runs first on
@@ -865,7 +1048,16 @@ function _resolve_table_fields(
       for field_name_sym in colect_deletion
         field_name = field_name_sym |> string
         old_field = model.fields[model_fields_map[field_name]]
-        _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name, nothing, old_field)
+        # `nothing` on the new side IS the deletion path: `_fk_constraint_action` reads it as "the
+        # reference is going away" and answers `:drop`. The live column is compiled through the
+        # fail-safe entry point on purpose — a field being deleted is often a foreign key whose
+        # PARENT has just been removed from the models file too, which is the shape most likely to
+        # make a compile fail, and aborting `makemigrations` there would be a regression against the
+        # pre-phase-2 planner (which read two slots off the struct and compiled nothing). Degrading
+        # keeps the DROP planned, and `get_constraints_fk` inside the helper is the authority on
+        # whether a constraint is really there.
+        _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name, nothing,
+                                          _spec_or_degraded(old_field, conn, "<uncompilable:old>"; name = field_name))
         _drop_index(conn, migration_plan, model_name, field_name)
         _configure_order_dict_migration_plan(migration_plan, model_name, "Remove field: $field_name",
         Dialect.drop_field(conn, model_name, field_name))

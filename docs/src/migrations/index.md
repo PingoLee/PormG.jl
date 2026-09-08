@@ -90,38 +90,81 @@ On SQLite the same change goes through the [table rebuild](#SQLite:-Table-Recrea
 
     The new constraint is `DEFERRABLE INITIALLY DEFERRED`, so it is validated when the migration **commits**. If any existing row holds a value that does not exist in the new parent, the commit fails and the whole migration rolls back. Re-point the data first, or make the column nullable and clear it, before changing the model.
 
-### Renaming a foreign-key field
+### Renaming a field
 
-Renaming the field is **not** a change to the constraint. On PostgreSQL `ALTER TABLE ... RENAME COLUMN` carries the existing `FOREIGN KEY` along with the column, and on SQLite the stored `FOREIGN KEY ... REFERENCES` clause is rewritten as part of the rename — so PormG renames the column and re-creates its index, and never re-issues the key. Renaming `Result.statusid` to `Result.racestatusid`, with everything else about the key unchanged, generates this on PostgreSQL, in execution order:
+**A rename plans the rename.** Both backends carry a column's own baggage across
+`ALTER TABLE ... RENAME COLUMN` — its indexes, its `UNIQUE` constraint, its `PRIMARY KEY`, and its
+`FOREIGN KEY` — so when nothing else about the field changed, that one statement is the whole plan.
+Renaming `Result.statusid` to `Result.racestatusid`, with everything else about the key unchanged:
 
 ```sql
 ALTER TABLE "result" RENAME COLUMN "statusid" TO "racestatusid";
-
-DROP INDEX IF EXISTS "result_statusid_a1b2c3d4_idx";
-
-CREATE INDEX IF NOT EXISTS "result_racestatusid_wpkbcx73_idx" ON "result" ("racestatusid");
 ```
 
-The **index** is re-created rather than carried over — `ForeignKey` sets `db_index = true` by default, and PormG names indexes with a random suffix it cannot re-derive, so it drops the old one and creates a fresh one against the new column. Both backends emit the same bare `DROP INDEX IF EXISTS` for that step.
+That is all, on both engines, and it holds for a plain field, an indexed field
+(`ForeignKey` sets `db_index = true` by default), a `unique = true` field, and one that is both.
 
-Only an index PormG may actually drop is ever chosen. A `UNIQUE` constraint is *implemented by* an index, and a `PRIMARY KEY` likewise — PostgreSQL refuses to drop such an index while the constraint owns it, and SQLite refuses to drop its `sqlite_autoindex_…` at all — so those are never selected, and a rename leaves them exactly where they are. The index is matched by real column membership, not by a substring of its definition, so a neighbouring index cannot be caught up in it either.
+The **index keeps its old name**. PormG names indexes with a random suffix it cannot re-derive, so an
+index created for `statusid` stays `result_statusid_a1b2c3d4_idx` while covering `racestatusid`. That
+is cosmetic: nothing reads the name — PormG matches an index by its real column membership — and
+`makemigrations` sees the column as indexed on both sides afterwards, so it plans nothing further.
+The alternative would be dropping and re-creating the index on every rename, which rebuilds it from
+scratch on a large table to change a string nobody reads.
 
-What the plan does **not** contain is any `DROP CONSTRAINT`/`ADD CONSTRAINT` for the *foreign key*: it is untouched, and keeps its **pre-rename** name. That is harmless — PormG looks a foreign key up by its table and column, never by a name convention, so a later drop or re-point finds it normally. Rename the field *and* change what the key points at in the same migration and you get both: the rename runs first, then the drop, then the add.
+The **foreign key** likewise keeps its pre-rename name, and that too is harmless: PormG looks a key
+up by its table and column, never by a name convention, so a later drop or re-point finds it.
 
-### Renaming a `unique` field
+#### When a rename carries more than a rename
 
-Nothing is planned for the constraint, and nothing needs to be. Both backends carry a `UNIQUE` constraint across `ALTER TABLE ... RENAME COLUMN` with the column, exactly as they carry a foreign key, so renaming a `unique = true` field generates only the `RENAME COLUMN` itself:
+A rename is the same column change with a new name, so if the field *also* changed, the plan carries
+that change too — the `RENAME COLUMN` first, then exactly what an ordinary alteration of that column
+would have emitted. Rename `Result.statusid` to `Result.racestatusid` **and** change the key — a
+different parent, a different target column, or a different `ON DELETE`; any of the three re-issues
+the constraint — and you get the drop, the rename, and the new constraint, in that order:
 
 ```sql
-ALTER TABLE "driver" RENAME COLUMN "driverref" TO "driverslug";
+ALTER TABLE "result" DROP CONSTRAINT "result_statusid_a1b2c3d4_fk";
+
+ALTER TABLE "result" RENAME COLUMN "statusid" TO "racestatusid";
+
+ALTER TABLE "result" ADD CONSTRAINT "result_racestatusid_wpkbcx73_fk"
+  FOREIGN KEY ("racestatusid") REFERENCES "status" ("statusid") ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED;
 ```
 
-A field that is **both** `unique = true` and `db_index = true` carries two indexes — the one backing the constraint and the plain one — and only the plain one is dropped and re-created, as above.
+The drop comes first and names the **pre-rename** column, because that is what the live catalog knows
+when the plan is built; the add names the new one, because by then the rename has run. On SQLite the
+same change is one table rebuild, emitted after the `RENAME COLUMN`.
 
-!!! warning "Renaming an *indexed* field needs `destructive = true`"
-    When the field carries a plain index (`db_index = true`, which `ForeignKey` sets by default), the plan contains `DROP INDEX`, which `dry_run()` classifies as destructive — so `migrate()` refuses it until you opt in with `migrate(path, destructive = true)`. Only the field's index is dropped, and the same migration re-creates it against the new column name; no column and no data are removed.
+Two renames on the same table in one migration are fine, and so is a rename alongside a new column:
+SQLite collapses them into a single rebuild placed after every rename and every `ADD COLUMN`.
 
-    A field that is only `unique = true`, with no `db_index`, plans no `DROP INDEX` and so needs no opt-in.
+!!! note "On SQLite, a rename combined with another change may leave its index for the next run"
+    The rebuild re-creates the renamed column's secondary indexes when the rename is what registered
+    it. But a rename that co-occurs with an ordinary column alteration, or with a new column, on the
+    *same* table produces one rebuild for all of them — and that one may not carry the rename, in
+    which case the renamed column's index is not re-created. No column and no data are affected, and
+    the next `makemigrations` sees the column as unindexed and plans the `CREATE INDEX`. Renaming on
+    its own, or renaming two columns together, always keeps the indexes.
+
+!!! warning "A rename that DROPS a constraint needs `destructive = true`"
+    Renaming a field is not destructive. But if the same change also removes a `UNIQUE` constraint or
+    a `PRIMARY KEY`, the plan contains `DROP CONSTRAINT` (PostgreSQL) or a table rebuild whose
+    `DROP TABLE` is part of the recreation (SQLite) — and `dry_run()` classifies either as
+    destructive, so `migrate()` refuses it until you opt in with `migrate(path, destructive = true)`.
+
+    On **SQLite** the opt-in is needed for *any* rename that also changes the column — a retype, a
+    nullability change, a re-pointed key — because SQLite alters a column by recreating the table.
+    The recreation copies every row; no column and no data are lost, but `DROP TABLE` is what the
+    classifier sees. On **PostgreSQL** the same changes are in-place
+    `ALTER COLUMN` statements and need no opt-in unless a constraint is genuinely being dropped.
+
+    Measured per shape (`dry_run().statements` through `Migrations.is_destructive`):
+
+    | the rename also… | PostgreSQL | SQLite |
+    |---|---|---|
+    | …changes nothing else | not destructive | not destructive |
+    | …retypes the column, or changes `null` | not destructive | **destructive** |
+    | …drops a `UNIQUE` or `PRIMARY KEY` | **destructive** | **destructive** |
 
 !!! warning "Repairing a `UNIQUE` constraint dropped by an older PormG"
     Before this behavior was fixed, renaming a `unique = true` field **destroyed the constraint on PostgreSQL** and **aborted the migration on SQLite**. The plan dropped the index backing the constraint, and on PostgreSQL that meant dropping the constraint first — successfully, and with nothing to put it back.

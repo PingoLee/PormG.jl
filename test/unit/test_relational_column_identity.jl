@@ -8,8 +8,8 @@ is diffed against a live side that says `sOneToOneField`, forever. Before this f
 no branch for that pair:
 
     typeof equal (branch 1 gate)                          -> false
-    Models._compare_model_field(declared, live)           -> true      # they ARE equal
-    Dialect.describes_same_column(conn, declared, live)   -> false     # …and they are NOT
+    Models._compare_model_field(declared, live)           -> true      # they WERE equal
+    Dialect.describes_same_column(conn, declared, live)   -> false     # …and they were NOT
     db_constraint escape (planner.jl)                     -> false
     => push!(colect_not_equal, :type)
 
@@ -20,12 +20,16 @@ compiles to one `ColumnSpec`, not because a fifth branch was added for it.)
 `INTEGER -> INTEGER`, so churn rather than data damage — but a permanent, unavoidable table-rebuild
 proposal an operator cannot tell apart from a real one.
 
-WHY IT WAS LATENT, and why testset 3 is shaped the way it is: `Models._compare_model_field` compares
-attribute-wise over two structs with identical field-name sets, so the pair compares EQUAL and
-`are_model_fields_equal` lets the planner's fast path return early. The bug only bites once ANY
-OTHER column in the same table differs — then the detailed loop runs, `typeof` differs, and the
-unrelated one-to-one column is swept into the rebuild. A test that changes only the relational
-column therefore passes both before and after the fix and proves nothing.
+WHY IT WAS LATENT, and why testset 3 is shaped the way it is: `Models._compare_model_field` compared
+attribute-wise over two structs with identical field-name sets, so the pair compared EQUAL and
+`are_model_fields_equal` let the planner's fast path return early. The bug only bit once ANY OTHER
+column in the same table differed — then the detailed loop ran, `typeof` differed, and the unrelated
+one-to-one column was swept into the rebuild. A test that changes only the relational column
+therefore passed both before and after the fix and proved nothing, which is why testset 3 changes a
+second column too. (Both of those functions are gone since #507 phase 2 — the planner has no
+early-out and no attribute-wise comparator — so the shape is history. The testset keeps it: the
+per-column loop now always runs, and a test that exercises only the easy path is still worth less
+than one that does not.)
 
 MOCK LIMIT, measured: the SQLite marker struct cannot serve a NON-EMPTY plan. A SQLite alteration is
 a full table rebuild, and `_sqlite_rebuild_preserving_indexes` asks the connection for the live
@@ -165,23 +169,25 @@ _rc_parent_sql(plan) =
   #    user saw it until an unrelated column changed. Documents the shape; it is not a gate for the
   #    fix (it passed before the fix too) and it must not be mistaken for one.
   # ───────────────────────────────────────────────────────────────────────────
-  @testset "the fast path already called the pair equal (why it stayed hidden)" begin
+  @testset "the pair is one column, on both engines (why the bug could hide)" begin
     declared = Models.ForeignKey(_rc_parent(), unique = true, pk_field = "id", null = true)
     live     = _rc_live_o2o()
 
-    @test Models._compare_model_field(declared, live)
+    # This testset has now been retargeted twice, and both moves are the same story.
+    #
+    # Originally it pinned `Dialect.describes_same_column` answering `false` for this pair while
+    # `Models._compare_model_field` answered `true` — the DISAGREEMENT was the point, and it was
+    # why the bug could hide: whichever comparator ran decided the outcome. #507 phase 1 replaced
+    # both with the column IR and the property became "the fast path and the IR must AGREE".
+    # Phase 2 retired the fast path itself, so there is no second answer left to agree with, and
+    # what remains is the only claim that was ever really about the schema: this is ONE column.
+    #
+    # `_compare_field_foreign_key` survives as the shared "same parent?" predicate (it delegates to
+    # `_fk_targets_equal`, which the IR uses too), so it is still asserted here.
     @test Models._compare_field_foreign_key(declared, live)
-
-    # #507 retargeted the two assertions that used to sit here. They pinned
-    # `Dialect.describes_same_column` answering `false` for this pair while the fast path answered
-    # `true` — the DISAGREEMENT was the point, and it was the reason the bug could hide. There is
-    # now one comparator, so the property worth pinning is the opposite one: the fast path and the
-    # column IR must AGREE. That is what makes keeping `_compare_model_field` as a speed path safe
-    # (it may only answer `true` when the IR would too); the general form of this invariant, over a
-    # corpus, is in `test_column_spec.jl`.
     for conn in (RC_PG, RC_SL)
       @test Migrations.column_spec(declared, conn) == Migrations.column_spec(live, conn)
-      @test isempty(Migrations.column_attrs_changed(declared, live, conn; name = "parent_id"))
+      @test isempty(Migrations.column_delta(declared, live, conn; name = "parent_id").changed)
     end
   end
 
@@ -354,7 +360,10 @@ _rc_parent_sql(plan) =
       # helpers key on.
       @test Migrations.column_spec(Models.ForeignKey("Parent_t"), conn).reference !== nothing
       @test Migrations.column_spec(Models.BigIntegerField(), conn).reference === nothing
-      @test :to in Migrations.column_attrs_changed(Models.ForeignKey("Parent_t"), Models.BigIntegerField(), conn; name = "parent_id")
+      # `:reference` since #507 phase 2: the IR carries the whole constraint as one facet, and the
+      # planner reads `:add` / `:drop` / `:repoint` off it. Phase 1 reported the planner's old
+      # `:to` symbol here purely so the pre-IR action code kept working.
+      @test :reference in Migrations.column_delta(Models.ForeignKey("Parent_t"), Models.BigIntegerField(), conn; name = "parent_id").changed
     end
 
     # And end to end: a declared foreign key over a column the database holds as a plain integer is
@@ -408,7 +417,14 @@ _rc_parent_sql(plan) =
                      id        = Models.IDField(),
                      parent_id = Models.ForeignKey(parent, unique = true, pk_field = "id", null = true),
                      note      = Models.CharField(max_length = 40))
-        @test Models.are_model_fields_equal(declared, by["child_t"])
+        # #507 phase 2 retired `are_model_fields_equal`. Convergence is now what the planner
+        # actually checks: every declared column compiles to the same `ColumnSpec` as the column
+        # introspection read back, so the per-column delta is empty and nothing is planned. It also
+        # says WHICH column disagrees when it fails, which the model-level boolean could not.
+        @test Set(keys(declared.fields)) == Set(keys(by["child_t"].fields))
+        for (k, f) in declared.fields
+          @test isempty(Migrations.column_delta(f, by["child_t"].fields[k], pool; name = string(k)).changed)
+        end
       finally
         # Windows will not remove the temp dir while the file handle is open, so `mktempdir` prints
         # a cleanup error and leaks the directory — the same leak test_key_type_round_trip.jl has.

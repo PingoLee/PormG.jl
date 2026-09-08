@@ -34,7 +34,7 @@ using Test
 using PormG
 using PormG.Models
 using PormG.Dialect: _get_column_type
-using PormG.Migrations: column_spec, column_attrs_changed
+using PormG.Migrations: column_spec, column_delta
 
 # `PormGPostgres`/`PormGSQLite` are abstract backend markers (src/Kernel.jl); dialect rendering
 # dispatches on them alone. Same mock pattern as test/unit/test_alter_field_constraint_drops.jl.
@@ -87,11 +87,13 @@ same_column(conn, a::PormG.PormGField, b::PormG.PormGField) = column_spec(a, con
     @test !same_column(PG325, Models.UUIDField(), Models.CharField())    # uuid vs varchar
     @test !same_column(PG325, Models.BinaryField(), Models.TextField())  # bytea vs text
 
-    # And the emitted symbol for a length-only change is `:max_length`, not `:type` — the narrow
-    # symbol `Dialect.alter_field`'s char branch expects, and what the pre-#507 diff produced for
-    # the same change. Keeping it identical is what let the whole action path stay untouched.
-    @test column_attrs_changed(Models.CharField(max_length = 250), Models.CharField(max_length = 120),
-                               PG325; name = "code") == [:max_length]
+    # A length-only change is a `:type` delta, because the IR's type IS the rendered column:
+    # `CVarChar(250)` and `CVarChar(120)` are different types. Phase 1 reported the narrow
+    # `:max_length` here, purely so `Dialect.alter_field`'s char branch — which gated on the
+    # field-attribute name — kept firing; #507 phase 2 deleted that adapter and the renderer now
+    # gates on `:type` for every width, precision and outright type change alike.
+    @test column_delta(Models.CharField(max_length = 250), Models.CharField(max_length = 120),
+                       PG325; name = "code").changed == [:type]
   end
 
   # ───────────────────────────────────────────────────────────────────────────
@@ -127,10 +129,14 @@ same_column(conn, a::PormG.PormGField, b::PormG.PormGField) = column_spec(a, con
     @test !same_column(SL325, Models.BinaryField(max_length = 8), Models.BinaryField())
     @test !same_column(PG325, Models.BinaryField(max_length = 8), Models.BinaryField(max_length = 16))
 
-    # Each CHECK maps to the symbol `Dialect.alter_field` gates that constraint's DROP/ADD on.
-    @test column_attrs_changed(Models.PositiveIntegerField(), Models.IntegerField(), PG325; name = "n") == [:type]
-    @test column_attrs_changed(Models.BinaryField(max_length = 16), Models.BinaryField(max_length = 8),
-                               PG325; name = "blob") == [:max_length]
+    # A CHECK-expressed bound is the `:checks` facet, and on PostgreSQL that is ALL it is: both
+    # `IntegerField` and `PositiveIntegerField` render `integer`, so the type did not change and
+    # `alter_field` emits the CHECK alone. Phase 1 reported `:type` / `:max_length` here because its
+    # adapter had to name a symbol the renderer's old field-attribute gates recognised — which is
+    # exactly how a redundant `ALTER COLUMN … TYPE integer` came to ride along with the CHECK.
+    @test column_delta(Models.PositiveIntegerField(), Models.IntegerField(), PG325; name = "n").changed == [:checks]
+    @test column_delta(Models.BinaryField(max_length = 16), Models.BinaryField(max_length = 8),
+                       PG325; name = "blob").changed == [:checks]
   end
 
   # ───────────────────────────────────────────────────────────────────────────
@@ -181,15 +187,15 @@ same_column(conn, a::PormG.PormGField, b::PormG.PormGField) = column_spec(a, con
     for conn in (PG325, SL325)
       @test same_column(conn, Models.ForeignKey("Races", unique = true), Models.OneToOneField("Races"))
       @test same_column(conn, Models.OneToOneField("Races"), Models.ForeignKey("Races", unique = true))
-      @test isempty(column_attrs_changed(Models.ForeignKey("Races", unique = true),
-                                         Models.OneToOneField("Races"), conn; name = "race_id"))
+      @test isempty(column_delta(Models.ForeignKey("Races", unique = true),
+                                 Models.OneToOneField("Races"), conn; name = "race_id"))
     end
 
     # Not a blanket "relational fields are equal": drop the UNIQUE and they are two columns again.
     for conn in (PG325, SL325)
       @test !same_column(conn, Models.ForeignKey("Races"), Models.OneToOneField("Races"))
-      @test :unique in column_attrs_changed(Models.ForeignKey("Races"), Models.OneToOneField("Races"),
-                                            conn; name = "race_id")
+      @test :unique in column_delta(Models.ForeignKey("Races"), Models.OneToOneField("Races"),
+                                    conn; name = "race_id")
     end
   end
 

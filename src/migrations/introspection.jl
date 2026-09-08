@@ -830,7 +830,7 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
           # the round trip strictly WORSE: `INTEGER` + a constraint became `TEXT` + none. #408 fixed
           # both halves, which is what makes this reversible.
           #
-          # Leaving it diverged was not free. `Models._compare_model_field` compares attribute-wise
+          # Leaving it diverged was not free. `Models._compare_model_field` compared attribute-wise
           # and the two structs have identical field-name sets, so a declared `OneToOneField` against
           # a live `ForeignKey` compared EQUAL and the planner's fast path returned early — but
           # `Dialect.describes_same_column` answered `false` for any relational field, so the moment

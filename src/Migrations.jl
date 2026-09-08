@@ -42,6 +42,17 @@ import PormG: Models, Migration, Dialect
 import PormG.Models: format_model_name, model_table_name, fk_target_table
 import PormG: connection, config, get_constraints_pk, get_constraints_unique, get_constraints_check, get_constraints_byte_length_check
 import PormG: PormGModel, PormGField, PormGSettings, PormGBackend, PormGPostgres, PormGSQLite
+# The canonical column IR (#507). The NOUNS live in `Kernel` (`src/column_ir.jl`) because `Dialect`
+# renders an ALTER from a `ColumnDelta` and is included before this module; the COMPILER that turns a
+# `PormGField` into a `ColumnSpec` is `migrations/column_spec.jl`, here, where `Models` and `Dialect`
+# are reachable. `column_delta` is imported rather than merely reachable because the compiler adds
+# the `(field, field, conn)` method to it.
+import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CBool, CText, CDate, CTime,
+              CInterval, CUUID, CJSON, CBytes, CVarChar, CDecimal, CDateTime, CUnsupported,
+              ColumnDefault, NoDefault, LiteralDefault, ExpressionDefault,
+              CheckKind, NonNegativeCheck, ByteLengthCheck,
+              ColumnIdentity, ForeignKeyRef, ColumnSpec, ColumnDelta,
+              reference_delta, column_delta, COLUMN_DELTA_COMPARATORS, COLUMN_DELTA_SLOTS
 import PormG: sqlite_type_map, postgres_type_map, sqlite_ignore_schema, postgres_ignore_table, _EXTRA_IGNORE_TABLES
 import PormG: GENERATED_MODULE_RESERVED_BINDINGS
 import PormG: MODEL_PATH, PormGSettings, DB_PATH

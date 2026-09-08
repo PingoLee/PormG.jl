@@ -93,23 +93,36 @@ end
 @testset "#360: a ForeignKey differing only in to_table is not schema drift" begin
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 1. The fast path (`Models._compare_model_field`, reached via `are_model_fields_equal`).
-  #    Mutation gate: drop the `:to_table` branch and both of these flip to `false`.
+  # 1. The "same parent?" predicate, which is where the `to_table` asymmetry is actually resolved.
+  #
+  #    This testset used to gate the fast path — `Models._compare_model_field` and its `:to_table`
+  #    branch, reached through `are_model_fields_equal`. #507 phase 2 retired both: the planner has
+  #    no whole-model early-out and no attribute-wise comparator, so there is no second place for
+  #    the `to_table` question to be answered differently. What survives is the predicate the rule
+  #    was extracted into, `Models._fk_targets_equal` (Kernel-owned since phase 2), which
+  #    `_compare_field_foreign_key` and the IR's `reference_delta` both call.
+  #
+  #    Mutation gate: make that predicate compare `to_table` unconditionally — rather than only
+  #    when BOTH sides can name a physical table — and the first assertion flips to `false`.
   # ───────────────────────────────────────────────────────────────────────────
-  @testset "are_model_fields_equal ignores to_table" begin
+  @testset "the same-parent rule ignores a to_table only one side can name" begin
     declared_fk, introspected_fk = _fk_pair()
 
-    @test Models._compare_model_field(introspected_fk, declared_fk)
+    @test Models._compare_field_foreign_key(introspected_fk, declared_fk)
+    @test Models._fk_targets_equal(Models._fk_reference_table(introspected_fk),
+                                   Models._fk_target_binding(introspected_fk),
+                                   Models._fk_reference_table(declared_fk),
+                                   Models._fk_target_binding(declared_fk))
 
-    declared_model = Models.Model("pit_stop", id = Models.IDField(), profile_id = declared_fk)
-    live_model     = Models.Model("pit_stop", id = Models.IDField(), profile_id = introspected_fk)
-    @test Models.are_model_fields_equal(live_model, declared_model)
-
-    # Negative control: a REAL difference on the same field must still register, so the assertion
-    # above is proving "to_table is ignored", not "this comparison always says equal".
+    # Negative control: a REAL difference on the same field must still register, so the assertions
+    # above prove "to_table is not compared alone", not "this comparison always says equal". The
+    # difference is `null`, which the reference predicate does not look at — so it is asserted where
+    # it now lands, on the column delta.
     changed_fk = Models.ForeignKey("Driver_profile", pk_field = "id", null = false)
     changed_fk.to_table = "driver profile"
-    @test !Models._compare_model_field(changed_fk, declared_fk)
+    for conn in (FkToTablePlannerMockPg(), FkToTablePlannerMockSQLite())
+      @test :nullable in Migrations.column_delta(changed_fk, declared_fk, conn; name = "profile_id").changed
+    end
   end
 
   # ───────────────────────────────────────────────────────────────────────────
@@ -134,7 +147,7 @@ end
 
     for conn in (FkToTablePlannerMockPg(), FkToTablePlannerMockSQLite())
       @test Migrations.column_spec(declared_fk, conn) == Migrations.column_spec(introspected_fk, conn)
-      @test isempty(Migrations.column_attrs_changed(declared_fk, introspected_fk, conn; name = "profile_id"))
+      @test isempty(Migrations.column_delta(declared_fk, introspected_fk, conn; name = "profile_id").changed)
     end
   end
 

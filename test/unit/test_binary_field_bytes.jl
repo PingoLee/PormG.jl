@@ -20,6 +20,27 @@ struct MockSLBin <: PormG.PormGSQLite end
 struct MockPGBinNamed <: PormG.PormGPostgres end
 PormG.get_constraints_byte_length_check(::MockPGBinNamed, table_name::String, field_name::String) = "technical_document_payload_check"
 
+# #507 phase 2: `alter_field` takes a `ColumnDelta` instead of a `Vector{Symbol}` of
+# field-attribute names. This builds the delta these renderer tests want — both fields compiled to
+# their `ColumnSpec`, with the facets under test named explicitly — which is the direct translation
+# of the vector each call used to pass. Naming them rather than diffing keeps each assertion aimed
+# at ONE branch of the renderer, which is what these tests are for.
+#
+# The vocabulary moved with the argument: the old `:max_length` (a field attribute) is the IR's
+# `:checks`, because a `BinaryField`'s bound is enforced by a CHECK and not by the column type
+# (#296) — `bytea` and `BLOB` take no length parameter. `:null` is `:nullable`.
+# CHECKED, not trusted: the named facets must be exactly what the compiler reports for this pair, so
+# a compiler change cannot leave these tests asserting a rendering the planner can no longer reach.
+# (Flagged in review — a hand-built list is a second opinion, which is the very thing #507 removes.)
+# `diffed = false` opts out for a pair that is deliberately SYNTHETIC: naming a facet an identical
+# pair does not have is how "no constraint churn" is probed, and it has to stay possible.
+function _bin_delta(conn, new_field, old_field, slots; name = "payload", diffed = true)
+  new_spec = PormG.Migrations.column_spec(new_field, conn; name = name)
+  old_spec = PormG.Migrations.column_spec(old_field, conn; name = name)
+  diffed && @test PormG.column_delta(new_spec, old_spec) == slots
+  return PormG.ColumnDelta(new_spec, old_spec, slots)
+end
+
 @testset "BinaryField byte storage (#296)" begin
 
   # ───────────────────────────────────────────────────────────────────────────
@@ -135,7 +156,8 @@ PormG.get_constraints_byte_length_check(::MockPGBinNamed, table_name::String, fi
   # ───────────────────────────────────────────────────────────────────────────
   @testset "PostgreSQL ALTER carries a USING cast" begin
     sql = PormG.Dialect.alter_field(MockPGBin(), "technical_document", "payload",
-                                    Models.BinaryField(), Models.TextField(), Symbol[:type])
+                                    Models.BinaryField(), Models.TextField(),
+                                    _bin_delta(MockPGBin(), Models.BinaryField(), Models.TextField(), [:type]))
 
     @test occursin("TYPE bytea", sql)
     @test occursin("USING convert_to(\"payload\", 'UTF8')", sql)
@@ -152,14 +174,17 @@ PormG.get_constraints_byte_length_check(::MockPGBinNamed, table_name::String, fi
     # Added alongside a type change, after the TYPE statement.
     added = PormG.Dialect.alter_field(MockPGBin(), "technical_document", "payload",
                                       Models.BinaryField(max_length = 4), Models.TextField(),
-                                      Symbol[:type, :max_length])
+                                      _bin_delta(MockPGBin(), Models.BinaryField(max_length = 4),
+                                                 Models.TextField(), [:type, :checks]))
     @test occursin("ADD CHECK (octet_length(\"payload\") <= 4)", added)
     @test findfirst("TYPE bytea", added).start < findfirst("ADD CHECK", added).start
 
     # Changed 4 -> 8 with no type change: drop the stale clause, add the new one.
     changed = PormG.Dialect.alter_field(MockPGBinNamed(), "technical_document", "payload",
                                         Models.BinaryField(max_length = 8),
-                                        Models.BinaryField(max_length = 4), Symbol[:max_length])
+                                        Models.BinaryField(max_length = 4),
+                                        _bin_delta(MockPGBinNamed(), Models.BinaryField(max_length = 8),
+                                                   Models.BinaryField(max_length = 4), [:checks]))
     @test occursin("DROP CONSTRAINT \"technical_document_payload_check\"", changed)
     @test occursin("ADD CHECK (octet_length(\"payload\") <= 8)", changed)
     @test findfirst("DROP CONSTRAINT", changed).start < findfirst("ADD CHECK", changed).start
@@ -170,21 +195,26 @@ PormG.get_constraints_byte_length_check(::MockPGBinNamed, table_name::String, fi
     # Removed: drop only.
     removed = PormG.Dialect.alter_field(MockPGBinNamed(), "technical_document", "payload",
                                         Models.BinaryField(), Models.BinaryField(max_length = 4),
-                                        Symbol[:max_length])
+                                        _bin_delta(MockPGBinNamed(), Models.BinaryField(),
+                                                   Models.BinaryField(max_length = 4), [:checks]))
     @test occursin("DROP CONSTRAINT \"technical_document_payload_check\"", removed)
     @test !occursin("ADD CHECK", removed)
 
     # Unchanged bound: no constraint churn at all.
     unchanged = PormG.Dialect.alter_field(MockPGBinNamed(), "technical_document", "payload",
                                           Models.BinaryField(max_length = 4),
-                                          Models.BinaryField(max_length = 4), Symbol[:null])
+                                          Models.BinaryField(max_length = 4),
+                                          _bin_delta(MockPGBinNamed(), Models.BinaryField(max_length = 4),
+                                                     Models.BinaryField(max_length = 4), [:nullable];
+                                                     diffed = false))
     @test !occursin("CHECK", unchanged)
 
     # Transitioning AWAY from a bounded BinaryField must drop the stale byte CHECK, and drop it
     # BEFORE the type change — an `octet_length` clause left in place would block the cast.
     away = PormG.Dialect.alter_field(MockPGBinNamed(), "technical_document", "payload",
                                      Models.TextField(), Models.BinaryField(max_length = 4),
-                                     Symbol[:type])
+                                     _bin_delta(MockPGBinNamed(), Models.TextField(),
+                                                Models.BinaryField(max_length = 4), [:type, :checks]))
     @test occursin("DROP CONSTRAINT \"technical_document_payload_check\"", away)
     @test occursin("TYPE text", away)
     @test findfirst("DROP CONSTRAINT", away).start < findfirst("TYPE text", away).start
@@ -204,7 +234,8 @@ PormG.get_constraints_byte_length_check(::MockPGBinNamed, table_name::String, fi
                          name = Models.CharField(max_length = 50))
 
     sql = PormG.Dialect.alter_field(MockSLBin(), model, "payload",
-                                    Models.BinaryField(), Models.TextField(), Symbol[:type])
+                                    Models.BinaryField(), Models.TextField(),
+                                    _bin_delta(MockSLBin(), Models.BinaryField(), Models.TextField(), [:type]))
 
     @test occursin("CAST(\"payload\" AS BLOB)", sql)
     # Non-binary columns are copied verbatim — the cast is not applied indiscriminately.

@@ -48,6 +48,20 @@ using .Kernel
 # Underscore-private members are not exported by Kernel; import those reached across
 # submodules or pinned by tests (e.g. `PormG._emsg`, `PormG._EXTRA_IGNORE_TABLES`, `PormG._suggest_name`).
 import .Kernel: _emsg, _EXTRA_IGNORE_TABLES, _levenshtein, _suggest_name
+# Column-IR internals (#507): the "same parent?" rule `Models` and `reference_delta` share, and the
+# two CHECK accessors `Dialect.alter_field` reads off a `ColumnDelta`. Underscore-private, so
+# `using .Kernel` does not bind them here — and a submodule's `import PormG: _byte_bound` would
+# then warn "undeclared at import time" and resolve to nothing.
+import .Kernel: _fk_targets_equal, _references_equal, _has_non_negative, _byte_bound
+# The canonical column IR itself (#507). Bound here rather than exported by `Kernel`, so that
+# `Dialect.alter_field` and `Migrations.column_spec` can `import PormG: …` it while a
+# `using PormG.Kernel` elsewhere does not inherit two dozen `C*` type names.
+import .Kernel: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CBool, CText, CDate, CTime,
+                CInterval, CUUID, CJSON, CBytes, CVarChar, CDecimal, CDateTime, CUnsupported,
+                ColumnDefault, NoDefault, LiteralDefault, ExpressionDefault,
+                CheckKind, NonNegativeCheck, ByteLengthCheck,
+                ColumnIdentity, ForeignKeyRef, ColumnSpec, ColumnDelta,
+                reference_delta, column_delta, COLUMN_DELTA_COMPARATORS, COLUMN_DELTA_SLOTS
 # Physical-table-name resolution (#59). Deliberately NOT exported — internal plumbing reached as
 # `PormG.model_table_name`, so it stays off the public surface guard. Lives in Kernel because
 # layer-2 `Configuration` needs it and is included before `Models`.

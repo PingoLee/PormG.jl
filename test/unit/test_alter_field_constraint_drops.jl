@@ -43,6 +43,24 @@ PormG.get_constraints_unique(::MockPgUniqueNone283, table_name::String, field_na
 struct MockPgEmptyResult283 <: PormG.PormGPostgres end
 Base.fetch(::MockPgEmptyResult283, sql::String; kwargs...) = DataFrame()
 
+# #507 phase 2: `alter_field` takes a `ColumnDelta` rather than a `Vector{Symbol}` of
+# field-attribute names. `_afd_delta` is the direct translation — both fields compiled to their
+# `ColumnSpec`, with the facet under test named — so each assertion still aims at exactly one
+# branch of the renderer, which is what this file is for. The facet names are the IR's
+# (`:primary_key` and `:unique` happen to be spelled the same as the old attributes; `:null` became
+# `:nullable`, and `:max_length` became `:checks`).
+# CHECKED, not trusted: the named facets must be exactly what the compiler reports for this pair, so
+# a compiler change cannot leave these tests asserting a rendering the planner can no longer reach.
+# (Flagged in review — a hand-built list is a second opinion, which is the very thing #507 removes.)
+# `diffed = false` opts out for a pair that is deliberately SYNTHETIC: naming a facet an identical
+# pair does not have is how "no constraint churn" is probed, and it has to stay possible.
+function _afd_delta(conn, new_field, old_field, slots; diffed = true)
+  new_spec = PormG.Migrations.column_spec(new_field, conn; name = "alt")
+  old_spec = PormG.Migrations.column_spec(old_field, conn; name = "alt")
+  diffed && @test PormG.column_delta(new_spec, old_spec) == slots
+  return PormG.ColumnDelta(new_spec, old_spec, slots)
+end
+
 @testset "alter_field constraint DROP branches (#283, #284)" begin
 
   # ───────────────────────────────────────────────────────────────────────────
@@ -57,7 +75,7 @@ Base.fetch(::MockPgEmptyResult283, sql::String; kwargs...) = DataFrame()
     old_field = Models.CharField(primary_key = true)
 
     sql = PormG.Dialect.alter_field(MockPgPkNamed283(), "circuits", "alt",
-                                    new_field, old_field, Symbol[:primary_key])
+                                    new_field, old_field, _afd_delta(MockPgPkNamed283(), new_field, old_field, [:primary_key]))
 
     # Assert the WHOLE statement, not a fragment: the table name, the constraint name
     # and the terminating semicolon are all knowable, so a regression in any of them
@@ -75,7 +93,7 @@ Base.fetch(::MockPgEmptyResult283, sql::String; kwargs...) = DataFrame()
     old_field = Models.CharField(primary_key = true)
 
     sql = PormG.Dialect.alter_field(MockPgPkNone283(), "circuits", "alt",
-                                    new_field, old_field, Symbol[:primary_key])
+                                    new_field, old_field, _afd_delta(MockPgPkNone283(), new_field, old_field, [:primary_key]))
 
     @test sql == ""
   end
@@ -92,7 +110,7 @@ Base.fetch(::MockPgEmptyResult283, sql::String; kwargs...) = DataFrame()
     # MockPgPkNone283 would return `nothing`; if the ADD path wrongly called
     # introspection we would still get no DROP, so assert the ADD is present.
     sql = PormG.Dialect.alter_field(MockPgPkNone283(), "circuits", "alt",
-                                    new_field, old_field, Symbol[:primary_key])
+                                    new_field, old_field, _afd_delta(MockPgPkNone283(), new_field, old_field, [:primary_key]))
 
     @test occursin("ADD PRIMARY KEY (\"alt\")", sql)
     @test !occursin("DROP CONSTRAINT", sql)
@@ -100,10 +118,13 @@ Base.fetch(::MockPgEmptyResult283, sql::String; kwargs...) = DataFrame()
 
   # ───────────────────────────────────────────────────────────────────────────
   # #283 — the real production entry point.
-  # Every `Dialect.alter_field` call site in src/ (planner.jl:264, 367, 464, 544)
-  # goes through the `model::PormGModel` overload, which resolves the table as
-  # `model.name |> lowercase` before delegating here. This exercises that whole
-  # chain rather than the bare 3-arg form, so it pins the path migrations take.
+  # Every `Dialect.alter_field` call site in `src/` goes through the `model::PormGModel` overload,
+  # which resolves the table with `model_table_name` before delegating here. This exercises that
+  # whole chain rather than the bare 3-arg form, so it pins the path migrations take. Since #507
+  # phase 2 there are two such sites, both in `migrations/planner.jl`: `_plan_column_change!` (the
+  # one ordered action path, used by the alteration loop AND the rename branch) and
+  # `_add_new_field`'s temporary-default cleanup. Named rather than numbered — the line numbers
+  # this comment used to carry had already drifted by four revisions.
   # ───────────────────────────────────────────────────────────────────────────
   @testset "drops the primary key through the model overload" begin
     model = Models.Model("circuits", alt = Models.CharField(primary_key = false))
@@ -111,7 +132,7 @@ Base.fetch(::MockPgEmptyResult283, sql::String; kwargs...) = DataFrame()
     old_field = Models.CharField(primary_key = true)
 
     sql = PormG.Dialect.alter_field(MockPgPkNamed283(), model, "alt",
-                                    new_field, old_field, Symbol[:primary_key])
+                                    new_field, old_field, _afd_delta(MockPgPkNamed283(), new_field, old_field, [:primary_key]))
 
     @test occursin("ALTER TABLE \"circuits\" DROP CONSTRAINT \"circuits_pkey\";", sql)
   end
@@ -124,7 +145,7 @@ Base.fetch(::MockPgEmptyResult283, sql::String; kwargs...) = DataFrame()
     old_field = Models.CharField(unique = true)
 
     sql = PormG.Dialect.alter_field(MockPgUniqueNamed283(), "circuits", "alt",
-                                    new_field, old_field, Symbol[:unique])
+                                    new_field, old_field, _afd_delta(MockPgUniqueNamed283(), new_field, old_field, [:unique]))
 
     # Assert the WHOLE statement: a regression that emitted the right constraint name
     # against the wrong table would still satisfy a fragment match.
@@ -140,7 +161,7 @@ Base.fetch(::MockPgEmptyResult283, sql::String; kwargs...) = DataFrame()
     old_field = Models.CharField(unique = true)
 
     sql = PormG.Dialect.alter_field(MockPgUniqueNone283(), "circuits", "alt",
-                                    new_field, old_field, Symbol[:unique])
+                                    new_field, old_field, _afd_delta(MockPgUniqueNone283(), new_field, old_field, [:unique]))
 
     @test sql == ""
   end

@@ -31,9 +31,12 @@ TWO THINGS make this subtler than it reads, and both are load-bearing below:
     Neither fails loudly. Answering "changed" for either proposes a destructive DROP + ADD CONSTRAINT
     (a whole-table rebuild on SQLite) on EVERY `makemigrations`, forever, for a key nobody touched —
     so the fold rows in testset 5, not the identity rows, are what that testset is actually for.
-  * `Models._compare_model_field` backs `are_model_fields_equal`, the early-out `_alter_table_fields`
-    takes BEFORE its diff loop. Fixing the planner alone would have left the whole `on_delete` half
-    dead code, so testset 2 asserts the fast path reports the change at all.
+  * The DIFF has to report the change before any of this can act on it. When #498 landed that meant
+    two functions — `Models._compare_model_field`, which backed the `are_model_fields_equal`
+    early-out `_alter_table_fields` took BEFORE its diff loop, skipped `:on_delete` outright — so
+    fixing the planner alone would have left the whole `on_delete` half dead code. #507 phase 2
+    retired both, and testset 2 now asserts the same thing of the one function that remains:
+    `column_delta` must put `:reference` in the delta for these pairs.
 
 MOCK LIMIT, measured — the same one test_relational_column_identity.jl records: a bare SQLite marker
 struct cannot serve a NON-EMPTY plan (the rebuild asks the connection for live secondary-index DDL),
@@ -53,7 +56,7 @@ import PormG: PormGModel, PormGPostgres, PormGSQLite
 # loads it for the whole suite; this guard is what makes the file runnable on its own.
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 import PormG.ConnectionPool: SQLiteConnectionPool, fetch
-import PormG.Migrations: _fk_constraint_action, _fk_definition_changed
+import PormG.Migrations: _fk_constraint_action, column_spec, column_delta
 
 # Suffixed name: `runtests.jl` includes every unit file into ONE module, so a bare `MockPostgres`
 # silently redefines a sibling's.
@@ -163,46 +166,62 @@ _fr_add(plan)  = _fr_step(plan, "New foreign key: parent_id")
   @testset "the constraint decision is stated once, and can say :repoint" begin
     declared = Models.ForeignKey(_fr_parent(), pk_field = "id", null = true)
 
+    # #507 phase 2: the decision reads the canonical column IR, so this table is spelled over
+    # `ColumnSpec`s. Every row still means what it meant — `_spec` is only the compile step the
+    # planner now performs before asking. What changed underneath is that the answer is no longer
+    # assembled from three field reads (`_compare_field_foreign_key` + `fk_target_column` +
+    # `_fk_on_delete_equal`, which was `_fk_definition_changed`): a reference either moved or it
+    # did not, and `reference_delta` is the one place that is decided.
+    _spec(field) = column_spec(field, FR_PG; name = "parent_id")
+
     # Preserved: the constraint is going away.
-    @test _fk_constraint_action(nothing, _fr_live_fk())                    === :drop   # field deleted
-    @test _fk_constraint_action(Models.BigIntegerField(), _fr_live_fk())   === :drop   # became a plain column
-    @test _fk_constraint_action(Models.ForeignKey(_fr_parent(), pk_field = "id", db_constraint = false),
-                                _fr_live_fk())                             === :drop   # db_constraint true -> false
+    @test _fk_constraint_action(nothing, _spec(_fr_live_fk()))                    === :drop   # field deleted
+    @test _fk_constraint_action(_spec(Models.BigIntegerField()), _spec(_fr_live_fk())) === :drop   # became a plain column
+    @test _fk_constraint_action(_spec(Models.ForeignKey(_fr_parent(), pk_field = "id", db_constraint = false)),
+                                _spec(_fr_live_fk()))                             === :drop   # db_constraint true -> false
 
     # Preserved: the constraint is appearing.
-    @test _fk_constraint_action(declared, Models.BigIntegerField())        === :add
+    @test _fk_constraint_action(_spec(declared), _spec(Models.BigIntegerField()))  === :add
 
     # Preserved: nothing to do.
-    @test _fk_constraint_action(declared, _fr_live_fk())                   === :none
-    @test _fk_constraint_action(Models.IntegerField(), Models.BigIntegerField()) === :none
+    @test _fk_constraint_action(_spec(declared), _spec(_fr_live_fk()))             === :none
+    @test _fk_constraint_action(_spec(Models.IntegerField()), _spec(Models.BigIntegerField())) === :none
 
     # NEW — the state neither old guard could express.
-    @test _fk_constraint_action(declared, _fr_live_fk(to_table = "other_parent_t")) === :repoint
-    @test _fk_constraint_action(Models.ForeignKey(_fr_parent(), pk_field = "id", on_delete = Models.CASCADE),
-                                _fr_live_fk())                             === :repoint
+    @test _fk_constraint_action(_spec(declared), _spec(_fr_live_fk(to_table = "other_parent_t"))) === :repoint
+    @test _fk_constraint_action(_spec(Models.ForeignKey(_fr_parent(), pk_field = "id", on_delete = Models.CASCADE)),
+                                _spec(_fr_live_fk()))                             === :repoint
   end
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 2. Why testset 5 would otherwise be dead code. `Models._compare_model_field` backs
-  #    `are_model_fields_equal`, which `_alter_table_fields` consults BEFORE its diff loop — and it
-  #    used to `continue` on `:on_delete` unconditionally. An on_delete-only change therefore made
-  #    the two models compare EQUAL and the planner returned without reaching anything #498 touches.
-  #    Revert the `Models.jl` half alone and this testset fails while the planner half still "works".
+  # 2. Why testset 5 would otherwise be dead code. The diff has to REPORT an on_delete change
+  #    before any of #498 can run on it.
+  #
+  #    That used to be a claim about two functions: `Models._compare_model_field` (which backed
+  #    `are_model_fields_equal`, the whole-model early-out `_alter_table_fields` consulted BEFORE
+  #    its diff loop) skipped `:on_delete` unconditionally, so an on_delete-only change made the
+  #    models compare EQUAL and the planner returned without reaching anything #498 touches. #507
+  #    phase 2 retired the early-out and the comparator, so the claim is now about ONE function:
+  #    `column_delta` must put `:reference` in the delta for these pairs, or nothing downstream
+  #    happens. Revert `ForeignKeyRef.on_delete` to unrendered and this testset fails.
   # ───────────────────────────────────────────────────────────────────────────
-  @testset "the fast-path comparison reports an on_delete change" begin
+  @testset "the column diff reports an on_delete change" begin
     declared_same = Models.ForeignKey(_fr_parent(), pk_field = "id", null = true)
     declared_casc = Models.ForeignKey(_fr_parent(), pk_field = "id", null = true, on_delete = Models.CASCADE)
+    _delta(a, b) = column_delta(a, b, FR_PG; name = "parent_id").changed
 
-    @test Models._compare_model_field(declared_same, _fr_live_fk())                         # unchanged
-    @test !Models._compare_model_field(declared_casc, _fr_live_fk())                        # CASCADE vs NO ACTION
-    # Control, not a gate: the slot normalizes "CASCADE" to the declared sentinel, so a raw `==`
-    # agrees here too. The fold this function actually needs `_fk_on_delete_equal` for is below.
-    @test Models._compare_model_field(declared_casc, _fr_live_fk(on_delete = "CASCADE"))
-    # THE GATE: a fold, where a raw `==` would report a change and make every `makemigrations`
-    # propose a destructive re-point for a key nobody touched.
-    @test Models._compare_model_field(
+    @test isempty(_delta(declared_same, _fr_live_fk()))                       # unchanged
+    @test :reference in _delta(declared_casc, _fr_live_fk())                  # CASCADE vs NO ACTION
+    # Control, not a gate: the slot normalizes "CASCADE" to the declared sentinel, so even a raw
+    # comparison agrees here. The fold that needs the RENDERED clause is below.
+    @test isempty(_delta(declared_casc, _fr_live_fk(on_delete = "CASCADE")))
+    # THE GATE: a fold, where a raw comparison would report a change and make every
+    # `makemigrations` propose a destructive re-point for a key nobody touched. `PROTECT` renders
+    # `RESTRICT`, and `ForeignKeyRef` stores what was rendered — so the fold is structural rather
+    # than a predicate someone has to remember to call.
+    @test isempty(_delta(
       Models.ForeignKey(_fr_parent(), pk_field = "id", null = true, on_delete = Models.PROTECT),
-      _fr_live_fk(on_delete = "RESTRICT"))
+      _fr_live_fk(on_delete = "RESTRICT")))
   end
 
   # ───────────────────────────────────────────────────────────────────────────
@@ -329,20 +348,35 @@ _fr_add(plan)  = _fr_step(plan, "New foreign key: parent_id")
   end
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 5c. `_fk_definition_changed` (#150) directly. It is the SQLite rename path's gate and the body of
-  #     `_fk_constraint_action`'s `:repoint` answer, and it compared `on_delete` with a raw `!=` until
-  #     #498 — so a renamed key declared `PROTECT` against its own live `RESTRICT` reported "changed"
-  #     and forced a whole-table rebuild that a plain `RENAME COLUMN` covers. Asserted here rather
-  #     than through a plan because the predicate has exactly one other consumer, which makes a
-  #     regression in it invisible everywhere else.
+  # 5c. The fold, at the decision itself.
+  #
+  #     This used to assert `_fk_definition_changed` (#150) — the SQLite rename path's gate, which
+  #     also supplied `_fk_constraint_action`'s `:repoint` answer. It compared `on_delete` with a
+  #     raw `!=` until #498, so a renamed key declared `PROTECT` against its own live `RESTRICT`
+  #     reported "changed" and forced a whole-table rebuild that a plain `RENAME COLUMN` covers.
+  #
+  #     #507 phase 2 deleted that predicate: it was `reference_delta` reached through three field
+  #     reads, and two functions answering "did the reference move?" is the defect class the column
+  #     IR exists to end. The rows below are unchanged in meaning and now name the ACTION rather
+  #     than a boolean — `:none` where the old gate said `false`, `:repoint` where it said `true`.
+  #     Still asserted directly rather than through a plan, for the reason it always was: a
+  #     regression in the fold is invisible in a plan that correctly proposes nothing.
   # ───────────────────────────────────────────────────────────────────────────
-  @testset "_fk_definition_changed folds equivalent ON DELETE values (#150 + #498)" begin
+  @testset "equivalent ON DELETE values fold, at the constraint decision (#150 + #498)" begin
     fk(od) = Models.ForeignKey(_fr_parent(), pk_field = "id", null = true, on_delete = od)
-    @test _fk_definition_changed(fk(Models.PROTECT),    _fr_live_fk(on_delete = "RESTRICT")) == false
-    @test _fk_definition_changed(fk(Models.DO_NOTHING), _fr_live_fk(on_delete = nothing))    == false
-    @test _fk_definition_changed(fk(Models.CASCADE),    _fr_live_fk(on_delete = "CASCADE"))  == false
+    _spec(field) = column_spec(field, FR_PG; name = "parent_id")
+    action(a, b) = _fk_constraint_action(_spec(a), _spec(b))
+
+    @test action(fk(Models.PROTECT),    _fr_live_fk(on_delete = "RESTRICT")) === :none
+    @test action(fk(Models.DO_NOTHING), _fr_live_fk(on_delete = nothing))    === :none
+    @test action(fk(Models.CASCADE),    _fr_live_fk(on_delete = "CASCADE"))  === :none
     # Positive control: a genuine action change is still reported.
-    @test _fk_definition_changed(fk(Models.CASCADE),    _fr_live_fk(on_delete = "SET NULL")) == true
+    @test action(fk(Models.CASCADE),    _fr_live_fk(on_delete = "SET NULL")) === :repoint
+
+    # The fold is structural, not a predicate someone has to remember to call: `ForeignKeyRef`
+    # stores the RENDERED clause, so two spellings of one clause are the same stored value.
+    @test _spec(fk(Models.PROTECT)).reference.on_delete == "RESTRICT"
+    @test _spec(fk(Models.DO_NOTHING)).reference.on_delete == _spec(fk(nothing)).reference.on_delete
   end
 
   # ───────────────────────────────────────────────────────────────────────────

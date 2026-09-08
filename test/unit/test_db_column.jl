@@ -14,8 +14,7 @@ using Test
 using PormG
 using DataFrames
 using PormG.Models: Model, CharField, IDField, IntegerField, ForeignKey, OneToOneField,
-                    field_db_column, fk_target_column, model_column, model_has_db_column,
-                    are_model_fields_equal
+                    field_db_column, fk_target_column, model_column, model_has_db_column
 using PormG.QueryBuilder: inspect_query, Count
 using InteractiveUtils: subtypes   # #376: walk every field TYPE, not a hand-maintained list
 
@@ -291,12 +290,28 @@ Entry.connect_key = "default"
   # Comparison: adding a db_column IS a real model change (code-vs-code), so the diff
   # engine must report it — even though it produces no spurious migration churn
   # against an already-matching DB (that no-churn path is an integration test).
+  #
+  # #507 phase 2 retired `are_model_fields_equal`, and this asserts the axis that replaced it for
+  # the NAME question specifically. A `db_column` change moves the PHYSICAL COLUMN, and
+  # `_alter_table_fields` keys both sides of the diff by exactly this set — so the change surfaces
+  # as a column that appears on one side and not the other, i.e. as a RENAME candidate (or an
+  # add + drop non-interactively), never as a column ALTER. That is also why `ColumnSpec.name` is
+  # excluded from `column_delta`: the two fields below describe the same *kind* of column, and it
+  # is only their identity that moved.
   # ─────────────────────────────────────────────────────────────────────────────
-  @testset "are_model_fields_equal treats db_column as a real change" begin
+  @testset "a db_column change moves the physical column the diff is keyed by" begin
     same  = Model("product_scratch", id=IDField(), sku=CharField(db_column="product_sku"), name=CharField())
     plain = Model("product_scratch", id=IDField(), sku=CharField(),                         name=CharField())
-    @test are_model_fields_equal(Product, same)    # identical db_column → equal
-    @test !are_model_fields_equal(Product, plain)  # db_column added/removed → not equal
+    physical(m) = Set(field_db_column(f, string(k)) for (k, f) in m.fields)
+    @test physical(Product) == physical(same)     # identical db_column → the same columns
+    @test physical(Product) != physical(plain)    # db_column added/removed → a different column
+    @test "product_sku" in physical(same)
+    @test "sku" in physical(plain)
+    # The column DIFF, by contrast, sees one kind of column: `name` is excluded from it on purpose,
+    # because a moved name is a rename and renames are planned from the key sets above.
+    @test isempty(PormG.Migrations.column_delta(
+      PormG.Migrations.column_spec(same.fields["sku"], MockPostgresDbColumn(); name = "sku"),
+      PormG.Migrations.column_spec(plain.fields["sku"], MockPostgresDbColumn(); name = "sku")))
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

@@ -10,6 +10,10 @@ import PormG: model_table_name, model_has_db_table
 import PormG: DATETIME_FORMAT
 import PormG: PormGBytes  # binary-payload wrapper the parameter collectors bind as one blob (#296)
 import PormG: _emsg  # shared TTY-aware error-message strip helper (Kernel)
+# The "same parent?" rule (#360/#390), shared with the column IR's `reference_delta` and owned by
+# Kernel since #507 phase 2 — see the Comparison Tools section below. Underscore-private, so it is
+# imported by name rather than arriving through `using`.
+import PormG: _fk_targets_equal
 # Semantic error taxonomy (#239). Models raises TWO different categories, and the split is by
 # *when* the failure happens, not by which file the helper lives in:
 #   ModelDefinitionError — defining a model/schema (Model, add_field!, UniqueConstraint,
@@ -1422,8 +1426,21 @@ end
 
 # The `ON DELETE` clause a field's `on_delete` MEANS, as SQL. Lives here rather than in `Dialect`
 # (where it was defined until #498) for one reason: it is also the only correct way to COMPARE two
-# `on_delete` values, and `_compare_model_field` below — in a module `Dialect` is included after —
-# needs that comparison. Backend-agnostic by construction: it takes no connection and both the
+# `on_delete` values, and that comparison is needed by a module included BEFORE `Dialect` — namely
+# this one, in `_fk_on_delete_equal` below. That is the whole constraint, and it is worth stating
+# precisely because the obvious-sounding version is wrong: `Migrations` also renders through this
+# function (`column_spec` stores the rendered clause in `ForeignKeyRef.on_delete`, which is what
+# makes comparing two stored values the same predicate by construction), but `Migrations` is include
+# step 11 — AFTER `Dialect` at step 10 — so that use would be satisfied either way.
+#
+# The caller that originally established the constraint was `_compare_model_field`, retired by #507
+# phase 2 — and `_fk_on_delete_equal` outlived it with NO `src/` caller of its own: the only caller
+# left in the repo is `test/unit/test_column_spec.jl`, where it is the oracle that the IR's
+# stored-clause comparison agrees with the predicate. So the constraint is real but latent, and the
+# honest reading is that this function's location is now justified by a test rather than by
+# production code. Folding both into the phase-3 removal (alongside the equally caller-less
+# `_compare_field_foreign_key`) is the tidier end state; neither is a second ANSWER to anything,
+# which is why neither is urgent. Backend-agnostic by construction: it takes no connection and both the
 # PostgreSQL and SQLite renderers call this one definition, so it is field vocabulary, not dialect.
 #
 # The two FOLDS are the point, and are why a second copy of this mapping must never be written:
@@ -3017,99 +3034,19 @@ end
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Comparison Tools
+#
+# What is left here RESOLVES a foreign key's target; nothing here compares two models any more.
+# `are_model_fields_equal` / `_compare_model_field` / `_compare_model_fields_prepare_fields` were
+# `_alter_table_fields`' whole-model early-out, and #507 phase 2 retired them: the planner runs its
+# per-column loop unconditionally and an empty `ColumnDelta` IS the "nothing changed" answer, so a
+# second comparator can no longer disagree with the first. Do not reintroduce one — a difference the
+# column IR cannot express is a missing fact in `ColumnSpec` (`src/column_ir.jl`), not an exception
+# beside it.
+#
+# `_fk_targets_equal` — the "same parent?" rule these functions share with the IR — moved to
+# `Kernel` with the IR itself (imported at the top of this file), because `ForeignKeyRef`'s equality
+# is built on it and layer 1 is where a rule two modules share has to live.
 #═══════════════════════════════════════════════════════════════════════════════
-
-"""
-  are_model_fields_equal(new_model::PormGModel, old_model::PormGModel) :: Bool
-
-Compares the fields of two `PormGModel` instances to determine if they are equal.
-"""
-function are_model_fields_equal(new_model::PormGModel, old_model::PormGModel)::Bool
-  new_fields = new_model.fields |> _compare_model_fields_prepare_fields
-  old_fields = old_model.fields |> _compare_model_fields_prepare_fields
-
-  for (field_name, field) in new_fields
-    if haskey(old_fields, field_name)
-      old_fields[field_name]["exists"] = true
-      _compare_model_field(field["field"], old_fields[field_name]["field"]) || return false
-    else
-      return false
-    end
-  end
-
-  if length(new_fields) != length(old_fields)
-    return false
-  end
-
-  return true
-end
-function _compare_model_fields_prepare_fields(fields::Dict{String, PormGField})
-  fields_dict = Dict{String, Dict{String, Union{Bool, PormGField}}}()
-  for (field_name, field) in pairs(fields)
-    fields_dict[field_name] = Dict{String, Union{Bool, PormGField}}()
-    fields_dict[field_name]["exists"] = false
-    fields_dict[field_name]["field"] = field
-  end
-  return fields_dict  
-end
-function _compare_model_field(new_field::PormGField, old_field::PormGField)::Bool
-  # Check if all fields are equal
-  if length(fieldnames(typeof(new_field))) != length(fieldnames(typeof(old_field)))
-    return false
-  end
-  for field_name in fieldnames(typeof(new_field))
-    # Check if field exists in old_field
-    try
-      if !(field_name in fieldnames(typeof(old_field)))
-        return false
-      elseif field_name == :to && _compare_field_foreign_key(new_field, old_field)
-        continue
-      elseif field_name == :on_delete && _fk_on_delete_equal(new_field, old_field)
-        # #498: was an UNCONDITIONAL `continue` ("Skip comparison for :on_delete attribute"), which
-        # made this fast path structurally unable to report an `on_delete` change. That mattered more
-        # than it looks: this function backs `are_model_fields_equal`, the early-out `_alter_table_fields`
-        # takes BEFORE its per-attribute diff loop — so an on_delete-only change made the two models
-        # compare equal and the planner returned without ever reaching the code that plans DDL for it.
-        # Fixing the planner alone would have left that half dead.
-        #
-        # Skipping was never the right answer, but it was suppressing a REAL signal rather than noise:
-        # the slot normalizes an introspected string to the declared sentinel, so a plain `!=` already
-        # agreed for CASCADE/SET_NULL/nothing. What it could not do is the PROTECT->RESTRICT and
-        # DO_NOTHING->nothing folds, which is the whole job `_fk_on_delete_equal` does here.
-        continue
-      elseif field_name == :to_table
-        # #360: an introspection-only breadcrumb, asymmetric by construction — introspection sets the
-        # live parent table, the models-file side is always `nothing` because `Model_to_str` never
-        # emits it. It expresses no schema, so comparing it would report EVERY foreign key as changed.
-        # This function is the fast-path early-out for `_alter_table_fields`; the column IR below it
-        # reaches the same result differently — `to_table` is in `Migrations.SCHEMA_ATTRS`, because
-        # `column_spec` READS it to resolve the foreign key's physical parent, and simply never
-        # compares it on its own (#507). Both are needed —
-        # without this one the cheap "nothing changed" answer is never reachable for a model with FKs.
-        continue
-      elseif getfield(new_field, field_name) != getfield(old_field, field_name)
-        return false
-      end
-    catch e
-      # A StackOverflowError / InterruptException signals corrupted or interrupted program state,
-      # not an ordinary attribute mismatch — rethrow those so they surface loudly instead of being
-      # masked as "changed". (A StackOverflowError here would be a symptom of the getproperty
-      # recursion, issue #108, and must not be swallowed.)
-      (e isa InterruptException || e isa StackOverflowError) && rethrow()
-      # Otherwise fail SAFE, not open (issue #69). A schema-diff must never default to "equal" on an
-      # unexpected comparison error: reporting "equal" means "no change", so a real field change
-      # whose comparison throws would be silently dropped and no migration generated. Treat the
-      # field as CHANGED (return false) so a migration is emitted, and log structured context
-      # instead of swallowing. Worst case is an extra, visible migration — never a missed one.
-      @warn "Model field comparison raised; treating field as changed so a migration is generated" field=field_name new_field_type=typeof(new_field) old_field_type=typeof(old_field) exception=e
-      return false
-    end
-  end
-  return true
-end
-function _compare_model_field(new_field::Dict{String, PormGField}, old_field::Dict{String, PormGField})
-  return _compare_model_field(new_field |> _compare_model_fields_prepare_fields, old_field |> _compare_model_fields_prepare_fields)
-end
 
 # The PHYSICAL table an FK points at, when the field can actually state one (#360): `to_table` on an
 # introspected field, the resolved target's `model_table_name` on a declared one. `nothing` when it
@@ -3125,7 +3062,9 @@ end
 # `hasproperty`, not a type check: this is reached for any field carrying a `.to`, which includes
 # `sManyToManyField` (no `to_table` slot — it falls through to the resolved-model branch). That path
 # then behaves exactly as before, including the pre-existing `fk_target_column` `FieldError` an M2M
-# pair raises, which `_compare_model_field` catches and treats as "changed" (#69 fail-safe).
+# pair raises. Nothing on the planner path can reach that: `column_spec` refuses a ManyToManyField
+# outright, and `Migrations._spec_or_degraded` would report the column as changed rather than let a
+# raise become "equal" (#69 fail-safe).
 function _fk_reference_table(field::PormGField)::Union{String, Nothing}
   if hasproperty(field, :to_table)
     tbl = getproperty(field, :to_table)
@@ -3194,25 +3133,6 @@ _fk_target_binding(field::PormGField)::Union{String, Nothing} =
   (to = field.to; to === nothing ? nothing :
                   format_model_name(string(to isa PormGModel ? to.name : to)))
 
-"""
-    _fk_targets_equal(new_table, new_binding, old_table, old_binding) -> Bool
-
-Whether two foreign keys point at the same parent, given each side's resolved physical table (or
-`nothing` when it cannot be named) and its folded Julia binding.
-
-**The one definition of that rule.** `_compare_field_foreign_key` calls it with two fields'
-resolutions; `Migrations.reference_delta` calls it with the two `ForeignKeyRef`s a `ColumnSpec`
-carries (#507). Holding one copy each would let the planner's fast path and the column IR drift
-apart, and that drift is precisely the defect class #507 exists to end — so the rule is stated here
-and nowhere else.
-
-When BOTH sides can name their physical table, that is the comparison (#360). Only when one cannot —
-an unresolved String target — does it fall back to the binding axis.
-"""
-_fk_targets_equal(new_table::Union{String, Nothing}, new_binding::Union{String, Nothing},
-                  old_table::Union{String, Nothing}, old_binding::Union{String, Nothing})::Bool =
-  (new_table !== nothing && old_table !== nothing) ? new_table == old_table :
-                                                     new_binding == old_binding
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Fields

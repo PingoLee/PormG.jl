@@ -68,9 +68,11 @@ struct MigrationPlannerAutoAddMockPg <: PormGPostgres end
     )
 
     # 2. The behavioral consequence that DOES distinguish "excluded" from "not excluded": with the
-    # exclusion, `_compare_model_field`-style diffing never puts `:auto_add` in `colect_not_equal`,
-    # so `Dialect.alter_field` is never asked to render it and never logs its "not implemented"
-    # warning. `min_level = Logging.Warn` with no expected specs asserts ZERO Warn-or-above log
+    # exclusion, the column diff never reports `:auto_add` as a difference, so `Dialect.alter_field`
+    # is never asked to render it. (When this test was written that meant the attribute never
+    # reached `colect_not_equal` and the renderer logged a "not implemented" warning for it; since
+    # #507 the facet set is closed and `auto_add` is classified in `NON_DB_ATTRS`, so the assertion
+    # below is now "no warning of any kind", which is strictly stronger.) `min_level = Logging.Warn` with no expected specs asserts ZERO Warn-or-above log
     # records — the same idiom `test/unit/test_connection_pool_leak.jl` uses for "no warn expected".
     plan = @test_logs min_level = Logging.Warn Migrations.get_migration_plan(
         PormGModel[live_table], current_schema, mock_conn_pg, settings)

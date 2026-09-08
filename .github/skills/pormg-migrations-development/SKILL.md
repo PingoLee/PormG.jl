@@ -110,10 +110,11 @@ Follow the canonical [PormG Test Writing Standard](../../instructions/test-writi
 ## Planner internals: column identity
 
 `makemigrations` decides *changed / unchanged* by compiling **both** sides of the diff to a canonical
-column IR and comparing that — never by comparing `PormGField` structs. The IR is
-`Migrations.ColumnSpec` (`src/migrations/column_spec.jl`); the compiler is
-`column_spec(field, conn)`; the planner's whole field diff is one call to `column_attrs_changed`
-inside `_alter_table_fields`.
+column IR and comparing that — never by comparing `PormGField` structs. The IR's nouns are
+`ColumnSpec` / `ColumnDelta` (`src/column_ir.jl`, layer 1); the compiler is `column_spec(field, conn)`
+(`src/migrations/column_spec.jl`); the planner's whole field diff is one call to `column_delta`
+inside `_alter_table_fields`. Since #507 phase 2 every plan ACTION derives from that same delta —
+see *From delta to actions* below.
 
 **Why an IR at all.** Introspection reconstructs a `PormGField` from the live schema through a type
 map that returns *one* struct per rendered type, so the declared struct can never be recovered:
@@ -134,9 +135,9 @@ same column compiles to the same spec**.
    alike would silently stop planning a real change.
 2. **`on_delete` is a schema fact**, carried in `ForeignKeyRef(table, binding, column, on_delete)`.
    A change there is a **constraint delta, never a column ALTER** — it reaches the plan as DROP +
-   ADD CONSTRAINT. This used to be answered three different ways (`_compare_model_field` skipped it,
-   `_NON_SCHEMA_FIELD_ATTRS` skipped it, `_fk_constraint_action` diffed it); the compiler answers it
-   once. It matches Django: `on_delete` is not in `Field.non_db_attrs`, and on Django `main`
+   ADD CONSTRAINT. It used to be answered four different ways (`_compare_model_field` skipped it,
+   `_NON_SCHEMA_FIELD_ATTRS` skipped it, `_fk_definition_changed` and `_fk_constraint_action` each
+   diffed it); all four are gone, the compiler answers it once, and one function acts on it. It matches Django: `on_delete` is not in `Field.non_db_attrs`, and on Django `main`
    `ForeignObject` skips it only when the action is *not* a `DatabaseOnDelete` variant — *"Database-
    level on_delete options are part of the column definition."* PormG renders `ON DELETE` into every
    constraint (#292), so it only ever has that flavour.
@@ -151,15 +152,70 @@ Named after Django's `Field.non_db_attrs`. `test/unit/test_column_spec.jl` fails
 gains a slot in neither — the same guarantee `field_kwargs_snapshot.txt` gives `Model_to_str`, with
 no snapshot to regenerate.
 
-**The seam to the action code.** Phase 1 changed how the answer is *decided*, not what is emitted
-once it is "changed". `column_delta` returns the typed facets (`:type`, `:nullable`, `:reference`,
-`:checks`, `:identity`, …); `alter_attrs` adapts those back to the `colect_not_equal::Vector{Symbol}`
-that `Dialect.alter_field`, the FK helpers and `_FK_IDENTITY_ATTRS` already consume. **#507 phase 2
-deletes that adapter** and derives plan actions from `column_delta` directly, which is what makes
-#504 unrepresentable.
+**From delta to actions.** `column_delta(new_field, old_field, conn)` returns a `ColumnDelta` — both
+sides' `ColumnSpec` plus the facets that differ, a subset of `COLUMN_DELTA_SLOTS` — and **that value
+is the whole input to every action the plan takes about a column.** Phase 1 translated it back into
+field-attribute symbols through an `alter_attrs` adapter so the action code could stay untouched;
+phase 2 deleted the adapter, and with it each action site's private opinion of a fact the compiler
+had already settled. Four bugs in one week came from those opinions: #498 (a re-pointed key planned
+nothing), #504 (a rename added a second constraint), #514, #515.
 
-**Two review flags, both sharper than what they replace:**
+Four rules follow, and they are the ones to check a change against:
 
+1. **`Dialect.alter_field` renders one fragment per changed slot.** The decision of *which* fragments
+   comes only from the delta; the SQL text may still read the field (a column type, a `USING` cast,
+   a decimal precision). Reading a field to *re-decide* whether to emit something is the regression.
+   There is no `IMPLEMENTED` allowlist and no "not implemented" warning any more — the slot set is
+   closed by type (`ColumnDelta` validates its facets), and `test_plan_actions_golden.jl` walks
+   `COLUMN_DELTA_SLOTS` and calls the renderer for each.
+2. **`:reference` is a constraint action, never a column ALTER.** `alter_field` has no branch for it
+   and needs none: a slot with no branch renders nothing, so a reference-only delta returns `""` and
+   the step is dropped, while `_fk_constraint_action(new_spec, old_spec)` plans DROP + ADD CONSTRAINT.
+   That absence replaced the `_FK_IDENTITY_ATTRS` filter every call site had to remember. One
+   function answers `:add` / `:drop` / `:repoint` / `:none` for the alteration path, the rename
+   branch and the deletion loop alike; `nothing` on the new side is the deletion path.
+3. **A rename is the same column change with a new name.** `_plan_column_change!` is the one ordered
+   path — FK drop → RENAME COLUMN → the column ALTER or SQLite rebuild if the delta is non-empty →
+   FK add. `_alter_table_fields` and the rename branch both call it. An empty delta reduces it to
+   RENAME and nothing else; a non-empty one carries the alteration, which is a fix rather than a
+   refactor (a rename that also retyped a column used to plan the RENAME alone and defer the retype
+   to the next run). Do not re-grow a private copy of this sequence in the rename branch.
+
+   Two contracts inside it are load-bearing, and both were learned by shipping the bug first:
+
+   - **`delta.old_spec.name` is the single source for "the column the live catalog knows".** At plan
+     time nothing has executed, so on a rename that is the PRE-rename column — and the FK drop plus
+     all four `get_constraints_*` lookups in `Dialect.alter_field` must key on it. A fifth statement
+     that needs a constraint name has to read the same field: asking for `field_name` there is how a
+     renamed column silently lost its UNIQUE / PRIMARY KEY / CHECK drop, and how a renamed
+     `PositiveIntegerField` becoming a `TextField` emitted the retype with a stale `>= 0` CHECK that
+     PostgreSQL refuses. `column_delta`'s `old_name` is what puts the name there.
+   - **On SQLite the rebuild entry is RELOCATED to the end of the table's plan on every
+     registration.** It copies by the DESIRED column names, so it must follow every `RENAME COLUMN`
+     and every `ADD COLUMN`; `_configure_order_dict_migration_plan` overwrites a key in place, so
+     re-registering without `delete!` leaves it at the first registration's position. A plan-time
+     refusal was tried first and rejected: `colect_addition` is a `Set`, so it fired on hash order.
+     The surviving rebuild carries only the `column_renames` its own call was given, which is why a
+     rename co-occurring with another change to that table can still lose the renamed column's index.
+4. **`db_index` stays outside the delta**, with `index_actions` (see rule 3 of the previous section).
+   Consequence worth knowing: a rename that also flips `db_index` plans its index action one run
+   later, when the column appears on both sides of the diff. Self-healing, and deliberate.
+
+**Where the types live, and why it is not tidiness.** The IR's nouns are layer 1 (`src/column_ir.jl`,
+included from `Kernel`) because `Dialect` renders from a `ColumnDelta` and is included *before*
+`Migrations` — each submodule resolves `import PormG: …` at include time, so a type defined in
+`Migrations` does not exist yet when `Dialect` compiles. That is #239 verbatim. The compiler stays at
+layer 3, where `Models` and `Dialect` are reachable: **Kernel holds the nouns, the submodules keep the
+verbs.**
+
+**Three review flags, all sharper than what they replace:**
+
+- **An action site that re-inspects the field structs instead of reading the delta.** A
+  `field.null` / `field.unique` / `hasproperty(field, :generated)` read used to *decide* whether to
+  emit a statement, a second `_fk_constraint_action`, a private copy of the alteration path in the
+  rename branch. Reading a field to render SQL text is fine; reading one to re-decide is the flag —
+  the fix is to read the `ColumnDelta`, and if it cannot express the fact, the missing fact belongs
+  in `ColumnSpec`.
 - **A new `isa` on a field struct inside the planner's field diff.** There is now none: the planner
   does no field-type dispatch at all. A new one is a regression against the IR, not a fix —
   `column_spec` is where a field type is interpreted. (Its predecessor rule was "route it to #507";
@@ -168,6 +224,12 @@ deletes that adapter** and derives plan actions from `column_delta` directly, wh
   path emits. It is *not* a place to park an inconvenient difference — check that no renderer writes
   it before adding one, and say so in the comment, as the `on_update` / `deferrable` /
   `initially_deferred` entry does.
+
+**The two classes this closed.** Convergence churn is the first (below). The second is the ACTION
+class — a plan that emits the wrong DDL, or none, for a change it correctly detected: #498, #504,
+#514, #515, all inside a week. A new issue in *that* class is a defect in `_plan_column_change!`,
+`_fk_constraint_action` or `alter_field`'s per-slot gates, and it is fixed by making the action read
+the delta — never by giving one site a private test.
 
 **The churn class this closed.** "`makemigrations` plans DDL forever" / "plans nothing" for a column
 nobody changed was one bug shape seen seven times — #325 → #408 → #409 → #417 → #437 → #498 → #503 —

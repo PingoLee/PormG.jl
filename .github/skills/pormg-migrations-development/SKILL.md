@@ -222,8 +222,12 @@ verbs.**
   #507 phase 1 has landed, so the routing is into the compiler.)
 - **A new entry in `NON_DB_ATTRS` that hides a real fact.** The list is legitimate for things no DDL
   path emits. It is *not* a place to park an inconvenient difference — check that no renderer writes
-  it before adding one, and say so in the comment, as the `on_update` / `deferrable` /
-  `initially_deferred` entry does.
+  it before adding one, and say so in the comment. The cautionary case is `on_update` / `deferrable`
+  / `initially_deferred`: #507 classified them here (correctly — nothing rendered them) with a
+  `maxlog` warning so the dropped intent was never silent, and #516 then asked the question the
+  classification had deferred and **removed the three keywords outright**. Classifying an attribute
+  non-schema answers "can this be a column delta?"; it does not answer "should this be declarable at
+  all?" — if the honest answer to the second is no, the entry is a stopgap and needs an issue.
 
 **The two classes this closed.** Convergence churn is the first (below). The second is the ACTION
 class — a plan that emits the wrong DDL, or none, for a change it correctly detected: #498, #504,

@@ -296,3 +296,80 @@ end
   end
 end
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #516: an introspected constraint's unrendered options never reach the generated file
+# The SQLite reader parses `ON UPDATE` and `DEFERRABLE INITIALLY` out of the stored DDL, and until
+# #516 it threaded both into the reconstructed `ForeignKey` as `on_update=` / `deferrable=`.
+# `_model_to_str_foreign_key` emits any slot differing from the constructor default, so a database
+# whose foreign keys carried either clause made PormG GENERATE a models file containing keywords
+# nobody typed. #516 removed the keywords, which makes that generated file unloadable — so the
+# reader must stop producing it. This is the regression guarding that pair: parse the clauses, keep
+# `ON DELETE` (the one referential action PormG does render), and carry neither into the field.
+# Hermetic — `convertSQLToModel(::String)` parses DDL text, no database.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "unrendered constraint options do not survive introspection (#516)" begin
+  # Both clauses present, in the order SQLite stores them, plus the ON DELETE that must survive.
+  #
+  # `ON DELETE RESTRICT` against `ON UPDATE CASCADE` deliberately: the reader destructures six regex
+  # captures and #516 replaced two of them with `_` placeholders, so the realistic defect is a
+  # capture-index shift. Identical actions on both clauses would make that shift INVISIBLE — the
+  # wrong capture would hold the right string — so the two must differ, and the assertion has to pin
+  # the value rather than settle for `!== nothing`.
+  sql = """CREATE TABLE "lap_time" (
+    "id" INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+    "milliseconds" INTEGER NOT NULL,
+    "race_id" INTEGER NOT NULL,
+    FOREIGN KEY("race_id") REFERENCES "race"("id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED
+  );"""
+
+  model = PormG.Migrations.convertSQLToModel(sql)
+  race = model.fields["race_id"]
+
+  # The constraint was parsed — this is not passing because the regex failed to match.
+  @test race isa PormG.Models.sForeignKey
+  @test race.to_table == "race"
+  @test race.pk_field == "id"
+  # `ON DELETE` is the referential action PormG renders (#292), so it must still round-trip — and it
+  # must be RESTRICT, the clause's own value, not CASCADE leaking in from the `ON UPDATE` capture.
+  @test race.on_delete === PormG.RESTRICT
+
+  # The three removed keywords have no slot to land in. Asserted on the instance rather than on the
+  # type so this fails loudly if a slot is ever reintroduced without updating the reader.
+  for attr in (:on_update, :deferrable, :initially_deferred)
+    @test !hasproperty(race, attr)
+  end
+
+  # The generated file must not mention them either. String-matched first because that is the
+  # artifact a user actually gets handed.
+  generated = PormG.Models.Model_to_str(model)
+  @test occursin("Models.ForeignKey(", generated)
+  for kw in ("on_update", "deferrable", "initially_deferred")
+    @test !occursin(kw, generated)
+  end
+
+  # And it RELOADS. This is the assertion the string matches cannot make: before #516's reader fix,
+  # the generated text carried `on_update="CASCADE"`, which the post-#516 constructor refuses —
+  # PormG would have generated a file it then could not load.
+  # The scratch module mirrors the envelope `Generator.jl` actually writes — `import PormG.Models`
+  # plus the sentinel bindings (`CASCADE`, `SET_NULL`, …) — rather than a hand-rolled `const Models`.
+  # Built from `GENERATED_MODULE_RESERVED_BINDINGS`, the same constant the generator reads, so this
+  # cannot drift from the real file's imports.
+  rmod = Module(:Fk516RoundTripScratch)
+  Base.eval(rmod, :(import PormG.Models))
+  sentinels = join(filter(!=("Models"), PormG.GENERATED_MODULE_RESERVED_BINDINGS), ", ")
+  Base.eval(rmod, Meta.parse("import PormG.Models: $sentinels"))
+  reloaded = Base.eval(rmod, Meta.parse(generated))
+  @test reloaded.fields["race_id"] isa PormG.Models.sForeignKey
+
+  # Control: a constraint carrying NEITHER optional clause is unaffected, so the assertions above
+  # are about the clauses rather than about foreign keys in general.
+  plain_sql = """CREATE TABLE "pit_stop" (
+    "id" INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+    "race_id" INTEGER NOT NULL,
+    FOREIGN KEY("race_id") REFERENCES "race"("id") ON DELETE CASCADE
+  );"""
+  plain = PormG.Migrations.convertSQLToModel(plain_sql).fields["race_id"]
+  @test plain isa PormG.Models.sForeignKey
+  @test plain.to_table == "race"
+end

@@ -97,6 +97,14 @@ end
 # at `Models.jl`'s `Model(name; fields...)`), so this helper may reorganize validation but must never
 # rename, add or drop an accepted keyword.
 #
+# #516 is the one deliberate exception, and it is what the contract is FOR. `on_update`, `deferrable`
+# and `initially_deferred` were dropped from `ForeignKey`/`OneToOneField` — and because generated
+# files reload through this form, dropping them into the `@warn "Unexpected parameter"` arm below
+# would have loaded an old generated file as a quietly different model (the #501 silent-drop shape).
+# So the names stay recognized here for the sole purpose of REFUSING them, the way #408 retired
+# `AutoField`. `_RETIRED_FK_KWARGS` is that refusal; deleting an accepted keyword without one is
+# still forbidden.
+#
 # ## Validation order (deliberate)
 #
 # Common keywords validate first (in `_COMMON_FIELD_KWARGS` order), then the constructor's declared
@@ -111,6 +119,56 @@ end
 # or `default`).
 const _COMMON_FIELD_KWARGS = (:verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable)
 
+# #516: the three keywords `ForeignKey`/`OneToOneField` accepted and no renderer ever emitted. Each
+# group maps to why the declared value and the emitted DDL were unrelated in BOTH directions — a user
+# who wrote `deferrable = true` got `DEFERRABLE` because it is hardcoded, not because they asked, and
+# one who left the default got it anyway.
+#
+# Grouped by REASON rather than one entry per keyword: `deferrable` and `initially_deferred` share an
+# explanation, and a field declaring both should read it once instead of twice verbatim.
+const _RETIRED_FK_KWARGS = (
+  (:on_update,) => "no `ON UPDATE` clause is rendered on either backend",
+  (:deferrable, :initially_deferred) =>
+      "PostgreSQL emits every foreign-key constraint `DEFERRABLE INITIALLY DEFERRED` regardless " *
+      "of what is declared, and SQLite renders no deferrability clause at all",
+)
+
+# Refuse a retired keyword instead of dropping it into the `@warn "Unexpected parameter"` arm — see
+# the frozen-names contract above for why silence is the wrong failure here. Scoped to the two
+# constructors that accepted them, so `CharField(deferrable = true)` keeps its old "unexpected
+# parameter" warning rather than gaining an error this issue never argued for.
+function _reject_retired_fk_kwargs(field_type::AbstractString, kwargs)
+  field_type in ("ForeignKey", "OneToOneField") || return nothing
+  # Cheap early-out FIRST. This runs on every `ForeignKey`/`OneToOneField` construction and the
+  # answer is almost always "none declared", so the common path must allocate nothing.
+  any(g -> any(k -> k in keys(kwargs), first(g)), _RETIRED_FK_KWARGS) || return nothing
+
+  # ALL of them, not the first: a field declaring two retired keywords should take one edit to fix,
+  # not one edit per re-run. Iterating `_RETIRED_FK_KWARGS` rather than `keys(kwargs)` keeps the
+  # order deterministic for the test that pins this message.
+  named = String[]
+  reasons = String[]
+  for (ks, why) in _RETIRED_FK_KWARGS
+    hit = [k for k in ks if k in keys(kwargs)]
+    isempty(hit) && continue
+    append!(named, ("`$k`" for k in hit))
+    push!(reasons, join(("`$k`" for k in hit), ", ") * " — " * why)
+  end
+
+  # The tail agrees with the head in number: a message that pluralizes "were removed" and then says
+  # "delete the keyword … without it" reads as though only one of the two needs deleting.
+  one = length(named) == 1
+  throw(_fielderr(
+    "$field_type: $(join(named, ", ", " and ")) $(one ? "was" : "were") removed in #516 — " *
+    "accepted but never rendered ($(join(reasons, "; "))). The declared " *
+    "$(one ? "value" : "values") could not reach the database and $(one ? "was" : "were") not read " *
+    "back by either schema reader. Delete the $(one ? "keyword" : "keywords"): the emitted DDL is " *
+    "byte-identical without $(one ? "it" : "them"), so this changes no schema and forces no " *
+    "migration. If $(one ? "it appears" : "they appear") in a GENERATED models file, PormG wrote " *
+    "$(one ? "it" : "them") there from the SQLite catalog — re-run `generate_models_from_db` to " *
+    "regenerate, or delete the $(one ? "keyword" : "keywords") by hand. See UPGRADING.md."))
+end
+
 function _common_kwargs(field_type::AbstractString, kwargs;
                         bools::NamedTuple = NamedTuple(),
                         extra::Tuple = (),
@@ -123,6 +181,8 @@ function _common_kwargs(field_type::AbstractString, kwargs;
   primary_key === nothing || push!(accepted, :primary_key)
   for k in keys(bools); push!(accepted, k); end
   for k in extra;        push!(accepted, k); end
+
+  _reject_retired_fk_kwargs(field_type, kwargs)
 
   for (k, v) in kwargs
     if !(k in accepted)
@@ -261,14 +321,11 @@ mutable struct sForeignKey <: PormGField
   to::Union{String, PormGModel, Nothing}
   pk_field::Union{String, Symbol, Nothing}
   on_delete::Union{Function, Nothing}
-  on_update::Union{String, Nothing}
-  deferrable::Bool
   how::Union{String, Nothing}  # INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN used in _build_row_join
   related_name::Union{String, Nothing}
   type::String
   formatter::Function
   db_constraint::Bool
-  initially_deferred::Bool
   # Physical parent TABLE this key points at, when `.to` came from introspection (#360). NOT declared
   # API: no constructor kwarg accepts it, `Model_to_str` never emits it, and the migration planner
   # reads it only to resolve the parent table, never as a difference of its own
@@ -320,9 +377,6 @@ The `ForeignKey` field represents a relationship where many records in the curre
 - `editable::Bool = false`: Whether the field should be editable in forms
 - `pk_field::Union{String, Symbol, Nothing} = nothing`: Which field in the target model to reference (defaults to primary key)
 - `on_delete::Union{Function, String, Nothing} = nothing`: Action when the referenced object is deleted
-- `on_update::Union{String, Nothing} = nothing`: Action when the referenced object's key is updated
-- `deferrable::Bool = false`: Whether the constraint check can be deferred until transaction commit
-- `initially_deferred::Bool = false`: Whether constraint checking is initially deferred
 - `how::Union{String, Nothing} = nothing`: Join type for queries ("INNER JOIN", "LEFT JOIN", etc.)
 - `related_name::Union{String, Nothing} = nothing`: Name for the reverse relation
 - `db_constraint::Bool = true`: Whether to create a database foreign key constraint
@@ -399,27 +453,28 @@ Message = Models.Model(
 - The `to` parameter must be a valid model name or PormGModel instance
 - All boolean parameters are validated for type safety
 - The `on_delete` parameter is validated against allowed values
-- Invalid parameters trigger warnings but don't cause errors
+- Unrecognized parameters trigger a warning and are ignored — except `on_update`, `deferrable` and
+  `initially_deferred`, retired in #516, which raise `FieldValidationError` (see UPGRADING.md)
 
 # Notes
 - The field stores the primary key value of the referenced object
 - Uses BIGINT type to match IDField primary keys
-- Supports deferred constraint checking for complex transactions
-- Compatible with PostgreSQL's foreign key features
+- Deferrability is not configurable (#516): PostgreSQL emits every foreign-key constraint
+  `DEFERRABLE INITIALLY DEFERRED`, and SQLite renders no deferrability clause at all
+- No `ON UPDATE` clause is rendered on either backend
 
 # See Also
 - Django's ForeignKey documentation for conceptual understanding
 """
 function ForeignKey(to::Union{String, PormGModel}; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, deferrable, initially_deferred, db_constraint) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, db_constraint) =
     _common_kwargs("ForeignKey", kwargs; primary_key = false, db_index = true,
-      bools = (deferrable = false, initially_deferred = false, db_constraint = true),
-      extra = (:pk_field, :on_delete, :on_update, :how, :related_name))
+      bools = (db_constraint = true,),
+      extra = (:pk_field, :on_delete, :how, :related_name))
 
   default = get(kwargs, :default, nothing)
   pk_field = get(kwargs, :pk_field, nothing)
   on_delete = get(kwargs, :on_delete, nothing)
-  on_update = get(kwargs, :on_update, nothing)
   how = get(kwargs, :how, nothing)
   related_name = get(kwargs, :related_name, nothing)
 
@@ -435,7 +490,6 @@ function ForeignKey(to::Union{String, PormGModel}; kwargs...)
   !(pk_field isa Union{Nothing, AbstractString, Symbol}) &&
     throw(_fielderr("The 'pk_field' must be a String, Symbol, or nothing"))
   on_delete = _get_on_delete_mode(on_delete)
-  !(on_update isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'on_update' must be a String or nothing"))
   !(how isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'how' must be a String or nothing"))
   !(related_name isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'related_name' must be a String or nothing"))
   related_name = _validate_related_name(related_name, "ForeignKey")
@@ -457,14 +511,11 @@ function ForeignKey(to::Union{String, PormGModel}; kwargs...)
     to,
     pk_field,
     on_delete,
-    on_update,
-    deferrable,
     how,
     related_name,
     "BIGINT",
     format_number_sql,
     db_constraint,
-    initially_deferred,
     nothing  # to_table — introspection-only breadcrumb (#360), never set from a declaration
   )
 end
@@ -608,14 +659,11 @@ mutable struct sOneToOneField <: PormGField
   to::Union{String, PormGModel, Nothing}
   pk_field::Union{String, Symbol, Nothing}
   on_delete::Union{Function, Nothing}
-  on_update::Union{String, Nothing}
-  deferrable::Bool
   how::Union{String, Nothing}  # INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN used in _build_row_join
   related_name::Union{String, Nothing}
   type::String
   formatter::Function
   db_constraint::Bool
-  initially_deferred::Bool
   # See `sForeignKey.to_table` above for why this slot exists and why it is not declared API (#360).
   # It must exist on BOTH structs: since #417 BOTH schema readers emit a `OneToOneField` whenever
   # the foreign key column is also UNIQUE, or is itself the primary key (#409).
@@ -665,9 +713,6 @@ The `OneToOneField` represents a strict one-to-one relationship where each recor
 - `editable::Bool = false`: Whether the field should be editable in forms
 - `pk_field::Union{String, Symbol, Nothing} = nothing`: Which field in the target model to reference (defaults to primary key)
 - `on_delete::Union{Function, String, Nothing} = nothing`: Action when the referenced object is deleted
-- `on_update::Union{String, Nothing} = nothing`: Action when the referenced object's key is updated
-- `deferrable::Bool = false`: Whether the constraint check can be deferred until transaction commit
-- `initially_deferred::Bool = false`: Whether constraint checking is initially deferred
 - `how::Union{String, Nothing} = nothing`: Join type for queries ("INNER JOIN", "LEFT JOIN", etc.)
 - `related_name::Union{String, Nothing} = nothing`: Name for the reverse relation
 - `db_constraint::Bool = true`: Whether to create a database foreign key constraint
@@ -773,22 +818,27 @@ changed: an `ALTER` that re-rendered the column unchanged, and a full table rebu
 - All boolean parameters are validated for type safety
 - The `on_delete` parameter is validated against allowed values
 - Uniqueness is automatically enforced at the database level
-- Invalid parameters trigger warnings but don't cause errors
+- Unrecognized parameters trigger a warning and are ignored — except `on_update`, `deferrable` and
+  `initially_deferred`, retired in #516, which raise `FieldValidationError` (see UPGRADING.md)
+
+# Notes
+- Deferrability is not configurable (#516): PostgreSQL emits every foreign-key constraint
+  `DEFERRABLE INITIALLY DEFERRED`, and SQLite renders no deferrability clause at all
+- No `ON UPDATE` clause is rendered on either backend
 
 # See Also
 - Django's OneToOneField documentation for conceptual understanding
 - Database normalization principles for when to use one-to-one relationships
 """
 function OneToOneField(to::Union{String, PormGModel}; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, deferrable, initially_deferred, db_constraint) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, db_constraint) =
     _common_kwargs("OneToOneField", kwargs; primary_key = false, unique = true, db_index = true,
-      bools = (deferrable = false, initially_deferred = false, db_constraint = true),
-      extra = (:pk_field, :on_delete, :on_update, :how, :related_name))
+      bools = (db_constraint = true,),
+      extra = (:pk_field, :on_delete, :how, :related_name))
 
   default = get(kwargs, :default, nothing)
   pk_field = get(kwargs, :pk_field, nothing)
   on_delete = get(kwargs, :on_delete, nothing)
-  on_update = get(kwargs, :on_update, nothing)
   how = get(kwargs, :how, nothing)
   related_name = get(kwargs, :related_name, nothing)
 
@@ -802,7 +852,6 @@ function OneToOneField(to::Union{String, PormGModel}; kwargs...)
 
   # Validate optional string parameters
   !(pk_field isa Union{Nothing, String, Symbol}) && throw(_fielderr("The 'pk_field' must be a String, Symbol, or nothing"))
-  !(on_update isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'on_update' must be a String or nothing"))
   !(how isa Union{Nothing, String}) && throw(_fielderr("The 'how' must be a String or nothing"))
   !(related_name isa Union{Nothing, String}) && throw(_fielderr("The 'related_name' must be a String or nothing"))
   related_name = _validate_related_name(related_name, "OneToOneField")
@@ -830,14 +879,11 @@ function OneToOneField(to::Union{String, PormGModel}; kwargs...)
     to,
     pk_field,
     on_delete,
-    on_update,
-    deferrable,
     how,
     related_name,
     "BIGINT",
     format_number_sql,
     db_constraint,
-    initially_deferred,
     nothing  # to_table — introspection-only breadcrumb (#360), never set from a declaration
   )
 end

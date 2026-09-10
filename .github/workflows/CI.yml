@@ -17,10 +17,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Test on minimum supported version and latest stable.
+        # Minimum supported version (the Project.toml `julia = "1.12"` floor, deliberate
+        # — README → Requirements, #211) and the current stable, 1.13.
+        #
+        # Both are PINNED rather than spelled `'1'`: the floating alias made the check
+        # name ("Julia 1") not say which version actually ran, and let a new minor change
+        # what CI tested with no PR. The cost is that this list needs a bump when a new
+        # minor ships — which is the point: the bump is reviewable.
+        #
         # Integration tests (test/integration/) require a live PostgreSQL database
         # and are NOT part of this CI job — they run separately in a dev environment.
-        julia-version: ['1.12', '1']
+        julia-version: ['1.12', '1.13']
         os: [ubuntu-latest, windows-latest]
 
     steps:
@@ -49,7 +56,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        julia-version: ['1.12', '1']
+        # Keep in step with the `test` job's matrix above.
+        julia-version: ['1.12', '1.13']
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2

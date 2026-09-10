@@ -165,14 +165,18 @@ const SLOTS = Tuple{String,Any,Function}[
          q.filter(QBA.FExpression(field_name = "note", operation = "=", operand = "x", column = v));
          _adm_render(q))),
 
-  # CONSTRUCTION ONLY, and the one deliberate exception to the render rule above. `OperObject.column`
-  # has no user-facing entry point that takes an arbitrary `ColumnPart`: `OP(...)` accepts only a
-  # `String` or an `SQLTypeFunction`, and every other `OperObject` is built by `_check_filter` from a
-  # parsed pair. Handing `filter` a hand-built `OperObject` is not a spelling anyone writes, so
-  # probing it that way would report the probe's own unrealism as four defects. What this slot can
-  # still catch is a CONSTRUCTOR that accepts what the struct cannot hold.
-  ("OperObject.column (construction only — no public entry)", QBA.ColumnPart,
-   v -> QBA.OperObject(operator = "=", values = "x", column = v)),
+  # Probed through `OP(...)`, the real public constructor, and DECLARED as `SQLTypeFunction` — what
+  # `OP` accepts beyond a `String`. An earlier draft declared the struct's own `ColumnPart` here and
+  # handed `filter` a hand-built `OperObject`; that reported six offenders which were the probe's own
+  # unrealism, so the draft after it made the slot construction-only and justified that with "there
+  # is no public entry point". Both were wrong: `OP(::SQLTypeFunction, ::Any)` is public, documented,
+  # and raises a raw `FieldError` at render (#537).
+  #
+  # `ColumnPart` is genuinely wider than any public entry point, and reconciling the two widths is
+  # #537's to settle rather than this file's to assert. Narrowing the declared type here is what
+  # keeps the report honest: it probes the spelling a user can actually write.
+  ("OperObject.column via OP()", PormG.SQLTypeFunction,
+   v -> (q = _with_cte(AD.Adm_child.objects); q.values("note"); q.filter(OP(v, "x")); _adm_render(q))),
 
   ("Lower(x) — the functions.jl family",
    Union{String,PormG.SQLTypeField,PormG.SQLTypeText,PormG.SQLTypeFunction,PormG.SQLTypeF,PormG.SQLTypeCTE,PormG.SQLTypeJoined},
@@ -199,6 +203,12 @@ const KNOWN_GAPS = Dict{Type,Vector{String}}(
   # `_check_function` has no arm. Pre-existing; #533 closed the `FExpression.operand` instance by
   # naming `FExpression` directly, and left the design call on these two to #535.
   QBA.OuterRefObject => ["WindowFunction.column", "Lower(x) — the functions.jl family"],
+
+  # #537 — `OP(::SQLTypeFunction, value)` is a public constructor whose result nothing renders: the
+  # path reads `.field` off the column, which only an `SQLField` has. Pre-existing on origin/main;
+  # measured identically on both trees.
+  QBA.FObject        => ["OperObject.column via OP()"],
+  QBA.WindowFunction => ["OperObject.column via OP()"],
 )
 
 @testset "#533: every admitted node type has a consumer" begin

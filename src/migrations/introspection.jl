@@ -1590,9 +1590,18 @@ separate index `db_index` means. It now gets its plain index once and converges.
 
 NOT narrowed to single-column, non-partial indexes, unlike the `db_index` reader
 [`_sqlite_single_column_indexed_columns`](@ref) whose filter this otherwise mirrors. That reader
-answers *"is this column `db_index = true`?"*; this one answers *"may PormG drop this index?"*, and
-a composite or partial index is both droppable and blocking — SQLite refuses `DROP COLUMN` on ANY
-indexed column, so the planner's field-deletion loop needs those found. Do not collapse the two.
+answers *"is this column `db_index = true`?"*; this one answers *"may PormG drop this index?"*, and a
+composite index is both droppable and worth finding. Do not collapse the two.
+
+#519: THIS FUNCTION IS NOT A DELETION-BLOCKING CHECK, and an earlier version of this docstring said it
+was — *"SQLite refuses `DROP COLUMN` on ANY indexed column, so the planner's field-deletion loop needs
+those found."* It cannot answer that question, for two reasons that are both structural rather than
+fixable here: the SQLite query below matches on `pragma_index_info.name`, which is `NULL` for an
+EXPRESSION member and never lists a PARTIAL index's `WHERE` columns; and it returns a single name, so a
+column with two eligible indexes reports one. Use
+[`_sqlite_indexes_referencing_column`](@ref) for "would SQLite refuse to drop this column?" — it reads
+the index DDL as well as the pragma members and returns every hit. The field-deletion loop routes
+through the table rebuild on that answer and no longer pre-drops anything on SQLite.
 """
 function get_constraints_index(conn::PormGPostgres, table_name::Symbol, field_name::String)
   # Parameterized, per this file's own rule (see `get_constraints_fk` above): the unparameterized
@@ -1603,8 +1612,11 @@ function get_constraints_index(conn::PormGPostgres, table_name::Symbol, field_na
   # an index that is not unique — so what comes back is provably owned by no constraint, which is
   # what lets `_drop_index` emit a bare `DROP INDEX` with no `DROP CONSTRAINT` ahead of it.
   #
-  # `indkey` covers INCLUDE columns as well as key columns, on purpose: a non-key column still makes
-  # PostgreSQL refuse to drop the column, and this lookup's job is to find what stands in the way.
+  # `indkey` covers INCLUDE columns as well as key columns, on purpose: an INCLUDE column is as much a
+  # reason to re-create the index under a new name after a `RENAME COLUMN` as a key column is, and this
+  # lookup arms that. (#519: it is NOT arming a deletion — PostgreSQL drops an index with the column it
+  # covers and never refuses the `DROP COLUMN`, as the docstring above says. An earlier version of this
+  # comment claimed the lookup existed "to find what stands in the way", which contradicted it.)
   # Scoped through `current_schemas(false)` for `get_constraints_fk`'s reason — the DDL this arms is
   # emitted UNQUALIFIED and so resolves through the search path, and the lookup has to agree with the
   # statement it is arming. Ordered, because "whichever PostgreSQL returned first" is not an answer.
@@ -1918,6 +1930,440 @@ function _sqlite_composite_indexes(conn::PormGSQLite, table_name)::Vector{Pair{S
   return out
 end
 
+# ── SQLite index reference analysis (#519) ───────────────────────────────────────────────────────
+#
+# `pragma_index_info` is blind in two places, and both of them make SQLite refuse a `DROP COLUMN`
+# that PormG planned as if the column were free:
+#
+#   * an EXPRESSION member reports `name = NULL` — `CREATE INDEX ix ON t(lower("a"))` lists one
+#     member with no name, because an expression has no column name to give;
+#   * a PARTIAL index's `WHERE` columns are not members at all — `CREATE INDEX ix ON t(a) WHERE b > 0`
+#     reports only `a`, yet dropping `b` breaks the index just as badly.
+#
+# So the index's own DDL text from `sqlite_master` is the only place the reference is recorded. The
+# #515 rule applies to reading it: no unanchored substring, no `LIKE '%<column>%'` — a short column
+# name matches a neighbouring identifier, a function name, or the contents of a string literal. What
+# follows is an identifier-aware read instead, and the answer is still grounded in the CATALOG: the
+# DDL only supplies candidate tokens, and a token counts as a column reference only if
+# `pragma_table_info` says the table really has a column by that name.
+
+"""
+    _sqlite_identifier_tokens(sql) -> Vector{Tuple{String,Bool,Bool}}
+
+Every identifier in `sql` as `(name, called, quoted)` — `called` is whether the next non-space
+character is `(`, `quoted` whether the identifier was written in one of SQLite's three quoting forms.
+Punctuation is not returned at all; the only punctuation this needs to report is that one `(`, and it
+travels with the identifier before it. [`_sqlite_index_argument_region`](@ref) does its own scan rather
+than reading this list, because it needs a character OFFSET and these tokens carry none.
+
+`quoted` is what lets a caller tell a COLUMN from SQL SYNTAX. `DESC`, `COLLATE`, `WHERE`, `AND` and
+friends are bare words in the same position a column name occupies, and a legacy table really can have
+a column named `desc` — so neither the word nor the position settles it, but the quoting does: a column
+whose name is a reserved word can only be referenced quoted, while the syntax is never quoted. Dropping
+this flag silently destroyed an index on an unrelated surviving column (see
+[`_SQLITE_INDEX_SYNTAX_WORDS`](@ref)).
+
+A tokenizer rather than a regex because the things that must NOT be mistaken for an identifier are
+exactly the things a regex over raw text cannot exclude: `'…'` string literals (with `''` escapes),
+`x'…'` blobs, `--` line comments and `/* … */` block comments. SQLite's three quoted-identifier
+spellings are all recognised (`"…"` with `""` escapes, `[…]`, `` `…` `` with ``` `` ``` escapes), so a
+column named `select` or `index` reads correctly, and bare identifiers use SQLite's own character
+class (a leading letter or `_`, then letters, digits, `_` or \$).
+
+Julia's `isletter` is Unicode-aware where SQLite's bare-identifier class is ASCII, so this accepts a
+few spellings SQLite would reject in unquoted form. That is the harmless direction: a name that cannot
+appear in real DDL simply never matches a real column.
+
+The `(`-follows flag is what separates `lower` the function from `lower` the column in
+`lower("a")` — without it, an index expression's function names would be indistinguishable from
+column references, and a table with a column named after a function it uses would route every
+deletion through a table rebuild.
+"""
+function _sqlite_identifier_tokens(sql::AbstractString)::Vector{Tuple{String,Bool,Bool}}
+  cs = collect(sql)
+  n = length(cs)
+  out = Tuple{String,Bool,Bool}[]
+  i = 1
+  # Position of the next non-space character at or after `j`, or 0 when there is none.
+  next_visible = function (j::Int)
+    while j <= n && isspace(cs[j])
+      j += 1
+    end
+    return j <= n ? j : 0
+  end
+  while i <= n
+    c = cs[i]
+    if isspace(c)
+      i += 1
+    elseif c == '-' && i < n && cs[i + 1] == '-'
+      # Line comment: to end of line.
+      while i <= n && cs[i] != '\n'
+        i += 1
+      end
+    elseif c == '/' && i < n && cs[i + 1] == '*'
+      # Block comment. An unterminated one runs to the end, which is what SQLite does too.
+      i += 2
+      while i < n && !(cs[i] == '*' && cs[i + 1] == '/')
+        i += 1
+      end
+      i = min(i + 2, n + 1)
+    elseif c == '\''
+      # String literal. `''` is an escaped quote, so a doubled quote does not end it.
+      i += 1
+      while i <= n
+        if cs[i] == '\'' && i < n && cs[i + 1] == '\''
+          i += 2
+        elseif cs[i] == '\''
+          i += 1
+          break
+        else
+          i += 1
+        end
+      end
+    elseif (c == 'x' || c == 'X') && i < n && cs[i + 1] == '\''
+      # Blob literal `x'ABCD'` — skipped as a literal, NOT read as the identifier `x`.
+      i += 2
+      while i <= n && cs[i] != '\''
+        i += 1
+      end
+      i += 1
+    elseif c == '"' || c == '`'
+      # Quoted identifier; the quote character doubles to escape itself.
+      q = c
+      i += 1
+      buf = Char[]
+      while i <= n
+        if cs[i] == q && i < n && cs[i + 1] == q
+          push!(buf, q)
+          i += 2
+        elseif cs[i] == q
+          i += 1
+          break
+        else
+          push!(buf, cs[i])
+          i += 1
+        end
+      end
+      nx = next_visible(i)
+      push!(out, (String(buf), nx != 0 && cs[nx] == '(', true))
+    elseif c == '['
+      # Bracketed identifier — no escape form in SQLite; the first `]` ends it.
+      i += 1
+      buf = Char[]
+      while i <= n && cs[i] != ']'
+        push!(buf, cs[i])
+        i += 1
+      end
+      i += 1
+      nx = next_visible(i)
+      push!(out, (String(buf), nx != 0 && cs[nx] == '(', true))
+    elseif isdigit(c)
+      # Numeric literal — consumed so that `1e5` or `0x1f` cannot leave an identifier fragment.
+      while i <= n && (isdigit(cs[i]) || cs[i] == '.' || cs[i] == 'x' || cs[i] == 'X' ||
+                       (cs[i] in ('e', 'E')) || isletter(cs[i]))
+        i += 1
+      end
+    elseif isletter(c) || c == '_'
+      buf = Char[]
+      while i <= n && (isletter(cs[i]) || isdigit(cs[i]) || cs[i] == '_' || cs[i] == '$')
+        push!(buf, cs[i])
+        i += 1
+      end
+      nx = next_visible(i)
+      push!(out, (String(buf), nx != 0 && cs[nx] == '(', false))
+    else
+      i += 1
+    end
+  end
+  return out
+end
+
+"""
+    _sqlite_index_argument_region(sql) -> String
+
+The part of a `CREATE INDEX` statement that can reference a column: the indexed-column list plus any
+`WHERE` clause, i.e. everything from the first `(` onwards.
+
+`CREATE [UNIQUE] INDEX [IF NOT EXISTS] [schema.]name ON table (…) [WHERE …]` has no parenthesis
+before the column list, so that one boundary excludes the index name and the table name
+STRUCTURALLY rather than by guessing — which matters because either of them may legitimately equal a
+column name. The scan skips literals and comments the same way [`_sqlite_identifier_tokens`](@ref)
+does, so a `(` inside a quoted index name cannot be mistaken for the list's opening paren.
+
+Returns the whole string when there is no `(` at all, which cannot happen for real `CREATE INDEX`
+DDL but keeps a malformed or truncated `sqlite_master.sql` conservative rather than blind.
+"""
+function _sqlite_index_argument_region(sql::AbstractString)
+  cs = collect(sql)
+  n = length(cs)
+  i = 1
+  while i <= n
+    c = cs[i]
+    if c == '-' && i < n && cs[i + 1] == '-'
+      while i <= n && cs[i] != '\n'
+        i += 1
+      end
+    elseif c == '/' && i < n && cs[i + 1] == '*'
+      i += 2
+      while i < n && !(cs[i] == '*' && cs[i + 1] == '/')
+        i += 1
+      end
+      i = min(i + 2, n + 1)
+    elseif c == '\''
+      i += 1
+      while i <= n
+        if cs[i] == '\'' && i < n && cs[i + 1] == '\''
+          i += 2
+        elseif cs[i] == '\''
+          i += 1
+          break
+        else
+          i += 1
+        end
+      end
+    elseif c == '"' || c == '`'
+      q = c
+      i += 1
+      while i <= n
+        if cs[i] == q && i < n && cs[i + 1] == q
+          i += 2
+        elseif cs[i] == q
+          i += 1
+          break
+        else
+          i += 1
+        end
+      end
+    elseif c == '['
+      i += 1
+      while i <= n && cs[i] != ']'
+        i += 1
+      end
+      i += 1
+    elseif c == '('
+      return String(cs[i:end])
+    else
+      i += 1
+    end
+  end
+  return String(cs)
+end
+
+"""
+    _SQLITE_INDEX_SYNTAX_WORDS
+
+Bare words that are SQL SYNTAX inside a `CREATE INDEX` argument region rather than column references.
+Consulted only for an UNQUOTED token: `"desc"` in quotes is a column named `desc`, while a bare `DESC`
+is the sort direction, and SQLite gives no other way to tell them apart.
+
+Why this list is not merely tidiness: without it, an ordinary descending index over a table that also
+has a column named `desc` — `CREATE INDEX ix ON t("a" DESC)` — read as referencing BOTH `a` and `desc`.
+Deleting `desc` then dropped `ix`, an index on the surviving column `a`, and reported it as an
+expression index. That is the one direction that must not happen: an index lost on a column nobody
+touched, silently, because a rebuild declined to re-create it.
+
+Erring the other way is safe, and it is worth knowing exactly how far the exposure goes rather than
+trusting the shape. Nine of these are NOT reserved in SQLite and so are legal as unquoted identifiers —
+`asc`, `desc`, `like`, `glob`, `regexp`, `match`, `true`, `false`, `end` — while the other seventeen can
+only ever appear quoted, where this filter does not touch them. For a PLAIN member even those nine are
+still found, because `pragma_index_info` supplies the column and the DDL half only adds to it. The
+residual miss is one of those nine names referenced unquoted INSIDE an expression or a `WHERE` clause
+(`ON t(lower(match))`), and it cannot go silent: a miss shrinks the referenced set, so the index is
+KEPT and re-emitted, and SQLite refuses it by name. A missed reference is therefore loud and
+recoverable, where the reverse — inventing a reference and dropping an index on a column nobody
+touched — is silent and not.
+
+Deliberately NOT a full keyword list: only words reachable in this one region, so an ordinary column
+named `key` or `value` (also non-reserved, also legal unquoted) is still matched.
+"""
+const _SQLITE_INDEX_SYNTAX_WORDS = Set([
+  # ordering and collation
+  "ASC", "DESC", "COLLATE",
+  # the partial-index predicate, and the operators an expression or predicate can contain
+  "WHERE", "AND", "OR", "NOT", "IS", "IN", "LIKE", "GLOB", "REGEXP", "MATCH", "BETWEEN", "ESCAPE",
+  "NULL", "TRUE", "FALSE",
+  # expression forms
+  "CASE", "WHEN", "THEN", "ELSE", "END", "CAST", "AS", "DISTINCT",
+])
+
+"""
+    _SQLITE_INDEX_UNMODELLABLE_WORDS
+
+The bare words whose presence means PormG could not have written the index — a `WHERE` predicate, an
+explicit `COLLATE`, or a sort direction. Read by
+[`_sqlite_index_is_unmodellable`](@ref); UNQUOTED occurrences only.
+
+Much narrower than [`_SQLITE_INDEX_SYNTAX_WORDS`](@ref) on purpose, because the two answer different
+questions. That set is "this token is syntax, so it is not a column"; this one is "this index carries
+intent no model declaration holds". `AND`, `NULL`, `LIKE` and the rest are syntax but say nothing about
+renderability — they only ever appear inside a predicate, which `WHERE` already disqualifies. Widening
+this to the full set would flag every partial index twice and nothing new.
+"""
+const _SQLITE_INDEX_UNMODELLABLE_WORDS = ("WHERE", "COLLATE", "ASC", "DESC")
+
+"""
+    _sqlite_index_is_unmodellable(index_sql, pragma_members, ddl_columns) -> Bool
+
+Whether this index is one PormG could not have created itself — an expression index, a partial index,
+one with an explicit `COLLATE`, or one with a sort direction — and therefore one it cannot re-create
+after a table rebuild.
+
+PormG emits exactly two index shapes — `Dialect.create_index` (from `db_index` and `Models.Index`) and
+`Dialect.create_unique_index` (from `Meta.unique_together` and the many-to-many join table). Both are a
+bare list of column names, nothing else. Anything a rebuild drops that does NOT have that shape carries
+intent no model declaration can hold, so nothing will bring it back and the operator has to be told.
+
+Four things disqualify an index, and each is checked against what the renderers can actually produce:
+
+  * an **expression** member — a column the DDL references that `pragma_index_info` does not list;
+  * a **partial** index — a `WHERE` clause, whose columns pragma never lists at all, and which is
+    still disqualifying when its predicate happens to name only plain members
+    (`CREATE INDEX ix ON t(a) WHERE a > 0`), where the difference test alone sees nothing;
+  * an explicit **`COLLATE`**, which changes which rows the index can serve;
+  * an **`ASC`/`DESC`** direction. Django's `Index(fields=['-name'])` produces exactly this, so a
+    schema imported from Django can arrive carrying one.
+
+A plain `CREATE UNIQUE INDEX` is deliberately NOT disqualifying: PormG renders those from
+`unique_together` and for M2M join tables, and one that references a dropped column is intent the
+declared model no longer holds either — the operator removed the column from the group in the same
+edit. Warning there would be noise on an ordinary field deletion, which is also why a plain
+`CREATE INDEX` (i.e. `db_index`) does not warn.
+"""
+function _sqlite_index_is_unmodellable(index_sql::AbstractString, pragma_members::Set{String},
+                                       ddl_columns::Set{String})::Bool
+  # A column the DDL references but pragma does not report as a member ⇒ expression or WHERE clause.
+  any(c -> !(c in pragma_members), ddl_columns) && return true
+  # The modifiers no PormG renderer emits. UNQUOTED only — `"desc"` is a column named `desc`, and
+  # reading it as a sort direction is the same confusion `_SQLITE_INDEX_SYNTAX_WORDS` exists for. See
+  # `_SQLITE_INDEX_UNMODELLABLE_WORDS` for why that list is narrower than the syntax one.
+  for (tok, _called, quoted) in _sqlite_identifier_tokens(_sqlite_index_argument_region(index_sql))
+    quoted && continue
+    uppercase(tok) in _SQLITE_INDEX_UNMODELLABLE_WORDS && return true
+  end
+  return false
+end
+
+"""
+    _sqlite_index_pragma_members(conn, index_name) -> Set{String}
+
+The index's `pragma_index_info` members — the column names SQLite itself reports, with expression
+members (whose `name` is `NULL`) absent.
+
+Split out for [`get_secondary_index_ddls`](@ref), which needs BOTH this set and the DDL-derived one
+(it classifies the index by their difference) and passes the result into
+[`_sqlite_index_referenced_columns`](@ref) as `pragma_members` so the pragma is fetched once per index
+rather than twice.
+"""
+function _sqlite_index_pragma_members(conn::PormGSQLite, index_name::AbstractString)::Set{String}
+  rows = fetch(conn, "SELECT name FROM pragma_index_info(?)", [string(index_name)]) |> DataFrame
+  members = Set{String}()
+  isempty(rows) && return members
+  for c in rows.name
+    c === missing || push!(members, string(c))
+  end
+  return members
+end
+
+"""
+    _sqlite_index_referenced_columns(conn, table_name, index_name, index_sql) -> Set{String}
+
+Which of `table_name`'s columns the index actually references — its `pragma_index_info` members
+UNION the columns named in its DDL, so an expression member and a partial index's `WHERE` columns are
+both included where `pragma_index_info` alone reports neither (#519).
+
+The DDL half is deliberately conservative in the safe direction. Candidate identifier tokens come
+from [`_sqlite_index_argument_region`](@ref); a candidate is dropped when it is
+
+  * followed by `(` — a function call, which is what separates `lower` the function from `lower` the
+    column in `lower("a")`;
+  * an unquoted [`_SQLITE_INDEX_SYNTAX_WORDS`](@ref) member — `DESC`, `WHERE`, `AND` … ; or
+  * the name immediately after an unquoted `COLLATE`, which is a collation (`NOCASE`, `BINARY`,
+    `RTRIM`) and not a column, however much it may coincide with one;
+
+and what survives is kept only if `pragma_table_info` confirms the table has a column of that name. So
+the DDL text never decides anything on its own: it narrows, and the catalog confirms. Comparison is
+case-insensitive because SQLite compares ASCII identifiers that way, and the LIVE spelling is what
+comes back, so the result can be tested against a `surviving_columns` set built from a model.
+"""
+function _sqlite_index_referenced_columns(conn::PormGSQLite, table_name::Union{String,Symbol},
+                                          index_name::AbstractString,
+                                          index_sql::Union{Nothing,AbstractString};
+                                          pragma_members::Union{Nothing,Set{String}} = nothing)::Set{String}
+  referenced = pragma_members === nothing ?
+               _sqlite_index_pragma_members(conn, index_name) : copy(pragma_members)
+  (index_sql === nothing || isempty(strip(String(index_sql)))) && return referenced
+
+  # Parameterized, per this file's own rule (`get_constraints_index`: "an EDITED query does not
+  # inherit the exemption") — and these are new queries, so they never had the exemption. The
+  # table-valued pragmas take a bound argument, which `get_constraints_index`'s SQLite arm already
+  # relies on.
+  cols = fetch(conn, "SELECT name FROM pragma_table_info(?)", [string(table_name)]) |> DataFrame
+  isempty(cols) && return referenced
+  # lowercase ⇒ live spelling, so a mixed-case column (#57) is matched case-insensitively but
+  # returned exactly as the catalog holds it.
+  by_lower = Dict{String,String}()
+  for c in cols.name
+    c === missing || (by_lower[lowercase(string(c))] = string(c))
+  end
+
+  after_collate = false
+  for (tok, called, quoted) in _sqlite_identifier_tokens(_sqlite_index_argument_region(index_sql))
+    # The token right after an unquoted COLLATE is a collation name. Consumed here rather than
+    # filtered by name, because `NOCASE` is a perfectly legal column name and a user-defined
+    # collation can be called anything at all.
+    if after_collate
+      after_collate = false
+      continue
+    end
+    if !quoted && uppercase(tok) == "COLLATE"
+      after_collate = true
+      continue
+    end
+    called && continue                                                  # a function name
+    (!quoted && uppercase(tok) in _SQLITE_INDEX_SYNTAX_WORDS) && continue  # SQL syntax
+    live = get(by_lower, lowercase(tok), nothing)
+    live === nothing || push!(referenced, live)
+  end
+  return referenced
+end
+
+"""
+    _sqlite_indexes_referencing_column(conn, table_name, column_name) -> Vector{String}
+
+Names of every user-created index on `table_name` that references `column_name`, in name order —
+plain, composite, unique, expression and partial alike (#519).
+
+This is the question `ALTER TABLE … DROP COLUMN` asks on SQLite, which refuses to drop a column ANY
+index references. It is deliberately much wider than [`get_constraints_index`](@ref), which answers
+"may PormG drop this index?" and therefore excludes the constraint-backing ones and returns a single
+name; a blocking check needs every index, including the ones that cannot be dropped separately and
+the ones a second `DROP INDEX` would be needed for.
+
+Restricted to `sql IS NOT NULL`, i.e. indexes with DDL of their own. The auto-indexes that back a
+`UNIQUE` or `PRIMARY KEY` clause have a NULL `sql`, cannot be dropped at all, and are already routed
+to the rebuild by [`_sqlite_column_is_unique`](@ref) and the planner's `primary_key` test.
+"""
+function _sqlite_indexes_referencing_column(conn::PormGSQLite, table_name::Union{String,Symbol},
+                                            column_name::AbstractString)::Vector{String}
+  # `COLLATE NOCASE` on `tbl_name`, because SQLite resolves a table NAME case-insensitively while
+  # `sqlite_master.tbl_name` is BINARY-collated. Without it this answers "no indexes" for a table
+  # whose `db_table` spelling differs in case from its `CREATE TABLE` — the plain `DROP COLUMN` is
+  # then planned and SQLite refuses it, i.e. #519 silently un-fixed for a mixed-case table (#57). The
+  # sibling probe in the same planner disjunct, `_sqlite_column_is_unique`, goes through
+  # `PRAGMA index_list`, which is already case-insensitive; these two must agree.
+  rows = fetch(conn, "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE AND sql IS NOT NULL ORDER BY name", [string(table_name)]) |> DataFrame
+  isempty(rows) && return String[]
+  target = lowercase(String(column_name))
+  hits = String[]
+  for r in eachrow(rows)
+    r.name === missing && continue
+    sql = r.sql === missing ? nothing : string(r.sql)
+    referenced = _sqlite_index_referenced_columns(conn, table_name, string(r.name), sql)
+    any(c -> lowercase(c) == target, referenced) && push!(hits, string(r.name))
+  end
+  return hits
+end
+
 """
     get_secondary_index_ddls(conn::PormGSQLite, table_name) -> Vector{String}
 
@@ -1935,11 +2381,21 @@ Default empty ⇒ no rewriting, so every existing #82/#116 call site is unaffect
 function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Symbol};
                                   surviving_columns::Union{Nothing,Set{String}} = nothing,
                                   column_renames::Dict{String,String} = Dict{String,String}())::Vector{String}
-  tname = replace(string(table_name), "'" => "''")
   # `name` is fetched alongside `sql` so we can probe each index's columns via pragma_index_info
   # when filtering (#116). Auto-created indexes (UNIQUE/PK) carry a NULL `sql` and are excluded here,
   # exactly as before — they belong to the CREATE TABLE the rebuild already re-emits.
-  rows = fetch(conn, "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = '$(tname)' AND sql IS NOT NULL") |> DataFrame
+  # `? COLLATE NOCASE`, for the reason spelled out in `_sqlite_indexes_referencing_column`: SQLite
+  # resolves a table NAME case-insensitively while `sqlite_master.tbl_name` is BINARY-collated.
+  #
+  # #519 review: this query and that probe MUST agree, and making only one of them insensitive was a
+  # regression worse than leaving both blind. The probe decides whether a deletion routes to the
+  # rebuild; this decides which indexes the rebuild puts back. Insensitive probe + sensitive snapshot
+  # on a mixed-case table (#57) meant "rebuild the table, and re-create NONE of its indexes" — every
+  # index silently lost, including ones on columns nobody touched, which is the #82 class this filter
+  # exists to prevent. While both were blind they agreed and the deletion merely failed loudly. The
+  # two name sources also differ (the probe gets the planner's key, this gets
+  # `model_table_name(current_model)`), so agreement cannot be assumed from the callers.
+  rows = fetch(conn, "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE AND sql IS NOT NULL", [string(table_name)]) |> DataFrame
   isempty(rows) && return String[]
   ddls = String[]
   for r in eachrow(rows)
@@ -1948,22 +2404,45 @@ function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Sy
     stmt = strip(string(s))
     isempty(stmt) && continue
     # #116: when the caller is rebuilding a table with columns removed (FK-field deletion), an index on a
-    # dropped column must NOT be re-created — SQLite would raise "no such column". `pragma_index_info`
-    # gives the index's exact indexed-column membership (robust vs. substring-matching the DDL text); drop
-    # the index if any of its columns is no longer present in the rebuilt table. No filtering when the
-    # kwarg is `nothing`, so every existing rebuild call site keeps its current behavior.
+    # dropped column must NOT be re-created — SQLite would raise "no such column". Drop the index if any
+    # of the columns it references is no longer present in the rebuilt table. No filtering when the kwarg
+    # is `nothing`, so every existing rebuild call site keeps its current behavior.
     #
-    # Known limitation: `pragma_index_info` reports NULL for an *expression* column and does not list a
-    # *partial* index's WHERE-clause columns, so a user-created expression/partial index over a dropped
-    # column would slip through and fail the rebuild. Accepted for #116: PormG only ever emits plain
-    # single/multi-column indexes (create_index in Dialect.jl), which pragma_index_info covers exactly.
+    # #519: the membership test was `pragma_index_info` alone, and that reports NULL for an EXPRESSION
+    # member and does not list a PARTIAL index's WHERE-clause columns — so an expression or partial index
+    # over a dropped column slipped through the filter, was re-emitted verbatim, and failed the rebuild
+    # with "no such column". `_sqlite_index_referenced_columns` answers the same question over the index's
+    # DDL as well as its pragma members, identifier-aware and confirmed against `pragma_table_info`, so
+    # both shapes are now caught. The old comment called this an accepted limitation on the grounds that
+    # PormG never CREATES such an index; that is still true, and it was never the point — an adopted
+    # database arrives with indexes PormG did not write.
     if surviving_columns !== nothing
-      idxname = replace(string(r.name), "'" => "''")
-      cols = fetch(conn, "SELECT name FROM pragma_index_info('$(idxname)')") |> DataFrame
+      pragma_members = _sqlite_index_pragma_members(conn, string(r.name))
+      all_referenced = _sqlite_index_referenced_columns(conn, table_name, string(r.name), stmt;
+                                                        pragma_members = pragma_members)
       # #150: the live index references the OLD column name; map it to the rebuilt table's new name
       # before the membership test so a renamed-but-surviving column keeps its index.
-      referenced = String[get(column_renames, string(c), string(c)) for c in cols.name if c !== missing]
-      any(c -> !(c in surviving_columns), referenced) && continue
+      referenced = String[get(column_renames, c, c) for c in all_referenced]
+      lost = String[c for c in referenced if !(c in surviving_columns)]
+      if !isempty(lost)
+        # #519: nothing is dropped in silence. Only for an index PormG could not have created — a plain
+        # column index is `db_index` / `Models.Index`, which the declared model re-creates by itself, so
+        # warning there would be noise on an ordinary field deletion. Structured kwargs and NO `maxlog`,
+        # per the repo's warn-once policy in `src/AdvisoryLock.jl`: that policy exists for unbounded call
+        # sites, and this one is bounded by a single table's index count. A rebuild can be registered
+        # more than once for one table (the entry is relocated on each registration), so the same warning
+        # may appear twice in a `makemigrations` — repetition beats a silently lost index.
+        if _sqlite_index_is_unmodellable(stmt, pragma_members, all_referenced)
+          # The message names all four disqualifying shapes, because the `definition` printed beside it
+          # tells the operator which one they have — and a message that said "expression or partial"
+          # beside a `("a" DESC)` definition contradicted itself.
+          @warn "SQLite table rebuild will DROP an index PormG cannot re-create: it uses an " *
+                "expression, a WHERE clause, an explicit COLLATE or a sort direction, none of which a " *
+                "model declaration expresses. Re-create it by hand after the migration if you still " *
+                "need it." table = string(table_name) index = string(r.name) dropped_columns = sort(lost) definition = stmt
+        end
+        continue
+      end
     end
     # #150: rewrite renamed columns in the snapshotted DDL. PormG emits quoted identifiers
     # (create_index in Dialect.jl), so replacing the quoted `"old"` token is precise — it can't

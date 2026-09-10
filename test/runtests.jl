@@ -43,6 +43,7 @@ end
     @testset "cjoin_on Anchor-less Joins (#45)" include("unit/test_cjoin_on.jl")
     @testset "Joined Reference — Joined(alias, path) (#481)" include("unit/test_joined_reference.jl")
     @testset "Operator SQL Generation" include("unit/test_operators.jl")
+    @testset "F/Joined Date Operands (#494)" include("unit/test_f_date_operands.jl")
     @testset "pormg_lower UDF (#78)" include("unit/test_pormg_lower_udf.jl")
     @testset "Aggregate Fan-out Guard (#74)" include("unit/test_aggregate_fanout.jl")
     @testset "Date Bucket Operator (yyyy_mm)" include("unit/test_date_bucket_operator.jl")

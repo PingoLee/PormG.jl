@@ -44,6 +44,33 @@ function _values_field(ref::JoinedReference)
   return _retag_joined_field!(SQLField(_check_function(check), join(check, "__")), ref.alias)
 end
 
+# #509 — the ORDER BY twin of `_values_field`, extracted so the two callers that need it cannot
+# drift: the fluent `order_by(CTE(...))` arm in `_order_by!` below, and the `SQLOrder(CTE(...))`
+# constructor (`types.jl`). Before this they would have been two hand-written copies of the same
+# peel/validate/retag, and #509 exists precisely because a CTE column reached one ordering path and
+# not the other.
+#
+# Deliberately silent about `desc`: the two callers disagree about what it means, so each decides
+# for itself. `_order_by!` CONSUMES it — the fluent `order_by(...)` is one of the two sites where a
+# direction on a handle is meaningful — while `SQLOrder` REFUSES it, because that wrapper carries
+# `orientation` of its own.
+function _order_field(ref::CTEReference)
+  check = String.(split(ref.path, "__@"))
+  if size(check, 1) > 1 && haskey(PormGsuffix, check[end])
+    throw(QueryBuildError("Invalid order_by() field \e[4m\e[31mCTE(\"$(ref.name)\", \"$(ref.path)\")\e[0m: operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in ordering."))
+  end
+  return _retag_cte_field!(SQLField(_check_function(check), join(check, "__")), ref.name)
+end
+
+# #481/#509 — the joined-copy twin, same shape.
+function _order_field(ref::JoinedReference)
+  check = String.(split(ref.path, "__@"))
+  if size(check, 1) > 1 && haskey(PormGsuffix, check[end])
+    throw(QueryBuildError("Invalid order_by() field \e[4m\e[31mJoined(\"$(ref.alias)\", \"$(ref.path)\")\e[0m: operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in ordering."))
+  end
+  return _retag_joined_field!(SQLField(_check_function(check), join(check, "__")), ref.alias)
+end
+
 # Backs `query.values(...)` through ChainCaller. Each call RESETS `q.values` — last-call-wins,
 # Django parity (#199) — unlike `_filter!`, which accumulates.
 #
@@ -84,8 +111,21 @@ function _values!(q::SQLObject, values)
         push!(q.values, SQLField(v.second, v.first))
       elseif isa(v.second, SQLTypeText)
         # Support Value(x) as an aliased pair: "label" => Value("hello")
-        v.second.custom_as = v.first
-        push!(q.values, v.second)
+        #
+        # #508 — a COPY carrying the alias, never `v.second.custom_as = v.first` on the caller's own
+        # node. `Value(x)` is a documented projection spelling and a handle a user may bind to a
+        # name, so writing the alias onto it made a shared handle single-use: with
+        # `v = Value("hello")`, building `qb.values("b" => v)` rewrote `qa`'s already-declared alias
+        # from `a` to `b`, silently and after the fact. Measured, both engines.
+        #
+        # A copy rather than the `SQLField(v.second, v.first)` wrap the function arm above uses, and
+        # that is a measurement, not a preference. `get_select_query` has a dedicated `SQLTypeText`
+        # branch that `continue`s before the `push!(instruc.group, i)` every other projection takes,
+        # so wrapping moved a LITERAL into GROUP BY (`GROUP BY 1` became `GROUP BY 1, 2` on both
+        # backends) and cost `_describe_projection` its `Value(...)` spelling in the #441 message,
+        # which degraded to a bare `SQLText`. The copy changes no rendered byte — that is the whole
+        # of its job here.
+        push!(q.values, SQLText(v.second.field, v.second._as, v.first))
       elseif isa(v.second, Union{String,CTEReference,JoinedReference})
         # #444/#481: `"alias" => CTE("ev","sku")` and `"who" => Joined("d","surname")` take the same
         # route as `"alias" => "path"` — the handle's `_values_field` method peels and retags.
@@ -433,23 +473,14 @@ function _order_by!(q::SQLObject, values::NTuple{N,Union{String,SQLTypeOrder,CTE
       # #444: `order_by(CTE("monaco_stats", "total_points"; desc = true))`. A reference object cannot
       # carry the string form's leading `-`, so the direction is a keyword on the constructor — this
       # is the ONE site where `desc` is meaningful; every other consumer refuses it.
+      # #509: the peel/validate/retag itself is `_order_field`, shared with `SQLOrder(CTE(...))`.
       orientation = v.desc ? "DESC" : "ASC"
-      check = String.(split(v.path, "__@"))
-      if size(check, 1) > 1 && haskey(PormGsuffix, check[end])
-        throw(QueryBuildError("Invalid order_by() field \e[4m\e[31mCTE(\"$(v.name)\", \"$(v.path)\")\e[0m: operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in ordering."))
-      end
-      field = _retag_cte_field!(SQLField(_check_function(check), join(check, "__")), v.name)
-      push!(q.order, SQLOrder(field, orientation=orientation))
+      push!(q.order, SQLOrder(_order_field(v), orientation=orientation))
     elseif isa(v, JoinedReference)
       # #481: `order_by(Joined("d", "surname"; desc = true))` — the joined-copy twin of the branch
       # above, and the other site where `desc` is meaningful.
       orientation = v.desc ? "DESC" : "ASC"
-      check = String.(split(v.path, "__@"))
-      if size(check, 1) > 1 && haskey(PormGsuffix, check[end])
-        throw(QueryBuildError("Invalid order_by() field \e[4m\e[31mJoined(\"$(v.alias)\", \"$(v.path)\")\e[0m: operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in ordering."))
-      end
-      field = _retag_joined_field!(SQLField(_check_function(check), join(check, "__")), v.alias)
-      push!(q.order, SQLOrder(field, orientation=orientation))
+      push!(q.order, SQLOrder(_order_field(v), orientation=orientation))
     else
       push!(q.order, v)
     end

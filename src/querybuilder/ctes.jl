@@ -512,14 +512,66 @@ function _retag_cte_string_window_order(x::String, q::SQLObject, rewrote::Set{St
   push!(rewrote, _cte_as(seg1, chopprefix(path, seg1 * "__")))
   return CTEReference(name = seg1, path = chopprefix(path, seg1 * "__"), desc = desc)
 end
-# An `SQLOrder` entry is left ALONE, and that is a scope decision rather than an oversight.
-# `SQLOrder.field` is `Union{SQLTypeField,String}` and `SQLTypeCTE` is not a `SQLTypeField`, so the
-# wrapper cannot hold a CTE column in EITHER spelling — `SQLOrder(CTE("ev","seen"))` is a
-# `MethodError` today and was one under #444 too. Rewriting into a bare `CTEReference` would work
-# (the vector's element type admits one) but would silently drop the entry's `nulls` placement, and
-# firing the ambiguity gate here would print a `CTE(...)` remedy that this wrapper cannot accept.
-# Both are new design, not #492's, so the shape keeps its pre-existing behaviour and the gap is
-# tracked separately in #509, together with the three distinct ways the shape currently fails.
+# #509 — an `SQLOrder` entry, the one window slot #492 left untouched. It was left alone because
+# `SQLOrder` could not hold a CTE column in either spelling (`SQLOrder(CTE("ev","seen"))` was a
+# `MethodError`), so there was nothing to rewrite INTO and firing the gate here would have printed a
+# `CTE(...)` remedy the wrapper could not accept. #509 gave `SQLOrder` that constructor, so both
+# halves are available now and this arm closes the corner:
+#
+#   • the SHADOWING case stops resolving silently. `SQLOrder("parent__sku")` inside a window's
+#     `order_by` rendered against the ForeignKey with no error, while the identical string raised
+#     `AmbiguousFieldError` in `values()`, in `partition_by` and in a bare `order_by` entry. That is
+#     first-match precedence surviving in one corner, which is the class #431/#434/#492 remove.
+#   • the UNAMBIGUOUS case now resolves to the CTE column instead of the model, so `SQLOrder` is no
+#     longer the one ordering spelling a CTE column cannot reach.
+#
+# BOTH spellings of the wrapper's field are walked, not just the `String` one. `SQLField` is the
+# form every doc example and every existing test writes (`SQLOrder(SQLField(f, f); nulls = :first)`),
+# and it reaches the same silent resolution by the same route — covering only the `String` would fix
+# the issue's repro and leave the commoner spelling broken.
+#
+# A leading `-` is deliberately NOT stripped here, unlike the bare-string arm above: an `SQLOrder`
+# carries its direction in `orientation`, so `"-ev__seen"` inside one would be a second spelling for
+# a slot that already has one. `nulls`, `order`, `_as` and `orientation` all ride across untouched.
+#
+# CONSTRUCTS, never mutates: this node arrived through the public API, so it is replaced rather than
+# written into (the standing contract above, and #508's half of it).
+function _retag_cte_string_window_order(x::SQLTypeOrder, q::SQLObject, rewrote::Set{String})
+  if x.field isa String
+    seg1 = _cte_string_root(q, x.field)
+    seg1 === nothing && return x
+    _segment1_on_model(q, seg1) && _refuse_ambiguous_cte_path(q, x.field, seg1)
+    path = chopprefix(x.field, seg1 * "__")
+    push!(rewrote, _cte_as(seg1, path))
+    # Through the same constructor a user's `SQLOrder(CTE(...))` takes, so the two spellings cannot
+    # render differently — that equivalence is what the regression asserts, byte for byte.
+    return SQLOrder(CTEReference(name = seg1, path = path); order = x.order,
+                    orientation = x.orientation, _as = x._as, nulls = x.nulls)
+  elseif x.field isa SQLField
+    # `_bind_cte_string!` is the same per-field entry the top-level `q.order` loop uses, so the
+    # window and the fluent `order_by` agree on what a CTE-rooted path means.
+    #
+    # It WRITES into the `SQLField` it is handed, hence the copy — which is DEFENSIVE, not
+    # demonstrated, and saying so is the point of this comment. Measured: removing the `deepcopy`
+    # turns no test red and leaves the caller's node unmutated anyway, because every read path
+    # deepcopies the handler before `build()` and Julia's generic walk clones `q.values`/`q.order`
+    # wholesale rather than routing through the shallow `Base.deepcopy(::SQLTypeField)` method. So
+    # the caller's `SQLField` never actually reaches this walker today.
+    #
+    # It stays because that protection is a property of the CALL PATH, not of this function, and
+    # this function is the one that writes. It costs one shallow copy per window ORDER BY entry.
+    # Its reach is partial and worth stating exactly: `deepcopy(::SQLTypeField)` rebuilds the wrapper
+    # while SHARING whatever `.field` holds, so reassigning that slot on the copy protects a `String`
+    # terminal — what every `SQLOrder(SQLField(f, f))` in the docs and the suite carries — but not a
+    # nested mutable node such as an `FObject` from a `__@` transform, which `_retag_cte_string`'s
+    # `SQLTypeFunction` arm still rewrites in place. That write is #508 phase 2's to remove.
+    return SQLOrder(_bind_cte_string!(deepcopy(x.field), q),
+                    x.order, x.orientation, x._as, x.nulls)
+  end
+  return x
+end
+# Everything else — a `CTEReference`, a `JoinedReference`, anything not a column path — is left as
+# it arrived; those have their own arms or need none.
 _retag_cte_string_window_order(x, q::SQLObject, rewrote::Set{String}) = x
 function _retag_cte_string(x::SQLTypeOper, q::SQLObject, rewrote::Set{String})
   x.column = _retag_cte_string(x.column, q, rewrote)

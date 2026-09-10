@@ -177,7 +177,14 @@ want; [`WindowSpec`](@ref) is the value it returns.
 - `partition_by`: restart the window per group. A field path, an `F` expression, or a
   vector/tuple of them. `Symbol`s are accepted and converted.
 - `order_by`: ordering inside each window. Strings use the repo-wide `"-field"` convention
-  for `DESC`; `SQLOrder` objects also work.
+  for `DESC`; `SQLOrder` objects also work, and add an explicit `nulls = :first`/`:last`
+  placement, which a string entry has no room for. With `nulls` unset the window emits no `NULLS`
+  clause, which is the rendering every window has always produced.
+  Since #509 an `SQLOrder` can also carry a CTE column — `SQLOrder(CTE("name", "col"))`, or the
+  equivalent `"name__col"` path, both of which a bare entry has been able to name since #492 — and
+  a `Joined` column, which only a handle can name. An `SQLOrder`'s direction is its own
+  `orientation`, so `desc = true` on a handle nested inside one is refused; pass
+  `orientation = "DESC"` instead.
 - `frame`: a raw frame clause such as `"ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"`.
 
 Both list arguments accept a bare scalar, so `partition_by = "raceid"` and

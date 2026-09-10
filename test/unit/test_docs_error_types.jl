@@ -29,6 +29,9 @@ using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField, DateTimeField, ForeignKey, JSONField,
                     UniqueConstraint, Index, add_field!
 using PormG.QueryBuilder: bulk_insert, bulk_update
+# #509 — the ordering wrapper and the window constructor, for the two window-page claims below.
+using PormG.QueryBuilder: SQLOrder
+using PormG.Functions: WindowOver, Rank
 import DataFrames
 
 # Mock backends: dialect dispatch is by connection TYPE, so a bare subtype is enough to render
@@ -241,6 +244,34 @@ const DOCERR_CASES = [
             q.values("resultid", "driverid__surname")
             q.list(show_query = :dict)
         end,
+    ),
+    (
+        # #509. The window-function page states that the same ambiguity applies to an `SQLOrder`
+        # entry inside a window's `order_by` — "exactly as it applies to values(), filter() and
+        # order_by()". That sentence is the whole point of the fix: this was the one clause where a
+        # shadowing CTE name RESOLVED to the model side and rendered, silently, while every other
+        # clause already refused it. A page claiming parity that the code does not provide would be
+        # worse than no page, so the claim is executed rather than trusted.
+        "read/window_functions.md — a shadowing CTE name in an SQLOrder window entry is ambiguous",
+        AmbiguousFieldError,
+        () -> begin
+            totals = DOCERR_DRIVER_PG.objects.values("driverid", "surname")
+            q = DOCERR_RESULT_PG.objects
+            q.with("driverid" => totals)
+            q.values("resultid",
+                     "rk" => Rank(over = WindowOver(
+                         order_by = [SQLOrder("driverid__surname")])))
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #509. The same page's note that `desc = true` cannot be combined with an `SQLOrder`, which
+        # carries the direction in its own `orientation`. Refused at CONSTRUCTION — no query is
+        # needed — because two spellings for one direction is a tie-break the caller would never see
+        # resolved.
+        "read/window_functions.md — desc = true inside an SQLOrder is refused",
+        QueryBuildError,
+        () -> SQLOrder(CTE("season", "season_points"; desc = true)),
     ),
     (
         # #481. A `Joined(...)` handle names a `cjoin_on` joined copy, so it cannot appear in

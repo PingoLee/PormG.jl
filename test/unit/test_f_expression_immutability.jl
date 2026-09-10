@@ -75,6 +75,8 @@ end
 
 const FI = FImmutModels
 import PormG.QueryBuilder: F, FExpression, inspect_query
+# #508 phase 1 — the projection spellings whose build-time writes this file now also pins.
+using PormG.Functions: Value, Sum, Count
 
 _fi_sql(q; conn = _FI_SL)    = inspect_query(q; connection = conn)[:sql_text]
 _fi_params(q; conn = _FI_SL) = inspect_query(q; connection = conn)[:parameters]
@@ -263,4 +265,121 @@ _fi_params(q; conn = _FI_SL) = inspect_query(q; connection = conn)[:parameters]
     @test h.operation === nothing
   end
 
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #508 phase 1 — the BUILD pass stops writing on nodes the caller handed it
+#
+# #457 (above) made the comparison OPERATORS construct. The `F` docstring now promises *"Every
+# operator builds a new expression and leaves its operands untouched"* — but that promise was held
+# by convention only, because the nodes are still `mutable struct` and the build pass wrote into
+# them too. One of those writes produced wrong SQL:
+#
+#   `_values!`'s `Value` arm assigned `custom_as` onto the caller's own node, so a `Value` handle
+#   held across two `values()` calls with different aliases had the FIRST query's alias rewritten
+#   when the SECOND was built. Silent, after the fact, and `Value(x)` is a documented projection
+#   spelling (`docs/src/api.md`).
+#
+# The probe below is the issue's, measured on both mock engines. The `Sum` control beside it is what
+# makes it a defect report rather than an observation: the function arm a few lines above the `Value`
+# arm already wrapped instead of writing, so one query shape was safe and its twin was not, for no
+# reason a caller could see.
+#
+# Phase 2 — declaring the node structs `struct` so this is unrepresentable rather than avoided — is
+# deliberately NOT in this PR. What is asserted here is the seam, not the shape.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#508 phase 1: values() does not write on the caller's node" begin
+
+  @testset "a Value handle shared by two queries keeps each query's own alias" begin
+    for (backend, conn) in (("PostgreSQL", _FI_PG), ("SQLite", _FI_SL))
+      v = Value("hello")
+
+      qa = FI.Fi_child.objects; qa.values("a" => v)
+      before = _fi_sql(qa; conn = conn)
+
+      qb = FI.Fi_child.objects; qb.values("b" => v)
+      after = _fi_sql(qa; conn = conn)
+
+      # The headline: building `qb` must not have touched `qa`.
+      @test before == after
+      # Stated positively too, so a change that broke BOTH renderings identically cannot pass:
+      # each query projects under the name it declared.
+      @test occursin("as \"a\"", after)
+      @test !occursin("as \"b\"", after)
+      @test occursin("as \"b\"", _fi_sql(qb; conn = conn))
+      @test !occursin("as \"a\"", _fi_sql(qb; conn = conn))
+
+      # And the user's handle is unchanged — the alias went onto the build's copy, not onto it.
+      @test v.custom_as === nothing
+      @test v._as === nothing
+      @test v.field == "hello"
+    end
+  end
+
+  @testset "the Sum control still behaves — it always did" begin
+    # The function arm wraps in a fresh `SQLField`, so this shape was never affected. Kept as the
+    # control the issue used: without it, "qa is unchanged" says nothing about which arm fixed it.
+    for (backend, conn) in (("PostgreSQL", _FI_PG), ("SQLite", _FI_SL))
+      s = Sum("id")
+
+      qa = FI.Fi_parent.objects; qa.values("a" => s)
+      before = _fi_sql(qa; conn = conn)
+      qb = FI.Fi_parent.objects; qb.values("b" => s)
+
+      @test before == _fi_sql(qa; conn = conn)
+      @test s._as === nothing
+    end
+  end
+
+  @testset "a projected Value renders exactly as before" begin
+    # The fix is a copy, NOT the `SQLField(v.second, v.first)` wrap the function arm uses — measured:
+    # `get_select_query` has a dedicated `SQLTypeText` branch that skips the GROUP BY push every
+    # other projection takes, so wrapping moved the literal into GROUP BY (`GROUP BY 1` became
+    # `GROUP BY 1, 2`). These pin the rendering the copy preserves, so a later "simplification" to
+    # the wrap fails here instead of shipping a changed plan.
+    for (backend, conn) in (("PostgreSQL", _FI_PG), ("SQLite", _FI_SL))
+      q = FI.Fi_child.objects
+      q.values("note", "label" => Value("hello"), "n" => Count("id"))
+      sql = _fi_sql(q; conn = conn)
+      @test occursin("as \"label\"", sql)
+      # One grouped column — `note`. The literal and the aggregate are not in GROUP BY.
+      @test occursin("GROUP BY 1", sql)
+      @test !occursin("GROUP BY 1, 2", sql)
+      @test _fi_params(q; conn = conn) == Any["hello"]
+    end
+  end
+
+  @testset "the #441 duplicate-name refusal still names the projections" begin
+    # `_describe_projection` reads the pushed node, so wrapping the literal degraded this message to
+    # a bare `SQLText`. The copy keeps it a value the caller recognises.
+    err = try
+      q = FI.Fi_child.objects
+      q.values("x" => Value("a"), "x" => Value("b"))
+      _fi_sql(q); nothing
+    catch e; e end
+    @test err isa PormG.QueryBuildError
+    @test !occursin("SQLText", err.msg)
+    @test occursin("twice", err.msg)
+  end
+
+  @testset "_check_function returns a new node instead of writing on the handle" begin
+    # The other in-place write phase 1 removes. It is idempotent today — the transform writes the
+    # same value back — so no wrong SQL was measured from it; what is asserted is that the build no
+    # longer hands itself the caller's object, which is what makes idempotence stop being load-bearing.
+    s = Sum("id")
+    built = PormG.QueryBuilder._check_function(s)
+    @test built !== s
+    @test built.function_name == s.function_name
+    @test built.aggregate == s.aggregate
+
+    # A `kwargs` dict is copied, not shared: a build product writing into it must not reach the
+    # caller's handle (the #112 discipline, which exists because these nodes are mutable).
+    @test built.kwargs !== s.kwargs
+
+    # And an operator node likewise — same arm, same reasoning.
+    q = FI.Fi_child.objects
+    q.values("note")
+    q.filter("note" => "X")
+    @test occursin("\"Tb\".\"note\" = ", _fi_sql(q))
+  end
 end

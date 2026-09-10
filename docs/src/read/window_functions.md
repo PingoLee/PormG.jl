@@ -298,6 +298,121 @@ Follow the same `"-field"` → `DESC` convention used everywhere in PormG:
 | `order_by=["-points"]` | `ORDER BY "Tb"."points" DESC` |
 | `order_by=["-points", "driverid"]` | `ORDER BY "Tb"."points" DESC, "Tb"."driverid" ASC` |
 
+An entry may also be an `SQLOrder` object, which spells the direction as a keyword instead of a
+prefix and adds one thing the string form has no room for — an explicit NULL placement:
+
+| Expression | SQL |
+| :--- | :--- |
+| `order_by=[SQLOrder(SQLField("points", "points"))]` | `ORDER BY "Tb"."points" ASC` |
+| `order_by=[SQLOrder(SQLField("points", "points"); orientation="DESC")]` | `ORDER BY "Tb"."points" DESC` |
+| `order_by=[SQLOrder(SQLField("points", "points"); nulls=:first)]` | `ORDER BY "Tb"."points" ASC NULLS FIRST` |
+
+Leave `nulls` unset and the window emits no `NULLS` clause at all, letting the backend apply its own
+default — that is the rendering every window has always produced, and it is unchanged.
+
+#### Ordering a window by a CTE column
+
+An `SQLOrder` entry can name a column of a CTE the query declares, either as a `"<cte>__<column>"`
+path or as the [`CTE("name", "column")`](subqueries_and_ctes.md#Referencing-a-CTE's-columns) handle.
+Both resolve to the same column; the handle is the one to reach for when the CTE's name also names
+something on the model (see below).
+
+Rank the drivers in one race by how many points they scored in the *previous* season — the ranking
+key lives in the CTE, not in the row being ranked:
+
+```julia
+using PormG.Functions: Rank, Sum, WindowOver
+using PormG.QueryBuilder: SQLOrder
+using PormG: CTE
+
+# CTE: total points per driver over the 1990 season
+prev = M.Result.objects
+prev.filter("raceid__year" => 1990)
+prev.values("driverid", "prev_points" => Sum("points"))
+
+query = M.Result.objects
+query.with("prev" => prev, join_field="driverid" => "driverid")
+query.filter("raceid" => 305)                 # the 1991 United States Grand Prix
+query.values(
+    "driverid__surname",
+    "prev_points" => CTE("prev", "prev_points"),
+    "rank_by_prev" => Rank(over=WindowOver(
+        order_by=[SQLOrder(CTE("prev", "prev_points"); orientation="DESC", nulls=:last)]
+    ))
+)
+query.order_by("rank_by_prev", "driverid__surname")
+df = query |> DataFrame
+```
+
+Generated SQL (PostgreSQL):
+
+```sql
+WITH "prev" AS (
+  SELECT "Tb"."driverid" as "driverid",
+         SUM("Tb"."points") as "prev_points"
+  FROM "result" as "Tb"
+   INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
+  WHERE "Tb_1"."year" = $1
+  GROUP BY 1
+)
+SELECT "R1_1"."surname" as "driverid__surname",
+       "R1_2"."prev_points" as "prev_points",
+       RANK() OVER (ORDER BY "R1_2"."prev_points" DESC NULLS LAST) as "rank_by_prev"
+FROM "result" as "R1"
+ INNER JOIN "driver" AS "R1_1" ON "R1"."driverid" = "R1_1"."driverid"
+ LEFT JOIN "prev" AS "R1_2" ON "R1"."driverid" = "R1_2"."driverid"
+WHERE "R1"."raceid" = $2
+ORDER BY "rank_by_prev" ASC NULLS LAST,
+  "driverid__surname" ASC NULLS LAST
+```
+
+Result — 34 rows, of which the first and last few:
+
+```
+ Row │ driverid__surname  prev_points  rank_by_prev
+     │ String             Float64?     Int64
+─────┼──────────────────────────────────────────────
+   1 │ Senna                     78.0             1
+   2 │ Prost                     73.0             2
+   3 │ Piquet                    44.0             3
+   ⋮ │         ⋮               ⋮             ⋮
+  31 │ Chaves                 missing            28
+  32 │ Comas                  missing            28
+  33 │ Häkkinen               missing            28
+  34 │ van de Poele           missing            28
+```
+
+Seven of the 34 drivers did not race in 1990 at all, so the `LEFT JOIN` gives them a `NULL`
+`prev_points` — and that is what makes `nulls=:last` load-bearing rather than decorative. **The two
+backends disagree about where a `NULL` sorts by default**: PostgreSQL treats it as the largest
+value, so `DESC` puts it *first*; SQLite treats it as the smallest, so `DESC` puts it *last*. Drop
+the `nulls=:last` from the example above and the same query returns, measured:
+
+| Backend | Rank 1, with `nulls` unset |
+| :--- | :--- |
+| PostgreSQL | Bailey, Blundell, Brundle, Chaves, Comas, Häkkinen … — the seven **rookies**, all tied at rank 1 |
+| SQLite | Senna, as above |
+
+An explicit placement is how the two are made to agree. This is the same divergence the top-level
+`order_by()` normalizes for you (see
+[Ordering and NULL Placement](filters_and_aggregates.md#Ordering-and-NULL-Placement)); a window's `ORDER BY` applies no
+default of its own, so inside `OVER (...)` you state it or you inherit the backend's.
+
+!!! note "The direction lives in `orientation`"
+    `CTE("season", "season_points"; desc=true)` is the spelling for a **bare** entry —
+    `order_by=CTE("season", "season_points"; desc=true)` — where there is no other slot to put the
+    direction in. Inside an `SQLOrder` that same `desc=true` is refused with a `QueryBuildError`,
+    because the wrapper already carries `orientation` and one direction cannot have two spellings.
+    Write `SQLOrder(CTE("season", "season_points"); orientation="DESC")`.
+
+!!! warning "A CTE name that shadows a model field is ambiguous, here as everywhere else"
+    If the CTE's name is also a field, reverse accessor or join path on the model being queried, the
+    `"<cte>__<column>"` string has two readings and PormG refuses to pick one — it raises
+    `AmbiguousFieldError` rather than resolving to either side. That applies to an `SQLOrder` entry
+    in a window exactly as it applies to `values()`, `filter()` and `order_by()`. Use
+    `CTE("name", "column")` to select the CTE's column, or rename the CTE to reach the model's.
+    See [Referencing a CTE's columns](subqueries_and_ctes.md#Referencing-a-CTE's-columns).
+
 ### Frame Specifications (PostgreSQL only)
 
 Explicit frames are needed when the SQL default frame is wrong for your use case. The most common trap: **`LastValue` with `ORDER BY` but no explicit frame.**

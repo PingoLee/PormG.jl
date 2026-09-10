@@ -115,6 +115,53 @@ df = query |> DataFrame
 
 PormG resolves the `__` paths, creates the necessary joins, and applies the `EXTRACT(MONTH FROM ...)` transform on both sides.
 
+### Comparing Against a Date
+
+A comparison operand may be a `Dates.Date` or a `Dates.DateTime`. The literal is bound as a
+parameter through the same path an ordinary date filter uses, so `F("dob") >= Date(1970, 1, 1)` and
+`"dob__@gte" => Date(1970, 1, 1)` bind identical values on both backends:
+
+```julia
+using Dates
+
+query = M.Driver.objects
+query.filter(F("dob") >= Dates.Date(1970, 1, 1))
+query.values("surname", "dob")
+df = query |> DataFrame
+```
+
+Generated SQL:
+```sql
+WHERE ("Tb"."dob" >= $1)      -- $1 bound as '1970-01-01'
+```
+
+For a plain column-against-literal test like this one, the suffix form is the idiomatic spelling —
+see [When NOT to Use F](#When-NOT-to-Use-F). Where `F` earns its place is when the *left* side is an
+expression the suffix API cannot build. Putting [date arithmetic](#Date-Arithmetic) on the left and
+a date literal on the right is the clearest case:
+
+```julia
+# Drivers who had already turned 18 by the first World Championship race (13 May 1950)
+query = M.Driver.objects
+query.filter(F("dob") + Dates.Year(18) <= Dates.Date(1950, 5, 13))
+query.values("surname", "dob")
+df = query |> DataFrame
+```
+
+Generated SQL (PostgreSQL):
+```sql
+WHERE (("Tb"."dob" + make_interval(years => $1::integer)) <= $2)
+```
+
+On SQLite the same expression renders through `date(...)` modifiers instead —
+`date("Tb"."dob", '+' || ? || ' years') <= ?` — and binds the same two values.
+
+The representation follows the **column**, not the value: a `DateField` binds the calendar date
+(`'1970-01-01'`), a `DateTimeField` binds the canonical UTC timestamp
+(`'1970-01-01T00:00:00.000+00:00'`), and a `DateTime` compared against a `DateField` is coerced to
+its calendar date — the same coercions `filter("dob" => value)` applies. That is what keeps the two
+spellings interchangeable on SQLite, where dates are compared as text.
+
 ### Mixing F and Standard Filters
 
 Combine `F()` comparisons with ordinary filter pairs when only part of the predicate needs an expression:

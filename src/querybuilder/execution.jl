@@ -1225,6 +1225,94 @@ function _field_type_known(field_name::String, instruc::SQLInstruction)::Bool
          memo_field(instruc, memo_key(:base, field_name)) !== nothing
 end
 
+# #494 — the DATE/TIMESTAMP type of a comparison's LEFT side, or `nothing` when there is no column
+# to ask.
+#
+# `F("path")` puts a `String` in `field_name` and `Joined(alias, col)` puts the handle there. A
+# nested expression — `F("dob") + Year(18)` — puts an `FExpression` there, and it is NOT
+# unanswerable: the column one level down is the column the comparison is against, so recursing to
+# find it is what keeps the representation following the COLUMN rather than the literal's own Julia
+# type.
+#
+# That recursion is load-bearing, not tidiness. Without it `F("dob") + Year(0) == DateTime(1985,1,7)`
+# on a `DateField` bound the canonical UTC string while `date(...)` rendered `'1985-01-07'` — no
+# match, zero rows, no error. Exactly the silent failure the operand arm exists to prevent, one hop
+# away from where it was being prevented. `_render_date_period_arithmetic` calls this same function
+# to choose SQLite's `date()` vs `datetime()` wrapper, so the wrapper and the bound representation
+# agree about which column the expression is rooted in.
+#
+# What this does NOT claim is that arithmetic preserves the column's KIND at render time. It does
+# not: a sub-day duration on a `DateField` renders `datetime("seen", '+2 hours')` on SQLite, whose
+# output matches neither the calendar-date form nor the canonical timestamp form. That is a
+# render-side representation gap of its own — pre-existing, reachable without any of #494 (a plain
+# `F(ts) + Day(1) == F(other_ts)` has it too), and tracked separately. Answering with the rooted
+# column is the right answer to THIS question; it is not a claim that the rest of that path is sound.
+#
+# A `CTE(...)` cannot be a LEFT operand — no comparison method takes one on that side — so it has no
+# arm. Nor does an `FObject`, and the honest reason is that nothing needs one: no comparison overload
+# accepts a bare `FObject` on the left at all (`Max("seen") == Date(…)` falls through to `Base.==`),
+# so the only route in is one hop down — `(Sum("points") - 10) == Date(…)` — where falling back to
+# the operand's own type is correct. A `__@` transform does not arrive here as an `FObject` either:
+# `F("seen__@year")` puts the whole path in `field_name` as a STRING, and `_date_field_type` already
+# declines it.
+#
+# The joined arm reads the memo rather than the model: `_get_select_query(::JoinedReference)` writes
+# the resolved `PormGField` under `memo_key(ref)` (`build_helpers.jl`), and the caller renders the
+# left side BEFORE the operand, so the entry is always there by the time this runs. Without it a
+# `Joined` comparison fell back to the operand's own type while the `F` twin consulted the column —
+# the two families binding different bytes for the same query, which is the asymmetry #494 exists to
+# close.
+#
+# `depth` bounds the walk. #457 made an F-expression self-cycle unrepresentable through the
+# operators, but `FExpression` is still mutable, so a hand-built cycle is one assignment away — the
+# same reasoning that keeps `_guard_no_handle`'s cap (`ctes.jl`) alive.
+#
+# Which cycle the cap catches is worth stating, because it is not all of them. Build the cycle
+# BEFORE the comparison (`g.field_name = g; q.filter(g == Date(…))`) and the renderer reaches it
+# first: `_set_update_query_left` recurses and raises `StackOverflowError` before this function is
+# called at all. Build it AFTER (`cmp = (g == Date(…)); g.field_name = g`) and the renderer stops at
+# the outer node — which carries an `operation` — while this walk still descends, and the cap is
+# what ends it. So the cap covers the ordering the renderer does not, rather than being redundant
+# with it or being the only guard.
+function _operand_column_type(field_name, instruc::SQLInstruction; depth::Int = 0)::Union{String,Nothing}
+  depth > 16 && return nothing
+  field_name isa String && return _date_field_type(field_name, instruc)
+  if field_name isa JoinedReference
+    f = memo_field(instruc, memo_key(field_name))
+    f === nothing && return nothing
+    return f.type in ("DATE", "TIMESTAMPTZ", "TIMESTAMP") ? f.type : nothing
+  end
+  field_name isa FExpression && return _operand_column_type(field_name.field_name, instruc; depth = depth + 1)
+  return nothing
+end
+
+# #494 — the representation a `Date`/`DateTime` literal binds as on the RIGHT of an `F(...)` /
+# `Joined(...)` comparison.
+#
+# The LEFT column decides, and `_set_update_query_operand` already receives it as `field_name`, so
+# the choice is made the way the plain-filter path makes it: by the field, not by the value.
+# `_operand_column_type` above answers for both families, and its answer selects the MODEL LAYER's
+# own formatter rather than a second copy of the rules — `format_date_sql` for a DATE column,
+# `format_timezone_sql` for a TIMESTAMP/TIMESTAMPTZ one (the canonical UTC string #79 defined, so
+# SQLite's lexicographic TEXT comparison agrees with PostgreSQL's instant comparison). Reusing those
+# is the whole point: an `F` comparison and an ordinary `filter(...)` pair against the same column
+# now bind the same bytes.
+#
+# A `Date` against a TIMESTAMP column is promoted to midnight first, because `format_timezone_sql`
+# has no `::Date` method — and midnight is what SQL itself means by a date literal compared to a
+# timestamp, so the promotion is exact rather than a guess.
+#
+# When the left side is a nested expression or an unresolvable path there is no column to ask, so
+# the operand's own type decides. Still a formatted string, never a raw bind.
+function _format_date_operand(operand::Union{Dates.Date,Dates.DateTime}, field_name, instruc::SQLInstruction)
+  ftype = _operand_column_type(field_name, instruc)
+  ftype == "DATE" && return Models.format_date_sql(operand)
+  if ftype == "TIMESTAMP" || ftype == "TIMESTAMPTZ"
+    return Models.format_timezone_sql(operand isa Dates.Date ? Dates.DateTime(operand) : operand)
+  end
+  return operand isa Dates.Date ? Models.format_date_sql(operand) : Models.format_timezone_sql(operand)
+end
+
 # Decompose a Period/CompoundPeriod into an ordered [(unit, magnitude)] list (largest → smallest),
 # folding sub-second components into a single fractional `:second`. Zero-valued components are
 # dropped. Month/Year are kept as calendar units (SQL renders them natively) rather than rejected
@@ -1295,12 +1383,24 @@ function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
     return "($(left_side) $(v.operation) make_interval($(join(parts, ", "))))"
 
   elseif instruc.connection isa PormGSQLite
-    ftype   = v.field_name isa String ? _date_field_type(v.field_name, instruc) : nothing
+    # #494: `_operand_column_type`, not the String-only `_date_field_type` this used to call. It
+    # resolves a nested `FExpression` down to the column the expression is rooted in — the same
+    # question the OPERAND binder asks one function away — so the wrapper chosen here and the
+    # representation bound there now agree by construction instead of by coincidence. (Only the
+    # `String` and nested-`FExpression` arms are reachable from here: a `Joined` handle has no
+    # arithmetic overload at all, so it never reaches this function.)
+    #
+    # They did not agree before. The `occursin("datetime(", left_side)` fallback below is textual,
+    # and a zero-length link in a chain erases the marker it looks for: `_render_date_period_arithmetic`
+    # short-circuits an empty interval to the bare left side, so `F(ts) + Day(0) + Day(1)` lost the
+    # inner `datetime(` and the outer call truncated a TIMESTAMP with `date(...)`. Resolving the
+    # column instead of reading the rendered text closes that, and the textual check stays as a
+    # backstop for a left side this resolver cannot type.
+    ftype   = _operand_column_type(v.field_name, instruc)
     subday  = any(c -> c[1] in (:hour, :minute, :second), comps)
     # Choose datetime() when a sub-day unit is present, the column is a timestamp, OR the left side
-    # is ALREADY a datetime() expression (a chained `F(ts) + Day(1) + Day(2)`: the outer call sees a
-    # nested FExpression as field_name so `ftype` is unknown — without this, wrapping the inner
-    # datetime() in date() would silently truncate the time-of-day, diverging from PostgreSQL).
+    # is ALREADY a datetime() expression — without the last one, wrapping an inner datetime() in
+    # date() would silently truncate the time-of-day, diverging from PostgreSQL.
     use_datetime = subday || ftype in ("TIMESTAMP", "TIMESTAMPTZ") || occursin("datetime(", left_side)
     wrapper = use_datetime ? "datetime" : "date"
     op_factor = v.operation == "-" ? -1 : 1
@@ -1334,6 +1434,22 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # binds as a VALUE — `F("note") == CTE("ev","code")` rendered `"R1"."note" = ?` with no join
     # emitted at all, which is valid SQL comparing a column against a stringified handle.
     return _get_select_query(operand, instruc)
+  elseif isa(operand, Union{Dates.Date,Dates.DateTime})
+    # #494 — a date/timestamp literal on the right of an `F(...)` / `Joined(...)` comparison.
+    #
+    # Ahead of the generic `add_parameter!` at the bottom for the same reason the #25 duration gate
+    # sits ahead of the infix branch: reaching it would bind the RAW Julia value, and
+    # `add_parameter!` normalizes nothing. On PostgreSQL that survives (the driver adapts a `Date`),
+    # but on SQLite a date column holds the TEXT its field formatter produced — `"2020-01-01"`, or
+    # the canonical UTC string for a timestamp — so a raw bind compares against a different
+    # representation and returns the wrong rows with no error at all. Silent, not loud, which is why
+    # this arm is not optional.
+    #
+    # So the literal takes the SAME route a plain filter value takes (`_get_filter_query(::SQLTypeOper)`,
+    # build_helpers.jl): run it through the field's formatter, then bind the formatted string with no
+    # explicit cast, letting PostgreSQL infer the type from the comparison context exactly as an
+    # ordinary `filter("date" => Date(...))` already does.
+    return add_parameter!(instruc, _format_date_operand(operand, field_name, instruc))
   elseif isa(operand, String)
     # Check if it's a field reference
     if contains(operand, "__") || operand in instruc.object.model.field_names

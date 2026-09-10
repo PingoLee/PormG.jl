@@ -72,6 +72,7 @@ end
     @testset "Relation Alias Namespace (#474/#447/#424)" include("unit/test_relation_alias_namespace.jl")
     @testset "Memo Access Interface (#478)" include("unit/test_memo_interface.jl")
     @testset "F Comparison Immutability (#457)" include("unit/test_f_expression_immutability.jl")
+    @testset "Node Admission Invariant (#533)" include("unit/test_node_admission.jl")
     @testset "CTE Table Names & Alias Reservation (#479/#480)" include("unit/test_cte_table_name_and_alias_reservation.jl")
     @testset "Nested CTE Guard (#433)" include("unit/test_nested_cte_guard.jl")
     @testset "JSON Path Lookups (#27)" include("unit/test_json_lookups.jl")

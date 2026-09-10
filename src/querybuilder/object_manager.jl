@@ -71,6 +71,48 @@ function _order_field(ref::JoinedReference)
   return _retag_joined_field!(SQLField(_check_function(check), join(check, "__")), ref.alias)
 end
 
+# #533 — the rest of the funnel. `SQLOrder.field` is `SQLTypeField` now, and its inner constructor
+# routes EVERY construction path through here, so a value the constructor accepts is a value the four
+# readers (`get_order_query`, `_resolve_window_order`, `_resolve_cte_string_paths!`, `deepcopy`) can
+# handle. Before this the slot was `Union{SQLTypeField,String}`: a bare String type-checked at
+# construction and then died in `get_order_query` reading `._as` off a `String` — a raw `FieldError`
+# naming an internal slot rather than anything the caller wrote (#528).
+_order_field(f::SQLField) = f
+
+# The String spelling now WORKS rather than being accepted and then failing: it is peeled and
+# validated exactly as the fluent `order_by("col")` path does, then normalized into the `SQLField`
+# every consumer requires.
+function _order_field(v::String)
+  # A leading `-` is the FLUENT spelling's direction marker. `SQLOrder` carries `orientation` of its
+  # own, so consuming it here would mean two ways to say one thing and a silent winner when they
+  # disagree — the first-match precedence #492/#509 exist to remove. One direction, one slot.
+  startswith(v, "-") && throw(QueryBuildError(
+    "\e[4m\e[31m\"$(v)\"\e[0m: a leading \e[4m\e[31m-\e[0m is the fluent " *
+    "\e[4m\e[32morder_by(\"-column\")\e[0m spelling and has no meaning inside " *
+    "\e[4m\e[32mSQLOrder\e[0m, which carries the direction in its own " *
+    "\e[4m\e[32morientation\e[0m. Write " *
+    "\e[4m\e[32mSQLOrder(\"$(v[2:end])\"; orientation = \"DESC\")\e[0m (#533)."))
+  check = String.(split(v, "__@"))
+  size(check, 1) > 1 && haskey(PormGsuffix, check[end]) && throw(QueryBuildError(
+    "Invalid SQLOrder field \e[4m\e[31m\"$(v)\"\e[0m: operator suffixes (__@lte, __@gte, " *
+    "__@contains, …) are not allowed in ordering."))
+  size(check, 1) == 1 && return SQLField(v, v)
+  return SQLField(_check_function(check), join(check, "__"))
+end
+
+# An ordering term is not a column. This was constructible before #533 — `SQLTypeOrder <: SQLTypeField`
+# made `SQLOrder(SQLOrder(...))` type-check — and no reading of it means anything, since the inner
+# term's `orientation`/`nulls` would be silently discarded.
+_order_field(o::SQLTypeOrder) = throw(QueryBuildError(
+  "\e[4m\e[31mSQLOrder(SQLOrder(...))\e[0m: an ordering term already carries its own " *
+  "\e[4m\e[32morientation\e[0m and \e[4m\e[32mnulls\e[0m, so it cannot be the field of another " *
+  "one. Pass the column instead (#533)."))
+
+_order_field(f) = throw(QueryBuildError(
+  "\e[4m\e[31mSQLOrder\e[0m field must be a column-name String, an \e[4m\e[32mSQLField\e[0m, " *
+  "\e[4m\e[32mCTE(\"name\", \"path\")\e[0m or \e[4m\e[32mJoined(\"alias\", \"column\")\e[0m; " *
+  "got \e[4m\e[31m::$(typeof(f))\e[0m (#533)."))
+
 # Backs `query.values(...)` through ChainCaller. Each call RESETS `q.values` — last-call-wins,
 # Django parity (#199) — unlike `_filter!`, which accumulates.
 #

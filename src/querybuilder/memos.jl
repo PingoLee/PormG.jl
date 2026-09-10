@@ -46,7 +46,12 @@
 # field path `"<fk>__<col>"`, and `_as` is the OUTPUT column name so it cannot change. The namespace
 # therefore has to come from `root`, which `_retag_cte_field!` / `_retag_joined_field!` are the only
 # writers of. `nothing` means the expression has no output name and memoizes nowhere.
-memo_key(v::SQLTypeField)::Union{Nothing,MemoKey} =
+#
+# `::SQLField`, not `::SQLTypeField` (#508 phase 2 / #533). The abstract signature also matched
+# `SQLOrder` — `SQLTypeOrder <: SQLTypeField` (`Kernel.jl`) — which has no `root` slot at all, so a
+# stray `SQLOrder` reaching a memo lookup raised a raw `Base.FieldError` naming an internal field
+# rather than anything the caller wrote. That is #528's failure mode, and this is where it landed.
+memo_key(v::SQLField)::Union{Nothing,MemoKey} =
   v._as === nothing ? nothing : (v.root, v._as)
 
 # The same key from a handle rather than from a built `SQLField`, for the sites that resolve a

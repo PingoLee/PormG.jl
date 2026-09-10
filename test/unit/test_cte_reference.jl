@@ -564,24 +564,29 @@ _sql(q; conn = _CR_SL) = inspect_query(q; connection = conn)[:sql_text]
       end
     end
 
-    @testset "the join guard terminates on a self-referential F expression" begin
+    @testset "the join guard terminates on a cyclic Q container" begin
       # A cycle in the expression graph makes the recursive sweep a StackOverflowError — which Julia
       # reports as "program state may be corrupted" — so it needs a depth cap. `cjoin_on` is the path
       # that matters: it never recursed before #444, so this exposure is new here.
       #
-      # #457 changed how the cycle has to be BUILT, not whether the cap is needed. The comparison
-      # overloads used to mutate their left operand, so `f = F("x"); g = (f == f)` returned an object
-      # containing itself and any user could write one by accident. They build a new expression now,
-      # so that route is gone (`test_f_expression_immutability.jl` owns it) — but `FExpression` is a
-      # mutable struct, so an internal `g.operand = g` is still one assignment away. Hand-build it,
-      # which is the only thing the cap defends against any more.
-      g = F("sku")
-      g.operation = "="
-      g.operand = g
-      @test g.operand === g          # the cycle really is a cycle, or this test proves nothing
+      # WHICH cycle can be built has changed twice, and the cap outlived both. #457 removed the
+      # ACCIDENTAL one: the comparison overloads used to mutate their left operand, so
+      # `f = F("x"); g = (f == f)` returned an object containing itself and any user could write one
+      # by mistake (`test_f_expression_immutability.jl` owns that route now). #508 phase 2 removed
+      # the DELIBERATE one this test used to hand-build — `FExpression` is a `struct`, so
+      # `g.operand = g` no longer compiles.
+      #
+      # What is left is the cap's live customer, and it is stronger evidence than the hand-built
+      # version ever was: `QObject` is a container, `push!` is documented public API
+      # (`docs/src/read/q_objects.md`), so a self-referential `Q` is one line of ordinary user code
+      # rather than an internal accident. `FObject.column` admits `SQLTypeQ`/`SQLTypeQor`, so one can
+      # also arrive nested inside a function.
+      cyc = Q("sku" => "x")
+      push!(cyc, cyc)
+      @test cyc.filters[end] === cyc   # the cycle really is a cycle, or this test proves nothing
       q = CR.Cj_child.objects
       q.with("ev" => _parent_cte())
-      @test_nowarn q.cjoin_on("Cj_parent", alias = "b2", on = [g])
+      @test_nowarn q.cjoin_on("Cj_parent", alias = "b2", on = [cyc])
     end
 
     @testset "Value() refuses a CTE handle" begin
@@ -1471,15 +1476,58 @@ end
   # ───────────────────────────────────────────────────────────────────────────
   @testset "the rewrite does not mutate the caller's SQLOrder" begin
     entry = SQLOrder("ev__seen"; nulls = :first)
+    # #533 changed WHERE the String becomes an `SQLField`, not whether the build may touch the node.
+    # `SQLOrder.field` is `SQLTypeField` now and `_order_field` normalizes at CONSTRUCTION, so the
+    # old assertion (`entry.field == "ev__seen"`) was testing the representation rather than the
+    # contract — it failed the moment the constructor ran, before any build. The contract is
+    # snapshotted from the constructed node instead, which is the same claim the testset header
+    # makes and is representation-independent.
+    field_before = entry.field
+    as_before    = entry.field._as
     q = CR.Cj_child.objects
     q.with("ev" => _full_cte(), join_field = "id" => "id")
     q.values("note", "rk" => Rank(over = WindowOver(order_by = [entry])))
     _sql(q)
-    # Still the String the caller passed — not rewritten to a CTEReference or an SQLField.
-    @test entry.field == "ev__seen"
+    @test entry.field === field_before        # the slot was not reassigned…
+    @test entry.field._as == as_before        # …and the SQLField was not written into
+    @test entry.field.field == "ev__seen"     # still the caller's path, not a CTEReference
+    @test entry.field isa SQLField            # #533: normalized once, at construction
     @test entry.nulls === :first
 
     # And the same handle renders the same way a second time, from the untouched node.
     @test _sql(q) == _sql(deepcopy(q))
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # #533 — the one rendering this change moved, pinned deliberately.
+  #
+  # `SQLOrder.field` is normalized at construction now, so a String-spelled window ORDER BY takes
+  # `_bind_cte_string!` instead of the deleted String branch. That branch also pushed onto the
+  # CALLER's `rewrote` set, which tagged the enclosing projection `root = :cte` — so a projection
+  # ALIASED with the same string was reused by a later filter. It no longer is.
+  #
+  # Before: `WHERE RANK() OVER (ORDER BY "R1_1"."seen" ASC) = ?` — a window function in WHERE, which
+  # neither backend accepts. After: the CTE column, which is what `SQLOrder(CTE(...))` has always
+  # rendered. The change is an improvement, but it IS a change, and the first draft of the comment
+  # in `ctes.jl` claimed it did not happen.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "a window SQLOrder over a CTE path resolves the column, not the projection" begin
+    _build(order_entry) = begin
+      q = CR.Cj_child.objects
+      q.with("ev" => _full_cte(), join_field = "id" => "id")
+      q.values("note", "ev__seen" => Rank(over = WindowOver(order_by = [order_entry])))
+      q.filter("ev__seen" => "2020-01-01")
+      _sql(q)
+    end
+
+    sql_string = _build(SQLOrder("ev__seen"))
+    where_string = match(r"WHERE(.*)"s, sql_string)
+    @test where_string !== nothing
+    @test occursin("\"seen\"", where_string.captures[1])
+    @test !occursin("RANK()", where_string.captures[1])   # a window function is not legal in WHERE
+
+    # The handle spelling has always rendered the column; the String spelling now agrees with it,
+    # which is the point — two spellings of one thing must not mean two different columns.
+    @test _build(SQLOrder(CTE("ev", "seen"))) == sql_string
   end
 end

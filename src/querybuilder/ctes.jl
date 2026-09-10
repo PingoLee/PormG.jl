@@ -1228,14 +1228,17 @@ end
 Build CTE (WITH clause) SQL string from the CTEs defined in the query object.
 
 # Arguments
-- `ctes::Dict{String, Dict{String, Union{SQLObjectHandler, PormGField}}}`: Dict of CTE name => fields dict
+- `ctes::OrderedDict{String, CTEDict}`: CTE name => fields dict. ORDERED, and the order is the
+  declaration order of the `.with(...)` calls — iterating it here is what fixes the emitted WITH
+  clause, so the same query renders the same SQL on every run and every Julia version. See the
+  `ctes` field comment in `types.jl` for why a plain `Dict` was not enough.
 - `connection`: Database connection for quoting identifiers
 - `parameters`: Parameterized query object to collect all parameters
 
 # Returns
 - String containing the WITH clause SQL, or empty string if no CTEs
 """
-function build_cte_clause(ctes::Dict{String,CTEDict}, connection, parameters::Union{Nothing,AbstractPormGParam}, table_alias::Union{Nothing,SQLTableAlias})
+function build_cte_clause(ctes::OrderedCollections.OrderedDict{String,CTEDict}, connection, parameters::Union{Nothing,AbstractPormGParam}, table_alias::Union{Nothing,SQLTableAlias})
   isempty(ctes) && return ""
 
   @pormg_debug false

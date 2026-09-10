@@ -553,17 +553,14 @@ end
 # CONSTRUCTS, never mutates: this node arrived through the public API, so it is replaced rather than
 # written into (the standing contract above, and #508's half of it).
 function _retag_cte_string_window_order(x::SQLTypeOrder, q::SQLObject, rewrote::Set{String})
-  if x.field isa String
-    seg1 = _cte_string_root(q, x.field)
-    seg1 === nothing && return x
-    _segment1_on_model(q, seg1) && _refuse_ambiguous_cte_path(q, x.field, seg1)
-    path = chopprefix(x.field, seg1 * "__")
-    push!(rewrote, _cte_as(seg1, path))
-    # Through the same constructor a user's `SQLOrder(CTE(...))` takes, so the two spellings cannot
-    # render differently — that equivalence is what the regression asserts, byte for byte.
-    return SQLOrder(CTEReference(name = seg1, path = path); order = x.order,
-                    orientation = x.orientation, _as = x._as, nulls = x.nulls)
-  elseif x.field isa SQLField
+  # #533 removed the `x.field isa String` branch that stood here. `SQLOrder.field` is `SQLTypeField`
+  # now, so a String is normalized into an `SQLField` by `_order_field` at CONSTRUCTION and reaches
+  # this walker as one — `SQLOrder("ev__sku")` takes the branch below instead, where
+  # `_bind_cte_string!` resolves the same CTE path and sets the same `root = :cte`. The deleted
+  # branch also pushed the output spelling onto the caller's `rewrote`; `_bind_cte_string!` keeps its
+  # OWN set for that tagging, so nothing downstream lost a name. Held byte-identical by the
+  # spelling-equivalence table in `test_cte_reference.jl` and by the cross-backend differential.
+  if x.field isa SQLField
     # `_bind_cte_string!` is the same per-field entry the top-level `q.order` loop uses, so the
     # window and the fluent `order_by` agree on what a CTE-rooted path means.
     #

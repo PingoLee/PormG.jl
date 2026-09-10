@@ -1302,7 +1302,12 @@ end
 #
 # When the left side is a nested expression or an unresolvable path there is no column to ask, so
 # the operand's own type decides. Still a formatted string, never a raw bind.
-function _format_date_operand(operand::Union{Dates.Date,Dates.DateTime}, field_name, instruc::SQLInstruction)
+# #533 added `ZonedDateTime`. The body needed no new arm: `Models.format_date_sql` and
+# `Models.format_timezone_sql` each already carry a `::ZonedDateTime` method, and the two branches
+# below pick between them by the COLUMN's type, not the value's — which is the whole point of #494.
+# So a `ZonedDateTime` against a TIMESTAMP column binds the canonical UTC string (#79), byte-identical
+# to what the ordinary `filter("ts" => zdt)` pair spelling binds.
+function _format_date_operand(operand::Union{Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime}, field_name, instruc::SQLInstruction)
   ftype = _operand_column_type(field_name, instruc)
   ftype == "DATE" && return Models.format_date_sql(operand)
   if ftype == "TIMESTAMP" || ftype == "TIMESTAMPTZ"
@@ -1432,8 +1437,11 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # binds as a VALUE — `F("note") == CTE("ev","code")` rendered `"R1"."note" = ?` with no join
     # emitted at all, which is valid SQL comparing a column against a stringified handle.
     return _get_select_query(operand, instruc)
-  elseif isa(operand, Union{Dates.Date,Dates.DateTime})
+  elseif isa(operand, Union{Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime})
     # #494 — a date/timestamp literal on the right of an `F(...)` / `Joined(...)` comparison.
+    # #533 added `ZonedDateTime`: it is the third temporal type the `format_*_sql` family binds, and
+    # the one #530 reported. Widening `_CompareOperand` without extending THIS arm would have bound
+    # it raw — which is the failure this arm's own comment describes, on a new type.
     #
     # Ahead of the generic `add_parameter!` at the bottom for the same reason the #25 duration gate
     # sits ahead of the infix branch: reaching it would bind the RAW Julia value, and

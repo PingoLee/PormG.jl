@@ -290,7 +290,12 @@ end
 
 # Return a order of field to sql query
 mutable struct SQLOrder <: SQLTypeOrder
-  field::Union{SQLTypeField,String}
+  # #533 — `SQLTypeField`, not `Union{SQLTypeField,String}`. The String member was admitted and never
+  # handled: `get_order_query` read `._as` off it and raised a raw `FieldError` naming an internal
+  # slot (#528). The inner constructor now routes every path through `_order_field`
+  # (`object_manager.jl`), which NORMALIZES a String into the `SQLField` all four readers require —
+  # so the spelling works instead of merely type-checking.
+  field::SQLTypeField
   order::Union{Integer,Nothing}
   orientation::String
   _as::OptionalString
@@ -299,9 +304,13 @@ mutable struct SQLOrder <: SQLTypeOrder
   nulls::Union{Symbol,Nothing}
   # Inner constructor: every construction path (keyword, positional, deepcopy) passes the
   # orientation whitelist (#77), so an injection-shaped direction never reaches the renderer.
-  SQLOrder(field, order, orientation, _as, nulls) = new(field, order, _normalize_order_orientation(orientation), _as, nulls)
+  SQLOrder(field, order, orientation, _as, nulls) = new(_order_field(field), order, _normalize_order_orientation(orientation), _as, nulls)
 end
-SQLOrder(field::Union{SQLTypeField,String}; order::Union{Integer,Nothing}=nothing, orientation::String="ASC", _as::OptionalString=nothing, nulls::Union{Symbol,Nothing}=nothing) = SQLOrder(field, order, orientation, _as, nulls)
+# `field` is untyped on purpose (#533): an unsupported value must reach `_order_field`'s typed
+# refusal, which names the supported spellings, rather than dying as a bare `MethodError` on this
+# signature. The `CTE`/`Joined` handles have their own more specific method below, so they still
+# take the `desc`-rejecting path.
+SQLOrder(field; order::Union{Integer,Nothing}=nothing, orientation::String="ASC", _as::OptionalString=nothing, nulls::Union{Symbol,Nothing}=nothing) = SQLOrder(field, order, orientation, _as, nulls)
 # #509 — a CTE (#444) or joined-copy (#481) column inside an `SQLOrder`. Until this, the keyword
 # constructor above was the whole surface and its `field` union excluded both, so
 # `SQLOrder(CTE("ev", "seen"))` was a `MethodError` — which is why an `SQLOrder` entry in a window's
@@ -630,6 +639,33 @@ Interval(s::AbstractString) = Interval(_parse_time_string_to_compoundperiod(s))
 # Duration operands accepted by F-expression +/- date arithmetic (#25).
 const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 
+# ── The operand vocabulary, named ONCE (#533) ────────────────────────────────
+#
+# `_CompareOperand` (the comparison SIGNATURE) and `FExpression.operand` (the STORAGE slot) have to
+# admit the same types, and until now each spelled its own list. Keeping two lists in step is the
+# defect #494 was: the signature accepted `Date`/`DateTime` while the slot did not, so
+# `F("date") == Date(2020,1,1)` died in `convert` naming an internal union. `test_f_date_operands.jl`
+# has been asserting the two agree, by hand.
+#
+# They were spelled twice for a real reason, not carelessness: `_CompareOperand` names `FExpression`,
+# and `FExpression.operand` would name `_CompareOperand` — a cycle. The slot reached for the ABSTRACT
+# `SQLTypeF` to break it, and that is what silently admitted `OuterRefObject` (the other `SQLTypeF`
+# subtype), which no `_set_update_query_operand` arm handles: it fell to the terminal `else` and was
+# bound RAW as a parameter. Measured on origin/main: `PARAMS: Any[OuterRefObject("id")]`.
+#
+# The cycle breaks by naming the NON-circular halves here and composing on both sides. A struct may
+# name itself in its own field types, so `FExpression` appears directly instead of through `SQLTypeF`,
+# and the admission is a named seam again — the rule `CTEReference` and `JoinedReference` already follow.
+#
+# The stated membership rule for the literal half: **every type the `format_*_sql` family can bind.**
+# That admits `ZonedDateTime` (`Models.format_timezone_sql` has the method, and `filter("ts" => zdt)`
+# already binds through it) and excludes `Vector{UInt8}`/JSON, whose scalar value is itself a
+# collection and which have no comparison semantics. Adding a member here is only half the change:
+# it needs a render arm in `_format_date_operand` / `_set_update_query_operand` (`execution.jl`) or it
+# binds raw, which is #494 again on a new type.
+const _CompareLiteral = Union{Integer,Float64,String,Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime}
+const _ColumnHandle   = Union{SQLTypeCTE,SQLTypeJoined}
+
 # Carrier for an F reference and any arithmetic built on top of it. Users construct it through
 # `F(field_name)` (documented below) and the Base.:+/-/*// overloads further down; the struct
 # itself is internal.
@@ -637,19 +673,17 @@ const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
   # #481: `SQLTypeJoined` so a joined-copy reference can be the LEFT side of a comparison
   # (`Joined("d","driverid") == F("driverid")`). It renders through `_set_update_query`, the same
   # seam a `String` field_name uses.
-  field_name::Union{String,Integer,SQLTypeF,SQLTypeFunction,SQLTypeJoined}
+  # #533: `FExpression`, not the abstract `SQLTypeF` — see the operand-vocabulary note above. The
+  # abstract spelling also admitted `OuterRefObject`, which no renderer arm handles.
+  field_name::Union{String,Integer,FExpression,SQLTypeFunction,SQLTypeJoined}
   operation::OptionalString = nothing  # +, -, *, /, etc.
-  # #444/#481: `SQLTypeCTE`/`SQLTypeJoined` so `F("note") == CTE("ev","code")` builds a comparison instead of
-  # falling through to `Base.==` and silently yielding a Bool.
-  # #494: `Dates.Date`/`Dates.DateTime` — the COMPARISON operands. All twelve comparison overloads
-  # (six here, six on `JoinedReference`) accepted both at dispatch through `_CompareOperand` while
-  # this field did not admit them, so `F("date") == Date(2020, 1, 1)` died right here with a bare
-  # `MethodError` from `convert`, naming this union and not the comparison the caller wrote. The
-  # `Period`/`CompoundPeriod`/`Interval` members below are the DURATION operands #25 added for date
-  # ARITHMETIC; the split between the two was the whole defect. Exactly these two types, not
-  # `Dates.TimeType`: widening further would admit `ZonedDateTime`/`Time` that the signature does
-  # not, which is the same disagreement pointing the other way.
-  operand::Union{String,Integer,Float64,SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,Dates.Date,Dates.DateTime,Dates.Period,Dates.CompoundPeriod,Interval,Nothing} = nothing
+  # Composed from the named halves above, so this slot and the `_CompareOperand` signature cannot
+  # drift apart: widening one widens both, by construction rather than by a test that checks.
+  #
+  # `_DurationOperand` is the other half and is NOT part of `_CompareOperand`: those are the operands
+  # #25 added for date ARITHMETIC (`F("seen") + Day(1)`), not for comparison. Conflating the two was
+  # the whole of #494. `SQLTypeFunction` likewise — `F("x") * Sum("y")` is arithmetic.
+  operand::Union{_CompareLiteral,_ColumnHandle,_DurationOperand,SQLTypeFunction,FExpression,Nothing} = nothing
   function_name::String = "F"
   column::Union{String,SQLTypeField,Vector{String}} = ""
   aggregate::Bool = false
@@ -821,11 +855,14 @@ Base.:+(operand::_DurationOperand, f::FExpression) = f + operand
 # so the signature and the slot agree — `test_f_date_operands.jl` asserts every member of this union
 # is storable, so the two cannot drift apart again silently.
 #
-# The union is still the dispatch contract for a `CTE(...)` / `Joined(...)` right-hand side: keep
-# additions to it and to `FExpression.operand` in step, and give any new member a render arm in
-# `_set_update_query_operand` (`execution.jl`) — a member that binds RAW is not "supported", it is
-# #494 again on a different type.
-const _CompareOperand = Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined}
+# The union is still the dispatch contract for a `CTE(...)` / `Joined(...)` right-hand side. #533
+# made "keep additions to it and to `FExpression.operand` in step" structural rather than a rule to
+# remember: both are now COMPOSED from `_CompareLiteral` / `_ColumnHandle` (declared above the
+# struct), so widening one widens the other. What still has to be done by hand is the CONSUMER half —
+# a new member needs a render arm in `_format_date_operand` / `_set_update_query_operand`
+# (`execution.jl`), or it binds RAW, and a member that binds raw is not "supported", it is #494 again
+# on a different type. `test_node_admission.jl` is what fails when that half is forgotten.
+const _CompareOperand = Union{_CompareLiteral,_ColumnHandle,FExpression}
 
 function _compare(f::FExpression, operation::String, operand)
   if f.operation === nothing

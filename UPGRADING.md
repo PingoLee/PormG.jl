@@ -45,6 +45,131 @@ _Changes merged but not yet cut into a release. A consumer dev'ing PormG at HEAD
 and `PormG.upgrade_guide` surfaces them by default. When the maintainer next rolls changes into a
 consuming app, `/pormg-cut-release` stamps every entry below with `0.6.0`, dates them, and tags it._
 
+## An ordering term is no longer a field expression (#533)
+
+- **Version**: Unreleased
+- **PormG ref**: #533 ; `src/Kernel.jl`, `src/querybuilder/types.jl`, `src/querybuilder/object_manager.jl`, `src/querybuilder/functions.jl`, `src/querybuilder/execution.jl`
+- **Recorded**: 2026-09-10
+- **Severity**: breaking
+
+### What changed
+
+`SQLTypeOrder` was declared `<: SQLTypeField`. Because around 26 signatures across the query builder
+spell `Union{String, SQLTypeField, …}`, that one subtype relation silently admitted an `SQLOrder` into
+every one of them — `partition_by`, `Lower(...)`, `Cast(...)`, `values(...)`, `OperObject.column` and
+the rest. None of those has a consumer for an ordering term, so each accepted it at construction and
+then died at render with a raw `MethodError` outside the #231 taxonomy. It is now
+`SQLTypeOrder <: SQLType`.
+
+Three consequences a consuming app can see:
+
+| spelling | before | after |
+|---|---|---|
+| `x isa PormG.SQLTypeField` for an `SQLOrder` | `true` | `false` — test `SQLTypeOrder` |
+| `partition_by = SQLOrder(...)`, `Lower(SQLOrder(...))`, … | constructed, then a raw `MethodError` | refused at declaration with a `QueryBuildError` naming the supported spellings |
+| `SQLOrder("surname")` | constructed, then a raw `FieldError` naming the internal `._as` slot | normalizes to the `SQLField` every consumer requires, and renders |
+
+`SQLOrder.field` is narrowed to `SQLTypeField`, and every construction path runs through one funnel —
+so a value the constructor accepts is a value the renderer handles. `SQLOrder("-surname")` is refused
+rather than resolving a column literally named `-surname`; the direction belongs in `orientation`.
+
+`ORDER BY` itself is untouched. `SQLTypeOrder` is still a member of `WindowOrderPart`, and
+`order_by(SQLOrder(...))` — including the `CTE` and `Joined` handle spellings #509 added — works
+exactly as before, byte for byte.
+
+### How to find the calls to migrate
+
+```bash
+grep -rn 'SQLOrder(' --include='*.jl' .
+grep -rn 'SQLTypeField' --include='*.jl' .
+```
+
+Measured across both consuming apps when this landed: **zero** hits for either.
+
+### Migrate your app
+
+```julia
+# ✗ before — an SQLOrder satisfied ::SQLTypeField, so these constructed and died at render
+Rank(over = WindowOver(partition_by = SQLOrder(SQLField("x", "x"))))
+Lower(SQLOrder(SQLField("note", "note")))
+
+# ✓ after — name the column; only ORDER BY has a direction to carry
+Rank(over = WindowOver(partition_by = "x"))
+Lower("note")
+
+# ✗ before — a type test that silently included ordering terms
+x isa PormG.SQLTypeField
+# ✓ after — say which you meant
+x isa PormG.SQLTypeOrder                                    # ordering terms
+x isa PormG.SQLTypeField || x isa PormG.SQLTypeOrder        # genuinely both
+
+# ✗ before — accepted, then a raw FieldError naming an internal slot
+query.order_by(SQLOrder("-surname"))
+# ✓ after — the direction goes in its own slot
+query.order_by(SQLOrder("surname"; orientation = "DESC"))
+```
+
+---
+
+## Expression and reference nodes are immutable `struct`s (#508)
+
+- **Version**: Unreleased
+- **PormG ref**: #508 ; `src/querybuilder/types.jl`, `src/querybuilder/build_helpers.jl`, `src/querybuilder/ctes.jl`, `src/querybuilder/execution.jl`, `src/querybuilder/memos.jl`
+- **Recorded**: 2026-09-10
+- **Severity**: breaking
+
+### What changed
+
+Seven expression and reference node types are declared `struct` rather than `mutable struct`:
+`SQLText` (what `Value(x)` returns), `OperObject`, `FExpression` (what `F(x)` returns),
+`OuterRefObject`, `CTEReference`, `FObject` (what `Sum`/`Count`/`Lower`/… return) and
+`WindowFunction`.
+
+Assigning to a slot on one of these is now an error at the call site instead of a silent rewrite. The
+`F` docstring has promised since #493 that *"every operator builds a new expression and leaves its
+operands untouched"*; until now that was held by convention, and the convention had already broken
+twice — #457 (a reused `F` handle rendered `(("note" > ?) < ?)`) and #508 phase 1 (a `Value` handle
+shared by two queries rewrote the first query's alias).
+
+**The emitted SQL is unchanged.** A 76-shape corpus rendered on both engines produces byte-identical
+SQL and byte-identical parameter vectors against the previous release.
+
+Four types stay mutable deliberately, and none is an expression node: `SQLField` (a build product),
+`SQLOrder` (an ordering term), and `WindowSpec` / `QObject` / `QorObject` (containers whose in-place
+assembly is documented API — `push!` on a `Q` is unaffected).
+
+Seven hand-written `Base.deepcopy` methods were deleted with them. `deepcopy` on any of the seven now
+goes through Base, which is *deeper*, not shallower — no app edit is needed, and this is recorded
+only so nobody re-adds one.
+
+### How to find the calls to migrate
+
+```bash
+grep -rnE '\.(operation|operand|field_name|column|custom_as|_as|aggregate|formatter|function_name|over|path|desc)[[:space:]]*=[^=]' --include='*.jl' .
+```
+
+Measured across both consuming apps when this landed: **zero** hits.
+
+### Migrate your app
+
+```julia
+# ✗ before — writing a slot on a node you built
+s = Sum("points")
+s._as = "total"
+query.values(s)
+
+f = F("points")
+f.operation = "+"
+f.operand = 1
+query.update("points" => f)
+
+# ✓ after — every node is a value; build the one you want
+query.values("total" => Sum("points"))
+query.update("points" => F("points") + 1)
+```
+
+---
+
 ## `ForeignKey` / `OneToOneField` — `on_update`, `deferrable` and `initially_deferred` are removed (#516)
 
 - **Version**: Unreleased

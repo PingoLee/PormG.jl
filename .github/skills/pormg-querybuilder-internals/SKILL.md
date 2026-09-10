@@ -130,31 +130,63 @@ the node it was handed. `F("points") > 10`, `Sum("points")`, `Value("x")`, `CTE(
 `Joined("d", "col")` are values a user may bind to a name and reuse across queries, and the `F`
 docstring promises exactly that.
 
-The contract is held by convention, not by the type system: every node except `JoinedReference` is
-still a `mutable struct` (`types.jl`), which is what let each of these happen —
+**Since #508 phase 2 the type system holds the contract, not convention.** Seven node types are
+declared `struct` — `SQLText`, `OperObject`, `FExpression`, `OuterRefObject`, `CTEReference`,
+`FObject`, `WindowFunction` — joining `JoinedReference`, which was immutable from #481. Writing to a
+slot on any of them is a `setfield!` error at the call site rather than a silent rewrite.
+
+It took two defects to get there, and both are now unrepresentable rather than guarded:
 
 - **#457 / #493** — the six `F` comparisons wrote `operation` / `operand` onto their left operand:
   `f == f` built a self-cycle that overflowed the stack, and `f > "a"; f < "z"` rendered
   `(("note" > ?) < ?)`. Fixed by making comparisons construct, as arithmetic always had.
-- **#508** — `_values!`'s `Value` arm writes `custom_as` onto the user's node, so a `Value` handle
-  shared by two queries rewrites the first query's alias when the second is built. The function arm a
-  few lines above wraps in a fresh `SQLField` instead — that is the pattern.
+- **#508** — `_values!`'s `Value` arm wrote `custom_as` onto the user's node, so a `Value` handle
+  shared by two queries rewrote the first query's alias when the second was built. Phase 1 fixed the
+  seam; phase 2 removed the ability.
 
-Rules while the structs stay mutable:
+The rules now:
 
-- **Operators construct.** `_compare` (`types.jl`) is the template: copy every slot, set the new
-  operation, return.
-- **Walkers replace.** `_check_function` / `_retag_cte_column` / `_retag_joined_column`
-  (`build_helpers.jl`) may rewrite a *build product* (the `SQLField` a String-path parse produced),
-  never a node that arrived through the public API. `JoinedReference`'s comment says why: *the retag
-  walker replaces rather than mutates … safe to share between a deepcopy'd field and its original.*
-- **Containers are the exception, and they are named.** `QObject` / `QorObject` support `push!` as a
-  documented API (`docs/src/read/q_objects.md`), and `WindowSpec` documents in-place assembly. They
-  are containers, not nodes; do not extend that affordance to the node types.
-- **A hand-written `deepcopy` is a symptom.** `Base.deepcopy(::FExpression / ::FObject / ::SQLText)`
-  and the #112 copy discipline (`types.jl` → *a copy must share no MUTABLE state*) exist because nodes
-  are mutable. #508 phase 2 makes the seven node types `struct` and deletes them; until then, a new
-  mutable node needs a `deepcopy` method and a #112 test.
+- **Operators and walkers construct.** `_compare` (`types.jl`) is the template: read every slot,
+  set the new one, return a fresh node. `_check_function` / `_retag_cte_column` /
+  `_retag_joined_column` (`build_helpers.jl`) and `_retag_cte_string` (`ctes.jl`) all follow it.
+  `_retag_cte_string(::WindowFunction)` builds a fresh `WindowSpec` too — a spec reused across two
+  window functions is documented as supported, so rewriting one in place reached a node the caller
+  still held.
+- **`SQLField` is the exception, and it is a build product.** The `_retag_*_field!` helpers still
+  write into it, because it is what a String-path parse produced, never what a caller handed in.
+  `SQLOrder` likewise (`_invert_order!` rewrites it for `last()`).
+- **Containers are the other exception, and they are named.** `QObject` / `QorObject` support `push!`
+  as documented API (`docs/src/read/q_objects.md`), and `WindowSpec` documents in-place assembly.
+  They are containers, not nodes; do not extend that affordance to the node types. A `Q` is also the
+  only cycle a user can still build (`push!(q, q)`), which is why `_guard_no_handle`'s depth cap
+  (`ctes.jl`) stays.
+- **A hand-written `deepcopy` is a symptom.** The seven that existed only to satisfy the #112 copy
+  discipline (*a copy must share no MUTABLE state*) are deleted. Four remain, none of them about
+  mutability — `SQLTypeField` (deliberately shallow on `.field`), `SQLTypeOrder` (re-runs the #77
+  orientation whitelist that Base bypasses), `SQLTypeOper` (shares an `SQLObjectHandler` rather than
+  cloning a subquery) and `WindowSpec` (still a container). **Do not add an eighth**: a node that
+  needs a copy method to be safe is a node that should not be mutable.
+
+### A declared type must not admit what no consumer handles (#533)
+
+The sibling rule, and the one that is easiest to break by accident, because the breakage is
+*inherited* rather than written. `SQLTypeOrder` used to be `<: SQLTypeField`, and ~26 unions name
+`SQLTypeField` — so one subtype relation put `SQLOrder` into `WindowPartitionPart`, `ColumnPart`,
+`FExpression.column`, `SQLObjectQuery.values` and all 18 scalar-function signatures at once. Each
+accepted it and died at render with a raw `MethodError`. #529 reported one; there were ~25 behind it.
+
+- **Prefer the concrete type in a union.** `CTEReference` is deliberately not `<: SQLTypeF` and
+  `JoinedReference` not `<: SQLTypeCTE`, both so "every admission is a named seam" (`types.jl`).
+  `FExpression.operand` names `FExpression`, not the abstract `SQLTypeF` — naming the abstract one
+  silently admitted `OuterRefObject`, which bound RAW as a parameter. #535 is the same pattern still
+  open one level out.
+- **Widening a union is half a change.** The other half is a consumer arm. A member that binds raw is
+  not "supported": on PostgreSQL the driver often adapts it and the bug hides; on SQLite it compares
+  against a different representation and returns wrong rows silently.
+- **`test/unit/test_node_admission.jl` is the backstop.** It probes each slot's real entry point —
+  `hasmethod` cannot answer this, because `_resolve_window_expression` takes its argument untyped and
+  branches on `isa` — and reports offenders grouped by admitted TYPE, so one inherited admission
+  reads as one cause rather than 26 failures.
 
 ### Identifier sanitization contract
 

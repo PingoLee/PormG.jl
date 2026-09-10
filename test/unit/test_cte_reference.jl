@@ -1476,12 +1476,22 @@ end
   # ───────────────────────────────────────────────────────────────────────────
   @testset "the rewrite does not mutate the caller's SQLOrder" begin
     entry = SQLOrder("ev__seen"; nulls = :first)
+    # #533 changed WHERE the String becomes an `SQLField`, not whether the build may touch the node.
+    # `SQLOrder.field` is `SQLTypeField` now and `_order_field` normalizes at CONSTRUCTION, so the
+    # old assertion (`entry.field == "ev__seen"`) was testing the representation rather than the
+    # contract — it failed the moment the constructor ran, before any build. The contract is
+    # snapshotted from the constructed node instead, which is the same claim the testset header
+    # makes and is representation-independent.
+    field_before = entry.field
+    as_before    = entry.field._as
     q = CR.Cj_child.objects
     q.with("ev" => _full_cte(), join_field = "id" => "id")
     q.values("note", "rk" => Rank(over = WindowOver(order_by = [entry])))
     _sql(q)
-    # Still the String the caller passed — not rewritten to a CTEReference or an SQLField.
-    @test entry.field == "ev__seen"
+    @test entry.field === field_before        # the slot was not reassigned…
+    @test entry.field._as == as_before        # …and the SQLField was not written into
+    @test entry.field.field == "ev__seen"     # still the caller's path, not a CTEReference
+    @test entry.field isa SQLField            # #533: normalized once, at construction
     @test entry.nulls === :first
 
     # And the same handle renders the same way a second time, from the untouched node.

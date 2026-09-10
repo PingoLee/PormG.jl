@@ -255,8 +255,11 @@ function _guard_no_handle(filter, ::Type{T}, reject::Function, context::String, 
   # push!(q, q)` — and the `QObject`/`QorObject` arms below walk straight into it. That is the cap's
   # live customer.
   #
-  # A second reason it stays: `FExpression` is a mutable struct, so `g.operand = g` on an internal
-  # object is one assignment away too. Be precise about what it buys, though: it protects **`cjoin_on`**, the
+  # A second reason it stays, narrower since #508 phase 2: the expression nodes are immutable now, so
+  # `g.operand = g` on an internal `FExpression` is no longer one assignment away — that route is
+  # closed by the type. What survives is the same container cycle arriving INDIRECTLY: `FObject.column`
+  # admits `SQLTypeQ`/`SQLTypeQor` (`types.jl`), so a cyclic `Q` nested inside a function still reaches
+  # this walk. Be precise about what it buys, though: it protects **`cjoin_on`**, the
   # one caller that reaches this sweep WITHOUT going through `_prefix_join_filter`. It does NOT make
   # the `on()` / `cjoin()` route cycle-safe, and the three arms of `_prefix_join_filter` fail
   # differently, so do not read a uniform rule into it:
@@ -461,11 +464,16 @@ function _retag_cte_string(x::String, q::SQLObject, rewrote::Set{String})
   push!(rewrote, _cte_as(seg1, chopprefix(x, seg1 * "__")))
   return CTEReference(name = seg1, path = chopprefix(x, seg1 * "__"))
 end
-function _retag_cte_string(x::SQLTypeFunction, q::SQLObject, rewrote::Set{String})
-  x.column = _retag_cte_string(x.column, q, rewrote)
-  return x
+# #508 phase 2 — CONSTRUCTS. `::FObject` rather than `::SQLTypeFunction`: `WindowFunction` is the
+# only other subtype and it has always had its own method below, so the abstract signature never
+# served anything else.
+function _retag_cte_string(x::FObject, q::SQLObject, rewrote::Set{String})
+  return FObject(function_name=x.function_name, column=_retag_cte_string(x.column, q, rewrote),
+                 aggregate=x.aggregate, formatter=x.formatter, _as=x._as, kwargs=x.kwargs)
 end
-function _retag_cte_string(x::SQLTypeField, q::SQLObject, rewrote::Set{String})
+# `::SQLField`, not `::SQLTypeField` — see the twin note in `_retag_cte_column` (`build_helpers.jl`).
+# `SQLField` is a build product and stays mutable, so this arm still writes.
+function _retag_cte_string(x::SQLField, q::SQLObject, rewrote::Set{String})
   x.field = _retag_cte_string(x.field, q, rewrote)
   return x
 end
@@ -481,18 +489,24 @@ end
 # One query, one string, refused in one clause and guessed in the other: that is exactly the
 # first-match precedence #492 exists to remove, surviving in a corner.
 #
-# The vectors are mutated IN PLACE, not rebuilt. They are typed `Vector{WindowPartitionPart}` /
-# `Vector{WindowOrderPart}` while the `::Vector` arm below returns an `Any[]`, which neither field
-# will accept; element assignment type-checks because `SQLTypeCTE` is a member of both unions.
+# #508 phase 2 — the vectors were mutated in place here; now the whole node is rebuilt, `over`
+# included. The TYPED comprehensions are what replaces the old element-assignment trick: they
+# produce a `Vector{WindowPartitionPart}` / `Vector{WindowOrderPart}` directly, where the `::Vector`
+# arm below would return an `Any[]` that neither `WindowSpec` field accepts.
+#
+# A FRESH `WindowSpec`, not the caller's. `WindowSpec` is a container and stays mutable, so reusing
+# it would put the rewritten entries into a spec the user may still hold and may have shared across
+# two window functions in the same query — which is documented as supported (`WindowSpec`'s
+# docstring). This is the one place a container being mutable actually mattered.
 function _retag_cte_string(x::WindowFunction, q::SQLObject, rewrote::Set{String})
-  x.column = _retag_cte_string(x.column, q, rewrote)
-  for i in eachindex(x.over.partition_by)
-    x.over.partition_by[i] = _retag_cte_string(x.over.partition_by[i], q, rewrote)
-  end
-  for i in eachindex(x.over.order_by)
-    x.over.order_by[i] = _retag_cte_string_window_order(x.over.order_by[i], q, rewrote)
-  end
-  return x
+  over = WindowSpec(
+    partition_by = WindowPartitionPart[_retag_cte_string(p, q, rewrote) for p in x.over.partition_by],
+    order_by = WindowOrderPart[_retag_cte_string_window_order(o, q, rewrote) for o in x.over.order_by],
+    frame = x.over.frame)
+  return WindowFunction(function_name=x.function_name,
+                        column=_retag_cte_string(x.column, q, rewrote),
+                        over=over, aggregate=x.aggregate, formatter=x.formatter,
+                        _as=x._as, kwargs=x.kwargs)
 end
 
 # A window's ORDER BY stores each entry AS GIVEN — `"-ev__seen"` keeps its `-`, and the prefix is
@@ -560,11 +574,13 @@ function _retag_cte_string_window_order(x::SQLTypeOrder, q::SQLObject, rewrote::
     #
     # It stays because that protection is a property of the CALL PATH, not of this function, and
     # this function is the one that writes. It costs one shallow copy per window ORDER BY entry.
-    # Its reach is partial and worth stating exactly: `deepcopy(::SQLTypeField)` rebuilds the wrapper
-    # while SHARING whatever `.field` holds, so reassigning that slot on the copy protects a `String`
-    # terminal — what every `SQLOrder(SQLField(f, f))` in the docs and the suite carries — but not a
-    # nested mutable node such as an `FObject` from a `__@` transform, which `_retag_cte_string`'s
-    # `SQLTypeFunction` arm still rewrites in place. That write is #508 phase 2's to remove.
+    # Its reach used to be partial: `deepcopy(::SQLTypeField)` rebuilds the wrapper while SHARING
+    # whatever `.field` holds, so reassigning that slot on the copy protected a `String` terminal —
+    # what every `SQLOrder(SQLField(f, f))` in the docs and the suite carries — but not a nested
+    # mutable node such as an `FObject` from a `__@` transform, which the function arm rewrote in
+    # place. #508 phase 2 closed that gap from the other side: `FObject` is immutable and
+    # `_retag_cte_string`'s function arm constructs, so there is no in-place write left for the
+    # shallow copy to fail to cover.
     return SQLOrder(_bind_cte_string!(deepcopy(x.field), q),
                     x.order, x.orientation, x._as, x.nulls)
   end
@@ -574,8 +590,8 @@ end
 # it arrived; those have their own arms or need none.
 _retag_cte_string_window_order(x, q::SQLObject, rewrote::Set{String}) = x
 function _retag_cte_string(x::SQLTypeOper, q::SQLObject, rewrote::Set{String})
-  x.column = _retag_cte_string(x.column, q, rewrote)
-  return x
+  return OperObject(operator=x.operator, values=x.values,
+                    column=_retag_cte_string(x.column, q, rewrote))
 end
 _retag_cte_string(x::Vector, q::SQLObject, rewrote::Set{String}) =
   Any[_retag_cte_string(v, q, rewrote) for v in x]
@@ -757,22 +773,27 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
     # OperObject rather than on a raw Pair. Same refusal, same reason (#444/#481).
     _guard_no_join_handles(new_oper, "a join ON clause (on(...) / cjoin(...))")
 
-    if new_oper.column isa SQLField && new_oper.column.field isa String
-      new_oper.column = SQLField(
-        _normalize_cjoin_filter_key(new_oper.column.field, prefix, foreign_model),
-        new_oper.column._as,
-        new_oper.column.custom_as,
-        new_oper.column.root   # #474: carry the namespace tag through the rewrite
+    # #508 phase 2 — `OperObject` is immutable, so the rewritten slots are computed here and the node
+    # is built ONCE at the end. The `deepcopy` above stays exactly where it was: it is what the guard
+    # walks, and `values` may hold a nested handler it must not share.
+    column = new_oper.column
+    if column isa SQLField && column.field isa String
+      column = SQLField(
+        _normalize_cjoin_filter_key(column.field, prefix, foreign_model),
+        column._as,
+        column.custom_as,
+        column.root   # #474: carry the namespace tag through the rewrite
       )
-    elseif new_oper.column isa String
-      new_oper.column = _normalize_cjoin_filter_key(new_oper.column, prefix, foreign_model)
+    elseif column isa String
+      column = _normalize_cjoin_filter_key(column, prefix, foreign_model)
     end
 
-    if new_oper.values isa FExpression
-      new_oper.values = _prefix_join_filter(new_oper.values, prefix, foreign_model)
+    values = new_oper.values
+    if values isa FExpression
+      values = _prefix_join_filter(values, prefix, foreign_model)
     end
 
-    return new_oper
+    return OperObject(operator=new_oper.operator, values=values, column=column)
   elseif filter isa FExpression
     # #444: sweep the F expression BEFORE prefixing. `F("sku") == CTE("ev","sku")` is a `FilterType`,
     # so `on()`/`cjoin()` accept it, and the arms below only rewrite `String` slots — a handle rode
@@ -781,30 +802,36 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
     _guard_no_join_handles(filter, "a join ON clause (on(...) / cjoin(...))")
     new_filter = deepcopy(filter)
 
-    if new_filter.field_name isa String
-      new_filter.field_name = _normalize_cjoin_filter_key(new_filter.field_name, prefix, foreign_model)
-    elseif new_filter.field_name isa FExpression
-      new_filter.field_name = _prefix_join_filter(new_filter.field_name, prefix, foreign_model)
+    # #508 phase 2 — as in the `OperObject` arm above: compute each rewritten slot, build one node.
+    field_name = new_filter.field_name
+    if field_name isa String
+      field_name = _normalize_cjoin_filter_key(field_name, prefix, foreign_model)
+    elseif field_name isa FExpression
+      field_name = _prefix_join_filter(field_name, prefix, foreign_model)
     end
 
-    if new_filter.column isa String
-      new_filter.column = _normalize_cjoin_filter_key(new_filter.column, prefix, foreign_model)
-    elseif new_filter.column isa Vector{String}
-      new_filter.column = [_normalize_cjoin_filter_key(v, prefix, foreign_model) for v in new_filter.column]
-    elseif new_filter.column isa SQLField && new_filter.column.field isa String
-      new_filter.column = SQLField(
-        _normalize_cjoin_filter_key(new_filter.column.field, prefix, foreign_model),
-        new_filter.column._as,
-        new_filter.column.custom_as,
-        new_filter.column.root   # #474: carry the namespace tag through the rewrite
+    column = new_filter.column
+    if column isa String
+      column = _normalize_cjoin_filter_key(column, prefix, foreign_model)
+    elseif column isa Vector{String}
+      column = [_normalize_cjoin_filter_key(v, prefix, foreign_model) for v in column]
+    elseif column isa SQLField && column.field isa String
+      column = SQLField(
+        _normalize_cjoin_filter_key(column.field, prefix, foreign_model),
+        column._as,
+        column.custom_as,
+        column.root   # #474: carry the namespace tag through the rewrite
       )
     end
 
-    if new_filter.operand isa FExpression
-      new_filter.operand = _prefix_join_filter(new_filter.operand, prefix, foreign_model)
+    operand = new_filter.operand
+    if operand isa FExpression
+      operand = _prefix_join_filter(operand, prefix, foreign_model)
     end
 
-    return new_filter
+    return FExpression(field_name=field_name, operation=new_filter.operation, operand=operand,
+                       function_name=new_filter.function_name, column=column,
+                       aggregate=new_filter.aggregate, _as=new_filter._as, kwargs=new_filter.kwargs)
   else
     return filter
   end

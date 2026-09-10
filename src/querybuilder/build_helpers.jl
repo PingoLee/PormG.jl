@@ -70,8 +70,9 @@ end
 # `build()`, and Julia's generic array deepcopy clones the spec along with it — so a copy here would
 # be a second layer over a hazard that does not reach this far. Sharing keeps the built node
 # byte-identical to what the mutating form produced, which is the rule the rest of this function
-# follows. #508 phase 2 revisits this slot: once `WindowFunction` is a `struct` and the `_retag_*`
-# walkers construct, the question stops being "copy or share" at all.
+# follows. #508 phase 2 settled the slot: `WindowFunction` is a `struct` now and the `_retag_*`
+# walkers construct, so no build step can write through a shared `over` any more. Sharing is a
+# property of the types here, not a bet on call paths.
 function _check_function(f::FObject)
   return FObject(function_name=f.function_name, column=_check_function(f.column),
                  aggregate=f.aggregate, formatter=f.formatter, _as=f._as,
@@ -162,17 +163,34 @@ _check_function(x::CTEReference) = x
 _retag_cte_column(x::String, name::String) = CTEReference(name=name, path=x)
 _retag_cte_column(x::CTEReference, ::String) = x
 _retag_cte_column(x::SQLTypeText, ::String) = x
-function _retag_cte_column(x::SQLTypeFunction, name::String)
-  x.column = _retag_cte_column(x.column, name)
-  return x
+# #508 phase 2 — these arms CONSTRUCT. The `SQLTypeFunction` arm splits in two because `FObject` and
+# `WindowFunction` do not share a slot list: only the latter carries `over`.
+#
+# `kwargs` rides across BY REFERENCE here, unlike `_check_function`'s shallow copy above. The node
+# reaching this walker is already the build product `_check_function` returned, so its `kwargs` is a
+# fresh Dict the user's handle does not share — and the caller replaces the original rather than
+# keeping it alongside, so there are never two live nodes over one Dict. Copying again would only
+# make the retag allocate more than the mutating form it replaces.
+function _retag_cte_column(x::FObject, name::String)
+  return FObject(function_name=x.function_name, column=_retag_cte_column(x.column, name),
+                 aggregate=x.aggregate, formatter=x.formatter, _as=x._as, kwargs=x.kwargs)
 end
-function _retag_cte_column(x::SQLTypeField, name::String)
+function _retag_cte_column(x::WindowFunction, name::String)
+  return WindowFunction(function_name=x.function_name,
+                        column=x.column === nothing ? nothing : _retag_cte_column(x.column, name),
+                        over=x.over, aggregate=x.aggregate, formatter=x.formatter,
+                        _as=x._as, kwargs=x.kwargs)
+end
+# `::SQLField`, not `::SQLTypeField`: `SQLTypeOrder <: SQLTypeField`, so the abstract signature also
+# accepts an `SQLOrder` and would write its `.field` — a slot that means something entirely
+# different. #533 removes that subtype relation; narrowing here is correct either way. `SQLField` is
+# a build product and stays mutable, so this arm still writes.
+function _retag_cte_column(x::SQLField, name::String)
   x.field = _retag_cte_column(x.field, name)
   return x
 end
 function _retag_cte_column(x::SQLTypeOper, name::String)
-  x.column = _retag_cte_column(x.column, name)
-  return x
+  return OperObject(operator=x.operator, values=x.values, column=_retag_cte_column(x.column, name))
 end
 _retag_cte_column(x::Vector, name::String) = Any[_retag_cte_column(v, name) for v in x]
 function _retag_cte_column(x, ::String)
@@ -208,17 +226,24 @@ _check_function(x::JoinedReference) = x
 _retag_joined_column(x::String, alias::String) = JoinedReference(alias, x, false)
 _retag_joined_column(x::JoinedReference, ::String) = x
 _retag_joined_column(x::SQLTypeText, ::String) = x
-function _retag_joined_column(x::SQLTypeFunction, alias::String)
-  x.column = _retag_joined_column(x.column, alias)
-  return x
+# #508 phase 2 — the CTE twin's arms, construct for construct (see the note there for why the
+# function arm splits and why `kwargs` rides across by reference).
+function _retag_joined_column(x::FObject, alias::String)
+  return FObject(function_name=x.function_name, column=_retag_joined_column(x.column, alias),
+                 aggregate=x.aggregate, formatter=x.formatter, _as=x._as, kwargs=x.kwargs)
 end
-function _retag_joined_column(x::SQLTypeField, alias::String)
+function _retag_joined_column(x::WindowFunction, alias::String)
+  return WindowFunction(function_name=x.function_name,
+                        column=x.column === nothing ? nothing : _retag_joined_column(x.column, alias),
+                        over=x.over, aggregate=x.aggregate, formatter=x.formatter,
+                        _as=x._as, kwargs=x.kwargs)
+end
+function _retag_joined_column(x::SQLField, alias::String)
   x.field = _retag_joined_column(x.field, alias)
   return x
 end
 function _retag_joined_column(x::SQLTypeOper, alias::String)
-  x.column = _retag_joined_column(x.column, alias)
-  return x
+  return OperObject(operator=x.operator, values=x.values, column=_retag_joined_column(x.column, alias))
 end
 _retag_joined_column(x::Vector, alias::String) = Any[_retag_joined_column(v, alias) for v in x]
 function _retag_joined_column(x, ::String)

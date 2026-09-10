@@ -240,7 +240,7 @@ function get_alias(s::SQLTableAlias)
 end
 
 # Return a value to sql query, like value from DjangoSQLText
-mutable struct SQLText <: SQLTypeText
+struct SQLText <: SQLTypeText
   field::Any
   _as::OptionalString
   custom_as::OptionalString
@@ -299,9 +299,14 @@ SQLOrder(field::Union{SQLTypeField,String}; order::Union{Integer,Nothing}=nothin
 # The handle is NORMALIZED into the same `SQLField` the fluent `order_by(CTE(...))` builds, not
 # stored raw. That is what makes this cheap rather than invasive: all four readers of
 # `SQLOrder.field` — `get_order_query`, `_resolve_window_order`, the `_resolve_cte_string_paths!`
-# order loop and `deepcopy` — already require an `SQLField`, and two of them (`._as`, `memo_key`)
-# have no method for anything else. Normalizing here keeps their invariant intact, so the widening
-# costs zero consumer changes.
+# order loop and `deepcopy` — already require an `SQLField`. Normalizing here keeps their invariant
+# intact, so the widening costs zero consumer changes.
+#
+# This comment used to claim `._as` and `memo_key` "have no method for anything else". That was
+# false for `memo_key`: it was typed `::SQLTypeField` and `SQLTypeOrder <: SQLTypeField`, so it
+# accepted an `SQLOrder` and then read a `root` slot `SQLOrder` does not have — a raw `FieldError`
+# instead of the MethodError the claim assumed. #508 phase 2 retyped it to `::SQLField` (`memos.jl`),
+# which is what makes the sentence true.
 #
 # `desc = true` is REFUSED, not folded into `orientation`. `SQLOrder` carries the direction itself
 # and its `"ASC"` default is indistinguishable from an explicitly passed one, so folding would have
@@ -513,7 +518,7 @@ That is a internal function, please do not use it.
 - `column::Union{String, SQLTypeFunction}`: the column to be used with the operator.
 
 """
-@kwdef mutable struct OperObject <: SQLTypeOper
+@kwdef struct OperObject <: SQLTypeOper
   operator::String
   # `Base.UUID` appears on BOTH arms (#411): the vector arm so `uid__@in` can hold a list, and the
   # scalar arm so `filter("uid" => uuid)` can hold one value. Widening only the vector arm left plain
@@ -616,7 +621,7 @@ const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 # Carrier for an F reference and any arithmetic built on top of it. Users construct it through
 # `F(field_name)` (documented below) and the Base.:+/-/*// overloads further down; the struct
 # itself is internal.
-@kwdef mutable struct FExpression <: SQLTypeF
+@kwdef struct FExpression <: SQLTypeF
   # #481: `SQLTypeJoined` so a joined-copy reference can be the LEFT side of a comparison
   # (`Joined("d","driverid") == F("driverid")`). It renders through `_set_update_query`, the same
   # seam a `String` field_name uses.
@@ -881,7 +886,7 @@ function Base.:*(operand::Union{Integer,Float64}, f::FExpression)
   )
 end
 
-@kwdef mutable struct OuterRefObject <: SQLTypeF
+@kwdef struct OuterRefObject <: SQLTypeF
   field_name::String
 end
 
@@ -929,7 +934,7 @@ Base.deepcopy(x::OuterRefObject) = OuterRefObject(field_name=x.field_name)
 # exactly the hazard — `Sum(CTE(...))` would silently construct (it is refused, see functions.jl)
 # and a bare `filter(CTE("ev","sku"))` with no pair would parse as a standalone filter. Every
 # admission below is a named seam, on purpose.
-@kwdef mutable struct CTEReference <: SQLTypeCTE
+@kwdef struct CTEReference <: SQLTypeCTE
   name::String        # the `.with(...)` label this column belongs to
   path::String        # a field path INSIDE that CTE
   desc::Bool = false  # order_by only; refused everywhere else
@@ -1167,7 +1172,7 @@ end
 # SQLTypeFunction Objects (functions from sql)
 #
 
-@kwdef mutable struct FObject <: SQLTypeFunction
+@kwdef struct FObject <: SQLTypeFunction
   function_name::String
   # #444: `SQLTypeCTE` is admitted for the TRANSFORM path — `CTE("ev", "seen__@yyyy_mm__@lte")`
   # builds a `ToChar` over the CTE's column, and the retag puts the handle here. It does NOT open the
@@ -1222,7 +1227,7 @@ function Base.deepcopy(w::WindowSpec)
   )
 end
 
-@kwdef mutable struct WindowFunction <: SQLTypeFunction
+@kwdef struct WindowFunction <: SQLTypeFunction
   function_name::String
   column::WindowColumnPart = nothing
   over::WindowSpec

@@ -564,24 +564,29 @@ _sql(q; conn = _CR_SL) = inspect_query(q; connection = conn)[:sql_text]
       end
     end
 
-    @testset "the join guard terminates on a self-referential F expression" begin
+    @testset "the join guard terminates on a cyclic Q container" begin
       # A cycle in the expression graph makes the recursive sweep a StackOverflowError — which Julia
       # reports as "program state may be corrupted" — so it needs a depth cap. `cjoin_on` is the path
       # that matters: it never recursed before #444, so this exposure is new here.
       #
-      # #457 changed how the cycle has to be BUILT, not whether the cap is needed. The comparison
-      # overloads used to mutate their left operand, so `f = F("x"); g = (f == f)` returned an object
-      # containing itself and any user could write one by accident. They build a new expression now,
-      # so that route is gone (`test_f_expression_immutability.jl` owns it) — but `FExpression` is a
-      # mutable struct, so an internal `g.operand = g` is still one assignment away. Hand-build it,
-      # which is the only thing the cap defends against any more.
-      g = F("sku")
-      g.operation = "="
-      g.operand = g
-      @test g.operand === g          # the cycle really is a cycle, or this test proves nothing
+      # WHICH cycle can be built has changed twice, and the cap outlived both. #457 removed the
+      # ACCIDENTAL one: the comparison overloads used to mutate their left operand, so
+      # `f = F("x"); g = (f == f)` returned an object containing itself and any user could write one
+      # by mistake (`test_f_expression_immutability.jl` owns that route now). #508 phase 2 removed
+      # the DELIBERATE one this test used to hand-build — `FExpression` is a `struct`, so
+      # `g.operand = g` no longer compiles.
+      #
+      # What is left is the cap's live customer, and it is stronger evidence than the hand-built
+      # version ever was: `QObject` is a container, `push!` is documented public API
+      # (`docs/src/read/q_objects.md`), so a self-referential `Q` is one line of ordinary user code
+      # rather than an internal accident. `FObject.column` admits `SQLTypeQ`/`SQLTypeQor`, so one can
+      # also arrive nested inside a function.
+      cyc = Q("sku" => "x")
+      push!(cyc, cyc)
+      @test cyc.filters[end] === cyc   # the cycle really is a cycle, or this test proves nothing
       q = CR.Cj_child.objects
       q.with("ev" => _parent_cte())
-      @test_nowarn q.cjoin_on("Cj_parent", alias = "b2", on = [g])
+      @test_nowarn q.cjoin_on("Cj_parent", alias = "b2", on = [cyc])
     end
 
     @testset "Value() refuses a CTE handle" begin

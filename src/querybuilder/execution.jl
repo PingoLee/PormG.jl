@@ -1263,26 +1263,24 @@ end
 # the two families binding different bytes for the same query, which is the asymmetry #494 exists to
 # close.
 #
-# `depth` bounds the walk. #457 made an F-expression self-cycle unrepresentable through the
-# operators, but `FExpression` is still mutable, so a hand-built cycle is one assignment away — the
-# same reasoning that keeps `_guard_no_handle`'s cap (`ctes.jl`) alive.
+# #508 phase 2 removed this walk's `depth > 16` cap. It existed for one stated reason — `FExpression`
+# was mutable, so a hand-built cycle (`g.field_name = g`) was one assignment away, in either of the
+# two orderings the deleted comment enumerated. `FExpression` is a `struct` now and `field_name` can
+# only be set at construction, so a self-cycle is unrepresentable rather than merely unlikely. That
+# is the same reason #457 added no cap for the operator route it closed, applied one level up.
 #
-# Which cycle the cap catches is worth stating, because it is not all of them. Build the cycle
-# BEFORE the comparison (`g.field_name = g; q.filter(g == Date(…))`) and the renderer reaches it
-# first: `_set_update_query_left` recurses and raises `StackOverflowError` before this function is
-# called at all. Build it AFTER (`cmp = (g == Date(…)); g.field_name = g`) and the renderer stops at
-# the outer node — which carries an `operation` — while this walk still descends, and the cap is
-# what ends it. So the cap covers the ordering the renderer does not, rather than being redundant
-# with it or being the only guard.
-function _operand_column_type(field_name, instruc::SQLInstruction; depth::Int = 0)::Union{String,Nothing}
-  depth > 16 && return nothing
+# Deleting it is a correctness fix and not only cleanup: the cap returned `nothing`, and `nothing`
+# here means "not a date column" — so a legitimately 17-deep expression did not fail, it silently
+# selected the wrong literal representation for the bound operand. #494's whole point is that an `F`
+# comparison and an ordinary `filter(...)` pair bind the same bytes; the cap could break exactly that.
+function _operand_column_type(field_name, instruc::SQLInstruction)::Union{String,Nothing}
   field_name isa String && return _date_field_type(field_name, instruc)
   if field_name isa JoinedReference
     f = memo_field(instruc, memo_key(field_name))
     f === nothing && return nothing
     return f.type in ("DATE", "TIMESTAMPTZ", "TIMESTAMP") ? f.type : nothing
   end
-  field_name isa FExpression && return _operand_column_type(field_name.field_name, instruc; depth = depth + 1)
+  field_name isa FExpression && return _operand_column_type(field_name.field_name, instruc)
   return nothing
 end
 

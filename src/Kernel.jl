@@ -126,7 +126,23 @@ abstract type SQLTypeOper <: SQLType end
 abstract type SQLTypeText <: SQLType end # raw texgt to be used in the query
 abstract type SQLTypeArrays <: SQLType end # Arrays to orgnize the query informations
 abstract type SQLTypeField <: SQLType end # Field to be used in the query (values, filters, etc)
-abstract type SQLTypeOrder <: SQLTypeField end # Order to be used in the query
+# #533 — `<: SQLType`, NOT `<: SQLTypeField`. An ordering TERM carries a direction (and a NULL
+# placement); a field expression does not. While the two were related, every union in the query
+# builder that names `SQLTypeField` silently admitted an `SQLOrder` as well — around 26 of them,
+# including `WindowPartitionPart`, `WindowColumnPart`, `ColumnPart`, `FExpression.column`,
+# `SQLObjectQuery.values`, `SQLOrder.field` itself, and all 18 scalar-function signatures in
+# `functions.jl` (`Lower`, `Cast`, `Round`, `Trim`, …). None of them has a consumer for an ordering
+# term, so each one accepted it at construction and died at render with a raw `MethodError` outside
+# the #231 taxonomy. #529 reported one of those; there were ~25 more behind it.
+#
+# This is the rule the file already applies twice, finally applied here: `CTEReference` is
+# deliberately not `<: SQLTypeF` and `JoinedReference` not `<: SQLTypeCTE`, both so that "every
+# admission is a named seam" (`querybuilder/types.jl`). Ordering was the one place it was skipped.
+#
+# Nothing consumes an order term through `SQLTypeField`: `SQLObjectQuery.order`, `get_order_query`,
+# `_resolve_window_order`, `_retag_cte_string_window_order`, `_order_by!`, `WindowOrderPart`,
+# `deepcopy` and `Base.show` all dispatch on `SQLTypeOrder` or on the concrete `SQLOrder`.
+abstract type SQLTypeOrder <: SQLType end # Order to be used in the query
 abstract type SQLTypeCTE <: SQLType end # Common Table Expression (WITH clause)
 abstract type SQLTypeJoined <: SQLType end # a column of a `cjoin_on` joined copy (#481)
 

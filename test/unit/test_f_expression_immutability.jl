@@ -383,3 +383,95 @@ end
     @test occursin("\"Tb\".\"note\" = ", _fi_sql(q))
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #508 phase 2 — the SHAPE, not the seam.
+#
+# Phase 1 asserted that specific call sites stopped writing on caller-supplied nodes. Phase 2 makes
+# the write unrepresentable, so what is pinned here is the declaration itself plus the two things
+# that could regress silently underneath it: `deepcopy` depth (seven hand-written methods were
+# deleted, so the recursion now goes through Base) and `WindowSpec` sharing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#508 phase 2: node shape and its consequences" begin
+  QB = PormG.QueryBuilder
+
+  @testset "the seven expression nodes are immutable" begin
+    # Named one by one rather than looped over `subtypes`: a loop over an accidentally-narrowed set
+    # would pass vacuously, and these seven are exactly what the issue lists.
+    for T in (QB.SQLText, QB.OperObject, QB.FExpression, QB.OuterRefObject,
+              QB.CTEReference, QB.FObject, QB.WindowFunction)
+      @test !ismutabletype(T)
+    end
+
+    # The deliberate exceptions, asserted so a future "make everything immutable" sweep has to argue
+    # with a test rather than discover the reasons by breaking them. `SQLField` is the build product
+    # every walker legitimately writes into; `SQLOrder` is an ordering term `_invert_order!` rewrites
+    # for `last()`; `WindowSpec`/`QObject` are containers whose in-place assembly is documented API.
+    for T in (QB.SQLField, QB.SQLOrder, QB.WindowSpec, QB.QObject, QB.QorObject)
+      @test ismutabletype(T)
+    end
+  end
+
+  @testset "a nested expression chain still deep-copies, and still shares the model" begin
+    # The risk this pins: `Base.deepcopy(::T)` is NOT a `deepcopy_internal` hook, so deleting the
+    # seven methods sends the recursion through Base's generic walk instead — deeper than before.
+    # That is the #157 shape, and the thing that must survive it is model SHARING: a `Model_Type`
+    # reached through a query must come back identical, not cloned (`test_model_deepcopy.jl` owns
+    # the contract; this asserts it still holds through an expression chain).
+    q = FI.Fi_child.objects
+    q.values("id", "t" => Sum("id"), "x" => F("id") * 2)
+    q.filter(F("id") == F("parent"))
+
+    before = _fi_sql(q)
+    c = deepcopy(q)
+
+    @test c !== q
+    @test _fi_sql(c) == before          # the copy renders identically…
+    @test _fi_sql(q) == before          # …and copying did not disturb the original
+    @test c.object.model === q.object.model   # the model is SHARED, not cloned (#157)
+  end
+
+  @testset "a CTE-path build does not mutate the caller's WindowSpec" begin
+    # `_retag_cte_string(::WindowFunction)` used to rewrite `over.partition_by[i]` IN PLACE, and
+    # `_check_function(::WindowFunction)` shares `over` rather than copying it — so the write landed
+    # on the very spec the caller holds.
+    #
+    # Measured, and worth stating precisely because the end-to-end route does NOT show it: every read
+    # path deepcopies the handler before `build()`, and Julia's generic walk clones the `WindowSpec`
+    # along with it, so the caller's spec was protected by the CALL PATH even before phase 2. The
+    # end-to-end assertion below therefore passes on both sides; it pins the property, it does not
+    # detect the change.
+    #
+    # The direct call is what detects it. It is also the honest test of the fix: phase 2's claim is
+    # that the walker itself no longer writes, independent of who deepcopied what upstream.
+    cte = FI.Fi_parent.objects
+    cte.values("id", "sku")
+
+    q = FI.Fi_child.objects
+    q.with("ev" => cte, join_field = "parent" => "id")
+    spec = QB.WindowOver(partition_by = "ev__sku")
+    q.values("id", "r" => QB.Rank(over = spec))
+
+    sql = _fi_sql(q)
+    @test occursin("PARTITION BY", sql)
+    @test spec.partition_by == ["ev__sku"]
+    @test spec.partition_by[1] isa String
+
+    # Direct: hand the walker a node holding the caller's spec, with nothing deepcopied in between.
+    # Before phase 2 `caller_spec.partition_by[1]` came back a `CTEReference`.
+    cte2 = FI.Fi_parent.objects
+    cte2.values("id", "sku")
+    q2 = FI.Fi_child.objects
+    q2.with("ev" => cte2, join_field = "parent" => "id")
+
+    caller_spec = QB.WindowOver(partition_by = "ev__sku")
+    wf = QB.Rank(over = caller_spec)
+    out = QB._retag_cte_string(wf, q2.object, Set{String}())
+
+    @test out !== wf                                  # the walker CONSTRUCTS
+    @test out.over !== caller_spec                    # …with a fresh spec
+    @test caller_spec.partition_by == ["ev__sku"]     # …and leaves the caller's untouched
+    @test caller_spec.partition_by[1] isa String
+    @test out.over.partition_by[1] isa PormG.SQLTypeCTE  # the rewrite really happened, on the copy
+  end
+end

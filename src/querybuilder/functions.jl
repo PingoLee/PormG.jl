@@ -148,7 +148,16 @@ function _window_part_vector(value, part_name::String)::Vector{WindowPartitionPa
   parts = WindowPartitionPart[]
   for item in values
     item isa Symbol && (item = String(item))
-    item isa WindowPartitionPart || throw(QueryBuildError("WindowOver $part_name entries must be strings, SQL fields, SQL functions, or F expressions. Got $(typeof(item))."))
+    # #533 — the enumeration used to omit `CTE(...)` and `Joined(...)`, admitted since #444/#481, so
+    # the message named fewer spellings than the guard accepted. It also gains the ordering case: an
+    # `SQLOrder` used to satisfy this test through `SQLTypeOrder <: SQLTypeField` and then die at
+    # render with a raw `MethodError` (#529); it is refused here now, and the refusal says why.
+    item isa SQLTypeOrder && throw(QueryBuildError(
+      "WindowOver $part_name does not take an \e[4m\e[31mSQLOrder\e[0m: an ordering term carries a " *
+      "direction, which has no meaning in \e[4m\e[31mPARTITION BY\e[0m. Write the column itself — " *
+      "\e[4m\e[32m$part_name = \"column\"\e[0m, \e[4m\e[32mCTE(\"name\", \"path\")\e[0m, " *
+      "\e[4m\e[32mJoined(\"alias\", \"column\")\e[0m or an \e[4m\e[32mF(...)\e[0m expression (#533)."))
+    item isa WindowPartitionPart || throw(QueryBuildError("WindowOver $part_name entries must be strings, SQL fields, SQL functions, F expressions, CTE(\"name\", \"path\") or Joined(\"alias\", \"column\"). Got $(typeof(item))."))
     push!(parts, item)
   end
   return parts
@@ -160,7 +169,9 @@ function _window_order_vector(value)::Vector{WindowOrderPart}
   parts = WindowOrderPart[]
   for item in values
     item isa Symbol && (item = String(item))
-    item isa WindowOrderPart || throw(QueryBuildError("WindowOver order_by entries must be strings or SQLOrder objects. Got $(typeof(item))."))
+    # #533 — same omission as the sibling guard above: `CTE(...)` / `Joined(...)` have been admitted
+    # here since #444/#481 and the message never said so.
+    item isa WindowOrderPart || throw(QueryBuildError("WindowOver order_by entries must be strings, SQLOrder objects, CTE(\"name\", \"path\") or Joined(\"alias\", \"column\"). Got $(typeof(item))."))
     push!(parts, item)
   end
   return parts

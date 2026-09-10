@@ -240,14 +240,13 @@ function get_alias(s::SQLTableAlias)
 end
 
 # Return a value to sql query, like value from DjangoSQLText
-mutable struct SQLText <: SQLTypeText
+struct SQLText <: SQLTypeText
   field::Any
   _as::OptionalString
   custom_as::OptionalString
 end
 SQLText(field::Any; _as::OptionalString=nothing) = SQLText(field, _as, nothing)
 SQLText(field::Any, _as::OptionalString) = SQLText(field, _as, nothing)
-Base.deepcopy(x::SQLTypeText) = SQLText(x.field, x._as, x.custom_as)
 
 
 # Return a field to sql query
@@ -265,6 +264,26 @@ mutable struct SQLField <: SQLTypeField
 end
 SQLField(field::FieldPart; _as::OptionalString=nothing) = SQLField(field, _as, nothing, :base)
 SQLField(field::FieldPart, _as::OptionalString) = SQLField(field, _as, nothing, :base)
+# #508 phase 2 deleted seven hand-written `Base.deepcopy` methods — for `SQLText`, `FExpression`,
+# `OuterRefObject`, `CTEReference`, `JoinedReference`, `FObject` and `WindowFunction`. They existed
+# to satisfy the #112 discipline — *a copy must share no MUTABLE state with its original* — which an
+# immutable node satisfies for free; `JoinedReference` had been immutable since #481 and kept one
+# only for symmetry with the others. Do not re-add one: a node type that needs a copy method to be
+# safe is a node type that should not have been mutable.
+#
+# Four survive, and each for a reason that is NOT mutability:
+#   - this one — deliberately SHALLOW on `.field`, which `ctes.jl` documents as load-bearing;
+#   - `SQLTypeOrder` below — re-runs the #77 orientation whitelist through the inner constructor,
+#     which Base's generic `deepcopy` bypasses entirely (`test_sqlorder_orientation.jl` pins it);
+#   - `SQLTypeOper` — shares an `SQLObjectHandler` in `values` instead of cloning a whole subquery.
+#     Narrower than it reads, and review measured the boundary: `Base.deepcopy(::T)` is not a
+#     `deepcopy_internal` hook, so this specialisation applies to a TOP-LEVEL `deepcopy(::OperObject)`
+#     only. Reached nested — under an `FObject`, or under an `FExpression` — the generic walk runs
+#     instead and the handler IS cloned, where the deleted methods used to keep it shared. Cost, not
+#     correctness: `Base.deepcopy_internal(::Model_Type, …)` still returns the model itself, so the
+#     #157 sharing contract holds through the generic walk (pinned in `test_model_deepcopy.jl` and by
+#     the chain testset in `test_f_expression_immutability.jl`);
+#   - `WindowSpec` — still a mutable container.
 Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as, x.root)
 
 # `orientation` is interpolated into rendered SQL, so it is whitelisted here (#77) and stored
@@ -278,7 +297,12 @@ end
 
 # Return a order of field to sql query
 mutable struct SQLOrder <: SQLTypeOrder
-  field::Union{SQLTypeField,String}
+  # #533 — `SQLTypeField`, not `Union{SQLTypeField,String}`. The String member was admitted and never
+  # handled: `get_order_query` read `._as` off it and raised a raw `FieldError` naming an internal
+  # slot (#528). The inner constructor now routes every path through `_order_field`
+  # (`object_manager.jl`), which NORMALIZES a String into the `SQLField` all four readers require —
+  # so the spelling works instead of merely type-checking.
+  field::SQLTypeField
   order::Union{Integer,Nothing}
   orientation::String
   _as::OptionalString
@@ -287,9 +311,13 @@ mutable struct SQLOrder <: SQLTypeOrder
   nulls::Union{Symbol,Nothing}
   # Inner constructor: every construction path (keyword, positional, deepcopy) passes the
   # orientation whitelist (#77), so an injection-shaped direction never reaches the renderer.
-  SQLOrder(field, order, orientation, _as, nulls) = new(field, order, _normalize_order_orientation(orientation), _as, nulls)
+  SQLOrder(field, order, orientation, _as, nulls) = new(_order_field(field), order, _normalize_order_orientation(orientation), _as, nulls)
 end
-SQLOrder(field::Union{SQLTypeField,String}; order::Union{Integer,Nothing}=nothing, orientation::String="ASC", _as::OptionalString=nothing, nulls::Union{Symbol,Nothing}=nothing) = SQLOrder(field, order, orientation, _as, nulls)
+# `field` is untyped on purpose (#533): an unsupported value must reach `_order_field`'s typed
+# refusal, which names the supported spellings, rather than dying as a bare `MethodError` on this
+# signature. The `CTE`/`Joined` handles have their own more specific method below, so they still
+# take the `desc`-rejecting path.
+SQLOrder(field; order::Union{Integer,Nothing}=nothing, orientation::String="ASC", _as::OptionalString=nothing, nulls::Union{Symbol,Nothing}=nothing) = SQLOrder(field, order, orientation, _as, nulls)
 # #509 — a CTE (#444) or joined-copy (#481) column inside an `SQLOrder`. Until this, the keyword
 # constructor above was the whole surface and its `field` union excluded both, so
 # `SQLOrder(CTE("ev", "seen"))` was a `MethodError` — which is why an `SQLOrder` entry in a window's
@@ -299,9 +327,14 @@ SQLOrder(field::Union{SQLTypeField,String}; order::Union{Integer,Nothing}=nothin
 # The handle is NORMALIZED into the same `SQLField` the fluent `order_by(CTE(...))` builds, not
 # stored raw. That is what makes this cheap rather than invasive: all four readers of
 # `SQLOrder.field` — `get_order_query`, `_resolve_window_order`, the `_resolve_cte_string_paths!`
-# order loop and `deepcopy` — already require an `SQLField`, and two of them (`._as`, `memo_key`)
-# have no method for anything else. Normalizing here keeps their invariant intact, so the widening
-# costs zero consumer changes.
+# order loop and `deepcopy` — already require an `SQLField`. Normalizing here keeps their invariant
+# intact, so the widening costs zero consumer changes.
+#
+# This comment used to claim `._as` and `memo_key` "have no method for anything else". That was
+# false for `memo_key`: it was typed `::SQLTypeField` and `SQLTypeOrder <: SQLTypeField`, so it
+# accepted an `SQLOrder` and then read a `root` slot `SQLOrder` does not have — a raw `FieldError`
+# instead of the MethodError the claim assumed. #508 phase 2 retyped it to `::SQLField` (`memos.jl`),
+# which is what makes the sentence true.
 #
 # `desc = true` is REFUSED, not folded into `orientation`. `SQLOrder` carries the direction itself
 # and its `"ASC"` default is indistinguishable from an explicitly passed one, so folding would have
@@ -521,7 +554,7 @@ That is a internal function, please do not use it.
 - `column::Union{String, SQLTypeFunction}`: the column to be used with the operator.
 
 """
-@kwdef mutable struct OperObject <: SQLTypeOper
+@kwdef struct OperObject <: SQLTypeOper
   operator::String
   # `Base.UUID` appears on BOTH arms (#411): the vector arm so `uid__@in` can hold a list, and the
   # scalar arm so `filter("uid" => uuid)` can hold one value. Widening only the vector arm left plain
@@ -621,26 +654,63 @@ Interval(s::AbstractString) = Interval(_parse_time_string_to_compoundperiod(s))
 # Duration operands accepted by F-expression +/- date arithmetic (#25).
 const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 
+# ── The operand vocabulary, named ONCE (#533) ────────────────────────────────
+#
+# `_CompareOperand` (the comparison SIGNATURE) and `FExpression.operand` (the STORAGE slot) have to
+# admit the same types, and until now each spelled its own list. Keeping two lists in step is the
+# defect #494 was: the signature accepted `Date`/`DateTime` while the slot did not, so
+# `F("date") == Date(2020,1,1)` died in `convert` naming an internal union. `test_f_date_operands.jl`
+# has been asserting the two agree, by hand.
+#
+# They were spelled twice for a real reason, not carelessness: `_CompareOperand` names `FExpression`,
+# and `FExpression.operand` would name `_CompareOperand` — a cycle. The slot reached for the ABSTRACT
+# `SQLTypeF` to break it, and that is what silently admitted `OuterRefObject` (the other `SQLTypeF`
+# subtype), which no `_set_update_query_operand` arm handles: it fell to the terminal `else` and was
+# bound RAW as a parameter. Measured on origin/main: `PARAMS: Any[OuterRefObject("id")]`.
+#
+# The cycle breaks by naming the NON-circular halves here and composing on both sides. A struct may
+# name itself in its own field types, so `FExpression` appears directly instead of through `SQLTypeF`,
+# and the admission is a named seam again — the rule `CTEReference` and `JoinedReference` already follow.
+#
+# What the literal half actually holds: the numeric and string scalars the renderer has arms for,
+# plus the three temporal types. `ZonedDateTime` joined it in #533 (`Models.format_timezone_sql` has
+# the method, and `filter("ts" => zdt)` already binds through it) together with its render arm.
+#
+# It is NOT "every type the `format_*_sql` family can bind" — an earlier draft of this comment said
+# that, and review measured it false: `Base.UUID` and `Dates.Time` both have working formatters, the
+# pair spelling binds both, and neither is a member, so `F("uid") == uuid` still falls through to
+# `Base.==` and yields a bare `Bool`. `Float64` is worse — it IS a member and binds the raw Julia
+# value where the pair path binds the formatted string. Both are tracked in **#536**; closing that is
+# what would let this comment state a rule instead of a list.
+#
+# `Vector{UInt8}` and JSON stay out deliberately: their scalar value is itself a collection, which is
+# the trap `_format_filter_value` singles out, and neither has comparison semantics.
+#
+# Adding a member here is only half a change. The other half is a render arm in
+# `_format_date_operand` / `_set_update_query_operand` (`execution.jl`) — a member that binds raw is
+# not "supported", it is #494 again on a new type, and #536's `Float64` row is what that looks like
+# when nobody notices for a release.
+const _CompareLiteral = Union{Integer,Float64,String,Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime}
+const _ColumnHandle   = Union{SQLTypeCTE,SQLTypeJoined}
+
 # Carrier for an F reference and any arithmetic built on top of it. Users construct it through
 # `F(field_name)` (documented below) and the Base.:+/-/*// overloads further down; the struct
 # itself is internal.
-@kwdef mutable struct FExpression <: SQLTypeF
+@kwdef struct FExpression <: SQLTypeF
   # #481: `SQLTypeJoined` so a joined-copy reference can be the LEFT side of a comparison
   # (`Joined("d","driverid") == F("driverid")`). It renders through `_set_update_query`, the same
   # seam a `String` field_name uses.
-  field_name::Union{String,Integer,SQLTypeF,SQLTypeFunction,SQLTypeJoined}
+  # #533: `FExpression`, not the abstract `SQLTypeF` — see the operand-vocabulary note above. The
+  # abstract spelling also admitted `OuterRefObject`, which no renderer arm handles.
+  field_name::Union{String,Integer,FExpression,SQLTypeFunction,SQLTypeJoined}
   operation::OptionalString = nothing  # +, -, *, /, etc.
-  # #444/#481: `SQLTypeCTE`/`SQLTypeJoined` so `F("note") == CTE("ev","code")` builds a comparison instead of
-  # falling through to `Base.==` and silently yielding a Bool.
-  # #494: `Dates.Date`/`Dates.DateTime` — the COMPARISON operands. All twelve comparison overloads
-  # (six here, six on `JoinedReference`) accepted both at dispatch through `_CompareOperand` while
-  # this field did not admit them, so `F("date") == Date(2020, 1, 1)` died right here with a bare
-  # `MethodError` from `convert`, naming this union and not the comparison the caller wrote. The
-  # `Period`/`CompoundPeriod`/`Interval` members below are the DURATION operands #25 added for date
-  # ARITHMETIC; the split between the two was the whole defect. Exactly these two types, not
-  # `Dates.TimeType`: widening further would admit `ZonedDateTime`/`Time` that the signature does
-  # not, which is the same disagreement pointing the other way.
-  operand::Union{String,Integer,Float64,SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,Dates.Date,Dates.DateTime,Dates.Period,Dates.CompoundPeriod,Interval,Nothing} = nothing
+  # Composed from the named halves above, so this slot and the `_CompareOperand` signature cannot
+  # drift apart: widening one widens both, by construction rather than by a test that checks.
+  #
+  # `_DurationOperand` is the other half and is NOT part of `_CompareOperand`: those are the operands
+  # #25 added for date ARITHMETIC (`F("seen") + Day(1)`), not for comparison. Conflating the two was
+  # the whole of #494. `SQLTypeFunction` likewise — `F("x") * Sum("y")` is arithmetic.
+  operand::Union{_CompareLiteral,_ColumnHandle,_DurationOperand,SQLTypeFunction,FExpression,Nothing} = nothing
   function_name::String = "F"
   column::Union{String,SQLTypeField,Vector{String}} = ""
   aggregate::Bool = false
@@ -694,24 +764,6 @@ function F(field_name::String)
     column=field_name
   )
 end
-function Base.deepcopy(f::FExpression)
-  try
-    return FExpression(
-      field_name=f.field_name,
-      operation=f.operation,
-      operand=deepcopy(f.operand),
-      function_name=f.function_name,
-      column=deepcopy(f.column),
-      aggregate=f.aggregate,
-      _as=f._as,
-      kwargs=deepcopy(f.kwargs)
-    )
-  catch e
-    @error "Error in deepcopy for FExpression: $e" exception = (e, catch_backtrace())
-    rethrow(e)
-  end
-end
-
 # Arithmetic operations for F expressions
 # Aggregate propagation helper: result is aggregate if any operand is aggregate
 _is_agg(f::FExpression) = f.aggregate
@@ -830,11 +882,14 @@ Base.:+(operand::_DurationOperand, f::FExpression) = f + operand
 # so the signature and the slot agree — `test_f_date_operands.jl` asserts every member of this union
 # is storable, so the two cannot drift apart again silently.
 #
-# The union is still the dispatch contract for a `CTE(...)` / `Joined(...)` right-hand side: keep
-# additions to it and to `FExpression.operand` in step, and give any new member a render arm in
-# `_set_update_query_operand` (`execution.jl`) — a member that binds RAW is not "supported", it is
-# #494 again on a different type.
-const _CompareOperand = Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined}
+# The union is still the dispatch contract for a `CTE(...)` / `Joined(...)` right-hand side. #533
+# made "keep additions to it and to `FExpression.operand` in step" structural rather than a rule to
+# remember: both are now COMPOSED from `_CompareLiteral` / `_ColumnHandle` (declared above the
+# struct), so widening one widens the other. What still has to be done by hand is the CONSUMER half —
+# a new member needs a render arm in `_format_date_operand` / `_set_update_query_operand`
+# (`execution.jl`), or it binds RAW, and a member that binds raw is not "supported", it is #494 again
+# on a different type. `test_node_admission.jl` is what fails when that half is forgotten.
+const _CompareOperand = Union{_CompareLiteral,_ColumnHandle,FExpression}
 
 function _compare(f::FExpression, operation::String, operand)
   if f.operation === nothing
@@ -889,7 +944,7 @@ function Base.:*(operand::Union{Integer,Float64}, f::FExpression)
   )
 end
 
-@kwdef mutable struct OuterRefObject <: SQLTypeF
+@kwdef struct OuterRefObject <: SQLTypeF
   field_name::String
 end
 
@@ -929,7 +984,6 @@ function OuterRef(field_name::AbstractString)
   isempty(normalized) && throw(QueryBuildError("OuterRef requires a non-empty field name"))
   return OuterRefObject(field_name=normalized)
 end
-Base.deepcopy(x::OuterRefObject) = OuterRefObject(field_name=x.field_name)
 
 # #444 — a CTE column reference. `SQLTypeCTE` (Kernel.jl) was declared with zero subtypes and zero
 # uses; this is what it was reserved for. Deliberately NOT `<: SQLTypeF`: that would auto-admit the
@@ -937,7 +991,7 @@ Base.deepcopy(x::OuterRefObject) = OuterRefObject(field_name=x.field_name)
 # exactly the hazard — `Sum(CTE(...))` would silently construct (it is refused, see functions.jl)
 # and a bare `filter(CTE("ev","sku"))` with no pair would parse as a standalone filter. Every
 # admission below is a named seam, on purpose.
-@kwdef mutable struct CTEReference <: SQLTypeCTE
+@kwdef struct CTEReference <: SQLTypeCTE
   name::String        # the `.with(...)` label this column belongs to
   path::String        # a field path INSIDE that CTE
   desc::Bool = false  # order_by only; refused everywhere else
@@ -1011,7 +1065,6 @@ function CTE(name::AbstractString, path::AbstractString; desc::Bool=false)
   # message on the call that is not the one at fault.
   return CTEReference(name=normalized_name, path=normalized_path, desc=desc)
 end
-Base.deepcopy(x::CTEReference) = CTEReference(name=x.name, path=x.path, desc=x.desc)
 
 # The output/cache spelling of a CTE reference — `name__path`. It is byte-identical to what the
 # pre-#444 string form produced, which is what lets every `_as`-keyed consumer downstream
@@ -1092,7 +1145,6 @@ function Joined(alias::AbstractString, path::AbstractString; desc::Bool=false)
   # declared one — so it reports as an unknown alias, naming the ones that exist.
   return JoinedReference(normalized_alias, normalized_path, desc)
 end
-Base.deepcopy(x::JoinedReference) = JoinedReference(x.alias, x.path, x.desc)
 Base.show(io::IO, x::JoinedReference) = print(io, "Joined(\"", x.alias, "\", \"", x.path, "\")")
 # `Base.:(==)` on this type builds a PREDICATE (see the comparison methods below), so the generic
 # `isequal` fallback — which calls `==` and expects a Bool — would throw a TypeError on any value
@@ -1175,7 +1227,7 @@ end
 # SQLTypeFunction Objects (functions from sql)
 #
 
-@kwdef mutable struct FObject <: SQLTypeFunction
+@kwdef struct FObject <: SQLTypeFunction
   function_name::String
   # #444: `SQLTypeCTE` is admitted for the TRANSFORM path — `CTE("ev", "seen__@yyyy_mm__@lte")`
   # builds a `ToChar` over the CTE's column, and the retag puts the handle here. It does NOT open the
@@ -1187,17 +1239,6 @@ end
   _as::OptionalString = nothing
   kwargs::Dict{String,Any} = Dict{String,Any}()
 end
-function Base.deepcopy(f::FObject)
-  return FObject(
-    function_name=f.function_name,
-    column=deepcopy(f.column),
-    aggregate=f.aggregate,
-    formatter=f.formatter,
-    _as=f._as,
-    kwargs=deepcopy(f.kwargs)
-  )
-end
-
 """
     WindowSpec <: SQLType
 
@@ -1230,7 +1271,7 @@ function Base.deepcopy(w::WindowSpec)
   )
 end
 
-@kwdef mutable struct WindowFunction <: SQLTypeFunction
+@kwdef struct WindowFunction <: SQLTypeFunction
   function_name::String
   column::WindowColumnPart = nothing
   over::WindowSpec
@@ -1239,18 +1280,6 @@ end
   _as::OptionalString = nothing
   kwargs::Dict{String,Any} = Dict{String,Any}()
 end
-function Base.deepcopy(f::WindowFunction)
-  return WindowFunction(
-    function_name=f.function_name,
-    column=deepcopy(f.column),
-    over=deepcopy(f.over),
-    aggregate=f.aggregate,
-    formatter=f.formatter,
-    _as=f._as,
-    kwargs=deepcopy(f.kwargs)
-  )
-end
-
 _is_agg(::WindowFunction) = false
 _is_window_expr(::WindowFunction) = true
 _is_window_expr(f::FExpression) = _is_window_expr(f.field_name) || _is_window_expr(f.operand)

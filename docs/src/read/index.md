@@ -264,6 +264,75 @@ nationalities = M.Driver.objects.values("nationality").distinct().list()
 
 ---
 
+## At the REPL
+
+Models, queries and rows print as readable summaries, so you can build a query one step at a time and look at it as you go.
+
+Typing a model shows its columns as the database holds them — the SQL type, the relations, and the schema flags:
+
+```julia-repl
+julia> M.Driver
+PormG model · driver · db "db_sl"
+  driverid     IDField       BIGINT  pk  unique  index
+  driverref    CharField     VARCHAR(250)
+  number       IntegerField  INTEGER  null
+  code         CharField     VARCHAR(250)
+  forename     CharField     VARCHAR(250)
+  surname      CharField     VARCHAR(250)
+  dob          DateField     DATE
+  nationality  CharField     VARCHAR(250)
+  url          CharField     VARCHAR(250)
+  reverse: driver_standings, lap_times, pit_stops, qualifying, result, sprint_results
+  query: driver.objects.filter(…)
+```
+
+The `reverse:` line lists the accessors other models installed on this one through their `ForeignKey`s — those are the names you traverse backwards with, as described in [Values and Joins](values_and_joins.md).
+
+A query handler shows the clauses you have set so far:
+
+```julia-repl
+julia> q = M.Result.objects.filter("driverid__surname" => "Senna", "positionorder__@lte" => 3).
+           values("year" => "raceid__year", "race" => "raceid__name", "pts" => "points").
+           order_by("-points").limit(20)
+PormG query · result
+  filter    driverid__surname => "Senna", positionorder <= 3
+  values    year, race, pts
+  order_by  -points
+  page      limit 20
+  not executed — .list() · .count() · DataFrame(q) · SQL: show_query(q)
+```
+
+The `values` line names the **output columns** — the aliases you gave — not the field paths behind them, so it reads as the columns the result will actually carry.
+
+!!! note "Displaying a query never touches the database"
+    Unlike Django, where `repr(queryset)` executes the query and prints the first rows, printing a PormG query builds nothing and connects to nothing. The last line names the calls that do: `.list()` to fetch rows, `.count()` for a count, `DataFrame(q)` for a table, and [`show_query`](#Query-Inspection) for the SQL. This keeps display free of hidden side effects and consistent with the [async-first](../async.md) contract — a query only reaches the database when you say so.
+
+Rows print as themselves, with the primary key first:
+
+```julia-repl
+julia> row = M.Driver.objects.filter("surname" => "Senna").values("driverid", "forename", "surname", "nationality").first()
+PormG row · driver · 4 columns
+  driverid     102
+  forename     "Ayrton"
+  nationality  "Brazilian"
+  surname      "Senna"
+```
+
+And `list()` uses standard Julia vector display, one row per line — so a long result set elides in the middle the way any Julia vector does:
+
+```julia-repl
+julia> M.Driver.objects.filter("surname" => "Fittipaldi").values("driverid", "forename", "surname").list()
+4-element Vector{PormGRow}:
+ Row(driver: driverid=104, forename="Christian", surname="Fittipaldi")
+ Row(driver: driverid=224, forename="Emerson", surname="Fittipaldi")
+ Row(driver: driverid=290, forename="Wilson", surname="Fittipaldi")
+ Row(driver: driverid=850, forename="Pietro", surname="Fittipaldi")
+```
+
+For a tabular view of a result set, pipe to `DataFrame` instead — see [Choosing an Output Format](#Choosing-an-Output-Format) above.
+
+---
+
 ## Query Inspection
 
 You can inspect the generated SQL without executing the query:

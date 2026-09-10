@@ -555,11 +555,29 @@ end
 function _retag_cte_string_window_order(x::SQLTypeOrder, q::SQLObject, rewrote::Set{String})
   # #533 removed the `x.field isa String` branch that stood here. `SQLOrder.field` is `SQLTypeField`
   # now, so a String is normalized into an `SQLField` by `_order_field` at CONSTRUCTION and reaches
-  # this walker as one — `SQLOrder("ev__sku")` takes the branch below instead, where
-  # `_bind_cte_string!` resolves the same CTE path and sets the same `root = :cte`. The deleted
-  # branch also pushed the output spelling onto the caller's `rewrote`; `_bind_cte_string!` keeps its
-  # OWN set for that tagging, so nothing downstream lost a name. Held byte-identical by the
-  # spelling-equivalence table in `test_cte_reference.jl` and by the cross-backend differential.
+  # this walker as one: `SQLOrder("ev__sku")` takes the branch below, where `_bind_cte_string!`
+  # resolves the same CTE path.
+  #
+  # ONE BEHAVIOUR CHANGED WITH IT, and it is not cosmetic — found by review, and recorded here
+  # because the first draft of this comment claimed the opposite. The deleted branch also pushed the
+  # output spelling onto the CALLER's `rewrote` set, which is what tagged the enclosing projection
+  # `root = :cte`; `_bind_cte_string!` keeps its own set and never reaches that one. So when a
+  # projection is ALIASED with the same string the window orders by —
+  # `values("ev__seen" => Rank(over = WindowOver(order_by = [SQLOrder("ev__seen")])))` — that
+  # projection's memo root moves from `:cte` to `:base`, and a later `filter("ev__seen" => …)`
+  # resolves the CTE COLUMN instead of reusing the projection. Measured:
+  #
+  #     before:  WHERE RANK() OVER (ORDER BY "R1_1"."seen" ASC) = ?
+  #     after:   WHERE "R1_1"."seen" = ?
+  #
+  # The new rendering is the correct one — a window function is not legal in `WHERE` on either
+  # backend — and it makes this spelling agree with `SQLOrder(CTE("ev","seen"))`, which has always
+  # rendered the column. The BARE-STRING entry (`order_by = ["ev__seen"]`) still reuses the
+  # projection, so the three spellings are two-to-one rather than unanimous; that inconsistency
+  # predates #533 and is deliberately not addressed here.
+  #
+  # Pinned by "a window SQLOrder over a CTE path resolves the column, not the projection" in
+  # `test_cte_reference.jl`.
   if x.field isa SQLField
     # `_bind_cte_string!` is the same per-field entry the top-level `q.order` loop uses, so the
     # window and the fluent `order_by` agree on what a CTE-rooted path means.

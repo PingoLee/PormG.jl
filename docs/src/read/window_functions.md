@@ -303,9 +303,15 @@ prefix and adds one thing the string form has no room for — an explicit NULL p
 
 | Expression | SQL |
 | :--- | :--- |
+| `order_by=[SQLOrder("points")]` | `ORDER BY "Tb"."points" ASC` |
+| `order_by=[SQLOrder("points"; orientation="DESC")]` | `ORDER BY "Tb"."points" DESC` |
+| `order_by=[SQLOrder("points"; nulls=:first)]` | `ORDER BY "Tb"."points" ASC NULLS FIRST` |
 | `order_by=[SQLOrder(SQLField("points", "points"))]` | `ORDER BY "Tb"."points" ASC` |
-| `order_by=[SQLOrder(SQLField("points", "points"); orientation="DESC")]` | `ORDER BY "Tb"."points" DESC` |
-| `order_by=[SQLOrder(SQLField("points", "points"); nulls=:first)]` | `ORDER BY "Tb"."points" ASC NULLS FIRST` |
+
+A plain column name is the shortest spelling and is normalized to the `SQLField` form above, so the
+two rows render identically. The direction goes in `orientation`, never in the string: `SQLOrder("-points")`
+is refused with a `QueryBuildError` rather than read as a column named `-points` — the `-` prefix
+belongs to the fluent `order_by("-points")` spelling, and an `SQLOrder` already has a slot for it.
 
 Leave `nulls` unset and the window emits no `NULLS` clause at all, letting the backend apply its own
 default — that is the rendering every window has always produced, and it is unchanged.

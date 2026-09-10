@@ -73,9 +73,31 @@ Three consequences a consuming app can see:
 so a value the constructor accepts is a value the renderer handles. `SQLOrder("-surname")` is refused
 rather than resolving a column literally named `-surname`; the direction belongs in `orientation`.
 
-`ORDER BY` itself is untouched. `SQLTypeOrder` is still a member of `WindowOrderPart`, and
-`order_by(SQLOrder(...))` — including the `CTE` and `Joined` handle spellings #509 added — works
-exactly as before, byte for byte.
+`ORDER BY` itself is untouched: `SQLTypeOrder` is still a member of `WindowOrderPart`, and
+`order_by(SQLOrder(...))` — including the `CTE` and `Joined` handle spellings #509 added — behaves as
+before.
+
+**One rendering did move**, in a shape that combines three things: a CTE, a projection *aliased* with
+a CTE path, and a window that orders by the same path as a `SQLOrder(String)`. That projection's memo
+namespace was `:cte` and is now `:base`, so a later `filter` on the alias resolves the CTE column
+instead of reusing the projection:
+
+```julia
+q.with("ev" => cte, join_field = "parent" => "id")
+q.values("note", "ev__seen" => Rank(over = WindowOver(order_by = [SQLOrder("ev__seen")])))
+q.filter("ev__seen" => "2020-01-01")
+```
+
+```sql
+-- before
+WHERE RANK() OVER (ORDER BY "R1_1"."seen" ASC) = ?
+-- after
+WHERE "R1_1"."seen" = ?
+```
+
+No app should need an edit: the previous SQL put a window function in `WHERE`, which neither
+PostgreSQL nor SQLite accepts, so that query could not have been running successfully. The new
+rendering matches what `SQLOrder(CTE("ev","seen"))` has always produced.
 
 ### How to find the calls to migrate
 

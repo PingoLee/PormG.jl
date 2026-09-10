@@ -275,7 +275,14 @@ SQLField(field::FieldPart, _as::OptionalString) = SQLField(field, _as, nothing, 
 #   - this one — deliberately SHALLOW on `.field`, which `ctes.jl` documents as load-bearing;
 #   - `SQLTypeOrder` below — re-runs the #77 orientation whitelist through the inner constructor,
 #     which Base's generic `deepcopy` bypasses entirely (`test_sqlorder_orientation.jl` pins it);
-#   - `SQLTypeOper` — shares an `SQLObjectHandler` in `values` instead of cloning a whole subquery;
+#   - `SQLTypeOper` — shares an `SQLObjectHandler` in `values` instead of cloning a whole subquery.
+#     Narrower than it reads, and review measured the boundary: `Base.deepcopy(::T)` is not a
+#     `deepcopy_internal` hook, so this specialisation applies to a TOP-LEVEL `deepcopy(::OperObject)`
+#     only. Reached nested — under an `FObject`, or under an `FExpression` — the generic walk runs
+#     instead and the handler IS cloned, where the deleted methods used to keep it shared. Cost, not
+#     correctness: `Base.deepcopy_internal(::Model_Type, …)` still returns the model itself, so the
+#     #157 sharing contract holds through the generic walk (pinned in `test_model_deepcopy.jl` and by
+#     the chain testset in `test_f_expression_immutability.jl`);
 #   - `WindowSpec` — still a mutable container.
 Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as, x.root)
 
@@ -657,12 +664,24 @@ const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 # name itself in its own field types, so `FExpression` appears directly instead of through `SQLTypeF`,
 # and the admission is a named seam again — the rule `CTEReference` and `JoinedReference` already follow.
 #
-# The stated membership rule for the literal half: **every type the `format_*_sql` family can bind.**
-# That admits `ZonedDateTime` (`Models.format_timezone_sql` has the method, and `filter("ts" => zdt)`
-# already binds through it) and excludes `Vector{UInt8}`/JSON, whose scalar value is itself a
-# collection and which have no comparison semantics. Adding a member here is only half the change:
-# it needs a render arm in `_format_date_operand` / `_set_update_query_operand` (`execution.jl`) or it
-# binds raw, which is #494 again on a new type.
+# What the literal half actually holds: the numeric and string scalars the renderer has arms for,
+# plus the three temporal types. `ZonedDateTime` joined it in #533 (`Models.format_timezone_sql` has
+# the method, and `filter("ts" => zdt)` already binds through it) together with its render arm.
+#
+# It is NOT "every type the `format_*_sql` family can bind" — an earlier draft of this comment said
+# that, and review measured it false: `Base.UUID` and `Dates.Time` both have working formatters, the
+# pair spelling binds both, and neither is a member, so `F("uid") == uuid` still falls through to
+# `Base.==` and yields a bare `Bool`. `Float64` is worse — it IS a member and binds the raw Julia
+# value where the pair path binds the formatted string. Both are tracked in **#536**; closing that is
+# what would let this comment state a rule instead of a list.
+#
+# `Vector{UInt8}` and JSON stay out deliberately: their scalar value is itself a collection, which is
+# the trap `_format_filter_value` singles out, and neither has comparison semantics.
+#
+# Adding a member here is only half a change. The other half is a render arm in
+# `_format_date_operand` / `_set_update_query_operand` (`execution.jl`) — a member that binds raw is
+# not "supported", it is #494 again on a new type, and #536's `Float64` row is what that looks like
+# when nobody notices for a release.
 const _CompareLiteral = Union{Integer,Float64,String,Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime}
 const _ColumnHandle   = Union{SQLTypeCTE,SQLTypeJoined}
 

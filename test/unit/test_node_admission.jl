@@ -148,16 +148,30 @@ const SLOTS = Tuple{String,Any,Function}[
   ("WindowFunction.column", QBA.WindowColumnPart,
    v -> (q = _with_cte(AD.Adm_child.objects); q.values("id", "p" => Lag(v, over = WindowOver(order_by = "id"))); _adm_render(q))),
 
+  # Each of these RENDERS, not merely constructs — the rule stated in the header. Review caught three
+  # of them stopping at construction, which would have missed #529 (a slot that accepts a value and
+  # dies at render is the whole defect class).
   ("SQLOrder.field", fieldtype(QBA.SQLOrder, :field),
-   v -> SQLOrder(v)),
+   v -> (q = _with_cte(AD.Adm_child.objects); q.values("id", "note"); q.order_by(SQLOrder(v)); _adm_render(q))),
+
+  ("SQLField.field", fieldtype(QBA.SQLField, :field),
+   v -> (q = _with_cte(AD.Adm_child.objects); q.values("id", "x" => SQLField(v, "x")); _adm_render(q))),
 
   ("FExpression.operand", fieldtype(QBA.FExpression, :operand),
    v -> (q = _with_cte(AD.Adm_child.objects); q.values("id"); q.filter(F("note") == v); _adm_render(q))),
 
   ("FExpression.column", fieldtype(QBA.FExpression, :column),
-   v -> QBA.FExpression(field_name = "note", column = v)),
+   v -> (q = _with_cte(AD.Adm_child.objects); q.values("id");
+         q.filter(QBA.FExpression(field_name = "note", operation = "=", operand = "x", column = v));
+         _adm_render(q))),
 
-  ("OperObject.column", QBA.ColumnPart,
+  # CONSTRUCTION ONLY, and the one deliberate exception to the render rule above. `OperObject.column`
+  # has no user-facing entry point that takes an arbitrary `ColumnPart`: `OP(...)` accepts only a
+  # `String` or an `SQLTypeFunction`, and every other `OperObject` is built by `_check_filter` from a
+  # parsed pair. Handing `filter` a hand-built `OperObject` is not a spelling anyone writes, so
+  # probing it that way would report the probe's own unrealism as four defects. What this slot can
+  # still catch is a CONSTRUCTOR that accepts what the struct cannot hold.
+  ("OperObject.column (construction only — no public entry)", QBA.ColumnPart,
    v -> QBA.OperObject(operator = "=", values = "x", column = v)),
 
   ("Lower(x) — the functions.jl family",
@@ -222,7 +236,19 @@ const KNOWN_GAPS = Dict{Type,Vector{String}}(
 
   # ── guard the guard ────────────────────────────────────────────────────────
   # Without these, a narrowed union or an empty walk makes the loop above vacuously green.
-  @test length(SLOTS) >= 9
+  #
+  # The empty-leaves check is the one review found missing: `_node_leaves` returns ∅ for a slot whose
+  # declared type is a `UnionAll` (`FObject.column` and `OperObject.values` both are), so adding such
+  # a slot would contribute ZERO probes and still read as covered. A slot that probes nothing is a
+  # slot that is not tested, and it must say so rather than pass.
+  empty_slots = [label for (label, declared, _) in SLOTS if isempty(_node_leaves(declared))]
+  isempty(empty_slots) || @error """
+  A slot in SLOTS expands to no node types, so it probes nothing and passes vacuously.
+  `_node_leaves` returns ∅ for a `UnionAll` declared type — unwrap it, or drop the slot.
+  """ empty_slots
+  @test isempty(empty_slots)
+
+  @test length(SLOTS) >= 10
   @test haskey(SPECIMENS, QBA.SQLOrder)
   @test QBA.SQLField in _node_leaves(QBA.WindowPartitionPart)    # the walk descends ABSTRACT members
   @test QBA.CTEReference in _node_leaves(QBA.WindowPartitionPart)

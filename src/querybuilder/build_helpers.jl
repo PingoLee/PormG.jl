@@ -175,9 +175,13 @@ function _retag_cte_column(x::FObject, name::String)
   return FObject(function_name=x.function_name, column=_retag_cte_column(x.column, name),
                  aggregate=x.aggregate, formatter=x.formatter, _as=x._as, kwargs=x.kwargs)
 end
+# No `nothing` guard on `column`, deliberately: the mutating form called `_retag_cte_column` on it
+# unconditionally, so a column-less window function reaching this walker hit the catch-all and threw
+# "Internal: … Please report this (#444)". Adding a guard here would convert that loud internal error
+# into a silent pass — a behaviour change smuggled into a refactor that owes byte-identical output.
+# (The `_retag_cte_string` twin in `ctes.jl` needs none: its catch-all RETURNS `x` for `nothing`.)
 function _retag_cte_column(x::WindowFunction, name::String)
-  return WindowFunction(function_name=x.function_name,
-                        column=x.column === nothing ? nothing : _retag_cte_column(x.column, name),
+  return WindowFunction(function_name=x.function_name, column=_retag_cte_column(x.column, name),
                         over=x.over, aggregate=x.aggregate, formatter=x.formatter,
                         _as=x._as, kwargs=x.kwargs)
 end
@@ -233,8 +237,7 @@ function _retag_joined_column(x::FObject, alias::String)
                  aggregate=x.aggregate, formatter=x.formatter, _as=x._as, kwargs=x.kwargs)
 end
 function _retag_joined_column(x::WindowFunction, alias::String)
-  return WindowFunction(function_name=x.function_name,
-                        column=x.column === nothing ? nothing : _retag_joined_column(x.column, alias),
+  return WindowFunction(function_name=x.function_name, column=_retag_joined_column(x.column, alias),
                         over=x.over, aggregate=x.aggregate, formatter=x.formatter,
                         _as=x._as, kwargs=x.kwargs)
 end

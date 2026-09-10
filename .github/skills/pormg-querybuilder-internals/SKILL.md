@@ -157,9 +157,11 @@ The rules now:
   `SQLOrder` likewise (`_invert_order!` rewrites it for `last()`).
 - **Containers are the other exception, and they are named.** `QObject` / `QorObject` support `push!`
   as documented API (`docs/src/read/q_objects.md`), and `WindowSpec` documents in-place assembly.
-  They are containers, not nodes; do not extend that affordance to the node types. A `Q` is also the
-  only cycle a user can still build (`push!(q, q)`), which is why `_guard_no_handle`'s depth cap
-  (`ctes.jl`) stays.
+  They are containers, not nodes; do not extend that affordance to the node types. Containers are
+  also where the remaining user-buildable cycles live, which is why `_guard_no_handle`'s depth cap
+  (`ctes.jl`) stays: `push!(q, q)` on a `Q` is one, and a `WindowSpec` is another —
+  `spec = WindowOver(partition_by = "c"); push!(spec.partition_by, Rank(over = spec))` type-checks,
+  because `WindowFunction <: SQLTypeFunction <: WindowPartitionPart`.
 - **A hand-written `deepcopy` is a symptom.** The seven that existed only to satisfy the #112 copy
   discipline (*a copy must share no MUTABLE state*) are deleted. Four remain, none of them about
   mutability — `SQLTypeField` (deliberately shallow on `.field`), `SQLTypeOrder` (re-runs the #77

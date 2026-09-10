@@ -1497,4 +1497,37 @@ end
     # And the same handle renders the same way a second time, from the untouched node.
     @test _sql(q) == _sql(deepcopy(q))
   end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # #533 — the one rendering this change moved, pinned deliberately.
+  #
+  # `SQLOrder.field` is normalized at construction now, so a String-spelled window ORDER BY takes
+  # `_bind_cte_string!` instead of the deleted String branch. That branch also pushed onto the
+  # CALLER's `rewrote` set, which tagged the enclosing projection `root = :cte` — so a projection
+  # ALIASED with the same string was reused by a later filter. It no longer is.
+  #
+  # Before: `WHERE RANK() OVER (ORDER BY "R1_1"."seen" ASC) = ?` — a window function in WHERE, which
+  # neither backend accepts. After: the CTE column, which is what `SQLOrder(CTE(...))` has always
+  # rendered. The change is an improvement, but it IS a change, and the first draft of the comment
+  # in `ctes.jl` claimed it did not happen.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "a window SQLOrder over a CTE path resolves the column, not the projection" begin
+    _build(order_entry) = begin
+      q = CR.Cj_child.objects
+      q.with("ev" => _full_cte(), join_field = "id" => "id")
+      q.values("note", "ev__seen" => Rank(over = WindowOver(order_by = [order_entry])))
+      q.filter("ev__seen" => "2020-01-01")
+      _sql(q)
+    end
+
+    sql_string = _build(SQLOrder("ev__seen"))
+    where_string = match(r"WHERE(.*)"s, sql_string)
+    @test where_string !== nothing
+    @test occursin("\"seen\"", where_string.captures[1])
+    @test !occursin("RANK()", where_string.captures[1])   # a window function is not legal in WHERE
+
+    # The handle spelling has always rendered the column; the String spelling now agrees with it,
+    # which is the point — two spellings of one thing must not mean two different columns.
+    @test _build(SQLOrder(CTE("ev", "seen"))) == sql_string
+  end
 end

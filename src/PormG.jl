@@ -221,6 +221,11 @@ using .Migrations
 # `_emsg`; that helper now lives in Kernel, so this file is free to land where it belongs.)
 include("tools.jl")
 
+# Also layer 4, and for the same reason: `Base.show` methods for the model/query/row types consume
+# every layer above and are depended on by nothing. They must land AFTER `QueryBuilder`, since the
+# types they dispatch on are defined there (#534).
+include("display.jl")
+
 include("precompile.jl")
 
 function __init__()

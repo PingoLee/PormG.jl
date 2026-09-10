@@ -150,6 +150,7 @@ end
     @testset "Model_to_str Render Failure (#70/#134)" include("unit/test_model_to_str_render_failure.jl")
     @testset "Migration Format Stability (v1)" include("unit/test_migration_format_v1.jl")
     @testset "Schema Conventions Freeze (#33)" include("unit/test_schema_conventions.jl")
+    @testset "REPL Display — Base.show (#534)" include("unit/test_repl_display.jl")
     @testset "Public Export Surface (#35)" include("unit/test_public_exports.jl")
     @testset "Docstring Coverage (#212)" include("unit/test_docstring_coverage.jl")
     @testset "Upgrade Guide Emitter (#216)" include("unit/test_upgrade_guide.jl")

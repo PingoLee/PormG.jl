@@ -1010,12 +1010,30 @@ function _resolve_table_fields(
     # field), so ONE rebuild drops all of this table's deleted columns + their indexes at once — hence if ANY
     # deleted field forces a rebuild, route the WHOLE table's deletions through it and skip the per-column
     # DROP COLUMNs (emitting both would race: the rebuild removes the column, then a stray `DROP COLUMN` for a
-    # sibling deletion fails "no such column"). Ordinary indexed columns still take the cheap DROP COLUMN path
-    # below (their plain index is pre-dropped). `unique` is probed live, and STILL must be after #318 gave
+    # sibling deletion fails "no such column"). `unique` is probed live, and STILL must be after #318 gave
     # SQLite introspection a `unique` flag: that flag is deliberately narrow (single-column UNIQUE constraints
     # only), whereas SQLite refuses DROP COLUMN for a column in ANY unique index — a composite-unique member
     # or a `CREATE UNIQUE INDEX` column included. `_sqlite_column_is_unique` answers that broader question;
     # `old_field.unique` does not. `primary_key` IS populated by introspection.
+    #
+    # #519 ADDS THE FOURTH DISJUNCT, and it deliberately overwrites what this comment used to promise:
+    # *"Ordinary indexed columns still take the cheap DROP COLUMN path below (their plain index is
+    # pre-dropped)."* They no longer do — an index of ANY kind referencing the column now routes the
+    # deletion here, the way uniqueness already does. The cheap path's pre-drop could not carry the
+    # promise:
+    #
+    #   * `get_constraints_index` cannot SEE an expression index (`pragma_index_info` reports `name = NULL`
+    #     for an expression member) or a partial index's WHERE-clause column, so nothing was pre-dropped
+    #     and SQLite refused the `DROP COLUMN` — #519 as filed;
+    #   * and it returns `result[1, …]`, ONE name, so a column carrying two plain non-unique indexes got
+    #     one of them pre-dropped and was refused for the other.
+    #
+    # Both are the same defect — the pre-drop has to be exhaustive to be safe, and it is not. The rebuild
+    # already drops every index with the table and re-creates the ones the declared model still wants
+    # (`_sqlite_rebuild_preserving_indexes` + `surviving_columns`), so routing here is correct for all of
+    # them rather than for the subset the pre-drop happens to cover. It costs a data copy on a deletion
+    # that used to be a metadata-only `DROP COLUMN`; the end state is identical either way, and an
+    # end state that the database accepts beats a cheaper one it refuses.
     rebuild_delete_idx = nothing
     if conn isa PormGSQLite
       rebuild_delete_idx = findfirst(colect_deletion) do fsym
@@ -1023,7 +1041,8 @@ function _resolve_table_fields(
         f = model.fields[model_fields_map[fname]]
         (hasfield(typeof(f), :to) && f.db_constraint) ||
           (hasfield(typeof(f), :primary_key) && f.primary_key) ||
-          _sqlite_column_is_unique(conn, model_name, fname)
+          _sqlite_column_is_unique(conn, model_name, fname) ||
+          !isempty(_sqlite_indexes_referencing_column(conn, model_name, fname))
       end
     end
     if rebuild_delete_idx !== nothing
@@ -1043,8 +1062,12 @@ function _resolve_table_fields(
           Dialect.rebuild_table(conn, current_model);
           surviving_columns = _model_physical_columns(current_model)))
     else
-      # PostgreSQL, or SQLite with no FK-column deletions: plain DROP COLUMN works (the FK drop runs first on
-      # PostgreSQL; the index is pre-dropped so SQLite can drop an ordinary column).
+      # PostgreSQL, or SQLite with no blocking column: plain DROP COLUMN works (the FK drop runs first on
+      # PostgreSQL). Since #519 a SQLite column reaching here is referenced by no index at all, so the
+      # `_drop_index` below is a no-op on this backend and the pre-drop is no longer what makes the
+      # deletion legal — the fourth disjunct above is. It stays for PostgreSQL, where `get_constraints_index`
+      # still names a droppable index and dropping it explicitly is harmless (PostgreSQL would drop it with
+      # the column anyway).
       for field_name_sym in colect_deletion
         field_name = field_name_sym |> string
         old_field = model.fields[model_fields_map[field_name]]

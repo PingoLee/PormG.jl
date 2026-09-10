@@ -207,15 +207,15 @@ SQLite collapses them into a single rebuild placed after every rename and every 
 ## Database-Specific Behavior
 
 ### SQLite: Table Recreation
-SQLite has limited `ALTER TABLE` support. It can rename tables/columns and add or drop plain columns, but it **cannot** change a column's type, modify nullability/`UNIQUE`/`CHECK` constraints in place, remove a foreign key (there is no `ALTER TABLE ... DROP CONSTRAINT`), or `DROP COLUMN` on a column that participates in a `FOREIGN KEY`, a `UNIQUE` constraint, or the `PRIMARY KEY`.
+SQLite has limited `ALTER TABLE` support. It can rename tables/columns and add or drop plain columns, but it **cannot** change a column's type, modify nullability/`UNIQUE`/`CHECK` constraints in place, remove a foreign key (there is no `ALTER TABLE ... DROP CONSTRAINT`), or `DROP COLUMN` on a column that participates in a `FOREIGN KEY`, a `UNIQUE` constraint, the `PRIMARY KEY`, or **any index**.
 
 To handle any of those changes, PormG automatically rebuilds the table from your model:
 - Creates a new table with the desired schema.
 - Copies existing data from the old table into it (surviving columns only).
-- Re-creates the surviving indexes and foreign keys — an index on a *dropped* column is **not** re-created.
+- Re-creates the surviving indexes and foreign keys — an index referencing a *dropped* column is **not** re-created (see the expression-index note below).
 - Drops the old table, renames the new one, and runs `PRAGMA foreign_key_check` to catch orphaned rows.
 
-The rebuild is emitted as plain DDL that composes with the migration's transaction, so no data is lost and the remaining indexes and constraints are preserved. This is what makes **removing a foreign-key field or constraint, a `UNIQUE` column, or a `PRIMARY KEY` column** work on SQLite even though `DROP COLUMN`/`DROP CONSTRAINT` alone cannot express it. Changes SQLite *can* do in place — adding a column, or dropping an *ordinary* column (not part of a `FOREIGN KEY`, `UNIQUE`, or `PRIMARY KEY`) — use `ALTER TABLE` directly, without a rebuild.
+The rebuild is emitted as plain DDL that composes with the migration's transaction, so no data is lost and the remaining indexes and constraints are preserved. This is what makes **removing a foreign-key field or constraint, a `UNIQUE` column, a `PRIMARY KEY` column, or an indexed column** work on SQLite even though `DROP COLUMN`/`DROP CONSTRAINT` alone cannot express it. Changes SQLite *can* do in place — adding a column, or dropping an *ordinary* column (not part of a `FOREIGN KEY`, `UNIQUE`, or `PRIMARY KEY`, and not referenced by an index) — use `ALTER TABLE` directly, without a rebuild.
 
 This process is transparent to the user but may take longer on very large tables.
 
@@ -238,6 +238,34 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
 
     For every other required column, add it in two steps on either backend: declare it nullable with no default, migrate, backfill the values, then tighten it — the tightening is an alteration of an existing column, which takes the table rebuild on SQLite and an `ALTER COLUMN` on PostgreSQL.
 
+!!! warning "Deleting an indexed column, and the two index shapes PormG cannot re-create"
+    SQLite refuses `ALTER TABLE ... DROP COLUMN` for a column **any** index references, so deleting an indexed column takes the table rebuild rather than a plain `DROP COLUMN`. The rebuild drops every index with the old table and re-creates the ones the rebuilt table can still support, so the end state is the same — it just costs a data copy on a large table.
+
+    PormG writes exactly two index shapes — a plain `CREATE INDEX` (from `db_index` and `Models.Index`) and a plain `CREATE UNIQUE INDEX` (from `Meta.unique_together` and many-to-many join tables). Both are a bare list of column names. An index carrying anything more cannot be re-created from a model, because **no model declaration expresses it**:
+
+    - an **expression index** — `CREATE INDEX ... ON t(lower(a))`
+    - a **partial index** — `CREATE INDEX ... ON t(a) WHERE b > 0`
+    - an explicit **`COLLATE`** — `CREATE INDEX ... ON t(a COLLATE NOCASE)`
+    - a sort **direction** — `CREATE INDEX ... ON t(a DESC)`; Django's `Index(fields=['-name'])` produces exactly this
+
+    PormG never creates any of them, but a database it adopted through `generate_models_from_db` or the Django importer can arrive carrying them, and so can one indexed by hand.
+
+    When a rebuild drops one of those four, PormG logs a warning naming the index and its definition, so **an index PormG cannot model is never dropped silently**. Nothing puts it back, though: re-create it by hand after the migration if you still need it.
+
+    ```
+    ┌ Warning: SQLite table rebuild will DROP an index PormG cannot re-create: it is an
+    │ expression or partial index, which no model declaration expresses. Re-create it by
+    │ hand after the migration if you still need it.
+    │   table = "driver"
+    │   index = "driver_surname_lower_idx"
+    │   dropped_columns = 1-element Vector{String}: …
+    │   definition = "CREATE INDEX \"driver_surname_lower_idx\" ON \"driver\" (lower(\"surname\"))"
+    ```
+
+    A plain index — the two shapes PormG *does* write — is dropped without a warning, because the column it covered is the one you removed: a `db_index` you still declare comes back with the rebuild, and a `unique_together` group you still declare cannot name a column that no longer exists.
+
+    Such an index on a column that **survives** the rebuild is preserved, name and all. One exception is worth knowing: the rebuild rewrites a *renamed* column inside a preserved index's DDL only where the name is **quoted**, which is how PormG writes it. A hand-written expression index spelling the column bare (`lower(surname)` rather than `lower("surname")`) is re-emitted with the pre-rename name and the migration fails on it — rename such a column in two steps, or drop and re-create the index by hand.
+
 !!! warning "Dropping a primary key: PostgreSQL vs SQLite"
     Removing a column that is the table's **only** primary key diverges by backend. PostgreSQL's `DROP COLUMN` drops the column and its `PRIMARY KEY` constraint natively, leaving a table with no primary key. SQLite cannot express that without silently degrading the table to a rowid table, so PormG **fails `makemigrations` loudly** instead — declare a replacement primary key, or make the change manually. Dropping a primary-key column while the model still declares a primary key (the key moved to another column) rebuilds normally on both backends.
 
@@ -247,3 +275,16 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
 
 ### PostgreSQL: Advisory Locking
 PostgreSQL migrations automatically acquire an advisory lock (`pormg_migrations_{db_name}`) to prevent concurrent migration execution. This ensures safe deployment in multi-instance environments.
+
+### PostgreSQL: Identity Columns
+`IDField()` renders a PostgreSQL identity column, and `generated_always = true` makes it the stricter `GENERATED ALWAYS AS IDENTITY` — a column application code cannot supply a value for. Changing that declaration is a migration like any other, and PostgreSQL spells the three transitions differently:
+
+| Change | Statement PormG emits | Order |
+|---|---|---|
+| A non-identity column becomes one | `ALTER COLUMN "id" ADD GENERATED { ALWAYS \| BY DEFAULT } AS IDENTITY` | **after** the type change — a column can only become an identity once it is already an integer type |
+| The flavour moves, `BY DEFAULT` ⇄ `ALWAYS` | `ALTER COLUMN "id" SET GENERATED { ALWAYS \| BY DEFAULT }` | unordered — it does not touch the column type |
+| An identity column stops being one | `ALTER COLUMN "id" DROP IDENTITY` | **before** the type change — PostgreSQL enforces the integer restriction *during* `ALTER COLUMN ... TYPE`, so a later `DROP IDENTITY` would never run |
+
+The distinction between the first two matters because PostgreSQL rejects the wrong one: `ADD GENERATED` on a column that already is an identity fails with `column "id" is already an identity column`. Tightening a live key is therefore `SET GENERATED ALWAYS`, and it changes only the flavour — the sequence keeps its current value and no data is rewritten.
+
+SQLite has no equivalent. Its identity is `INTEGER PRIMARY KEY AUTOINCREMENT`, which has no `ALWAYS`/`BY DEFAULT` distinction and which no `ALTER` can change, so `generated_always` is a no-op there and a change to it correctly plans nothing.

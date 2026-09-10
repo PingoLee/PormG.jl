@@ -70,6 +70,24 @@ dev:
     time_zone: 'UTC'
 ```
 
+#### In-memory databases
+
+Two `database:` values are **SQLite keywords rather than file paths**, and PormG hands them to the driver untouched instead of resolving them inside your DB folder:
+
+```yaml
+test:
+  adapter: SQLite
+  database: ":memory:"   # in-memory, private to each pool connection
+```
+
+```yaml
+test:
+  adapter: SQLite
+  database: "file:pormg_test?mode=memory&cache=shared"   # in-memory, shared across the pool
+```
+
+The distinction matters as soon as `pool_size` is above 1 (it defaults to 3). A bare `:memory:` database belongs to the **connection that opened it** — a table created through one pool slot is invisible from the next, which surfaces as a puzzling `no such table` rather than as a connection error. The `file:…?mode=memory&cache=shared` URI form gives every connection in the pool one shared database and still writes nothing to disk, so prefer it unless you have deliberately set `pool_size: 1`.
+
 ## Environment-block Keys
 
 These are the keys PormG reads **directly under an environment block** — the peers of `config:`. Anything else in that block is not read by anything, and warns on load (see [Unrecognised keys](#Unrecognised-keys) below).
@@ -77,7 +95,7 @@ These are the keys PormG reads **directly under an environment block** — the p
 | Key | Applies to | Meaning |
 |---|---|---|
 | `adapter` | both | **Required.** `PostgreSQL` or `SQLite`. A block without it raises `InvalidConfigurationError` on load. |
-| `database` | both | Database name (PostgreSQL) or file path (SQLite). A relative SQLite path resolves inside the config folder. |
+| `database` | both | Database name (PostgreSQL) or file path (SQLite). A relative SQLite path resolves inside the config folder — except for the two keyword forms, `:memory:` and a `file:` URI, which are passed to SQLite verbatim (see [In-memory databases](#In-memory-databases)). |
 | `host` | both | Server host on PostgreSQL. **On SQLite it is the database file name and takes precedence over `database:`** — a historical quirk, not a typo. |
 | `url` | PostgreSQL | A complete connection string. When present, **every other PostgreSQL target key is ignored** — PormG passes it through verbatim. Setting it under `adapter: SQLite` does nothing and warns; use `database:` there. |
 | `username`, `password`, `port`, `hostaddr` | PostgreSQL | Standard credentials/target. Forwarded into the libpq DSN. |

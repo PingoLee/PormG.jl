@@ -385,13 +385,27 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
           nothing
         end
 
-    db_path = if dbname !== nothing
-      # Ensure path is absolute if it's not relative to memory
+    # SQLite reads two unrelated kinds of string here: a filesystem path, and its own keywords (#545) —
+    # the `:memory:` in-memory database and `file:` URI filenames. Only a path may be resolved
+    # against `path` or handed to `mkpath`; joining a keyword corrupts it.
+    #
+    # This branch used to test `dbname === nothing`, so the in-memory arm fired only when the key
+    # was *absent* — an explicit `database: ":memory:"` fell through to `joinpath`. Julia < 1.13
+    # hid that on Windows: `splitdrive(":memory:")` returned `(":memory:", "")`, so `joinpath` saw
+    # a drive-rooted component and silently discarded the prefix, landing on the right answer by
+    # accident. 1.13 fixed the `splitdrive` quirk and the accident stopped, yielding
+    # `<path>\:memory:`, which SQLite cannot open on Windows. POSIX never had the accident at all:
+    # it quietly created a real on-disk file *named* `:memory:`, so an in-memory configuration was
+    # only ever in-memory on Windows.
+    db_path = if dbname === nothing
+      ":memory:"                       # neither `host:` nor `database:` given
+    elseif _is_sqlite_nonpath(dbname)
+      String(dbname)                   # a SQLite keyword — hand it over untouched
+    else
+      # A real file: make it absolute, resolving a relative name inside the config folder.
       full_path = isabspath(dbname) ? dbname : joinpath(path, dbname)
       isempty(dirname(full_path)) || mkpath(dirname(full_path))
       full_path
-    else # in-memory
-      ":memory:"
     end
 
     @pormg_debug false
@@ -646,6 +660,17 @@ const CONNECTION_KEY_ALIASES = Dict{String,String}(
 # A key written with no value (`url:`) parses to `nothing`, and one written blank (`url: ''`) to an
 # empty string. Both mean "not set" — neither should be treated as a configured value.
 _is_unset(v) = v === nothing || (v isa AbstractString && isempty(strip(v)))
+
+# `database:` values SQLite reads as keywords rather than filesystem paths, so `load` must pass them
+# through untouched instead of resolving them against the config folder (see the `db_path` branch).
+#
+#   `:memory:`  the private in-memory database
+#   `file:…`    a URI filename — `file:cache?mode=memory&cache=shared` is the spelling that gives
+#               every pool connection ONE shared in-memory database, and it is a URI, not a path
+#
+# URI filenames are honoured by the SQLite build shipped in `SQLite_jll`, so `file:` is a real
+# escape hatch here and not merely reserved.
+_is_sqlite_nonpath(dbname::AbstractString) = dbname == ":memory:" || startswith(dbname, "file:")
 
 # Ordered, not a Dict: `Dict` iteration order is unspecified, so a value matching two names
 # (e.g. "debug_info") previously resolved differently between runs.

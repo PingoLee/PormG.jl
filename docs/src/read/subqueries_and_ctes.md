@@ -665,6 +665,13 @@ query.filter("statusid__@in" => subq)   # Reuse the subquery in a filter
 
 PormG allows CTEs and custom joins (`.cjoin()`) in the same query. Parameter ordering is deterministic across these combinations:
 
+!!! note "CTEs are emitted in the order you declare them"
+    Two `.with(...)` calls render two `WITH` entries in call order, and their parameters bind in
+    that same order. The rendered SQL for a given query is therefore stable — it does not depend on
+    what you named the CTEs, or on which Julia version you are running. If you compare generated
+    SQL as a string in your own tests, that comparison is safe.
+
+
 ```julia
 # 1. Define the CTE
 top_const = M.Constructor.objects.

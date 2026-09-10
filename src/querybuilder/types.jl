@@ -379,7 +379,15 @@ mutable struct SQLObjectQuery <: SQLObject
   row_join::Vector{Dict{String,Any}}
   distinct::Bool # Add distinct field
   for_update::Union{Nothing,ForUpdateClause} # #26: row-level lock clause (nothing = no lock)
-  ctes::Dict{String,CTEDict}
+  # ORDERED for the same reason as `alias_join` below and `insert` above. `build_cte_clause`
+  # emits the WITH clause by ITERATING this container, and the CTE bodies' positional parameters
+  # are collected in that same pass — so under a plain `Dict` the rendered SQL for one query was
+  # decided by how Julia hashed the CTE NAME STRINGS. Renaming a CTE for readability reordered
+  # the WITH clause, and so did upgrading Julia: 1.13.0 changed string hashing and flipped the
+  # pair in `test_alignment_sqlite.jl`'s "Multiple CTEs" testset, which had been asserting
+  # declaration order that a `Dict` never promised. Text and parameters do flip together, so
+  # binding stayed correct — what was lost is that the same query rendered the same SQL twice.
+  ctes::OrderedCollections.OrderedDict{String,CTEDict}
   # The PATH namespace (#484): `cjoin` / `on()` entries, keyed by a join path on the base model.
   # Ordered because materialization order decides generated alias numbering (#449).
   custom_join::OrderedCollections.OrderedDict{String,PathJoin}
@@ -395,7 +403,7 @@ mutable struct SQLObjectQuery <: SQLObject
   parameters::Union{Nothing,AbstractPormGParam}
 
   SQLObjectQuery(; model=nothing, connect_key=nothing, values=[], filter=[], insert=OrderedCollections.OrderedDict{String,Any}(), limit=0, offset=0,
-    order=[], group=[], having=[], list_joins=[], row_join=[], distinct=false, for_update=nothing, ctes=Dict{String,CTEDict}(),
+    order=[], group=[], having=[], list_joins=[], row_join=[], distinct=false, for_update=nothing, ctes=OrderedCollections.OrderedDict{String,CTEDict}(),
     custom_join=OrderedCollections.OrderedDict{String,PathJoin}(), alias_join=OrderedCollections.OrderedDict{String,AliasJoin}(), parameters=nothing) =
     new(model, connect_key, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, for_update, ctes, custom_join, alias_join, parameters)
 end
@@ -412,8 +420,8 @@ end
 # (Pair/String are immutable), and DROP the transient "model" — it is re-derived on
 # every build and holds a Model_Type → Module reference that deepcopy cannot traverse
 # (the very reason the original copy was shallow).
-function _copy_ctes(ctes::Dict{String,CTEDict})::Dict{String,CTEDict}
-  out = Dict{String,CTEDict}()
+function _copy_ctes(ctes::OrderedCollections.OrderedDict{String,CTEDict})::OrderedCollections.OrderedDict{String,CTEDict}
+  out = OrderedCollections.OrderedDict{String,CTEDict}()
   for (name, cte_dict) in ctes
     fresh = CTEDict()
     for (k, v) in cte_dict

@@ -247,7 +247,6 @@ struct SQLText <: SQLTypeText
 end
 SQLText(field::Any; _as::OptionalString=nothing) = SQLText(field, _as, nothing)
 SQLText(field::Any, _as::OptionalString) = SQLText(field, _as, nothing)
-Base.deepcopy(x::SQLTypeText) = SQLText(x.field, x._as, x.custom_as)
 
 
 # Return a field to sql query
@@ -265,6 +264,19 @@ mutable struct SQLField <: SQLTypeField
 end
 SQLField(field::FieldPart; _as::OptionalString=nothing) = SQLField(field, _as, nothing, :base)
 SQLField(field::FieldPart, _as::OptionalString) = SQLField(field, _as, nothing, :base)
+# #508 phase 2 deleted seven hand-written `Base.deepcopy` methods — for `SQLText`, `FExpression`,
+# `OuterRefObject`, `CTEReference`, `JoinedReference`, `FObject` and `WindowFunction`. They existed
+# to satisfy the #112 discipline — *a copy must share no MUTABLE state with its original* — which an
+# immutable node satisfies for free; `JoinedReference` had been immutable since #481 and kept one
+# only for symmetry with the others. Do not re-add one: a node type that needs a copy method to be
+# safe is a node type that should not have been mutable.
+#
+# Four survive, and each for a reason that is NOT mutability:
+#   - this one — deliberately SHALLOW on `.field`, which `ctes.jl` documents as load-bearing;
+#   - `SQLTypeOrder` below — re-runs the #77 orientation whitelist through the inner constructor,
+#     which Base's generic `deepcopy` bypasses entirely (`test_sqlorder_orientation.jl` pins it);
+#   - `SQLTypeOper` — shares an `SQLObjectHandler` in `values` instead of cloning a whole subquery;
+#   - `WindowSpec` — still a mutable container.
 Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as, x.root)
 
 # `orientation` is interpolated into rendered SQL, so it is whitelisted here (#77) and stored
@@ -691,24 +703,6 @@ function F(field_name::String)
     column=field_name
   )
 end
-function Base.deepcopy(f::FExpression)
-  try
-    return FExpression(
-      field_name=f.field_name,
-      operation=f.operation,
-      operand=deepcopy(f.operand),
-      function_name=f.function_name,
-      column=deepcopy(f.column),
-      aggregate=f.aggregate,
-      _as=f._as,
-      kwargs=deepcopy(f.kwargs)
-    )
-  catch e
-    @error "Error in deepcopy for FExpression: $e" exception = (e, catch_backtrace())
-    rethrow(e)
-  end
-end
-
 # Arithmetic operations for F expressions
 # Aggregate propagation helper: result is aggregate if any operand is aggregate
 _is_agg(f::FExpression) = f.aggregate
@@ -926,7 +920,6 @@ function OuterRef(field_name::AbstractString)
   isempty(normalized) && throw(QueryBuildError("OuterRef requires a non-empty field name"))
   return OuterRefObject(field_name=normalized)
 end
-Base.deepcopy(x::OuterRefObject) = OuterRefObject(field_name=x.field_name)
 
 # #444 — a CTE column reference. `SQLTypeCTE` (Kernel.jl) was declared with zero subtypes and zero
 # uses; this is what it was reserved for. Deliberately NOT `<: SQLTypeF`: that would auto-admit the
@@ -1008,7 +1001,6 @@ function CTE(name::AbstractString, path::AbstractString; desc::Bool=false)
   # message on the call that is not the one at fault.
   return CTEReference(name=normalized_name, path=normalized_path, desc=desc)
 end
-Base.deepcopy(x::CTEReference) = CTEReference(name=x.name, path=x.path, desc=x.desc)
 
 # The output/cache spelling of a CTE reference — `name__path`. It is byte-identical to what the
 # pre-#444 string form produced, which is what lets every `_as`-keyed consumer downstream
@@ -1089,7 +1081,6 @@ function Joined(alias::AbstractString, path::AbstractString; desc::Bool=false)
   # declared one — so it reports as an unknown alias, naming the ones that exist.
   return JoinedReference(normalized_alias, normalized_path, desc)
 end
-Base.deepcopy(x::JoinedReference) = JoinedReference(x.alias, x.path, x.desc)
 Base.show(io::IO, x::JoinedReference) = print(io, "Joined(\"", x.alias, "\", \"", x.path, "\")")
 # `Base.:(==)` on this type builds a PREDICATE (see the comparison methods below), so the generic
 # `isequal` fallback — which calls `==` and expects a Bool — would throw a TypeError on any value
@@ -1184,17 +1175,6 @@ end
   _as::OptionalString = nothing
   kwargs::Dict{String,Any} = Dict{String,Any}()
 end
-function Base.deepcopy(f::FObject)
-  return FObject(
-    function_name=f.function_name,
-    column=deepcopy(f.column),
-    aggregate=f.aggregate,
-    formatter=f.formatter,
-    _as=f._as,
-    kwargs=deepcopy(f.kwargs)
-  )
-end
-
 """
     WindowSpec <: SQLType
 
@@ -1236,18 +1216,6 @@ end
   _as::OptionalString = nothing
   kwargs::Dict{String,Any} = Dict{String,Any}()
 end
-function Base.deepcopy(f::WindowFunction)
-  return WindowFunction(
-    function_name=f.function_name,
-    column=deepcopy(f.column),
-    over=deepcopy(f.over),
-    aggregate=f.aggregate,
-    formatter=f.formatter,
-    _as=f._as,
-    kwargs=deepcopy(f.kwargs)
-  )
-end
-
 _is_agg(::WindowFunction) = false
 _is_window_expr(::WindowFunction) = true
 _is_window_expr(f::FExpression) = _is_window_expr(f.field_name) || _is_window_expr(f.operand)

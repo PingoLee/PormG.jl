@@ -265,8 +265,10 @@ function _guard_no_handle(filter, ::Type{T}, reject::Function, context::String, 
   # differently, so do not read a uniform rule into it:
   #
   #   - `FExpression` — this guard runs, returns cleanly under the cap, and the very next line
-  #     `deepcopy`s the same filter. `Base.deepcopy(::FExpression)` is uncapped, so the overflow just
-  #     moves one line down.
+  #     `deepcopy`s the same filter. That used to move the overflow one line down, because the
+  #     hand-written `Base.deepcopy(::FExpression)` was uncapped; #508 phase 2 deleted it, so the copy
+  #     now goes through Base, which tracks visited objects in an `IdDict` and terminates on a cycle
+  #     instead of recursing into it.
   #   - `OperObject` — `deepcopy` runs FIRST, before this guard is called at all, so an internal cycle
   #     there never even reaches the cap.
   #   - `Pair` — this guard runs and nothing is copied; a cycle rides through untouched and overflows

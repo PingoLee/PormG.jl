@@ -74,6 +74,9 @@ end
 
 const CR = CteRefModels
 import PormG.QueryBuilder: F, inspect_query, Joined, Concat, Sum, Value, Rank, WindowOver, Lower
+# #509 — the ordering wrapper and the field it carries. Imported here rather than inside the testset
+# so the shadowing cases above can name `SQLOrder` too.
+import PormG.QueryBuilder: SQLOrder, SQLField
 
 # CTE bodies reused across cases.
 _parent_cte()  = (c = CR.Cj_parent.objects; c.values("id", "sku"); c)
@@ -814,6 +817,22 @@ _sql(q; conn = _CR_SL) = inspect_query(q; connection = conn)[:sql_text]
                                q.with("parent" => _parent_cte(), join_field = "id" => "id");
                                q.values("note",
                                         "rk" => Rank(over = WindowOver(order_by = "-parent__sku"))); q),
+      # #509 — the same window slot reached through an `SQLOrder` wrapper, which #492 could not
+      # cover: `SQLOrder` had no constructor admitting a CTE column, so there was nothing to rewrite
+      # into and the entry was passed through untouched. It therefore kept resolving to the
+      # ForeignKey and rendering, SILENTLY, while the identical string one row up already refused.
+      # Both spellings of the wrapper's field are pinned, because both reach that resolution:
+      # `String` is the issue's own repro, and `SQLField` is what every doc example and every other
+      # `SQLOrder` in this suite actually writes.
+      "window order SQLOrder(String)"   => () -> (q = CR.Cj_child.objects;
+                               q.with("parent" => _parent_cte(), join_field = "id" => "id");
+                               q.values("note",
+                                        "rk" => Rank(over = WindowOver(order_by = [SQLOrder("parent__sku")]))); q),
+      "window order SQLOrder(SQLField)" => () -> (q = CR.Cj_child.objects;
+                               q.with("parent" => _parent_cte(), join_field = "id" => "id");
+                               q.values("note",
+                                        "rk" => Rank(over = WindowOver(
+                                          order_by = [SQLOrder(SQLField("parent__sku", "parent__sku"))]))); q),
     )
     for (clause, mk) in cases
       err = try; inspect_query(mk(); connection = _CR_SL); nothing; catch e; e end
@@ -1256,5 +1275,211 @@ end
     first_render = _sql(q)
     @test _sql(q) == first_render
     @test _sql(deepcopy(q)) == first_render
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #509 — an `SQLOrder` entry inside a window's `order_by` reaches a CTE column
+#
+# `WindowOver(order_by = ...)` has always documented that it takes `SQLOrder` objects as well as
+# strings. It could not carry a CTE column in either spelling, and the three ways it failed were
+# not equally visible:
+#
+#   1. an UNAMBIGUOUS CTE name threw, with a message prescribing `CTE("ev", "seen")` — a remedy that
+#      did not exist, because `SQLOrder`'s constructor did not admit one;
+#   2. a SHADOWING CTE name rendered, resolving to the model side with no error at all, while the
+#      identical string raised `AmbiguousFieldError` in every other clause since #492. The silent
+#      one, and the reason this is a bug rather than a missing feature;
+#   3. `SQLOrder(CTE("ev", "seen"))` was a `MethodError`.
+#
+# The shadowing half is pinned in the `#492` testset above, beside the string spellings it should
+# always have matched. What is pinned here is the positive half: the wrapper now reaches a CTE
+# column, keeps its own `orientation` and `nulls`, and renders identically to the two spellings that
+# already worked. Byte-equality against those, not "it renders" — a `String` that resolved to the
+# BASE model would also render, and would be the wrong column.
+#
+# `nulls` is asserted in both directions. It was dropped for EVERY `SQLOrder` in a window before
+# #509 (not merely a CTE-carrying one), so an unset `nulls` must still render bare — otherwise the
+# fix would silently rewrite ordering SQL that nobody asked it to touch.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#509: an SQLOrder entry reaches a CTE column" begin
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Outcome 3: the constructor exists at all, and normalizes to the same `SQLField` the fluent
+  # `order_by(CTE(...))` builds. The normalization is the reason nothing downstream had to change,
+  # so it is asserted directly rather than inferred from the rendered SQL.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "SQLOrder(CTE(...)) constructs and normalizes to an SQLField" begin
+    o = SQLOrder(CTE("ev", "seen"))
+    @test o isa PormG.QueryBuilder.SQLOrder
+    @test o.field isa SQLField
+    # `root === :cte` is what keeps this out of the base namespace's memo (#474); a `:base` tag here
+    # would make the handle and the string spelling two cache entries for one column.
+    @test o.field.root === :cte
+    @test o.orientation == "ASC"
+
+    # The keyword slots survive construction — they are `SQLOrder`'s own and the handle does not
+    # touch them.
+    o2 = SQLOrder(CTE("ev", "seen"); orientation = "DESC", nulls = :first)
+    @test o2.orientation == "DESC"
+    @test o2.nulls === :first
+
+    # #481's twin, fixed alongside: `Joined` had the identical limitation for the identical reason.
+    oj = SQLOrder(Joined("d", "surname"))
+    @test oj.field isa SQLField
+    @test oj.field.root === :joined
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Outcome 1: the unambiguous name resolves to the CTE column, in BOTH spellings of the wrapper's
+  # field, and renders exactly like the two forms that already worked (a bare `CTEReference` entry
+  # and the `"-<cte>__<col>"` string). Both backends, because the ORDER BY renderer is the one place
+  # where the dialects legitimately diverge.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "an unambiguous CTE name renders identically to the spellings that worked" begin
+    mk(order_entry) = begin
+      q = CR.Cj_child.objects
+      q.with("ev" => _full_cte(), join_field = "id" => "id")
+      q.values("note", "rk" => Rank(over = WindowOver(order_by = order_entry)))
+      q
+    end
+
+    for (backend, conn) in (("PostgreSQL", _CR_PG), ("SQLite", _CR_SL))
+      # The reference rendering: a bare handle, the form #444 shipped.
+      reference = inspect_query(mk(CTE("ev", "seen")); connection = conn)
+
+      for (label, entry) in (
+          "SQLOrder(String)"   => [SQLOrder("ev__seen")],
+          "SQLOrder(CTE(...))" => [SQLOrder(CTE("ev", "seen"))],
+          "SQLOrder(SQLField)" => [SQLOrder(SQLField("ev__seen", "ev__seen"))],
+        )
+        got = inspect_query(mk(entry); connection = conn)
+        @test got[:sql_text] == reference[:sql_text]
+        @test got[:parameters] == reference[:parameters]
+      end
+
+      # Guard against a vacuous match: a shape that stopped joining the CTE would otherwise "equal"
+      # its twin by both sides being wrong in the same way.
+      @test occursin("JOIN \"ev\" AS", reference[:sql_text])
+      @test occursin("\"seen\"", reference[:sql_text])
+    end
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Direction lives in `orientation`, and the string form does NOT smuggle a second spelling in.
+  # `SQLOrder("-ev__seen")` is deliberately not read as DESC: the wrapper already has a slot for it,
+  # and two spellings for one direction is the tie-break this issue exists to remove.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "orientation is the SQLOrder's own, and desc = true on the handle is refused" begin
+    mk(entry) = begin
+      q = CR.Cj_child.objects
+      q.with("ev" => _full_cte(), join_field = "id" => "id")
+      q.values("note", "rk" => Rank(over = WindowOver(order_by = entry)))
+      q
+    end
+
+    desc_via_wrapper = _sql(mk([SQLOrder(CTE("ev", "seen"); orientation = "DESC")]))
+    desc_via_handle  = _sql(mk(CTE("ev", "seen"; desc = true)))
+    @test desc_via_wrapper == desc_via_handle
+    @test occursin("ORDER BY \"R1_1\".\"seen\" DESC", desc_via_wrapper)
+
+    # `desc = true` inside the wrapper is a duplicate spelling, not a direction — refused, and the
+    # message names the slot that wins so the remedy is one edit.
+    err = try; SQLOrder(CTE("ev", "seen"; desc = true)); nothing; catch e; e end
+    @test err isa PormG.QueryBuildError
+    @test occursin("orientation", err.msg)
+    @test occursin("#509", err.msg)
+
+    errj = try; SQLOrder(Joined("d", "surname"; desc = true)); nothing; catch e; e end
+    @test errj isa PormG.QueryBuildError
+    @test occursin("orientation", errj.msg)
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # `nulls`, both directions. The render path read `orientation` and ignored `nulls` outright, for
+  # every `SQLOrder` in a window — so the fix has to make an EXPLICIT placement appear without
+  # making a default one appear.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "an explicit nulls placement survives; an unset one changes nothing" begin
+    mk(entry) = begin
+      q = CR.Cj_child.objects
+      q.with("ev" => _full_cte(), join_field = "id" => "id")
+      q.values("note", "rk" => Rank(over = WindowOver(order_by = entry)))
+      q
+    end
+
+    for (backend, conn) in (("PostgreSQL", _CR_PG), ("SQLite", _CR_SL))
+      first_ = inspect_query(mk([SQLOrder(CTE("ev", "seen"); nulls = :first)]); connection = conn)[:sql_text]
+      last_  = inspect_query(mk([SQLOrder(CTE("ev", "seen"); orientation = "DESC", nulls = :last)]); connection = conn)[:sql_text]
+      @test occursin("NULLS FIRST", first_)
+      @test occursin("NULLS LAST", last_)
+      # The placement is the caller's, not the orientation's default: ASC would default to
+      # NULLS LAST and DESC to NULLS FIRST, so both cases above are the OPPOSITE of the default —
+      # which is the only way to prove the keyword was read rather than coincidentally matched.
+      @test !occursin("NULLS LAST", first_)
+      @test !occursin("NULLS FIRST", last_)
+
+      # Unset: no NULLS clause at all, the pre-#509 rendering, unchanged.
+      plain = inspect_query(mk([SQLOrder(CTE("ev", "seen"))]); connection = conn)[:sql_text]
+      @test !occursin("NULLS", plain)
+      # And it still equals the bare-handle form, i.e. honouring `nulls` did not perturb the default.
+      @test plain == inspect_query(mk(CTE("ev", "seen")); connection = conn)[:sql_text]
+    end
+
+    # A `nulls` placement on a plain model column in a window is fixed by the same change — the slot
+    # was ignored for every entry, not only a CTE-carrying one.
+    q = CR.Cj_child.objects
+    q.values("note", "rk" => Rank(over = WindowOver(order_by = [SQLOrder(SQLField("note", "note"); nulls = :first)])))
+    @test occursin("NULLS FIRST", _sql(q))
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # The wrapper works in the FLUENT `order_by(...)` too, not only inside a window — the same
+  # constructor feeds both, so a CTE column is now reachable from every ordering spelling.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "the same wrapper orders a top-level query" begin
+    mk(entry) = begin
+      q = CR.Cj_child.objects
+      q.with("ev" => _full_cte(), join_field = "id" => "id")
+      q.values("note", "x" => CTE("ev", "sku"))
+      q.order_by(entry)
+      q
+    end
+    for (backend, conn) in (("PostgreSQL", _CR_PG), ("SQLite", _CR_SL))
+      wrapped = inspect_query(mk(SQLOrder(CTE("ev", "sku"); orientation = "DESC")); connection = conn)
+      handle  = inspect_query(mk(CTE("ev", "sku"; desc = true)); connection = conn)
+      @test wrapped[:sql_text] == handle[:sql_text]
+      @test wrapped[:parameters] == handle[:parameters]
+      @test occursin("ORDER BY", wrapped[:sql_text])
+    end
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # An operator suffix is refused in ordering, the same way `order_by(CTE(...))` already refused it —
+  # the shared `_order_field` is what makes the two agree instead of drifting.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "operator suffixes stay out of an SQLOrder-wrapped handle" begin
+    err = try; SQLOrder(CTE("ev", "sku__@lte")); nothing; catch e; e end
+    @test err isa PormG.QueryBuildError
+    @test occursin("not allowed in ordering", err.msg)
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # The rewrite CONSTRUCTS. `_retag_cte_string_window_order` is handed a node that arrived through
+  # the public API, so a user's `SQLOrder` must come back from a build exactly as they wrote it —
+  # the #508 contract, asserted here because this arm is new code that could have written in place.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "the rewrite does not mutate the caller's SQLOrder" begin
+    entry = SQLOrder("ev__seen"; nulls = :first)
+    q = CR.Cj_child.objects
+    q.with("ev" => _full_cte(), join_field = "id" => "id")
+    q.values("note", "rk" => Rank(over = WindowOver(order_by = [entry])))
+    _sql(q)
+    # Still the String the caller passed — not rewritten to a CTEReference or an SQLField.
+    @test entry.field == "ev__seen"
+    @test entry.nulls === :first
+
+    # And the same handle renders the same way a second time, from the untouched node.
+    @test _sql(q) == _sql(deepcopy(q))
   end
 end

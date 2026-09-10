@@ -48,13 +48,40 @@ function _check_function(f::Vector{N} where N<:SQLObject)
   end
   return r_v
 end
+# #508 phase 1 — these three arms CONSTRUCT. They used to assign `f.column = _check_function(f.column)`
+# on the node they were handed, and that node arrives straight from the public API: `Sum("points")`,
+# `Count("id")`, `Rank(over = …)` are handles a user may bind to a name and reuse, which the `F`
+# docstring promises outright. No wrong SQL was measured from them — the transform is idempotent, so
+# writing the same value back is invisible — but idempotence is a property of today's
+# `_check_function`, not a contract, and the identical shape one arm over (`_values!`'s `Value`) DID
+# produce wrong SQL. Replacing rather than writing is what `JoinedReference`'s comment calls the
+# intended shape, and it costs one allocation on a path that already allocates.
+#
+# Every slot except `column` rides across by reference, deliberately: the built node must be
+# byte-identical to what the mutating form left behind, which is the same discipline `_compare`
+# (`types.jl`) follows for the comparison operators. `kwargs` is shallow-copied for the reason it is
+# there too — a `Dict` shared between the user's handle and the build product is exactly the mutable
+# state #112 forbids sharing.
+#
+# `over` is shared rather than copied, and the honest reason is that nothing here needs it copied,
+# not that copying would break anything: measured, `over = deepcopy(f.over)` leaves the whole unit
+# suite green and every CTE/window render byte-identical. The caller's `WindowSpec` is already safe
+# from the CTE-string pass by a different mechanism — every read path deepcopies the handler before
+# `build()`, and Julia's generic array deepcopy clones the spec along with it — so a copy here would
+# be a second layer over a hazard that does not reach this far. Sharing keeps the built node
+# byte-identical to what the mutating form produced, which is the rule the rest of this function
+# follows. #508 phase 2 revisits this slot: once `WindowFunction` is a `struct` and the `_retag_*`
+# walkers construct, the question stops being "copy or share" at all.
 function _check_function(f::FObject)
-  f.column = _check_function(f.column)
-  return f
+  return FObject(function_name=f.function_name, column=_check_function(f.column),
+                 aggregate=f.aggregate, formatter=f.formatter, _as=f._as,
+                 kwargs=copy(f.kwargs))
 end
 function _check_function(f::WindowFunction)
-  f.column !== nothing && (f.column = _check_function(f.column))
-  return f
+  return WindowFunction(function_name=f.function_name,
+                        column=f.column === nothing ? nothing : _check_function(f.column),
+                        over=f.over, aggregate=f.aggregate, formatter=f.formatter,
+                        _as=f._as, kwargs=copy(f.kwargs))
 end
 function _check_function(f::Vector{FObject})
   for i in 1:size(f, 1)
@@ -63,8 +90,7 @@ function _check_function(f::Vector{FObject})
   return f
 end
 function _check_function(f::SQLTypeOper)
-  f.column = _check_function(f.column)
-  return f
+  return OperObject(operator=f.operator, values=f.values, column=_check_function(f.column))
 end
 function _check_function(f::Union{SQLText,SQLField})
   return f
@@ -852,8 +878,26 @@ function _resolve_window_order(v::String, instruc::SQLInstruction)::String
   return string(_resolve_window_expression(field, instruc), " ", orientation)
 end
 
+# #509 — an EXPLICIT `nulls` placement is honoured here; before this the window path read
+# `v.orientation` and dropped `v.nulls` on the floor, for every `SQLOrder` entry and not merely a
+# CTE-carrying one. A keyword the constructor accepts, validates and stores, silently ignored at
+# render, is the same silent-wrong-answer shape #509 is about — found while making a CTE column
+# reachable from this wrapper, fixed here for every entry rather than for the new case only.
+#
+# An UNSET `nulls` still renders exactly as before — bare `expr ORIENTATION`, no NULLS clause — so
+# every existing window's SQL is byte-for-byte unchanged. The top-level ORDER BY applies a
+# backend-aligned DEFAULT placement (`_nulls_placement`'s ASC → :last, DESC → :first) and a window
+# deliberately does not: adding one would rewrite SQL nobody asked to change, and the two clauses
+# are not obliged to agree on a default they never agreed on.
+#
+# `_order_term_sql` is the same renderer the top-level clause uses, so the SQLite < 3.30 emulation
+# (`(expr IS NULL) DESC, expr ASC`, legal inside `OVER (...)` too) and its placeholder guard come
+# along for free instead of being restated.
 function _resolve_window_order(v::SQLTypeOrder, instruc::SQLInstruction)::String
-  return string(_resolve_window_expression(v.field, instruc), " ", _normalize_window_orientation(v.orientation))
+  expr = _resolve_window_expression(v.field, instruc)
+  orientation = _normalize_window_orientation(v.orientation)
+  v.nulls === nothing && return string(expr, " ", orientation)
+  return _order_term_sql(expr, orientation, _nulls_placement(orientation, v.nulls), instruc.connection)
 end
 # #444 — a window's ORDER BY is the SECOND place where `desc = true` is meaningful (the fluent
 # `order_by(...)` is the first), so it consumes the flag here instead of letting `_cte_join_path`

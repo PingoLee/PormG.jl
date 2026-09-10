@@ -239,3 +239,152 @@ end
     @test all(df.driverid__nationality .!= df.constructorid__nationality)
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Field Expressions: a Date / DateTime literal as a comparison operand (#494)
+#
+# All twelve `F` / `Joined` comparison overloads accepted `Dates.Date` and `Dates.DateTime` at
+# dispatch and then died in the `FExpression` constructor with a bare `MethodError`. #494 accepts
+# them, and this is the half no mock can prove: the literal is bound through the field's own
+# formatter, and whether that representation MATCHES what the column holds is a driver round-trip
+# question. On SQLite in particular a raw bind would compare a Julia `Date` against the TEXT the
+# column stores and return the wrong rows silently — so what is asserted here is the ROW SET, not
+# the SQL, cross-checked against the pair spelling that has always worked.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "F comparisons accept a Date literal (#494)" begin
+  cutoff = Dates.Date(1970, 1, 1)
+
+  @testset "an F date comparison returns the rows the pair spelling returns" begin
+    # The oracle is the suffix filter: it is the documented workaround, it predates #494, and it
+    # binds through the same formatter — so agreement proves the new path binds the same bytes
+    # against real data rather than merely rendering.
+    fexpr = M.Driver.objects
+    fexpr.filter(F("dob") >= cutoff)
+    fexpr.values("driverid", "surname", "dob")
+    fexpr.order_by("driverid")
+
+    pair = M.Driver.objects
+    pair.filter("dob__@gte" => cutoff)
+    pair.values("driverid", "surname", "dob")
+    pair.order_by("driverid")
+
+    df_f = fexpr |> DataFrame
+    df_p = pair |> DataFrame
+
+    @test size(df_f, 1) > 0                      # a vacuous empty set would match trivially
+    @test size(df_f, 1) == size(df_p, 1)
+    @test df_f.driverid == df_p.driverid
+
+    # Independently recomputed, so the two spellings agreeing on a WRONG set still fails: every row
+    # returned must genuinely satisfy the predicate, read back from the driver.
+    @test all(d -> Dates.Date(string(d)) >= cutoff, skipmissing(df_f.dob))
+
+    # And the complement is non-empty, so the filter is doing work at all.
+    older = M.Driver.objects
+    older.filter(F("dob") < cutoff)
+    older.values("driverid")
+    @test size(older |> DataFrame, 1) > 0
+  end
+
+  @testset "a date literal on the right of an arithmetic expression" begin
+    # The shape that needs `F` — the suffix API cannot put arithmetic on the left. It also proves
+    # the #25 duration operand and the #494 comparison operand coexist in ONE expression, which is
+    # exactly the split that produced the bug.
+    query = M.Driver.objects
+    query.filter(F("dob") + Dates.Year(18) <= Dates.Date(1950, 5, 13))
+    query.values("driverid", "surname", "dob")
+    df = query |> DataFrame
+
+    @test size(df, 1) > 0
+    # Every returned driver had turned 18 by that date — recomputed in Julia from the stored value.
+    @test all(d -> Dates.Date(string(d)) + Dates.Year(18) <= Dates.Date(1950, 5, 13),
+              skipmissing(df.dob))
+  end
+
+  @testset "the Joined family binds the same way against the joined copy" begin
+    # `Joined(...)` reaches its column through a `cjoin_on` copy, and picks its formatter from the
+    # memoized field rather than from the model — a code path with no equivalent on the `F` side.
+    # Newest code in the change, so it gets a real round-trip rather than mock coverage alone.
+    joined = M.Result.objects
+    joined.cjoin_on("Race", alias = "r", on = [Joined("r", "raceid") == F("raceid")])
+    joined.filter(Joined("r", "date") >= Dates.Date(1991, 1, 1),
+                  Joined("r", "date") <  Dates.Date(1992, 1, 1))
+    joined.values("resultid")
+    joined.order_by("resultid")
+
+    # The oracle is the ordinary field-path filter for the same season — a different resolver
+    # reaching the same rows.
+    control = M.Result.objects
+    control.filter("raceid__year" => 1991)
+    control.values("resultid")
+    control.order_by("resultid")
+
+    df_j = joined |> DataFrame
+    df_c = control |> DataFrame
+    @test size(df_j, 1) > 0
+    @test df_j.resultid == df_c.resultid
+  end
+
+  @testset "a DateTimeField round-trips through an F comparison" begin
+    # The `DateField` cases above exercise `format_date_sql`; this one exercises
+    # `format_timezone_sql`'s canonical UTC string, which is the representation SQLite stores as
+    # TEXT and compares lexicographically — so a wrong bind here is silent wrong rows, and no mock
+    # can prove the round-trip.
+    #
+    # Its own row, created and deleted here: the fixture's only TIMESTAMP columns live on scratch
+    # tables other tests truncate, so borrowing their contents would couple this test to run order.
+    label = "fx494_dt_probe"
+    marker = Dates.DateTime(2031, 7, 4, 12, 30, 0)
+
+    # Pre-emptive cleanup BEFORE the try, matching the other two writers of this table
+    # (`test_allocate_primary_keys_sqlite.jl`, `test_bulk_copy.jl`). `label` is `unique = true`, so a
+    # row stranded by a killed run — the `finally` below never reached — would otherwise fail the
+    # `create` with a UNIQUE violation and cost a red run before self-healing.
+    cleanup = M.Django_contract_scratch.objects
+    cleanup.filter("label" => label)
+    cleanup.exists() && cleanup.delete()
+
+    try
+      M.Django_contract_scratch.objects.create("label" => label, "event_time" => marker)
+
+      # Strictly-after and strictly-before bracket the stored instant from both sides, so a bind that
+      # landed on the wrong representation cannot satisfy both.
+      hit = M.Django_contract_scratch.objects
+      hit.filter(F("event_time") >= marker, F("event_time") <= marker, "label" => label)
+      hit.values("label", "event_time")
+      @test size(hit |> DataFrame, 1) == 1
+
+      miss = M.Django_contract_scratch.objects
+      miss.filter(F("event_time") > marker, "label" => label)
+      @test size(miss.values("label") |> DataFrame, 1) == 0
+
+      # And the pair spelling agrees, which is the same oracle the unit tests use.
+      pair = M.Django_contract_scratch.objects
+      pair.filter("event_time__@gte" => marker, "label" => label)
+      @test size(pair.values("label") |> DataFrame, 1) == 1
+    finally
+      M.Django_contract_scratch.objects.filter("label" => label).delete()
+    end
+  end
+
+  @testset "a DateTime literal against a DateField truncates, as the pair spelling does" begin
+    # `format_date_sql` coerces a `DateTime` to its calendar date on both paths. If the F path bound
+    # a timestamp string instead, SQLite would return no rows at all and PostgreSQL would still
+    # match — a divergence only a live run on both engines can catch.
+    fexpr = M.Driver.objects
+    fexpr.filter(F("dob") >= Dates.DateTime(1970, 1, 1, 13, 45))
+    fexpr.values("driverid")
+    fexpr.order_by("driverid")
+
+    pair = M.Driver.objects
+    pair.filter("dob__@gte" => Dates.Date(1970, 1, 1))
+    pair.values("driverid")
+    pair.order_by("driverid")
+
+    df_f = fexpr |> DataFrame
+    df_p = pair |> DataFrame
+    # Non-empty first: two empty frames would satisfy the equality below and prove nothing.
+    @test size(df_f, 1) > 0
+    @test df_f.driverid == df_p.driverid
+  end
+end

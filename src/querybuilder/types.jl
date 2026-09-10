@@ -290,6 +290,29 @@ mutable struct SQLOrder <: SQLTypeOrder
   SQLOrder(field, order, orientation, _as, nulls) = new(field, order, _normalize_order_orientation(orientation), _as, nulls)
 end
 SQLOrder(field::Union{SQLTypeField,String}; order::Union{Integer,Nothing}=nothing, orientation::String="ASC", _as::OptionalString=nothing, nulls::Union{Symbol,Nothing}=nothing) = SQLOrder(field, order, orientation, _as, nulls)
+# #509 — a CTE (#444) or joined-copy (#481) column inside an `SQLOrder`. Until this, the keyword
+# constructor above was the whole surface and its `field` union excluded both, so
+# `SQLOrder(CTE("ev", "seen"))` was a `MethodError` — which is why an `SQLOrder` entry in a window's
+# `order_by` had no spelling for a CTE column at all, and why the error message that told users to
+# "write CTE(...) instead" prescribed a remedy that did not exist.
+#
+# The handle is NORMALIZED into the same `SQLField` the fluent `order_by(CTE(...))` builds, not
+# stored raw. That is what makes this cheap rather than invasive: all four readers of
+# `SQLOrder.field` — `get_order_query`, `_resolve_window_order`, the `_resolve_cte_string_paths!`
+# order loop and `deepcopy` — already require an `SQLField`, and two of them (`._as`, `memo_key`)
+# have no method for anything else. Normalizing here keeps their invariant intact, so the widening
+# costs zero consumer changes.
+#
+# `desc = true` is REFUSED, not folded into `orientation`. `SQLOrder` carries the direction itself
+# and its `"ASC"` default is indistinguishable from an explicitly passed one, so folding would have
+# to silently pick a winner when the two spellings disagree — first-match precedence, which is the
+# exact defect class #492/#509 exist to remove. One direction, one slot.
+function SQLOrder(field::Union{SQLTypeCTE,SQLTypeJoined}; order::Union{Integer,Nothing}=nothing,
+                  orientation::String="ASC", _as::OptionalString=nothing,
+                  nulls::Union{Symbol,Nothing}=nothing)
+  _reject_handle_desc_in_sqlorder(field)
+  return SQLOrder(_order_field(field), order, orientation, _as, nulls)
+end
 Base.deepcopy(x::SQLTypeOrder) = SQLOrder(x.field, x.order, x.orientation, x._as, x.nulls)
 
 #
@@ -601,7 +624,15 @@ const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
   operation::OptionalString = nothing  # +, -, *, /, etc.
   # #444/#481: `SQLTypeCTE`/`SQLTypeJoined` so `F("note") == CTE("ev","code")` builds a comparison instead of
   # falling through to `Base.==` and silently yielding a Bool.
-  operand::Union{String,Integer,Float64,SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,Dates.Period,Dates.CompoundPeriod,Interval,Nothing} = nothing
+  # #494: `Dates.Date`/`Dates.DateTime` — the COMPARISON operands. All twelve comparison overloads
+  # (six here, six on `JoinedReference`) accepted both at dispatch through `_CompareOperand` while
+  # this field did not admit them, so `F("date") == Date(2020, 1, 1)` died right here with a bare
+  # `MethodError` from `convert`, naming this union and not the comparison the caller wrote. The
+  # `Period`/`CompoundPeriod`/`Interval` members below are the DURATION operands #25 added for date
+  # ARITHMETIC; the split between the two was the whole defect. Exactly these two types, not
+  # `Dates.TimeType`: widening further would admit `ZonedDateTime`/`Time` that the signature does
+  # not, which is the same disagreement pointing the other way.
+  operand::Union{String,Integer,Float64,SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,Dates.Date,Dates.DateTime,Dates.Period,Dates.CompoundPeriod,Interval,Nothing} = nothing
   function_name::String = "F"
   column::Union{String,SQLTypeField,Vector{String}} = ""
   aggregate::Bool = false
@@ -782,14 +813,19 @@ Base.:+(operand::_DurationOperand, f::FExpression) = f + operand
 # yield a `Bool`. It is reproduced verbatim from the six pre-#457 signatures; #457 named it, it did
 # not redraw it.
 #
-# Two of its members are NOT honoured, and predate this: `Dates.Date` and `Dates.DateTime` dispatch
-# through this union — in BOTH families that share it, the `F` comparisons below and the
-# `JoinedReference` ones further down — and then die in the constructor, because
-# `FExpression.operand` (the struct field, above) admits
-# `Period`/`CompoundPeriod`/`Interval` but neither `Date` nor `DateTime`. So `F("date") == Date(2020)`
-# raises a bare `MethodError`, outside the #231 taxonomy. Left alone deliberately — widening the field
-# is a behaviour change with its own tests, not part of #457 — but recorded here so the next reader
-# does not take this union as proof the shapes work.
+# #494 closed the one gap #457 recorded here and left open: `Dates.Date` and `Dates.DateTime`
+# dispatched through this union — in BOTH families that share it, the `F` comparisons below and the
+# `JoinedReference` ones further down — and then died in the constructor, because
+# `FExpression.operand` admitted `Period`/`CompoundPeriod`/`Interval` (the #25 duration operands, for
+# date ARITHMETIC) but neither `Date` nor `DateTime` (comparison operands). `F("date") == Date(2020)`
+# raised a bare `MethodError` from `convert`, outside the #231 taxonomy. The field now admits both,
+# so the signature and the slot agree — `test_f_date_operands.jl` asserts every member of this union
+# is storable, so the two cannot drift apart again silently.
+#
+# The union is still the dispatch contract for a `CTE(...)` / `Joined(...)` right-hand side: keep
+# additions to it and to `FExpression.operand` in step, and give any new member a render arm in
+# `_set_update_query_operand` (`execution.jl`) — a member that binds RAW is not "supported", it is
+# #494 again on a different type.
 const _CompareOperand = Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression,SQLTypeCTE,SQLTypeJoined}
 
 function _compare(f::FExpression, operation::String, operand)
@@ -1078,6 +1114,28 @@ function _reject_joined_desc(ref::JoinedReference, context::AbstractString)
   ref.desc && throw(QueryBuildError(
     "\e[4m\e[31mdesc = true\e[0m on \e[4m\e[31mJoined(\"$(ref.alias)\", \"$(ref.path)\")\e[0m is only " *
     "meaningful in \e[4m\e[32morder_by(...)\e[0m, not in $(context). Drop it here."))
+  return ref
+end
+
+# #509 — the SQLOrder-specific refusal, and NOT `_reject_cte_desc(ref, "an SQLOrder")`: that
+# message reads *"`desc = true` is only meaningful in order_by(...)"*, which is false here and
+# actively misleading, because an `SQLOrder` IS an ordering term. What is wrong is not the place,
+# it is the duplication — two spellings for one direction — so the message names the slot that
+# wins instead.
+function _reject_handle_desc_in_sqlorder(ref::CTEReference)
+  ref.desc && throw(QueryBuildError(
+    "\e[4m\e[31mdesc = true\e[0m on \e[4m\e[31mCTE(\"$(ref.name)\", \"$(ref.path)\")\e[0m cannot be " *
+    "combined with \e[4m\e[32mSQLOrder\e[0m, which carries the direction in its own " *
+    "\e[4m\e[32morientation\e[0m. Write \e[4m\e[32mSQLOrder(CTE(\"$(ref.name)\", " *
+    "\"$(ref.path)\"); orientation = \"DESC\")\e[0m (#509)."))
+  return ref
+end
+function _reject_handle_desc_in_sqlorder(ref::JoinedReference)
+  ref.desc && throw(QueryBuildError(
+    "\e[4m\e[31mdesc = true\e[0m on \e[4m\e[31mJoined(\"$(ref.alias)\", \"$(ref.path)\")\e[0m cannot " *
+    "be combined with \e[4m\e[32mSQLOrder\e[0m, which carries the direction in its own " *
+    "\e[4m\e[32morientation\e[0m. Write \e[4m\e[32mSQLOrder(Joined(\"$(ref.alias)\", " *
+    "\"$(ref.path)\"); orientation = \"DESC\")\e[0m (#509)."))
   return ref
 end
 

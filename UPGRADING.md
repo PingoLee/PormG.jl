@@ -103,11 +103,12 @@ removed because nothing implemented it, not because the semantics were rejected.
 
 - **Version**: Unreleased
 - **PormG ref**: #492 (partially reverses #444 — its namespace split stays, only the *spelling*
-  changes; #431/#434 stay fixed, by a loud guard instead of by construction);
+  changes; #431/#434 stay fixed, by a loud guard instead of by construction); completed by #509,
+  which extends the same gate to the one clause it had missed;
   `src/querybuilder/ctes.jl`, `src/querybuilder/build_query.jl`, `src/querybuilder/build_joins.jl`,
   `src/exceptions.jl`, `docs/src/read/subqueries_and_ctes.md`, `docs/src/read/custom_joins.md`,
-  `docs/src/schema_conventions.md`
-- **Recorded**: 2026-09-06
+  `docs/src/read/window_functions.md`, `docs/src/schema_conventions.md`
+- **Recorded**: 2026-09-06 (amended 2026-09-10 for #509)
 - **Severity**: **behavior change** — additive for almost every app. It forces an edit in exactly one
   shape: a `.with()` label that both (a) also names a model field, reverse accessor, many-to-many
   field or `cjoin`/`on()` join path, **and** (b) is referenced somewhere as a `"<label>__…"` string.
@@ -152,6 +153,16 @@ is deliberate — the name is known *twice*, not unknown, and the remedy is diff
 A CTE name that collides with **nothing** changes no field path at all, and a colliding label that is
 only ever referenced through `CTE(...)` — never as a `"<label>__…"` string — also keeps working: the
 gate fires on the string, not on the declaration.
+
+**One clause was missed, and #509 closed it.** An `SQLOrder` entry inside a window's `order_by` —
+`WindowOver(order_by = [SQLOrder("driverid__surname")])` — kept resolving a shadowed name to the
+model side and rendering, with no error, while every other clause already refused it. It now raises
+`AmbiguousFieldError` like the rest, in both spellings of the wrapper's field (a `String` and an
+`SQLField`). Same break, same remedy, same wave: if renaming the label already migrated your app for
+the clauses above, nothing further is needed. Everything else #509 added is purely additive — an
+`SQLOrder` can now *carry* a CTE or `Joined` column at all (`SQLOrder(CTE("fast", "milliseconds"))`,
+previously a `MethodError`), and an explicit `nulls = :first`/`:last` on a window's `SQLOrder` is
+honoured instead of silently dropped.
 
 ### How to find the calls to migrate
 

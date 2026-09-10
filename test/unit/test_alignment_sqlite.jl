@@ -346,6 +346,75 @@ end
     @test final_params[2] == 1991
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# CTE emission order: declaration order, not name-hash order
+# The WITH clause is emitted by iterating `q.ctes`. While that was a plain `Dict`,
+# the emitted order came from hashing the CTE NAME STRINGS, so renaming a CTE
+# reordered the SQL — and so did upgrading Julia, since 1.13.0 changed string
+# hashing and flipped the pair used by the testset above. Text and parameters
+# always flipped together, so binding stayed correct; what was lost was that one
+# query rendered one SQL string. This pins declaration order for a pair chosen at
+# runtime *because* a plain Dict would iterate it backwards on this Julia, so the
+# test cannot pass vacuously on a future version whose hashing changes again.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Alignment Verification - CTE order follows declaration, not name hash" begin
+    # Find a name pair that a plain Dict iterates AGAINST insertion order on this
+    # Julia. This is the positive control: it is the pair that used to render
+    # backwards, and it is recomputed per version rather than hard-coded.
+    # Deliberately synthetic names: a CTE called "results" or "races" would also match
+    # the real table name elsewhere in the SQL, and the position checks below would be
+    # reading the FROM clause instead of the WITH clause.
+    candidates = ["zcte_" * string(c1, c2) for c1 in 'a':'f' for c2 in 'a':'f']
+    inverting = nothing
+    for a in candidates, b in candidates
+        a == b && continue
+        probe = Dict{String,Int}()
+        probe[a] = 1
+        probe[b] = 2
+        if collect(keys(probe)) != [a, b]
+            inverting = (a, b)
+            break
+        end
+    end
+    # Anti-vacuity: if no such pair exists, this testset proves nothing and must fail
+    # rather than report a green that means "Dict happened to behave today".
+    @test inverting !== nothing
+
+    name_a, name_b = inverting
+
+    # Same two-CTE shape as the testset above: the first CTE binds "Brazilian",
+    # the second binds 1991, and the trailing WHERE binds 1.
+    function render(first_name, second_name)
+        brazilian = M.Driver.objects.filter("nationality" => "Brazilian").values("driverid")
+        races91 = M.Race.objects.filter("year" => 1991).values("raceid")
+        q = M.Result.objects
+        _with(q, first_name, brazilian, join_field="driverid" => "driverid")
+        _with(q, second_name, races91, join_field="raceid" => "raceid")
+        q.filter("positionorder" => 1)
+        return inspect_query(q)
+    end
+
+    insp = render(name_a, name_b)
+    sql = insp[:sql_text]
+
+    # The CTE declared first must appear first in the WITH clause...
+    @test first(findfirst(name_a, sql)) < first(findfirst(name_b, sql))
+    # ...and its parameter must therefore bind first.
+    @test insp[:parameters] == ["Brazilian", 1991, 1]
+
+    # Declaring the SAME two names in the OPPOSITE order must reverse the TEXT. This is
+    # what separates "ordered by declaration" from "ordered by something stable but
+    # unrelated" — sorting the names would produce the same order for both calls here.
+    rev = render(name_b, name_a)
+    rev_sql = rev[:sql_text]
+    @test first(findfirst(name_b, rev_sql)) < first(findfirst(name_a, rev_sql))
+    # The parameter vector is UNCHANGED, and that is the correct expectation, not a
+    # weaker one: "Brazilian" belongs to whichever CTE was declared first, so a vector
+    # that tracks declaration order looks identical in both calls. It is the pairing of
+    # this with the reversed text above that shows text and parameters moved together.
+    @test rev[:parameters] == ["Brazilian", 1991, 1]
+end
+
 @testset "Alignment Verification - Complex Nested Join Paths" begin
     # Test deep traversal: Result -> Race -> Circuit with filters at multiple levels
     q = M.Result.objects.filter(

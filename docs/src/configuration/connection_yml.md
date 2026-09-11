@@ -88,6 +88,16 @@ test:
 
 The distinction matters as soon as `pool_size` is above 1 (it defaults to 3). A bare `:memory:` database belongs to the **connection that opened it** — a table created through one pool slot is invisible from the next, which surfaces as a puzzling `no such table` rather than as a connection error. The `file:…?mode=memory&cache=shared` URI form gives every connection in the pool one shared database and still writes nothing to disk, so prefer it unless you have deliberately set `pool_size: 1`.
 
+PormG does not leave you to discover that on your own:
+
+| configuration | what happens |
+|---|---|
+| `:memory:` with `pool_size: 1` | nothing to warn about — one connection, one database |
+| `:memory:` with `pool_size` above 1 | a **warning**, issued the first time a second connection is actually opened (most pools never do) |
+| `:memory:` with `sqlite_split_read_write: true` | **`InvalidConfigurationError` on load** |
+
+The last one is refused rather than warned about because it cannot work at all: split mode sends writes to one fixed connection and reads to the others, so with a per-connection database every read would look in an empty one. Use the shared-cache URI, or `pool_size: 1`.
+
 ## Environment-block Keys
 
 These are the keys PormG reads **directly under an environment block** — the peers of `config:`. Anything else in that block is not read by anything, and warns on load (see [Unrecognised keys](#Unrecognised-keys) below).

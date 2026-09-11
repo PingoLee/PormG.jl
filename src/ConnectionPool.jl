@@ -292,6 +292,32 @@ function SQLiteConnectionPool(connection_string::String; pool_size::Int = 3, spl
   if split_read_write && !effective_split
     @warn "SQLite split read/write mode requires pool_size > 1; falling back to shared pool" pool_size=pool_size
   end
+
+  # A bare `:memory:` database belongs to the connection that opened it — a table created through
+  # one pool slot is invisible from the next. `file:<name>?mode=memory&cache=shared` is the URI
+  # spelling that gives the whole pool ONE in-memory database and still writes nothing to disk;
+  # it is passed through untouched by `Configuration.load` for exactly this reason (#545).
+  #
+  # The two multi-connection cases differ in kind, so they are answered differently.
+  if connection_string == ":memory:"
+    # Certain failure. Split mode pins writes to `writer_slot` and reads to the other slots, so
+    # every write lands in one private database and every read looks in an empty one — no
+    # concurrency required, and no ordering that makes it work. Refuse it rather than hand back a
+    # pool that silently loses every write.
+    effective_split && throw(InvalidConfigurationError(
+      "SQLite `:memory:` cannot be combined with split read/write: each connection opens its own " *
+      "private in-memory database, so the reader slots would never see what the writer slot " *
+      "wrote. Use `file:<name>?mode=memory&cache=shared` for one shared in-memory database, or " *
+      "set pool_size=1."))
+
+    # The non-split case is a latent trap rather than a certain failure, so it is NOT answered
+    # here. A shared pool scans slots in ascending order and reuses slot 1 whenever it is free, so
+    # a sequential workload never opens a second database and has nothing to be warned about —
+    # warning at construction would fire on every `:memory:` pool, the overwhelming majority of
+    # which never leave slot 1 (PormG's own config tests build 28 such pools and connect on 10).
+    # `_warn_private_memory_slot` warns at the moment a second slot is actually opened instead.
+  end
+
   SQLiteConnectionPool(connections, available, connection_string, pool_size, Float64(pool_timeout), fail_fast_on_connect, effective_split, 1, 0, lock, ReentrantLock())
 end
 
@@ -359,6 +385,27 @@ function _sqlite_candidate_slots!(pool::PormGSQLite, mode::Symbol)::Vector{Int}
   ordered = vcat(reader_slots[start:end], reader_slots[1:start - 1], [writer])
   pool.reader_cursor = mod(start, length(reader_slots))
   return ordered
+end
+
+# A bare `:memory:` database is private to the connection that opened it (#545), so the pool's
+# second slot is a second, *empty* database rather than another handle on the same one.
+#
+# Warned here rather than in the constructor on purpose. A shared pool scans slots in ascending
+# order and reuses slot 1 whenever it is free, so the overwhelming majority of `:memory:` pools
+# never open a second slot and have nothing to be warned about — PormG's own configuration tests
+# build 28 such pools and connect on 10 of them. Warning at construction would fire on all 28.
+# Here it fires exactly once, at the moment the isolation becomes reachable, which is also the
+# moment it explains the `no such table` the caller is about to see.
+#
+# `maxlog=1` keeps a busy pool from repeating it; the split_read_write pairing never reaches this
+# path because the constructor refuses it outright.
+function _warn_private_memory_slot(pool::PormGSQLite, slot::Int)
+  (slot > 1 && pool.connection_string == ":memory:") || return nothing
+  @warn "SQLite `:memory:` gives each connection its own private database, and this pool just " *
+        "opened a second one — rows written through the first connection are invisible here, " *
+        "which surfaces as \"no such table\". Use `file:<name>?mode=memory&cache=shared` for one " *
+        "shared in-memory database, or set pool_size=1." slot=slot pool_size=pool.pool_size maxlog=1
+  return nothing
 end
 
 # ── Direct-handoff wait (#124) ───────────────────────────────────────────────
@@ -1005,6 +1052,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
           new_conn = backend_connect(pool; read_only = is_reader_slot)
           pool.connections[i] = new_conn
           _monitor_note_create!(pool, i)                  # fresh connection timestamp (#125)
+          _warn_private_memory_slot(pool, i)              # per-connection `:memory:` (#545)
           return (:got, new_conn)
         catch e
           # Free/hand-off the leased slot BEFORE we return either way, fast-fail included (#72/#124).
@@ -1036,6 +1084,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
             pool.connections[i] = new_conn
             pool.available[i] = false
             _monitor_note_create!(pool, i)                 # fresh connection timestamp (#125)
+            _warn_private_memory_slot(pool, i)             # per-connection `:memory:` (#545)
             return (:got, new_conn)
           catch e
             _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
@@ -1056,6 +1105,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
           push!(pool.connections, new_conn)
           push!(pool.available, false)
           _monitor_note_create!(pool, length(pool.connections))   # grow monitor vectors in lockstep (#125)
+          _warn_private_memory_slot(pool, length(pool.connections))  # per-connection `:memory:` (#545)
           new_size = length(pool.connections)
           if new_size == ceiling
             @warn "SQLite pool reached its maximum size; raise pool_size to add capacity" max_size=new_size pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)

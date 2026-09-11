@@ -990,7 +990,12 @@ end
             db_dir = _write_348_yml(joinpath(temp_root, "db"),
                 "dev:\n" *
                 "  adapter: SQLite\n" *
-                "  database: \":memory:\"\n" *
+                # Not `:memory:`: split read/write pins writes to the writer slot and reads to the
+                # others, and a bare `:memory:` database is private per connection — the pool would
+                # never read back what it wrote, so the constructor refuses that pairing (#545).
+                # This case is about the `options:` key allowlist, not about the database, so use
+                # the shared-cache URI, which is still DB-free and still opens no file.
+                "  database: \"file:pormg_opts_348?mode=memory&cache=shared\"\n" *
                 "  options:\n" *
                 "    sqlite_split_read_write: true\n")
 

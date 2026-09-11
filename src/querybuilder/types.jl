@@ -117,7 +117,7 @@ both, which is how `.with("parent" => cte)` plus `filter("parent__sku" => "S")` 
 column and left the ForeignKey's join unused.
 
 A `"cte:"` STRING PREFIX was tried first and is not sufficient, which is worth recording because it
-looks sufficient: `Models.Model(name, ::Dict{String,PormGField})` (the #317 import path) does not
+looks sufficient: `Models.Model(name, ::AbstractDict{String,PormGField})` (the #317 import path) does not
 run `format_fild_name`, so a field may legitimately be named `cte:x` — and then a `cjoin` keyed
 `"cte:x"` collides with the prefixed key of a CTE named `x`, silently dropping the cjoin's whole
 join, and an FK named `cte:x` collides in the memo, reproducing the very defect above. A prefix over

@@ -4,6 +4,7 @@ using Dates, TimeZones
 using Base64
 using UUIDs
 import JSON
+import OrderedCollections
 import PormG: PormGField, PormGModel, reserved_words, MODEL_OPTION_KWARGS, Migration
 # Physical-table-name resolution (#59) — defined in Kernel so layer-2 Configuration can reach it too.
 import PormG: model_table_name, model_has_db_table
@@ -98,7 +99,18 @@ See also [`Model`](@ref), [`set_models`](@ref), [`UniqueConstraint`](@ref), [`In
 @kwdef mutable struct Model_Type <: PormGModel
   name::AbstractString
   db_table::Union{String, Nothing} = nothing # explicit physical table name override (#59)
-  fields::Dict{String, PormGField}
+  # Ordered, not a `Dict`: this container decides the PHYSICAL COLUMN ORDER of every table PormG
+  # creates — `create_table` and the SQLite table rebuild both iterate it. Under a plain `Dict` that
+  # order came from hashing the FIELD NAMES, so a model rendered its columns in an order nobody
+  # chose, and two Julia versions disagreed: 1.12.7 and 1.13.0 produced different DDL from identical
+  # models, because 1.13 changed string hashing (#544). Insertion order is declaration order on the
+  # kwargs path and physical database order on both introspection paths (the PostgreSQL reader
+  # aggregates `ORDER BY a.attnum`, the SQLite one reads `PRAGMA table_info` in `cid` order), so
+  # this field now carries the order its source already knew and used to discard.
+  #
+  # Fourth container in this class to be fixed, after `insert` (#97), `custom_join`/`alias_join`
+  # (#449) and `ctes` (#543).
+  fields::OrderedCollections.OrderedDict{String, PormGField}
   field_names::Vector{String} = [] # needed to create sql queries with joins
   related_objects::Dict{String, Any} = Dict{String, Any}() # needed to create sql queries with joins
   _module::Union{Module, Nothing} = nothing # needed to create sql queries with joins
@@ -2129,7 +2141,9 @@ function Model(name::AbstractString, fields::NTuple{N, <:Pair{Symbol}}) where N
   # or a Python class, where mixed case is legitimate and must pass through untouched. The same
   # split applies to the FIELD-name guard on the loop below (#317).
   isempty(name) || _validate_positional_model_name(name)
-  fields_dict::Dict{String, PormGField} = Dict{String, PormGField}()
+  # Ordered: `pairs` over the kwargs NamedTuple yields them in the order the user wrote them, and
+  # that is the order the columns must be created in (#544).
+  fields_dict = OrderedCollections.OrderedDict{String, PormGField}()
   field_names::Vector{String} = []
   for (field_name, field) in pairs(fields)
     # This is the KWARGS declaration path — the only place a field name is a Julia identifier the
@@ -2153,18 +2167,28 @@ end
 # storing `dict` verbatim, so a `_end` column registered `fields["_end"]` alongside
 # `field_names == ["end"]` — a split — and an `a__b` column aborted the whole import from inside this
 # loop, before `Model_to_str` ever got a chance to render it.
-function Model(name::AbstractString, dict::Dict{String, PormGField})
+#
+# Widened from `Dict` to `AbstractDict` for #544. `Model_Type.fields` is an `OrderedDict` now, and a
+# caller that already knows the physical column order — both introspection readers do — must be able
+# to hand that order over instead of having it dropped on the way in. A plain `Dict` still works and
+# behaves exactly as it did: there is simply no order in it to preserve.
+function Model(name::AbstractString, dict::AbstractDict{String, PormGField})
+  fields = dict isa OrderedCollections.OrderedDict{String, PormGField} ? dict :
+           OrderedCollections.OrderedDict{String, PormGField}(dict)
   field_names::Vector{String} = []
-  for (field_name, field) in pairs(dict)
+  for (field_name, field) in pairs(fields)
     !is_many_to_many_field(field) && push!(field_names, field_name)
   end
-  return Model_Type(name=name, fields=dict, field_names=field_names)
+  return Model_Type(name=name, fields=fields, field_names=field_names)
 end
 # Django-importer path. Same exemption as the `Dict{String,…}` method above (#317) — the keys are
 # Python class attributes read from a live model; a Django `_foo = models.CharField()` used to import
 # as the column `foo`, which was simply wrong.
 function Model(name::AbstractString, fields::Dict{Symbol, Any})
-  fields_dict = Dict{String, PormGField}()
+  # Ordered to satisfy `Model_Type.fields` (#544). The SOURCE here is a plain `Dict`, so there is no
+  # declaration order left to recover — this preserves whatever order the caller's Dict iterates in
+  # rather than inventing one.
+  fields_dict = OrderedCollections.OrderedDict{String, PormGField}()
   field_names::Vector{String} = []
   for (field_name, field) in pairs(fields)
     @pormg_debug false
@@ -3593,7 +3617,10 @@ function get_many_to_many_relation(model::PormGModel, accessor::String)::ManyToM
 end
 
 function strip_many_to_many_fields(model::PormGModel)::PormGModel
-  physical_fields = Dict{String, PormGField}()
+  # Ordered, and load-bearing (#544): every model reaching the migration planner passes through
+  # here, so a plain `Dict` would re-hash the column order back to arbitrary at the last step before
+  # DDL is rendered — undoing the fix for exactly the path it exists to fix.
+  physical_fields = OrderedCollections.OrderedDict{String, PormGField}()
   for (field_name, field) in model.fields
     is_many_to_many_field(field) && continue
     physical_fields[field_name] = field

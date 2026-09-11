@@ -289,7 +289,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "char_to_int/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "varchar_length/PG" => [
     "Alter field: col" =>
@@ -297,7 +297,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "varchar_length/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" TEXT(80) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" TEXT(80) NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "decimal_precision/PG" => [
     "Alter field: col" =>
@@ -305,7 +305,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "decimal_precision/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" DECIMAL(12, 4) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" DECIMAL(12, 4) NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "int_to_text/PG" => [
     "Alter field: col" =>
@@ -313,7 +313,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "int_to_text/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" TEXT NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" TEXT NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "int_to_duration/PG" => [
     "Alter field: col" =>
@@ -321,7 +321,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "int_to_duration/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTERVAL NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTERVAL NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "null_set/PG" => [
     "Alter field: col" =>
@@ -329,7 +329,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "null_set/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "null_drop/PG" => [
     "Alter field: col" =>
@@ -337,7 +337,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "null_drop/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "unique_add/PG" => [
     "Alter field: col" =>
@@ -345,7 +345,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "unique_add/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" TEXT(40) UNIQUE NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" TEXT(40) UNIQUE NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "unique_drop/PG" => [
     "Alter field: col" =>
@@ -353,7 +353,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "unique_drop/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" TEXT(40) NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "default_set/PG" => [
     "Alter field: col" =>
@@ -361,7 +361,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "default_set/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NOT NULL DEFAULT 7\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NOT NULL DEFAULT 7,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "default_drop/PG" => [
     "Alter field: col" =>
@@ -369,7 +369,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "default_drop/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "default_change/PG" => [
     "Alter field: col" =>
@@ -377,7 +377,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "default_change/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NOT NULL DEFAULT 9\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NOT NULL DEFAULT 9,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "pk_add/PG" => [
     "Alter field: col" =>
@@ -385,7 +385,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "pk_add/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" TEXT(40) PRIMARY KEY NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" TEXT(40) PRIMARY KEY NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "pk_drop/PG" => [
     "Alter field: col" =>
@@ -393,7 +393,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "pk_drop/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" TEXT(40) NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "identity_drop/PG" => [
     "Alter field: col" =>
@@ -401,7 +401,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "identity_drop/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" TEXT NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" TEXT NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "identity_cross/PG" => [
     "Alter field: col" =>
@@ -409,16 +409,12 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "identity_cross/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "identity_set_always/PG" => [
     "Alter field: col" =>
       "ALTER TABLE \"child_t\" ALTER COLUMN \"col\" SET GENERATED ALWAYS;",
   ],
-  # Empty, and that IS the assertion: SQLite has no identity FLAVOUR. `_column_identity` answers
-  # `ColumnIdentity(false, false, true)` for any `sIDField` primary key whatever `generated_always`
-  # says, because `field_to_column(::PormGSQLite)` renders `PRIMARY KEY AUTOINCREMENT` either way -
-  # so both sides compile to the same spec, the delta is empty, and there is nothing to plan.
   "identity_set_always/SL" => [
   ],
   "identity_set_by_default/PG" => [
@@ -433,7 +429,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "positive_check_add/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER UNSIGNED NOT NULL CHECK (\"col\" >= 0)\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER UNSIGNED NOT NULL CHECK (\"col\" >= 0),\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "positive_check_drop/PG" => [
     "Alter field: col" =>
@@ -441,7 +437,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "positive_check_drop/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "positive_widen/PG" => [
     "Alter field: col" =>
@@ -449,7 +445,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "positive_widen/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER UNSIGNED NOT NULL CHECK (\"col\" >= 0)\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER UNSIGNED NOT NULL CHECK (\"col\" >= 0),\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "binary_bound_change/PG" => [
     "Alter field: col" =>
@@ -457,7 +453,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "binary_bound_change/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" BLOB NOT NULL CHECK (length(\"col\") <= 8)\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", CAST(\"col\" AS BLOB) FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" BLOB NOT NULL CHECK (length(\"col\") <= 8),\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", CAST(\"col\" AS BLOB), \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "binary_from_text/PG" => [
     "Alter field: col" =>
@@ -465,7 +461,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "binary_from_text/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" BLOB NOT NULL CHECK (length(\"col\") <= 4)\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", CAST(\"col\" AS BLOB) FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" BLOB NOT NULL CHECK (length(\"col\") <= 4),\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", CAST(\"col\" AS BLOB), \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "fk_add/PG" => [
     "New foreign key: col" =>
@@ -475,7 +471,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "fk_add/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NULL,\n  FOREIGN KEY (\"col\") REFERENCES \"parent_t\"(\"id\") ON DELETE NO ACTION\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NULL,\n  \"note\" TEXT(40) NOT NULL,\n  FOREIGN KEY (\"col\") REFERENCES \"parent_t\"(\"id\") ON DELETE NO ACTION\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
     "Create index on col" =>
       "CREATE INDEX IF NOT EXISTS \"child_t_col_HASH_idx\" ON \"child_t\" (\"col\");",
   ],
@@ -485,7 +481,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "fk_drop/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "fk_repoint/PG" => [
     "Remove foreign key: col" =>
@@ -495,7 +491,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "fk_repoint/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NULL,\n  FOREIGN KEY (\"col\") REFERENCES \"other_parent_t\"(\"id\") ON DELETE NO ACTION\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NULL,\n  \"note\" TEXT(40) NOT NULL,\n  FOREIGN KEY (\"col\") REFERENCES \"other_parent_t\"(\"id\") ON DELETE NO ACTION\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "fk_on_delete/PG" => [
     "Remove foreign key: col" =>
@@ -505,7 +501,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "fk_on_delete/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NULL,\n  FOREIGN KEY (\"col\") REFERENCES \"parent_t\"(\"id\") ON DELETE SET NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NULL,\n  \"note\" TEXT(40) NOT NULL,\n  FOREIGN KEY (\"col\") REFERENCES \"parent_t\"(\"id\") ON DELETE SET NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "fk_constraint_off/PG" => [
     "Remove foreign key: col" =>
@@ -513,7 +509,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "fk_constraint_off/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" INTEGER NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "fk_unchanged/PG" => [
   ],
@@ -525,7 +521,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "positive_to_text/SL" => [
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" TEXT NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col\") SELECT \"note\", \"id\", \"col\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col\" TEXT NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col\", \"note\") SELECT \"id\", \"col\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "rename_plain/PG" => [
     "Rename field: col2" =>
@@ -545,7 +541,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
     "Rename field: col2" =>
       "ALTER TABLE \"child_t\" RENAME COLUMN \"col\" TO \"col2\";",
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col2\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col2\") SELECT \"note\", \"id\", \"col2\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col2\" TEXT(40) NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col2\", \"note\") SELECT \"id\", \"col2\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "rename_and_drop_pk/PG" => [
     "Rename field: col2" =>
@@ -557,7 +553,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
     "Rename field: col2" =>
       "ALTER TABLE \"child_t\" RENAME COLUMN \"col\" TO \"col2\";",
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col2\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col2\") SELECT \"note\", \"id\", \"col2\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col2\" TEXT(40) NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col2\", \"note\") SELECT \"id\", \"col2\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "rename_and_drop_check/PG" => [
     "Rename field: col2" =>
@@ -569,7 +565,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
     "Rename field: col2" =>
       "ALTER TABLE \"child_t\" RENAME COLUMN \"col\" TO \"col2\";",
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col2\" TEXT NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col2\") SELECT \"note\", \"id\", \"col2\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col2\" TEXT NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col2\", \"note\") SELECT \"id\", \"col2\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "rename_and_retype/PG" => [
     "Rename field: col2" =>
@@ -581,7 +577,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
     "Rename field: col2" =>
       "ALTER TABLE \"child_t\" RENAME COLUMN \"col\" TO \"col2\";",
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col2\" INTEGER NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col2\") SELECT \"note\", \"id\", \"col2\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col2\" INTEGER NOT NULL,\n  \"note\" TEXT(40) NOT NULL\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col2\", \"note\") SELECT \"id\", \"col2\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "rename_and_repoint/PG" => [
     "Remove foreign key: col" =>
@@ -595,7 +591,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
     "Rename field: col2" =>
       "ALTER TABLE \"child_t\" RENAME COLUMN \"col\" TO \"col2\";",
     "Alter table: child_t" =>
-      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"note\" TEXT(40) NOT NULL,\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col2\" INTEGER NULL,\n  FOREIGN KEY (\"col2\") REFERENCES \"other_parent_t\"(\"id\") ON DELETE NO ACTION\n);;\nINSERT INTO \"child_t_new\" (\"note\", \"id\", \"col2\") SELECT \"note\", \"id\", \"col2\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
+      "DROP TABLE IF EXISTS \"child_t_new\";\nCREATE TABLE \"child_t_new\" (\n  \"id\" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,\n  \"col2\" INTEGER NULL,\n  \"note\" TEXT(40) NOT NULL,\n  FOREIGN KEY (\"col2\") REFERENCES \"other_parent_t\"(\"id\") ON DELETE NO ACTION\n);;\nINSERT INTO \"child_t_new\" (\"id\", \"col2\", \"note\") SELECT \"id\", \"col2\", \"note\" FROM \"child_t\";;\nDROP TABLE \"child_t\";\nALTER TABLE \"child_t_new\" RENAME TO \"child_t\";\nPRAGMA foreign_key_check(\"child_t\");",
   ],
   "rename_fk_unchanged/PG" => [
     "Rename field: col2" =>

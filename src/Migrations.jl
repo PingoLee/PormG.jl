@@ -11,7 +11,7 @@ using DataFrames
 using CSV
 using Dates
 using JSON
-import OrderedCollections: OrderedDict
+import OrderedCollections: OrderedDict, OrderedSet
 import Random: randstring
 import SHA
 import PormG.ConnectionPool: fetch, with_transaction, with_sqlite_write_lock, finalize_transaction_connection!

@@ -28,7 +28,7 @@ const QB = PormG.QueryBuilder
 # all the misuse below is rejected before any DB work.
 typed_errs_model = Models.Model_Type(
     name = "typed_errs_test",
-    fields = Dict(
+    fields = PormG.OrderedCollections.OrderedDict(
         "id" => Models.IDField(),
         "points" => Models.IntegerField(),
     ),

@@ -189,7 +189,7 @@ end
     # build/validation time, before any DB work.
     taxo_model = Models.Model_Type(
         name = "taxonomy_test",
-        fields = Dict("id" => Models.IDField(), "points" => Models.IntegerField()),
+        fields = PormG.OrderedCollections.OrderedDict("id" => Models.IDField(), "points" => Models.IntegerField()),
         field_names = ["id", "points"],
     )
 
@@ -215,7 +215,7 @@ end
         # Config entry exists but its pool was never built → typed, not a downstream MethodError.
         PormG.config["docerr_nopool"] = PormG.Configuration.Settings(change_data = true)
         nopool = Models.Model_Type(name = "np_probe",
-            fields = Dict("id" => Models.IDField()), field_names = ["id"])
+            fields = PormG.OrderedCollections.OrderedDict("id" => Models.IDField()), field_names = ["id"])
         nopool.connect_key = "docerr_nopool"
         err = try; object(nopool).filter("id" => 1).list(show_query = :dict); nothing; catch e; e; end
         @test err isa PormG.InvalidConfigurationError

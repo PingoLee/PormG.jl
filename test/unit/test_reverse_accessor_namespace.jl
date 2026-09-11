@@ -569,7 +569,7 @@ end
 # choosing a better `related_name` before the fact, because the user never wrote a name at all — so
 # the message has to say where the name came from and offer BOTH remedies.
 #
-# The `Model_Type(; fields = Dict(...))` spelling is deliberate: it is the shape `inspectdb`
+# The `Model_Type(; fields = PormG.OrderedCollections.OrderedDict(...))` spelling is deliberate: it is the shape `inspectdb`
 # introspection and the Django importer build, and it is the reason this route is reachable without
 # anyone hand-writing a `__` field name.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -577,7 +577,7 @@ end
   err = @test_throws PormG.ModelDefinitionError _ran_module(:RanSepDerivedModels, quote
     Driver = Models.Model("ransd_driver", id = Models.IDField(), surname = Models.CharField())
     Incident = Models.Model_Type(name = "ransd_incident",
-      fields = Dict{String, PormG.PormGField}(
+      fields = PormG.OrderedCollections.OrderedDict{String, PormG.PormGField}(
         "id"             => Models.IDField(),
         "lap"            => Models.IntegerField(),
         "caused__by_id"  => Models.ForeignKey("Driver", pk_field = "id"),
@@ -617,7 +617,7 @@ end
   CTL = _ran_module(:RanSepControlModels, quote
     Driver = Models.Model("ransc_driver", id = Models.IDField(), surname = Models.CharField())
     Incident = Models.Model_Type(name = "ransc_incident",
-      fields = Dict{String, PormG.PormGField}(
+      fields = PormG.OrderedCollections.OrderedDict{String, PormG.PormGField}(
         "id"            => Models.IDField(),
         "caused__by_id" => Models.ForeignKey("Driver", pk_field = "id")),
       field_names = ["id", "caused__by_id"])
@@ -676,7 +676,7 @@ end
   err = @test_throws PormG.ModelDefinitionError _ran_module(:RanSepBoundaryModels, quote
     Driver = Models.Model("ransb_driver", id = Models.IDField(), surname = Models.CharField())
     Incident = Models.Model_Type(name = "ransb_incident",
-      fields = Dict{String, PormG.PormGField}(
+      fields = PormG.OrderedCollections.OrderedDict{String, PormG.PormGField}(
         "id"   => Models.IDField(),
         "_id"  => Models.ForeignKey("Driver", pk_field = "id"),
         "b_id" => Models.ForeignKey("Driver", pk_field = "id")),

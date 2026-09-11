@@ -42,7 +42,7 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
     @testset "Integer Fields (IDField, IntegerField, BigIntegerField)" begin
         mock_int_model = Models.Model_Type(
             name = "int_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "age" => Models.IntegerField(null=false),
                 "big_val" => Models.BigIntegerField()
@@ -82,7 +82,7 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
     @testset "String Fields (CharField, TextField, EmailField)" begin
         mock_str_model = Models.Model_Type(
             name = "str_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "code" => Models.CharField(max_length=5),
                 "email" => Models.EmailField()
             ),
@@ -107,7 +107,7 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
         # …and length validation still fires at the declared bound, wherever it is.
         mock_long_model = Models.Model_Type(
             name = "long_char_test",
-            fields = Dict("url" => Models.CharField(max_length = 500)),
+            fields = PormG.OrderedCollections.OrderedDict("url" => Models.CharField(max_length = 500)),
             field_names = ["url"]
         )
         @test validate_field_data(mock_long_model, "url", "a"^500, "insert") === true
@@ -124,7 +124,7 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
         # check, which is the branch a binary value now takes.
         mock_unbounded_model = Models.Model_Type(
             name = "unbounded_len_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "blob" => Models.BinaryField()    # max_length defaults to nothing
             ),
@@ -143,7 +143,7 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
         # characters and skipped byte vectors entirely, so neither of these raised.
         mock_bounded_model = Models.Model_Type(
             name = "bounded_len_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "blob" => Models.BinaryField(max_length = 4)
             ),
@@ -159,7 +159,7 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
     @testset "Numeric Fields: Comprehensive Type Handling" begin
         mock_decimal_model = Models.Model_Type(
             name = "decimal_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "price" => Models.DecimalField(max_digits=10, decimal_places=2),
                 "score" => Models.DecimalField(max_digits=5, decimal_places=1, null=true)
             ),
@@ -168,7 +168,7 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
         
         mock_float_model = Models.Model_Type(
             name = "float_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "ratio" => Models.FloatField(null=false),
                 "percentage" => Models.FloatField(null=true)
             ),
@@ -294,7 +294,7 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
     @testset "Logical & Temporal Fields (BooleanField, DateTimeField, DateField)" begin
         mock_time_model = Models.Model_Type(
             name = "time_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "is_ok" => Models.BooleanField(default=true),
                 "ts" => Models.DateTimeField()
             ),
@@ -311,7 +311,7 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
         # DateTimeField with various configurations
         DateTimeModel = Models.Model_Type(
             name = "datetime_comprehensive_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "created_at" => Models.DateTimeField(auto_now_add=true),
                 "updated_at" => Models.DateTimeField(auto_now=true),
@@ -472,7 +472,7 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
     @testset "DateField Comprehensive Testing: Edge Cases & Operations" begin
         DateModel = Models.Model_Type(
             name = "date_comprehensive_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "created_on" => Models.DateField(auto_now_add=true),
                 "updated_on" => Models.DateField(auto_now=true),
@@ -544,7 +544,7 @@ end
     @testset "Extensive Field Combinations & Constraints" begin
         ExtensiveModel = Models.Model_Type(
             name = "comprehensive_table",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "name" => Models.CharField(max_length = 100),
                 "description" => Models.TextField(null = true),
@@ -588,7 +588,7 @@ end
         
         BoundaryModel = Models.Model_Type(
             name = "boundary_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id"    => Models.IDField(),
                 "price" => Models.DecimalField(max_digits=12, decimal_places=2)
             ),
@@ -774,7 +774,7 @@ end
     @testset "User API Integration: .objects.create() with complex models" begin
         ComplexModel = Models.Model_Type(
             name = "complex_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "username" => Models.CharField(max_length=50),
                 "email" => Models.EmailField(unique=true),
@@ -858,7 +858,7 @@ end
     @testset "User API Numeric Contract via Create/Update Inspection" begin
         NumericApiModel = Models.Model_Type(
             name = "numeric_api_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "label" => Models.CharField(max_length=50),
                 "amount" => Models.DecimalField(max_digits=10, decimal_places=2),
@@ -959,7 +959,7 @@ end
     @testset "Bulk Operations Validation via Inspection" begin
         BulkModel = Models.Model_Type(
             name = "bulk_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "name" => Models.CharField(max_length=100),
                 "age" => Models.IntegerField(),
@@ -1002,7 +1002,7 @@ end
     @testset "Query Inspection for Select/Update/Delete Operations" begin
         InspectModel = Models.Model_Type(
             name = "inspect_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "name" => Models.CharField(max_length=100),
                 "age" => Models.IntegerField(),
@@ -1060,7 +1060,7 @@ end
         # TimeField represents time without a specific date (HHμ:MM:SS format)
         TimeModel = Models.Model_Type(
             name = "time_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "opening_hour" => Models.TimeField(null=false),
                 "closing_hour" => Models.TimeField(null=true),  # nullable
@@ -1143,7 +1143,7 @@ end
     @testset "DurationField (Elapsed Time Values)" begin
         DurationModel = Models.Model_Type(
             name = "duration_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "lap_time" => Models.DurationField(null=false),
                 "pit_duration" => Models.DurationField(null=true),
                 "default_duration" => Models.DurationField(default=Minute(1) + Second(27) + Millisecond(452))
@@ -1169,7 +1169,7 @@ end
         # Test explicit timezone handling: DateTime, ZonedDateTime, and timezone mismatches
         TzModel = Models.Model_Type(
             name = "tz_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "naive_timestamp" => Models.DateTimeField(null=false),
                 "aware_timestamp" => Models.DateTimeField(null=true),
@@ -1325,7 +1325,7 @@ end
         # Test DateField string format validation: only YYYY-MM-DD should be accepted
         DateFormatModel = Models.Model_Type(
             name = "date_format_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "event_date" => Models.DateField(null=false),
                 "optional_date" => Models.DateField(null=true)
@@ -1468,7 +1468,7 @@ end
         # Test ForeignKey field initialization and validation
         UserModel = Models.Model_Type(
             name = "users",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "username" => Models.CharField(max_length=50)
             ),
@@ -1478,7 +1478,7 @@ end
 
         PostModel = Models.Model_Type(
             name = "posts",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "title" => Models.CharField(max_length=200),
                 "author" => Models.ForeignKey("User", on_delete="CASCADE"),
@@ -1566,7 +1566,7 @@ end
         # Test OneToOneField
         ProfileModel = Models.Model_Type(
             name = "profiles",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "user" => Models.OneToOneField("User", on_delete="CASCADE"),
                 "bio" => Models.TextField(null=true),
@@ -1628,7 +1628,7 @@ end
 
         ZeroSentinelModel = Models.Model_Type(
             name = "zero_sentinel_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "title" => Models.CharField(max_length=100),
                 "required_fk" => Models.ForeignKey("Other", on_delete="CASCADE"),
@@ -1662,7 +1662,7 @@ end
         # Test unique=true field enforcement
         UniqueModel = Models.Model_Type(
             name = "unique_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "email" => Models.EmailField(unique=true),
                 "username" => Models.CharField(max_length=50, unique=true),
@@ -1746,7 +1746,7 @@ end
         # Test CharField max_length enforcement
         StringModel = Models.Model_Type(
             name = "string_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "code" => Models.CharField(max_length=5),
                 "title" => Models.CharField(max_length=100),
@@ -1865,7 +1865,7 @@ end
         # Test BooleanField with various input values
         BoolModel = Models.Model_Type(
             name = "bool_test",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "is_active" => Models.BooleanField(default=false),
                 "is_verified" => Models.BooleanField(default=true),
@@ -2058,7 +2058,7 @@ end
     @testset "DateField: DateTime input truncates to Date (no error)" begin
         DateContractModel = Models.Model_Type(
             name = "django_date_contract",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id"         => Models.IDField(),
                 "event_date" => Models.DateField(null=true),
             ),
@@ -2091,7 +2091,7 @@ end
     @testset "DecimalField: NUMERIC(10,2) precision enforced before DB" begin
         PriceModel = Models.Model_Type(
             name        = "django_decimal_contract",
-            fields      = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id"    => Models.IDField(),
                 "price" => Models.DecimalField(max_digits=10, decimal_places=2)
             ),
@@ -2119,7 +2119,7 @@ end
 
         FunctionContractModel = Models.Model_Type(
             name = "function_contract_model",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "forename" => Models.CharField(max_length=100),
                 "points" => Models.FloatField(null=true),
@@ -2161,7 +2161,7 @@ end
         # select item, otherwise the builder incorrectly pushes it into GROUP BY.
         AggregateContractModel = Models.Model_Type(
             name = "aggregate_contract_model",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "team" => Models.CharField(max_length=100),
                 "points" => Models.FloatField(null=true),
@@ -2202,7 +2202,7 @@ end
 
         DateHelperModel = Models.Model_Type(
             name = "date_helper_model",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "id" => Models.IDField(),
                 "created_at" => Models.DateTimeField(null=true),
             ),

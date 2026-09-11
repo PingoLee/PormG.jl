@@ -32,10 +32,16 @@ end
 
 # Bare Model_Type around a fields dict — bypasses the Model() constructor (and any config/FK
 # resolution) so the test isolates the rendering loop only, mirroring test_migration_diff_failsafe.jl.
-# `AbstractDict` since #544: `Model_Type.fields` is an `OrderedDict`, and while a plain `Dict` still
-# converts on the way in, pinning `Dict` here would claim a narrower contract than the type has.
+# `AbstractDict` in, `OrderedDict` out (#544). `Model_Type.fields` is an `OrderedDict`, and callers
+# here pass a plain `Dict` because these cases are about the RENDERING loop, not about order.
+#
+# The conversion has to be explicit: OrderedCollections 2.0 removed `convert(::OrderedDict, ::Dict)`
+# — `ArgumentError: Cannot convert unordered AbstractDicts into OrderedDicts` — so relying on
+# `@kwdef` to convert works on OC1 and throws on OC2. `[compat]` allows both, and `Manifest.toml` is
+# gitignored, so that difference is invisible locally and appears only in CI.
 _mk_render_model(fields::AbstractDict{String, PormG.PormGField}) =
-  PormG.Models.Model_Type(name = "drivers_render_scratch", fields = fields)
+  PormG.Models.Model_Type(name = "drivers_render_scratch",
+                          fields = PormG.OrderedCollections.OrderedDict{String, PormG.PormGField}(fields))
 
 # Model_to_str only reads settings.django_prefix (nothing by default) — an all-default
 # Settings is a sufficient stand-in for a real connection config here.

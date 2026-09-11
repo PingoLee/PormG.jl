@@ -2021,7 +2021,7 @@ end
     # defined in the module raises ModelDefinitionError rather than silently skipping.
     BadChild = PormG.Models.Model_Type(
         name = "bad_fk_child",
-        fields = Dict(
+        fields = PormG.OrderedCollections.OrderedDict(
             "id" => PormG.Models.IDField(),
             "parent" => PormG.Models.ForeignKey("NoSuchModelXYZ", on_delete="CASCADE", null=true),
         ),
@@ -2053,12 +2053,12 @@ end
     function _on_delete_mod(modname::Symbol, make_fk)
         parent = PormG.Models.Model_Type(
             name = "od_parent_$(modname)",
-            fields = Dict("id" => PormG.Models.IDField()),
+            fields = PormG.OrderedCollections.OrderedDict("id" => PormG.Models.IDField()),
             field_names = ["id"]
         )
         child = PormG.Models.Model_Type(
             name = "od_child_$(modname)",
-            fields = Dict("id" => PormG.Models.IDField(), "parent" => make_fk(parent)),
+            fields = PormG.OrderedCollections.OrderedDict("id" => PormG.Models.IDField(), "parent" => make_fk(parent)),
             field_names = ["id", "parent"]
         )
         mod = Module(modname)
@@ -2107,14 +2107,14 @@ end
 @testset "set_models reports every on_delete contradiction at once (#303)" begin
     parent = PormG.Models.Model_Type(
         name = "od303_parent",
-        fields = Dict("id" => PormG.Models.IDField()),
+        fields = PormG.OrderedCollections.OrderedDict("id" => PormG.Models.IDField()),
         field_names = ["id"]
     )
     # Model A: TWO contradictions on ONE model — one of each rule. Proves the walk does not stop
     # at the first offending FIELD. `ok_fk` is the discrimination control (assertion 5).
     child_a = PormG.Models.Model_Type(
         name = "od303_child_a",
-        fields = Dict(
+        fields = PormG.OrderedCollections.OrderedDict(
             "id"        => PormG.Models.IDField(),
             "bad_null"  => PormG.Models.ForeignKey(parent, pk_field = "id",
                              on_delete = "SET_NULL",    null = false, related_name = "od303_a_null"),
@@ -2129,7 +2129,7 @@ end
     # first offending MODEL either — the two axes fail independently.
     child_b = PormG.Models.Model_Type(
         name = "od303_child_b",
-        fields = Dict(
+        fields = PormG.OrderedCollections.OrderedDict(
             "id"       => PormG.Models.IDField(),
             "bad_null" => PormG.Models.ForeignKey(parent, pk_field = "id",
                             on_delete = "SET_NULL", null = false, related_name = "od303_b_null"),
@@ -2277,7 +2277,7 @@ end
     # should raise a ModelDefinitionError during set_models.
     DupParent = PormG.Models.Model_Type(
         name = "dup_parent",
-        fields = Dict(
+        fields = PormG.OrderedCollections.OrderedDict(
             "id" => PormG.Models.IDField()
         ),
         field_names = ["id"]
@@ -2285,7 +2285,7 @@ end
 
     DupChild = PormG.Models.Model_Type(
         name = "dup_child",
-        fields = Dict(
+        fields = PormG.OrderedCollections.OrderedDict(
             "id" => PormG.Models.IDField(),
             "fk1" => PormG.Models.ForeignKey(DupParent, pk_field="id", on_delete="CASCADE", null=true, related_name="same_name"),
             "fk2" => PormG.Models.ForeignKey(DupParent, pk_field="id", on_delete="CASCADE", null=true, related_name="same_name")

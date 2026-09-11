@@ -757,7 +757,7 @@ end
     @testset "no match_on and no primary key raises" begin
         NoPk = PormG.Models.Model_Type(
             name = "no_pk_scope_model",
-            fields = Dict(
+            fields = PormG.OrderedCollections.OrderedDict(
                 "a" => IntegerField(),
                 "b" => IntegerField(),
             ),
@@ -916,7 +916,7 @@ end
             # Model with a defaulted field `laps` that is absent from DataFrame
             StintModel = PormG.Models.Model_Type(
                 name = "stint_col_collision_model",
-                fields = Dict(
+                fields = PormG.OrderedCollections.OrderedDict(
                     "id"   => IDField(),
                     "laps" => IntegerField(default = 0),
                 ),

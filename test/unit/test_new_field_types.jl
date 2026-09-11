@@ -91,7 +91,7 @@ end
         @testset "validate_field_data with UUIDField" begin
             mock_model = Models.Model_Type(
                 name = "uuid_test",
-                fields = Dict(
+                fields = PormG.OrderedCollections.OrderedDict(
                     "token" => Models.UUIDField(),
                     "nullable_token" => Models.UUIDField(null=true)
                 ),
@@ -142,7 +142,7 @@ end
         @testset "validate_field_data with URLField" begin
             mock_model = Models.Model_Type(
                 name = "url_test",
-                fields = Dict(
+                fields = PormG.OrderedCollections.OrderedDict(
                     "website" => Models.URLField(max_length=50)
                 ),
                 field_names = ["website"]
@@ -186,7 +186,7 @@ end
         @testset "validate_field_data with SlugField" begin
             mock_model = Models.Model_Type(
                 name = "slug_test",
-                fields = Dict(
+                fields = PormG.OrderedCollections.OrderedDict(
                     "slug" => Models.SlugField(max_length=20)
                 ),
                 field_names = ["slug"]
@@ -257,7 +257,7 @@ end
         @testset "validate_field_data with JSONField" begin
             mock_model = Models.Model_Type(
                 name = "json_test",
-                fields = Dict(
+                fields = PormG.OrderedCollections.OrderedDict(
                     "data" => Models.JSONField(),
                     "nullable_data" => Models.JSONField(null=true)
                 ),

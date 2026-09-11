@@ -445,6 +445,88 @@ end
     end
 end
 
+# ── #545: SQLite `database:` keywords are not filesystem paths ────────────────────────────────
+# `:memory:` and `file:` URI filenames are SQLite keywords. `load` used to run the in-memory arm
+# only when the key was *absent*, so an explicit `database: ":memory:"` was resolved against the
+# config folder like an ordinary relative path. The corruption was invisible for years because
+# Windows `splitdrive(":memory:")` returned `(":memory:", "")` on Julia < 1.13, so `joinpath`
+# discarded the prefix and produced the right answer by accident; POSIX has always created a real
+# on-disk file *named* `:memory:` instead. Julia 1.13 fixed the `splitdrive` quirk, and the
+# Windows accident became `<path>\:memory:` — a path SQLite cannot open at all.
+#
+# Note on red-before-green: pre-fix, case (1) errors on Julia ≥1.13 and resolves to a joined path
+# on POSIX, but it *passes* on Windows + Julia 1.12 — that platform is precisely where the accident
+# used to land on the correct string. Case (2) is the version-independent half: no file may appear.
+@testset "SQLite in-memory and URI `database:` values bypass path resolution" begin
+    # (1) An explicit `:memory:` must reach the pool verbatim, never joined to the config folder.
+    mktempdir() do temp_root
+        db_dir = joinpath(temp_root, "db")
+        mkpath(db_dir)
+        _write_configuration_test_connection(joinpath(db_dir, "connection.yml"))
+
+        PormG.Configuration.load(db_dir; env="test")
+        pool = PormG.Configuration.get_settings(db_dir).connections
+        @test pool.connection_string == ":memory:"
+
+        # (2) …and nothing may be created on disk for it. This is the half that fails on POSIX
+        #     regardless of Julia version, where the joined path is a perfectly legal filename.
+        @test readdir(db_dir) == ["connection.yml"]
+
+        _cleanup_configuration_test_keys([db_dir])
+    end
+
+    # (3) A `file:` URI is a URI, not a relative path. This is the spelling that yields ONE shared
+    #     in-memory database across every pool connection, so mangling it would take the documented
+    #     escape hatch away from anyone whose pool_size is above 1.
+    mktempdir() do temp_root
+        db_dir = joinpath(temp_root, "db")
+        mkpath(db_dir)
+        open(joinpath(db_dir, "connection.yml"), "w") do f
+            write(f,
+                "test:\n" *
+                "  adapter: SQLite\n" *
+                "  database: \"file:pormg_shared?mode=memory&cache=shared\"\n" *
+                "  config:\n" *
+                "    change_db: true\n" *
+                "    change_data: true\n")
+        end
+
+        PormG.Configuration.load(db_dir; env="test")
+        pool = PormG.Configuration.get_settings(db_dir).connections
+        @test pool.connection_string == "file:pormg_shared?mode=memory&cache=shared"
+        @test readdir(db_dir) == ["connection.yml"]
+
+        _cleanup_configuration_test_keys([db_dir])
+    end
+
+    # (4) An ordinary relative path must still be resolved against the config folder — the fix
+    #     must not turn every `database:` value into a pass-through.
+    mktempdir() do temp_root
+        db_dir = joinpath(temp_root, "db")
+        mkpath(db_dir)
+        open(joinpath(db_dir, "connection.yml"), "w") do f
+            write(f,
+                "test:\n" *
+                "  adapter: SQLite\n" *
+                "  database: \"nested/f1.sqlite\"\n" *
+                "  config:\n" *
+                "    change_db: true\n" *
+                "    change_data: true\n")
+        end
+
+        PormG.Configuration.load(db_dir; env="test")
+        pool = PormG.Configuration.get_settings(db_dir).connections
+        #     Assert the contract, not the separator spelling: the value is made absolute, lands
+        #     under the config folder, and its parent directory is created.
+        @test isabspath(pool.connection_string)
+        @test startswith(pool.connection_string, db_dir)
+        @test endswith(pool.connection_string, "f1.sqlite")
+        @test isdir(joinpath(db_dir, "nested"))   # mkpath still runs for real paths
+
+        _cleanup_configuration_test_keys([db_dir])
+    end
+end
+
 # ── #205: connection.yml env selection + fail-loud load ────────────────────────────────────────
 # Pins the config-loading onboarding fixes: `default_env:` is honored as the lowest-priority
 # environment selector, the legacy `env:` key is inert but warns, `load` throws (rather than

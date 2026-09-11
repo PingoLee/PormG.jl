@@ -717,16 +717,22 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
   # Compare fields
   @pormg_debug false
   # Convert keys(model.fields) to an array of stripped strings and keep mapping to original key
-  model_fields_map = Dict(String(strip(key, '"')) => String(key) for key in keys(model.fields))
-  stripped_model_fields = Set(keys(model_fields_map))
+  # Ordered, both of them (#544). `model.fields` is an `OrderedDict` now, but a plain `Dict`
+  # comprehension over it re-hashes immediately and a `Set` of those keys hashes again — so the
+  # order the model declared survived into `fields` and was thrown away two lines later. Every
+  # consumer below either ITERATES these (the deletion/addition loops, the deferred index pass at
+  # the end of this function) or asks them for membership; `OrderedSet` answers both, so the
+  # declared order now reaches the rendered DDL and the interactive rename prompts intact.
+  model_fields_map = OrderedDict(String(strip(key, '"')) => String(key) for key in keys(model.fields))
+  stripped_model_fields = OrderedSet(keys(model_fields_map))
 
   # Do the same for current_schema model fields, but key by the PHYSICAL column name
   # (db_column when set, else the field name) so the code side aligns with the
   # column-keyed introspected DB side — otherwise a field whose db_column differs from
   # its name would churn as a spurious DROP + ADD (#50). The value stays the real
   # field-name key for accessing model.fields.
-  current_fields_map = Dict(Models.field_db_column(field, String(strip(String(key), '"'))) => String(key) for (key, field) in current_schema[model_name][:model].fields)
-  stripped_current_fields = Set(keys(current_fields_map))
+  current_fields_map = OrderedDict(Models.field_db_column(field, String(strip(String(key), '"'))) => String(key) for (key, field) in current_schema[model_name][:model].fields)
+  stripped_current_fields = OrderedSet(keys(current_fields_map))
 
   # check the field are not in current_schema (deletion)
   colect_deletion::Vector{Symbol} = []
@@ -865,8 +871,12 @@ function _resolve_table_fields(
                                 colect_addition::Vector{Symbol}, 
                                 migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
                                 settings::PormGSettings,
-                                model_fields_map::Dict{String, String},
-                                current_fields_map::Dict{String, String};
+                                # `AbstractDict` since #544: the caller now builds these as
+                                # `OrderedDict` so field order survives to the DDL and the rename
+                                # prompts. Only looked up here, never iterated, so the widening
+                                # costs nothing and keeps a plain `Dict` caller working.
+                                model_fields_map::AbstractDict{String, String},
+                                current_fields_map::AbstractDict{String, String};
                                 interactive::Bool = true
                               )::Nothing
   # #150/#507: the SQLite rebuild that a renamed-and-altered column needs is registered under ONE

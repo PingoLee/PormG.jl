@@ -592,7 +592,10 @@ end
 @testset "PormGModel.getproperty: struct fields and M2M accessors coexist (BUG-1)" begin
   # Struct fields accessible via getproperty (goes through struct-field guard)
   @test M2M.Driver_championship.name == "driver_championships"
-  @test M2M.Driver_championship.fields isa Dict
+  # `AbstractDict`, not `Dict`: `fields` is an `OrderedDict` since #544, and `OrderedDict` is not a
+  # `Dict` subtype. What this line pins is that `.fields` resolves to the STRUCT FIELD rather than
+  # an M2M accessor — the container type is incidental to that.
+  @test M2M.Driver_championship.fields isa AbstractDict
   @test M2M.Driver_championship.cache isa Dict   # internal struct field, not M2M
 
   # M2M accessors (forward direction) reachable (sym not in fieldnames → M2M branch)

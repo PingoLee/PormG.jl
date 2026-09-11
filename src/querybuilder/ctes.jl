@@ -1395,7 +1395,10 @@ end
 
 function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   values = instruct.object.values
-  fields = Dict{String,PormGField}()
+  # Ordered to satisfy `Model_Type.fields` (#544), and meaningfully so: the loop below walks
+  # `instruct.object.values` in the order the caller selected them, so the synthetic CTE model now
+  # describes its columns in that same order instead of a hash of the aliases.
+  fields = OrderedCollections.OrderedDict{String,PormGField}()
   selected_field_names = String[]
   @pormg_debug false
   for value_part in values

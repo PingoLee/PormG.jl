@@ -32,7 +32,9 @@ end
 
 # Bare Model_Type around a fields dict — bypasses the Model() constructor (and any config/FK
 # resolution) so the test isolates the rendering loop only, mirroring test_migration_diff_failsafe.jl.
-_mk_render_model(fields::Dict{String, PormG.PormGField}) =
+# `AbstractDict` since #544: `Model_Type.fields` is an `OrderedDict`, and while a plain `Dict` still
+# converts on the way in, pinning `Dict` here would claim a narrower contract than the type has.
+_mk_render_model(fields::AbstractDict{String, PormG.PormGField}) =
   PormG.Models.Model_Type(name = "drivers_render_scratch", fields = fields)
 
 # Model_to_str only reads settings.django_prefix (nothing by default) — an all-default

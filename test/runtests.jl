@@ -126,6 +126,7 @@ end
     @testset "Key Type Round Trip (#408/#409/#417)" include("unit/test_key_type_round_trip.jl")
     @testset "OneToOneField Row Paths (#418)" include("unit/test_one_to_one_row_paths.jl")
     @testset "Self-Heal Key Inference" include("unit/test_self_heal_inference.jl")
+    @testset "Connect-key Resolution (#550)" include("unit/test_connect_key_resolution.jl")
     @testset "Ignore-Tables Registry" include("unit/test_ignore_tables_registry.jl")
     @testset "New Field Types (UUID, URL, Slug, JSON)" include("unit/test_new_field_types.jl")
     @testset "Field Kwargs Equivalence (#260)" include("unit/test_field_kwargs_equivalence.jl")

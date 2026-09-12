@@ -28,6 +28,13 @@ using PormG
         @test parentmodule(PormG._emsg) === PormG.Kernel
         @test parentmodule(PormG._levenshtein) === PormG.Kernel
         @test parentmodule(PormG._suggest_name) === PormG.Kernel
+        # #550: models-folder identity. These are shared vocabulary by construction —
+        # `Configuration._resolve_loaded_key` and `Models._resolve_connect_key` both bind them, and
+        # the whole point is that the two cannot disagree. Pinned so they cannot drift back into
+        # one submodule, which is how the duplicate-resolver split arose in the first place.
+        @test parentmodule(PormG._canonical_folder_path) === PormG.Kernel
+        @test parentmodule(PormG._folder_tag) === PormG.Kernel
+        @test parentmodule(PormG._usable_folder_tag) === PormG.Kernel
 
         # The canonical column IR (#507 phase 2). These are here for a reason that is *live* rather
         # than tidy: `Dialect.alter_field` takes a `ColumnDelta` and decides which ALTER fragments to

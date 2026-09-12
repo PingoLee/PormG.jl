@@ -575,6 +575,16 @@ Loads a database configuration folder. Use `env` to explicitly set the environme
 PormG.Configuration.load("db"; env="prod")
 ```
 
+Returns `Union{Nothing, String}`: the **connection key** it registered, or `nothing` when
+`scaffold=true` wrote a skeleton instead of loading anything. The key is normally the string you
+passed, but a folder already loaded under a different spelling is reused rather than registered
+twice (#550), so it can differ — hold on to the return value instead of assuming your own spelling:
+
+```julia
+key = PormG.Configuration.load("db"; env="prod")
+settings = PormG.Configuration.get_settings(key)
+```
+
 ### `Configuration.load_many(paths; env=nothing)`
 
 Bootstraps multiple database folders in one call:
@@ -582,6 +592,10 @@ Bootstraps multiple database folders in one call:
 ```julia
 PormG.Configuration.load_many(["db", "db_analytics"]; env="prod")
 ```
+
+Returns the connection keys actually registered. As with `load`, a folder already held under another
+spelling is reused, so a returned key is not always the path that was passed — use the returned list
+rather than the one you supplied.
 
 ### `Configuration.is_loaded(path_or_key)`
 

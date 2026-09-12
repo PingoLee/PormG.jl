@@ -11,6 +11,7 @@ import PormG: model_table_name, model_has_db_table
 import PormG: DATETIME_FORMAT
 import PormG: PormGBytes  # binary-payload wrapper the parameter collectors bind as one blob (#296)
 import PormG: _emsg  # shared TTY-aware error-message strip helper (Kernel)
+import PormG: _canonical_folder_path, _folder_tag, _usable_folder_tag  # models-folder identity (#550, Kernel)
 # The "same parent?" rule (#360/#390), shared with the column IR's `reference_delta` and owned by
 # Kernel since #507 phase 2 — see the Comparison Tools section below. Underscore-private, so it is
 # imported by name rather than arriving through `using`.
@@ -817,6 +818,122 @@ function _render_contradictions(cs::Vector{ModelContradiction}, mod::Module)::St
                        "the schema contradicts itself. $(c.fix)" for c in ordered)
 end
 
+"""
+    _resolve_connect_key(path::AbstractString, config) -> Union{String, Nothing}
+
+Resolve a models folder to the key of an already-loaded connection, or `nothing` when nothing
+matches. Three rules, all aimed at the same failure — a model bound to the wrong database with
+nothing logged.
+
+**Ranked, not raced (#550).** A match on the resolved path is stronger evidence than a match on the
+folder's final component, so every candidate is collected and the strongest rank wins. The loop
+this replaced OR'd both conditions together and `break`ed on the first `config` entry satisfying
+either — and `config` is a `Dict`, so a folder-name match on an earlier-hashed key beat an exact
+path match on a later one. Which database a model reached was decided by hash order.
+
+**Explicit beats implicit (#550).** When one rank holds several candidates, a key that is an
+absolute path loses to one that is not. An absolute-path key is the signature of the implicit load
+below — `set_models` registers the entry under the caller's own path, with the environment taken
+from `default_env:` rather than from the application. A short key is what an explicit
+`Configuration.load("db"; env = ...)` mints. When a single folder carries both, the explicit entry
+is the one the application asked for, and the implicit one is the entry whose environment nobody
+chose. Ranking alone is not enough here: both keys match at the path rank, and a plain
+lexicographic tiebreak picks the absolute path **every time**, because `/` (0x2F) sorts below every
+letter and digit.
+
+`isabspath` is a *proxy* for "was minted implicitly", not a recorded fact, and it is exact only for
+the `@import_models` route, which always passes an absolute folder. A direct
+`set_models(mod, "db")` implicit-loads under the relative string, and this rule cannot tell that
+entry from an explicit one. Recording implicitness on the settings object would make it exact;
+until then the proxy holds for the path the incident came from.
+
+**Unique, or ambiguous.** When the preference above still leaves more than one candidate, the
+choice is genuinely arbitrary: we warn naming every candidate, then take the lexicographically
+first so that at least the same configuration resolves the same way on every boot.
+
+Folder-name matching is kept rather than removed because it is what makes the ordinary case work:
+applications load configuration by short key (`Configuration.load("db")`, so `db_def_folder ==
+"db"`) and import models by relative path (`@import_models "../db/models.jl"`, so the folder is
+`"../db"`). Those agree on `abspath` only when `pwd()` lines up.
+
+Free of globals and of `set_models` side effects — it only logs — so every rule is unit-testable
+without loading a configuration, in the spirit of `_infer_self_heal_key`.
+
+Deliberately not a raise: `@import_models` injects an `__init__` that swallows every exception (see
+`Utils.ensure_models_init!`), so a throw here would be invisible and the module would silently keep
+whatever key was baked at precompile — a deeper failure rather than a louder one.
+"""
+function _resolve_connect_key(path::AbstractString, config)
+    target = _canonical_folder_path(path)
+    tag = _folder_tag(path)
+    tag_usable = _usable_folder_tag(tag)
+
+    by_path = String[]
+    by_name = String[]
+    for (k, v) in config
+        folder = v.db_def_folder
+        # `add_connection` entries carry this sentinel instead of a real folder, so every one of
+        # them would collide with every other. `Configuration._resolve_loaded_key` skips them for
+        # the same reason; the two resolvers should not disagree about what a folder is.
+        folder == "dynamic_connection" && continue
+        if _canonical_folder_path(folder) == target
+            push!(by_path, k)
+        elseif tag_usable && _folder_tag(folder) == tag
+            push!(by_name, k)
+        end
+    end
+
+    isempty(by_path) || return _pick_connect_key(by_path, path, "path")
+    isempty(by_name) || return _pick_connect_key(by_name, path, "folder name")
+    return nothing
+end
+
+# Choose among candidates that all matched at the same rank. Split out from `_resolve_connect_key`
+# so the "explicit beats implicit" rule is testable on its own and cannot drift between ranks.
+#
+# Precondition: `candidates` is non-empty. Both call sites in `_resolve_connect_key` guard with
+# `isempty`, and the `::String` return leaves nowhere to report an empty set, so this is an
+# internal contract rather than a validated argument.
+function _pick_connect_key(candidates::Vector{String}, path::AbstractString, rank::String)::String
+    length(candidates) == 1 && return only(candidates)
+
+    # Narrow to the explicitly loaded keys FIRST, then break any remaining tie inside that set.
+    # Doing it the other way round — preferring only when exactly one explicit key exists, and
+    # otherwise sorting the whole list — puts the absolute keys back in the running, and `/`
+    # (0x2F) sorts below every letter, so a single implicit key beat TWO explicit ones.
+    explicit = filter(!isabspath, candidates)
+    preferred = isempty(explicit) ? candidates : explicit
+    chosen = first(sort(preferred))
+
+    # The prose is chosen by RANK, not by which branch we took. The two ranks describe opposite
+    # situations and their remedies contradict each other: path-rank candidates are ONE folder
+    # registered under several keys, where "give the folders distinct names" is impossible advice;
+    # folder-name-rank candidates are SEVERAL different folders that happen to end in the same
+    # component, where "remove the duplicate" sends the reader hunting for something that does not
+    # exist. A rank-agnostic message is necessarily wrong at one of them.
+    problem, remedy = rank == "path" ?
+        ("this models folder is registered under more than one configuration key",
+         "Load the folder once, before the models are registered, so only one entry exists.") :
+        ("several configured folders share this folder's name",
+         "Give the folders distinct final components, or load the intended connection before " *
+         "registering the models.")
+
+    # Orthogonal to the rank: did the explicit/implicit preference actually decide this?
+    decided = length(preferred) < length(candidates) ?
+        "Binding to the explicitly loaded key; the others were minted implicitly, so their " *
+        "environment came from `default_env:` rather than from your application. " :
+        "Nothing distinguishes them, so the lexicographically first is used and the choice at " *
+        "least stays the same on every boot. "
+
+    # `candidates` is the FULL set, not the narrowed one: the entries the preference dropped are
+    # exactly the implicit duplicates the reader has to go and remove, so hiding them leaves the
+    # warning naming no actionable item.
+    @warn("PormG: $problem, so the binding is ambiguous and queries may reach the wrong " *
+          "database. " * decided * remedy,
+          folder = path, rank = rank, candidates = sort(candidates), chosen = chosen)
+    return chosen
+end
+
 #
 # NOTE: keep this comment ABOVE the docstring. A comment between a docstring and the definition it
 # documents silently detaches it — `@doc` binds to the next expression, and the comment is not one,
@@ -840,9 +957,12 @@ Registration does four things:
 1. **Names the unnamed.** A model declared without a positional table name carries `name == ""`; it
    is filled in here from the Julia binding, lowercased (`Race = Model(...)` → table `race`).
 2. **Binds the connection.** `path` is matched against the configured folders to find the connection
-   key. A folder that is not loaded yet is loaded implicitly — which also fixes the environment, so
-   call `PormG.Configuration.load(path; env = ...)` first when you need a specific one, and expect
-   `MissingConfigurationError` from that implicit load if `path` holds no `connection.yml`.
+   key, strongest match first and preferring an explicitly loaded key over one minted by the
+   implicit load below (`_resolve_connect_key`). A folder that matches nothing is loaded
+   implicitly, **with a warning** — that path guesses the environment (from `default_env:`) and
+   the key (the caller's own absolute path), so call `PormG.Configuration.load(path; env = ...)`
+   first when you need a specific one, and expect `MissingConfigurationError` from that implicit
+   load if `path` holds no `connection.yml`. See `docs/src/configuration/advanced.md`.
 3. **Resolves relationships.** Each `ForeignKey`/`OneToOneField` target is resolved (a target given
    as a model-name `String` is replaced by the model object), `pk_field` defaults are applied, and
    the reverse accessor is installed on the target. An omitted `related_name` is derived and logged:
@@ -913,23 +1033,33 @@ function set_models(_module::Module, path::String)::Nothing
     # Ignore errors if the module is closed or already has it
   end
 
-  abs_path = abspath(path)
-
-  # Find if this path is already loaded under any key
-  connect_key = nothing
-  for (k, v) in config
-    v_path_abs = abspath(v.db_def_folder)
-    if v_path_abs == abs_path || v.db_def_folder == path || basename(v.db_def_folder) == basename(path)
-        connect_key = k
-        break
-    end
-  end
+  # #550: ranked, unique-or-warn. This was a first-match `break` over `config`, which is a Dict —
+  # so a folder-name match on an earlier-hashed key beat an exact path match on a later one.
+  connect_key = _resolve_connect_key(path, config)
 
   @pormg_debug false
   if isnothing(connect_key)
-    # Try to load using the path as the primary key
+    # Nothing matched, so this call is about to GUESS two things at once:
+    #
+    #   1. the environment — `load` is called with no `env`, so the file's `default_env:` wins.
+    #      In a server that has not selected its env yet, that is usually `dev`, i.e. production.
+    #   2. the key — the entry is registered under `path`, which callers pass as an ABSOLUTE path.
+    #      A later `load("db"; env=...)` then creates a SECOND entry for the same folder, and which
+    #      one a query uses depends on which the model happened to bind to. A safety check written
+    #      against `config["db"]` is then inspecting an entry the queries never reach.
+    #
+    # The fix belongs at the call site: `Configuration.load(path; env = ...)` FIRST — and for a
+    # precompiled package that call has to run at runtime (an `__init__`), because a module-body
+    # call does not re-run when the image is loaded. See docs/src/configuration/advanced.md.
+    @warn("PormG: no configured connection matches this models folder, so it is being loaded " *
+          "implicitly — the environment is taken from the file's `default_env:` and the entry is " *
+          "keyed by this path. Load it explicitly before registering models to choose both.",
+          folder = path)
     Configuration.load(path)
-    connect_key = path
+    # Re-resolve rather than assume `path` became the key: since #550 `Configuration.load` reuses
+    # an entry already held under another spelling of this folder instead of adding a second one,
+    # so the key it registered is not necessarily the string we handed it.
+    connect_key = something(_resolve_connect_key(path, config), path)
   end
   
   settings::PormGSettings = Configuration.get_settings(connect_key)
@@ -1059,13 +1189,19 @@ function ensure_model_initialized(model::PormGModel)
 
     # Case 1: Key exists but is not in config (likely a path mismatch after precompilation)
     if !isnothing(model.connect_key) && !haskey(config, model.connect_key)
-        abs_key = abspath(model.connect_key)
-        for (k, v) in config
-            if abspath(v.db_def_folder) == abs_key || basename(v.db_def_folder) == basename(model.connect_key)
-                @info "Self-healing: Remapping connect_key '$(model.connect_key)' → '$k'"
-                model.connect_key = k
-                return true
-            end
+        # #550: the same ranked resolver as `set_models`. This was its own first-match loop over
+        # `config`, with the identical hash-order defect — and case 2b below already states the
+        # rule both of them broke ("We must NOT guess by scanning `config`").
+        k = _resolve_connect_key(model.connect_key, config)
+        if !isnothing(k)
+            # @warn, not @info: this fires when a model's key is absent from `config` entirely. It
+            # is a recovery, not a normal event, and what it recovers from is usually a
+            # configuration that was never loaded for the session.
+            @warn("PormG: remapping model connect_key — its key is not in the configuration. " *
+                  "Load the folder before the models are registered to bind deterministically.",
+                  model = model.name, from = model.connect_key, to = k)
+            model.connect_key = k
+            return true
         end
     end
 

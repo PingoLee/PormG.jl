@@ -7,6 +7,7 @@ import PormG: ConfigurationError, InvalidConfigurationError  # semantic error ta
 import PormG: TransactionError  # cross-connection transaction misuse (#268); the config is valid, the call pattern is not
 import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT, UTC_TIMEZONE, DEFAULT_POOL_TIMEOUT
 import PormG: _suggest_name  # typo suggestion helper (Kernel)
+import PormG: _canonical_folder_path  # models-folder identity, shared with Models (#550, Kernel)
 import PormG: Generator
 import PormG: @pormg_debug
 # Backend generics — driver bodies live in the weakdep extensions (no direct LibPQ/SQLite here).
@@ -302,13 +303,20 @@ function _peek_default_env(db_settings_file::String)::Union{Nothing, String}
   return string(val)
 end
 
-function _resolve_loaded_key(path_or_key::String)::Union{Nothing, String}
+function _resolve_loaded_key(path_or_key::String,
+                            config::Dict{String,PormGSettings} = config)::Union{Nothing, String}
+  # The dict is a parameter, not the global: `load` accepts a `config=` override, and answering
+  # "is this folder already loaded?" against the global while writing to a local dict mixes two
+  # different configurations — it threw a `KeyError` from `load`'s own migrate branch.
   haskey(config, path_or_key) && return path_or_key
 
-  target_path = abspath(path_or_key)
+  # #550: `_canonical_folder_path`, not bare `abspath` — and the SAME helper `Models` binds with,
+  # so `is_loaded("db")` and a model's actual connection key cannot disagree about whether two
+  # spellings name one folder.
+  target_path = _canonical_folder_path(path_or_key)
   for (key, settings) in config
     settings.db_def_folder == "dynamic_connection" && continue
-    if abspath(settings.db_def_folder) == target_path
+    if _canonical_folder_path(settings.db_def_folder) == target_path
       return key
     end
   end
@@ -889,6 +897,29 @@ function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{
 end
 
 
+# Report a reload/migration that is about to replace an existing entry's pool. `close_pool!` closes
+# every slot regardless of checkout state, so a non-zero `in_use` means live borrowers are about to
+# lose their connection — that is an `@error`, not a footnote: the operator otherwise sees only an
+# unexplained failure in whatever request was holding one.
+function _warn_pool_takeover(msg::String, path::String, existing::String,
+                             config::Dict{String,PormGSettings})
+  in_use = 0
+  try
+    pool = config[existing].connections
+    pool === nothing || (in_use = pool_stats(pool).in_use)
+  catch
+    # Never let a diagnostic break the load it is describing.
+  end
+  if in_use > 0
+    @error(msg * " Connections are currently checked out of that pool and will be closed; " *
+           "in-flight queries using them will fail. Load configurations at boot, before traffic.",
+           folder = path, existing_key = existing, in_use = in_use)
+  else
+    @warn(msg, folder = path, existing_key = existing)
+  end
+  return nothing
+end
+
 function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,PormGSettings} = config)
   # create settings if does not exists
   path === nothing && (path = DB_PATH )
@@ -918,18 +949,63 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   # Resolve the environment with the file's `default_env:` folded into the precedence (#205).
   selected_env = _effective_env(env, _peek_default_env(db_settings_file))
 
-  if haskey(config, path) && config[path].connections !== nothing
-    close_pool!(config[path].connections)
+  # #550: one folder, one entry. `config[path] = …` used to add a SECOND entry whenever the same
+  # folder was already registered under a different spelling — typically an absolute path minted
+  # by the implicit load in `set_models`. Two entries meant two pools and possibly two databases
+  # for one folder, and which one a query reached depended on which key its model bound to: a
+  # safety check written against `config["db"]` could be inspecting an entry the queries never
+  # touched. Detecting it was never the missing piece — `_resolve_loaded_key` has always been
+  # able to — so rather than guard the duplicate we stop creating it.
+  key = path
+  existing = _resolve_loaded_key(path, config)
+  if existing !== nothing && existing != path
+    if isabspath(existing) && !isabspath(path)
+      # The caller is naming the folder explicitly; the entry we hold was minted implicitly, with
+      # an environment nobody chose. Migrate to the caller's key. Models still bound to the old
+      # one are remapped by `Models.ensure_model_initialized`, which warns when it does.
+      #
+      # `close_pool!` does NOT spare checked-out connections, so a migration during live traffic
+      # kills in-flight queries. Refusing to migrate would be worse — it leaves the two entries
+      # this change exists to eliminate, and makes `load` behave differently depending on
+      # transient runtime state — so migrate, but say how much was in use, because that is the
+      # number that explains a request dying a moment later.
+      _warn_pool_takeover("PormG: this folder was already loaded under an implicit absolute-path " *
+                          "key; re-registering it under the key you asked for and discarding the " *
+                          "implicit entry.", path, existing, config)
+      config[existing].connections !== nothing && close_pool!(config[existing].connections)
+      delete!(config, existing)
+    else
+      # The existing key is at least as explicit as this one, so keep it and refresh it in place
+      # rather than adding a rival entry under a second spelling. This path replaces the entry's
+      # pool too (below), so it can take connections down just as the migrate branch can.
+      _warn_pool_takeover("PormG: this folder is already loaded under a different key; reloading " *
+                          "that entry instead of registering a second one for the same folder.",
+                          path, existing, config)
+      key = existing
+    end
   end
 
-  config[path] = Settings(app_env = selected_env, db_def_folder=path)
-  settings::PormGSettings = config[path]
+  if haskey(config, key) && config[key].connections !== nothing
+    close_pool!(config[key].connections)
+  end
+
+  # `db_def_folder = key`, not `path`: the field is documented as "same then key" and the
+  # migration runner derives ~8 things from it, including the advisory-lock key
+  # (`pormg_migrations_$(db_def_folder)`). Writing the caller's spelling into a reused entry
+  # silently changed that lock's identity for one folder. `key` and `path` name the same folder,
+  # so this loses nothing — `read_db_connection_data` below is still given `path`, the spelling
+  # that was checked against the filesystem above.
+  config[key] = Settings(app_env = selected_env, db_def_folder=key)
+  settings::PormGSettings = config[key]
 
   settings.db_config_settings = read_db_connection_data(path, settings)
 
   _build_connection_pool!(settings, path)
   _check_configured_extensions!(settings)
-  return nothing
+  # Return the key actually registered. It is not always the string that was passed — see the
+  # reuse/migrate branch above — and a caller that keeps holding the spelling it handed in would
+  # otherwise have no way to find its own entry again.
+  return key
 end
 
 """
@@ -942,8 +1018,10 @@ function load_many(paths::AbstractVector{<:AbstractString}; env::Union{Nothing,S
   loaded_keys = String[]
   for path in paths
     key = String(path)
-    load(key; env=env, config=config)
-    push!(loaded_keys, key)
+    # #550: `load` may reuse an entry already held under a different spelling of the same folder,
+    # so the key it actually registered is not necessarily the string we passed. It returns the
+    # real one — callers use this list to look entries up.
+    push!(loaded_keys, something(load(key; env=env, config=config), key))
   end
   return loaded_keys
 end

@@ -81,21 +81,10 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
     end
   end
 
-  # #194 (interim, coarse): a projected correlated Subquery/Exists alongside a grouped projection is
-  # dangerous when the OuterRef column is not in the GROUP BY — PostgreSQL raises a GroupingError, but
-  # SQLite silently evaluates the subquery against an ARBITRARY row of each group (a plausible-looking
-  # wrong number). We cannot yet resolve which outer columns the inner OuterRefs reference (tracked in
-  # #194 for a precise fail-loud guard), so warn on the combination itself. False positive when the
-  # correlation column IS grouped — the message says so. `values` holds the originals (the loop deep-
-  # copies), so the SubqueryObject/ExistsObject fields are still inspectable here.
-  if instruc.aggregate && !isempty(instruc.group) &&
-     any(v -> v isa SQLTypeField && isa(v.field, Union{SubqueryObject,ExistsObject}), values)
-    @warn(_emsg(
-      "Subquery/Exists projected alongside a grouped aggregate: if the inner OuterRef column is not " *
-      "in the GROUP BY, SQLite silently returns an arbitrary row's value per group and PostgreSQL " *
-      "raises a GroupingError. Ensure the correlated column is part of the grouped projection " *
-      "(then this warning is a false positive — precise guard tracked in #194)."))
-  end
+  # #194: the coarse warn that used to sit here is gone — the precise guard is
+  # `_check_grouped_correlation`, called at the END of build(). It cannot run here: `get_order_query`
+  # still adds to `instruc.group` afterwards, so at this point the group set is incomplete and a
+  # legitimate query would be refused. See the guard's own comment.
 end
 
 # NULLS FIRST/LAST syntax landed in SQLite 3.30.0; older builds need the portable
@@ -991,7 +980,8 @@ function build(object::SQLObject;
   set_contexts && set_context!(instruct, :join)
   build_row_join_sql_text(instruct)
 
-  _check_aggregate_fanout(instruct)  # #74: refuse silently-inflated aggregates over to-many joins
+  _check_aggregate_fanout(instruct)      # #74: refuse silently-inflated aggregates over to-many joins
+  _check_grouped_correlation(instruct)   # #194: refuse a correlated projection on an ungrouped column
 
   return instruct
 end
@@ -1037,4 +1027,100 @@ function _fanout_error_msg(a, many, ambiguous::Bool)
     "    \e[32m2.\e[0m Pass \e[32mdistinct=true\e[0m to the aggregate if de-duplicated counting is what you want.\n",
     "    \e[32m3.\e[0m Compute the aggregate in a correlated \e[32mSubquery(...)\e[0m projected in values() " *
     "(correlate the inner query with \e[32mOuterRef(...)\e[0m) so the base rows are not multiplied.\n")
+end
+
+# #194 grouped-correlation guard -------------------------------------------------------------------
+# A correlated Subquery/Exists projected in a query that AGGREGATES is only meaningful when the outer
+# column it correlates on has one value per output row. When it does not, the backends diverge:
+# PostgreSQL refuses ("subquery uses ungrouped column ... from outer query"), while SQLite runs it
+# against an ARBITRARY row of each group and returns a plausible-looking wrong number. Both measured
+# on PostgreSQL 16 and SQLite 3.45. Same fail-loud stance as the #74 guard above.
+#
+# WHY IT RUNS AT THE END OF build() and not where the old #194 warn sat (end of get_select_query):
+# `get_order_query` pushes into `instruct.group` too, for an ORDER BY term the projection does not
+# contain. So
+#     values("nationality", "n" => Count("driverid"), "s" => Subquery(<correlates on surname>))
+#     order_by("surname")
+# emits `GROUP BY 1, "Tb"."surname"` — the correlation IS grouped, reached only through order_by.
+# Guarding at the select site refuses that query. `test_alignment_sqlite.jl` pins it.
+#
+# It deliberately does NOT require a non-empty group set. A whole-table aggregate
+# (`values("n" => Count(...), "s" => Subquery(...))`) renders with no GROUP BY at all and is the most
+# broken shape of the lot — PostgreSQL rejects it outright (measured) — yet the old warn, which
+# tested `!isempty(group)`, never fired on it.
+function _check_grouped_correlation(instruct::SQLInstruction)
+  instruct.aggregate || return nothing        # no aggregate ⇒ one output row per input row ⇒ safe
+  isempty(instruct.outer_refs) && return nothing
+  grouped = _grouped_expressions(instruct)
+  for c in instruct.outer_refs
+    c.expr in grouped && continue
+    throw(QueryBuildError(_ungrouped_correlation_error_msg(c, grouped)))
+  end
+  return nothing
+end
+
+# `instruct.group` is a MIXED vector, and this is the whole reason the guard needs a derivation step
+# rather than a direct membership test:
+#   - get_select_query pushes a POSITIONAL INDEX into `object.values` ("1", "2", …)
+#   - get_order_query pushes an ALREADY RENDERED expression (`"Tb"."surname"`)
+# Resolving the index through `instruct.select[i].field` puts both kinds into the same vocabulary the
+# recorder stores — rendered SQL — so no semantic bookkeeping is needed on either side.
+#
+# WHY THE TWO SIDES AGREE, precisely — they do NOT come from one function, and assuming they do is
+# how this would rot. A group entry is rendered by `_get_select_query(::String, …)`; the recorder's
+# `expr` by `_get_filter_query(::String, …)`. Those are different methods with different heads (the
+# select arm has a `"*"` fast path and a `memo_field!` write; the filter arm peels `__@` transforms),
+# but they share the resolution tail, and the `as` kwarg that appears to separate them is never read
+# in `_build_row_join`. Join-alias numbering matches for a `__` path in either render order because
+# `_build_row_join` memoizes on `row_path`. Measured: a joined path and a `__@`-transform column both
+# compare equal from the two sides. If the two String arms ever diverge in the tail, this guard gets
+# false positives — pin it with a test there rather than widening the comparison here.
+#
+# `all(isdigit, g)` distinguishes the two: the order_by push only happens on its `!found_in_select`
+# branch, where `field` is a resolved expression and always carries a non-digit. If that branch ever
+# changes to push the degraded bare alias instead, a one-character alias could collide here.
+function _grouped_expressions(instruct::SQLInstruction)::Vector{String}
+  out = String[]
+  for g in instruct.group
+    if !isempty(g) && all(isdigit, g)
+      i = parse(Int, g)
+      (1 <= i <= length(instruct.select) && isassigned(instruct.select, i)) || continue
+      push!(out, string(instruct.select[i].field))
+    else
+      push!(out, g)
+    end
+  end
+  return out
+end
+
+# The actionable lines name `c.column`, never `c.ref` or a rendered expression. The two differ for
+# `OuterRef("pk")`, where `ref` is the literal "pk" and `column` is the resolved key name — and "add
+# \"pk\" to values(...)" is not merely unhelpful, it is a second error (`UnknownFieldError`: there is
+# no column named `pk`). Same rule the #76 DISTINCT throw states in `get_order_query`: a diagnosis
+# line may carry an internal name, a *fix* line must be something the user can paste back. That is
+# also why fix 2 does not echo the `Grouped by:` expressions — those are rendered SQL
+# (`"Tb"."nationality"`), which is not valid `OuterRef(...)` input.
+function _ungrouped_correlation_error_msg(c::CorrelatedRef, grouped::Vector{String})
+  groups = isempty(grouped) ?
+    "(none — this query aggregates the whole table into a single row)" :
+    join(grouped, ", ")
+  string(
+    "PormG grouped-correlation guard (#194): the projected correlated column \e[4m\e[31m", c.label,
+    "\e[0m correlates on \e[4m\e[31m", c.column, "\e[0m, which this query does not GROUP BY.\n",
+    "  The outer query aggregates, so each output row stands for many input rows and ", c.column,
+    " has no single value to correlate against. PostgreSQL refuses this (\"subquery uses ungrouped ",
+    "column ... from outer query\"); SQLite runs it against an ARBITRARY row of each group and returns ",
+    "a plausible-looking wrong number, so PormG refuses it on both backends.\n",
+    "  Grouped by: \e[33m", groups, "\e[0m.\n",
+    "  Correlated on: \e[33m", c.expr, "\e[0m.\n",
+    "  Fix one of:\n",
+    "    \e[32m1.\e[0m Project the correlated column so it joins the group set — add \e[32m\"", c.column,
+    "\"\e[0m to \e[32mvalues(...)\e[0m. This is needed even when the query already groups by the ",
+    "primary key: PostgreSQL would accept that shape (every column is functionally dependent on the ",
+    "key), but PormG does not infer the dependency and refuses it on both backends rather than let ",
+    "the rule differ per engine.\n",
+    "    \e[32m2.\e[0m Correlate on a column the query already groups by — change \e[32mOuterRef(\"",
+    c.ref, "\")\e[0m to name one of them.\n",
+    "    \e[32m3.\e[0m Drop the outer aggregate: a scalar \e[32mSubquery(...)\e[0m already returns one ",
+    "value per outer row and needs no outer GROUP BY — that is the fan-out-safe #92 shape.\n")
 end

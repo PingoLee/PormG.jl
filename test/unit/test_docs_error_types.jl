@@ -34,6 +34,9 @@ using PormG.QueryBuilder: SQLOrder
 using PormG.Functions: WindowOver, Rank
 # #535 — a scalar function wrapping an `OuterRef`, for the subqueries-page claim below.
 using PormG.Functions: Lower
+# #194 — an outer aggregate, for the grouped-correlation claim below. `Count` is deliberately not a
+# top-level PormG export (it would collide with Base/user code), so it is named here explicitly.
+using PormG.Functions: Count
 import DataFrames
 
 # Mock backends: dialect dispatch is by connection TYPE, so a bare subtype is enough to render
@@ -645,6 +648,22 @@ const DOCERR_CASES = [
         () -> begin
             q = DOCERR_DRIVER_PG.objects
             q.values("l" => Lower(OuterRef("surname")))
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #194. The subqueries page promises a build-time refusal when a projected correlated
+        # Subquery/Exists references an outer column the query does not GROUP BY — the shape that
+        # PostgreSQL rejects outright and SQLite answers from an arbitrary row of each group.
+        "read/subqueries_and_ctes.md — a correlated Subquery on an ungrouped outer column is refused (#194)",
+        QueryBuildError,
+        () -> begin
+            inner = DOCERR_RESULT_PG.objects
+            inner.filter("driverid" => OuterRef("driverid"))
+            inner.values("t" => Count("resultid"))
+            q = DOCERR_DRIVER_PG.objects
+            # Groups by nationality; the subquery correlates on the ungrouped driverid.
+            q.values("nationality", "n" => Count("driverid"), "s" => Subquery(inner))
             q.list(show_query = :dict)
         end,
     ),

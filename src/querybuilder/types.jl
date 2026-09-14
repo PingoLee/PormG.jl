@@ -279,10 +279,13 @@ SQLField(field::FieldPart, _as::OptionalString) = SQLField(field, _as, nothing, 
 # only for symmetry with the others. Do not re-add one: a node type that needs a copy method to be
 # safe is a node type that should not have been mutable.
 #
-# Four survive, and each for a reason that is NOT mutability:
+# Three survive, and each for a reason that is NOT mutability. (#540 deleted a fourth: the
+# `SQLTypeOrder` one re-ran the #77 orientation whitelist through the inner constructor, which
+# Base's generic `deepcopy` bypasses — but a frozen `SQLOrder` cannot hold an invalid orientation,
+# so there was nothing left to re-validate. It was never a `deepcopy_internal` hook either, so
+# `deepcopy(handler)` already went through Base; `test_sqlorder_orientation.jl` now pins that the
+# generic path preserves every slot.)
 #   - this one — deliberately SHALLOW on `.field`, which `ctes.jl` documents as load-bearing;
-#   - `SQLTypeOrder` below — re-runs the #77 orientation whitelist through the inner constructor,
-#     which Base's generic `deepcopy` bypasses entirely (`test_sqlorder_orientation.jl` pins it);
 #   - `SQLTypeOper` — shares an `SQLObjectHandler` in `values` instead of cloning a whole subquery.
 #     Narrower than it reads, and review measured the boundary: `Base.deepcopy(::T)` is not a
 #     `deepcopy_internal` hook, so this specialisation applies to a TOP-LEVEL `deepcopy(::OperObject)`
@@ -303,8 +306,12 @@ function _normalize_order_orientation(orientation::AbstractString; context::Stri
   return normalized
 end
 
-# Return a order of field to sql query
-mutable struct SQLOrder <: SQLTypeOrder
+# An ORDER BY term. Immutable since #540: it is a value a user constructs and hands in, not a build
+# product, and the one path that used to write into it — `last()`'s inversion — constructs the
+# reversed term instead (`_invert_order`, execution.jl). With no second writer, the inner
+# constructor's whitelist below is the only place an orientation is ever set, which is what let
+# #540 delete the render-time re-validation in `get_order_query` and the hand-written `deepcopy`.
+struct SQLOrder <: SQLTypeOrder
   # #533 — `SQLTypeField`, not `Union{SQLTypeField,String}`. The String member was admitted and never
   # handled: `get_order_query` read `._as` off it and raised a raw `FieldError` naming an internal
   # slot (#528). The inner constructor now routes every path through `_order_field`
@@ -317,8 +324,9 @@ mutable struct SQLOrder <: SQLTypeOrder
   # NULL placement for this term (#75): `nothing` = apply the canonical backend-aligned default
   # (ASC → NULLS LAST, DESC → NULLS FIRST); `:first`/`:last` force the placement explicitly.
   nulls::Union{Symbol,Nothing}
-  # Inner constructor: every construction path (keyword, positional, deepcopy) passes the
-  # orientation whitelist (#77), so an injection-shaped direction never reaches the renderer.
+  # Inner constructor: every construction path (keyword, positional) passes the orientation
+  # whitelist (#77), so an injection-shaped direction never reaches the renderer — and since the
+  # struct is immutable (#540), construction is the only time the slot is ever written.
   SQLOrder(field, order, orientation, _as, nulls) = new(_order_field(field), order, _normalize_order_orientation(orientation), _as, nulls)
 end
 # `field` is untyped on purpose (#533): an unsupported value must reach `_order_field`'s typed
@@ -354,7 +362,6 @@ function SQLOrder(field::Union{SQLTypeCTE,SQLTypeJoined}; order::Union{Integer,N
   _reject_handle_desc_in_sqlorder(field)
   return SQLOrder(_order_field(field), order, orientation, _as, nulls)
 end
-Base.deepcopy(x::SQLTypeOrder) = SQLOrder(x.field, x.order, x.orientation, x._as, x.nulls)
 
 #
 # SQLObject Objects (main object to build a query)

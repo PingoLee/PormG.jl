@@ -116,7 +116,8 @@ end
   @test occursin("LIMIT 1", sql_pk)
 
   # NULLS placement must invert together with the direction: ASC NULLS FIRST → DESC NULLS LAST.
-  # (Guards the _invert_order! bug where two sequential `&&` swaps left :first unchanged.)
+  # (Guards the `_invert_order` bug — `_invert_order!` before #540 — where two sequential `&&`
+  # swaps left :first unchanged.)
   qn = GocPg.objects
   qn.order_by(SQLOrder(SQLField("points", "points"); orientation = "ASC", nulls = :first))
   sqln = qn.last(show_query = :sql)

@@ -2131,21 +2131,18 @@ end
 # test/unit/test_public_exports.jl. (`delete`/`inspect_query` keep their curried forms — those
 # functions are package-owned, so a kwargs-only method on them is not piracy.)
 
-# Reverse a single ORDER BY term in place — the reverse of an ORDER BY yields the last row (#208).
-# Flip ASC↔DESC, and any EXPLICIT nulls placement (an unset `nothing` stays default so the
-# renderer keeps its orientation-derived NULLS placement). Non-SQLOrder ordering terms are left
-# as-is (best effort).
-function _invert_order!(o::SQLOrder)
-  o.orientation = o.orientation == "DESC" ? "ASC" : "DESC"
-  # if/elseif, NOT two `&&` statements: sequential flips would swap :first→:last→:first (no-op).
-  if o.nulls === :first
-    o.nulls = :last
-  elseif o.nulls === :last
-    o.nulls = :first
-  end
-  return o
+# Reverse a single ORDER BY term by CONSTRUCTING the reversed one — the reverse of an ORDER BY
+# yields the last row (#208). Flip ASC↔DESC, and any EXPLICIT nulls placement (an unset `nothing`
+# stays default so the renderer keeps its orientation-derived NULLS placement). #540: `SQLOrder` is
+# an immutable struct, so this cannot write into the caller's term — which is the point: the term
+# is a value the caller may still hold, and `last()` works on a copy of the handler anyway.
+# Non-SQLOrder ordering terms are returned as-is (best effort).
+function _invert_order(o::SQLOrder)::SQLOrder
+  # One conditional, NOT two flips in sequence: :first→:last followed by :last→:first is a no-op.
+  nulls = o.nulls === :first ? :last : o.nulls === :last ? :first : o.nulls
+  return SQLOrder(o.field, o.order, o.orientation == "DESC" ? "ASC" : "DESC", o._as, nulls)
 end
-_invert_order!(o) = o
+_invert_order(o) = o
 
 """
     last(objct::SQLObjectHandler; show_query::Symbol = :execute)
@@ -2177,9 +2174,9 @@ function last(objct::SQLObjectHandler; show_query::Symbol = :execute)
     q.order_by("-" * String(pk_sym))
   else
     # Reverse the existing ordering; the reversed ORDER BY's first row is the original's last.
-    for o in q.object.order
-      _invert_order!(o)
-    end
+    # #540: rebuild the copy's own order list from constructed terms — nothing is written into an
+    # `SQLOrder`, which is a `struct` now.
+    map!(_invert_order, q.object.order, q.object.order)
   end
   q.limit(1)
   res = list(q, show_query=show_query)

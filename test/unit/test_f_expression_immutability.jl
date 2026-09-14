@@ -402,12 +402,15 @@ end
               QB.CTEReference, QB.FObject, QB.WindowFunction)
       @test !ismutabletype(T)
     end
+    # #540 — the eighth: an ordering TERM, frozen once `last()` stopped writing into it
+    # (`_invert_order` constructs the reversed term; `test_sqlorder_orientation.jl` owns it).
+    @test !ismutabletype(QB.SQLOrder)
 
     # The deliberate exceptions, asserted so a future "make everything immutable" sweep has to argue
     # with a test rather than discover the reasons by breaking them. `SQLField` is the build product
-    # every walker legitimately writes into; `SQLOrder` is an ordering term `_invert_order!` rewrites
-    # for `last()`; `WindowSpec`/`QObject` are containers whose in-place assembly is documented API.
-    for T in (QB.SQLField, QB.SQLOrder, QB.WindowSpec, QB.QObject, QB.QorObject)
+    # every walker legitimately writes into; `WindowSpec`/`QObject` are containers whose in-place
+    # assembly is documented API.
+    for T in (QB.SQLField, QB.WindowSpec, QB.QObject, QB.QorObject)
       @test ismutabletype(T)
     end
   end

@@ -346,8 +346,9 @@ mutable struct sForeignKey <: PormGField
   #     spelling. Self-healing rather than perpetual: the first `migrate` creates the parent and the
   #     next read canonicalizes it;
   #   * `convertSQLToModel(::String)` — since #522 it executes the statement in a throwaway SQLite
-  #     file and runs the PRAGMA reader over it, so it resolves the spelling the same way the reader
-  #     above does (the regex reader it replaced wrote the REFERENCES spelling verbatim).
+  #     file and runs the PRAGMA reader over it. The parent table never exists in that file, so the
+  #     resolver falls back to the REFERENCES spelling: for this entry point the outcome is the same
+  #     as the regex reader it replaced, and it stays off the live route.
   #
   # A NEW producer that writes a non-canonical name here reintroduces #390's churn.
   to_table::Union{String, Nothing}

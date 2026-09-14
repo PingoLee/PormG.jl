@@ -322,6 +322,32 @@ function _clean_default(raw, ctype::CanonicalType, ::PormGPostgres)
 end
 
 """
+    _parse_catalog_timestamp(s) -> Union{ZonedDateTime, DateTime, Nothing}
+
+`YYYY-MM-DD[ T]HH:MM:SS[.fff][±HH[:MM]]` — the shape a catalog renders a stored timestamp in — as a
+UTC `ZonedDateTime` when an offset is present and a naive `DateTime` otherwise (naive is UTC by
+PormG's convention, `format_timezone_sql`). `nothing` when the string is not that shape, so the
+caller can fall back to the constructor's own ladder.
+
+PostgreSQL's `pg_get_expr` deparses a `timestamptz` default as `'2024-05-06 07:08:09+00'::timestamp
+with time zone` — space separator, a two-digit offset, no milliseconds — which is not a spelling
+`normalize_datetime_default` accepts (it knows PormG's own `…T…+00:00` form). The old reader fed the
+same string to the same converter, so a declared `DateTimeField(default = …)` never converged on
+PostgreSQL: every run planned `SET DEFAULT`. Found in review; pinned by a unit test.
+"""
+function _parse_catalog_timestamp(s::AbstractString)::Union{ZonedDateTime, DateTime, Nothing}
+  m = match(r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.(\d+))?(?:([+-])(\d{2})(?::?(\d{2}))?)?$", strip(s))
+  m === nothing && return nothing
+  fraction = m.captures[3]
+  millis = fraction === nothing ? 0 : parse(Int, rpad(first(fraction, 3), 3, '0'))
+  dt = DateTime(m.captures[1] * "T" * m.captures[2]) + Millisecond(millis)
+  m.captures[4] === nothing && return dt
+  offset = Hour(parse(Int, m.captures[5])) + Minute(m.captures[6] === nothing ? 0 : parse(Int, m.captures[6]))
+  utc = m.captures[4] == "+" ? dt - offset : dt + offset
+  return ZonedDateTime(utc, tz"UTC")
+end
+
+"""
     _coerce_default(value, ctype::CanonicalType)
 
 The Julia value a DECLARED field stores for this default — the coercion each field constructor's
@@ -362,6 +388,11 @@ function _coerce_default(value, ctype::CanonicalType)
     value isa Union{DateTime, ZonedDateTime} && return Date(value)
     value isa AbstractString && return Date(String(value))
   elseif ctype isa CDateTime
+    # The catalog's own rendering first (`_parse_catalog_timestamp`), then the constructor's ladder.
+    if value isa AbstractString
+      parsed = _parse_catalog_timestamp(value)
+      parsed === nothing || return parsed
+    end
     return Models.normalize_datetime_default(value)
   elseif ctype isa CTime
     value isa Time && return value
@@ -395,14 +426,16 @@ literal the type can hold is carried; a SQL expression, or a literal the type ca
 dropped with a warning naming the table and column — one per column per read, never `maxlog` — and
 the column imports with no default. `probe` is the column's spec minus its default; its key arm
 ([`_inspectdb_key_arm`](@ref)) decides the policy the way the old readers' arms did: the
-bare-`IDField` key has never read a default at all (its slot cannot hold the `nextval(…)` a legacy
-`serial` key carries, and `check` reports that class on its own terms), and a relation reports through
-`_fk_default_or_warn`'s foreign-key wording.
+bare-`IDField` key — an INTEGER column on the fall-through key arm, `_integer_key_arm` — has never
+read a default at all (its slot cannot hold the `nextval(…)` a legacy `serial` key carries, and
+`check` reports that class on its own terms); a TEXT key on the same arm (a `UUIDField(primary_key =
+true)`) reads its default like any column; and a relation reports through `_fk_default_or_warn`'s
+foreign-key wording.
 """
 function _default_or_drop(table_name, probe::ColumnSpec, raw,
                           conn::Union{PormGPostgres, PormGSQLite})::ColumnDefault
   arm = _inspectdb_key_arm(probe)
-  arm === :id_pk && return NoDefault()
+  _integer_key_arm(arm, probe.type) && return NoDefault()
   cleaned = _clean_default(raw, probe.type, conn)
   cleaned === nothing && return NoDefault()
   if arm === :reference
@@ -636,9 +669,12 @@ table)`, so there is no second, regex-driven reader to keep in step with the fir
 replaced had two documented gaps (`unique` never read, a non-canonical `to_table`) for exactly that
 reason.
 
-The statement must name its table in double quotes, as PormG writes it; an `InvalidMigrationError`
-says so otherwise. SQLite does not check that a `REFERENCES` target exists at `CREATE TABLE` time,
-so a statement carrying foreign keys reads fine on its own.
+**The statement is executed as given** — one SQL statement, in a scratch database that holds nothing
+else — so pass only DDL you would run yourself. It must name its table in double quotes, as PormG
+writes it; an `InvalidMigrationError` says so otherwise. SQLite does not check that a `REFERENCES`
+target exists at `CREATE TABLE` time, so a statement carrying foreign keys reads fine on its own —
+and, the parent being absent, its `to_table` keeps the `REFERENCES` spelling rather than a
+canonical one.
 """
 function convertSQLToModel(sql::String)::PormGModel
   table_name_match = match(r"CREATE TABLE \"(.+?)\"", sql)
@@ -671,9 +707,10 @@ without it and the diff says so, once, instead of the reader claiming a constrai
 not hold.
 
 Keys are lower-cased and looked up with `lowercase(col)` (#531): SQLite resolves identifiers
-ASCII-case-insensitively, so the spelling inside a CHECK need not match the column definition's nor
-what `PRAGMA table_info` reports. All four identifier spellings are accepted, because an adopted
-schema wrote the clause, not PormG.
+case-insensitively (ASCII only; Julia's `lowercase` is the Unicode superset, so a non-ASCII case pair
+folds here where SQLite would not — the same trade `_sqlite_index_referenced_columns` makes), so the
+spelling inside a CHECK need not match the column definition's nor what `PRAGMA table_info` reports.
+All four identifier spellings are accepted, because an adopted schema wrote the clause, not PormG.
 """
 function _sqlite_column_checks(create_sql::Union{AbstractString, Nothing})::Dict{String, Vector{CheckKind}}
   checks = Dict{String, Vector{CheckKind}}()
@@ -690,6 +727,13 @@ function _sqlite_column_checks(create_sql::Union{AbstractString, Nothing})::Dict
   end
   return checks
 end
+
+# The declared type as `PRAGMA table_info` reports it, upper-cased and stripped — the reader's own
+# derivation, shared with `check()` so the two cannot disagree about a column's type. A typeless
+# column reports `''`; `missing` is guarded as well as `nothing`, because a `DataFrame` cell is the
+# former.
+_sqlite_declared_type(x)::String =
+  uppercase(String(strip((x === nothing || ismissing(x)) ? "" : String(x))))
 
 """
     _sqlite_live_table(db::PormGSQLite, table_name) -> LiveTable
@@ -711,10 +755,11 @@ What each slot is read FROM, and what it is no longer inferred from:
     list (#318/#325). A key is unique on the arms that always built it so (`IDField`, a pk-fk),
     never from the pragma, exactly as before; a relational column's `db_index` is what the catalog
     holds, not the `true` the old reader stamped on every foreign key;
-  * `identity` — the catalog image of the DECLARED rule, stated once: the column an `IDField` would
-    occupy (`_key_arm(…) === :id_pk`) compiles to the SQLite identity, because `IDField` is the only
-    integer key PormG can declare and it always renders `AUTOINCREMENT`, so a rowid key without the
-    token has no declaration that could ever equal it (see `_column_identity(::PormGSQLite)`);
+  * `identity` — the catalog image of the DECLARED rule, stated once beside its other half in
+    `_column_identity(::PormGSQLite)`: an INTEGER column on the `IDField` arm (`_integer_key_arm`)
+    compiles to the SQLite identity, because `IDField` is the only integer key PormG can declare and
+    it always renders `AUTOINCREMENT`, so a rowid key without the token has no declaration that
+    could ever equal it; a TEXT key (`UUIDField(primary_key = true)`) compiles none;
   * `default` — `_default_or_drop`: the literal coerced per canonical type; an expression or
     an uncoercible literal dropped with the same warning as before (#472/#475).
 
@@ -765,7 +810,7 @@ function _sqlite_live_table(db::PormGSQLite, table_name::AbstractString)::LiveTa
   columns = OrderedDict{String, ColumnSpec}()
   for col_row in eachrow(cols)
     col_name = String(col_row.name)
-    raw_type = uppercase(String(strip(String(something(col_row.type, "")))))
+    raw_type = _sqlite_declared_type(col_row.type)
     ctype = parse_canonical_type(raw_type, db)
     is_pk = col_row.pk > 0
     nullable = col_row.notnull == 0
@@ -779,13 +824,16 @@ function _sqlite_live_table(db::PormGSQLite, table_name::AbstractString)::LiveTa
                                 Models._foreign_key_on_delete_sql(_normalize_introspected_on_delete(fk.on_delete)))
     end
     arm = _key_arm(is_pk, ctype, reference !== nothing)
-    # `unique`, per arm, as the old reader built the field: `IDField` and a pk-fk `OneToOneField`
-    # are unique by construction; any other key is what its constructor defaults to (`false` — a
-    # PRIMARY KEY's own autoindex has `origin = 'pk'`, never `'u'`); a non-key column is unique when
-    # the pragma lists a single-column UNIQUE constraint on it (#318).
-    spec_unique = (arm === :id_pk || (arm === :reference && is_pk)) ? true :
-                  (is_pk ? false : col_name in unique_cols)
-    identity = arm === :id_pk ? ColumnIdentity(false, false, true) : nothing
+    # `unique`, per arm, as the old reader built the field — narrowed in review: an INTEGER key on
+    # the `IDField` arm and a pk-fk `OneToOneField` are unique by construction; every other column,
+    # keys included, is unique when the pragma lists a single-column UNIQUE constraint on it (#318).
+    # A PRIMARY KEY's own autoindex has `origin = 'pk'`, never `'u'`, so a bare `TEXT PRIMARY KEY` —
+    # what `UUIDField(primary_key = true)` renders — reads `false`, exactly as its declaration
+    # compiles. (The retired arm gave every fall-through key the `IDField`'s `unique = true` and
+    # identity, so such a table rebuilt on every run.)
+    integer_key = _integer_key_arm(arm, ctype)
+    spec_unique = (integer_key || (arm === :reference && is_pk)) ? true : col_name in unique_cols
+    identity = integer_key ? ColumnIdentity(false, false, true) : nothing
     probe = ColumnSpec(col_name, ctype, is_pk ? false : nullable, is_pk, spec_unique, NoDefault(),
                        reference, _reader_checks(get(checks, lowercase(col_name), CheckKind[]), ctype),
                        identity, raw_type)

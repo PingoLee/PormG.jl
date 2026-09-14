@@ -33,7 +33,8 @@ import PormG.ConnectionPool: SQLiteConnectionPool, fetch, close_pool!
 import PormG.Migrations: LiveTable, read_live_schema, live_table, model_from_live, field_from_spec,
                          column_spec, column_delta, parse_canonical_type, convertSQLToModel,
                          convert_schema_to_models, get_migration_plan, _pg_live_table, _key_arm,
-                         _PostgresEngine, _SQLiteEngine, _sqlite_column_checks, check
+                         _integer_key_arm, _coerce_default, _PostgresEngine, _SQLiteEngine,
+                         _sqlite_column_checks, check
 # The SQLite laws open a real (temporary) file. `runtests.jl` loads the weakdep extension for the
 # whole suite; this guard is what makes the file runnable on its own.
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
@@ -199,8 +200,10 @@ end
                _col522("s_text", "text"),
                _col522("b_bool", "boolean"; notnull = true, default = "true"),
                _col522("d_date", "date"; notnull = true, default = "'2024-01-02'::date"),
-               _col522("d_tz", "timestamp with time zone"; notnull = true),
-               _col522("d_naive", "timestamp without time zone"; notnull = true),
+               _col522("d_tz", "timestamp with time zone"; notnull = true,
+                       default = "'2024-01-02 03:04:05+00'::timestamp with time zone"),
+               _col522("d_naive", "timestamp without time zone"; notnull = true,
+                       default = "'2024-01-02 03:04:05'::timestamp without time zone"),
                _col522("d_time", "time without time zone"; notnull = true),
                _col522("d_dur", "interval"),
                _col522("f_dec", "numeric(8,3)"; notnull = true),
@@ -224,8 +227,10 @@ end
     "s_text"  => Models.TextField(null = true),
     "b_bool"  => Models.BooleanField(default = true),
     "d_date"  => Models.DateField(default = Date(2024, 1, 2)),
-    "d_tz"    => Models.DateTimeField(),
-    "d_naive" => Models.DateTimeField(type = "TIMESTAMP"),
+    # Declared naive: PormG's convention is UTC, and the catalog renders the stored instant its own
+    # way (space separator, `+00`, no milliseconds) — the shape that never converged before #522.
+    "d_tz"    => Models.DateTimeField(default = DateTime(2024, 1, 2, 3, 4, 5)),
+    "d_naive" => Models.DateTimeField(type = "TIMESTAMP", default = DateTime(2024, 1, 2, 3, 4, 5)),
     "d_time"  => Models.TimeField(),
     "d_dur"   => Models.DurationField(null = true),
     "f_dec"   => Models.DecimalField(max_digits = 8, decimal_places = 3),
@@ -339,7 +344,7 @@ end
                                       "created" DATETIME DEFAULT CURRENT_TIMESTAMP,
                                       "note" TEXT DEFAULT 'n');""")
       # Two columns warn: `n` (a literal INTEGER cannot hold) and `created` (an expression).
-      live = @test_logs (:warn, r"could not be represented") (:warn, r"could not be represented") match_mode=:any read_live_schema(pool; include_table = ["d"])
+      live = @test_logs (:warn, r"could not be represented") (:warn, r"could not be represented") match_mode=:all read_live_schema(pool; include_table = ["d"])
       cols = live[1].columns
       @test cols["day"].default == LiteralDefault(Date(2024, 1, 2))
       @test cols["n"].default == NoDefault()
@@ -356,6 +361,68 @@ end
       close_pool!(pool)
     end
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Review finding: a non-integer key is read as its declaration compiles, and inspectdb keeps it
+# A `UUIDField(primary_key = true)` renders a bare `TEXT PRIMARY KEY` on SQLite. The first cut of the
+# reader gave EVERY fall-through key the `IDField`'s identity and `unique = true` — so this table
+# rebuilt on every run, and `inspectdb` regenerated the key as an `IDField` whose plan poured uuids
+# into a rowid. Now only an INTEGER key on that arm takes the literals; a TEXT key compiles no
+# identity and the pragma's `unique`, and `inspectdb` picks the one declaration that renders it.
+# Mutation gate: drop the `_integer_key_arm` gate in `_sqlite_live_table` and `sid` reports
+# `[:unique, :identity]`; drop the `CText` arm in `_inspectdb_field` and the regenerated key is an
+# `IDField`, whose plan is a rebuild.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: a UUID or CharField key reads as its declaration compiles, and inspectdb keeps it (#522)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "keys.sqlite"); pool_size = 1)
+    try
+      session = Models.Model("session"; sid = Models.UUIDField(primary_key = true), who = Models.CharField(max_length = 10))
+      natural = Models.Model("natural"; code = Models.CharField(primary_key = true, max_length = 8), label = Models.CharField(max_length = 20))
+      _create_from_plan!(pool, session, natural)
+      live = read_live_schema(pool; include_table = ["session", "natural"])
+      by = Dict(t.name => t for t in live)
+
+      sid = by["session"].columns["sid"]
+      @test sid.primary_key && sid.identity === nothing && sid.unique == false
+      @test !_integer_key_arm(_key_arm(true, sid.type, false), sid.type)
+      @test isempty(column_delta(session.fields["sid"], sid, pool; name = "sid").changed)
+      @test isempty(column_delta(natural.fields["code"], by["natural"].columns["code"], pool; name = "code").changed)
+      plan = get_migration_plan(live, _schema522(session, natural), pool, _settings522(); interactive = false)
+      @test all(isempty, values(plan))
+
+      # inspectdb: the one lengthless textual key PormG can declare is `UUIDField`; a sized one is a
+      # `CharField` — and the regenerated file converges against its own database.
+      regen = Dict(m.name => m for m in convert_schema_to_models(pool; include_table = ["session", "natural"]))
+      @test regen["session"].fields["sid"] isa Models.sUUIDField && regen["session"].fields["sid"].primary_key
+      @test regen["natural"].fields["code"] isa Models.sCharField && regen["natural"].fields["code"].max_length == 8
+      plan2 = get_migration_plan(live, _schema522(regen["session"], regen["natural"]), pool, _settings522(); interactive = false)
+      @test all(isempty, values(plan2))
+    finally
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Review finding: a catalog-rendered timestamp default coerces to the instant a declaration stores
+# PostgreSQL deparses a stored `timestamptz` default as `2024-05-06 07:08:09+00` — a spelling the
+# constructor's converter never parsed, so a declared `DateTimeField(default = …)` planned
+# `SET DEFAULT` on every run. `_parse_catalog_timestamp` reads that shape (and the naive one) ahead
+# of the constructor's ladder; PormG's own `T…+00:00` spelling matches the same regex and lands on
+# the same instant, and anything else falls through to the ladder.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a catalog-rendered timestamp default coerces to the instant a declaration stores (#522)" begin
+  utc = ZonedDateTime(DateTime(2024, 5, 6, 7, 8, 9), tz"UTC")
+  @test _coerce_default("2024-05-06 07:08:09+00", CDateTime(true)) == utc
+  @test _coerce_default("2024-05-06 07:08:09.5-03", CDateTime(true)) == ZonedDateTime(DateTime(2024, 5, 6, 10, 8, 9, 500), tz"UTC")
+  @test _coerce_default("2024-05-06 07:08:09+05:30", CDateTime(true)) == ZonedDateTime(DateTime(2024, 5, 6, 1, 38, 9), tz"UTC")
+  @test _coerce_default("2024-05-06 07:08:09", CDateTime(false)) == DateTime(2024, 5, 6, 7, 8, 9)
+  @test _coerce_default("2024-05-06T07:08:09.000+00:00", CDateTime(true)) == utc
+  # …and through `_literal_default`, both spellings of one instant are one default.
+  @test Migrations._literal_default(_coerce_default("2024-05-06 07:08:09+00", CDateTime(true))) ==
+        Migrations._literal_default(DateTime(2024, 5, 6, 7, 8, 9))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

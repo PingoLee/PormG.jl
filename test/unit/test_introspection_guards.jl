@@ -17,7 +17,8 @@ other key type could never equal what introspection reported, so `makemigrations
   * a key that is ALSO a foreign key ⇒ the relation, carrying `primary_key=true`
   * every integer width ⇒ `IDField`, which since #408 is the only integer key type PormG has, so
     this is correct by construction rather than by flattening
-  * `numeric`, and a lengthless `text` key ⇒ still `IDField`, deliberately: `DecimalField` refuses
+  * `numeric`, and a lengthless `text` key ⇒ still `IDField` on PostgreSQL (SQLite maps a bare `TEXT` key
+    to `UUIDField` since #522, the declaration that renders it there), deliberately: `DecimalField` refuses
     `primary_key` outright, and no field type both accepts `primary_key` and carries no length.
 
 So the max_length/max_digits guard is still load-bearing, but for the `numeric` fallback rather than

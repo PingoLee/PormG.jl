@@ -307,6 +307,15 @@ function _column_identity(field::PormGField, ::PormGSQLite)::Union{Nothing, Colu
   return ColumnIdentity(false, false, true)
 end
 
+# THE LIVE SIDE'S HALF of the same rule (#522), stated here so the two cannot drift. The SQLite
+# reader (`_sqlite_live_table`) compiles `ColumnIdentity(false, false, true)` for a column on the
+# `IDField` arm whose type is an integer — `_integer_key_arm` — and for nothing else. It deliberately
+# does NOT read the catalog's `AUTOINCREMENT` token: `IDField` is the only integer key PormG can
+# declare and it always renders the token, so a rowid key without it has no declaration that could
+# ever equal it, and reading the token would make such a key churn forever. A TEXT key (what
+# `UUIDField(primary_key = true)` renders here) compiles no identity and takes the pragma's `unique`,
+# which is this function's and `column_spec`'s answer for that declaration.
+
 function _column_reference(field::PormGField)::Union{Nothing, ForeignKeyRef}
   # `sRelationalColumn` rather than a bare `isa sForeignKey`: the FK/O2O pair is spelled ONCE in
   # `src/models/fields.jl` precisely so a gate cannot silently miss half of it (#408/#409/#418/#437).
@@ -582,6 +591,16 @@ function _key_arm(primary_key::Bool, ctype::CanonicalType, has_reference::Bool):
   return :generic
 end
 
+# The bare-`IDField` key, precisely: the fall-through key arm on an INTEGER column. It is the one arm
+# that never reads a default (its slot is `Union{Int64, Nothing}`, and a legacy `serial` key's
+# `nextval(…)` could not be declared there) and, on SQLite, the one that compiles the identity. A
+# TEXT or REAL key also lands on `:id_pk` — PormG can declare a lengthless textual key only as
+# `UUIDField(primary_key = true)`, which renders bare `TEXT` on SQLite — and must take neither, or a
+# `UUIDField` key would rebuild its table on every run (found in review; the retired reader had the
+# same defect, flattening every such key to an `IDField`).
+_integer_key_arm(arm::Symbol, ctype::CanonicalType)::Bool =
+  arm === :id_pk && ctype isa Union{CInt16, CInt32, CInt64}
+
 # The inverse of `Models._foreign_key_on_delete_sql` for the values a catalog can hold: the stored
 # clause back to the spelling a models file declares. `NO ACTION` is `nothing` — lossless, because
 # `nothing` and `DO_NOTHING` both render it (#292, `_pg_confdeltype_to_on_delete`) — and `RESTRICT`
@@ -621,10 +640,12 @@ silently:
 The struct per type is per ENGINE only where the renderer is: `CInt64` is `BigIntegerField` on
 PostgreSQL (`bigint`) but `IntegerField` on SQLite, where both write `INTEGER` and the reverse map
 has always read `IntegerField`; `CDateTime(false)` is `DateTimeField(type = "TIMESTAMP")` on
-PostgreSQL and the default flavour on SQLite, which has no other. `unique` and `db_index` are always
-the COMPUTED facts, never a literal `true` — the rule every key arm of the old readers had to
-re-learn (#334): a literal that disagrees with the struct's own constructor default manufactures a
-permanent disagreement with a plain declaration.
+PostgreSQL and the default flavour on SQLite, which has no other. On the uuid-key, sized-textual-key
+and generic arms `unique` and `db_index` are the COMPUTED facts, never a literal `true` — the rule
+every key arm of the old readers had to re-learn (#334): a literal that disagrees with the struct's
+own constructor default manufactures a permanent disagreement with a plain declaration. The
+`IDField` arm and a pk-fk `OneToOneField` pass the literals their constructors default to (`unique =
+true`, `db_index = true`), which is the same rule from the other side.
 
 A default the constructor refuses degrades through `_field_or_drop_default`, with the same warning
 the readers have always emitted — the readers coerce every literal per `CanonicalType` first, so
@@ -675,16 +696,46 @@ function _inspectdb_field(spec::ColumnSpec, table_name::AbstractString,
                             null = false, db_index = indexed, default = default)
   elseif arm === :id_pk
     if conn isa PormGPostgres
+      # INTENTIONAL ENGINE DIVERGENCE, documented: on PostgreSQL every fall-through key stays an
+      # `IDField`, because PostgreSQL renders PormG's own non-integer keys as `uuid` / `varchar(n)` —
+      # which take the arms above — so a bare `text` or `numeric` key here can only be adopted, and
+      # no declaration renders one. SQLite (below) maps a bare `TEXT` key to `UUIDField`, because
+      # that IS what `UUIDField(primary_key = true)` renders there. Both engines say so when they
+      # flatten, never silently.
+      if !_integer_key_arm(arm, ctype)
+        @warn "inspectdb: no PormG field declares a primary key of this type on PostgreSQL; emitting " *
+              "IDField. A declared IDField will NOT match this column, so makemigrations plans a " *
+              "retype unless the column is declared by hand." table = string(table_name) column = spec.name type = spec.raw
+      end
       identity = spec.identity
       return Models.IDField(generated = identity !== nothing,
                             generated_always = identity !== nothing && identity.always,
                             unique = true, null = false, db_index = true)
-    else
+    elseif _integer_key_arm(arm, ctype)
       # `auto_increment` is cosmetic on SQLite (`_column_identity` reads the renderer's condition,
       # not this slot) and is kept as the readers always set it: only an exact `INTEGER` is a rowid
       # alias, which is the one spelling that can carry AUTOINCREMENT.
       return Models.IDField(null = false, primary_key = true,
                             auto_increment = uppercase(strip(spec.raw)) == "INTEGER")
+    elseif ctype isa CText
+      # A bare `TEXT PRIMARY KEY` is what `UUIDField(primary_key = true)` renders on SQLite (the
+      # reverse map writes `TEXT` for `UUID`), and it is the ONE lengthless textual key PormG can
+      # declare — `TextField` does not accept `primary_key`. Computed `unique`/`db_index`, matching
+      # that constructor's defaults; the retired reader flattened this key to an `IDField`, which
+      # regenerated a models file that rebuilt the table (an `INSERT … SELECT` of uuids into a rowid).
+      # Said out loud like every other lossy choice here: the column may hold text that is not a
+      # UUID, and `UUIDField` validates every write — that is a runtime error a warning at import
+      # time can prevent.
+      @warn "inspectdb: a lengthless TEXT primary key is emitted as UUIDField(primary_key = true), " *
+            "the one declaration that renders it on SQLite. If the key holds text that is not a " *
+            "UUID, declare the column by hand." table = string(table_name) column = spec.name
+      return Models.UUIDField(primary_key = true, unique = spec.unique, null = false,
+                              db_index = indexed, default = default)
+    else
+      @warn "inspectdb: no PormG field declares a primary key of this type; emitting IDField. A " *
+            "declared IDField will NOT match this column, so makemigrations plans a retype unless " *
+            "the column is declared by hand." table = string(table_name) column = spec.name type = spec.raw
+      return Models.IDField(null = false, primary_key = true, auto_increment = false)
     end
   end
 

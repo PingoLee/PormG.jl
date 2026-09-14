@@ -334,8 +334,8 @@ end
       fetch(pool, """CREATE TABLE "uuid_key" (
           "id" UUID PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
           "label" TEXT)""")
-      # A SIZED textual key — `CharField(primary_key=true, max_length=n)` (#409). A LENGTHLESS one
-      # would fall through to `IDField` instead, which is why the `(n)` is what matters.
+      # A SIZED textual key — `CharField(primary_key=true, max_length=n)` (#409). (A LENGTHLESS one
+      # is a `UUIDField` key since #522 and reads its default too; only an INTEGER key is silent.)
       fetch(pool, """CREATE TABLE "code_key" (
           "code" TEXT(8) PRIMARY KEY DEFAULT (lower(hex(randomblob(4)))),
           "label" TEXT)""")

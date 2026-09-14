@@ -1964,13 +1964,33 @@ end
 # `pragma_table_info` says the table really has a column by that name.
 
 """
-    _sqlite_identifier_tokens(sql) -> Vector{Tuple{String,Bool,Bool}}
+    _SQLiteIdentifierToken
 
-Every identifier in `sql` as `(name, called, quoted)` — `called` is whether the next non-space
-character is `(`, `quoted` whether the identifier was written in one of SQLite's three quoting forms.
-Punctuation is not returned at all; the only punctuation this needs to report is that one `(`, and it
-travels with the identifier before it. [`_sqlite_index_argument_region`](@ref) does its own scan rather
-than reading this list, because it needs a character OFFSET and these tokens carry none.
+One identifier token of a SQLite statement as [`_sqlite_identifier_tokens`](@ref) reports it: its
+`name` (quotes and brackets stripped, doubled quotes collapsed), whether it is `called` (followed by
+`(`), whether it was `quoted`, and its BYTE span `start:stop` in the scanned string. A NAMED tuple
+rather than a positional one since #532: two call sites used to destructure `(tok, called, quoted)`
+positionally, so adding a field in the middle would have silently shifted their meaning.
+"""
+const _SQLiteIdentifierToken = @NamedTuple{name::String, called::Bool, quoted::Bool, start::Int, stop::Int}
+
+"""
+    _sqlite_identifier_tokens(sql) -> Vector{_SQLiteIdentifierToken}
+
+Every identifier in `sql` as a named tuple `(name, called, quoted, start, stop)` — `called` is whether
+the next non-space character is `(`, `quoted` whether the identifier was written in one of SQLite's
+three quoting forms, and `start:stop` the token's BYTE span in `sql`: `sql[start:stop]` is the token
+exactly as written, quotes or brackets included, so a caller can rewrite it in place. Punctuation is
+not returned at all; the only punctuation this needs to report is that one `(`, and it travels with
+the identifier before it.
+
+The span is what #532 added. The #150 rename rewrite substituted the quoted `"old"` token as a string
+and so could not see a column spelled bare inside an expression (`lower(a)`), while an unanchored
+substring replace is exactly what #515 removed — it also rewrites an index name, a string literal or a
+longer identifier that merely contains the column. A span lets [`_sqlite_rewrite_index_columns`](@ref)
+splice precisely the token, whatever its spelling. [`_sqlite_index_argument_start`](@ref) still does
+its own scan rather than reading this list, because it needs the position of a PARENTHESIS, which is
+not a token here.
 
 `quoted` is what lets a caller tell a COLUMN from SQL SYNTAX. `DESC`, `COLLATE`, `WHERE`, `AND` and
 friends are bare words in the same position a column name occupies, and a legacy table really can have
@@ -1995,10 +2015,14 @@ The `(`-follows flag is what separates `lower` the function from `lower` the col
 column references, and a table with a column named after a function it uses would route every
 deletion through a table rebuild.
 """
-function _sqlite_identifier_tokens(sql::AbstractString)::Vector{Tuple{String,Bool,Bool}}
+function _sqlite_identifier_tokens(sql::AbstractString)::Vector{_SQLiteIdentifierToken}
   cs = collect(sql)
+  # Character position ⇒ byte index, so the spans reported below index `sql` itself. Scanning over
+  # `collect(sql)` is what keeps the branches below simple, but a span in character positions would
+  # put every token after a multi-byte identifier (`"país"`) off by one byte per non-ASCII character.
+  idx = collect(eachindex(sql))
   n = length(cs)
-  out = Tuple{String,Bool,Bool}[]
+  out = _SQLiteIdentifierToken[]
   i = 1
   # Position of the next non-space character at or after `j`, or 0 when there is none.
   next_visible = function (j::Int)
@@ -2006,6 +2030,11 @@ function _sqlite_identifier_tokens(sql::AbstractString)::Vector{Tuple{String,Boo
       j += 1
     end
     return j <= n ? j : 0
+  end
+  # Byte span of the token that began at character `from` and ended at character `i - 1` — clamped,
+  # because an unterminated quote or bracket runs to the end of the input, like SQLite reads it.
+  span = function (from::Int)
+    return (idx[from], idx[min(i - 1, n)])
   end
   while i <= n
     c = cs[i]
@@ -2045,6 +2074,7 @@ function _sqlite_identifier_tokens(sql::AbstractString)::Vector{Tuple{String,Boo
       i += 1
     elseif c == '"' || c == '`'
       # Quoted identifier; the quote character doubles to escape itself.
+      from = i
       q = c
       i += 1
       buf = Char[]
@@ -2061,9 +2091,11 @@ function _sqlite_identifier_tokens(sql::AbstractString)::Vector{Tuple{String,Boo
         end
       end
       nx = next_visible(i)
-      push!(out, (String(buf), nx != 0 && cs[nx] == '(', true))
+      a, b = span(from)
+      push!(out, (name = String(buf), called = nx != 0 && cs[nx] == '(', quoted = true, start = a, stop = b))
     elseif c == '['
       # Bracketed identifier — no escape form in SQLite; the first `]` ends it.
+      from = i
       i += 1
       buf = Char[]
       while i <= n && cs[i] != ']'
@@ -2072,7 +2104,8 @@ function _sqlite_identifier_tokens(sql::AbstractString)::Vector{Tuple{String,Boo
       end
       i += 1
       nx = next_visible(i)
-      push!(out, (String(buf), nx != 0 && cs[nx] == '(', true))
+      a, b = span(from)
+      push!(out, (name = String(buf), called = nx != 0 && cs[nx] == '(', quoted = true, start = a, stop = b))
     elseif isdigit(c)
       # Numeric literal — consumed so that `1e5` or `0x1f` cannot leave an identifier fragment.
       while i <= n && (isdigit(cs[i]) || cs[i] == '.' || cs[i] == 'x' || cs[i] == 'X' ||
@@ -2080,13 +2113,15 @@ function _sqlite_identifier_tokens(sql::AbstractString)::Vector{Tuple{String,Boo
         i += 1
       end
     elseif isletter(c) || c == '_'
+      from = i
       buf = Char[]
       while i <= n && (isletter(cs[i]) || isdigit(cs[i]) || cs[i] == '_' || cs[i] == '$')
         push!(buf, cs[i])
         i += 1
       end
       nx = next_visible(i)
-      push!(out, (String(buf), nx != 0 && cs[nx] == '(', false))
+      a, b = span(from)
+      push!(out, (name = String(buf), called = nx != 0 && cs[nx] == '(', quoted = false, start = a, stop = b))
     else
       i += 1
     end
@@ -2095,10 +2130,10 @@ function _sqlite_identifier_tokens(sql::AbstractString)::Vector{Tuple{String,Boo
 end
 
 """
-    _sqlite_index_argument_region(sql) -> String
+    _sqlite_index_argument_start(sql) -> Int
 
-The part of a `CREATE INDEX` statement that can reference a column: the indexed-column list plus any
-`WHERE` clause, i.e. everything from the first `(` onwards.
+The BYTE index in `sql` of the first top-level `(` — where the part of a `CREATE INDEX` statement that
+can reference a column begins: the indexed-column list plus any `WHERE` clause.
 
 `CREATE [UNIQUE] INDEX [IF NOT EXISTS] [schema.]name ON table (…) [WHERE …]` has no parenthesis
 before the column list, so that one boundary excludes the index name and the table name
@@ -2106,11 +2141,17 @@ STRUCTURALLY rather than by guessing — which matters because either of them ma
 column name. The scan skips literals and comments the same way [`_sqlite_identifier_tokens`](@ref)
 does, so a `(` inside a quoted index name cannot be mistaken for the list's opening paren.
 
-Returns the whole string when there is no `(` at all, which cannot happen for real `CREATE INDEX`
-DDL but keeps a malformed or truncated `sqlite_master.sql` conservative rather than blind.
+Returns `1` when there is no `(` at all — the whole statement is then the region — which cannot
+happen for real `CREATE INDEX` DDL but keeps a malformed or truncated `sqlite_master.sql`
+conservative rather than blind.
+
+A byte index rather than the region text (#532), so a caller holding the tokens of the WHOLE
+statement can tell which of them lie in the region by comparing `token.start` against it — that is how
+[`_sqlite_rewrite_index_columns`](@ref) rewrites a renamed column in place without offset arithmetic.
 """
-function _sqlite_index_argument_region(sql::AbstractString)
+function _sqlite_index_argument_start(sql::AbstractString)::Int
   cs = collect(sql)
+  idx = collect(eachindex(sql))
   n = length(cs)
   i = 1
   while i <= n
@@ -2157,13 +2198,24 @@ function _sqlite_index_argument_region(sql::AbstractString)
       end
       i += 1
     elseif c == '('
-      return String(cs[i:end])
+      return idx[i]
     else
       i += 1
     end
   end
-  return String(cs)
+  return 1
 end
+
+"""
+    _sqlite_index_argument_region(sql) -> String
+
+`sql` from [`_sqlite_index_argument_start`](@ref) onwards — the part of a `CREATE INDEX` statement that
+can reference a column. Kept as the convenient form for callers that only classify tokens
+([`_sqlite_index_is_unmodellable`](@ref), [`_sqlite_index_referenced_columns`](@ref)) and never need
+to know where in the statement they sat.
+"""
+_sqlite_index_argument_region(sql::AbstractString)::String =
+  String(SubString(sql, _sqlite_index_argument_start(sql)))
 
 """
     _SQLITE_INDEX_SYNTAX_WORDS
@@ -2252,9 +2304,9 @@ function _sqlite_index_is_unmodellable(index_sql::AbstractString, pragma_members
   # The modifiers no PormG renderer emits. UNQUOTED only — `"desc"` is a column named `desc`, and
   # reading it as a sort direction is the same confusion `_SQLITE_INDEX_SYNTAX_WORDS` exists for. See
   # `_SQLITE_INDEX_UNMODELLABLE_WORDS` for why that list is narrower than the syntax one.
-  for (tok, _called, quoted) in _sqlite_identifier_tokens(_sqlite_index_argument_region(index_sql))
-    quoted && continue
-    uppercase(tok) in _SQLITE_INDEX_UNMODELLABLE_WORDS && return true
+  for t in _sqlite_identifier_tokens(_sqlite_index_argument_region(index_sql))
+    t.quoted && continue
+    uppercase(t.name) in _SQLITE_INDEX_UNMODELLABLE_WORDS && return true
   end
   return false
 end
@@ -2323,7 +2375,7 @@ function _sqlite_index_referenced_columns(conn::PormGSQLite, table_name::Union{S
   end
 
   after_collate = false
-  for (tok, called, quoted) in _sqlite_identifier_tokens(_sqlite_index_argument_region(index_sql))
+  for t in _sqlite_identifier_tokens(_sqlite_index_argument_region(index_sql))
     # The token right after an unquoted COLLATE is a collation name. Consumed here rather than
     # filtered by name, because `NOCASE` is a perfectly legal column name and a user-defined
     # collation can be called anything at all.
@@ -2331,16 +2383,74 @@ function _sqlite_index_referenced_columns(conn::PormGSQLite, table_name::Union{S
       after_collate = false
       continue
     end
-    if !quoted && uppercase(tok) == "COLLATE"
+    if !t.quoted && uppercase(t.name) == "COLLATE"
       after_collate = true
       continue
     end
-    called && continue                                                  # a function name
-    (!quoted && uppercase(tok) in _SQLITE_INDEX_SYNTAX_WORDS) && continue  # SQL syntax
-    live = get(by_lower, lowercase(tok), nothing)
+    t.called && continue                                                    # a function name
+    (!t.quoted && uppercase(t.name) in _SQLITE_INDEX_SYNTAX_WORDS) && continue  # SQL syntax
+    live = get(by_lower, lowercase(t.name), nothing)
     live === nothing || push!(referenced, live)
   end
   return referenced
+end
+
+"""
+    _sqlite_rewrite_index_columns(index_sql, column_renames) -> String
+
+`index_sql` with every reference to a renamed column — inside the argument region, whatever its
+spelling — replaced by the QUOTED new name (#532).
+
+The #150 rewrite substituted the quoted `"old"` token as a string: exact for the one spelling PormG
+writes and blind to every other, so a hand-written `lower(a)`, `[a]` or `` `a` `` passed the
+`surviving_columns` filter (the identifier-aware reader sees the reference) and was re-emitted with the
+PRE-rename name, failing the rebuild at the server with "no such column". A bare-word substitution is
+not the fix — it is the unanchored substring match #515 removed, and it would rewrite an index NAME,
+a string literal or a longer identifier that merely contains the column. So the rewrite is by token
+SPAN, over the tokens of the whole statement:
+
+  * a candidate must start at or after [`_sqlite_index_argument_start`](@ref), which excludes the
+    index name and the table name structurally;
+  * the same three exclusions [`_sqlite_index_referenced_columns`](@ref) applies hold here — a name
+    followed by `(` is a function, an unquoted [`_SQLITE_INDEX_SYNTAX_WORDS`](@ref) member is syntax,
+    the name after an unquoted `COLLATE` is a collation — so the filter and the rewrite agree about
+    what a column reference is;
+  * matching is ASCII-case-insensitive, as SQLite resolves identifiers; the replacement is always the
+    quoted form, which is how PormG spells every identifier it writes, with an embedded `"` doubled;
+  * spans are spliced right to left, so replacing one never moves the offsets of the ones before it.
+
+String literals, comments and blob literals are never candidates, because the tokenizer does not
+report them.
+"""
+function _sqlite_rewrite_index_columns(index_sql::AbstractString,
+                                       column_renames::AbstractDict{String,String})::String
+  out = String(index_sql)
+  isempty(column_renames) && return out
+  by_lower = Dict{String,String}(lowercase(k) => v for (k, v) in column_renames)
+  region_start = _sqlite_index_argument_start(out)
+  edits = Tuple{Int,Int,String}[]
+  after_collate = false
+  for t in _sqlite_identifier_tokens(out)
+    t.start < region_start && continue                          # the index name and the table name
+    if after_collate
+      after_collate = false
+      continue
+    end
+    if !t.quoted && uppercase(t.name) == "COLLATE"
+      after_collate = true
+      continue
+    end
+    t.called && continue                                        # a function name
+    (!t.quoted && uppercase(t.name) in _SQLITE_INDEX_SYNTAX_WORDS) && continue
+    newc = get(by_lower, lowercase(t.name), nothing)
+    newc === nothing && continue
+    push!(edits, (t.start, t.stop, string('"', replace(newc, '"' => string('"', '"')), '"')))
+  end
+  # Tokens arrive in source order; splice from the last one back so the earlier spans stay valid.
+  for (a, b, repl) in Iterators.reverse(edits)
+    out = string(SubString(out, 1, prevind(out, a)), repl, SubString(out, nextind(out, b)))
+  end
+  return out
 end
 
 """
@@ -2391,7 +2501,9 @@ re-create the indexes that the rebuild's `DROP TABLE` would otherwise silently l
 `column_renames` (old ⇒ new physical name) supports the rename-with-FK-change rebuild (#150): the DDL is
 snapshotted from the LIVE schema at planning time (old column name), but the rebuilt table carries the new
 name, so each renamed column is mapped through this dict both when testing `surviving_columns` membership
-(else the renamed column's index would be wrongly filtered out and lost) and when rewriting the emitted DDL.
+(else the renamed column's index would be wrongly filtered out and lost) and when rewriting the emitted DDL
+— by token span, so a column spelled bare, bracketed or backticked in a hand-written index follows the
+rename exactly like PormG's own quoted spelling (#532, [`_sqlite_rewrite_index_columns`](@ref)).
 Default empty ⇒ no rewriting, so every existing #82/#116 call site is unaffected.
 """
 function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Symbol};
@@ -2460,12 +2572,11 @@ function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Sy
         continue
       end
     end
-    # #150: rewrite renamed columns in the snapshotted DDL. PormG emits quoted identifiers
-    # (create_index in Dialect.jl), so replacing the quoted `"old"` token is precise — it can't
-    # touch the index name or table name. Empty dict ⇒ no-op for the #82/#116 call sites.
-    for (oldc, newc) in column_renames
-      stmt = replace(stmt, "\"$oldc\"" => "\"$newc\"")
-    end
+    # #150 / #532: rewrite each renamed column in the snapshotted DDL — by token span, not by string
+    # substitution. The quoted-token `replace` this used to be was precise for what PormG writes and
+    # blind to a column spelled bare inside an expression or a WHERE clause, which then came back under
+    # the pre-rename name and failed the rebuild at the server. Empty dict ⇒ no-op for #82/#116.
+    stmt = _sqlite_rewrite_index_columns(stmt, column_renames)
     push!(ddls, endswith(stmt, ";") ? stmt : stmt * ";")
   end
   return ddls

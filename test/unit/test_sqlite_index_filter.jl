@@ -837,6 +837,68 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #531: the CHECK-bounds read resolves a mixed-case table name like every other read in the reader
+# `convertSQLToModel(::PormGSQLite)` reads columns through `PRAGMA table_info`, which resolves a table
+# name case-insensitively, but read the table's byte-length CHECKs out of `sqlite_master` with
+# `name = ?`, which is BINARY-collated. Called with a spelling that differs in case from the
+# CREATE TABLE, the columns came back right and every `BinaryField` bound silently vanished — which
+# `column_delta` reports as `:checks` on a column nobody changed, the convergence-churn class. The
+# reader now resolves the name to its catalog spelling ONCE, before any read (the resolver #390 added
+# for FK parents), and keys the bounds case-insensitively on the COLUMN axis as well.
+#
+# Mutation gates: drop the `_sqlite_canonical_table_name` call and the lower-case read returns
+# `max_length === nothing`; drop the lower-cased bounds key and `blob2` — whose CHECK spells it
+# `"BLOB2"` — loses its bound under every spelling.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "convertSQLToModel keeps CHECK bounds under a table-name case mismatch (#531)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "case531.sqlite"); pool_size = 1)
+    try
+      # The issue's repro, plus one column whose CHECK is spelled in a different case from its
+      # definition — legal SQLite, and exactly what an adopted schema can carry.
+      fetch(pool, """CREATE TABLE "MyTab" (
+                       "id"      INTEGER PRIMARY KEY AUTOINCREMENT,
+                       "payload" BLOB CHECK (length("payload") <= 8),
+                       "blob2"   BLOB CHECK (length("BLOB2") <= 4));""")
+
+      for name in ("MyTab", "mytab", "MYTAB")
+        m = convertSQLToModel(pool, name)
+        # The bound must not depend on how the caller spells the table…
+        @test m.fields["payload"].max_length == 8
+        # …nor on how the CHECK spells the column.
+        @test m.fields["blob2"].max_length == 4
+        # And the model is named by the CATALOG spelling whatever the caller wrote, so it keys the
+        # plan the way `convert_schema_to_models` would.
+        @test m.name == "MyTab"
+      end
+
+      # The acceptance criterion: a mixed-case table with a bounded BinaryField CONVERGES — nothing is
+      # planned for it — however the live side was read. Before the fix the lower-case read produced a
+      # `:checks` delta on both BLOB columns, i.e. an `ADD CHECK` planned on every run, forever. The
+      # declared model carries the mixed-case name as `db_table` (a positional name must be lowercase,
+      # #300), which is how a real models file spells such a table.
+      declared = PormG.Models.Model("mytab"; db_table = "MyTab",
+                   id      = PormG.Models.IDField(),
+                   payload = PormG.Models.BinaryField(null = true, max_length = 8),
+                   blob2   = PormG.Models.BinaryField(null = true, max_length = 4))
+      current_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+        :MyTab => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared, :exist => false))
+      settings = PormG.Configuration.Settings()
+      settings.change_db = true
+      for name in ("MyTab", "mytab")
+        live = convertSQLToModel(pool, name)
+        plan = PormG.Migrations.get_migration_plan(PormGModel[live], current_schema, pool, settings;
+                                                   interactive = false)
+        planned = haskey(plan, :MyTab) ? collect(keys(plan[:MyTab])) : String[]
+        @test isempty(planned)
+      end
+    finally
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #519 (f): the identifier match is identifier-aware, per the #515 rule
 # THIS is the mutation gate. Every assertion above would also pass an unanchored
 # `occursin(column, index_ddl)`, which is precisely what #515 removed from the PostgreSQL side. These

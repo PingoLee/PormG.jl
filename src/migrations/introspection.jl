@@ -644,8 +644,8 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
                                                          max_length=ddl_len)
       end
       # BLOB carries no length suffix, so a BinaryField's byte bound comes from its CHECK (#296).
-      if type_sym == :BinaryField && haskey(byte_bounds, column_name)
-        field_instance.max_length = byte_bounds[column_name]
+      if type_sym == :BinaryField && haskey(byte_bounds, lowercase(column_name))
+        field_instance.max_length = byte_bounds[lowercase(column_name)]
       elseif type_sym == :CharField && declared_length !== nothing
         # #325: carry the declared length instead of letting CharField default it to 250.
         field_instance.max_length = parse(Int, declared_length)
@@ -673,17 +673,31 @@ constraints at all, and `max_length` is part of the field state the migration pl
 this, every `makemigrations` against a bounded BinaryField would see the live column as unbounded
 and propose the same ALTER forever. On SQLite that is especially costly: any field alteration
 rebuilds the whole table.
+
+Keys are **lower-cased** and must be looked up with `lowercase(col)` (#531): SQLite resolves
+identifiers ASCII-case-insensitively, so the spelling inside a `CHECK` need not match the column
+definition's — nor the spelling `PRAGMA table_info` reports back.
 """
 function _sqlite_byte_length_bounds(create_sql::Union{AbstractString, Nothing})::Dict{String, Int}
   bounds = Dict{String, Int}()
   create_sql === nothing && return bounds
   for m in eachmatch(r"CHECK\s*\(\s*length\s*\(\s*\"([^\"]+)\"\s*\)\s*<=\s*(\d+)\s*\)", create_sql)
-    bounds[m.captures[1]] = parse(Int, m.captures[2])
+    bounds[lowercase(m.captures[1])] = parse(Int, m.captures[2])
   end
   return bounds
 end
 
 function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{String, Symbol} = sqlite_type_map)
+  # #531: resolve the caller's spelling to the `sqlite_master` one ONCE, before any read. Every PRAGMA
+  # below resolves a table name case-insensitively, but `sqlite_master.name` is BINARY-collated, so
+  # the CHECK-bounds read further down found no row for `"mytab"` when the table was created as
+  # `"MyTab"`: the columns came back correct and every byte-length CHECK silently vanished, which
+  # `column_delta` then reported as `:checks` on a column nobody changed — the convergence-churn
+  # class (#325 → … → #503). One resolution up front keeps every read in this function talking about
+  # the same table, and it is the resolver the FK-parent loop already uses (#390). A name it cannot
+  # find (a view, an ATTACHed table) comes back unchanged, exactly as before. The returned model is
+  # therefore named by the CATALOG spelling, which is also what `convert_schema_to_models` passes in.
+  table_name = _sqlite_canonical_table_name(db, table_name)
   # Use PRAGMA instead of Regex for more reliable introspection
   cols = fetch(db, "PRAGMA table_info(\"$table_name\")") |> DataFrame
   fks = fetch(db, "PRAGMA foreign_key_list(\"$table_name\")") |> DataFrame
@@ -691,7 +705,8 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
   # PRAGMA cannot see CHECK constraints, so the byte bounds come from the stored DDL text (#296).
   # Parameterized, not interpolated: `table_name` is caller-supplied (convertSQLToModel is public),
   # and unlike the PRAGMA calls above — which interpolate into a *quoted identifier* — this value
-  # lands inside a single-quoted literal, where an embedded `'` would break out.
+  # lands inside a single-quoted literal, where an embedded `'` would break out. An exact `name = ?`
+  # is correct here only because `table_name` was resolved to the catalog spelling above (#531).
   _bounds_rows = fetch(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?", [table_name]) |> DataFrame
   byte_bounds = _sqlite_byte_length_bounds(nrow(_bounds_rows) == 0 || ismissing(_bounds_rows[1, :sql]) ? nothing : _bounds_rows[1, :sql])
 
@@ -928,10 +943,11 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
                                getfield(Models, type_sym)(null=nullable, default=d,
                                                           max_length=char_len)
       end
-        if type_sym == :BinaryField && haskey(byte_bounds, col_name)
+        if type_sym == :BinaryField && haskey(byte_bounds, lowercase(col_name))
             # Byte bound recovered from the CHECK clause — `BLOB` carries no length suffix, so it
-            # cannot come from `col_type` the way CharField's does (#296).
-            field.max_length = byte_bounds[col_name]
+            # cannot come from `col_type` the way CharField's does (#296). Lower-cased on both
+            # sides: the CHECK may spell the column differently from its definition (#531).
+            field.max_length = byte_bounds[lowercase(col_name)]
         end
     end
     # #318: set post-construction, matching the `field.max_length = …` mutations just above — that

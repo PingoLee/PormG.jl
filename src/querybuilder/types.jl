@@ -708,19 +708,23 @@ const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 # The arm is keyed by the COLUMN, not by the value's Julia type — that is what closed #536's two
 # defects at once. `Float64` WAS a member and bound the raw Julia value where the pair path bound
 # `format_number_sql`'s string; `Base.UUID` and `Dates.Time` had working formatters and were never
-# admitted, so `F("uid") == uuid` fell through to `Base.==` and yielded a bare `Bool`. `AbstractFloat`
-# rather than `Float64` for the same reason: `Float32` was the bare-`Bool` row in the issue's table.
+# admitted, so `F("uid") == uuid` fell through to `Base.==` and yielded a bare `Bool`. `Float16` /
+# `Float32` / `Float64` rather than `Float64` alone for the same reason — `Float32` was the
+# bare-`Bool` row in the issue's table — and rather than `AbstractFloat`, because those three are
+# exactly the floats `format_number_sql` has a method for: a `BigFloat` member would type-check and
+# then die inside the formatter (the #533 class, one level down), where a non-member is refused at
+# the operator with a typed error.
 #
-# Deliberately out: `Decimals.Decimal` and other `Number`s (no oracle row, so no proof they bind
-# identically — add the row first), `Vector{UInt8}` and JSON (their scalar value is itself a
-# collection, the trap `_format_filter_value` singles out, and neither has comparison semantics).
-# Any other type is refused AT THE OPERATOR by `_unsupported_compare_operand` (`error_funnels.jl`)
-# rather than left to `Base.==`; see the catch-all methods below `_CompareOperand`.
+# Deliberately out: `Decimals.Decimal`, `BigFloat` and other `Number`s (no formatter method or no
+# oracle row, so no proof they bind identically — add both first), `Vector{UInt8}` and JSON (their
+# scalar value is itself a collection, the trap `_format_filter_value` singles out, and neither has
+# comparison semantics). Any other type is refused AT THE OPERATOR by `_unsupported_compare_operand`
+# (`error_funnels.jl`) rather than left to `Base.==`; see the catch-all methods below `_CompareOperand`.
 #
 # Adding a member is still two halves: the union here AND an oracle row in `test_f_date_operands.jl`.
 # The testset that walks `Base.uniontypes(_CompareLiteral)` fails on a member with no row, which is
 # what keeps this comment a rule rather than a list.
-const _CompareLiteral = Union{Integer,AbstractFloat,String,Base.UUID,Dates.Time,Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime}
+const _CompareLiteral = Union{Integer,Float16,Float32,Float64,String,Base.UUID,Dates.Time,Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime}
 const _ColumnHandle   = Union{SQLTypeCTE,SQLTypeJoined}
 
 # Carrier for an F reference and any arithmetic built on top of it. Users construct it through
@@ -982,6 +986,18 @@ end
 Base.:(==)(::FExpression, operand::Missing) = throw(_unsupported_compare_operand("=", operand))
 Base.:(==)(::FExpression, operand::WeakRef) = throw(_unsupported_compare_operand("=", operand))
 Base.:<(::FExpression, operand::Missing)    = throw(_unsupported_compare_operand("<", operand))
+
+# #536 — and the `isequal` half, mirroring the guard `JoinedReference` has carried since #481 (see
+# that block further down). Base's fallback is `isequal(x, y) = x == y`, so without these the
+# catch-alls above would make `isequal(F("a"), nothing)` THROW where it used to answer `false` — and
+# `isequal` is the total hashing-equality contract `Dict`/`Set`/`unique`/`findfirst(isequal(x), …)`
+# rely on; it must never throw. Identity for two nodes, `false` against anything else; the `::Missing`
+# arm disambiguates against Base's `isequal(::Any, ::Missing)` exactly as the Joined block does.
+# This is the `isequal` half of #541's option 1, applied here only for consistency with
+# `JoinedReference`; `in` / `findfirst(==(x), …)` still reach `==` and remain #541's open question.
+Base.isequal(a::FExpression, b::FExpression) = a === b
+Base.isequal(::FExpression, ::Any) = false
+Base.isequal(::FExpression, ::Missing) = false
 
 # Allow arithmetic operations with F expressions on the right side
 function Base.:+(operand::Union{Integer,Float64}, f::FExpression)

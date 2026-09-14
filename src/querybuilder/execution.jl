@@ -1475,7 +1475,7 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # explicit cast, letting PostgreSQL infer the type from the comparison context exactly as an
     # ordinary `filter("date" => Date(...))` already does.
     return add_parameter!(instruc, _format_date_operand(operand, field_name, instruc))
-  elseif operation in _COMPARISON_OPERATIONS && isa(operand, Union{Integer,AbstractFloat,Base.UUID,Dates.Time})
+  elseif operation in _COMPARISON_OPERATIONS && isa(operand, Union{Integer,Float16,Float32,Float64,Base.UUID,Dates.Time})
     # #536 — every other `_CompareLiteral` scalar on the right of a COMPARISON, bound the way the
     # pair spelling binds it: through the rooted column's formatter, with no explicit SQL type. The
     # column decides, not the value's Julia type — `F("points") == true` on an IntegerField binds
@@ -1496,15 +1496,20 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
                 operand isa Base.UUID ? Models.format_uuid_sql :
                 operand isa Dates.Time ? Models.format_text_sql :
                 Models.format_number_sql
-    # The BYTES are the pair path's; the SQL-text cast is not, and deliberately so. A numeric literal
-    # keeps the explicit PostgreSQL cast the raw arms always gave it (`$1::bigint`,
-    # `$1::double precision`, pinned by `test_operators.jl`'s bitwise examples): it is what lets
-    # `F("number") > 2.5` compare an integer column against a double, where an uncast `$1` would be
-    # inferred as integer from the column and PostgreSQL would reject "2.5". `Bool` is excluded — its
-    # FORMATTED value is the column's (`1` on an IntegerField, `true` on a BooleanField), so the
-    # column must type it, exactly as it does for a UUID or a Time; those bind uncast like a pair.
-    sql_type = operand isa Bool || !(operand isa Union{Integer,AbstractFloat}) ? nothing :
-               _infer_parameter_sql_type(operand, instruc)
+    # The BYTES are the pair path's; the SQL-text cast is not, and deliberately so — but only where
+    # the cast agrees with the column. A numeric literal against a NUMERIC column (its formatter is
+    # `format_number_sql`), or against no resolvable column, keeps the explicit PostgreSQL cast the
+    # raw arms always gave it (`$1::bigint`, `$1::double precision`, pinned by `test_operators.jl`'s
+    # bitwise examples): it is what lets `F("number") > 2.5` compare an integer column against a
+    # double, where an uncast `$1` would be inferred as integer from the column and PostgreSQL would
+    # reject "2.5". Everything else binds UNCAST, like a pair, so PostgreSQL types the parameter from
+    # the column: a `Bool` (its formatted value is the column's — `1` on an IntegerField, `true` on a
+    # BooleanField), a UUID or a Time, and a numeric literal against a text or boolean column —
+    # `F("flag") == 1` binds `true` and must not carry `::bigint` (review of #536 measured the cast
+    # following the LITERAL there: `"flag" = $1::bigint` with `true` bound, a PostgreSQL error).
+    numeric_column = f === nothing || f.formatter === Models.format_number_sql
+    sql_type = numeric_column && operand isa Union{Integer,Float16,Float32,Float64} && !(operand isa Bool) ?
+               _infer_parameter_sql_type(operand, instruc) : nothing
     return add_parameter!(instruc, _format_filter_value(formatter, operand, operation); sql_type=sql_type)
   elseif isa(operand, String)
     # Check if it's a field reference

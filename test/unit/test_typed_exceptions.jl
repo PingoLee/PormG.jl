@@ -184,13 +184,15 @@ end
     unsupported = QB._unsupported_conn("unit-test-op", nothing)
     notallowed  = QB._write_not_allowed("insert", "db_test")
     fielderr    = PormG.Models._fielderr("bad kwarg")
+    badoperand  = QB._unsupported_compare_operand(">=", 1 // 2)   # #536
 
     @test unsupported isa PormG.UnsupportedConnectionError
     @test notallowed  isa PormG.WritesDisabledError
     @test fielderr    isa PormG.FieldValidationError
+    @test badoperand  isa PormG.QueryBuildError
 
     # …and each is still under the taxonomy root, so `catch PormGError` covers them.
-    for e in (unsupported, notallowed, fielderr)
+    for e in (unsupported, notallowed, fielderr, badoperand)
         @test e isa PormG.PormGError
         @test !isempty(PormG.error_message(e))
     end
@@ -203,6 +205,8 @@ end
     @test occursin("insert", PormG.error_message(notallowed))
     @test occursin("db_test", PormG.error_message(notallowed))
     @test occursin("bad kwarg", PormG.error_message(fielderr))
+    @test occursin("Rational{Int64}", PormG.error_message(badoperand))   # the offending type
+    @test occursin(">=", PormG.error_message(badoperand))                # the operator
 
     # The pure-alias funnel that used to sit alongside these is gone (#262);
     # test_docs_error_type_drift.jl keeps it from coming back.

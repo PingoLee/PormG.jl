@@ -115,11 +115,15 @@ df = query |> DataFrame
 
 PormG resolves the `__` paths, creates the necessary joins, and applies the `EXTRACT(MONTH FROM ...)` transform on both sides.
 
-### Comparing Against a Date
+### Comparing Against a Literal
 
-A comparison operand may be a `Dates.Date` or a `Dates.DateTime`. The literal is bound as a
-parameter through the same path an ordinary date filter uses, so `F("dob") >= Date(1970, 1, 1)` and
-`"dob__@gte" => Date(1970, 1, 1)` bind identical values on both backends:
+The right-hand side of an `F` comparison may be a number, a string, a `Base.UUID`, or one of the
+temporal types `Dates.Time`, `Dates.Date`, `Dates.DateTime` and `TimeZones.ZonedDateTime`. Whatever
+the literal, it is bound as a parameter **through the column's own formatter** — the same path an
+ordinary filter pair takes — so `F("dob") >= Date(1970, 1, 1)` and `"dob__@gte" => Date(1970, 1, 1)`
+bind identical values on both backends. That matters most on SQLite, where a column holds the text
+its formatter produced: a `Float64` against a `FloatField` binds `"1.5"`, a `Bool` against an
+`IntegerField` binds `1`, and a `UUID` binds its canonical string.
 
 ```julia
 using Dates
@@ -134,6 +138,10 @@ Generated SQL:
 ```sql
 WHERE ("Tb"."dob" >= $1)      -- $1 bound as '1970-01-01'
 ```
+
+A value of any other type — a `Rational`, a byte vector, `nothing` — raises `QueryBuildError` at the
+comparison itself, naming the type and the accepted ones. It never silently evaluates to a `Bool`.
+To test for `NULL`, filter with `"col__@isnull" => true` instead.
 
 For a plain column-against-literal test like this one, the suffix form is the idiomatic spelling —
 see [When NOT to Use F](#When-NOT-to-Use-F). Where `F` earns its place is when the *left* side is an

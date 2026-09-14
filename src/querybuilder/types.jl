@@ -672,25 +672,31 @@ const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 # name itself in its own field types, so `FExpression` appears directly instead of through `SQLTypeF`,
 # and the admission is a named seam again — the rule `CTEReference` and `JoinedReference` already follow.
 #
-# What the literal half actually holds: the numeric and string scalars the renderer has arms for,
-# plus the three temporal types. `ZonedDateTime` joined it in #533 (`Models.format_timezone_sql` has
-# the method, and `filter("ts" => zdt)` already binds through it) together with its render arm.
+# What the literal half holds, and the rule for adding to it (#536): a member is a SCALAR whose
+# comparison binds — through the ROOTED COLUMN's own formatter — the same bytes the pair spelling
+# `filter("col" => value)` binds, and `test_f_date_operands.jl`'s oracle table (`_FD_ORACLE_ROWS`)
+# proves that per member, on both backends. The consumer half is the literal arm of
+# `_set_update_query_operand` (`execution.jl`): it resolves the LEFT column with
+# `_operand_column_field` and runs the value through that column's formatter, exactly as
+# `_get_filter_query(::SQLTypeOper)` does for a pair. The three temporal members take the
+# `_format_date_operand` arm beside it, which adds the DATE-vs-TIMESTAMP promotion.
 #
-# It is NOT "every type the `format_*_sql` family can bind" — an earlier draft of this comment said
-# that, and review measured it false: `Base.UUID` and `Dates.Time` both have working formatters, the
-# pair spelling binds both, and neither is a member, so `F("uid") == uuid` still falls through to
-# `Base.==` and yields a bare `Bool`. `Float64` is worse — it IS a member and binds the raw Julia
-# value where the pair path binds the formatted string. Both are tracked in **#536**; closing that is
-# what would let this comment state a rule instead of a list.
+# The arm is keyed by the COLUMN, not by the value's Julia type — that is what closed #536's two
+# defects at once. `Float64` WAS a member and bound the raw Julia value where the pair path bound
+# `format_number_sql`'s string; `Base.UUID` and `Dates.Time` had working formatters and were never
+# admitted, so `F("uid") == uuid` fell through to `Base.==` and yielded a bare `Bool`. `AbstractFloat`
+# rather than `Float64` for the same reason: `Float32` was the bare-`Bool` row in the issue's table.
 #
-# `Vector{UInt8}` and JSON stay out deliberately: their scalar value is itself a collection, which is
-# the trap `_format_filter_value` singles out, and neither has comparison semantics.
+# Deliberately out: `Decimals.Decimal` and other `Number`s (no oracle row, so no proof they bind
+# identically — add the row first), `Vector{UInt8}` and JSON (their scalar value is itself a
+# collection, the trap `_format_filter_value` singles out, and neither has comparison semantics).
+# Any other type is refused AT THE OPERATOR by `_unsupported_compare_operand` (`error_funnels.jl`)
+# rather than left to `Base.==`; see the catch-all methods below `_CompareOperand`.
 #
-# Adding a member here is only half a change. The other half is a render arm in
-# `_format_date_operand` / `_set_update_query_operand` (`execution.jl`) — a member that binds raw is
-# not "supported", it is #494 again on a new type, and #536's `Float64` row is what that looks like
-# when nobody notices for a release.
-const _CompareLiteral = Union{Integer,Float64,String,Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime}
+# Adding a member is still two halves: the union here AND an oracle row in `test_f_date_operands.jl`.
+# The testset that walks `Base.uniontypes(_CompareLiteral)` fails on a member with no row, which is
+# what keeps this comment a rule rather than a list.
+const _CompareLiteral = Union{Integer,AbstractFloat,String,Base.UUID,Dates.Time,Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime}
 const _ColumnHandle   = Union{SQLTypeCTE,SQLTypeJoined}
 
 # Carrier for an F reference and any arithmetic built on top of it. Users construct it through
@@ -885,10 +891,12 @@ Base.:+(operand::_DurationOperand, f::FExpression) = f + operand
 # The union is still the dispatch contract for a `CTE(...)` / `Joined(...)` right-hand side. #533
 # made "keep additions to it and to `FExpression.operand` in step" structural rather than a rule to
 # remember: both are now COMPOSED from `_CompareLiteral` / `_ColumnHandle` (declared above the
-# struct), so widening one widens the other. What still has to be done by hand is the CONSUMER half —
-# a new member needs a render arm in `_format_date_operand` / `_set_update_query_operand`
-# (`execution.jl`), or it binds RAW, and a member that binds raw is not "supported", it is #494 again
-# on a different type. `test_node_admission.jl` is what fails when that half is forgotten.
+# struct), so widening one widens the other. The CONSUMER half is no longer per-type either (#536):
+# the literal arm of `_set_update_query_operand` (`execution.jl`) binds every `_CompareLiteral`
+# scalar through the rooted column's formatter, so a new member cannot bind RAW — what it can still
+# lack is PROOF, and that is the oracle row `test_f_date_operands.jl` demands per member. A column
+# HANDLE (`_ColumnHandle`) is the other kind of operand and renders as a column reference, never a
+# bound value; `test_node_admission.jl` is what fails when a NODE type is admitted without a consumer.
 const _CompareOperand = Union{_CompareLiteral,_ColumnHandle,FExpression}
 
 function _compare(f::FExpression, operation::String, operand)
@@ -920,6 +928,36 @@ Base.:>(f::FExpression, operand::_CompareOperand)    = _compare(f, ">", operand)
 Base.:<(f::FExpression, operand::_CompareOperand)    = _compare(f, "<", operand)
 Base.:>=(f::FExpression, operand::_CompareOperand)   = _compare(f, ">=", operand)
 Base.:<=(f::FExpression, operand::_CompareOperand)   = _compare(f, "<=", operand)
+
+# #536 — a right-hand side OUTSIDE `_CompareOperand` used to fall through to `Base.==` (identity)
+# and evaluate to a bare `Bool`, which `filter(...)` then reported as *"Invalid filter argument:
+# false"* — naming a value the user never wrote (#530's complaint, on every type the union omits).
+# Each operator now refuses with a `QueryBuildError` naming the type and the supported vocabulary.
+#
+# SQLAlchemy is the prior art: `column == object()` raises `ArgumentError: SQL expression element
+# expected` rather than answering `False`. Django has no equivalent — its `F()` does not overload
+# comparison at all.
+#
+# Only the expression-on-the-LEFT forms are covered. `1.5 == F("a")` still reaches Base's fallback
+# and answers `false`: a `(::Any, ::FExpression)` method would collide with every left-typed `==`
+# in Base, and the issue's table is the left-hand form. Out of scope here; #541 owns the
+# node-as-container question (`isequal`/`in`) these methods sit beside and do not change.
+#
+# The `::Missing` / `::WeakRef` arms are NOT redundant. Measured on 1.12: Base defines
+# `==(::Any, ::Missing)` and `<(::Any, ::Missing)` (missing.jl) and `==(::Any, ::WeakRef)`
+# (gcutils.jl) — no others in the six — so those three signatures are ambiguous with the `::Any`
+# arm, and Aqua's ambiguity check is what pins the set. `!=`, `>`, `<=`, `>=` have no such Base
+# method and need no arm. They refuse exactly as the `::Any` arm does.
+#
+# The `JoinedReference` family gets the same twelve further down, generated in the same loop as
+# its comparison methods — a second, independent site, so it is asserted separately in
+# `test_f_date_operands.jl` rather than assumed to follow.
+for (op, sym) in ((:(==), "="), (:(!=), "!="), (:(>), ">"), (:(<), "<"), (:(>=), ">="), (:(<=), "<="))
+  @eval Base.$op(::FExpression, operand) = throw(_unsupported_compare_operand($sym, operand))
+end
+Base.:(==)(::FExpression, operand::Missing) = throw(_unsupported_compare_operand("=", operand))
+Base.:(==)(::FExpression, operand::WeakRef) = throw(_unsupported_compare_operand("=", operand))
+Base.:<(::FExpression, operand::Missing)    = throw(_unsupported_compare_operand("<", operand))
 
 # Allow arithmetic operations with F expressions on the right side
 function Base.:+(operand::Union{Integer,Float64}, f::FExpression)
@@ -1216,12 +1254,22 @@ end
 # The operand type is the SHARED `_CompareOperand`, not a second copy of the same union: the two
 # families must admit exactly the same right-hand sides, and a union spelled twice drifts silently —
 # a member added to one side would make `Joined(...) == CTE(...)` and `F(...) == CTE(...)` disagree.
+#
+# #536 — and the same refusal for an operand OUTSIDE the union, so `Joined("r","uid") == 1//2`
+# raises the same `QueryBuildError` the `F` twin does instead of answering `false` from `Base.==`.
+# The `::Missing` / `::WeakRef` arms mirror the `FExpression` set above, for the same three
+# ambiguities with Base. `isequal(::JoinedReference, ::Any)` above is untouched: it never reaches
+# `==`, so containers keep behaving.
 for (op, sym) in ((:(==), "="), (:(!=), "!="), (:(>), ">"), (:(<), "<"), (:(>=), ">="), (:(<=), "<="))
   @eval function Base.$op(j::JoinedReference, operand::_CompareOperand)
     _reject_joined_desc(j, "a comparison")
     return FExpression(field_name=j, operation=$sym, operand=operand, function_name="F", column="", aggregate=false)
   end
+  @eval Base.$op(::JoinedReference, operand) = throw(_unsupported_compare_operand($sym, operand))
 end
+Base.:(==)(::JoinedReference, operand::Missing) = throw(_unsupported_compare_operand("=", operand))
+Base.:(==)(::JoinedReference, operand::WeakRef) = throw(_unsupported_compare_operand("=", operand))
+Base.:<(::JoinedReference, operand::Missing)    = throw(_unsupported_compare_operand("<", operand))
 
 #
 # SQLTypeFunction Objects (functions from sql)

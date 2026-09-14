@@ -626,6 +626,14 @@ const DOCERR_CASES = [
         FieldValidationError,
         () -> ForeignKey("Docerr_Driver", pk_field = "id", related_name = "incident__driver"),
     ),
+    (
+        # #536. The page states that a comparison literal outside the accepted vocabulary is refused
+        # AT THE OPERATOR — before any query is built — and never evaluates to a bare `Bool`. A plain
+        # constructor-level call, so no model or connection is involved.
+        "read/field_expressions.md — an unsupported comparison literal is refused (#536)",
+        QueryBuildError,
+        () -> F("points") == 1 // 2,
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

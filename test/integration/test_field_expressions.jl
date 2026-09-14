@@ -367,6 +367,139 @@ end
     end
   end
 
+  @testset "date arithmetic compares against stored values (#527)" begin
+    # The half no mock can prove, and the half #494 deliberately left out of scope: not which bytes
+    # are BOUND, but whether the rendered expression lands in a representation the column actually
+    # holds.
+    #
+    # On SQLite it did not. `F(ts) + Day(1)` rendered through `datetime(...)`, whose
+    # `YYYY-MM-DD HH:MM:SS` output can never equal the canonical `...T...+00:00` a DateTimeField
+    # stores — and since SQLite compares TEXT and a space (0x20) sorts below `T` (0x54), the wrapped
+    # value was ALWAYS less than the same instant in stored form. So `=` matched nothing and `<`/`>`
+    # were systematically biased, silently, while PostgreSQL (comparing real timestamps) returned the
+    # right rows. Everything below is asserted identically on both engines for that reason: the
+    # defect was a cross-backend divergence, and a test that only ran on one could not see it.
+    #
+    # Its own row, created and deleted here, for the reason the #494 DateTimeField case states: the
+    # fixture's only TIMESTAMP columns live on scratch tables other tests truncate.
+    label  = "fx527_arith_probe"
+    marker = Dates.DateTime(2031, 7, 4, 12, 30, 0)
+    marker_day  = Dates.Date(2031, 7, 4)
+    plus_one    = marker + Dates.Day(1)
+    minus_one   = marker - Dates.Day(1)
+
+    cleanup = M.Django_contract_scratch.objects
+    cleanup.filter("label" => label)
+    cleanup.exists() && cleanup.delete()
+
+    try
+      M.Django_contract_scratch.objects.create(
+        "label" => label, "event_time" => marker, "event_date" => marker_day)
+
+      # 1. Equality against the shifted instant. This is the acceptance case, and it returned ZERO
+      #    rows on SQLite before the fix — for every row, not just this one.
+      hit = M.Django_contract_scratch.objects
+      hit.filter(F("event_time") + Dates.Day(1) == plus_one, "label" => label)
+      @test size(hit.values("label") |> DataFrame, 1) == 1
+
+      # And the shift is real, not a no-op the equality would satisfy anyway.
+      wrong = M.Django_contract_scratch.objects
+      wrong.filter(F("event_time") + Dates.Day(1) == marker, "label" => label)
+      @test size(wrong.values("label") |> DataFrame, 1) == 0
+
+      # The subtraction mirror, so the sign is exercised on the equality path and not only on the
+      # ordering ones below.
+      back = M.Django_contract_scratch.objects
+      back.filter(F("event_time") - Dates.Day(1) == minus_one, "label" => label)
+      @test size(back.values("label") |> DataFrame, 1) == 1
+
+      # 2. Ordering is not biased — and the shift has to be SUB-DAY to show it. The old rendering
+      #    compared `YYYY-MM-DD HH:MM:SS` against `YYYY-MM-DDTHH:MM:SS.sss+00:00` character by
+      #    character, so as long as the calendar dates differed the comparison happened to land on
+      #    the date digits and come out right. The bias only surfaces once the two strings agree up
+      #    to the separator, where a space (0x20) loses to `T` (0x54) regardless of the clock.
+      #
+      #    `event_time + 1 hour` is strictly AFTER the marker, on the same calendar day. Before the
+      #    fix this pair was inverted: the `<` returned the row and the `>` did not.
+      biased = M.Django_contract_scratch.objects
+      biased.filter(F("event_time") + Dates.Hour(1) < marker, "label" => label)
+      @test size(biased.values("label") |> DataFrame, 1) == 0
+
+      unbiased = M.Django_contract_scratch.objects
+      unbiased.filter(F("event_time") + Dates.Hour(1) > marker, "label" => label)
+      @test size(unbiased.values("label") |> DataFrame, 1) == 1
+
+      # The mirror image on the same day, so "always greater" would fail here too.
+      earlier = M.Django_contract_scratch.objects
+      earlier.filter(F("event_time") - Dates.Hour(1) < marker, "label" => label)
+      @test size(earlier.values("label") |> DataFrame, 1) == 1
+
+      later = M.Django_contract_scratch.objects
+      later.filter(F("event_time") - Dates.Hour(1) > marker, "label" => label)
+      @test size(later.values("label") |> DataFrame, 1) == 0
+
+      # Whole days across a date boundary, which is the case the old rendering got RIGHT — kept as a
+      # control so a fix that broke coarse ordering to fix fine ordering would still fail.
+      after = M.Django_contract_scratch.objects
+      after.filter(F("event_time") + Dates.Day(1) > marker, "label" => label)
+      @test size(after.values("label") |> DataFrame, 1) == 1
+
+      before = M.Django_contract_scratch.objects
+      before.filter(F("event_time") - Dates.Day(1) < marker, "label" => label)
+      @test size(before.values("label") |> DataFrame, 1) == 1
+
+      # Bracketing the shifted instant from both sides at once — a single comparison that landed on
+      # the wrong representation cannot satisfy both halves.
+      bracket = M.Django_contract_scratch.objects
+      bracket.filter(F("event_time") + Dates.Day(1) >= plus_one,
+                     F("event_time") + Dates.Day(1) <= plus_one, "label" => label)
+      @test size(bracket.values("label") |> DataFrame, 1) == 1
+
+      # 3. The integer-days spelling is the same defect one branch over: guarded by a check that
+      #    answers `true` for TIMESTAMP, it truncated a DateTimeField to a calendar date.
+      int_days = M.Django_contract_scratch.objects
+      int_days.filter(F("event_time") + 1 == plus_one, "label" => label)
+      @test size(int_days.values("label") |> DataFrame, 1) == 1
+
+      # 4. The projected value, which is what makes this a representation fix rather than a
+      #    comparison fix. On SQLite the alias comes back as raw TEXT — an expression alias is never
+      #    in the DateTime-coercion set, which only covers aliases naming a plain column — and that
+      #    TEXT is the thing under test: it must be byte-identical to what the column itself would
+      #    hold for that instant. Asserting a round-trip through the canonicalizer instead would be
+      #    theater, because `validate_timezone` accepts the OLD space-separated output too and
+      #    repairs it; only the literal comparison fails against the old rendering.
+      proj = M.Django_contract_scratch.objects
+      proj.filter("label" => label)
+      proj.values("label", "next_day" => F("event_time") + Dates.Day(1))
+      row = proj |> DataFrame
+      @test size(row, 1) == 1
+      shifted = row[1, :next_day]
+      if shifted isa AbstractString
+        @test shifted == Models.format_timezone_sql(plus_one)
+      else
+        # PostgreSQL returns a typed value, so the claim there is that it denotes the same instant.
+        @test Models.format_timezone_sql(shifted) == Models.format_timezone_sql(plus_one)
+      end
+
+      # 5. A sub-day duration on a DateField. `date + interval` is a timestamp in standard SQL, so
+      #    this has a correct answer — but the literal used to bind the column's calendar date
+      #    against a timestamp-valued expression, which matched nothing on EITHER engine.
+      subday = M.Django_contract_scratch.objects
+      subday.filter(F("event_date") + Dates.Hour(6) == Dates.DateTime(2031, 7, 4, 6, 0, 0),
+                    "label" => label)
+      @test size(subday.values("label") |> DataFrame, 1) == 1
+
+      # …and the same expression against a different hour must not match, so the row above is not
+      # matching for some representation-independent reason.
+      subday_miss = M.Django_contract_scratch.objects
+      subday_miss.filter(F("event_date") + Dates.Hour(6) == Dates.DateTime(2031, 7, 4, 7, 0, 0),
+                         "label" => label)
+      @test size(subday_miss.values("label") |> DataFrame, 1) == 0
+    finally
+      M.Django_contract_scratch.objects.filter("label" => label).delete()
+    end
+  end
+
   @testset "a DateTime literal against a DateField truncates, as the pair spelling does" begin
     # `format_date_sql` coerces a `DateTime` to its calendar date on both paths. If the F path bound
     # a timestamp string instead, SQLite would return no rows at all and PostgreSQL would still

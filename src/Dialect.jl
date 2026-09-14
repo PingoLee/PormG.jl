@@ -58,6 +58,49 @@ function QUADRIMESTER(column::String, format::Dict{String,Any}, conn::PormGSQLit
   return "((strftime('%m', $(column)) - 1) / 4) + 1"
 end
 
+# #527 — the SQL-side image of `DATETIME_FORMAT` (#79, `constants.jl`), for SQLite.
+#
+# SQLite's own `datetime(...)` emits `YYYY-MM-DD HH:MM:SS`, but a `DateTimeField` stores what
+# `Models.format_timezone_sql` produces — `YYYY-MM-DDTHH:MM:SS.sss+00:00` — and SQLite compares TEXT
+# lexicographically. A space (0x20) sorts below `T` (0x54), so a `datetime()`-wrapped value is
+# ALWAYS less than the same instant in canonical form: `=` never matches and `<`/`>` are
+# systematically biased rather than occasionally wrong. Worse on the write side — an
+# `update("ts" => F("ts") + Day(1))` persisted that string into the column, after which the read
+# path (`_parse_sqlite_datetime`, which anchors on the `T`) silently returned a `String` instead of
+# a `ZonedDateTime`.
+#
+# `%f` is SQLite's `SS.SSS`, so this mask is a character-for-character image of
+# `"yyyy-mm-ddTHH:MM:SS.ssszzzz"` with the zone pinned to UTC — which is honest, because every
+# PormG write path canonicalizes to UTC through `Models.validate_timezone` first. Rendering date
+# arithmetic through it makes the expression's OUTPUT directly comparable to every stored value,
+# so wrapper and bind agree by construction instead of needing the counterpart operand wrapped at
+# each of the (many) comparison sites.
+#
+# Deliberately a NEW constant rather than an entry in `sqlite_date_format_map`: that map spells the
+# same idea as `"%Y-%m-%d %H:%M:%S.%f"`, which is wrong — `%f` already carries the seconds, so it
+# renders `…:09.09.000`. Reusing it would inherit the defect.
+#
+# The `date(...)` sibling is deliberately NOT changed: its output already equals what
+# `Models.format_date_sql` produces for a `DateField`, so there is nothing to reconcile.
+const SQLITE_CANONICAL_DATETIME_MASK = "'%Y-%m-%dT%H:%M:%f+00:00'"
+
+"""
+    _sqlite_canonical_datetime(expr, modifiers) -> String
+
+Render a SQLite timestamp-valued expression in PormG's canonical UTC form (#527).
+
+`modifiers` are already-rendered `strftime`/`datetime` modifier arguments (e.g.
+`"'+' || ? || ' days'"`); pass none to canonicalize `expr` on its own.
+
+The emitted `SQLITE_CANONICAL_DATETIME_MASK` literal doubles as the **marker** that says "this text
+is already canonical". Sniffing a bare `strftime(` would not work — `QUARTER`, `QUADRIMESTER`,
+`EXTRACT_DATE` and `EXTRACT` above all emit that too, and none of them yields a timestamp.
+"""
+function _sqlite_canonical_datetime(expr::AbstractString, modifiers::Vector{String} = String[])
+  isempty(modifiers) && return "strftime($(SQLITE_CANONICAL_DATETIME_MASK), $(expr))"
+  return "strftime($(SQLITE_CANONICAL_DATETIME_MASK), $(expr), $(join(modifiers, ", ")))"
+end
+
 
 # PostgreSQL
 function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGPostgres)

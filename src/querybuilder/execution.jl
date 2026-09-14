@@ -1328,6 +1328,17 @@ const _COMPARISON_OPERATIONS = ("=", "!=", ">", "<", ">=", "<=")
 # to what the ordinary `filter("ts" => zdt)` pair spelling binds.
 function _format_date_operand(operand::Union{Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime}, field_name, instruc::SQLInstruction)
   ftype = _operand_column_type(field_name, instruc)
+  # #527: the expression's RESULT kind outranks the rooted column's kind, and only ever to promote.
+  # `F("dob") + Hour(6)` on a `DateField` evaluates to a timestamp — `date + interval` is a
+  # `timestamp` in SQL:2003 and PostgreSQL, and Django resolves the same combination to a
+  # `DateTimeField` — so the literal must bind the canonical form, not the column's calendar date.
+  # Bound to the column's date form, the comparison was unsatisfiable on BOTH engines and returned
+  # zero rows with no error. `_f_arith_result_kind` promotes only on a sub-day component, so the
+  # pinned truncation contract for whole-day arithmetic (`F("dob") + Day(1) == DateTime(...)` binds
+  # the calendar date, exactly as the pair spelling does) is untouched.
+  if field_name isa FExpression && _f_arith_result_kind(field_name, instruc) === :timestamp
+    ftype = "TIMESTAMP"
+  end
   ftype == "DATE" && return Models.format_date_sql(operand)
   if ftype == "TIMESTAMP" || ftype == "TIMESTAMPTZ"
     return Models.format_timezone_sql(operand isa Dates.Date ? Dates.DateTime(operand) : operand)
@@ -1373,14 +1384,66 @@ function _decompose_period(period::Union{Dates.Period, Dates.CompoundPeriod})
   return comps
 end
 
+# #527 — the temporal kind an `F` date-arithmetic expression EVALUATES TO, as opposed to the kind of
+# the column it is rooted in. `:timestamp`, `:date`, or `nothing` when there is no column to ask.
+#
+# One resolver, called from two places that must never disagree: the SQLite wrapper choice in
+# `_render_date_period_arithmetic` and the literal binder in `_format_date_operand`. That is the same
+# construction #494 used to close the wrapper/bind split — asking one function rather than writing two
+# predicates that happen to agree today.
+#
+# The promotion it adds over `_operand_column_type` is the SQL one: a sub-day duration on a DATE
+# column yields a TIMESTAMP. `date + interval` is a `timestamp` in SQL:2003 and in PostgreSQL;
+# Django registers `DateField + DurationField -> DateTimeField` in `_connector_combinations` and
+# SQLAlchemy resolves `Date + Interval -> DateTime`. Without it `F("dob") + Hour(6) == DateTime(...)`
+# bound the column's calendar-date form against a timestamp-valued left side and returned zero rows —
+# on BOTH engines, silently.
+#
+# Three details, each of which a simpler spelling gets wrong:
+#
+#   1. It walks the CHAIN, not just the top link. `F("dob") + Hour(6) + Day(1)` renders a timestamp
+#      (the outer call sees the inner canonical marker), so a top-level-only predicate would see
+#      `Day(1)`, decline to promote, and bind the calendar date — a fresh wrapper/bind disagreement.
+#   2. It asks `_decompose_period`, not `typeof(operand)`. `F("dob") + Hour(0) + Day(1)`: a
+#      zero-length interval short-circuits to the bare left side and emits no wrapper at all, so a
+#      type-based test would promote an expression that stayed a DATE. Reusing the decomposer is what
+#      makes render and bind agree by construction.
+#   3. It unwraps `Interval`, mirroring `_render_date_period_arithmetic` — `_decompose_period` takes
+#      `Period`/`CompoundPeriod` only, and `Interval("01:30:00")` is the sub-day case that matters most.
+#
+# NARROWER than Django on purpose: Django promotes `DateField + Duration` unconditionally, including
+# whole days. PormG has a pinned, deliberate contract that a `DateTime` literal against a DATE column
+# truncates to its calendar date exactly as the `filter("dob__@gte" => …)` pair spelling does, and
+# promoting on `Day(1)` would overturn it. Promoting only when the expression itself produced a
+# time-of-day changes nothing that already has a correct answer.
+#
+# No depth cap on the walk, for the reason recorded at `_operand_column_field`: `FExpression` has been
+# a `struct` since #508 phase 2, so `field_name` is set once at construction and a cycle is
+# unrepresentable rather than merely unlikely.
+function _f_arith_result_kind(v::FExpression, instruc::SQLInstruction)::Union{Symbol,Nothing}
+  node = v
+  while node isa FExpression
+    if node.operation in ("+", "-") && node.operand isa Union{Dates.Period, Dates.CompoundPeriod, Interval}
+      period = node.operand isa Interval ? node.operand.period : node.operand
+      any(c -> c[1] in (:hour, :minute, :second), _decompose_period(period)) && return :timestamp
+    end
+    node = node.field_name
+  end
+  ftype = _operand_column_type(v, instruc)
+  ftype in ("TIMESTAMP", "TIMESTAMPTZ") && return :timestamp
+  ftype == "DATE" && return :date
+  return nothing
+end
+
 # Render `F(date) ± <duration>` per dialect. PostgreSQL emits a single `make_interval(...)` with
-# explicitly-typed placeholders; SQLite emits one `date()`/`datetime()` modifier per component.
+# explicitly-typed placeholders; SQLite emits one `date()`/canonical-`strftime()` modifier per
+# component.
 function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
   period = v.operand isa Interval ? v.operand.period : v.operand
   comps  = _decompose_period(period)
 
   # Resolve the left side FIRST — rendering it populates `instruc.tab_field_cache` for dotted join
-  # keys, which the SQLite wrapper choice (date vs datetime) below depends on.
+  # keys, which the SQLite wrapper choice (`date()` vs the canonical timestamp form) below depends on.
   left_side = _set_update_query_left(v.field_name, v.operation, instruc)
 
   # Soft validation (#25, best-effort): a duration only makes sense on a date/time column. Only
@@ -1405,26 +1468,39 @@ function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
     return "($(left_side) $(v.operation) make_interval($(join(parts, ", "))))"
 
   elseif instruc.connection isa PormGSQLite
-    # #494: `_operand_column_type`, not the String-only `_date_field_type` this used to call. It
+    # #494: `_f_arith_result_kind`, not the String-only `_date_field_type` this used to call. It
     # resolves a nested `FExpression` down to the column the expression is rooted in — the same
-    # question the OPERAND binder asks one function away — so the wrapper chosen here and the
-    # representation bound there now agree by construction instead of by coincidence. (Only the
-    # `String` and nested-`FExpression` arms are reachable from here: a `Joined` handle has no
-    # arithmetic overload at all, so it never reaches this function.)
+    # question the OPERAND binder asks one function away, now literally the same function — so the
+    # wrapper chosen here and the representation bound there agree by construction instead of by
+    # coincidence. (Only the `String` and nested-`FExpression` arms are reachable from here: a
+    # `Joined` handle has no arithmetic overload at all, so it never reaches this function.)
     #
-    # They did not agree before. The `occursin("datetime(", left_side)` fallback below is textual,
-    # and a zero-length link in a chain erases the marker it looks for: `_render_date_period_arithmetic`
+    # They did not agree before. The textual fallback below reads the RENDERED text, and a
+    # zero-length link in a chain erases the marker it looks for: `_render_date_period_arithmetic`
     # short-circuits an empty interval to the bare left side, so `F(ts) + Day(0) + Day(1)` lost the
-    # inner `datetime(` and the outer call truncated a TIMESTAMP with `date(...)`. Resolving the
-    # column instead of reading the rendered text closes that, and the textual check stays as a
-    # backstop for a left side this resolver cannot type.
-    ftype   = _operand_column_type(v.field_name, instruc)
-    subday  = any(c -> c[1] in (:hour, :minute, :second), comps)
-    # Choose datetime() when a sub-day unit is present, the column is a timestamp, OR the left side
-    # is ALREADY a datetime() expression — without the last one, wrapping an inner datetime() in
-    # date() would silently truncate the time-of-day, diverging from PostgreSQL.
-    use_datetime = subday || ftype in ("TIMESTAMP", "TIMESTAMPTZ") || occursin("datetime(", left_side)
-    wrapper = use_datetime ? "datetime" : "date"
+    # inner marker and the outer call truncated a TIMESTAMP with `date(...)`. Resolving the column
+    # instead of reading the text closes that, and the textual check stays as a backstop for a left
+    # side this resolver cannot type.
+    #
+    # #527: the timestamp wrapper is now the CANONICAL `strftime(...)` form, not SQLite's own
+    # `datetime(...)`. `datetime()` emits `YYYY-MM-DD HH:MM:SS`, which can never equal — and always
+    # sorts below — the `YYYY-MM-DDTHH:MM:SS.sss+00:00` a `DateTimeField` stores. The rationale and
+    # the mask live on `Dialect.SQLITE_CANONICAL_DATETIME_MASK`.
+    #
+    # The backstop sniffs that MASK, never a bare `strftime(` — `Dialect.QUARTER`,
+    # `QUADRIMESTER`, `EXTRACT_DATE` and `EXTRACT` all emit `strftime(` too, and none of them yields
+    # a timestamp, so the looser marker would misclassify an `F("ts__@quarter")`-rooted left side as
+    # already-canonical.
+    # Choose the timestamp wrapper when the expression EVALUATES to a timestamp — a timestamp column,
+    # or a sub-day duration anywhere down the chain — OR when the left side is ALREADY canonical.
+    # Without the second clause, wrapping an inner timestamp in `date()` would silently truncate the
+    # time-of-day, diverging from PostgreSQL.
+    #
+    # There is no separate "this call's own operand is sub-day" test: the resolver's first hop is
+    # THIS node, over the same operand `comps` came from, so it already answers that. Keeping a second
+    # copy would be one more place for the two to drift.
+    use_datetime = _f_arith_result_kind(v, instruc) === :timestamp ||
+                   occursin(Dialect.SQLITE_CANONICAL_DATETIME_MASK, left_side)
     op_factor = v.operation == "-" ? -1 : 1
     mods = String[]
     for (unit, value) in comps
@@ -1438,7 +1514,8 @@ function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
     # Zero-length interval → identity, matching the PostgreSQL branch (never wrap, so a timestamp
     # column is not truncated by a stray date() on a no-op interval).
     isempty(mods) && return left_side
-    return "$wrapper($(left_side), $(join(mods, ", ")))"
+    use_datetime && return Dialect._sqlite_canonical_datetime(left_side, mods)
+    return "date($(left_side), $(join(mods, ", ")))"
   else
     throw(_unsupported_conn("date/interval arithmetic", instruc.connection))
   end
@@ -1612,8 +1689,27 @@ function _set_update_query(v::FExpression, instruc::SQLInstruction)
     right_side = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc)
     
     if instruc.connection isa PormGSQLite && v.operation in ["+", "-"] && (v.field_name isa String && _is_date_field(v.field_name, instruc))
+      # #527: the wrapper follows the COLUMN, as it already does on the duration path one branch up.
+      # `_is_date_field` stays the outer guard — it must keep answering `true` for a timestamp
+      # column, or this branch would not fire at all and the render would fall through to numeric
+      # addition on TEXT. What was wrong is that it then emitted `date(...)` unconditionally, so
+      # `F("event_time") + 7` on a `DateTimeField` truncated the time-of-day AND produced SQLite's
+      # own format, which no stored canonical value can equal.
+      #
+      # No bind-side change is owed here: integer days are never a sub-day duration, so
+      # `_f_arith_result_kind` answers with the rooted column's own kind and wrapper and bind agree.
+      #
+      # It asks that resolver rather than `_date_field_type` even though the guard above already
+      # narrowed `field_name` to a `String` — where the two are equivalent, since the chain walk has
+      # nothing to contribute and both fall through to the same model-then-memo lookup. The point is
+      # that "what temporal kind does this expression evaluate to" has exactly ONE answer in this
+      # file. A second predicate that merely happens to agree today is how the wrapper and the bind
+      # drifted apart before #494.
       op_sign = v.operation == "+" ? "+" : "-"
-      return "date($(left_side), '$(op_sign)' || $(right_side) || ' days')"
+      modifier = "'$(op_sign)' || $(right_side) || ' days'"
+      _f_arith_result_kind(v, instruc) === :timestamp &&
+        return Dialect._sqlite_canonical_datetime(left_side, [modifier])
+      return "date($(left_side), $(modifier))"
     end
 
     return "($(left_side) $(v.operation) $(right_side))"

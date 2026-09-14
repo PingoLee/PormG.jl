@@ -204,6 +204,70 @@ end
   race_query.update("date" => orig_date)
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Date arithmetic in an UPDATE against a TIMESTAMP column (#527).
+#
+# The testset above uses `Race.date`, a DATE column, and it stayed green throughout #527 — which is
+# exactly why it could not catch the bug. On SQLite the TIMESTAMP wrapper rendered through
+# `datetime(...)`, whose `YYYY-MM-DD HH:MM:SS` output is not the canonical `...T...+00:00` a
+# DateTimeField stores. In a SELECT that meant a comparison matching nothing; in an UPDATE it was
+# written straight INTO the column, and the damage outlived the query: the row stopped matching any
+# canonical filter, and `list()` handed it back as a raw `String` because both the normalizer and the
+# parser anchor on the `T` separator. Silent, persistent, and invisible to a DATE-only test.
+#
+# So what is asserted here is the round trip — write through the expression, read back, and check
+# BOTH the Julia type and the instant — plus that the rewritten row is still findable by an ordinary
+# filter, which is the property a non-canonical write destroys.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Date arithmetic in an UPDATE preserves the stored timestamp format (#527)" begin
+  label  = "up527_ts_probe"
+  marker = Dates.DateTime(2031, 8, 9, 7, 45, 0)
+  shifted = marker + Dates.Day(1)
+
+  # Pre-emptive cleanup before the try, matching the other writers of this table: `label` is
+  # `unique = true`, so a row stranded by a killed run would fail the `create` on the next one.
+  cleanup = M.Django_contract_scratch.objects
+  cleanup.filter("label" => label)
+  cleanup.exists() && cleanup.delete()
+
+  try
+    M.Django_contract_scratch.objects.create("label" => label, "event_time" => marker)
+
+    probe = M.Django_contract_scratch.objects
+    probe.filter("label" => label)
+    probe.update("event_time" => F("event_time") + Dates.Day(1))
+
+    read_back = M.Django_contract_scratch.objects
+    read_back.filter("label" => label)
+    row = read_back.values("label", "event_time").list() |> first
+    stored = row[:event_time]
+
+    # The type is the tell. A non-canonical write does not raise here — it degrades the column from
+    # a timestamp to a `String`, which is how the corruption stayed invisible.
+    @test !(stored isa AbstractString)
+    # And it is the right instant, recomputed in Julia from the value that went in.
+    @test Models.format_timezone_sql(stored) == Models.format_timezone_sql(shifted)
+
+    # The decisive one: an ordinary filter must still find the row it just rewrote. This is the
+    # property the old path destroyed — the row was still there, and unreachable.
+    found = M.Django_contract_scratch.objects
+    found.filter("event_time" => shifted, "label" => label)
+    @test size(found.values("label") |> DataFrame, 1) == 1
+
+    # The integer-days spelling writes through a different branch with the same defect, and it was
+    # additionally truncating the time-of-day on a TIMESTAMP column.
+    probe2 = M.Django_contract_scratch.objects
+    probe2.filter("label" => label)
+    probe2.update("event_time" => F("event_time") - 1)
+
+    row2 = M.Django_contract_scratch.objects.filter("label" => label).values("event_time").list() |> first
+    @test !(row2[:event_time] isa AbstractString)
+    @test Models.format_timezone_sql(row2[:event_time]) == Models.format_timezone_sql(marker)
+  finally
+    M.Django_contract_scratch.objects.filter("label" => label).delete()
+  end
+end
+
 @testset "Null and Missing handling in Updates" begin
   query = M.Just_a_test_deletion.objects
     query.exists() && query.delete(allow_delete_all = true)

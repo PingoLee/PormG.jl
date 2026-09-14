@@ -351,7 +351,7 @@ sequence after one of those, or after any load that happened outside PormG entir
 ### Real-World Example: Loading F1 Season Data
 
 ```julia
-using CSV, DataFrames
+using CSV, DataFrames, Dates
 import .models as M
 
 # Load initial reference data
@@ -374,9 +374,13 @@ bulk_copy(M.Driver.objects, drivers_df)
 # Load races with pre-processing
 races_df = CSV.File("f1/races.csv") |> DataFrame
 rename!(races_df, lowercase.(names(races_df)))
-for col in [:fp1_date, :fp1_time, :fp2_date, :fp2_time, :fp3_date, :fp3_time, :quali_date, :quali_time, :sprint_date, :sprint_time]
+for col in [:fp1_date, :fp1_time, :fp2_date, :fp2_time, :fp3_date, :fp3_time, :quali_date, :quali_time, :sprint_date, :sprint_time, :time]
     races_df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, races_df[!, col])
 end
+# `start_at` is a DateTimeField the CSV does not carry: derive it from `date` + `time` (UTC),
+# leaving it NULL where no start time was published.
+races_df[!, :start_at] = map((d, t) -> ismissing(t) ? missing : DateTime(Date(d), Time(t)),
+                             races_df[!, :date], races_df[!, :time])
 M.Race.objects.exists() && M.Race.objects.delete(allow_delete_all=true)
 bulk_copy(M.Race.objects, races_df)
 

@@ -60,6 +60,7 @@ Race = Models.Model(
   name = Models.CharField(),
   date = Models.DateField(),
   time = Models.TimeField(null=true),
+  start_at = Models.DateTimeField(null=true),   # race start as a UTC timestamp (derived from date + time)
   url = Models.CharField(),
   fp1_date = Models.DateField(null=true),
   fp1_time = Models.TimeField(null=true),

@@ -29,6 +29,12 @@ Race = Models.Model(
   name=Models.CharField(),
   date=Models.DateField(),
   time=Models.TimeField(null=true),
+  # #564: the fixture's only SEEDED timestamp column. Derived at seed time from `date` + `time`
+  # (Ergast publishes race starts in UTC), NULL where the CSV has no start time. It exists so
+  # the value-representation property test reaches a real TIMESTAMP through an ordinary F1
+  # query, rather than steering around it — until it was added the only TIMESTAMP columns
+  # lived on scratch tables other tests truncate.
+  start_at=Models.DateTimeField(null=true),
   url=Models.CharField(),
   fp1_date=Models.DateField(null=true),
   fp1_time=Models.TimeField(null=true),

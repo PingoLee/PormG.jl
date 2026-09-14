@@ -139,6 +139,11 @@ end
     for col in [:fp1_date, :fp1_time, :fp2_date, :fp2_time, :fp3_date, :fp3_time, :quali_date, :quali_time, :sprint_date, :sprint_time, :time]
         df[!, col] = map(x -> ismissing(x) || x == "\\N" || x == "" ? missing : x, df[!, col])
     end
+    # #564: `Race.start_at` is not in the CSV — derive it from `date` + `time`. Ergast publishes
+    # race starts in UTC, and a naive `DateTime` serializes as UTC through `format_timezone_sql`,
+    # so no zone attachment is needed. Races without a published start time stay NULL.
+    df[!, :start_at] = map((d, t) -> ismissing(t) ? missing : DateTime(Date(d), Time(t)),
+                           df[!, :date], df[!, :time])
     try
         bulk_insert(query, df)
     catch e

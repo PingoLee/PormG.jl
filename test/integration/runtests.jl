@@ -34,6 +34,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "db_column Authoritative"       begin include("test_db_column_db.jl")       end
     @testset "db_table Authoritative"        begin include("test_db_table_db.jl")        end
     @testset "Field Expressions"            begin include("test_field_expressions.jl")  end
+    @testset "Value Representation (#564)"  begin include("test_value_repr_property.jl") end
     @testset "Updates"                      begin include("test_updates.jl")            end
     @testset "Deletes"                      begin include("test_deletes.jl")            end
     @testset "Fluent parity (#208)"         begin include("test_fluent_parity_208.jl")  end

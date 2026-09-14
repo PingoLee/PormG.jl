@@ -68,7 +68,7 @@ end
     new_field = Models.PositiveSmallIntegerField()
     old_field = Models.IntegerField()
 
-    sql = PormG.Dialect.alter_field(MockPGCheck(), "circuits", "alt", new_field, old_field,
+    sql = PormG.Dialect.alter_field(MockPGCheck(), "circuits", "alt", new_field,
                                     _psi_delta(MockPGCheck(), new_field, old_field, [:type, :checks]))
 
     @test occursin("ALTER COLUMN \"alt\" TYPE smallint", sql)
@@ -86,7 +86,7 @@ end
     new_field = Models.IntegerField()
     old_field = Models.PositiveSmallIntegerField()
 
-    sql = PormG.Dialect.alter_field(MockPGCheckNamed(), "circuits", "alt", new_field, old_field,
+    sql = PormG.Dialect.alter_field(MockPGCheckNamed(), "circuits", "alt", new_field,
                                     _psi_delta(MockPGCheckNamed(), new_field, old_field, [:type, :checks]))
 
     @test occursin("DROP CONSTRAINT \"circuits_alt_check\"", sql)
@@ -150,7 +150,7 @@ end
     delta = PormG.Migrations.column_delta(new_field, old_field, MockPGCheck(); name = "milliseconds")
     @test delta.changed == [:checks]
 
-    sql = PormG.Dialect.alter_field(MockPGCheck(), "lap_times", "milliseconds", new_field, old_field, delta)
+    sql = PormG.Dialect.alter_field(MockPGCheck(), "lap_times", "milliseconds", new_field, delta)
 
     @test occursin("ADD CHECK (\"milliseconds\" >= 0)", sql)
     @test !occursin("TYPE", sql)
@@ -175,7 +175,7 @@ end
     delta = PormG.Migrations.column_delta(new_field, old_field, MockPGCheckNamed(); name = "milliseconds")
     @test delta.changed == [:checks]
 
-    sql = PormG.Dialect.alter_field(MockPGCheckNamed(), "lap_times", "milliseconds", new_field, old_field, delta)
+    sql = PormG.Dialect.alter_field(MockPGCheckNamed(), "lap_times", "milliseconds", new_field, delta)
 
     @test occursin("DROP CONSTRAINT \"circuits_alt_check\"", sql)
     @test !occursin("ADD CHECK", sql)
@@ -191,7 +191,7 @@ end
     new_field = Models.PositiveIntegerField()
     old_field = Models.PositiveSmallIntegerField()
 
-    sql = PormG.Dialect.alter_field(MockPGCheckNamed(), "results", "points", new_field, old_field,
+    sql = PormG.Dialect.alter_field(MockPGCheckNamed(), "results", "points", new_field,
                                     _psi_delta(MockPGCheckNamed(), new_field, old_field, [:type]; name = "points"))
 
     @test occursin("ALTER COLUMN \"points\" TYPE integer", sql)

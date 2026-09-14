@@ -88,13 +88,15 @@ _rc_col(name, type; notnull = false, unique = false) =
 _rc_fk(column, table, pk) =
   Dict{String, Any}("column" => column, "table" => table, "pk" => pk, "on_delete" => "a")
 
-_rc_row(; table_name, columns, primary_keys, foreign_keys = missing) =
+# `indexes` is the single-column non-unique index list the `indexes` CTE carries (#325); it takes the
+# same `[Dict("column" => …, "name" => …)]` shape as the other aggregates, or `missing` for none.
+_rc_row(; table_name, columns, primary_keys, foreign_keys = missing, indexes = missing) =
   DataFrames.DataFrame(
     table_name   = [table_name],
     columns      = [columns isa AbstractVector ? JSON.json(columns) : columns],
     primary_keys = [primary_keys isa AbstractVector ? JSON.json(primary_keys) : primary_keys],
     foreign_keys = [foreign_keys isa AbstractVector ? JSON.json(foreign_keys) : foreign_keys],
-    indexes      = [missing])[1, :]
+    indexes      = [indexes isa AbstractVector ? JSON.json(indexes) : indexes])[1, :]
 
 # The parent every foreign key below points at, and the two sides of the pair under test. `declared`
 # carries a RESOLVED `PormGModel` in `.to` (what `set_models` leaves behind); `live` carries the
@@ -182,9 +184,9 @@ _rc_parent_sql(plan) =
     # Phase 2 retired the fast path itself, so there is no second answer left to agree with, and
     # what remains is the only claim that was ever really about the schema: this is ONE column.
     #
-    # `_compare_field_foreign_key` survives as the shared "same parent?" predicate (it delegates to
-    # `_fk_targets_equal`, which the IR uses too), so it is still asserted here.
-    @test Models._compare_field_foreign_key(declared, live)
+    # "Same parent?" is the IR's own comparison since #522 (`ForeignKeyRef ==`, i.e. an empty
+    # `reference_delta`); the field-pair predicate that used to stand here is gone.
+    @test Migrations.column_spec(declared, RC_PG).reference == Migrations.column_spec(live, RC_PG).reference
     for conn in (RC_PG, RC_SL)
       @test Migrations.column_spec(declared, conn) == Migrations.column_spec(live, conn)
       @test isempty(Migrations.column_delta(declared, live, conn; name = "parent_id").changed)
@@ -290,7 +292,7 @@ _rc_parent_sql(plan) =
     # test_fk_repoint_planner.jl, against a mock that can serve a live constraint name.
     declared_other = Models.ForeignKey(_rc_parent(), unique = true, pk_field = "id", null = true)
     live_other     = _rc_live_o2o(to_table = "other_parent_t")
-    @test !Models._compare_field_foreign_key(declared_other, live_other)
+    @test Migrations.column_spec(declared_other, RC_PG).reference != Migrations.column_spec(live_other, RC_PG).reference
 
     cross_keys = @test_logs min_level = Logging.Warn _rc_plan_keys(RC_PG, declared_other, live_other)
 
@@ -433,12 +435,18 @@ _rc_parent_sql(plan) =
     end
 
     # ── PostgreSQL, from the row-shaped reader (no connection needed) ────────
+    # `indexes` carries the plain index PormG's own DDL creates for a relational column
+    # (`_add_constrains`, `db_index = true` by default). Until #522 the reader stamped `db_index =
+    # true` on every foreign key whatever the catalog held, so the row could omit it; the reader now
+    # reports what the catalog lists, and a row without it describes a table PormG did not write —
+    # against which the planner correctly plans `Create index on parent_id`, once.
     pg_rel = Migrations.convertSQLToModel(_rc_row(
       table_name   = "child_t",
       columns      = [_rc_col("id", "bigint"; notnull = true),
                       _rc_col("parent_id", "bigint"; unique = true)],
       primary_keys = ["id"],
-      foreign_keys = [_rc_fk("parent_id", "parent_t", "id")])).fields["parent_id"]
+      foreign_keys = [_rc_fk("parent_id", "parent_t", "id")],
+      indexes      = [Dict{String, Any}("column" => "parent_id", "name" => "child_t_parent_id_idx")])).fields["parent_id"]
 
     # `fk_is_o2o = unique || primary_key` — the rule the SQLite reader was aligned to in #417.
     @test pg_rel isa Models.sOneToOneField

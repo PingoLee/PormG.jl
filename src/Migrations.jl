@@ -53,7 +53,17 @@ import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CBool, CText, CDa
               CheckKind, NonNegativeCheck, ByteLengthCheck,
               ColumnIdentity, ForeignKeyRef, ColumnSpec, ColumnDelta,
               reference_delta, column_delta, COLUMN_DELTA_COMPARATORS, COLUMN_DELTA_SLOTS
-import PormG: sqlite_type_map, postgres_type_map, sqlite_ignore_schema, postgres_ignore_table, _EXTRA_IGNORE_TABLES
+# The two forward type maps (`sqlite_type_map` / `postgres_type_map`) were imported here until #522
+# retired them: the readers compile a catalog type through `parse_canonical_type` now, and nothing
+# maps a rendered type back to a field struct any more.
+import PormG: sqlite_ignore_schema, postgres_ignore_table, _EXTRA_IGNORE_TABLES
+# #522: `convertSQLToModel(::String)` executes its statement in a throwaway SQLite file and reads it
+# back through the live reader, so the pool constructor and its close are needed here — and, per the
+# #276 note above, must be on an explicit import list to be visible in this module.
+import PormG.ConnectionPool: SQLiteConnectionPool, close_pool!
+# #522: `_literal_default` folds a `DateTimeField` default to a UTC `ZonedDateTime` on both sides
+# of the diff, and the readers coerce a catalog datetime with the same vocabulary.
+import TimeZones: ZonedDateTime, astimezone, @tz_str
 import PormG: GENERATED_MODULE_RESERVED_BINDINGS
 import PormG: MODEL_PATH, PormGSettings, DB_PATH
 import PormG.AdvisoryLock
@@ -82,7 +92,8 @@ export get_migration_plan
 # them qualified (`PormG.Migrations.get_database_schema(...)`) if you are extending PormG itself:
 #
 #   get_database_schema, get_all_models, get_all_dicts,
-#   get_constraints_fk, get_constraints_index, get_sequence_name
+#   get_constraints_fk, get_constraints_index, get_sequence_name,
+#   read_live_schema, LiveTable, live_table, model_from_live, field_from_spec  (#522)
 #
 # get_constraints_pk / get_constraints_unique / get_constraints_check are NOT re-exported here
 # either — they are Kernel generics (Kernel.jl) that Kernel already exports, so `PormG.get_*`

@@ -837,9 +837,11 @@ struct MockPg389 <: PormG.PormGPostgres end
     declared = PormG.Models.ForeignKey("MixedParent", pk_field = "Id")
     declared.to_table = "MixedParent"
 
-    @test PormG.Models._compare_field_foreign_key(declared, live)
-    # Symmetric — the planner calls it (new, old) and nothing should depend on the order.
-    @test PormG.Models._compare_field_foreign_key(live, declared)
+    # "Same parent?" is the IR's comparison (#522): the two references compile equal.
+    ref(field) = PormG.Migrations.column_spec(field, PormG.Migrations._PostgresEngine()).reference
+    @test ref(declared) == ref(live)
+    # Symmetric — the planner compares (new, old) and nothing should depend on the order.
+    @test ref(live) == ref(declared)
   end
 
   @testset "a mixed-case FK COLUMN is still detected as a foreign key" begin
@@ -1347,27 +1349,28 @@ end
   end
 end
 
-@testset "the type arrives whole, so no spelling needs rewriting (#455)" begin
-  # `format_type` output is its own JSON field now, which retires two workarounds at once: the
-  # `replace(col, "double precision" => "double_precision")` that ran over the whole rendered entry
-  # (and so also rewrote a column so NAMED), and the `character varying\((\d+)\)` re-match that
-  # existed because `col_parts[1]` was only ever `character`.
-  split_ft = PormG.Migrations._pg_split_format_type
-  tm = PormG.postgres_type_map
+@testset "the type arrives whole, and parses whole (#455, #522)" begin
+  # `format_type` output is its own JSON field (#455), and since #522 it goes to
+  # `parse_canonical_type` exactly as the catalog spells it — no alias table, no type-map key in
+  # between. So the spellings that used to need rewriting are asserted as the canonical type they
+  # parse to, on the same engine stand-in the row decoder uses.
+  parse_pg = raw -> PormG.Migrations.parse_canonical_type(raw, PormG.Migrations._PostgresEngine())
 
-  @test split_ft("character varying(120)", tm) == ("varchar", "120")
-  @test split_ft("double precision", tm)       == ("double_precision", nothing)
-  @test split_ft("numeric(10,2)", tm)          == ("numeric", "10,2")
+  @test parse_pg("character varying(120)") == PormG.CVarChar(120)
+  @test parse_pg("double precision")       == PormG.CFloat64()
+  @test parse_pg("numeric(10,2)")          == PormG.CDecimal(10, 2)
 
-  # The modifier is the FIRST parenthesized group and is REMOVED rather than assumed to trail:
-  # `format_type` renders datetime precision in the MIDDLE. Applying it by pattern rather than by
-  # type is how `timestamp(3)` would have become a `max_length`.
-  @test split_ft("timestamp(3) without time zone", tm) == ("timestamp", "3")
+  # The modifier sits in the MIDDLE of a datetime spelling; the tail after it is part of the base,
+  # so the timezone flag survives (#522 — with the tail dropped, `timestamp(6) with time zone` read
+  # as a naive timestamp and every `DateTimeField` on PostgreSQL would have churned).
+  @test parse_pg("timestamp(3) without time zone") == PormG.CDateTime(false)
+  @test parse_pg("timestamp(6) with time zone")    == PormG.CDateTime(true)
 
-  # Unmatched long spellings fall back to the first word, exactly as `split(col_rest, " ")[1]` did,
-  # so an unknown type still degrades to TextField rather than being re-typed.
-  @test split_ft("interval day to second(3)", tm) == ("interval", "3")
-  @test split_ft("integer[]", tm)                 == ("integer[]", nothing)
+  # A field-restricted interval is the same column as a bare one (PormG can declare no restriction).
+  @test parse_pg("interval day to second(3)") == PormG.CInterval()
+  # Deliberately unsupported: PormG never renders these, so a declared field must NOT equate to them.
+  @test parse_pg("integer[]")    isa PormG.CUnsupported
+  @test parse_pg("character(8)") isa PormG.CUnsupported
 
   # Through the reader: the modifier lands on the right slot for the right type, and nowhere for a
   # type that has no such slot.

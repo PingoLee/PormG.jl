@@ -11,12 +11,15 @@ import PormG: backend_sqlite_version  # SQLite library-version probe (driver bod
 #   QueryBuildError            — the caller passed an impossible argument shape (on_conflict_clause).
 import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError
 import PormG.ConnectionPool: fetch
-import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
+import PormG: postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
 # The canonical column IR (#507). `alter_field` renders an ALTER from a `ColumnDelta`, which is why
 # these types live in `Kernel` (layer 1) rather than in `Migrations` — this module is included
 # BEFORE it, and a submodule resolves `import PormG: …` at include time. `_has_non_negative` and
 # `_byte_bound` are underscore-private, hence named explicitly.
 import PormG: ColumnDelta, LiteralDefault, ExpressionDefault
+# #522: the two `USING` casts in `alter_field` read the LIVE column's canonical type off the delta
+# instead of dispatching on a reconstructed field struct — the readers no longer build one.
+import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CDecimal, CText, CVarChar, CTime
 import PormG: _has_non_negative, _byte_bound
 import PormG: get_constraints_pk, get_constraints_unique, get_constraints_check, get_constraints_byte_length_check
 import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column, format_timezone_sql, model_table_name, fk_target_table
@@ -497,7 +500,7 @@ function _format_default_sql_value(default_value)
 end
 
 """
-    _postgres_bytea_cast_expression(field_name, old_field) -> String
+    _postgres_bytea_cast_expression(field_name, old_type::Union{Nothing, CanonicalType}) -> String
 
 The `USING` expression for a column transitioning **into** `bytea` (#296).
 
@@ -517,24 +520,30 @@ faithful-reinterpretation form and `UPGRADING.md` tells the operator to substitu
 column actually held. `makemigrations` writes a reviewable plan before anything runs, which is
 where that substitution belongs.
 """
-function _postgres_bytea_cast_expression(field_name::Union{String, Symbol}, old_field::Union{Nothing, PormGField})
+function _postgres_bytea_cast_expression(field_name::Union{String, Symbol}, old_type::Union{Nothing, CanonicalType})
   column_ref = "\"$(_quote_table_ddl(field_name))\""
 
-  if old_field isa Union{sCharField, sTextField, sImageField, sSlugField, sURLField}
+  # #522: keyed on what the live column HOLDS (`delta.old_spec.type`) rather than on which struct the
+  # reader happened to reconstruct — the text family is exactly the structs this used to list
+  # (`CharField`, `TextField`, `ImageField`, `SlugField`, `URLField` all render `text`/`varchar`),
+  # plus the two that rendered `text` through the `else` arm and were missed (`EmailField`,
+  # `FileField`), for which a bare `::bytea` was a cast PostgreSQL refuses.
+  if old_type isa Union{CText, CVarChar}
     return "convert_to($(column_ref), 'UTF8')"
   end
   # Already bytea, or a type with a real cast to it — let PostgreSQL apply its own.
   return "$(column_ref)::bytea"
 end
 
-function _postgres_interval_cast_expression(field_name::Union{String, Symbol}, old_field::Union{Nothing, PormGField})
+function _postgres_interval_cast_expression(field_name::Union{String, Symbol}, old_type::Union{Nothing, CanonicalType})
   column_ref = "\"$(_quote_table_ddl(field_name))\""
 
-  if old_field isa Union{sFloatField, sDecimalField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField}
+  # #522: the numeric family is what the six integer/decimal structs this used to list render to.
+  if old_type isa Union{CInt16, CInt32, CInt64, CFloat64, CDecimal}
     return "make_interval(secs => $(column_ref)::double precision)"
-  elseif old_field isa sTimeField
+  elseif old_type isa CTime
     return "($(column_ref)::text)::interval"
-  elseif old_field isa Union{sCharField, sTextField}
+  elseif old_type isa Union{CText, CVarChar}
     return "CASE " *
       "WHEN $(column_ref) IS NULL THEN NULL " *
       "WHEN $(column_ref) ~ '^[+-]?\\d+(\\.\\d+)?\$' THEN make_interval(secs => $(column_ref)::double precision) " *
@@ -826,12 +835,12 @@ function create_table(conn::PormGSQLite, table_name::String, columns::Vector{Str
 end
 
 # `_foreign_key_on_delete_sql` moved to `Models` (#498) and is imported at the top of this module, so
-# `Dialect._foreign_key_on_delete_sql` still resolves for every existing caller. It had to move: it is
-# also the CANONICAL COMPARISON of two `on_delete` values, and a module included BEFORE this one
-# needs it: `Models._fk_on_delete_equal`, in the file it moved to. `Models._compare_model_field` was
-# the caller that established that until #507 phase 2 retired it. (`Migrations.column_spec` renders
-# through it too, but `Migrations` is included AFTER this module, so that use would not by itself
-# require the move.)
+# `Dialect._foreign_key_on_delete_sql` still resolves for every existing caller. It is field
+# vocabulary — the one definition of what an `on_delete` MEANS as SQL, and the value the column IR
+# stores and compares (`ForeignKeyRef.on_delete`, rendered on both sides) — which is why it lives
+# beside the sentinels it interprets rather than here. The include-order argument that first forced
+# the move (a field-pair predicate in `Models`, `_fk_on_delete_equal`) went with that predicate in
+# #522; the comment on the function in `Models.jl` carries the history.
 
 function create_table(conn::PormGPostgres, model::PormGModel)
   columns::Vector{String} = []
@@ -987,7 +996,7 @@ end
 # ADD CONSTRAINT off the same slot. An empty `delta` — or one carrying only `:reference` — therefore
 # returns `""`, which `_configure_order_dict_migration_plan` drops from the plan entirely. That is
 # what the `_FK_IDENTITY_ATTRS` filter used to arrange by hand, one call site at a time.
-function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, delta::ColumnDelta)::String
+function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, field_name::Union{Symbol,String}, new_field::PormGField, delta::ColumnDelta)::String
   # Resolve to the physical column (db_column when set) so every ALTER targets the real
   # column even when called with the field-name key (e.g. the temporary-default cleanup in
   # _add_new_field). Idempotent when callers already pass the physical column (#50).
@@ -1115,24 +1124,22 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
       max_digits = hasproperty(new_field, :max_digits) ? new_field.max_digits : 10
       decimal_places = hasproperty(new_field, :decimal_places) ? new_field.decimal_places : 2
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE DECIMAL($max_digits, $decimal_places);""")
-      if old_field !== nothing
-        old_max_digits = hasproperty(old_field, :max_digits) ? old_field.max_digits : nothing
-        old_decimal_places = hasproperty(old_field, :decimal_places) ? old_field.decimal_places : nothing
-        if old_max_digits !== nothing && decimal_places < old_decimal_places
-          @warn "The new decimal_places is less than the old decimal_places in table $(table_name) and field $(field_name)"
-        end
+      # #522: the live precision is read off the delta's old spec, not off a reconstructed field.
+      old_type = delta.old_spec.type
+      if old_type isa CDecimal && old_type.scale !== nothing && decimal_places < old_type.scale
+        @warn "The new decimal_places is less than the old decimal_places in table $(table_name) and field $(field_name)"
       end
     elseif new_field isa sTimeField
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE TIME USING "$(_quote_table_ddl(field_name))"::time without time zone;""")
     elseif new_field isa sDurationField
-      cast_expression = _postgres_interval_cast_expression(field_name, old_field)
+      cast_expression = _postgres_interval_cast_expression(field_name, delta.old_spec.type)
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE INTERVAL USING $cast_expression;""")
     elseif new_field isa sBinaryField
       # The inner `if :type in colect_not_equal` this used to carry is gone, and nothing replaced it:
       # a `BinaryField` whose `max_length` alone moved is a `:checks` delta, not a `:type` one, so it
       # never enters this branch at all. Same outcome — no redundant `TYPE bytea USING …` rewriting
       # the whole table for nothing — reached by the slot being right rather than by a second guard.
-      cast_expression = _postgres_bytea_cast_expression(field_name, old_field)
+      cast_expression = _postgres_bytea_cast_expression(field_name, delta.old_spec.type)
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE bytea USING $cast_expression;""")
     else
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE $(_get_column_type(new_field, conn));""")
@@ -1361,18 +1368,18 @@ function drop_field(conn::PormGSQLite, table_name::Union{String,Symbol}, field_n
   return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP COLUMN "$(_quote_table_ddl(field_name))";"""
 end
 
-function alter_field(conn::PormGPostgres, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, delta::ColumnDelta)
-  return alter_field(conn, model_table_name(model), field_name, new_field, old_field, delta)
+function alter_field(conn::PormGPostgres, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, delta::ColumnDelta)
+  return alter_field(conn, model_table_name(model), field_name, new_field, delta)
 end
 
 # SQLite alters a column by rebuilding the whole table from the DESIRED model, so it reads none of
-# the arguments that describe the change: not the field pair, not the delta. It keeps them because
+# the arguments that describe the change: not the new field, not the delta. It keeps them because
 # the planner calls one `alter_field` for both engines. The signature is the only thing #507 phase 2
-# changed here.
+# changed here, and #522 dropped the reconstructed old field from it on both engines.
 #
 # `rebuild_table` below is that body, reachable on its own — see the note there for why the planner
 # needs both spellings.
-function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, delta::ColumnDelta)
+function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, delta::ColumnDelta)
   return rebuild_table(conn, model)
 end
 

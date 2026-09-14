@@ -385,8 +385,9 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # SQLite accepts three spellings for a textual key, and all three must reconstruct (#409)
 #
-# `sqlite_type_map` maps `TEXT`, `VARCHAR` and `CHAR` onto `CharField` precisely for schemas PormG
-# did not create — which is the whole population the natural-key branch serves. Gating that branch
+# The reader accepts `TEXT`, `VARCHAR` and `CHAR` as a textual key precisely for schemas PormG
+# did not create (since #522 through `parse_canonical_type`, which reads all three as `CVarChar` when a
+# length is declared) — which is the whole population the natural-key branch serves. Gating that branch
 # on `TEXT` alone left `VARCHAR(20) PRIMARY KEY` flattened to `IDField` on SQLite while PostgreSQL
 # reconstructed the identical column, so the same legacy schema converged on one engine only.
 #

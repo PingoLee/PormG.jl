@@ -123,6 +123,7 @@ end
     @testset "Introspection PK Guards" include("unit/test_introspection_guards.jl")
     @testset "Physical-column Identity (#325)" include("unit/test_column_equivalence.jl")
     @testset "Canonical Column IR (#507)" include("unit/test_column_spec.jl")
+    @testset "Live schema readers compile to ColumnSpec (#522)" include("unit/test_live_schema_reader.jl")
     @testset "Key Type Round Trip (#408/#409/#417)" include("unit/test_key_type_round_trip.jl")
     @testset "OneToOneField Row Paths (#418)" include("unit/test_one_to_one_row_paths.jl")
     @testset "Self-Heal Key Inference" include("unit/test_self_heal_inference.jl")

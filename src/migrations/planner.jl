@@ -528,7 +528,7 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
     # none of the four constraint-name lookups sits in that branch.
     _configure_order_dict_migration_plan(migration_plan, model_name, alter_key,
       _sqlite_rebuild_preserving_indexes(conn, model_table_name(model),
-        Dialect.alter_field(conn, model, field_name, field, nothing,
+        Dialect.alter_field(conn, model, field_name, field,
           ColumnDelta(temp_spec,
                       ColumnSpec(temp_spec.name, temp_spec.type, temp_spec.nullable,
                                  temp_spec.primary_key, temp_spec.unique,
@@ -569,7 +569,7 @@ end
 
 """
     _plan_column_change!(conn, migration_plan, model_name, declared_model, field_name,
-                         new_field, old_field, delta, hashed_name;
+                         new_field, delta, hashed_name;
                          old_column = nothing, column_renames = Dict{String,String}())
 
 Plan everything one existing column needs, in the one order that works, from the one delta.
@@ -626,7 +626,6 @@ function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
                               declared_model::PormGModel,
                               field_name::String,
                               new_field::PormGField,
-                              old_field::PormGField,
                               delta::ColumnDelta,
                               hashed_name::String;
                               old_column::Union{String, Nothing} = nothing,
@@ -690,7 +689,7 @@ function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
     # #82: on SQLite this preserves the table's secondary indexes across the rebuild and gates on
     # foreign_key_check (no-op on PostgreSQL). See _sqlite_rebuild_preserving_indexes.
     alter_sql = _sqlite_rebuild_preserving_indexes(conn, model_table_name(declared_model),
-      Dialect.alter_field(conn, declared_model, field_name, new_field, old_field, delta);
+      Dialect.alter_field(conn, declared_model, field_name, new_field, delta);
       surviving_columns = _model_physical_columns(declared_model),
       column_renames = column_renames)
     _configure_order_dict_migration_plan(migration_plan, model_name, alter_key, alter_sql)
@@ -702,7 +701,7 @@ function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
   return nothing
 end
 
-function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::PormGSettings; interactive::Bool = true)::Nothing
+function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, live::LiveTable, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::PormGSettings; interactive::Bool = true)::Nothing
   # @pormg_debug model_name == :new_join_position
   # #507 phase 2: NO whole-model early-out. `Models.are_model_fields_equal` used to short-circuit
   # this whole function when every field compared equal, and it was a second answer to a question
@@ -716,14 +715,13 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
   # the same code path, so "converged" can no longer be right by accident.
   # Compare fields
   @pormg_debug false
-  # Convert keys(model.fields) to an array of stripped strings and keep mapping to original key
-  # Ordered, both of them (#544). `model.fields` is an `OrderedDict` now, but a plain `Dict`
-  # comprehension over it re-hashes immediately and a `Set` of those keys hashes again — so the
-  # order the model declared survived into `fields` and was thrown away two lines later. Every
-  # consumer below either ITERATES these (the deletion/addition loops, the deferred index pass at
-  # the end of this function) or asks them for membership; `OrderedSet` answers both, so the
-  # declared order now reaches the rendered DDL and the interactive rename prompts intact.
-  model_fields_map = OrderedDict(String(strip(key, '"')) => String(key) for key in keys(model.fields))
+  # The live side's physical columns, in catalog order (#544). Since #522 they arrive as the keys of
+  # `live.columns` — already the physical names, nothing to strip — and the map is kept only so the
+  # code below reads symmetrically with `current_fields_map`, whose VALUES are the model's field keys.
+  # Ordered, both of them: every consumer below either ITERATES these (the deletion/addition loops,
+  # the deferred index pass at the end of this function) or asks them for membership; `OrderedSet`
+  # answers both, so the order reaches the rendered DDL and the interactive rename prompts intact.
+  model_fields_map = OrderedDict{String, String}(col => col for col in keys(live.columns))
   stripped_model_fields = OrderedSet(keys(model_fields_map))
 
   # Do the same for current_schema model fields, but key by the PHYSICAL column name
@@ -751,7 +749,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
 
   @pormg_debug false
   # Pass maps to resolve fields so original keys can be used for accessing model.fields
-  _resolve_table_fields(conn, model_name, model, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive)
+  _resolve_table_fields(conn, model_name, live, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive)
 
   # #325: index create/drop is DEFERRED to after the whole field loop, not emitted inline.
   # `stripped_current_fields` is a `Set`, so field order is arbitrary — and on SQLite the table
@@ -768,26 +766,27 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
       original_db_key = model_fields_map[field_name_stripped]
 
       field = current_schema[model_name][:model].fields[original_code_key]
-      old_field = model.fields[original_db_key]
+      old_spec = live.columns[original_db_key]
 
       # A ManyToManyField is not a physical column and `sManyToManyField` is the one field struct
       # with no `db_index` at all, so the index blocks below would raise on it. It cannot normally
-      # be matched here (it is never a live column), but the guard is what makes that explicit —
+      # be matched here (a live column is never one), but the guard is what makes that explicit —
       # `_add_new_field` / `_add_constrains` both early-return on m2m for the same reason.
-      (Models.is_many_to_many_field(field) || Models.is_many_to_many_field(old_field)) && continue
+      Models.is_many_to_many_field(field) && continue
 
       name::String = _hash_field_name(model_name, field_name_stripped)
 
-      # #507: ONE comparator. Both fields compile to a `ColumnSpec` — what the database can hold —
-      # and the difference is read off that. This replaced four code paths that each answered
-      # "same column?" with their own reconciliations and disagreed at the edges: the attribute-wise
-      # loop, `Dialect.describes_same_column` (#325), the `db_constraint = false` escape (#408) and
-      # the `push!(:type)` fallthrough.
+      # #507: ONE comparator. The declared field compiles to a `ColumnSpec` — what the database can
+      # hold — and the live column arrived as one from the readers (#522), so the difference is read
+      # off two specs and no struct is reconstructed on the live side. This replaced four code paths
+      # that each answered "same column?" with their own reconciliations and disagreed at the edges:
+      # the attribute-wise loop, `Dialect.describes_same_column` (#325), the `db_constraint = false`
+      # escape (#408) and the `push!(:type)` fallthrough.
       #
       # Phase 2 made the delta TYPED and made it the only input to what follows. Phase 1 adapted it
       # back into field-attribute symbols so the action code could stay untouched; that adapter is
       # gone, and with it every action site's private opinion of a fact decided right here.
-      delta = column_delta(field, old_field, conn; name = field_name_stripped)
+      delta = column_delta(field, old_spec, conn; name = field_name_stripped)
 
       # if field_name == "time"
       #   @pormg_debug
@@ -818,25 +817,28 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
       # branch for that facet and needs none, and `_fk_constraint_action` reads it directly — so the
       # filter has nothing left to remove.
       _plan_column_change!(conn, migration_plan, model_name, current_schema[model_name][:model],
-                           field_name_stripped, field, old_field, delta, name)
+                           field_name_stripped, field, delta, name)
 
       # Index differences are RECORDED here and emitted after the loop — see `index_actions`.
 
+      # #522: the live side's index facts sit on the `LiveTable`, outside the column spec (see
+      # `ColumnSpec` for why `db_index` is not a column fact). The flag is the key's presence; the
+      # value is the live index name `_drop_index` needs, or `nothing` when only the fact is known,
+      # which routes `_drop_index` through `get_constraints_index` rather than raising. The readers
+      # now record what the catalog holds — the old ones stamped `db_index = true` on every
+      # relational column — so an adopted foreign key with no index plans its `CREATE INDEX` once.
+      old_indexed = haskey(live.indexes, original_db_key)
+
       # Check if the field is also indexed
-      if !field.primary_key && field.db_index && !old_field.db_index
+      if !field.primary_key && field.db_index && !old_indexed
         @pormg_debug false
         push!(index_actions, (:create, field_name_stripped, name, nothing))
       end
 
       # Check if is need to remove the index
-      if !field.primary_key && old_field.db_index && !field.db_index
+      if !field.primary_key && old_indexed && !field.db_index
         @pormg_debug
-        # The live model's index cache maps physical column ⇒ index name. `db_index=true` on the
-        # live side means introspection saw exactly such an index, so the key is present; the
-        # `nothing` fallback routes `_drop_index` through `get_constraints_index` rather than
-        # raising a KeyError from inside makemigrations.
-        live_index_name = get(get(model.cache, "index", Dict{String,Any}()), original_db_key, nothing)
-        push!(index_actions, (:drop, field_name_stripped, name, live_index_name === nothing ? nothing : string(live_index_name)))
+        push!(index_actions, (:drop, field_name_stripped, name, live.indexes[original_db_key]))
       end
     end
   end
@@ -854,7 +856,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
       if !(conn isa PormGSQLite && get_constraints_index(conn, model_name, col) !== nothing)
         index_name = "$(hashed)_idx"
         _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $col",
-        Dialect.create_index(conn, "\"$(Dialect._quote_table_ddl(index_name))\"", "\"$(Dialect._quote_table_ddl(model_table_name(model)))\"", ["\"$(Dialect._quote_table_ddl(col))\""]))
+        Dialect.create_index(conn, "\"$(Dialect._quote_table_ddl(index_name))\"", "\"$(Dialect._quote_table_ddl(live.name))\"", ["\"$(Dialect._quote_table_ddl(col))\""]))
       end
     else
       _drop_index(conn, migration_plan, model_name, col, index_name=live_index_name)
@@ -865,7 +867,7 @@ end
 function _resolve_table_fields(
                                 conn::Union{PormGPostgres, PormGSQLite}, 
                                 model_name::Symbol, 
-                                model::PormGModel, 
+                                live::LiveTable, 
                                 current_model::PormGModel, 
                                 colect_deletion::Vector{Symbol}, 
                                 colect_addition::Vector{Symbol}, 
@@ -914,7 +916,7 @@ function _resolve_table_fields(
         end
         old_field_name = old_field_sym |> string
         new_field = current_model.fields[current_fields_map[field_name]]
-        old_field = model.fields[model_fields_map[old_field_name]]
+        old_spec = live.columns[model_fields_map[old_field_name]]
         # #507 phase 2: a rename is the SAME column change with a new name, so it goes through the
         # same `_plan_column_change!` the alteration loop uses — FK drop (by the pre-rename column,
         # because the catalog has not been renamed yet), RENAME COLUMN, the column ALTER or SQLite
@@ -957,24 +959,22 @@ function _resolve_table_fields(
         # index to that. And `_add_new_field`'s own rebuild (#514, or a temporary default) carries no
         # rename map either. Both are index loss on a rare combination, not a broken plan — the
         # rebuild itself is correct in every ordering — and both are a #150 follow-up.
-        # `old_name` is what makes the alteration correct rather than merely present: the live
-        # catalog knows this column by its PRE-rename name, and four statements in
-        # `Dialect.alter_field` can only learn a constraint's name by asking it. Found in review —
-        # before this, a renamed column's UNIQUE / PRIMARY KEY / CHECK drop was silently omitted, and
-        # a renamed `PositiveIntegerField` becoming a `TextField` emitted the retype with the stale
-        # `>= 0` CHECK still in place, which PostgreSQL rejects.
-        delta = column_delta(new_field, old_field, conn; name = field_name, old_name = old_field_name)
-        # `delta.old_spec.name` IS `field_db_column(old_field, old_field_name)` — the pre-rename
-        # physical column — so the rename map reads it off the same single source the constraint
-        # lookups use rather than recomputing it.
+        # The live spec's own `name` is the PRE-rename column — the catalog still knows it by that
+        # name at plan time, and four statements in `Dialect.alter_field` can only learn a constraint's
+        # name by asking it — which is what makes the alteration correct rather than merely present.
+        # Found in review: before that, a renamed column's UNIQUE / PRIMARY KEY / CHECK drop was
+        # silently omitted, and a renamed `PositiveIntegerField` becoming a `TextField` emitted the
+        # retype with the stale `>= 0` CHECK still in place, which PostgreSQL rejects. Since #522 the
+        # readers put that name there directly; nothing is threaded through as `old_name` any more.
+        delta = column_delta(new_field, old_spec, conn; name = field_name)
+        # `delta.old_spec.name` IS the pre-rename physical column, so the rename map reads it off the
+        # same single source the constraint lookups use rather than recomputing it.
         sqlite_rename_map[delta.old_spec.name] = field_name
         _plan_column_change!(conn, migration_plan, model_name, current_model, field_name,
-                             new_field, old_field, delta,
+                             new_field, delta,
                              _hash_field_name(model_name, field_name);
                              old_column = old_field_name,
                              column_renames = sqlite_rename_map)
-        # Update model.fields to reflect rename to avoid double processing if needed
-        model.fields[model_fields_map[old_field_name]] = model.fields[model_fields_map[old_field_name]] # effectively stays same but we can update key if we want to sync
         # remove the old field from colect_deletion
         filter!(x -> x != old_field_sym, colect_deletion)
       end
@@ -997,8 +997,7 @@ function _resolve_table_fields(
     desired_has_pk = any(f -> hasfield(typeof(f), :primary_key) && f.primary_key, values(current_model.fields))
     if !desired_has_pk
       for fsym in colect_deletion
-        f = model.fields[model_fields_map[string(fsym)]]
-        if hasfield(typeof(f), :primary_key) && f.primary_key
+        if live.columns[model_fields_map[string(fsym)]].primary_key
           throw(InvalidMigrationError("Cannot auto-migrate on SQLite: deleting primary-key column \"$(fsym)\" from table " *
                 "\"$(model_name)\" would leave it with no primary key. Declare a replacement primary key, " *
                 "or make this change manually."))
@@ -1024,7 +1023,7 @@ function _resolve_table_fields(
     # SQLite introspection a `unique` flag: that flag is deliberately narrow (single-column UNIQUE constraints
     # only), whereas SQLite refuses DROP COLUMN for a column in ANY unique index — a composite-unique member
     # or a `CREATE UNIQUE INDEX` column included. `_sqlite_column_is_unique` answers that broader question;
-    # `old_field.unique` does not. `primary_key` IS populated by introspection.
+    # the live spec's `unique` does not. `primary_key` and the reference are read off the live spec (#522).
     #
     # #519 ADDS THE FOURTH DISJUNCT, and it deliberately overwrites what this comment used to promise:
     # *"Ordinary indexed columns still take the cheap DROP COLUMN path below (their plain index is
@@ -1048,9 +1047,11 @@ function _resolve_table_fields(
     if conn isa PormGSQLite
       rebuild_delete_idx = findfirst(colect_deletion) do fsym
         fname = string(fsym)
-        f = model.fields[model_fields_map[fname]]
-        (hasfield(typeof(f), :to) && f.db_constraint) ||
-          (hasfield(typeof(f), :primary_key) && f.primary_key) ||
+        spec = live.columns[model_fields_map[fname]]
+        # A constraint in the database is a non-`nothing` reference (#522); a `db_constraint = false`
+        # key has none and is physically just its integer column, exactly as before.
+        spec.reference !== nothing ||
+          spec.primary_key ||
           _sqlite_column_is_unique(conn, model_name, fname) ||
           !isempty(_sqlite_indexes_referencing_column(conn, model_name, fname))
       end
@@ -1080,17 +1081,13 @@ function _resolve_table_fields(
       # the column anyway).
       for field_name_sym in colect_deletion
         field_name = field_name_sym |> string
-        old_field = model.fields[model_fields_map[field_name]]
         # `nothing` on the new side IS the deletion path: `_fk_constraint_action` reads it as "the
-        # reference is going away" and answers `:drop`. The live column is compiled through the
-        # fail-safe entry point on purpose — a field being deleted is often a foreign key whose
-        # PARENT has just been removed from the models file too, which is the shape most likely to
-        # make a compile fail, and aborting `makemigrations` there would be a regression against the
-        # pre-phase-2 planner (which read two slots off the struct and compiled nothing). Degrading
-        # keeps the DROP planned, and `get_constraints_fk` inside the helper is the authority on
-        # whether a constraint is really there.
+        # reference is going away" and answers `:drop`. The live column arrived as a spec from the
+        # readers (#522) — nothing is compiled here any more, so the fail-safe this call used to go
+        # through has no failure left to guard; `get_constraints_fk` inside the helper remains the
+        # authority on whether a constraint is really there.
         _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name, nothing,
-                                          _spec_or_degraded(old_field, conn, "<uncompilable:old>"; name = field_name))
+                                          live.columns[model_fields_map[field_name]])
         _drop_index(conn, migration_plan, model_name, field_name)
         _configure_order_dict_migration_plan(migration_plan, model_name, "Remove field: $field_name",
         Dialect.drop_field(conn, model_name, field_name))
@@ -1130,7 +1127,8 @@ end
 # ---
 
 """
-    get_migration_plan(models, current_schema, conn, settings; interactive = true)
+    get_migration_plan(live::Vector{LiveTable}, current_schema, conn, settings; interactive = true)
+    get_migration_plan(models::Vector{PormGModel}, current_schema, conn, settings; interactive = true)
 
 Diff the model definitions against the live database schema and return the DDL that would
 reconcile them, as an `OrderedDict{Symbol, OrderedDict{String, String}}` — model name ⇒
@@ -1142,7 +1140,13 @@ or executed. [`makemigrations`](@ref) is the entry point that drives it.
     the **new** state defined in your `models.jl`. The names predate the current terminology
     and are kept to avoid churning the planner's unit tests.
 
-An empty `models` means an empty database, so every model becomes a `CREATE TABLE`.
+The live side is a vector of `LiveTable`s — what `read_live_schema` returns — and the diff
+runs on their `ColumnSpec`s directly (#522): no `PormGField` is reconstructed from the catalog. The
+`Vector{PormGModel}` form reads each model as a live table through `live_table`; it exists
+for callers that already hold models (the planner's own tests hand-build the live side that way) and
+is not what `makemigrations` uses.
+
+An empty live side means an empty database, so every model becomes a `CREATE TABLE`.
 
 With `interactive = true` (the default) a model with no matching table prompts whether it is
 new or a rename of a table that disappeared, so a rename keeps its data. `interactive = false`
@@ -1151,14 +1155,20 @@ answers "new table" and "not a rename" for everything — a non-interactive run 
 `InvalidMigrationError`.
 """
 function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn, settings::PormGSettings; interactive::Bool = true)
-# models is olds models
+  # The adapter (#522): a `PormGModel` read as a live table — see `live_table` for what it keeps.
+  return get_migration_plan(LiveTable[live_table(model, conn) for model in models], current_schema,
+                            conn, settings; interactive = interactive)
+end
+
+function get_migration_plan(live::Vector{LiveTable}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn, settings::PormGSettings; interactive::Bool = true)
+# `live` is the schema as the database holds it; `current_schema` is the models file (see the docstring).
 
 migration_plan = OrderedDict{Symbol, OrderedDict{String, String}}()
 futher_processing = Dict{Symbol, Dict{Symbol, Any}}()
 current_schema = Models.synthesize_many_to_many_through_models(current_schema, settings)
 
-# models is empty set all models to migration_plan
-if isempty(models)
+# an empty live side: every declared model is a new table
+if isempty(live)
   for (model_name, model) in current_schema
     _add_new_table(conn, migration_plan, model_name, model[:model])
   end
@@ -1167,20 +1177,19 @@ end
 
 @pormg_debug false
 
-for model in models # models is olds models
-  # Resolved physical name (#59), symmetric with how `get_all_models` keys `current_schema`. A no-op
-  # for genuinely-introspected models (they carry no db_table, so this is `model.name` — already the
-  # exact live table name), but it keeps the two sides of the diff keyed the same way.
-  model_name = Symbol(model_table_name(model))
+for table in live
+  # The live table's catalog name, symmetric with how `get_all_models` keys `current_schema` by the
+  # resolved physical name (#59) — so the two sides of the diff are keyed the same way.
+  model_name = Symbol(table.name)
   @pormg_debug false
   if haskey(current_schema, model_name)
     current_schema[model_name][:exist] = true
-    _alter_table_fields(conn, migration_plan, model_name, model, current_schema, settings, interactive=interactive)
+    _alter_table_fields(conn, migration_plan, model_name, table, current_schema, settings, interactive=interactive)
   else
     if !haskey(futher_processing, :drop_table)
-      futher_processing[:drop_table] = Dict{Symbol, Any}(model_name => Dict{String, Any}("model" => model, "exist" => false))
+      futher_processing[:drop_table] = Dict{Symbol, Any}(model_name => Dict{String, Any}("model" => table, "exist" => false))
     else
-      futher_processing[:drop_table][model_name] = Dict{String, Any}("model" => model, "exist" => false)
+      futher_processing[:drop_table][model_name] = Dict{String, Any}("model" => table, "exist" => false)
     end
   end
 end
@@ -1292,9 +1301,11 @@ if !settings.change_db
   return
 end
 @pormg_debug false
-models_array::Vector{PormGModel} = []
+# #522: the live side is read straight into `LiveTable`s; `convert_schema_to_models` (which builds
+# `PormGModel`s on top of them) is `inspectdb`'s form and is not called here.
+live_schema = LiveTable[]
 try
-  models_array = convert_schema_to_models(connection)
+  live_schema = read_live_schema(connection)
 catch e
   error_message = sprint(showerror, e)
   if occursin("Table definition not found", error_message)
@@ -1311,7 +1322,7 @@ current_models = _load_current_models(path)
 
 @pormg_debug false
 
-migration_plan = get_migration_plan(models_array, current_models, connection, settings, interactive=interactive)
+migration_plan = get_migration_plan(live_schema, current_models, connection, settings, interactive=interactive)
 
 @pormg_debug false
 
@@ -1336,18 +1347,19 @@ function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::
     return
   end
   
-  models_array::Vector{PormGModel} = []
+  # #522: the live side is read straight into `LiveTable`s (see the PostgreSQL method above).
+  live_schema = LiveTable[]
   try
-    models_array = convert_schema_to_models(connection)
+    live_schema = read_live_schema(connection)
   catch e
-    @error("Error converting schema to models: ", e)
+    @error("Error reading the live schema: ", e)
     return
   end
 
   # get module from the path (load + resolve FK targets + default pk_field — #62)
   current_models = _load_current_models(path)
 
-  migration_plan = get_migration_plan(models_array, current_models, connection, settings, interactive=interactive)
+  migration_plan = get_migration_plan(live_schema, current_models, connection, settings, interactive=interactive)
 
   # store migration_plan as pending_migrations.jl file
   if migration_plan |> isempty

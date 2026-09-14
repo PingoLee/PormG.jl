@@ -115,59 +115,11 @@ const PormGTypeField = Dict{String,Symbol}(
 
 # I whant work with dictionary to handle pool connections
 
-const sqlite_type_map = Dict{String, Symbol}(
-  "INTEGER" => :IntegerField,
-  # Django-style declared type for PositiveIntegerField (INTEGER affinity); the
-  # distinct spelling is what lets SQLite introspection round-trip the field.
-  "INTEGER UNSIGNED" => :PositiveIntegerField,
-  "SMALLINT" => :PositiveSmallIntegerField,
-  "INT" => :BigIntegerField,
-  # PormG renders every VARCHAR-family field as `TEXT(n)` on SQLite (see `sqlite_type_map_reverse`),
-  # so a length suffix is what distinguishes a CharField from a TextField here — a BARE `TEXT` is
-  # resolved to `:TextField` in `convertSQLToModel(::PormGSQLite)` rather than to a CharField whose
-  # constructor would invent `max_length = 250` (#325). VARCHAR/CHAR are accepted for schemas PormG
-  # did not create, so a hand-written `VARCHAR(50)` keeps its length.
-  "TEXT" => :CharField,
-  "VARCHAR" => :CharField,
-  "CHAR" => :CharField,
-  "NUMERIC" => :FloatField,
-  "REAL" => :FloatField,
-  "DECIMAL" => :DecimalField,
-  "DATETIME" => :DateTimeField,
-  "TIME" => :TimeField,
-  "INTERVAL" => :DurationField,
-  "DATE" => :DateField,
-  "BLOB" => :BinaryField,
-  "BOOLEAN" => :BooleanField,
-  "UUID" => :UUIDField,
-  "JSON" => :JSONField,
-  "JSONB" => :JSONField
-)
-
-const postgres_type_map = Dict{String, Symbol}(
-  "integer" => :IntegerField,
-  "smallint" => :PositiveSmallIntegerField,
-  "bigint" => :BigIntegerField,
-  "boolean" => :BooleanField,
-  "date" => :DateField,
-  "timestamp" => :DateTimeField,
-  "decimal" => :DecimalField,
-  "numeric" => :DecimalField,
-  "varchar" => :CharField,
-  "character" => :CharField,
-  "text" => :TextField,
-  "float" => :FloatField,
-  "time" => :TimeField,
-  "interval" => :DurationField,
-  # PostgreSQL's format_type() reports `bytea`; it never reports "blob". The "blob" key below is
-  # unreachable in practice and kept only so a hand-written mapping does not regress (#296).
-  "bytea" => :BinaryField,
-  "blob" => :BinaryField,
-  "double_precision" => :FloatField,
-  "uuid" => :UUIDField,
-  "json" => :JSONField,
-  "jsonb" => :JSONField,
-)
+# `sqlite_type_map` and `postgres_type_map` — the two FORWARD maps from a catalog type to a field
+# struct — lived here until #522. The introspection readers compile a catalog type straight to a
+# `CanonicalType` through `Migrations.parse_canonical_type`, and `inspectdb` picks its struct from
+# the compiled `ColumnSpec` (`Migrations.field_from_spec`), so nothing maps a rendered type back to
+# a field struct any more. The two REVERSE maps below are the renderer's and stay.
 
 # const postgres_map_type_to_cast = Dict{String, String}(
 #   "TIME" => "time",

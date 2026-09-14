@@ -197,7 +197,7 @@ const SPEC_CORPUS = [
     @test parse_canonical_type("DATETIME", SL507) == parse_canonical_type("TIMESTAMP", SL507)
 
     # NOT collapsed, deliberately. PormG writes "SMALLINT" and "INTEGER UNSIGNED" verbatim on SQLite
-    # and `sqlite_type_map` reads both back, so a change between them is observable and must still
+    # and the reader hands both back verbatim, so a change between them is observable and must still
     # be planned — even though SQLite gives all three the same INTEGER affinity. The rule is
     # "collapse what the RENDERER makes indistinguishable", not "what the engine stores alike".
     @test parse_canonical_type("SMALLINT", SL507) != parse_canonical_type("INTEGER", SL507)
@@ -333,11 +333,13 @@ const SPEC_CORPUS = [
     @test reference_delta(ForeignKeyRef("driver", "Driver", "id", "CASCADE"),
                           ForeignKeyRef("driver", "Driver", "id", "SET NULL")) == [:on_delete]
 
-    # `on_delete` is stored RENDERED, through the same function `Models._fk_on_delete_equal` uses —
-    # so the pairs that mean one clause fold, and comparing stored values IS that predicate.
+    # `on_delete` is stored RENDERED, through `Models._foreign_key_on_delete_sql` — so the pairs that
+    # mean one clause fold, and comparing stored values compares what the database is told. (The
+    # field-pair predicate `_fk_on_delete_equal` that used to be the oracle here was retired by #522;
+    # the rendering function IS the oracle.)
     protect = Models.ForeignKey("Races", on_delete = "PROTECT")
     restrict = Models.ForeignKey("Races", on_delete = "RESTRICT")
-    @test Models._fk_on_delete_equal(protect, restrict)
+    @test Models._foreign_key_on_delete_sql(protect.on_delete) == Models._foreign_key_on_delete_sql(restrict.on_delete)
     @test column_spec(protect, PG507) == column_spec(restrict, PG507)
     @test column_spec(protect, PG507).reference.on_delete ==
           Models._foreign_key_on_delete_sql(protect.on_delete)
@@ -434,7 +436,7 @@ const SPEC_CORPUS = [
       # No exception, and no warning — the renderer's own verdict on whether it can express what the
       # compiler reported. The FULL delta is handed over, `:reference` included: phase 1 had to
       # filter that facet out first, and needing no filter is the point of the change.
-      @test_logs min_level = Logging.Warn PormG.Dialect.alter_field(PG507, "t", "c", a, b, delta)
+      @test_logs min_level = Logging.Warn PormG.Dialect.alter_field(PG507, "t", "c", a, delta)
     end
 
     # The one facet with no rendering branch must also be the only one that renders NOTHING — that
@@ -446,7 +448,7 @@ const SPEC_CORPUS = [
       delta = column_delta(a, b, PG507; name = "c")
       delta.changed == [:reference] || continue
       ref_only += 1
-      @test PormG.Dialect.alter_field(PG507, "t", "c", a, b, delta) == ""
+      @test PormG.Dialect.alter_field(PG507, "t", "c", a, delta) == ""
     end
     # Guard the guard: a corpus that produced no reference-only pair would pass the loop vacuously.
     @test ref_only > 0
@@ -481,7 +483,7 @@ const SPEC_CORPUS = [
       @test :identity in delta
       @test :type in delta
 
-      lines = split(strip(PormG.Dialect.alter_field(PG507, "t", "c", declared, live, delta)), string(Char(10)))
+      lines = split(strip(PormG.Dialect.alter_field(PG507, "t", "c", declared, delta)), string(Char(10)))
       type_at = findfirst(l -> occursin("TYPE", l), lines)
       drop_at = findfirst(l -> occursin("DROP IDENTITY", l), lines)
       @test type_at !== nothing
@@ -494,8 +496,7 @@ const SPEC_CORPUS = [
     # report both facets.
     add_delta = column_delta(Models.IDField(), Models.CharField(max_length = 40), PG507; name = "c")
     @test :identity in add_delta && :type in add_delta
-    lines = split(strip(PormG.Dialect.alter_field(PG507, "t", "c", Models.IDField(),
-                                                  Models.CharField(max_length = 40), add_delta)), string(Char(10)))
+    lines = split(strip(PormG.Dialect.alter_field(PG507, "t", "c", Models.IDField(), add_delta)), string(Char(10)))
     add_at = findfirst(l -> occursin("ADD GENERATED", l), lines)
     type_at = findfirst(l -> occursin("TYPE", l), lines)
     @test add_at !== nothing && type_at !== nothing

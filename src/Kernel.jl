@@ -465,7 +465,7 @@ export DEFAULT_POOL_TIMEOUT, LAST_INSERT_ID_LABEL, DATETIME_FORMAT, UTC_TIMEZONE
 export PormGsuffix, PormGtransform, PormGTypeField, JSON_CONTAINMENT_OPERATORS
 
 # Type maps and introspection ignore lists
-export sqlite_type_map, postgres_type_map, sqlite_type_map_reverse, postgres_type_map_reverse,
+export sqlite_type_map_reverse, postgres_type_map_reverse,
        sqlite_date_format_map, sqlite_ignore_schema, postgres_ignore_table
 
 # on_delete handlers

@@ -109,30 +109,58 @@ Follow the canonical [PormG Test Writing Standard](../../instructions/test-writi
 
 ## Planner internals: column identity
 
-`makemigrations` decides *changed / unchanged* by compiling **both** sides of the diff to a canonical
-column IR and comparing that — never by comparing `PormGField` structs. The IR's nouns are
-`ColumnSpec` / `ColumnDelta` (`src/column_ir.jl`, layer 1); the compiler is `column_spec(field, conn)`
-(`src/migrations/column_spec.jl`); the planner's whole field diff is one call to `column_delta`
-inside `_alter_table_fields`. Since #507 phase 2 every plan ACTION derives from that same delta —
-see *From delta to actions* below.
+`makemigrations` decides *changed / unchanged* on a canonical column IR — never by comparing
+`PormGField` structs, and since #522 never by *building* one for the live side either. The IR's
+nouns are `ColumnSpec` / `ColumnDelta` (`src/column_ir.jl`, layer 1). The **declared** side compiles
+through `column_spec(field, conn)` (`src/migrations/column_spec.jl`); the **live** side is read
+straight into a `LiveTable` of `ColumnSpec`s by the readers (`read_live_schema`,
+`src/migrations/introspection.jl`), and the planner's whole field diff is one call to
+`column_delta(field, old_spec, conn)` inside `_alter_table_fields`. Since #507 phase 2 every plan
+ACTION derives from that same delta — see *From delta to actions* below.
 
-**Why an IR at all.** Introspection reconstructs a `PormGField` from the live schema through a type
-map that returns *one* struct per rendered type, so the declared struct can never be recovered:
-`CharField` / `URLField` / `SlugField` all come back as one struct, and on SQLite a `BIGINT` column
-comes back as `sIntegerField`. Struct identity is therefore not column identity. The IR closes the
-gap by construction rather than by reconciliation — `column_spec` renders through
-`Dialect._get_column_type`, the same function the DDL path uses, so **every struct that renders the
-same column compiles to the same spec**.
+**Why an IR at all, and why the readers had to change.** Introspection used to reconstruct a
+`PormGField` from the live schema through a type map that returned *one* struct per rendered type,
+so the declared struct could never be recovered: `CharField` / `URLField` / `SlugField` all came
+back as one struct, and on SQLite a `BIGINT` column came back as `sIntegerField`. Struct identity is
+therefore not column identity. Phase 1 closed the gap by construction — `column_spec` renders
+through `Dialect._get_column_type`, the same function the DDL path uses, so **every struct that
+renders the same column compiles to the same spec** — and phase 3 (#522) removed the round trip: the
+readers compile catalog facts (`format_type` / `PRAGMA table_info`, the CHECK clauses, `attidentity`,
+the constraint tables) directly, the forward type maps are gone, and **no reader choice can be a
+schema opinion the planner acts on**. The one place a struct is still chosen from a spec is
+`field_from_spec` — `inspectdb`'s compiler, which has to write a models file — and it is off the
+diff path by design; where the declaration vocabulary cannot say what a column is (a lengthless
+`varchar`, a type outside the closed set) it picks the constructor default and **warns**, never
+silently. Both readers share `_key_arm` (the uuid-key / relation / sized-textual-key / `IDField`
+arm order of #409) and the default coercion `_coerce_default`, so the two engines describe one
+schema the same way, and `Migrations.check` asks those same helpers instead of mirroring them.
+
+Two consequences worth knowing when reading a reader:
+
+- **A live fact is read, not inferred.** A `SMALLINT` without its `>= 0` CHECK compiles without the
+  check; a relational column's `db_index` is whether the catalog lists a single-column index; a
+  catalog type PormG never renders (`character(n)`, an array) is `CUnsupported` and does not equate
+  to a declared `TextField`. Each surfaces as a one-time plan on an adopted schema; tables PormG
+  wrote always carry the facts. The exception is stated once, beside `_column_identity(::PormGSQLite)`:
+  a SQLite integer key compiles to the identity whether or not it carries `AUTOINCREMENT`, because
+  `IDField` is the only declarable integer key and it always renders the token — a rowid key without
+  it has no declaration that could ever equal it.
+- **The planner's live side is a `LiveTable`, and a `PormGModel` is only an adapter for it.**
+  `get_migration_plan(::Vector{PormGModel}, …)` compiles each model through `live_table` (the
+  declared-side compiler plus `db_index` / `cache["index"]`); the unit tests and the golden plan
+  corpus hand-build the live side that way, `makemigrations` never does.
 
 **Three rules worth knowing before editing it:**
 
 1. **Engine equivalence is decided in `parse_canonical_type`, once** — Atlas's per-driver normalizer,
-   run on both sides before the diff. A collapse belongs there only when it is *forced*: two
-   spellings become one `CanonicalType` when PormG renders both as the same string, so the database
-   cannot tell them apart. SQLite `BIGINT ≡ INTEGER` qualifies (`sqlite_type_map_reverse` maps both
-   to `INTEGER`); SQLite `SMALLINT` vs `INTEGER UNSIGNED` does **not**, because PormG writes both
-   verbatim and a change between them is observable. Collapsing what the engine merely *stores*
-   alike would silently stop planning a real change.
+   run on both sides before the diff — and since #522 it is also the readers' whole type
+   vocabulary, so the catalog aliases in it (`int4`, `bigserial`, `character varying`,
+   `timestamp(6) with time zone`) are load-bearing, not conveniences. A collapse belongs there only
+   when it is *forced*: two spellings become one `CanonicalType` when PormG renders both as the same
+   string, so the database cannot tell them apart. SQLite `BIGINT ≡ INTEGER` qualifies
+   (`sqlite_type_map_reverse` maps both to `INTEGER`); SQLite `SMALLINT` vs `INTEGER UNSIGNED` does
+   **not**, because PormG writes both verbatim and a change between them is observable. Collapsing
+   what the engine merely *stores* alike would silently stop planning a real change.
 2. **`on_delete` is a schema fact**, carried in `ForeignKeyRef(table, binding, column, on_delete)`.
    A change there is a **constraint delta, never a column ALTER** — it reaches the plan as DROP +
    ADD CONSTRAINT. It used to be answered four different ways (`_compare_model_field` skipped it,
@@ -220,6 +248,11 @@ verbs.**
   does no field-type dispatch at all. A new one is a regression against the IR, not a fix —
   `column_spec` is where a field type is interpreted. (Its predecessor rule was "route it to #507";
   #507 phase 1 has landed, so the routing is into the compiler.)
+- **A reader building a `PormGField`, or choosing a struct, on the diff path.** Since #522 the
+  readers produce `ColumnSpec`s from catalog facts and nothing else; a struct is chosen only in
+  `field_from_spec`, for `inspectdb`. A reader that infers a fact from a type spelling (a CHECK from
+  `SMALLINT`, an index from a foreign key) has re-created the class the IR closed — read the
+  catalog, and if the catalog cannot say it, the fact does not belong in the spec.
 - **A new entry in `NON_DB_ATTRS` that hides a real fact.** The list is legitimate for things no DDL
   path emits. It is *not* a place to park an inconvenient difference — check that no renderer writes
   it before adding one, and say so in the comment. The cautionary case is `on_update` / `deferrable`

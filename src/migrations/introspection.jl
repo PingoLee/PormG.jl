@@ -12,8 +12,7 @@
 # Both existed to undo `quote_ident` in the PostgreSQL schema query's string aggregates — one for
 # the quoting itself (#389), one for a name containing a SPACE that the field separator tore in
 # half (#414). That query now transports every identifier as a JSON string, which is not a SQL
-# identifier and needs no quoting, so there is nothing left to undo. `convertSQLToModel(::String)`
-# below reads DDL PormG itself emitted and deliberately never used either helper.
+# identifier and needs no quoting, so there is nothing left to undo.
 
 # ---
 
@@ -212,21 +211,6 @@ function _wrapped_in_parens(s::AbstractString)::Bool
   return false
 end
 
-# Does the field type `field_type` builds carry the slot `slot`?
-#
-# Answered from the STRUCT, never by building a throwaway instance. The constructors are named
-# `CharField` and the structs `sCharField` (models/fields.jl) — the same `s`-prefix relation
-# `_field_or_drop_default`'s warning inverts to report a public type name — so the question needs no
-# object to ask it of. Verified for every field type reachable from either reader's type map: the
-# struct exists, `typeof(ctor())` is exactly it, and both slot answers agree with the instance.
-#
-# It replaces a per-column probe construction, and that was not only wasted work: a probe built with
-# the column's real default let `CharField()`'s INVENTED `max_length = 250` judge a value the
-# declared `varchar(500)` accepts, so the guard dropped a good default and blamed a width from
-# nowhere. Asking the type instead of an instance makes that mistake unavailable.
-_field_type_has_slot(field_type, slot::Symbol)::Bool =
-  hasfield(getfield(Models, Symbol(:s, nameof(field_type))), slot)
-
 # Build a field from an introspected column, dropping the column's DEFAULT if the field type
 # refuses it, or `nothing` never having been a default at all.
 #
@@ -289,7 +273,7 @@ function _field_or_drop_default(build::Function, table_name, column_name, defaul
   # is no constructor complaint to quote when no constructor was asked.
   if default_val isa _ExpressionDefault
     field = build(nothing)
-    @warn "Column default could not be represented as a field default; importing the column without it." table = string(table_name) column = string(column_name) default = string(default_val) field_type = string(nameof(typeof(field)))[2:end] reason = "the DEFAULT is a SQL expression, not a literal value; PormG has no field-level representation for one"
+    @warn _DEFAULT_DROPPED_MESSAGE table = string(table_name) column = string(column_name) default = string(default_val) field_type = string(nameof(typeof(field)))[2:end] reason = "the DEFAULT is a SQL expression, not a literal value; PormG has no field-level representation for one"
     return field
   end
 
@@ -310,9 +294,153 @@ function _field_or_drop_default(build::Function, table_name, column_name, defaul
     # SAME call that file's twin degrade warning makes (`reason = _one_line(sprint(showerror, e),
     # 160)`). Both files are included into `Migrations`, so it needs no import. Without it the
     # warning says a default was dropped but never why.
-    @warn "Column default could not be represented as a field default; importing the column without it." table = string(table_name) column = string(column_name) default = string(default_val) field_type = string(nameof(typeof(field)))[2:end] reason = _one_line(sprint(showerror, e), 160)
+    @warn _DEFAULT_DROPPED_MESSAGE table = string(table_name) column = string(column_name) default = string(default_val) field_type = string(nameof(typeof(field)))[2:end] reason = _one_line(sprint(showerror, e), 160)
     return field
   end
+end
+
+# ── Live defaults: clean per engine, coerce per canonical type, drop out loud (#522) ─────────
+
+const _DEFAULT_DROPPED_MESSAGE = "Column default could not be represented as a field default; importing the column without it."
+
+"""
+    _clean_default(raw, ctype::CanonicalType, conn)
+
+The engine half of reading a column DEFAULT: `pg_get_expr`'s or `PRAGMA table_info`'s rendering
+reduced to a literal, or tagged as an expression (#475), with the two type-directed special cases the
+cleaners carry — a `BLOB`/`bytea` literal decoded to bytes (#296) and a boolean folded from `1/0/t/f`
+— keyed on the canonical type rather than on a field struct. Pure and total: never logs, never throws.
+"""
+_clean_default(raw, ctype::CanonicalType, ::PormGSQLite) =
+  _normalize_sqlite_default(raw, ctype isa CBytes ? :BinaryField : ctype isa CBool ? :BooleanField : :TextField)
+function _clean_default(raw, ctype::CanonicalType, ::PormGPostgres)
+  cleaned = _pg_clean_default(raw)
+  # A bytea DEFAULT survives the cleanup as PostgreSQL's hex text; an unrecognised literal degrades
+  # to "no default", as it always has (#296).
+  (cleaned isa AbstractString && ctype isa CBytes) && return _pg_bytea_literal_bytes(cleaned)
+  return cleaned
+end
+
+"""
+    _coerce_default(value, ctype::CanonicalType)
+
+The Julia value a DECLARED field stores for this default — the coercion each field constructor's
+`validate_default` converter applies (`format2int64`, `parse(Bool, …)`, `Date(…)`,
+`normalize_datetime_default`, `format_uuid_sql`, …), keyed on the canonical type instead of on a
+struct, so the live side lands on exactly the value the declared side holds and `LiteralDefault`'s
+`isequal` is a real comparison (#522). Throws `FieldValidationError` for a literal the type cannot
+hold, the category the constructors throw (#239); the caller turns that into the warn-and-drop the
+readers have always done.
+
+One fix rides along: a `DATE … DEFAULT '2024-01-01'` column used to reach `DateField`'s converter,
+which returned the String into a `Union{Date, Nothing}` slot — a `MethodError`, not a
+`FieldValidationError`, so it escaped the drop guard and aborted the whole schema read.
+"""
+function _coerce_default(value, ctype::CanonicalType)
+  value === nothing && return nothing
+  if ctype isa Union{CInt16, CInt32, CInt64}
+    value isa Bool && throw(FieldValidationError("a boolean is not an integer default"))
+    value isa Integer && return Int64(value)
+    value isa AbstractString && return Models.format2int64(value)
+  elseif ctype isa Union{CFloat64, CDecimal}
+    value isa Bool && throw(FieldValidationError("a boolean is not a numeric default"))
+    value isa Real && return Float64(value)
+    value isa AbstractString && return Models.format2float64(value)
+  elseif ctype isa CBool
+    value isa Bool && return value
+    return parse(Bool, lowercase(strip(string(value))))
+  elseif ctype isa CVarChar
+    # `CharField` stringifies a numeric default and refuses one longer than `max_length`.
+    str = value isa AbstractString ? String(value) : string(value)
+    (ctype.length !== nothing && length(str) > ctype.length) &&
+      throw(FieldValidationError("default value has $(length(str)) characters, max_length is $(ctype.length)"))
+    return str
+  elseif ctype isa Union{CText, CJSON, CUnsupported}
+    value isa AbstractString && return String(value)
+  elseif ctype isa CDate
+    value isa Date && return value
+    value isa Union{DateTime, ZonedDateTime} && return Date(value)
+    value isa AbstractString && return Date(String(value))
+  elseif ctype isa CDateTime
+    return Models.normalize_datetime_default(value)
+  elseif ctype isa CTime
+    value isa Time && return value
+    value isa AbstractString && return Time(String(value))
+  elseif ctype isa CUUID
+    return Models.format_uuid_sql(String(value))
+  elseif ctype isa CInterval
+    return Models.format_duration_sql(value)
+  elseif ctype isa CBytes
+    value isa AbstractVector{UInt8} && return collect(UInt8, value)
+    # A literal that is not blob syntax was never a default the field could hold: "none", silently,
+    # exactly as `_normalize_sqlite_default` and `_pg_bytea_literal_bytes` have always answered.
+    return nothing
+  end
+  throw(FieldValidationError("a $(typeof(value)) is not a valid default for this column type"))
+end
+
+# The PUBLIC field name `inspectdb` would write for this column — for the dropped-default warning,
+# which has always named it (`CharField`, never `sCharField`). Computed by the same compiler, under a
+# null logger so its own lossy-choice warnings cannot fire from inside a default read.
+_inspectdb_field_name(probe::ColumnSpec, table_name, conn)::String =
+  Logging.with_logger(Logging.NullLogger()) do
+    string(nameof(typeof(_inspectdb_field(probe, table_name, conn, false, nothing))))[2:end]
+  end
+
+"""
+    _default_or_drop(table_name, probe::ColumnSpec, raw, conn) -> ColumnDefault
+
+A live column's DEFAULT as the diff compares it, under the readers' standing policy (#472/#475): a
+literal the type can hold is carried; a SQL expression, or a literal the type cannot hold, is
+dropped with a warning naming the table and column — one per column per read, never `maxlog` — and
+the column imports with no default. `probe` is the column's spec minus its default; its key arm
+([`_inspectdb_key_arm`](@ref)) decides the policy the way the old readers' arms did: the
+bare-`IDField` key has never read a default at all (its slot cannot hold the `nextval(…)` a legacy
+`serial` key carries, and `check` reports that class on its own terms), and a relation reports through
+`_fk_default_or_warn`'s foreign-key wording.
+"""
+function _default_or_drop(table_name, probe::ColumnSpec, raw,
+                          conn::Union{PormGPostgres, PormGSQLite})::ColumnDefault
+  arm = _inspectdb_key_arm(probe)
+  arm === :id_pk && return NoDefault()
+  cleaned = _clean_default(raw, probe.type, conn)
+  cleaned === nothing && return NoDefault()
+  if arm === :reference
+    value = _fk_default_or_warn(cleaned, table_name, probe.name)
+    return value === nothing ? NoDefault() : _literal_default(value)
+  end
+  if cleaned isa _ExpressionDefault
+    @warn _DEFAULT_DROPPED_MESSAGE table = string(table_name) column = probe.name default = string(cleaned) field_type = _inspectdb_field_name(probe, table_name, conn) reason = "the DEFAULT is a SQL expression, not a literal value; PormG has no field-level representation for one"
+    return NoDefault()
+  end
+  value = try
+    _coerce_default(cleaned, probe.type)
+  catch e
+    (e isa InterruptException || e isa StackOverflowError) && rethrow()
+    @warn _DEFAULT_DROPPED_MESSAGE table = string(table_name) column = probe.name default = string(cleaned) field_type = _inspectdb_field_name(probe, table_name, conn) reason = _one_line(sprint(showerror, e), 160)
+    return NoDefault()
+  end
+  return value === nothing ? NoDefault() : _literal_default(value)
+end
+
+# The CHECK facts the IR carries are the two PormG renders, on the types it renders them on. A `>= 0`
+# on a text column or a byte bound on an integer is a fact no declaration could ever match, so
+# carrying it would be a permanent delta; such a clause is left to the database, unread.
+function _reader_checks(found::Vector{CheckKind}, ctype::CanonicalType)::Vector{CheckKind}
+  kept = CheckKind[]
+  any(c -> c isa NonNegativeCheck, found) && ctype isa Union{CInt16, CInt32} && push!(kept, NonNegativeCheck())
+  i = findfirst(c -> c isa ByteLengthCheck, found)
+  i !== nothing && ctype isa CBytes && push!(kept, found[i])
+  return kept
+end
+
+# Both readers end a column here: its facts minus the default are a probe spec, the default is read
+# under that spec's arm, and the final spec carries it.
+function _finish_column_spec(table_name, probe::ColumnSpec, raw_default,
+                             conn::Union{PormGPostgres, PormGSQLite})::ColumnSpec
+  default = _default_or_drop(table_name, probe, raw_default, conn)
+  return ColumnSpec(probe.name, probe.type, probe.nullable, probe.primary_key, probe.unique, default,
+                    probe.reference, probe.checks, probe.identity, probe.raw)
 end
 
 # PormG's `on_delete === nothing` and `DO_NOTHING` both render as SQL `ON DELETE NO ACTION`
@@ -500,489 +628,183 @@ function get_database_schema(db::PormGSQLite)
 end
 
 """
-  convertSQLToModel(sql::String)
+    convertSQLToModel(sql::String) -> PormGModel
 
-Converts a SQL CREATE TABLE statement into a model definition in PormGModel.
+The model for one `CREATE TABLE` statement, read the way a live table is (#522): the DDL is executed
+in a throwaway SQLite file and the result goes through the same reader as `convertSQLToModel(db,
+table)`, so there is no second, regex-driven reader to keep in step with the first — the one this
+replaced had two documented gaps (`unique` never read, a non-canonical `to_table`) for exactly that
+reason.
 
-# Arguments
-- `sql::String`: The SQL CREATE TABLE statement.
-
-# Returns
-- `PormGModel`: The model definition.
-
-# Example"""
-function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_type_map)
-  # NOTE (#318): this DDL-regex reader does NOT populate `field.unique`, unlike the PRAGMA reader
-  # (`convertSQLToModel(::PormGSQLite, …)`) that #318 fixed. Deliberate: `convert_schema_to_models`
-  # reaches the PRAGMA method, so this one is off the production introspection path. Reading it here
-  # would mean regex-parsing inline and table-level UNIQUE clauses out of the DDL text — strictly
-  # worse than the pragma. If this path is ever put back on the live route, close that gap first.
-  #
-  # SECOND gap since #390, same condition: the `to_table` this sets below is the `REFERENCES`-clause
-  # spelling, NOT the canonical `sqlite_master` one. The PRAGMA reader resolves that through
-  # `_sqlite_canonical_table_name`; this method takes no connection and cannot. Since #390
-  # `Models._compare_field_foreign_key` compares `to_table` EXACTLY, so a non-canonical value here
-  # would churn — harmless only while this stays off the live route. Put it back on, and this gap
-  # closes with the `unique` one (see the `to_table` invariant in `src/models/fields.jl`).
-
-  # Extract table name
+The statement must name its table in double quotes, as PormG writes it; an `InvalidMigrationError`
+says so otherwise. SQLite does not check that a `REFERENCES` target exists at `CREATE TABLE` time,
+so a statement carrying foreign keys reads fine on its own.
+"""
+function convertSQLToModel(sql::String)::PormGModel
   table_name_match = match(r"CREATE TABLE \"(.+?)\"", sql)
   table_name = table_name_match !== nothing ? table_name_match.captures[1] :
     throw(InvalidMigrationError("Cannot introspect: CREATE TABLE statement has no double-quoted table name (table created outside PormG?): $(first(sql, 120))"))
-
-  # Define a dictionary to map SQL types to Models.jl field types
-  fk_map::Dict{String, Any} = Dict{String, Any}()
-  pk_map::Dict{String, Any} = Dict{String, Any}()
-
-  # Extract any primary key constraints
-  # primary_key_regex = eachmatch(r"PRIMARY KEY\s*\((.+?)\)", sql)
-  primary_key_regex = eachmatch(r"PRIMARY KEY\s*\((.+?)\)?\s*(AUTOINCREMENT)?\)", sql)
-  for match in primary_key_regex
-    primary_keys = match.captures[1]
-    # Deliberately NOT `_unquote_ident`: this reader parses DDL PormG itself emitted, where an
-  # identifier is quoted but never contains a doubled `"`, so there is no doubling to undo and the
-  # blanket strip is exact here.
-  primary_keys = replace(primary_keys, r"\"" => "") 
-    primary_keys = split(primary_keys, ",")
-    auto_increment = isnothing(match.captures[2]) ? false : true
-    # println(primary_keys)
-    for key in primary_keys
-      key = strip(key) |> String
-      pk_map[key] = Dict("primary_keys" => key, "auto_increment" => auto_increment)
+  return mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "convert_sql.sqlite"); pool_size = 1)
+    try
+      fetch(pool, sql)
+      return convertSQLToModel(pool, String(table_name))
+    finally
+      # Release the handle first, or Windows cannot remove the temp directory (WAL keeps it open).
+      close_pool!(pool)
     end
   end
-
-  # Extract any foreign key constraints
-  foreign_key_matches = eachmatch(r"FOREIGN KEY\(\"(\w+)\"\) REFERENCES \"(\w+)\"\(\"(\w+)\"\)(?: ON DELETE (CASCADE|SET NULL|NO ACTION|RESTRICT|SET DEFAULT))?(?: ON UPDATE (CASCADE|SET NULL|NO ACTION|RESTRICT|SET DEFAULT))?(?: DEFERRABLE INITIALLY (DEFERRED|IMMEDIATE))?", sql)
-  for match in foreign_key_matches
-    # #516 removed the `on_update` / `deferrable` keywords, so the last two groups have no reader:
-    # threading them into `fk_map` would reconstruct a field the constructor now refuses, and
-    # `Model_to_str` would write them into a generated file that cannot be loaded back.
-    #
-    # The groups stay in the PATTERN, but not because the match needs them — the regex is unanchored,
-    # so a trimmed pattern matches the same DDL and yields a byte-identical `fk_map` (measured, both
-    # forms, against a constraint carrying both clauses). They are kept so the pattern still documents
-    # the full constraint grammar SQLite stores, and so re-capturing them is a one-line change if
-    # deferrability ever becomes a rendered feature.
-    column_name, fk_table, fk_column, on_delete, _, _ = match.captures
-    # println(match.captures)
-    # typeof(column_name |> String) |> println
-    fk_map[column_name |> String] = Dict("column_name" => column_name, "fk_table" => fk_table, "fk_column" => fk_column, "on_delete" => on_delete)
-  end
-
-  
-  # Byte bounds for BinaryField columns, read from the CHECK clauses in the same DDL text (#296).
-  byte_bounds = _sqlite_byte_length_bounds(sql)
-
-  # Extend regex to capture PRIMARY KEY and FOREIGN KEY constraints.
-  # The type group allows a trailing UNSIGNED so the two-word declared type of
-  # PositiveIntegerField ("INTEGER UNSIGNED") round-trips instead of degrading
-  # to IntegerField.
-  #
-  # The DEFAULT alternation enumerates the literal shapes explicitly instead of using a catch-all,
-  # because a column can be followed by a CHECK clause with no comma between them: in
-  # `"c" BLOB NOT NULL DEFAULT X'0102' CHECK (length("c") <= 4)` the previous `[^,]*` branch
-  # swallowed ` CHECK (length("c") <= 4)` into the default (#296).
-  #
-  # The branches, in order: a quoted string; a blob literal; a parenthesized expression (SQLite
-  # allows `DEFAULT (expr)`, e.g. `(datetime('now'))`, which `_strip_sqlite_default_wrapper` exists
-  # to unwrap — one nesting level is enough for every form SQLite emits); then a bare token. The
-  # bare-token branch must exclude `(` so it cannot run into a trailing CHECK.
-  #
-  # The single-integer length suffix (`TEXT(120)`) is captured because it is what distinguishes a
-  # CharField from a TextField on SQLite (#325) — see the note by `type_sym` below. A two-argument
-  # suffix (`DECIMAL(10,2)`) deliberately does not match: `\s*(NOT NULL)?` then matches empty and
-  # the match ends before it, exactly as it did before the group existed.
-  column_matches = eachmatch(r"[^(]\"(\w+)\"\s+([A-Z]+(?: UNSIGNED)?)(?:\(\s*(\d+)\s*\))?\s*(NOT NULL)?\s*(?:DEFAULT\s+('[^']*'|[Xx]'[0-9A-Fa-f]*'|\([^()]*(?:\([^()]*\)[^()]*)*\)|[^,()\s]+))?", sql)
-  # Initialize fields dictionary
-  fields_dict = Dict{Symbol, Any}()
-  str_fields_dict = Dict{String, Any}()
-  for match in column_matches
-    # println(match.captures)
-    column_name, column_type, declared_length, nullable, default_value = match.captures
-    type_sym = get(type_map, column_type, :TextField)
-    # #325: keep this reader's CharField/TextField split identical to the PRAGMA reader's. A bare
-    # textual column has no length, and `CharField()` would invent `max_length = 250`.
-    if type_sym == :CharField && declared_length === nothing
-      type_sym = :TextField
-    end
-    normalized_default = _normalize_sqlite_default(default_value, type_sym)
-    # check if column_name is a primary key
-    # NOTE (#409): this reader still force-converts every key to `IDField`, and still checks
-    # `pk_map` BEFORE `fk_map` — both defects the live readers had fixed. It is off the live route
-    # (see this function's header), so it was left alone rather than fixed blind; anyone putting it
-    # back on that route must close these two as well as the #318 gap the header already names.
-    if haskey(pk_map, column_name)
-      field_instance = Models.IDField(null=(nullable === nothing), auto_increment=pk_map[column_name]["auto_increment"])
-    elseif haskey(fk_map, column_name)
-      # `default=` was computed above but never reached this branch before #292, so an FK declared
-      # ON DELETE SET DEFAULT introspected to `SET_DEFAULT` with no default — which since #287
-      # throws `ModelDefinitionError` at `set_models`, and regenerating produced the identical
-      # broken file. Routed through `_fk_default_or_warn` so an unrepresentable default warns
-      # rather than throwing from inside introspection.
-      # #360: `.to` must name the BINDING `Model_to_str` derives for the target table, because
-      # `_resolve_target_model` resolves it by binding lookup alone — hence `_model_binding_name`,
-      # the one expression that derivation lives in (bare `uppercasefirst` here produced a `.to` no
-      # binding could ever spell for a table like `driver profile`). That still is not enough on its
-      # own: the binding may be suffixed with a digit to dodge a sibling's (#338), and
-      # `_model_binding_name` is lossy, so `to_table` records the physical parent verbatim and
-      # `_plan_inspectdb_bindings!` rewrites `.to` to the FINAL binding before anything is rendered.
-      fk_parent_table = fk_map[column_name]["fk_table"] |> string
-      field_instance = Models.ForeignKey(Models._model_binding_name(fk_parent_table); pk_field=fk_map[column_name]["fk_column"] |> string,
-      on_delete=_normalize_introspected_on_delete(fk_map[column_name]["on_delete"]),
-      null=(nullable === nothing),
-      default=_fk_default_or_warn(normalized_default, table_name, column_name))
-      field_instance.to_table = fk_parent_table
-    else
-      # One construction carrying the declared width, for the same #472 reason as the two live
-      # readers: a width stamped on afterwards is never checked against the default.
-      ddl_len = (type_sym == :CharField && declared_length !== nothing) ?
-                parse(Int, declared_length) : nothing
-      field_instance = _field_or_drop_default(table_name, column_name, normalized_default) do d
-        ddl_len === nothing ? getfield(Models, type_sym)(null=(nullable === nothing), default=d) :
-                              getfield(Models, type_sym)(null=(nullable === nothing), default=d,
-                                                         max_length=ddl_len)
-      end
-      # BLOB carries no length suffix, so a BinaryField's byte bound comes from its CHECK (#296).
-      if type_sym == :BinaryField && haskey(byte_bounds, lowercase(column_name))
-        field_instance.max_length = byte_bounds[lowercase(column_name)]
-      elseif type_sym == :CharField && declared_length !== nothing
-        # #325: carry the declared length instead of letting CharField default it to 250.
-        field_instance.max_length = parse(Int, declared_length)
-      end
-    end
-
-    fields_dict[Symbol(column_name)] = field_instance
-  end
-
-  # Construct and return the model
-  # Dict(:models => Models.Model(table_name, fields_dict), :str_models => Models.Model(table_name, str_fields_dict))
-  # println(fields_dict)
-  # println(typeof(table_name))
-  return Models.Model(table_name, fields_dict)
 end
 
 """
-    _sqlite_byte_length_bounds(create_sql) -> Dict{String, Int}
+    _sqlite_column_checks(create_sql) -> Dict{String, Vector{CheckKind}}
 
-Recover each column's BinaryField byte bound from the `CHECK (length("col") <= n)` clauses in a
-table's `CREATE TABLE` text (#296).
+Recover the per-column CHECK facts PormG renders — the `>= 0` of a positive-integer field and the
+`length(col) <= n` byte bound of a `BinaryField` (#296) — from a table's `CREATE TABLE` text, keyed
+by LOWER-CASED column name.
 
-`PRAGMA table_info` — which `convertSQLToModel` otherwise relies on — does not report CHECK
-constraints at all, and `max_length` is part of the field state the migration planner diffs. Without
-this, every `makemigrations` against a bounded BinaryField would see the live column as unbounded
-and propose the same ALTER forever. On SQLite that is especially costly: any field alteration
-rebuilds the whole table.
+`PRAGMA table_info` does not report CHECK constraints at all, and both are part of what the diff
+compares (`ColumnSpec.checks`): without this the live side would compile without them and
+`makemigrations` would propose the same `ADD CHECK` forever. They are read as FACTS, not inferred
+from the type spelling (#522): an adopted `SMALLINT` column that never had the CHECK compiles
+without it and the diff says so, once, instead of the reader claiming a constraint the catalog does
+not hold.
 
-Keys are **lower-cased** and must be looked up with `lowercase(col)` (#531): SQLite resolves
-identifiers ASCII-case-insensitively, so the spelling inside a `CHECK` need not match the column
-definition's — nor the spelling `PRAGMA table_info` reports back.
+Keys are lower-cased and looked up with `lowercase(col)` (#531): SQLite resolves identifiers
+ASCII-case-insensitively, so the spelling inside a CHECK need not match the column definition's nor
+what `PRAGMA table_info` reports. All four identifier spellings are accepted, because an adopted
+schema wrote the clause, not PormG.
 """
-function _sqlite_byte_length_bounds(create_sql::Union{AbstractString, Nothing})::Dict{String, Int}
-  bounds = Dict{String, Int}()
-  create_sql === nothing && return bounds
-  for m in eachmatch(r"CHECK\s*\(\s*length\s*\(\s*\"([^\"]+)\"\s*\)\s*<=\s*(\d+)\s*\)", create_sql)
-    bounds[lowercase(m.captures[1])] = parse(Int, m.captures[2])
+function _sqlite_column_checks(create_sql::Union{AbstractString, Nothing})::Dict{String, Vector{CheckKind}}
+  checks = Dict{String, Vector{CheckKind}}()
+  create_sql === nothing && return checks
+  # `"c"`, `[c]`, a backticked `c`, or bare — one capture group per spelling.
+  ident = "(?:\"([^\"]+)\"|\\[([^\\]]+)\\]|`([^`]+)`|([A-Za-z_][A-Za-z0-9_]*))"
+  name(m) = lowercase(String(something(m.captures[1], m.captures[2], m.captures[3], m.captures[4])))
+  # NonNegative first, then ByteLength — the order `_column_checks` builds the declared side in.
+  for m in eachmatch(Regex("CHECK\\s*\\(\\s*" * ident * "\\s*>=\\s*0\\s*\\)", "i"), create_sql)
+    push!(get!(checks, name(m), CheckKind[]), NonNegativeCheck())
   end
-  return bounds
+  for m in eachmatch(Regex("CHECK\\s*\\(\\s*length\\s*\\(\\s*" * ident * "\\s*\\)\\s*<=\\s*(\\d+)\\s*\\)", "i"), create_sql)
+    push!(get!(checks, name(m), CheckKind[]), ByteLengthCheck(parse(Int, m.captures[5])))
+  end
+  return checks
 end
 
-function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{String, Symbol} = sqlite_type_map)
-  # #531: resolve the caller's spelling to the `sqlite_master` one ONCE, before any read. Every PRAGMA
-  # below resolves a table name case-insensitively, but `sqlite_master.name` is BINARY-collated, so
-  # the CHECK-bounds read further down found no row for `"mytab"` when the table was created as
-  # `"MyTab"`: the columns came back correct and every byte-length CHECK silently vanished, which
-  # `column_delta` then reported as `:checks` on a column nobody changed — the convergence-churn
-  # class (#325 → … → #503). One resolution up front keeps every read in this function talking about
-  # the same table, and it is the resolver the FK-parent loop already uses (#390). A name it cannot
-  # find (a view, an ATTACHed table) comes back unchanged, exactly as before. The returned model is
-  # therefore named by the CATALOG spelling, which is also what `convert_schema_to_models` passes in.
-  table_name = _sqlite_canonical_table_name(db, table_name)
-  # Use PRAGMA instead of Regex for more reliable introspection
+"""
+    _sqlite_live_table(db::PormGSQLite, table_name) -> LiveTable
+
+The SQLite reader (#522): one table's catalog facts compiled straight into a `LiveTable` of
+`ColumnSpec`s. No `PormGField` is built on the way — `convertSQLToModel` is this plus
+`model_from_live`, and `makemigrations` uses this alone.
+
+What each slot is read FROM, and what it is no longer inferred from:
+
+  * `type` — the declared type `PRAGMA table_info` reports, through `parse_canonical_type`, which
+    is the reader's whole type vocabulary now (`sqlite_type_map` is gone);
+  * `checks` — the CHECK clauses in the stored DDL (`_sqlite_column_checks`), never the type
+    spelling: an `INTEGER UNSIGNED` without its `>= 0` is read as it is;
+  * `reference` — `PRAGMA foreign_key_list`, single-column keys only (#415), the parent resolved to
+    its `sqlite_master` spelling (#390) and the binding derived from it exactly as `.to` used to be;
+    `on_delete` rendered through `_foreign_key_on_delete_sql` so it compares by clause (#498);
+  * `unique` / `indexes` — the single-column UNIQUE constraints and non-unique indexes the pragmas
+    list (#318/#325). A key is unique on the arms that always built it so (`IDField`, a pk-fk),
+    never from the pragma, exactly as before; a relational column's `db_index` is what the catalog
+    holds, not the `true` the old reader stamped on every foreign key;
+  * `identity` — the catalog image of the DECLARED rule, stated once: the column an `IDField` would
+    occupy (`_key_arm(…) === :id_pk`) compiles to the SQLite identity, because `IDField` is the only
+    integer key PormG can declare and it always renders `AUTOINCREMENT`, so a rowid key without the
+    token has no declaration that could ever equal it (see `_column_identity(::PormGSQLite)`);
+  * `default` — `_default_or_drop`: the literal coerced per canonical type; an expression or
+    an uncoercible literal dropped with the same warning as before (#472/#475).
+
+The table name is resolved to its catalog spelling ONCE, before any read (#531): the pragmas resolve
+a name case-insensitively but `sqlite_master.name` is BINARY-collated, and a mixed-case table read
+under another spelling used to lose every CHECK.
+"""
+function _sqlite_live_table(db::PormGSQLite, table_name::AbstractString)::LiveTable
+  table_name = _sqlite_canonical_table_name(db, String(table_name))
   cols = fetch(db, "PRAGMA table_info(\"$table_name\")") |> DataFrame
   fks = fetch(db, "PRAGMA foreign_key_list(\"$table_name\")") |> DataFrame
-
-  # PRAGMA cannot see CHECK constraints, so the byte bounds come from the stored DDL text (#296).
-  # Parameterized, not interpolated: `table_name` is caller-supplied (convertSQLToModel is public),
-  # and unlike the PRAGMA calls above — which interpolate into a *quoted identifier* — this value
-  # lands inside a single-quoted literal, where an embedded `'` would break out. An exact `name = ?`
-  # is correct here only because `table_name` was resolved to the catalog spelling above (#531).
-  _bounds_rows = fetch(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?", [table_name]) |> DataFrame
-  byte_bounds = _sqlite_byte_length_bounds(nrow(_bounds_rows) == 0 || ismissing(_bounds_rows[1, :sql]) ? nothing : _bounds_rows[1, :sql])
-
-  # #318: `PRAGMA table_info` above has no uniqueness column, so `unique` was never populated at all.
-  # Read it once per table here; the per-column branches below test membership.
+  # PRAGMA cannot see CHECK constraints, so they come from the stored DDL text (#296). Parameterized,
+  # not interpolated: `table_name` is caller-supplied (`convertSQLToModel` is public), and unlike the
+  # PRAGMA calls above — which interpolate into a *quoted identifier* — this value lands inside a
+  # single-quoted literal, where an embedded `'` would break out. An exact `name = ?` is correct only
+  # because the name was resolved to the catalog spelling above (#531).
+  ddl_rows = fetch(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?", [table_name]) |> DataFrame
+  checks = _sqlite_column_checks(nrow(ddl_rows) == 0 || ismissing(ddl_rows[1, :sql]) ? nothing : ddl_rows[1, :sql])
   unique_cols = _sqlite_single_column_unique_columns(db, table_name)
-  # #325: the same gap for `db_index` — PRAGMA table_info has no index column either. Column ⇒ index
-  # name, so the model can also carry `cache["index"]` for the planner's DROP INDEX path.
   indexed_cols = _sqlite_single_column_indexed_columns(db, table_name)
-  # #347: and the multi-column half of the same set, which the reader above excludes by arity. These
-  # become model-level `Models.Index` declarations rather than a per-field attribute.
-  composite_idxs = _sqlite_composite_indexes(db, table_name)
+  composite = _sqlite_composite_indexes(db, table_name)
 
-  fields_dict = Dict{Symbol, Any}()
+  # Single-column foreign keys by child column. A MULTI-COLUMN key is skipped rather than split
+  # (#415): `PRAGMA foreign_key_list` returns one row per column grouped under a shared `id`, PormG
+  # has no composite-FK field type, and a skipped constraint reads as "no relation" on both sides of
+  # the diff — symmetric with the PostgreSQL reader's `array_length(con.conkey, 1) = 1`.
   fk_map = Dict{String, Any}()
-  # #390: REFERENCES-clause spelling ⇒ `sqlite_master` spelling, filled below alongside `fk_map`.
-  parent_table_canon = Dict{String, String}()
+  parent_canon = Dict{String, String}()
   if !isempty(fks)
-    # #415: keyed on the CHILD column (`from`), which is what the per-column branches below look up —
-    # but a MULTI-COLUMN foreign key is skipped rather than split. `PRAGMA foreign_key_list` returns
-    # one row per column and groups a composite constraint under a shared `id`, so keying on `from`
-    # alone turned one composite FK into N independent single-column relations: each looked plausible
-    # on its own, and regenerating the model emitted N separate constraints the parent may not even
-    # accept. PormG has no composite-FK field type, so there is nothing faithful to read here; a
-    # skipped constraint reads as "no relation" on both sides of the diff and the schema converges.
-    #
-    # Deliberately symmetric with the PostgreSQL reader, which excludes the same shape in its
-    # `foreign_keys` CTE (`array_length(con.conkey, 1) = 1`) — this is the cross-engine alignment,
-    # not an independent SQLite decision. Both engines must agree about one schema.
     columns_per_fk = Dict{Any, Int}()
     for fk_row in eachrow(fks)
       columns_per_fk[fk_row.id] = get(columns_per_fk, fk_row.id, 0) + 1
     end
     for fk_row in eachrow(fks)
       columns_per_fk[fk_row.id] > 1 && continue
-      fk_map[fk_row.from] = fk_row
+      fk_map[String(fk_row.from)] = fk_row
     end
-    # #390: resolve each DISTINCT parent table to its `sqlite_master` spelling once, here, rather
-    # than once per foreign-key column below. `PRAGMA foreign_key_list` reports the parent as the
-    # `REFERENCES` clause spelled it, which need not match `CREATE TABLE` — see
-    # `_sqlite_canonical_table_name` for why that is legal and why the fold is done in SQL.
+    # #390: each DISTINCT parent resolved to its `sqlite_master` spelling once — `PRAGMA
+    # foreign_key_list` reports the parent as the `REFERENCES` clause spelled it, which need not
+    # match `CREATE TABLE`. A parent not in the catalog (a dangling key, which SQLite permits) keeps
+    # the REFERENCES spelling; the first `migrate` creates it and the next read canonicalises it.
     for fk_row in values(fk_map)
       parent = String(fk_row.table)
-      haskey(parent_table_canon, parent) && continue
-      parent_table_canon[parent] = _sqlite_canonical_table_name(db, parent)
+      haskey(parent_canon, parent) || (parent_canon[parent] = _sqlite_canonical_table_name(db, parent))
     end
   end
 
+  columns = OrderedDict{String, ColumnSpec}()
   for col_row in eachrow(cols)
-    col_name = col_row.name
-    col_type = col_row.type |> uppercase
-    # Handle types with length/precision like VARCHAR(255)
-    base_type = split(col_type, '(')[1] |> strip
-    
-    nullable = col_row.notnull == 0
-    default_val = ismissing(col_row.dflt_value) ? nothing : col_row.dflt_value
+    col_name = String(col_row.name)
+    raw_type = uppercase(String(strip(String(something(col_row.type, "")))))
+    ctype = parse_canonical_type(raw_type, db)
     is_pk = col_row.pk > 0
-    
-    # #409: the relational arm runs BEFORE the generic primary-key arms. It used to run after, so a
-    # column that is both a PRIMARY KEY and a FOREIGN KEY came back as a bare `IDField` with the
-    # relation silently DISCARDED — `inspectdb` regenerated such a model with no foreign key at all.
-    # `PRAGMA foreign_key_list` names the child column in `from`, which is what `fk_map` is keyed on.
-    #
-    # The arm ORDER mirrors the PostgreSQL reader exactly — uuid key, then relation, then sized
-    # textual key, then the `IDField` fallback — and that is not cosmetic. An earlier revision of
-    # this fix hoisted the FK check above the WHOLE `is_pk` block, which put it above the UUID arm
-    # too, so a `UUID PRIMARY KEY REFERENCES …` column read back as an integer `ForeignKey` here
-    # while PostgreSQL still read it as a `UUIDField`. Two readers disagreeing about one schema is
-    # the exact failure mode this issue exists to remove, so they are kept in lockstep.
-    fk_hit = haskey(fk_map, col_name)
-
-    if is_pk && base_type == "UUID"
-      # #334: a UUID primary key is the ONE non-integer pk type this reader could safely reconstruct
-      # before #409 widened the set, mirroring the same carve-out in the PostgreSQL reader.
-      #
-      # UNREACHABLE today for a table PormG itself created: `sqlite_type_map_reverse` renders every
-      # `UUIDField` column — pk or not — as bare `TEXT`, never as a literal `UUID` column type. This
-      # branch exists for a hand-written or foreign SQLite schema that DOES declare a column type as
-      # `UUID` (SQLite accepts any type name), and costs nothing to keep.
-      field = _field_or_drop_default(table_name, col_name,
-          _normalize_sqlite_default(default_val, :UUIDField)) do d
-        Models.UUIDField(null=false, primary_key=true, default=d)
-      end
-
-    elseif fk_hit
-        fk_info = fk_map[col_name]
-        # Same #292 gap as the DDL-regex path above: `default_val` was in scope and used two
-        # branches down, but never passed to the FK. This is the path the live
-        # `convert_schema_to_models(::PormGSQLite)` actually reaches. The FK column's declared type
-        # drives normalization the same way a non-FK column's does.
-        fk_type_sym = get(type_map, base_type, :TextField)
-        # #390: the CANONICAL parent table, not the `REFERENCES` spelling `PRAGMA foreign_key_list`
-        # hands back. Both `.to` and `to_table` are derived from it, so a `REFERENCES DRIVER(id)`
-        # against a table created as `driver` records `Driver` / `driver` — matching what the
-        # PostgreSQL reader has always produced, and what `_plan_inspectdb_bindings!` needs to
-        # resolve the target to its imported model.
-        fk_parent_table = get(parent_table_canon, String(fk_info.table), String(fk_info.table))
-        # #360: `.to` is the target's BINDING and `to_table` the physical parent table — see the
-        # `convertSQLToModel(::String)` path above for why both are needed. `fk_info.to` here is the
-        # parent COLUMN from `PRAGMA foreign_key_list`, unrelated to a field's `.to`.
-        fk_binding = Models._model_binding_name(fk_parent_table)
-
-        if is_pk
-          # A pk-fk reconstructs as a `OneToOneField`, the SAME type the PostgreSQL reader produces
-          # for it, and the two readers must agree or #409 simply moves rather than closes: whichever
-          # type a model DECLARES, the other backend's reader would report the other one — so the two
-          # backends would disagree about one schema, which is the defect this issue is about. A
-          # per-backend answer is not an option.
-          #
-          # The CHURN half of that argument is no longer live: the planner used to see two different
-          # structs, short-circuit `describes_same_column` on `_is_relational_field`, and push
-          # `:type` on every `makemigrations` — a full table rebuild here, forever. #437 fixed that
-          # in the planner, and #507 removed the possibility: both sides now compile to a
-          # `ColumnSpec` (`migrations/column_spec.jl`), where an FK and a one-to-one over the same
-          # parent are the same column. The alignment below now rests on reader FIDELITY and #409
-          # symmetry alone. That is reason
-          # enough: a reader should report what the schema says regardless of what the diff tolerates.
-          #
-          # A PRIMARY KEY needs no uniqueness lookup: it is unique by definition, so `is_pk` is a
-          # signal #318 never had to weigh. And since #408 an `sOneToOneField` renders the
-          # referenced key's type and carries its constraint, so emitting one here is no longer
-          # worse than a plain `ForeignKey` — which was #318's actual objection.
-          #
-          # The UNIQUE non-key FK is the `elseif` below, and it is the SAME decision taken for the
-          # same reason (#417). #318 deferred it on the grounds that an `sOneToOneField` could not
-          # be materialized; #408 removed that objection, and leaving the divergence in place cost
-          # exactly what the arm below now documents. Both arms must keep agreeing with the
-          # PostgreSQL reader's `fk_is_o2o = unique || primary_key`, or #409 merely relocates.
-          #
-          # `null=false`: a PRIMARY KEY column is conceptually NOT NULL, and all three sibling key
-          # arms hardcode it. SQLite is the one engine that actually permits NULL in a non-INTEGER
-          # PRIMARY KEY, so for that (foreign-schema only) shape this reports a NOT NULL the column
-          # does not have. Accepted deliberately: the alternative is a
-          # `OneToOneField(primary_key=true, null=true)` that no sane declaration matches, which
-          # trades a silent divergence for permanent churn.
-          field = Models.OneToOneField(fk_binding; pk_field=fk_info.to,
-              primary_key=true, unique=true, null=false,
-              on_delete=_normalize_introspected_on_delete(fk_info.on_delete),
-              default=_fk_default_or_warn(_normalize_sqlite_default(default_val, fk_type_sym), table_name, col_name))
-        elseif col_name in unique_cols
-          # #417: a UNIQUE non-key foreign key IS a one-to-one, and the PostgreSQL reader has always
-          # reported it as one (`fk_is_o2o = unique || primary_key`). SQLite withheld it under #318
-          # because `Dialect._get_column_type` had no `sOneToOneField` branch and the inline
-          # `FOREIGN KEY … REFERENCES` clause was gated on `isa sForeignKey`, so returning one made
-          # the round trip strictly WORSE: `INTEGER` + a constraint became `TEXT` + none. #408 fixed
-          # both halves, which is what makes this reversible.
-          #
-          # Leaving it diverged was not free. `Models._compare_model_field` compared attribute-wise
-          # and the two structs have identical field-name sets, so a declared `OneToOneField` against
-          # a live `ForeignKey` compared EQUAL and the planner's fast path returned early — but
-          # `Dialect.describes_same_column` answered `false` for any relational field, so the moment
-          # any OTHER column in the table changed, the detailed loop ran, `typeof` differed, and
-          # `:type` swept this column into a full SQLite table rebuild it had nothing to do with.
-          #
-          # PAST TENSE since #437, and unrepresentable since #507: the planner no longer compares
-          # field structs at all — both sides compile to a `ColumnSpec` (`migrations/column_spec.jl`)
-          # in which the FK/O2O pair over one parent is one column — so that sweep cannot happen for
-          # EITHER reader's output. This arm stays as it is regardless — it is here so the two readers describe one
-          # schema the same way (#409), which was always the stronger half of the argument.
-          #
-          # No `primary_key=` here: the `is_pk` arm above already claimed that case, so this arm is
-          # reachable only for a NON-key foreign key — the same reasoning the PostgreSQL reader
-          # records on its own `ForeignKey` branch.
-          #
-          # `unique_cols` comes from `_sqlite_single_column_unique_columns`, computed before this
-          # loop; it counts only single-column UNIQUE CONSTRAINTS (`pragma_index_list.origin = 'u'`),
-          # matching the PostgreSQL side's `contype = 'u' AND array_length(conkey, 1) = 1`. Passing
-          # `unique=true` explicitly (rather than leaning on the constructor default) makes this arm
-          # readable next to the `is_pk` one, and turns the post-loop `field.unique` fixup below into
-          # a no-op for this field.
-          field = Models.OneToOneField(fk_binding; pk_field=fk_info.to, unique=true, null=nullable,
-              on_delete=_normalize_introspected_on_delete(fk_info.on_delete),
-              default=_fk_default_or_warn(_normalize_sqlite_default(default_val, fk_type_sym), table_name, col_name))
-        else
-          field = Models.ForeignKey(fk_binding; pk_field=fk_info.to,
-              on_delete=_normalize_introspected_on_delete(fk_info.on_delete), null=nullable,
-              default=_fk_default_or_warn(_normalize_sqlite_default(default_val, fk_type_sym), table_name, col_name))
-        end
-        field.to_table = fk_parent_table
-
-    elseif is_pk && base_type in ("TEXT", "VARCHAR", "CHAR") && occursin("(", col_type)
-        # #409: a natural key declared with a length — what `CharField(primary_key=true,
-        # max_length=n)` renders as. Flattened to `IDField` it could never equal the model that
-        # declared it, so `makemigrations` proposed the same alteration forever, and on SQLite that
-        # alteration is the full CREATE-new/INSERT-SELECT/DROP/RENAME table rebuild.
-        #
-        # All three spellings, not just `TEXT`: `sqlite_type_map` accepts `TEXT`, `VARCHAR` and
-        # `CHAR` for exactly the foreign-schema population this branch serves (PormG's own DDL only
-        # ever emits `TEXT(n)`), and the non-pk arm below already honours all three. Gating on `TEXT`
-        # alone left a `VARCHAR(20) PRIMARY KEY` flattened here while PostgreSQL reconstructed it —
-        # the two-readers-disagree shape again.
-        #
-        # The `(n)` is REQUIRED, for the same #325 reason as the non-pk arm: `CharField()` invents
-        # `max_length = 250`, which renders `TEXT(250)` and can never match a live bare `TEXT`. A
-        # LENGTHLESS textual key therefore still falls through to `IDField` — not because that is
-        # right, but because no PormG field type both accepts `primary_key` and carries no length
-        # (`TextField` does not accept it at all, so reconstructing one would yield a model with no
-        # key). PormG never emits such a column itself; only a hand-written or foreign schema can.
-        m_pk = match(r"\((\d+)\)", col_type)
-        field = _field_or_drop_default(table_name, col_name,
-            _normalize_sqlite_default(default_val, :CharField)) do d
-          Models.CharField(primary_key=true, null=false,
-              max_length = m_pk !== nothing ? parse(Int, m_pk.captures[1]) : 250,
-              default=d)
-        end
-
-    elseif is_pk
-        # In SQLite, INTEGER PRIMARY KEY often implies AUTOINCREMENT behavior. Correct BY
-        # CONSTRUCTION for the integer case since #408 retired `AutoField` — `IDField` is the only
-        # integer key type PormG has, so a declared key and an introspected one agree. Also the
-        # documented fallback for the shapes with nothing to reconstruct into: a lengthless textual
-        # key, and anything else a foreign schema declares.
-        field = Models.IDField(null=false, primary_key=true, auto_increment=(base_type == "INTEGER"))
-    else
-        type_sym = get(type_map, base_type, :TextField)
-        # #325: a BARE textual column carries no length, but `CharField()` INVENTS `max_length = 250`
-        # (models/fields.jl) — which then renders `TEXT(250)` and can never match the live `TEXT`.
-        # SQLite collapses UUIDField, JSONField, ImageField and TextField all onto bare `TEXT`, so
-        # every one of them read back as `CharField(250)` and churned forever. Only a declared `(n)`
-        # is a CharField here; a lengthless textual column is a TextField.
-        if type_sym == :CharField && !occursin("(", col_type)
-            type_sym = :TextField
-        end
-        # Handle decimal precision if present
-      # Width first, then ONE construction that carries it (#472). Assigning `max_length` after
-      # the fact bypasses `CharField`'s "a default must fit max_length" check, which let an
-      # over-long default reach the generated models file and throw at load. `type_sym` is already
-      # known here, so unlike the PostgreSQL arm this needs no probe.
-      m_len = type_sym == :CharField ? match(r"\((\d+)\)", col_type) : nothing
-      char_len = m_len === nothing ? nothing : parse(Int, m_len.captures[1])
-      field = _field_or_drop_default(table_name, col_name,
-          _normalize_sqlite_default(default_val, type_sym)) do d
-        char_len === nothing ? getfield(Models, type_sym)(null=nullable, default=d) :
-                               getfield(Models, type_sym)(null=nullable, default=d,
-                                                          max_length=char_len)
-      end
-        if type_sym == :BinaryField && haskey(byte_bounds, lowercase(col_name))
-            # Byte bound recovered from the CHECK clause — `BLOB` carries no length suffix, so it
-            # cannot come from `col_type` the way CharField's does (#296). Lower-cased on both
-            # sides: the CHECK may spell the column differently from its definition (#531).
-            field.max_length = byte_bounds[lowercase(col_name)]
-        end
+    nullable = col_row.notnull == 0
+    reference = nothing
+    if haskey(fk_map, col_name)
+      fk = fk_map[col_name]
+      parent = parent_canon[String(fk.table)]
+      reference = ForeignKeyRef(parent,
+                                format_model_name(Models._model_binding_name(parent)),
+                                String(fk.to),
+                                Models._foreign_key_on_delete_sql(_normalize_introspected_on_delete(fk.on_delete)))
     end
-    # #318: set post-construction, matching the `field.max_length = …` mutations just above — that
-    # avoids threading a kwarg through three different constructors.
-    #
-    # `!is_pk` is required, not defensive, on two independent counts: `sIDField` is the ONE immutable
-    # field struct (models/fields.jl), so `setfield!` would throw; and it already defaults
-    # `unique=true`, which must survive an `INTEGER PRIMARY KEY` rowid alias that has no backing index
-    # at all. Hence the rule everywhere here: only ever set TRUE, never clear it.
-    if !is_pk && col_name in unique_cols && hasfield(typeof(field), :unique) && !field.unique
-      field.unique = true
-    end
-    # #325: same treatment for `db_index`, and for the same three reasons `!is_pk` is required —
-    # sIDField is immutable, it already defaults `db_index=true`, and only ever setting TRUE keeps a
-    # ForeignKey's constructor-forced `db_index` intact.
-    if !is_pk && haskey(indexed_cols, col_name) && hasfield(typeof(field), :db_index) && !field.db_index
-      field.db_index = true
-    end
-    fields_dict[Symbol(col_name)] = field
+    arm = _key_arm(is_pk, ctype, reference !== nothing)
+    # `unique`, per arm, as the old reader built the field: `IDField` and a pk-fk `OneToOneField`
+    # are unique by construction; any other key is what its constructor defaults to (`false` — a
+    # PRIMARY KEY's own autoindex has `origin = 'pk'`, never `'u'`); a non-key column is unique when
+    # the pragma lists a single-column UNIQUE constraint on it (#318).
+    spec_unique = (arm === :id_pk || (arm === :reference && is_pk)) ? true :
+                  (is_pk ? false : col_name in unique_cols)
+    identity = arm === :id_pk ? ColumnIdentity(false, false, true) : nothing
+    probe = ColumnSpec(col_name, ctype, is_pk ? false : nullable, is_pk, spec_unique, NoDefault(),
+                       reference, _reader_checks(get(checks, lowercase(col_name), CheckKind[]), ctype),
+                       identity, raw_type)
+    default_val = ismissing(col_row.dflt_value) ? nothing : col_row.dflt_value
+    columns[col_name] = _finish_column_spec(table_name, probe, default_val, db)
   end
-
-  model_resp = Models.Model(table_name, fields_dict)
-  # The planner reads `cache["index"]` to name the index it must DROP when a model stops declaring
-  # `db_index`. PostgreSQL's reader has always populated it; SQLite's never did, which was harmless
-  # only while `db_index` could not be true on this side (#325).
-  #
-  # #347: writes the one KEY rather than assigning the whole `cache` field. `_attach_composite_indexes!`
-  # below writes a second key, and while the current order happens to be safe, a whole-field assign
-  # makes the two writers order-dependent for no reason. Defensive, not a bug fix.
-  if !isempty(indexed_cols)
-    model_resp.cache["index"] = indexed_cols
-  end
-  _attach_composite_indexes!(model_resp, composite_idxs)
-  return model_resp
+  indexes = Dict{String, Union{String, Nothing}}(k => v for (k, v) in indexed_cols)
+  return LiveTable(table_name, columns, indexes, composite)
 end
+
+"""
+    convertSQLToModel(db::PormGSQLite, table_name) -> PormGModel
+
+The model `inspectdb` writes for one live SQLite table: `_sqlite_live_table` compiled
+through `model_from_live`. The table name may be spelled in any case (#531); the model is
+named by the catalog spelling.
+"""
+convertSQLToModel(db::PormGSQLite, table_name::String)::PormGModel =
+  model_from_live(_sqlite_live_table(db, table_name), db)
 
 """
     _is_ignored_table(table_name, ignore_table) -> Bool
@@ -1006,26 +828,39 @@ were wrong in different directions:
 _is_ignored_table(table_name, ignore_table)::Bool =
   any(ignored -> startswith(String(table_name), ignored), ignore_table)
 
-function convert_schema_to_models(db::PormGSQLite; ignore_table::Vector{String} = sqlite_ignore_schema, include_table::Union{Vector{String}, Nothing} = nothing)
-  # Always skip consumer-registered framework tables (e.g. Nitro's), on top of the caller's list.
-  ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
-  # Query the sqlite_master table to get the table names
-  tables_query = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
-  tables = fetch(db, tables_query) |> DataFrame
-  
-  models_array::Vector{PormGModel} = []
-  for row in eachrow(tables)
-    table_name = row.name
-    # If include_table is specified, only include those tables
-    if include_table !== nothing
-      !any(included -> table_name == included, include_table) && continue
-    end
-    _is_ignored_table(table_name, ignore_table) && continue
+"""
+    read_live_schema(db; ignore_table, include_table) -> Vector{LiveTable}
 
-    push!(models_array, convertSQLToModel(db, table_name))
-  end  
-  return models_array
+Every user table of the live database as a `LiveTable` — the whole of what `makemigrations`
+reads (#522). `convert_schema_to_models` is this plus `model_from_live` per table,
+for `inspectdb`. Filtering is the same on both engines: `include_table` keeps only those names, and
+`ignore_table` plus the consumer-registered `_EXTRA_IGNORE_TABLES` skip framework tables by prefix
+(#325).
+"""
+function read_live_schema(db::PormGSQLite; ignore_table::Vector{String} = sqlite_ignore_schema,
+                          include_table::Union{Vector{String}, Nothing} = nothing)::Vector{LiveTable}
+  ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
+  tables = fetch(db, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';") |> DataFrame
+  out = LiveTable[]
+  for row in eachrow(tables)
+    table_name = String(row.name)
+    include_table !== nothing && !any(included -> table_name == included, include_table) && continue
+    _is_ignored_table(table_name, ignore_table) && continue
+    push!(out, _sqlite_live_table(db, table_name))
+  end
+  return out
 end
+
+"""
+    convert_schema_to_models(db; ignore_table, include_table) -> Vector{PormGModel}
+
+The models `inspectdb` writes for the live database: `read_live_schema` compiled through
+`model_from_live`, table by table. `makemigrations` does not call this any more — it diffs
+the `LiveTable`s directly — so a struct chosen here is a choice about the generated file, never
+about the plan.
+"""
+convert_schema_to_models(db::PormGSQLite; kwargs...)::Vector{PormGModel} =
+  PormGModel[model_from_live(table, db) for table in read_live_schema(db; kwargs...)]
 
 # ---
 # PostgreSQL Introspection
@@ -1189,40 +1024,27 @@ Convert the database schema to models.
 # Description
 This function retrieves the database schema and converts it to models. It collects all create instructions and skips tables specified in the `ignore_table` vector. The function prints the type of each schema and returns the schema for debugging purposes. It stops processing after the fifth schema.
 """
-function convert_schema_to_models(db::PormGPostgres; ignore_table::Vector{String} = postgres_ignore_table, include_table::Union{Vector{String}, Nothing} = nothing)
-  # Always skip consumer-registered framework tables (e.g. Nitro's), on top of the caller's list.
+function read_live_schema(db::PormGPostgres; ignore_table::Vector{String} = postgres_ignore_table,
+                          include_table::Union{Vector{String}, Nothing} = nothing)::Vector{LiveTable}
   ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
-  # Get all schema
   schemas = get_database_schema(db)
   # #347: composite indexes come from their own schema-wide query — see `_pg_composite_indexes` for
   # why they cannot ride along on the dump above. Keyed by physical table name.
-  composite_idx_by_table = _pg_composite_indexes(db)
-  # Colect all create instructions
-
-  # println("-----------------------------------------")
-  
-  models_array::Vector{PormGModel} = []
-  for (index, schema) in enumerate(eachrow(schemas))
-    # println(schema |> typeof)
-    # println(schema)
-    # If include_table is specified, only include those tables
-    if include_table !== nothing
-      !any(included -> schema.table_name == included, include_table) && continue
-    end
-    _is_ignored_table(schema.table_name, ignore_table) && continue
-    # println(typeof(schema), " ", convertSQLToModel(schema) |> println)
-
-    model = convertSQLToModel(schema)
-    # #347: attach this table's composite indexes. `model.name` IS the live table name on this path,
-    # which is the key `_pg_composite_indexes` groups by.
-    _attach_composite_indexes!(model, get(composite_idx_by_table, String(model.name), Pair{String, Vector{String}}[]))
-    push!(models_array, model)
-    # index > 4 && break
+  composite_by_table = _pg_composite_indexes(db)
+  out = LiveTable[]
+  for schema in eachrow(schemas)
+    table_name = String(schema.table_name)
+    include_table !== nothing && !any(included -> table_name == included, include_table) && continue
+    _is_ignored_table(table_name, ignore_table) && continue
+    table = _pg_live_table(schema)
+    push!(out, LiveTable(table.name, table.columns, table.indexes,
+                         get(composite_by_table, table.name, Pair{String, Vector{String}}[])))
   end
-  # println(models_array)
-  # @pormg_debug 
-  return models_array
+  return out
 end
+
+convert_schema_to_models(db::PormGPostgres; kwargs...)::Vector{PormGModel} =
+  PormGModel[model_from_live(table, db) for table in read_live_schema(db; kwargs...)]
 
 function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} = "public", table::Union{String, Nothing} = nothing)
   # ONE ROUND TRIP. There used to be a `SELECT split_part(version(), ' ', 2)` probe here, whose only
@@ -1763,8 +1585,8 @@ clause**, not as `CREATE TABLE` spelled it. SQLite identifiers are case-insensit
 is legal and introspects as `DRIVER` against a table the catalog calls `driver`. Resolving that back
 here is what lets the live-vs-declared foreign-key comparison be EXACT on both engines: the
 PostgreSQL reader has always returned the catalog spelling (`cf.relname` in `get_database_schema`),
-so this reader was the one producer of a non-canonical name. Before #390, `Models._compare_field_foreign_key`
-absorbed the difference by folding case unconditionally — which was safe here and wrong on
+so this reader was the one producer of a non-canonical name. Before #390, the planner's same-parent
+comparison absorbed the difference by folding case unconditionally — which was safe here and wrong on
 PostgreSQL, where `Driver` and `driver` can be two distinct tables.
 
 The fold happens **in SQL** (`COLLATE NOCASE`), deliberately not in Julia. Julia's `lowercase` is
@@ -2735,9 +2557,10 @@ end
 # PostgreSQL schema-query decoding (#455)
 #
 # `get_database_schema(::PormGPostgres)` transports every aggregate as `json_agg(...)::text`. The
-# three helpers below are the whole decode: one to parse an aggregate, one to normalize a
-# `format_type` spelling into a `postgres_type_map` key, one to undo `pg_get_expr`'s rendering of a
-# DEFAULT. They replaced a parse that split the same facts out of a rendered string, where the
+# two helpers below are the whole decode: one to parse an aggregate, one to undo `pg_get_expr`'s
+# rendering of a DEFAULT; the `format_type` spelling goes to `parse_canonical_type` as it is (#522),
+# which retired the alias table and the type-map normaliser that used to sit between them. They
+# replaced a parse that split the same facts out of a rendered string, where the
 # delimiters were `", "` and `" "` — both legal inside the identifiers and DEFAULT expressions they
 # delimited.
 # ---
@@ -2758,42 +2581,6 @@ function _pg_json(row, key::Symbol)
   (key in propertynames(row) && !ismissing(row[key])) || return nothing
   return JSON.parse(String(row[key]))
 end
-
-# `format_type` spellings that are not themselves `postgres_type_map` keys (src/constants.jl). Only
-# what PormG can CREATE, plus the datetime variants a foreign schema carries. Anything else falls
-# through to the first-word rule in `_pg_split_format_type`, which is what the old
-# `split(col_rest, " ")[1]` did — so an unknown type still degrades to TextField.
-const _PG_FORMAT_TYPE_ALIASES = Dict{String, String}(
-  "character varying"           => "varchar",
-  # Retires a `replace(col, "double precision" => "double_precision")` that ran over the whole
-  # rendered column string, and so also rewrote a column NAMED `double precision`.
-  "double precision"            => "double_precision",
-  "timestamp with time zone"    => "timestamp",
-  "timestamp without time zone" => "timestamp",
-  "time with time zone"         => "time",
-  "time without time zone"      => "time",
-)
-
-# (type-map key, modifier) from one `format_type` result.
-#
-# The modifier is the FIRST parenthesized group and is REMOVED rather than assumed to trail:
-# `format_type` renders a datetime precision in the MIDDLE — `timestamp(3) without time zone` — so
-# a trailing-anchored match would miss it and a global one would corrupt the base name. The caller
-# then applies the modifier BY TYPE, which is what stops that `(3)` becoming a `max_length`.
-function _pg_split_format_type(raw::AbstractString, type_map::Dict{String, Symbol})
-  s = strip(raw)
-  m = match(r"\(([^)]*)\)", s)
-  modifier = m === nothing ? nothing : String(m.captures[1])
-  base = lowercase(strip(m === nothing ? s : replace(s, r"\([^)]*\)" => "", count = 1)))
-  key = get(_PG_FORMAT_TYPE_ALIASES, base, base)
-  # `interval day to second` must stay a DurationField, exactly as `col_parts[1]` made it.
-  if !haskey(type_map, key)
-    first_word = String(first(split(key, ' ')))
-    haskey(type_map, first_word) && (key = first_word)
-  end
-  return (key, modifier)
-end
-
 
 _pg_single_quoted_literal(s::AbstractString)::Bool = _quoted_literal(s, '\'')
 
@@ -2861,345 +2648,94 @@ function _pg_clean_default(expr)::Union{String, Nothing, _ExpressionDefault}
 end
 
 
-function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_map::Dict{String, Symbol} = postgres_type_map)
-  table_name = row[:table_name]
-  columns = something(_pg_json(row, :columns), Any[])
+"""
+    _pg_live_table(row) -> LiveTable
 
-  # Initialize fields dictionary. Ordered (#544): `columns` is aggregated `ORDER BY a.attnum` by the
-  # schema query above, i.e. in PHYSICAL column order, and a plain `Dict` threw that away — so a
-  # model generated by `inspectdb` described the right columns in an order the database never had.
-  fields_dict = OrderedDict{String, PormGField}()
+The PostgreSQL reader (#522): one row of `get_database_schema(::PormGPostgres)` — a table with its
+JSON-transported aggregates (#455) — compiled straight into a `LiveTable`. The slot-by-slot
+contract is `_sqlite_live_table`'s, read from the catalog facts this engine has instead:
+`format_type` for the type, `attnotnull`, the single-column `contype = 'u'` set, the `>= 0` and
+`octet_length` CHECKs the schema query already isolates, `attidentity` for the identity of an
+integer key, and the single-column non-unique index list for `indexes`. Composite indexes are
+attached by `read_live_schema`, which holds the schema-wide query for them (#347).
 
-  # Extract primary key constraints. `primary_keys` is missing for keyless tables (e.g. Lap_times,
-  # Pit_stops, which have no IDField).
-  #
-  # No de-quoting anywhere in this function since #455. The schema query used to aggregate every
-  # identifier through `quote_ident`, so each of these sites had to undo it with `_unquote_ident`,
-  # and the one aggregate that was RAW (`index_columns`) had to be exempted — an asymmetry that had
-  # to be explained at each site to stop someone "fixing" it. JSON carries a name as a string, not
-  # as a SQL identifier, so every name below is already the physical one.
+The two readers must describe one schema the same way (#409): the key arms and their order are
+`_key_arm`'s on both, `unique` and `null` follow the same per-arm rules, and the same coercion
+lands each default on the value a declaration stores.
+"""
+function _pg_live_table(row::DataFrameRow)::LiveTable
+  engine = _PostgresEngine()
+  table_name = String(row[:table_name])
+  # `primary_keys` is missing for keyless tables. No de-quoting anywhere since #455: JSON carries a
+  # name as a string, not as a SQL identifier, so every name here is already the physical one.
   pk_set = Set{String}(String.(something(_pg_json(row, :primary_keys), Any[])))
-
-  # Extract foreign key constraints
-  # Widened past `(table, pk)` for #292 to carry the referential action, which the schema query
-  # never selected — so every introspected FK claimed no ON DELETE and a migration generated from
-  # it silently dropped the action from the schema.
+  # Each fact reads off the object it belongs to (#455); `on_delete` degrades to "none recorded"
+  # rather than throwing if absent, per the reader's policy of never aborting a schema read over one
+  # field. `something(...)` because JSON null parses to `nothing`, which `String` has no method for.
   fk_map = Dict{String, NamedTuple{(:table, :pk, :on_delete), Tuple{String, String, Union{String, Nothing}}}}()
   for fk in something(_pg_json(row, :foreign_keys), Any[])
-    # #455: each fact reads off the object it belongs to. This used to zip four parallel `split`
-    # results, and #415's work went into making that pairing SOUND — one entry per foreign key, all
-    # six aggregates fed the same row stream in the same order. It was still only sound while every
-    # aggregate produced the same COUNT, and a `, ` in a parent table, child column or referenced
-    # column broke exactly that: `zip` truncates to the shortest, so one torn entry shifted every
-    # later foreign key onto a different parent. There is now no order to preserve.
-    #
-    # `on_delete` degrades to "none recorded" rather than throwing if it is absent or null. The
-    # query always emits it (`confdeltype` is NOT NULL), so this is belt-and-braces for the reader's
-    # stated policy — introspection never aborts a whole schema read over one field it cannot read
-    # — rather than a shape any producer emits. `something(...)` because JSON null parses to
-    # `nothing`, which `String` has no method for.
     fk_map[String(fk["column"])] =
-      (table = String(fk["table"]),
-       pk = String(fk["pk"]),
+      (table = String(fk["table"]), pk = String(fk["pk"]),
        on_delete = _pg_confdeltype_to_on_delete(something(get(fk, "on_delete", ""), "")))
   end
-
-  # Extract index information — physical column ⇒ index name, for the single-column secondary
-  # indexes the `indexes` CTE keeps. Both halves are the raw physical name (#455); the value is
-  # re-quoted by `_drop_index` on the way out. A mixed-case name (#57) used to match neither half.
-  index_map = Dict{String, String}()
+  # Physical column ⇒ index name, for the single-column secondary indexes the `indexes` CTE keeps;
+  # the value is what `_drop_index` needs (#325, #455).
+  indexes = Dict{String, Union{String, Nothing}}()
   for ix in something(_pg_json(row, :indexes), Any[])
-    index_map[String(ix["column"])] = String(ix["name"])
+    indexes[String(ix["column"])] = String(ix["name"])
   end
 
-  # Parse each column definition
-  for col in columns
-      # #455: the name is a field, not a prefix to be peeled off a rendered string. #414 recovered
-      # a name containing a SPACE by scanning `quote_ident`'s self-delimiting quoting; that helper
-      # is gone, because a name can no longer be torn in the first place — and neither can the
-      # DEFAULT expression that used to share the same string. There is no degrade path and no
-      # warning here any more: under JSON no legal schema produces an entry this cannot read, so a
-      # malformed aggregate is a PormG bug and should surface as one. `makemigrations` already wraps
-      # this whole read in a try/catch and reports it as "no plan generated".
-      #
-      # `name` and `type` are REQUIRED, and that is the one place this reader's degrade policy
-      # stops: an entry without them describes no column, so there is nothing to degrade TO and a
-      # `KeyError` is the honest answer. Every OPTIONAL key below is read with `get` and a default,
-      # so a row that omits one still imports — which matters because a boolean read without a
-      # default fails ASYMMETRICALLY (`non_negative_check` is only consulted for an `integer`
-      # column, so the same malformed row would import a `text` column fine and die on the next one).
-      col_name = String(col["name"])
-      col_type, type_modifier = _pg_split_format_type(String(col["type"]), type_map)
-      generated::Bool = false
-      max_length = nothing
-      max_digits = nothing
-      decimal_places = nothing
-      byte_limit = get(col, "byte_limit", nothing)
-
-      # Detect if the column is indexed. #325: this probed a `Dict{String,String}` with a `Symbol`
-      # key, which `haskey` never matches — so `db_index` was a hard `false` for every plain
-      # PostgreSQL column, and every `db_index=true` field re-proposed its own CREATE INDEX on every
-      # `makemigrations`. Both sides are the raw physical name and neither is normalized on the way
-      # in, so the lookup is an exact match by construction (#455); it used to depend on the reader
-      # de-quoting `columns` and NOT de-quoting `index_columns`, which was the #389 asymmetry.
-      db_index = haskey(index_map, col_name)
-
-      @pormg_debug false
-
-      # The type modifier is applied BY TYPE, not by pattern (#455). `format_type` renders a
-      # modifier for several types that mean entirely different things by it, and the old regexes
-      # matched on the rendered string — so `timestamp(3) without time zone` was one `(\d+)` away
-      # from being read as a `max_length`. Dispatching on the normalized type name instead means an
-      # unknown parameterized type carries its modifier nowhere rather than somewhere wrong.
-      if type_modifier !== nothing
-        if col_type == "varchar" || col_type == "character"
-          max_length = tryparse(Int, strip(type_modifier))
-        elseif col_type == "numeric" || col_type == "decimal"
-          # `numeric(p)` with the scale omitted is legal and leaves `decimal_places` unset, so both
-          # halves must parse before the type is narrowed.
-          scale_parts = split(type_modifier, ',')
-          if length(scale_parts) == 2
-            max_digits = tryparse(Int, strip(scale_parts[1]))
-            decimal_places = tryparse(Int, strip(scale_parts[2]))
-            if max_digits !== nothing && decimal_places !== nothing
-              col_type = "decimal"
-            end
-          end
-        end
-      end
-      # A BinaryField's byte bound lives in its CHECK, not in the column type (#296).
-      if col_type == "bytea" && byte_limit !== nothing
-        max_length = Int(byte_limit)
-      end
-
-      # Determine field type. format_type() reports a PositiveIntegerField column as plain
-      # "integer", so the schema query reports the `>= 0` CHECK separately — that is what tells a
-      # PositiveIntegerField apart from an IntegerField on round-trip.
-      field_type = getfield(Models, haskey(type_map, col_type) ? type_map[col_type] : :TextField)
-      if col_type == "integer" && get(col, "non_negative_check", false) === true
-        field_type = Models.PositiveIntegerField
-      end
-
-      # Determine field constraints. Every one of these is a FIELD READ since #455, where each used
-      # to be an `occursin` (or, for `unique` after #318, a token membership test) against the same
-      # string that carried the column's DEFAULT. That put arbitrary user text inside the thing being
-      # scanned: `DEFAULT 'NOT NULL'::text` on a nullable column read back `null=false`, and
-      # `DEFAULT 'a UNIQUE b'::text` fabricated a unique constraint that then churned forever.
-      primary_key::Bool = col_name in pk_set
-      unique::Bool = get(col, "unique", false) === true
-      not_null::Bool = get(col, "notnull", false) === true
-      default_value = _pg_clean_default(get(col, "default", nothing))
-
-      # A bytea DEFAULT survives the cleanup above as PostgreSQL's hex text (`\x0102`), and
-      # `BinaryField(default = <String>)` raises — so without this, introspecting any BLOB column
-      # that has a DEFAULT would abort the schema read (#296). Same import-layer normalization as
-      # `_normalize_sqlite_default`; an unrecognized literal degrades to "no default".
-      #
-      # `isa AbstractString` rather than `!== nothing` (#475): the cleaner now also returns an
-      # `_ExpressionDefault`, which `_pg_bytea_literal_bytes(::AbstractString)` has no method for.
-      # A real bytea default is a QUOTED literal and still reaches this line; `DEFAULT
-      # decode('01','hex')` is an expression and now correctly skips it, to be dropped and reported
-      # by `_field_or_drop_default` like any other expression.
-      if default_value isa AbstractString && field_type === Models.BinaryField
-        default_value = _pg_bytea_literal_bytes(default_value)
-      end
-      if primary_key
-        # `pg_attribute.attidentity` verbatim (#455): 'a' = GENERATED ALWAYS, 'd' = GENERATED BY
-        # DEFAULT, '' = neither. This replaces two GENE_*_IDENTITY marker strings the schema query
-        # appended and this loop scanned for with `occursin`.
-        identity_code = something(get(col, "identity", ""), "")
-        generated = identity_code == "a" || identity_code == "d"
-        generated_always = identity_code == "a"
-      end
-
-      # Create field instance
-      field = if primary_key && col_type == "uuid"
-          # #334: a UUID primary key is the ONE non-integer pk type this reader can safely
-          # reconstruct as its real field type. Force-converting EVERY primary key to IDField
-          # (the `elseif primary_key` branch below) silently discarded it, so `makemigrations`
-          # proposed re-typing it back to bigint on every single run against a model that never
-          # declared an IDField at all. No existing fixture exercised a UUID primary key before
-          # #334, which is why this went unnoticed. Deliberately NOT generalized to "any
-          # non-integer pk": `test_introspection_guards.jl` pins IDField as the correct fallback
-          # for a VARCHAR/NUMERIC primary key specifically BECAUSE those can crash otherwise — a
-          # `NUMERIC` pk parsed as `DecimalField(primary_key=true)` refuses construction outright
-          # (`models/fields.jl`, "DecimalField cannot be used as a Primary Key"), and a VARCHAR pk
-          # would try to assign `max_length` onto whatever field resulted. `UUIDField` carries
-          # neither hazard: no `max_length`/`max_digits`, and `primary_key=true` is always legal.
-          # `db_index` takes the COMPUTED local, not a literal `true`. The `indexes` CTE excludes
-          # primary-key indexes (`NOT i.indisprimary`) so it reads back `false` — which is exactly
-          # what `UUIDField`'s own constructor defaults to, and therefore what a plain
-          # `UUIDField(primary_key=true)` declares. (The rule is "agree with the field type's own
-          # constructor default"; only `IDField` defaults `db_index=true`, so only its arm may pass
-          # the literal. Passing `true` here manufactured a permanent disagreement on PostgreSQL
-          # while the SQLite UUID arm, which passes nothing, converged — one schema, two answers.)
-          #
-          # `unique` is the COMPUTED local variable here, deliberately NOT the literal `true` the
-          # IDField branch hardcodes. IDField's own constructor defaults `unique=true`, so hardcoding
-          # it there always agrees with a plain `IDField()` declaration; UUIDField's constructor
-          # defaults `unique=false` (uniqueness on a pk column comes from the PRIMARY KEY constraint
-          # itself, not a separate `UNIQUE` one), so a declared `UUIDField(primary_key=true, ...)`
-          # with no explicit `unique=true` would otherwise permanently disagree with a hardcoded
-          # `true` here — `:unique` is a schema fact the column IR compares (it is a `ColumnSpec`
-          # field, not a `NON_DB_ATTRS` entry), so that mismatch alone would keep
-          # `makemigrations` proposing an alteration regardless of the `:auto_add` exemption below.
-          _field_or_drop_default(table_name, col_name, default_value) do d
-            Models.UUIDField(primary_key=true, unique=unique, null=false, db_index=db_index, default=d)
-          end
-      elseif haskey(fk_map, col_name)
-        # #409: this branch now runs BEFORE the generic `primary_key` fallback below. It used to run
-        # after, so a column that is both a PRIMARY KEY and a FOREIGN KEY — `OneToOneField(
-        # primary_key=true)`, the standard Django profile/extension-table shape, and legal per the
-        # importer's own list of key-capable types — was reconstructed as a bare `IDField` and the
-        # relation was DISCARDED. `inspectdb` regenerated such a model with no foreign key at all:
-        # not perpetual drift, actual loss. A key that is also a relation is a relation first; the
-        # `primary_key=` flag rides along.
-        fk_info = fk_map[col_name]
-        # #360: `.to` is the target's BINDING (via `_model_binding_name`, the single derivation
-        # `_resolve_target_model` has to agree with) and `to_table` the physical parent table — see
-        # the `convertSQLToModel(::String)` path in this file for why both are needed.
-        fk_parent_table = String(fk_info.table)
-        fk_table = Models._model_binding_name(fk_parent_table)
-        fk_column = fk_info.pk
-        # #292: `on_delete` is now carried (it was never even queried), and `default_value` goes
-        # through the shared failure policy — this branch passed it unguarded, so a column default
-        # that cannot be an Int64 raised FieldValidationError from inside introspection.
-        # `OneToOneField` had the identical omission and is fixed with `ForeignKey`.
-        fk_default = _fk_default_or_warn(default_value, table_name, col_name)
-        fk_on_delete = _normalize_introspected_on_delete(fk_info.on_delete)
-        # A PRIMARY KEY column is unique by construction, but PostgreSQL records that through the
-        # primary-key constraint rather than a separate UNIQUE one, so the `unique` local read off
-        # the column markers is `false` for it. Treat the key as the O2O signal in that case: a
-        # one-to-one IS "the FK is also unique", and a pk-fk is the strongest form of it.
-        fk_is_o2o = unique || primary_key
-        fk_field = if fk_is_o2o
-          Models.OneToOneField(fk_table, pk_field=fk_column, primary_key=primary_key, unique=true,
-              null=!not_null, default=fk_default, on_delete=fk_on_delete, db_index=true)
-        else
-          # No `primary_key=` here: `fk_is_o2o` is `unique || primary_key`, so this branch is only
-          # reachable for a NON-key foreign key. Passing it would read as though a plain `ForeignKey`
-          # can be a key on PostgreSQL, which is precisely the per-backend divergence #409 is about.
-          Models.ForeignKey(fk_table, pk_field=fk_column,
-              null=!not_null, default=fk_default, on_delete=fk_on_delete, db_index=true)
-        end
-        # Set on BOTH branches — a plain `ForeignKey` needs `to_table` just as much as an
-        # `OneToOneField` does. (The SQLite reader emits `OneToOneField` for the same two shapes
-        # as this one since #409 and #417, so the slot is not PostgreSQL-only either.)
-        fk_field.to_table = fk_parent_table
-        fk_field
-      elseif primary_key && col_type == "varchar" && max_length !== nothing
-          # #409: a natural VARCHAR key — `matricula = CharField(primary_key=true)` over a legacy
-          # table — reconstructed as its real type instead of being flattened to `IDField`. Flattened,
-          # the declared model could never equal what introspection reported: the planner's
-          # cross-type escape refused to equate two field types when either declared a key, so it fell
-          # to its final `else` and pushed `:type` on EVERY `makemigrations` — a full table rebuild
-          # each time on SQLite. (#507 replaced that escape with the column IR, which compares a key
-          # column by its type, `primary_key` and identity rather than declining to compare it — but
-          # a flattened `IDField` still differs from a declared `CharField` there, so reconstructing
-          # the real type remains the fix.)
-          #
-          # `max_length` is required, not defaulted: `CharField()` INVENTS `max_length = 250`
-          # (models/fields.jl), which would render `varchar(250)` and never match a `varchar(20)`
-          # column — the same #325 trap that made a bare `TEXT` read back as `CharField(250)`. The
-          # guard means a lengthless key falls through to the `IDField` fallback below rather than
-          # being reconstructed wrongly.
-          #
-          # Both `unique` and `db_index` take the COMPUTED locals here, deliberately — this branch
-          # must NOT copy the literal `true`s the `IDField` and `UUIDField` arms use. The rule is
-          # "agree with the field type's own constructor default", not "say true for every key":
-          #
-          #   * `IDField` defaults `unique=true, db_index=true`, so its literals always agree with a
-          #     plain `IDField()` declaration. It is the ONLY key arm that may pass them — the
-          #     `UUIDField` arm above passes the computed values for the same reason this one does.
-          #   * `CharField` defaults BOTH to `false`. The `indexes` CTE excludes primary-key indexes
-          #     (`NOT i.indisprimary`), so the computed `db_index` reads `false` — which is exactly
-          #     what a plain `CharField(primary_key=true, max_length=n)` declares. Writing `true`
-          #     here would manufacture the very disagreement this branch exists to remove, and bake
-          #     an untrue `db_index=true` into the file `Model_to_str` regenerates.
-          #
-          # `:unique` is a `ColumnSpec` field so it would alter; `:db_index` is in `NON_DB_ATTRS`
-          # and not in the IR at all, so it would not — but it still costs the fast-path early-out on every
-          # varchar-keyed model, and a generated file that lies is a defect on its own terms.
-          _field_or_drop_default(table_name, col_name, default_value) do d
-            Models.CharField(primary_key=true, max_length=max_length, unique=unique, null=false,
-                db_index=db_index, default=d)
-          end
-      elseif primary_key
-          # The remaining keys: every integer width, and the types that are genuinely hazardous to
-          # reconstruct. `IDField` is now correct BY CONSTRUCTION for the integer case rather than by
-          # flattening — #408 retired `AutoField`, so it is the only integer key type PormG has, and
-          # a declared key and an introspected one agree.
-          #
-          # It stays a deliberate lie for the rest, and the reasons are unchanged from #334: a
-          # `NUMERIC` key parsed as `DecimalField(primary_key=true)` refuses construction outright
-          # ("DecimalField cannot be used as a Primary Key"), and there is no field type that both
-          # accepts `primary_key` and carries no length for a bare `text` key — `TextField` does not
-          # accept `primary_key` at all (its constructor passes a literal `false`), so reconstructing
-          # one would produce a model with no key.
-          Models.IDField(generated=generated, generated_always=generated_always, unique=true, null=false, db_index=true)
-      else
-        # The column's width/precision is passed to the CONSTRUCTOR rather than assigned onto the
-        # field afterwards (#472). The post-loop `field.max_length = n` below is a plain struct
-        # write with no checks, so it bypassed `CharField`'s "a default must fit max_length" rule:
-        # a `varchar(5) DEFAULT concat('a','b')` imported as a field `CharField` itself refuses,
-        # and `inspectdb` wrote exactly that into the models file, where loading it threw. The
-        # abort moved out of introspection instead of going away.
-        #
-        # Which slot the type carries is a question about the TYPE, so `_field_type_has_slot` asks
-        # the struct rather than building a probe instance to interrogate. `hasfield` is the right
-        # gate either way: it matches exactly which constructors accept the kwarg silently, and
-        # every other field type warns "Unexpected parameter" on one.
-        _field_or_drop_default(table_name, col_name, default_value) do d
-          base = (unique = unique, null = !not_null, default = d, db_index = db_index)
-          if max_length !== nothing && _field_type_has_slot(field_type, :max_length)
-            field_type(; base..., max_length = max_length)
-          elseif max_digits !== nothing && decimal_places !== nothing &&
-                 _field_type_has_slot(field_type, :max_digits)
-            # `decimal_places !== nothing` is required, not defensive: `DecimalField` REFUSES a
-            # `max_digits` with no `decimal_places`, and that refusal would hit the retry too — so
-            # the second throw escapes and aborts the whole schema read, the exact #472 failure
-            # through a new door. `format_type` sets the pair together today; this keeps the arm
-            # honest if that ever changes 170 lines away.
-            field_type(; base..., max_digits = max_digits, decimal_places = decimal_places)
-          else
-            field_type(; base...)
-          end
-        end
-      end
-
-      # Only fields that actually carry these attributes get them. A primary-key column
-      # is mapped to an IDField (above), which has no max_length/max_digits — guard the
-      # assignments so such columns don't raise FieldError during introspection.
-      # #325: unconditional. This used to retype any `varchar(n > 255)` to TextField and DROP the
-      # length, because CharField refused a max_length above 255 — so a live `varchar(500)` read
-      # back as `text`, never matched the model that declared it, and `makemigrations` proposed the
-      # same widening on every run. CharField no longer carries that ceiling (models/fields.jl), so
-      # `varchar(n)` now always round-trips as `CharField(n)`, symmetric with `text` ⇒ `TextField`.
-      # (The sBinaryField branch that used to sidestep the ceiling for byte bounds, #296, is what
-      # this generalizes.)
-      if max_length !== nothing && hasfield(typeof(field), :max_length)
-        field.max_length = max_length
-      end
-
-      if max_digits !== nothing && hasfield(typeof(field), :max_digits)
-        field.max_digits = max_digits
-        field.decimal_places = decimal_places
-      end
-      
-      # Add field to fields dictionary
-      fields_dict[col_name] = field
+  # Ordered (#544): `columns` is aggregated `ORDER BY a.attnum`, i.e. in physical column order.
+  columns = OrderedDict{String, ColumnSpec}()
+  for col in something(_pg_json(row, :columns), Any[])
+    # `name` and `type` are REQUIRED — an entry without them describes no column, so a `KeyError`
+    # is the honest answer. Every optional key is read with a default, so a row that omits one still
+    # imports (#455).
+    col_name = String(col["name"])
+    raw_type = String(col["type"])
+    ctype = parse_canonical_type(raw_type, engine)
+    is_pk = col_name in pk_set
+    not_null = get(col, "notnull", false) === true
+    unique = get(col, "unique", false) === true
+    reference = nothing
+    if haskey(fk_map, col_name)
+      fk = fk_map[col_name]
+      reference = ForeignKeyRef(fk.table,
+                                format_model_name(Models._model_binding_name(fk.table)),
+                                fk.pk,
+                                Models._foreign_key_on_delete_sql(_normalize_introspected_on_delete(fk.on_delete)))
+    end
+    arm = _key_arm(is_pk, ctype, reference !== nothing)
+    # `unique`, per arm, as the old reader built the field: `IDField` and a pk-fk `OneToOneField`
+    # are unique by construction; every other arm takes the COMPUTED fact — PostgreSQL records a
+    # key's uniqueness through the primary-key constraint, not a separate UNIQUE one, so a plain
+    # `UUIDField(primary_key = true)` or `CharField(primary_key = true, …)` reads back `false`,
+    # which is what its constructor defaults to (#334).
+    spec_unique = (arm === :id_pk || (arm === :reference && is_pk)) ? true : unique
+    # The two CHECK facts the schema query isolates per column (#296, PositiveIntegerField).
+    found = CheckKind[]
+    get(col, "non_negative_check", false) === true && push!(found, NonNegativeCheck())
+    byte_limit = get(col, "byte_limit", nothing)
+    byte_limit === nothing || push!(found, ByteLengthCheck(Int(byte_limit)))
+    # `pg_attribute.attidentity` verbatim (#455): 'a' = GENERATED ALWAYS, 'd' = BY DEFAULT, '' =
+    # neither — and only on the arm whose struct can carry it (`IDField`), as before.
+    identity_code = something(get(col, "identity", ""), "")
+    identity = (arm === :id_pk && identity_code in ("a", "d")) ?
+               ColumnIdentity(true, identity_code == "a", false) : nothing
+    probe = ColumnSpec(col_name, ctype, is_pk ? false : !not_null, is_pk, spec_unique, NoDefault(),
+                       reference, _reader_checks(found, ctype), identity, raw_type)
+    columns[col_name] = _finish_column_spec(table_name, probe, get(col, "default", nothing), engine)
   end
-
-  # Construct and return the model
-  # check if index_map is empty
-  model_resp = Models.Model(table_name, fields_dict)
-  # #347: writes the one KEY rather than assigning the whole `cache` field — `convert_schema_to_models`
-  # attaches composite indexes onto the same dict afterwards, so a whole-field assign here would make
-  # the two writers order-dependent. Same change as the SQLite reader above; defensive, not a fix.
-  if !isempty(index_map)
-    model_resp.cache["index"] = index_map
-  end
-  @pormg_debug false
-  return model_resp
-
+  return LiveTable(table_name, columns, indexes, Pair{String, Vector{String}}[])
 end
+
+"""
+    convertSQLToModel(row::DataFrameRow; conn = _PostgresEngine()) -> PormGModel
+
+The model `inspectdb` writes for one row of `get_database_schema(::PormGPostgres)`:
+`_pg_live_table` compiled through `model_from_live`. Exported, so a row may come
+from a caller's own frame; `conn` only picks the engine's struct choices and touches no connection.
+"""
+convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index};
+                  conn::Union{PormGPostgres, PormGSQLite} = _PostgresEngine())::PormGModel =
+  model_from_live(_pg_live_table(row), conn)

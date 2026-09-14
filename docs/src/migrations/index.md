@@ -27,6 +27,17 @@ Because every plan is a fresh diff between your models and the **live database**
 - **Migration files are an audit trail, not the source of truth.** `pending_migrations.jl` and everything under `applied_migrations/` record *what was done*; they are never re-read to plan or apply anything. Editing an already-applied file has **no effect** on future migrations — don't do it, it only desyncs the archive from the authoritative `pormg_migrations` table.
 - **You can regenerate freely.** A pending draft you dislike can be dropped with `discard_pending_migration("db")` and re-generated from scratch; there is no graph to keep consistent.
 - **"Drift" means the live schema diverging from your models** — an out-of-band `ALTER`/`DROP`, say — not an edited migration file. It is surfaced the normal way: the next `makemigrations` plans to reconcile it, and [`status()`](workflow.md) reports drift signals. Verifying old migration-file checksums buys you nothing here.
+- **Both sides are compared as columns, not as field types.** Each declared field compiles to a canonical description of the column it renders — type, nullability, key, uniqueness, default, foreign key, CHECKs, identity — and the live schema is read straight into the same description from the catalog. Two fields that render the same column (`CharField`, `URLField` and `SlugField` with the same length; a `ForeignKey(unique = true)` and a `OneToOneField`) are therefore one column to the diff, and nothing about a live column is inferred from which field type it "looks like".
+
+!!! note "Adopting a schema PormG did not create"
+    Because the live side is read as facts, a column that no declaration could produce shows up as a **one-time plan** rather than being silently equated with the nearest field type — after it is applied, the schema converges:
+
+    - a `SMALLINT` / `INTEGER UNSIGNED` column without its `>= 0` CHECK plans `ADD CHECK` once against a `PositiveSmallIntegerField` / `PositiveIntegerField`;
+    - a foreign-key column with no index plans `CREATE INDEX` once against a `ForeignKey` (which declares `db_index = true` by default) — declare `db_index = false` if you do not want one;
+    - a lengthless `varchar` or an unparameterised `numeric` plans the declared width once;
+    - a column type PormG has no field for (`inet`, `citext`, an array, `character(n)`) never matches a declared `TextField` or `CharField`: `generate_models_from_db` emits `TextField` for it **with a warning**, and `makemigrations` plans a retype unless you exclude the table or declare the column by hand.
+
+    Tables PormG created itself always carry these facts, so nothing changes for them.
 
 !!! tip "Coming from Django?"
     There is no migration graph, no `dependencies` list, and no per-file state replay. Read each `makemigrations` as `diff(your models, the live database)` — closer to Prisma / Atlas / Flyway's declarative diffing than to Django's ordered migration chain.

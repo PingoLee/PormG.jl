@@ -1572,24 +1572,19 @@ end
 # above — live in `Kernel` and are imported at the top of this module, because layer-2
 # `Configuration` needs them and is included before `Models`. See Kernel.jl for the definitions.
 
-# The `ON DELETE` clause a field's `on_delete` MEANS, as SQL. Lives here rather than in `Dialect`
-# (where it was defined until #498) for one reason: it is also the only correct way to COMPARE two
-# `on_delete` values, and that comparison is needed by a module included BEFORE `Dialect` — namely
-# this one, in `_fk_on_delete_equal` below. That is the whole constraint, and it is worth stating
-# precisely because the obvious-sounding version is wrong: `Migrations` also renders through this
-# function (`column_spec` stores the rendered clause in `ForeignKeyRef.on_delete`, which is what
-# makes comparing two stored values the same predicate by construction), but `Migrations` is include
-# step 11 — AFTER `Dialect` at step 10 — so that use would be satisfied either way.
+# The `ON DELETE` clause a field's `on_delete` MEANS, as SQL. It is the ONE definition of that mapping
+# and it is also the only correct way to COMPARE two `on_delete` values: `column_spec` stores the
+# rendered clause in `ForeignKeyRef.on_delete`, so comparing two stored values IS the predicate, by
+# construction, and the readers render a catalog action through it for the same reason.
 #
-# The caller that originally established the constraint was `_compare_model_field`, retired by #507
-# phase 2 — and `_fk_on_delete_equal` outlived it with NO `src/` caller of its own: the only caller
-# left in the repo is `test/unit/test_column_spec.jl`, where it is the oracle that the IR's
-# stored-clause comparison agrees with the predicate. So the constraint is real but latent, and the
-# honest reading is that this function's location is now justified by a test rather than by
-# production code. Folding both into the phase-3 removal (alongside the equally caller-less
-# `_compare_field_foreign_key`) is the tidier end state; neither is a second ANSWER to anything,
-# which is why neither is urgent. Backend-agnostic by construction: it takes no connection and both the
-# PostgreSQL and SQLite renderers call this one definition, so it is field vocabulary, not dialect.
+# Lives here rather than in `Dialect` (where it was defined until #498) because it is field
+# vocabulary, not dialect: backend-agnostic by construction — it takes no connection and both the
+# PostgreSQL and SQLite renderers call this one definition — and it belongs beside the `on_delete`
+# sentinels it interprets. Nothing about include order forces the location any more. It used to:
+# `_fk_on_delete_equal`, defined right below here, compared two fields through this function from a
+# module included before `Dialect`. That predicate's last `src/` caller was retired by #507 phase 2
+# and the predicate itself by #522 (its one remaining test caller asserted a fold the IR now carries
+# in the stored clause), together with the equally caller-less `_compare_field_foreign_key`.
 #
 # The two FOLDS are the point, and are why a second copy of this mapping must never be written:
 #   * `DO_NOTHING` and `nothing` both render `NO ACTION` — a database cannot tell them apart, and
@@ -1617,24 +1612,20 @@ function _foreign_key_on_delete_sql(on_delete)::String
   end
 end
 
-# #498: do two fields mean the same `ON DELETE`? Compare what they RENDER, through the very function
-# that emits the clause, so the comparison cannot drift from the DDL. Equal renderings mean the
-# database cannot tell the two apart, which is exactly the question a schema diff is asking.
-#
-# A raw `==` gets MOST pairs right and that is what makes it dangerous. The slot is typed
-# `Union{Function, Nothing}` and `_get_on_delete_mode(::AbstractString)` normalizes an introspected
-# `"CASCADE"` to the same `Kernel.CASCADE` sentinel a models file declares, so declared-vs-live
-# agrees for CASCADE, RESTRICT, SET_NULL, SET_DEFAULT and `nothing` on identity alone. It is exactly
-# the two FOLDS above that it gets wrong, and both are silent rather than loud (measured here):
+# #498, kept as the reason the RENDERED clause is what the IR stores: a raw `==` on `on_delete` gets
+# MOST pairs right and that is what makes it dangerous. The slot is typed `Union{Function, Nothing}`
+# and `_get_on_delete_mode(::AbstractString)` normalizes an introspected `"CASCADE"` to the same
+# `Kernel.CASCADE` sentinel a models file declares, so declared-vs-live agrees for CASCADE, RESTRICT,
+# SET_NULL, SET_DEFAULT and `nothing` on identity alone. It is exactly the two FOLDS above that it
+# gets wrong, and both are silent rather than loud (measured):
 #
 #     declared PROTECT    vs live RESTRICT   raw ==  ->  false, render ==  ->  true
 #     declared DO_NOTHING vs live nothing    raw ==  ->  false, render ==  ->  true
 #
 # A schema diff that answers "changed" for either proposes a destructive DROP + ADD CONSTRAINT on
-# every single `makemigrations`, forever, for a key nobody touched. Hence a rendered comparison
-# everywhere `on_delete` is diffed, not just where it looked necessary.
-_fk_on_delete_equal(new_field::PormGField, old_field::PormGField)::Bool =
-  _foreign_key_on_delete_sql(new_field.on_delete) == _foreign_key_on_delete_sql(old_field.on_delete)
+# every single `makemigrations`, forever, for a key nobody touched. Hence the IR compares the
+# rendering (`ForeignKeyRef.on_delete`), and `_fk_on_delete_equal` — the field-pair predicate that
+# used to make the same comparison — is gone since #522.
 
 # Referenced (parent) physical column for a ForeignKey (#50). `pk_field` names a
 # field on the target model; resolve it to that field's `db_column` when the target
@@ -3235,49 +3226,12 @@ function _fk_reference_table(field::PormGField)::Union{String, Nothing}
   return nothing
 end
 
-function _compare_field_foreign_key(new_field::PormGField, old_field::PormGField)::Bool
-  # #360: when BOTH sides can name their physical TABLE, that is the comparison — no assumption
-  # about how `.to` was spelled. Only when one of them cannot (an unresolved String target) does this
-  # fall back to the logical-name comparison below.
-  #
-  # #390 — THE DECISION, recorded here because this line is where it is visible.
-  #
-  # Compared EXACTLY, case included. It was not always: this branch used to `lowercase` both sides,
-  # because SQLite's `PRAGMA foreign_key_list` reports a parent AS SPELLED IN THE `REFERENCES`
-  # CLAUSE rather than as `CREATE TABLE` spelled it, so `REFERENCES DRIVER(id)` against a table
-  # created as `driver` landed here as "DRIVER" against "driver". Comparing exactly then meant that
-  # key reporting as changed on EVERY `makemigrations` — a full table rebuild on SQLite.
-  #
-  # The fold was safe on SQLite and WRONG on PostgreSQL, where identifiers are case-sensitive and
-  # `Driver` and `driver` can be two distinct tables in one schema: a key repointed from one to the
-  # other was not detected and no migration was generated. It also conflated two declared parents
-  # whose physical tables differ only in case.
-  #
-  # Fixed at the SOURCE instead of here, which is why this function needs no connection and no
-  # engine flag. `Migrations._sqlite_canonical_table_name` now resolves the `REFERENCES` spelling
-  # back to the `sqlite_master` spelling inside the SQLite reader, where the engine is already known;
-  # the PostgreSQL reader has always returned the catalog spelling (`cf.relname`). Both sides of the
-  # comparison are therefore canonical on both engines, and an exact match is the correct test.
-  #
-  # This also matches how table identity is decided EVERYWHERE ELSE: `get_migration_plan` keys the
-  # live schema by `Symbol(model_table_name(model))` and looks models up with an exact `haskey`, so
-  # a case-differing table is already a different table. Folding only the FK-target axis made this
-  # one comparison disagree with that.
-  #
-  # Prior art: SQLAlchemy puts identifier-case knowledge in the dialect at reflection time
-  # (`requires_name_normalize` / `normalize_name` / `denormalize_name`) so nothing above the
-  # reflection layer has to know which engine it is on. Same shape.
-  #
-  # Note #360 moved the comparison from the LOGICAL axis to the PHYSICAL one, which is a change in
-  # its own right, not just a change of normalization.
-  # Compare the referenced column by its RESOLVED physical name (fk_target_column), so a
-  # field-name pk_field on the code side matches the introspected physical column when the
-  # parent's pk field is renamed via db_column (#50). With no db_column this equals the
-  # field name, so behavior is unchanged for existing schemas.
-  return _fk_targets_equal(_fk_reference_table(new_field), _fk_target_binding(new_field),
-                           _fk_reference_table(old_field), _fk_target_binding(old_field)) &&
-         fk_target_column(new_field) == fk_target_column(old_field)
-end
+# `_compare_field_foreign_key(new_field, old_field)` stood here until #522: the field-pair form of
+# "same parent, same referenced column?". It delegated to `_fk_targets_equal` (Kernel) and had no
+# `src/` caller left after #507 phase 2 — the planner compares two `ForeignKeyRef`s through
+# `reference_delta`, and the readers no longer build a field for the live side at all. The #390
+# decision it carried (compare the physical table EXACTLY, case included) is recorded on
+# `_fk_targets_equal`, which is where the comparison is made.
 
 """
     _fk_target_binding(field) -> Union{String, Nothing}

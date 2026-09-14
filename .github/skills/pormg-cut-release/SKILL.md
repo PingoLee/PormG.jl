@@ -138,8 +138,10 @@ the single worst place to inherit a flake from an unstated default.
    before #438 this step read *"the stamped entries must now parse"* with nothing to check it, and
    the precondition passed while being false.
 
-6. **Commit** (respect the commit gate — show the diff, get explicit approval):
-   `chore(release): cut <new>` with the entry titles in the body.
+6. **Commit**: `chore(release): cut <new>` with the entry titles in the body. A release cut is
+   maintainer-invoked, so the invocation authorizes the commit and the PR — but **not** the tag,
+   which is outward-facing and gated on its own (step 7), like every other item on the merge gate's
+   still-gated list in [`general.instructions.md`](../../instructions/general.instructions.md).
 
 7. **Tag** (confirm first — tagging/pushing is a separate outward step). Tag the commit on `main`
    that carries the new `Project.toml` version — the merge commit of the release PR, not the branch

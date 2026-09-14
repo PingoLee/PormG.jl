@@ -179,7 +179,8 @@ end
 @testset "db_table: a re-diff proposes nothing (global, #325)" begin
     settings = PormG.config[PORMG_DB_FOLDER]
     conn = settings.connections
-    live = PormG.Migrations.convert_schema_to_models(conn)
+    # The production entry point (#522): the live side as `makemigrations` reads it.
+    live = PormG.Migrations.read_live_schema(conn)
     declared = PormG.Migrations.get_all_models(M)
     plan = PormG.Migrations.get_migration_plan(live, declared, conn, settings; interactive = false)
 

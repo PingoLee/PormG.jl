@@ -385,13 +385,18 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # SQLite accepts three spellings for a textual key, and all three must reconstruct (#409)
 #
-# `sqlite_type_map` maps `TEXT`, `VARCHAR` and `CHAR` onto `CharField` precisely for schemas PormG
-# did not create — which is the whole population the natural-key branch serves. Gating that branch
+# The reader accepts `TEXT`, `VARCHAR` and `CHAR` as a textual key precisely for schemas PormG
+# did not create (since #522 through `parse_canonical_type`, which reads all three as `CVarChar` when a
+# length is declared) — which is the whole population the natural-key branch serves. Gating that branch
 # on `TEXT` alone left `VARCHAR(20) PRIMARY KEY` flattened to `IDField` on SQLite while PostgreSQL
 # reconstructed the identical column, so the same legacy schema converged on one engine only.
 #
-# The lengthless case is asserted too, because it is a DOCUMENTED limitation rather than an
-# oversight, and a documented limitation with no test is just a comment.
+# The lengthless case is asserted too. Until #522 it was a DOCUMENTED limitation — the bare key was
+# flattened to `IDField` — and this testset pinned that. The limitation was a mistake: a
+# `UUIDField(primary_key = true)` renders exactly `TEXT PRIMARY KEY` on SQLite (the reverse map writes
+# `TEXT` for `UUID`), so a bare textual key HAS a declaration that converges with it, and the `IDField`
+# it used to become could never converge (an integer with an identity) — the table rebuilt on every
+# run and `inspectdb` regenerated a key that poured uuids into a rowid. Found in the #522 review.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "SQLite reconstructs TEXT(n), VARCHAR(n) and CHAR(n) keys alike (#409)" begin
   mktempdir() do dir
@@ -413,10 +418,12 @@ end
         @test f.max_length == len
       end
 
-      # Lengthless: nothing to reconstruct into. `CharField()` would invent `max_length = 250` and
-      # never match the live bare `TEXT`; `TextField` does not accept `primary_key` at all. The
-      # `IDField` fallback is deliberate and is documented at the branch.
-      @test by["bare_key"].fields["code"] isa Models.sIDField
+      # Lengthless: the ONE declaration that renders a bare `TEXT PRIMARY KEY` on SQLite is
+      # `UUIDField(primary_key = true)` — `CharField()` would invent `max_length = 250` and never
+      # match, and `TextField` does not accept `primary_key` at all. (The `IDField` this used to
+      # assert is the flattening #522 removed; see the header.)
+      @test by["bare_key"].fields["code"] isa Models.sUUIDField
+      @test by["bare_key"].fields["code"].primary_key
     finally
       PormG.ConnectionPool.close_pool!(pool)
     end

@@ -29,6 +29,7 @@ import PormG.Migrations: get_secondary_index_ddls, _sqlite_column_is_unique,
                          _sqlite_single_column_indexed_columns, _sqlite_composite_indexes,
                          convertSQLToModel, get_constraints_index,
                          _sqlite_identifier_tokens, _sqlite_index_argument_region,
+                         _sqlite_index_argument_start, _sqlite_rewrite_index_columns,
                          _sqlite_index_referenced_columns, _sqlite_indexes_referencing_column,
                          _sqlite_index_is_unmodellable
 import PormG: PormGModel
@@ -82,10 +83,10 @@ end
 # snapshots the LIVE (pre-rename) index DDL — with the OLD column name — but the
 # rebuilt table carries the NEW name. `column_renames` (old ⇒ new) maps each renamed
 # column so its index (a) survives the `surviving_columns` filter (keyed on the NEW
-# names) and (b) is re-created with the new column name. PormG emits quoted
-# identifiers (create_index in Dialect.jl), so the rewrite targets the quoted `"old"`
-# token — precise enough to leave an index NAME that merely contains the column
-# substring untouched.
+# names) and (b) is re-created with the new column name. The rewrite is by token SPAN
+# (#532), so it reaches the column however the index spells it, and leaves an index
+# NAME that merely contains the column substring untouched — structurally, because the
+# name sits before the argument region.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "get_secondary_index_ddls column_renames (#150)" begin
   mktempdir() do dir
@@ -123,6 +124,97 @@ end
       # `!occursin("\"old_col\"")` checks fail. Drop the filter mapping and `kept` goes empty.
     finally
       # Release the SQLite handle so mktempdir can delete the temp DB on Windows (WAL keeps it open).
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #532: a renamed column is rewritten inside a preserved index by TOKEN SPAN, however it was spelled
+# The #150 rewrite replaced the quoted `"old"` token only — precise, and blind to an index that spells
+# the column bare (`lower(a)`), bracketed or backticked. Such an index passed the `surviving_columns`
+# filter (the identifier-aware reader #519 added sees the reference) and was then re-emitted with the
+# PRE-rename name, so the rebuild failed at the server with "no such column". The rewrite now uses the
+# tokenizer's byte spans: every identifier token in the argument region that names a renamed column —
+# bare, quoted, bracketed or backticked, in the column list or the WHERE clause — is replaced by the
+# quoted new name; function names, SQL syntax, string literals, comments, the index name and the table
+# name are never touched.
+#
+# Executed, not just inspected: the rewritten DDL is applied to the renamed table, so SQLite itself
+# confirms each statement is valid and the identifier-aware reader confirms it covers the new column.
+# Mutation gate: restore the quoted-only `replace` and every bare/bracket/backtick case below comes
+# back spelled `a`, and the executed CREATE INDEX raises "no such column: a".
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "get_secondary_index_ddls rewrites a renamed column by span, however spelled (#532)" begin
+  # ── The helper alone, on inputs no real catalog would hold together, so every rule is visible ──
+  rw(sql, m) = _sqlite_rewrite_index_columns(sql, m)
+  # Bare in the list, in an expression and in the predicate (upper-case there — SQLite matches
+  # identifiers ASCII-case-insensitively) are rewritten; the index NAME `a` before the region, the
+  # longer identifier `a_b`, the string literal `'a'` and the comment are not.
+  @test rw("CREATE INDEX a ON t (a, lower(a), a_b, 'a') WHERE A > 0 -- a", Dict("a" => "z")) ==
+        """CREATE INDEX a ON t ("z", lower("z"), a_b, 'a') WHERE "z" > 0 -- a"""
+  # A collation named like the column is not a reference; the bracket and backtick spellings are.
+  # The new name is always emitted quoted, so one that needs quoting is safe.
+  @test rw("CREATE INDEX i ON t (b COLLATE a, [a], `a`)", Dict("a" => "new col")) ==
+        """CREATE INDEX i ON t (b COLLATE a, "new col", "new col")"""
+  # An embedded quote in the new name is doubled, the way SQLite escapes it.
+  @test rw("""CREATE INDEX i ON t ("a")""", Dict("a" => string("we", '"', "ird"))) ==
+        string("CREATE INDEX i ON t (", '"', "we", '"', '"', "ird", '"', ")")
+  # A function named like the renamed column is left alone; the column of that name inside it moves.
+  @test rw("CREATE INDEX i ON t (a(a))", Dict("a" => "z")) == """CREATE INDEX i ON t (a("z"))"""
+  # No renames ⇒ byte-identical output, which is what every #82/#116 call site relies on.
+  @test rw("""CREATE INDEX i ON t ("a")""", Dict{String,String}()) == """CREATE INDEX i ON t ("a")"""
+
+  # ── Through `get_secondary_index_ddls`, against a real catalog, and EXECUTED ──
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "rn532.sqlite"); pool_size = 1)
+    try
+      fetch(pool, """CREATE TABLE "t" ("a" TEXT, "aa" TEXT, "b" TEXT);""")
+      # The issue's own repro: `a` UNQUOTED inside an expression.
+      fetch(pool, """CREATE INDEX "ix_expr" ON "t" (lower(a));""")
+      # A partial index spelling the column bare in BOTH the list and the predicate.
+      fetch(pool, """CREATE INDEX "ix_part" ON "t" (a) WHERE a IS NOT NULL;""")
+      # Quoted with a sort direction beside a bracketed neighbour; and the backtick spelling.
+      fetch(pool, """CREATE INDEX "ix_mixed" ON "t" ("a" DESC, [b]);""")
+      fetch(pool, "CREATE INDEX \"ix_bt\" ON \"t\" (`a`);")
+      # Traps: an index NAMED `a` over an unrelated column, a longer identifier that contains the
+      # name, and a string literal equal to it.
+      fetch(pool, """CREATE INDEX "a" ON "t" ("b");""")
+      fetch(pool, """CREATE INDEX "ix_aa" ON "t" ("aa");""")
+      fetch(pool, """CREATE INDEX "ix_lit" ON "t" ("b") WHERE "b" <> 'a';""")
+
+      renames = Dict("a" => "z")
+      surviving = Set(["z", "aa", "b"])          # the rebuilt table's columns, post-rename
+      kept = get_secondary_index_ddls(pool, "t"; surviving_columns = surviving, column_renames = renames)
+      by_name = Dict(split(d, '"')[2] => d for d in kept)
+      # Nothing is lost: every index references only surviving (or renamed-and-surviving) columns.
+      @test Set(keys(by_name)) == Set(["ix_expr", "ix_part", "ix_mixed", "ix_bt", "a", "ix_aa", "ix_lit"])
+      # The four spellings of the renamed column all come back as the quoted new name.
+      @test by_name["ix_expr"]  == """CREATE INDEX "ix_expr" ON "t" (lower("z"));"""
+      @test by_name["ix_part"]  == """CREATE INDEX "ix_part" ON "t" ("z") WHERE "z" IS NOT NULL;"""
+      @test by_name["ix_mixed"] == """CREATE INDEX "ix_mixed" ON "t" ("z" DESC, [b]);"""
+      @test by_name["ix_bt"]    == """CREATE INDEX "ix_bt" ON "t" ("z");"""
+      # The traps are untouched, byte for byte.
+      @test by_name["a"]      == """CREATE INDEX "a" ON "t" ("b");"""
+      @test by_name["ix_aa"]  == """CREATE INDEX "ix_aa" ON "t" ("aa");"""
+      @test by_name["ix_lit"] == """CREATE INDEX "ix_lit" ON "t" ("b") WHERE "b" <> 'a';"""
+
+      # Executed: rebuild the table with the column renamed and replay every kept statement. SQLite
+      # is the oracle that each is valid DDL over the new table — the old `replace` produced
+      # `lower(a)` here, and this `fetch` raised "no such column: a".
+      fetch(pool, """DROP TABLE "t";""")
+      fetch(pool, """CREATE TABLE "t" ("z" TEXT, "aa" TEXT, "b" TEXT);""")
+      for d in kept
+        fetch(pool, d)
+      end
+      live = Dict(string(r.name) => string(r.sql) for r in
+                  eachrow(fetch(pool, "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 't'") |> DataFrame))
+      @test length(live) == 7
+      # …and the identifier-aware reader confirms each rewritten index now covers `z`.
+      for name in ("ix_expr", "ix_part", "ix_mixed", "ix_bt")
+        @test "z" in _sqlite_index_referenced_columns(pool, "t", name, live[name])
+      end
+    finally
       close_pool!(pool)
     end
   end
@@ -837,6 +929,68 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #531: the CHECK-bounds read resolves a mixed-case table name like every other read in the reader
+# `convertSQLToModel(::PormGSQLite)` reads columns through `PRAGMA table_info`, which resolves a table
+# name case-insensitively, but read the table's byte-length CHECKs out of `sqlite_master` with
+# `name = ?`, which is BINARY-collated. Called with a spelling that differs in case from the
+# CREATE TABLE, the columns came back right and every `BinaryField` bound silently vanished — which
+# `column_delta` reports as `:checks` on a column nobody changed, the convergence-churn class. The
+# reader now resolves the name to its catalog spelling ONCE, before any read (the resolver #390 added
+# for FK parents), and keys the bounds case-insensitively on the COLUMN axis as well.
+#
+# Mutation gates: drop the `_sqlite_canonical_table_name` call and the lower-case read returns
+# `max_length === nothing`; drop the lower-cased bounds key and `blob2` — whose CHECK spells it
+# `"BLOB2"` — loses its bound under every spelling.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "convertSQLToModel keeps CHECK bounds under a table-name case mismatch (#531)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "case531.sqlite"); pool_size = 1)
+    try
+      # The issue's repro, plus one column whose CHECK is spelled in a different case from its
+      # definition — legal SQLite, and exactly what an adopted schema can carry.
+      fetch(pool, """CREATE TABLE "MyTab" (
+                       "id"      INTEGER PRIMARY KEY AUTOINCREMENT,
+                       "payload" BLOB CHECK (length("payload") <= 8),
+                       "blob2"   BLOB CHECK (length("BLOB2") <= 4));""")
+
+      for name in ("MyTab", "mytab", "MYTAB")
+        m = convertSQLToModel(pool, name)
+        # The bound must not depend on how the caller spells the table…
+        @test m.fields["payload"].max_length == 8
+        # …nor on how the CHECK spells the column.
+        @test m.fields["blob2"].max_length == 4
+        # And the model is named by the CATALOG spelling whatever the caller wrote, so it keys the
+        # plan the way `convert_schema_to_models` would.
+        @test m.name == "MyTab"
+      end
+
+      # The acceptance criterion: a mixed-case table with a bounded BinaryField CONVERGES — nothing is
+      # planned for it — however the live side was read. Before the fix the lower-case read produced a
+      # `:checks` delta on both BLOB columns, i.e. an `ADD CHECK` planned on every run, forever. The
+      # declared model carries the mixed-case name as `db_table` (a positional name must be lowercase,
+      # #300), which is how a real models file spells such a table.
+      declared = PormG.Models.Model("mytab"; db_table = "MyTab",
+                   id      = PormG.Models.IDField(),
+                   payload = PormG.Models.BinaryField(null = true, max_length = 8),
+                   blob2   = PormG.Models.BinaryField(null = true, max_length = 4))
+      current_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+        :MyTab => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared, :exist => false))
+      settings = PormG.Configuration.Settings()
+      settings.change_db = true
+      for name in ("MyTab", "mytab")
+        live = convertSQLToModel(pool, name)
+        plan = PormG.Migrations.get_migration_plan(PormGModel[live], current_schema, pool, settings;
+                                                   interactive = false)
+        planned = haskey(plan, :MyTab) ? collect(keys(plan[:MyTab])) : String[]
+        @test isempty(planned)
+      end
+    finally
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #519 (f): the identifier match is identifier-aware, per the #515 rule
 # THIS is the mutation gate. Every assertion above would also pass an unanchored
 # `occursin(column, index_ddl)`, which is precisely what #515 removed from the PostgreSQL side. These
@@ -921,10 +1075,35 @@ end
       @test _sqlite_index_argument_region("""CREATE INDEX "i(x" ON "t" ("b")""") == """("b")"""
 
       # ── The token SHAPE itself ──
-      # `quoted` is the load-bearing discriminator and both call sites destructure the tuple
-      # POSITIONALLY, so inserting a flag in the middle would silently change their meaning. Pin it.
-      @test _sqlite_identifier_tokens("""("a" DESC)""") == [("a", false, true), ("DESC", false, false)]
-      @test _sqlite_identifier_tokens("""(lower("a"))""") == [("lower", true, false), ("a", false, true)]
+      # `quoted` is the load-bearing discriminator, and `start:stop` (#532) is what the rename rewrite
+      # splices by, so both are pinned: a NAMED tuple, so a caller cannot silently read one field as
+      # another, with BYTE spans that index the input string itself — `sql[start:stop]` is the token
+      # as written, quotes or brackets included.
+      @test _sqlite_identifier_tokens("""("a" DESC)""") ==
+            [(name = "a", called = false, quoted = true, start = 2, stop = 4),
+             (name = "DESC", called = false, quoted = false, start = 6, stop = 9)]
+      @test _sqlite_identifier_tokens("""(lower("a"))""") ==
+            [(name = "lower", called = true, quoted = false, start = 2, stop = 6),
+             (name = "a", called = false, quoted = true, start = 8, stop = 10)]
+      # A bracketed identifier's span covers the brackets; a doubled-quote escape is one token whose
+      # name carries the quote once and whose span carries it twice.
+      @test _sqlite_identifier_tokens("([a])") == [(name = "a", called = false, quoted = true, start = 2, stop = 4)]
+      let toks = _sqlite_identifier_tokens("""("a""b")""")
+        @test length(toks) == 1
+        @test toks[1].name == """a"b"""
+        @test (toks[1].start, toks[1].stop) == (2, 7)
+      end
+      # BYTE spans, not character positions: `é` is two bytes, and the token after it must not be off
+      # by one — the case a `collect`-indexed span would get wrong.
+      let sql = """("é", b)""", toks = _sqlite_identifier_tokens(sql)
+        @test [t.name for t in toks] == ["é", "b"]
+        @test sql[toks[1].start:toks[1].stop] == string('"', 'é', '"')
+        @test sql[toks[2].start:toks[2].stop] == "b"
+        @test (toks[2].start, toks[2].stop) == (8, 8)
+      end
+      # The region START is a byte index too, and it is the boundary the rewrite filters tokens by.
+      @test _sqlite_index_argument_start("""CREATE INDEX "i(x" ON "t" ("b")""") == 27
+      @test _sqlite_index_argument_start("no parenthesis at all") == 1
 
       # ── COLLATE consumes exactly one following identifier ──
       # SQLite's grammar is `COLLATE <collation-name>`, one identifier, so the rule is positional

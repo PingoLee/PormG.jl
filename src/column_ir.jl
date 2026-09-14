@@ -166,13 +166,12 @@ definition."* PormG renders `ON DELETE <action>` into every foreign-key constrai
 (`Dialect.add_foreign_key`, #292), so it only ever has the database-level flavour and Django's
 condition is always true here.
 
-The value stored is the **rendered** clause, produced by `Models._foreign_key_on_delete_sql` — the
-same function `Models._fk_on_delete_equal` renders both sides through, so comparing two stored values
-with `==` is that predicate by construction rather than a second copy of it. It is what folds the
-pairs that mean the same clause: `PROTECT` ≡ `RESTRICT`, `DO_NOTHING` ≡ `nothing` ≡ `NO ACTION`
-(#498). On the introspected side the readers have already normalised the raw catalog value through
-`_normalize_introspected_on_delete` before the field was built, so both sides reach this rendering
-from the same vocabulary.
+The value stored is the **rendered** clause, produced by `Models._foreign_key_on_delete_sql`, so
+comparing two stored values with `==` compares what the database would be told, by construction. It
+is what folds the pairs that mean the same clause: `PROTECT` ≡ `RESTRICT`, `DO_NOTHING` ≡ `nothing` ≡
+`NO ACTION` (#498). On the introspected side the readers normalise the raw catalog value through
+`_normalize_introspected_on_delete` and render it through the same function (#522), so both sides
+reach this slot from the same vocabulary.
 
 `table` is the physical parent table when either side can name one; `binding` is the
 `format_model_name`-folded Julia binding, used only as the fallback axis — see `reference_delta` for
@@ -193,18 +192,17 @@ Which parts of two foreign-key references differ, as the planner's own symbols (
 
 The target comparison is **conditional** — exact physical table when both sides can name one (#390),
 folded Julia binding otherwise — and this function does **not** reimplement that rule. It calls
-[`_fk_targets_equal`](@ref), the single definition `Models._compare_field_foreign_key` also calls, so
-no two places can answer "same parent?" differently. Two copies of that rule drifting apart is the
-defect class #507 exists to end; introducing one here to build the thing that ends it would have been
-the same mistake in a new place.
+[`_fk_targets_equal`](@ref), the single definition of it, so no two places can answer "same parent?"
+differently. Two copies of that rule drifting apart is the defect class #507 exists to end;
+introducing one here to build the thing that ends it would have been the same mistake in a new place.
 
 Both axes have to be carried into the `ForeignKeyRef` because the two sides are asymmetric by
 construction — introspection sets `to_table` to the live parent table while `Model_to_str` never
 emits it, and a declared `.to` may still be an unresolved binding string.
 
 Similarly, `on_delete` is compared with `==` on values both sides rendered through
-`Models._foreign_key_on_delete_sql`, which is exactly what `Models._fk_on_delete_equal` does; the
-rendering happens once at compile time instead of on every comparison.
+`Models._foreign_key_on_delete_sql`; the rendering happens once at compile time instead of on every
+comparison.
 
 That conditional is why `ForeignKeyRef` does not get field-wise `==`: `==` is defined as
 `isempty(reference_delta(a, b))`.
@@ -270,12 +268,23 @@ Whether two foreign keys point at the same parent, given each side's resolved ph
 `nothing` when it cannot be named) and its folded Julia binding.
 
 **The one definition of that rule.** [`reference_delta`](@ref) calls it with the two `ForeignKeyRef`s
-a [`ColumnSpec`](@ref) carries, and `Models._compare_field_foreign_key` calls it with two fields'
-resolutions. Holding one copy each would let two answers to "same parent?" drift apart, and that
-drift is precisely the defect class #507 exists to end — so the rule is stated here and nowhere else.
+a [`ColumnSpec`](@ref) carries; it used to have a second caller, `Models._compare_field_foreign_key`,
+which #522 retired with the field-pair comparison it served. Holding one copy per caller would let
+two answers to "same parent?" drift apart, and that drift is precisely the defect class #507 exists
+to end — so the rule is stated here and nowhere else.
 
 When BOTH sides can name their physical table, that is the comparison (#360). Only when one cannot —
 an unresolved String target — does it fall back to the binding axis.
+
+The table is compared EXACTLY, case included (#390). It was folded to lower case once, because
+SQLite's `PRAGMA foreign_key_list` reports a parent as the `REFERENCES` clause spelled it, and that
+fold was safe on SQLite and WRONG on PostgreSQL, where `Driver` and `driver` can be two tables in one
+schema — a key repointed between them went undetected. Fixed at the source instead: the SQLite reader
+canonicalises the `REFERENCES` spelling through `_sqlite_canonical_table_name`, the PostgreSQL reader
+has always returned the catalog spelling, and `get_migration_plan` keys tables by exact name — so an
+exact comparison here is the one that agrees with how table identity is decided everywhere else.
+(Prior art: SQLAlchemy puts identifier-case knowledge in the dialect at reflection time, so nothing
+above the reflection layer has to know which engine it is on. Same shape.)
 
 It lives in `Kernel` rather than in `Models` because `ForeignKeyRef`'s equality is built on it and
 the IR is layer 1 (see this file's header). It needs nothing from `Models` to say what it says: four

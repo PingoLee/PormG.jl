@@ -27,6 +27,17 @@ Because every plan is a fresh diff between your models and the **live database**
 - **Migration files are an audit trail, not the source of truth.** `pending_migrations.jl` and everything under `applied_migrations/` record *what was done*; they are never re-read to plan or apply anything. Editing an already-applied file has **no effect** on future migrations — don't do it, it only desyncs the archive from the authoritative `pormg_migrations` table.
 - **You can regenerate freely.** A pending draft you dislike can be dropped with `discard_pending_migration("db")` and re-generated from scratch; there is no graph to keep consistent.
 - **"Drift" means the live schema diverging from your models** — an out-of-band `ALTER`/`DROP`, say — not an edited migration file. It is surfaced the normal way: the next `makemigrations` plans to reconcile it, and [`status()`](workflow.md) reports drift signals. Verifying old migration-file checksums buys you nothing here.
+- **Both sides are compared as columns, not as field types.** Each declared field compiles to a canonical description of the column it renders — type, nullability, key, uniqueness, default, foreign key, CHECKs, identity — and the live schema is read straight into the same description from the catalog. Two fields that render the same column (`CharField`, `URLField` and `SlugField` with the same length; a `ForeignKey(unique = true)` and a `OneToOneField`) are therefore one column to the diff, and nothing about a live column is inferred from which field type it "looks like".
+
+!!! note "Adopting a schema PormG did not create"
+    Because the live side is read as facts, a column that no declaration could produce shows up as a **one-time plan** rather than being silently equated with the nearest field type — after it is applied, the schema converges:
+
+    - a `SMALLINT` / `INTEGER UNSIGNED` column without its `>= 0` CHECK plans `ADD CHECK` once against a `PositiveSmallIntegerField` / `PositiveIntegerField`;
+    - a foreign-key column with no index plans `CREATE INDEX` once against a `ForeignKey` (which declares `db_index = true` by default) — declare `db_index = false` if you do not want one;
+    - a lengthless `varchar` or an unparameterised `numeric` plans the declared width once;
+    - a column type PormG has no field for (`inet`, `citext`, an array, `character(n)`) never matches a declared `TextField` or `CharField`: `generate_models_from_db` emits `TextField` for it **with a warning**, and `makemigrations` plans a retype unless you exclude the table or declare the column by hand.
+
+    Tables PormG created itself always carry these facts, so nothing changes for them.
 
 !!! tip "Coming from Django?"
     There is no migration graph, no `dependencies` list, and no per-file state replay. Read each `makemigrations` as `diff(your models, the live database)` — closer to Prisma / Atlas / Flyway's declarative diffing than to Django's ordered migration chain.
@@ -253,9 +264,10 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
     When a rebuild drops one of those four, PormG logs a warning naming the index and its definition, so **an index PormG cannot model is never dropped silently**. Nothing puts it back, though: re-create it by hand after the migration if you still need it.
 
     ```
-    ┌ Warning: SQLite table rebuild will DROP an index PormG cannot re-create: it is an
-    │ expression or partial index, which no model declaration expresses. Re-create it by
-    │ hand after the migration if you still need it.
+    ┌ Warning: SQLite table rebuild will DROP an index PormG cannot re-create: it uses an
+    │ expression, a WHERE clause, an explicit COLLATE or a sort direction, none of which a
+    │ model declaration expresses. Re-create it by hand after the migration if you still
+    │ need it.
     │   table = "driver"
     │   index = "driver_surname_lower_idx"
     │   dropped_columns = 1-element Vector{String}: …
@@ -264,7 +276,7 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
 
     A plain index — the two shapes PormG *does* write — is dropped without a warning, because the column it covered is the one you removed: a `db_index` you still declare comes back with the rebuild, and a `unique_together` group you still declare cannot name a column that no longer exists.
 
-    Such an index on a column that **survives** the rebuild is preserved, name and all. One exception is worth knowing: the rebuild rewrites a *renamed* column inside a preserved index's DDL only where the name is **quoted**, which is how PormG writes it. A hand-written expression index spelling the column bare (`lower(surname)` rather than `lower("surname")`) is re-emitted with the pre-rename name and the migration fails on it — rename such a column in two steps, or drop and re-create the index by hand.
+    Such an index on a column that **survives** the rebuild is preserved, name and all — across a `RENAME COLUMN` too: the renamed column is rewritten inside the preserved index's DDL wherever it appears, however the index spells it (`lower(surname)`, `lower("surname")`, `[surname]`), so a hand-written expression or partial index follows the rename.
 
 !!! warning "Dropping a primary key: PostgreSQL vs SQLite"
     Removing a column that is the table's **only** primary key diverges by backend. PostgreSQL's `DROP COLUMN` drops the column and its `PRIMARY KEY` constraint natively, leaving a table with no primary key. SQLite cannot express that without silently degrading the table to a rowid table, so PormG **fails `makemigrations` loudly** instead — declare a replacement primary key, or make the change manually. Dropping a primary-key column while the model still declares a primary key (the key moved to another column) rebuilds normally on both backends.

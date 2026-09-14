@@ -62,6 +62,14 @@ import PormG.Migrations: convert_schema_to_models
 
 struct FkToTablePlannerMockPg <: PormGPostgres end
 
+# #522 retired `Models._compare_field_foreign_key`, the field-pair "same parent, same column?"
+# predicate these testsets used as their oracle. The comparison it made lives in the IR now: two
+# `ForeignKeyRef`s are `==` when `reference_delta` is empty, and a field's reference is what
+# `column_spec` compiles for it. So the oracle is the production comparison itself, engine-neutral
+# (both mocks give the same answer; the PostgreSQL one is used).
+_same_fk(a, b) = Migrations.column_spec(a, FkToTablePlannerMockPg()).reference ==
+                 Migrations.column_spec(b, FkToTablePlannerMockPg()).reference
+
 # #498: testset 5b's repoint now reaches `_drop_fk_constraint_in_alteration`, which asks the catalog
 # for the live constraint's name — so the marker has to answer with a NAME. An empty frame would not
 # be a neutral stand-in: a `:repoint` whose DROP cannot be planned is refused outright (adding
@@ -102,13 +110,13 @@ end
   #    was extracted into, `Models._fk_targets_equal` (Kernel-owned since phase 2), which
   #    `_compare_field_foreign_key` and the IR's `reference_delta` both call.
   #
-  #    Mutation gate: make that predicate compare `to_table` unconditionally — rather than only
+  #    Mutation gate: make `_fk_targets_equal` compare `to_table` unconditionally — rather than only
   #    when BOTH sides can name a physical table — and the first assertion flips to `false`.
   # ───────────────────────────────────────────────────────────────────────────
   @testset "the same-parent rule ignores a to_table only one side can name" begin
     declared_fk, introspected_fk = _fk_pair()
 
-    @test Models._compare_field_foreign_key(introspected_fk, declared_fk)
+    @test _same_fk(introspected_fk, declared_fk)
     @test Models._fk_targets_equal(Models._fk_reference_table(introspected_fk),
                                    Models._fk_target_binding(introspected_fk),
                                    Models._fk_reference_table(declared_fk),
@@ -267,7 +275,7 @@ end
       declared_model = Models.Model("pit_stop", id = Models.IDField(), profile_id = declared_fk)
       live_model     = Models.Model("pit_stop", id = Models.IDField(), profile_id = live_fk)
 
-      @test Models._compare_field_foreign_key(live_fk, declared_fk)
+      @test _same_fk(live_fk, declared_fk)
 
       current_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
         :pit_stop => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared_model, :exist => false))
@@ -286,7 +294,7 @@ end
     declared_other = Models.ForeignKey(other_parent, pk_field = "id", null = true)
     live_other = Models.ForeignKey("Driver_profile", pk_field = "id", null = true)
     live_other.to_table = "driver_profile"
-    @test !Models._compare_field_foreign_key(live_other, declared_other)
+    @test !_same_fk(live_other, declared_other)
   end
 
   # ───────────────────────────────────────────────────────────────────────────
@@ -335,8 +343,8 @@ end
         # …so an exact comparison against the declared model succeeds with no fold in sight.
         parent = Models.Model("driver"; id = Models.IDField())
         declared_fk = Models.ForeignKey(parent, pk_field = "id", null = true)
-        @test Models._compare_field_foreign_key(declared_fk, live_fk)
-        @test Models._compare_field_foreign_key(live_fk, declared_fk)   # order-independent
+        @test _same_fk(declared_fk, live_fk)
+        @test _same_fk(live_fk, declared_fk)   # order-independent
       finally
         # Windows will not remove the temp dir while the handle is open; same leak as
         # test_key_type_round_trip.jl, not copied here.
@@ -413,12 +421,12 @@ end
     live_upper = Models.ForeignKey("Driver", pk_field = "id", null = true); live_upper.to_table = "Driver"
 
     # THE assertion #390 exists for: repointing between them is a genuine change and is detected.
-    @test !Models._compare_field_foreign_key(declared_lower, live_upper)
-    @test !Models._compare_field_foreign_key(declared_upper, live_lower)
+    @test !_same_fk(declared_lower, live_upper)
+    @test !_same_fk(declared_upper, live_lower)
 
     # Positive controls — each still matches its OWN table, so the above is not "always unequal".
-    @test Models._compare_field_foreign_key(declared_lower, live_lower)
-    @test Models._compare_field_foreign_key(declared_upper, live_upper)
+    @test _same_fk(declared_lower, live_lower)
+    @test _same_fk(declared_upper, live_upper)
 
     # And end to end, so this is not confined to the comparator: the repoint reaches the planner.
     # This asserted a WARNING until #498 — back then `:to` was absent from `alter_field`'s

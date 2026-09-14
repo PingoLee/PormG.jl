@@ -156,6 +156,12 @@ a physical name is escaped rather than validated.
     for a through model that has two pointing at the same model; each takes the field name, and its
     column is resolved from it. Same contract as Django's `through_fields`.
 
+### Generated files: the field type is chosen from the column, and says so when it has to guess
+
+`generate_models_from_db` reads each live column into the same canonical description `makemigrations` diffs on, and only then picks the field to write. Where the column says exactly what it is, the choice is mechanical: `varchar(40)` is `CharField(max_length = 40)`, `numeric(8, 3)` is `DecimalField(max_digits = 8, decimal_places = 3)`, a `bytea`/`BLOB` with a byte-length CHECK is `BinaryField(max_length = n)`, a `timestamp without time zone` is `DateTimeField(type = "TIMESTAMP")`, an integer with a `>= 0` CHECK is a `PositiveIntegerField`, an integer key is an `IDField`, a foreign key is a `ForeignKey` — or a `OneToOneField` when the column is unique or is the primary key.
+
+Where no declaration can say it, the generator picks the constructor default and **warns**, naming the table and column, so the choice is never silent: a lengthless `varchar` becomes `CharField()` (250), an unparameterised `numeric` becomes `DecimalField()`, and a type PormG has no field for (`inet`, an array, `character(n)`) becomes `TextField`. The first `makemigrations` after such an import plans the declared width or type for that column; see *Adopting a schema PormG did not create* in the [migrations guide](migrations/index.md).
+
 ### Generated files: colliding bindings and names are disambiguated
 
 `inspectdb`-style import (`import_models_from_sqlite` / `import_models_from_postgres` /

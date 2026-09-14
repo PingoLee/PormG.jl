@@ -254,12 +254,15 @@ own is not enough to act on.
 
 This is the GLOBAL assertion #318 wanted and could not have: it was blocked on the type/length
 round-trip, which is why `test/integration/test_db_table_db.jl` carried a per-table workaround
-until #325 landed.
+until #325 landed. Since #522 it is also the end-to-end convergence gate for the spec readers: the
+live side comes from `read_live_schema`, exactly as `makemigrations` reads it.
 """
 function assert_no_schema_drift()
   settings = PormG.config[PORMG_DB_FOLDER]
   conn = settings.connections
-  live = PormG.Migrations.convert_schema_to_models(conn)
+  # The PRODUCTION entry point (#522): `makemigrations` reads the live side as `LiveTable`s, never as
+  # models, so this asserts the path it actually takes rather than the `inspectdb` form.
+  live = PormG.Migrations.read_live_schema(conn)
   declared = PormG.Migrations.get_all_models(models)
   plan = PormG.Migrations.get_migration_plan(live, declared, conn, settings; interactive = false)
   if !isempty(plan)

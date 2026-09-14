@@ -75,7 +75,7 @@ end
     old_field = Models.CharField(primary_key = true)
 
     sql = PormG.Dialect.alter_field(MockPgPkNamed283(), "circuits", "alt",
-                                    new_field, old_field, _afd_delta(MockPgPkNamed283(), new_field, old_field, [:primary_key]))
+                                    new_field, _afd_delta(MockPgPkNamed283(), new_field, old_field, [:primary_key]))
 
     # Assert the WHOLE statement, not a fragment: the table name, the constraint name
     # and the terminating semicolon are all knowable, so a regression in any of them
@@ -93,7 +93,7 @@ end
     old_field = Models.CharField(primary_key = true)
 
     sql = PormG.Dialect.alter_field(MockPgPkNone283(), "circuits", "alt",
-                                    new_field, old_field, _afd_delta(MockPgPkNone283(), new_field, old_field, [:primary_key]))
+                                    new_field, _afd_delta(MockPgPkNone283(), new_field, old_field, [:primary_key]))
 
     @test sql == ""
   end
@@ -110,7 +110,7 @@ end
     # MockPgPkNone283 would return `nothing`; if the ADD path wrongly called
     # introspection we would still get no DROP, so assert the ADD is present.
     sql = PormG.Dialect.alter_field(MockPgPkNone283(), "circuits", "alt",
-                                    new_field, old_field, _afd_delta(MockPgPkNone283(), new_field, old_field, [:primary_key]))
+                                    new_field, _afd_delta(MockPgPkNone283(), new_field, old_field, [:primary_key]))
 
     @test occursin("ADD PRIMARY KEY (\"alt\")", sql)
     @test !occursin("DROP CONSTRAINT", sql)
@@ -132,7 +132,7 @@ end
     old_field = Models.CharField(primary_key = true)
 
     sql = PormG.Dialect.alter_field(MockPgPkNamed283(), model, "alt",
-                                    new_field, old_field, _afd_delta(MockPgPkNamed283(), new_field, old_field, [:primary_key]))
+                                    new_field, _afd_delta(MockPgPkNamed283(), new_field, old_field, [:primary_key]))
 
     @test occursin("ALTER TABLE \"circuits\" DROP CONSTRAINT \"circuits_pkey\";", sql)
   end
@@ -145,7 +145,7 @@ end
     old_field = Models.CharField(unique = true)
 
     sql = PormG.Dialect.alter_field(MockPgUniqueNamed283(), "circuits", "alt",
-                                    new_field, old_field, _afd_delta(MockPgUniqueNamed283(), new_field, old_field, [:unique]))
+                                    new_field, _afd_delta(MockPgUniqueNamed283(), new_field, old_field, [:unique]))
 
     # Assert the WHOLE statement: a regression that emitted the right constraint name
     # against the wrong table would still satisfy a fragment match.
@@ -161,7 +161,7 @@ end
     old_field = Models.CharField(unique = true)
 
     sql = PormG.Dialect.alter_field(MockPgUniqueNone283(), "circuits", "alt",
-                                    new_field, old_field, _afd_delta(MockPgUniqueNone283(), new_field, old_field, [:unique]))
+                                    new_field, _afd_delta(MockPgUniqueNone283(), new_field, old_field, [:unique]))
 
     @test sql == ""
   end

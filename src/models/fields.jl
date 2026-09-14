@@ -335,8 +335,8 @@ mutable struct sForeignKey <: PormGField
   # cannot be recovered from `.to` afterwards. Set post-construction; see `_plan_inspectdb_bindings!`.
   #
   # INVARIANT (#390): when set, this is the CANONICAL table name — the spelling the catalog itself
-  # uses, not whatever a `REFERENCES` clause happened to say. `Models._compare_field_foreign_key`
-  # compares it EXACTLY (case included), which is only correct while its producers honor that.
+  # uses, not whatever a `REFERENCES` clause happened to say. The planner compares it EXACTLY (case
+  # included) through `_fk_targets_equal` (#390), which is only correct while its producers honor that.
   # Three write here, and one of them does NOT:
   #
   #   * the PostgreSQL reader — `cf.relname` from `pg_class`, canonical by construction;
@@ -345,10 +345,10 @@ mutable struct sForeignKey <: PormGField
   #     at read time (a dangling foreign key, which SQLite permits). That one keeps the REFERENCES
   #     spelling. Self-healing rather than perpetual: the first `migrate` creates the parent and the
   #     next read canonicalizes it;
-  #   * the DDL-regex reader `convertSQLToModel(::String)` — writes the REFERENCES spelling verbatim
-  #     and has no connection to resolve it with. It is OFF the live introspection path (see the NOTE
-  #     at the top of that function), which is the only reason the exact comparison is safe; putting
-  #     it back on that path means closing this gap first.
+  #   * `convertSQLToModel(::String)` — since #522 it executes the statement in a throwaway SQLite
+  #     file and runs the PRAGMA reader over it. The parent table never exists in that file, so the
+  #     resolver falls back to the REFERENCES spelling: for this entry point the outcome is the same
+  #     as the regex reader it replaced, and it stays off the live route.
   #
   # A NEW producer that writes a non-canonical name here reintroduces #390's churn.
   to_table::Union{String, Nothing}
@@ -1813,32 +1813,6 @@ function DateTimeField(; kwargs...)
   #TIMESTAMPTZ
   type = get(kwargs, :type, "TIMESTAMPTZ") |> uppercase
 
-  normalize_datetime_default(value) = begin
-    if value === nothing
-      nothing
-    elseif value isa Union{ZonedDateTime, DateTime}
-      value
-    elseif value isa AbstractString
-      try
-        ZonedDateTime(value, DATETIME_FORMAT)
-      catch e
-        # #472: these were bare `catch`es, so an interrupt raised mid-parse was absorbed here and
-        # the next attempt simply ran — `validate_default`'s carve-out never saw it. This is the
-        # converter EVERY DateTimeField default goes through, i.e. the `DEFAULT now()` path that
-        # introspection's warn-and-drop guard depends on not disguising a cancelled import.
-        (e isa InterruptException || e isa StackOverflowError) && rethrow()
-        try
-          DateTime(value, DATETIME_FORMAT)
-        catch e2
-          (e2 isa InterruptException || e2 isa StackOverflowError) && rethrow()
-          DateTime(value)
-        end
-      end
-    else
-      throw(_fielderr("Invalid default value for DateTimeField. Expected a DateTime, ZonedDateTime, or parseable datetime string."))
-    end
-  end
-
   # Validate default
   default = validate_default(default, Union{ZonedDateTime, DateTime, Nothing}, "DateTimeField", normalize_datetime_default)
   !(type isa String) && throw(_fielderr("The 'type' must be a String"))
@@ -1861,6 +1835,43 @@ function DateTimeField(; kwargs...)
     type,
     format_timezone_sql
   )  
+end
+
+"""
+    normalize_datetime_default(value)
+
+The converter every `DateTimeField` default goes through: a `DateTime` or `ZonedDateTime` as it is, a
+string parsed as `DATETIME_FORMAT` with an offset, then without, then as a plain ISO datetime.
+
+Module-level since #522 rather than a closure inside the constructor, because the introspection
+readers coerce a live column's default with the SAME converter (`Migrations._coerce_default`) so the
+live side lands on the value a declaration stores. One definition, or the two sides drift on exactly
+the strings a catalog hands back.
+"""
+function normalize_datetime_default(value)
+  if value === nothing
+    nothing
+  elseif value isa Union{ZonedDateTime, DateTime}
+    value
+  elseif value isa AbstractString
+    try
+      ZonedDateTime(value, DATETIME_FORMAT)
+    catch e
+      # #472: these were bare `catch`es, so an interrupt raised mid-parse was absorbed here and
+      # the next attempt simply ran — `validate_default`'s carve-out never saw it. This is the
+      # converter EVERY DateTimeField default goes through, i.e. the `DEFAULT now()` path that
+      # introspection's warn-and-drop guard depends on not disguising a cancelled import.
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      try
+        DateTime(value, DATETIME_FORMAT)
+      catch e2
+        (e2 isa InterruptException || e2 isa StackOverflowError) && rethrow()
+        DateTime(value)
+      end
+    end
+  else
+    throw(_fielderr("Invalid default value for DateTimeField. Expected a DateTime, ZonedDateTime, or parseable datetime string."))
+  end
 end
 
 mutable struct sDecimalField <: PormGField

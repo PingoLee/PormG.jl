@@ -156,7 +156,7 @@ end
   # ───────────────────────────────────────────────────────────────────────────
   @testset "PostgreSQL ALTER carries a USING cast" begin
     sql = PormG.Dialect.alter_field(MockPGBin(), "technical_document", "payload",
-                                    Models.BinaryField(), Models.TextField(),
+                                    Models.BinaryField(),
                                     _bin_delta(MockPGBin(), Models.BinaryField(), Models.TextField(), [:type]))
 
     @test occursin("TYPE bytea", sql)
@@ -173,7 +173,7 @@ end
   @testset "byte CHECK is added, replaced and dropped as max_length changes" begin
     # Added alongside a type change, after the TYPE statement.
     added = PormG.Dialect.alter_field(MockPGBin(), "technical_document", "payload",
-                                      Models.BinaryField(max_length = 4), Models.TextField(),
+                                      Models.BinaryField(max_length = 4),
                                       _bin_delta(MockPGBin(), Models.BinaryField(max_length = 4),
                                                  Models.TextField(), [:type, :checks]))
     @test occursin("ADD CHECK (octet_length(\"payload\") <= 4)", added)
@@ -182,7 +182,6 @@ end
     # Changed 4 -> 8 with no type change: drop the stale clause, add the new one.
     changed = PormG.Dialect.alter_field(MockPGBinNamed(), "technical_document", "payload",
                                         Models.BinaryField(max_length = 8),
-                                        Models.BinaryField(max_length = 4),
                                         _bin_delta(MockPGBinNamed(), Models.BinaryField(max_length = 8),
                                                    Models.BinaryField(max_length = 4), [:checks]))
     @test occursin("DROP CONSTRAINT \"technical_document_payload_check\"", changed)
@@ -194,7 +193,7 @@ end
 
     # Removed: drop only.
     removed = PormG.Dialect.alter_field(MockPGBinNamed(), "technical_document", "payload",
-                                        Models.BinaryField(), Models.BinaryField(max_length = 4),
+                                        Models.BinaryField(),
                                         _bin_delta(MockPGBinNamed(), Models.BinaryField(),
                                                    Models.BinaryField(max_length = 4), [:checks]))
     @test occursin("DROP CONSTRAINT \"technical_document_payload_check\"", removed)
@@ -202,7 +201,6 @@ end
 
     # Unchanged bound: no constraint churn at all.
     unchanged = PormG.Dialect.alter_field(MockPGBinNamed(), "technical_document", "payload",
-                                          Models.BinaryField(max_length = 4),
                                           Models.BinaryField(max_length = 4),
                                           _bin_delta(MockPGBinNamed(), Models.BinaryField(max_length = 4),
                                                      Models.BinaryField(max_length = 4), [:nullable];
@@ -212,7 +210,7 @@ end
     # Transitioning AWAY from a bounded BinaryField must drop the stale byte CHECK, and drop it
     # BEFORE the type change — an `octet_length` clause left in place would block the cast.
     away = PormG.Dialect.alter_field(MockPGBinNamed(), "technical_document", "payload",
-                                     Models.TextField(), Models.BinaryField(max_length = 4),
+                                     Models.TextField(),
                                      _bin_delta(MockPGBinNamed(), Models.TextField(),
                                                 Models.BinaryField(max_length = 4), [:type, :checks]))
     @test occursin("DROP CONSTRAINT \"technical_document_payload_check\"", away)
@@ -234,7 +232,7 @@ end
                          name = Models.CharField(max_length = 50))
 
     sql = PormG.Dialect.alter_field(MockSLBin(), model, "payload",
-                                    Models.BinaryField(), Models.TextField(),
+                                    Models.BinaryField(),
                                     _bin_delta(MockSLBin(), Models.BinaryField(), Models.TextField(), [:type]))
 
     @test occursin("CAST(\"payload\" AS BLOB)", sql)

@@ -65,8 +65,9 @@ end
   end
 
   # Adapter-appropriate DDL. The VARCHAR/NUMERIC primary keys only stress the
-  # Postgres max_length/max_digits guard; on SQLite they degrade to TEXT/INTEGER
-  # (still a valid "PK → IDField, no crash" check on the SQLite introspection path).
+  # Postgres max_length/max_digits guard; on SQLite they degrade to TEXT/INTEGER — a bare TEXT
+  # key reads as the `UUIDField(primary_key = true)` that renders it there (#522), the INTEGER
+  # one as an `IDField`; either way a "PK, no crash" check on the SQLite introspection path.
   natural_pk_ddl = is_pg ?
     """CREATE TABLE "pormg_it_natural_key" (code VARCHAR(20) PRIMARY KEY, label VARCHAR(100))""" :
     """CREATE TABLE "pormg_it_natural_key" (code TEXT PRIMARY KEY, label TEXT)"""
@@ -402,8 +403,8 @@ end
     # Both backends, deliberately: the PostgreSQL fixture is `VARCHAR(20)` and the SQLite one is
     # `TEXT`, and the two readers reach the reconstruction by different routes (`col_type ==
     # "varchar"` with a parsed `max_length` vs. `base_type == "TEXT"` with a `(n)` suffix). The
-    # SQLite fixture declares no length, so it exercises the documented LENGTHLESS fallback rather
-    # than the reconstruction — which is the behaviour that would otherwise be untested anywhere.
+    # SQLite fixture declares no length, so it exercises the LENGTHLESS key — which since #522 is a
+    # reconstruction too, and the behaviour that would otherwise be untested anywhere.
     code_field = by_name["pormg_it_natural_key"].fields["code"]
     if is_pg
       @test code_field isa PormG.Models.sCharField
@@ -415,9 +416,13 @@ end
       @test code_field.unique == false
     else
       # `code TEXT PRIMARY KEY` — no declared length, so there is no CharField to reconstruct it as
-      # (`CharField()` would invent `max_length = 250` and never match the live bare `TEXT`), and it
-      # keeps the IDField fallback. Documented in `convertSQLToModel`, not an oversight.
-      @test code_field isa PormG.Models.sIDField
+      # (`CharField()` would invent `max_length = 250` and never match the live bare `TEXT`). The ONE
+      # declaration that renders a bare `TEXT PRIMARY KEY` on SQLite is `UUIDField(primary_key =
+      # true)`, and that is what it becomes (#522). Until then it kept an `IDField` fallback, which
+      # could never converge with the column (an integer with an identity) — the #522 review found
+      # the table rebuilding on every run.
+      @test code_field isa PormG.Models.sUUIDField
+      @test code_field.primary_key
     end
 
     # NUMERIC keeps the IDField fallback on both backends: `DecimalField` refuses `primary_key`

@@ -1906,6 +1906,25 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # about. Leaving them raw would keep that coincidence load-bearing.
     placeholders = add_parameter!(instruc,
       _format_filter_value(getfield(Models, PormGTypeField[v.column.function_name]), v.values, v.operator))
+  elseif isa(v.column, SQLTypeFunction)
+    # #537 — a function column none of the branches above can bind. `OP(::SQLTypeFunction, …)` is a
+    # constructor arm PormG itself relies on — `When(OP(MONTH(x), "<=", N))` builds QUADRIMESTER /
+    # QUARTER (functions.jl) — but only the `PormGTypeField` functions (EXTRACT, TO_CHAR, COUNT)
+    # have a formatter this path can name. Every other function fell through to the `else` ladder
+    # below and died reading `.field` off a node that has no such slot: a raw `FieldError`, outside
+    # the #231 taxonomy. Refused HERE, ahead of any `.field` read, naming the two spellings that do
+    # bind through a known formatter. Deliberately not a consumer arm: `OP` is internal (#202) and
+    # the string-lookup forms are the public surface, so the fix does not grow a spelling users are
+    # steered away from. An AGGREGATE or window column in a WHERE predicate is refused one level up
+    # (`_guard_no_aggregate_predicate`, build_query.jl) with the HAVING / CTE spelling, so what
+    # reaches this branch is a scalar function — or a SELECT-side `When(OP(Sum(…)))`, which took the
+    # same raw `FieldError` and now takes the same typed refusal.
+    throw(QueryBuildError(
+      "\e[4m\e[31mOP($(v.column.function_name)(…), …)\e[0m cannot be rendered: only " *
+      "$(join(sort!(collect(keys(PormGTypeField))), " / ")) columns bind through OP. Project the " *
+      "function under an alias and filter on the alias — \e[4m\e[32mvalues(\"total\" => Sum(\"qty\")); " *
+      "filter(\"total__@gt\" => 1)\e[0m — or use the transform-suffix spelling " *
+      "\e[4m\e[32m\"seen__@month__@lte\" => 4\e[0m (#537)."))
   elseif isa(v.values, SQLObjectHandler)
     # Subqueries - these are safe since they're built through PormG.jl
     if !(v.operator in ["IN", "NOT IN"])

@@ -165,18 +165,17 @@ const SLOTS = Tuple{String,Any,Function}[
          q.filter(QBA.FExpression(field_name = "note", operation = "=", operand = "x", column = v));
          _adm_render(q))),
 
-  # Probed through `OP(...)`, the real public constructor, and DECLARED as `SQLTypeFunction` — what
-  # `OP` accepts beyond a `String`. An earlier draft declared the struct's own `ColumnPart` here and
-  # handed `filter` a hand-built `OperObject`; that reported six offenders which were the probe's own
-  # unrealism, so the draft after it made the slot construction-only and justified that with "there
-  # is no public entry point". Both were wrong: `OP(::SQLTypeFunction, ::Any)` is public, documented,
-  # and raises a raw `FieldError` at render (#537).
-  #
-  # `ColumnPart` is genuinely wider than any public entry point, and reconciling the two widths is
-  # #537's to settle rather than this file's to assert. Narrowing the declared type here is what
-  # keeps the report honest: it probes the spelling a user can actually write.
-  ("OperObject.column via OP()", PormG.SQLTypeFunction,
-   v -> (q = _with_cte(AD.Adm_child.objects); q.values("note"); q.filter(OP(v, "x")); _adm_render(q))),
+  # Declared from the struct's own slot. Until #537 this was narrowed to `PormG.SQLTypeFunction` —
+  # what `OP` accepts beyond a `String` — because `ColumnPart` was wider than any entry point could
+  # construct (`String`, `SQLTypeF`, CTE / joined handles, a `Vector` member), and probing those
+  # reported offenders that were the probe's own unrealism. #537 narrowed `ColumnPart` to exactly
+  # what is built — `SQLTypeField` or `SQLTypeFunction` — so the real width IS the honest probe now,
+  # and the node is handed to `filter` directly so every admitted member (a field, an aggregate, a
+  # window) is exercised rather than only the ones `OP` can spell. `OP(...)` itself is exercised by
+  # `test_op_function_column.jl`.
+  ("OperObject.column", fieldtype(QBA.OperObject, :column),
+   v -> (q = _with_cte(AD.Adm_child.objects); q.values("note");
+         q.filter(QBA.OperObject(operator = "=", values = "x", column = v)); _adm_render(q))),
 
   ("Lower(x) — the functions.jl family",
    Union{String,PormG.SQLTypeField,PormG.SQLTypeText,PormG.SQLTypeFunction,PormG.SQLTypeF,PormG.SQLTypeCTE,PormG.SQLTypeJoined},
@@ -199,15 +198,13 @@ end
 # new gap fails, and so does a FIXED one, which forces the pin to be removed alongside the fix. Same
 # discipline as `test_memo_interface.jl`'s allowed-hit counts: "pinned, not bounded".
 const KNOWN_GAPS = Dict{Type,Vector{String}}(
-  # (#535 — `OuterRefObject` in `WindowFunction.column` and the `functions.jl` family — was pinned
-  # here until `_check_function` gained its `::OuterRefObject` arm; `test_outer_ref_in_functions.jl`
-  # owns that spelling now, and the invariant covers it unconditionally.)
-
-  # #537 — `OP(::SQLTypeFunction, value)` is a public constructor whose result nothing renders: the
-  # path reads `.field` off the column, which only an `SQLField` has. Pre-existing on origin/main;
-  # measured identically on both trees.
-  QBA.FObject        => ["OperObject.column via OP()"],
-  QBA.WindowFunction => ["OperObject.column via OP()"],
+  # Empty since Session 28 closed both pins, and kept as an empty Dict on purpose — the EXACT
+  # equality below is the discipline, and a new gap must land here with its issue number rather
+  # than as an untracked failure:
+  #   - #535 — `OuterRefObject` in `WindowFunction.column` and the `functions.jl` family — until
+  #     `_check_function` gained its `::OuterRefObject` arm (`test_outer_ref_in_functions.jl`).
+  #   - #537 — `FObject` / `WindowFunction` in `OperObject.column` via `OP()` — until the render path
+  #     refused them with a typed error instead of reading `.field` (`test_op_function_column.jl`).
 )
 
 @testset "#533: every admitted node type has a consumer" begin
@@ -240,7 +237,8 @@ const KNOWN_GAPS = Dict{Type,Vector{String}}(
   end
   @test isempty(new_gaps)
 
-  # And the pin is exact, so fixing #535 without deleting its pin fails here.
+  # And the pin is exact, so fixing a pinned gap without deleting its pin fails here — as #535 and
+  # #537 each did when they landed.
   @test offenders == KNOWN_GAPS
 
   # ── guard the guard ────────────────────────────────────────────────────────
@@ -283,6 +281,8 @@ end
   # The consequences, spot-checked at the seams the superseded issues named.
   @test !(QBA.SQLOrder <: QBA.WindowPartitionPart)   # #529
   @test !(QBA.SQLOrder <: QBA.ColumnPart)
+  # #537 — and `ColumnPart` itself is exactly what an `OperObject` is ever built with.
+  @test fieldtype(QBA.OperObject, :column) === Union{PormG.SQLTypeField,PormG.SQLTypeFunction}
   @test QBA.SQLOrder <: QBA.WindowOrderPart          # …but ordering still belongs in ORDER BY
 
   # #529's own repro, now a typed refusal that names the spellings that work.

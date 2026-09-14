@@ -140,8 +140,16 @@ const MemoKey = Tuple{Symbol,String}
 """Field references in SQL: text, functions, string names, projected subqueries (Subquery/Exists, #92), a CTE column handle (`CTE(name, path)`, #444), or a joined-copy column handle (`Joined(alias, path)`, #481)."""
 const FieldPart = Union{SQLTypeText,SQLTypeFunction,String,SQLTypeF,SubqueryObject,ExistsObject,SQLTypeCTE,SQLTypeJoined}
 
-"""Column references: fields, functions, strings, CTE or joined-copy column handles, or vectors of operations."""
-const ColumnPart = Union{SQLTypeField,SQLTypeFunction,String,SQLTypeF,SQLTypeCTE,SQLTypeJoined,Vector{Union{String,SQLTypeF}}}
+# #537 — exactly what is CONSTRUCTED, no wider. Every site that builds an `OperObject` produces one
+# of the two: the `_get_pair_to_oper` arms wrap the parsed path in an `SQLField`, `OP(...)` wraps a
+# `String` in one or passes a function through, and `_check_function` plus the two retag walkers
+# (`build_helpers.jl`, `ctes.jl`) rebuild from those. `String`, `SQLTypeF`, `SQLTypeCTE`,
+# `SQLTypeJoined` and the `Vector` member were admissions nothing ever built — a CTE or joined
+# handle in the column position is normalized into an `SQLField` by `_retag_*_field!` before it
+# gets here. This reconciles the slot with `OP`'s accepted set, which #537 found to be two different
+# widths; `test_op_function_column.jl` and `test_node_admission.jl` pin it.
+"""The left-hand side of an operator predicate: a resolved field, or a SQL function over one."""
+const ColumnPart = Union{SQLTypeField,SQLTypeFunction}
 
 """Window PARTITION BY expressions."""
 # #444: `SQLTypeCTE` — PARTITION BY a CTE column worked before the change (the reference was a
@@ -551,7 +559,7 @@ That is a internal function, please do not use it.
 # Fields
 - `operator::String`: the operator used in the SQL query.
 - `values::Union{String, Integer, Bool}`: the value(s) to be used with the operator.
-- `column::Union{String, SQLTypeFunction}`: the column to be used with the operator.
+- `column::ColumnPart`: the left-hand side — an `SQLTypeField`, or an `SQLTypeFunction` over one.
 
 """
 @kwdef struct OperObject <: SQLTypeOper
@@ -561,8 +569,17 @@ That is a internal function, please do not use it.
   # equality on a UUIDField raising a `convert` MethodError — an untyped error on the most ordinary
   # spelling there is, which is precisely what this pair of issues exists to remove.
   values::Union{String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,SQLObjectHandler,SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF,Base.UUID}
-  column::ColumnPart # Vector{String} is needed
+  column::ColumnPart
 end
+# `OP` is internal (#202): unexported, undocumented, and the string-lookup form (`"field__@op" =>
+# value`) is the public way to write an operator predicate. The `SQLTypeFunction` arms exist for
+# PormG's own composite transforms — `QUADRIMESTER` / `QUARTER` (functions.jl) build
+# `When(OP(MONTH(x), "<=", N))` — and a function column renders only where the filter path can name
+# a formatter: the `PormGTypeField` functions (EXTRACT, TO_CHAR, COUNT). Any other function column,
+# and any aggregate or window column in a WHERE predicate, is refused at render with a
+# `QueryBuildError` naming the alias / suffix spelling (#537) rather than the raw `FieldError` it
+# used to be. Do not widen the arms without a consumer: `test_op_function_column.jl` pins both the
+# served set and the refusals.
 OP(column::String, value) = OperObject(operator="=", values=value, column=SQLField(column))
 OP(column::SQLTypeFunction, value) = OperObject(operator="=", values=value, column=column)
 OP(column::String, operator::String, value) = OperObject(operator=operator, values=value, column=SQLField(column))

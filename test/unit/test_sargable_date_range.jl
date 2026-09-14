@@ -143,8 +143,10 @@ _sdr_where(res) = strip(split(res[:sql_text], " WHERE ")[end])
   # =========================================================================
   @testset "@year accepts every numeric shape the old rendering accepted" begin
     # `Decimals.Decimal(1991)`, not `Decimals.decimal(1991)` — the lowercase helper was REMOVED in
-    # Decimals 0.5, which `[compat]` allows and a fresh CI resolve lands on. The type constructor
-    # exists in both 0.4 and 0.5.
+    # Decimals 0.5. `[compat]` declares `"0.4, 0.5"` and which one an environment lands on depends on
+    # whether LibPQ is installed: LibPQ pins Decimals 0.4, and `[targets].test` carries LibPQ, so CI
+    # resolves 0.4 while a driver-free env resolves 0.5 (#558). The type constructor exists in both,
+    # which is what makes this line version-proof; the lowercase helper is not.
     for v in (1991, "1991", 1991.0, Int32(1991), Decimals.Decimal(1991))
       res = _SdrEv.objects.filter("happened__@year__@gte" => v).list(show_query=:dict)
       @test res[:parameters] == ["1991-01-01"]

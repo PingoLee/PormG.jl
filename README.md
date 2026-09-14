@@ -32,6 +32,7 @@ Full documentation, tutorials, and API reference:
 
 - Julia **1.12** or newer — the 1.12 floor is deliberate: the hot-reload model-loading machinery (`@import_models` / `set_models`) relies on Julia 1.12 world-age semantics, so the 1.10 LTS is not targeted ([#211](https://github.com/PingoLee/PormG.jl/issues/211))
 - A SQL driver for your backend — [`LibPQ`](https://github.com/JuliaDatabases/LibPQ.jl) (PostgreSQL) or [`SQLite`](https://github.com/JuliaDatabases/SQLite.jl)
+- `Decimals` is declared as `"0.4, 0.5"` rather than the newest major alone, and that is deliberate: **every** `LibPQ` release through 1.18.0 requires `Decimals 0.4`, so declaring `"0.5"` alone leaves the only PostgreSQL driver with no installable version and any app depending on both fails to resolve ([#558](https://github.com/PingoLee/PormG.jl/issues/558)). PormG uses only the `Decimals.Decimal` constructor and `string` / `Int64` conversions, which behave identically in both — so an environment carrying `LibPQ` resolves `0.4.x`, a driver-free or SQLite-only one resolves `0.5.x`, and PormG works the same either way
 
 ## Installation
 

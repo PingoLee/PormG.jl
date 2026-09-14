@@ -37,8 +37,8 @@ end
 #
 # The conversion has to be explicit: OrderedCollections 2.0 removed `convert(::OrderedDict, ::Dict)`
 # — `ArgumentError: Cannot convert unordered AbstractDicts into OrderedDicts` — so relying on
-# `@kwdef` to convert works on OC1 and throws on OC2. `[compat]` allows both, and `Manifest.toml` is
-# gitignored, so that difference is invisible locally and appears only in CI.
+# `@kwdef` to convert works on OC1 and throws on OC2. `[compat]` narrowed to `"2"` in #549, so OC2 is
+# now the only supported version and the explicit conversion is required rather than merely safer.
 _mk_render_model(fields::AbstractDict{String, PormG.PormGField}) =
   PormG.Models.Model_Type(name = "drivers_render_scratch",
                           fields = PormG.OrderedCollections.OrderedDict{String, PormG.PormGField}(fields))

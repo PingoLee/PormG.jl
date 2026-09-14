@@ -48,6 +48,7 @@ using PormG
 using PormG.Models
 using PormG.QueryBuilder: F, inspect_query
 using PormG: Joined
+using PormG: Interval   # #527 — the `Interval("HH:MM:SS")` spelling of a sub-day duration
 using Dates
 import TimeZones   # #536 — the `ZonedDateTime` oracle row; a PormG dependency, so `--project=.` resolves it
 import PormG.QueryBuilder as QB
@@ -116,6 +117,14 @@ const _FD_DATETIME = Dates.DateTime(1991, 10, 6, 14, 30)
 const _FD_DATE_TEXT     = "1991-10-06"
 const _FD_TS_TEXT       = "1991-10-06T14:30:00.000+00:00"
 const _FD_DATE_AS_TS    = "1991-10-06T00:00:00.000+00:00"
+const _FD_SUBDAY_TS     = "1991-10-06T06:00:00.000+00:00"   # #527, the sub-day promotion cases
+
+# #527 — the SQLite wrapper for a TIMESTAMP-valued expression. Spelled literally for the same reason
+# the strings above are: `Dialect.SQLITE_CANONICAL_DATETIME_MASK` is the thing under test, so a test
+# that interpolated it would agree with any value the constant ever takes. The render contract itself
+# (and why this is `strftime(...)` rather than SQLite's `datetime(...)`) is pinned in
+# `test_alignment_sqlite.jl`; here it is only the marker the wrapper-choice cases look for.
+const _FD_TS_WRAPPER    = "strftime('%Y-%m-%dT%H:%M:%f+00:00', "
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The contract itself: the dispatch union and the storage slot must admit the same types.
@@ -552,22 +561,24 @@ end
     control.filter(F("logged_at") + Dates.Day(1) == _FD_DATETIME)
     sql_control = _fd_sql(control; conn = _FD_SL)
 
-    # A TIMESTAMP column takes `datetime(...)` either way — the zero-length link must not downgrade
-    # it to `date(...)`, which would drop the time-of-day the operand still carries. `date("Tb"` is
-    # the exact spelling of the downgrade, and cannot match inside `datetime("Tb"`.
-    @test occursin("datetime(", sql_chained)
+    # A TIMESTAMP column takes the canonical timestamp wrapper either way — the zero-length link must
+    # not downgrade it to `date(...)`, which would drop the time-of-day the operand still carries.
+    # `date("Tb"` is the exact spelling of the downgrade, and cannot match inside the `strftime(...)`
+    # form. #527 changed that wrapper from SQLite's own `datetime(...)` to the canonical mask (see
+    # `test_alignment_sqlite.jl` for why); the assertion is the same contract, one spelling later.
+    @test occursin(_FD_TS_WRAPPER, sql_chained)
     @test !occursin("date(\"Tb\"", sql_chained)
-    @test occursin("datetime(", sql_control)
+    @test occursin(_FD_TS_WRAPPER, sql_control)
     # Both bind the canonical timestamp form, so wrapper and bind agree in both spellings.
     @test last(_fd_params(chained; conn = _FD_SL)) == _FD_TS_TEXT
     @test last(_fd_params(control; conn = _FD_SL)) == _FD_TS_TEXT
 
-    # The DATE column keeps `date(...)` — the resolver must not upgrade everything to datetime.
+    # The DATE column keeps `date(...)` — the resolver must not upgrade everything to a timestamp.
     plain = FD.Fd_result.objects
     plain.values("id")
     plain.filter(F("seen") + Dates.Day(1) == _FD_DATE)
     @test occursin("date(\"Tb\"", _fd_sql(plain; conn = _FD_SL))
-    @test !occursin("datetime(", _fd_sql(plain; conn = _FD_SL))
+    @test !occursin(_FD_TS_WRAPPER, _fd_sql(plain; conn = _FD_SL))
   end
 
   # A joined PATH under arithmetic resolves the far-side column too.
@@ -576,6 +587,93 @@ end
     q.values("id")
     q.filter(F("race__date") + Dates.Day(1) == _FD_DATETIME)
     @test last(_fd_params(q; conn = conn)) == _FD_DATE_TEXT
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #527: a SUB-DAY duration promotes the expression's result kind, so the literal follows what the
+# expression EVALUATES TO rather than the column it is rooted in.
+#
+# `F("seen") + Hour(6)` on a `DateField` is a timestamp — `date + interval` is a `timestamp` in
+# SQL:2003 and in PostgreSQL, and Django resolves `DateField + DurationField` to a `DateTimeField`.
+# Before #527 the literal bound the column's calendar date (`'1991-10-06'`) against a
+# timestamp-valued left side, so the comparison was unsatisfiable for every row — zero rows, no
+# error, on BOTH engines. That is why every case here is asserted on PostgreSQL too: this is not a
+# SQLite rendering quirk, it is which bytes get bound.
+#
+# The promotion is deliberately NARROWER than Django's, which promotes on any duration. The three
+# negative cases below are the ones that pin that narrowness, and each of them broke a simpler
+# implementation of this rule:
+#   · whole days must NOT promote — the truncation contract above (line ~516) depends on it;
+#   · a ZERO sub-day link must not promote, because the renderer short-circuits it away entirely,
+#     so promoting would put the bind back out of step with the wrapper;
+#   · the promotion must survive a whole-day link stacked ON TOP of a sub-day one, which a
+#     predicate that inspected only the outermost operand would miss.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#527: a sub-day duration promotes a DATE column's result to a timestamp" begin
+  _FD_SUBDAY_DT = Dates.DateTime(1991, 10, 6, 6, 0)
+
+  for (backend, conn) in (("PostgreSQL", _FD_PG), ("SQLite", _FD_SL))
+    # The case the issue reports: hours on a DATE column.
+    q1 = FD.Fd_result.objects
+    q1.values("id")
+    q1.filter(F("seen") + Dates.Hour(6) == _FD_SUBDAY_DT)
+    @test _fd_params(q1; conn = conn) == Any[6, _FD_SUBDAY_TS]
+
+    # `Interval("HH:MM:SS")` is the same duration by another spelling, and it is the one that needs
+    # unwrapping before the components can be read — a resolver that only handled bare `Period`s
+    # would decline to promote here.
+    q2 = FD.Fd_result.objects
+    q2.values("id")
+    q2.filter(F("seen") + Interval("06:00:00") == _FD_SUBDAY_DT)
+    @test last(_fd_params(q2; conn = conn)) == _FD_SUBDAY_TS
+
+    # A whole-day link stacked on top of a sub-day one. The OUTERMOST operand is `Day(1)`, so a
+    # predicate that looked only one level down would bind the calendar date here while the SQLite
+    # render (which sees the inner wrapper) emitted a timestamp — a fresh wrapper/bind split, the
+    # exact class #494 closed.
+    q3 = FD.Fd_result.objects
+    q3.values("id")
+    q3.filter(F("seen") + Dates.Hour(6) + Dates.Day(1) == _FD_SUBDAY_DT)
+    @test last(_fd_params(q3; conn = conn)) == _FD_SUBDAY_TS
+
+    # Negative 1: whole days alone must not promote. Same column, same literal, one unit different.
+    q4 = FD.Fd_result.objects
+    q4.values("id")
+    q4.filter(F("seen") + Dates.Day(1) == _FD_SUBDAY_DT)
+    @test _fd_params(q4; conn = conn) == Any[1, _FD_DATE_TEXT]
+
+    # Negative 2: a ZERO-length sub-day link. `_decompose_period` drops it, the renderer
+    # short-circuits to the bare left side and emits NO wrapper — so promoting on the presence of an
+    # `Hour` would bind a timestamp against an untouched DATE column. Asking the decomposer, rather
+    # than the operand's Julia type, is what keeps render and bind in step.
+    q5 = FD.Fd_result.objects
+    q5.values("id")
+    q5.filter(F("seen") + Dates.Hour(0) + Dates.Day(1) == _FD_SUBDAY_DT)
+    @test _fd_params(q5; conn = conn) == Any[1, _FD_DATE_TEXT]
+
+    # Negative 3: a TIMESTAMP column was already binding the canonical form, and still does — the
+    # promotion may only ever widen DATE→TIMESTAMP, never narrow.
+    q6 = FD.Fd_result.objects
+    q6.values("id")
+    q6.filter(F("logged_at") + Dates.Hour(6) == _FD_SUBDAY_DT)
+    @test last(_fd_params(q6; conn = conn)) == _FD_SUBDAY_TS
+  end
+
+  # And on SQLite the wrapper agrees with every bind above — which is the whole point, since a
+  # correct bind against a `date(...)`-wrapped left side still matches nothing.
+  @testset "the SQLite wrapper agrees with the promoted bind" begin
+    promoted = FD.Fd_result.objects
+    promoted.values("id")
+    promoted.filter(F("seen") + Dates.Hour(6) == _FD_SUBDAY_DT)
+    @test occursin(_FD_TS_WRAPPER, _fd_sql(promoted; conn = _FD_SL))
+
+    # The zero-length negative renders `date(...)`, so its un-promoted bind is the matching one.
+    zeroed = FD.Fd_result.objects
+    zeroed.values("id")
+    zeroed.filter(F("seen") + Dates.Hour(0) + Dates.Day(1) == _FD_SUBDAY_DT)
+    @test occursin("date(\"Tb\"", _fd_sql(zeroed; conn = _FD_SL))
+    @test !occursin(_FD_TS_WRAPPER, _fd_sql(zeroed; conn = _FD_SL))
   end
 end
 

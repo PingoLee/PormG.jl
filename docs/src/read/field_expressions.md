@@ -217,13 +217,29 @@ Generated SQL (PostgreSQL) — a single, strongly-typed `make_interval(...)`:
 -- parameters: [1, 15]
 ```
 
-Generated SQL (SQLite) — `date()` (or `datetime()` when a sub-day unit or a `TIMESTAMP` column is involved), one modifier per component:
+Generated SQL (SQLite) — `date()`, one modifier per component:
 ```sql
 date("Tb"."date", '+' || ? || ' months', '+' || ? || ' days')
 -- parameters: [1, 15]
 ```
 
 Magnitudes are always bound as parameters; the unit keywords come from a fixed whitelist. Weeks render natively on PostgreSQL and as days (×7) on SQLite, which has no `weeks` modifier.
+
+When the result is a **timestamp** rather than a date — a `DateTimeField` column, or any duration carrying hours, minutes or seconds — SQLite renders the same modifiers through `strftime` with PormG's canonical UTC mask instead:
+
+```sql
+strftime('%Y-%m-%dT%H:%M:%f+00:00', "Tb"."created_at", '+' || ? || ' days')
+```
+
+That mask is the exact format a `DateTimeField` stores, which is the point of it: SQLite compares timestamps as text, so an expression rendered in SQLite's own `YYYY-MM-DD HH:MM:SS` form could never equal a stored value — and, because a space sorts below `T`, would always compare *less* than it. Rendering the arithmetic straight into the stored representation keeps `==`, `<`, `>`, `ORDER BY` and `update()` all agreeing with PostgreSQL. You never write the mask yourself.
+
+!!! note "Sub-day durations on a `DateField`"
+    Adding hours, minutes or seconds to a `DateField` produces a **timestamp**, as it does in
+    standard SQL (`date + interval` is a `timestamp`). A date literal you compare it against is
+    promoted to the same representation, so `F("date") + Hour(6) == DateTime(1991, 10, 6, 6)`
+    matches. Whole-day arithmetic stays a date, and a `DateTime` compared against a plain
+    `DateField` is still coerced to its calendar date — the same coercion `filter("date" => value)`
+    applies.
 
 #### The `Interval` helper
 
@@ -240,7 +256,14 @@ F("created_at") + Interval("01:30:00")    # + 1 hour 30 minutes
     `Interval` is also a common name in the `Dates`/`Intervals.jl` ecosystems. If you `using Intervals` alongside PormG, reach PormG's helper as `PormG.QueryBuilder.Interval`.
 
 !!! warning "Sub-day math on `DATE` columns"
-    Adding a sub-day duration (`Hour`, `Minute`, `Second`) promotes the result to a timestamp. Persisting that back into a `DATE` column truncates the time — sub-day arithmetic only round-trips on `TIMESTAMP` / `DateTimeField` columns.
+    Adding a sub-day duration (`Hour`, `Minute`, `Second`) promotes the result to a timestamp, so
+    **comparisons** against it work on both engines (see the note above) — though a projected
+    expression alias comes back as a `String` on SQLite and as a typed timestamp on PostgreSQL.
+    **Writing** it into a `DATE` column is not well defined, and the two engines fail differently:
+    PostgreSQL coerces to `date` and drops the time, while on SQLite a `DATE` column has NUMERIC
+    affinity, which leaves a non-numeric string untouched — so the whole timestamp string is stored
+    verbatim into a column that is then no longer a valid date. Sub-day arithmetic only round-trips
+    through `update()` on a `TIMESTAMP` / `DateTimeField` column.
 
 ### When NOT to Use F
 

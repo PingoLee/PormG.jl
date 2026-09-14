@@ -2350,15 +2350,31 @@ end
 # =============================================================================
 # F-expression date arithmetic with explicit Julia duration types (#25) — SQLite.
 #
-# SQLite rendering contract: `F(date) ± <period>` becomes a `date()`/`datetime()`
-# wrapper with one `'<sign>' || ? || ' <unit>'` modifier per component. The wrapper
-# is `datetime()` when any sub-day unit is present OR the column is TIMESTAMP/TIMESTAMPTZ
+# SQLite rendering contract: `F(date) ± <period>` becomes a wrapper with one
+# `'<sign>' || ? || ' <unit>'` modifier per component. The wrapper is the CANONICAL
+# TIMESTAMP form when any sub-day unit is present OR the column is TIMESTAMP/TIMESTAMPTZ
 # (to preserve time-of-day), otherwise `date()`. Weeks have no SQLite modifier and are
 # expressed as days (×7). The sign is baked into each modifier so subtraction binds a
 # positive magnitude. The typed-PostgreSQL counterpart is pinned in test_operators.jl;
 # this locks the placeholder/bucket parity so the two dialects can't silently diverge.
+#
+# #527 changed what "the timestamp wrapper" spells. It was SQLite's own `datetime(...)`, which emits
+# `YYYY-MM-DD HH:MM:SS` — a format no `DateTimeField` value can ever equal, because the column holds
+# the canonical `YYYY-MM-DDTHH:MM:SS.sss+00:00` (#79) and SQLite compares TEXT lexicographically. A
+# space (0x20) sorts below `T` (0x54), so the mismatch was not merely "equality fails": every
+# wrapped value was systematically LESS than the same instant in stored form, biasing `<` and `>`
+# silently. It is now `strftime('%Y-%m-%dT%H:%M:%f+00:00', ...)`, whose output IS the stored form.
+#
+# `date()` is untouched on purpose — its output already equals `Models.format_date_sql`'s, so the
+# DATE path had nothing to reconcile. Every `date(` assertion below is therefore a control, not a
+# leftover: it proves the fix did not upgrade the whole family.
 # =============================================================================
-@testset "F-expression date arithmetic — SQLite date()/datetime() (#25)" begin
+@testset "F-expression date arithmetic — SQLite date()/canonical strftime() (#25, #527)" begin
+    # #527 — the canonical timestamp wrapper's rendered prefix. Spelled literally rather than
+    # interpolated from `Dialect.SQLITE_CANONICAL_DATETIME_MASK`, because that constant is the thing
+    # under test: a test built from it would agree with whatever value it is ever given.
+    TS_WRAPPER = "strftime('%Y-%m-%dT%H:%M:%f+00:00', "
+
     # Render a values() projection and return the inspection dict.
     render(model, expr) = begin
         q = model.objects
@@ -2370,38 +2386,39 @@ end
         insp = render(M.Driver, F("dob") + Day(30))
         sql = insp[:sql_text]
         @test contains(sql, "date(\"Tb\".\"dob\", '+' || ? || ' days')")
-        @test !contains(sql, "datetime(")                 # a pure DATE + day stays on date()
+        @test !contains(sql, TS_WRAPPER)                  # a pure DATE + day stays on date()
         @test count(==('?'), sql) == 1                    # one placeholder == one component
         @test insp[:parameters] == [30]
         @test 30 in insp[:parameter_buckets][:select]     # values() projection → :select bucket
     end
 
-    @testset "TIMESTAMPTZ field → datetime() via the column-type trigger" begin
-        # Day is NOT a sub-day unit, so datetime() here can come ONLY from the TIMESTAMPTZ column
-        # type — this is the discriminating case that actually exercises the `ftype` branch. Without
-        # it the row would render date() and silently truncate the stored time-of-day.
+    @testset "TIMESTAMPTZ field → canonical strftime() via the column-type trigger" begin
+        # Day is NOT a sub-day unit, so the timestamp wrapper here can come ONLY from the TIMESTAMPTZ
+        # column type — this is the discriminating case that actually exercises the `ftype` branch.
+        # Without it the row would render date() and silently truncate the stored time-of-day.
         insp = render(M.Django_contract_scratch, F("event_time") + Day(1))
-        @test contains(insp[:sql_text], "datetime(\"Tb\".\"event_time\", '+' || ? || ' days')")
+        @test contains(insp[:sql_text], TS_WRAPPER * "\"Tb\".\"event_time\", '+' || ? || ' days')")
         @test !contains(insp[:sql_text], "date(\"Tb\".\"event_time\"")
         @test insp[:parameters] == [1]
     end
 
-    @testset "Chained arithmetic on a TIMESTAMP column stays datetime() (no truncation)" begin
+    @testset "Chained arithmetic on a TIMESTAMP column stays a timestamp (no truncation)" begin
         # `F(event_time) + Day(1) + Day(2)` nests: the outer call sees a nested FExpression as its
-        # field_name (so the column type is unknown), but the inner render is already a datetime(),
-        # so the outer must stay datetime(). Otherwise date(datetime(...)) drops the time-of-day and
-        # diverges from PostgreSQL (which keeps the full timestamp).
+        # field_name, and must resolve THROUGH it to the rooted TIMESTAMP column. If it fell back to
+        # date(), the outer wrapper would drop the time-of-day the inner one preserved and diverge
+        # from PostgreSQL (which keeps the full timestamp).
         insp = render(M.Django_contract_scratch, F("event_time") + Day(1) + Day(2))
         sql = insp[:sql_text]
-        @test !contains(sql, "date(datetime(")                              # the truncating shape must NOT appear
-        @test contains(sql, "datetime(datetime(\"Tb\".\"event_time\"")      # nested datetime() preserves time
+        @test !contains(sql, "date(" * TS_WRAPPER)                        # the truncating shape must NOT appear
+        @test contains(sql, TS_WRAPPER * TS_WRAPPER * "\"Tb\".\"event_time\"")   # nesting preserves time
         @test insp[:parameters] == [1, 2]
     end
 
-    @testset "Sub-day unit forces datetime() even on a DATE column" begin
-        # event_date is DATE, but adding hours must not truncate to a date → datetime().
+    @testset "Sub-day unit forces the timestamp wrapper even on a DATE column" begin
+        # event_date is DATE, but adding hours must not truncate to a date. #527 also makes the
+        # matching BIND follow this promotion (`test_f_date_operands.jl`); here it is the render half.
         insp = render(M.Django_contract_scratch, F("event_date") + Hour(6))
-        @test contains(insp[:sql_text], "datetime(\"Tb\".\"event_date\", '+' || ? || ' hours')")
+        @test contains(insp[:sql_text], TS_WRAPPER * "\"Tb\".\"event_date\", '+' || ? || ' hours')")
         @test insp[:parameters] == [6]
     end
 
@@ -2436,11 +2453,74 @@ end
         @test insp[:parameters] == [30]
     end
 
-    @testset "Interval(\"01:30:00\") → datetime() with hours+minutes" begin
+    @testset "Interval(\"01:30:00\") → the timestamp wrapper with hours+minutes" begin
         insp = render(M.Django_contract_scratch, F("event_time") + Interval("01:30:00"))
         @test contains(insp[:sql_text],
-            "datetime(\"Tb\".\"event_time\", '+' || ? || ' hours', '+' || ? || ' minutes')")
+            TS_WRAPPER * "\"Tb\".\"event_time\", '+' || ? || ' hours', '+' || ? || ' minutes')")
         @test insp[:parameters] == [1, 30]
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # #527 — the assertions that give the wrapper its POINT. Everything above pins which wrapper is
+    # chosen; these pin that the chosen wrapper's output is a representation stored values actually
+    # have. Without them the contract is satisfiable by any pair of function names.
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @testset "#527: the mask is the model layer's canonical format, character for character" begin
+        # The decisive assertion of the whole fix. `strftime` emits whatever mask it is handed, so
+        # the wrapper is only correct if that mask reproduces `Models.format_timezone_sql`'s output
+        # exactly — one character of drift and the comparison silently matches nothing again, which
+        # is the #527 defect wearing a different function name.
+        #
+        # Cross-checked against the FORMATTER's real output rather than against a hand-written twin,
+        # so a change to `DATETIME_FORMAT` fails here instead of quietly re-opening the bug. SQLite's
+        # `%f` is `SS.SSS`, and the `+00:00` is honest because every PormG write path canonicalizes
+        # to UTC (`Models.validate_timezone`) before the value is ever stored.
+        canonical = PormG.Models.format_timezone_sql(DateTime(1991, 10, 6, 14, 30, 0))
+        @test canonical == "1991-10-06T14:30:00.000+00:00"
+
+        mask = PormG.Dialect.SQLITE_CANONICAL_DATETIME_MASK
+        @test mask == "'%Y-%m-%dT%H:%M:%f+00:00'"
+        # Substituting SQLite's own field codes for that instant must land back on the formatter's
+        # string — the literal separators, the `T`, and the offset all have to line up.
+        rendered = replace(strip(mask, '\''),
+            "%Y" => "1991", "%m" => "10", "%d" => "06",
+            "%H" => "14", "%M" => "30", "%f" => "00.000")
+        @test rendered == canonical
+
+        # And the wrapper the renderer emits is built from that same constant, not a second copy.
+        insp = render(M.Django_contract_scratch, F("event_time") + Day(1))
+        @test contains(insp[:sql_text], "strftime($(mask), ")
+    end
+
+    @testset "#527: integer-days on a TIMESTAMP column no longer truncates to date()" begin
+        # The sibling defect, one branch over from the duration path. `F(ts) + 7` is guarded by
+        # `_is_date_field`, which answers `true` for TIMESTAMP as well as DATE, and then emitted
+        # `date(...)` unconditionally — so a `DateTimeField` lost its time-of-day AND landed in
+        # SQLite's own format. Both halves are asserted: the wrapper is the canonical one, and the
+        # truncating spelling is absent.
+        insp = render(M.Django_contract_scratch, F("event_time") + 7)
+        sql = insp[:sql_text]
+        @test contains(sql, TS_WRAPPER * "\"Tb\".\"event_time\", '+' || ? || ' days')")
+        @test !contains(sql, "date(\"Tb\".\"event_time\"")
+        @test insp[:parameters] == [7]
+
+        # The DATE column is the control and must be untouched by that change.
+        insp_date = render(M.Driver, F("dob") + 7)
+        @test contains(insp_date[:sql_text], "date(\"Tb\".\"dob\", '+' || ? || ' days')")
+        @test !contains(insp_date[:sql_text], TS_WRAPPER)
+    end
+
+    @testset "#527: the already-canonical backstop keys on the MASK, not on `strftime(`" begin
+        # The wrapper choice falls back to sniffing the rendered left side for a left it cannot type.
+        # That marker has to be the mask: `Dialect.QUARTER`, `QUADRIMESTER`, `EXTRACT_DATE` and
+        # `EXTRACT` all emit `strftime(` too, and none of them yields a timestamp — so a bare
+        # `strftime(` marker would read a date-PART expression as already-canonical and skip the
+        # wrapper a DATE column still needs.
+        insp = render(M.Driver, F("dob__@year") + Day(1))
+        sql = insp[:sql_text]
+        @test contains(sql, "strftime(")          # the date-part call really is in the left side
+        @test !contains(sql, TS_WRAPPER)          # …and it did not masquerade as the canonical form
     end
 end
 

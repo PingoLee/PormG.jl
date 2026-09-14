@@ -319,6 +319,51 @@ function _levenshtein(a::AbstractString, b::AbstractString)::Int
   return prev[n + 1]
 end
 
+# ── Models-folder identity (#550) ──────────────────────────────────────────────
+# `Configuration` and `Models` both have to answer "do these two strings name the same models
+# folder?" — `Configuration._resolve_loaded_key` when deciding whether a folder is already
+# loaded, `Models._resolve_connect_key` when binding models to a connection. They used to answer
+# it with slightly different rules, which meant `is_loaded("db")` and a model's actual binding
+# could disagree. Shared vocabulary belongs in Kernel (layer 1), so the rules live here once.
+
+"""
+    _canonical_folder_path(path::AbstractString) -> String
+
+`abspath` with trailing separators normalised away, so `"db"` and `"db/"` compare equal.
+
+`abspath` alone preserves them (`abspath("db/")` keeps the slash), which would make one spelling
+of a folder fail to match another spelling of the same folder.
+"""
+function _canonical_folder_path(path::AbstractString)::String
+    parts = splitpath(abspath(String(path)))
+    return isempty(parts) ? abspath(String(path)) : joinpath(parts...)
+end
+
+"""
+    _folder_tag(path::AbstractString) -> String
+
+The final component of a models-folder path, with any trailing separators removed.
+
+`basename` alone is not safe here: `basename("db/") == ""`, so two configurations whose folder
+carries a trailing separator both reduce to `""` — and then match each other, and every other
+trailing-separator folder. `splitpath` normalises that away on both platforms.
+"""
+function _folder_tag(path::AbstractString)::String
+    parts = splitpath(String(path))
+    return isempty(parts) ? "" : String(last(parts))
+end
+
+"""
+    _usable_folder_tag(tag::AbstractString) -> Bool
+
+Whether a `_folder_tag` actually names a folder, and may therefore be matched on.
+
+`isdirpath` is true for every spelling that names none — `""`, `"."`, `".."`, and a filesystem
+root (`/`, `C:\\`, all of which end in a separator) — so it is the whole predicate. Matching on
+any of those would bind unrelated folders together.
+"""
+_usable_folder_tag(tag::AbstractString)::Bool = !isdirpath(tag)
+
 """
     _suggest_name(input::AbstractString, candidates) -> Union{Nothing, String}
 

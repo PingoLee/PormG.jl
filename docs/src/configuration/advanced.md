@@ -106,14 +106,105 @@ end
 
 ## The Boot-Time Hazard
 
-There is an important boot-time hazard when using `@import_models` in a server module.
+`@import_models` eventually calls `Models.set_models(...)`, which binds every model to a
+`connect_key` by matching its models folder against the configurations already loaded. Everything
+below is about that match: what it does when it finds nothing, and what it does when it finds more
+than one thing.
 
-`@import_models` eventually calls `Models.set_models(...)`. If the corresponding configuration path is not loaded yet, `set_models(...)` can trigger `Configuration.load(path)` implicitly. If that happens before the server has selected the intended environment, PormG may initialize that settings object using the default environment and retain it for the rest of the process.
+### When nothing matches, PormG guesses twice
 
-!!! warning "Load the configuration before `@import_models`"
-    If `set_models(...)` triggers an implicit `Configuration.load(path)` before the server has
-    selected its environment, PormG initializes that settings object from the **default**
-    environment and keeps it for the rest of the process. Nothing errors — the application simply
-    runs against the wrong database until it restarts. Always call
-    `Configuration.load(path; env = "...")` explicitly **before** `@import_models` in server-side
-    code.
+`set_models` loads the folder itself — and that implicit load decides two things you did not state.
+
+**It guesses the environment.** `Configuration.load(path)` is called with no `env`, so the file's
+`default_env:` wins. In a server that has not selected its environment yet, that is usually `dev`,
+which in a great many deployments points at production.
+
+**It guesses the key.** The entry is registered under `path`, which is the *absolute* path of the
+folder — not a name your application chose. A later `Configuration.load("db"; env = "prod")` no
+longer adds a second entry for that folder: it migrates the implicit one to the key you asked for
+and warns. So you end up with one entry under the right key, but with a window beforehand in which
+models bound to the absolute key and its environment came from `default_env:`.
+
+PormG emits a `@warn` when this implicit load fires. It does not raise: `@import_models` injects an
+`__init__` that swallows every exception, so a throw would be invisible and the module would
+silently keep whatever key was baked in at precompile.
+
+### When several configurations match, the explicit key wins
+
+Applications normally load configuration by short key (`Configuration.load("db")`) and import
+models by relative path (`@import_models "../db/models.jl"`). Those two agree on the resolved
+absolute path only when the working directory lines up, so PormG also matches on the folder's final
+component.
+
+Matches are **ranked** — an exact path beats a folder-name match. Within a rank, a key you loaded
+explicitly beats one minted implicitly under an absolute path, because the implicit entry is the one
+whose environment came from `default_env:` rather than from your application.
+
+Only when that still leaves several candidates is the binding genuinely ambiguous — two configured
+folders that end in the same name (`db` and `vendor_app/db`), say. PormG then warns, lists every
+candidate, and picks the lexicographically first so that at least the same configuration resolves
+the same way on every boot. Give the folders distinct final components and the ambiguity
+disappears.
+
+### Loading before `@import_models` is not enough for a package
+
+!!! warning "Module-body configuration does not survive precompilation"
+    The obvious fix — call `Configuration.load(path; env = ...)` above `@import_models` — is
+    correct but **incomplete for a precompiled package**. Module-body code runs at precompile
+    time, and PormG's `config` is a global inside PormG, so those entries do not survive into the
+    session. At runtime `config` starts empty again and the first `Model.objects` access
+    re-derives the key through the implicit-load path described above.
+
+    Load the configuration in **both** places: in the module body, so the right `connect_key` is
+    baked into the image, and again from your module's `__init__`, so it is right in the running
+    session. Route both through one helper so they cannot drift apart.
+
+```julia
+module RaceControl
+
+using PormG
+
+const DB_DIRS  = ["db", "db_telemetry"]
+const APP_ROOT = normpath(joinpath(@__DIR__, ".."))
+
+# `cd` matters: PormG stores the string you pass as the configuration key, without normalising it,
+# so short names resolved from a known root are what keep one predictable key per folder.
+_load_configs() = cd(APP_ROOT) do
+    PormG.Configuration.load_many(DB_DIRS; env = get(ENV, "RACECONTROL_ENV", "dev"))
+end
+
+_load_configs()                       # precompile: bakes the right connect_key into the image
+PormG.@import_models "../db/models.jl" models
+
+__init__() = _load_configs()          # runtime: the image's configuration did not survive
+
+end
+```
+
+Each half does a different job, which is why dropping either one breaks something:
+
+| Where the configuration is loaded | `connect_key` at runtime | `config` at runtime |
+|---|---|---|
+| Module body **and** `__init__` | short key ✔ | populated ✔ |
+| Module body only | short key ✔ | **empty** — queries cannot resolve the connection |
+| `__init__` only | **absolute path** — the environment came from `default_env:` | populated |
+| Neither | absolute path | empty |
+
+The module body runs at precompile time, so it is what bakes the right `connect_key` into the
+image; `__init__` runs in the session, so it is what puts the connection in `config` where a query
+can find it. Neither substitutes for the other.
+
+### Verify the binding instead of assuming it
+
+`connect_key` is the field that decides which database a model's queries reach, so read it back
+rather than inferring it from the configuration you *meant* to load:
+
+```julia
+julia> using RaceControl
+julia> RaceControl.models.Driver.objects       # the access that re-derives the key
+julia> RaceControl.models.Driver.connect_key   # want the short key, not an absolute path
+"db"
+```
+
+A value that is an absolute path means the implicit load ran and the environment came from
+`default_env:` — not from whatever your application selected.

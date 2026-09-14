@@ -48,6 +48,10 @@ using .Kernel
 # Underscore-private members are not exported by Kernel; import those reached across
 # submodules or pinned by tests (e.g. `PormG._emsg`, `PormG._EXTRA_IGNORE_TABLES`, `PormG._suggest_name`).
 import .Kernel: _emsg, _EXTRA_IGNORE_TABLES, _levenshtein, _suggest_name
+# Models-folder identity (#550) — shared by `Configuration._resolve_loaded_key` and
+# `Models._resolve_connect_key` so the two cannot disagree about whether two spellings
+# name one folder.
+import .Kernel: _canonical_folder_path, _folder_tag, _usable_folder_tag
 # Column-IR internals (#507): the "same parent?" rule `Models` and `reference_delta` share, and the
 # two CHECK accessors `Dialect.alter_field` reads off a `ColumnDelta`. Underscore-private, so
 # `using .Kernel` does not bind them here — and a submodule's `import PormG: _byte_bound` would

@@ -982,6 +982,14 @@ function Base.:*(operand::Union{Integer,Float64}, f::FExpression)
   )
 end
 
+# `<: SQLTypeF` on purpose, and — unlike `CTEReference` / `JoinedReference` below — every union the
+# abstract type reaches is a place an outer-row reference is legitimate SQL: the ~18 scalar-function
+# signatures in `functions.jl` and `WindowColumnPart` (`Lower(OuterRef("surname"))`,
+# `Lag(OuterRef("id"), over = …)` inside a correlated subquery). #535 gave the build side the one
+# consumer it lacked (`_check_function(::OuterRefObject)`, build_helpers.jl); the render side always
+# resolved it against `instruc.outer` or refused with `QueryBuildError`. The ONE union it must not
+# reach is `FExpression.operand` — `F("a") == OuterRef("b")` has no render arm and would bind the
+# handle RAW — which is why that slot names `FExpression` rather than `SQLTypeF` (#533).
 @kwdef struct OuterRefObject <: SQLTypeF
   field_name::String
 end
@@ -1012,7 +1020,11 @@ Two limits, both enforced with a `QueryBuildError`:
 - **One level only.** It binds to the immediately enclosing query, so a projected subquery nested
   inside another projected subquery is rejected rather than silently correlated to the wrong level.
 - **Correlated context required.** Used outside an `Exists`/`Subquery` build there is no outer
-  query to bind to.
+  query to bind to — wrapped in a function or not.
+
+An outer column may be wrapped in a scalar function or a window column inside the correlated query
+— `Lower(OuterRef("surname"))`, `Cast(OuterRef("driverid"), "text")`, `Lag(OuterRef("driverid"),
+over = …)` — and resolves against the outer row exactly as the bare reference does.
 
 Correlate on a base column of the outer model. A joined path (`OuterRef("constructorid__name")`)
 adds a join to the outer query and is outside the validated surface.

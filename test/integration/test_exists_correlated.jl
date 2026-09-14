@@ -4,7 +4,8 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
-import PormG.QueryBuilder: Exists, OuterRef
+import PormG.QueryBuilder: Exists, OuterRef, Subquery
+import PormG.Functions: Lower   # #535 — an OuterRef wrapped in a scalar function
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Correlated EXISTS – basic round-trip
@@ -311,4 +312,35 @@ end
     # testset would pass against the bug it exists to catch.
     @test !isempty(expected)
     @test got == expected
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #535 — an OuterRef wrapped in a scalar function INSIDE the correlated query.
+# `Lower(OuterRef("surname"))` projected through a scalar Subquery correlated on the driver row must
+# round-trip on both engines. Before #535 the projection died at `values()` with a raw MethodError
+# (no `_check_function` arm for `OuterRefObject`), before any SQL existed.
+#
+# Two assertions, deliberately split: the SQL text pins that the wrapped reference resolved against
+# the OUTER alias ("Tb"), which the value alone could not prove here — the inner row is the same
+# driver, so an inner-alias resolution would lower-case the same surname. The value assertion then
+# proves the driver executes it, with Julia's `lowercase` as the independent oracle. SQLite's
+# built-in lower() is ASCII-only while PostgreSQL's is locale-aware (a documented divergence), so
+# the value check is restricted to ASCII surnames, and the mask must be non-empty so the restriction
+# cannot make it vacuous.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Correlated Subquery - OuterRef wrapped in a scalar function (#535)" begin
+    inner = M.Driver.objects
+    inner.filter("driverid" => OuterRef("driverid"))
+    inner.values("l" => Lower(OuterRef("surname")))
+
+    q = M.Driver.objects
+    q.values("surname", "lower_surname" => Subquery(inner))
+    sql = inspect_query(q)[:sql_text]
+    @test occursin(r"LOWER\(\"Tb\"\.\"surname\"\)"i, sql)
+
+    df = q |> DataFrame
+    @test nrow(df) == M.Driver.objects.count()
+    mask = isascii.(df.surname)
+    @test any(mask)
+    @test df.lower_surname[mask] == lowercase.(df.surname[mask])
 end

@@ -199,10 +199,9 @@ end
 # new gap fails, and so does a FIXED one, which forces the pin to be removed alongside the fix. Same
 # discipline as `test_memo_interface.jl`'s allowed-hit counts: "pinned, not bounded".
 const KNOWN_GAPS = Dict{Type,Vector{String}}(
-  # #535 — `OuterRefObject <: SQLTypeF`, so every union naming the ABSTRACT `SQLTypeF` admits it and
-  # `_check_function` has no arm. Pre-existing; #533 closed the `FExpression.operand` instance by
-  # naming `FExpression` directly, and left the design call on these two to #535.
-  QBA.OuterRefObject => ["WindowFunction.column", "Lower(x) — the functions.jl family"],
+  # (#535 — `OuterRefObject` in `WindowFunction.column` and the `functions.jl` family — was pinned
+  # here until `_check_function` gained its `::OuterRefObject` arm; `test_outer_ref_in_functions.jl`
+  # owns that spelling now, and the invariant covers it unconditionally.)
 
   # #537 — `OP(::SQLTypeFunction, value)` is a public constructor whose result nothing renders: the
   # path reads `.field` off the column, which only an `SQLField` has. Pre-existing on origin/main;

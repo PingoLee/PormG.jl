@@ -140,6 +140,16 @@ function _check_function(x::FExpression)
 end
 # #444 — a CTE handle is already fully resolved; there is nothing left to peel.
 _check_function(x::CTEReference) = x
+# #535 — an outer-query reference is fully resolved too. `OuterRefObject <: SQLTypeF`, so every
+# union naming the abstract `SQLTypeF` — the ~18 scalar-function signatures in `functions.jl` and
+# `WindowColumnPart` — admits it, and the RENDER side always had a consumer:
+# `_get_select_query(::OuterRefObject)` resolves it against the enclosing query's `instruc.outer`
+# (`Lower(OuterRef("surname"))` inside an `Exists`/`Subquery` renders `LOWER("Tb"."surname")`,
+# Django's own spelling — `OuterRef` subclasses `F` there) or refuses with `QueryBuildError` when
+# there is no outer query. What was missing was THIS arm on the build side: `_check_function(::FObject)`
+# and `(::WindowFunction)` walk their `column` through here, so `values("l" => Lower(OuterRef(…)))`
+# died with a raw `MethodError` before any SQL existed. One identity arm closes every union at once.
+_check_function(x::OuterRefObject) = x
 
 # #444 — retag a resolved column expression so its terminal column becomes a CTE handle.
 #

@@ -1176,7 +1176,17 @@ end
 
 function _get_select_query(v::ExistsObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   _guard_no_nested_projection(instruc, "Exists")   # #92
-  return _get_filter_query(v, instruc)
+  # #194: mark this as a PROJECTED correlation for the duration of the render, so the OuterRefs it
+  # resolves are recorded. The filter-position arm, `_get_filter_query(::ExistsObject)`, is
+  # deliberately NOT bracketed — a WHERE predicate is evaluated before GROUP BY, so correlating it
+  # on an ungrouped column is legal on both backends.
+  prev = instruc.correlated_projection
+  instruc.correlated_projection = _as === nothing ? "Exists(…)" : _as
+  try
+    return _get_filter_query(v, instruc)
+  finally
+    instruc.correlated_projection = prev
+  end
 end
 function _get_select_query(v::OuterRefObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   return _get_filter_query(v, instruc)
@@ -1213,12 +1223,21 @@ function _get_select_query(v::SubqueryObject, instruc::SQLInstruction; _as::Unio
   # #432: same nested-run reordering as `_build_exists_query` — this subquery's text sits in the
   # SELECT list, so everything it binds must be one clause-ordered run in the ambient bucket.
   nested_mark = nested_parameter_mark(instruc)
-  inner_sql = query(handler,
-                    table_alias=instruc.table_alias,
-                    connection=instruc.connection,
-                    parameters=instruc.parameters,
-                    outer=instruc,
-                    own_contexts=true)
+  # #194: see the `ExistsObject` arm above — the flag marks a PROJECTED correlation so every
+  # OuterRef this inner build resolves is recorded against it. `finally` because the inner build
+  # throws routinely (the one-column rule a few lines up is one of several).
+  prev_correlated = instruc.correlated_projection
+  instruc.correlated_projection = _as === nothing ? "Subquery(…)" : _as
+  inner_sql = try
+    query(handler,
+          table_alias=instruc.table_alias,
+          connection=instruc.connection,
+          parameters=instruc.parameters,
+          outer=instruc,
+          own_contexts=true)
+  finally
+    instruc.correlated_projection = prev_correlated
+  end
   reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
   return string("(", inner_sql, ")")
 end
@@ -1406,7 +1425,21 @@ function _get_filter_query(v::ExistsObject, instruc::SQLInstruction)
 end
 function _get_filter_query(v::OuterRefObject, instruc::SQLInstruction)
   instruc.outer === nothing && throw(QueryBuildError("OuterRef(\"$(v.field_name)\") can only be resolved while building a correlated subquery such as Exists(subquery)."))
-  return _get_filter_query(_resolve_outer_ref_field_name(v, instruc.outer), instruc.outer)
+  outer = instruc.outer
+  column = _resolve_outer_ref_field_name(v, outer)
+  sql = _get_filter_query(column, outer)
+  # #194: this is the ONE place an OuterRef becomes SQL — `_resolve_outer_ref_field_name` has a
+  # single caller and `_get_select_query(::OuterRefObject)` delegates straight here — so recording
+  # the reference here cannot miss one that renders. Resolving against `outer` is also what makes
+  # `sql` directly comparable to the outer's GROUP BY entries: both sides come out of the same
+  # `_get_filter_query(::String, outer)`, including the join-alias numbering for a `__` path.
+  #
+  # A second caller of `_resolve_outer_ref_field_name` must record here too, or the guard in
+  # `_check_grouped_correlation` (`build_query.jl`) silently stops seeing that reference.
+  outer.correlated_projection !== nothing &&
+    push!(outer.outer_refs, (label = outer.correlated_projection, ref = v.field_name,
+                             column = column, expr = sql))
+  return sql
 end
 function _get_filter_query(v::CTEReference, instruc::SQLInstruction)
   return _build_row_join(_cte_join_path(v), instruc, as=false, cte=true)

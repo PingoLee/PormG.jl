@@ -1920,11 +1920,11 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # reaches this branch is a scalar function — or a SELECT-side `When(OP(Sum(…)))`, which took the
     # same raw `FieldError` and now takes the same typed refusal.
     throw(QueryBuildError(
-      "\e[4m\e[31mOP($(v.column.function_name)(…), …)\e[0m cannot be rendered: only " *
-      "$(join(sort!(collect(keys(PormGTypeField))), " / ")) columns bind through OP. Project the " *
-      "function under an alias and filter on the alias — \e[4m\e[32mvalues(\"total\" => Sum(\"qty\")); " *
-      "filter(\"total__@gt\" => 1)\e[0m — or use the transform-suffix spelling " *
-      "\e[4m\e[32m\"seen__@month__@lte\" => 4\e[0m (#537)."))
+      "\e[4m\e[31mOP($(v.column.function_name)(…), …)\e[0m cannot bind a literal: only " *
+      "$(join(sort!(collect(keys(PormGTypeField))), " / ")) function columns render through OP, in a " *
+      "filter or inside a CASE/WHEN. For a filter on any other function, project it under an alias and " *
+      "filter on the alias — \e[4m\e[32mvalues(\"total\" => Sum(\"qty\")); filter(\"total__@gt\" => 1)\e[0m " *
+      "— or use the transform-suffix spelling \e[4m\e[32m\"seen__@month__@lte\" => 4\e[0m (#537)."))
   elseif isa(v.values, SQLObjectHandler)
     # Subqueries - these are safe since they're built through PormG.jl
     if !(v.operator in ["IN", "NOT IN"])

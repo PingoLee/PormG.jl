@@ -376,3 +376,117 @@ end
     err = try; q |> DataFrame; nothing; catch e; e; end
     @test err isa PormGError && occursin("one level", err.msg)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Grouped-correlation guard (#194): the outer query groups by `nationality` while
+# the projected subquery correlates on the UNGROUPED `driverid`. Before the guard
+# this was a cross-backend divergence with no error on either side of it that a
+# user would see: PostgreSQL raised a raw GroupingError from the driver, while
+# SQLite happily returned one arbitrary driver's count presented as the group's.
+# PormG now refuses it identically on both engines, at build time.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery (#194) - ungrouped correlation is refused before the database" begin
+    standings = M.Driver_standings.objects
+    standings.filter("driverid" => OuterRef("driverid"))
+    standings.values("t" => Count("driverstandingsid"))
+
+    q = M.Driver.objects.
+        filter("driverid__@lte" => 20).
+        values("nationality",
+               "n_drivers"   => Count("driverid"),
+               "n_standings" => Subquery(standings))
+
+    err = try; q |> DataFrame; nothing; catch e; e; end
+    @test err isa PormGError
+    # Name the guard and the offending column — not a generic query-shape complaint.
+    @test occursin("#194", err.msg)
+    @test occursin("driverid", err.msg)
+    # Build time, not execution: the message is PormG's own, not a relayed backend error. On
+    # PostgreSQL the un-guarded form produced the driver's own text; seeing ours proves we stopped
+    # short of the database, which is also what makes the two engines agree.
+    @test occursin("grouped-correlation guard", err.msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Grouped-correlation guard (#194): the LEGITIMATE shape must keep working and
+# return correct values — this is the interim warn's false positive being removed.
+# Self-correlation on `nationality` lets the same number be computed three
+# independent ways: the outer COUNT over the group, the correlated scalar
+# subquery, and a separate manager query per row. All three must agree.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery (#194) - grouped correlation builds and returns exact values" begin
+    per_nat = M.Driver.objects
+    per_nat.filter("nationality" => OuterRef("nationality"))
+    per_nat.values("t" => Count("driverid"))
+
+    q = M.Driver.objects.
+        values("nationality",
+               "n_joined"     => Count("driverid"),    # counted by the outer GROUP BY
+               "n_correlated" => Subquery(per_nat)).   # counted by the correlated subquery
+        order_by("nationality")
+    df = q |> DataFrame
+
+    # Guard the fixture's assumptions, or the equalities below could pass vacuously on a
+    # one-row-per-group dataset.
+    @test nrow(df) > 1
+    @test maximum(df.n_correlated) > 1
+
+    for row in eachrow(df)
+        # The third, independent computation — a plain manager count, no grouping involved.
+        indep = M.Driver.objects.filter("nationality" => row.nationality).count()
+        @test row.n_correlated == indep
+        @test row.n_joined == indep
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Grouped-correlation guard (#194): a column that reaches the GROUP BY only
+# through `order_by` counts as grouped, because it genuinely is — `GROUP BY 1,
+# "Tb"."nationality"` here. Running it live is the half a unit test cannot prove:
+# that the SQL the relaxed guard lets through is actually ACCEPTED by the engine
+# rather than merely built by PormG. That proof is per-engine and only counts for
+# the engine the suite is pointed at — it is earned for whichever of db_sl/db_2
+# this run used, not for both at once.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery (#194) - a column grouped only via order_by executes on both backends" begin
+    per_nat = M.Driver.objects
+    per_nat.filter("nationality" => OuterRef("nationality"))
+    per_nat.values("t" => Count("driverid"))
+
+    q = M.Driver.objects.
+        filter("driverid__@lte" => 10).
+        values("driverid",
+               "n_rows"       => Count("driverid"),
+               "n_nationals"  => Subquery(per_nat)).
+        order_by("nationality")                    # <- the only thing that groups `nationality`
+    df = q |> DataFrame
+
+    @test nrow(df) == 10
+    for row in eachrow(df)
+        nat = M.Driver.objects.filter("driverid" => row.driverid).values("nationality") |> DataFrame
+        indep = M.Driver.objects.filter("nationality" => nat[1, :nationality]).count()
+        @test row.n_nationals == indep
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Grouped-correlation guard (#194): a whole-table aggregate renders with no GROUP
+# BY at all, which is the same defect with an empty group set — and the worst of
+# the family, since PostgreSQL rejects it outright while SQLite answers from one
+# arbitrary row of the whole table. The interim warn required a non-empty GROUP
+# BY and so never fired here; the guard deliberately does.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery (#194) - whole-table aggregate with a correlated projection is refused" begin
+    standings = M.Driver_standings.objects
+    standings.filter("driverid" => OuterRef("driverid"))
+    standings.values("t" => Count("driverstandingsid"))
+
+    q = M.Driver.objects.
+        values("n_drivers"   => Count("driverid"),
+               "n_standings" => Subquery(standings))
+
+    err = try; q |> DataFrame; nothing; catch e; e; end
+    @test err isa PormGError
+    @test occursin("#194", err.msg)
+    @test occursin("driverid", err.msg)
+end

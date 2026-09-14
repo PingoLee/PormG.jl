@@ -78,10 +78,12 @@ This is the fan-out-safe way to aggregate across a to-many relation: two `Subque
 two different relations stay exact, where a joined `values(Count(...), Count(...))` would
 row-multiply (the guard for that is #74).
 
-!!! warning "Outer `GROUP BY`"
+!!! note "Outer `GROUP BY` — guarded (#194)"
     Combining a correlated `Subquery` with an outer aggregate is only well-defined when the
-    correlated column is itself grouped. If it is not, PostgreSQL fails loudly while SQLite
-    silently evaluates the subquery against an arbitrary row of each group. See
+    correlated column is itself grouped. When it is not, PormG raises a `QueryBuildError` naming
+    the ungrouped column, on both backends and before any SQL runs — left to the database,
+    PostgreSQL refuses it while SQLite evaluates the subquery against an *arbitrary* row of each
+    group and returns a plausible-looking wrong number. See
     [Subqueries and CTEs](read/subqueries_and_ctes.md).
 
 See also [`Exists`](@ref) for the boolean form and [`OuterRef`](@ref) for the correlation.
@@ -187,6 +189,24 @@ const JoinDict = Dict{String,Union{String,Vector{FilterType}}}
   array_int::Array{Integer,2} = Array{Integer,2}(undef, 20, 3)
 end
 
+"""
+One `OuterRef` that rendered inside a projected correlated `Subquery`/`Exists` (#194).
+
+Spelled once, as a named type, because two places have to agree on it exactly: the recorder in
+`_get_filter_query(::OuterRefObject, …)` writes it, and `_ungrouped_correlation_error_msg` reads it.
+Written out twice as an anonymous `NamedTuple` they could drift without a type error.
+
+- `label` — the projection's output name (`"n_standings"`), what the user sees as the offending column
+- `ref` — what the user WROTE (`"driverid"`, or the literal `"pk"`)
+- `column` — the RESOLVED outer column name (`OuterRef("pk")` → `"driverid"`)
+- `expr` — the rendered outer SQL (`"Tb"."driverid"`), comparable to the group set
+
+`ref` and `column` differ only for `OuterRef("pk")`, and the distinction is load-bearing in the error
+message: a fix line that echoes `ref` would tell the user to add `"pk"` to `values(...)`, which is a
+second error rather than a fix.
+"""
+const CorrelatedRef = NamedTuple{(:label, :ref, :column, :expr),NTuple{4,String}}
+
 #
 # SQLInstruction Objects (instructions to build a query)
 #
@@ -231,6 +251,31 @@ end
   # (deriving avoids over-counting when _cache_join builds the same join twice). See _check_aggregate_fanout.
   agg_sources::Vector{NamedTuple{(:alias, :func, :label, :distinct),Tuple{String,String,String,Bool}}} =
     NamedTuple{(:alias, :func, :label, :distinct),Tuple{String,String,String,Bool}}[]
+  # #194 grouped-correlation guard — same evidence-plumbing shape as `agg_sources` above, and for
+  # the same reason: what the guard needs cannot be read back off the rendered state.
+  #
+  # `correlated_projection` is the output name of the projected correlated Subquery/Exists currently
+  # rendering, or `nothing` outside one. It is set ONLY by the two PROJECTED entry points
+  # (`_get_select_query(::SubqueryObject)` / `(::ExistsObject)`), which is what keeps a
+  # FILTER-position `Exists` out of the guard: a WHERE predicate is evaluated before GROUP BY, so
+  # correlating one on an ungrouped column is legal and both backends run it.
+  #
+  # **Set and restore it with `try`/`finally`.** A projected render throws routinely (the
+  # one-column rule, the nested-CTE guard, the inner build), and a flag left set would make the NEXT
+  # ref recorded against a projection that is no longer rendering.
+  correlated_projection::OptionalString = nothing
+  # One entry per OuterRef actually RENDERED inside a projected correlated subquery of this query.
+  # Written at resolution time rather than collected by walking the inner query's AST, because the
+  # two have opposite failure modes: a walker must enumerate every node type an OuterRef can hide in
+  # and every miss is a silent wrong number, while a recorder's invariant — "a ref that was not
+  # recorded was not rendered, and a ref that was not rendered cannot affect the answer" — holds by
+  # construction. A walk is also actively WRONG here: `_build_exists_query` discards the inner
+  # `values()`, so `Exists(q.values("t" => Lower(OuterRef("surname"))))` never renders that ref, and
+  # a collector reading `.values` would refuse a correct query.
+  #
+  # `expr` is the resolved outer SQL (`"Tb"."driverid"`), directly comparable to the group set —
+  # which is why the guard needs no parallel semantic bookkeeping on the group side.
+  outer_refs::Vector{CorrelatedRef} = CorrelatedRef[]
 end
 
 # Store information to decide the name from table alias in subquery

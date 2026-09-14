@@ -2513,25 +2513,65 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Subquery (#92) - mixed projection GROUP BY isolation: when the outer query
-# mixes a plain column, a real aggregate, and a projected subquery, GROUP BY
-# must reference only the plain column's positional index — a projected
-# subquery is a per-row expression, neither groupable nor an outer aggregate.
-# Regression: get_select_query used to push every non-aggregate value's index.
+# #194 helper: the guard's message carries ANSI so it colorizes in the REPL, and
+# `_emsg` only strips it when `Base.have_color` is false. Content assertions must
+# therefore compare against the plain text, or they pass locally and fail on a
+# color-enabled runner (the split test_docs_error_types.jl records).
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "Subquery projection (#92) - mixed projection keeps subquery out of GROUP BY" begin
+_g194_plain(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
+# NB: deliberately NOT named `_raised` — `test_database_error_boundary.jl` defines one, and the unit
+# files include into a shared `Main`, so whichever loads last would silently win.
+_g194_raised(f) = try; f(); nothing; catch e; e; end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Grouped-correlation guard (#194) - the dangerous shape: the outer query groups
+# by `nationality` while the projected subquery correlates on `driverid`, which
+# is NOT in the group set. PostgreSQL refuses this outright; SQLite evaluates the
+# subquery against an ARBITRARY row of each group and returns a plausible wrong
+# number. PormG refuses it on both backends, at build time, before any SQL runs.
+# Replaces the interim coarse @warn this testset used to assert (#92 shipped it).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#194) - ungrouped correlation raises" begin
     standings = M.Driver_standings.objects
     standings.filter("driverid" => OuterRef("driverid"))
     standings.values("t" => Count("driverstandingsid"))
 
     q = M.Driver.objects
-    q.values("nationality",                          # index 1 — groupable plain column
+    q.values("nationality",                          # GROUP BY nationality …
+             "n_drivers" => Count("driverid"),       # … forced by this aggregate
+             "n_standings" => Subquery(standings))   # … correlates on the UNGROUPED driverid
+
+    err = _g194_raised(() -> q |> inspect_query)
+    @test err isa PormG.QueryBuildError
+    plain = _g194_plain(err)
+    @test occursin("#194", plain)
+    # The acceptance criterion: the message must NAME the ungrouped column, and the projection
+    # whose correlation is at fault — a bare "something is ungrouped" is not actionable.
+    @test occursin("driverid", plain)
+    @test occursin("n_standings", plain)
+    # And it must point at the fix, which is the one thing worth taking from Django's auto-grouping.
+    @test occursin("values(", plain)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Grouped-correlation guard (#194) - the LEGITIMATE shape, and the #92 regression
+# it also carries: when the correlation column IS grouped the query must build
+# silently (this is the interim warn's false positive being removed), and GROUP BY
+# must still reference ONLY the plain column's positional index — a projected
+# subquery is a per-row expression, neither groupable nor an outer aggregate.
+# Regression: get_select_query used to push every non-aggregate value's index.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#92/#194) - grouped correlation builds, subquery stays out of GROUP BY" begin
+    standings = M.Driver_standings.objects
+    standings.filter("driverid" => OuterRef("driverid"))
+    standings.values("t" => Count("driverstandingsid"))
+
+    q = M.Driver.objects
+    q.values("driverid",                             # index 1 — grouped, and what we correlate on
              "n_drivers" => Count("driverid"),       # index 2 — outer aggregate (forces GROUP BY)
              "n_standings" => Subquery(standings))   # index 3 — must NOT appear in GROUP BY
 
-    # #194 interim warn: grouped projection + projected subquery is the SQLite arbitrary-row trap
-    # (the correlation column `driverid` is NOT grouped here) — the coarse warn must fire.
-    insp = @test_logs (:warn, r"grouped aggregate.*#194"s) match_mode=:any (q |> inspect_query)
+    insp = @test_logs min_level=Logging.Warn (q |> inspect_query)   # silent: no warn, no raise
     sql = insp[:sql_text]
 
     m = match(r"GROUP BY\s+([0-9,\s]+)", sql)
@@ -2540,12 +2580,172 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Interim GROUP BY warn (#194) - negative case: a projected Subquery WITHOUT an
-# outer aggregate produces no GROUP BY and therefore must build silently. Locks
-# the warn to the dangerous combination only, so every plain #92 usage stays
-# noise-free.
+# Grouped-correlation guard (#194) - THE PLACEMENT PIN. `get_order_query` pushes
+# into `instruc.group` as well, for an ORDER BY term the projection does not
+# contain, and it runs AFTER the projection is resolved. So `surname` here is
+# grouped only by way of order_by — `GROUP BY 1, "Tb"."surname"` — and the query
+# is correct. A guard run at the old warn's site (end of get_select_query) sees an
+# incomplete group set and refuses it.
+#
+# If someone "simplifies" the guard back to the select site, THIS is the test that
+# turns red. Do not relax it into a raise-assertion.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "Subquery projection (#92/#194) - no grouped aggregate, no warn" begin
+@testset "Subquery projection (#194) - a column grouped only via order_by satisfies the guard" begin
+    standings = M.Driver_standings.objects
+    standings.filter("driverid" => OuterRef("surname"))
+    standings.values("t" => Count("driverstandingsid"))
+
+    q = M.Driver.objects
+    q.values("nationality", "n_drivers" => Count("driverid"), "n_standings" => Subquery(standings))
+    q.order_by("surname")                            # <- the only thing that groups `surname`
+
+    insp = @test_logs min_level=Logging.Warn (q |> inspect_query)
+    sql = insp[:sql_text]
+    g = match(r"GROUP BY([^\n]*)", sql)
+    @test g !== nothing
+    @test occursin("\"Tb\".\"surname\"", g.captures[1])   # order_by's contribution to the group set
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Grouped-correlation guard (#194) - a WHOLE-TABLE aggregate renders with no
+# GROUP BY at all, and is the most broken shape of the lot: PostgreSQL rejects it
+# ("subquery uses ungrouped column", measured on PG 16) and SQLite returns one
+# arbitrary row's value as if it were the table's. The interim warn tested
+# `!isempty(group)` and so never fired here; the guard deliberately does not.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#194) - whole-table aggregate with no GROUP BY also raises" begin
+    standings = M.Driver_standings.objects
+    standings.filter("driverid" => OuterRef("driverid"))
+    standings.values("t" => Count("driverstandingsid"))
+
+    q = M.Driver.objects
+    q.values("n_drivers" => Count("driverid"), "n_standings" => Subquery(standings))
+
+    err = _g194_raised(() -> q |> inspect_query)
+    @test err isa PormG.QueryBuildError
+    plain = _g194_plain(err)
+    @test occursin("driverid", plain)
+    # The "grouped by" line must say so rather than printing an empty list.
+    @test occursin("none", plain)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Grouped-correlation guard (#194) - scope: a FILTER-position Exists is evaluated
+# before GROUP BY, so correlating one on an ungrouped column is legal and both
+# backends run it. Only a PROJECTED correlation is guarded. Protects against
+# over-scoping the recorder to every OuterRef the build resolves.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Exists in a filter under an outer aggregate is not a correlated projection (#194)" begin
+    standings = M.Driver_standings.objects
+    standings.filter("driverid" => OuterRef("driverid"))
+    standings.values("t" => Count("driverstandingsid"))
+
+    q = M.Driver.objects
+    q.values("nationality", "n_drivers" => Count("driverid"))
+    q.filter(Exists(standings))                      # WHERE, not SELECT — pre-grouping
+
+    insp = @test_logs min_level=Logging.Warn (q |> inspect_query)
+    @test occursin("WHERE EXISTS", insp[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Grouped-correlation guard (#194) - a projected Exists is guarded exactly like a
+# projected Subquery: it is a correlated per-row expression in the SELECT list,
+# and the same arbitrary-row divergence applies.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Exists projection (#194) - ungrouped correlation raises" begin
+    standings = M.Driver_standings.objects
+    standings.filter("driverid" => OuterRef("driverid"))
+
+    q = M.Driver.objects
+    q.values("nationality", "n_drivers" => Count("driverid"), "has_standings" => Exists(standings))
+
+    err = _g194_raised(() -> q |> inspect_query)
+    @test err isa PormG.QueryBuildError
+    plain = _g194_plain(err)
+    @test occursin("driverid", plain)
+    @test occursin("has_standings", plain)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Grouped-correlation guard (#194) - `OuterRef("pk")` is normalized to the outer
+# model's primary-key field name BEFORE it renders, so it must match a group set
+# that names that column literally. Without the normalization the guard would
+# compare "pk" against "driverid" and refuse a correct query.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#194) - OuterRef(\"pk\") matches the grouped primary key" begin
+    standings = M.Driver_standings.objects
+    standings.filter("driverid" => OuterRef("pk"))
+    standings.values("t" => Count("driverstandingsid"))
+
+    q = M.Driver.objects
+    q.values("driverid", "n_drivers" => Count("driverid"), "n_standings" => Subquery(standings))
+
+    insp = @test_logs min_level=Logging.Warn (q |> inspect_query)
+    @test occursin("\"R1\".\"driverid\" = \"Tb\".\"driverid\"", insp[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Grouped-correlation guard (#194) - the message must name the RESOLVED column,
+# not what the user typed. `OuterRef("pk")` is the one place the two differ, and
+# the fix line is where it matters: "add \"pk\" to values(...)" is not a fix, it
+# is a second error — there is no column named `pk`, so following the advice
+# literally raises UnknownFieldError. Asserting only that the message contains
+# "values(" cannot catch this, which is how it got through the first review.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#194) - the fix line names the resolved column, not \"pk\"" begin
+    standings = M.Driver_standings.objects
+    standings.filter("driverid" => OuterRef("pk"))
+    standings.values("t" => Count("driverstandingsid"))
+
+    q = M.Driver.objects
+    q.values("nationality",                          # grouped by nationality …
+             "n_drivers" => Count("driverid"),
+             "n_standings" => Subquery(standings))   # … while correlating on the PK
+
+    err = _g194_raised(() -> q |> inspect_query)
+    @test err isa PormG.QueryBuildError
+    plain = _g194_plain(err)
+    # The resolved key name, in the actionable line — paste-able into values(...).
+    @test occursin("add \"driverid\" to values(...)", plain)
+    # And never the raw spelling as something to project.
+    @test !occursin("add \"pk\"", plain)
+    # Echoing what the user wrote is still correct in the OuterRef suggestion.
+    @test occursin("OuterRef(\"pk\")", plain)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Grouped-correlation guard (#194) - `Exists` DISCARDS the inner query's values()
+# (`_build_exists_query` empties it), so an OuterRef that appears only there never
+# renders and cannot affect the answer. The guard records refs at the point they
+# become SQL, so it does not see this one — a static walk over the inner AST would
+# have, and would refuse a correct query.
+#
+# This is the measurement behind choosing a recorder over a collector. If anyone
+# reworks the guard into an AST walk, this test turns red.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Exists discards inner values(), so an OuterRef there is not a correlation (#194)" begin
+    standings = M.Driver_standings.objects
+    standings.filter("driverid" => OuterRef("driverid"))    # this one renders
+    standings.values("t" => Concat("surname", OuterRef("surname")))  # this one is discarded
+
+    q = M.Driver.objects
+    q.values("driverid", "n_drivers" => Count("driverid"), "has_standings" => Exists(standings))
+
+    insp = @test_logs min_level=Logging.Warn (q |> inspect_query)
+    sql = insp[:sql_text]
+    @test occursin("EXISTS (SELECT 1", sql)
+    @test !occursin("\"Tb\".\"surname\"", sql)   # the discarded ref really never rendered
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Grouped-correlation guard (#194) - negative case: a projected Subquery WITHOUT
+# an outer aggregate produces no GROUP BY and therefore must build silently. Locks
+# the guard to the dangerous combination only, so every plain #92 usage stays
+# noise-free. (Named for the interim @warn until #194 replaced it with the guard;
+# the assertion is unchanged because "must stay silent" outlived the mechanism.)
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#92/#194) - no outer aggregate, builds silently" begin
     standings = M.Driver_standings.objects
     standings.filter("driverid" => OuterRef("driverid"))
     standings.values("t" => Count("driverstandingsid"))

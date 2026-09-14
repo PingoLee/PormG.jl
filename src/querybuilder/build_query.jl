@@ -246,9 +246,10 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     else
       v_field_copy.field = _get_select_query(v_field_copy.field, instruc)
     end
-    # Re-validate at render: SQLOrder is mutable, so a post-construction reassignment could
-    # bypass the constructor whitelist (#77) — same render-time guard the window path has.
-    orientation = _normalize_order_orientation(v.orientation)
+    # #540: no render-time re-validation. `SQLOrder` is an immutable struct whose inner constructor
+    # runs the #77 whitelist, so `v.orientation` is ASC or DESC by construction and nothing can have
+    # rewritten it since — the constructor is the only writer.
+    orientation = v.orientation
     placement = _nulls_placement(orientation, v.nulls)
     push!(instruc.order, _order_term_sql(v_field_copy.field, orientation, placement, instruc.connection))
     # Cache the resolved selector, but NEVER overwrite one that is already there (#404). The
@@ -390,6 +391,7 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
   # [isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper}) ? push!(instruc._where, _get_filter_query(v, instruc)) : throw("Error in values, $(v) is not a SQLTypeQor, SQLTypeQ or SQLTypeOper") for v in object.filter]
   @pormg_debug false
   for v in object.filter
+    _guard_no_aggregate_predicate(v)   # #537
     if isa(v, ExistsObject)
       push!(instruc._where, _get_filter_query(v, instruc))
     elseif isa(v, SQLTypeOper)
@@ -437,6 +439,46 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
       push!(instruc._where, _get_filter_query(v, instruc))
     else
       throw(FilterError("Invalid filter entry: $(v) (::$(typeof(v))) is not a Q, Qor, or operator expression."))
+    end
+  end
+  return nothing
+end
+
+# #537 — an aggregate or window function cannot be a WHERE predicate, and `OP(::SQLTypeFunction, …)`
+# lets one be written: `filter(OP(Count("id"), ">", 3))` rendered `WHERE COUNT(...)`, which both
+# backends reject at EXECUTION, and `OP(Sum(…), …)` died earlier still with a raw `FieldError`.
+# Refused at build time instead, naming the spelling that puts the same predicate in the clause SQL
+# evaluates it in: an aggregate through the projection alias (HAVING — the alias branch in
+# `get_filter_query` above), a window through a CTE, because SQL evaluates windows after WHERE.
+#
+# Recursive, in the shape of `_guard_no_handle` (ctes.jl) and with its depth cap, because `Q(...)`
+# and `Qor(...)` admit an `OperObject` directly (functions.jl): a flat check on the top-level entry
+# would let `Q(OP(Count("id"), ">", 3))` through. `_is_agg(::WindowFunction)` is `false` by design —
+# a window is not an aggregate — hence the explicit `isa` beside it. A SELECT-side CASE
+# (`When(OP(...))`) never enters this walk; it renders through `_get_select_query(::SQLTypeOper)`.
+function _guard_no_aggregate_predicate(filter, depth::Int = 0)
+  depth > 32 && return nothing
+  if filter isa SQLTypeOper
+    col = filter.column
+    if col isa WindowFunction
+      throw(QueryBuildError(
+        "\e[4m\e[31mOP($(col.function_name)(…), …)\e[0m — a window function cannot be a WHERE " *
+        "predicate: SQL evaluates windows after WHERE. Compute it in a CTE and filter on its column — " *
+        "\e[4m\e[32m.with(\"ranked\" => q, join_field = …)\e[0m then " *
+        "\e[4m\e[32mfilter(\"ranked__rk\" => 1)\e[0m (#537)."))
+    elseif col isa SQLTypeFunction && _is_agg(col)
+      throw(QueryBuildError(
+        "\e[4m\e[31mOP($(col.function_name)(…), …)\e[0m — an aggregate cannot be a WHERE predicate. " *
+        "Project it under an alias and filter on the alias, which renders as HAVING — " *
+        "\e[4m\e[32mvalues(\"total\" => Sum(\"qty\")); filter(\"total__@gt\" => 1)\e[0m (#537)."))
+    end
+  elseif filter isa SQLTypeQ
+    for f in filter.filters
+      _guard_no_aggregate_predicate(f, depth + 1)
+    end
+  elseif filter isa SQLTypeQor
+    for f in filter.or
+      _guard_no_aggregate_predicate(f, depth + 1)
     end
   end
   return nothing

@@ -140,6 +140,16 @@ function _check_function(x::FExpression)
 end
 # #444 — a CTE handle is already fully resolved; there is nothing left to peel.
 _check_function(x::CTEReference) = x
+# #535 — an outer-query reference is fully resolved too. `OuterRefObject <: SQLTypeF`, so every
+# union naming the abstract `SQLTypeF` — the ~18 scalar-function signatures in `functions.jl` and
+# `WindowColumnPart` — admits it, and the RENDER side always had a consumer:
+# `_get_select_query(::OuterRefObject)` resolves it against the enclosing query's `instruc.outer`
+# (`Lower(OuterRef("surname"))` inside an `Exists`/`Subquery` renders `LOWER("Tb"."surname")`,
+# Django's own spelling — `OuterRef` subclasses `F` there) or refuses with `QueryBuildError` when
+# there is no outer query. What was missing was THIS arm on the build side: `_check_function(::FObject)`
+# and `(::WindowFunction)` walk their `column` through here, so `values("l" => Lower(OuterRef(…)))`
+# died with a raw `MethodError` before any SQL existed. One identity arm closes every union at once.
+_check_function(x::OuterRefObject) = x
 
 # #444 — retag a resolved column expression so its terminal column becomes a CTE handle.
 #
@@ -1896,6 +1906,25 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # about. Leaving them raw would keep that coincidence load-bearing.
     placeholders = add_parameter!(instruc,
       _format_filter_value(getfield(Models, PormGTypeField[v.column.function_name]), v.values, v.operator))
+  elseif isa(v.column, SQLTypeFunction)
+    # #537 — a function column none of the branches above can bind. `OP(::SQLTypeFunction, …)` is a
+    # constructor arm PormG itself relies on — `When(OP(MONTH(x), "<=", N))` builds QUADRIMESTER /
+    # QUARTER (functions.jl) — but only the `PormGTypeField` functions (EXTRACT, TO_CHAR, COUNT)
+    # have a formatter this path can name. Every other function fell through to the `else` ladder
+    # below and died reading `.field` off a node that has no such slot: a raw `FieldError`, outside
+    # the #231 taxonomy. Refused HERE, ahead of any `.field` read, naming the two spellings that do
+    # bind through a known formatter. Deliberately not a consumer arm: `OP` is internal (#202) and
+    # the string-lookup forms are the public surface, so the fix does not grow a spelling users are
+    # steered away from. An AGGREGATE or window column in a WHERE predicate is refused one level up
+    # (`_guard_no_aggregate_predicate`, build_query.jl) with the HAVING / CTE spelling, so what
+    # reaches this branch is a scalar function — or a SELECT-side `When(OP(Sum(…)))`, which took the
+    # same raw `FieldError` and now takes the same typed refusal.
+    throw(QueryBuildError(
+      "\e[4m\e[31mOP($(v.column.function_name)(…), …)\e[0m cannot bind a literal: only " *
+      "$(join(sort!(collect(keys(PormGTypeField))), " / ")) function columns render through OP, in a " *
+      "filter or inside a CASE/WHEN. For a filter on any other function, project it under an alias and " *
+      "filter on the alias — \e[4m\e[32mvalues(\"total\" => Sum(\"qty\")); filter(\"total__@gt\" => 1)\e[0m " *
+      "— or use the transform-suffix spelling \e[4m\e[32m\"seen__@month__@lte\" => 4\e[0m (#537)."))
   elseif isa(v.values, SQLObjectHandler)
     # Subqueries - these are safe since they're built through PormG.jl
     if !(v.operator in ["IN", "NOT IN"])

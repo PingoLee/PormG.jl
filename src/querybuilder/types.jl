@@ -140,8 +140,16 @@ const MemoKey = Tuple{Symbol,String}
 """Field references in SQL: text, functions, string names, projected subqueries (Subquery/Exists, #92), a CTE column handle (`CTE(name, path)`, #444), or a joined-copy column handle (`Joined(alias, path)`, #481)."""
 const FieldPart = Union{SQLTypeText,SQLTypeFunction,String,SQLTypeF,SubqueryObject,ExistsObject,SQLTypeCTE,SQLTypeJoined}
 
-"""Column references: fields, functions, strings, CTE or joined-copy column handles, or vectors of operations."""
-const ColumnPart = Union{SQLTypeField,SQLTypeFunction,String,SQLTypeF,SQLTypeCTE,SQLTypeJoined,Vector{Union{String,SQLTypeF}}}
+# #537 — exactly what is CONSTRUCTED, no wider. Every site that builds an `OperObject` produces one
+# of the two: the `_get_pair_to_oper` arms wrap the parsed path in an `SQLField`, `OP(...)` wraps a
+# `String` in one or passes a function through, and `_check_function` plus the two retag walkers
+# (`build_helpers.jl`, `ctes.jl`) rebuild from those. `String`, `SQLTypeF`, `SQLTypeCTE`,
+# `SQLTypeJoined` and the `Vector` member were admissions nothing ever built — a CTE or joined
+# handle in the column position is normalized into an `SQLField` by `_retag_*_field!` before it
+# gets here. This reconciles the slot with `OP`'s accepted set, which #537 found to be two different
+# widths; `test_op_function_column.jl` and `test_node_admission.jl` pin it.
+"""The left-hand side of an operator predicate: a resolved field, or a SQL function over one."""
+const ColumnPart = Union{SQLTypeField,SQLTypeFunction}
 
 """Window PARTITION BY expressions."""
 # #444: `SQLTypeCTE` — PARTITION BY a CTE column worked before the change (the reference was a
@@ -271,10 +279,13 @@ SQLField(field::FieldPart, _as::OptionalString) = SQLField(field, _as, nothing, 
 # only for symmetry with the others. Do not re-add one: a node type that needs a copy method to be
 # safe is a node type that should not have been mutable.
 #
-# Four survive, and each for a reason that is NOT mutability:
+# Three survive, and each for a reason that is NOT mutability. (#540 deleted a fourth: the
+# `SQLTypeOrder` one re-ran the #77 orientation whitelist through the inner constructor, which
+# Base's generic `deepcopy` bypasses — but a frozen `SQLOrder` cannot hold an invalid orientation,
+# so there was nothing left to re-validate. It was never a `deepcopy_internal` hook either, so
+# `deepcopy(handler)` already went through Base; `test_sqlorder_orientation.jl` now pins that the
+# generic path preserves every slot.)
 #   - this one — deliberately SHALLOW on `.field`, which `ctes.jl` documents as load-bearing;
-#   - `SQLTypeOrder` below — re-runs the #77 orientation whitelist through the inner constructor,
-#     which Base's generic `deepcopy` bypasses entirely (`test_sqlorder_orientation.jl` pins it);
 #   - `SQLTypeOper` — shares an `SQLObjectHandler` in `values` instead of cloning a whole subquery.
 #     Narrower than it reads, and review measured the boundary: `Base.deepcopy(::T)` is not a
 #     `deepcopy_internal` hook, so this specialisation applies to a TOP-LEVEL `deepcopy(::OperObject)`
@@ -295,8 +306,12 @@ function _normalize_order_orientation(orientation::AbstractString; context::Stri
   return normalized
 end
 
-# Return a order of field to sql query
-mutable struct SQLOrder <: SQLTypeOrder
+# An ORDER BY term. Immutable since #540: it is a value a user constructs and hands in, not a build
+# product, and the one path that used to write into it — `last()`'s inversion — constructs the
+# reversed term instead (`_invert_order`, execution.jl). With no second writer, the inner
+# constructor's whitelist below is the only place an orientation is ever set, which is what let
+# #540 delete the render-time re-validation in `get_order_query` and the hand-written `deepcopy`.
+struct SQLOrder <: SQLTypeOrder
   # #533 — `SQLTypeField`, not `Union{SQLTypeField,String}`. The String member was admitted and never
   # handled: `get_order_query` read `._as` off it and raised a raw `FieldError` naming an internal
   # slot (#528). The inner constructor now routes every path through `_order_field`
@@ -309,8 +324,9 @@ mutable struct SQLOrder <: SQLTypeOrder
   # NULL placement for this term (#75): `nothing` = apply the canonical backend-aligned default
   # (ASC → NULLS LAST, DESC → NULLS FIRST); `:first`/`:last` force the placement explicitly.
   nulls::Union{Symbol,Nothing}
-  # Inner constructor: every construction path (keyword, positional, deepcopy) passes the
-  # orientation whitelist (#77), so an injection-shaped direction never reaches the renderer.
+  # Inner constructor: every construction path (keyword, positional) passes the orientation
+  # whitelist (#77), so an injection-shaped direction never reaches the renderer — and since the
+  # struct is immutable (#540), construction is the only time the slot is ever written.
   SQLOrder(field, order, orientation, _as, nulls) = new(_order_field(field), order, _normalize_order_orientation(orientation), _as, nulls)
 end
 # `field` is untyped on purpose (#533): an unsupported value must reach `_order_field`'s typed
@@ -346,7 +362,6 @@ function SQLOrder(field::Union{SQLTypeCTE,SQLTypeJoined}; order::Union{Integer,N
   _reject_handle_desc_in_sqlorder(field)
   return SQLOrder(_order_field(field), order, orientation, _as, nulls)
 end
-Base.deepcopy(x::SQLTypeOrder) = SQLOrder(x.field, x.order, x.orientation, x._as, x.nulls)
 
 #
 # SQLObject Objects (main object to build a query)
@@ -551,7 +566,7 @@ That is a internal function, please do not use it.
 # Fields
 - `operator::String`: the operator used in the SQL query.
 - `values::Union{String, Integer, Bool}`: the value(s) to be used with the operator.
-- `column::Union{String, SQLTypeFunction}`: the column to be used with the operator.
+- `column::ColumnPart`: the left-hand side — an `SQLTypeField`, or an `SQLTypeFunction` over one.
 
 """
 @kwdef struct OperObject <: SQLTypeOper
@@ -561,8 +576,17 @@ That is a internal function, please do not use it.
   # equality on a UUIDField raising a `convert` MethodError — an untyped error on the most ordinary
   # spelling there is, which is precisely what this pair of issues exists to remove.
   values::Union{String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,SQLObjectHandler,SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF,Base.UUID}
-  column::ColumnPart # Vector{String} is needed
+  column::ColumnPart
 end
+# `OP` is internal (#202): unexported, undocumented, and the string-lookup form (`"field__@op" =>
+# value`) is the public way to write an operator predicate. The `SQLTypeFunction` arms exist for
+# PormG's own composite transforms — `QUADRIMESTER` / `QUARTER` (functions.jl) build
+# `When(OP(MONTH(x), "<=", N))` — and a function column renders only where the filter path can name
+# a formatter: the `PormGTypeField` functions (EXTRACT, TO_CHAR, COUNT). Any other function column,
+# and any aggregate or window column in a WHERE predicate, is refused at render with a
+# `QueryBuildError` naming the alias / suffix spelling (#537) rather than the raw `FieldError` it
+# used to be. Do not widen the arms without a consumer: `test_op_function_column.jl` pins both the
+# served set and the refusals.
 OP(column::String, value) = OperObject(operator="=", values=value, column=SQLField(column))
 OP(column::SQLTypeFunction, value) = OperObject(operator="=", values=value, column=column)
 OP(column::String, operator::String, value) = OperObject(operator=operator, values=value, column=SQLField(column))
@@ -672,25 +696,35 @@ const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 # name itself in its own field types, so `FExpression` appears directly instead of through `SQLTypeF`,
 # and the admission is a named seam again — the rule `CTEReference` and `JoinedReference` already follow.
 #
-# What the literal half actually holds: the numeric and string scalars the renderer has arms for,
-# plus the three temporal types. `ZonedDateTime` joined it in #533 (`Models.format_timezone_sql` has
-# the method, and `filter("ts" => zdt)` already binds through it) together with its render arm.
+# What the literal half holds, and the rule for adding to it (#536): a member is a SCALAR whose
+# comparison binds — through the ROOTED COLUMN's own formatter — the same bytes the pair spelling
+# `filter("col" => value)` binds, and `test_f_date_operands.jl`'s oracle table (`_FD_ORACLE_ROWS`)
+# proves that per member, on both backends. The consumer half is the literal arm of
+# `_set_update_query_operand` (`execution.jl`): it resolves the LEFT column with
+# `_operand_column_field` and runs the value through that column's formatter, exactly as
+# `_get_filter_query(::SQLTypeOper)` does for a pair. The three temporal members take the
+# `_format_date_operand` arm beside it, which adds the DATE-vs-TIMESTAMP promotion.
 #
-# It is NOT "every type the `format_*_sql` family can bind" — an earlier draft of this comment said
-# that, and review measured it false: `Base.UUID` and `Dates.Time` both have working formatters, the
-# pair spelling binds both, and neither is a member, so `F("uid") == uuid` still falls through to
-# `Base.==` and yields a bare `Bool`. `Float64` is worse — it IS a member and binds the raw Julia
-# value where the pair path binds the formatted string. Both are tracked in **#536**; closing that is
-# what would let this comment state a rule instead of a list.
+# The arm is keyed by the COLUMN, not by the value's Julia type — that is what closed #536's two
+# defects at once. `Float64` WAS a member and bound the raw Julia value where the pair path bound
+# `format_number_sql`'s string; `Base.UUID` and `Dates.Time` had working formatters and were never
+# admitted, so `F("uid") == uuid` fell through to `Base.==` and yielded a bare `Bool`. `Float16` /
+# `Float32` / `Float64` rather than `Float64` alone for the same reason — `Float32` was the
+# bare-`Bool` row in the issue's table — and rather than `AbstractFloat`, because those three are
+# exactly the floats `format_number_sql` has a method for: a `BigFloat` member would type-check and
+# then die inside the formatter (the #533 class, one level down), where a non-member is refused at
+# the operator with a typed error.
 #
-# `Vector{UInt8}` and JSON stay out deliberately: their scalar value is itself a collection, which is
-# the trap `_format_filter_value` singles out, and neither has comparison semantics.
+# Deliberately out: `Decimals.Decimal`, `BigFloat` and other `Number`s (no formatter method or no
+# oracle row, so no proof they bind identically — add both first), `Vector{UInt8}` and JSON (their
+# scalar value is itself a collection, the trap `_format_filter_value` singles out, and neither has
+# comparison semantics). Any other type is refused AT THE OPERATOR by `_unsupported_compare_operand`
+# (`error_funnels.jl`) rather than left to `Base.==`; see the catch-all methods below `_CompareOperand`.
 #
-# Adding a member here is only half a change. The other half is a render arm in
-# `_format_date_operand` / `_set_update_query_operand` (`execution.jl`) — a member that binds raw is
-# not "supported", it is #494 again on a new type, and #536's `Float64` row is what that looks like
-# when nobody notices for a release.
-const _CompareLiteral = Union{Integer,Float64,String,Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime}
+# Adding a member is still two halves: the union here AND an oracle row in `test_f_date_operands.jl`.
+# The testset that walks `Base.uniontypes(_CompareLiteral)` fails on a member with no row, which is
+# what keeps this comment a rule rather than a list.
+const _CompareLiteral = Union{Integer,Float16,Float32,Float64,String,Base.UUID,Dates.Time,Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime}
 const _ColumnHandle   = Union{SQLTypeCTE,SQLTypeJoined}
 
 # Carrier for an F reference and any arithmetic built on top of it. Users construct it through
@@ -885,10 +919,12 @@ Base.:+(operand::_DurationOperand, f::FExpression) = f + operand
 # The union is still the dispatch contract for a `CTE(...)` / `Joined(...)` right-hand side. #533
 # made "keep additions to it and to `FExpression.operand` in step" structural rather than a rule to
 # remember: both are now COMPOSED from `_CompareLiteral` / `_ColumnHandle` (declared above the
-# struct), so widening one widens the other. What still has to be done by hand is the CONSUMER half —
-# a new member needs a render arm in `_format_date_operand` / `_set_update_query_operand`
-# (`execution.jl`), or it binds RAW, and a member that binds raw is not "supported", it is #494 again
-# on a different type. `test_node_admission.jl` is what fails when that half is forgotten.
+# struct), so widening one widens the other. The CONSUMER half is no longer per-type either (#536):
+# the literal arm of `_set_update_query_operand` (`execution.jl`) binds every `_CompareLiteral`
+# scalar through the rooted column's formatter, so a new member cannot bind RAW — what it can still
+# lack is PROOF, and that is the oracle row `test_f_date_operands.jl` demands per member. A column
+# HANDLE (`_ColumnHandle`) is the other kind of operand and renders as a column reference, never a
+# bound value; `test_node_admission.jl` is what fails when a NODE type is admitted without a consumer.
 const _CompareOperand = Union{_CompareLiteral,_ColumnHandle,FExpression}
 
 function _compare(f::FExpression, operation::String, operand)
@@ -921,6 +957,48 @@ Base.:<(f::FExpression, operand::_CompareOperand)    = _compare(f, "<", operand)
 Base.:>=(f::FExpression, operand::_CompareOperand)   = _compare(f, ">=", operand)
 Base.:<=(f::FExpression, operand::_CompareOperand)   = _compare(f, "<=", operand)
 
+# #536 — a right-hand side OUTSIDE `_CompareOperand` used to fall through to `Base.==` (identity)
+# and evaluate to a bare `Bool`, which `filter(...)` then reported as *"Invalid filter argument:
+# false"* — naming a value the user never wrote (#530's complaint, on every type the union omits).
+# Each operator now refuses with a `QueryBuildError` naming the type and the supported vocabulary.
+#
+# SQLAlchemy is the prior art: `column == object()` raises `ArgumentError: SQL expression element
+# expected` rather than answering `False`. Django has no equivalent — its `F()` does not overload
+# comparison at all.
+#
+# Only the expression-on-the-LEFT forms are covered. `1.5 == F("a")` still reaches Base's fallback
+# and answers `false`: a `(::Any, ::FExpression)` method would collide with every left-typed `==`
+# in Base, and the issue's table is the left-hand form. Out of scope here; #541 owns the
+# node-as-container question (`isequal`/`in`) these methods sit beside and do not change.
+#
+# The `::Missing` / `::WeakRef` arms are NOT redundant. Measured on 1.12: Base defines
+# `==(::Any, ::Missing)` and `<(::Any, ::Missing)` (missing.jl) and `==(::Any, ::WeakRef)`
+# (gcutils.jl) — no others in the six — so those three signatures are ambiguous with the `::Any`
+# arm, and Aqua's ambiguity check is what pins the set. `!=`, `>`, `<=`, `>=` have no such Base
+# method and need no arm. They refuse exactly as the `::Any` arm does.
+#
+# The `JoinedReference` family gets the same twelve further down, generated in the same loop as
+# its comparison methods — a second, independent site, so it is asserted separately in
+# `test_f_date_operands.jl` rather than assumed to follow.
+for (op, sym) in ((:(==), "="), (:(!=), "!="), (:(>), ">"), (:(<), "<"), (:(>=), ">="), (:(<=), "<="))
+  @eval Base.$op(::FExpression, operand) = throw(_unsupported_compare_operand($sym, operand))
+end
+Base.:(==)(::FExpression, operand::Missing) = throw(_unsupported_compare_operand("=", operand))
+Base.:(==)(::FExpression, operand::WeakRef) = throw(_unsupported_compare_operand("=", operand))
+Base.:<(::FExpression, operand::Missing)    = throw(_unsupported_compare_operand("<", operand))
+
+# #536 — and the `isequal` half, mirroring the guard `JoinedReference` has carried since #481 (see
+# that block further down). Base's fallback is `isequal(x, y) = x == y`, so without these the
+# catch-alls above would make `isequal(F("a"), nothing)` THROW where it used to answer `false` — and
+# `isequal` is the total hashing-equality contract `Dict`/`Set`/`unique`/`findfirst(isequal(x), …)`
+# rely on; it must never throw. Identity for two nodes, `false` against anything else; the `::Missing`
+# arm disambiguates against Base's `isequal(::Any, ::Missing)` exactly as the Joined block does.
+# This is the `isequal` half of #541's option 1, applied here only for consistency with
+# `JoinedReference`; `in` / `findfirst(==(x), …)` still reach `==` and remain #541's open question.
+Base.isequal(a::FExpression, b::FExpression) = a === b
+Base.isequal(::FExpression, ::Any) = false
+Base.isequal(::FExpression, ::Missing) = false
+
 # Allow arithmetic operations with F expressions on the right side
 function Base.:+(operand::Union{Integer,Float64}, f::FExpression)
   return FExpression(
@@ -944,6 +1022,14 @@ function Base.:*(operand::Union{Integer,Float64}, f::FExpression)
   )
 end
 
+# `<: SQLTypeF` on purpose, and — unlike `CTEReference` / `JoinedReference` below — every union the
+# abstract type reaches is a place an outer-row reference is legitimate SQL: the ~18 scalar-function
+# signatures in `functions.jl` and `WindowColumnPart` (`Lower(OuterRef("surname"))`,
+# `Lag(OuterRef("id"), over = …)` inside a correlated subquery). #535 gave the build side the one
+# consumer it lacked (`_check_function(::OuterRefObject)`, build_helpers.jl); the render side always
+# resolved it against `instruc.outer` or refused with `QueryBuildError`. The ONE union it must not
+# reach is `FExpression.operand` — `F("a") == OuterRef("b")` has no render arm and would bind the
+# handle RAW — which is why that slot names `FExpression` rather than `SQLTypeF` (#533).
 @kwdef struct OuterRefObject <: SQLTypeF
   field_name::String
 end
@@ -974,7 +1060,11 @@ Two limits, both enforced with a `QueryBuildError`:
 - **One level only.** It binds to the immediately enclosing query, so a projected subquery nested
   inside another projected subquery is rejected rather than silently correlated to the wrong level.
 - **Correlated context required.** Used outside an `Exists`/`Subquery` build there is no outer
-  query to bind to.
+  query to bind to — wrapped in a function or not.
+
+An outer column may be wrapped in a scalar function or a window column inside the correlated query
+— `Lower(OuterRef("surname"))`, `Cast(OuterRef("driverid"), "text")`, `Lag(OuterRef("driverid"),
+over = …)` — and resolves against the outer row exactly as the bare reference does.
 
 Correlate on a base column of the outer model. A joined path (`OuterRef("constructorid__name")`)
 adds a join to the outer query and is outside the validated surface.
@@ -1216,12 +1306,22 @@ end
 # The operand type is the SHARED `_CompareOperand`, not a second copy of the same union: the two
 # families must admit exactly the same right-hand sides, and a union spelled twice drifts silently —
 # a member added to one side would make `Joined(...) == CTE(...)` and `F(...) == CTE(...)` disagree.
+#
+# #536 — and the same refusal for an operand OUTSIDE the union, so `Joined("r","uid") == 1//2`
+# raises the same `QueryBuildError` the `F` twin does instead of answering `false` from `Base.==`.
+# The `::Missing` / `::WeakRef` arms mirror the `FExpression` set above, for the same three
+# ambiguities with Base. `isequal(::JoinedReference, ::Any)` above is untouched: it never reaches
+# `==`, so containers keep behaving.
 for (op, sym) in ((:(==), "="), (:(!=), "!="), (:(>), ">"), (:(<), "<"), (:(>=), ">="), (:(<=), "<="))
   @eval function Base.$op(j::JoinedReference, operand::_CompareOperand)
     _reject_joined_desc(j, "a comparison")
     return FExpression(field_name=j, operation=$sym, operand=operand, function_name="F", column="", aggregate=false)
   end
+  @eval Base.$op(::JoinedReference, operand) = throw(_unsupported_compare_operand($sym, operand))
 end
+Base.:(==)(::JoinedReference, operand::Missing) = throw(_unsupported_compare_operand("=", operand))
+Base.:(==)(::JoinedReference, operand::WeakRef) = throw(_unsupported_compare_operand("=", operand))
+Base.:<(::JoinedReference, operand::Missing)    = throw(_unsupported_compare_operand("<", operand))
 
 #
 # SQLTypeFunction Objects (functions from sql)

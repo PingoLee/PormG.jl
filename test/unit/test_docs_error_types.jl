@@ -32,6 +32,8 @@ using PormG.QueryBuilder: bulk_insert, bulk_update
 # #509 — the ordering wrapper and the window constructor, for the two window-page claims below.
 using PormG.QueryBuilder: SQLOrder
 using PormG.Functions: WindowOver, Rank
+# #535 — a scalar function wrapping an `OuterRef`, for the subqueries-page claim below.
+using PormG.Functions: Lower
 import DataFrames
 
 # Mock backends: dialect dispatch is by connection TYPE, so a bare subtype is enough to render
@@ -625,6 +627,26 @@ const DOCERR_CASES = [
         "read/values_and_joins.md — a related_name containing `__` is refused (#420)",
         FieldValidationError,
         () -> ForeignKey("Docerr_Driver", pk_field = "id", related_name = "incident__driver"),
+    ),
+    (
+        # #536. The page states that a comparison literal outside the accepted vocabulary is refused
+        # AT THE OPERATOR — before any query is built — and never evaluates to a bare `Bool`. A plain
+        # constructor-level call, so no model or connection is involved.
+        "read/field_expressions.md — an unsupported comparison literal is refused (#536)",
+        QueryBuildError,
+        () -> F("points") == 1 // 2,
+    ),
+    (
+        # #535. The subqueries page states that an `OuterRef` outside a correlated build raises
+        # `QueryBuildError` "wrapped or not" — the WRAPPED half is the one this pins, because before
+        # #535 it was a raw `MethodError` at `values()` time while the bare half was already typed.
+        "read/subqueries_and_ctes.md — a function-wrapped OuterRef outside a correlated build is refused (#535)",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_DRIVER_PG.objects
+            q.values("l" => Lower(OuterRef("surname")))
+            q.list(show_query = :dict)
+        end,
     ),
 ]
 

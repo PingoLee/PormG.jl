@@ -49,6 +49,7 @@ using PormG.Models
 using PormG.QueryBuilder: F, inspect_query
 using PormG: Joined
 using Dates
+import TimeZones   # #536 — the `ZonedDateTime` oracle row; a PormG dependency, so `--project=.` resolves it
 import PormG.QueryBuilder as QB
 
 # Dedicated config key + mock types: `runtests.jl` includes every unit file into one `Main`, so a
@@ -84,6 +85,13 @@ Fd_result = Models.Model("fd_result",
   points    = Models.IntegerField(null = true),
   seen      = Models.DateField(null = true),
   logged_at = Models.DateTimeField(null = true),
+  # #536 — one column per formatter family the literal arm routes through, so the oracle table below
+  # can pair every `_CompareLiteral` member with the COLUMN that decides its representation.
+  amount    = Models.FloatField(null = true),
+  uid       = Models.UUIDField(null = true),
+  flag      = Models.BooleanField(null = true),
+  at        = Models.TimeField(null = true),
+  code      = Models.CharField(null = true),
 )
 
 PormG.Models.set_models(@__MODULE__, "fd_mock")
@@ -133,7 +141,47 @@ const _FD_DATE_AS_TS    = "1991-10-06T00:00:00.000+00:00"
   # The duration operands #25 added are untouched — the fix widens, it does not redraw.
   @test Dates.Period <: slot
   @test Dates.CompoundPeriod <: slot
+
+  # #536 widened the literal half: the three floats `format_number_sql` binds (so `Float32` no
+  # longer yields a bare `Bool`), plus the two scalars with working formatters that were never
+  # admitted. NOT `AbstractFloat`: a `BigFloat` has no formatter method and must be refused at the
+  # operator rather than admitted and then die inside the formatter.
+  for T in (Float16, Float32, Float64, Base.UUID, Dates.Time)
+    @test T <: QB._CompareLiteral
+  end
+  @test !(BigFloat <: QB._CompareLiteral)
+  @test !(AbstractFloat <: QB._CompareLiteral)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #536 — the oracle table: every `(column, literal)` pairing the literal arm must bind IDENTICALLY
+# to the pair spelling `filter(column => literal)`. The pairings are the ones that were wrong or
+# unrepresentable before the fix, plus controls:
+#   - `Float64`/`Float32` against a FloatField bound the RAW Julia value where the pair path bound
+#     `format_number_sql`'s "1.5"; `Float32` did not build at all (bare `Bool` from `Base.==`).
+#   - `Bool` against an IntegerField: the pair binds `1` (`format_number_sql(::Bool)`); the `F` path
+#     hit the Integer arm and bound raw `true`. The BooleanField row is the CONTROL — both spellings
+#     already bound `true`, because `format_bool_sql(::Bool)` returns it unchanged.
+#   - `UUID` and `Time`: working formatters, never admitted — the bare-`Bool` rows of the issue.
+#   - `("race__name", 1)`: a JOINED String path — the column is resolved through the base-namespace
+#     memo the left-side render wrote, and its CharField formatter binds `"1"`; a lookup that
+#     silently missed would fall back to `format_number_sql` and bind the Int `1`, which the `===`
+#     element check below catches. (The independent review found the joined rows were all DATE
+#     controls that never reached the new arm; this one does.)
+#   - `ZonedDateTime`, `Integer` and `String` rows are controls that must keep binding what they did.
+# The testset after the equivalence walks `Base.uniontypes(_CompareLiteral)` against this table, so
+# a member added to the union without a row here is a red test rather than an unproven claim.
+# ─────────────────────────────────────────────────────────────────────────────
+const _FD_ORACLE_ROWS = (
+  ("seen", _FD_DATE), ("seen", _FD_DATETIME), ("logged_at", _FD_DATETIME), ("logged_at", _FD_DATE),
+  ("logged_at", TimeZones.ZonedDateTime(_FD_DATETIME, TimeZones.tz"UTC")),
+  ("amount", 1.5), ("amount", Float32(2.5)), ("amount", Float16(0.5)), ("points", 1.5),
+  ("amount", 3), ("points", 7),
+  ("uid", Base.UUID("12345678-1234-5678-1234-567812345678")),
+  ("at", Dates.Time(9, 30)),
+  ("flag", true), ("points", true),
+  ("code", "HAM"), ("race__name", 1),
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The `F` family: all six operators, both date types, both backends.
@@ -262,10 +310,9 @@ end
 # two disagree, one of them is querying a representation the column does not hold — and on SQLite,
 # where the comparison is lexicographic over TEXT, that is wrong rows and not an error.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#494: an F comparison binds what the equivalent filter pair binds" begin
+@testset "#494/#536: an F comparison binds what the equivalent filter pair binds" begin
   for (backend, conn) in (("PostgreSQL", _FD_PG), ("SQLite", _FD_SL))
-    for (col, value) in (("seen", _FD_DATE), ("seen", _FD_DATETIME),
-                         ("logged_at", _FD_DATETIME), ("logged_at", _FD_DATE))
+    for (col, value) in _FD_ORACLE_ROWS
       pair = FD.Fd_result.objects
       pair.values("id")
       pair.filter(col => value)
@@ -274,9 +321,31 @@ end
       fexpr.values("id")
       fexpr.filter(F(col) == value)
 
+      # `==` on the two vectors, and `===` on the elements: `1 == true` is true in Julia, so a
+      # vector equality alone would pass the Bool-on-IntegerField row with the F path still binding
+      # raw `true` — which is the exact defect that row exists to catch.
       @test _fd_params(fexpr; conn = conn) == _fd_params(pair; conn = conn)
+      @test all(a === b for (a, b) in zip(_fd_params(fexpr; conn = conn), _fd_params(pair; conn = conn)))
       # Non-empty, so the equality above cannot be satisfied by both sides binding nothing.
       @test length(_fd_params(pair; conn = conn)) == 1
+    end
+
+    # The `Joined` family binds the same bytes through its own construction site (#536). The DATE and
+    # TIMESTAMP rows are controls (they take the #494 temporal arm); `("name", 1)` is the one that
+    # reaches the NEW arm through `_operand_column_field`'s `JoinedReference` branch — the joined
+    # copy's CharField formatter binds `"1"`, and a missed memo lookup would bind the Int `1`.
+    for (col, value) in (("date", _FD_DATE), ("starts_at", _FD_DATETIME), ("name", 1))
+      pair = FD.Fd_race.objects
+      pair.values("id")
+      pair.filter(col => value)
+
+      joined = FD.Fd_result.objects
+      joined.cjoin_on("Fd_race", alias = "r", on = [Joined("r", "id") == F("race")])
+      joined.values("id")
+      joined.filter(Joined("r", col) == value)
+
+      @test _fd_params(joined; conn = conn) == _fd_params(pair; conn = conn)
+      @test all(a === b for (a, b) in zip(_fd_params(joined; conn = conn), _fd_params(pair; conn = conn)))
     end
 
     # The suffix spelling too — the issue's second listed workaround.
@@ -289,6 +358,116 @@ end
     fexpr.filter(F("seen") >= _FD_DATE)
 
     @test _fd_params(fexpr; conn = conn) == _fd_params(suffix; conn = conn)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #536 — the union is exactly as wide as its proof. Every member of `_CompareLiteral` has at least
+# one row in the oracle table above, so widening the union without proving the new member binds
+# like the pair spelling fails here. This is what lets the comment on `_CompareLiteral` state a
+# RULE ("a member binds what the pair binds") instead of listing types.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#536: every _CompareLiteral member has an oracle row" begin
+  members = Base.uniontypes(QB._CompareLiteral)
+  @test length(members) >= 8   # not vacuous: the union was not accidentally emptied
+  for member in members
+    @test any(typeof(value) <: member for (_, value) in _FD_ORACLE_ROWS)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #536 — an operand OUTSIDE the vocabulary is refused at the operator, on BOTH families, for all
+# six operators. Before the fix every one of these fell through to `Base.==` and evaluated to a
+# bare `Bool`, so `filter(...)` reported "Invalid filter argument: false" — a value the user never
+# wrote. The message names the offending type; `nothing`/`missing` also get the `__@isnull` hint,
+# because those two are the ones a user reaches for when they mean NULL.
+#
+# `WeakRef` and `missing` are here for the Aqua half of the fix: Base defines `==(::Any, ::WeakRef)`
+# and `==`/`<`(::Any, ::Missing), so those pairings need their own disambiguation methods, and this
+# is what proves each of them refuses rather than falling into Base's arm.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#536: an unsupported operand raises QueryBuildError naming the type" begin
+  # `big"1.5"` is the `AbstractFloat` that is NOT a member: no `format_number_sql` method exists for
+  # it, so admitting it would trade a typed refusal for a `MethodError` inside the formatter.
+  bad_values = (1 // 2, UInt8[1, 2], nothing, missing, Dict("a" => 1), WeakRef(nothing), big"1.5")
+  for (name, op, token) in _FD_OPS, bad in bad_values
+    for lhs in (F("points"), Joined("r", "date"))
+      err = try
+        op(lhs, bad)
+        nothing
+      catch e
+        e
+      end
+      @test err isa PormG.QueryBuildError
+      msg = err === nothing ? "" : PormG.error_message(err)
+      @test occursin(string(typeof(bad)), msg)
+      @test occursin(token, msg)
+      # The accepted vocabulary is read live from the union, so the message can never go stale.
+      @test occursin("UUID", msg) && occursin("Integer", msg)
+      if bad === nothing || bad === missing
+        @test occursin("__@isnull", msg)
+      end
+    end
+  end
+
+  # A `Bool` is NOT refused — `Bool <: Integer` — and it still reaches the literal arm.
+  q = FD.Fd_result.objects
+  q.values("id")
+  q.filter(F("flag") == true)
+  @test _fd_params(q) == Any[true]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #536 — `isequal` answers, it never throws. Base's fallback is `isequal(x, y) = x == y`, so the
+# refusing catch-alls above would have turned `isequal(F("a"), nothing)` into a QueryBuildError
+# where it used to answer `false` — a regression the independent review caught. `isequal` is the
+# total hashing-equality contract (`Dict`, `Set`, `unique`, `findfirst(isequal(x), …)`), so the
+# `FExpression` family now carries the same identity guard `JoinedReference` has had since #481.
+# Fails on the catch-alls alone (throws); passes on the base tree only for the non-node cases.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#536: isequal on an F handle answers, never throws" begin
+  f = F("points")
+  @test isequal(f, f) === true
+  @test isequal(F("points"), F("points")) === false     # identity, exactly as JoinedReference
+  for other in (nothing, missing, :x, 1, "points", Joined("r", "date"))
+    @test isequal(f, other) === false
+  end
+  @test isequal(Joined("r", "date"), nothing) === false  # the precedent is still in place
+  d = Dict(f => 1)                                       # the hashing contract holds
+  @test d[f] == 1
+  @test findfirst(isequal(f), [F("a"), f]) == 2
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #536 — the SQL-text cast follows the COLUMN, the bytes follow the pair. On PostgreSQL a numeric
+# literal against a NUMERIC column keeps the explicit cast the raw arm always emitted (that is what
+# lets an integer column be compared against a double); against a boolean or text column it binds
+# UNCAST like a pair, so PostgreSQL types the parameter from the column. The independent review
+# measured the first draft casting by the LITERAL — `"flag" = $1::bigint` with `true` bound.
+# SQLite renders no cast at all, so this is a PostgreSQL-mock testset by design.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#536: the cast follows the column, the bytes follow the pair" begin
+  cases = (
+    ("flag",   1,   false, Any[true]),   # BooleanField: `format_bool_sql(1)` → true, no cast
+    ("code",   1,   false, Any["1"]),    # CharField: a text column, no cast
+    ("points", 2.5, true,  Any["2.5"]),  # IntegerField vs a float literal: ::double precision kept
+    ("amount", 3,   true,  Any[3]),      # FloatField vs an int literal: ::bigint kept
+  )
+  for (col, value, cast, expected) in cases
+    fexpr = FD.Fd_result.objects
+    fexpr.values("id")
+    fexpr.filter(F(col) == value)
+    pair = FD.Fd_result.objects
+    pair.values("id")
+    pair.filter(col => value)
+
+    sql = _fd_sql(fexpr; conn = _FD_PG)
+    @test _fd_params(fexpr; conn = _FD_PG) == expected
+    @test all(a === b for (a, b) in zip(_fd_params(fexpr; conn = _FD_PG), _fd_params(pair; conn = _FD_PG)))
+    @test occursin("::", sql) == cast
+    # The pair spelling never casts — so where the F spelling does, that is the F spelling's own
+    # deliberate addition and not parity; assert it directly.
+    @test !occursin("::", _fd_sql(pair; conn = _FD_PG))
   end
 end
 

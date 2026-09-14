@@ -1273,16 +1273,35 @@ end
 # here means "not a date column" — so a legitimately 17-deep expression did not fail, it silently
 # selected the wrong literal representation for the bound operand. #494's whole point is that an `F`
 # comparison and an ordinary `filter(...)` pair bind the same bytes; the cap could break exactly that.
-function _operand_column_type(field_name, instruc::SQLInstruction)::Union{String,Nothing}
-  field_name isa String && return _date_field_type(field_name, instruc)
-  if field_name isa JoinedReference
-    f = memo_field(instruc, memo_key(field_name))
-    f === nothing && return nothing
-    return f.type in ("DATE", "TIMESTAMPTZ", "TIMESTAMP") ? f.type : nothing
+#
+# #536 generalized the walk from "the DATE/TIMESTAMP type of the column" to "the column's FIELD",
+# because the literal arm needs the column's FORMATTER, not only its temporal kind: a `Float64`
+# against a `FloatField` must bind `format_number_sql`'s string, a `UUID` against a `UUIDField`
+# `format_uuid_sql`'s — the same choice the pair path makes at `_get_filter_query(::SQLTypeOper)`
+# (build_helpers.jl) by reading `model.fields[...]`. The String arm is `_date_field_type`'s own
+# two-step lookup (model fields, then the base-namespace memo the left-side render populated).
+function _operand_column_field(field_name, instruc::SQLInstruction)::Union{PormGField,Nothing}
+  if field_name isa String
+    model = instruc.object.model
+    haskey(model.fields, field_name) && return model.fields[field_name]
+    return memo_field(instruc, memo_key(:base, field_name))   # #474: base-model namespace
   end
-  field_name isa FExpression && return _operand_column_type(field_name.field_name, instruc)
+  field_name isa JoinedReference && return memo_field(instruc, memo_key(field_name))
+  field_name isa FExpression && return _operand_column_field(field_name.field_name, instruc)
   return nothing
 end
+
+function _operand_column_type(field_name, instruc::SQLInstruction)::Union{String,Nothing}
+  f = _operand_column_field(field_name, instruc)
+  f === nothing && return nothing
+  return f.type in ("DATE", "TIMESTAMPTZ", "TIMESTAMP") ? f.type : nothing
+end
+
+# #536 — the operators whose right-hand literal is bound through the rooted column's formatter.
+# Arithmetic (`+ - * / << >>` …) is deliberately NOT in this set: those operands keep the raw,
+# SQL-typed bind (`integer_column / 2.0` must not be inferred back to integer on PostgreSQL), and
+# the Integer arm's date-arithmetic wrapper depends on receiving the bare value.
+const _COMPARISON_OPERATIONS = ("=", "!=", ">", "<", ">=", "<=")
 
 # #494 — the representation a `Date`/`DateTime` literal binds as on the RIGHT of an `F(...)` /
 # `Joined(...)` comparison.
@@ -1456,6 +1475,42 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # explicit cast, letting PostgreSQL infer the type from the comparison context exactly as an
     # ordinary `filter("date" => Date(...))` already does.
     return add_parameter!(instruc, _format_date_operand(operand, field_name, instruc))
+  elseif operation in _COMPARISON_OPERATIONS && isa(operand, Union{Integer,Float16,Float32,Float64,Base.UUID,Dates.Time})
+    # #536 — every other `_CompareLiteral` scalar on the right of a COMPARISON, bound the way the
+    # pair spelling binds it: through the rooted column's formatter, with no explicit SQL type. The
+    # column decides, not the value's Julia type — `F("points") == true` on an IntegerField binds
+    # `1` (`format_number_sql(::Bool)`), on a BooleanField `true` (`format_bool_sql`), and a `Float64`
+    # binds `format_number_sql`'s `"1.5"` string rather than the raw `1.5` this used to fall through
+    # to. On PostgreSQL the raw bind survived (the driver adapts it); on SQLite a column whose
+    # formatter produces TEXT compared against a different representation and matched nothing, with
+    # no error — which is why this arm sits ahead of the typed binds below.
+    #
+    # `Bool <: Integer`, so `true`/`false` arrive here too. Ahead of the Integer arm on purpose: that
+    # arm is the ARITHMETIC one (date offsets, bitwise shifts), and only comparisons take this route.
+    #
+    # No column to ask (a nested expression rooted in a function, an unresolvable path): fall back to
+    # the value's own formatter family — still a formatted value, never a raw bind — mirroring what
+    # `_format_date_operand` does one arm up.
+    f = _operand_column_field(field_name, instruc)
+    formatter = f !== nothing ? f.formatter :
+                operand isa Base.UUID ? Models.format_uuid_sql :
+                operand isa Dates.Time ? Models.format_text_sql :
+                Models.format_number_sql
+    # The BYTES are the pair path's; the SQL-text cast is not, and deliberately so — but only where
+    # the cast agrees with the column. A numeric literal against a NUMERIC column (its formatter is
+    # `format_number_sql`), or against no resolvable column, keeps the explicit PostgreSQL cast the
+    # raw arms always gave it (`$1::bigint`, `$1::double precision`, pinned by `test_operators.jl`'s
+    # bitwise examples): it is what lets `F("number") > 2.5` compare an integer column against a
+    # double, where an uncast `$1` would be inferred as integer from the column and PostgreSQL would
+    # reject "2.5". Everything else binds UNCAST, like a pair, so PostgreSQL types the parameter from
+    # the column: a `Bool` (its formatted value is the column's — `1` on an IntegerField, `true` on a
+    # BooleanField), a UUID or a Time, and a numeric literal against a text or boolean column —
+    # `F("flag") == 1` binds `true` and must not carry `::bigint` (review of #536 measured the cast
+    # following the LITERAL there: `"flag" = $1::bigint` with `true` bound, a PostgreSQL error).
+    numeric_column = f === nothing || f.formatter === Models.format_number_sql
+    sql_type = numeric_column && operand isa Union{Integer,Float16,Float32,Float64} && !(operand isa Bool) ?
+               _infer_parameter_sql_type(operand, instruc) : nothing
+    return add_parameter!(instruc, _format_filter_value(formatter, operand, operation); sql_type=sql_type)
   elseif isa(operand, String)
     # Check if it's a field reference
     if contains(operand, "__") || operand in instruc.object.model.field_names
@@ -2081,21 +2136,18 @@ end
 # test/unit/test_public_exports.jl. (`delete`/`inspect_query` keep their curried forms — those
 # functions are package-owned, so a kwargs-only method on them is not piracy.)
 
-# Reverse a single ORDER BY term in place — the reverse of an ORDER BY yields the last row (#208).
-# Flip ASC↔DESC, and any EXPLICIT nulls placement (an unset `nothing` stays default so the
-# renderer keeps its orientation-derived NULLS placement). Non-SQLOrder ordering terms are left
-# as-is (best effort).
-function _invert_order!(o::SQLOrder)
-  o.orientation = o.orientation == "DESC" ? "ASC" : "DESC"
-  # if/elseif, NOT two `&&` statements: sequential flips would swap :first→:last→:first (no-op).
-  if o.nulls === :first
-    o.nulls = :last
-  elseif o.nulls === :last
-    o.nulls = :first
-  end
-  return o
+# Reverse a single ORDER BY term by CONSTRUCTING the reversed one — the reverse of an ORDER BY
+# yields the last row (#208). Flip ASC↔DESC, and any EXPLICIT nulls placement (an unset `nothing`
+# stays default so the renderer keeps its orientation-derived NULLS placement). #540: `SQLOrder` is
+# an immutable struct, so this cannot write into the caller's term — which is the point: the term
+# is a value the caller may still hold, and `last()` works on a copy of the handler anyway.
+# Non-SQLOrder ordering terms are returned as-is (best effort).
+function _invert_order(o::SQLOrder)::SQLOrder
+  # One conditional, NOT two flips in sequence: :first→:last followed by :last→:first is a no-op.
+  nulls = o.nulls === :first ? :last : o.nulls === :last ? :first : o.nulls
+  return SQLOrder(o.field, o.order, o.orientation == "DESC" ? "ASC" : "DESC", o._as, nulls)
 end
-_invert_order!(o) = o
+_invert_order(o) = o
 
 """
     last(objct::SQLObjectHandler; show_query::Symbol = :execute)
@@ -2127,9 +2179,9 @@ function last(objct::SQLObjectHandler; show_query::Symbol = :execute)
     q.order_by("-" * String(pk_sym))
   else
     # Reverse the existing ordering; the reversed ORDER BY's first row is the original's last.
-    for o in q.object.order
-      _invert_order!(o)
-    end
+    # #540: rebuild the copy's own order list from constructed terms — nothing is written into an
+    # `SQLOrder`, which is a `struct` now.
+    map!(_invert_order, q.object.order, q.object.order)
   end
   q.limit(1)
   res = list(q, show_query=show_query)

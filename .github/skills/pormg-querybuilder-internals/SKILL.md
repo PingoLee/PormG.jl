@@ -132,8 +132,9 @@ docstring promises exactly that.
 
 **Since #508 phase 2 the type system holds the contract, not convention.** Seven node types are
 declared `struct` — `SQLText`, `OperObject`, `FExpression`, `OuterRefObject`, `CTEReference`,
-`FObject`, `WindowFunction` — joining `JoinedReference`, which was immutable from #481. Writing to a
-slot on any of them is a `setfield!` error at the call site rather than a silent rewrite.
+`FObject`, `WindowFunction` — joining `JoinedReference`, which was immutable from #481, and
+`SQLOrder`, frozen in #540. Writing to a slot on any of them is a `setfield!` error at the call
+site rather than a silent rewrite.
 
 It took two defects to get there, and both are now unrepresentable rather than guarded:
 
@@ -154,7 +155,10 @@ The rules now:
   still held.
 - **`SQLField` is the exception, and it is a build product.** The `_retag_*_field!` helpers still
   write into it, because it is what a String-path parse produced, never what a caller handed in.
-  `SQLOrder` likewise (`_invert_order!` rewrites it for `last()`).
+  `SQLOrder` is no longer an exception (#540): it is a `struct`, `last()` inverts an ordering term
+  by constructing a new one (`_invert_order`), and the render-time orientation re-validation that
+  existed only because it was mutable is gone — the inner constructor's #77 whitelist is the only
+  writer.
 - **Containers are the other exception, and they are named.** `QObject` / `QorObject` support `push!`
   as documented API (`docs/src/read/q_objects.md`), and `WindowSpec` documents in-place assembly.
   They are containers, not nodes; do not extend that affordance to the node types. Containers are
@@ -163,11 +167,12 @@ The rules now:
   `spec = WindowOver(partition_by = "c"); push!(spec.partition_by, Rank(over = spec))` type-checks,
   because `WindowFunction <: SQLTypeFunction <: WindowPartitionPart`.
 - **A hand-written `deepcopy` is a symptom.** The seven that existed only to satisfy the #112 copy
-  discipline (*a copy must share no MUTABLE state*) are deleted. Four remain, none of them about
-  mutability — `SQLTypeField` (deliberately shallow on `.field`), `SQLTypeOrder` (re-runs the #77
-  orientation whitelist that Base bypasses), `SQLTypeOper` (shares an `SQLObjectHandler` rather than
-  cloning a subquery) and `WindowSpec` (still a container). **Do not add an eighth**: a node that
-  needs a copy method to be safe is a node that should not be mutable.
+  discipline (*a copy must share no MUTABLE state*) are deleted, and #540 deleted an eighth — the
+  `SQLTypeOrder` one re-ran the #77 whitelist that Base bypasses, which a frozen struct makes moot.
+  Three remain, none of them about mutability — `SQLTypeField` (deliberately shallow on `.field`),
+  `SQLTypeOper` (shares an `SQLObjectHandler` rather than cloning a subquery) and `WindowSpec`
+  (still a container). **Do not add another**: a node that needs a copy method to be safe is a node
+  that should not be mutable.
 
 ### A declared type must not admit what no consumer handles (#533)
 
@@ -180,8 +185,11 @@ accepted it and died at render with a raw `MethodError`. #529 reported one; ther
 - **Prefer the concrete type in a union.** `CTEReference` is deliberately not `<: SQLTypeF` and
   `JoinedReference` not `<: SQLTypeCTE`, both so "every admission is a named seam" (`types.jl`).
   `FExpression.operand` names `FExpression`, not the abstract `SQLTypeF` — naming the abstract one
-  silently admitted `OuterRefObject`, which bound RAW as a parameter. #535 is the same pattern still
-  open one level out.
+  silently admitted `OuterRefObject`, which bound RAW as a parameter. The other unions that name
+  `SQLTypeF` — the `functions.jl` signatures and `WindowColumnPart` — keep admitting `OuterRefObject`
+  on purpose: since #535 every one of them has a consumer (`_check_function(::OuterRefObject)` on the
+  build side; the render side always resolved it against `instruc.outer`). The rule is "a consumer
+  per admitted member", not "never the abstract type".
 - **Widening a union is half a change.** The other half is a consumer arm. A member that binds raw is
   not "supported": on PostgreSQL the driver often adapts it and the bug hides; on SQLite it compares
   against a different representation and returns wrong rows silently.

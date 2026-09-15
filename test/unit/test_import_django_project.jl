@@ -4517,44 +4517,273 @@ class Thing(models.Model):
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Django Importer (#429): a child overriding an inherited field is NOT a collision
+# Django Importer (#429): an override is silent; a cross-body column clobber is not
 #
 # The half that decides whether this feature is usable at all. A blanket "warn on any key
 # collision" would fire on every legitimate abstract-base override — the common case, and the
-# entire reason the merge concatenates ancestors ahead of the child. The report is gated on the
-# statements sharing an OWNER, so an inherited statement and the child's own never trip it however
-# many times they write the same key.
+# entire reason the merge concatenates ancestors ahead of the child.
+#
+# The line is drawn by TWO signals together, and either one alone puts it in the wrong place:
+# same OWNER (#402's per-statement tag), OR different attribute NAMES. An override always
+# re-declares the same attribute, so the second signal never fires on one; and two differently
+# spelled attributes landing on one column is never an override, because only the `_id` suffix
+# rule can make that happen.
+#
+# Owner alone was the first attempt, and it missed the cross-body clobber entirely — an inherited
+# `other = ForeignKey(...)` silently replaced by the child's `other_id = IntegerField()`, which is
+# #429's own problem statement one merge hop away. That gap was justified in this file as "legal
+# Django". It is not: abstract-base fields are COPIED into the child, so they sit in
+# `cls._meta.local_fields`, which is what `_check_column_name_clashes` iterates — models.E007
+# fires on it.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a child overriding an inherited field is not reported (#429)" begin
+    # Both shapes of a genuine override, and the FK one matters most: a child narrowing
+    # `on_delete` re-declares the SAME attribute, so it must stay silent even though the two
+    # statements have different owners AND the column name differs from the attribute name.
     inherited = """
 from django.db import models
-
-class Base(models.Model):
-    nome = models.CharField(max_length=5)
-    owner = models.ForeignKey('Other', on_delete=models.CASCADE)
-
-    class Meta:
-        abstract = True
 
 class Other(models.Model):
     rotulo = models.CharField(max_length=5)
 
+class Base(models.Model):
+    nome = models.CharField(max_length=5)
+    owner = models.ForeignKey(Other, on_delete=models.CASCADE)
+
+    class Meta:
+        abstract = True
+
 class Thing(Base):
     nome = models.CharField(max_length=40)
-    owner_id = models.IntegerField()
+    owner = models.ForeignKey(Other, on_delete=models.PROTECT)
 """
     generated, config_key, db_dir_existed =
         import_project(["racing" => inherited]; output_file = "inherited_override.jl")
     try
-        # Neither override is reported: `nome` is a plain same-key override, and `owner_id` is the
-        # #429 shape reached ACROSS the inheritance boundary, which is legal Django.
-        @test !occursin("in the SAME class body", generated)
+        @test !occursin("both write the column", generated)
         # ...and both overrides took effect, which is what the silence is protecting.
         @test occursin("nome = Models.CharField(max_length=40)", generated)
-        @test occursin("owner_id = Models.IntegerField()", generated)
-        @test !occursin("owner_id = Models.ForeignKey", generated)
+        @test occursin("on_delete=PROTECT", generated)
+        @test !occursin("on_delete=CASCADE", generated)
     finally
         cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+@testset "an inherited declaration clobbered by a differently-named one is reported (#429)" begin
+    # The gap owner-alone left. `Base.other` is a ForeignKey whose column is `other_id`; the child
+    # declares `other_id` outright. The relation — target, `on_delete`, `related_name` — is gone,
+    # and before this nothing in the artifact said it had ever been declared.
+    cross_body = """
+from django.db import models
+
+class Other(models.Model):
+    rotulo = models.CharField(max_length=5)
+
+class Base(models.Model):
+    other = models.ForeignKey(Other, on_delete=models.CASCADE, related_name='bases')
+
+    class Meta:
+        abstract = True
+
+class Thing(Base):
+    other_id = models.IntegerField()
+"""
+    generated, config_key, db_dir_existed =
+        import_project(["racing" => cross_body]; output_file = "inherited_clobber.jl")
+    try
+        @test occursin("both write the column 'other_id'", generated)
+        # The base is NAMED, because it is the file the reader has to open — and the report must
+        # not claim these two shared a class body, which they did not.
+        @test occursin("inherited from the abstract base 'Base'", generated)
+        @test !occursin("in the SAME class body", generated)
+        # The outcome clause is the buildable one, and it is true here.
+        @test occursin("Only the later declaration reaches the model below", generated)
+        @test occursin("other_id = Models.IntegerField()", generated)
+        @test !occursin("other_id = Models.ForeignKey", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#429): the collision report describes the artifact it is attached to
+#
+# The report is emitted before either skip branch acts, which is right — it must not depend on
+# which half of the pair happened to be buildable. But the OUTCOME differs in all three
+# dispositions of the later statement, and the first draft of this gave them one sentence:
+#
+#   * buildable         — the later one wins, the earlier is lost;
+#   * #410 unsupported  — that branch deletes the key, so NEITHER column is emitted;
+#   * autofields_ignore — that branch does not delete, so the EARLIER one is what stands.
+#
+# The third is the dangerous one: "the earlier one is lost, including any relation it declared"
+# was printed directly above the surviving ForeignKey, so a reader acting on it would hunt for a
+# relation that is four lines below and never notice which column actually vanished. A marker that
+# contradicts the model under it is worse than no marker — it is the silent drop this importer
+# exists to prevent, wearing a hat.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the collision report names the outcome the artifact actually has (#429)" begin
+    # A. The later half is a type PormG does not implement. #410's skip `delete!`s the key, so the
+    #    column neither statement's spelling survives.
+    later_unsupported = """
+from django.db import models
+
+class Other(models.Model):
+    nome = models.CharField(max_length=5)
+
+class Thing(models.Model):
+    other = models.ForeignKey(Other, on_delete=models.CASCADE)
+    other_id = models.SmallIntegerField()
+    ativo = models.BooleanField()
+"""
+    generated, key, existed = import_project(["racing" => later_unsupported];
+                                             output_file = "collision_later_skipped.jl")
+    try
+        @test occursin("both write the column 'other_id'", generated)
+        @test occursin("NEITHER reaches the model", generated)
+        # The claim is checked against the model, not merely against itself.
+        @test !occursin("other_id = Models.", generated[findfirst("Thing = Models.Model", generated)[1]:end])
+        @test !occursin("Only the later declaration reaches the model", generated)
+        # ...and #410's own marker is still there, saying which type it could not build.
+        @test occursin("is a models.SmallIntegerField", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+
+    # B. The later half is dropped by `autofields_ignore`, which does NOT delete the key — so the
+    #    earlier declaration is what the file emits. The relation survives; saying it was lost
+    #    points the reader at a column that is right there and hides the one that is not.
+    later_ignored = """
+from django.db import models
+
+class Other(models.Model):
+    nome = models.CharField(max_length=5)
+
+class Thing(models.Model):
+    other = models.ForeignKey(Other, on_delete=models.CASCADE)
+    other_id = models.TextField()
+"""
+    gen_b, key_b, existed_b = import_project(["racing" => later_ignored];
+                                             output_file = "collision_later_ignored.jl",
+                                             autofields_ignore = ["Manager", "TextField"])
+    try
+        @test occursin("both write the column 'other_id'", gen_b)
+        @test occursin("is the EARLIER declaration's", gen_b)
+        # The relation really is what survived — the sentence the old text got backwards.
+        @test occursin("other_id = Models.ForeignKey(\"Other\"", gen_b)
+        @test !occursin("the earlier one is lost", gen_b)
+    finally
+        cleanup_project_test!(key_b, existed_b)
+    end
+
+    # C. Both buildable — the original shape, and the one case where "the later one wins" is true.
+    #    Pinned beside the other two so the three-way choice cannot collapse back into one arm.
+    both_buildable = """
+from django.db import models
+
+class Other(models.Model):
+    nome = models.CharField(max_length=5)
+
+class Thing(models.Model):
+    other = models.ForeignKey(Other, on_delete=models.CASCADE)
+    other_id = models.IntegerField()
+"""
+    gen_c, key_c, existed_c = import_project(["racing" => both_buildable];
+                                             output_file = "collision_both_buildable.jl")
+    try
+        @test occursin("Only the later declaration reaches the model below", gen_c)
+        @test occursin("other_id = Models.IntegerField()", gen_c)
+        @test !occursin("NEITHER reaches the model", gen_c)
+        @test !occursin("is the EARLIER declaration's", gen_c)
+    finally
+        cleanup_project_test!(key_c, existed_c)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#428): the `id` report describes the artifact, not the claim
+#
+# Three conditions can suppress the implicit key and they are NOT mutually exclusive. Only one of
+# them — a column named `id` actually present in `fields_dict` — is a statement about the file that
+# gets written; the other two are statements about a claim some statement made. `haskey` with a
+# #410 skip is unreachable (that branch deletes the key it skips), but `haskey` with an
+# `autofields_ignore` drop is entirely reachable, because that branch does not delete. Testing the
+# claims first printed "that column is not imported at all" immediately above the column.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an id built by an ancestor outranks a later ignore claim in the report (#428)" begin
+    src = """
+from django.db import models
+
+class Base(models.Model):
+    id = models.BigIntegerField()
+
+    class Meta:
+        abstract = True
+
+class Thing(Base):
+    id = models.CharField(max_length=10)
+    ativo = models.BooleanField()
+"""
+    generated, config_key, db_dir_existed =
+        import_project(["access" => src]; output_file = "ignored_id_over_built.jl",
+                       autofields_ignore = ["Manager", "CharField"])
+    try
+        # The column IS in the file, so the report must say the implicit key would have destroyed
+        # it — not that it was never imported.
+        @test occursin("id = Models.BigIntegerField()", generated)
+        @test occursin("that would silently destroy the declared column below", generated)
+        @test !occursin("that column is not imported at all", generated)
+        @test !occursin("`autofields_ignore`", generated)
+        # A column literally named `id` that is not the key IS the models.E004 shape, so the
+        # sentence that #428 suppresses on the pure-ignore path belongs here.
+        @test occursin("models.E004", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#428): the empty-model abort does not blame the ignore list for other losses
+#
+# `fields_dict` can be emptied by several mechanisms at once, and the arm chosen by `:id in
+# ignored_fields` used to open "Every field it declares has a Django type listed in
+# `autofields_ignore`". A field-shaped call the importer cannot read is dropped by a different path
+# entirely and warned about separately — the same lesson the #410 testset above records, one arm
+# further along.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the ignore-list abort does not claim losses it did not cause (#428)" begin
+    mixed = """
+from django.db import models
+
+class Thing(models.Model):
+    id = models.CharField(max_length=10)
+    tags = ArrayField(models.IntegerField())
+"""
+    key_m, existed_m = project_config!()
+    try
+        err = nothing
+        try
+            import_models_from_django(["access" => mixed]; db = key_m, file = "mixed_causes.jl",
+                                      force_replace = true,
+                                      autofields_ignore = ["Manager", "CharField"])
+        catch e
+            err = e
+        end
+        @test err isa PormG.InvalidMigrationError
+        msg = sprint(showerror, err)
+        @test occursin("'access.Thing' has no column left to emit", msg)
+        @test !occursin("This is a PormG bug", msg)
+        # The true cause of the SUPPRESSED KEY is named — that part is the ignore list's doing.
+        @test occursin("field named `id` whose Django type is in this import's `autofields_ignore`",
+                       msg)
+        # ...but `tags` was dropped by `_looks_like_a_field_call`, not by the ignore list, so the
+        # message must not sweep it in.
+        @test !occursin("Every field it declares has a Django type listed", msg)
+        @test occursin("not all of them are necessarily the ignore list's doing", msg)
+    finally
+        cleanup_project_test!(key_m, existed_m)
     end
 end
 
@@ -4668,8 +4897,10 @@ end
     # An earlier candidate fix carried the alias alongside each scope entry and retried it only
     # AFTER the pre-existing lenient key, which looks `Outra` up as a scope name in any app already
     # in scope — so it found `core`'s real `Outra` first and imported `WRONG` in silence. This
-    # assertion is what rejected that design: the alias key lands under `shop`, which sorts ahead
-    # of every ancestor entry, so the module binding wins the way Python makes it win.
+    # assertion is what rejected that design, and it rejected the same mistake a second time during
+    # #512, which first appended the `enum_aliases` probe after that same loop. `_lookup_enum`'s
+    # qualified fallback is therefore three explicit passes — the writing module's own scopes, then
+    # its own bindings, then every other app in scope — which is Python's order.
     shop = """
 from django.db import models
 from core.models import Base as Outra

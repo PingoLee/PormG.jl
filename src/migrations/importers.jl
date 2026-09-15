@@ -1921,34 +1921,46 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
           # is the more dangerous half — the column it mis-types is the one every query reads.
           skipped_id = :id in unsupported_fields
           ignored_id = :id in ignored_fields
-          if haskey(fields_dict, :id) || skipped_id || ignored_id
-            @warn "import: a class-declared field named 'id' is not the primary key; no implicit id was substituted and this model has none" class=class_label declared_id_imported=!(skipped_id || ignored_id) dropped_by=(skipped_id ? "unimplemented type" : ignored_id ? "autofields_ignore" : "")
+          # `id_built` is tested FIRST, and that order is load-bearing rather than stylistic. The
+          # three conditions are not mutually exclusive, and only `id_built` is a statement about the
+          # ARTIFACT — the other two are statements about a claim. `haskey && skipped_id` happens to
+          # be unreachable, because #410's branch `delete!`s the key it skips; `haskey && ignored_id`
+          # is entirely reachable, because the `autofields_ignore` branch does not delete. An
+          # abstract base that builds `id` and a child that declares an ignored `id` hits exactly
+          # that, and testing the claims first printed "that column is not imported at all" directly
+          # above the column, as `BigIntegerField`.
+          id_built = haskey(fields_dict, :id)
+          if id_built || skipped_id || ignored_id
+            @warn "import: a class-declared field named 'id' is not the primary key; no implicit id was substituted and this model has none" class=class_label declared_id_imported=id_built dropped_by=(id_built ? "" : skipped_id ? "unimplemented type" : "autofields_ignore")
             push!(markers, "# PormG: '$(class_label)' declares a field named 'id' that is NOT its " *
                            "primary key. Django's implicit `id` was NOT substituted for it — " *
-                           (skipped_id ?
+                           (id_built ?
+                              "that would silently destroy the declared column below. " :
+                            skipped_id ?
                               "that column is not imported at all (its Django type has no PormG " *
                               "counterpart; see the marker above), and claiming a BIGINT " *
                               "auto-increment key in its place would mis-type the one column " *
                               "every query reads. " :
-                            ignored_id ?
                               "that column is not imported at all — its Django type is in this " *
                               "import's `autofields_ignore`, so you asked for it to be dropped. " *
                               "Dropping it is not the same request as replacing it with a BIGINT " *
                               "auto-increment key, which would mis-type the one column every query " *
                               "reads. Remove that type from `autofields_ignore` to import the " *
-                              "column, or declare the key here by hand. " :
-                              "that would silently destroy the declared column below. ") *
+                              "column, or declare the key here by hand. ") *
                            "This model therefore has NO primary key, which leaves it unusable by " *
                            "anything that needs one: a ManyToManyField pointing at it makes the " *
                            "WHOLE generated file fail to load, and a ForeignKey pointing at it " *
                            "loads and is silently wrong. Declare the real key by hand — mark this " *
                            "column `primary_key = true` if that is what the table does." *
-                           # The E004 sentence is FALSE on the `autofields_ignore` path, so it is
-                           # omitted there. `id = models.CharField(max_length=10, primary_key=True)`
-                           # is a models.py Django accepts; it reaches this branch only because the
-                           # caller dropped `CharField`, and telling them their project never passed
-                           # `manage.py check` sends them to look for a problem that is not there.
-                           (ignored_id ? "" :
+                           # The E004 sentence is FALSE only where the `id` column is absent because
+                           # the caller dropped its type. `id = models.CharField(max_length=10,
+                           # primary_key=True)` is a models.py Django accepts; it reaches this branch
+                           # only because the caller dropped `CharField`, and telling them their
+                           # project never passed `manage.py check` sends them after a problem that
+                           # is not there. When a column named `id` IS emitted — an ancestor built it
+                           # and the child's redeclaration was ignored — this is the E004 shape after
+                           # all, so the sentence belongs.
+                           (ignored_id && !id_built ? "" :
                               " (Django rejects this shape itself, models.E004, so it can only " *
                               "reach here from a models.py that never passed `manage.py check`.)"))
           else
@@ -2040,14 +2052,15 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
             "would name a binding this file does not define. Declare the missing columns by hand.") :
           :id in ignored_fields ?
           InvalidMigrationError(
-            "import: '$(_django_ref_label(entry))' has no column left to emit. Every field it " *
-            "declares has a Django type listed in this import's `autofields_ignore` " *
-            "($(join(autofields_ignore, ", "))), so every column was dropped at your request — and " *
-            "no implicit `id` was substituted, because the class declares a field named `id` " *
-            "itself and inventing a BIGINT auto-increment key under that name would mis-type it. " *
-            "A model with no column cannot be emitted, and any relation pointing at it would name " *
-            "a binding this file does not define. Remove a type from `autofields_ignore`, or " *
-            "exclude this class from the import.") :
+            "import: '$(_django_ref_label(entry))' has no column left to emit. It declares a field " *
+            "named `id` whose Django type is in this import's `autofields_ignore` " *
+            "($(join(autofields_ignore, ", "))), so that column was dropped at your request and no " *
+            "implicit `id` could be substituted for it — inventing a BIGINT auto-increment key " *
+            "under that name would mis-type it. Nothing else this class declares produced a column " *
+            "either; the warnings above name every field that did not survive, and not all of them " *
+            "are necessarily the ignore list's doing. A model with no column cannot be emitted, " *
+            "and any relation pointing at it would name a binding this file does not define. " *
+            "Remove a type from `autofields_ignore`, or exclude this class from the import.") :
           InvalidMigrationError(
             "import: internal — '$(_django_ref_label(entry))' was indexed but has no field to " *
             "emit, so any relation pointing at it would name a binding this file does not define. " *
@@ -3612,9 +3625,10 @@ qualified fallback resolves `Base.Status` by looking up `Status` inside the scop
 fallback scans this list for its **app** half only, so what it needs is the base's APP to appear
 here, not the base's own entry; the two coincide except when the base lives in another app, which is
 exactly when it matters. That covers the base addressed by its OWN name only — a base reached through
-an `as` alias is served instead by an alias entry in `enums`, registered once per module in
-`_django_graph_from_scopes` (#425), because the alias is a module-level binding rather than anything
-this ancestor walk knows about. The other is a deliberate leniency: a bare name
+a name the module IMPORTED is served instead by the separate `enum_aliases` table built in
+`_django_graph_from_scopes` (#425, #512), which `_lookup_enum` consults for the statement's own app
+alone, because a module-level binding is not anything this ancestor walk knows about. The other is a
+deliberate leniency: a bare name
 that matches nothing in the owner's class or module still falls through to a base's nested enum,
 where Python would raise `NameError`. That is narrower than what it replaced (before, bases outranked
 the module outright) and it fails toward resolving rather than toward a wrong-value silent import,
@@ -4198,11 +4212,30 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
   #
   # Last-write-wins is CORRECT and load-bearing: abstract-base merging concatenates ancestors'
   # statements ahead of the child's precisely so a child can override an inherited field. That is
-  # the common case and it must stay silent. The distinguishing signal is the per-statement owner
-  # #402 added — a merged statement carries the `(app, class)` it was WRITTEN in, the child's own
-  # body carries the child's — so "the same class body wrote this key twice" is answerable here and
-  # was not before. `_inherited_statements` walks with a `seen` set, so one owner tuple cannot
-  # contribute a key twice through a diamond either: same owner means same body, structurally.
+  # the common case and it must stay silent.
+  #
+  # So the report fires on either of two signals, and it takes BOTH to draw the line in the right
+  # place:
+  #
+  #   * the same OWNER wrote the key twice. `class_content` entries carry the `(app, class)` the
+  #     statement was WRITTEN in (#402) — a merged statement keeps its ancestor's, the child's own
+  #     body carries the child's — so this is answerable here and was not before.
+  #     `_inherited_statements` walks with a `seen` set, so one owner tuple cannot contribute a key
+  #     twice through a diamond: same owner means same class body, structurally.
+  #   * the two statements use DIFFERENT field names. An override always re-declares the same
+  #     attribute (`nome` over `nome`); two differently spelled attributes landing on one column is
+  #     never an override in any arrangement, because only the `_id` suffix rule can make that
+  #     happen. Owner alone missed it across the inheritance boundary:
+  #
+  #         class Base(models.Model):                       # abstract
+  #             other = models.ForeignKey(Other, …)         # column `other_id`
+  #         class Thing(Base):
+  #             other_id = models.IntegerField()            # column `other_id`
+  #
+  #     — the relation gone, silently, which is #429's own problem statement one merge hop away.
+  #     Django rejects this too: abstract-base fields are COPIED into the child, so they are in
+  #     `cls._meta.local_fields`, which is exactly what `_check_column_name_clashes` iterates, and
+  #     models.E007 fires. The earlier claim that this shape was legal Django was simply wrong.
   claimed = Dict{Symbol, Tuple{Tuple{Int, String}, String, String, Int}}()
 
   if is_auth_user
@@ -4289,40 +4322,11 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     field_key = field_type in ["ForeignKey", "OneToOneField"] ? Symbol("$(field_name)_id") :
                                                                 Symbol(field_name)
 
-    # Two statements from ONE class body writing one key (#429). Reported here, before any of the
-    # skip branches below, so the report does not depend on which half of the pair happened to be
-    # buildable: `owner = ForeignKey(…)` colliding with `owner_id = models.IntegerField()`,
-    # `owner_id = models.SmallIntegerField()` (#410 skips it) and `owner_id = models.Manager()`
-    # (`autofields_ignore` drops it) are one defect wearing three coats, and the reader needs the
-    # same sentence for all three.
-    #
-    # A DIFFERENT owner is silent. That is a child overriding an inherited field, which is what the
-    # merge exists to allow. Django itself rejects the same-body pair (models.E007, "column name
-    # 'owner_id' is used by …"), so this cannot come from a project that passes `manage.py check` —
-    # but hand-edited, legacy and partially-migrated models.py files are exactly what this importer
-    # reads and cannot validate, and a declared RELATION disappearing in silence is the one thing it
-    # promises never to do.
-    prior = get(claimed, field_key, nothing)
-    if prior !== nothing && prior[1] == stmt_owner
-      (_, prior_name, prior_type, prior_line) = prior
-      @warn "import: two fields in one class body write the same column; the later one wins and the earlier is lost" class=class_label column=String(field_key) first="$(prior_name) = models.$(prior_type)()" first_line=prior_line second="$(field_name) = models.$(django_type)()" second_line=stmt.lineno
-      push!(markers, "# PormG: '$(class_label)' declares '$(prior_name)' ($(prior_type), models.py " *
-                     "line $(prior_line)) and '$(field_name)' ($(django_type), line " *
-                     "$(stmt.lineno)) in the SAME class body, and both write the column " *
-                     "'$(field_key)'" *
-                     # Only worth saying when the `_id` suffix is what made two differently spelled
-                     # field names land on one column; for `x` twice over it is noise.
-                     (String(field_key) == prior_name && String(field_key) == field_name ? ". " :
-                        " — Django appends `_id` to a ForeignKey's column name. ") *
-                     "Only the later declaration survives below; the earlier one is lost, " *
-                     "including any relation it declared. Django rejects this itself " *
-                     "(models.E007), so it can only reach here from a models.py that never passed " *
-                     "`manage.py check` — rename one of the two fields.")
-    end
-    claimed[field_key] = (stmt_owner, field_name, django_type, stmt.lineno)
-
     # A Django field type PormG does not implement (#410). DECIDED here, ACTED on below — the two
-    # cannot be one statement, and the gap between them is the whole design:
+    # cannot be one statement, and the gap between them is the whole design (#429 moved the decision
+    # a few lines earlier still, so the collision report below can say which column actually
+    # survives; it is unchanged, and everything the comment requires of it is about what comes
+    # AFTER it, not before):
     #
     #   * deciding here mutes the option-level reports for a column that will not exist.
     #     `parse_field_args` says things like "…has no choices slot… The column is unaffected", and
@@ -4343,6 +4347,65 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     # you ever add an `@error` in there for something structural, exempt it from this scope or it
     # will vanish without trace for exactly the fields already in trouble.
     unsupported_type = !_is_pormg_field_type(field_type)
+
+    # Two statements from ONE class body writing one key (#429). Reported here, before either skip
+    # branch acts, so the report does not depend on which half of the pair happened to be buildable:
+    # `owner = ForeignKey(…)` colliding with `owner_id = models.IntegerField()`,
+    # `owner_id = models.SmallIntegerField()` (#410 skips it) and `owner_id = models.TextField()`
+    # under `autofields_ignore` are one defect, and all three deserve to be named.
+    #
+    # They do NOT all deserve the same sentence about the outcome, and the first draft of this gave
+    # them one. The three dispositions of the LATER statement produce three different artifacts, and
+    # the ignore case produces the opposite of what "the later one wins" says:
+    #
+    #   * buildable       — the later statement overwrites the key; the earlier one is gone.
+    #   * #410 skip       — that branch `delete!`s the key, so NEITHER column reaches the model.
+    #   * autofields_ignore — that branch does not delete, so whatever the EARLIER statement built is
+    #                       what stands. Saying "the earlier one is lost, including any relation it
+    #                       declared" there points the reader at a ForeignKey that is rendered four
+    #                       lines below, and says nothing about the column that actually vanished.
+    #
+    # So the outcome clause is chosen from the later statement's disposition, both of which are
+    # decidable here: `unsupported_type` is a pure function of `field_type` (moved above this block
+    # for that reason, still ahead of `parse_field_args` as its own comment requires), and the ignore
+    # test is a membership check on `django_type`.
+    #
+    # The gate is "same class body OR different attribute names" — see `claimed` above for why it
+    # takes both to leave a legitimate override silent while catching the cross-body clobber.
+    prior = get(claimed, field_key, nothing)
+    if prior !== nothing && (prior[1] == stmt_owner || prior[2] != field_name)
+      (_, prior_name, prior_type, prior_line) = prior
+      later_ignored = django_type in autofields_ignore
+      # Where the earlier declaration came from. "the SAME class body" is true only when the owners
+      # match; when they do not, the earlier statement was inherited from an abstract base, and
+      # naming that base is the whole value of the report — it is the file the reader has to open.
+      same_body = prior[1] == stmt_owner
+      origin = same_body ? " in the SAME class body" :
+               " (the first inherited from the abstract base '$(prior[1][2])', the second " *
+               "declared on this class)"
+      outcome = later_ignored ?
+        "The later declaration is dropped by `autofields_ignore`, so the column below — if this " *
+        "class emits one under that name at all — is the EARLIER declaration's, not the one the " *
+        "last statement in this body describes. " :
+        unsupported_type ?
+        "NEITHER reaches the model: the later declaration's Django type has no PormG counterpart, " *
+        "and skipping it removes the column both statements name (see the marker below). " :
+        "Only the later declaration reaches the model below; the earlier one is lost, including " *
+        "any relation it declared. "
+      @warn "import: two declarations write the same column; one of them is lost" class=class_label column=String(field_key) first="$(prior_name) = models.$(prior_type)()" first_line=prior_line second="$(field_name) = models.$(django_type)()" second_line=stmt.lineno same_class_body=same_body inherited_from=(same_body ? "" : prior[1][2]) later_dropped=(later_ignored ? "autofields_ignore" : unsupported_type ? "unimplemented type" : "")
+      push!(markers, "# PormG: '$(class_label)' declares '$(prior_name)' ($(prior_type), models.py " *
+                     "line $(prior_line)) and '$(field_name)' ($(django_type), line " *
+                     "$(stmt.lineno))" * origin * ", and both write the column " *
+                     "'$(field_key)'" *
+                     # Only worth saying when the `_id` suffix is what made two differently spelled
+                     # field names land on one column; for `x` twice over it is noise.
+                     (String(field_key) == prior_name && String(field_key) == field_name ? ". " :
+                        " — Django appends `_id` to a ForeignKey's column name. ") *
+                     outcome *
+                     "Django rejects this itself (models.E007), so it can only reach here from a " *
+                     "models.py that never passed `manage.py check` — rename one of the two fields.")
+    end
+    claimed[field_key] = (stmt_owner, field_name, django_type, stmt.lineno)
 
     # Parse field arguments
     parse_args() = parse_field_args(field_args_str, django_type, parameters_ignore;

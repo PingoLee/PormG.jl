@@ -45,8 +45,22 @@ end
 function DAY(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   return EXTRACT(column, Dict{String,Any}("part" => "DAY"), conn)
 end
-function DATE(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+# #562 — `@date` is the one transform whose two resolution ladders did not merely differ in
+# spelling: one of them was wrong. `CAST(col AS DATE)` applies NUMERIC affinity on SQLite, because
+# `DATE` is a declared type name containing none of the affinity keywords (`INT`, `CHAR`, `CLOB`,
+# `TEXT`, `BLOB`, `REAL`, `FLOA`, `DOUB`), so a stored `'2026-04-07T21:30:23.741+00:00'` came back
+# as the INTEGER `2026` — the year, silently, both projected and compared. Measured on SQLite
+# 3.53.4.
+#
+# PostgreSQL keeps the real cast: `date` is a type there and `(col)::date` yields one. SQLite gets
+# `strftime`, which is what the string ladder already emitted and what `format_date_sql` parses back
+# — so both engines now read back a `Date`, which is also Django's `__date` contract (`TruncDate`
+# returns a `datetime.date`, not text).
+function DATE(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   return CAST(column, Dict{String,Any}("type" => "date"), conn)
+end
+function DATE(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+  return "strftime('%Y-%m-%d', $(column))"
 end
 function Y_M(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   return EXTRACT_DATE(column, Dict{String,Any}("format" => "YYYY-MM"), conn)

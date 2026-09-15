@@ -790,7 +790,12 @@ MONTH(x) = Extract(x, "MONTH", formatter = Models.format_number_sql)
 YEAR(x) = Extract(x, "YEAR", formatter = Models.format_number_sql)
 DAY(x) = Extract(x, "DAY", formatter = Models.format_number_sql)
 Y_M(x) = ToChar(x, "YYYY-MM", formatter = Models.format_yyyy_mm)
-DATE(x) = ToChar(x, "YYYY-MM-DD", formatter = Models.format_date_sql)
+# #562: `@date` no longer goes through `ToChar`. A `ToChar` node carries the format mask as SQL
+# text, which forces one spelling on both engines; `DATE` is the one transform where the correct
+# spelling differs (`(col)::date` on PostgreSQL, `strftime` on SQLite — see `Dialect.DATE`). Naming
+# the function lets the dialect decide, and it is what lets the `F` ladder delegate here instead of
+# resolving into `Dialect` on its own.
+DATE(x) = FObject(function_name = "DATE", column = x, formatter = Models.format_date_sql)
 # Same that function CAST in django ORM
 # # relatorio = relatorio.annotate(quarter=functions.Concat(functions.Cast(f'{data}__year', CharField()), Value('-Q'), Case(
 # # 					When(**{ f'{data}__month__lte': 4 }, then=Value('1')),

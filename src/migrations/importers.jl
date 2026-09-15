@@ -4107,6 +4107,24 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
   unsupported_fields = Set{Symbol}()
   ignored_fields = Set{Symbol}()
 
+  # Who last wrote each key, and from which class body (#429). NOT returned — nothing outside this
+  # function asks the question, and the report it feeds is emitted here.
+  #
+  # Two statements can resolve to one key, and the later one wins with no report at all:
+  # `owner = models.ForeignKey(Other, …)` writes `:owner_id` under Django's `_id` suffix rule, and
+  # `owner_id = models.IntegerField()` writes `:owner_id` too. The relation — its target, its
+  # `on_delete`, its `related_name` — is gone, and nothing in the artifact says a ForeignKey was
+  # ever declared. Reverse the two lines and the FK wins instead, equally quietly.
+  #
+  # Last-write-wins is CORRECT and load-bearing: abstract-base merging concatenates ancestors'
+  # statements ahead of the child's precisely so a child can override an inherited field. That is
+  # the common case and it must stay silent. The distinguishing signal is the per-statement owner
+  # #402 added — a merged statement carries the `(app, class)` it was WRITTEN in, the child's own
+  # body carries the child's — so "the same class body wrote this key twice" is answerable here and
+  # was not before. `_inherited_statements` walks with a `seen` set, so one owner tuple cannot
+  # contribute a key twice through a diamond either: same owner means same body, structurally.
+  claimed = Dict{Symbol, Tuple{Tuple{Int, String}, String, String, Int}}()
+
   if is_auth_user
       fields_dict[:password] = Models.CharField()
       fields_dict[:last_login] = Models.DateTimeField()
@@ -4190,6 +4208,38 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     # lines up, so moving it earlier crosses no dependency.
     field_key = field_type in ["ForeignKey", "OneToOneField"] ? Symbol("$(field_name)_id") :
                                                                 Symbol(field_name)
+
+    # Two statements from ONE class body writing one key (#429). Reported here, before any of the
+    # skip branches below, so the report does not depend on which half of the pair happened to be
+    # buildable: `owner = ForeignKey(…)` colliding with `owner_id = models.IntegerField()`,
+    # `owner_id = models.SmallIntegerField()` (#410 skips it) and `owner_id = models.Manager()`
+    # (`autofields_ignore` drops it) are one defect wearing three coats, and the reader needs the
+    # same sentence for all three.
+    #
+    # A DIFFERENT owner is silent. That is a child overriding an inherited field, which is what the
+    # merge exists to allow. Django itself rejects the same-body pair (models.E007, "column name
+    # 'owner_id' is used by …"), so this cannot come from a project that passes `manage.py check` —
+    # but hand-edited, legacy and partially-migrated models.py files are exactly what this importer
+    # reads and cannot validate, and a declared RELATION disappearing in silence is the one thing it
+    # promises never to do.
+    prior = get(claimed, field_key, nothing)
+    if prior !== nothing && prior[1] == stmt_owner
+      (_, prior_name, prior_type, prior_line) = prior
+      @warn "import: two fields in one class body write the same column; the later one wins and the earlier is lost" class=class_label column=String(field_key) first="$(prior_name) = models.$(prior_type)()" first_line=prior_line second="$(field_name) = models.$(django_type)()" second_line=stmt.lineno
+      push!(markers, "# PormG: '$(class_label)' declares '$(prior_name)' ($(prior_type), models.py " *
+                     "line $(prior_line)) and '$(field_name)' ($(django_type), line " *
+                     "$(stmt.lineno)) in the SAME class body, and both write the column " *
+                     "'$(field_key)'" *
+                     # Only worth saying when the `_id` suffix is what made two differently spelled
+                     # field names land on one column; for `x` twice over it is noise.
+                     (String(field_key) == prior_name && String(field_key) == field_name ? ". " :
+                        " — Django appends `_id` to a ForeignKey's column name. ") *
+                     "Only the later declaration survives below; the earlier one is lost, " *
+                     "including any relation it declared. Django rejects this itself " *
+                     "(models.E007), so it can only reach here from a models.py that never passed " *
+                     "`manage.py check` — rename one of the two fields.")
+    end
+    claimed[field_key] = (stmt_owner, field_name, django_type, stmt.lineno)
 
     # A Django field type PormG does not implement (#410). DECIDED here, ACTED on below — the two
     # cannot be one statement, and the gap between them is the whole design:

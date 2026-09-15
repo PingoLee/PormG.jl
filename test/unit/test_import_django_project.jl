@@ -4420,6 +4420,144 @@ class Thing(Base):
     end
 end
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#429): two statements in ONE class body writing one column
+#
+# `fields_dict` is a Dict and `owner = models.ForeignKey(Other, …)` writes `:owner_id` under
+# Django's `_id` suffix rule — the same key `owner_id = models.IntegerField()` writes. The later
+# statement won with no report at all, so the relation (its target, its `on_delete`, its
+# `related_name`) vanished and nothing in the artifact said a ForeignKey had ever been declared.
+# Reverse the two lines and the FK wins instead, equally quietly.
+#
+# Last-write-wins is not the bug — it is what makes abstract-base merging work, and a child
+# overriding an inherited field is the common, intended case that must stay silent. What #402's
+# per-statement owner added is the ability to tell the two apart: same owner tuple means same class
+# body, because `_inherited_statements` walks with a `seen` set.
+#
+# Django rejects the pair itself (models.E007), so it cannot come from a project that passes
+# `manage.py check` — which is exactly the argument #400 was filed against and rejected. This
+# importer's stated contract is that it reads hand-edited, legacy and partially-migrated models.py
+# files it cannot validate, and never drops a declared column in silence. A dropped RELATION is
+# strictly worse than a dropped column.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "two statements in one class body writing one key are reported (#429)" begin
+    # A. The issue's own reproduction: the FK is declared first and loses.
+    fk_first = """
+from django.db import models
+
+class Other(models.Model):
+    nome = models.CharField(max_length=5)
+
+class Thing(models.Model):
+    owner = models.ForeignKey(Other, on_delete=models.CASCADE)
+    owner_id = models.IntegerField()
+"""
+    generated, config_key, db_dir_existed =
+        import_project(["racing" => fk_first]; output_file = "same_body_fk_first.jl")
+    try
+        # BOTH declarations are named, with their own source lines — a report that named only the
+        # survivor would not tell the reader what they lost.
+        @test occursin("'racing.Thing' declares 'owner' (ForeignKey, models.py line 7)", generated)
+        @test occursin("'owner_id' (IntegerField, line 8)", generated)
+        @test occursin("both write the column 'owner_id'", generated)
+        # The `_id` rule is what made two differently spelled names land on one column, so it is
+        # named — the reader otherwise has no way to see why these two collide at all.
+        @test occursin("Django appends `_id` to a ForeignKey's column name", generated)
+        # The outcome itself is unchanged: last-write-wins still decides, and the relation is gone.
+        @test occursin("owner_id = Models.IntegerField()", generated)
+        @test !occursin("owner_id = Models.ForeignKey", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # B. Reversed. The FK wins the column this time, which is the direction the issue calls out as
+    # equally quiet — so the report must not be keyed to "a ForeignKey was the loser".
+    fk_second = """
+from django.db import models
+
+class Other(models.Model):
+    nome = models.CharField(max_length=5)
+
+class Thing(models.Model):
+    owner_id = models.IntegerField()
+    owner = models.ForeignKey(Other, on_delete=models.CASCADE)
+"""
+    generated_b, key_b, existed_b =
+        import_project(["racing" => fk_second]; output_file = "same_body_fk_second.jl")
+    try
+        @test occursin("'racing.Thing' declares 'owner_id' (IntegerField, models.py line 7)",
+                       generated_b)
+        @test occursin("'owner' (ForeignKey, line 8)", generated_b)
+        @test occursin("both write the column 'owner_id'", generated_b)
+        # And here the relation is what survives.
+        @test occursin("owner_id = Models.ForeignKey(\"Other\"", generated_b)
+    finally
+        cleanup_project_test!(key_b, existed_b)
+    end
+
+    # C. Two plain fields under one name, no `_id` rule involved. The collision is real and
+    # reported; the sentence about ForeignKey suffixes is not, because it would be noise.
+    plain_clash = """
+from django.db import models
+
+class Thing(models.Model):
+    codigo = models.CharField(max_length=5)
+    codigo = models.IntegerField()
+"""
+    generated_c, key_c, existed_c =
+        import_project(["racing" => plain_clash]; output_file = "same_body_plain.jl")
+    try
+        @test occursin("both write the column 'codigo'", generated_c)
+        @test !occursin("Django appends `_id`", generated_c)
+        @test occursin("codigo = Models.IntegerField()", generated_c)
+    finally
+        cleanup_project_test!(key_c, existed_c)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#429): a child overriding an inherited field is NOT a collision
+#
+# The half that decides whether this feature is usable at all. A blanket "warn on any key
+# collision" would fire on every legitimate abstract-base override — the common case, and the
+# entire reason the merge concatenates ancestors ahead of the child. The report is gated on the
+# statements sharing an OWNER, so an inherited statement and the child's own never trip it however
+# many times they write the same key.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a child overriding an inherited field is not reported (#429)" begin
+    inherited = """
+from django.db import models
+
+class Base(models.Model):
+    nome = models.CharField(max_length=5)
+    owner = models.ForeignKey('Other', on_delete=models.CASCADE)
+
+    class Meta:
+        abstract = True
+
+class Other(models.Model):
+    rotulo = models.CharField(max_length=5)
+
+class Thing(Base):
+    nome = models.CharField(max_length=40)
+    owner_id = models.IntegerField()
+"""
+    generated, config_key, db_dir_existed =
+        import_project(["racing" => inherited]; output_file = "inherited_override.jl")
+    try
+        # Neither override is reported: `nome` is a plain same-key override, and `owner_id` is the
+        # #429 shape reached ACROSS the inheritance boundary, which is legal Django.
+        @test !occursin("in the SAME class body", generated)
+        # ...and both overrides took effect, which is what the silence is protecting.
+        @test occursin("nome = Models.CharField(max_length=40)", generated)
+        @test occursin("owner_id = Models.IntegerField()", generated)
+        @test !occursin("owner_id = Models.ForeignKey", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Django Importer (#425): a qualified enum reference resolves through the `as` alias it was
 # imported under. `Base.Status.choices` worked only when the base was addressed by its OWN class

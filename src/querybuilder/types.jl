@@ -720,6 +720,13 @@ end
 
 Interval(s::AbstractString) = Interval(_parse_time_string_to_compoundperiod(s))
 
+# #564 — the kind a rendered temporal expression EVALUATES TO, carried alongside its SQL text.
+# `nothing` means "not a temporal expression, or one this build cannot type"; both consumers
+# (the SQLite wrapper choice and the literal binder) treat it as "no representation to honour",
+# which is what they did before the render carried a kind at all. Django's name for this is the
+# expression's `output_field`.
+const TemporalKind = Union{CanonicalType, Nothing}
+
 # Duration operands accepted by F-expression +/- date arithmetic (#25).
 const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 

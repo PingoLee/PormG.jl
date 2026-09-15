@@ -32,6 +32,10 @@ import PormG: PormGError, FieldAccessError, UnknownFieldError, AmbiguousFieldErr
 import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, run_in_transaction
 import PormG: backend_num_affected_rows  # PG matched-row count (driver body in the weakdep extension)
 import PormG: backend_sqlite_version  # SQLite library-version probe for the bind-parameter limit (#84)
+# #564 — the value-representation table (`src/value_repr.jl`). The read path asks it which parser
+# undoes a backend's stored text instead of naming one itself; `CDateTime` is the key it asks with.
+import PormG: value_parser, value_formatter, sql_canonicalize, field_canonical_kind
+import PormG: CanonicalType, CDate, CDateTime
 import PormG: _emsg, _suggest_name  # shared helpers (Kernel)
 import PormG.ConnectionPool: fetch, fetch_copy, with_transaction, with_savepoint, with_sqlite_write_lock, current_task, finalize_transaction_connection!
 # #344: "was this failure a cancellation?" — sees through the DatabaseError wrapper the pool applies,

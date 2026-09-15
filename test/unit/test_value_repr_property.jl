@@ -172,6 +172,14 @@ _vr_base() = VRM.Probe.objects.filter("label" => _VR_LABEL)
     for (T, k) in temporal
       @test k in probe_kinds
       @test k in case_kinds
+      # #564 — and a populated cell in the representation table. Without this a new temporal field
+      # struct could gain a probe column and a case row while the table still answered `nothing` for
+      # it, which is the silent half: `value_formatter` returning `nothing` makes a renderer fall
+      # back to whatever it did before the owner existed, rather than failing. Asserted on the
+      # INSTANCE, so the field's own declared type decides — the same source `kind_of` reads.
+      f = instance(T)
+      @test PormG.field_canonical_kind(f) !== nothing
+      @test PormG.value_formatter(PormG.field_canonical_kind(f), _VR_POOL) === f.formatter
     end
   end
 end

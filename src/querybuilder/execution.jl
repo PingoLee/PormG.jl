@@ -1291,10 +1291,19 @@ function _operand_column_field(field_name, instruc::SQLInstruction)::Union{PormG
   return nothing
 end
 
-function _operand_column_type(field_name, instruc::SQLInstruction)::Union{String,Nothing}
+# #564 — the rooted column's canonical kind, replacing `_operand_column_type`'s type STRING. The
+# strings were the symptom the representation table exists to remove: every consumer re-derived the
+# same DATE-vs-TIMESTAMP decision from them, and each copy was a place the two could disagree.
+#
+# NARROWED to the two kinds that take date arithmetic, exactly as the string version was. `CTime` and
+# `CInterval` are temporal representations but never the LEFT of `± duration` — a `TimeField` reaching
+# the date renderer is refused by the soft validation in `_render_date_period_arithmetic`, and it must
+# keep being refused there rather than silently acquiring a wrapper here.
+function _operand_column_kind(field_name, instruc::SQLInstruction)::TemporalKind
   f = _operand_column_field(field_name, instruc)
   f === nothing && return nothing
-  return f.type in ("DATE", "TIMESTAMPTZ", "TIMESTAMP") ? f.type : nothing
+  kind = field_canonical_kind(f)
+  return (kind isa CDate || kind isa CDateTime) ? kind : nothing
 end
 
 # #536 — the operators whose right-hand literal is bound through the rooted column's formatter.
@@ -1326,24 +1335,35 @@ const _COMPARISON_OPERATIONS = ("=", "!=", ">", "<", ">=", "<=")
 # below pick between them by the COLUMN's type, not the value's — which is the whole point of #494.
 # So a `ZonedDateTime` against a TIMESTAMP column binds the canonical UTC string (#79), byte-identical
 # to what the ordinary `filter("ts" => zdt)` pair spelling binds.
-function _format_date_operand(operand::Union{Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime}, field_name, instruc::SQLInstruction)
-  ftype = _operand_column_type(field_name, instruc)
-  # #527: the expression's RESULT kind outranks the rooted column's kind, and only ever to promote.
-  # `F("dob") + Hour(6)` on a `DateField` evaluates to a timestamp — `date + interval` is a
-  # `timestamp` in SQL:2003 and PostgreSQL, and Django resolves the same combination to a
-  # `DateTimeField` — so the literal must bind the canonical form, not the column's calendar date.
-  # Bound to the column's date form, the comparison was unsatisfiable on BOTH engines and returned
-  # zero rows with no error. `_f_arith_result_kind` promotes only on a sub-day component, so the
-  # pinned truncation contract for whole-day arithmetic (`F("dob") + Day(1) == DateTime(...)` binds
-  # the calendar date, exactly as the pair spelling does) is untouched.
-  if field_name isa FExpression && _f_arith_result_kind(field_name, instruc) === :timestamp
-    ftype = "TIMESTAMP"
-  end
-  ftype == "DATE" && return Models.format_date_sql(operand)
-  if ftype == "TIMESTAMP" || ftype == "TIMESTAMPTZ"
-    return Models.format_timezone_sql(operand isa Dates.Date ? Dates.DateTime(operand) : operand)
-  end
-  return operand isa Dates.Date ? Models.format_date_sql(operand) : Models.format_timezone_sql(operand)
+# #564: `left_kind` is the kind the LEFT SIDE evaluates to, carried out of its own render rather than
+# reconstructed here. That replaces the `_f_arith_result_kind` chain walk this used to perform.
+#
+# #527's promotion is now a property of the value it receives: `F("dob") + Hour(6)` on a `DateField`
+# evaluates to a timestamp — `date + interval` is a `timestamp` in SQL:2003 and PostgreSQL, and Django
+# resolves the same combination to a `DateTimeField` — so the literal must bind the canonical form,
+# not the column's calendar date. Bound to the column's date form, the comparison was unsatisfiable on
+# BOTH engines and returned zero rows with no error. The promotion still fires only on a sub-day
+# component (`_shift_result_kind`), so the pinned truncation contract for whole-day arithmetic
+# (`F("dob") + Day(1) == DateTime(...)` binds the calendar date, exactly as the pair spelling does) is
+# untouched.
+#
+# Which formatter a kind gets is NOT decided here — `value_formatter` is the single declaration both
+# this binder and the field itself derive from (#564), so an `F` comparison and an ordinary
+# `filter(...)` pair against the same column bind the same bytes by construction rather than because
+# two ladders happen to agree.
+function _format_date_operand(operand::Union{Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime}, field_name, instruc::SQLInstruction;
+                              left_kind::TemporalKind = nothing)
+  kind = left_kind === nothing ? _operand_column_kind(field_name, instruc) : left_kind
+  formatter = kind === nothing ? nothing : value_formatter(kind, instruc.connection)
+  # No column to ask (a nested expression rooted in a function, an unresolvable path): the operand's
+  # own type decides. Still a formatted string, never a raw bind.
+  formatter === nothing &&
+    return operand isa Dates.Date ? Models.format_date_sql(operand) : Models.format_timezone_sql(operand)
+  # A `Date` against a TIMESTAMP column is promoted to midnight first, because `format_timezone_sql`
+  # has no `::Date` method — and midnight is what SQL itself means by a date literal compared to a
+  # timestamp, so the promotion is exact rather than a guess.
+  kind isa CDateTime && operand isa Dates.Date && return formatter(Dates.DateTime(operand))
+  return formatter(operand)
 end
 
 # Decompose a Period/CompoundPeriod into an ordered [(unit, magnitude)] list (largest → smallest),
@@ -1384,75 +1404,68 @@ function _decompose_period(period::Union{Dates.Period, Dates.CompoundPeriod})
   return comps
 end
 
-# #527 — the temporal kind an `F` date-arithmetic expression EVALUATES TO, as opposed to the kind of
-# the column it is rooted in. `:timestamp`, `:date`, or `nothing` when there is no column to ask.
+# #564 — the kind an expression evaluates to, given the kind its LEFT SIDE evaluates to and the
+# duration components applied to it. One rule, one line, no walk.
 #
-# One resolver, called from two places that must never disagree: the SQLite wrapper choice in
-# `_render_date_period_arithmetic` and the literal binder in `_format_date_operand`. That is the same
-# construction #494 used to close the wrapper/bind split — asking one function rather than writing two
-# predicates that happen to agree today.
+# It replaces `_f_arith_result_kind`, a type inferencer written as a RETROACTIVE walk: because the
+# render returned a bare `String`, anything downstream that needed the type had to reconstruct it
+# afterwards, either by re-walking the AST or by sniffing the rendered text. The walk's three
+# documented subtleties were all consequences of that, and the typed render gets each for free:
 #
-# The promotion it adds over `_operand_column_type` is the SQL one: a sub-day duration on a DATE
-# column yields a TIMESTAMP. `date + interval` is a `timestamp` in SQL:2003 and in PostgreSQL;
-# Django registers `DateField + DurationField -> DateTimeField` in `_connector_combinations` and
-# SQLAlchemy resolves `Date + Interval -> DateTime`. Without it `F("dob") + Hour(6) == DateTime(...)`
-# bound the column's calendar-date form against a timestamp-valued left side and returned zero rows —
-# on BOTH engines, silently.
+#   1. "It walks the CHAIN, not just the top link" — the inner node's kind is now CARRIED out of the
+#      inner render and read from the tuple, so there is no chain left to walk.
+#   2. "It asks `_decompose_period`, not `typeof(operand)`" — still true, and now structural: this
+#      function takes `comps`, so it cannot be spelled any other way.
+#   3. The zero-length link (`F(ts) + Day(0) + Day(1)`) — the identity short-circuit returns
+#      `(left_sql, kind)`, so the kind survives a link that emits no text at all. That is what makes
+#      the textual backstop unnecessary rather than merely redundant; see the deletion note below.
 #
-# Three details, each of which a simpler spelling gets wrong:
+# Django calls the kind an expression evaluates to its `output_field`, and every `Expression` carries
+# one — this is that idea, narrowed to the temporal path.
 #
-#   1. It walks the CHAIN, not just the top link. `F("dob") + Hour(6) + Day(1)` renders a timestamp
-#      (the outer call sees the inner canonical marker), so a top-level-only predicate would see
-#      `Day(1)`, decline to promote, and bind the calendar date — a fresh wrapper/bind disagreement.
-#   2. It asks `_decompose_period`, not `typeof(operand)`. `F("dob") + Hour(0) + Day(1)`: a
-#      zero-length interval short-circuits to the bare left side and emits no wrapper at all, so a
-#      type-based test would promote an expression that stayed a DATE. Reusing the decomposer is what
-#      makes render and bind agree by construction.
-#   3. It unwraps `Interval`, mirroring `_render_date_period_arithmetic` — `_decompose_period` takes
-#      `Period`/`CompoundPeriod` only, and `Interval("01:30:00")` is the sub-day case that matters most.
+# The promotion is the SQL one: a sub-day duration on a DATE column yields a TIMESTAMP. `date +
+# interval` is a `timestamp` in SQL:2003 and in PostgreSQL; Django registers `DateField +
+# DurationField -> DateTimeField` in `_connector_combinations` and SQLAlchemy resolves
+# `Date + Interval -> DateTime`. Without it `F("dob") + Hour(6) == DateTime(...)` bound the column's
+# calendar-date form against a timestamp-valued left side and returned zero rows — on BOTH engines,
+# silently.
 #
 # NARROWER than Django on purpose: Django promotes `DateField + Duration` unconditionally, including
 # whole days. PormG has a pinned, deliberate contract that a `DateTime` literal against a DATE column
 # truncates to its calendar date exactly as the `filter("dob__@gte" => …)` pair spelling does, and
 # promoting on `Day(1)` would overturn it. Promoting only when the expression itself produced a
-# time-of-day changes nothing that already has a correct answer.
+# time-of-day changes nothing that already has a correct answer. (The resulting cross-engine type
+# split on whole-day arithmetic is measured and tracked as #572.)
+_shift_result_kind(::Nothing, comps) = nothing
+_shift_result_kind(kind::CDate, comps) =
+  any(c -> c[1] in (:hour, :minute, :second), comps) ? CDateTime(false) : kind
+_shift_result_kind(kind::CanonicalType, comps) = kind
+
+# The LEFT side of an expression, rendered AND typed.
 #
-# No depth cap on the walk, for the reason recorded at `_operand_column_field`: `FExpression` has been
-# a `struct` since #508 phase 2, so `field_name` is set once at construction and a cycle is
-# unrepresentable rather than merely unlikely.
-function _f_arith_result_kind(v::FExpression, instruc::SQLInstruction)::Union{Symbol,Nothing}
-  node = v
-  while node isa FExpression
-    if node.operation in ("+", "-") && node.operand isa Union{Dates.Period, Dates.CompoundPeriod, Interval}
-      period = node.operand isa Interval ? node.operand.period : node.operand
-      any(c -> c[1] in (:hour, :minute, :second), _decompose_period(period)) && return :timestamp
-    end
-    node = node.field_name
-  end
-  ftype = _operand_column_type(v, instruc)
-  ftype in ("TIMESTAMP", "TIMESTAMPTZ") && return :timestamp
-  ftype == "DATE" && return :date
-  return nothing
+# RENDERS BEFORE IT TYPES, and the order is load-bearing rather than incidental: resolving the left
+# populates `instruc.tab_field_cache` for a dotted join key (`F("driverid__dob")`), which is the only
+# way `_operand_column_kind` can answer for one. Type first and every joined temporal column silently
+# becomes `nothing` — on PostgreSQL that is `timestamptz + bigint`, a hard error; on SQLite it is a
+# `date()` truncation nobody sees.
+function _render_left_typed(value::Any, operation::String, instruc::SQLInstruction)::Tuple{String,TemporalKind}
+  value isa FExpression && return _set_update_query_typed(value, instruc)
+  sql = _set_update_query_left(value, operation, instruc)
+  return sql, _operand_column_kind(value, instruc)
 end
 
-# Render `F(date) ± <duration>` per dialect. PostgreSQL emits a single `make_interval(...)` with
-# explicitly-typed placeholders; SQLite emits one `date()`/canonical-`strftime()` modifier per
-# component.
-function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
-  period = v.operand isa Interval ? v.operand.period : v.operand
-  comps  = _decompose_period(period)
-
-  # Resolve the left side FIRST — rendering it populates `instruc.tab_field_cache` for dotted join
-  # keys, which the SQLite wrapper choice (`date()` vs the canonical timestamp form) below depends on.
-  left_side = _set_update_query_left(v.field_name, v.operation, instruc)
-
-  # Soft validation (#25, best-effort): a duration only makes sense on a date/time column. Only
-  # throw when the field is known AND known to be non-date; stay silent for unresolved/nested lefts.
-  if v.field_name isa String && _field_type_known(v.field_name, instruc) &&
-     _date_field_type(v.field_name, instruc) === nothing
-    throw(InvalidValueError("F(\"$(v.field_name)\") ± a duration requires a DATE/TIMESTAMP field; \"$(v.field_name)\" is not a date/time column"))
-  end
-
+# #564 — THE ONE TEMPORAL RENDERER. It takes an ALREADY-RENDERED left side and the kind that left
+# evaluates to, so every spelling of "shift this temporal expression" resolves its own operand into
+# `comps` and then renders through here, rather than through its own copy of the wrapper choice.
+#
+# Taking the left pre-rendered is not a convenience, it closes an ordering hazard. Rendering the left
+# is what populates `instruc.tab_field_cache` for a dotted join key (`F("driverid__dob")`), and
+# nothing can resolve that key's kind until it has. A caller that decided "is this temporal?" BEFORE
+# rendering would see `nothing` for every joined temporal column and fall through to plain arithmetic
+# — `timestamptz + bigint` on PostgreSQL, a silent `date()` truncation on SQLite. Making the rendered
+# left a PARAMETER means a caller cannot ask the question in the wrong order.
+function _render_temporal_shift(left_side::AbstractString, kind::TemporalKind, operation::String,
+                                comps, instruc::SQLInstruction)::String
   if instruc.connection isa PormGPostgres
     parts = String[]
     for (unit, value) in comps
@@ -1465,43 +1478,10 @@ function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
       end
     end
     isempty(parts) && return left_side  # zero-length interval → identity
-    return "($(left_side) $(v.operation) make_interval($(join(parts, ", "))))"
+    return "($(left_side) $(operation) make_interval($(join(parts, ", "))))"
 
   elseif instruc.connection isa PormGSQLite
-    # #494: `_f_arith_result_kind`, not the String-only `_date_field_type` this used to call. It
-    # resolves a nested `FExpression` down to the column the expression is rooted in — the same
-    # question the OPERAND binder asks one function away, now literally the same function — so the
-    # wrapper chosen here and the representation bound there agree by construction instead of by
-    # coincidence. (Only the `String` and nested-`FExpression` arms are reachable from here: a
-    # `Joined` handle has no arithmetic overload at all, so it never reaches this function.)
-    #
-    # They did not agree before. The textual fallback below reads the RENDERED text, and a
-    # zero-length link in a chain erases the marker it looks for: `_render_date_period_arithmetic`
-    # short-circuits an empty interval to the bare left side, so `F(ts) + Day(0) + Day(1)` lost the
-    # inner marker and the outer call truncated a TIMESTAMP with `date(...)`. Resolving the column
-    # instead of reading the text closes that, and the textual check stays as a backstop for a left
-    # side this resolver cannot type.
-    #
-    # #527: the timestamp wrapper is now the CANONICAL `strftime(...)` form, not SQLite's own
-    # `datetime(...)`. `datetime()` emits `YYYY-MM-DD HH:MM:SS`, which can never equal — and always
-    # sorts below — the `YYYY-MM-DDTHH:MM:SS.sss+00:00` a `DateTimeField` stores. The rationale and
-    # the mask live on `Dialect.SQLITE_CANONICAL_DATETIME_MASK`.
-    #
-    # The backstop sniffs that MASK, never a bare `strftime(` — `Dialect.QUARTER`,
-    # `QUADRIMESTER`, `EXTRACT_DATE` and `EXTRACT` all emit `strftime(` too, and none of them yields
-    # a timestamp, so the looser marker would misclassify an `F("ts__@quarter")`-rooted left side as
-    # already-canonical.
-    # Choose the timestamp wrapper when the expression EVALUATES to a timestamp — a timestamp column,
-    # or a sub-day duration anywhere down the chain — OR when the left side is ALREADY canonical.
-    # Without the second clause, wrapping an inner timestamp in `date()` would silently truncate the
-    # time-of-day, diverging from PostgreSQL.
-    #
-    # There is no separate "this call's own operand is sub-day" test: the resolver's first hop is
-    # THIS node, over the same operand `comps` came from, so it already answers that. Keeping a second
-    # copy would be one more place for the two to drift.
-    use_datetime = _f_arith_result_kind(v, instruc) === :timestamp ||
-                   occursin(Dialect.SQLITE_CANONICAL_DATETIME_MASK, left_side)
-    op_factor = v.operation == "-" ? -1 : 1
+    op_factor = operation == "-" ? -1 : 1
     mods = String[]
     for (unit, value) in comps
       # SQLite has no 'weeks' modifier — express weeks as days.
@@ -1512,16 +1492,68 @@ function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
       push!(mods, "'$sign' || $ph || ' $(_SQLITE_INTERVAL_UNIT[u])'")
     end
     # Zero-length interval → identity, matching the PostgreSQL branch (never wrap, so a timestamp
-    # column is not truncated by a stray date() on a no-op interval).
+    # column is not truncated by a stray date() on a no-op interval). The KIND still travels out of
+    # the caller, which is what makes the deleted backstop below unnecessary: `F(ts) + Day(0) + Day(1)`
+    # emits no text here for the inner link, and the outer call is told `CDateTime` anyway.
     isempty(mods) && return left_side
-    use_datetime && return Dialect._sqlite_canonical_datetime(left_side, mods)
-    return "date($(left_side), $(join(mods, ", ")))"
+
+    # #564 — the wrapper is no longer chosen by an `if` at this site. `sql_canonicalize` is asked to
+    # render the expression into the form THIS kind's values are stored in, and the table owns which
+    # form that is: the canonical `strftime` mask for a timestamp (#527 — SQLite's own `datetime()`
+    # emits `YYYY-MM-DD HH:MM:SS`, which can never equal, and always sorts below, the
+    # `YYYY-MM-DDTHH:MM:SS.sss+00:00` a `DateTimeField` stores), `date(...)` for a DATE column, whose
+    # output already equals `format_date_sql`'s.
+    #
+    # ── THE TEXTUAL BACKSTOP IS GONE (#564) ──────────────────────────────────────────────────────
+    # This site used to read
+    #
+    #     use_datetime = <resolver> === :timestamp || occursin(<the canonical mask>, left_side)
+    #
+    # — a sniff of the RENDERED TEXT, kept because the resolver could not see through a zero-length
+    # link. It is deleted on two independent grounds, both required:
+    #
+    #   * STRUCTURAL — the kind is now carried out of the left render instead of reconstructed from
+    #     it, and the identity short-circuit above propagates it, so the one shape the backstop
+    #     existed for is handled by construction.
+    #   * MEASURED — both branches were instrumented and run over four corpora (a purpose-built
+    #     256-shape sweep, the full unit suite, the hermetic property test, and the full `db_sl`
+    #     integration suite): 519 renders, of which `text ∧ ¬kind` occurred **0** times. The sniff
+    #     never once decided an outcome the resolver had not already decided.
+    #
+    # `test/unit/test_value_repr_table.jl` scans `src/querybuilder/` for the mask so it cannot return.
+    #
+    # `nothing` means a left side this build cannot type. `date(...)` is what that case rendered
+    # before, and it stays that, rather than being promoted on a guess.
+    kind === nothing && return "date($(left_side), $(join(mods, ", ")))"
+    return sql_canonicalize(kind, instruc.connection, left_side, mods)
   else
     throw(_unsupported_conn("date/interval arithmetic", instruc.connection))
   end
 end
 
-function _set_update_query_operand(operand::Any, field_name::Any, operation::String, instruc::SQLInstruction)
+# The DURATION spelling (#25): `F(date) ± <a Dates period or an Interval>`.
+function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)::Tuple{String,TemporalKind}
+  period = v.operand isa Interval ? v.operand.period : v.operand
+  comps  = _decompose_period(period)
+
+  # Resolve the left side FIRST — see `_render_temporal_shift`'s note on why the order is the fix.
+  left_side, left_kind = _render_left_typed(v.field_name, v.operation, instruc)
+  kind = _shift_result_kind(left_kind, comps)
+
+  # Soft validation (#25, best-effort): a duration only makes sense on a date/time column. Only
+  # throw when the field is known AND known to be non-date; stay silent for unresolved/nested lefts.
+  if v.field_name isa String && _field_type_known(v.field_name, instruc) &&
+     _date_field_type(v.field_name, instruc) === nothing
+    throw(InvalidValueError("F(\"$(v.field_name)\") ± a duration requires a DATE/TIMESTAMP field; \"$(v.field_name)\" is not a date/time column"))
+  end
+
+  return _render_temporal_shift(left_side, kind, v.operation, comps, instruc), kind
+end
+
+# `left_kind` (#564): the kind the LEFT side evaluates to, when the caller has it. Only the temporal
+# literal arm reads it — the `xor` call sites legitimately have no temporal left and pass nothing.
+function _set_update_query_operand(operand::Any, field_name::Any, operation::String, instruc::SQLInstruction;
+                                   left_kind::TemporalKind = nothing)
   if isa(operand, FExpression)
     return _set_update_query(operand, instruc)
   elseif isa(operand, SQLTypeFunction)
@@ -1551,7 +1583,7 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # build_helpers.jl): run it through the field's formatter, then bind the formatted string with no
     # explicit cast, letting PostgreSQL infer the type from the comparison context exactly as an
     # ordinary `filter("date" => Date(...))` already does.
-    return add_parameter!(instruc, _format_date_operand(operand, field_name, instruc))
+    return add_parameter!(instruc, _format_date_operand(operand, field_name, instruc; left_kind = left_kind))
   elseif operation in _COMPARISON_OPERATIONS && isa(operand, Union{Integer,Float16,Float32,Float64,Base.UUID,Dates.Time})
     # #536 — every other `_CompareLiteral` scalar on the right of a COMPARISON, bound the way the
     # pair spelling binds it: through the rooted column's formatter, with no explicit SQL type. The
@@ -1644,26 +1676,42 @@ _set_update_query(v::CTEReference, instruc::SQLInstruction) = _get_select_query(
 # non-String `field_name` here.
 _set_update_query(v::JoinedReference, instruc::SQLInstruction) = _get_select_query(v, instruc)
 
-function _set_update_query(v::FExpression, instruc::SQLInstruction)
+# #564 — the temporal path renders AND types, in one pass.
+#
+# `_set_update_query` keeps its `String` contract for every caller (`_get_select_query(::SQLTypeF)`
+# in `build_helpers.jl`, through which SELECT, WHERE-side `F` comparisons and UPDATE SET all funnel;
+# the insert path; the recursive operand and left-side calls). Only this file's own temporal
+# recursion reads the second element, so nothing downstream had to change.
+#
+# EVERY ARM MUST RETURN A KIND EXPLICITLY. A missed arm returns `nothing`, and `nothing` degrades to
+# `date(...)` on SQLite — which is the #527 truncation, silently. There is no arm where "it does not
+# matter": where the result is genuinely not temporal, `nothing` is the ANSWER, not the default.
+_set_update_query(v::FExpression, instruc::SQLInstruction) = first(_set_update_query_typed(v, instruc))
+
+function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple{String,TemporalKind}
   if v.operation === nothing
     # Resolve the field using existing logic for joins and modifiers
     if v.field_name isa String
-      return _get_filter_query(v.field_name, instruc)
+      # Render before typing: resolving the path is what populates the memo the kind lookup reads.
+      sql = _get_filter_query(v.field_name, instruc)
+      return sql, _operand_column_kind(v.field_name, instruc)
     elseif v.field_name isa Integer
-      return add_parameter!(instruc, v.field_name; sql_type=_infer_parameter_sql_type(v.field_name, instruc))
+      # A bare integer is a value, not a column — no representation to carry.
+      return add_parameter!(instruc, v.field_name; sql_type=_infer_parameter_sql_type(v.field_name, instruc)), nothing
     else
       # Recursive call for nested expressions
-      return _set_update_query(v.field_name, instruc)
+      return _render_left_typed(v.field_name, "", instruc)
     end
   elseif v.operation == "~"
-    # Unary NOT operator
+    # Unary NOT operator. Bitwise, never temporal.
     left_side = _set_update_query_left(v.field_name, v.operation, instruc)
-    return "~($(left_side))"
+    return "~($(left_side))", nothing
   elseif v.operation == "xor"
+    # Bitwise, never temporal — on either engine.
     if instruc.connection isa PormGPostgres
       left_side = _set_update_query_left(v.field_name, v.operation, instruc)
       right_side = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc)
-      return "($(left_side) # $(right_side))"
+      return "($(left_side) # $(right_side))", nothing
     elseif instruc.connection isa PormGSQLite
       # Positional Parameter Alignment: render each side twice to duplicate any embedded parameters
       left_side1 = _set_update_query_left(v.field_name, v.operation, instruc)
@@ -1672,7 +1720,7 @@ function _set_update_query(v::FExpression, instruc::SQLInstruction)
       left_side2 = _set_update_query_left(v.field_name, v.operation, instruc)
       right_side2 = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc)
 
-      return "((($(left_side1)) | ($(right_side1))) - (($(left_side2)) & ($(right_side2))))"
+      return "((($(left_side1)) | ($(right_side1))) - (($(left_side2)) & ($(right_side2))))", nothing
     else
       throw(_unsupported_conn("xor update expression", instruc.connection))
     end
@@ -1682,12 +1730,17 @@ function _set_update_query(v::FExpression, instruc::SQLInstruction)
     # bind it as a raw SQL parameter.
     return _render_date_period_arithmetic(v, instruc)
   else
-    # Field with operation - handle nesting and date arithmetic properly
-    left_side = _set_update_query_left(v.field_name, v.operation, instruc)
+    # Field with operation - handle nesting and date arithmetic properly.
+    #
+    # RENDER THE LEFT FIRST, THEN ASK WHAT IT IS: rendering is what populates
+    # `instruc.tab_field_cache` for a dotted join key, so `F("driverid__dob")` can only be typed
+    # afterwards. Typing first answers `nothing` for every joined temporal column.
+    left_side, left_kind = _render_left_typed(v.field_name, v.operation, instruc)
 
-    # @pormg_debug
-    right_side = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc)
-    
+    # #564: the left's kind travels to the binder, so the representation the literal binds and the
+    # one the wrapper renders come from the same value rather than from two resolvers that agree.
+    right_side = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc; left_kind = left_kind)
+
     if instruc.connection isa PormGSQLite && v.operation in ["+", "-"] && (v.field_name isa String && _is_date_field(v.field_name, instruc))
       # #527: the wrapper follows the COLUMN, as it already does on the duration path one branch up.
       # `_is_date_field` stays the outer guard — it must keep answering `true` for a timestamp
@@ -1696,23 +1749,19 @@ function _set_update_query(v::FExpression, instruc::SQLInstruction)
       # `F("event_time") + 7` on a `DateTimeField` truncated the time-of-day AND produced SQLite's
       # own format, which no stored canonical value can equal.
       #
-      # No bind-side change is owed here: integer days are never a sub-day duration, so
-      # `_f_arith_result_kind` answers with the rooted column's own kind and wrapper and bind agree.
+      # No bind-side change is owed here: integer days are never a sub-day duration, so the left's
+      # own kind IS the result kind and wrapper and bind agree.
       #
-      # It asks that resolver rather than `_date_field_type` even though the guard above already
-      # narrowed `field_name` to a `String` — where the two are equivalent, since the chain walk has
-      # nothing to contribute and both fall through to the same model-then-memo lookup. The point is
-      # that "what temporal kind does this expression evaluate to" has exactly ONE answer in this
-      # file. A second predicate that merely happens to agree today is how the wrapper and the bind
-      # drifted apart before #494.
+      # #564: WHICH wrapper is no longer decided here — `sql_canonicalize` owns that per kind, the
+      # same call the duration path one branch up makes. `left_kind === nothing` keeps the historical
+      # `date(...)`, as it does there.
       op_sign = v.operation == "+" ? "+" : "-"
       modifier = "'$(op_sign)' || $(right_side) || ' days'"
-      _f_arith_result_kind(v, instruc) === :timestamp &&
-        return Dialect._sqlite_canonical_datetime(left_side, [modifier])
-      return "date($(left_side), $(modifier))"
+      left_kind === nothing && return "date($(left_side), $(modifier))", nothing
+      return sql_canonicalize(left_kind, instruc.connection, left_side, [modifier]), left_kind
     end
 
-    return "($(left_side) $(v.operation) $(right_side))"
+    return "($(left_side) $(v.operation) $(right_side))", nothing
   end
 end
 
@@ -2133,41 +2182,25 @@ function _sqlite_datetime_aliases(objct::SQLObjectHandler)::Set{Symbol}
     return col_set
 end
 
-"""
-    _parse_sqlite_datetime(v) → Union{ZonedDateTime, DateTime, typeof(v)}
-
-Parse a raw string value read from a SQLite DATETIME column into a Julia temporal type.
-
-SQLite stores datetime values as TEXT.  PormG serialises `DateTimeField` values (including
-`auto_now` / `auto_now_add`) as canonical UTC ISO-8601 strings, e.g. `"2026-04-07T21:30:23.741+00:00"`
-(issue #79). This function converts those strings back into proper Julia types so that the SQLite backend
-returns the same high-level types as the PostgreSQL backend (which returns `ZonedDateTime`
-natively via LibPQ).
-
-- Strings containing a timezone offset → `ZonedDateTime`
-- Naive ISO 8601 strings → `DateTime`
-- Non-string values or unparseable strings → returned unchanged
-"""
-function _parse_sqlite_datetime(v::Any)
-    v isa AbstractString || return v
-    normalized = Models.normalize_sqlite_datetime_string(v)
-    # Try timezone-aware form first (e.g. "2026-04-07T18:30:23.741-03:00")
-    try; return ZonedDateTime(normalized, dateformat"yyyy-mm-ddTHH:MM:SS.ssszzzz"); catch; end
-    # Fall back to naive datetime (e.g. "2026-04-07T21:30:23")
-    try; return DateTime(v[1:min(19, length(v))], dateformat"yyyy-mm-ddTHH:MM:SS"); catch; end
-    return v
-end
 function _list_raw(objct::SQLObjectHandler)
   result = query_list(objct)
   rows = Tables.rowtable(result) |> collect |> x -> [Dict(Symbol(k) => v for (k, v) in pairs(row)) for row in x]
-  # SQLite returns DATETIME columns as raw strings. Normalise columns that correspond to a
-  # DateTimeField in the primary model into ZonedDateTime / DateTime so the return type
-  # matches what the PostgreSQL backend produces natively.
+  # A backend whose stored form is text (SQLite) hands every temporal column back as a raw `String`.
+  # Which parser undoes that is the THIRD slot of the value-representation table (#564,
+  # `src/value_repr.jl`) — the inverse of the field formatter that wrote the text — so this asks for
+  # it rather than naming a parser itself. `value_parser` answers `nothing` for a backend that
+  # already delivers a typed value, which is why there is no `connection isa PormGSQLite` test here.
   _, connection, _ = get_settings(objct)
-  if connection isa PormGSQLite
+  # The alias SET is still "a plain `DateTimeField` column on the primary model", so every member's
+  # kind is `CDateTime` by construction. Widening it to the kind an EXPRESSION evaluates to is the
+  # rest of #564 and lands in its own commit. Asked FIRST, so a backend that needs no parsing (a
+  # `nothing` answer — PostgreSQL, where the driver delivers typed values) skips the alias walk
+  # entirely, exactly as the `connection isa PormGSQLite` test it replaces did.
+  parse = value_parser(CDateTime(true), connection)
+  if parse !== nothing
     dt_cols = _sqlite_datetime_aliases(objct)
     if !isempty(dt_cols)
-      rows = [Dict(k => (k in dt_cols && v isa AbstractString ? _parse_sqlite_datetime(v) : v)
+      rows = [Dict(k => (k in dt_cols && v isa AbstractString ? parse(v) : v)
                    for (k, v) in row) for row in rows]
     end
   end

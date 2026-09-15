@@ -20,9 +20,15 @@ import PormG: ColumnDelta, LiteralDefault, ExpressionDefault
 # #522: the two `USING` casts in `alter_field` read the LIVE column's canonical type off the delta
 # instead of dispatching on a reconstructed field struct — the readers no longer build one.
 import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CDecimal, CText, CVarChar, CTime
+# #564: the remaining temporal nouns, for the read-parser half of the value-representation table.
+import PormG: CDate, CDateTime, CInterval
 import PormG: _has_non_negative, _byte_bound
 import PormG: get_constraints_pk, get_constraints_unique, get_constraints_check, get_constraints_byte_length_check
 import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column, format_timezone_sql, model_table_name, fk_target_table
+# #564: the read side of the canonical timestamp text, now that its PARSER lives here beside the
+# mask it inverts. `normalize_sqlite_datetime_string` stays in `Models` because it is also on the
+# WRITE path (`validate_timezone`) — this module only consumes it.
+import PormG.Models: normalize_sqlite_datetime_string
 # `_foreign_key_on_delete_sql` lives in `Models` since #498 — see the note where it used to be defined.
 import PormG.Models: _foreign_key_on_delete_sql
 
@@ -99,6 +105,38 @@ is already canonical". Sniffing a bare `strftime(` would not work — `QUARTER`,
 function _sqlite_canonical_datetime(expr::AbstractString, modifiers::Vector{String} = String[])
   isempty(modifiers) && return "strftime($(SQLITE_CANONICAL_DATETIME_MASK), $(expr))"
   return "strftime($(SQLITE_CANONICAL_DATETIME_MASK), $(expr), $(join(modifiers, ", ")))"
+end
+
+
+"""
+    _parse_sqlite_timestamp(v) -> Union{ZonedDateTime, DateTime, typeof(v)}
+
+Parse SQLite's stored text for a timestamp back into a Julia temporal type — the READ half of the
+representation `SQLITE_CANONICAL_DATETIME_MASK` above renders and `Models.format_timezone_sql`
+writes.
+
+It lives here, next to that mask, for the reason #564 exists: the write format, the SQL rendering of
+it and the parse of it are one convention, and while they sat in three files nothing made them agree.
+`PormG.value_parser(::CDateTime, ::PormGSQLite)` is what names this as the third slot of the pair.
+
+PostgreSQL needs no equivalent: LibPQ delivers a `ZonedDateTime` natively.
+
+- a string carrying a timezone offset -> `ZonedDateTime`
+- a naive ISO 8601 string -> `DateTime`
+- a non-string, or a string in no shape it recognises -> returned **unchanged**
+
+That last rule is what makes a wrong caller harmless rather than lossy: handed the integer `2031`
+that `CAST(col AS DATE)` yields on SQLite, or text in a representation nothing here wrote, it hands
+it straight back rather than guessing.
+"""
+function _parse_sqlite_timestamp(v::Any)
+    v isa AbstractString || return v
+    normalized = normalize_sqlite_datetime_string(v)
+    # Try timezone-aware form first (e.g. "2026-04-07T18:30:23.741-03:00")
+    try; return ZonedDateTime(normalized, dateformat"yyyy-mm-ddTHH:MM:SS.ssszzzz"); catch; end
+    # Fall back to naive datetime (e.g. "2026-04-07T21:30:23")
+    try; return DateTime(v[1:min(19, length(v))], dateformat"yyyy-mm-ddTHH:MM:SS"); catch; end
+    return v
 end
 
 

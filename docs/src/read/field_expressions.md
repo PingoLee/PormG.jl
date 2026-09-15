@@ -233,13 +233,25 @@ strftime('%Y-%m-%dT%H:%M:%f+00:00', "Tb"."created_at", '+' || ? || ' days')
 
 That mask is the exact format a `DateTimeField` stores, which is the point of it: SQLite compares timestamps as text, so an expression rendered in SQLite's own `YYYY-MM-DD HH:MM:SS` form could never equal a stored value — and, because a space sorts below `T`, would always compare *less* than it. Rendering the arithmetic straight into the stored representation keeps `==`, `<`, `>`, `ORDER BY` and `update()` all agreeing with PostgreSQL. You never write the mask yourself.
 
-!!! note "Sub-day durations on a `DateField`"
+!!! note "Sub-day durations on a `DateField` — the promotion rule, named"
     Adding hours, minutes or seconds to a `DateField` produces a **timestamp**, as it does in
     standard SQL (`date + interval` is a `timestamp`). A date literal you compare it against is
     promoted to the same representation, so `F("date") + Hour(6) == DateTime(1991, 10, 6, 6)`
     matches. Whole-day arithmetic stays a date, and a `DateTime` compared against a plain
     `DateField` is still coerced to its calendar date — the same coercion `filter("date" => value)`
     applies.
+
+    **This promotion is deliberate and narrower than Django's**, which promotes `DateField +
+    Duration` unconditionally. PormG promotes only when the duration actually carries a time of day,
+    so the pinned contract above — a `DateTime` against a `DateField` truncates — is preserved.
+    The rule is a property of the expression, not of where it appears: PormG resolves the type an
+    expression *evaluates to* once, and the wrapper, the bound literal and the projection all read
+    that one answer.
+
+    One consequence is visible and is **not** settled: because whole-day arithmetic stays a date in
+    PormG while PostgreSQL's own `date + interval` yields a `timestamp`, a projected
+    `F("date") + Day(1)` reads back as a `DateTime` on PostgreSQL and as a date on SQLite. Tracked
+    as issue #572.
 
 #### The `Interval` helper
 

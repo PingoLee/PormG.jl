@@ -761,10 +761,16 @@ This function checks if the given `field` is a valid field in the provided `mode
 # same list in `names_to_path` for the same reason. Reverse accessors are listed too — they are
 # addressable at exactly the same position in a path, so omitting them makes a legal name look
 # unavailable.
+#
+# `include_accessors = false` is for the WRITE path (#462). A reverse accessor is addressable in a
+# filter/values path but is not a column, so `create("results" => …)` can never work — listing them
+# in a write error would advertise a capability that does not exist. Every read-path caller keeps
+# the default.
 function _unknown_field(model::PormGModel, name::AbstractString;
-                       aliases::Vector{String} = String[])::UnknownFieldError
+                       aliases::Vector{String} = String[],
+                       include_accessors::Bool = true)::UnknownFieldError
   choices = sort(collect(model.field_names))
-  accessors = sort(collect(keys(model.related_objects)))
+  accessors = include_accessors ? sort(collect(keys(model.related_objects))) : String[]
   tail = isempty(accessors) ? "" :
     "; and the reverse accessors: \e[4m\e[32m$(join(accessors, ", "))\e[0m"
   # A projection alias is addressable in exactly the same position as a field — `filter("tot__@gt")`

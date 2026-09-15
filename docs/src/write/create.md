@@ -154,6 +154,21 @@ driver = M.Driver.objects.create(
 ERROR: InvalidValueError: Error in insert, the field driverref not allow null
 ```
 
+A **misspelled** field name is a different mistake and raises a different type — `UnknownFieldError`,
+the same one `filter(...)` raises for the same typo, listing the model's fields so you can see what
+you meant:
+
+```julia
+M.Driver.objects.create("driverref" => "hamilton", "sirname" => "Hamilton")
+```
+
+```julia
+ERROR: UnknownFieldError: the column sirname not found in driver, that contains the fields: code, dob, driverid, driverref, forename, nationality, number, surname, url
+```
+
+Catch `PormGError` for either, or the specific type when you want to tell a typo apart from a value
+the column cannot store.
+
 ### Default Values
 
 Fields with default values don't need to be specified:

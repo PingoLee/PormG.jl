@@ -397,18 +397,112 @@ function _render_json_lookup(instruct::SQLInstruction, alias::String, json_field
   return Dialect._json_extract_expr(instruct.connection, col, segs)
 end
 
+# #68 — ONE forward ForeignKey / OneToOne hop, shared by the first hop and the loop of
+# `_build_row_join`. Before this the two sites carried near-identical copies of the same resolution,
+# and the `db_column` key half (#50/#64) had to be hand-applied to each — `test_db_column_deep_joins.jl`
+# is the regression that could tell the copies apart. What differs between the two callers stays in
+# the callers, on purpose: the first hop's `cjoin(field = …)` override decides which field is
+# resolved, and the loop's `hasfield(:to)` guard fires BEFORE the join type is derived, so the two
+# report a non-FK column with different messages in a different order (#197). `no_target_message`
+# is the caller's own wording for a `.to === nothing` field, for the same reason.
+#
+# `src_table` is passed, never derived from `src_model`: in the loop it is the previous row's `b`,
+# which is the CTE NAME on a CTE-rooted path and `_reverse_join_table(...)`'s spelling after a
+# reverse hop — neither equals `model_table_name(src_model)`.
+#
+# Returns the row it BUILT (not the dedup survivor — the loop reads `prev_how`/`prev_b` off it, as
+# it always did), the resolved target model, and the terminal field when this is the last hop.
+function _forward_fk_hop(instruct::SQLInstruction, src_model::PormGModel, src_table::String,
+                         src_alias::String, column::String, field::PormGField, vector::Vector{String};
+                         prev_how::Union{String,Nothing}, no_target_message::String)
+  # Resolved BEFORE the `.to` check below, on purpose: `_determine_join_type` is what turns
+  # `name__contains` into the "did you mean an operator?" hint, and it has to fire first.
+  how = _determine_join_type(field, previus_how = prev_how,
+                             second_fild_name = size(vector, 1) > 1 ? vector[2] : nothing)
+  target = field.to
+  target === nothing && throw(QueryBuildError(no_target_message))
+  # #388: the two arms are ONE arm now. A String `.to` is the target's binding, so resolving it
+  # yields the same model a `set_models`-resolved `.to` already holds, and the table comes off that
+  # model either way. Carrying the model forward (matching the reverse hop below, #343) also
+  # spares the next hop and `_solve_field` from repeating the binding lookup.
+  next_model = target isa PormGModel ? target :
+    _forward_join_model(target, instruct.object.model._module::Module, src_model, column)
+  last_field = size(vector, 1) == 2 ? get(next_model.fields, vector[2], nothing) : nothing
+  row = ModelJoin(
+    a = src_table,
+    alias_a = src_alias,
+    # Local FK column and referenced parent column both honor db_column (#50). When `src_model` is a
+    # CTE model this stays correct WITHOUT a branch (#376): its fields carry no db_column, so `key_a`
+    # resolves to the projection alias the CTE actually exposes, while `key_b` reads the REAL target
+    # model and keeps its physical column — the two halves of the same contract.
+    key_a = Models.field_db_column(field, column),
+    b = Models.model_table_name(next_model),
+    alias_b = _get_alias_name(instruct),
+    key_b = Models.fk_target_column(field),
+    how = how,
+  )
+  return (row, next_model, last_field)
+end
+
+# #68 — ONE reverse-relation hop, the mirror of `_forward_fk_hop` and shared the same way. The
+# `length(vector) == 1` refusal stays in the callers (both have it), and so does the loop-only
+# "column not found on the child" check — the first hop deliberately lacks it (its line has been
+# commented out since before #343), and the extraction does not change which hop reports what.
+function _reverse_hop(instruct::SQLInstruction, src_model::PormGModel, src_table::String,
+                      src_alias::String, rel::Models.ReverseRelation, vector::Vector{String};
+                      prev_how::Union{String,Nothing})
+  # #343: the child model is READ off the relation, never rebuilt from its name. The old
+  # `Symbol(uppercasefirst(lowercased_name))` could only ever spell `Xxxxx`, so a binding with an
+  # internal capital (Dim_CNES, CustomUser) raised UndefVarError instead of joining.
+  reverse_model = rel.model_resolved
+  join_field = reverse_model.fields[String(rel.fk_field)]
+  how = _determine_join_type(join_field, previus_how = prev_how, second_fild_name = vector[2])
+  last_field = size(vector, 1) == 2 ? get(reverse_model.fields, vector[2], nothing) : nothing
+  row = ModelJoin(
+    a = src_table,
+    alias_a = src_alias,
+    # Reverse join: key_a is the parent's referenced column, key_b the child's FK
+    # column; both honor db_column (resolved in their own model, no-op without it) (#50).
+    key_a = Models.model_column(src_model, String(rel.target_pk)),
+    # The LOGICAL name goes straight into the table fallback, which is the only thing that ever
+    # wanted it — before #343 it was assigned to `foreign_table_name` and then overwritten.
+    b = _reverse_join_table(reverse_model, String(rel.model_name), instruct.django),
+    alias_b = _get_alias_name(instruct),
+    key_b = Models.model_column(reverse_model, String(rel.fk_field)),
+    how = how,
+    # #74: a reverse foreign key (one-to-many) makes the child table the many-side.
+    to_many = true,
+  )
+  return (row, reverse_model, last_field)
+end
+
+# #68 — the shared tail of every non-M2M hop: fold the path's `cjoin` / `on()` config into the row
+# (by copy, #487) and insert it. Returns the alias the hop renders under and the row as inserted,
+# so the caller's local carries the override the next hop's `prev_how` reads.
+#
+# #474: `custom_join` is the BASE model's PATH-keyed join-config registry, and a hop only has a
+# config to inherit when it is rooted there. A CTE-rooted hop is not — at the first hop `join_path`
+# is the CTE NAME, and past it a recomputed `"<cte>__<seg>"` collides with an `on("ev__parent", …)`
+# entry whenever the base model also has a relation named `ev`. So the lookups are gated on `cte`,
+# and a CTE row admits only the `(nothing, nothing)` that gate passes; its join type comes from the
+# `.with(...)` declaration. #484: the registry no longer holds `cjoin_on` entries either, so the same
+# gate covers a MODEL hop whose path equals a declared alias — the third instance of this family.
+# `track_path = !cte` for the same reason: a CTE hop must not claim its name in `row_path`.
+function _finish_hop!(instruct::SQLInstruction, row::JoinRow, join_path::String; cte::Bool)
+  join_type_override = cte ? nothing : _get_join_type_override(instruct.object, join_path)
+  join_filters = cte ? nothing : _get_join_filters(instruct.object, join_path)
+  row = _with_config(row, join_type_override, join_filters)
+  alias = _insert_join(instruct.row_join, row, instruct.row_path, join_path; track_path = !cte)
+  return (alias, row)
+end
+
 function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bool=true, cte::Bool=false)
   vector = copy(field)
-  # The `String` member is UNREACHABLE as of #388, and deliberately left in place. Every one of the
-  # nine assignments below now stores a resolved model — `cte_model`, `_apply_many_to_many_branch`'s
-  # `foreign_model` (×4), `first_model`/`next_model` (the forward arms), and `reverse_model` (×2) —
-  # so narrowing this to `Union{PormGModel, Nothing}` would make that invariant enforced rather than
-  # merely true. It is not narrowed here because the annotation would then `convert` on assignment,
-  # turning any path this audit missed from a working query into a `TypeError`. The unit suite does
-  # reach these branches (`test_cte_ergonomics.jl`, `test_many_to_many.jl`), but not all four M2M call
-  # sites, and this change is not authorized to run the integration suite that would. Narrow it in a
-  # change that can; until then the `isa PormGModel` tests downstream stay.
-  foreign_table_name::Union{String, PormGModel, Nothing} = nothing
+  # #68 narrowed this from `Union{String, PormGModel, Nothing}`: every arm stores a resolved model
+  # (#388 made the String member unreachable and asked for the narrowing in a change that runs the
+  # join integration slice, which this one did), so the `getfield(module, …)` fallback the loop kept
+  # for it is gone with it.
+  foreign_table_name::Union{PormGModel, Nothing} = nothing
   foreing_table_module::Module = instruct.object.model._module::Module
   # `row_join` is assigned by exactly one arm below — a fresh `JoinRow` per hop (#487).
 
@@ -417,7 +511,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   first_column = _resolve_fk_short_form(instruct.object.model, vector[1])
   last_field::Union{Nothing, PormGField} = nothing
   join_path = field[1]
-  m2m_inserted = false
+  # The M2M arms insert their own pair of rows (`_apply_many_to_many_branch` folds the tail), so
+  # they skip `_finish_hop!` — which also means a `cjoin`/`on()` config keyed on an M2M path is
+  # never consulted. Long-standing behavior; #68 preserves it rather than fixing it in passing.
+  inserted = false
 
   # #27: a non-terminal JSON base field is a value extraction (`payload__key`, `payload__0__name`),
   # not a join hop. Fire before the CTE/FK cascade — otherwise `payload` enters the forward-FK
@@ -588,33 +685,15 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       join_path, vector; track_path = !cte
     )
     foreign_table_name = foreign_model
-    m2m_inserted = true
+    inserted = true
   elseif first_column in instruct.object.model.field_names || _get_join_field(instruct.object, join_path) !== nothing
+    # A `cjoin(field = …)` entry on this path supplies the link field itself; the first hop is the
+    # only one that can carry such an override, which is why the choice stays here.
     first_field = _get_join_field(instruct.object, join_path) !== nothing ? _get_join_field(instruct.object, join_path) : instruct.object.model.fields[first_column]
-    # Resolved BEFORE the `.to` check below, on purpose: `_determine_join_type` is what turns
-    # `name__contains` into the "did you mean an operator?" hint, and it has to fire first.
-    how = _determine_join_type(first_field, second_fild_name= size(vector, 1) > 1 ? vector[2] : nothing)
-    first_target = first_field.to
-    first_target === nothing &&
-      throw(QueryBuildError("Invalid field path: the column $(first_column) does not have a foreign key"))
-    # #388: the two arms are ONE arm now. A String `.to` is the target's binding, so resolving it
-    # yields the same model a `set_models`-resolved `.to` already holds, and the table comes off that
-    # model either way. Carrying the model forward (matching the reverse branch below, #343) also
-    # spares the next hop and `_solve_field` from repeating the binding lookup.
-    first_model = first_target isa PormGModel ? first_target :
-      _forward_join_model(first_target, foreing_table_module, instruct.object.model, first_column)
-    size(vector, 1) == 2 && (last_field = get(first_model.fields, vector[2], nothing))
-    foreign_table_name = first_model
-    row_join = ModelJoin(
-      a = Models.model_table_name(instruct.object.model),
-      alias_a = instruct.alias,
-      # Local FK column and referenced parent column both honor db_column (#50).
-      key_a = Models.field_db_column(first_field, first_column),
-      b = Models.model_table_name(first_model),
-      alias_b = _get_alias_name(instruct),
-      key_b = Models.fk_target_column(first_field),
-      how = how,
-    )
+    row_join, foreign_table_name, last_field = _forward_fk_hop(
+      instruct, instruct.object.model, Models.model_table_name(instruct.object.model), instruct.alias,
+      first_column, first_field, vector; prev_how = nothing,
+      no_target_message = "Invalid field path: the column $(first_column) does not have a foreign key")
   elseif haskey(instruct.object.model.related_objects, vector[1])
     related_object = instruct.object.model.related_objects[vector[1]]
     if related_object isa Models.ManyToManyRelation
@@ -624,41 +703,16 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         join_path, vector; reverse=true, track_path = !cte
       )
       foreign_table_name = foreign_model
-      m2m_inserted = true
+      inserted = true
     else
-    # @pormg_debug false
-    # #343: the child model is READ off the relation, never rebuilt from its name. The old
-    # `Symbol(uppercasefirst(lowercased_name))` could only ever spell `Xxxxx`, so a binding with an
-    # internal capital (Dim_CNES, CustomUser) raised UndefVarError instead of joining.
-    rel = related_object::Models.ReverseRelation
-    reverse_model = rel.model_resolved
-    length(vector) == 1 && throw(QueryBuildError("Invalid field path: $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
-    # !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
-    join_field = reverse_model.fields[String(rel.fk_field)]
-    how = _determine_join_type(join_field, second_fild_name= vector[2])
-    size(vector, 1) == 2 && (last_field = get(reverse_model.fields, vector[2], nothing))
-    row_join = ModelJoin(
-      a = Models.model_table_name(instruct.object.model),
-      alias_a = instruct.alias,
-      # Reverse join: key_a is the parent's referenced column, key_b the child's FK
-      # column; both honor db_column (resolved in their own model, no-op without it) (#50).
-      key_a = Models.model_column(instruct.object.model, String(rel.target_pk)),
-      # The LOGICAL name goes straight into the table fallback, which is the only thing that ever
-      # wanted it — before #343 it was assigned to `foreign_table_name` and then overwritten below.
-      b = _reverse_join_table(reverse_model, String(rel.model_name), instruct.django),
-      alias_b = _get_alias_name(instruct),
-      key_b = Models.model_column(reverse_model, String(rel.fk_field)),
-      how = how,
-      # #74: a reverse foreign key (one-to-many) makes the child table the many-side.
-      to_many = true,
-    )
-    # Carry the RESOLVED model forward, matching the CTE and M2M branches. `foreign_table_name` is
-    # already declared `Union{String, PormGModel, Nothing}`, and both cross-branch readers accept a
-    # model: the next-hop lookup branches on `isa PormGModel`, and the terminal column resolver
-    # dispatches to `_solve_field(::String, ::Module, ::PormGModel, …)`. That terminal site was a
-    # FIFTH broken reconstruction, reached only if the join above had not already thrown.
-    foreign_table_name = reverse_model
-    @pormg_debug false
+      rel = related_object::Models.ReverseRelation
+      length(vector) == 1 && throw(QueryBuildError("Invalid field path: $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
+      # Unlike the loop's reverse arm, the first hop does NOT check `vector[2]` against the child's
+      # field names here — an unknown terminal column falls through to `_solve_field`'s typed error
+      # (#446). Long-standing; #68 keeps each hop reporting what it reported.
+      row_join, foreign_table_name, last_field = _reverse_hop(
+        instruct, instruct.object.model, Models.model_table_name(instruct.object.model), instruct.alias,
+        rel, vector; prev_how = nothing)
     end
   else
     @pormg_debug false
@@ -690,27 +744,11 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     throw(_unknown_field(instruct.object.model, vector[1]))
   end
 
-  if !m2m_inserted
-    # #474: `custom_join` is the BASE model's PATH-keyed join-config registry, and this hop only has
-    # a config to inherit when it is rooted there. A CTE-rooted hop is not — `join_path` here is
-    # `field[1]`, i.e. the CTE NAME, so these two lookups read whatever `cjoin` / `on()` entry
-    # happened to share that name and handed the CTE's join that entry's type and predicates. That
-    # was #447's first two symptoms; the third was `_insert_join` claiming the CTE name in
-    # `row_path`. Skipping the lookups and namespacing the key makes all three unrepresentable —
-    # a CTE has no join config by construction, and its join type comes from `cte_dict["join_type"]`
-    # set in the `cte` branch above.
-    #
-    # #484: the registry no longer holds `cjoin_on` entries either, so the same reasoning now covers
-    # a MODEL hop whose path equals a declared alias. That was the third instance of this family —
-    # here, with `cte == false`, the lookups fired and folded the alias's whole ON clause into a
-    # ForeignKey's join.
-    join_type_override = cte ? nothing : _get_join_type_override(instruct.object, join_path)
-    join_filters = cte ? nothing : _get_join_filters(instruct.object, join_path)
-    # #487: by copy. A CTE row admits only the `(nothing, nothing)` the `cte` gate passes.
-    row_join = _with_config(row_join, join_type_override, join_filters)
-
-    tb_alias = _insert_join(instruct.row_join, row_join, instruct.row_path, join_path; track_path = !cte)
-  end
+  # #447: skipping the config lookups for a CTE hop (inside `_finish_hop!`) is what stopped a
+  # `cjoin` / `on()` entry that happened to share the CTE's name from handing the CTE's join its
+  # type and predicates, and `track_path = !cte` is what stopped `_insert_join` claiming the CTE
+  # name in `row_path` — the three symptoms of that issue, all unrepresentable now.
+  inserted || ((tb_alias, row_join) = _finish_hop!(instruct, row_join, join_path; cte = cte))
   
   vector = vector[2:end]  
 
@@ -720,7 +758,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # get new object
     @pormg_debug false
     join_path = join(field[1:length(field)-length(vector) + 1], "__")
-    new_object = foreign_table_name isa PormGModel ? foreign_table_name : getfield(foreing_table_module, foreign_table_name |> Symbol)
+    new_object = foreign_table_name::PormGModel
     first_column = _resolve_fk_short_form(new_object, vector[1])
 
     # #27: a non-terminal JSON field reached through FK joins (e.g. `fk__payload__key`) is a value
@@ -735,9 +773,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     prev_how = _prev_how(row_join)
     prev_b = row_join.b
 
-    # Track whether the reverse-join branch already advanced vector
-    _reverse_advanced = false
-    _m2m_inserted = false
+    inserted = false
 
     if haskey(new_object.fields, first_column) && Models.is_many_to_many_field(new_object.fields[first_column])
       relation = Models.get_many_to_many_relation(new_object, first_column)
@@ -745,36 +781,17 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         relation, instruct, prev_b, tb_alias, join_path, vector; previus_how=prev_how, track_path = !cte
       )
       foreign_table_name = foreign_model
-      _m2m_inserted = true
+      inserted = true
     elseif first_column in new_object.field_names
       first_field = new_object.fields[first_column]
+      # This guard fires BEFORE the join type is derived — so a non-FK column here never reaches
+      # `_determine_join_type`'s operator hint, unlike at the first hop. Kept in the caller for
+      # exactly that reason: the helper must not decide the order (#68).
       !hasfield(typeof(first_field), :to) && throw(QueryBuildError("Invalid field path: the column $(first_column) is a field from $(new_object.name), but it does not have a foreign key"))
-      # `first_field`, not a second `new_object.fields[first_column]` lookup — same object, and it is
-      # the one the `hasfield(:to)` guard above already vetted and `fk_target_column` reads below.
-      how = _determine_join_type(first_field, previus_how=prev_how, second_fild_name= size(vector, 1) > 1 ? vector[2] : nothing)
-      next_target = first_field.to
-      if next_target === nothing
+      row_join, foreign_table_name, last_field = _forward_fk_hop(
+        instruct, new_object, prev_b, tb_alias, first_column, first_field, vector; prev_how = prev_how,
         # #197: this used to blame `vector[2]`, but the FK-less column is `first_column`.
-        throw(QueryBuildError("Invalid field path: the column $(first_column) in $(new_object.name) does not have a foreign key target"))
-      end
-      # #388: same single arm as the first hop above — see `_forward_join_model`.
-      next_model = next_target isa PormGModel ? next_target :
-        _forward_join_model(next_target, foreing_table_module, new_object, first_column)
-      size(vector, 1) == 2 && (last_field = get(next_model.fields, vector[2], nothing))
-      foreign_table_name = next_model
-      # Local FK column and referenced parent column both honor db_column (#50). When `new_object`
-      # is a CTE model this stays correct WITHOUT a branch (#376): its fields carry no db_column, so
-      # `key_a` resolves to the projection alias the CTE actually exposes, while `key_b` reads the
-      # REAL target model and keeps its physical column — the two halves of the same contract.
-      row_join = ModelJoin(
-        a = prev_b,
-        alias_a = tb_alias,
-        key_a = Models.field_db_column(first_field, first_column),
-        b = Models.model_table_name(next_model),
-        alias_b = _get_alias_name(instruct),
-        key_b = Models.fk_target_column(first_field),
-        how = how,
-      )
+        no_target_message = "Invalid field path: the column $(first_column) in $(new_object.name) does not have a foreign key target")
     elseif haskey(new_object.related_objects, vector[1])
       related_object = new_object.related_objects[vector[1]]
       if related_object isa Models.ManyToManyRelation
@@ -783,33 +800,15 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
           relation, instruct, prev_b, tb_alias, join_path, vector; previus_how=prev_how, reverse=true, track_path = !cte
         )
         foreign_table_name = foreign_model
-        _m2m_inserted = true
+        inserted = true
       else
-      # #343: read the resolved child — see the first-hop branch above for why respelling the
-      # binding from the logical name cannot work.
-      rel = related_object::Models.ReverseRelation
-      reverse_model = rel.model_resolved
-      length(vector) == 1 && throw(QueryBuildError("Invalid field path: $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
-      !(vector[2] in reverse_model.field_names) && throw(UnknownFieldError("Invalid field path: the column $(vector[2]) not found in $(reverse_model.name)"))
-      join_field = reverse_model.fields[String(rel.fk_field)]
-      how = _determine_join_type(join_field, previus_how=prev_how, second_fild_name= vector[2])
-      size(vector, 1) == 2 && (last_field = get(reverse_model.fields, vector[2], nothing))
-      row_join = ModelJoin(
-        a = prev_b,
-        alias_a = tb_alias,
-        # Reverse join: key_a is the parent's referenced column, key_b the child's FK
-        # column; both honor db_column (resolved in their own model, no-op without it) (#50).
-        key_a = Models.model_column(new_object, String(rel.target_pk)),
-        b = _reverse_join_table(reverse_model, String(rel.model_name), instruct.django),
-        alias_b = _get_alias_name(instruct),
-        key_b = Models.model_column(reverse_model, String(rel.fk_field)),
-        how = how,
-        # #74: a reverse foreign key (one-to-many) makes the child table the many-side.
-        to_many = true,
-      )
-      foreign_table_name = reverse_model
-      vector = vector[2:end]
-      _reverse_advanced = true
+        rel = related_object::Models.ReverseRelation
+        length(vector) == 1 && throw(QueryBuildError("Invalid field path: $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
+        # Loop-only check (the first hop lacks it — see there); stays in the caller so the helper
+        # does not silently give the first hop a message it never had.
+        !(vector[2] in rel.model_resolved.field_names) && throw(UnknownFieldError("Invalid field path: the column $(vector[2]) not found in $(rel.model_resolved.name)"))
+        row_join, foreign_table_name, last_field = _reverse_hop(
+          instruct, new_object, prev_b, tb_alias, rel, vector; prev_how = prev_how)
       end
 
     else
@@ -817,24 +816,12 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
 
     @pormg_debug false   
-    if !_m2m_inserted
-      # #474: same gate as the first hop above, and it is needed here too rather than only there.
-      # `join_path` is recomputed as `"<root>__<seg>"`, so a CTE-rooted deep path produces
-      # `"ev__parent"` — which collides with an `on("ev__parent", …)` entry whenever the base model
-      # also has a relation named `ev`. Hops past the first also walk the CTE's OWN model, whose
-      # field names are a different namespace from the base model's join keys entirely.
-      join_type_override = cte ? nothing : _get_join_type_override(instruct.object, join_path)
-      join_filters = cte ? nothing : _get_join_filters(instruct.object, join_path)
-      row_join = _with_config(row_join, join_type_override, join_filters)   # #487: by copy
+    inserted || ((tb_alias, row_join) = _finish_hop!(instruct, row_join, join_path; cte = cte))
 
-      tb_alias = _insert_join(instruct.row_join, row_join, instruct.row_path, join_path; track_path = !cte)
-    end
-
-    # Only advance vector for forward-FK joins; reverse joins already advanced above
-    if !_reverse_advanced
-      vector = vector[2:end]
-    end
-
+    # Every arm consumes exactly ONE segment per iteration. The reverse arm used to advance in-arm
+    # and set a `_reverse_advanced` flag that made this line skip — a no-op pair, since the two
+    # advances were never both taken (#68).
+    vector = vector[2:end]
   end
 
   # tb_alias is the last table alias in the join ex. tb_1

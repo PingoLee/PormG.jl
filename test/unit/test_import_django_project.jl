@@ -4258,6 +4258,169 @@ class Thing(models.Model):
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#428): a field `autofields_ignore` dropped still CLAIMS its key
+#
+# #400 and #410 taught the implicit-`id` guard to ask the class "did you declare this name",
+# rather than asking `fields_dict` "is there a field here" — two questions with different
+# answers. One skip path was left outside that set on purpose: `autofields_ignore` is the caller
+# explicitly asking for a type to be dropped, so recording it looked like noise. It is not the
+# same request. "Drop this column" and "drop this column and then invent a BIGINT auto-increment
+# key under its name" are two asks, and the caller only made the first — so an `id` declared as a
+# `CharField(max_length=10)` came back as `Models.IDField()`, mis-typing the one column every
+# query reads, with no marker anywhere saying so.
+#
+# The `_looks_like_a_field_call` path (`id = ArrayField(...)`) stays outside the set and is NOT
+# covered here: its type is unknown, so its KEY is unknowable — `id = TreeForeignKey(...)` writes
+# `id_id` in Django and leaves `id` genuinely free. The reasoning is recorded beside that branch
+# in `process_class_fields!`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an id dropped by autofields_ignore still suppresses the implicit key (#428)" begin
+    # The issue's own reproduction, plus one column of a type the ignore list does NOT name, so
+    # the model still has something to emit and the assertion is about the key rather than about
+    # the abort.
+    src = """
+from django.db import models
+
+class Thing(models.Model):
+    id = models.CharField(max_length=10)
+    nome = models.CharField(max_length=40)
+    ativo = models.BooleanField()
+"""
+    generated, config_key, db_dir_existed =
+        import_project(["access" => src]; output_file = "ignored_id.jl",
+                       autofields_ignore = ["Manager", "CharField"])
+    try
+        # The clobber itself: no BIGINT auto key invented over a VARCHAR(10) column.
+        @test !occursin("id = Models.IDField()", generated)
+        # ...and the outcome is REPORTED, not merely avoided. The marker names `autofields_ignore`
+        # as the cause, because that is the one the reader can act on — pointing at an
+        # unimplemented Django type here would send them hunting in the wrong repository.
+        @test occursin("declares a field named 'id' that is NOT its primary key", generated)
+        @test occursin("`autofields_ignore`", generated)
+        # models.E004 is FALSE on this path — `id = CharField(max_length=10, primary_key=True)` is
+        # a models.py Django accepts, and it lands here only because the caller dropped CharField.
+        @test !occursin("models.E004", generated)
+        # The columns the ignore list did not name are untouched.
+        @test occursin("ativo = Models.BooleanField()", generated)
+        @test !occursin("nome =", generated)
+        # The model really does come out keyless — the marker is describing a fact, not hedging.
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        thing = Core.eval(sandbox, :(ignored_id.Thing))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, thing) === nothing
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # Suppressing the implicit `id` RE-OPENS the empty-model tripwire, which the comment above it
+    # recorded as unreachable precisely because `autofields_ignore` could no longer empty a class.
+    # It can again — and the message must not accuse PormG of an internal bug for what is the
+    # caller's own argument.
+    empty_src = """
+from django.db import models
+
+class Thing(models.Model):
+    id = models.CharField(max_length=10)
+    nome = models.CharField(max_length=40)
+"""
+    key_e, existed_e = project_config!()
+    try
+        err = nothing
+        try
+            import_models_from_django(["access" => empty_src]; db = key_e,
+                                      file = "ignored_empty.jl", force_replace = true,
+                                      autofields_ignore = ["Manager", "CharField"])
+        catch e
+            err = e
+        end
+        @test err isa PormG.InvalidMigrationError
+        msg = sprint(showerror, err)
+        @test occursin("'access.Thing' has no column left to emit", msg)
+        @test !occursin("This is a PormG bug", msg)
+        # The cause, and the caller's own list echoed back so they can see what they passed.
+        @test occursin("autofields_ignore", msg)
+        @test occursin("Manager, CharField", msg)
+        # NOT the #410 text: no field here uses a type PormG fails to implement.
+        @test !occursin("Django field type PormG does not implement", msg)
+    finally
+        cleanup_project_test!(key_e, existed_e)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#428/#346): an ignored field claims its NAME, never the primary key
+#
+# The two halves pull in opposite directions and both have to hold. #346: an ignored
+# `CharField(primary_key=True)` must NOT claim the key, or the implicit `id` is suppressed and the
+# model comes out with no fields at all — which `_import_django_apps` then skipped silently while
+# the class index had already handed it a binding. #428: an ignored field named `id` must claim
+# its name, or a differently-typed column is invented under it. The key claim and the name claim
+# are separate sets for exactly this reason.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an ignored primary_key field still gets the implicit id (#346, #428)" begin
+    src = """
+from django.db import models
+
+class Thing(models.Model):
+    codigo = models.CharField(max_length=10, primary_key=True)
+    ativo = models.BooleanField()
+"""
+    generated, config_key, db_dir_existed =
+        import_project(["access" => src]; output_file = "ignored_pk.jl",
+                       autofields_ignore = ["Manager", "CharField"])
+    try
+        # The name claimed is `codigo`, not `id`, so nothing suppresses the implicit key.
+        @test occursin("id = Models.IDField()", generated)
+        @test occursin("ativo = Models.BooleanField()", generated)
+        @test !occursin("codigo", generated)
+        # And no #428 marker: this class never declared a field named `id`.
+        @test !occursin("declares a field named 'id'", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#428): a later buildable statement clears the ignore claim
+#
+# `fields_dict` is last-write-wins, which is what makes abstract-base merging work: ancestors'
+# statements are concatenated ahead of the child's so the child overrides for free. The #410 sets
+# already follow that rule, and #428's has to as well — a child that overrides an inherited field
+# of an ignored type with one the importer CAN build has not left any name unclaimed, so the
+# marker must not fire and the child's column must stand.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a later buildable statement clears the ignore claim (#428)" begin
+    src = """
+from django.db import models
+
+class Base(models.Model):
+    id = models.CharField(max_length=10)
+
+    class Meta:
+        abstract = True
+
+class Thing(Base):
+    id = models.BigIntegerField()
+    ativo = models.BooleanField()
+"""
+    generated, config_key, db_dir_existed =
+        import_project(["access" => src]; output_file = "ignore_override.jl",
+                       autofields_ignore = ["Manager", "CharField"])
+    try
+        # The child's statement wins the column, exactly as it would over any inherited field.
+        @test occursin("id = Models.BigIntegerField()", generated)
+        # No implicit key is substituted — `id` is taken, by a real column this time.
+        @test !occursin("id = Models.IDField()", generated)
+        # The class DOES still declare a non-key `id`, so #400's own report stands; what must NOT
+        # appear is the `autofields_ignore` explanation, because the claim was cleared.
+        @test occursin("declares a field named 'id' that is NOT its primary key", generated)
+        @test !occursin("`autofields_ignore`", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Django Importer (#425): a qualified enum reference resolves through the `as` alias it was
 # imported under. `Base.Status.choices` worked only when the base was addressed by its OWN class
 # name, because `_lookup_enum`'s qualified fallback looks the owner half up as a SCOPE NAME and

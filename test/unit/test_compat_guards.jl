@@ -161,9 +161,19 @@ end
 #   CSV    0.10.0-0.10.12 fail their own module `__init__` (`getsource` typeassert,
 #          CSV/src/utils.jl); 0.10.13 is the lowest that loads. PormG did not precompile at
 #          all at the old `"0.10"` floor — no testset ran.
-#   SQLite 1.0.0-1.4.2 have no `SQLite.Stmt(db, sql; register = …)` method, which
-#          `ext/PormGSQLiteExt.jl` needs (it keeps bulk seeding from accumulating registered
-#          statements); 1.5.0 is the lowest that has it.
+#   SQLite Two separate breaks, so the bound is the higher of the two. 1.0.0-1.4.2 have no
+#          `SQLite.Stmt(db, sql; register = …)` method, which `ext/PormGSQLiteExt.jl` needs (it
+#          keeps bulk seeding from accumulating registered statements) — 1.5.0 fixes that. But
+#          1.5.0-1.6.0 then re-`@eval` the C wrapper when the SAME Julia function is registered
+#          on a second connection, and `_create_sqlite_connection` registers `pormg_lower` PER
+#          CONNECTION, so a pool emits `WARNING: Method definition pormg_lower(...) overwritten
+#          on the same line` from the second slot on — which fails the `@test_nowarn` in
+#          `test_sqlite_memory_pool.jl`. 1.6.1 is the lowest clean on both counts.
+#
+#          That warning is only visible under `--warn-overwrite=yes`, which `Pkg.test` sets and a
+#          bare `julia test/runtests.jl` does not — so it was invisible to a local rehearsal and
+#          surfaced only once CI ran `julia-runtest` (run 35018968976). Rehearse through
+#          `Pkg.test`, not by invoking the suite directly.
 #   Consuming-app blast radius, measured before raising these (#574, the env-#2 half of the rule in
 #   general.instructions.md): `TimeZones` is the only one of the four that is a hard `[deps]` entry,
 #   so it is the only one an app resolves at all — `Aqua` is a test-only extra, and the `CSV`/
@@ -214,7 +224,7 @@ end
   # PormG uses none of those today and CompatHelper writes bare forms, so this is a latent guard.
   for (name, floor) in (
     ("CSV", v"0.10.13"),
-    ("SQLite", v"1.5.0"),
+    ("SQLite", v"1.6.1"),
     ("TimeZones", v"1.12.0"),
     ("Aqua", v"0.8.14"),
   )

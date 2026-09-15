@@ -34,14 +34,25 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
             # `Project.toml` that `julia-downgrade-compat` has REWRITTEN: to let `Pkg.test` run
             # from a locked manifest it promotes the `[targets].test` names into `[deps]` and
             # deletes them from `[weakdeps]` — LibPQ, SQLite, Aqua, BenchmarkTools, Infiltrator
-            # and SafeTestsets. `src/` imports none of those, and LibPQ/SQLite are no longer in
-            # `[weakdeps]` for Aqua to subtract, so `stale_deps` reports six entries. That is a
-            # verdict about a project layout which exists nowhere but inside that job, so it is
-            # the ONLY check disabled there — the other seven still run at the floor, and the
-            # `test` job runs all eight, `stale_deps` included, on 1.12 and 1.13.
+            # and SafeTestsets. `[extensions]` still names LibPQ and SQLite as extension triggers,
+            # so the file that job tests against is a shape that exists nowhere else.
+            #
+            # Exactly TWO of Aqua's eight checks read that file, and both therefore judge the
+            # rewrite rather than PormG. They are the two disabled here, for the one shared reason:
+            #   * stale_deps       — six `[deps]` entries `src/` never imports, and LibPQ/SQLite
+            #                        are no longer in `[weakdeps]` for Aqua to subtract.
+            #   * persistent_tasks — it builds a wrapper package that must resolve from
+            #                        `Project.toml` ALONE (its own docstring says this cannot work
+            #                        when a dependency is a path/dev'd package). Against the
+            #                        rewritten file the wrapper's precompile exits without
+            #                        signalling, and Aqua reports "done.log was not created".
+            #                        Measured on CI run 35018968976; it is not a timeout.
+            #
+            # The other six still run at the floor, and the `test` job runs all eight — including
+            # these two — on 1.12 and 1.13, which is where a real regression in either would show.
             if PORMG_FLOOR_RESOLVE
-                @info "PORMG_FLOOR_RESOLVE=1: Aqua stale_deps disabled (see comment above)"
-                Aqua.test_all(PormG; stale_deps = false)
+                @info "PORMG_FLOOR_RESOLVE=1: Aqua stale_deps + persistent_tasks disabled (see comment above)"
+                Aqua.test_all(PormG; stale_deps = false, persistent_tasks = false)
             else
                 Aqua.test_all(PormG)
             end

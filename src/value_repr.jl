@@ -182,4 +182,7 @@ before this table existed — and can never produce a wrong typed value.
 """
 value_parser(::CanonicalType, ::PormGPostgres) = nothing
 value_parser(::CDateTime, ::PormGSQLite) = Dialect._parse_sqlite_timestamp
+value_parser(::CDate,     ::PormGSQLite) = Dialect._parse_sqlite_date
+value_parser(::CTime,     ::PormGSQLite) = Dialect._parse_sqlite_time
+value_parser(::CInterval, ::PormGSQLite) = Dialect._parse_sqlite_interval
 value_parser(::CanonicalType, ::PormGBackend) = nothing

@@ -89,6 +89,7 @@ end
     @testset "Kernel Layering" include("unit/test_kernel_layering.jl")
     @testset "DateTime UTC Canonicalization (#79)" include("unit/test_datetime_canonicalization.jl")
     @testset "Value Representation Table (#564)" include("unit/test_value_repr_table.jl")
+    @testset "Read Value Coercion (#564)" include("unit/test_read_value_coercion.jl")
     @testset "Value Representation Property (#564)" include("unit/test_value_repr_property.jl")
     @testset "Reload Regressions" include("unit/test_reload.jl")
     @testset "Configuration API" include("unit/test_configuration_api.jl")

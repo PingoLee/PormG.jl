@@ -129,14 +129,106 @@ That last rule is what makes a wrong caller harmless rather than lossy: handed t
 that `CAST(col AS DATE)` yields on SQLite, or text in a representation nothing here wrote, it hands
 it straight back rather than guessing.
 """
+# A naive timestamp, with or without the `T`, with an optional fraction. Used only by the fallback
+# arm below — the canonical form with its offset is handled by `normalize_sqlite_datetime_string`.
+const _SQLITE_NAIVE_TS = r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.(\d{1,3})\d*)?$"
+
 function _parse_sqlite_timestamp(v::Any)
     v isa AbstractString || return v
     normalized = normalize_sqlite_datetime_string(v)
-    # Try timezone-aware form first (e.g. "2026-04-07T18:30:23.741-03:00")
-    try; return ZonedDateTime(normalized, dateformat"yyyy-mm-ddTHH:MM:SS.ssszzzz"); catch; end
-    # Fall back to naive datetime (e.g. "2026-04-07T21:30:23")
-    try; return DateTime(v[1:min(19, length(v))], dateformat"yyyy-mm-ddTHH:MM:SS"); catch; end
-    return v
+    # Timezone-aware form first (e.g. "2026-04-07T18:30:23.741-03:00") — the canonical one.
+    try
+      return ZonedDateTime(normalized, dateformat"yyyy-mm-ddTHH:MM:SS.ssszzzz")
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+    end
+    # Fall back to a naive datetime. MATCH FIRST, then parse.
+    #
+    # This used to slice the RAW `v` by byte — `v[1:min(19, length(v))]` — which assumes an ASCII,
+    # `T`-separated prefix in exactly the arm that fires for a string
+    # `normalize_sqlite_datetime_string` did NOT recognise. On a multi-byte value that is a
+    # `StringIndexError`, and the bare `catch` it sat behind swallowed it. Matching a shape before
+    # parsing removes the assumption, and accepts the space-separated form as a side effect.
+    m = match(_SQLITE_NAIVE_TS, normalized)
+    m === nothing && return v
+    frac = m[3] === nothing ? "000" : rpad(m[3], 3, '0')
+    try
+      return DateTime("$(m[1])T$(m[2]).$(frac)", dateformat"yyyy-mm-ddTHH:MM:SS.sss")
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      return v
+    end
+end
+
+"""
+    _parse_sqlite_date(v) -> Union{Date, typeof(v)}
+
+The READ half of `Models.format_date_sql` on SQLite — `"2031-07-04"` back into a `Date`.
+
+Deliberately refuses a timestamp string rather than truncating it. A `CDate`-kinded expression that
+produced one means the render side mistyped it, and silently taking the date part would hide exactly
+the class of defect #564 exists to surface.
+"""
+function _parse_sqlite_date(v::Any)
+    v isa AbstractString || return v
+    occursin(r"^\d{4}-\d{2}-\d{2}$", v) || return v
+    try
+      return Date(v)
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      return v                                   # a well-shaped but impossible date (2023-02-29)
+    end
+end
+
+"""
+    _parse_sqlite_time(v) -> Union{Time, typeof(v)}
+
+The READ half of `TimeField`'s formatter on SQLite. `TimeField` has no dedicated formatter — it
+rides `Models.format_text_sql(::Time)`, which is `string(::Time)`, an exact inverse of
+`Time(::String)`. That formatter is left alone: changing it would be a write-side behaviour change
+this table has no mandate for.
+"""
+function _parse_sqlite_time(v::Any)
+    v isa AbstractString || return v
+    occursin(r"^\d{1,2}:\d{2}(:\d{2}(\.\d{1,9})?)?$", v) || return v
+    try
+      return Time(v)
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      return v
+    end
+end
+
+# `HH:MM:SS` with an optional fraction and an optional leading sign — the shape
+# `Models._duration_nanoseconds_to_string` writes.
+const _SQLITE_INTERVAL = r"^([+-]?)(\d+):(\d{2}):(\d{2})(?:\.(\d{1,9}))?$"
+
+"""
+    _parse_sqlite_interval(v) -> Union{Dates.CompoundPeriod, typeof(v)}
+
+The READ half of `Models.format_duration_sql` on SQLite.
+
+Reconstructed from the SAME units the writer emits — hours, minutes, seconds, nanoseconds — so the
+two are literal inverses. NOT `Dates.canonicalize`, which would roll hours up into days and weeks
+while the writer caps at hours: the round trip would not close, and `format_duration_sql` would then
+write something different from what it read.
+
+`CompoundPeriod <: Dates.AbstractTime`, which is the type parity PostgreSQL's driver already
+delivers for an INTERVAL column.
+"""
+function _parse_sqlite_interval(v::Any)
+    v isa AbstractString || return v
+    m = match(_SQLITE_INTERVAL, strip(v))
+    m === nothing && return v
+    sign  = m[1] == "-" ? -1 : 1
+    nanos = m[5] === nothing ? 0 : parse(Int, rpad(m[5], 9, '0'))
+    try
+      return Dates.CompoundPeriod(Hour(sign * parse(Int, m[2])), Minute(sign * parse(Int, m[3])),
+                                  Second(sign * parse(Int, m[4])), Nanosecond(sign * nanos))
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      return v
+    end
 end
 
 

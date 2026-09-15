@@ -33,16 +33,21 @@ import PormG.Migrations: convert_schema_to_models
     # ── 2. Introspection skips registered tables (hermetic temp SQLite) ─────
     mktempdir() do dir
       pool = SQLiteConnectionPool(joinpath(dir, "ig.sqlite"); pool_size = 1)
-      fetch(pool, "CREATE TABLE keep_me (id INTEGER PRIMARY KEY, n INTEGER);")
-      fetch(pool, "CREATE TABLE nitro_task (id TEXT PRIMARY KEY, status TEXT);")
-      fetch(pool, "CREATE TABLE nitro_session (session_key TEXT PRIMARY KEY, data TEXT);")
+      try
+        fetch(pool, "CREATE TABLE keep_me (id INTEGER PRIMARY KEY, n INTEGER);")
+        fetch(pool, "CREATE TABLE nitro_task (id TEXT PRIMARY KEY, status TEXT);")
+        fetch(pool, "CREATE TABLE nitro_session (session_key TEXT PRIMARY KEY, data TEXT);")
 
-      models = convert_schema_to_models(pool)   # sqlite default ignore list ∪ registry
-      names = Set(lowercase(string(m.name)) for m in models)
+        models = convert_schema_to_models(pool)   # sqlite default ignore list ∪ registry
+        names = Set(lowercase(string(m.name)) for m in models)
 
-      @test "keep_me" in names            # ordinary user table is imported
-      @test !("nitro_task" in names)      # registered → skipped
-      @test !("nitro_session" in names)   # registered → skipped
+        @test "keep_me" in names            # ordinary user table is imported
+        @test !("nitro_task" in names)      # registered → skipped
+        @test !("nitro_session" in names)   # registered → skipped
+      finally
+        # Release the SQLite handle so mktempdir can delete the temp DB on Windows (WAL keeps it open).
+        PormG.ConnectionPool.close_pool!(pool)
+      end
     end
   finally
     PormG._EXTRA_IGNORE_TABLES[] = saved   # never leak registry state into other suites

@@ -897,10 +897,12 @@ function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{
 end
 
 
-# Report a reload/migration that is about to replace an existing entry's pool. `close_pool!` closes
-# every slot regardless of checkout state, so a non-zero `in_use` means live borrowers are about to
-# lose their connection — that is an `@error`, not a footnote: the operator otherwise sees only an
-# unexplained failure in whatever request was holding one.
+# Report a reload/migration that is about to replace an existing entry's pool. `close_pool!` waits a
+# bounded grace period for checked-out slots and then closes them regardless (#47), so a non-zero
+# `in_use` means live borrowers are about to lose their connection unless they return it within
+# that window — that is an `@error`, not a footnote: the operator otherwise sees only an
+# unexplained failure in whatever request was holding one. The close itself logs a second line
+# (`@warn`, with the count it actually force-closed) if any were still out when the window expired.
 function _warn_pool_takeover(msg::String, path::String, existing::String,
                              config::Dict{String,PormGSettings})
   in_use = 0
@@ -964,8 +966,9 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
       # an environment nobody chose. Migrate to the caller's key. Models still bound to the old
       # one are remapped by `Models.ensure_model_initialized`, which warns when it does.
       #
-      # `close_pool!` does NOT spare checked-out connections, so a migration during live traffic
-      # kills in-flight queries. Refusing to migrate would be worse — it leaves the two entries
+      # `close_pool!` waits up to its drain budget for checked-out connections and then closes them
+      # anyway (#47), so a migration during live traffic may block `load` for a few seconds and
+      # still kill in-flight queries. Refusing to migrate would be worse — it leaves the two entries
       # this change exists to eliminate, and makes `load` behave differently depending on
       # transient runtime state — so migrate, but say how much was in use, because that is the
       # number that explains a request dying a moment later.
@@ -1144,20 +1147,29 @@ function unregister_connection(key::String)
 end
 
 """
-    close_pool!(pool::Union{PormGPostgres, PormGSQLite})
-    close_pool!(db::String)
+    close_pool!(pool::Union{PormGPostgres, PormGSQLite}; drain_seconds = 5.0)
+    close_pool!(db::String; drain_seconds = 5.0)
 
-Close all connections in the database pool.
+Close all connections in the database pool. Never throws; the pool stays usable afterwards.
+
+Connections that are still checked out get a bounded grace period (#47): the call waits up to
+`drain_seconds` for their borrowers to return them, then closes whatever is still leased and logs
+one `@warn` with the count — those borrowers' in-flight queries fail. Pass `drain_seconds = 0`
+to skip the wait (the `atexit` hook does, since nobody releases at exit). The string form tolerates
+a never-built pool. The full contract, including how a SQLite handle the async worker is still on
+is deferred rather than freed under it, is on `ConnectionPool.close_pool!`.
 """
-function close_pool!(pool::Union{PormGPostgres, PormGSQLite})
+function close_pool!(pool::Union{PormGPostgres, PormGSQLite}; kwargs...)
+  # `kwargs...`, not a named default: Configuration is included BEFORE ConnectionPool, so the
+  # default (`_CLOSE_POOL_DRAIN_SECONDS`) lives there and is not nameable here at definition time.
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-  CP.close_pool!(pool)
+  CP.close_pool!(pool; kwargs...)
 end
 
-function close_pool!(db::String)
+function close_pool!(db::String; kwargs...)
   settings::PormGSettings = get_settings(db)
   if settings.connections !== nothing
-    close_pool!(settings.connections)
+    close_pool!(settings.connections; kwargs...)
   end
 end
 
@@ -1312,9 +1324,14 @@ function __cleanup__()
     # Close the registered pool if there is one. `settings.connections` is a PormGBackend pool or nothing.
     if settings.connections isa PormGBackend
       # Registered as an atexit hook (#203): one bad pool must not abort cleanup of the rest, nor
-      # surface a stray error during process teardown. @debug (not @warn) — at-exit logging stays quiet.
+      # surface a stray error during process teardown — a failing close is @debug here, not @warn.
+      # `drain_seconds = 0`: at exit no borrower is coming back to release anything, so the #47
+      # grace period would only delay shutdown by its full budget per pool with a leaked lease.
+      # The one line `close_pool!` itself may log at exit — its `@warn` naming how many connections
+      # were still checked out — is kept on purpose: a lease outstanding at process exit is exactly
+      # the leak diagnostic an operator wants once, and it never fires for a clean shutdown.
       try
-        close_pool!(settings.connections)
+        close_pool!(settings.connections; drain_seconds = 0)
       catch e
         @debug "PormG atexit cleanup: error closing pool for '$path'" exception=e
       end

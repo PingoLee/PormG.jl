@@ -92,6 +92,8 @@ end
         @test occursin("driver", lowercase(content))   # the introspected table is present
       finally
         delete!(PormG.config, key)
+        # Release the SQLite handle so mktempdir can delete the temp DB on Windows (WAL keeps it open).
+        close_pool!(pool)
       end
     end
   end

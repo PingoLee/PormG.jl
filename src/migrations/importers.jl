@@ -1697,6 +1697,12 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       app.graph.enums[(a, "")] = gated
     end
   end
+  # `enum_aliases` needs no copy loop of its own (#512), and the asymmetry is worth stating so the
+  # next reader does not "fix" it. A module scope is per-graph because it is GATED by what its own
+  # app imported, which only that graph computed. An alias table is not gated by anything: it is
+  # seeded from `scopes`, which every graph holds identically, so every graph already agrees on
+  # every app's bindings. What keeps a binding from leaking is not which graph holds it — it is
+  # `_lookup_enum` consulting only `scopes[1]`, the app the statement was written in.
 
   for app in apps
     graph = app.graph
@@ -1860,7 +1866,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
                               _inherits_auth_user(graph, class), autofields_ignore,
                               parameters_ignore, markers, graph.enums,
                               enum_scope_map; class_label = class_label,
-                              strict_fields = strict_fields)
+                              strict_fields = strict_fields,
+                              enum_aliases = graph.enum_aliases)
 
       # Django's implicit `id`, added only when nothing claimed the key — DERIVED, per field, from
       # what was built and from what the models.py declared, never tracked with a class-wide flag
@@ -3102,6 +3109,12 @@ inheritance and still refused.
 reading them by class name expects. The ancestor walkers cannot use a bare name (two apps may
 declare one), so they read `byapp` and `resolved` instead: `byapp[(app, name)]` is the classified
 info of any class the walk reached, and `resolved[(app, token)]` is the edge a base token took.
+
+Two enum tables come back, and they are read under different rules (#512). `enums` is keyed by
+**scope** — `(app, class)` or `(app, "")` — and the qualified fallback probes it against every app
+in the statement's scope list. `enum_aliases` is keyed by **module-level binding** — `(app, token)`,
+what an `import` statement bound in that app — and is consulted only for the app that WROTE the
+statement, so a name one module bound never becomes reachable from another that did not.
 """
 function _django_graph_from_scopes(scopes::Vector{_AppScope}, self::Int)
   st = _ClassifyState(scopes)
@@ -3137,36 +3150,60 @@ function _django_graph_from_scopes(scopes::Vector{_AppScope}, self::Int)
   for (i, t) in enumerate(per_app), (scope, members) in t
     enums[(i, scope)] = members
   end
-  # A base addressed through an `as` alias (#425). `_lookup_enum`'s qualified fallback resolves
-  # `CoreBase.Status` by looking the OWNER half up as a scope name — and `_collect_enums` keys a
-  # class scope by the class's own name, which an alias makes a different string entirely. So
-  # `from core.models import Base as CoreBase` + `choices=CoreBase.Status.choices` dropped the
-  # option and told the reader to import a module they had already imported.
+  # A class addressed through a MODULE-LEVEL NAME — what `from core.models import Base as CoreBase`
+  # binds (#425, completed by #512). `_lookup_enum`'s qualified fallback resolves `CoreBase.Status`
+  # by looking the owner half up as a scope name, and `_collect_enums` keys a class scope by the
+  # class's own declared name — which an import statement can make a different string entirely. So
+  # the option was dropped, with a marker telling the reader to import a module they had already
+  # imported.
   #
-  # Registered HERE rather than in `_enum_scopes` because this is a MODULE-level binding, which is
-  # exactly what an `as` alias is in Python — and because `st.resolved` already holds the answer for
-  # every base token the classifier resolved, keyed by the token as written (`:2818`). It is the
-  # class-scope twin of the module-scope alias loop directly below, which has registered imported
-  # enums under their local name since #370.
+  # This is a SEPARATE table from `enums`, and that separation is the whole of #512. The two are
+  # read under different rules:
   #
-  # Three guards, each load-bearing:
+  #   * `enums` is keyed by SCOPE, and the qualified fallback probes it against the app half of the
+  #     WHOLE scope list — which for a statement written in `shop` that inherits `Mixin` from
+  #     `access` includes `access`. A module-level binding must not be reachable that way: `access`
+  #     writing `Base as CoreBase` does not put `CoreBase` in `shop`'s namespace, Python raises
+  #     `NameError` there, and resolving it is the "wrong enumeration through a name the source
+  #     never mentions" failure #370 removed.
+  #   * `enum_aliases` is keyed by BINDING, and is consulted only for the app that WROTE the
+  #     statement. So the same entries can now be registered for every app rather than only `self`,
+  #     and case (a) — an alias bound in a base's own module, whose statement is then merged into a
+  #     child in another app — resolves, while the grandparent case above stays dropped.
   #
-  #   * `a == self` — only tokens THIS module bound. An alias written in `access` must not resolve
-  #     from `shop`, which never wrote that name; Python raises `NameError` there.
-  #   * `token == pc.name` — not an alias at all. Skipping it is what leaves the un-aliased
-  #     `Base.Status` form resolving through the ancestor entries alone, so `_enum_scopes`' contract
-  #     and #402's coverage of it are untouched by this change.
-  #   * `get!` — never overwrite. A class this app declares itself outranks an import of that name,
-  #     as it does in Python and as `_resolve_base` already decides for bases.
+  # #425 registered these into `enums` under `a == self`, which is why the same statement resolved
+  # when `core` was the app being imported and was dropped when `shop` was: alias entries live in the
+  # graph of the app that wrote them, and only module scopes cross apps (see the copy loop in
+  # `_import_django_apps`). Moving them here and dropping that guard is what makes one statement
+  # give one answer.
   #
-  # Reachability stays narrow: `_lookup_enum`'s FIRST pass walks the scope list, which never contains
-  # an `(app, token)` key, so a bare `Status` can never resolve through an alias entry. Only the
-  # qualified fallback reads these — i.e. only a reference the source actually wrote with a dot.
+  # Two seeds, because a name can be bound and never used as a base:
+  #
+  #   1. `st.resolved` — every `(app, token)` edge the classifier actually took. This is the #425
+  #      seed, minus `a == self`.
+  #   2. `scopes[i].imports.names` — the module's own import table, for every app. `_resolve_base`
+  #      already follows `as` aliases, re-export façades and star imports, so this needs no second
+  #      reader. It covers case (b): a name imported but never used as a base anywhere, which
+  #      `st.resolved` cannot know about, and which Python resolves without complaint.
+  #
+  # `token == pc.name` is NOT skipped any more. It was skipped in `enums` so the un-aliased
+  # `Base.Status` form kept resolving through the ancestor entries alone and #402's contract stayed
+  # untouched; here it cannot affect that, because this table is read strictly AFTER the existing
+  # lookup fails. Keeping the entry is what lets a plainly imported `Base` — never used as a base —
+  # resolve too, which is the same defect wearing a different spelling.
+  #
+  # `get!` throughout: never overwrite. A class an app declares itself outranks an import of that
+  # name, as it does in Python and as `_resolve_base` already decides for bases.
+  enum_aliases = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}()
   for ((a, token), (pa, pc)) in st.resolved
-    a == self || continue
-    token == pc.name && continue
     sc = get(enums, (pa, pc.name), nothing)
-    sc === nothing || get!(enums, (a, token), sc)
+    sc === nothing || get!(enum_aliases, (a, token), sc)
+  end
+  for (i, sc_i) in enumerate(scopes), local_name in keys(sc_i.imports.names)
+    r = _resolve_base(scopes, i, local_name)
+    r === nothing && continue
+    sc = get(enums, (r[1], r[2].name), nothing)
+    sc === nothing || get!(enum_aliases, (i, local_name), sc)
   end
   mod_scope = Dict{String, _PyEnum}()
   own_mod = get(per_app[self], "", nothing)
@@ -3191,6 +3228,7 @@ function _django_graph_from_scopes(scopes::Vector{_AppScope}, self::Int)
   enums[(self, "")] = mod_scope
 
   return (classes = classes, index = index, info = info, enums = enums,
+          enum_aliases = enum_aliases,
           scopes = scopes, self = self, byapp = st.info, resolved = st.resolved)
 end
 
@@ -3637,7 +3675,7 @@ function _enum_scopes(graph, app::Int, class_name::AbstractString)::Vector{Tuple
 end
 
 """
-    _lookup_enum(enums, scopes, ref) -> Union{_PyEnum, Nothing}
+    _lookup_enum(enums, aliases, scopes, ref) -> Union{_PyEnum, Nothing}
 
 Resolve an enum NAME against an ordered list of `(app, scope)` keys. First match wins, so a nested
 enum shadows a module-level one of the same name — Python's own rule. A qualified `Owner.Status` is
@@ -3646,8 +3684,25 @@ accepted last, since Django permits addressing a nested enum through its owner.
 The qualified form is tried against the apps already in `scopes` and no others: `Owner` is a name in
 one of those modules, so widening the search to every app would resolve it in a module the source
 cannot see — the flat-table defect one level down.
+
+`aliases` is the last resort, and it is read under a STRICTER rule than the pass above it, not a
+looser one (#512). The scope pass reuses the app half of every entry in `scopes`; this one uses
+`scopes[1]` alone — the app the statement was WRITTEN in, which `_enum_scopes` seeds the list with.
+That is what makes `enum_aliases` safe to populate for every app at once:
+
+  * an alias a base's own module bound resolves for a child in another app, because the merged
+    statement carries its origin as `scopes[1]` (#402) — the same statement then gives the same
+    answer wherever it is merged, which was the whole complaint;
+  * an alias some OTHER module bound stays unreachable. A statement written in `shop` that inherits
+    `Mixin` from `access` has `access` in `scopes`, so the pass above would find a binding `access`
+    wrote — `shop` never wrote it, Python raises `NameError` there, and resolving it is #370's
+    defect one level down. `scopes[1]` is `shop`, and `access`'s entry is never consulted.
+
+Reachability stays narrow in the other direction too: the first pass walks `scopes` against `enums`
+only, so a bare `Status` can never resolve through a binding. Only a reference the source wrote with
+a dot reaches here.
 """
-function _lookup_enum(enums, scopes::Vector{Tuple{Int, String}},
+function _lookup_enum(enums, aliases, scopes::Vector{Tuple{Int, String}},
                       ref::AbstractString)::Union{_PyEnum, Nothing}
   for s in scopes
     scope = get(enums, s, nothing)
@@ -3658,7 +3713,28 @@ function _lookup_enum(enums, scopes::Vector{Tuple{Int, String}},
   if idx !== nothing
     owner = String(ref[firstindex(ref):prevind(ref, idx)])
     inner = ref[nextind(ref, idx):end]
+    self = isempty(scopes) ? nothing : scopes[1][1]
+    # Own app first — its declared scopes, then its module bindings — and only then every other app
+    # in the list. That order is Python's, and getting it wrong is a SILENT wrong enumeration rather
+    # than a miss, which is why it is spelled out as three passes instead of one loop.
+    #
+    # The case that fixes it: `shop` writes `from core.models import Base as Outra`, and `core` also
+    # DECLARES a class `Outra` with a different `Status`. `Outra` is a name in `shop`'s module bound
+    # to `Base`, so `Outra.Status` is `Base`'s. Consulting the bindings after the all-apps loop finds
+    # `core`'s real `Outra` first and imports the wrong members in silence — the exact failure the
+    # design check rejected during #425, reintroduced from the other side.
     for (a, _) in scopes
+      a == self || continue
+      scope = get(enums, (a, owner), nothing)
+      scope === nothing && continue
+      haskey(scope, inner) && return scope[inner]
+    end
+    if self !== nothing
+      scope = get(aliases, (self, owner), nothing)
+      scope === nothing || (haskey(scope, inner) && return scope[inner])
+    end
+    for (a, _) in scopes
+      a == self && continue
       scope = get(enums, (a, owner), nothing)
       scope === nothing && continue
       haskey(scope, inner) && return scope[inner]
@@ -4056,7 +4132,11 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
                                  Dict((1, String(class_name)) =>
                                         Tuple{Int, String}[(1, String(class_name)), (1, "")]);
                                class_label::AbstractString = class_name,
-                               strict_fields::Bool = false)
+                               strict_fields::Bool = false,
+                               # Keyword rather than a fourth positional (#512): `enums` and
+                               # `enum_scopes` are positionals-with-defaults, and wedging one
+                               # between them would silently re-bind every existing call.
+                               enum_aliases = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}())
   # Django's `AbstractUser` columns. A Bool rather than the base-list STRING it used to compare
   # against (#341): the base list is now parsed, so `class User(AbstractUser, SomeMixin)` and a
   # class reaching `AbstractUser` through an abstract base both qualify — an equality test on the
@@ -4266,7 +4346,8 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
 
     # Parse field arguments
     parse_args() = parse_field_args(field_args_str, django_type, parameters_ignore;
-                                    enums = enums, class_name = class_name,
+                                    enums = enums, enum_aliases = enum_aliases,
+                                    class_name = class_name,
                                     enum_scopes = stmt_scopes, class_label = class_label,
                                     field_name = field_name,
                                     markers = unsupported_type ? String[] : markers)
@@ -4591,6 +4672,7 @@ _is_pormg_field_type(t::AbstractString)::Bool =
 # it last also leaves the `class_name` → `enum_scopes` coupling visually adjacent.
 function parse_field_args(args_str::AbstractString, field_type::AbstractString, parameters_ignore::Vector{String};
                          enums = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}(),
+                         enum_aliases = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}(),
                          class_name::AbstractString = "",
                          enum_scopes::Vector{Tuple{Int, String}} = Tuple{Int, String}[(1, String(class_name)), (1, "")],
                          class_label::AbstractString = class_name,
@@ -4624,7 +4706,7 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
           end
           # Resolve `Status.choices` / `Status.DRAFT` BEFORE parse_value (#342), which would
           # otherwise hand the literal text through and let CharField reject the pair.
-          resolved = _resolve_enum_reference(value, enums, enum_scopes, class_label, field_name, key, markers, unresolved_enums)
+          resolved = _resolve_enum_reference(value, enums, enum_aliases, enum_scopes, class_label, field_name, key, markers, unresolved_enums)
           # A DISTINCT sentinel, not `nothing`: `parse_value("None")` is `nothing`, so an enum
           # member declared `NENHUM = None, "Nenhum"` resolved to `nothing` and was read here as
           # "dropped" — the option vanished with no warn and no marker, which is the one thing this
@@ -4787,7 +4869,7 @@ _looks_like_enum_attr(attr::AbstractString)::Bool =
 const _ENUM_MEMBER_ATTRS = ("value", "label", "name")
 
 """
-    _resolve_enum_reference(value, enums, enum_scopes, class_label, field_name, key, markers, unresolved) -> Any
+    _resolve_enum_reference(value, enums, enum_aliases, enum_scopes, class_label, field_name, key, markers, unresolved) -> Any
 
 Resolve a Django enum reference in a field option.
 
@@ -4798,7 +4880,8 @@ app-qualified (#371); it never reaches a lookup, so the two must not be swapped.
 Returns the resolved value, `_ENUM_NOT_A_REFERENCE` when `value` is not one, or `_ENUM_DROP` to mean
 "drop this option" (already warned and marked).
 """
-function _resolve_enum_reference(value::AbstractString, enums, enum_scopes::Vector{Tuple{Int, String}},
+function _resolve_enum_reference(value::AbstractString, enums, enum_aliases,
+                                 enum_scopes::Vector{Tuple{Int, String}},
                                  class_label::AbstractString,
                                  field_name::AbstractString, key::AbstractString,
                                  markers::Vector{String},
@@ -4816,7 +4899,7 @@ function _resolve_enum_reference(value::AbstractString, enums, enum_scopes::Vect
     if inner !== nothing
       enum_ref = head[firstindex(head):prevind(head, inner)]
       member = head[nextind(head, inner):end]
-      if _lookup_enum(enums, enum_scopes, enum_ref) !== nothing
+      if _lookup_enum(enums, enum_aliases, enum_scopes, enum_ref) !== nothing
         if attr != "value"
           @warn "import: enum member attribute has no PormG equivalent; the option was dropped" class=class_label field=field_name attribute="$(head).$(attr)"
           push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' uses " *
@@ -4830,7 +4913,7 @@ function _resolve_enum_reference(value::AbstractString, enums, enum_scopes::Vect
     end
   end
 
-  enum = _lookup_enum(enums, enum_scopes, head)
+  enum = _lookup_enum(enums, enum_aliases, enum_scopes, head)
 
   if enum === nothing
     # Only `choices`/`default` can carry an enum, and only an enum-SHAPED attribute is worth

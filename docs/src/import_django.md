@@ -760,9 +760,19 @@ module imported it under (`CoreBase.Status.choices`), since both are names your 
 bound. (A bare name matching *only* a base's nested enum is still resolved, as a convenience —
 Python would raise `NameError` there.)
 
-The alias has to be bound **in the module that writes the reference**, and used there as a base. A
-name another app aliased, or one imported but never inherited anywhere in this app, is not resolved:
-the option is dropped and reported, as it is for any name the file does not define.
+The name has to be bound **in the module that writes the reference** — and only that. It does not
+have to be an `as` alias, and it does not have to be used as a base: `from core.models import Base`
+followed by `Base.Status.choices` in a class that inherits nothing resolves like any other
+module-level name, because that is what Python does with it.
+
+"The module that writes the reference" is the statement's own module, not the class's. A field
+declared on an abstract base in `core` keeps resolving `core`'s bindings when that statement is
+merged into a child in `shop`, so one statement gives one answer wherever it lands.
+
+A name **another** module bound is still not resolved — `shop` inheriting `Mixin` from `access` does
+not put `access`'s imports in `shop`'s namespace, Python raises `NameError` there, and resolving it
+would hand a model an enumeration through a name its source never mentions (#370). The option is
+dropped and reported, as it is for any name the file does not define.
 
 A module-level enum in **another app** follows the same rule as a base: it resolves only when the
 `models.py` that *uses* it imports it — alias, star import and re-export included, exactly as for a
@@ -782,9 +792,10 @@ with its own nested `Status` and a child of either resolves to the right one.
 | a member the enum does not declare | dropped and reported |
 | an enum whose members are not literals (`CARRO = auto()`) | dropped and reported — the importer cannot know the value, and keeping `"auto()"` would give every member the same one |
 | a numeric member (`ALTO = 1_000`, `MEIO = 0x1F`) | imported as the value it **denotes** — `1000`, `31` — not as the source spelling, which would declare an enumeration no row can match |
-| a name this file does not define (`from .enums import Status`) | the option naming it is dropped and reported |
+| a class reached through a name the module **imported** (`from core.models import Base as CoreBase` then `CoreBase.Status.choices`) | resolves, aliased or not, and whether or not the class is also used as a base. The name is looked up in the module that **wrote the statement** — so an abstract base's own alias keeps working when its field is merged into a child in another app, and a name some *other* module bound stays unresolvable, exactly as Python's `NameError` says |
+| a name the module that wrote the statement does not define or import (`from .enums import Status`) | the option naming it is dropped and reported |
 
-That last row is per option, not per field: if `choices=Status.choices` resolves and only
+The dropped row is per option, not per field: if `choices=Status.choices` resolves and only
 `default=Externo.ATIVO` does not, the field keeps its enumeration and loses just the default.
 Dropping the resolvable half as well would throw away what the source did give you. The reason
 neither is ever passed through as a literal is that `default="Externo.ATIVO"` against an empty

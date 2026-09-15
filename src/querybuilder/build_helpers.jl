@@ -761,10 +761,16 @@ This function checks if the given `field` is a valid field in the provided `mode
 # same list in `names_to_path` for the same reason. Reverse accessors are listed too — they are
 # addressable at exactly the same position in a path, so omitting them makes a legal name look
 # unavailable.
+#
+# `include_accessors = false` is for the WRITE path (#462). A reverse accessor is addressable in a
+# filter/values path but is not a column, so `create("results" => …)` can never work — listing them
+# in a write error would advertise a capability that does not exist. Every read-path caller keeps
+# the default.
 function _unknown_field(model::PormGModel, name::AbstractString;
-                       aliases::Vector{String} = String[])::UnknownFieldError
+                       aliases::Vector{String} = String[],
+                       include_accessors::Bool = true)::UnknownFieldError
   choices = sort(collect(model.field_names))
-  accessors = sort(collect(keys(model.related_objects)))
+  accessors = include_accessors ? sort(collect(keys(model.related_objects))) : String[]
   tail = isempty(accessors) ? "" :
     "; and the reverse accessors: \e[4m\e[32m$(join(accessors, ", "))\e[0m"
   # A projection alias is addressable in exactly the same position as a field — `filter("tot__@gt")`
@@ -1840,6 +1846,31 @@ _format_filter_value(formatter, values, operator::AbstractString) =
   operator in ("IN", "NOT IN") && values isa AbstractArray ? [formatter(v) for v in values] :
                                                              formatter(values)
 
+# The filter path's shared re-raise (#411, #467). A formatter reports a value it cannot coerce as
+# `InvalidValueError`, whose own docstring scopes it to the insert/update coercion helpers — on a
+# READ that is the wrong bucket, so the filter path reports its own type instead. Anything else is
+# someone else's error and is rethrown untouched.
+#
+# A function rather than a copy of the `catch` body, because it had exactly one copy and that is how
+# #467 happened: `BETWEEN` formats its two operands in a branch of its own, and the arm that was not
+# guarded kept leaking `InvalidValueError` for two releases while every sibling operator converted.
+# One definition means the next operator branch cannot diverge by being written somewhere else.
+#
+# It is not yet the ONLY re-raise on the read path: `_resolve_having_filter_value` (build_query.jl)
+# and the `SQLTypeFunction` transform branches below still format outside any guard and still leak
+# `InvalidValueError`. #576 tracks routing them here; this is the helper they route to.
+#
+# **Call it only from inside a `catch`.** The non-`InvalidValueError` arm is `rethrow(e)`, which is
+# legal in a function only while a handler is dynamically in scope; called anywhere else it raises
+# `"rethrow(exc) not allowed outside a catch block"` and masks the error it was handed. The two
+# call sites below are both `catch` bodies.
+_rethrow_as_filter_error(e, field_name, field_type, values) =
+  e isa InvalidValueError ?
+    throw(FilterError("The \e[4m\e[31m$(field_name)\e[0m field is the type " *
+                      "\e[4m\e[32m$(field_type)\e[0m. Please check the value: " *
+                      "\e[4m\e[31m$(values)\e[0m")) :
+    rethrow(e)
+
 # The single renderer for `IN` / `NOT IN` (#411). Extracted so the WHERE path and the HAVING path
 # cannot drift: `get_filter_query`'s aggregate-alias branch used to build its own
 # `"$(field) $(operator) $(placeholder)"`, which produced `HAVING MAX(x) IN $1` on PostgreSQL and
@@ -1994,9 +2025,19 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       end
 
       if field_name != "" && haskey(instruc.object.model.fields, field_name)
-        formatter = instruc.object.model.fields[field_name].formatter
-        p1 = add_parameter!(instruc, formatter(v.values[1]))
-        p2 = add_parameter!(instruc, formatter(v.values[2]))
+        f_meta = instruc.object.model.fields[field_name]
+        # #467: the two operands are formatted through the SAME re-raise as every other operator.
+        # They used to sit outside the guard, so `"date__@range" => ["x", "y"]` was the one filter
+        # shape that still reported a wrong-typed value as `InvalidValueError`. `field_name` is the
+        # branch's own local, which is why the message can be built here at all: `v.column.field` is
+        # not guaranteed to be a String in this branch.
+        formatted = try
+          (f_meta.formatter(v.values[1]), f_meta.formatter(v.values[2]))
+        catch e
+          _rethrow_as_filter_error(e, field_name, f_meta.type, v.values)
+        end
+        p1 = add_parameter!(instruc, formatted[1])
+        p2 = add_parameter!(instruc, formatted[2])
         return string(column_sql, " ", v.operator, " ", p1, " AND ", p2)
       else
         p1 = add_parameter!(instruc, v.values[1])
@@ -2025,14 +2066,12 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
         # It is a deliberate behavior change, not a no-op: `filter("n" => "abc")` on an IntegerField
         # now raises `FilterError` where it raised `InvalidValueError`. Both are `PormGError`.
         #
-        # `@range`/`@nrange` still escape as `InvalidValueError` because the BETWEEN branch formats
-        # its two operands OUTSIDE this `try`. Left alone deliberately: moving it is a separate change
-        # to a separate branch, and doing it here would widen an already-wide diff.
-        if e isa InvalidValueError
-          throw(FilterError("The \e[4m\e[31m$(v.column.field)\e[0m field is the type \e[4m\e[32m$(instruc.object.model.fields[v.column.field].type)\e[0m. Please check the value: \e[4m\e[31m$(v.values)\e[0m"))
-        end
-        @pormg_debug false
-        rethrow(e)
+        # #467 moved the `BETWEEN`/`NOT BETWEEN` branch onto the same helper, so `@range`/`@nrange`
+        # no longer leak `InvalidValueError`. Both operator branches share one definition — but the
+        # HAVING/alias path and the transform branches still format outside any guard (#576), so
+        # this is not yet the only re-raise on the read path.
+        _rethrow_as_filter_error(e, v.column.field,
+                                 instruc.object.model.fields[v.column.field].type, v.values)
       end
     elseif (_vc_field = memo_field(instruc, memo_key(v.column))) !== nothing # #474
       @pormg_debug false

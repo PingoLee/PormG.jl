@@ -149,10 +149,39 @@ driver = M.Driver.objects.create(
 )
 ```
 
-**Error:**
+**Error** — an `InvalidValueError`. PormG's *validation* errors print their message alone, with no
+type name in front (the database-side types — `IntegrityError`, `OperationalError`,
+`StatementError` — do name themselves):
+
 ```julia
-ERROR: InvalidValueError: Error in insert, the field driverref not allow null
+ERROR: Error in insert, the field driverref not allow null
 ```
+
+A **misspelled** field name is a different mistake and raises a different type: `UnknownFieldError`,
+the same one `filter(...)` raises for the same typo, listing the model's fields so you can see what
+you meant. Note that this check runs **after** the required-field sweep above — so the typo below is
+an *extra* key on an otherwise complete row, and a call that both misspells a field and leaves a
+required one unset reports the missing field first:
+
+```julia
+M.Driver.objects.create(
+    "driverref" => "hamilton",
+    "code" => "HAM",
+    "forename" => "Lewis",
+    "surname" => "Hamilton",
+    "dob" => Date(1985, 1, 7),
+    "nationality" => "British",
+    "url" => "https://en.wikipedia.org/wiki/Lewis_Hamilton",
+    "sirname" => "Hamilton"   # typo — there is no `sirname` column
+)
+```
+
+```julia
+ERROR: the column sirname not found in driver, that contains the fields: code, dob, driverid, driverref, forename, nationality, number, surname, url
+```
+
+Catch `PormGError` for either, or the specific type when you want to tell a typo apart from a value
+the column cannot store.
 
 ### Default Values
 

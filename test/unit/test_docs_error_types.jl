@@ -611,6 +611,28 @@ const DOCERR_CASES = [
         UnknownFieldError,
         () -> DOCERR_RESULT_PG.objects.values("driverid__nope").list(show_query = :dict),
     ),
+    # #462. The same claim on the WRITE path, which #446 left out of its scope deliberately: the
+    # five shapes above are `filter`/`values`/`order_by`, while `create()`/`update()` reported the
+    # identical mistake as `InvalidValueError` — a type whose own docstring scopes it to a bad
+    # *value*. `api.md`'s `UnknownFieldError` row carves out no exception for writes, and
+    # `get_or_create`/`update_or_create` already raised it, so the write path disagreed with itself.
+    #
+    # `points` is supplied in the create case on purpose: `_prepare_row_insert!` refuses a missing
+    # NOT NULL field BEFORE it validates the field names, so omitting it would pin that unrelated
+    # (and correctly typed) `InvalidValueError` instead of the one this case is about.
+    (
+        "errors.md + write/create.md — an unknown field name in create()",
+        UnknownFieldError,
+        () -> DOCERR_RESULT_PG.objects.create("points" => 1, "nope" => 2, show_query = :dict),
+    ),
+    (
+        # Filtered, because an unfiltered `update()` is refused as unsafe before it ever looks at
+        # the field names — that guard is pinned separately.
+        "errors.md — an unknown field name in update()",
+        UnknownFieldError,
+        () -> DOCERR_RESULT_PG.objects.filter("resultid" => 1).
+            update("nope" => 2, show_query = :dict),
+    ),
     (
         "errors.md — an unknown field in order_by()",
         UnknownFieldError,
@@ -756,4 +778,67 @@ end
     @test listed == sort(listed)
     @test length(listed) > 1
     @test "surname" in listed
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The write path's unknown-field message: same funnel as the read path, minus the accessors (#462)
+#
+# The two cases in the table above pin the TYPE. This pins the half that decides whether the error
+# is useful — and the one deliberate difference between the two paths.
+#
+# `create("results" => …)` can never work: a reverse accessor is addressable in a filter/values path
+# but is not a column, so listing the accessors in a WRITE error would advertise a capability that
+# does not exist. `_unknown_field(...; include_accessors = false)` drops that tail and keeps
+# everything else, so the read and write messages stay one funnel rather than two wordings that
+# drift apart.
+#
+# `DocErrCycleModels` rather than the `DOCERR_*` fixtures: `related_objects` is populated by
+# reverse-accessor REGISTRATION, which only `set_models` does. The hand-built models above have an
+# empty map, so asserting "no accessors listed" against one would pass no matter what this keyword
+# did — the assertion needs a model that has accessors to omit.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the write path's unknown-field message omits reverse accessors (#462)" begin
+    model = DocErrCycleModels.Docerr_cycle_a
+    accessors = collect(keys(model.related_objects))
+    # Guard the fixture, not the contract: with no accessor to omit the two assertions below are
+    # vacuous, so fail on the fixture instead of passing silently.
+    @test !isempty(accessors)
+
+    write_err = try
+        model.objects.create("code" => "x", "nope" => 2, show_query = :dict)
+        nothing
+    catch e
+        e
+    end
+    @test write_err isa UnknownFieldError
+
+    # Strip ANSI before parsing structure: `_emsg` keeps the escapes under `--color=yes`, which is
+    # the local-passes/CI-fails split this file has hit before.
+    write_msg = replace(sprint(showerror, write_err), r"\e\[[0-9;]*m" => "")
+    @test occursin("nope", write_msg)
+    @test occursin(PormG.model_table_name(model), write_msg)
+    # Sorted, same property the read-path testset above asserts — the funnel is shared, so this
+    # would only diverge if the write path stopped using it.
+    listed = [strip(x) for x in split(match(r"fields: ([^;]+)", write_msg).captures[1], ",")]
+    @test listed == sort(listed)
+    @test "code" in listed
+    # The difference: no accessor tail.
+    @test !occursin("reverse accessors", write_msg)
+    for a in accessors
+        @test !occursin(a, write_msg)
+    end
+
+    # The control. The SAME model, the SAME unknown name, read instead of written — the accessors
+    # are listed there, which is what makes the omission above a deliberate choice rather than an
+    # empty map.
+    read_err = try
+        model.objects.filter("nope" => 2).list(show_query = :dict)
+        nothing
+    catch e
+        e
+    end
+    @test read_err isa UnknownFieldError
+    read_msg = replace(sprint(showerror, read_err), r"\e\[[0-9;]*m" => "")
+    @test occursin("reverse accessors", read_msg)
+    @test all(a -> occursin(a, read_msg), accessors)
 end

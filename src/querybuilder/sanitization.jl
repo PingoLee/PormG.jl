@@ -100,7 +100,9 @@ Checks:
 3. Max length for CharFields.
 4. Max digits for Decimal/Numeric fields.
 
-Returns `true` if valid, throws an `InvalidValueError` otherwise (#231; was `ErrorException`).
+Returns `true` if valid. An unknown field **name** throws an `UnknownFieldError` (#462); every
+other rejection — a bad **value**, a protected primary key, a many-to-many relation — throws an
+`InvalidValueError` (#231; was `ErrorException`).
 SQL expressions (SQLTypeF, SQLTypeFunction) skip data validation as they are evaluated by the DB.
 """
 function _validation_error(operation::String, model::PormGModel, field::String, message::String; suggestion::Union{Nothing, String}=nothing)
@@ -412,8 +414,15 @@ function validate_field_data(model::PormGModel, field::String, value::Any, opera
     end
 
     # 1. Field existence
+    #
+    # #462: an unknown field NAME is not a bad value, so it does not go through
+    # `_validation_error`'s `InvalidValueError` — it raises `UnknownFieldError`, which is what
+    # `docs/src/api.md` promises and what every other unknown-name site in `src/` already does,
+    # `get_or_create`/`update_or_create` (object_manager.jl) and the bulk writers included. Same
+    # funnel as the read path (`_unknown_field`), so a typo in `create()` reads exactly like a typo
+    # in `filter()` — minus the reverse accessors, which are not writable columns.
     if !(field in model.field_names)
-        _validation_error(operation, model, field, "field does not exist in the model schema")
+        throw(_unknown_field(model, field; include_accessors = false))
     end
     
     f_meta = model.fields[field]

@@ -107,4 +107,54 @@ _vri_lap()  = M.Lap_times.objects.filter("raceid" => 1, "driverid" => 1, "lap" =
   @testset "transform ladder parity (#562)" begin
     vr_run_ladder_parity(_vri_race, "start_at", _VRI_RACE_START, _VRI_ENGINE)
   end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # #564 sibling 4: a JOINED temporal alias. The widest behaviour change in the fix and the one the
+  # shared case table cannot reach — every case there projects a column of the query's OWN model.
+  #
+  # The gate this removes dropped every alias whose path contained `__`, so `values("d" =>
+  # "raceid__date")` came back as text on SQLite while the identical column read directly came back
+  # as a `Date`. It is also the shape that catches an implementation typing the projection BEFORE it
+  # renders: a dotted path's kind is resolvable only after the join has been resolved.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "a joined temporal alias reads back typed (#564)" begin
+    q = M.Result.objects
+    q.filter("raceid" => 1)
+    q.values("d" => "raceid__date", "ts" => "raceid__start_at")
+    row = q.list(:dict)[1]
+    @test row[:d] isa Date
+    @test row[:d] == _VRI_RACE_DATE
+    # The joined TIMESTAMP too — same gate, and the kind has to survive the join resolution.
+    @test row[:ts] isa Union{DateTime, TimeZones.ZonedDateTime}
+    # The direct and the joined spelling of ONE column must now agree in type. That equality is the
+    # whole point: before, which spelling you used decided what Julia type you got back.
+    direct = M.Race.objects
+    direct.filter("raceid" => 1)
+    direct.values("d" => F("date"))
+    @test typeof(direct.list(:dict)[1][:d]) == typeof(row[:d])
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # The coerced values must still be values the WRITE path accepts. A parser that produced something
+  # the matching formatter rejects would turn every read-modify-write into a runtime error, and no
+  # assertion about types alone would catch it.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "a coerced value round-trips back through the write path (#564)" begin
+    label = "vr564_roundtrip"
+    cleanup = M.Django_contract_scratch.objects
+    cleanup.filter("label" => label)
+    cleanup.exists() && cleanup.delete()
+    try
+      M.Django_contract_scratch.objects.create("label" => label, "event_time" => VR_INSTANT)
+      read_back = M.Django_contract_scratch.objects.filter("label" => label).
+                    values("event_time").list(:dict)[1][:event_time]
+      # Write the value we just read straight back, unmodified, and read it again.
+      M.Django_contract_scratch.objects.filter("label" => label).update("event_time" => read_back)
+      again = M.Django_contract_scratch.objects.filter("label" => label).
+                values("event_time").list(:dict)[1][:event_time]
+      @test vr_observed_text(:timestamp, again) == vr_observed_text(:timestamp, read_back)
+    finally
+      M.Django_contract_scratch.objects.filter("label" => label).delete()
+    end
+  end
 end

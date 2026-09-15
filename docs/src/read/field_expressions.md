@@ -291,8 +291,8 @@ F("created_at") + Interval("01:30:00")    # + 1 hour 30 minutes
 
 !!! warning "Sub-day math on `DATE` columns"
     Adding a sub-day duration (`Hour`, `Minute`, `Second`) promotes the result to a timestamp, so
-    **comparisons** against it work on both engines (see the note above) — though a projected
-    expression alias comes back as a `String` on SQLite and as a typed timestamp on PostgreSQL.
+    **comparisons** against it work on both engines (see the note above), and a projected expression
+    alias reads back as a typed timestamp on both.
     **Writing** it into a `DATE` column is not well defined, and the two engines fail differently:
     PostgreSQL coerces to `date` and drops the time, while on SQLite a `DATE` column has NUMERIC
     affinity, which leaves a non-numeric string untouched — so the whole timestamp string is stored

@@ -311,6 +311,9 @@ function query(q::SQLObjectHandler;
 
   # Store the final parameters object with all CTEs + main query parameters
   q.object.parameters = instruction.parameters
+  # #564 — and what each result column IS, for the read path. Written back beside `parameters` for
+  # the same reason: both are per-build artifacts the caller needs after the build has finished.
+  q.object.projection_kinds = instruction.projection_kinds
 
   if show_query !== :execute
     return _show_query_result(show_query, resposta, instruction.connection, q.object.model.name, :select;
@@ -1293,10 +1296,25 @@ end
 # the date renderer is refused by the soft validation in `_render_date_period_arithmetic`, and it must
 # keep being refused there rather than silently acquiring a wrapper here.
 function _operand_column_kind(field_name, instruc::SQLInstruction)::TemporalKind
+  kind = _projection_column_kind(field_name, instruc)
+  return (kind isa CDate || kind isa CDateTime) ? kind : nothing
+end
+
+# The same lookup, UNNARROWED — the kind a column's values are stored as, whatever it is.
+#
+# Two functions rather than one because they answer two different questions, and conflating them
+# changes behaviour in both directions. ARITHMETIC must see only DATE and TIMESTAMP: a `TimeField`
+# or a `DurationField` is a temporal REPRESENTATION but never the left of `± duration`, and
+# `_render_date_period_arithmetic`'s soft validation refuses one — widening `_operand_column_kind`
+# would let `F(t) + 7` render `date(t, '+7 days')` instead of throwing. A PROJECTION must see all
+# four: a `TimeField` column read back as a `String` on SQLite while PostgreSQL delivered a `Time`
+# is precisely the defect this closes.
+#
+# One lookup, two policies, each named for its job — not two implementations of one rule.
+function _projection_column_kind(field_name, instruc::SQLInstruction)::TemporalKind
   f = _operand_column_field(field_name, instruc)
   f === nothing && return nothing
-  kind = field_canonical_kind(f)
-  return (kind isa CDate || kind isa CDateTime) ? kind : nothing
+  return field_canonical_kind(f)
 end
 
 # #536 — the operators whose right-hand literal is bound through the rooted column's formatter.
@@ -1347,6 +1365,10 @@ const _COMPARISON_OPERATIONS = ("=", "!=", ">", "<", ">=", "<=")
 function _format_date_operand(operand::Union{Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime}, field_name, instruc::SQLInstruction;
                               left_kind::TemporalKind = nothing)
   kind = left_kind === nothing ? _operand_column_kind(field_name, instruc) : left_kind
+  # Only a DATE/TIMESTAMP left decides a date literal's representation. A `TimeField` left reaching
+  # here means the caller compared a date against a time column, where the column has nothing useful
+  # to say — the operand's own type decides, as it did before the render carried a kind.
+  kind isa Union{CDate,CDateTime} || (kind = nothing)
   formatter = kind === nothing ? nothing : value_formatter(kind, instruc.connection)
   # No column to ask (a nested expression rooted in a function, an unresolvable path): the operand's
   # own type decides. Still a formatted string, never a raw bind.
@@ -1444,7 +1466,7 @@ _shift_result_kind(kind::CanonicalType, comps) = kind
 function _render_left_typed(value::Any, operation::String, instruc::SQLInstruction)::Tuple{String,TemporalKind}
   value isa FExpression && return _set_update_query_typed(value, instruc)
   sql = _set_update_query_left(value, operation, instruc)
-  return sql, _operand_column_kind(value, instruc)
+  return sql, _projection_column_kind(value, instruc)
 end
 
 # #564/#568 — THE ONE TEMPORAL RENDERER. It takes an ALREADY-RENDERED left side and the kind that
@@ -1680,8 +1702,11 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
     # Resolve the field using existing logic for joins and modifiers
     if v.field_name isa String
       # Render before typing: resolving the path is what populates the memo the kind lookup reads.
+      # The column's TRUE kind, not the arithmetic-narrowed one: a bare `F(col)` projection over a
+      # `TimeField` or a `DurationField` has a representation the read path must undo. Each CONSUMER
+      # states which kinds it can act on, rather than the producer pre-narrowing for all of them.
       sql = _get_filter_query(v.field_name, instruc)
-      return sql, _operand_column_kind(v.field_name, instruc)
+      return sql, _projection_column_kind(v.field_name, instruc)
     elseif v.field_name isa Integer
       # A bare integer is a value, not a column — no representation to carry.
       return add_parameter!(instruc, v.field_name; sql_type=_infer_parameter_sql_type(v.field_name, instruc)), nothing
@@ -1750,7 +1775,10 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
     # become `Day(true)` rather than staying the arithmetic the user wrote. `Dates.Day(n)` is exact —
     # a bare integer on a date column has meant whole days since #25 — and `_decompose_period` folds
     # `Day(0)` to an empty list, so `F(c) + 0` short-circuits to the identity and binds nothing.
-    if left_kind !== nothing && v.operation in ("+", "-") &&
+    # `CDate`/`CDateTime` explicitly, because the left's kind is now the column's TRUE one: a
+    # `TimeField` or a `DurationField` is a temporal representation but never the left of a day
+    # shift, and must keep falling through to ordinary arithmetic exactly as it did before #568.
+    if left_kind isa Union{CDate,CDateTime} && v.operation in ("+", "-") &&
        v.operand isa Integer && !(v.operand isa Bool)
       comps = _decompose_period(Dates.Day(v.operand))
       kind  = _shift_result_kind(left_kind, comps)   # whole days never promote; stated, not assumed
@@ -2101,7 +2129,14 @@ query.order_by("-laps")
 df = query |> DataFrame
 ```
 """
-function query_list(objct::SQLObjectHandler; show_query::Symbol = :execute)
+# #564 — the shared body of `query_list`, returning the BUILT handler alongside the result.
+#
+# `query()` writes its per-build artifacts — `parameters`, and now `projection_kinds` — onto the copy
+# it was handed, and that copy is local to this function. `query_list` therefore had no way to hand
+# the kind map to `_list_raw`, which holds the ORIGINAL handler: the map went out of scope the
+# moment the result came back. Splitting the body is what closes that, and it changes nothing about
+# `query_list` itself, whose signature and behaviour are untouched.
+function _execute_select(objct::SQLObjectHandler)
   # Resolve settings
   settings, connection, conn_key = get_settings(objct)
 
@@ -2112,11 +2147,17 @@ function query_list(objct::SQLObjectHandler; show_query::Symbol = :execute)
   # deepcopy(SQLObjectQuery) now clones CTE state independently (see _copy_ctes),
   # so the copy is fully isolated. Mirrors _count/_exists/get, which already copy.
   q = deepcopy(objct)
-  sql = query(q, connection=connection, show_query=show_query)
+  sql = query(q, connection=connection, show_query=:execute)
+  return fetch(settings, sql, q.object.parameters), q, connection
+end
+
+function query_list(objct::SQLObjectHandler; show_query::Symbol = :execute)
   if show_query !== :execute
-     return sql
+    settings, connection, conn_key = get_settings(objct)
+    q = deepcopy(objct)
+    return query(q, connection=connection, show_query=show_query)
   end
-  return fetch(settings, sql, q.object.parameters)
+  return first(_execute_select(objct))
 end
 
 """
@@ -2143,66 +2184,48 @@ function DataFrames.DataFrame(objct::SQLObjectHandler)
 end
 
 
-"""
-    _sqlite_datetime_aliases(objct::SQLObjectHandler) → Set{Symbol}
-
-Return the set of result-row column keys that map to a `DateTimeField` on the primary
-model.  Only direct (non-joined) field projections are resolved; joined columns
-(containing `__`) are skipped so no cross-model traversal is needed.
-
-Used on the SQLite backend to normalise string datetime values in `list()` results into
-proper Julia temporal types, giving the same contract as the PostgreSQL backend.
-"""
-function _sqlite_datetime_aliases(objct::SQLObjectHandler)::Set{Symbol}
-    model = objct.object.model
-    col_set = Set{Symbol}()
-
-    if isempty(objct.object.values)
-        # No .values() projection — all direct model fields appear in the result
-        for (fname, fmeta) in model.fields
-            fmeta isa Models.sDateTimeField && push!(col_set, Symbol(fname))
-        end
-    else
-        for v in objct.object.values
-            v isa SQLTypeField || continue
-            # The effective alias is how the column appears in the result dict
-            effective_alias = v.custom_as !== nothing ? v.custom_as : (v._as !== nothing ? v._as : (v.field isa String ? v.field : nothing))
-            effective_alias === nothing && continue
-            # The field reference must be a plain string to look up in model.fields.
-            # Expressions or function objects are skipped.
-            field_ref = v.field isa String ? v.field : nothing
-            field_ref === nothing && continue
-            # Skip joined columns — their source model is not tracked here
-            occursin("__", field_ref) && continue
-            if haskey(model.fields, field_ref) && model.fields[field_ref] isa Models.sDateTimeField
-                push!(col_set, Symbol(effective_alias))
-            end
-        end
-    end
-    return col_set
-end
-
 function _list_raw(objct::SQLObjectHandler)
-  result = query_list(objct)
-  rows = Tables.rowtable(result) |> collect |> x -> [Dict(Symbol(k) => v for (k, v) in pairs(row)) for row in x]
-  # A backend whose stored form is text (SQLite) hands every temporal column back as a raw `String`.
-  # Which parser undoes that is the THIRD slot of the value-representation table (#564,
-  # `src/value_repr.jl`) — the inverse of the field formatter that wrote the text — so this asks for
-  # it rather than naming a parser itself. `value_parser` answers `nothing` for a backend that
-  # already delivers a typed value, which is why there is no `connection isa PormGSQLite` test here.
-  _, connection, _ = get_settings(objct)
-  # The alias SET is still "a plain `DateTimeField` column on the primary model", so every member's
-  # kind is `CDateTime` by construction. Widening it to the kind an EXPRESSION evaluates to is the
-  # rest of #564 and lands in its own commit. Asked FIRST, so a backend that needs no parsing (a
-  # `nothing` answer — PostgreSQL, where the driver delivers typed values) skips the alias walk
-  # entirely, exactly as the `connection isa PormGSQLite` test it replaces did.
-  parse = value_parser(CDateTime(true), connection)
-  if parse !== nothing
-    dt_cols = _sqlite_datetime_aliases(objct)
-    if !isempty(dt_cols)
-      rows = [Dict(k => (k in dt_cols && v isa AbstractString ? parse(v) : v)
-                   for (k, v) in row) for row in rows]
-    end
+  result, built, connection = _execute_select(objct)
+
+  # `Dict{Symbol,Any}` EXPLICITLY, and it is an ENABLING change rather than a style choice. The
+  # un-annotated comprehension this replaces NARROWS: a projection whose columns are all TEXT infers
+  # `Dict{Symbol,String}`, and `setindex!`ing a `ZonedDateTime` into one throws. That narrowing is
+  # the entire reason the old code rebuilt every `Dict` from scratch to coerce a single column.
+  # Annotating it is what makes in-place coercion possible — and it makes `list(:dict)` finally
+  # return what its own docstring promises.
+  rows = [Dict{Symbol,Any}(Symbol(k) => v for (k, v) in pairs(row)) for row in Tables.rowtable(result)]
+
+  # #564 — COERCE BY WHAT EACH PROJECTION EVALUATES TO, not by whether its alias happens to name a
+  # plain column.
+  #
+  # What this replaces (`_sqlite_datetime_aliases`) had four gates, ALL of which had to pass: the
+  # projection had to be an `SQLTypeField`, its `.field` had to be a plain `String`, that string had
+  # to contain no `__`, and the field had to be an `sDateTimeField`. So the coercion set was exactly
+  # "bare, unjoined, primary-model `DateTimeField` columns" — every expression alias, every joined
+  # column, and every `DateField`/`TimeField`/`DurationField` fell outside it and came back as raw
+  # text, while PostgreSQL's driver delivered typed values for all of them.
+  #
+  # The build now records the canonical kind of each projection (`projection_kinds`), and the
+  # representation table says which parser undoes that kind on this backend. Django resolves its own
+  # read coercion the same way — off `expression.output_field`, never off the alias's spelling.
+  #
+  # The `connection isa PormGSQLite` test is GONE from this site: the backend dimension belongs to
+  # the table, so a third backend becomes table entries rather than a branch here. On PostgreSQL
+  # every `value_parser` answers `nothing`, the loop below builds nothing, and this returns after one
+  # dispatch per projection.
+  parsers = nothing
+  for (name, kind) in built.object.projection_kinds
+    parser = value_parser(kind, connection)
+    parser === nothing && continue
+    parsers === nothing && (parsers = Dict{Symbol,Function}())
+    parsers[name] = parser
+  end
+  parsers === nothing && return rows
+
+  for row in rows, (name, parser) in parsers
+    # A key the row does not carry is skipped rather than added: the wildcard recorder registers
+    # both a field's name and its `db_column`, and only one of them is in any given result.
+    haskey(row, name) && (row[name] = parser(row[name]))
   end
   return rows
 end

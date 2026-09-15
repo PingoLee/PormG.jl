@@ -104,6 +104,13 @@ const PormGtransform = Dict{String,Union{Int64, String}}(
   "yyyy_mm" => "Y_M",
   "quarter" => "QUARTER",
   "quadrimester" => "QUADRIMESTER",
+  # #579: the year-qualified LABEL forms. `@quarter` used to render `CONCAT(year, '-Q', CASE …)`,
+  # so it denoted the string `'1985-Q1'` rather than the number every doc table promised — which is
+  # why `filter("date__@quarter" => 1)` could never match. `@quarter` / `@quadrimester` now extract
+  # the period number, as Django's `ExtractQuarter` lookup does, and the label moves here under
+  # names shaped like the `@yyyy_mm` bucket it belongs beside.
+  "yyyy_q" => "Y_Q",
+  "yyyy_quad" => "Y_QUAD",
 )
 
 # dictionary from function to type of the field

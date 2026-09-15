@@ -191,6 +191,9 @@ PormG uses `__@` suffixes for lookup operators and field transforms:
 | `field__@month` | Extract month from date | `"dob__@month" => 3` |
 | `field__@day` | Extract day from date | `"dob__@day" => 21` |
 | `field__@quarter` | Extract quarter (1-4) | `"date__@quarter" => 1` |
+| `field__@quadrimester` | Extract quadrimester (1-3) | `"date__@quadrimester" => 2` |
+| `field__@yyyy_q` | Year-qualified quarter label (`values()` only) | `"q" => "date__@yyyy_q"` |
+| `field__@yyyy_quad` | Year-qualified quadrimester label (`values()` only) | `"q" => "date__@yyyy_quad"` |
 | `field__@date` | Extract date from datetime | `"created_at__@date" => Date(2025, 1, 1)` |
 
 For the full list of operators and transforms, see [Filters and Aggregates](read/filters_and_aggregates.md).

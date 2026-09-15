@@ -164,9 +164,11 @@ _check_function(x::OuterRefObject) = x
 # kwargs and retagging it would corrupt the rendered function.
 #
 # #481 widened the walk. A COMPOSITE transform does not build a bare function over the column: the
-# `@quarter` / `@quadrimester` keys expand to `Concat([Cast(Year(x)), Value("-Q"), Case([When(...)])])`
+# `@yyyy_q` / `@yyyy_quad` keys expand to `Concat([Cast(Year(x)), Value("-Q"), Case([When(...)])])`
 # (`functions.jl`), so the walk also meets an `SQLText` literal, an `SQLField` wrapper and the
-# `OperObject` inside each `When`. Without these three arms `CTE("ev","seen__@quarter")` — and the
+# `OperObject` inside each `When`. (#579 moved that expansion off `@quarter` / `@quadrimester`, which
+# now extract the period number through one dialect function and reach none of these arms.)
+# Without these three arms `CTE("ev","seen__@yyyy_q")` — and the
 # `Joined` twin below — died on the catch-all with an "Internal … please report" message for a
 # documented transform. An `SQLText` is a LITERAL (the `"-Q"` separator) and must never be retagged,
 # which is the same boundary the `kwargs` rule above draws.
@@ -1973,8 +1975,9 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       _format_filter_value(getfield(Models, PormGTypeField[v.column.function_name]), v.values, v.operator))
   elseif isa(v.column, SQLTypeFunction)
     # #537 — a function column none of the branches above can bind. `OP(::SQLTypeFunction, …)` is a
-    # constructor arm PormG itself relies on — `When(OP(MONTH(x), "<=", N))` builds QUADRIMESTER /
-    # QUARTER (functions.jl) — but only the `PormGTypeField` functions (EXTRACT, TO_CHAR, COUNT)
+    # constructor arm PormG itself relies on — `When(OP(MONTH(x), "<=", N))` builds `Y_Q` / `Y_QUAD`,
+    # the `@yyyy_q` / `@yyyy_quad` labels (functions.jl; #579 moved that expansion off `@quarter` /
+    # `@quadrimester`) — but only the `PormGTypeField` functions (EXTRACT, TO_CHAR, COUNT)
     # have a formatter this path can name. Every other function fell through to the `else` ladder
     # below and died reading `.field` off a node that has no such slot: a raw `FieldError`, outside
     # the #231 taxonomy. Refused HERE, ahead of any `.field` read, naming the two spellings that do

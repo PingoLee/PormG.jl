@@ -94,7 +94,8 @@ include("querybuilder/ctes.jl")
 #
 # `OP` is intentionally internal (#202): not exported and not documented. The string-lookup
 # form `"field__@op" => value` is the public way to build operator predicates; `OP` is a
-# low-level builder used inside the date-bucketing helpers (QUADRIMESTER/QUARTER). Reach it
+# low-level builder used inside the date-bucketing helpers (`Y_Q`/`Y_QUAD`, the `@yyyy_q` and
+# `@yyyy_quad` labels). Reach it
 # as `PormG.QueryBuilder.OP` if ever needed — it stays defined, just off the public surface.
 export Q, Qor
 export Sum, Avg, Count, Max, Min, When, F, Exists, OuterRef, Subquery, CTE, Joined, Case, Cast, Concat, Extract, ToChar, Value, Interval

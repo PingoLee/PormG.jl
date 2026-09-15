@@ -4,8 +4,9 @@
 `OP` has four methods (`types.jl`); the two `SQLTypeFunction` arms build an `OperObject` whose
 `column` is an `FObject` or a `WindowFunction`. Rendering served exactly the functions whose
 formatter it could name — `EXTRACT`, `TO_CHAR`, `COUNT`, the `PormGTypeField` set — and PormG's own
-`QUADRIMESTER` / `QUARTER` transforms depend on that (`When(OP(MONTH(x), "<=", N))`, `functions.jl`),
-which is why the arms cannot be deleted. Every OTHER function fell to the `else` ladder of
+`Y_Q` / `Y_QUAD` label transforms depend on that (`When(OP(MONTH(x), "<=", N))`, `functions.jl`),
+which is why the arms cannot be deleted. (#579 moved that expansion off `@quarter`/`@quadrimester`,
+which now extract the period number through one dialect function, onto the label keys.) Every OTHER function fell to the `else` ladder of
 `_get_filter_query(::SQLTypeOper)` and died reading `.field` off a node that has no such slot: a raw
 `FieldError` outside the #231 taxonomy. And an AGGREGATE column that happened to be served
 (`OP(Count("id"), ">", 3)`) rendered `WHERE COUNT(...)`, which is invalid SQL, and failed at the
@@ -175,8 +176,10 @@ end
     @test 4 in _opf_params(q1; conn = conn)
 
     # The composite transform PormG itself builds over `OP(MONTH(x), "<=", N)` (functions.jl).
+    # `@yyyy_quad`, not `@quadrimester`: #579 moved the `Concat`/`Case` expansion to the label key,
+    # and the number key no longer reaches `OP` at all.
     q2 = OPF.Opf_row.objects
-    q2.values("note", "seen__@quadrimester")
+    q2.values("note", "seen__@yyyy_quad")
     sql2 = _opf_sql(q2; conn = conn)
     @test occursin("CASE", sql2)
     @test all(n in _opf_params(q2; conn = conn) for n in (4, 8, 12))

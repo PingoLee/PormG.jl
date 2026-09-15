@@ -19,6 +19,52 @@ PormG provides date-related modifiers through the `__@` suffix system. These wor
 | `@quadrimester` | Extract quadrimester (1-3) | `"date__@quadrimester"` | `"date__@quadrimester" => 2` |
 | `@date` | Extract date from datetime | `"created_at__@date"` | `"created_at__@date" => Date(2023,1,1)` |
 | `@yyyy_mm` | Year-month as string | `"date__@yyyy_mm"` | `"date__@yyyy_mm" => "1991-10"` |
+| `@yyyy_q` | Year-quarter as string | `"date__@yyyy_q"` | — *(projection-only, see below)* |
+| `@yyyy_quad` | Year-quadrimester as string | `"date__@yyyy_quad"` | — *(projection-only, see below)* |
+
+### Period number or period label?
+
+`@quarter` and `@quadrimester` extract a **number** — `1`–`4` and `1`–`3` — so they answer "which
+quarter", independently of the year. That is what makes `filter("date__@quarter" => 1)` select Q1 of
+every season. It is the same shape as Django's `__quarter` lookup and SQL's
+`EXTRACT(QUARTER FROM …)`.
+
+`@yyyy_q` and `@yyyy_quad` build the **year-qualified label** (`"1991-Q1"`), the form you want as a
+`values()` grouping key when each year's periods must not be merged. They sit beside `@yyyy_mm`,
+which works the same way for months.
+
+Both number transforms validate the comparison value: a quarter outside `1`–`4`, or a value that is
+not a number at all, raises `InvalidValueError` instead of building SQL that silently matches
+nothing.
+
+!!! warning "The label transforms are projection-only today"
+    `@yyyy_q` and `@yyyy_quad` work in `values()`, and in `order_by()` **on a projected alias**. They
+    cannot be used as a `filter()` key, and `order_by("date__@yyyy_q")` — the unprojected spelling —
+    returns silently wrong rows on SQLite. Both come from the same place: the label expands to a
+    `CONCAT`/`CASE` that binds parameters, and neither the predicate path nor the ORDER BY path
+    places those parameters correctly.
+
+    As a filter key the expansion is rendered twice while the text keeps one copy. On SQLite the
+    statement then binds more values than it has placeholders and the driver refuses it
+    (`values should be provided for all query placeholders`). On PostgreSQL the counts agree —
+    placeholders are numbered as they are rendered — but the discarded copy consumes a block of
+    numbers that appear nowhere in the text, so the query carries a gap in its `$n` sequence and the
+    server refuses it too.
+
+    Filter on the period number instead (`"date__@quarter" => 1`), and order by the alias:
+
+    ```julia
+    query.values("q" => "date__@yyyy_q")
+    query.order_by("q")          # ✓ — orders on the projected alias
+    ```
+
+    The number transforms are unaffected in every position: they render one function call and bind
+    nothing.
+
+!!! note "`@yyyy_quad` spells its separator `-Q` too"
+    `"1991-Q1"` from `@yyyy_quad` means the first *quadrimester*, not the first quarter — the two
+    labels are indistinguishable from the value alone. Alias them explicitly
+    (`"quad" => "date__@yyyy_quad"`) when both appear in one projection.
 
 ---
 
@@ -164,7 +210,8 @@ numeric string. A value no single date can express (a fraction, a year outside t
     rendering: a `DateTimeField`, because `to_char` on a timestamp renders in the session time zone
     and the range boundaries would shift around midnight; and the `@month`/`@day`/`@quarter`/
     `@quadrimester` buckets, which repeat every year rather than covering one contiguous range over
-    the column.
+    the column. The year-qualified `@yyyy_q` / `@yyyy_quad` labels do cover a contiguous range but
+    are not rewritten either — only `@yyyy_mm`, `@date` and `@year` are.
 
     For every value the bucket can express, the rewrite selects the same rows as before — only the
     query plan changes. The one behavioural difference is at the edges: because the comparison is

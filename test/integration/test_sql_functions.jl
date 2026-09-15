@@ -207,20 +207,59 @@ end
 end
 
 @testset "Special Date Functions (Quarter/Quadrimester)" begin
-    # Logic: Test the high-level QUARTER and QUADRIMESTER functions.
-    # Why: These are complex functions that use Case, When, and Concat internally.
+    # Logic: Test the period transforms in both of their shapes.
+    # Why: #579 split one name into two meanings. `@quarter` / `@quadrimester` extract the period
+    # NUMBER (1-4, 1-3) through a single per-engine dialect function; `@yyyy_q` / `@yyyy_quad`
+    # carry the year-qualified label, which is the complex Case/When/Concat expansion both names
+    # used to render. Both shapes are pinned here because the split is exactly the kind of change a
+    # projection-only test cannot see — the old label form rendered fine and could never be
+    # filtered on.
     q = M.Driver.objects
     q.values(
         "driverid",
-        "q_func"    => "dob__@quarter",
-        "quad_func" => "dob__@quadrimester"
+        "q_num"     => "dob__@quarter",
+        "quad_num"  => "dob__@quadrimester",
+        "q_label"   => "dob__@yyyy_q",
+        "quad_label"=> "dob__@yyyy_quad"
     )
     q.filter("surname" => "Hamilton")
     df = q |> DataFrame
-    
-    # Hamilton born 1985-01-07 -> Q1, Quad 1
-    @test df[1, :q_func] == "1985-Q1"
-    @test df[1, :quad_func] == "1985-Q1" # QUADRIMESTER also uses -Q in its current implementation
+
+    # Hamilton born 1985-01-07 -> quarter 1, quadrimester 1.
+    @test df[1, :q_num] == 1
+    @test df[1, :quad_num] == 1
+    @test df[1, :q_label] == "1985-Q1"
+    @test df[1, :quad_label] == "1985-Q1" # `@yyyy_quad` also uses -Q; the labels are ambiguous alone
+
+    # A driver born in April separates the two, which the January case cannot: month 4 is quarter 2
+    # but quadrimester 1. Without a row like this the two transforms are indistinguishable and a
+    # renderer that answered `@quadrimester` for both would pass.
+    q2 = M.Driver.objects
+    q2.values("driverid", "q_num" => "dob__@quarter", "quad_num" => "dob__@quadrimester",
+              "q_label" => "dob__@yyyy_q", "quad_label" => "dob__@yyyy_quad")
+    q2.filter("dob__@month" => 4)
+    df2 = q2 |> DataFrame
+    @test nrow(df2) > 0
+    @test all(df2.q_num .== 2)
+    @test all(df2.quad_num .== 1)
+    @test all(endswith.(df2.q_label, "-Q2"))
+    @test all(endswith.(df2.quad_label, "-Q1"))
+
+    # #579: the documented filter spelling. It rendered valid SQL, bound the parameter, and
+    # returned NOTHING — the label expression could never equal an integer. Asserted against an
+    # independently computed count so "it returns rows now" cannot pass with the wrong rows.
+    q3 = M.Driver.objects
+    q3.filter("dob__@quarter" => 1)
+    q3.values("driverid")
+    n_filtered = nrow(q3 |> DataFrame)
+    all_dob = (M.Driver.objects.values("dob") |> DataFrame).dob
+    n_expected = count(x -> !ismissing(x) && Dates.month(Dates.Date(string(x)[1:10])) <= 3, all_dob)
+    @test n_filtered == n_expected
+    @test n_filtered > 0
+
+    # …and a value no quarter can express is refused rather than matching nothing.
+    @test_throws PormG.InvalidValueError M.Driver.objects.filter("dob__@quarter" => 7).values("driverid").list()
+    @test_throws PormG.InvalidValueError M.Driver.objects.filter("dob__@quarter" => "abc").values("driverid").list()
 end
 
 @testset "Date Functions & Modifiers" begin
@@ -244,8 +283,9 @@ end
     @test df[1, :birth_month] == 1
     @test df[1, :birth_day] == 7
 
-    # Test complex date modifiers (Quarter)
-    q_complex = M.Driver.objects.values("driverid", "q" => "dob__@quarter")
+    # Test complex date modifiers (the year-qualified quarter LABEL, which is the Case/When/Concat
+    # expansion — `@quarter` itself is the plain period number since #579).
+    q_complex = M.Driver.objects.values("driverid", "q" => "dob__@yyyy_q")
     q_complex.filter("surname" => "Hamilton")
     df_complex = q_complex |> DataFrame
     @test df_complex[1, :q] == "1985-Q1"

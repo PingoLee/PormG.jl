@@ -398,15 +398,23 @@ end
 # marks below are kept as an empty record on purpose — the loop is the guard, and an entry added
 # here would be a measurement, not a waiver.
 #
-# The oracle is stated only where a transform denotes a value this table can name; `quarter`
-# and `quadrimester` are parity-only because what they denote is a design question #579 answers,
-# not this test.
+# Every transform now denotes something this table can name. `quarter` and `quadrimester` were
+# parity-only while one spelling yielded `'YYYY-Qn'` text and the other an integer — #579 settled
+# that: the plain names extract the period number, and the label moved to `@yyyy_q` / `@yyyy_quad`.
 const VR_LADDER_ORACLE = Dict{String,Function}(
   "date"    => v -> Date(_vr_utc_naive(v)),
   "year"    => v -> year(_vr_utc_naive(v)),
   "month"   => v -> month(_vr_utc_naive(v)),
   "day"     => v -> day(_vr_utc_naive(v)),
   "yyyy_mm" => v -> Dates.format(_vr_utc_naive(v), "yyyy-mm"),
+  # #579: the period NUMBER, not the label. Quarters are 3 months, quadrimesters 4 — the same
+  # arithmetic the dialect renders, restated from the calendar rather than from the SQL.
+  "quarter"      => v -> cld(month(_vr_utc_naive(v)), 3),
+  "quadrimester" => v -> cld(month(_vr_utc_naive(v)), 4),
+  # …and the year-qualified labels those two used to be. Both spell the separator `-Q`; that
+  # collision predates #579, which moved the expansion without touching it.
+  "yyyy_q"    => v -> string(year(_vr_utc_naive(v)), "-Q", cld(month(_vr_utc_naive(v)), 3)),
+  "yyyy_quad" => v -> string(year(_vr_utc_naive(v)), "-Q", cld(month(_vr_utc_naive(v)), 4)),
 )
 
 # Per engine: which transforms DISAGREE between the two spellings (parity), and for which the `F`

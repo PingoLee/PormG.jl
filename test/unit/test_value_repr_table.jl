@@ -174,6 +174,13 @@ const _VRT_KINDS = [
   # `Dialect` is the only module allowed to NAME the mask: it owns the constant and the one function
   # that emits it. Comment lines are excluded, so the deletion note left behind at the old site (and
   # this block) do not trip it — the rule is about emitted code, not about discussing it.
+  #
+  # KNOWN LIMIT, stated rather than papered over: this bans the constant's NAME, so someone who
+  # re-spelled the mask as a literal (`"strftime('%Y-%m-%dT%H:%M:%f+00:00'"`) would slip past it. That
+  # is a mechanical guard against the sniff being *reinstated*, not a proof that no text sniff can
+  # exist. The reason it is enough: the sniff it replaced read the constant by name, and anyone
+  # reaching for a literal copy of a mask that already has a named owner has a larger problem than
+  # this test can catch.
   # ───────────────────────────────────────────────────────────────────────────
   @testset "no file under src/querybuilder/ names the canonical mask" begin
     qb = joinpath(dirname(@__DIR__), "..", "src", "querybuilder")

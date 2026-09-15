@@ -158,7 +158,21 @@ function sql_canonicalize(::CanonicalType, conn::PormGPostgres, expr::AbstractSt
 end
 
 # A kind/backend pair with no canonical form of its own: the expression is already what it is.
-sql_canonicalize(::CanonicalType, ::PormGBackend, expr::AbstractString, modifiers::Vector{String} = String[]) = expr
+#
+# NON-EMPTY MODIFIERS ARE REFUSED HERE, not merely ignored, and that is the point. The caller has
+# already bound one parameter per modifier by the time it reaches this arm (`_render_temporal_shift`),
+# so silently returning `expr` would emit a query whose text has fewer placeholders than its bound
+# vector — a `StatementError` on SQLite, an unused `$N` on PostgreSQL. Only the CALL-SITE narrowings
+# keep a `CTime`/`CInterval` from arriving here today, and a guard at the call site protecting a table
+# cell that quietly does the wrong thing is exactly the arrangement #564 exists to remove. The cell
+# states its own contract instead.
+function sql_canonicalize(::CanonicalType, ::PormGBackend, expr::AbstractString,
+                          modifiers::Vector{String} = String[])
+  isempty(modifiers) ||
+    throw(QueryBuildError("this column kind has no canonical form to render date modifiers into; " *
+                          "a duration only applies to a DATE or TIMESTAMP column"))
+  return expr
+end
 
 
 # ── Slot 3: the stored text -> the Julia value ──────────────────────────────────────────────────

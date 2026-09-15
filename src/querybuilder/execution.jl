@@ -1292,9 +1292,15 @@ end
 # same DATE-vs-TIMESTAMP decision from them, and each copy was a place the two could disagree.
 #
 # NARROWED to the two kinds that take date arithmetic, exactly as the string version was. `CTime` and
-# `CInterval` are temporal representations but never the LEFT of `± duration` — a `TimeField` reaching
-# the date renderer is refused by the soft validation in `_render_date_period_arithmetic`, and it must
-# keep being refused there rather than silently acquiring a wrapper here.
+# `CInterval` are temporal representations but never the LEFT of `± duration`.
+#
+# This is a CONSUMER-SIDE narrowing, and it is not the only thing enforcing the rule. Since the
+# projection path needs the column's TRUE kind, `_render_left_typed` hands the unnarrowed answer to
+# the temporal renderer, so a `CTime` left is refused by two independent things: the soft validation
+# in `_render_date_period_arithmetic` (the String case), and `sql_canonicalize`'s generic arm, which
+# THROWS rather than silently dropping modifiers whose parameters are already bound. Neither is a
+# formality — `test_f_date_operands.jl`'s "#564: a TIME column is not whole-day arithmetic" testset
+# fails if this narrowing is removed.
 function _operand_column_kind(field_name, instruc::SQLInstruction)::TemporalKind
   kind = _projection_column_kind(field_name, instruc)
   return (kind isa CDate || kind isa CDateTime) ? kind : nothing
@@ -1460,7 +1466,7 @@ _shift_result_kind(kind::CanonicalType, comps) = kind
 #
 # RENDERS BEFORE IT TYPES, and the order is load-bearing rather than incidental: resolving the left
 # populates `instruc.tab_field_cache` for a dotted join key (`F("driverid__dob")`), which is the only
-# way `_operand_column_kind` can answer for one. Type first and every joined temporal column silently
+# way `_projection_column_kind` can answer for one. Type first and every joined temporal column silently
 # becomes `nothing` — on PostgreSQL that is `timestamptz + bigint`, a hard error; on SQLite it is a
 # `date()` truncation nobody sees.
 function _render_left_typed(value::Any, operation::String, instruc::SQLInstruction)::Tuple{String,TemporalKind}
@@ -2243,10 +2249,26 @@ function list(objct::SQLObjectHandler, ::Val{:dict}; show_query::Symbol = :execu
   return _list_raw(objct)
 end
 
+# #564 — a temporal value is serialized as the TEXT its own formatter writes, not by whatever
+# `JSON.json` makes of the Julia type.
+#
+# `Date`, `Time` and `ZonedDateTime` all have a `JSON` representation that happens to be right, but
+# `Dates.CompoundPeriod` does not: `JSON.json` has no method for it and falls back to struct
+# reflection, which emits `{"periods":[{"value":1},{"value":49}]}` — **the units are gone**, and no
+# consumer can reconstruct a duration from that. On PostgreSQL that has always been the shape (LibPQ
+# delivers a `CompoundPeriod`); on SQLite it became reachable when #564 started coercing
+# `DurationField`. Parity with a lossy shape is not the parity this table is for.
+#
+# So the JSON arm asks the same owner every other representation question goes through. For the three
+# kinds that already serialized correctly this is a no-op that now HOLDS rather than coincides.
+_json_value(v) = v
+_json_value(v::Dates.CompoundPeriod) = Models.format_duration_sql(v)
+_json_value(v::Dates.Period) = Models.format_duration_sql(v)
+
 """Return a JSON string without allocating `PormGRow` wrappers."""
 function list(objct::SQLObjectHandler, ::Val{:json}; show_query::Symbol = :execute)
   show_query !== :execute && return query_list(objct, show_query=show_query)
-  return JSON.json([Dict(String(k) => v for (k, v) in row) for row in _list_raw(objct)])
+  return JSON.json([Dict(String(k) => _json_value(v) for (k, v) in row) for row in _list_raw(objct)])
 end
 
 function list(objct::SQLObjectHandler, ::Val{F}; kwargs...) where F

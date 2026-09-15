@@ -200,15 +200,17 @@ A bare integer and an explicit `Day(n)` are the same thing: the integer is whole
 through the same path, so they compose identically and at any depth — `(F("date") + 7) + 3` shifts by
 ten days, exactly as `F("date") + Day(7) + Day(3)` does.
 
-Generated SQL (PostgreSQL):
+Generated SQL (PostgreSQL) — both operands are joined columns, so both carry a join alias:
 ```sql
-("Tb"."date" + make_interval(days => $1::integer))
+WHERE ("Tb_1"."date" > "Tb_2"."dob")
+  AND ("Tb_1"."date" <= ("Tb_2"."dob" + make_interval(days => $1::integer)))
 -- parameters: [30]
 ```
 
 Generated SQL (SQLite):
 ```sql
-date("Tb"."date", '+' || ? || ' days')
+WHERE ("Tb_1"."date" > "Tb_2"."dob")
+  AND ("Tb_1"."date" <= date("Tb_2"."dob", '+' || ? || ' days'))
 -- parameters: [30]
 ```
 

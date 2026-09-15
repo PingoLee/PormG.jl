@@ -137,6 +137,36 @@ _vr_base() = VRM.Probe.objects.filter("label" => _VR_LABEL)
   end
 
   # ───────────────────────────────────────────────────────────────────────────
+  # #564 — `list(:json)` serializes a temporal value as the TEXT its formatter writes.
+  #
+  # `Date`, `Time` and `ZonedDateTime` all happen to have a correct `JSON` representation, but
+  # `Dates.CompoundPeriod` does not: `JSON.json` has no method for it and falls back to struct
+  # reflection, emitting `{"periods":[{"value":1},{"value":49}]}` — the UNITS are gone, and no
+  # consumer can reconstruct a duration from that. PostgreSQL has always produced that shape (LibPQ
+  # delivers a `CompoundPeriod`); on SQLite it became reachable the moment #564 started coercing
+  # `DurationField`. Parity with a lossy shape is not the parity this table is for.
+  #
+  # `list(:json)` is documented public API ("for API responses"), so this is a response-format
+  # guarantee, asserted on the text rather than on the Julia type.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "list(:json) writes the formatter's text for every temporal kind" begin
+    q = VRM.Probe.objects
+    q.filter("label" => _VR_LABEL)
+    q.values("ts", "d", "t", "dur")
+    json = q.list(:json)
+    # The duration: its canonical `HH:MM:SS.sss`, never the reflected struct.
+    @test occursin("\"dur\":\"$(Models.format_duration_sql(VR_DURATION))\"", json)
+    @test !occursin("periods", json)
+    # The other three, which were already right and must stay so.
+    @test occursin("\"d\":\"$(Models.format_date_sql(VR_DATE))\"", json)
+    @test occursin("\"t\":\"$(Models.format_text_sql(VR_TIME))\"", json)
+    @test occursin(Models.format_timezone_sql(VR_INSTANT), json)
+    # And it must parse as JSON at all — a struct-reflected value still would, so this is a floor,
+    # not the assertion that matters.
+    @test json isa String && startswith(strip(json), "[")
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
   # Meta-guard: every temporal field kind is covered. Walks the real `PormGField` subtypes (the
   # `test_column_spec.jl` shape) so a new temporal field struct fails this file until it has a
   # probe column and a case row — the property must reach the NEXT renderer, not only these.

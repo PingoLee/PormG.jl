@@ -70,14 +70,31 @@ by that, so SQLite matches what PostgreSQL already delivered. Three classes of a
 | `values("x" => "driverid__dob")` (joined) | `String` | `Date(…)` |
 | `values("x" => F("date"))` on a `DateField` | `"2009-03-29"` | `Date(2009, 3, 29)` |
 | `values("x" => F("time"))` on a `TimeField` | `"06:00:00"` | `Time(6, 0, 0)` |
-| `values("x" => F("time"))` on a `DurationField` | `"00:01:49.088"` | `Dates.CompoundPeriod(…)` |
+| `values("x" => F("lap"))` on a `DurationField` | `"00:01:49.088"` | `Dates.CompoundPeriod(…)` |
+
+`list(:json)` serializes a coerced value as the text its formatter writes, so a `DurationField`
+renders `"00:01:49.088"` rather than the Julia struct.
 
 **Parsing is fail-open and never lossy.** An expression PormG cannot type comes back exactly as the
 driver delivered it, and so does a value in a shape the parser does not recognise — so the worst case
 is the old behaviour, never a wrong typed value.
 
-`DataFrame(query)` is **unchanged**: it bypasses the read path and still returns the driver's raw
-values. PostgreSQL is unaffected in every case — it already returned typed values.
+### What this does NOT cover
+
+Worth knowing, because the boundary is not where you might guess:
+
+- **Aggregates and SQL functions over a temporal column still read back raw on SQLite** —
+  `values("m" => Max("start_at"))`, `Coalesce(...)`, `Cast(...)` and friends. PormG types an `F`
+  expression and a plain column path; a `SQLTypeFunction` alias answers "no kind", which is the
+  fail-open case above. What `Max(a_date_column)` evaluates to is a real design question and is not
+  settled here.
+- **`DataFrame(query)` is unchanged**, and the two APIs now disagree for four field types rather
+  than one. `DataFrames.DataFrame(::SQLObjectHandler)` bypasses the read path, so a temporal column
+  arrives as the driver's raw value there while `list()` gives a typed one. Most documentation
+  examples end in `|> DataFrame`, so this is the read path the docs teach. Whether to close that
+  divergence, and in which direction, is deliberately left open.
+
+PostgreSQL is unaffected in every case — it already returned typed values.
 
 ### How to find the calls to migrate
 

@@ -811,3 +811,61 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #564: the two kind NARROWINGS, which are the branch's most consequential and least obvious lines.
+#
+# Since #564 the render carries the column's TRUE canonical kind, so that a projected `TimeField` or
+# `DurationField` can be coerced on the way out. Every ARITHMETIC consumer therefore has to re-narrow
+# to `CDate`/`CDateTime` itself. Without that, a `CTime` left reaches the temporal renderer, which
+# binds one parameter per modifier and then hands the kind to a table cell with no canonical form —
+# emitting SQL with fewer placeholders than bound values (`StatementError` on SQLite, a stray `$N` on
+# PostgreSQL).
+#
+# Both narrowings were previously asserted by nothing: reverting either left every test in this
+# repository green. These are the cases that close that.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#564: a TIME column is not whole-day arithmetic, and does not decide a date literal" begin
+  # `at` is the fixture's `TimeField`.
+  @testset "F(time) + <integer> stays ordinary arithmetic" begin
+    for (backend, conn) in (("SQLite", _FD_SL), ("PostgreSQL", _FD_PG))
+      q = FD.Fd_result.objects
+      q.values("x" => F("at") + 7)
+      sql = _fd_sql(q; conn = conn)
+      # No wrapper, no modifier — and, decisively, a placeholder for the 7 that IS in the text.
+      @test occursin("\"Tb\".\"at\" + ", sql)
+      @test !occursin("days", sql)
+      @test !occursin(_FD_TS_WRAPPER, sql)
+      @test _fd_params(q; conn = conn) == Any[7]
+      # The regression this pins is a text/parameter MISMATCH, so count the placeholders against the
+      # bound vector rather than trusting the shape assertions above.
+      n_marks = conn === _FD_SL ? count(==('?'), sql) : length(collect(eachmatch(r"\$\d+", sql)))
+      @test n_marks == length(_fd_params(q; conn = conn))
+    end
+  end
+
+  # A duration on a TIME column must still RAISE — the soft validation in the duration renderer is
+  # the only thing refusing it, and widening the kind must not have quietly bypassed that.
+  @testset "F(time) ± a duration still raises" begin
+    q = FD.Fd_result.objects
+    q.values("x" => F("at") + Dates.Day(1))
+    @test_throws PormG.InvalidValueError _fd_sql(q; conn = _FD_SL)
+  end
+
+  # The literal binder's narrowing: a TIME column has nothing useful to say about how a DATE or
+  # TIMESTAMP literal should be represented, so the operand's own type decides.
+  #
+  # The operand is a `DateTime` DELIBERATELY, and a `Date` will not do. Unnarrowed, the kind is
+  # `CTime` and `value_formatter(CTime, …)` is `format_text_sql` — which for a `Date` produces
+  # `"1991-10-06"`, byte-identical to `format_date_sql`'s, so a `Date` operand cannot tell the two
+  # apart and a test using one passes either way. The two formatters diverge on a `DateTime`:
+  # `format_text_sql` gives `"1991-10-06T14:30:00"` and `format_timezone_sql` the canonical
+  # `"1991-10-06T14:30:00.000+00:00"`. Measured, after a first version of this case proved unable to
+  # fail under mutation.
+  @testset "a timestamp literal against a TIME column binds by its own type" begin
+    q = FD.Fd_result.objects
+    q.values("id")
+    q.filter(F("at") == _FD_DATETIME)
+    @test _fd_params(q; conn = _FD_SL) == Any[_FD_TS_TEXT]
+  end
+end

@@ -47,6 +47,40 @@ const _RVC_PROBES = [
   (PormG.CInterval(),      Minute(1) + Second(49) + Millisecond(88)),   # lap 1 of race 1: "1:49.088"
 ]
 
+# ── A scratch model, for the RECORDER half (#564) ────────────────────────────
+# The parsers above are pure functions of a string; what decides whether one ever RUNS is the
+# alias→kind map the build records. That half needs a model and a mock connection, not a database.
+PormG.config["rvc_mock"] = PormG.Configuration.Settings(
+  connections = _RVC_SL, change_data = true, db_def_folder = "rvc_mock")
+
+module RvcModels
+import PormG
+import PormG.Models
+Rvc_team = Models.Model("rvc_team", id = Models.IDField(), founded = Models.DateField(null = true))
+Rvc_row = Models.Model("rvc_row",
+  id    = Models.IDField(),
+  team  = Models.ForeignKey(Rvc_team, on_delete = "CASCADE", related_name = "rvc_rows", null = true),
+  ts    = Models.DateTimeField(null = true),
+  d     = Models.DateField(null = true),
+  t     = Models.TimeField(null = true),
+  dur   = Models.DurationField(null = true),
+  # #564: a temporal column whose PHYSICAL name differs from its field name. `SELECT "Tb".*` returns
+  # the physical name, so a recorder keyed only on the field name never coerces this one.
+  moved = Models.DateTimeField(db_column = "moved_at", null = true),
+  note  = Models.CharField(null = true),
+)
+PormG.Models.set_models(@__MODULE__, "rvc_mock")
+end
+const RVC = RvcModels
+
+"""Build a query on the mock connection and return the recorded alias→kind map."""
+function _rvc_kinds(build!::Function)
+  q = RVC.Rvc_row.objects
+  build!(q)
+  PormG.QueryBuilder.query(q; connection = _RVC_SL, show_query = :sql)
+  return q.object.projection_kinds
+end
+
 @testset "Reading a temporal value back on SQLite (#564)" begin
 
   # ───────────────────────────────────────────────────────────────────────────
@@ -167,5 +201,63 @@ const _RVC_PROBES = [
     for kind in (PormG.CText(), PormG.CInt64(), PormG.CBool(), PormG.CBytes())
       @test PormG.value_parser(kind, _RVC_SL) === nothing
     end
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # THE RECORDER. A parser only runs if the build recorded a kind for that output name, so the map is
+  # half the fix and the half a value-level test cannot reach. Asserted white-box on a mock
+  # connection, because the failures below are invisible on any single-column result.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "the build records a kind per projection" begin
+    kinds = _rvc_kinds(q -> q.values("a" => "ts", "b" => "d", "c" => "t", "e" => "dur", "z" => "note"))
+    @test kinds[:a] == PormG.CDateTime(true)
+    @test kinds[:b] == PormG.CDate()
+    @test kinds[:c] == PormG.CTime()
+    @test kinds[:e] == PormG.CInterval()
+    # A non-temporal column records nothing: `nothing` means "no representation this table owns", and
+    # the read path must skip the column entirely rather than call an identity on every row.
+    @test !haskey(kinds, :z)
+  end
+
+  # The ORDERING the whole fix rests on. Resolving a dotted path is what populates the memo its kind
+  # is read from, so the projection must be RENDERED before it is TYPED. Typing first answers
+  # `nothing` for every joined temporal column — and the failure is invisible unless two projections
+  # name the same joined path, because the second one then reads the memo the first one filled.
+  # That asymmetry is exactly what this case pins.
+  @testset "a joined projection is typed (render-then-type order)" begin
+    kinds = _rvc_kinds(q -> q.values("a" => "team__founded", "b" => "team__founded"))
+    @test kinds[:a] == PormG.CDate()
+    @test kinds[:b] == PormG.CDate()
+  end
+
+  # `SELECT "Tb".*` returns PHYSICAL column names, so a recorder keyed only on the field name never
+  # coerces a renamed column. Both keys are registered; the read loop only visits the one the row has.
+  @testset "the wildcard branch records the db_column name too" begin
+    for build! in (q -> nothing, q -> q.values("*"))
+      kinds = _rvc_kinds(build!)
+      @test kinds[:ts] == PormG.CDateTime(true)
+      @test kinds[:moved] == PormG.CDateTime(true)      # the field name…
+      @test kinds[:moved_at] == PormG.CDateTime(true)   # …and the physical one
+      @test !haskey(kinds, :note)
+    end
+  end
+
+  # An EXPLICIT wildcard beside a joined alias is the spelling PormG's own error message recommends
+  # for a joined query. Recording only the empty-projection case left it returning a MIX — the joined
+  # alias typed, every wildcard column raw — inside one row.
+  @testset "an explicit wildcard beside a joined alias types both halves" begin
+    kinds = _rvc_kinds(q -> q.values("*", "team__founded"))
+    @test kinds[:ts] == PormG.CDateTime(true)
+    @test kinds[:d] == PormG.CDate()
+    @test kinds[:team__founded] == PormG.CDate()
+  end
+
+  # An expression PormG cannot type records nothing, which is what keeps the fix fail-open: an
+  # aggregate or a text-producing function is left exactly as the driver delivered it.
+  @testset "an untypable projection records no kind" begin
+    kinds = _rvc_kinds(q -> q.values("x" => PormG.Functions.Max("ts"),
+                                     "y" => PormG.Functions.ToChar("ts", "YYYY-MM")))
+    @test !haskey(kinds, :x)
+    @test !haskey(kinds, :y)
   end
 end

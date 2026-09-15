@@ -30,7 +30,12 @@ _projection_output_name(v::SQLTypeText) = v.custom_as !== nothing ? v.custom_as 
 # `DateTimeField(db_column = "created")` was silently never coerced. A key the row does not carry
 # costs nothing — the read loop only visits keys the row has.
 function _record_wildcard_projection_kinds!(instruc::SQLInstruction)
-  isempty(instruc.object.values) || return nothing
+  # An EXPLICIT `"*"` counts too, not only an empty projection list. `values("*")` and
+  # `values("*", "team__founded")` both put every model column in the result under its own name, and
+  # the second spelling is the one PormG's own error message recommends for a joined query ("Tip: Use
+  # .values(\"*\", \"joined_model__field_name\")"). Recording only the empty case left that spelling
+  # returning a MIX — the joined alias typed, the wildcard columns raw — in one row.
+  isempty(instruc.object.values) || any(_is_wildcard_projection, instruc.object.values) || return nothing
   for (fname, fmeta) in instruc.object.model.fields
     kind = field_canonical_kind(fmeta)
     kind === nothing && continue

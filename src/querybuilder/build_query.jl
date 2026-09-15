@@ -18,12 +18,15 @@ _projection_output_name(v::SQLTypeText) = v.custom_as !== nothing ? v.custom_as 
 
 # #564 — the SELECT-`*` half of the projection-kind map.
 #
-# `get_select_query` records a kind per PROJECTION, so an un-projected query (`.list()` with no
-# `values(...)`) records none — and the read path would stop coercing columns it coerced before.
-# This fills that case from the model, and here a static scan is not merely adequate but PROVABLY
-# complete: `query()` refuses an un-projected joined query outright ("Joined queries must explicitly
-# select fields using .values(...)"), so on the execute path an empty `values` guarantees ZERO
-# joins — the primary model's own fields ARE the entire result set.
+# `get_select_query` records a kind per PROJECTION, so a query whose result carries columns it never
+# projected — `SELECT "Tb".*` — records none for them, and the read path would stop coercing columns
+# it coerced before. This fills that case from the model.
+#
+# A static scan from the model is sound here because a star emits the PRIMARY MODEL's own columns and
+# nothing else: `query()` refuses an un-projected joined query outright ("Joined queries must
+# explicitly select fields using .values(...)"), and the explicit `values("*", "joined__field")`
+# spelling still expands the star over the base table alone, with the joined column arriving as its
+# own projection (which `get_select_query` has already typed).
 #
 # Keyed under BOTH the field name and its `db_column`, because `SELECT "Tb".*` returns PHYSICAL
 # column names: the predecessor of this code keyed only on the field name, so a
@@ -39,9 +42,15 @@ function _record_wildcard_projection_kinds!(instruc::SQLInstruction)
   for (fname, fmeta) in instruc.object.model.fields
     kind = field_canonical_kind(fmeta)
     kind === nothing && continue
-    instruc.projection_kinds[Symbol(fname)] = kind
+    # `get!`, NEVER `[]=`. This runs AFTER `get_select_query`, so a plain assignment would let the
+    # model-derived kind CLOBBER one an explicit projection already recorded under the same name —
+    # and `values("*", "moved" => "d")` is exactly that collision when a field's `db_column` differs
+    # from its name, since this loop claims both spellings while the duplicate-name guard only
+    # reserves the star's physical columns. The explicit projection is the more specific answer and
+    # wins; these are the fallback for names nothing else claimed.
+    get!(instruc.projection_kinds, Symbol(fname), kind)
     physical = Models.field_db_column(fmeta, fname)
-    physical == fname || (instruc.projection_kinds[Symbol(physical)] = kind)
+    physical == fname || get!(instruc.projection_kinds, Symbol(physical), kind)
   end
   return nothing
 end

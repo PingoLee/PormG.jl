@@ -2261,9 +2261,24 @@ end
 #
 # So the JSON arm asks the same owner every other representation question goes through. For the three
 # kinds that already serialized correctly this is a no-op that now HOLDS rather than coincides.
+# FAIL-OPEN, like every parser in this table, and for a sharper reason here: `format_duration_sql`
+# REFUSES a month or year component ("Months and years are ambiguous"), because `DurationField`
+# deliberately does not store one. But this function dispatches on the Julia VALUE, not on a column
+# kind — so a PostgreSQL `interval` holding `'1 month'`, from a column PormG did not write or a
+# database it introspected, reaches it. Formatting unconditionally would turn a working
+# `list(:json)` into a hard error, which is a worse regression than the lossy shape this fixes.
+#
+# So: format what the formatter accepts, hand back anything else untouched. The `JSON` fallback for
+# an unformattable period is still poor, but it is what shipped before and it is not an exception.
 _json_value(v) = v
-_json_value(v::Dates.CompoundPeriod) = Models.format_duration_sql(v)
-_json_value(v::Dates.Period) = Models.format_duration_sql(v)
+function _json_value(v::Union{Dates.Period, Dates.CompoundPeriod})
+  try
+    return Models.format_duration_sql(v)
+  catch e
+    (e isa InterruptException || e isa StackOverflowError) && rethrow()
+    return v
+  end
+end
 
 """Return a JSON string without allocating `PormGRow` wrappers."""
 function list(objct::SQLObjectHandler, ::Val{:json}; show_query::Symbol = :execute)

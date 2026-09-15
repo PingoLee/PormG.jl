@@ -204,6 +204,37 @@ end
   end
 
   # ───────────────────────────────────────────────────────────────────────────
+  # `list(:json)`'s duration serializer must be FAIL-OPEN, and this is the one place in the branch
+  # where "fail-open" prevents a HARD ERROR rather than a wrong value.
+  #
+  # `Models.format_duration_sql` refuses a month or year component — `DurationField` deliberately
+  # does not store one, because the conversion is ambiguous. But the JSON serializer dispatches on
+  # the Julia VALUE, not on a column kind, so a PostgreSQL `interval` holding `'1 month'` (a column
+  # PormG did not write, or an introspected database) reaches it. Formatting unconditionally turns a
+  # working `list(:json)` into an exception — a worse regression than the lossy shape it fixes.
+  #
+  # Caught by asking what `format_duration_sql` actually does with a `Month`, after the first version
+  # of the fix called it unconditionally.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "the JSON duration serializer never throws on a period it cannot format" begin
+    jv = PormG.QueryBuilder._json_value
+    # What it CAN format, it does — the whole point of the fix.
+    @test jv(Minute(1) + Second(49) + Millisecond(88)) == "00:01:49.088"
+    @test jv(Hour(24)) == "24:00:00"
+    # What it cannot, it hands back untouched rather than raising.
+    # `=== refused` is the assertion doing the work: it can only hold if the call RETURNED, so it
+    # covers "does not throw" and "does not approximate" at once. (`@test_nowarn` would be the wrong
+    # idiom here — it asserts the absence of a warning, not of an exception.)
+    for refused in (Month(1), Year(1), Dates.CompoundPeriod(Month(1), Day(2)))
+      @test jv(refused) === refused
+    end
+    # And it is not in the way of anything else.
+    @test jv("text") === "text"
+    @test jv(42) === 42
+    @test jv(missing) === missing
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
   # THE RECORDER. A parser only runs if the build recorded a kind for that output name, so the map is
   # half the fix and the half a value-level test cannot reach. Asserted white-box on a mock
   # connection, because the failures below are invisible on any single-column result.
@@ -250,6 +281,23 @@ end
     @test kinds[:ts] == PormG.CDateTime(true)
     @test kinds[:d] == PormG.CDate()
     @test kinds[:team__founded] == PormG.CDate()
+  end
+
+  # The wildcard recorder runs AFTER `get_select_query`, so it must never CLOBBER a kind an explicit
+  # projection already recorded. It claims both a field's name and its `db_column`, while the
+  # duplicate-name guard only reserves the star's PHYSICAL columns — so an alias equal to a renamed
+  # field's NAME is legal, and a plain assignment would overwrite it with the wrong kind.
+  #
+  # Here `moved` is a `DateTimeField(db_column = "moved_at")` and the alias `moved` is bound to `d`,
+  # a `DateField`. Before the `get!`, the star's `CDateTime` won and the SQLite read handed back a
+  # `String` (the DATE text fails open through the timestamp parser) where the pre-#564 code gave a
+  # `Date` — a silent type regression introduced by the wildcard branch itself.
+  @testset "an explicit projection outranks the wildcard's model-derived kind" begin
+    kinds = _rvc_kinds(q -> q.values("*", "moved" => "d"))
+    @test kinds[:moved] == PormG.CDate()          # the alias's own column decides…
+    @test kinds[:moved_at] == PormG.CDateTime(true)  # …and the physical name keeps the field's kind
+    # Without the star, the same alias resolves the same way — which is the invariant that matters.
+    @test _rvc_kinds(q -> q.values("moved" => "d"))[:moved] == PormG.CDate()
   end
 
   # An expression PormG cannot type records nothing, which is what keeps the fix fail-open: an

@@ -488,36 +488,41 @@ end
       change_data   = true,
     )
 
-    # (a) Integer AUTOINCREMENT PK: _update_sequence upserts MAX(id) into sqlite_sequence —
-    #     it corrects a deliberately stale value and, crucially, NEVER appends duplicate rows
-    #     even when called repeatedly. (The old INSERT OR REPLACE appended a row each time,
-    #     since sqlite_sequence.name has no UNIQUE constraint.)
-    fetch(pool, "CREATE TABLE seq_int (id INTEGER PRIMARY KEY AUTOINCREMENT, n INTEGER);")
-    fetch(pool, "INSERT INTO seq_int (id, n) VALUES (5, 1);")
-    fetch(pool, "UPDATE sqlite_sequence SET seq = 1 WHERE name = 'seq_int';")   # deliberately stale
+    try
+      # (a) Integer AUTOINCREMENT PK: _update_sequence upserts MAX(id) into sqlite_sequence —
+      #     it corrects a deliberately stale value and, crucially, NEVER appends duplicate rows
+      #     even when called repeatedly. (The old INSERT OR REPLACE appended a row each time,
+      #     since sqlite_sequence.name has no UNIQUE constraint.)
+      fetch(pool, "CREATE TABLE seq_int (id INTEGER PRIMARY KEY AUTOINCREMENT, n INTEGER);")
+      fetch(pool, "INSERT INTO seq_int (id, n) VALUES (5, 1);")
+      fetch(pool, "UPDATE sqlite_sequence SET seq = 1 WHERE name = 'seq_int';")   # deliberately stale
 
-    PormG.QueryBuilder._update_sequence(Model("seq_int", id=IDField(), n=IntegerField()), pool, ["id"], settings)
-    PormG.QueryBuilder._update_sequence(Model("seq_int", id=IDField(), n=IntegerField()), pool, ["id"], settings)  # idempotent
+      PormG.QueryBuilder._update_sequence(Model("seq_int", id=IDField(), n=IntegerField()), pool, ["id"], settings)
+      PormG.QueryBuilder._update_sequence(Model("seq_int", id=IDField(), n=IntegerField()), pool, ["id"], settings)  # idempotent
 
-    rows = fetch(pool, "SELECT seq FROM sqlite_sequence WHERE name = 'seq_int';") |> DataFrame
-    @test nrow(rows) == 1        # upsert never appends duplicate rows (the quirk this guards)
-    @test rows[1, :seq] == 5     # stale value corrected to MAX(id)
+      rows = fetch(pool, "SELECT seq FROM sqlite_sequence WHERE name = 'seq_int';") |> DataFrame
+      @test nrow(rows) == 1        # upsert never appends duplicate rows (the quirk this guards)
+      @test rows[1, :seq] == 5     # stale value corrected to MAX(id)
 
-    # (b) TEXT PK: MAX(code) is non-numeric → tryparse returns nothing → must NOT throw (graceful skip).
-    fetch(pool, "CREATE TABLE seq_text (code TEXT PRIMARY KEY);")
-    fetch(pool, "INSERT INTO seq_text (code) VALUES ('abc');")
+      # (b) TEXT PK: MAX(code) is non-numeric → tryparse returns nothing → must NOT throw (graceful skip).
+      fetch(pool, "CREATE TABLE seq_text (code TEXT PRIMARY KEY);")
+      fetch(pool, "INSERT INTO seq_text (code) VALUES ('abc');")
 
-    @test (PormG.QueryBuilder._update_sequence(Model("seq_text", code=CharField()), pool, ["code"], settings); true)
+      @test (PormG.QueryBuilder._update_sequence(Model("seq_text", code=CharField()), pool, ["code"], settings); true)
 
-    # (c) Float MAX (REAL column): a Real value is coerced via floor(Int64, …), not skipped —
-    #     `tryparse(Int64, "5.0")` would have returned nothing. Exercises the numeric branch.
-    fetch(pool, "CREATE TABLE seq_real (id REAL PRIMARY KEY);")
-    fetch(pool, "INSERT INTO seq_real (id) VALUES (5.0);")
+      # (c) Float MAX (REAL column): a Real value is coerced via floor(Int64, …), not skipped —
+      #     `tryparse(Int64, "5.0")` would have returned nothing. Exercises the numeric branch.
+      fetch(pool, "CREATE TABLE seq_real (id REAL PRIMARY KEY);")
+      fetch(pool, "INSERT INTO seq_real (id) VALUES (5.0);")
 
-    PormG.QueryBuilder._update_sequence(Model("seq_real", id=IDField()), pool, ["id"], settings)
+      PormG.QueryBuilder._update_sequence(Model("seq_real", id=IDField()), pool, ["id"], settings)
 
-    real_rows = fetch(pool, "SELECT seq FROM sqlite_sequence WHERE name = 'seq_real';") |> DataFrame
-    @test nrow(real_rows) == 1
-    @test real_rows[1, :seq] == 5    # 5.0 floored to an integer seq, not silently skipped
+      real_rows = fetch(pool, "SELECT seq FROM sqlite_sequence WHERE name = 'seq_real';") |> DataFrame
+      @test nrow(real_rows) == 1
+      @test real_rows[1, :seq] == 5    # 5.0 floored to an integer seq, not silently skipped
+    finally
+      # Release the SQLite handle so mktempdir can delete the temp DB on Windows (WAL keeps it open).
+      PormG.ConnectionPool.close_pool!(pool)
+    end
   end
 end

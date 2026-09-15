@@ -120,6 +120,8 @@ end
       @test nrow(exists) == 0   # _update_sequence never ran — the table doesn't even exist
     finally
       delete!(PormG.config, key)
+      # Release the SQLite handle so mktempdir can delete the temp DB on Windows (WAL keeps it open).
+      PormG.ConnectionPool.close_pool!(pool)
     end
   end
 end
@@ -201,6 +203,8 @@ end
       @test seq[1, :seq] == 100   # corrected back — only resync_sequences could have done this
     finally
       delete!(PormG.config, key)
+      # Release the SQLite handle so mktempdir can delete the temp DB on Windows (WAL keeps it open).
+      PormG.ConnectionPool.close_pool!(pool)
     end
   end
 end

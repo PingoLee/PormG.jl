@@ -110,6 +110,7 @@ end
     @testset "Pool Exhaustion Typed Error (#37)" include("unit/test_connection_pool_timeout.jl")
     @testset "Connect-Failure Fast-Fail Typed Error (#72)" include("unit/test_connection_pool_connect_error.jl")
     @testset "close_pool! Skips Non-pool Mocks (#147)" include("unit/test_close_pool_mock_skip.jl")
+    @testset "close_pool! Drains Leases, Closes Outside the Lock (#47)" include("unit/test_close_pool_drain.jl")
     @testset "SQLite `:memory:` Pool Guards (#545)" include("unit/test_sqlite_memory_pool.jl")
     @testset "Module Init & atexit Cleanup (#203)" include("unit/test_module_init.jl")
     @testset "Failed Rollback → Connection Renewed/Discarded (#71)" include("unit/test_transaction_rollback_renewal.jl")

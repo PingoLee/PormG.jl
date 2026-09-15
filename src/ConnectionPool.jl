@@ -749,40 +749,102 @@ function pool_stats(pool::Union{PormGPostgres, PormGSQLite})
             waiting)
 end
 
-function close_pool!(pool::PostgresConnectionPool)
-  Base.lock(pool.lock) do
-    for i in 1:length(pool.connections)
-      conn = pool.connections[i]
-      if conn !== nothing
-        try
-          close(conn)
-        catch e
-          @warn "Error closing PG connection $i: $e"
-        finally
-          pool.connections[i] = nothing
-        end
-      end
-      pool.available[i] = true
-    end
-  end
-end
+# ── close_pool!: bounded drain, then close (#47) ────────────────────────────
+# How long `close_pool!` waits for checked-out connections to come back before closing them out
+# from under their borrowers. Bounded on purpose: a lease nobody will ever release (a dead task, a
+# leak) must not wedge teardown. `Configuration.__cleanup__` passes 0 — at exit nobody releases.
+const _CLOSE_POOL_DRAIN_SECONDS = 5.0
 
-function close_pool!(pool::SQLiteConnectionPool)
+# Leased-slot count under the pool's own lock. Deliberately NOT `pool_stats(pool).in_use`: that
+# also takes `_POOL_WAITERS_LOCK` and hashes the pool into the waiter registry, and this probe
+# runs on every 50 ms drain poll.
+_pool_in_use(pool)::Int = Base.lock(() -> count(!, pool.available), pool.lock)
+
+"""
+    close_pool!(pool; drain_seconds = $(_CLOSE_POOL_DRAIN_SECONDS)) -> Nothing
+
+Close every connection in the pool and empty its slots. Never throws; the pool stays usable — the
+next `acquire_connection` re-materializes the emptied slots, the same shape as reaping (#125).
+
+Slots that are still checked out get a bounded grace period (#47): `close_pool!` waits up to
+`drain_seconds` for their borrowers to `release_connection`, then takes and closes whatever is
+still leased and logs **one** `@warn` naming the count. The wait is best-effort, not a barrier —
+a slot released inside the window can be re-leased, or handed straight to a parked waiter (#124),
+before the final sweep; what is leased at *that* instant is what gets force-closed. A pool with
+parked waiters therefore never drains: every release is handed to a waiter, so the budget
+expires and those fresh leases are closed too. Waiters are not woken by close — they unwind
+through their own timeout, a pre-existing #124 limitation. A slot handed to a waiter by a
+discard (empty, leased) is left leased for that waiter; one handed by a release still holds its
+handle and is indistinguishable from an ordinary lease, so it is swept like one — the narrow
+double-lease that allows under contention predates #47 and is tracked as #584.
+
+Every handle is closed **outside** `pool.lock` and through [`_close_driver_handle!`](@ref): a
+SQLite handle the global worker still has statements for is closed only once that work drains
+(#327), so a pool torn down mid-statement defers that one handle's close rather than freeing it
+under the worker. `drain_seconds = 0` skips the wait entirely.
+
+A borrower whose connection was force-closed keeps a handle the pool no longer knows: its
+`release_connection` warns *not found* and returns `false`, and its next statement raises from the
+driver. That is the honest outcome of a forced teardown, and `Configuration.load` reports the
+`in_use` count before it happens.
+
+No double-close guard is needed on the driver side for a second *sequential* close: SQLite.jl's
+`_close_db!` nulls `db.handle` and `sqlite3_close_v2(NULL)` is a documented no-op, so calling this
+again, or the `DB` finalizer running later, is harmless — and a finalizer cannot run on a handle a
+live task still references, so an explicit close never races one. Two *concurrent* closers of the
+same SQLite handle are not guarded by the driver; the pool takes a handle out of its slot under the
+lock before closing it, so this function never races the reaper on the same handle — the second
+closers left are `_discard_connection!` on a handle it did not find and the unconditional close in
+`_recover_abandoned_connection!`'s timeout branch, both tracked as #585.
+"""
+close_pool!(pool::PostgresConnectionPool; drain_seconds::Real = _CLOSE_POOL_DRAIN_SECONDS) =
+  _close_pool_slots!(pool; drain_seconds)
+close_pool!(pool::SQLiteConnectionPool; drain_seconds::Real = _CLOSE_POOL_DRAIN_SECONDS) =
+  _close_pool_slots!(pool; drain_seconds)
+
+function _close_pool_slots!(pool::Union{PormGPostgres, PormGSQLite}; drain_seconds::Real)
+  # 1. Bounded drain, OUTSIDE the lock — a borrower's `release_connection` needs it to come back.
+  #    Skipped entirely at 0: `timedwait` would otherwise still burn one poll interval.
+  if drain_seconds > 0 && _pool_in_use(pool) > 0
+    _wait_settled(() -> _pool_in_use(pool) == 0, drain_seconds)
+  end
+
+  # 2. Take every handle out under the lock; close nothing here (closes never run under
+  #    `pool.lock` — a driver close can block on I/O, and on SQLite it may defer, #327). A leased
+  #    slot is taken too: its borrower keeps a handle the pool no longer knows. A leased slot with
+  #    NO handle is a discard-origin #124 handoff still materializing (acquire branch A) — the
+  #    waiter that owns it will store a fresh handle and release the slot itself, so it stays
+  #    leased: flipping it available here would let a second acquirer lease that fresh handle too.
+  #    A release-origin handoff is NOT distinguishable here: it leaves the released handle in the
+  #    slot with `available[i] == false`, exactly like an ordinary lease, so it is force-closed and
+  #    re-opened for lease like one — and under contention the waiter and a fresh acquirer can end
+  #    up sharing the re-materialized handle. Pre-existing (the old body flipped every slot), and
+  #    the fix is in the handoff, not here: #584 carries identity into the waiter's channel.
+  handles = Any[]
+  in_use = 0
   Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
+      pool.available[i] || (in_use += 1)
       conn = pool.connections[i]
-      if conn !== nothing
-        try
-          close(conn)
-        catch e
-          @warn "Error closing SQLite connection $i: $e"
-        finally
-          pool.connections[i] = nothing
-        end
-      end
+      conn === nothing && continue
+      push!(handles, conn)
+      pool.connections[i] = nothing
       pool.available[i] = true
     end
   end
+
+  # 3. Close through the #327 seam: immediate for PostgreSQL and for a SQLite handle the global
+  #    worker is done with; deferred until the ledger drains otherwise. Never throws.
+  for conn in handles
+    _close_driver_handle!(pool, conn)
+  end
+
+  # 4. One warning, not one per slot, with structured keys a log query can find.
+  in_use > 0 && @warn("close_pool!: closed connections that were still checked out; " *
+                      "in-flight queries on them will fail",
+                      in_use, drain_seconds,
+                      adapter = pool isa PormGPostgres ? "PostgreSQL" : "SQLite")
+  return nothing
 end
 
 # The two methods above dispatch on the CONCRETE pool structs so they only ever touch real
@@ -791,7 +853,8 @@ end
 # tests register in `config` to satisfy dialect dispatch — so cleanup must SKIP it rather
 # than trip on its missing fields. Without this fallback, `__cleanup__` (which closes every
 # `config` entry) aborts with a `FieldError` the first time it reaches a leaked test mock (#147).
-close_pool!(::Union{PormGPostgres, PormGSQLite}) = nothing
+# Accepts (and ignores) the `drain_seconds` kwarg so `__cleanup__` can pass it uniformly.
+close_pool!(::Union{PormGPostgres, PormGSQLite}; kwargs...) = nothing
 
 """
     acquire_connection(pool::PormGPostgres; timeout_seconds=nothing, max_retries=300)

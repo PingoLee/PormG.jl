@@ -171,14 +171,17 @@ const VR_CASES = VRCase[
   vrcase("plus_hour", :timestamp, c -> F(c) + Hour(1), v -> v + Hour(1), p3 = (:sqlite,)),
   # Integer days — the other #527 branch, and the one #563's name collision produced.
   vrcase("plus_int_days", :timestamp, c -> F(c) + 7, v -> v + Day(7), p3 = (:sqlite,)),
-  # Sibling 1: both integer-days guards require `field_name isa String`, so a NESTED left falls
-  # through to plain numeric addition on TEXT.
+  # Sibling 1, FIXED by #568. Both integer-days guards required `field_name isa String`, so a NESTED
+  # left fell through to plain numeric addition on TEXT — a silent integer on SQLite, and
+  # `timestamptz + bigint` (no such operator) on PostgreSQL. A bare integer is now normalized into
+  # `Day(n)` and rendered by the one temporal renderer, so it composes at any depth.
+  #
+  # The marks are now identical to `plus_int_days` above, which is the point: the single-link and
+  # nested spellings of one expression should not differ, and the only mark left is the SQLite
+  # read-back (sibling 4), which every expression alias shares. The `shape` lambda is GONE rather
+  # than rewritten — it recorded a measured FAILURE, and there is no longer a failure to record.
   vrcase("nested_int_days", :timestamp, c -> (F(c) + 7) + 3, v -> v + Day(10),
-         sibling = "1 — nested integer-days left escapes the wrapper",
-         # SQLite: numeric addition on TEXT, a silent integer. PostgreSQL: `timestamptz + bigint`
-         # has no operator, so the same rendering is REFUSED (`StatementError`) — loud, not wrong.
-         shape = (x, engine) -> engine === :postgres ? x isa VRRefused : x isa Integer,
-         p1 = (:sqlite, :postgres), p2f = (:sqlite, :postgres), p3 = (:sqlite, :postgres)),
+         sibling = "1 — fixed by #568; nested integer days compose", p3 = (:sqlite,)),
   # #494 control: a zero-length link short-circuits to the bare left side; the outer call must
   # still resolve the column's kind rather than sniff the (now absent) marker.
   vrcase("zero_link_chain", :timestamp, c -> F(c) + Day(0) + Day(1), v -> v + Day(1), p3 = (:sqlite,)),
@@ -215,10 +218,13 @@ const VR_CASES = VRCase[
   # give the expression different TYPES for the same whole-day arithmetic.
   vrcase("plus_day", :date, c -> F(c) + Day(1), v -> v + Day(1), p3 = (:sqlite, :postgres)),
   vrcase("plus_int_days", :date, c -> F(c) + 7, v -> v + Day(7), p3 = (:sqlite, :postgres)),
+  # Sibling 1's DATE branch, fixed by #568 alongside the timestamp one. Marks match `plus_int_days`
+  # above: SQLite reads the alias back as text (sibling 4), and PostgreSQL returns a `DateTime`
+  # because `date + interval` is a `timestamp` in SQL — the promotion split tracked as #572, which
+  # this change deliberately does not touch.
   vrcase("nested_int_days", :date, c -> (F(c) + 7) + 3, v -> v + Day(10),
-         sibling = "1 — nested integer-days left escapes the wrapper (date branch)",
-         shape = (x, engine) -> engine === :postgres ? x isa VRRefused : x isa Integer,
-         p1 = (:sqlite, :postgres), p2f = (:sqlite, :postgres), p3 = (:sqlite, :postgres)),
+         sibling = "1 — fixed by #568; nested integer days compose (date branch)",
+         p3 = (:sqlite, :postgres)),
   # #527 control: a sub-day duration on a DATE column promotes to a timestamp on both engines.
   vrcase("plus_hour6", :date, c -> F(c) + Hour(6), v -> DateTime(v) + Hour(6),
          result_kind = :timestamp, p3 = (:sqlite,)),

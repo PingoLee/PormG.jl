@@ -465,7 +465,7 @@ df = query |> DataFrame
 Generated SQL (PostgreSQL):
 ```sql
 SELECT "circuit"."name"  AS raceid__circuitid__name,
-       SUM(CASE WHEN ("race"."date" <= ("driver"."dob" + ($1::bigint || ' days')::interval)
+       SUM(CASE WHEN ("race"."date" <= ("driver"."dob" + make_interval(days => $1::integer))
                  AND  "result"."positionorder" = $2)
                 THEN $3::bigint
                 ELSE $4::bigint

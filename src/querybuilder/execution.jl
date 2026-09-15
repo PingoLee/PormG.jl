@@ -1170,24 +1170,17 @@ function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::
   end
 end
 
-# TODO: Implement a function to handle the update with multiple dispatch
-# Helper function to check if a field is a date field
-function _is_date_field(field_name::String, instruc::SQLInstruction)
-  model = instruc.object.model
-  # @pormg_debug
-  if haskey(model.fields, field_name)
-    field_type = model.fields[field_name].type
-    return field_type in ["DATE", "TIMESTAMPTZ", "TIMESTAMP"]
-  # #474: a raw String field name, and always the base-model half of the memo namespace. #492 gave
-  # `"<cte>__<col>"` its meaning back, but a CTE-rooted string is rewritten into a `CTEReference` by
-  # `_resolve_cte_string_paths!` before `build()` renders — so a String still standing here named no
-  # CTE.
-  else
-    memoized = memo_field(instruc, memo_key(:base, field_name))
-    memoized === nothing || return memoized.type in ["DATE", "TIMESTAMPTZ", "TIMESTAMP"]
-  end
-  return false
-end
+# `_is_date_field(::String, ::SQLInstruction)` used to live here. Both of its callers were the
+# integer-days special cases #568 deleted, so it went with them — and with it the #563 collision, in
+# which two functions named `_is_date_field` carried DIFFERENT semantics: this one answered `true`
+# for TIMESTAMP, while `sanitization.jl`'s `_is_date_field(f_meta)` answers `true` only for a plain
+# DATE. That pair is what produced the integer-days half of #527 in the first place. The removal is a
+# side effect of the collapse, not a fix for #563 — #563 also covers the surviving function's name,
+# and stays open.
+#
+# What replaces it: `_operand_column_kind`, which answers with a `CanonicalType` rather than a Bool
+# and is shape-polymorphic (a String, a `JoinedReference` or a nested `FExpression`), so there is one
+# answer to "what temporal kind is this?" in this file instead of two predicates that agreed by luck.
 
 function _set_update_query(v::SQLTypeFunction, instruc::SQLInstruction)
   return _get_select_query(v, instruc)
@@ -1454,16 +1447,16 @@ function _render_left_typed(value::Any, operation::String, instruc::SQLInstructi
   return sql, _operand_column_kind(value, instruc)
 end
 
-# #564 — THE ONE TEMPORAL RENDERER. It takes an ALREADY-RENDERED left side and the kind that left
-# evaluates to, so every spelling of "shift this temporal expression" resolves its own operand into
-# `comps` and then renders through here, rather than through its own copy of the wrapper choice.
+# #564/#568 — THE ONE TEMPORAL RENDERER. It takes an ALREADY-RENDERED left side and the kind that
+# left evaluates to, which is what lets the duration spelling and the bare-integer spelling share it:
+# each resolves its own operand into `comps` and then renders identically.
 #
-# Taking the left pre-rendered is not a convenience, it closes an ordering hazard. Rendering the left
-# is what populates `instruc.tab_field_cache` for a dotted join key (`F("driverid__dob")`), and
-# nothing can resolve that key's kind until it has. A caller that decided "is this temporal?" BEFORE
-# rendering would see `nothing` for every joined temporal column and fall through to plain arithmetic
-# — `timestamptz + bigint` on PostgreSQL, a silent `date()` truncation on SQLite. Making the rendered
-# left a PARAMETER means a caller cannot ask the question in the wrong order.
+# Taking the left pre-rendered is not a convenience, it is the fix for an ordering hazard. Rendering
+# the left is what populates `instruc.tab_field_cache` for a dotted join key (`F("driverid__dob")`),
+# and nothing can resolve that key's kind until it has. A caller that decided "is this temporal?"
+# BEFORE rendering would see `nothing` for every joined temporal column and fall through to plain
+# arithmetic — `timestamptz + bigint` on PostgreSQL, a silent `date()` truncation on SQLite. Making
+# the rendered left a PARAMETER means a caller cannot ask the question in the wrong order.
 function _render_temporal_shift(left_side::AbstractString, kind::TemporalKind, operation::String,
                                 comps, instruc::SQLInstruction)::String
   if instruc.connection isa PormGPostgres
@@ -1630,21 +1623,15 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
       return add_parameter!(instruc, operand; sql_type=_infer_parameter_sql_type(operand, instruc))
     end
   elseif isa(operand, Integer)
-    # SECURITY: Handle integer operands for date arithmetic and bitwise shifts
+    # SECURITY: parameterize the integer (bitwise shifts and ordinary arithmetic).
+    #
+    # #568 — the date arm that used to live here is GONE. It bound the placeholder FIRST and only
+    # then asked whether the left was a date column, so on PostgreSQL a nested left arrived already
+    # bound as `$n::bigint` and produced `timestamp with time zone + bigint`, which has no operator.
+    # Whole days are now normalized into `Day(n)` by `_set_update_query_typed` BEFORE this function
+    # is reached, so an integer that survives to here is genuinely arithmetic, never a duration.
     sql_type = (operation in ["<<", ">>"]) ? "integer" : _infer_parameter_sql_type(operand, instruc)
-    placeholder = add_parameter!(instruc, operand; sql_type=sql_type)
-    if operation in ["+", "-"] && (field_name isa String && _is_date_field(field_name, instruc))
-      if instruc.connection isa PormGSQLite
-        # SQLite handles date arithmetic via functions, but for the infix expression
-        # we just return the placeholder and handle the wrapper in the final return
-        return placeholder
-      else
-        # Convert integer days to interval for date arithmetic (PostgreSQL)
-        return "($placeholder || ' days')::interval"
-      end
-    else
-      return placeholder
-    end
+    return add_parameter!(instruc, operand; sql_type=sql_type)
   else
     # SECURITY: Use parameterized query for other numeric values
     return add_parameter!(instruc, operand; sql_type=_infer_parameter_sql_type(operand, instruc))
@@ -1732,34 +1719,47 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
   else
     # Field with operation - handle nesting and date arithmetic properly.
     #
-    # RENDER THE LEFT FIRST, THEN ASK WHAT IT IS: rendering is what populates
-    # `instruc.tab_field_cache` for a dotted join key, so `F("driverid__dob")` can only be typed
-    # afterwards. Typing first answers `nothing` for every joined temporal column.
+    # RENDER THE LEFT FIRST, THEN ASK WHAT IT IS. That order is the whole of #568's fix and is not
+    # negotiable: rendering is what populates `instruc.tab_field_cache` for a dotted join key, so
+    # `F("driverid__dob") + 30` can only be typed afterwards. Deciding first types every joined
+    # temporal column as `nothing` and silently drops it to plain arithmetic.
     left_side, left_kind = _render_left_typed(v.field_name, v.operation, instruc)
+
+    # #568 — A BARE INTEGER ON ± OVER A TEMPORAL LEFT IS WHOLE DAYS, rendered by the one temporal
+    # renderer rather than by a second implementation. Ahead of the operand bind below, because that
+    # bind is what used to break PostgreSQL: it stamped `$n::bigint` on the parameter before anything
+    # asked whether the left was temporal, and `timestamp with time zone + bigint` has no operator.
+    #
+    # The two implementations this replaces both gated on `v.field_name isa String`, while the
+    # DURATION path gates on the OPERAND's type. That asymmetry was the whole of #568: a duration
+    # composes over nesting and an integer did not, so `(F(c) + 7) + 3` fell through to plain numeric
+    # addition — a silent `2012` on SQLite (TEXT with NUMERIC affinity), a hard error on PostgreSQL.
+    # `F(c) + 7` alone was correct on both since #527; only the nested spelling failed, and only
+    # because of where the test was written.
+    #
+    # Normalized at RENDER time, not at construction time (`types.jl`'s `+`/`-` overloads), for two
+    # reasons that are not close calls:
+    #   * there is no type information at construction — `F("points") + 10` and `F("dob") + 10` are
+    #     the same node shape, so an unconditional rewrite would send integer-column arithmetic into
+    #     the date renderer and trip its soft validation on every one of them;
+    #   * `FExpression` is a `struct` and the `F` docstring promises a caller may bind and reuse a
+    #     node, so `x = F("dob") + 7` must still report `operand == 7`. The node stays faithful to
+    #     what the user wrote; only the rendering is unified.
+    #
+    # `!(v.operand isa Bool)` because `Bool <: Integer` in Julia: without it `F("ts") + true` would
+    # become `Day(true)` rather than staying the arithmetic the user wrote. `Dates.Day(n)` is exact —
+    # a bare integer on a date column has meant whole days since #25 — and `_decompose_period` folds
+    # `Day(0)` to an empty list, so `F(c) + 0` short-circuits to the identity and binds nothing.
+    if left_kind !== nothing && v.operation in ("+", "-") &&
+       v.operand isa Integer && !(v.operand isa Bool)
+      comps = _decompose_period(Dates.Day(v.operand))
+      kind  = _shift_result_kind(left_kind, comps)   # whole days never promote; stated, not assumed
+      return _render_temporal_shift(left_side, kind, v.operation, comps, instruc), kind
+    end
 
     # #564: the left's kind travels to the binder, so the representation the literal binds and the
     # one the wrapper renders come from the same value rather than from two resolvers that agree.
     right_side = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc; left_kind = left_kind)
-
-    if instruc.connection isa PormGSQLite && v.operation in ["+", "-"] && (v.field_name isa String && _is_date_field(v.field_name, instruc))
-      # #527: the wrapper follows the COLUMN, as it already does on the duration path one branch up.
-      # `_is_date_field` stays the outer guard — it must keep answering `true` for a timestamp
-      # column, or this branch would not fire at all and the render would fall through to numeric
-      # addition on TEXT. What was wrong is that it then emitted `date(...)` unconditionally, so
-      # `F("event_time") + 7` on a `DateTimeField` truncated the time-of-day AND produced SQLite's
-      # own format, which no stored canonical value can equal.
-      #
-      # No bind-side change is owed here: integer days are never a sub-day duration, so the left's
-      # own kind IS the result kind and wrapper and bind agree.
-      #
-      # #564: WHICH wrapper is no longer decided here — `sql_canonicalize` owns that per kind, the
-      # same call the duration path one branch up makes. `left_kind === nothing` keeps the historical
-      # `date(...)`, as it does there.
-      op_sign = v.operation == "+" ? "+" : "-"
-      modifier = "'$(op_sign)' || $(right_side) || ' days'"
-      left_kind === nothing && return "date($(left_side), $(modifier))", nothing
-      return sql_canonicalize(left_kind, instruc.connection, left_side, [modifier]), left_kind
-    end
 
     return "($(left_side) $(v.operation) $(right_side))", nothing
   end

@@ -196,6 +196,28 @@ query.filter(
 )
 ```
 
+A bare integer and an explicit `Day(n)` are the same thing: the integer is whole days, and both render
+through the same path, so they compose identically and at any depth — `(F("date") + 7) + 3` shifts by
+ten days, exactly as `F("date") + Day(7) + Day(3)` does.
+
+Generated SQL (PostgreSQL):
+```sql
+("Tb"."date" + make_interval(days => $1::integer))
+-- parameters: [30]
+```
+
+Generated SQL (SQLite):
+```sql
+date("Tb"."date", '+' || ? || ' days')
+-- parameters: [30]
+```
+
+!!! note "The PostgreSQL rendering changed"
+    Integer days used to render as `($1::bigint || ' days')::interval` — a second, separate
+    implementation from the one `Day(n)` used. It is now `make_interval`, which is what the duration
+    spelling always produced. The two forms are equivalent to PostgreSQL, so no query result changes;
+    only a test that asserts the generated SQL **text** needs updating.
+
 #### Explicit duration types
 
 For anything other than whole days, add a Julia `Dates` duration — `Day`, `Week`, `Month`, `Year`, `Hour`, `Minute`, `Second`, or any `CompoundPeriod` (e.g. `Month(1) + Day(15)`). Only `+` and `-` apply to a duration operand:

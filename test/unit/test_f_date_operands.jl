@@ -690,3 +690,124 @@ end
     @test occursin("\"Tb\".\"seen\" = ", _fd_sql(q; conn = conn))
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #568: a bare integer on ± over a temporal left is whole days, at EVERY nesting depth.
+#
+# The defect was an asymmetry in how the two spellings were dispatched, not in either renderer. The
+# DURATION path keys off the OPERAND's type, so it composes over nesting; the two integer-days
+# implementations keyed off `v.field_name isa String`, so a nested left (`(F(c) + 7) + 3`) matched
+# neither and fell through to plain numeric addition. On SQLite that is `'2009-…' + 3` on TEXT with
+# NUMERIC affinity — the silent integer `2012`. On PostgreSQL it is `timestamp with time zone +
+# bigint`, which has no operator: loud, but the same wrong rendering.
+#
+# Both implementations are gone. A bare integer is normalized into `Day(n)` and rendered by the ONE
+# temporal renderer, so composition is a property of the renderer rather than of where each guard
+# happened to be written.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#568: integer days compose over nesting, on both engines" begin
+  # The single-link control. Green since #527 — it must stay byte-identical, or the collapse changed
+  # something it had no business changing.
+  @testset "single link is unchanged (regression control)" begin
+    q = FD.Fd_result.objects
+    q.values("x" => F("logged_at") + 7)
+    @test occursin(_FD_TS_WRAPPER, _fd_sql(q; conn = _FD_SL))
+    @test _fd_params(q; conn = _FD_SL) == Any[7]
+
+    q2 = FD.Fd_result.objects
+    q2.values("x" => F("logged_at") + 7)
+    @test occursin("make_interval(days => \$1::integer)", _fd_sql(q2; conn = _FD_PG))
+    @test _fd_params(q2; conn = _FD_PG) == Any[7]
+  end
+
+  # THE DEFECT. Two links, integer spelling. The assertion that matters is that the OUTER link is
+  # temporal too — before the fix it rendered `(<temporal inner> + ?)`, which is what made SQLite
+  # return an integer and PostgreSQL refuse the statement.
+  @testset "nested integer days render temporally at both links" begin
+    for (col, sl_marker) in (("logged_at", _FD_TS_WRAPPER), ("seen", "date("))
+      q = FD.Fd_result.objects
+      q.values("x" => (F(col) + 7) + 3)
+      sql = _fd_sql(q; conn = _FD_SL)
+      # Two wrappers, not one wrapper and one bare `+ ?`.
+      @test length(collect(eachmatch(Regex(replace(sl_marker, r"([().\[\]*+?^$|\\])" => s"\\\1")), sql))) == 2
+      @test !occursin("+ ?)", sql)          # the old numeric-addition shape
+      @test _fd_params(q; conn = _FD_SL) == Any[7, 3]
+
+      qp = FD.Fd_result.objects
+      qp.values("x" => (F(col) + 7) + 3)
+      sqlp = _fd_sql(qp; conn = _FD_PG)
+      @test length(collect(eachmatch(r"make_interval\(days => \$\d::integer\)", sqlp))) == 2
+      @test !occursin("::bigint", sqlp)     # the `timestamptz + bigint` shape PostgreSQL refused
+      @test _fd_params(qp; conn = _FD_PG) == Any[7, 3]
+    end
+  end
+
+  # A mixed chain: integer inside, duration outside. Broken before for the same reason — the inner
+  # link escaped, and the duration path then wrapped an already-wrong left.
+  @testset "a mixed integer/duration chain composes" begin
+    q = FD.Fd_result.objects
+    q.values("x" => (F("seen") + 7) + Dates.Day(1))
+    @test occursin("date(date(", _fd_sql(q; conn = _FD_SL))
+    @test _fd_params(q; conn = _FD_SL) == Any[7, 1]
+  end
+
+  # THE ORDERING HAZARD, pinned without a database. Rendering the left is what populates the memo a
+  # dotted join key's kind is resolved from, so a guard that asked "is this temporal?" BEFORE the
+  # render would see `nothing` here and drop the whole expression to plain arithmetic. That mistake
+  # is invisible on this fixture's own columns and only shows on a joined one — which is exactly why
+  # it gets its own case rather than being trusted to the integration suite.
+  @testset "a dotted join key is still temporal (the render-then-type order)" begin
+    q = FD.Fd_result.objects
+    q.values("x" => F("race__date") + 30)
+    @test occursin("date(\"Tb_1\".\"date\", '+' || ? || ' days')", _fd_sql(q; conn = _FD_SL))
+    @test _fd_params(q; conn = _FD_SL) == Any[30]
+
+    qp = FD.Fd_result.objects
+    qp.values("x" => F("race__date") + 30)
+    @test occursin("make_interval(days => \$1::integer)", _fd_sql(qp; conn = _FD_PG))
+    @test !occursin("::bigint", _fd_sql(qp; conn = _FD_PG))
+  end
+
+  # A negative integer. Before the collapse SQLite rendered `'+' || ? || ' days'` with the value -3,
+  # i.e. the modifier `'+-3 days'`, which SQLite does not parse — `date()` returns NULL, silently.
+  # The duration renderer has always carried the sign correctly; inheriting it is a free fix.
+  @testset "a negative integer renders a '-' modifier, not '+-'" begin
+    q = FD.Fd_result.objects
+    q.values("x" => F("seen") + (-3))
+    @test occursin("date(\"Tb\".\"seen\", '-' || ? || ' days')", _fd_sql(q; conn = _FD_SL))
+    @test _fd_params(q; conn = _FD_SL) == Any[3]      # magnitude bound, sign in the modifier
+  end
+
+  # Zero days short-circuits to the bare column and binds NOTHING, matching `Day(0)`. Asserted on the
+  # parameter vector because a stray bind here would misalign every SQLite parameter after it.
+  @testset "zero days is the identity and binds no parameter" begin
+    q = FD.Fd_result.objects
+    q.values("x" => F("seen") + 0)
+    @test isempty(_fd_params(q; conn = _FD_SL))
+    @test !occursin("date(", _fd_sql(q; conn = _FD_SL))
+  end
+
+  # `Bool <: Integer` in Julia, so without an explicit exclusion `F("ts") + true` would be rewritten
+  # to `Day(true)`. It must stay the arithmetic the caller actually wrote.
+  @testset "a Bool is not whole days" begin
+    q = FD.Fd_result.objects
+    q.values("x" => F("logged_at") + true)
+    sql = _fd_sql(q; conn = _FD_SL)
+    @test !occursin(_FD_TS_WRAPPER, sql)
+    @test !occursin("days", sql)
+  end
+
+  # The control that keeps the normalization from swallowing ordinary arithmetic: an integer column
+  # plus an integer is not a date shift, and must not reach the temporal renderer (whose soft
+  # validation would throw on it).
+  @testset "integer arithmetic on a non-temporal column is untouched" begin
+    for (backend, conn) in (("PostgreSQL", _FD_PG), ("SQLite", _FD_SL))
+      q = FD.Fd_result.objects
+      q.values("x" => F("points") + 10)
+      sql = _fd_sql(q; conn = conn)
+      @test occursin("\"Tb\".\"points\" + ", sql)
+      @test !occursin("days", sql)
+      @test _fd_params(q; conn = conn) == Any[10]
+    end
+  end
+end

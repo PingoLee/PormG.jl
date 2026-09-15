@@ -6,7 +6,10 @@
 # (self-joins), and SQL functions (year-extraction) in the ON — without raw SQL.
 #
 # Reference convention inside `on`:  bare F("col") = base/main table;
-# F("<alias>.col") = the joined copy declared by cjoin_on.
+# Joined("<alias>", "col") = the joined copy declared by cjoin_on (#481).
+#
+# The target is a model OBJECT or its name (#488): the two spellings share one implementation and
+# render identically, which the #488 testsets at the bottom pin.
 #
 # DB-free: mock connections subtype PormGPostgres/PormGSQLite; assertions inspect
 # the rendered SQL + parameter buckets via show_query=:dict (same pattern as
@@ -178,4 +181,126 @@ end
   q.filter("driverid" => 1)
   sql = q.update("position" => 0, show_query = :sql)
   @test occursin("INNER JOIN \"laps\" AS \"b2\" ON (\"b2\".\"raceid\" = \"Tb\".\"raceid\")", sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# cjoin_on target as a model OBJECT (#488): identical rendering to the name form
+# The String arm resolves the name and delegates to the object arm, so the two spellings must
+# produce byte-identical SQL and the same parameter vector on both dialects. Asserted as equality
+# of the two renders, not against a literal — a drift between the arms is the defect this pins.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "model-object target renders identically to the model-name form (#488)" begin
+  for (label, M) in (("SQLite", SL), ("PostgreSQL", PG))
+    @testset "$label" begin
+      by_name = M.Lap.objects
+      by_name.cjoin_on("Circuit", alias = "c", join_type = "LEFT",
+                       on = [Q(Joined("c", "raceid") == F("raceid"), "lap__@gte" => 3)])
+      by_name.filter("driverid" => 44)
+      by_name.values("id", "track" => Joined("c", "name"))
+
+      by_obj = M.Lap.objects
+      by_obj.cjoin_on(M.Circuit, alias = "c", join_type = "LEFT",
+                      on = [Q(Joined("c", "raceid") == F("raceid"), "lap__@gte" => 3)])
+      by_obj.filter("driverid" => 44)
+      by_obj.values("id", "track" => Joined("c", "name"))
+
+      a = by_name.list(show_query = :dict)
+      b = by_obj.list(show_query = :dict)
+      @test a[:sql_text] == b[:sql_text]
+      @test a[:parameters] == b[:parameters]
+      # And the shared render is the anchor-less LEFT join. The ON parameter precedes WHERE's in
+      # SQLite's flattened vector; PostgreSQL binds joins last and lets `$N` travel with the text,
+      # so only the SQLite vector has a fixed order to pin (see "Bound parameter in ON" above).
+      @test occursin("LEFT JOIN \"circuits\" AS \"c\" ON", b[:sql_text])
+      label == "SQLite" && @test b[:parameters] == [3, 44]
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Self-join with the model object (#488) goes through the same alias reservation (#480)
+# `q.cjoin_on(M.Lap, …)` on a `Lap` query is the documented self-join spelling now. The joined copy
+# renders under the user alias, its columns project through `Joined`, and the base relation's own
+# alias is still refused — `_build_cjoin_on_row_join`'s holder check does not care how the target
+# was spelled.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "self-join with the model object passes the #480 alias reservation (#488)" begin
+  q = SL.Lap.objects
+  q.cjoin_on(SL.Lap, alias = "b2", on = [Joined("b2", "raceid") == F("raceid")])
+  q.values("id", "other" => Joined("b2", "lap"))
+  sql = q.list(show_query = :dict)[:sql_text]
+  @test occursin("INNER JOIN \"laps\" AS \"b2\" ON (\"b2\".\"raceid\" = \"Tb\".\"raceid\")", sql)
+  @test occursin("\"b2\".\"lap\" as \"other\"", sql)
+
+  # The base relation's alias is a range variable the statement already has: refused at build.
+  err = try
+    q2 = SL.Lap.objects
+    q2.cjoin_on(SL.Lap, alias = "Tb", on = [Joined("Tb", "raceid") == F("raceid")])
+    q2.values("id")
+    q2.list(show_query = :sql)
+    nothing
+  catch e
+    e
+  end
+  @test err isa PormG.QueryBuildError
+  @test occursin("two range variables cannot share a name", sprint(showerror, err))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A model object registered on ANOTHER connection is refused (#488) — at build time
+# The name form can only ever resolve inside the query's own module, but an object can come from
+# anywhere. The connection a statement runs on is the `.db("key")` override, else the base model's
+# registration — never the target's — so a foreign target would render a table in a different
+# database. The check runs when the query is BUILT, because `.db()` may follow the `cjoin_on` call.
+# Discriminating pair: the same foreign target is REFUSED without `.db()` and ACCEPTED once `.db()`
+# routes the query to the target's connection; the inverse (`.db()` away from a same-module target)
+# is refused. An UNREGISTERED model object is not judged.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a model object registered on another connection is refused at build (#488)" begin
+  # Declaring is fine — nothing is known about the final connection yet.
+  q = SL.Lap.objects
+  q.cjoin_on(PG.Circuit, alias = "c", on = [Joined("c", "raceid") == F("raceid")])
+  q.values("id")
+  err = try
+    q.list(show_query = :sql)
+    nothing
+  catch e
+    e
+  end
+  @test err isa PormG.QueryBuildError
+  msg = sprint(showerror, err)
+  @test occursin("cjoinon_pg", msg) && occursin("cjoinon_sl", msg)
+  @test occursin("cannot cross connections", msg)
+
+  # `.db()` routes the query to the target's connection: accepted, and rendered in THAT dialect
+  # (PostgreSQL `$1`, not SQLite `?`), which is exactly why the model's own registration cannot be
+  # the rule.
+  routed = SL.Lap.objects
+  routed.db("cjoinon_pg")
+  routed.cjoin_on(PG.Circuit, alias = "c", on = [Q(Joined("c", "raceid") == F("raceid"), "lap__@gte" => 3)])
+  routed.values("id")
+  sql = routed.list(show_query = :sql)
+  @test occursin("INNER JOIN \"circuits\" AS \"c\" ON", sql)
+  @test occursin("\$1", sql) && !occursin("?", sql)
+
+  # The inverse: `.db()` away from a same-module target is refused.
+  away = SL.Lap.objects
+  away.db("cjoinon_pg")
+  away.cjoin_on(SL.Circuit, alias = "c", on = [Joined("c", "raceid") == F("raceid")])
+  away.values("id")
+  away_err = try
+    away.list(show_query = :sql)
+    nothing
+  catch e
+    e
+  end
+  @test away_err isa PormG.QueryBuildError
+  @test occursin("cannot cross connections", sprint(showerror, away_err))
+
+  # Unregistered (`connect_key === nothing`): accepted and rendered under its own table name.
+  loose = PormG.Models.Model("loose_circuits", id = PormG.Models.IDField(), raceid = PormG.Models.IntegerField())
+  q2 = SL.Lap.objects
+  q2.cjoin_on(loose, alias = "lc", on = [Joined("lc", "raceid") == F("raceid")])
+  q2.values("id")
+  @test occursin("INNER JOIN \"loose_circuits\" AS \"lc\" ON", q2.list(show_query = :sql))
 end

@@ -164,11 +164,14 @@ characterizations worth stating plainly.
   *queries/migrations run* (Django's `apps.populate()` analog). Highest-leverage improvement — it
   removes *why* the join builder does resolution inline, and retires the world-age-risky reflection.
 
-- **Join builder shape** — [#68](https://github.com/PingoLee/PormG.jl/issues/68). `_build_row_join`
-  resolves the first hop and each subsequent hop with near-duplicate branch chains, and the join
-  plan is carried as stringly-typed `Vector{Dict{String, …}}`. The tracked refactor is
-  behavior-preserving (collapse the duplication) and optionally introduces a typed `JoinPlan`/
-  `JoinNode` struct. Best done *after* #65, which simplifies the resolution it depends on.
+- **Join builder shape** — [#68](https://github.com/PingoLee/PormG.jl/issues/68) and
+  [#487](https://github.com/PingoLee/PormG.jl/issues/487), both landed. The join plan is typed:
+  `row_join` is a `Vector{JoinRow}` whose four kinds — `ModelJoin`, `CteJoin`, `CrossJoin`,
+  `AnchorlessJoin` (`src/querybuilder/types.jl`) — select the render path by dispatch rather than by
+  string flags. `_build_row_join` resolves the first hop and each subsequent hop through one
+  `_forward_fk_hop` / `_reverse_hop` / `_finish_hop!` triple (`src/querybuilder/build_joins.jl`), so
+  the `db_column` key resolution has a single source of truth per hop direction; the CTE arm is
+  first-hop only by design, and the many-to-many arms fold their own tail.
 
 - **Type stability is structural, not cosmetic** —
   [#41](https://github.com/PingoLee/PormG.jl/issues/41). The query state is built on

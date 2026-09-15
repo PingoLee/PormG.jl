@@ -689,6 +689,21 @@ const DOCERR_CASES = [
             q.list(show_query = :dict)
         end,
     ),
+    (
+        # #488. A `cjoin_on` target given as a model OBJECT may come from anywhere, so a model
+        # registered on a different connection from the one the query runs on is refused when the
+        # query is BUILT: the join would name a table that lives in another database. Build time,
+        # not call time, because a `.db("key")` override may follow the `cjoin_on` call. The name
+        # form cannot reach this — it resolves inside the query's own module.
+        "read/custom_joins.md — a cjoin_on target registered on another connection is refused (#488)",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.cjoin_on(DOCERR_DRIVER_SL, alias = "d", on = [Joined("d", "driverid") == F("driverid")])
+            q.values("resultid")
+            q.list(show_query = :dict)
+        end,
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

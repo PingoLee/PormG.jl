@@ -177,8 +177,130 @@ const ConnType = Union{PormGSQLite,PormGPostgres,Nothing}
 """CTE configuration dictionary."""
 const CTEDict = Dict{String,Union{SQLObjectHandler,PormGModel,Pair,String,Nothing}}
 
-"""Join metadata dictionary."""
-const JoinDict = Dict{String,Union{String,Vector{FilterType}}}
+# #487 — one materialized JOIN, typed by KIND.
+#
+# `InstructionObject.row_join` used to be a `Vector{Dict{String,Union{String,Vector{FilterType}}}}`
+# whose kind — model hop, keyed CTE, cross-joined CTE, anchor-less `cjoin_on` — was a set of string
+# booleans (`"no_anchor" => "1"`, `"cte" => "1"`, `"cross" => "1"`, `"to_many" => "1"`) that every
+# reader probed with its own idiom. The same defect #484 removed one layer up, in the config
+# namespace: the type IS the kind now, so a reader asks `isa` and the render path is selected by
+# what the row is rather than by which tags it happens to carry. Every slot every kind renders is a
+# real field; a slot a kind does not have (a `CrossJoin`'s key columns, a `CteJoin`'s ON predicates)
+# no longer exists as an empty-string sentinel a consumer has to know to skip.
+#
+# All four are immutable. The join builder writes to a row at three moments, and each is a
+# replacement rather than an edit: the shared tail applies a `cjoin`/`on()` override through
+# `_with_config` (a copy), and `_apply_many_to_many_branch` stamps `to_many` onto the dedup SURVIVOR
+# through `_flag_to_many!`, which replaces the slot in `row_join`. Nothing holds a row across either.
+#
+# The two slots every kind shares by name — `alias_a` / `alias_b`, and `a` / `b` — are read
+# generically by the alias allocator, the dedup, the relocation pass and the UPDATE-FROM renderer, so
+# they are spelled the same in all four structs on purpose.
+abstract type JoinRow end
+
+# A model-to-model equi-join: a forward ForeignKey / OneToOne hop, a reverse-relation hop, or either
+# half of a many-to-many expansion (the through-table hop and the related-table hop are two of these).
+# `to_many` marks the many-side of a reverse or M2M hop for the #74 fan-out guard; `on_conditions`
+# carries a `cjoin`/`on()` entry's predicates, AND-appended to the equi-anchor at render.
+Base.@kwdef struct ModelJoin <: JoinRow
+  a::String                      # source relation (physical table, or a CTE name on a hop out of one)
+  alias_a::String
+  key_a::String                  # physical column on the source side (`field_db_column` / `model_column`)
+  b::String                      # target physical table
+  alias_b::String
+  key_b::String                  # physical column on the target side
+  how::String                    # "INNER" / "LEFT" — interpolated raw into ` <how> JOIN `
+  to_many::Bool = false
+  on_conditions::Vector{FilterType} = FilterType[]
+end
+
+# A keyed `.with(name => sub, join_field = main => cte)` hop. `key_b` is the CTE's PROJECTION
+# ALIAS, not a physical column (#64/#376) — the one dual-natured key slot, which is why the #394
+# quoting table lets the render site stay escape-only: `_with` validated the name at declaration.
+# It never carries ON predicates or a join-type override: a CTE has no `custom_join` entry by
+# construction (#474), and its join type comes from the `.with(...)` declaration.
+Base.@kwdef struct CteJoin <: JoinRow
+  a::String
+  alias_a::String
+  key_a::String
+  b::String                      # the CTE name
+  alias_b::String
+  key_b::String                  # the CTE's projection alias
+  how::String
+end
+
+# An unkeyed `.with(name => sub)`: `CROSS JOIN`, no ON clause, no join type (#44). The correlation
+# is supplied by the outer query's `filter(...)`, which is why a predicate that lands here is refused
+# rather than rendered (#424).
+Base.@kwdef struct CrossJoin <: JoinRow
+  a::String
+  alias_a::String
+  b::String                      # the CTE name
+  alias_b::String
+end
+
+# A `cjoin_on` join (#45): `alias_b` is the user's alias and `on_conditions` is the ENTIRE ON clause —
+# no equi-anchor is emitted, so there are no key columns to carry.
+Base.@kwdef struct AnchorlessJoin <: JoinRow
+  a::String
+  alias_a::String
+  b::String
+  alias_b::String
+  how::String
+  on_conditions::Vector{FilterType}
+end
+
+# The dedup identity `_insert_join` compares. Deliberately KIND-AGNOSTIC and shaped exactly like the
+# `(a, b, key_a, key_b, alias_a)` tuple the dict rows compared, because putting the kind in would be
+# observable: a CTE row and a model row agree on `b` only when a CTE is named after a physical
+# table, `_with` refuses that for every table reachable from the registered models — but its walk is
+# one module deep, and SQL would resolve both joins to the CTE regardless, so a kind discriminator
+# could only ever render a second join reading the wrong relation (#479, `_insert_join`).
+#
+# The sentinels the kinds without key columns contribute are the ones their dict rows carried: a
+# `CrossJoin`'s empty strings collapse every reference to the same unkeyed CTE onto one `CROSS JOIN`,
+# and an `AnchorlessJoin` contributes its own alias, which is what keeps two `cjoin_on` joins to the
+# same target apart — `alias_b` is not in the tuple, so it has to arrive through `key_a`.
+_key_a(r::Union{ModelJoin,CteJoin})::String = r.key_a
+_key_a(::CrossJoin)::String = ""
+_key_a(r::AnchorlessJoin)::String = r.alias_b
+_key_b(r::Union{ModelJoin,CteJoin})::String = r.key_b
+_key_b(::Union{CrossJoin,AnchorlessJoin})::String = ""
+_dedup_key(r::JoinRow) = (r.a, r.b, _key_a(r), _key_b(r), r.alias_a)
+
+# The predicates a row appends to (or, for an `AnchorlessJoin`, substitutes for) its equi-anchor.
+# Empty for the two CTE kinds, which cannot carry any.
+_on_conditions(r::Union{ModelJoin,AnchorlessJoin})::Vector{FilterType} = r.on_conditions
+_on_conditions(::Union{CteJoin,CrossJoin})::Vector{FilterType} = FilterType[]
+
+# #74: is this row the many-side of a to-many relation?
+_to_many(r::ModelJoin)::Bool = r.to_many
+_to_many(::JoinRow)::Bool = false
+
+# #394: does this row name a CTE — i.e. a relation a statement that emits no `WITH` never declares?
+_joins_cte(::Union{CteJoin,CrossJoin})::Bool = true
+_joins_cte(::JoinRow)::Bool = false
+
+# The join type the NEXT hop inherits (`_determine_join_type(previus_how = …)` turns a `LEFT`
+# parent into a `LEFT` child). A `CrossJoin` has none: its dict row carried the sentinel `"CROSS"`
+# purely so a deep path after an unkeyed CTE reached the "not a foreign key" error instead of a
+# `KeyError`, and every consumer tests `== "LEFT"` only, so `nothing` renders identically.
+_prev_how(r::Union{ModelJoin,CteJoin,AnchorlessJoin})::Union{String,Nothing} = r.how
+_prev_how(::CrossJoin)::Union{String,Nothing} = nothing
+
+# The shared tail of `_build_row_join`: fold a `cjoin`/`on()` entry's join-type override and ON
+# predicates into the hop's row, by copy. Only a `ModelJoin` can receive one — the CTE kinds admit
+# exactly the `(nothing, nothing)` the tail passes when `cte == true`, so a config reaching a CTE row
+# is a `MethodError` at the call site rather than a silently ignored tag.
+function _with_config(row::ModelJoin, join_type_override::Union{String,Nothing},
+                      join_filters::Union{Vector{FilterType},Nothing})::ModelJoin
+  how = join_type_override === nothing ? row.how : join_type_override
+  on_conditions = (join_filters === nothing || isempty(join_filters)) ? row.on_conditions : join_filters
+  return ModelJoin(a = row.a, alias_a = row.alias_a, key_a = row.key_a,
+                   b = row.b, alias_b = row.alias_b, key_b = row.key_b,
+                   how = how, to_many = row.to_many, on_conditions = on_conditions)
+end
+_with_config(row::Union{CteJoin,CrossJoin}, ::Nothing, ::Nothing) = row
 
 #
 # SQLTypeArrays Objects
@@ -223,7 +345,7 @@ const CorrelatedRef = NamedTuple{(:label, :ref, :column, :expr),NTuple{4,String}
   having::Vector{String} = [] # values to be used in having query
   order::Vector{String} = [] # values to be used in order query  
   # df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
-  row_join::Vector{JoinDict} = [] # array of dictionary to be used in join query
+  row_join::Vector{JoinRow} = JoinRow[] # the materialized joins, one typed row each (#487)
   row_path::Vector{String} = [] # array of path to map the row_join (model__model__ etc)
   # array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
   tab_field_cache::Dict{MemoKey,PormGField} = sizehint!(Dict{MemoKey,PormGField}(), 12) # cache to be used in join query (#474: keyed by MemoKey)
@@ -256,8 +378,8 @@ const CorrelatedRef = NamedTuple{(:label, :ref, :column, :expr),NTuple{4,String}
   parameters::Union{Nothing,AbstractPormGParam} = nothing # parameters to be used in the query
   outer::Union{Nothing,SQLInstruction} = nothing # parent query instruction for correlated subqueries
   # #74 fan-out guard: record each at-risk aggregate's source alias so build() can refuse
-  # silently-inflated COUNT/SUM/AVG. To-many joins are flagged in-place on their row_join dict (a
-  # "to_many" key) and the many-side alias set is derived from the *deduped* row_join at check time
+  # silently-inflated COUNT/SUM/AVG. To-many joins carry `ModelJoin.to_many` (stamped onto the dedup
+  # survivor by `_flag_to_many!`) and the many-side alias set is derived from the *deduped* row_join at check time
   # (deriving avoids over-counting when _cache_join builds the same join twice). See _check_aggregate_fanout.
   agg_sources::Vector{NamedTuple{(:alias, :func, :label, :distinct),Tuple{String,String,String,Bool}}} =
     NamedTuple{(:alias, :func, :label, :distinct),Tuple{String,String,String,Bool}}[]
@@ -479,7 +601,6 @@ mutable struct SQLObjectQuery <: SQLObject
   group::Vector{String}
   having::Vector{String}
   list_joins::Vector{String} # is ther a better way to do this?
-  row_join::Vector{Dict{String,Any}}
   distinct::Bool # Add distinct field
   for_update::Union{Nothing,ForUpdateClause} # #26: row-level lock clause (nothing = no lock)
   # ORDERED for the same reason as `alias_join` below and `insert` above. `build_cte_clause`
@@ -513,10 +634,10 @@ mutable struct SQLObjectQuery <: SQLObject
   projection_kinds::Dict{Symbol,CanonicalType}
 
   SQLObjectQuery(; model=nothing, connect_key=nothing, values=[], filter=[], insert=OrderedCollections.OrderedDict{String,Any}(), limit=0, offset=0,
-    order=[], group=[], having=[], list_joins=[], row_join=[], distinct=false, for_update=nothing, ctes=OrderedCollections.OrderedDict{String,CTEDict}(),
+    order=[], group=[], having=[], list_joins=[], distinct=false, for_update=nothing, ctes=OrderedCollections.OrderedDict{String,CTEDict}(),
     custom_join=OrderedCollections.OrderedDict{String,PathJoin}(), alias_join=OrderedCollections.OrderedDict{String,AliasJoin}(), parameters=nothing,
     projection_kinds=Dict{Symbol,CanonicalType}()) =
-    new(model, connect_key, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, for_update, ctes, custom_join, alias_join, parameters, projection_kinds)
+    new(model, connect_key, values, filter, insert, limit, offset, order, group, having, list_joins, distinct, for_update, ctes, custom_join, alias_join, parameters, projection_kinds)
 end
 
 function Base.deepcopy(obj::SQLObjectHandler)
@@ -592,7 +713,6 @@ function Base.deepcopy(obj::SQLObjectQuery)
       group=deepcopy(obj.group),
       having=deepcopy(obj.having),
       list_joins=deepcopy(obj.list_joins),
-      row_join=deepcopy(obj.row_join),
       distinct=obj.distinct,
       for_update=obj.for_update,  # #26: immutable/set-once lock clause — share by reference (like distinct)
       ctes=_copy_ctes(obj.ctes),  # #43: independent CTE state (deep sub-query, drop transient "model")
@@ -1264,7 +1384,7 @@ CTE and neither shadows the other (#481):
 
 ```julia
 q = M.Result.objects
-q.cjoin_on("Driver", alias = "d", on = [Joined("d", "driverid") == F("driverid")])
+q.cjoin_on(M.Driver, alias = "d", on = [Joined("d", "driverid") == F("driverid")])
 q.values("points", "who" => Joined("d", "surname"))
 q.filter(Joined("d", "nationality") => "Brazilian")
 ```
@@ -1805,7 +1925,9 @@ Each mutates the handler and returns it, so calls can be chained or accumulated 
   itself, and an explicit one stays in effect for later `on()` calls on that path (#474)
 - `.cjoin("field" => "Model"; filters, join_type)` — custom join at query time
 - `.cjoin_on(model; alias, on, join_type)` — anchor-less join where `on` is the entire `ON` clause;
-  reference its columns with [`Joined(alias, column)`](@ref Joined) in any clause. Its alias may
+  `model` is the model object (`M.Driver`) or its name (`"Driver"`), and a model registered on
+  another connection is refused (#488). Reference its columns with
+  [`Joined(alias, column)`](@ref Joined) in any clause. Its alias may
   equal a relation name on the base model or an `on()`/`cjoin()` join path; each stays addressable,
   and both joins are emitted (#484)
 - `.with("name" => subquery; join_field, join_type)` — define a CTE; call again for a second one.

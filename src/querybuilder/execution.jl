@@ -295,16 +295,16 @@ function query(q::SQLObjectHandler;
   # WHERE/HAVING predicate — that is an unintended Cartesian product. The correlation is expected
   # to come from a `filter("main_col" => F("<cte>__col"))` (which renders in WHERE). No false
   # positive on the intended usage, where the alias appears in the WHERE fragment.
-  if any(rj -> get(rj, "cross", nothing) !== nothing, instruction.row_join)
+  if any(rj -> rj isa CrossJoin, instruction.row_join)
     predicate_text = string(
       isempty(instruction._where) ? "" : join(instruction._where, " AND "),
       isempty(instruction.having) ? "" : join(instruction.having, " AND "),
     )
     for rj in instruction.row_join
-      get(rj, "cross", nothing) === nothing && continue
-      cte_alias = rj["alias_b"]::String
+      rj isa CrossJoin || continue
+      cte_alias = rj.alias_b
       if !occursin("\"$(cte_alias)\"", predicate_text)
-        @warn _emsg("PormG: CTE \e[31m$(rj["b"])\e[0m is CROSS JOINed with no correlating filter — this is a Cartesian product. Add a correlation such as \e[32mfilter(\"main_col\" => F(\"$(rj["b"])__col\"))\e[0m, or pass \e[32mjoin_field=\e[0m to .with().")
+        @warn _emsg("PormG: CTE \e[31m$(rj.b)\e[0m is CROSS JOINed with no correlating filter — this is a Cartesian product. Add a correlation such as \e[32mfilter(\"main_col\" => F(\"$(rj.b)__col\"))\e[0m, or pass \e[32mjoin_field=\e[0m to .with().")
       end
     end
   end
@@ -1800,28 +1800,29 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
   end
 end
 
-function _build_from_tables(row_join::Vector{Dict{String, Union{String, Vector{FilterType}}}}, connection::Union{PormGPostgres, PormGSQLite})
+function _build_from_tables(row_join::Vector{JoinRow}, connection::Union{PormGPostgres, PormGSQLite})
   tables = String[]
-  for join_dict in row_join
+  for row in row_join
     # #394: no try/catch. This used to `@error` and CONTINUE, which dropped a table from a correlated
     # FROM list and left the surviving aliases unconstrained — a wrong query emitted as a warning.
-    # Everything that can raise here is a defect, not a tolerable condition: a `KeyError` means the
-    # row_join is malformed, and an `InvalidValueError` means an INTERNALLY generated alias is not an
-    # identifier. Both have to surface.
-    b = safe_table_identifier(join_dict["b"], connection)
-    alias_b = quote_identifier(join_dict["alias_b"], connection)
+    # Everything that can raise here is a defect, not a tolerable condition: an `InvalidValueError`
+    # means an INTERNALLY generated alias is not an identifier, and it has to surface. (A row with a
+    # missing slot used to be the other case; since #487 a `JoinRow` cannot be constructed without
+    # its relation and alias, so that one is unrepresentable rather than caught.)
+    b = safe_table_identifier(row.b, connection)
+    alias_b = quote_identifier(row.alias_b, connection)
     push!(tables, "$b AS $alias_b")
   end
   return join(unique(tables), ", ")
 end
 
-function _get_join_condition_list(row_join::Vector{Dict{String, Union{String, Vector{FilterType}}}}, connection)
+function _get_join_condition_list(row_join::Vector{JoinRow}, connection)
   # #45: this correlated UPDATE-FROM / DELETE-USING path only builds equi-anchors and ignores
   # on_conditions, so an anchor-less cjoin_on join would be emitted WITHOUT its ON (silently wrong).
   # The common update/delete path scopes rows via a subquery that DOES render cjoin_on correctly;
   # only this correlated path is unsupported — fail loudly rather than drop the join condition.
-  for join_dict in row_join
-    if get(join_dict, "no_anchor", "") == "1"
+  for row in row_join
+    if row isa AnchorlessJoin
       throw(QueryBuildError("cjoin_on is not supported in a correlated UPDATE-FROM/DELETE-USING (setting a " *
                     "column from a joined table); scope the mutation with a filter/subquery instead."))
     end
@@ -1829,41 +1830,43 @@ function _get_join_condition_list(row_join::Vector{Dict{String, Union{String, Ve
     # reached only from the three READ paths — so a row_join entry naming a CTE renders
     # `FROM "<cte>" AS "Tb_N"` against a relation this statement never declares. That is as true of a
     # KEYED CTE as of a CROSS-joined one, which is why the check is on the entry being a CTE rather
-    # than on the shape of its keys. The cross-joined case additionally carries SENTINEL empty key
-    # columns; those used to raise inside the loop below and be swallowed by a `catch` that dropped
-    # the ON condition entirely. Both fail here now, before any SQL is built.
-    if get(join_dict, "cte", nothing) !== nothing || get(join_dict, "cross", nothing) !== nothing
+    # than on the shape of its keys — `_joins_cte` is true for both kinds. The cross-joined case has
+    # no key columns at all (its dict row carried SENTINEL empty strings, which used to raise inside
+    # the loop below and be swallowed by a `catch` that dropped the ON condition entirely). Both fail
+    # here now, before any SQL is built.
+    if _joins_cte(row)
       throw(QueryBuildError("A CTE cannot be joined in a correlated UPDATE ... FROM: the statement emits " *
                     "no WITH clause, so the CTE it references is never declared. Scope the mutation with " *
                     "a filter or a subquery instead."))
     end
   end
   conditions = String[]
-  for join_dict in row_join
+  for row in row_join
     # #394: no try/catch either — the guards above refuse to drop an ON clause, and until now the
     # loop below dropped one anyway on any failure, with nothing but an `@error`. An UPDATE ... FROM
     # or DELETE ... USING missing its ON condition matches every row of the joined table, so this is
     # the one place a swallowed identifier error corrupts data rather than returning wrong rows.
-    # Everything reaching here is well-formed: both anchor-less shapes are refused above, and every
-    # `row_join` producer writes the alias/key set together with a PormG-generated `alias_b`.
-    alias_a = quote_identifier(join_dict["alias_a"], connection)
-    key_a = safe_column_identifier(join_dict["key_a"], connection)
-    alias_b = quote_identifier(join_dict["alias_b"], connection)
-    key_b = safe_column_identifier(join_dict["key_b"], connection)
+    # Everything reaching here is a `ModelJoin`: both anchor-less shapes and both CTE shapes are
+    # refused above, and a `ModelJoin` cannot exist without its alias/key set (#487).
+    row = row::ModelJoin
+    alias_a = quote_identifier(row.alias_a, connection)
+    key_a = safe_column_identifier(row.key_a, connection)
+    alias_b = quote_identifier(row.alias_b, connection)
+    key_b = safe_column_identifier(row.key_b, connection)
     push!(conditions, "$alias_a.$key_a = $alias_b.$key_b")
   end
   return conditions
 end
 
-function _build_join_conditions(row_join::Vector{Dict{String, Union{String, Vector{FilterType}}}}, connection::Union{PormGPostgres, PormGSQLite})
+function _build_join_conditions(row_join::Vector{JoinRow}, connection::Union{PormGPostgres, PormGSQLite})
   return _get_join_condition_list(row_join, connection)
 end
 
 function _set_clause_uses_join_aliases(set_clause::String,
-  row_join::Vector{Dict{String, Union{String, Vector{FilterType}}}},
+  row_join::Vector{JoinRow},
   connection::Union{PormGPostgres, PormGSQLite})::Bool
-  for join_dict in row_join
-    alias_b = quote_identifier(join_dict["alias_b"], connection)
+  for row in row_join
+    alias_b = quote_identifier(row.alias_b, connection)
     occursin("$alias_b.", set_clause) && return true
   end
   return false

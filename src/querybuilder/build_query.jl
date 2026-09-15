@@ -567,13 +567,17 @@ function build_row_join_sql_text(instruc::SQLInstruction)
     value = instruc.row_join[i]
     set_context!(instruc, :join)
 
-    if haskey(value, "on_conditions") && value["on_conditions"] !== nothing
-      on_conditions = value["on_conditions"]::Vector{FilterType}
-      alias_a_quoted = quote_identifier(value["alias_a"], instruc.connection)
+    on_conditions = _on_conditions(value)
+    # `!isempty`, not "has the slot" (#487): a `cjoin_on` declared with no predicates carries an
+    # EMPTY vector, and recording an empty extras list for it — or for every CTE row, which has none
+    # by construction — would make Phase 1c below refuse every `CrossJoin` and Phase 2 misreport
+    # #435's "every predicate relocated" case as this one.
+    if !isempty(on_conditions)
+      alias_a_quoted = quote_identifier(value.alias_a, instruc.connection)
       original_alias = instruc.alias
       extras = OnExtra[]
 
-      no_anchor = get(value, "no_anchor", "") == "1"
+      no_anchor = value isa AnchorlessJoin
       for condition in on_conditions
         # #421: lift the values this condition binds straight back out of the bucket. Phase 1b may
         # still move the fragment, so nothing resolved here has a final clause position yet; Phase 2
@@ -701,14 +705,14 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         # alias that happens to share a column's name (`alias = "code"` against `"Tb_2"."code"`)
         # then drags an unrelated join's ON filter onto itself. That is valid SQL returning wrong
         # rows, silently. Phase 1 above already keys on the same `"alias".` form (:310).
-        if occursin("\"$(instruc.row_join[dep_idx]["alias_b"])\".", extra.sql)
+        if occursin("\"$(instruc.row_join[dep_idx].alias_b)\".", extra.sql)
           haskey(on_clause_extras, dep_idx) || (on_clause_extras[dep_idx] = OnExtra[])
           push!(on_clause_extras[dep_idx], extra)
           relocated[ei] = true
           dests = get!(relocated_to, idx, Int[])
           dep_idx in dests || push!(dests, dep_idx)
           # Same `"alias".` form as every other alias test here, for the same reason.
-          occursin("\"$(instruc.row_join[idx]["alias_b"])\".", extra.sql) &&
+          occursin("\"$(instruc.row_join[idx].alias_b)\".", extra.sql) &&
             push!(relocated_self_ref, idx)
           break
         end
@@ -762,12 +766,11 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   # the reachable-shape list here was "written twice and wrong twice". If you can construct a
   # producer, it belongs in `test_order_by_joins.jl` next to the coexistence tests.
   for (idx, value) in enumerate(instruc.row_join)
-    get(value, "cte", nothing) === nothing && continue
-    get(value, "cross", nothing) === nothing && continue
+    value isa CrossJoin || continue
 
     haskey(on_clause_extras, idx) && throw(QueryBuildError(
-      "An ON predicate resolved onto \e[4m\e[31m$(value["alias_b"])\e[0m, the CROSS-joined CTE " *
-      "\e[4m\e[31m$(value["b"])\e[0m (a \e[4m\e[32m.with(...)\e[0m declared without " *
+      "An ON predicate resolved onto \e[4m\e[31m$(value.alias_b)\e[0m, the CROSS-joined CTE " *
+      "\e[4m\e[31m$(value.b)\e[0m (a \e[4m\e[32m.with(...)\e[0m declared without " *
       "\e[4m\e[32mjoin_field\e[0m). A CROSS JOIN has no ON clause to carry that predicate, so it " *
       "would be dropped and the join would match every row.\n  Move the predicate to " *
       "\e[4m\e[32m.filter(...)\e[0m, which is where a CROSS-joined CTE's correlation belongs " *
@@ -777,50 +780,46 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   # --- Phase 2: emit JOIN SQL text in original order -------------------------
   for (idx, value) in enumerate(instruc.row_join)
     set_context!(instruc, :join)
-    b_quoted = safe_table_identifier(value["b"], instruc.connection)
-    alias_b_quoted = quote_identifier(value["alias_b"], instruc.connection)
+    b_quoted = safe_table_identifier(value.b, instruc.connection)
+    alias_b_quoted = quote_identifier(value.alias_b, instruc.connection)
 
-    # #44: a CROSS-joined CTE (no join_field) carries sentinel empty key columns and has no ON —
-    # the correlation is supplied by the main query's F() filter(s) in WHERE. Emit it and move on
-    # before touching key_a/key_b (empty strings would fail identifier validation). Phase 1c above
-    # has already refused any entry here that picked up an ON predicate.
-    if get(value, "cross", nothing) !== nothing
+    # #44: a CROSS-joined CTE (no join_field) has no key columns and no ON — the correlation is
+    # supplied by the main query's F() filter(s) in WHERE. Emit it and move on. Phase 1c above has
+    # already refused any entry here that picked up an ON predicate.
+    if value isa CrossJoin
       push!(instruc.join, """ CROSS JOIN $b_quoted AS $alias_b_quoted """)
       continue
     end
 
-    if get(value, "no_anchor", "") == "1"
+    if value isa AnchorlessJoin
       # #45: anchor-less join — the ON clause is entirely the user's resolved extras (no equi-anchor).
       extras = get(on_clause_extras, idx, OnExtra[])
       if isempty(extras)
         # #435: two different causes reach this line, and they used to share one message that only
         # described the first. `row_join` still carries `on_conditions` — Phase 1b mutates only the
         # local `on_clause_extras` — so what the CALLER passed is still readable here, after
-        # relocation has erased what the join is left holding.
-        #
-        # The `!== nothing` mirrors Phase 1's gate exactly. It is dead today (`JoinDict`'s value
-        # type cannot hold `nothing`), and it stays so the two never drift: if that element type is
-        # ever widened, a `haskey`-only test here would report a relocation that never happened.
-        if haskey(value, "on_conditions") && value["on_conditions"] !== nothing
+        # relocation has erased what the join is left holding. The same `!isempty` gate as Phase 1,
+        # so the two cannot drift (#487).
+        if !isempty(value.on_conditions)
           dest_idxs = get(relocated_to, idx, Int[])
           # Naming the destination is diagnosis, not a remedy: relocation targets are often joins
           # PormG built itself (`Tb_2`), and the caller cannot address those. So the message reports
           # where the predicates went, and every remedy it offers is written in terms the caller
           # CAN act on — their own alias, or `.filter(...)`.
-          dests = [String(instruc.row_join[d]["alias_b"]) for d in dest_idxs]
+          dests = [instruc.row_join[d].alias_b for d in dest_idxs]
           where_to = isempty(dests) ? "another join" :
                      join(("\e[4m\e[31m$d\e[0m" for d in dests), ", ", " and ")
-          alias = value["alias_b"]
+          alias = value.alias_b
 
           # A destination that is itself a `cjoin_on` has NO path to project — `values("b2…")` is
           # not a thing — so "project it in values(...)" is unactionable there. The actionable move
           # is the opposite one: declare the predicate on the join PormG emits LATER, which turns
           # the forward reference into a backward one. Found in review: the self-ref remedy was
           # written for a model-path destination and asserted at both.
-          projectable = filter(d -> get(instruc.row_join[d], "no_anchor", "") != "1", dest_idxs)
+          projectable = filter(d -> !(instruc.row_join[d] isa AnchorlessJoin), dest_idxs)
           plural = length(projectable) > 1 ? "those paths" : "that path"
-          reorder = [String(instruc.row_join[d]["alias_b"])
-                     for d in dest_idxs if get(instruc.row_join[d], "no_anchor", "") == "1"]
+          reorder = [instruc.row_join[d].alias_b
+                     for d in dest_idxs if instruc.row_join[d] isa AnchorlessJoin]
 
           self_ref_remedy =
             "Your predicate does correlate \e[4m\e[31m$alias\e[0m; it moved only because the " *
@@ -873,7 +872,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
             "every predicate you gave, so nothing is left to constrain \e[4m\e[31m$alias\e[0m " *
             "itself.\n  $remedy (#435)."))
         end
-        throw(QueryBuildError("cjoin_on produced no ON conditions for alias '$(value["alias_b"])'."))
+        throw(QueryBuildError("cjoin_on produced no ON conditions for alias '$(value.alias_b)'."))
       end
       on_clause = join((e.sql for e in extras), " AND ")
 
@@ -900,13 +899,13 @@ function build_row_join_sql_text(instruc::SQLInstruction)
       # returns N rows instead of N×M — the inverse of the bug this guard exists for.
       if !occursin("$alias_b_quoted.", on_clause)
         throw(QueryBuildError(
-          "The ON clause built for \e[4m\e[31m$(value["alias_b"])\e[0m never references " *
-          "\e[4m\e[31m$(value["alias_b"])\e[0m, so the join is not constrained by it: every " *
-          "\e[4m\e[31m$(value["b"])\e[0m row would pair with every matched base row.\n  " *
+          "The ON clause built for \e[4m\e[31m$(value.alias_b)\e[0m never references " *
+          "\e[4m\e[31m$(value.alias_b)\e[0m, so the join is not constrained by it: every " *
+          "\e[4m\e[31m$(value.b)\e[0m row would pair with every matched base row.\n  " *
           "This is not #435's case: there, EVERY predicate was relocated onto another join and this " *
           "one was left with no ON clause at all. Here it has one — some of what you gave may well " *
           "have relocated, but what remains never names this alias.\n  Give it a predicate naming its " *
-          "own alias, e.g. \e[4m\e[32mF(\"$(value["alias_b"]).<column>\") == F(\"<base column>\")\e[0m. " *
+          "own alias, e.g. \e[4m\e[32mF(\"$(value.alias_b).<column>\") == F(\"<base column>\")\e[0m. " *
           "If the conditions were never about this join, move them to " *
           "\e[4m\e[32m.filter(...)\e[0m and drop the \e[4m\e[32mcjoin_on\e[0m; if you " *
           "genuinely want a cross product, declare the table as an unkeyed " *
@@ -919,16 +918,18 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         reattach_parameters!(instruc, extra.params)   # #421: bind in EMISSION order
       end
     else
-      alias_a_quoted = quote_identifier(value["alias_a"], instruc.connection)
+      alias_a_quoted = quote_identifier(value.alias_a, instruc.connection)
       # #394: escape-only, because on every model-join branch these are PHYSICAL columns
       # (`Models.model_column`). The one exception is a CTE join, where `key_b` is the CTE's
-      # projection ALIAS (`build_joins.jl` sets `row_join["key_b"] = cte_table_key`). That name is
+      # projection ALIAS (`build_joins.jl` builds the `CteJoin` with `key_b = cte_table_key`). That name is
       # not unguarded: `_build_row_join` raises `UnknownFieldError` unless it matches a field of
       # the CTE model, and that field came from a `values()` alias, which `_query_select` renders
       # through the fail-closed `quote_identifier`. So the strict check happens where the caller
       # wrote the name, exactly as it does for the CTE name itself since #394.
-      key_a_quoted = safe_column_identifier(value["key_a"], instruc.connection)
-      key_b_quoted = safe_column_identifier(value["key_b"], instruc.connection)
+      # Only the two keyed kinds reach this branch (#487): `CrossJoin` and `AnchorlessJoin` left above.
+      value = value::Union{ModelJoin,CteJoin}
+      key_a_quoted = safe_column_identifier(value.key_a, instruc.connection)
+      key_b_quoted = safe_column_identifier(value.key_b, instruc.connection)
 
       # Build base ON clause
       on_clause = "$alias_a_quoted.$key_a_quoted = $alias_b_quoted.$key_b_quoted"
@@ -944,7 +945,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
       end
     end
 
-    push!(instruc.join, """ $(value["how"]) JOIN $b_quoted AS $alias_b_quoted ON $on_clause """)
+    push!(instruc.join, """ $(value.how) JOIN $b_quoted AS $alias_b_quoted ON $on_clause """)
   end
 end
 
@@ -1069,7 +1070,7 @@ function _check_aggregate_fanout(instruct::SQLInstruction)
   # only one entry, so deriving here counts each actual to-many join exactly once.
   many = Set{String}()
   for r in instruct.row_join
-    get(r, "to_many", "") == "1" && push!(many, string(r["alias_b"]))
+    _to_many(r) && push!(many, r.alias_b)
   end
   isempty(many) && return nothing
   n = length(many)

@@ -650,8 +650,10 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
     # Chainable: query.on("join_path", "field" => value; join_type="INNER")
     return (args...; kwargs...) -> (_on(q, args...; kwargs...); q)
   elseif sym === :cjoin_on
-    # Chainable: query.cjoin_on("Model"; alias="b2", on=[Qor(...)], join_type="INNER")
-    # Anchor-less full-control join (#45): the `on` expressions are the ENTIRE ON clause.
+    # Chainable: query.cjoin_on(M.Model; alias="b2", on=[Qor(...)], join_type="INNER")
+    # Anchor-less full-control join (#45): the `on` expressions are the ENTIRE ON clause. The target
+    # is a model object or its name (#488); dispatch on that happens in `_cjoin_on`, so the closure
+    # forwards `args...` untyped.
     return (args...; kwargs...) -> (_cjoin_on(q, args...; kwargs...); q)
   elseif sym === :copy
     return () -> deepcopy(q)

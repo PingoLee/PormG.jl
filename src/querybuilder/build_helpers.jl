@@ -164,9 +164,11 @@ _check_function(x::OuterRefObject) = x
 # kwargs and retagging it would corrupt the rendered function.
 #
 # #481 widened the walk. A COMPOSITE transform does not build a bare function over the column: the
-# `@quarter` / `@quadrimester` keys expand to `Concat([Cast(Year(x)), Value("-Q"), Case([When(...)])])`
+# `@yyyy_q` / `@yyyy_quad` keys expand to `Concat([Cast(Year(x)), Value("-Q"), Case([When(...)])])`
 # (`functions.jl`), so the walk also meets an `SQLText` literal, an `SQLField` wrapper and the
-# `OperObject` inside each `When`. Without these three arms `CTE("ev","seen__@quarter")` — and the
+# `OperObject` inside each `When`. (#579 moved that expansion off `@quarter` / `@quadrimester`, which
+# now extract the period number through one dialect function and reach none of these arms.)
+# Without these three arms `CTE("ev","seen__@yyyy_q")` — and the
 # `Joined` twin below — died on the catch-all with an "Internal … please report" message for a
 # documented transform. An `SQLText` is a LITERAL (the `"-Q"` separator) and must never be retagged,
 # which is the same boundary the `kwargs` rule above draws.
@@ -1334,24 +1336,20 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
 end
 
 
+# #562: the `F(...)` / update-expression arrival point for a `"col__@transform"` string.
+#
+# This used to be a SECOND resolution ladder over `PormGtransform`: it read the same table and
+# resolved the name with `getfield(Dialect, ...)`, while the string spelling resolved it with
+# `getfield(@__MODULE__, ...)` into `QueryBuilder`'s own constructors. Two ladders over one table
+# emitted different SQL for the same transform on the same column, and for `@date` on SQLite one of
+# them was outright wrong (`CAST(col AS DATE)` -> the integer year; see `Dialect.DATE`).
+#
+# It now delegates into the one surviving ladder. `_check_function` is the richer of the two: it
+# builds a typed `FObject` carrying a `formatter` (so the comparison value is validated rather than
+# bound raw), it is the shape the #352/#373 sargable date-range rewrite recognises, and it already
+# resolves joined paths, CTE and window columns. `_resolve_joined` below does exactly this.
 function _get_filter_query(v::Vector{SubString{String}}, instruc::SQLInstruction)
-  v_str = String.(v)
-  # column is the first part
-  text = _get_filter_query(v_str[1], instruc)
-
-  # Apply functions in sequence
-  for i in 2:length(v_str)
-    func_key = v_str[i]
-    if haskey(PormGtransform, func_key)
-      func_name = Symbol(PormGtransform[func_key])
-      # Note: Dialect functions usually take (column, format_dict, connection)
-      # We need to construct the format_dict if needed, but for date parts it's simple
-      text = getfield(Dialect, func_name)(text, Dict{String,Any}(), instruc.connection)
-    else
-      throw(QueryBuildError("Unknown date function or modifier: \e[31m@$func_key\e[0m"))
-    end
-  end
-  return text
+  return _get_select_query(_check_function(String.(v)), instruc)
 end
 function _get_filter_query(v::String, instruc::SQLInstruction)
   # V does not have be suffix
@@ -1629,7 +1627,12 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
   # and a non-bucket transform (`@month`, `@quarter`, …) must never reach that.
   bucket = if fobj.function_name == "EXTRACT_DATE" && get(fobj.kwargs, "format", nothing) == "YYYY-MM"
     :yyyy_mm
-  elseif fobj.function_name == "EXTRACT_DATE" && get(fobj.kwargs, "format", nothing) == "YYYY-MM-DD"
+  elseif fobj.function_name == "DATE"
+    # #562: `@date` used to be a `ToChar(x, "YYYY-MM-DD")`, i.e. an `EXTRACT_DATE` node carrying the
+    # mask. It is now a named `DATE` function so the dialect can pick the per-engine spelling. This
+    # arm moves with it, and it is load-bearing in a way no correctness test can see: on a plain
+    # `DateField` the rewrite DROPS the transform entirely, so a stale marker here does not render
+    # wrong SQL — it silently stops rewriting, the #376 failure mode.
     :date
   elseif fobj.function_name == "EXTRACT" && get(fobj.kwargs, "part", nothing) == "YEAR" && !haskey(fobj.kwargs, "format")
     :year
@@ -1976,8 +1979,9 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       _format_filter_value(getfield(Models, PormGTypeField[v.column.function_name]), v.values, v.operator))
   elseif isa(v.column, SQLTypeFunction)
     # #537 — a function column none of the branches above can bind. `OP(::SQLTypeFunction, …)` is a
-    # constructor arm PormG itself relies on — `When(OP(MONTH(x), "<=", N))` builds QUADRIMESTER /
-    # QUARTER (functions.jl) — but only the `PormGTypeField` functions (EXTRACT, TO_CHAR, COUNT)
+    # constructor arm PormG itself relies on — `When(OP(MONTH(x), "<=", N))` builds `Y_Q` / `Y_QUAD`,
+    # the `@yyyy_q` / `@yyyy_quad` labels (functions.jl; #579 moved that expansion off `@quarter` /
+    # `@quadrimester`) — but only the `PormGTypeField` functions (EXTRACT, TO_CHAR, COUNT)
     # have a formatter this path can name. Every other function fell through to the `else` ladder
     # below and died reading `.field` off a node that has no such slot: a raw `FieldError`, outside
     # the #231 taxonomy. Refused HERE, ahead of any `.field` read, naming the two spellings that do

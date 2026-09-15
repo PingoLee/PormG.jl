@@ -202,14 +202,19 @@ _sql(q; conn = _CR_SL) = inspect_query(q; connection = conn)[:sql_text]
     end
 
     @testset "B2c — a COMPOSITE transform over a CTE column renders (#481)" begin
-      # `@quarter` and `@quadrimester` do not build one function over the column: they expand to
+      # `@yyyy_q` and `@yyyy_quad` do not build one function over the column: they expand to
       # `Concat([Cast(Year(x)), Value("-Q"), Case([When(...)])])`, so the retag walk meets an
       # `SQLText` literal, an `SQLField` wrapper and the `OperObject` inside each `When`. The walk
       # handled only functions and vectors, so both keys raised
       # `QueryBuildError("Internal: a CTE reference resolved to an unexpected column expression")`
       # — telling the caller to report a bug for a documented transform. Found while building the
       # `Joined` twin (#481), which had inherited the same hole; fixed on both.
-      for key in ("quarter", "quadrimester")
+      #
+      # #579 moved the composite expansion off `@quarter`/`@quadrimester`, which now extract the
+      # period NUMBER through a single dialect function, onto the label keys. The keys here follow
+      # the EXPANSION, not the spelling: pinned to the old names this testset would still pass and
+      # would no longer exercise the retag walk at all.
+      for key in ("yyyy_q", "yyyy_quad")
         q = CR.Cj_child.objects
         q.with("ev" => _full_cte(), join_field = "id" => "id")
         q.values("note", "bucket" => CTE("ev", "seen__@$(key)"))
@@ -1189,8 +1194,9 @@ end
       # Transform paths — parsed into a function before the pass sees them.
       "transform @year"  => (s = () -> (q = _base(); q.values("note", "y" => "ev__seen__@year"); q),
                              h = () -> (q = _base(); q.values("note", "y" => CTE("ev", "seen__@year")); q)),
-      "composite @quarter" => (s = () -> (q = _base(); q.values("note", "ev__seen__@quarter"); q),
-                               h = () -> (q = _base(); q.values("note", CTE("ev", "seen__@quarter")); q)),
+      # #579: the composite expansion lives on the label key now — see B2c.
+      "composite @yyyy_q" => (s = () -> (q = _base(); q.values("note", "ev__seen__@yyyy_q"); q),
+                              h = () -> (q = _base(); q.values("note", CTE("ev", "seen__@yyyy_q")); q)),
       # A CTE column NESTED in a function is `:base` on both sides — the handle form goes through the
       # function branch, not `_values_field(::CTEReference)`.
       "nested in Concat" => (s = () -> (q = _base();

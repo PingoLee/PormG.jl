@@ -3183,6 +3183,32 @@ function format_yyyy_mm(value)
   throw(InvalidValueError("The value must be a String or Integer in the format YYYY-MM or YYYYMM"))
 end    
 
+# #579 — the right-hand side of a `__@quarter` / `__@quadrimester` comparison.
+#
+# These transforms extract a period NUMBER (1-4 and 1-3), so a value outside that range denotes no
+# period at all and can never match. `@year` already refuses a value no date bound can express
+# rather than building SQL that silently matches nothing (`_year_bucket_bounds`), and that is the
+# precedent followed here: the whole point of #579 is that `filter("date__@quarter" => …)` used to
+# accept ANY value — including `"abc"` — and return an empty result set with no error.
+#
+# Built on `format_number_sql` so the type ladder (Bool, Integer, Float, numeric string, array for
+# `__@in`, `missing`) stays in ONE place and these add only the range. The raised type is
+# `InvalidValueError`, matching the sibling transforms `@month` and `@day` exactly — #576 tracks
+# moving that whole family to the filter path's `FilterError`, and splitting it here would leave
+# #576 with a third behaviour to reconcile instead of one.
+function _format_period_sql(value, lo::Int, hi::Int, label::String)
+  formatted = format_number_sql(value)
+  formatted isa AbstractArray && return [_format_period_sql(v, lo, hi, label) for v in formatted]
+  (formatted === missing || formatted === nothing) && return formatted
+  n = formatted isa Integer ? Int(formatted) : tryparse(Int, string(formatted))
+  (n === nothing || n < lo || n > hi) &&
+    throw(InvalidValueError("The value $(value) is not a valid $(label); it must be an integer from $(lo) to $(hi)"))
+  return n
+end
+
+format_quarter_sql(value) = _format_period_sql(value, 1, 4, "quarter")
+format_quadrimester_sql(value) = _format_period_sql(value, 1, 3, "quadrimester")
+
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Comparison Tools
 #

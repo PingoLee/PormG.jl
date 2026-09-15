@@ -203,14 +203,21 @@ const VR_CASES = VRCase[
          # `to_char`, `TH` is the ordinal-suffix pattern and `SSS` is `SS` plus a literal `S`, so
          # the map KEY is wrong on the engine it was copied from, too. New finding on PostgreSQL.
          sibling = "2 — sqlite_date_format_map spells %S.%f", p1 = (:sqlite, :postgres)),
-  # #562: the `F` route resolves `@date` through `Dialect` into `CAST(col AS DATE)`, a no-op on
-  # SQLite text; the pair route resolves it through `QueryBuilder` into `strftime('%Y-%m-%d', …)`.
+  # #562 FIXED: the `F` route used to resolve `@date` through `Dialect` into `CAST(col AS DATE)` —
+  # NUMERIC affinity on SQLite text, so it yielded the integer year — while the pair route resolved
+  # it through `QueryBuilder` into `strftime('%Y-%m-%d', …)`. There is one ladder now, and `@date`
+  # is a named function the dialect renders per engine, so both spellings denote the same `Date`.
   vrcase("at_date_f", :timestamp, c -> F("$(c)__@date"), v -> Date(_vr_utc_naive(v)),
          result_kind = :date, pair = c -> "$(c)__@date",
-         sibling = "5 / #562 — F-route @date renders CAST(... AS DATE)",
-         # SQLite: the integer year (NUMERIC affinity on the text). PostgreSQL: a real `Date`.
-         shape = (x, engine) -> engine === :sqlite ? x isa Integer : x isa Date,
-         p1 = (:sqlite,), p2f = (:sqlite,), p3 = (:sqlite,)),
+         # P3 is still broken on SQLite, and it is a DIFFERENT defect from the one #562 fixed: the
+         # value is right (`'2031-07-04'`, agreeing with the string spelling) but arrives as TEXT,
+         # because `build_query.jl` records a projection kind only for a plain path — a FUNCTION
+         # projection deliberately answers `nothing`, so the read path leaves it as the driver
+         # delivered it. On SQLite `strftime` delivers text; PostgreSQL's `(col)::date` delivers a
+         # real `Date`, which is why the mark is one-sided. Typing function projections belongs to
+         # #564's read table, not to the ladder.
+         shape = (x, engine) -> engine === :sqlite ? x isa AbstractString : x isa Date,
+         p3 = (:sqlite,)),
   # New finding (P3): `EXTRACT(YEAR FROM …)` is `numeric` on PostgreSQL ≥ 14, delivered as a
   # `Decimal`; SQLite's `CAST(strftime('%Y', …) AS INTEGER)` is an `Int`. Same value, two types.
   vrcase("at_year_f", :timestamp, c -> F("$(c)__@year"), v -> year(_vr_utc_naive(v)),
@@ -236,10 +243,11 @@ const VR_CASES = VRCase[
   # #527 control: a sub-day duration on a DATE column promotes to a timestamp on both engines.
   vrcase("plus_hour6", :date, c -> F(c) + Hour(6), v -> DateTime(v) + Hour(6),
          result_kind = :timestamp),
+  # #562 FIXED, on a DATE column: same collapse, and the same one-sided P3 remainder as the
+  # TIMESTAMP case above — a function projection carries no kind for the read path to undo.
   vrcase("at_date_f", :date, c -> F("$(c)__@date"), v -> v, pair = c -> "$(c)__@date",
-         sibling = "5 / #562 — F-route @date on a DATE column",
-         shape = (x, engine) -> engine === :sqlite ? x isa Integer : x isa Date,
-         p1 = (:sqlite,), p2f = (:sqlite,), p3 = (:sqlite,)),
+         shape = (x, engine) -> engine === :sqlite ? x isa AbstractString : x isa Date,
+         p3 = (:sqlite,)),
   vrcase("at_year_f", :date, c -> F("$(c)__@year"), v -> year(v), result_kind = :integer,
          p3 = (:postgres,)),
   # ── TIME ─────────────────────────────────────────────────────────────────
@@ -385,34 +393,37 @@ end
 # `QueryBuilder`'s constructors, and the `contains(v, "@")` branch into `Dialect` — and they are
 # reached by different spellings of the same transform. Both must project the same value.
 #
-# The oracle is stated only where the two ladders could agree on a representation; `quarter`
-# and `quadrimester` are parity-only because one ladder yields `'YYYY-Qn'` text and the other
-# an integer, and which is "right" is a design question this test does not answer.
+# #562 collapsed the two ladders into one: the `F` spelling now delegates into
+# `_check_function`, so both routes build the same node and no transform can drift again. The
+# marks below are kept as an empty record on purpose — the loop is the guard, and an entry added
+# here would be a measurement, not a waiver.
+#
+# Every transform now denotes something this table can name. `quarter` and `quadrimester` were
+# parity-only while one spelling yielded `'YYYY-Qn'` text and the other an integer — #579 settled
+# that: the plain names extract the period number, and the label moved to `@yyyy_q` / `@yyyy_quad`.
 const VR_LADDER_ORACLE = Dict{String,Function}(
   "date"    => v -> Date(_vr_utc_naive(v)),
   "year"    => v -> year(_vr_utc_naive(v)),
   "month"   => v -> month(_vr_utc_naive(v)),
   "day"     => v -> day(_vr_utc_naive(v)),
   "yyyy_mm" => v -> Dates.format(_vr_utc_naive(v), "yyyy-mm"),
+  # #579: the period NUMBER, not the label. Quarters are 3 months, quadrimesters 4 — the same
+  # arithmetic the dialect renders, restated from the calendar rather than from the SQL.
+  "quarter"      => v -> cld(month(_vr_utc_naive(v)), 3),
+  "quadrimester" => v -> cld(month(_vr_utc_naive(v)), 4),
+  # …and the year-qualified labels those two used to be. Both spell the separator `-Q`; that
+  # collision predates #579, which moved the expansion without touching it.
+  "yyyy_q"    => v -> string(year(_vr_utc_naive(v)), "-Q", cld(month(_vr_utc_naive(v)), 3)),
+  "yyyy_quad" => v -> string(year(_vr_utc_naive(v)), "-Q", cld(month(_vr_utc_naive(v)), 4)),
 )
 
-# Measured, per engine: which transforms DISAGREE between the two ladders (parity), and for
-# which the `F` route is also WRONG against the oracle. The two are separate marks because
-# PostgreSQL's `(col)::date` is a correct `Date` that merely differs in type from the string
-# route's text, while SQLite's `CAST(col AS DATE)` is the integer 2031 — wrong outright.
-const VR_LADDER_BROKEN = Dict{String,Tuple{Vararg{Symbol}}}(
-  # SQLite — F route `CAST(col AS DATE)` → the integer 2031; string route → '2031-07-04'.
-  # PostgreSQL — F route `(col)::date` → a `Date`; string route `to_char` → text. Both denote
-  # the date, so on PostgreSQL this is a TYPE divergence only; the parity assertion is by value
-  # and type, as a caller switching spellings would see it.
-  "date"         => (:sqlite, :postgres),
-  # F route: an integer (`Decimal` on PostgreSQL, `Int` on SQLite); string route: 'YYYY-Qn' text.
-  "quarter"      => (:sqlite, :postgres),
-  "quadrimester" => (:sqlite, :postgres),
-)
-const VR_LADDER_ORACLE_BROKEN = Dict{String,Tuple{Vararg{Symbol}}}(
-  "date" => (:sqlite,),   # the integer 2031 from `CAST(col AS DATE)`
-)
+# Per engine: which transforms DISAGREE between the two spellings (parity), and for which the `F`
+# spelling is also WRONG against the oracle. Both were populated before #562 — `date`, `quarter`
+# and `quadrimester` on both engines for parity, and `date` on SQLite for the oracle, where
+# `CAST(col AS DATE)` delivered the integer 2031. One ladder resolves all of them now, so both
+# tables are empty and every transform is asserted plainly.
+const VR_LADDER_BROKEN = Dict{String,Tuple{Vararg{Symbol}}}()
+const VR_LADDER_ORACLE_BROKEN = Dict{String,Tuple{Vararg{Symbol}}}()
 
 """
     vr_run_ladder_parity(base, col, stored, engine)

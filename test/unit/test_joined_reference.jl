@@ -315,7 +315,7 @@ for (backend, conn) in (("PostgreSQL", _JN_PG), ("SQLite", _JN_SL))
 
     # ─────────────────────────────────────────────────────────────────────────
     # Transforms over a joined column, including the COMPOSITE ones
-    # `@year` builds one function over the column; `@quarter` and `@quadrimester` expand to a
+    # `@year` builds one function over the column; `@yyyy_q` and `@yyyy_quad` expand to a
     # `Concat([Cast(Year(x)), Value("-Q"), Case([When(...)])])`, so the retag walk meets a literal,
     # a field wrapper and an operator object on the way down. A walk that handled only functions
     # raised "Internal … please report" for a documented transform — a regression against the
@@ -330,7 +330,9 @@ for (backend, conn) in (("PostgreSQL", _JN_PG), ("SQLite", _JN_SL))
       # A SELF-join, so `seen` exists on BOTH sides and "reads the joined copy, not the base table"
       # is actually falsifiable — on the base model `Jn_result` there is no `seen` at all, so the
       # negative half would hold no matter what the retag did.
-      for key in ("quarter", "quadrimester")
+      # #579 moved the composite expansion off `@quarter`/`@quadrimester` onto the label keys; the
+      # loop follows the expansion, because the retag walk is what this testset guards.
+      for key in ("yyyy_q", "yyyy_quad")
         composite = JN.Jn_driver.objects
         composite.cjoin_on("Jn_driver", alias = "d2", on = [Joined("d2", "id") == F("id")])
         composite.values("surname", "b" => Joined("d2", "seen__@$(key)"))

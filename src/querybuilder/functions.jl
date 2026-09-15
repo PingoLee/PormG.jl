@@ -790,7 +790,12 @@ MONTH(x) = Extract(x, "MONTH", formatter = Models.format_number_sql)
 YEAR(x) = Extract(x, "YEAR", formatter = Models.format_number_sql)
 DAY(x) = Extract(x, "DAY", formatter = Models.format_number_sql)
 Y_M(x) = ToChar(x, "YYYY-MM", formatter = Models.format_yyyy_mm)
-DATE(x) = ToChar(x, "YYYY-MM-DD", formatter = Models.format_date_sql)
+# #562: `@date` no longer goes through `ToChar`. A `ToChar` node carries the format mask as SQL
+# text, which forces one spelling on both engines; `DATE` is the one transform where the correct
+# spelling differs (`(col)::date` on PostgreSQL, `strftime` on SQLite — see `Dialect.DATE`). Naming
+# the function lets the dialect decide, and it is what lets the `F` ladder delegate here instead of
+# resolving into `Dialect` on its own.
+DATE(x) = FObject(function_name = "DATE", column = x, formatter = Models.format_date_sql)
 # Same that function CAST in django ORM
 # # relatorio = relatorio.annotate(quarter=functions.Concat(functions.Cast(f'{data}__year', CharField()), Value('-Q'), Case(
 # # 					When(**{ f'{data}__month__lte': 4 }, then=Value('1')),
@@ -799,7 +804,27 @@ DATE(x) = ToChar(x, "YYYY-MM-DD", formatter = Models.format_date_sql)
 # # 					output_field=CharField()
 # # 				)))
 
-function QUADRIMESTER(x)
+# #579 — `@quarter` / `@quadrimester` extract the period NUMBER; `@yyyy_q` / `@yyyy_quad` build the
+# year-qualified label.
+#
+# These two used to be one thing. `QUARTER` built the `CONCAT(year, '-Q', CASE …)` expansion below,
+# so it denoted the string `'1985-Q1'` — fine for a `values()` grouping key, and never able to equal
+# the `1` that `api.md`, `read/filters_and_aggregates.md` and `read/functions_and_dates.md` all
+# documented as the filter value. `filter("date__@quarter" => 1)` rendered valid SQL, bound the
+# parameter, and returned nothing, with no error and no way to tell from the outside.
+#
+# Prior art settles the split, and it is unanimous: Django registers `ExtractQuarter` (an
+# `IntegerField`, 1-4) as the `__quarter` LOOKUP and deliberately does NOT register `TruncQuarter`
+# as a transform, because the `Extract` subclasses own those names; SQL/PostgreSQL/jOOQ separate
+# `EXTRACT(QUARTER FROM x)` from `date_trunc('quarter', x)` the same way. Nobody resolves one name
+# to two meanings by position. So the number keeps the plain name and the label gets its own —
+# spelled like `@yyyy_mm`, the bucket it sits beside, rather than like Django's `TruncQuarter`,
+# because PormG's existing bucket idiom is a to_char/strftime string and not a truncated date.
+#
+# The label bodies are moved verbatim. `@yyyy_quad` therefore still renders `'1985-Q1'`, sharing the
+# `-Q` separator with `@yyyy_q`; that ambiguity predates this change and is left alone here so the
+# move stays a rename.
+function Y_QUAD(x)
   return Concat([
                 Cast(YEAR(x), CharField()), 
                 Value("-Q"), 
@@ -810,9 +835,9 @@ function QUADRIMESTER(x)
                       output_field = CharField())
                 ], 
                 output_field = CharField(), 
-                _as = "$(x[1])__quarter")
+                _as = "$(x[1])__yyyy_quad")
 end
-function QUARTER(x)
+function Y_Q(x)
   return Concat([
                 Cast(YEAR(x), CharField()), 
                 Value("-Q"), 
@@ -824,8 +849,15 @@ function QUARTER(x)
                       output_field = CharField())
                 ],
                 output_field = CharField(),
-                _as = "$(x[1])__trimester")
+                _as = "$(x[1])__yyyy_q")
 end
+# `Dialect.QUARTER` / `Dialect.QUADRIMESTER` already rendered the number per engine — they were what
+# the `F` ladder resolved into before #562 collapsed the two. Naming the function here is what puts
+# both spellings on that one rendering. The formatter is what makes the right-hand side type-check:
+# the `Concat` node above carries none, which is the second half of #579 — `=> "abc"` bound the
+# string and matched nothing instead of raising.
+QUARTER(x) = FObject(function_name = "QUARTER", column = x, formatter = Models.format_quarter_sql)
+QUADRIMESTER(x) = FObject(function_name = "QUADRIMESTER", column = x, formatter = Models.format_quadrimester_sql)
 
 
 function ISNULL(v::String , value::Bool)

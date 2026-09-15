@@ -1279,7 +1279,7 @@ function release_connection(pool::PormGPostgres, conn)
     try; Base.invokelatest(close, retired); catch e; @debug "Error closing retired PG connection" exception=e; end
   end
   released !== nothing && return released
-  @warn "PG Connection not found in the pool - connection may have been replaced due to failure"
+  @warn "PG Connection not found in the pool - it was replaced after a failure or the pool was closed; after a renewal, release the renewed handle (see release_connection)"
   return false
 end
 
@@ -1303,7 +1303,7 @@ function release_connection(pool::PormGSQLite, conn)
     try; Base.invokelatest(close, retired); catch e; @debug "Error closing retired SQLite connection" exception=e; end
   end
   released !== nothing && return released
-  @warn "SQLite Connection not found in the pool"
+  @warn "SQLite Connection not found in the pool - it was replaced after a failure or the pool was closed; after a renewal, release the renewed handle (see release_connection)"
   return false
 end
 

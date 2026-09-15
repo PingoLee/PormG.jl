@@ -1167,7 +1167,7 @@ _cjoin(q::SQLObjectHandler; kwargs...) = _cjoin(q, nothing; kwargs...)
 # Reference convention inside `on`:
 #   * bare `F("col")`            → the BASE/main table (b1)
 #   * `Joined("<alias>", "col")` → the joined copy declared here (b2), #481
-# A self-join is `_cjoin_on(q, "<BaseModelName>"; alias="b2", on=[...])`.
+# A self-join is `_cjoin_on(q, M.Base; alias="b2", on=[...])`.
 #
 # #484 — the entry goes in `q.alias_join`, its own namespace, NOT in `q.custom_join` alongside the
 # `cjoin` / `on()` PATH entries. Sharing one map is what made an alias equal to a ForeignKey field
@@ -1176,13 +1176,18 @@ _cjoin(q::SQLObjectHandler; kwargs...) = _cjoin(q, nothing; kwargs...)
 # alias is therefore refused only when it duplicates ANOTHER alias; it may equal a relation name, a
 # `cjoin` path or an `on()` path, in any declaration order, and both joins are emitted under their
 # own SQL aliases (they always did have different ones — the collision was only ever internal).
-function _cjoin_on(q::SQLObject, target_model::String, on::AbstractVector; alias::String, join_type::Union{String,Nothing}="INNER")
-  isempty(strip(target_model)) && throw(QueryBuildError("cjoin_on requires a target model name."))
+#
+# #488 — the target is a model OBJECT; the model-name `String` arm below is a prefix that resolves
+# the name in the query's models module and delegates here. `AliasJoin.target` and all three of its
+# render sites already spoke `PormGModel` since #484, so the object form is the shorter path, and a
+# typo in it is an `UndefVarError` from Julia at the call rather than a runtime `QueryBuildError`.
+function _cjoin_on(q::SQLObject, target::PormGModel, on::AbstractVector; alias::String, join_type::Union{String,Nothing}="INNER")
   # Fail-closed identifier check on the user alias (it is interpolated into SQL as a quoted alias).
   _validate_identifier(alias)
-  if !isdefined(q.model._module, Symbol(target_model))
-    throw(QueryBuildError("cjoin_on target model '$(target_model)' not found in module. Model names are case-sensitive."))
-  end
+  # #488: an object can come from anywhere, including a model registered on ANOTHER connection.
+  # That is refused — but at BUILD time, in `_build_cjoin_on_row_join`, not here: the connection a
+  # statement runs on is `q.connect_key` (a `.db("key")` override) falling back to the model's
+  # registration, and `.db()` may be called after this. Declaration time cannot know it.
   if haskey(q.alias_join, alias)
     throw(QueryBuildError("cjoin_on alias '$(alias)' is already declared on this query. Choose a distinct alias."))
   end
@@ -1207,19 +1212,31 @@ function _cjoin_on(q::SQLObject, target_model::String, on::AbstractVector; alias
   end
   isempty(parsed) && throw(QueryBuildError("cjoin_on requires at least one `on` predicate."))
 
-  # The target model is resolved HERE, once, rather than re-looked-up from a stored name at each of
-  # the three render sites that need it (#484). `isdefined` was checked above, so this cannot throw.
-  # The map key carries the alias and the map itself carries "anchor-less", so the old
-  # `"user_alias"` / `"no_anchor"` tags have nothing left to say.
+  # The target model is stored resolved, once, rather than re-looked-up from a stored name at each
+  # of the three render sites that need it (#484). The map key carries the alias and the map itself
+  # carries "anchor-less", so the old `"user_alias"` / `"no_anchor"` tags have nothing left to say.
   q.alias_join[alias] = AliasJoin(
-    getfield(q.model._module, Symbol(target_model))::PormGModel,
+    target,
     parsed,
     join_type === nothing ? "INNER" : _normalize_join_type(join_type))
   return q
 end
 
-function _cjoin_on(q::SQLObjectHandler, target_model::String; alias::String, on::AbstractVector, join_type::Union{String,Nothing}="INNER")
-  _cjoin_on(q.object, target_model, on; alias=alias, join_type=join_type)
+# The model-NAME spelling (#45's original form): resolve the binding in the query's models module,
+# then delegate. Kept alongside the object arm because it costs nothing and reads naturally in a
+# models file that has no `M.` prefix at hand. The alias is validated here too, so the two arms
+# report a bad alias and an unknown model in the same order they always did.
+function _cjoin_on(q::SQLObject, target_model::String, on::AbstractVector; alias::String, join_type::Union{String,Nothing}="INNER")
+  isempty(strip(target_model)) && throw(QueryBuildError("cjoin_on requires a target model name."))
+  _validate_identifier(alias)
+  if !isdefined(q.model._module, Symbol(target_model))
+    throw(QueryBuildError("cjoin_on target model '$(target_model)' not found in module. Model names are case-sensitive."))
+  end
+  return _cjoin_on(q, getfield(q.model._module, Symbol(target_model))::PormGModel, on; alias=alias, join_type=join_type)
+end
+
+function _cjoin_on(q::SQLObjectHandler, target::Union{String,PormGModel}; alias::String, on::AbstractVector, join_type::Union{String,Nothing}="INNER")
+  _cjoin_on(q.object, target, on; alias=alias, join_type=join_type)
   return q
 end
 

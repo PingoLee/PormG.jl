@@ -281,10 +281,16 @@ your own — an arbitrary boolean (top-level `OR`), field-to-field comparisons a
 (a self-join), or SQL functions in the ON — use **`.cjoin_on()`**.
 
 ```julia
-query.cjoin_on("Model"; alias="b2", on=[ ... ], join_type="INNER")
+query.cjoin_on(M.Model; alias="b2", on=[ ... ], join_type="INNER")
 ```
 
-- **`"Model"`** — the model to join (may be the query's **own** model, for a self-join).
+- **`M.Model`** — the model to join, as the model object (may be the query's **own** model, for a
+  self-join). The model's **name** is accepted too — `cjoin_on("Model"; …)` — and is resolved in
+  the query's models module; prefer the object, so a typo is an `UndefVarError` from Julia at the
+  call rather than a `QueryBuildError` at run time. A model registered on a **different connection**
+  from the one the query runs on (a `.db("key")` override counts) is refused when the query is built,
+  with a `QueryBuildError`: the join would name a table that lives in another database
+  ([#488](https://github.com/PingoLee/PormG.jl/issues/488)).
 - **`alias`** — the SQL alias for the joined copy. Reference its columns as `Joined(alias, "column")`.
 - **`on`** — the expressions that form the **entire** ON clause. No equi-anchor is added.
 - **`join_type`** — defaults to `"INNER"`.
@@ -317,7 +323,7 @@ year of the timestamp:
 
 ```julia
 query = M.Lap.objects
-query.cjoin_on("Lap"; alias="b2", join_type="INNER", on=[
+query.cjoin_on(M.Lap; alias="b2", join_type="INNER", on=[
   Qor(
     Joined("b2", "raceid") == F("raceid"),
     Q(Joined("b2", "driverid") == F("driverid"), Joined("b2", "lap") == F("lap")),

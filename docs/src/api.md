@@ -36,7 +36,7 @@ These methods modify the query builder and return the handler for further chaini
 | `.db("key")` | Route the query to a different connection pool. | `.db("tenant_42")` |
 | `.on("path", key => value; join_type)` | Add predicates to the ON clause of an existing join path. Does **not** change the join type unless `join_type` is passed. | `.on("driverid", "nationality" => "British")` |
 | `.cjoin("field" => "Model", ...)` | Add a custom join at query time. | `.cjoin("driverid" => "Driver")` |
-| `.cjoin_on("Model"; alias, on, join_type)` | Anchor-less join: `on` is the **entire** ON clause. | `.cjoin_on("Driver"; alias = "d", on = [...])` |
+| `.cjoin_on(model; alias, on, join_type)` | Anchor-less join: `on` is the **entire** ON clause. `model` is the model object, or its name as a `String`. | `.cjoin_on(M.Driver; alias = "d", on = [...])` |
 | `.with("name" => subquery; join_field, join_type)` | Define one CTE on the query; call again for a second. Its columns are then reached with [`CTE(name, path)`](@ref CTE). | `.with("fast" => sub)` |
 | `.select_for_update(; nowait, skip_locked, no_key)` | `SELECT … FOR UPDATE` row lock (PostgreSQL; must run inside a transaction). | `.select_for_update(nowait = true)` |
 | `.copy()` | Deep-copy the handler to branch a chain without disturbing the original. | `base.copy().filter("year" => 2020)` |

@@ -1384,7 +1384,7 @@ CTE and neither shadows the other (#481):
 
 ```julia
 q = M.Result.objects
-q.cjoin_on("Driver", alias = "d", on = [Joined("d", "driverid") == F("driverid")])
+q.cjoin_on(M.Driver, alias = "d", on = [Joined("d", "driverid") == F("driverid")])
 q.values("points", "who" => Joined("d", "surname"))
 q.filter(Joined("d", "nationality") => "Brazilian")
 ```
@@ -1925,7 +1925,9 @@ Each mutates the handler and returns it, so calls can be chained or accumulated 
   itself, and an explicit one stays in effect for later `on()` calls on that path (#474)
 - `.cjoin("field" => "Model"; filters, join_type)` — custom join at query time
 - `.cjoin_on(model; alias, on, join_type)` — anchor-less join where `on` is the entire `ON` clause;
-  reference its columns with [`Joined(alias, column)`](@ref Joined) in any clause. Its alias may
+  `model` is the model object (`M.Driver`) or its name (`"Driver"`), and a model registered on
+  another connection is refused (#488). Reference its columns with
+  [`Joined(alias, column)`](@ref Joined) in any clause. Its alias may
   equal a relation name on the base model or an `on()`/`cjoin()` join path; each stays addressable,
   and both joins are emitted (#484)
 - `.with("name" => subquery; join_field, join_type)` — define a CTE; call again for a second one.

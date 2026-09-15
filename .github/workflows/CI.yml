@@ -88,3 +88,115 @@ jobs:
             expect_friendly(PormG.ConnectionPool.SQLiteConnectionPool("dummy.sqlite"; pool_size=1), "requires SQLite")
             println("OK: PormG loads without drivers and both backends fail friendly on use")
           '
+
+  # Prove the LOWER end of each non-stdlib `[compat]` range still works (#574).
+  #
+  # Nothing else in this repository ever resolves a floor. The `test` job resolves
+  # newest-allowed; a developer resolves whatever their already-built `Manifest.toml`
+  # holds, and `Manifest.toml` is gitignored so it never moves on its own. Every
+  # declared lower bound was therefore an assertion no job checked — and the failure is
+  # expensive in BOTH directions:
+  #
+  #   * Floor too low  — PormG is broken at a version it claims to support, and the
+  #     first environment to land there belongs to somebody else.
+  #   * Floor removed  — #558 narrowed `Decimals` to "0.5"; every LibPQ release pins
+  #     Decimals 0.4, so all four test jobs died before a testset ran. #560 narrowed
+  #     `OrderedCollections` to "2" and made 2 of the 5 consuming apps unresolvable.
+  #
+  # READ A RED RUN AGAINST `test/unit/test_compat_guards.jl` BEFORE MOVING ANY BOUND.
+  # Red here has two readings with opposite fixes. Usually the floor is genuinely too
+  # low and the bound should be RAISED. But for `Decimals 0.4` and `OrderedCollections
+  # 1` the floor is load-bearing — that file records why, with the measurements — and
+  # raising it is precisely the wrong edit; there the job is telling you to fix PormG.
+  #
+  # Of the two scratch envs general.instructions.md requires before narrowing a range,
+  # this job covers the FIRST: it installs LibPQ, so a `Decimals` narrowing fails its
+  # resolve here. It cannot cover the SECOND — a consuming app's declared dependency
+  # set lives in another repository, and #560's break was invisible to every PormG-side
+  # run. Raising a hard `[deps]` floor still owes that measurement by hand.
+  #
+  # Required rather than `continue-on-error`: a reporting-only job in a single-
+  # maintainer repo gets scrolled past, which is the failure mode the job exists to
+  # prevent. The maintainer merges by hand and can override a red run caused by an
+  # upstream yanking a release at the floor.
+  floor-resolve:
+    name: Floor resolve — oldest allowed dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          # One Julia, and it is the `julia = "1.12"` compat floor. This job is about
+          # PACKAGE versions — the `test` matrix above already covers 1.12 x 1.13 —
+          # and pairing the oldest Julia with the oldest packages is the true lower
+          # end of what PormG claims to support.
+          version: '1.12'
+
+      - uses: julia-actions/cache@v2
+
+      - uses: julia-actions/julia-downgrade-compat@v2
+        with:
+          # Every stdlib, listed. NOTE this input is INERT in `mode: alldeps` — the
+          # action consults it only on the `forcedeps` path. Stdlibs are handled instead
+          # by `julia_version` below: Resolver.jl treats them as fixed at that Julia, so
+          # `Dates = "1"` admits 1.11.0 and `SHA = "0.7, 1"` admits 0.7.0 either way. The
+          # list is kept so a later switch to `forcedeps` is correct by default.
+          #
+          # That also settles `SHA = "0.7, 1"`: SHA is a stdlib, 0.7.0 on both 1.12 and
+          # 1.13, so the "1" arm is unreachable and there is no second version for this
+          # job to try. The entry stays spanning regardless — it costs nothing and keeps
+          # PormG resolvable if a Julia ever does ship SHA 1.x.
+          skip: Base64, Dates, Logging, Printf, Random, SHA, UUIDs, InteractiveUtils, Test
+          # There is no `test/Project.toml` — the test target is declared through the
+          # root `[extras]`/`[targets]`, which the action merges in by itself.
+          #
+          # Consequence worth knowing: the action floor-pins the WHOLE `[extras]` table,
+          # not just `[targets].test`. That includes the profiling-only tooling
+          # (FlameGraphs, ProfileView, SnoopCompile, SnoopCompileCore), which PormG never
+          # loads in any test but whose floors now have to co-resolve — and ProfileView
+          # drags in the Gtk4 JLL chain. If one of those ever fails to resolve at its
+          # floor, this job reds on tooling rather than on PormG; the fix then is to move
+          # it out of `[extras]`, not to weaken the job.
+          projects: '.'
+          # `alldeps` also min-resolves weakdep CONSTRAINTS. Measured, it currently adds
+          # nothing over `deps`: LibPQ and SQLite arrive via the `[extras]` promotion path
+          # regardless of mode, and `Revise` — weak-only, required by nothing installed —
+          # never enters the manifest at all. Kept as `alldeps` so that a weakdep which
+          # does become reachable gets floored without needing a workflow edit.
+          mode: alldeps
+          # Must match setup-julia above. The default `'1'` already means the runner's
+          # Julia, so this is belt-and-braces against the two drifting apart.
+          julia_version: '1.12'
+
+      - uses: julia-actions/julia-buildpkg@v1
+
+      - uses: julia-actions/julia-runtest@v1
+        env:
+          # Disables exactly one Aqua check, `stale_deps` — see the comment at the Aqua
+          # testset in test/runtests.jl. Short version: the step above rewrote
+          # Project.toml, promoting six packages into `[deps]` that `src/` never imports,
+          # so stale_deps here judges a project layout that exists nowhere else.
+          PORMG_FLOOR_RESOLVE: "1"
+        with:
+          # Both of these guard against the same silent failure — a green job that tested
+          # the newest versions after all:
+          #   * allow_reresolve — at its `true` default, a re-resolve is allowed to move
+          #     versions off the floor manifest. Note this is a backstop, NOT the thing
+          #     that pins the test env: what does that is the downgrade step promoting the
+          #     test-target deps into `[deps]`, so `Pkg.test` runs from the locked
+          #     manifest. If that promotion ever stopped happening, the sandbox's own
+          #     resolve would SUCCEED at the ceiling and raise nothing for this to catch —
+          #     so a green run is not by itself proof the floor was tested. The resolved
+          #     versions are printed in the step's log; read them when in doubt.
+          #   * force_latest_compatible_version — its `auto` default means "true when the
+          #     PR was opened by Dependabot or CompatHelper", which is precisely the PR
+          #     this job exists for. Left alone, a dependency bump would run at the ceiling
+          #     and report green.
+          allow_reresolve: false
+          force_latest_compatible_version: false
+
+  # NOTE: `load-without-drivers` deliberately has no floor variant. What it asserts is
+  # the weakdep fallback path — that `using PormG` works with no driver installed and
+  # `backend_connect` raises the friendly error. Nothing about that depends on a
+  # dependency version, so a floor copy would double the job's cost for no new signal.

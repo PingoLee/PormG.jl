@@ -19,13 +19,32 @@ if !haskey(ENV, "PORMG_ENV")
     ENV["PORMG_ENV"] = "test"
 end
 
+# Set only by CI's `floor-resolve` job (#574), which runs this suite against a machine-rewritten
+# Project.toml. It gates exactly one Aqua check — see the comment at the Aqua testset below.
+const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
+
 @testset "PormG Unit Tests" begin
     if HAS_AQUA
         @testset "Aqua Quality Checks" begin
             # stale_deps is ON: every [deps]/[weakdeps] entry is genuinely used by the
             # package. Profiling tools (SnoopCompile, etc.) live in [extras], which Aqua's
             # stale_deps never inspects — so they need no exemption here (#209).
-            Aqua.test_all(PormG)
+            #
+            # ...with ONE environment excepted (#574). CI's `floor-resolve` job runs against a
+            # `Project.toml` that `julia-downgrade-compat` has REWRITTEN: to let `Pkg.test` run
+            # from a locked manifest it promotes the `[targets].test` names into `[deps]` and
+            # deletes them from `[weakdeps]` — LibPQ, SQLite, Aqua, BenchmarkTools, Infiltrator
+            # and SafeTestsets. `src/` imports none of those, and LibPQ/SQLite are no longer in
+            # `[weakdeps]` for Aqua to subtract, so `stale_deps` reports six entries. That is a
+            # verdict about a project layout which exists nowhere but inside that job, so it is
+            # the ONLY check disabled there — the other seven still run at the floor, and the
+            # `test` job runs all eight, `stale_deps` included, on 1.12 and 1.13.
+            if PORMG_FLOOR_RESOLVE
+                @info "PORMG_FLOOR_RESOLVE=1: Aqua stale_deps disabled (see comment above)"
+                Aqua.test_all(PormG; stale_deps = false)
+            else
+                Aqua.test_all(PormG)
+            end
         end
     end
 

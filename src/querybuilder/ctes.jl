@@ -27,7 +27,7 @@ end
 # (PostgreSQL's SELECT reference: "the WITH query hides any real table of the same name"; measured
 # on SQLite too). PormG generates its joins from `db_table`, unqualified, so a CTE named after a
 # table turns every join it generates to that table into a read of the CTE — silently. Measured
-# before this check, the two rows also collided in `_insert_join`'s dedup tuple (`row_join["b"]`
+# before this check, the two rows also collided in `_insert_join`'s dedup tuple (`JoinRow.b`
 # holds the CTE name for a CTE row and the physical table for a model row), so only ONE join was
 # emitted and `CTE(name, col)` read the physical column instead. Fixing the dedup alone would have
 # emitted two joins that both read the CTE, and on SQLite a CTE body that reads its own name is a
@@ -106,13 +106,13 @@ function _with(q::SQLObject, name::String, query::SQLObjectHandler;
   join_type::String="LEFT")
   # #394: fail-closed on the CTE name HERE, at declaration. It is a query-time alias the caller typed,
   # and it reaches SQL twice — as the `WITH <name> AS (...)` label and, when a `join_field` is given,
-  # as the JOIN target (`row_join["b"]`). Since #394 that second site quotes ESCAPE-ONLY, because
+  # as the JOIN target (`CteJoin.b`). Since #394 that second site quotes ESCAPE-ONLY, because
   # every other thing landing in that slot is a physical table name; checking here removes the
   # ordering dependency between the two renders entirely and puts the error on the call the user
   # wrote. `build_cte_clause` still quotes fail-closed as defence in depth. Same rule as `_cjoin_on`.
   _validate_identifier(name)
   # ...and the CTE side of the join key, for the same reason. `_build_row_join` stores it as
-  # `row_join["key_b"]`, which since #394 is quoted escape-only because everything else in that slot
+  # `CteJoin.key_b`, which since #394 is quoted escape-only because everything else in that slot
   # is a physical column. This one is a CTE PROJECTION ALIAS, so it belongs to the fail-closed half
   # of the contract. `join_field.first` is deliberately NOT checked: it names a field on the MAIN
   # model and is resolved through `Models.model_column`, i.e. it is genuinely physical.
@@ -135,14 +135,14 @@ function _with(q::SQLObject, name::String, query::SQLObjectHandler;
   end
   # #474: validate the join type HERE, for the same reason the two identifier checks above are here.
   # A keyed CTE's `join_type` was the one join-type slot with NO validation anywhere on its path:
-  # `_preset_cte_fields` stored it verbatim, `_build_row_join` copied it into `row_join["how"]`, and
-  # Phase 2 interpolated it straight into `"$(value["how"]) JOIN …"`. So `join_type = "CROSS"` built
+  # `_preset_cte_fields` stored it verbatim, `_build_row_join` copied it into `CteJoin.how`, and
+  # Phase 2 interpolated it straight into `"$(value.how) JOIN …"`. So `join_type = "CROSS"` built
   # `CROSS JOIN … ON …` (invalid on both engines), and an arbitrary string reached the SQL text
   # unquoted — measured: `join_type = "LEFT OUTER JOIN cj_grand AS injected ON 1=1 --"` rendered
   # that clause verbatim ahead of the CTE's own JOIN. `_normalize_join_type` also upcases and
   # strips, so a lowercase `"inner"` now works here as it already did in `on()` and `cjoin_on()`.
-  # ...but only the KEYED arm of `_build_row_join` ever reads this value; an unkeyed CTE is
-  # CROSS-joined by construction and hardcodes `row_join["how"]` itself. So `join_type = "CROSS"`
+  # ...but only the KEYED arm of `_build_row_join` ever reads this value; an unkeyed CTE is a
+  # `CrossJoin` by construction, a kind with no join type at all. So `join_type = "CROSS"`
   # on an unkeyed `.with(...)` is a redundant statement of what already happens, and refusing it
   # would be absurd — the error would recommend the exact call the caller just wrote. Everything
   # else is still validated on both arms, so a typo is never silently swallowed.

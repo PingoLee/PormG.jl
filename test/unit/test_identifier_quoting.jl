@@ -203,38 +203,44 @@ end
 # of the joined table, so this is the one place a swallowed error corrupts data.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a malformed row_join raises instead of emitting wrong SQL (#394)" begin
-  RowJoin = Dict{String, Union{String, Vector{PormG.QueryBuilder.FilterType}}}
+  # #487: `row_join` entries are typed — `ModelJoin` / `CteJoin` / `CrossJoin` / `AnchorlessJoin` —
+  # so the two cases this testset opened with, a row missing its "b" and a row missing its "key_a"
+  # (each expected to surface as a `KeyError`), are UNCONSTRUCTABLE now: a `ModelJoin` cannot exist
+  # without every slot the renderers read. What follows is the other half of the claim, unchanged.
+  JR = PormG.QueryBuilder.JoinRow
+  MJ = PormG.QueryBuilder.ModelJoin
+  CJ = PormG.QueryBuilder.CteJoin
+  XJ = PormG.QueryBuilder.CrossJoin
+  AJ = PormG.QueryBuilder.AnchorlessJoin
 
-  @test_throws KeyError PormG.QueryBuilder._build_from_tables(
-    [RowJoin("alias_b" => "Tb_1")], MockPostgresIdent())          # no "b"
-
-  @test_throws KeyError PormG.QueryBuilder._get_join_condition_list(
-    [RowJoin("alias_a" => "Tb", "alias_b" => "Tb_1", "key_b" => "id")], MockPostgresIdent())  # no "key_a"
-
-  # The other half of what the comment on those loops claims: an INTERNALLY generated alias that is
-  # not an identifier must surface too. A wrong fix that re-wrapped only the `quote_identifier`
-  # calls in a try/catch passes the `KeyError` cases above and fails this one.
+  # An INTERNALLY generated alias that is not an identifier must surface. A wrong fix that
+  # re-wrapped only the `quote_identifier` calls in a try/catch would render the row anyway.
   @test_throws PormG.InvalidValueError PormG.QueryBuilder._get_join_condition_list(
-    [RowJoin("alias_a" => "bad alias", "alias_b" => "Tb_1", "key_a" => "id", "key_b" => "x")],
+    JR[MJ(a = "laps", alias_a = "bad alias", key_a = "id", b = "drivers", alias_b = "Tb_1", key_b = "x", how = "INNER")],
     MockPostgresIdent())
   @test_throws PormG.InvalidValueError PormG.QueryBuilder._build_from_tables(
-    [RowJoin("b" => "drivers", "alias_b" => "bad alias")], MockPostgresIdent())
+    JR[MJ(a = "laps", alias_a = "Tb", key_a = "id", b = "drivers", alias_b = "bad alias", key_b = "x", how = "INNER")],
+    MockPostgresIdent())
 
   # A CTE cannot be joined here at all: a correlated UPDATE ... FROM emits no WITH clause, so the
-  # relation the FROM list names is never declared. Both CTE shapes are refused before any SQL is
-  # built — the cross-joined one (which also carries sentinel empty key columns) and the keyed one.
+  # relation the FROM list names is never declared. Both CTE kinds are refused before any SQL is
+  # built — the cross-joined one (which has no key columns) and the keyed one.
   @test_throws PormG.QueryBuildError PormG.QueryBuilder._get_join_condition_list(
-    [RowJoin("b" => "fast_laps", "cte" => "1", "cross" => "1", "alias_a" => "Tb",
-             "alias_b" => "Tb_1", "key_a" => "", "key_b" => "")], MockPostgresIdent())
+    JR[XJ(a = "laps", alias_a = "Tb", b = "fast_laps", alias_b = "Tb_1")], MockPostgresIdent())
   @test_throws PormG.QueryBuildError PormG.QueryBuilder._get_join_condition_list(
-    [RowJoin("b" => "fast_laps", "cte" => "1", "alias_a" => "Tb", "alias_b" => "Tb_1",
-             "key_a" => "raceid", "key_b" => "raceid")], MockPostgresIdent())
+    JR[CJ(a = "laps", alias_a = "Tb", key_a = "raceid", b = "fast_laps", alias_b = "Tb_1",
+          key_b = "raceid", how = "INNER")], MockPostgresIdent())
+  # And an anchor-less `cjoin_on` row: this path renders equi-anchors only, so it refuses the row
+  # rather than emit the join without its ON clause (#45).
+  @test_throws PormG.QueryBuildError PormG.QueryBuilder._get_join_condition_list(
+    JR[AJ(a = "laps", alias_a = "Tb", b = "laps", alias_b = "b2", how = "INNER",
+          on_conditions = PormG.QueryBuilder.FilterType[])], MockPostgresIdent())
 
   # The well-formed case still builds, so the assertions above are about the failure path only.
-  good = RowJoin("b" => "drivers", "alias_a" => "Tb", "alias_b" => "Tb_1",
-                 "key_a" => "id", "key_b" => "driverid")
-  @test PormG.QueryBuilder._build_from_tables([good], MockPostgresIdent()) == "\"drivers\" AS \"Tb_1\""
-  @test PormG.QueryBuilder._get_join_condition_list([good], MockPostgresIdent()) ==
+  good = MJ(a = "laps", alias_a = "Tb", key_a = "id", b = "drivers", alias_b = "Tb_1",
+            key_b = "driverid", how = "INNER")
+  @test PormG.QueryBuilder._build_from_tables(JR[good], MockPostgresIdent()) == "\"drivers\" AS \"Tb_1\""
+  @test PormG.QueryBuilder._get_join_condition_list(JR[good], MockPostgresIdent()) ==
         ["\"Tb\".\"id\" = \"Tb_1\".\"driverid\""]
 end
 

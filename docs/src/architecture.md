@@ -165,10 +165,12 @@ characterizations worth stating plainly.
   removes *why* the join builder does resolution inline, and retires the world-age-risky reflection.
 
 - **Join builder shape** — [#68](https://github.com/PingoLee/PormG.jl/issues/68). `_build_row_join`
-  resolves the first hop and each subsequent hop with near-duplicate branch chains, and the join
-  plan is carried as stringly-typed `Vector{Dict{String, …}}`. The tracked refactor is
-  behavior-preserving (collapse the duplication) and optionally introduces a typed `JoinPlan`/
-  `JoinNode` struct. Best done *after* #65, which simplifies the resolution it depends on.
+  resolves the first hop and each subsequent hop with near-duplicate branch chains. The join plan
+  itself is typed since [#487](https://github.com/PingoLee/PormG.jl/issues/487): `row_join` is a
+  `Vector{JoinRow}` whose four kinds — `ModelJoin`, `CteJoin`, `CrossJoin`, `AnchorlessJoin`
+  (`src/querybuilder/types.jl`) — select the render path by dispatch rather than by string flags.
+  The tracked refactor is behavior-preserving (collapse the duplication). Best done *after* #65,
+  which simplifies the resolution it depends on.
 
 - **Type stability is structural, not cosmetic** —
   [#41](https://github.com/PingoLee/PormG.jl/issues/41). The query state is built on

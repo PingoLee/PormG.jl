@@ -634,6 +634,33 @@ function Base.show(io::IO, a::QueryBuilder.AliasJoin)
         ", ", getfield(a, :join_type), ", ", length(getfield(a, :filters)), " ON)")
 end
 
+# #487 — the materialized join rows. They hold only Strings and a predicate vector, so the default
+# `show` would not blow up; these exist so a `row_join` dump reads as one join per line, with the
+# kind first and the ON-predicate COUNT rather than the predicates (an `OperObject` can hold a
+# subquery handle, which is the graph the file header says never to walk).
+function _d_on_count(io::IO, n::Int)
+  n == 0 || print(io, ", ", n, " ON")
+end
+function Base.show(io::IO, r::QueryBuilder.ModelJoin)
+  print(io, "ModelJoin(", getfield(r, :alias_a), ".", getfield(r, :key_a), " = ",
+        getfield(r, :alias_b), ".", getfield(r, :key_b), " [", getfield(r, :b), "], ", getfield(r, :how))
+  getfield(r, :to_many) && print(io, ", to_many")
+  _d_on_count(io, length(getfield(r, :on_conditions)))
+  print(io, ")")
+end
+function Base.show(io::IO, r::QueryBuilder.CteJoin)
+  print(io, "CteJoin(", getfield(r, :alias_a), ".", getfield(r, :key_a), " = ",
+        getfield(r, :alias_b), ".", getfield(r, :key_b), " [", getfield(r, :b), "], ", getfield(r, :how), ")")
+end
+function Base.show(io::IO, r::QueryBuilder.CrossJoin)
+  print(io, "CrossJoin(", getfield(r, :b), " AS ", getfield(r, :alias_b), ")")
+end
+function Base.show(io::IO, r::QueryBuilder.AnchorlessJoin)
+  print(io, "AnchorlessJoin(", getfield(r, :b), " AS ", getfield(r, :alias_b), ", ", getfield(r, :how))
+  _d_on_count(io, length(getfield(r, :on_conditions)))
+  print(io, ")")
+end
+
 Base.show(io::IO, f::QueryBuilder.SQLField) = print(io, "SQLField(", _d_col(getfield(f, :field)), ")")
 
 function Base.show(io::IO, o::QueryBuilder.SQLOrder)

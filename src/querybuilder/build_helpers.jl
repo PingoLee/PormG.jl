@@ -624,9 +624,9 @@ end
 function _get_alias_name(instruct::SQLInstruction)::String
   return _get_alias_name(instruct.row_join, instruct.alias, _declared_join_aliases(instruct.object))
 end
-function _get_alias_name(row_join::Vector{Dict{String,Union{String,Vector{FilterType}}}}, alias::String,
+function _get_alias_name(row_join::Vector{JoinRow}, alias::String,
                          reserved::Vector{String}=String[])::String
-  taken = vcat([r["alias_a"] for r in row_join], [r["alias_b"] for r in row_join], reserved)
+  taken = vcat([r.alias_a for r in row_join], [r.alias_b for r in row_join], reserved)
   count = 1
   while true
     alias_name = alias * string("_", count)
@@ -650,34 +650,37 @@ _declared_join_aliases(object::SQLObject)::Vector{String} = collect(keys(object.
 # one remaining reader is an `∉` membership test), so the two vectors do not have to stay the same
 # length.
 function _insert_join(
-  row_join::Vector{Dict{String,Union{String,Vector{FilterType}}}},
-  row::Dict{String,Union{String,Vector{FilterType}}},
+  row_join::Vector{JoinRow},
+  row::JoinRow,
   row_path::Vector{String}, join_path::String; track_path::Bool=true)
   @pormg_debug false
   if size(row_join, 1) == 0
     push!(row_join, row)
     track_path && push!(row_path, join_path)
-    return row["alias_b"]
+    return row.alias_b
   else
     # The tuple has no CTE-vs-physical discriminator on purpose (#479): a CTE row and a model row
     # agree on `b` only when a CTE is named after a physical table, and `_with` refuses that at
     # declaration for every table reachable from the registered models. SQL would resolve both
     # joins to the CTE anyway, so keeping such rows apart here could only ever render a second
     # join that reads the wrong relation — a discriminator would not fix the shape, only hide it.
-    check = filter(r -> r["a"] == row["a"] && r["b"] == row["b"] && r["key_a"] == row["key_a"] && r["key_b"] == row["key_b"] && r["alias_a"] == row["alias_a"], row_join)
+    # #487 kept that when the rows became typed: `_dedup_key` (`types.jl`) is the same
+    # `(a, b, key_a, key_b, alias_a)` tuple, with the kind deliberately left out of it.
+    key = _dedup_key(row)
+    check = filter(r -> _dedup_key(r) == key, row_join)
     if size(check, 1) == 0
       @pormg_debug false
       push!(row_join, row)
       track_path && push!(row_path, join_path)
-      return row["alias_b"]
+      return row.alias_b
     else
       if size(check, 1) > 1
         # #197: was `throw("Error in join")` — a raw String with zero context. This branch means
         # the dedup filter matched the same (a, b, key_a, key_b, alias_a) join row more than once,
         # which the dedup invariant forbids.
-        error(_emsg("PormG internal error in _insert_join: duplicate deduplicated join rows for $(row["a"]) → $(row["b"]) (alias $(row["alias_a"])) — please report this."))
+        error(_emsg("PormG internal error in _insert_join: duplicate deduplicated join rows for $(row.a) → $(row.b) (alias $(row.alias_a)) — please report this."))
       end
-      return check[1]["alias_b"]
+      return check[1].alias_b
     end
   end
 end
@@ -694,16 +697,17 @@ function _check_if_field_is_a_operator(field::String)
 end
 
 # #474: `"CROSS"` is NOT in this list, and its absence is the fix rather than an oversight. Every
-# consumer of this function feeds `row_join["how"]`, and Phase 2 of `build_row_join_sql_text` emits
-# `"$(value["how"]) JOIN $b AS $alias ON $on_clause"` unconditionally — so an accepted `"CROSS"`
+# consumer of this function feeds a `ModelJoin`/`CteJoin`/`AnchorlessJoin`'s `how`, and Phase 2 of
+# `build_row_join_sql_text` emits `"$(value.how) JOIN $b AS $alias ON $on_clause"` for every one of
+# those kinds unconditionally — so an accepted `"CROSS"`
 # could only ever render `CROSS JOIN … ON …`, which BOTH PostgreSQL and SQLite reject. Measured on
 # all three writers before removal: `cjoin_on(join_type="CROSS")`, `on(join_type="CROSS")` and a
 # `field.how` of `"CROSS"` each produced that statement. It was never documented either
 # (`docs/src/api.md` has always listed only the four below).
 #
-# The one real CROSS JOIN PormG emits is an UNKEYED `.with(...)` that is REFERENCED — that path sets
-# `row_join["cross"]` in `build_joins.jl` and short-circuits ahead of the `ON` render; it never comes
-# through here. That is also the only supported spelling for a deliberate cross product, so the
+# The one real CROSS JOIN PormG emits is an UNKEYED `.with(...)` that is REFERENCED — that path builds
+# a `CrossJoin` in `build_joins.jl`, a kind with no join type at all, and Phase 2 short-circuits on it
+# ahead of the `ON` render; it never comes through here. That is also the only supported spelling for a deliberate cross product, so the
 # message points at it (and at the reference, not just the declaration: since #444 a `.with(...)`
 # alone emits no join at all).
 function _normalize_join_type(join_type::String)

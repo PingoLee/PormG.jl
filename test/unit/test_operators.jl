@@ -821,10 +821,19 @@ end
 # against a collection-valued field would both change. They must not.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a non-membership operator never maps its value (#411)" begin
-  # BETWEEN indexes its two operands separately and formats each as a scalar.
+  # BETWEEN indexes its two operands separately and formats each as a scalar. #467 moved that
+  # formatting inside the re-raise guard, so this is also the control proving the move changed the
+  # ERROR type only: a well-typed pair still binds two scalars, unwrapped and in order.
   q_r = _IN411.objects.filter("n__@range" => [1, 9])
   q_r.values("id")
   @test q_r.list(show_query = :dict)[:parameters] == [1, 9]
+
+  # The negated arm binds identically — it differs only in the operator string it emits.
+  q_nr = _IN411.objects.filter("happened__@nrange" => [Date("2026-06-15"), Date("2026-06-16")])
+  q_nr.values("id")
+  res_nr = q_nr.list(show_query = :dict)
+  @test res_nr[:parameters] == ["2026-06-15", "2026-06-16"]
+  @test contains(res_nr[:sql_text], "NOT BETWEEN")
 
   # A scalar Date comparison still formats as one value, not a one-element list.
   q_s = _IN411.objects.filter("happened__@lte" => Date("2026-06-15"))
@@ -854,11 +863,24 @@ end
   # A Date field was already converted by the old substring match; it must stay converted.
   @test_throws PormG.FilterError _IN411.objects.filter("happened" => "not-a-date").list(show_query = :dict)
 
-  # NOT converted: `@range` formats its two operands outside the `try`, so it still reports
-  # `InvalidValueError`. Pinned so the inconsistency is a recorded limit rather than an accident —
-  # if someone moves that branch inside the guard, this test tells them to update the note with it.
-  @test_throws PormG.InvalidValueError _IN411.objects.filter(
+  # #467: `@range`/`@nrange` were the one arm left out — `BETWEEN` formats its two operands in a
+  # branch of its own, which sat outside the guard, so the SAME mistake reported a different type
+  # depending on which operator was used. Both branches now go through `_rethrow_as_filter_error`.
+  # Asserting the cause as well as the type, for the reason stated above.
+  range_err = @test_throws PormG.FilterError _IN411.objects.filter(
     "happened__@range" => ["x", "y"]).list(show_query = :dict)
+  @test occursin("field is the type", range_err.value.msg)
+
+  # `@nrange` was untested either way before #467. It shares the branch but not the operator
+  # string, and a fix written against `BETWEEN` alone would be easy to scope to one of them.
+  nrange_err = @test_throws PormG.FilterError _IN411.objects.filter(
+    "happened__@nrange" => ["x", "y"]).list(show_query = :dict)
+  @test occursin("field is the type", nrange_err.value.msg)
+
+  # Non-Date too: the leak was never about dates, and `n` is the field the scalar case above uses,
+  # so a BETWEEN-specific regression cannot hide behind the Date formatter's own arms.
+  @test_throws PormG.FilterError _IN411.objects.filter(
+    "n__@range" => ["abc", "def"]).list(show_query = :dict)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

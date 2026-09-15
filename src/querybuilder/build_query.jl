@@ -16,6 +16,45 @@
 _projection_output_name(v::SQLTypeField) = v.custom_as !== nothing ? v.custom_as : v._as
 _projection_output_name(v::SQLTypeText) = v.custom_as !== nothing ? v.custom_as : v._as
 
+# #564 — the SELECT-`*` half of the projection-kind map.
+#
+# `get_select_query` records a kind per PROJECTION, so a query whose result carries columns it never
+# projected — `SELECT "Tb".*` — records none for them, and the read path would stop coercing columns
+# it coerced before. This fills that case from the model.
+#
+# A static scan from the model is sound here because a star emits the PRIMARY MODEL's own columns and
+# nothing else: `query()` refuses an un-projected joined query outright ("Joined queries must
+# explicitly select fields using .values(...)"), and the explicit `values("*", "joined__field")`
+# spelling still expands the star over the base table alone, with the joined column arriving as its
+# own projection (which `get_select_query` has already typed).
+#
+# Keyed under BOTH the field name and its `db_column`, because `SELECT "Tb".*` returns PHYSICAL
+# column names: the predecessor of this code keyed only on the field name, so a
+# `DateTimeField(db_column = "created")` was silently never coerced. A key the row does not carry
+# costs nothing — the read loop only visits keys the row has.
+function _record_wildcard_projection_kinds!(instruc::SQLInstruction)
+  # An EXPLICIT `"*"` counts too, not only an empty projection list. `values("*")` and
+  # `values("*", "team__founded")` both put every model column in the result under its own name, and
+  # the second spelling is the one PormG's own error message recommends for a joined query ("Tip: Use
+  # .values(\"*\", \"joined_model__field_name\")"). Recording only the empty case left that spelling
+  # returning a MIX — the joined alias typed, the wildcard columns raw — in one row.
+  isempty(instruc.object.values) || any(_is_wildcard_projection, instruc.object.values) || return nothing
+  for (fname, fmeta) in instruc.object.model.fields
+    kind = field_canonical_kind(fmeta)
+    kind === nothing && continue
+    # `get!`, NEVER `[]=`. This runs AFTER `get_select_query`, so a plain assignment would let the
+    # model-derived kind CLOBBER one an explicit projection already recorded under the same name —
+    # and `values("*", "moved" => "d")` is exactly that collision when a field's `db_column` differs
+    # from its name, since this loop claims both spellings while the duplicate-name guard only
+    # reserves the star's physical columns. The explicit projection is the more specific answer and
+    # wins; these are the fallback for names nothing else claimed.
+    get!(instruc.projection_kinds, Symbol(fname), kind)
+    physical = Models.field_db_column(fmeta, fname)
+    physical == fname || get!(instruc.projection_kinds, Symbol(physical), kind)
+  end
+  return nothing
+end
+
 function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instruc::SQLInstruction)
   for i in eachindex(values) # linear indexing
     v_copy = deepcopy(values[i])
@@ -70,7 +109,31 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       instruc.select[i] = cached
     else
       @pormg_debug false
-      v_copy.field = _get_select_query(v_copy.field, instruc, _as=v_copy._as)
+      # #564 — RENDER, AND CARRY OUT WHAT THE RESULT IS.
+      #
+      # The read path needs the canonical kind of every projection, and the only place that can
+      # answer is here: resolving a path is what populates the memos the kind lookup reads, and the
+      # rendered form is a bare `String` with nothing left to ask. So the kind is taken from the
+      # SAME call that renders, never from a second walk over the node — a second walk is precisely
+      # the duplication #564 exists to remove, and it would be free to drift.
+      #
+      # `FExpression` concretely, not the abstract `SQLTypeF`: `OuterRefObject` is also `<: SQLTypeF`
+      # (#533) and has no typed renderer. Everything else — functions, subqueries, window
+      # expressions — answers `nothing`, which means "no representation this table owns", and the
+      # read path then leaves the column exactly as the driver delivered it.
+      original = v_copy.field
+      kind = nothing
+      if original isa FExpression
+        v_copy.field, kind = _set_update_query_typed(original, instruc)
+      else
+        v_copy.field = _get_select_query(original, instruc, _as=v_copy._as)
+        # A plain path: render first (above), THEN type — the memo ordering `_render_left_typed`
+        # documents. A dotted join key cannot be typed before it has been resolved.
+        # `_projection_column_kind`, not the arithmetic-narrowed `_operand_column_kind`: a projected
+        # `TimeField` or `DurationField` has a representation to undo even though neither can be the
+        # left of date arithmetic.
+        original isa String && (kind = _projection_column_kind(original, instruc))
+      end
       instruc.select[i] = v_copy
       if v_copy._as === nothing
         throw(QueryBuildError("Field requires an alias: \e[4m\e[31m$(v_copy.field)\e[0m must have a name using the format \e[4m\e[32m\"field_name\" => $(v_copy.field)\e[0m or use \e[4m\e[32mSQLField($(v_copy.field), \"alias_name\")\e[0m"))
@@ -78,6 +141,13 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       # `cache_key` is non-`nothing` here: it is `nothing` exactly when `_as` is, which the throw
       # above has already ruled out.
       cached === nothing && memo_projection!(instruc, cache_key, instruc.select[i])
+      # #564: keyed by the RESULT-ROW name, which is what the driver hands back. The reuse branch
+      # above needs no equivalent — it is taken only when the output name is EQUAL, so the entry it
+      # would write is the one already written under that key.
+      if kind !== nothing
+        name = _projection_output_name(v_copy)
+        name === nothing || (instruc.projection_kinds[Symbol(name)] = kind)
+      end
     end
   end
 
@@ -918,6 +988,7 @@ function build(object::SQLObject;
   # Subqueries skip this to inherit the parent's current bucket.
   set_contexts && set_context!(instruct, :select)
   get_select_query(object.values, instruct)
+  _record_wildcard_projection_kinds!(instruct)
 
   set_contexts && set_context!(instruct, :where)
   get_filter_query(object, instruct)

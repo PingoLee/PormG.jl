@@ -20,9 +20,15 @@ import PormG: ColumnDelta, LiteralDefault, ExpressionDefault
 # #522: the two `USING` casts in `alter_field` read the LIVE column's canonical type off the delta
 # instead of dispatching on a reconstructed field struct — the readers no longer build one.
 import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CDecimal, CText, CVarChar, CTime
+# #564: the remaining temporal nouns, for the read-parser half of the value-representation table.
+import PormG: CDate, CDateTime, CInterval
 import PormG: _has_non_negative, _byte_bound
 import PormG: get_constraints_pk, get_constraints_unique, get_constraints_check, get_constraints_byte_length_check
 import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column, format_timezone_sql, model_table_name, fk_target_table
+# #564: the read side of the canonical timestamp text, now that its PARSER lives here beside the
+# mask it inverts. `normalize_sqlite_datetime_string` stays in `Models` because it is also on the
+# WRITE path (`validate_timezone`) — this module only consumes it.
+import PormG.Models: normalize_sqlite_datetime_string
 # `_foreign_key_on_delete_sql` lives in `Models` since #498 — see the note where it used to be defined.
 import PormG.Models: _foreign_key_on_delete_sql
 
@@ -99,6 +105,130 @@ is already canonical". Sniffing a bare `strftime(` would not work — `QUARTER`,
 function _sqlite_canonical_datetime(expr::AbstractString, modifiers::Vector{String} = String[])
   isempty(modifiers) && return "strftime($(SQLITE_CANONICAL_DATETIME_MASK), $(expr))"
   return "strftime($(SQLITE_CANONICAL_DATETIME_MASK), $(expr), $(join(modifiers, ", ")))"
+end
+
+
+"""
+    _parse_sqlite_timestamp(v) -> Union{ZonedDateTime, DateTime, typeof(v)}
+
+Parse SQLite's stored text for a timestamp back into a Julia temporal type — the READ half of the
+representation `SQLITE_CANONICAL_DATETIME_MASK` above renders and `Models.format_timezone_sql`
+writes.
+
+It lives here, next to that mask, for the reason #564 exists: the write format, the SQL rendering of
+it and the parse of it are one convention, and while they sat in three files nothing made them agree.
+`PormG.value_parser(::CDateTime, ::PormGSQLite)` is what names this as the third slot of the pair.
+
+PostgreSQL needs no equivalent: LibPQ delivers a `ZonedDateTime` natively.
+
+- a string carrying a timezone offset -> `ZonedDateTime`
+- a naive ISO 8601 string -> `DateTime`
+- a non-string, or a string in no shape it recognises -> returned **unchanged**
+
+That last rule is what makes a wrong caller harmless rather than lossy: handed the integer `2031`
+that `CAST(col AS DATE)` yields on SQLite, or text in a representation nothing here wrote, it hands
+it straight back rather than guessing.
+"""
+# A naive timestamp, with or without the `T`, with an optional fraction. Used only by the fallback
+# arm below — the canonical form with its offset is handled by `normalize_sqlite_datetime_string`.
+const _SQLITE_NAIVE_TS = r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.(\d{1,3})\d*)?$"
+
+function _parse_sqlite_timestamp(v::Any)
+    v isa AbstractString || return v
+    normalized = normalize_sqlite_datetime_string(v)
+    # Timezone-aware form first (e.g. "2026-04-07T18:30:23.741-03:00") — the canonical one.
+    try
+      return ZonedDateTime(normalized, dateformat"yyyy-mm-ddTHH:MM:SS.ssszzzz")
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+    end
+    # Fall back to a naive datetime. MATCH FIRST, then parse.
+    #
+    # This used to slice the RAW `v` by byte — `v[1:min(19, length(v))]` — which assumes an ASCII,
+    # `T`-separated prefix in exactly the arm that fires for a string
+    # `normalize_sqlite_datetime_string` did NOT recognise. On a multi-byte value that is a
+    # `StringIndexError`, and the bare `catch` it sat behind swallowed it. Matching a shape before
+    # parsing removes the assumption, and accepts the space-separated form as a side effect.
+    m = match(_SQLITE_NAIVE_TS, normalized)
+    m === nothing && return v
+    frac = m[3] === nothing ? "000" : rpad(m[3], 3, '0')
+    try
+      return DateTime("$(m[1])T$(m[2]).$(frac)", dateformat"yyyy-mm-ddTHH:MM:SS.sss")
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      return v
+    end
+end
+
+"""
+    _parse_sqlite_date(v) -> Union{Date, typeof(v)}
+
+The READ half of `Models.format_date_sql` on SQLite — `"2031-07-04"` back into a `Date`.
+
+Deliberately refuses a timestamp string rather than truncating it. A `CDate`-kinded expression that
+produced one means the render side mistyped it, and silently taking the date part would hide exactly
+the class of defect #564 exists to surface.
+"""
+function _parse_sqlite_date(v::Any)
+    v isa AbstractString || return v
+    occursin(r"^\d{4}-\d{2}-\d{2}$", v) || return v
+    try
+      return Date(v)
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      return v                                   # a well-shaped but impossible date (2023-02-29)
+    end
+end
+
+"""
+    _parse_sqlite_time(v) -> Union{Time, typeof(v)}
+
+The READ half of `TimeField`'s formatter on SQLite. `TimeField` has no dedicated formatter — it
+rides `Models.format_text_sql(::Time)`, which is `string(::Time)`, an exact inverse of
+`Time(::String)`. That formatter is left alone: changing it would be a write-side behaviour change
+this table has no mandate for.
+"""
+function _parse_sqlite_time(v::Any)
+    v isa AbstractString || return v
+    occursin(r"^\d{1,2}:\d{2}(:\d{2}(\.\d{1,9})?)?$", v) || return v
+    try
+      return Time(v)
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      return v
+    end
+end
+
+# `HH:MM:SS` with an optional fraction and an optional leading sign — the shape
+# `Models._duration_nanoseconds_to_string` writes.
+const _SQLITE_INTERVAL = r"^([+-]?)(\d+):(\d{2}):(\d{2})(?:\.(\d{1,9}))?$"
+
+"""
+    _parse_sqlite_interval(v) -> Union{Dates.CompoundPeriod, typeof(v)}
+
+The READ half of `Models.format_duration_sql` on SQLite.
+
+Reconstructed from the SAME units the writer emits — hours, minutes, seconds, nanoseconds — so the
+two are literal inverses. NOT `Dates.canonicalize`, which would roll hours up into days and weeks
+while the writer caps at hours: the round trip would not close, and `format_duration_sql` would then
+write something different from what it read.
+
+`CompoundPeriod <: Dates.AbstractTime`, which is the type parity PostgreSQL's driver already
+delivers for an INTERVAL column.
+"""
+function _parse_sqlite_interval(v::Any)
+    v isa AbstractString || return v
+    m = match(_SQLITE_INTERVAL, strip(v))
+    m === nothing && return v
+    sign  = m[1] == "-" ? -1 : 1
+    nanos = m[5] === nothing ? 0 : parse(Int, rpad(m[5], 9, '0'))
+    try
+      return Dates.CompoundPeriod(Hour(sign * parse(Int, m[2])), Minute(sign * parse(Int, m[3])),
+                                  Second(sign * parse(Int, m[4])), Nanosecond(sign * nanos))
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      return v
+    end
 end
 
 

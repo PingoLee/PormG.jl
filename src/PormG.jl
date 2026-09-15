@@ -118,6 +118,13 @@ export @models_module, @import_models
 include("Dialect.jl")
 import .Dialect
 
+# #564 — the value-representation table. AFTER `Models` and `Dialect` because it names both at
+# definition time, and BEFORE `QueryBuilder` because the render and read paths consult it. It defines
+# functions in the `PormG` namespace rather than a submodule: its three inputs live in three
+# different submodules, so `PormG` is the only module that can see all of them — `Backend.jl`'s
+# situation, and the same resolution. Kernel holds the nouns; `PormG` keeps the verbs.
+include("value_repr.jl")
+
 include("AdvisoryLock.jl")
 using .AdvisoryLock
 

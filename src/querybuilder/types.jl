@@ -239,6 +239,16 @@ const CorrelatedRef = NamedTuple{(:label, :ref, :column, :expr),NTuple{4,String}
   # re-derives everything it needs from the filter expression it is handed. It was a `Set` wearing a
   # `Dict`'s allocation, so it is spelled as one now. Reach it through `memo_json_lookup` (`memos.jl`).
   json_lookup_paths::Set{MemoKey} = Set{MemoKey}()
+  # #564 — the canonical kind each PROJECTION evaluates to, keyed by the RESULT-ROW column name
+  # (`_projection_output_name`, the same expression `_query_select` renders the `AS` alias from, so
+  # this key and the one the driver hands back agree by construction rather than by coincidence).
+  #
+  # DELIBERATELY NOT A FOURTH MEMO, and not reached through `memos.jl`. The three memos there are
+  # RESOLUTION caches keyed by `MemoKey` — a namespace plus a name — consulted DURING the build to
+  # avoid re-resolving an expression. This is a description of the RESULT SET, consumed AFTER the
+  # build by a reader whose only handle on a column is the name the driver gave it: `_list_raw` has
+  # no namespace to key with, and routing this through `memo_key` would force it to invent one.
+  projection_kinds::Dict{Symbol,CanonicalType} = Dict{Symbol,CanonicalType}()
   connection::ConnType = nothing
   # array_defs::SQLTypeArrays = SQLArrays()
   cache::Dict{MemoKey,SQLTypeField} = sizehint!(Dict{MemoKey,SQLTypeField}(), 12)
@@ -494,11 +504,19 @@ mutable struct SQLObjectQuery <: SQLObject
   # `insert` above is ordered (#97).
   alias_join::OrderedCollections.OrderedDict{String,AliasJoin}
   parameters::Union{Nothing,AbstractPormGParam}
+  # #564 — the build writes back the canonical kind of each projection here, the same way it writes
+  # back `parameters`, so the READ path can ask what each result column is without re-deriving it.
+  #
+  # Like `parameters`, it is a PER-BUILD artifact and `Base.deepcopy` deliberately does not carry it:
+  # it describes the projections of one build, and a stale map surviving into a copy that is then
+  # re-projected would describe columns that no longer exist.
+  projection_kinds::Dict{Symbol,CanonicalType}
 
   SQLObjectQuery(; model=nothing, connect_key=nothing, values=[], filter=[], insert=OrderedCollections.OrderedDict{String,Any}(), limit=0, offset=0,
     order=[], group=[], having=[], list_joins=[], row_join=[], distinct=false, for_update=nothing, ctes=OrderedCollections.OrderedDict{String,CTEDict}(),
-    custom_join=OrderedCollections.OrderedDict{String,PathJoin}(), alias_join=OrderedCollections.OrderedDict{String,AliasJoin}(), parameters=nothing) =
-    new(model, connect_key, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, for_update, ctes, custom_join, alias_join, parameters)
+    custom_join=OrderedCollections.OrderedDict{String,PathJoin}(), alias_join=OrderedCollections.OrderedDict{String,AliasJoin}(), parameters=nothing,
+    projection_kinds=Dict{Symbol,CanonicalType}()) =
+    new(model, connect_key, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, for_update, ctes, custom_join, alias_join, parameters, projection_kinds)
 end
 
 function Base.deepcopy(obj::SQLObjectHandler)
@@ -719,6 +737,13 @@ function _parse_time_string_to_compoundperiod(s::AbstractString)::Dates.Compound
 end
 
 Interval(s::AbstractString) = Interval(_parse_time_string_to_compoundperiod(s))
+
+# #564 — the kind a rendered temporal expression EVALUATES TO, carried alongside its SQL text.
+# `nothing` means "not a temporal expression, or one this build cannot type"; both consumers
+# (the SQLite wrapper choice and the literal binder) treat it as "no representation to honour",
+# which is what they did before the render carried a kind at all. Django's name for this is the
+# expression's `output_field`.
+const TemporalKind = Union{CanonicalType, Nothing}
 
 # Duration operands accepted by F-expression +/- date arithmetic (#25).
 const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}

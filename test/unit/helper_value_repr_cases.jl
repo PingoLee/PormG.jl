@@ -37,6 +37,7 @@ import TimeZones
 import PormG
 import PormG.Models
 using PormG.QueryBuilder: F
+import PormG.QueryBuilder   # `query_list` + its `Tables`, for the raw read below (no new test dependency)
 using PormG.Functions: ToChar
 
 # ── Probe values ────────────────────────────────────────────────────────────
@@ -104,14 +105,21 @@ The projected value, normalized for comparison. A `String` is compared AS IS —
 byte-identity claim on SQLite. A typed value (PostgreSQL) is pushed through the same formatter
 as the oracle, so both sides canonicalize identically.
 
-The byte comparison is what makes P1 strong on SQLite, and it holds today only BECAUSE P3 is
-broken there: `_sqlite_datetime_aliases` coerces an alias naming a plain `DateTimeField` column
-and nothing else, so every expression alias in this table reads back as raw text. Whoever fixes
-sibling 4 (coerce expression aliases) turns `x` into a `DateTime`, and `_parse_sqlite_datetime`
-accepts a `T`-separated, fraction-less string — so a rendering that dropped the `.sss` and the
-offset would canonicalize to the right text here and P1 would go hollow. That fix must come
-with an independent raw-text read for P1 (e.g. a second projection through `Cast(…, "TEXT")`);
-the erroring `@test_broken x isa T` marks will force the visit, and this paragraph says why.
+SIBLING 4 IS FIXED, AND P1 NO LONGER READS THROUGH THIS FUNCTION ON THE COERCED PATH.
+
+The warning this paragraph used to carry came true exactly as written: the byte comparison made
+P1 strong on SQLite only BECAUSE P3 was broken there, so every expression alias arrived as raw
+text. Now that expression aliases are coerced, `x` on the coerced path is a `DateTime`, and
+`_parse_sqlite_timestamp` accepts a `T`-separated, fraction-less string — a rendering that
+dropped the `.sss` and the offset would canonicalize to the right text here and P1 would prove
+nothing.
+
+So P1 reads `vr_raw_value` instead (below): `query_list`, which is `_list_raw` minus exactly the
+coercion step, and therefore the raw read DEFINED AT the seam it guards rather than approximating
+it. **Do not "simplify" P1 back to `list(:dict)`** — that is the hollow version.
+
+This function still normalizes the P1 comparison for a value that arrives typed anyway
+(PostgreSQL's driver delivers one on the raw path too), and it is still the right shape for that.
 """
 function vr_observed_text(kind::Symbol, x)
   x isa VRRefused && return x
@@ -164,24 +172,27 @@ const VR_CASES = VRCase[
   # sibling-4 probe — an expression alias is never in the SQLite DateTime-coercion set, which
   # only covers aliases naming a plain column, so `values("x" => F(c))` reads back as `String`.
   vrcase("identity", :timestamp, c -> F(c), v -> v,
-         sibling = "4 — expression alias reads back as String on SQLite", p3 = (:sqlite,)),
+         sibling = "4 — FIXED: the alias is coerced by the kind it evaluates to"),
   # #527 controls: the canonical `strftime` wrapper, whole-day and sub-day.
-  vrcase("plus_day",  :timestamp, c -> F(c) + Day(1),  v -> v + Day(1),  p3 = (:sqlite,)),
-  vrcase("minus_day", :timestamp, c -> F(c) - Day(1),  v -> v - Day(1),  p3 = (:sqlite,)),
-  vrcase("plus_hour", :timestamp, c -> F(c) + Hour(1), v -> v + Hour(1), p3 = (:sqlite,)),
+  vrcase("plus_day",  :timestamp, c -> F(c) + Day(1),  v -> v + Day(1)),
+  vrcase("minus_day", :timestamp, c -> F(c) - Day(1),  v -> v - Day(1)),
+  vrcase("plus_hour", :timestamp, c -> F(c) + Hour(1), v -> v + Hour(1)),
   # Integer days — the other #527 branch, and the one #563's name collision produced.
-  vrcase("plus_int_days", :timestamp, c -> F(c) + 7, v -> v + Day(7), p3 = (:sqlite,)),
-  # Sibling 1: both integer-days guards require `field_name isa String`, so a NESTED left falls
-  # through to plain numeric addition on TEXT.
+  vrcase("plus_int_days", :timestamp, c -> F(c) + 7, v -> v + Day(7)),
+  # Sibling 1, FIXED by #568. Both integer-days guards required `field_name isa String`, so a NESTED
+  # left fell through to plain numeric addition on TEXT — a silent integer on SQLite, and
+  # `timestamptz + bigint` (no such operator) on PostgreSQL. A bare integer is now normalized into
+  # `Day(n)` and rendered by the one temporal renderer, so it composes at any depth.
+  #
+  # The marks are now identical to `plus_int_days` above, which is the point: the single-link and
+  # nested spellings of one expression should not differ, and the only mark left is the SQLite
+  # read-back (sibling 4), which every expression alias shares. The `shape` lambda is GONE rather
+  # than rewritten — it recorded a measured FAILURE, and there is no longer a failure to record.
   vrcase("nested_int_days", :timestamp, c -> (F(c) + 7) + 3, v -> v + Day(10),
-         sibling = "1 — nested integer-days left escapes the wrapper",
-         # SQLite: numeric addition on TEXT, a silent integer. PostgreSQL: `timestamptz + bigint`
-         # has no operator, so the same rendering is REFUSED (`StatementError`) — loud, not wrong.
-         shape = (x, engine) -> engine === :postgres ? x isa VRRefused : x isa Integer,
-         p1 = (:sqlite, :postgres), p2f = (:sqlite, :postgres), p3 = (:sqlite, :postgres)),
+         sibling = "1 — fixed by #568; nested integer days compose"),
   # #494 control: a zero-length link short-circuits to the bare left side; the outer call must
   # still resolve the column's kind rather than sniff the (now absent) marker.
-  vrcase("zero_link_chain", :timestamp, c -> F(c) + Day(0) + Day(1), v -> v + Day(1), p3 = (:sqlite,)),
+  vrcase("zero_link_chain", :timestamp, c -> F(c) + Day(0) + Day(1), v -> v + Day(1)),
   # Sibling 2: `sqlite_date_format_map` spells this mask `%S.%f`, and SQLite's `%f` is already
   # `SS.SSS`, so the seconds render twice. Also measures the PostgreSQL half of the same map
   # entry: `to_char`'s `HH` is 12-hour and `SSS` is not a `to_char` pattern.
@@ -207,21 +218,24 @@ const VR_CASES = VRCase[
   # ── DATE ─────────────────────────────────────────────────────────────────
   # `date(...)` == `format_date_sql` is asserted only in a comment today (`Dialect.jl:83`); this
   # is that claim as a measurement.
-  vrcase("identity", :date, c -> F(c), v -> v, p3 = (:sqlite,)),
+  vrcase("identity", :date, c -> F(c), v -> v),
   # P3 on PostgreSQL: `date + interval` is a `timestamp` in SQL, so a whole-day shift reads back
   # as a `DateTime` there and as `YYYY-MM-DD` text (a date) on SQLite. P1 and P2 hold on both —
   # PormG binds the calendar date and PostgreSQL coerces — so this is the "sub-day-only
   # promotion is discontinuous" item from the #564 design review, measured: the two engines
   # give the expression different TYPES for the same whole-day arithmetic.
-  vrcase("plus_day", :date, c -> F(c) + Day(1), v -> v + Day(1), p3 = (:sqlite, :postgres)),
-  vrcase("plus_int_days", :date, c -> F(c) + 7, v -> v + Day(7), p3 = (:sqlite, :postgres)),
+  vrcase("plus_day", :date, c -> F(c) + Day(1), v -> v + Day(1), p3 = (:postgres,)),
+  vrcase("plus_int_days", :date, c -> F(c) + 7, v -> v + Day(7), p3 = (:postgres,)),
+  # Sibling 1's DATE branch, fixed by #568 alongside the timestamp one. Marks match `plus_int_days`
+  # above: SQLite reads the alias back as text (sibling 4), and PostgreSQL returns a `DateTime`
+  # because `date + interval` is a `timestamp` in SQL — the promotion split tracked as #572, which
+  # this change deliberately does not touch.
   vrcase("nested_int_days", :date, c -> (F(c) + 7) + 3, v -> v + Day(10),
-         sibling = "1 — nested integer-days left escapes the wrapper (date branch)",
-         shape = (x, engine) -> engine === :postgres ? x isa VRRefused : x isa Integer,
-         p1 = (:sqlite, :postgres), p2f = (:sqlite, :postgres), p3 = (:sqlite, :postgres)),
+         sibling = "1 — fixed by #568; nested integer days compose (date branch)",
+         p3 = (:postgres,)),
   # #527 control: a sub-day duration on a DATE column promotes to a timestamp on both engines.
   vrcase("plus_hour6", :date, c -> F(c) + Hour(6), v -> DateTime(v) + Hour(6),
-         result_kind = :timestamp, p3 = (:sqlite,)),
+         result_kind = :timestamp),
   vrcase("at_date_f", :date, c -> F("$(c)__@date"), v -> v, pair = c -> "$(c)__@date",
          sibling = "5 / #562 — F-route @date on a DATE column",
          shape = (x, engine) -> engine === :sqlite ? x isa Integer : x isa Date,
@@ -233,11 +247,11 @@ const VR_CASES = VRCase[
   # canonicalizer or read-side parser at all. `F(time) ± duration` raises `InvalidValueError`
   # by design (a duration only applies to a DATE/TIMESTAMP column), so identity is the whole
   # surface.
-  vrcase("identity", :time, c -> F(c), v -> v, p3 = (:sqlite,)),
+  vrcase("identity", :time, c -> F(c), v -> v),
   # ── INTERVAL ─────────────────────────────────────────────────────────────
   # `DurationField` writes `HH:MM:SS.sss` through `format_duration_sql`; identity plus the pair
   # spelling is the whole surface (no arithmetic, no transforms).
-  vrcase("identity", :interval, c -> F(c), v -> v, compare_f = false, pair = c -> c, p3 = (:sqlite,)),
+  vrcase("identity", :interval, c -> F(c), v -> v, compare_f = false, pair = c -> c),
 ]
 
 # A rendered expression the engine REFUSED. Carried as a value so the comparison below fails (or
@@ -260,6 +274,35 @@ catch e
   VRRefused(sprint(showerror, e))
 end
 
+# ── The raw read (#564, sibling 4) ────────────────────────────────────────────
+"""
+    vr_raw_value(q, key) -> the driver's value, BEFORE the read-side coercion
+
+P1 asks whether the RENDERED expression produces the representation the column's own formatter
+produces. Once PormG coerces temporal aliases on the way out, `list(:dict)` can no longer answer
+that: it would hand back a value PormG had already parsed and re-canonicalized, and a rendering
+that dropped the fraction and the offset would survive the round trip unnoticed.
+
+`_list_raw` is literally `query_list` plus that coercion, so reading `query_list` is the raw read
+DEFINED AT the seam it guards, not an approximation of it — it cannot drift away from what
+`_list_raw` does, because it is the thing `_list_raw` is built on.
+
+Not `Cast(…, "TEXT")`, which was the obvious candidate and does not work: on PostgreSQL
+`(x)::TEXT` yields PostgreSQL's own session-timezone rendering (`2031-07-04 12:30:45.123+00`),
+not `format_timezone_sql`'s canonical form, so every currently-green PostgreSQL timestamp case
+would start failing. Not `DataFrame(q)` either: it is uncoerced by ACCIDENT rather than by
+contract, and the day that divergence is closed P1 would go hollow a second time with no mark to
+force the visit.
+
+On PostgreSQL this is a provable no-op — `value_parser` answers `nothing` for every kind there, so
+the coerced and raw paths return the same object.
+"""
+function vr_raw_value(q, key::Symbol)
+  rows = QueryBuilder.Tables.rowtable(QueryBuilder.query_list(q)) |> collect
+  length(rows) == 1 || return VRRefused("expected one row, got $(length(rows))")
+  return getproperty(rows[1], key)
+end
+
 # ── Runner ───────────────────────────────────────────────────────────────────
 """
     vr_run_cases(base, col, stored, engine; kind)
@@ -273,12 +316,12 @@ function vr_run_cases(base::Function, col::String, stored, engine::Symbol; kind:
     @testset "$(kind) · $(case.id)" begin
       expected_value = case.expect(stored)
 
-      # P1 — render == formatter.
+      # P1 — render == formatter, read RAW (#564): before PormG's own read-side coercion, so the
+      # claim is about what the ENGINE produced and not about what PormG then parsed it into.
       q = base()
       q.values("x" => case.expr(col))
-      rows = _vr_try(() -> q.list(:dict))
-      x = rows isa VRRefused ? rows : (length(rows) == 1 ? rows[1][:x] : VRRefused("expected one row, got $(length(rows))"))
-      observed = vr_observed_text(case.result_kind, x)
+      raw = _vr_try(() -> vr_raw_value(q, :x))
+      observed = vr_observed_text(case.result_kind, raw)
       expected = vr_expected_text(case.result_kind, expected_value)
       if engine in case.broken.p1
         @test_broken observed == expected
@@ -286,9 +329,15 @@ function vr_run_cases(base::Function, col::String, stored, engine::Symbol; kind:
         @test observed == expected
       end
       # The measured failure shape, where one is recorded — a plain `@test`, so it cannot drift.
-      case.shape === nothing || @test case.shape(x, engine)
+      # Also on the RAW value: every recorded shape (`x isa Integer`, `x isa VRRefused`) is a
+      # statement about what the engine returned, not about what PormG made of it.
+      case.shape === nothing || @test case.shape(raw, engine)
 
-      # P3 — read-side type parity.
+      # P3 — read-side type parity, on the COERCED path, which is the one a user sees.
+      qc = base()
+      qc.values("x" => case.expr(col))
+      rows = _vr_try(() -> qc.list(:dict))
+      x = rows isa VRRefused ? rows : (length(rows) == 1 ? rows[1][:x] : VRRefused("expected one row, got $(length(rows))"))
       T = VR_JULIA_TYPE[case.result_kind]
       if engine in case.broken.p3
         @test_broken x isa T

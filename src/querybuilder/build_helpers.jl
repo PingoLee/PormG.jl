@@ -1855,6 +1855,15 @@ _format_filter_value(formatter, values, operator::AbstractString) =
 # #467 happened: `BETWEEN` formats its two operands in a branch of its own, and the arm that was not
 # guarded kept leaking `InvalidValueError` for two releases while every sibling operator converted.
 # One definition means the next operator branch cannot diverge by being written somewhere else.
+#
+# It is not yet the ONLY re-raise on the read path: `_resolve_having_filter_value` (build_query.jl)
+# and the `SQLTypeFunction` transform branches below still format outside any guard and still leak
+# `InvalidValueError`. #576 tracks routing them here; this is the helper they route to.
+#
+# **Call it only from inside a `catch`.** The non-`InvalidValueError` arm is `rethrow(e)`, which is
+# legal in a function only while a handler is dynamically in scope; called anywhere else it raises
+# `"rethrow(exc) not allowed outside a catch block"` and masks the error it was handed. The two
+# call sites below are both `catch` bodies.
 _rethrow_as_filter_error(e, field_name, field_type, values) =
   e isa InvalidValueError ?
     throw(FilterError("The \e[4m\e[31m$(field_name)\e[0m field is the type " *

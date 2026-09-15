@@ -71,7 +71,15 @@ M.Race.objects.filter("date__@range" => ["x", "y"])   # DateField, two wrong-typ
 
 Both are `PormGError`, so `catch e; e isa PormGError` is unaffected. Only a `catch` naming
 `InvalidValueError` specifically, around a `@range` / `@nrange` **read**, needs to change — the same
-edit #411 already asked for on every other operator. Well-typed operands bind exactly as before.
+edit #411 already asked for on the scalar and membership operators. Well-typed operands bind exactly
+as before.
+
+**The conversion is still not complete**, so do not drop an `InvalidValueError` handler from a read
+path wholesale. Three shapes continue to raise it and are tracked in #576: a wrong-typed value
+compared against an **aggregate alias** (`filter("tot__@gt" => "abc")` over a `Sum(...)`
+projection), the same against a `Max(...)`/`Min(...)` alias, and a **transform suffix**
+(`filter("happened__@month" => "abc")`). Convert the handlers around the operators named above;
+leave the ones guarding those three until #576 lands.
 
 ### How to find the calls to migrate
 
@@ -123,8 +131,13 @@ It was also the only such site left. `filter` / `values` / `order_by` were conve
 so `create()` disagreed with its own sibling on the same input.
 
 ```julia
-M.Driver.objects.create("driverref" => "hamilton", "sirname" => "Hamilton")
-# before → InvalidValueError: Error in insert for model Driver, field "sirname": field does not exist in the model schema
+# Every required field supplied, plus one misspelled extra — the required-field sweep runs first,
+# so a call that ALSO leaves a NOT NULL field unset reports that instead, before and after.
+M.Driver.objects.create("driverref" => "hamilton", "code" => "HAM", "forename" => "Lewis",
+                        "surname" => "Hamilton", "dob" => Date(1985, 1, 7),
+                        "nationality" => "British", "url" => "...",
+                        "sirname" => "Hamilton")
+# before → InvalidValueError: Error in insert for model driver, field "sirname": field does not exist in the model schema
 # after  → UnknownFieldError: the column sirname not found in driver, that contains the fields: code, dob, driverid, ...
 ```
 

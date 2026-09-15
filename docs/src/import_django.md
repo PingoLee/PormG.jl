@@ -114,10 +114,16 @@ import_models_from_django("/path/to/your/models.py")
   import_models_from_django(content, file="my_models.jl")
   ```
 
-- **`autofields_ignore::Vector{String}`**: Field types to ignore (default: `["Manager"]`)
+- **`autofields_ignore::Vector{String}`**: Field types to ignore, named the way the `models.py`
+  spells them (default: `["Manager"]`)
   ```julia
   import_models_from_django(content, autofields_ignore=["Manager", "CustomManager"])
   ```
+  A dropped field still **claims its column name**. Dropping `id = models.CharField(max_length=10)`
+  does not hand the name back to Django's implicit `id`: substituting a BIGINT auto-increment key
+  there would mis-type the one column every query reads, so the model comes out with no key and a
+  `# PormG:` marker saying why. If every column of a class is dropped this way the import raises,
+  naming the list you passed — a model with no column cannot be emitted.
 
 - **`parameters_ignore::Vector{String}`**: Field parameters to ignore (default: `["help_text"]`)
   ```julia
@@ -754,9 +760,19 @@ module imported it under (`CoreBase.Status.choices`), since both are names your 
 bound. (A bare name matching *only* a base's nested enum is still resolved, as a convenience —
 Python would raise `NameError` there.)
 
-The alias has to be bound **in the module that writes the reference**, and used there as a base. A
-name another app aliased, or one imported but never inherited anywhere in this app, is not resolved:
-the option is dropped and reported, as it is for any name the file does not define.
+The name has to be bound **in the module that writes the reference** — and only that. It does not
+have to be an `as` alias, and it does not have to be used as a base: `from core.models import Base`
+followed by `Base.Status.choices` in a class that inherits nothing resolves like any other
+module-level name, because that is what Python does with it.
+
+"The module that writes the reference" is the statement's own module, not the class's. A field
+declared on an abstract base in `core` keeps resolving `core`'s bindings when that statement is
+merged into a child in `shop`, so one statement gives one answer wherever it lands.
+
+A name **another** module bound is still not resolved — `shop` inheriting `Mixin` from `access` does
+not put `access`'s imports in `shop`'s namespace, Python raises `NameError` there, and resolving it
+would hand a model an enumeration through a name its source never mentions (#370). The option is
+dropped and reported, as it is for any name the file does not define.
 
 A module-level enum in **another app** follows the same rule as a base: it resolves only when the
 `models.py` that *uses* it imports it — alias, star import and re-export included, exactly as for a
@@ -776,9 +792,10 @@ with its own nested `Status` and a child of either resolves to the right one.
 | a member the enum does not declare | dropped and reported |
 | an enum whose members are not literals (`CARRO = auto()`) | dropped and reported — the importer cannot know the value, and keeping `"auto()"` would give every member the same one |
 | a numeric member (`ALTO = 1_000`, `MEIO = 0x1F`) | imported as the value it **denotes** — `1000`, `31` — not as the source spelling, which would declare an enumeration no row can match |
-| a name this file does not define (`from .enums import Status`) | the option naming it is dropped and reported |
+| a class reached through a name the module **imported** (`from core.models import Base as CoreBase` then `CoreBase.Status.choices`) | resolves, aliased or not, and whether or not the class is also used as a base. The name is looked up in the module that **wrote the statement** — so an abstract base's own alias keeps working when its field is merged into a child in another app, and a name some *other* module bound stays unresolvable, exactly as Python's `NameError` says |
+| a name the module that wrote the statement does not define or import (`from .enums import Status`) | the option naming it is dropped and reported |
 
-That last row is per option, not per field: if `choices=Status.choices` resolves and only
+The dropped row is per option, not per field: if `choices=Status.choices` resolves and only
 `default=Externo.ATIVO` does not, the field keeps its enumeration and loses just the default.
 Dropping the resolvable half as well would throw away what the source did give you. The reason
 neither is ever passed through as a literal is that `default="Externo.ATIVO"` against an empty
@@ -996,7 +1013,7 @@ no such translation, so it is reported like any other call.
 | | |
 |---|---|
 | **Imported** | Fields (including definitions wrapped across lines; Django's `BigAutoField` maps to `IDField`, an exact match), `ForeignKey` / `OneToOneField` / `ManyToManyField` — including `"self"`, `"<app_label>.<Class>"` and `settings.AUTH_USER_MODEL` targets, `Meta.db_table`, `Meta.unique_together`, `Meta.constraints`, `Meta.indexes`, `Meta.index_together` (the last three: see the whitelists above), abstract-base inheritance, `AbstractUser` auth columns, `TextChoices` / `IntegerChoices` enumerations |
-| **Imported, but degraded and annotated** | An `AutoField` or `SmallAutoField` — imported as `IDField`, because `IDField` is PormG's only integer key type (see the note under *Supported Django Fields*); the key is faithful, the declared width is not. A model whose base lives in another file — its own fields only. A relation whose target is not in this import — the column survives as a `BigIntegerField`, the relation does not (a `ManyToManyField` has no column, so it is dropped); `strict_relations = true` raises instead. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import. A field whose enum this file cannot see — the column survives, the enumeration does not. A field whose `choices` and/or `default` the field type rejects at construction — including a lone `default` on a field with no choices at all, such as one longer than `max_length` — the column survives without them. A `default` the importer cannot read as one value (`uuid.uuid4`, `uuid.uuid4()` and any other call, `'a' + 'b'`, an f-string, a raw or triple-quoted literal) — kept verbatim as text, so the stored default is that source text rather than what it denotes (see [String defaults](#String-defaults)). A `choices` **entry** whose value or label is not one literal — the entry is kept, carrying that source text, and reported (see [Choices](#Choices)). A `primary_key=True` on a field type PormG cannot key on — the column survives, the key does not, and no `id` is substituted; the model is then unusable by relations until you re-declare the key (see the warning above). A class-declared field named `id` that is **not** the primary key — the declared column is kept and Django's implicit `id` is not substituted over it, so the model has no key until you declare one |
+| **Imported, but degraded and annotated** | An `AutoField` or `SmallAutoField` — imported as `IDField`, because `IDField` is PormG's only integer key type (see the note under *Supported Django Fields*); the key is faithful, the declared width is not. A model whose base lives in another file — its own fields only. A relation whose target is not in this import — the column survives as a `BigIntegerField`, the relation does not (a `ManyToManyField` has no column, so it is dropped); `strict_relations = true` raises instead. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import. A field whose enum this file cannot see — the column survives, the enumeration does not. A field whose `choices` and/or `default` the field type rejects at construction — including a lone `default` on a field with no choices at all, such as one longer than `max_length` — the column survives without them. A `default` the importer cannot read as one value (`uuid.uuid4`, `uuid.uuid4()` and any other call, `'a' + 'b'`, an f-string, a raw or triple-quoted literal) — kept verbatim as text, so the stored default is that source text rather than what it denotes (see [String defaults](#String-defaults)). A `choices` **entry** whose value or label is not one literal — the entry is kept, carrying that source text, and reported (see [Choices](#Choices)). A `primary_key=True` on a field type PormG cannot key on — the column survives, the key does not, and no `id` is substituted; the model is then unusable by relations until you re-declare the key (see the warning above). A class-declared field named `id` that is **not** the primary key — the declared column is kept and Django's implicit `id` is not substituted over it, so the model has no key until you declare one. A field named `id` whose type `autofields_ignore` dropped — the column is gone as you asked, and no implicit `id` is written under its name either, because dropping a column and replacing it with a BIGINT auto-increment key are two different requests. Two declarations that write one column under **different field names** — `owner = ForeignKey(…)` and `owner_id = IntegerField()` both name the column `owner_id`, because Django appends `_id` to a relation's column. Both are named with their source lines, and the report says which one the file actually emits: the later declaration normally, *neither* if the later one's type has no PormG counterpart, and the *earlier* one if the later one's type is in `autofields_ignore`. Reported whether the two sit in one class body or arrive through an abstract base, and the report names which body each one is in — Django rejects both arrangements (`models.E007`), because an abstract base's fields are copied into the child. A child **re-declaring the same field name** it inherited is not this: that is the merge working as intended, and it stays silent. The same name declared **twice in one body** is reported, but as what it is — Python rebinds, so Django sees one field and `manage.py check` passes; the advice is to delete the declaration you did not mean, not to rename one |
 | **Reported and skipped** | `Meta.ordering` and every other option with no PormG equivalent; a `UniqueConstraint` or an `Index` PormG cannot express; multi-table inheritance; proxy models; a field-shaped call the importer cannot read (`tags = ArrayField(...)`); a field whose Django type PormG does not implement (`GenericIPAddressField`, `SmallIntegerField`, …) — the field, its class and its `models.py` line are named, and every other field, class and app in the call still imports, with `strict_fields = true` raising instead. Both leave the live column addressable by nothing in the model, so `makemigrations` reads it as drift |
 | **Not supported** | Model methods, managers, signals and validators are Python and have no PormG counterpart |
 

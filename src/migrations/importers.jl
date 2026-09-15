@@ -1697,6 +1697,12 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       app.graph.enums[(a, "")] = gated
     end
   end
+  # `enum_aliases` needs no copy loop of its own (#512), and the asymmetry is worth stating so the
+  # next reader does not "fix" it. A module scope is per-graph because it is GATED by what its own
+  # app imported, which only that graph computed. An alias table is not gated by anything: it is
+  # seeded from `scopes`, which every graph holds identically, so every graph already agrees on
+  # every app's bindings. What keeps a binding from leaking is not which graph holds it — it is
+  # `_lookup_enum` consulting only `scopes[1]`, the app the statement was written in.
 
   for app in apps
     graph = app.graph
@@ -1855,12 +1861,14 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       # Process fields separately
       # `class_name` and `class_label` both go down, and they are not interchangeable: the first is
       # the enum scope key, the second is what the reports NAME (#371). See `process_class_fields!`.
-      declared_pk, unsupported_pk, unsupported_fields =
+      declared_pk, unsupported_pk, unsupported_fields, ignored_fields =
         process_class_fields!(fields_dict, class_content, class_name,
                               _inherits_auth_user(graph, class), autofields_ignore,
                               parameters_ignore, markers, graph.enums,
                               enum_scope_map; class_label = class_label,
-                              strict_fields = strict_fields)
+                              strict_fields = strict_fields,
+                              enum_aliases = graph.enum_aliases,
+                              own_owner = (graph.self, String(class_name)))
 
       # Django's implicit `id`, added only when nothing claimed the key — DERIVED, per field, from
       # what was built and from what the models.py declared, never tracked with a class-wide flag
@@ -1907,24 +1915,55 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
           # CLAIMS the name and leaves the dict untouched. A `haskey` test alone called that free and
           # wrote an `IDField` over it — this very clobber, one skip path along, and with the field's
           # own marker already in the file saying that column was not imported.
+          #
+          # `autofields_ignore` is the third way the name can be taken (#428), and the last one the
+          # guard could not see. The caller asked for that TYPE to be dropped; substituting a BIGINT
+          # auto key under the dropped column's name is a second thing they never asked for, and it
+          # is the more dangerous half — the column it mis-types is the one every query reads.
           skipped_id = :id in unsupported_fields
-          if haskey(fields_dict, :id) || skipped_id
-            @warn "import: a class-declared field named 'id' is not the primary key; no implicit id was substituted and this model has none" class=class_label declared_id_imported=!skipped_id
+          ignored_id = :id in ignored_fields
+          # `id_built` is tested FIRST, and that order is load-bearing rather than stylistic. The
+          # three conditions are not mutually exclusive, and only `id_built` is a statement about the
+          # ARTIFACT — the other two are statements about a claim. `haskey && skipped_id` happens to
+          # be unreachable, because #410's branch `delete!`s the key it skips; `haskey && ignored_id`
+          # is entirely reachable, because the `autofields_ignore` branch does not delete. An
+          # abstract base that builds `id` and a child that declares an ignored `id` hits exactly
+          # that, and testing the claims first printed "that column is not imported at all" directly
+          # above the column, as `BigIntegerField`.
+          id_built = haskey(fields_dict, :id)
+          if id_built || skipped_id || ignored_id
+            @warn "import: a class-declared field named 'id' is not the primary key; no implicit id was substituted and this model has none" class=class_label declared_id_imported=id_built dropped_by=(id_built ? "" : skipped_id ? "unimplemented type" : "autofields_ignore")
             push!(markers, "# PormG: '$(class_label)' declares a field named 'id' that is NOT its " *
                            "primary key. Django's implicit `id` was NOT substituted for it — " *
-                           (skipped_id ?
+                           (id_built ?
+                              "that would silently destroy the declared column below. " :
+                            skipped_id ?
                               "that column is not imported at all (its Django type has no PormG " *
                               "counterpart; see the marker above), and claiming a BIGINT " *
                               "auto-increment key in its place would mis-type the one column " *
                               "every query reads. " :
-                              "that would silently destroy the declared column below. ") *
+                              "that column is not imported at all — its Django type is in this " *
+                              "import's `autofields_ignore`, so you asked for it to be dropped. " *
+                              "Dropping it is not the same request as replacing it with a BIGINT " *
+                              "auto-increment key, which would mis-type the one column every query " *
+                              "reads. Remove that type from `autofields_ignore` to import the " *
+                              "column, or declare the key here by hand. ") *
                            "This model therefore has NO primary key, which leaves it unusable by " *
                            "anything that needs one: a ManyToManyField pointing at it makes the " *
                            "WHOLE generated file fail to load, and a ForeignKey pointing at it " *
                            "loads and is silently wrong. Declare the real key by hand — mark this " *
-                           "column `primary_key = true` if that is what the table does. (Django " *
-                           "rejects this shape itself, models.E004, so it can only reach here " *
-                           "from a models.py that never passed `manage.py check`.)")
+                           "column `primary_key = true` if that is what the table does." *
+                           # The E004 sentence is FALSE only where the `id` column is absent because
+                           # the caller dropped its type. `id = models.CharField(max_length=10,
+                           # primary_key=True)` is a models.py Django accepts; it reaches this branch
+                           # only because the caller dropped `CharField`, and telling them their
+                           # project never passed `manage.py check` sends them after a problem that
+                           # is not there. When a column named `id` IS emitted — an ancestor built it
+                           # and the child's redeclaration was ignored — this is the E004 shape after
+                           # all, so the sentence belongs.
+                           (ignored_id && !id_built ? "" :
+                              " (Django rejects this shape itself, models.E004, so it can only " *
+                              "reach here from a models.py that never passed `manage.py check`.)"))
           else
             fields_dict[:id] = Models.IDField()
           end
@@ -1985,14 +2024,25 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       # Forked on `unsupported_fields`, not `unsupported_pk`: the second shape leaves the latter
       # empty and would otherwise land on the "PormG bug" text.
       #
+      # #428 RE-OPENS the original path, and adds a third arm. The comment above records that the
+      # `autofields_ignore` route was "fixed at its root in the field loop" — it was, by never
+      # letting an ignored field claim the primary key (#346), which left the implicit `id` free to
+      # save the model. Now that an ignored field claims its NAME, a class whose every column the
+      # caller dropped empties `fields_dict` again, with `unsupported_fields` empty: exactly the
+      # shape that lands on "This is a PormG bug". It is not one — it is the caller's own
+      # `autofields_ignore` argument, and that is what the message has to say.
+      #
+      # Ordered unimplemented-type first: when both sets are non-empty the type PormG cannot build is
+      # the surprising half, and the ignore list is already visible in the caller's own call. The
+      # second arm asks `:id in ignored_fields`, not `!isempty(ignored_fields)`, because that is the
+      # exact shape #428 creates and the only one whose message is true — an ignored field that is
+      # not `id` never suppresses the implicit key, so it cannot empty the model on its own.
+      # Anything else still falls through to the internal-bug text, unchanged.
+      #
       # It still aborts: there is no honest degrade for a model with zero addressable columns, and
       # every relation pointing at it was already rewritten to a binding this file would not define.
       if isempty(fields_dict)
-        throw(isempty(unsupported_fields) ?
-          InvalidMigrationError(
-            "import: internal — '$(_django_ref_label(entry))' was indexed but has no field to " *
-            "emit, so any relation pointing at it would name a binding this file does not define. " *
-            "This is a PormG bug; please report it with the models.py that triggered it.") :
+        throw(!isempty(unsupported_fields) ?
           InvalidMigrationError(
             "import: '$(_django_ref_label(entry))' has no column left to emit. At least one of " *
             "its fields uses a Django field type PormG does not implement, and no implicit `id` " *
@@ -2000,7 +2050,22 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
             "columns or declares `id` as one of them. If it declares other fields, they were " *
             "dropped for reasons of their own — the warnings above name every one that did not " *
             "survive. A model with no column cannot be emitted, and any relation pointing at it " *
-            "would name a binding this file does not define. Declare the missing columns by hand."))
+            "would name a binding this file does not define. Declare the missing columns by hand.") :
+          :id in ignored_fields ?
+          InvalidMigrationError(
+            "import: '$(_django_ref_label(entry))' has no column left to emit. It declares a field " *
+            "named `id` whose Django type is in this import's `autofields_ignore` " *
+            "($(join(autofields_ignore, ", "))), so that column was dropped at your request and no " *
+            "implicit `id` could be substituted for it — inventing a BIGINT auto-increment key " *
+            "under that name would mis-type it. Nothing else this class declares produced a column " *
+            "either; the warnings above name every field that did not survive, and not all of them " *
+            "are necessarily the ignore list's doing. A model with no column cannot be emitted, " *
+            "and any relation pointing at it would name a binding this file does not define. " *
+            "Remove a type from `autofields_ignore`, or exclude this class from the import.") :
+          InvalidMigrationError(
+            "import: internal — '$(_django_ref_label(entry))' was indexed but has no field to " *
+            "emit, so any relation pointing at it would name a binding this file does not define. " *
+            "This is a PormG bug; please report it with the models.py that triggered it."))
       end
       # `entry.name`, not `class_name`: a cross-app collision or a `binding_overrides` entry may
       # have renamed this model. `class_name` stays the source of every DJANGO-derived name below
@@ -3058,6 +3123,12 @@ inheritance and still refused.
 reading them by class name expects. The ancestor walkers cannot use a bare name (two apps may
 declare one), so they read `byapp` and `resolved` instead: `byapp[(app, name)]` is the classified
 info of any class the walk reached, and `resolved[(app, token)]` is the edge a base token took.
+
+Two enum tables come back, and they are read under different rules (#512). `enums` is keyed by
+**scope** — `(app, class)` or `(app, "")` — and the qualified fallback probes it against every app
+in the statement's scope list. `enum_aliases` is keyed by **module-level binding** — `(app, token)`,
+what an `import` statement bound in that app — and is consulted only for the app that WROTE the
+statement, so a name one module bound never becomes reachable from another that did not.
 """
 function _django_graph_from_scopes(scopes::Vector{_AppScope}, self::Int)
   st = _ClassifyState(scopes)
@@ -3093,36 +3164,60 @@ function _django_graph_from_scopes(scopes::Vector{_AppScope}, self::Int)
   for (i, t) in enumerate(per_app), (scope, members) in t
     enums[(i, scope)] = members
   end
-  # A base addressed through an `as` alias (#425). `_lookup_enum`'s qualified fallback resolves
-  # `CoreBase.Status` by looking the OWNER half up as a scope name — and `_collect_enums` keys a
-  # class scope by the class's own name, which an alias makes a different string entirely. So
-  # `from core.models import Base as CoreBase` + `choices=CoreBase.Status.choices` dropped the
-  # option and told the reader to import a module they had already imported.
+  # A class addressed through a MODULE-LEVEL NAME — what `from core.models import Base as CoreBase`
+  # binds (#425, completed by #512). `_lookup_enum`'s qualified fallback resolves `CoreBase.Status`
+  # by looking the owner half up as a scope name, and `_collect_enums` keys a class scope by the
+  # class's own declared name — which an import statement can make a different string entirely. So
+  # the option was dropped, with a marker telling the reader to import a module they had already
+  # imported.
   #
-  # Registered HERE rather than in `_enum_scopes` because this is a MODULE-level binding, which is
-  # exactly what an `as` alias is in Python — and because `st.resolved` already holds the answer for
-  # every base token the classifier resolved, keyed by the token as written (`:2818`). It is the
-  # class-scope twin of the module-scope alias loop directly below, which has registered imported
-  # enums under their local name since #370.
+  # This is a SEPARATE table from `enums`, and that separation is the whole of #512. The two are
+  # read under different rules:
   #
-  # Three guards, each load-bearing:
+  #   * `enums` is keyed by SCOPE, and the qualified fallback probes it against the app half of the
+  #     WHOLE scope list — which for a statement written in `shop` that inherits `Mixin` from
+  #     `access` includes `access`. A module-level binding must not be reachable that way: `access`
+  #     writing `Base as CoreBase` does not put `CoreBase` in `shop`'s namespace, Python raises
+  #     `NameError` there, and resolving it is the "wrong enumeration through a name the source
+  #     never mentions" failure #370 removed.
+  #   * `enum_aliases` is keyed by BINDING, and is consulted only for the app that WROTE the
+  #     statement. So the same entries can now be registered for every app rather than only `self`,
+  #     and case (a) — an alias bound in a base's own module, whose statement is then merged into a
+  #     child in another app — resolves, while the grandparent case above stays dropped.
   #
-  #   * `a == self` — only tokens THIS module bound. An alias written in `access` must not resolve
-  #     from `shop`, which never wrote that name; Python raises `NameError` there.
-  #   * `token == pc.name` — not an alias at all. Skipping it is what leaves the un-aliased
-  #     `Base.Status` form resolving through the ancestor entries alone, so `_enum_scopes`' contract
-  #     and #402's coverage of it are untouched by this change.
-  #   * `get!` — never overwrite. A class this app declares itself outranks an import of that name,
-  #     as it does in Python and as `_resolve_base` already decides for bases.
+  # #425 registered these into `enums` under `a == self`, which is why the same statement resolved
+  # when `core` was the app being imported and was dropped when `shop` was: alias entries live in the
+  # graph of the app that wrote them, and only module scopes cross apps (see the copy loop in
+  # `_import_django_apps`). Moving them here and dropping that guard is what makes one statement
+  # give one answer.
   #
-  # Reachability stays narrow: `_lookup_enum`'s FIRST pass walks the scope list, which never contains
-  # an `(app, token)` key, so a bare `Status` can never resolve through an alias entry. Only the
-  # qualified fallback reads these — i.e. only a reference the source actually wrote with a dot.
+  # Two seeds, because a name can be bound and never used as a base:
+  #
+  #   1. `st.resolved` — every `(app, token)` edge the classifier actually took. This is the #425
+  #      seed, minus `a == self`.
+  #   2. `scopes[i].imports.names` — the module's own import table, for every app. `_resolve_base`
+  #      already follows `as` aliases, re-export façades and star imports, so this needs no second
+  #      reader. It covers case (b): a name imported but never used as a base anywhere, which
+  #      `st.resolved` cannot know about, and which Python resolves without complaint.
+  #
+  # `token == pc.name` is NOT skipped any more. It was skipped in `enums` so the un-aliased
+  # `Base.Status` form kept resolving through the ancestor entries alone and #402's contract stayed
+  # untouched; here it cannot affect that, because this table is read strictly AFTER the existing
+  # lookup fails. Keeping the entry is what lets a plainly imported `Base` — never used as a base —
+  # resolve too, which is the same defect wearing a different spelling.
+  #
+  # `get!` throughout: never overwrite. A class an app declares itself outranks an import of that
+  # name, as it does in Python and as `_resolve_base` already decides for bases.
+  enum_aliases = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}()
   for ((a, token), (pa, pc)) in st.resolved
-    a == self || continue
-    token == pc.name && continue
     sc = get(enums, (pa, pc.name), nothing)
-    sc === nothing || get!(enums, (a, token), sc)
+    sc === nothing || get!(enum_aliases, (a, token), sc)
+  end
+  for (i, sc_i) in enumerate(scopes), local_name in keys(sc_i.imports.names)
+    r = _resolve_base(scopes, i, local_name)
+    r === nothing && continue
+    sc = get(enums, (r[1], r[2].name), nothing)
+    sc === nothing || get!(enum_aliases, (i, local_name), sc)
   end
   mod_scope = Dict{String, _PyEnum}()
   own_mod = get(per_app[self], "", nothing)
@@ -3147,6 +3242,7 @@ function _django_graph_from_scopes(scopes::Vector{_AppScope}, self::Int)
   enums[(self, "")] = mod_scope
 
   return (classes = classes, index = index, info = info, enums = enums,
+          enum_aliases = enum_aliases,
           scopes = scopes, self = self, byapp = st.info, resolved = st.resolved)
 end
 
@@ -3530,9 +3626,10 @@ qualified fallback resolves `Base.Status` by looking up `Status` inside the scop
 fallback scans this list for its **app** half only, so what it needs is the base's APP to appear
 here, not the base's own entry; the two coincide except when the base lives in another app, which is
 exactly when it matters. That covers the base addressed by its OWN name only — a base reached through
-an `as` alias is served instead by an alias entry in `enums`, registered once per module in
-`_django_graph_from_scopes` (#425), because the alias is a module-level binding rather than anything
-this ancestor walk knows about. The other is a deliberate leniency: a bare name
+a name the module IMPORTED is served instead by the separate `enum_aliases` table built in
+`_django_graph_from_scopes` (#425, #512), which `_lookup_enum` consults for the statement's own app
+alone, because a module-level binding is not anything this ancestor walk knows about. The other is a
+deliberate leniency: a bare name
 that matches nothing in the owner's class or module still falls through to a base's nested enum,
 where Python would raise `NameError`. That is narrower than what it replaced (before, bases outranked
 the module outright) and it fails toward resolving rather than toward a wrong-value silent import,
@@ -3593,7 +3690,7 @@ function _enum_scopes(graph, app::Int, class_name::AbstractString)::Vector{Tuple
 end
 
 """
-    _lookup_enum(enums, scopes, ref) -> Union{_PyEnum, Nothing}
+    _lookup_enum(enums, aliases, scopes, ref) -> Union{_PyEnum, Nothing}
 
 Resolve an enum NAME against an ordered list of `(app, scope)` keys. First match wins, so a nested
 enum shadows a module-level one of the same name — Python's own rule. A qualified `Owner.Status` is
@@ -3602,8 +3699,25 @@ accepted last, since Django permits addressing a nested enum through its owner.
 The qualified form is tried against the apps already in `scopes` and no others: `Owner` is a name in
 one of those modules, so widening the search to every app would resolve it in a module the source
 cannot see — the flat-table defect one level down.
+
+`aliases` is the last resort, and it is read under a STRICTER rule than the pass above it, not a
+looser one (#512). The scope pass reuses the app half of every entry in `scopes`; this one uses
+`scopes[1]` alone — the app the statement was WRITTEN in, which `_enum_scopes` seeds the list with.
+That is what makes `enum_aliases` safe to populate for every app at once:
+
+  * an alias a base's own module bound resolves for a child in another app, because the merged
+    statement carries its origin as `scopes[1]` (#402) — the same statement then gives the same
+    answer wherever it is merged, which was the whole complaint;
+  * an alias some OTHER module bound stays unreachable. A statement written in `shop` that inherits
+    `Mixin` from `access` has `access` in `scopes`, so the pass above would find a binding `access`
+    wrote — `shop` never wrote it, Python raises `NameError` there, and resolving it is #370's
+    defect one level down. `scopes[1]` is `shop`, and `access`'s entry is never consulted.
+
+Reachability stays narrow in the other direction too: the first pass walks `scopes` against `enums`
+only, so a bare `Status` can never resolve through a binding. Only a reference the source wrote with
+a dot reaches here.
 """
-function _lookup_enum(enums, scopes::Vector{Tuple{Int, String}},
+function _lookup_enum(enums, aliases, scopes::Vector{Tuple{Int, String}},
                       ref::AbstractString)::Union{_PyEnum, Nothing}
   for s in scopes
     scope = get(enums, s, nothing)
@@ -3614,7 +3728,28 @@ function _lookup_enum(enums, scopes::Vector{Tuple{Int, String}},
   if idx !== nothing
     owner = String(ref[firstindex(ref):prevind(ref, idx)])
     inner = ref[nextind(ref, idx):end]
+    self = isempty(scopes) ? nothing : scopes[1][1]
+    # Own app first — its declared scopes, then its module bindings — and only then every other app
+    # in the list. That order is Python's, and getting it wrong is a SILENT wrong enumeration rather
+    # than a miss, which is why it is spelled out as three passes instead of one loop.
+    #
+    # The case that fixes it: `shop` writes `from core.models import Base as Outra`, and `core` also
+    # DECLARES a class `Outra` with a different `Status`. `Outra` is a name in `shop`'s module bound
+    # to `Base`, so `Outra.Status` is `Base`'s. Consulting the bindings after the all-apps loop finds
+    # `core`'s real `Outra` first and imports the wrong members in silence — the exact failure the
+    # design check rejected during #425, reintroduced from the other side.
     for (a, _) in scopes
+      a == self || continue
+      scope = get(enums, (a, owner), nothing)
+      scope === nothing && continue
+      haskey(scope, inner) && return scope[inner]
+    end
+    if self !== nothing
+      scope = get(aliases, (self, owner), nothing)
+      scope === nothing || (haskey(scope, inner) && return scope[inner])
+    end
+    for (a, _) in scopes
+      a == self && continue
       scope = get(enums, (a, owner), nothing)
       scope === nothing && continue
       haskey(scope, inner) && return scope[inner]
@@ -4012,7 +4147,19 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
                                  Dict((1, String(class_name)) =>
                                         Tuple{Int, String}[(1, String(class_name)), (1, "")]);
                                class_label::AbstractString = class_name,
-                               strict_fields::Bool = false)
+                               strict_fields::Bool = false,
+                               # Keyword rather than a fourth positional (#512): `enums` and
+                               # `enum_scopes` are positionals-with-defaults, and wedging one
+                               # between them would silently re-bind every existing call.
+                               enum_aliases = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}(),
+                               # The `(app, class)` tag `_import_django_apps` puts on THIS class's
+                               # own statements. Needed whole, not by name (#429): the
+                               # inheritance-cycle guard is keyed on `(app, cls.name)`, so it
+                               # refuses a class inheriting from itself in the SAME app and says
+                               # nothing about a same-named abstract base in another one —
+                               # `core.Pessoa` abstract, `rh.Pessoa` concrete is an ordinary Django
+                               # layout. Comparing the name alone called both owners "this class".
+                               own_owner::Tuple{Int, String} = (1, String(class_name)))
   # Django's `AbstractUser` columns. A Bool rather than the base-list STRING it used to compare
   # against (#341): the base list is now parsed, so `class User(AbstractUser, SomeMixin)` and a
   # class reaching `AbstractUser` through an abstract base both qualify — an equality test on the
@@ -4025,9 +4172,9 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
   # legacy user table keyed on `matricula` came out with TWO primary keys and could never load.
   # Do not re-add it.
   #
-  # Returns `(declared_pk, unsupported_pk, unsupported_fields)`. Each answers a different question the
-  # caller has to ask, and none of the three can be derived from `fields_dict` after the fact —
-  # which is the whole reason they exist:
+  # Returns `(declared_pk, unsupported_pk, unsupported_fields, ignored_fields)`. Each answers a
+  # different question the caller has to ask, and none of the four can be derived from `fields_dict`
+  # after the fact — which is the whole reason they exist:
   #
   #   - `declared_pk` — keys whose declaration said `primary_key=True` and whose field this function
   #     actually BUILT. The caller reports the ones that did not survive as a built key (`lost_pk`),
@@ -4044,9 +4191,61 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
   #     `id` and leaves `fields_dict` untouched, so a `haskey` test answered "free" and wrote an
   #     `IDField` over it — the #400 clobber again, one skip path further along, with the field's own
   #     marker already in the file saying that column was not imported.
+  #   - `ignored_fields` — EVERY key dropped because its Django type is in `autofields_ignore` (#428).
+  #     The same question as `unsupported_fields` asks, reached from the one remaining direction, and
+  #     a SEPARATE set because the two have different answers and different remediation: a type PormG
+  #     cannot build versus a type the CALLER asked to drop. Deliberately NOT folded into
+  #     `unsupported_fields`, whose every report says "PormG does not implement this" — a sentence
+  #     that is simply false about `autofields_ignore = ["CharField"]`, and would send the reader
+  #     hunting in this repository for a limitation that is their own argument.
+  #
+  #     It is a key claim ONLY. It must never reach `declared_pk`/`unsupported_pk`: an ignored
+  #     `primary_key=True` field contributes no column, so it cannot be the key, and letting it
+  #     suppress the implicit `id` is #346 exactly — the model then came out with no fields at all.
+  #     What it does claim is the NAME, so the caller does not invent a differently-typed column
+  #     under it. Dropping a column and inventing another one under its name are two requests, and
+  #     `autofields_ignore` is only the first.
   declared_pk = Set{Symbol}()
   unsupported_pk = Set{Symbol}()
   unsupported_fields = Set{Symbol}()
+  ignored_fields = Set{Symbol}()
+
+  # Who last wrote each key, and from which class body (#429). NOT returned — nothing outside this
+  # function asks the question, and the report it feeds is emitted here.
+  #
+  # Two statements can resolve to one key, and the later one wins with no report at all:
+  # `owner = models.ForeignKey(Other, …)` writes `:owner_id` under Django's `_id` suffix rule, and
+  # `owner_id = models.IntegerField()` writes `:owner_id` too. The relation — its target, its
+  # `on_delete`, its `related_name` — is gone, and nothing in the artifact says a ForeignKey was
+  # ever declared. Reverse the two lines and the FK wins instead, equally quietly.
+  #
+  # Last-write-wins is CORRECT and load-bearing: abstract-base merging concatenates ancestors'
+  # statements ahead of the child's precisely so a child can override an inherited field. That is
+  # the common case and it must stay silent.
+  #
+  # So the report fires on either of two signals, and it takes BOTH to draw the line in the right
+  # place:
+  #
+  #   * the same OWNER wrote the key twice. `class_content` entries carry the `(app, class)` the
+  #     statement was WRITTEN in (#402) — a merged statement keeps its ancestor's, the child's own
+  #     body carries the child's — so this is answerable here and was not before.
+  #     `_inherited_statements` walks with a `seen` set, so one owner tuple cannot contribute a key
+  #     twice through a diamond: same owner means same class body, structurally.
+  #   * the two statements use DIFFERENT field names. An override always re-declares the same
+  #     attribute (`nome` over `nome`); two differently spelled attributes landing on one column is
+  #     never an override in any arrangement, because only the `_id` suffix rule can make that
+  #     happen. Owner alone missed it across the inheritance boundary:
+  #
+  #         class Base(models.Model):                       # abstract
+  #             other = models.ForeignKey(Other, …)         # column `other_id`
+  #         class Thing(Base):
+  #             other_id = models.IntegerField()            # column `other_id`
+  #
+  #     — the relation gone, silently, which is #429's own problem statement one merge hop away.
+  #     Django rejects this too: abstract-base fields are COPIED into the child, so they are in
+  #     `cls._meta.local_fields`, which is exactly what `_check_column_name_clashes` iterates, and
+  #     models.E007 fires. The earlier claim that this shape was legal Django was simply wrong.
+  claimed = Dict{Symbol, Tuple{Tuple{Int, String}, String, String, Int}}()
 
   if is_auth_user
       fields_dict[:password] = Models.CharField()
@@ -4085,6 +4284,16 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
       # imported directly rather than through `models.`) is reported with its source line so the
       # author can declare it by hand. Managers, constants and enum members are not fields and
       # stay quiet: see `_looks_like_a_field_call` for why the test is deliberately narrow.
+      #
+      # This path claims NO KEY, and deliberately so (#428, explicitly out of its scope). Every other
+      # skip in this loop records the key it would have written — `unsupported_fields` for #410,
+      # `ignored_fields` for #428 — so the caller's `:id` guard can ask "did the class claim this
+      # name". Here it cannot: `parsed.type === nothing` is exactly the case where the type is
+      # unknown, and the key is a FUNCTION of the type. `id = ArrayField(...)` writes column `id`,
+      # but `id = TreeForeignKey(...)` writes `id_id` in Django and leaves `id` genuinely free — so
+      # claiming on the NAME would suppress an implicit `id` the Django table really does want.
+      # Reporting the wrong one of those two is worse than reporting neither, and the field's own
+      # marker above already tells the reader the column is missing.
       if _looks_like_a_field_call(parsed.args)
         @warn "import: field-shaped call the importer cannot read; not imported — declare it in PormG by hand" field=parsed.name class=class_label line=stmt.lineno
         # ...and a marker in the generated file, not the warning alone (#341). A console warning
@@ -4112,8 +4321,21 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     field_type = django_field_type(django_type)
     field_args_str = parsed.args
 
+    # The key this statement writes, computed up front so the bookkeeping below can name it without
+    # restating the ForeignKey `_id` rule.
+    #
+    # Computed HERE, above the `autofields_ignore` test rather than below it (#428), because that
+    # test `continue`s and a statement it drops still CLAIMS this name — see `ignored_fields` in the
+    # contract above. It depends on nothing but `field_name` and `field_type`, both settled three
+    # lines up, so moving it earlier crosses no dependency.
+    field_key = field_type in ["ForeignKey", "OneToOneField"] ? Symbol("$(field_name)_id") :
+                                                                Symbol(field_name)
+
     # A Django field type PormG does not implement (#410). DECIDED here, ACTED on below — the two
-    # cannot be one statement, and the gap between them is the whole design:
+    # cannot be one statement, and the gap between them is the whole design (#429 moved the decision
+    # a few lines earlier still, so the collision report below can say which column actually
+    # survives; it is unchanged, and everything the comment requires of it is about what comes
+    # AFTER it, not before):
     #
     #   * deciding here mutes the option-level reports for a column that will not exist.
     #     `parse_field_args` says things like "…has no choices slot… The column is unaffected", and
@@ -4135,9 +4357,113 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     # will vanish without trace for exactly the fields already in trouble.
     unsupported_type = !_is_pormg_field_type(field_type)
 
+    # Two statements from ONE class body writing one key (#429). Reported here, before either skip
+    # branch acts, so the report does not depend on which half of the pair happened to be buildable:
+    # `owner = ForeignKey(…)` colliding with `owner_id = models.IntegerField()`,
+    # `owner_id = models.SmallIntegerField()` (#410 skips it) and `owner_id = models.TextField()`
+    # under `autofields_ignore` are one defect, and all three deserve to be named.
+    #
+    # They do NOT all deserve the same sentence about the outcome, and the first draft of this gave
+    # them one. The three dispositions of the LATER statement produce three different artifacts, and
+    # the ignore case produces the opposite of what "the later one wins" says:
+    #
+    #   * buildable       — the later statement overwrites the key; the earlier one is gone.
+    #   * #410 skip       — that branch `delete!`s the key, so NEITHER column reaches the model.
+    #   * autofields_ignore — that branch does not delete, so whatever the EARLIER statement built is
+    #                       what stands. Saying "the earlier one is lost, including any relation it
+    #                       declared" there points the reader at a ForeignKey that is rendered four
+    #                       lines below, and says nothing about the column that actually vanished.
+    #
+    # So the outcome clause is chosen from the later statement's disposition, both of which are
+    # decidable here: `unsupported_type` is a pure function of `field_type` (moved above this block
+    # for that reason, still ahead of `parse_field_args` as its own comment requires), and the ignore
+    # test is a membership check on `django_type`.
+    #
+    # The gate is "same class body OR different attribute names" — see `claimed` above for why it
+    # takes both to leave a legitimate override silent while catching the cross-body clobber.
+    prior = get(claimed, field_key, nothing)
+    if prior !== nothing && (prior[1] == stmt_owner || prior[2] != field_name)
+      (_, prior_name, prior_type, prior_line) = prior
+      later_ignored = django_type in autofields_ignore
+      same_body = prior[1] == stmt_owner
+      same_name = prior_name == field_name
+      # A ManyToManyField takes a NAME but declares no column on this table — its data lives in a
+      # through table. So it can collide with a ForeignKey's `_id` key (`other` vs `other_id`) while
+      # "both write the column" is false of it, and Django's own column check never compares the two.
+      m2m_involved = prior_type == "ManyToManyField" || django_type == "ManyToManyField"
+
+      # WHERE each declaration was written. Neither is necessarily this class: `class_content` merges
+      # every abstract ancestor's body ahead of the child's, so a collision can be wholly inherited —
+      # from one base, or from two different ones in a multiple-inheritance or grandparent chain.
+      # Naming the wrong file is worse than naming none, because the reader opens it and finds
+      # neither field. Compared as the whole `(app, class)` tuple — see `own_owner` on the signature
+      # for why the class name alone is not enough — and a base from another app says so, because
+      # two apps may each declare a class of that name.
+      _where(o) = o == own_owner ? "declared on this class" :
+                  "inherited from the abstract base '$(o[2])'" *
+                    (o[1] == own_owner[1] ? "" : " of another app in this import")
+      origin = !same_body ? " (the first $(_where(prior[1])), the second $(_where(stmt_owner)))" :
+               stmt_owner == own_owner ? " in the SAME class body" :
+               " (both in the body of the abstract base '$(stmt_owner[2])')"
+
+      outcome = later_ignored ?
+        "The later declaration is dropped by `autofields_ignore`, so the column below — if this " *
+        "class emits one under that name at all — is the EARLIER declaration's, not the one the " *
+        "last statement in this body describes. " :
+        unsupported_type ?
+        "NEITHER reaches the model: the later declaration's Django type has no PormG counterpart, " *
+        "and skipping it removes the column both statements name (see the marker below). " :
+        "Only the later declaration reaches the model below; the earlier one is lost, including " *
+        "any relation it declared. "
+
+      # What DJANGO makes of the same file, which is not one answer. The E007 sentence was printed
+      # unconditionally and is false in two of the three shapes:
+      #
+      #   * same attribute name twice — a class body is a namespace dict, so the second assignment
+      #     REBINDS the first and `ModelBase.__new__` receives one attribute. `manage.py check`
+      #     passes. Telling that author their project is broken, and to "rename one of the two
+      #     fields", is wrong twice over: renaming would create a second column they never wanted.
+      #   * a ManyToManyField — `_check_column_name_clashes` iterates `local_fields`, which holds
+      #     concrete columns only; an m2m lives in `local_many_to_many` and is never compared.
+      #
+      # It stays true, and worth saying, for the shape the issue was filed about: two differently
+      # named concrete fields landing on one column.
+      verdict = same_name ?
+        "Python keeps only the last assignment in a class body, so Django sees ONE field here and " *
+        "`manage.py check` passes — this is a duplicate declaration in the source rather than a " *
+        "schema clash. Delete the declaration you did not mean." :
+        m2m_involved ?
+        "Django compares column names across concrete fields only, and a ManyToManyField is not " *
+        "one, so `manage.py check` may well accept this — rename one of the two fields anyway, or " *
+        "the other declaration is lost with nothing in the schema to show for it." :
+        "Django rejects this itself (models.E007), so it can only reach here from a models.py that " *
+        "never passed `manage.py check` — rename one of the two fields."
+
+      @warn "import: two declarations collide on one name; one of them is lost" class=class_label name=String(field_key) first="$(prior_name) = models.$(prior_type)()" first_line=prior_line second="$(field_name) = models.$(django_type)()" second_line=stmt.lineno same_class_body=same_body first_written_in=prior[1][2] second_written_in=stmt_owner[2] later_dropped=(later_ignored ? "autofields_ignore" : unsupported_type ? "unimplemented type" : "")
+      push!(markers, "# PormG: '$(class_label)' declares '$(prior_name)' ($(prior_type), models.py " *
+                     "line $(prior_line)) and '$(field_name)' ($(django_type), line " *
+                     "$(stmt.lineno))" * origin * ", and both " *
+                     (m2m_involved ? "take the name" : "write the column") * " '$(field_key)'" *
+                     # Only worth saying when the `_id` suffix is what made two differently spelled
+                     # field names land on one column; for `x` twice over it is noise.
+                     (same_name ? ". " : " — Django appends `_id` to a ForeignKey's column name. ") *
+                     # Only the first half of this is true in every arrangement. "…and the
+                     # column the other declaration would have written goes with it" assumed the
+                     # m2m was the SURVIVOR: with the m2m declared first the ForeignKey's column is
+                     # rendered four lines below, and with both sides m2m no column was ever in
+                     # play. `outcome` already says who survived, so the clause was redundant as
+                     # well as false.
+                     (m2m_involved ?
+                        "A ManyToManyField declares no column on this table — it takes the NAME, " *
+                        "and keeps its data in a through table. " : "") *
+                     outcome * verdict)
+    end
+    claimed[field_key] = (stmt_owner, field_name, django_type, stmt.lineno)
+
     # Parse field arguments
     parse_args() = parse_field_args(field_args_str, django_type, parameters_ignore;
-                                    enums = enums, class_name = class_name,
+                                    enums = enums, enum_aliases = enum_aliases,
+                                    class_name = class_name,
                                     enum_scopes = stmt_scopes, class_label = class_label,
                                     field_name = field_name,
                                     markers = unsupported_type ? String[] : markers)
@@ -4154,7 +4480,26 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     # to ignore", so `autofields_ignore = ["BigAutoField"]` has to mean the name in the models.py.
     # Matching the mapped name would make that entry a silent no-op AND make `["AutoField"]` quietly
     # swallow types the caller never named.
-    django_type in autofields_ignore && continue
+    #
+    # The KEY is claimed on the way out (#428). That is not a softening of the rule above — nothing
+    # here reaches `declared_pk`, so #346's case is untouched and an ignored `primary_key=True` field
+    # still lets the implicit `id` in. What it stops is the other half: `id = models.CharField(…)`
+    # dropped by `autofields_ignore = [… "CharField"]` used to leave `:id` looking free to the
+    # caller's guard, which then wrote a BIGINT auto key over a VARCHAR column, with no marker
+    # anywhere. The caller asked for that column to be dropped; it did not ask for a differently
+    # typed one to be invented under its name.
+    if django_type in autofields_ignore
+      # Last-write-wins, the same rule the trio below applies: this statement overrides whatever an
+      # ancestor wrote at this key, so an earlier #410 claim on it is no longer the reason the column
+      # is missing and must not be the one reported. Done here rather than by moving those `delete!`s
+      # above this branch, so no other path's behaviour shifts. `declared_pk` is deliberately NOT
+      # touched — neither direction — because #346 turns on an ignored field never participating in
+      # the primary-key bookkeeping at all.
+      delete!(unsupported_pk, field_key)
+      delete!(unsupported_fields, field_key)
+      push!(ignored_fields, field_key)
+      continue
+    end
 
     # A narrower Django key came through as the one PormG can round-trip — the key is faithful, the
     # declared width is not. Reported for the same reason every other degrade in this file is:
@@ -4167,11 +4512,6 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
                      "$(django_type) ($(DJANGO_AUTO_KEY_TYPES[django_type])) — imported as " *
                      "$(field_type) (BIGINT). " * DJANGO_DEGRADED_FIELD_TYPES[django_type])
     end
-
-    # The key this statement writes, computed up front so the bookkeeping below can name it without
-    # restating the ForeignKey `_id` rule.
-    field_key = field_type in ["ForeignKey", "OneToOneField"] ? Symbol("$(field_name)_id") :
-                                                                Symbol(field_name)
 
     # Whether DJANGO called this field the primary key — recorded beside the built field because it
     # cannot be read back off it (#369). Most PormG field types do not accept `primary_key` at all:
@@ -4194,6 +4534,11 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     # re-added a few lines below if this statement is itself unimplemented.
     delete!(unsupported_pk, field_key)
     delete!(unsupported_fields, field_key)
+    # And for #428's set, for the same reason: a child overriding a field its base declared with an
+    # ignored type drops the ignore claim along with it. Unreachable from the ignore branch above —
+    # that one `continue`s before this line — so the claim only ever clears when a later statement
+    # actually gets this far.
+    delete!(ignored_fields, field_key)
 
     # #410: a field type PormG does not implement. Skip the COLUMN, not the file. Before this, one
     # `models.GenericIPAddressField` aborted `_import_django_apps` outright and every model in every
@@ -4353,7 +4698,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
   end
 
   return (declared_pk = declared_pk, unsupported_pk = unsupported_pk,
-          unsupported_fields = unsupported_fields)
+          unsupported_fields = unsupported_fields, ignored_fields = ignored_fields)
 
 end
 
@@ -4443,6 +4788,7 @@ _is_pormg_field_type(t::AbstractString)::Bool =
 # it last also leaves the `class_name` → `enum_scopes` coupling visually adjacent.
 function parse_field_args(args_str::AbstractString, field_type::AbstractString, parameters_ignore::Vector{String};
                          enums = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}(),
+                         enum_aliases = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}(),
                          class_name::AbstractString = "",
                          enum_scopes::Vector{Tuple{Int, String}} = Tuple{Int, String}[(1, String(class_name)), (1, "")],
                          class_label::AbstractString = class_name,
@@ -4476,7 +4822,7 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
           end
           # Resolve `Status.choices` / `Status.DRAFT` BEFORE parse_value (#342), which would
           # otherwise hand the literal text through and let CharField reject the pair.
-          resolved = _resolve_enum_reference(value, enums, enum_scopes, class_label, field_name, key, markers, unresolved_enums)
+          resolved = _resolve_enum_reference(value, enums, enum_aliases, enum_scopes, class_label, field_name, key, markers, unresolved_enums)
           # A DISTINCT sentinel, not `nothing`: `parse_value("None")` is `nothing`, so an enum
           # member declared `NENHUM = None, "Nenhum"` resolved to `nothing` and was read here as
           # "dropped" — the option vanished with no warn and no marker, which is the one thing this
@@ -4639,7 +4985,7 @@ _looks_like_enum_attr(attr::AbstractString)::Bool =
 const _ENUM_MEMBER_ATTRS = ("value", "label", "name")
 
 """
-    _resolve_enum_reference(value, enums, enum_scopes, class_label, field_name, key, markers, unresolved) -> Any
+    _resolve_enum_reference(value, enums, enum_aliases, enum_scopes, class_label, field_name, key, markers, unresolved) -> Any
 
 Resolve a Django enum reference in a field option.
 
@@ -4650,7 +4996,8 @@ app-qualified (#371); it never reaches a lookup, so the two must not be swapped.
 Returns the resolved value, `_ENUM_NOT_A_REFERENCE` when `value` is not one, or `_ENUM_DROP` to mean
 "drop this option" (already warned and marked).
 """
-function _resolve_enum_reference(value::AbstractString, enums, enum_scopes::Vector{Tuple{Int, String}},
+function _resolve_enum_reference(value::AbstractString, enums, enum_aliases,
+                                 enum_scopes::Vector{Tuple{Int, String}},
                                  class_label::AbstractString,
                                  field_name::AbstractString, key::AbstractString,
                                  markers::Vector{String},
@@ -4668,7 +5015,7 @@ function _resolve_enum_reference(value::AbstractString, enums, enum_scopes::Vect
     if inner !== nothing
       enum_ref = head[firstindex(head):prevind(head, inner)]
       member = head[nextind(head, inner):end]
-      if _lookup_enum(enums, enum_scopes, enum_ref) !== nothing
+      if _lookup_enum(enums, enum_aliases, enum_scopes, enum_ref) !== nothing
         if attr != "value"
           @warn "import: enum member attribute has no PormG equivalent; the option was dropped" class=class_label field=field_name attribute="$(head).$(attr)"
           push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' uses " *
@@ -4682,7 +5029,7 @@ function _resolve_enum_reference(value::AbstractString, enums, enum_scopes::Vect
     end
   end
 
-  enum = _lookup_enum(enums, enum_scopes, head)
+  enum = _lookup_enum(enums, enum_aliases, enum_scopes, head)
 
   if enum === nothing
     # Only `choices`/`default` can carry an enum, and only an enum-SHAPED attribute is worth

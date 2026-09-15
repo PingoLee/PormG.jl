@@ -4376,13 +4376,25 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     if prior !== nothing && (prior[1] == stmt_owner || prior[2] != field_name)
       (_, prior_name, prior_type, prior_line) = prior
       later_ignored = django_type in autofields_ignore
-      # Where the earlier declaration came from. "the SAME class body" is true only when the owners
-      # match; when they do not, the earlier statement was inherited from an abstract base, and
-      # naming that base is the whole value of the report — it is the file the reader has to open.
       same_body = prior[1] == stmt_owner
-      origin = same_body ? " in the SAME class body" :
-               " (the first inherited from the abstract base '$(prior[1][2])', the second " *
-               "declared on this class)"
+      same_name = prior_name == field_name
+      # A ManyToManyField takes a NAME but declares no column on this table — its data lives in a
+      # through table. So it can collide with a ForeignKey's `_id` key (`other` vs `other_id`) while
+      # "both write the column" is false of it, and Django's own column check never compares the two.
+      m2m_involved = prior_type == "ManyToManyField" || django_type == "ManyToManyField"
+
+      # WHERE each declaration was written. Neither is necessarily this class: `class_content` merges
+      # every abstract ancestor's body ahead of the child's, so a collision can be wholly inherited —
+      # from one base, or from two different ones in a multiple-inheritance or grandparent chain.
+      # Naming the wrong file is worse than naming none, because the reader opens it and finds
+      # neither field. Comparing on the class NAME is sound here: a class cannot inherit from one of
+      # its own name, which the inheritance-cycle guard refuses outright.
+      _where(o) = o[2] == class_name ? "declared on this class" :
+                                       "inherited from the abstract base '$(o[2])'"
+      origin = !same_body ? " (the first $(_where(prior[1])), the second $(_where(stmt_owner)))" :
+               stmt_owner[2] == class_name ? " in the SAME class body" :
+               " (both in the body of the abstract base '$(stmt_owner[2])')"
+
       outcome = later_ignored ?
         "The later declaration is dropped by `autofields_ignore`, so the column below — if this " *
         "class emits one under that name at all — is the EARLIER declaration's, not the one the " *
@@ -4392,18 +4404,42 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
         "and skipping it removes the column both statements name (see the marker below). " :
         "Only the later declaration reaches the model below; the earlier one is lost, including " *
         "any relation it declared. "
-      @warn "import: two declarations write the same column; one of them is lost" class=class_label column=String(field_key) first="$(prior_name) = models.$(prior_type)()" first_line=prior_line second="$(field_name) = models.$(django_type)()" second_line=stmt.lineno same_class_body=same_body inherited_from=(same_body ? "" : prior[1][2]) later_dropped=(later_ignored ? "autofields_ignore" : unsupported_type ? "unimplemented type" : "")
+
+      # What DJANGO makes of the same file, which is not one answer. The E007 sentence was printed
+      # unconditionally and is false in two of the three shapes:
+      #
+      #   * same attribute name twice — a class body is a namespace dict, so the second assignment
+      #     REBINDS the first and `ModelBase.__new__` receives one attribute. `manage.py check`
+      #     passes. Telling that author their project is broken, and to "rename one of the two
+      #     fields", is wrong twice over: renaming would create a second column they never wanted.
+      #   * a ManyToManyField — `_check_column_name_clashes` iterates `local_fields`, which holds
+      #     concrete columns only; an m2m lives in `local_many_to_many` and is never compared.
+      #
+      # It stays true, and worth saying, for the shape the issue was filed about: two differently
+      # named concrete fields landing on one column.
+      verdict = same_name ?
+        "Python keeps only the last assignment in a class body, so Django sees ONE field here and " *
+        "`manage.py check` passes — this is a duplicate declaration in the source rather than a " *
+        "schema clash. Delete the declaration you did not mean." :
+        m2m_involved ?
+        "Django compares column names across concrete fields only, and a ManyToManyField is not " *
+        "one, so `manage.py check` may well accept this — rename one of the two fields anyway, or " *
+        "the other declaration is lost with nothing in the schema to show for it." :
+        "Django rejects this itself (models.E007), so it can only reach here from a models.py that " *
+        "never passed `manage.py check` — rename one of the two fields."
+
+      @warn "import: two declarations collide on one name; one of them is lost" class=class_label name=String(field_key) first="$(prior_name) = models.$(prior_type)()" first_line=prior_line second="$(field_name) = models.$(django_type)()" second_line=stmt.lineno same_class_body=same_body first_written_in=prior[1][2] second_written_in=stmt_owner[2] later_dropped=(later_ignored ? "autofields_ignore" : unsupported_type ? "unimplemented type" : "")
       push!(markers, "# PormG: '$(class_label)' declares '$(prior_name)' ($(prior_type), models.py " *
                      "line $(prior_line)) and '$(field_name)' ($(django_type), line " *
-                     "$(stmt.lineno))" * origin * ", and both write the column " *
-                     "'$(field_key)'" *
+                     "$(stmt.lineno))" * origin * ", and both " *
+                     (m2m_involved ? "take the name" : "write the column") * " '$(field_key)'" *
                      # Only worth saying when the `_id` suffix is what made two differently spelled
                      # field names land on one column; for `x` twice over it is noise.
-                     (String(field_key) == prior_name && String(field_key) == field_name ? ". " :
-                        " — Django appends `_id` to a ForeignKey's column name. ") *
-                     outcome *
-                     "Django rejects this itself (models.E007), so it can only reach here from a " *
-                     "models.py that never passed `manage.py check` — rename one of the two fields.")
+                     (same_name ? ". " : " — Django appends `_id` to a ForeignKey's column name. ") *
+                     (m2m_involved ?
+                        "A ManyToManyField declares no column on this table — it takes the NAME, " *
+                        "and the column the other declaration would have written goes with it. " : "") *
+                     outcome * verdict)
     end
     claimed[field_key] = (stmt_owner, field_name, django_type, stmt.lineno)
 

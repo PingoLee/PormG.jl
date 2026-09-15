@@ -4787,6 +4787,218 @@ class Thing(models.Model):
     end
 end
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#429): the report names the file each declaration is actually in
+#
+# `class_content` merges every abstract ancestor's body ahead of the child's, so NEITHER half of a
+# collision is necessarily on the class being reported. The first attempt assumed a two-way split —
+# "the first inherited from the abstract base 'X', the second declared on this class" — and printed
+# that for a later statement that was itself inherited, from a different base or from a deeper one.
+# Naming the wrong file is worse than naming none: the reader opens it and finds neither field.
+#
+# Each origin is now described independently, which also covers the case both attempts missed —
+# both statements in ONE base's body, which shares an owner and so took the "SAME class body" arm
+# while the child declared neither field.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "each declaration's origin is named independently (#429)" begin
+    other = """
+class Other(models.Model):
+    rotulo = models.CharField(max_length=5)
+"""
+
+    # A. Two different abstract bases. The child's own body declares neither field.
+    two_bases = """
+from django.db import models
+$other
+class BaseA(models.Model):
+    other = models.ForeignKey(Other, on_delete=models.CASCADE)
+
+    class Meta:
+        abstract = True
+
+class BaseB(models.Model):
+    other_id = models.IntegerField()
+
+    class Meta:
+        abstract = True
+
+class Thing(BaseA, BaseB):
+    ativo = models.BooleanField()
+"""
+    generated, key, existed = import_project(["racing" => two_bases];
+                                             output_file = "collision_two_bases.jl")
+    try
+        @test occursin("inherited from the abstract base 'BaseA'", generated)
+        @test occursin("inherited from the abstract base 'BaseB'", generated)
+        # The claim that killed the first version: `Thing`'s body holds only `ativo`.
+        @test !occursin("declared on this class", generated)
+        @test !occursin("in the SAME class body", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+
+    # B. A grandparent chain — the likelier shape, and the one where a reader sent to the child has
+    #    nowhere to go. Neither statement is on `Thing`.
+    chain = """
+from django.db import models
+$other
+class Root(models.Model):
+    other = models.ForeignKey(Other, on_delete=models.CASCADE)
+
+    class Meta:
+        abstract = True
+
+class Mid(Root):
+    other_id = models.IntegerField()
+
+    class Meta:
+        abstract = True
+
+class Thing(Mid):
+    ativo = models.BooleanField()
+"""
+    gen_b, key_b, existed_b = import_project(["racing" => chain];
+                                             output_file = "collision_chain.jl")
+    try
+        @test occursin("inherited from the abstract base 'Root'", gen_b)
+        @test occursin("inherited from the abstract base 'Mid'", gen_b)
+        @test !occursin("declared on this class", gen_b)
+    finally
+        cleanup_project_test!(key_b, existed_b)
+    end
+
+    # C. Both halves in ONE base's body. Same owner, so the "SAME class body" test is true — but
+    #    that body is the BASE's, and saying so is the whole value of the report here.
+    one_base = """
+from django.db import models
+$other
+class Base(models.Model):
+    other = models.ForeignKey(Other, on_delete=models.CASCADE)
+    other_id = models.IntegerField()
+
+    class Meta:
+        abstract = True
+
+class Thing(Base):
+    ativo = models.BooleanField()
+"""
+    gen_c, key_c, existed_c = import_project(["racing" => one_base];
+                                             output_file = "collision_one_base.jl")
+    try
+        @test occursin("both in the body of the abstract base 'Base'", gen_c)
+        @test !occursin("in the SAME class body", gen_c)
+        @test !occursin("declared on this class", gen_c)
+    finally
+        cleanup_project_test!(key_c, existed_c)
+    end
+
+    # D. The plain case still says what it always said: both on the class being reported.
+    own_body = """
+from django.db import models
+$other
+class Thing(models.Model):
+    other = models.ForeignKey(Other, on_delete=models.CASCADE)
+    other_id = models.IntegerField()
+"""
+    gen_d, key_d, existed_d = import_project(["racing" => own_body];
+                                             output_file = "collision_own_body.jl")
+    try
+        @test occursin("in the SAME class body", gen_d)
+        @test !occursin("abstract base", gen_d)
+    finally
+        cleanup_project_test!(key_d, existed_d)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#429): what DJANGO makes of the same file is not one answer
+#
+# The `models.E007` sentence was appended to every collision marker. It is true only of the shape
+# the issue was filed about — two differently named CONCRETE fields landing on one column — and
+# false of the two others, in the direction that matters most: it tells an author their project is
+# broken when `manage.py check` passes on it, and hands them a remedy that would make things worse.
+#
+#   * the same attribute name twice — a class body is a namespace dict, so the second assignment
+#     REBINDS the first and `ModelBase.__new__` receives ONE attribute. There is no clash to
+#     report to Django, and "rename one of the two fields" would create a second column the author
+#     never wanted; the fix is to delete the declaration they did not mean.
+#   * a ManyToManyField — `_check_column_name_clashes` iterates `local_fields`, which holds
+#     concrete columns; an m2m lives in `local_many_to_many` and is never compared. It also takes
+#     a NAME without writing a column, so "both write the column" is false of it too.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the Django verdict matches the shape it describes (#429)" begin
+    # A. The same attribute name twice. Python rebinds; PormG must not claim E007.
+    duplicate_name = """
+from django.db import models
+
+class Thing(models.Model):
+    codigo = models.CharField(max_length=5)
+    codigo = models.IntegerField()
+"""
+    generated, key, existed = import_project(["racing" => duplicate_name];
+                                             output_file = "collision_same_name.jl")
+    try
+        @test occursin("both write the column 'codigo'", generated)
+        @test occursin("Python keeps only the last assignment", generated)
+        @test occursin("`manage.py check` passes", generated)
+        @test occursin("Delete the declaration you did not mean", generated)
+        # The two claims that are false here, asserted absent rather than merely not asserted.
+        @test !occursin("models.E007", generated)
+        @test !occursin("rename one of the two fields", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+
+    # B. A ManyToManyField taking a ForeignKey's `_id` name. It writes no column on this table, so
+    #    the report says "take the name", and Django's column check never compares the two.
+    m2m_clash = """
+from django.db import models
+
+class Other(models.Model):
+    rotulo = models.CharField(max_length=5)
+
+class Thing(models.Model):
+    other = models.ForeignKey(Other, on_delete=models.CASCADE)
+    other_id = models.ManyToManyField(Other)
+"""
+    gen_b, key_b, existed_b = import_project(["racing" => m2m_clash];
+                                             output_file = "collision_m2m.jl")
+    try
+        @test occursin("both take the name 'other_id'", gen_b)
+        @test !occursin("both write the column 'other_id'", gen_b)
+        @test occursin("A ManyToManyField declares no column on this table", gen_b)
+        @test !occursin("models.E007", gen_b)
+        # The relation really is what was lost, so the report is still warranted.
+        @test occursin("other_id = Models.ManyToManyField", gen_b)
+        @test !occursin("other_id = Models.ForeignKey", gen_b)
+    finally
+        cleanup_project_test!(key_b, existed_b)
+    end
+
+    # C. The shape the issue WAS filed about keeps the E007 sentence — two differently named
+    #    concrete fields, which Django really does reject.
+    genuine_e007 = """
+from django.db import models
+
+class Other(models.Model):
+    rotulo = models.CharField(max_length=5)
+
+class Thing(models.Model):
+    other = models.ForeignKey(Other, on_delete=models.CASCADE)
+    other_id = models.IntegerField()
+"""
+    gen_c, key_c, existed_c = import_project(["racing" => genuine_e007];
+                                             output_file = "collision_genuine_e007.jl")
+    try
+        @test occursin("Django rejects this itself (models.E007)", gen_c)
+        @test occursin("rename one of the two fields", gen_c)
+        @test !occursin("Python keeps only the last assignment", gen_c)
+    finally
+        cleanup_project_test!(key_c, existed_c)
+    end
+end
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Django Importer (#425): a qualified enum reference resolves through the `as` alias it was
 # imported under. `Base.Status.choices` worked only when the base was addressed by its OWN class

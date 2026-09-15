@@ -1177,9 +1177,10 @@ end
 # integer-days special cases #568 deleted, so it went with them — and with it the #563 collision, in
 # which two functions named `_is_date_field` carried DIFFERENT semantics: this one answered `true`
 # for TIMESTAMP, while `sanitization.jl`'s `_is_date_field(f_meta)` answers `true` only for a plain
-# DATE. That pair is what produced the integer-days half of #527 in the first place. The removal is a
-# side effect of the collapse, not a fix for #563 — #563 also covers the surviving function's name,
-# and stays open.
+# DATE. That pair is what produced the integer-days half of #527 in the first place, and removing it
+# is what CLOSED #563: that issue asked for the two predicates to have names distinguishing "any
+# temporal column" from "calendar-date column", and there is no longer a pair to distinguish. The
+# survivor reads unambiguously precisely because it has no confusable sibling left.
 #
 # What replaces it: `_operand_column_kind`, which answers with a `CanonicalType` rather than a Bool
 # and is shape-polymorphic (a String, a `JoinedReference` or a nested `FExpression`), so there is one

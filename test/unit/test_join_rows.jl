@@ -297,9 +297,11 @@ end
                    b = "jr_driver", alias_b = "Tb_1", key_b = "id", how = "INNER")
   filters = FilterType[PormG.QueryBuilder._check_filter("code" => "SEN")]
 
-  # Nothing to fold: an equal row comes back, and `to_many` / `on_conditions` are preserved.
+  # Nothing to fold: a slot-for-slot equal row comes back (compared by slots — `==` on the struct
+  # would fall back to identity and pass only while the vector object happens to be shared).
   same = _with_config(base, nothing, nothing)
-  @test same == base
+  @test same isa ModelJoin
+  @test all(getfield(same, f) == getfield(base, f) for f in fieldnames(ModelJoin))
   # Override only.
   left = _with_config(base, "LEFT", nothing)
   @test left.how == "LEFT" && isempty(left.on_conditions)
@@ -339,8 +341,16 @@ end
   @test second.to_many == false             # the original value is untouched
   # Stamping again returns the already-stamped row without allocating a new one.
   @test _flag_to_many!(rows, "Tb_2") === stamped
-  # An alias no row holds is an internal error, never a silent no-op.
-  @test_throws ErrorException _flag_to_many!(rows, "Tb_9")
+  # An alias no row holds is an internal error, never a silent no-op — and it is the "not found"
+  # arm of that error, not the "wrong kind" one.
+  missing_err = try
+    _flag_to_many!(rows, "Tb_9")
+    nothing
+  catch e
+    e
+  end
+  @test missing_err isa ErrorException
+  @test occursin("was not found in row_join", sprint(showerror, missing_err))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

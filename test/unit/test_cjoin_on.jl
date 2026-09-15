@@ -288,7 +288,14 @@ end
   away.db("cjoinon_pg")
   away.cjoin_on(SL.Circuit, alias = "c", on = [Joined("c", "raceid") == F("raceid")])
   away.values("id")
-  @test_throws PormG.QueryBuildError away.list(show_query = :sql)
+  away_err = try
+    away.list(show_query = :sql)
+    nothing
+  catch e
+    e
+  end
+  @test away_err isa PormG.QueryBuildError
+  @test occursin("cannot cross connections", sprint(showerror, away_err))
 
   # Unregistered (`connect_key === nothing`): accepted and rendered under its own table name.
   loose = PormG.Models.Model("loose_circuits", id = PormG.Models.IDField(), raceid = PormG.Models.IntegerField())

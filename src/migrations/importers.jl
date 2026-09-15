@@ -1867,7 +1867,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
                               parameters_ignore, markers, graph.enums,
                               enum_scope_map; class_label = class_label,
                               strict_fields = strict_fields,
-                              enum_aliases = graph.enum_aliases)
+                              enum_aliases = graph.enum_aliases,
+                              own_owner = (graph.self, String(class_name)))
 
       # Django's implicit `id`, added only when nothing claimed the key — DERIVED, per field, from
       # what was built and from what the models.py declared, never tracked with a class-wide flag
@@ -4150,7 +4151,15 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
                                # Keyword rather than a fourth positional (#512): `enums` and
                                # `enum_scopes` are positionals-with-defaults, and wedging one
                                # between them would silently re-bind every existing call.
-                               enum_aliases = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}())
+                               enum_aliases = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}(),
+                               # The `(app, class)` tag `_import_django_apps` puts on THIS class's
+                               # own statements. Needed whole, not by name (#429): the
+                               # inheritance-cycle guard is keyed on `(app, cls.name)`, so it
+                               # refuses a class inheriting from itself in the SAME app and says
+                               # nothing about a same-named abstract base in another one —
+                               # `core.Pessoa` abstract, `rh.Pessoa` concrete is an ordinary Django
+                               # layout. Comparing the name alone called both owners "this class".
+                               own_owner::Tuple{Int, String} = (1, String(class_name)))
   # Django's `AbstractUser` columns. A Bool rather than the base-list STRING it used to compare
   # against (#341): the base list is now parsed, so `class User(AbstractUser, SomeMixin)` and a
   # class reaching `AbstractUser` through an abstract base both qualify — an equality test on the
@@ -4387,12 +4396,14 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
       # every abstract ancestor's body ahead of the child's, so a collision can be wholly inherited —
       # from one base, or from two different ones in a multiple-inheritance or grandparent chain.
       # Naming the wrong file is worse than naming none, because the reader opens it and finds
-      # neither field. Comparing on the class NAME is sound here: a class cannot inherit from one of
-      # its own name, which the inheritance-cycle guard refuses outright.
-      _where(o) = o[2] == class_name ? "declared on this class" :
-                                       "inherited from the abstract base '$(o[2])'"
+      # neither field. Compared as the whole `(app, class)` tuple — see `own_owner` on the signature
+      # for why the class name alone is not enough — and a base from another app says so, because
+      # two apps may each declare a class of that name.
+      _where(o) = o == own_owner ? "declared on this class" :
+                  "inherited from the abstract base '$(o[2])'" *
+                    (o[1] == own_owner[1] ? "" : " of another app in this import")
       origin = !same_body ? " (the first $(_where(prior[1])), the second $(_where(stmt_owner)))" :
-               stmt_owner[2] == class_name ? " in the SAME class body" :
+               stmt_owner == own_owner ? " in the SAME class body" :
                " (both in the body of the abstract base '$(stmt_owner[2])')"
 
       outcome = later_ignored ?
@@ -4436,9 +4447,15 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
                      # Only worth saying when the `_id` suffix is what made two differently spelled
                      # field names land on one column; for `x` twice over it is noise.
                      (same_name ? ". " : " — Django appends `_id` to a ForeignKey's column name. ") *
+                     # Only the first half of this is true in every arrangement. "…and the
+                     # column the other declaration would have written goes with it" assumed the
+                     # m2m was the SURVIVOR: with the m2m declared first the ForeignKey's column is
+                     # rendered four lines below, and with both sides m2m no column was ever in
+                     # play. `outcome` already says who survived, so the clause was redundant as
+                     # well as false.
                      (m2m_involved ?
                         "A ManyToManyField declares no column on this table — it takes the NAME, " *
-                        "and the column the other declaration would have written goes with it. " : "") *
+                        "and keeps its data in a through table. " : "") *
                      outcome * verdict)
     end
     claimed[field_key] = (stmt_owner, field_name, django_type, stmt.lineno)

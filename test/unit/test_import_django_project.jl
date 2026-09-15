@@ -4831,6 +4831,9 @@ class Thing(BaseA, BaseB):
     try
         @test occursin("inherited from the abstract base 'BaseA'", generated)
         @test occursin("inherited from the abstract base 'BaseB'", generated)
+        # Prefix matches, so the app-boundary suffix needs its own negative or a mutation that
+        # appends it unconditionally passes every assertion here. Both bases are in `racing`.
+        @test !occursin("another app", generated)
         # The claim that killed the first version: `Thing`'s body holds only `ativo`.
         @test !occursin("declared on this class", generated)
         @test !occursin("in the SAME class body", generated)
@@ -4863,6 +4866,7 @@ class Thing(Mid):
     try
         @test occursin("inherited from the abstract base 'Root'", gen_b)
         @test occursin("inherited from the abstract base 'Mid'", gen_b)
+        @test !occursin("another app", gen_b)
         @test !occursin("declared on this class", gen_b)
     finally
         cleanup_project_test!(key_b, existed_b)
@@ -4887,6 +4891,7 @@ class Thing(Base):
                                              output_file = "collision_one_base.jl")
     try
         @test occursin("both in the body of the abstract base 'Base'", gen_c)
+        @test !occursin("another app", gen_c)
         @test !occursin("in the SAME class body", gen_c)
         @test !occursin("declared on this class", gen_c)
     finally
@@ -4994,6 +4999,137 @@ class Thing(models.Model):
         @test occursin("Django rejects this itself (models.E007)", gen_c)
         @test occursin("rename one of the two fields", gen_c)
         @test !occursin("Python keeps only the last assignment", gen_c)
+    finally
+        cleanup_project_test!(key_c, existed_c)
+    end
+end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#429): "this class" is a `(app, class)` tuple, not a class name
+#
+# The origin phrase first compared owners by class NAME, justified in a comment as "a class cannot
+# inherit from one of its own name, which the inheritance-cycle guard refuses outright". The guard
+# is keyed on `(app, cls.name)`, so it refuses a class inheriting from itself in the SAME app and
+# says nothing about a same-named abstract base in another one — `core.Pessoa` abstract and
+# `rh.Pessoa` concrete is an ordinary Django layout.
+#
+# The symptom was a phrase that contradicted itself on its face: the two-different-owners arm
+# printing "the first declared on this class, the second declared on this class", with two line
+# numbers from two different files and nothing saying so.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a same-named abstract base in another app is not called this class (#429)" begin
+    core = """
+from django.db import models
+
+class Other(models.Model):
+    rotulo = models.CharField(max_length=5)
+
+class Thing(models.Model):
+    other = models.ForeignKey(Other, on_delete=models.CASCADE)
+
+    class Meta:
+        abstract = True
+"""
+    # The `as` alias is required to reach this: a plain `class Thing(Thing)` resolves the base to
+    # the class itself, and the cycle guard really does refuse that one.
+    shop = """
+from django.db import models
+from core.models import Thing as CoreThing
+
+class Thing(CoreThing):
+    other_id = models.IntegerField()
+"""
+    generated, key, existed = import_project(["core" => core, "shop" => shop];
+                                             output_file = "collision_same_named_base.jl")
+    try
+        @test occursin("both write the column 'other_id'", generated)
+        # The inherited half is named as inherited, and the app boundary is stated — without it the
+        # reader is sent to a class of the same name in the wrong file.
+        @test occursin("inherited from the abstract base 'Thing' of another app in this import",
+                       generated)
+        @test occursin("the second declared on this class", generated)
+        # The self-contradiction this testset exists for.
+        @test !occursin("the first declared on this class", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#429): the ManyToManyField clause holds in every arrangement
+#
+# "A ManyToManyField declares no column on this table" is true always. The clause that followed it
+# — "and the column the other declaration would have written goes with it" — assumed the m2m was
+# the SURVIVOR, and was emitted on any m2m involvement. It was false in three arrangements of four,
+# and in the first one below it contradicted both the next sentence and the model four lines down.
+# `outcome` already says who survived, so the clause was redundant as well as wrong.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the ManyToManyField clause does not assume the m2m survived (#429)" begin
+    other = """
+class Other(models.Model):
+    rotulo = models.CharField(max_length=5)
+"""
+
+    # A. m2m declared FIRST: the ForeignKey's column is what the file emits.
+    m2m_first = """
+from django.db import models
+$other
+class Thing(models.Model):
+    other_id = models.ManyToManyField(Other)
+    other = models.ForeignKey(Other, on_delete=models.CASCADE)
+"""
+    generated, key, existed = import_project(["racing" => m2m_first];
+                                             output_file = "collision_m2m_first.jl")
+    try
+        @test occursin("keeps its data in a through table", generated)
+        @test !occursin("the column the other declaration would have written", generated)
+        # The FK's column is right there — which is what made the old clause false.
+        @test occursin("other_id = Models.ForeignKey(\"Other\"", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+
+    # B. BOTH sides m2m: there is no column in play at all, in either direction.
+    both_m2m = """
+from django.db import models
+$other
+class Outro(models.Model):
+    rotulo = models.CharField(max_length=5)
+
+class Thing(models.Model):
+    tags = models.ManyToManyField(Other)
+    tags = models.ManyToManyField(Outro)
+"""
+    gen_b, key_b, existed_b = import_project(["racing" => both_m2m];
+                                             output_file = "collision_both_m2m.jl")
+    try
+        @test occursin("both take the name 'tags'", gen_b)
+        @test !occursin("the column the other declaration would have written", gen_b)
+        # Same attribute name, so Python's rebinding is the verdict — not Django's column check,
+        # which never sees either field.
+        @test occursin("Python keeps only the last assignment", gen_b)
+        @test !occursin("models.E007", gen_b)
+        @test occursin("tags = Models.ManyToManyField(\"Outro\"", gen_b)
+    finally
+        cleanup_project_test!(key_b, existed_b)
+    end
+
+    # C. Same name, m2m then a concrete field: the concrete one wins and does write a column, so
+    #    the old clause was false here too.
+    m2m_then_concrete = """
+from django.db import models
+$other
+class Thing(models.Model):
+    tags = models.ManyToManyField(Other)
+    tags = models.CharField(max_length=5)
+"""
+    gen_c, key_c, existed_c = import_project(["racing" => m2m_then_concrete];
+                                             output_file = "collision_m2m_then_concrete.jl")
+    try
+        @test occursin("keeps its data in a through table", gen_c)
+        @test !occursin("the column the other declaration would have written", gen_c)
+        @test occursin("tags = Models.CharField(max_length=5)", gen_c)
     finally
         cleanup_project_test!(key_c, existed_c)
     end

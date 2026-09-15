@@ -1846,7 +1846,7 @@ _format_filter_value(formatter, values, operator::AbstractString) =
   operator in ("IN", "NOT IN") && values isa AbstractArray ? [formatter(v) for v in values] :
                                                              formatter(values)
 
-# The filter path's one re-raise (#411, #467). A formatter reports a value it cannot coerce as
+# The filter path's shared re-raise (#411, #467). A formatter reports a value it cannot coerce as
 # `InvalidValueError`, whose own docstring scopes it to the insert/update coercion helpers — on a
 # READ that is the wrong bucket, so the filter path reports its own type instead. Anything else is
 # someone else's error and is rethrown untouched.
@@ -2067,7 +2067,9 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
         # now raises `FilterError` where it raised `InvalidValueError`. Both are `PormGError`.
         #
         # #467 moved the `BETWEEN`/`NOT BETWEEN` branch onto the same helper, so `@range`/`@nrange`
-        # no longer leak `InvalidValueError`. There is one re-raise on this path now, not two.
+        # no longer leak `InvalidValueError`. Both operator branches share one definition — but the
+        # HAVING/alias path and the transform branches still format outside any guard (#576), so
+        # this is not yet the only re-raise on the read path.
         _rethrow_as_filter_error(e, v.column.field,
                                  instruc.object.model.fields[v.column.field].type, v.values)
       end

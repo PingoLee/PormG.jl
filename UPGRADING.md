@@ -75,7 +75,7 @@ edit #411 already asked for on the scalar and membership operators. Well-typed o
 as before.
 
 **The conversion is still not complete**, so do not drop an `InvalidValueError` handler from a read
-path wholesale. Three shapes continue to raise it and are tracked in #576: a wrong-typed value
+path wholesale. At least three shapes continue to raise it and are tracked in #576: a wrong-typed value
 compared against an **aggregate alias** (`filter("tot__@gt" => "abc")` over a `Sum(...)`
 projection), the same against a `Max(...)`/`Min(...)` alias, and a **transform suffix**
 (`filter("happened__@month" => "abc")`). Convert the handlers around the operators named above;

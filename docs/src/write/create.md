@@ -149,8 +149,9 @@ driver = M.Driver.objects.create(
 )
 ```
 
-**Error** — an `InvalidValueError`, printed as its message alone (PormG errors render without the
-type name in front):
+**Error** — an `InvalidValueError`. PormG's *validation* errors print their message alone, with no
+type name in front (the database-side types — `IntegrityError`, `OperationalError`,
+`StatementError` — do name themselves):
 
 ```julia
 ERROR: Error in insert, the field driverref not allow null

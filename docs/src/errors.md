@@ -46,7 +46,7 @@ Catch the umbrella when you want a category, the concrete type when you want a r
 | `delete` with `limit`/`offset`/`order_by`/`distinct`/aggregates | `UnsafeMutationError` | Those shapes make cascade counting unreliable — see [Deleting Records](write/delete.md) |
 | `delete` of a row referenced with `on_delete = PROTECT` | `ProtectedError` | The *data* forbids it; reassign or delete the referencing rows first |
 | `create` / `update` naming a field that does not exist | `UnknownFieldError` | Same message as the read path above — names the table searched and its available fields. Reverse accessors are **not** listed: they are addressable in a filter path, but they are not columns you can write |
-| bulk writers, `get_or_create` / `update_or_create` naming a field that does not exist | `UnknownFieldError` | Same type; each names the model and the field, without the available-field list |
+| bulk writers, `get_or_create` / `update_or_create` naming a field that does not exist | `UnknownFieldError` | Same type, with their own wording and no available-field list — usually the model and the field, and for a `bulk_update` `columns=` mapping the DataFrame's columns instead |
 | `create` with a `null` value on a non-null field | `InvalidValueError` | Rejected by PormG **before** any statement is sent |
 | `create` / `bulk_insert` violating a constraint | `IntegrityError` | The **database** refused it — `UNIQUE`, `FOREIGN KEY`, `NOT NULL`, `CHECK` |
 

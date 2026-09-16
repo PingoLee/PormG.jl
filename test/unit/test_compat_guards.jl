@@ -1,8 +1,10 @@
 # ============================================================
 # test/unit/test_compat_guards.jl
 #
-# `[compat]` ranges that are load-bearing for an environment PormG's own test runs never build:
-# a DRIVER environment (#558) and a CONSUMING-APP environment (#560).
+# Dependency-resolution contracts that are load-bearing for an environment PormG's own test runs
+# never build: a DRIVER environment (#558), a CONSUMING-APP environment (#560), and a
+# CompatHelper PR's environment (#599). The first two are about the declared `[compat]` ranges;
+# the third is about which END of one CI selects.
 #
 # CONTRACT 1 — `Decimals` keeps `LibPQ` installable (#558):
 #   PormG's declared `[compat]` must leave `LibPQ` — the only PostgreSQL driver — with an
@@ -34,7 +36,17 @@
 #   `OrderedSet(keys(d))` is already safe — `keys` of a typed dict has a concrete eltype — but
 #   spelling it costs nothing and removes the judgement call.)
 #
-# Why a test at all — the shared mechanism, and why neither contract can be seen locally:
+# CONTRACT 3 — CI must not force the CEILING of a spanning range (#599):
+#   `julia-actions/julia-runtest`'s `force_latest_compatible_version` defaults to `auto`, i.e.
+#   TRUE on a Dependabot/CompatHelper PR, where it pins every direct dependency to the newest
+#   version its range allows. For `Decimals = "0.4, 0.5"` that is 0.5.x — the end CONTRACT 1 says
+#   no LibPQ release accepts — so every CompatHelper PR arrives with all four `test` jobs dead in
+#   `Pkg.resolve`. Same symptom as #558, opposite cause: there the range was wrong, here the range
+#   is right and CI picks the wrong end of it, so neither testset above can see it and a re-run
+#   never clears it. Guarded as a text scan of `.github/workflows/CI.yml`, at the bottom of this
+#   file.
+#
+# Why a test at all — the shared mechanism, and why none of the three can be seen locally:
 #   `Manifest.toml` is gitignored, so an already-resolved environment keeps the old version of
 #   either package indefinitely and stays green. CI caught #558 only *after* the narrowing reached
 #   `main`, at the cost of all four test jobs; nothing at all would have caught #560, because the
@@ -48,7 +60,9 @@
 #
 # Mutation gates: restoring `Decimals = "0.5"` in Project.toml — the #558 regression, commit
 # 8f91cf37 — fails the `"0.4" in bounds` assertion below; restoring `OrderedCollections = "2"`,
-# the other half of that same commit, fails the `"1" in bounds` assertion.
+# the other half of that same commit, fails the `"1" in bounds` assertion; deleting the `with:`
+# block under the `test` job's `julia-runtest` step in `.github/workflows/CI.yml`, or flipping it
+# back to `true`/`auto`, fails the CONTRACT 3 testset.
 #
 # The other half, and how to read the two together (#574):
 #   `.github/workflows/CI.yml` -> the `floor-resolve` job now resolves each non-stdlib `[compat]`
@@ -272,4 +286,103 @@ end
   # Mutation gate: reverting planner.jl:732 to `OrderedDict(... => ... for ...)` lists it here.
   @test isempty(offenders)
   isempty(offenders) || @info "Bare OrderedDict/OrderedSet sites" offenders
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CI must not force every dependency to the TOP of its `[compat]` range (#599)
+# The third member of this file's family, and the one that is not about a range at all — it is
+# about which END of a range CI selects.
+#
+# `julia-actions/julia-runtest`'s `force_latest_compatible_version` defaults to `auto`, which
+# means "true when the PR was opened by Dependabot or CompatHelper". True pins every direct
+# dependency to the newest version its `[compat]` range allows — including `Decimals` to 0.5.x,
+# which no registered `LibPQ` release accepts (CONTRACT 1 above: they all pin `Decimals 0.4`).
+# So the test environment cannot resolve and all four `test` jobs die in `Pkg.resolve`, before a
+# single testset runs. Measured on this machine: `LibPQ` + PormG with no pin resolves clean at
+# Decimals 0.4.1 / LibPQ 1.18.0; adding `Decimals@0.5.1` leaves LibPQ with no versions left.
+#
+# This is the same SYMPTOM as #558 with a different CAUSE, which is what makes it worth a guard.
+# There the range had been wrongly narrowed to `"0.5"` and the two testsets above catch it. Here
+# the range is exactly right and CI selects the end LibPQ forbids — invisible to both of them,
+# and self-inflicted rather than upstream, so it never clears on a re-run.
+#
+# Why a text scan of the workflow, in THIS file: identical reasoning to the two contracts above.
+# The failure lives in an environment no local run builds — it needs a CompatHelper PR to exist —
+# so nothing else can observe it, and by the time it is observable it has already cost the whole
+# matrix. Asserting the declaration is the cheap half; `#593` was the expensive half.
+#
+# The `floor-resolve` job is asserted too, for the MIRROR-IMAGE reason (#574): there force-latest
+# on a CompatHelper PR would silently resolve the ceiling and report a floor job green. Both ends
+# of the same input, and neither is a preference.
+#
+# Mutation gates: deleting the `with:` block under the `test` job's `julia-runtest` step fails the
+# first assertion; deleting `floor-resolve`'s fails the second. Flipping either to `true` fails it
+# too — the scan matches the value, not merely the key.
+#
+# Deterministic, DB-free, no network.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "CI does not force the ceiling of a spanning [compat] range (#599)" begin
+  ci_workflow = joinpath(pkgdir(PormG), ".github", "workflows", "CI.yml")
+  @test isfile(ci_workflow)
+
+  # A DECLARATION of this input set to `false`, judged on code only: trailing comments are
+  # stripped and comment-only lines dropped. That is not cosmetic — BOTH jobs that carry this
+  # input also spell its name in prose ("* force_latest_compatible_version — its `auto` default
+  # means …"), so a scan that cannot tell a declaration from a sentence about one would pass on
+  # a workflow that declares nothing at all.
+  declares_false(lines) = any(lines) do line
+    startswith(strip(line), "#") && return false
+    occursin(r"^\s*force_latest_compatible_version:\s*false\s*$", first(split(line, '#')))
+  end
+
+  # The lines belonging to one top-level job: from `  <name>:` (exactly two spaces) up to the
+  # next key at that indent. Section-aware on purpose — both `test` and `floor-resolve` declare
+  # this input, so a flat file scan cannot say which job it found, and #599 is specifically
+  # about the `test` job.
+  function job_lines(job::AbstractString)
+    lines = readlines(ci_workflow)
+    start = findfirst(l -> l == "  $(job):", lines)
+    start === nothing && return nothing
+    stop = findfirst(l -> occursin(r"^  \S", l), lines[(start + 1):end])
+    return lines[(start + 1):(stop === nothing ? length(lines) : start + stop - 1)]
+  end
+
+  # ── Pin both helpers before trusting a verdict, same discipline as `_compat_entry` above ──
+  # A mis-spelled job name must fail as itself, never as a silent `false` that reads like a
+  # finding about the workflow.
+  @test job_lines("test") !== nothing
+  @test job_lines("floor-resolve") !== nothing
+  @test job_lines("PormGNotAJob") === nothing
+
+  # The sectioning is real, checked on content UNIQUE to each job rather than on the job names —
+  # the comment this PR added inside `test` legitimately mentions `floor-resolve` by name, so a
+  # name scan would fail on correct code. `steps:` appears in both, so it only proves a block was
+  # captured at all; the two `uses`/matrix keys prove the blocks do not overlap.
+  @test any(l -> strip(l) == "steps:", job_lines("test"))
+  # `matrix:` and the `julia-downgrade-compat` step are structural, not cosmetic: `test` is a
+  # matrix job and `floor-resolve` is a single-Julia job that downgrades. Chosen over the literal
+  # `os:` list so that adding a platform to the matrix does not fail this guard for an unrelated
+  # reason.
+  @test any(l -> strip(l) == "matrix:", job_lines("test"))
+  @test !any(l -> occursin("julia-downgrade-compat", l), job_lines("test"))
+  @test any(l -> occursin("julia-downgrade-compat", l), job_lines("floor-resolve"))
+  @test !any(l -> strip(l) == "matrix:", job_lines("floor-resolve"))
+
+  # The comment stripping is real, checked against synthetic lines rather than against a job
+  # that happens to declare the right thing anyway. Without the strip, the first two of these
+  # would each satisfy `declares_false` and every assertion below would be theater.
+  @test !declares_false(["          # force_latest_compatible_version: false"])
+  @test !declares_false(["          allow_reresolve: false  # force_latest_compatible_version: false"])
+  @test !declares_false(["          force_latest_compatible_version: true"])
+  @test !declares_false(["          force_latest_compatible_version: auto"])
+  @test declares_false(["          force_latest_compatible_version: false"])
+  @test declares_false(["          force_latest_compatible_version: false   # OFF DELIBERATELY"])
+
+  # ── The guard itself ──
+  # `test` is the job #599 is about: left at the `auto` default, a CompatHelper PR pins Decimals
+  # to 0.5.x and no LibPQ release allows it, so all four jobs die before a testset runs.
+  @test declares_false(job_lines("test"))
+  # `floor-resolve` has carried it since #574, for the mirror-image reason: force-latest there
+  # would resolve the CEILING and report a floor job green.
+  @test declares_false(job_lines("floor-resolve"))
 end

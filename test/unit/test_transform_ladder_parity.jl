@@ -328,8 +328,9 @@ end
       end
     end
 
-    # #587 — ORDER BY renders under the `:join` context, which flushes BEFORE `where`, while the text
-    # order is the reverse. SQLite ONLY; PostgreSQL is the control and is genuinely correct.
+    # #587 — ORDER BY used to render under the `:join` context, which flushes BEFORE `where`, while
+    # the text order is the reverse. It has its own `:order` bucket now (flattened last), so the
+    # SQLite vector matches the text; PostgreSQL was always correct and is the control.
     # The whole vector is asserted, not its ends: pinning `params[1]`/`params[end]` would still pass
     # a fix that reordered the middle, and would break spuriously if anything ever bound after the
     # WHERE value (a LIMIT operand).
@@ -340,13 +341,8 @@ end
     params = _tlp_params(q; conn = conn)
     # Text order: the WHERE placeholder comes first, then the nine ordering operands.
     in_text_order = Any["x", "-Q", 3, 1, 6, 2, 9, 3, 12, 4]
-    if conn === _TLP_SL
-      @test_broken params == in_text_order
-      # …and what it actually binds today: the WHERE value last, so the predicate receives the
-      # separator "-Q" and the ordering expression receives "x". Wrong rows, no error.
-      @test params == Any["-Q", 3, 1, 6, 2, 9, 3, 12, 4, "x"]
-    else
-      @test params == in_text_order
-    end
+    # Both engines now agree; before #587 SQLite bound `["-Q", 3, …, 4, "x"]` — the WHERE value
+    # last, so the predicate received the separator "-Q" and the ordering expression received "x".
+    @test params == in_text_order
   end
 end

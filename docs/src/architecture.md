@@ -183,7 +183,7 @@ characterizations worth stating plainly.
 
 - **Positional-parameter buckets (deliberate, contained)** — for SQLite the positional `?` markers
   are collected into per-clause buckets and flattened in SQL-clause order
-  (`:cte → :select → :update → :join → :where → :having`). The flatten order is single-sourced in
+  (`:cte → :select → :update → :join → :where → :group → :having → :order`). The flatten order is single-sourced in
   `_BUCKET_ORDER` (which `get_final_parameters` and the nested-run machinery both read) and guarded by `test_alignment_sqlite.jl` / `test_parameters.jl`. Noted here
   so it is not mistaken for accidental coupling.
 

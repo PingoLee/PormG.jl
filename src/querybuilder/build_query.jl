@@ -190,6 +190,24 @@ function _order_term_sql(expr, orientation::AbstractString, placement::Symbol, c
   return string(expr, " ", orientation, " ", placement === :first ? "NULLS FIRST" : "NULLS LAST")
 end
 
+# #587: the output name under which the expression with memo key `key` is projected, or `nothing`.
+# The scan is the one `get_order_query` runs for the same-name case, keyed on the full `memo_key`
+# — namespace AND name, never the bare `_as` string: a `Joined("raceid", "year")` projection and a
+# base-model `raceid__@year` term share the `_as` text `raceid__year` and differ only in the
+# namespace half, which is the #474 distinction. For a field-path or transform projection the name
+# half is the PATH (the chosen name lives in `custom_as`), so `values("q" => "date__@yyyy_q")`
+# answers `"q"` for an `order_by("date__@yyyy_q")` term.
+function _projected_output_name(instruc::SQLInstruction, key)::Union{Nothing,String}
+  key === nothing && return nothing
+  for i in eachindex(instruc.select)
+    isassigned(instruc.select, i) || continue
+    value = instruc.select[i]
+    memo_key(value) == key || continue
+    return value.custom_as !== nothing ? value.custom_as : value._as
+  end
+  return nothing
+end
+
 function get_order_query(object::SQLObject, instruc::SQLInstruction)
   for v in object.order
     found_in_select = false
@@ -291,6 +309,10 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # entry with one. Note the branch below still emits `_as` — that is the SELECT alias the
     # database sees, which is a different thing from the key this build memoizes under.
     order_cache_key = memo_key(v_field_copy)
+    # #587: the values this term binds, read back after rendering so the GROUP BY copy below can
+    # carry them too. Empty on the alias and memo branches, which bind nothing; empty on PostgreSQL
+    # always (`parameter_mark` holds no bucket there).
+    order_params = Any[]
     if found_in_select
       # Use the alias name instead of the expression to avoid double parameterization.
       # Most databases (PG, SQLite, MySQL) support aliases in ORDER BY.
@@ -300,10 +322,34 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # `_get_filter_query(::SQLTypeField)` and can write this very key — so a read hoisted above the
     # branch would be stale by the time the write guard further down consults it. Keeping the
     # binding scoped is what makes that mistake unavailable rather than merely commented against.
-    elseif (order_cached = memo_projection(instruc, order_cache_key)) !== nothing
+    #
+    # #587: the memo is reused ONLY for a node kind that never binds a parameter — a String path
+    # (which must keep it: `_cache_join` files the resolved selectors of CTE `join_field` paths
+    # under these keys), a CTE or joined-copy handle, an outer reference. A memoized expression that
+    # DID bind (`values("q" => "ts__@yyyy_q"); order_by("ts__@yyyy_q")`) carries `?`s whose values
+    # sit in `:select`; reusing its text here printed nine markers into ORDER BY with nothing bound
+    # for them — SQLite refused the statement. Gated negatively so a future node type that binds
+    # lands on the safe path by default.
+    elseif v_field_copy.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject} &&
+           (order_cached = memo_projection(instruc, order_cache_key)) !== nothing
       v_field_copy.field = order_cached.field
+    # #587: a binding expression that IS projected, under another output name, orders by that
+    # name — the same thing the `found_in_select` branch does when the names agree. Rendering it
+    # afresh would bind its operands a second time; on PostgreSQL that also renumbers the `$N`s,
+    # so the ORDER BY term stops being byte-identical to the projection and a DISTINCT query the
+    # #76 guard (and PostgreSQL itself) used to accept is refused. The alias binds nothing on either
+    # engine and is legal under DISTINCT by construction. Only a binding node takes this branch:
+    # a String path or a handle keeps its memoized selector above, so their SQL is unchanged.
+    elseif (projected_as = _projected_output_name(instruc, order_cache_key)) !== nothing
+      v_field_copy.field = quote_identifier(projected_as, instruc.connection)
+      found_in_select = true
     else
+      # `_get_select_query(::SQLTypeFunction)` also records an `agg_sources` entry per render, so
+      # a re-rendered aggregate term appears there twice — harmless to `_check_aggregate_fanout`,
+      # which reasons per entry and reaches the same verdict for a duplicate.
+      mark = parameter_mark(instruc)
       v_field_copy.field = _get_select_query(v_field_copy.field, instruc)
+      order_params = bound_since(mark)
     end
     # #540: no render-time re-validation. `SQLOrder` is an immutable struct whose inner constructor
     # runs the #77 whitelist, so `v.orientation` is ASC or DESC by construction and nothing can have
@@ -372,6 +418,13 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
         end
       end
       push!(instruc.group, v_field_copy.field)
+      # #587: GROUP BY prints this same string — `?`s included — BEFORE HAVING and ORDER BY, so on a
+      # positional backend the values the term bound are needed a second time, under `:group`.
+      # Gated on `instruc.aggregate`, which is final here (its only writer is `get_select_query`,
+      # which ran first) and is the exact condition under which `query` prints a GROUP BY clause:
+      # copying for a non-aggregate query would bind values no marker consumes — the mirror image
+      # of the defect. No-op on PostgreSQL, which prints the same `$N` twice and binds it once.
+      instruc.aggregate && copy_parameters_to!(instruc, :group, order_params)
     end
 
   end
@@ -1009,16 +1062,17 @@ function build(object::SQLObject;
   # and test/unit/test_order_by_joins.jl pins concrete Tb_1/Tb_2/Tb_3 names, so a reorder rewrites
   # those expectations rather than passing silently.
   #
-  # Context: :join is set explicitly and :where restored after, so in a TOP-LEVEL build an order
-  # term that parameterizes lands in the bucket it always did, and the cjoin loops keep running
-  # under :where. In a SUBQUERY (set_contexts=false) these two switches are skipped, and that is a
-  # real change: build_row_join_sql_text sets :join UNGATED in both its phase loops, so before this
-  # move a subquery carrying at least one join left the context on :join and the order term landed
-  # there; now it inherits the parent's bucket. Narrow — it needs a subquery with a join AND a
-  # parameterized order term — and arguably the better of the two, since the subquery's ORDER BY
-  # text renders inside the parent's WHERE. Untested either way, because ORDER BY has no bucket of
-  # its own (see parameters.jl); that gap pre-dates this change and is not closed here.
-  set_contexts && set_context!(instruct, :join)
+  # Context (#587): ORDER BY binds under its OWN bucket, `:order`, which `_BUCKET_ORDER`
+  # (parameters.jl) flattens last — where the clause prints. It used to render under `:join` because
+  # no bucket existed, and `:join` flattens BEFORE `:where`: an ordering expression that binds (the
+  # `@yyyy_q` / `@yyyy_quad` labels bind nine operands) shifted every WHERE value by that many
+  # positions, the counts still matched, and SQLite returned the wrong rows without an error.
+  # PostgreSQL numbers `$N` at render and was always right. `:where` is restored after, so the cjoin
+  # loops below keep running under it. In a SUBQUERY (set_contexts=false) both switches are skipped
+  # and the term inherits the parent's bucket — unreachable from the public surface, because every
+  # nested render passes `own_contexts=true` (#432), and the `:order` values it files are lifted
+  # into text order by `detach_nested_run!` like any other clause.
+  set_contexts && set_context!(instruct, :order)
   get_order_query(object, instruct)
   set_contexts && set_context!(instruct, :where)
 

@@ -40,11 +40,21 @@ const QB = PormG.QueryBuilder
     QB.set_context!(params, :cte)
     QB.add_parameter!(params, "cte_val")
 
+    # #587: GROUP BY and ORDER BY buckets, bound out of order too. GROUP BY prints between WHERE
+    # and HAVING; ORDER BY prints last.
+    QB.set_context!(params, :order)
+    QB.add_parameter!(params, "order_val")
+    QB.set_context!(params, :group)
+    QB.add_parameter!(params, "group_val")
+
     # 3. Verify final concatenation order matches SQL clause order:
-    # CTE -> SELECT -> UPDATE -> JOIN -> WHERE -> HAVING
+    # CTE -> SELECT -> UPDATE -> JOIN -> WHERE -> GROUP -> HAVING -> ORDER
     final_params = QB.get_final_parameters(params)
-    @test length(final_params) == 6
-    @test final_params == ["cte_val", "select_val", "update_val", "join_val", "where_val", "having_val"]
+    @test length(final_params) == 8
+    @test final_params == ["cte_val", "select_val", "update_val", "join_val", "where_val", "group_val", "having_val", "order_val"]
+    # The tuple every consumer reads is pinned at exactly these eight, in this order.
+    @test QB._BUCKET_ORDER == (:cte, :select, :update, :join, :where, :group, :having, :order)
+    @test params.parameter_count == 8
 
     # 4. Property access compatibility
     @test params.parameters == final_params
@@ -175,9 +185,14 @@ end
     QB.add_parameter!(params, "w")
     QB.set_context!(params, :having)
     QB.add_parameter!(params, "h")
+    QB.set_context!(params, :group)
+    QB.add_parameter!(params, "g")
+    QB.set_context!(params, :order)
+    QB.add_parameter!(params, "o")
 
     params_copy = deepcopy(params)
-    @test QB.get_final_parameters(params_copy) == ["c", "s", "u", "j", "w", "h"]
+    @test QB.get_final_parameters(params_copy) == ["c", "s", "u", "j", "w", "g", "h", "o"]
+    @test hasproperty(params_copy, :group_params) && hasproperty(params_copy, :order_params)
     @test params_copy !== params
 
     # Mutate copy

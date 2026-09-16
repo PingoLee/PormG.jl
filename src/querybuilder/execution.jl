@@ -40,7 +40,9 @@ function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing
         :update => parameters.update_params,
         :join => parameters.join_params,
         :where => parameters.where_params,
-        :having => parameters.having_params
+        :group => parameters.group_params,
+        :having => parameters.having_params,
+        :order => parameters.order_params
       )
     end
 

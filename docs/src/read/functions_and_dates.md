@@ -37,29 +37,20 @@ Both number transforms validate the comparison value: a quarter outside `1`–`4
 not a number at all, raises `InvalidValueError` instead of building SQL that silently matches
 nothing.
 
-!!! warning "The label transforms are projection-only today"
-    `@yyyy_q` and `@yyyy_quad` work in `values()`, and in `order_by()` **on a projected alias**. They
-    cannot be used as a `filter()` key, and `order_by("date__@yyyy_q")` — the unprojected spelling —
-    returns silently wrong rows on SQLite. Both come from the same place: the label expands to a
-    `CONCAT`/`CASE` that binds parameters, and neither the predicate path nor the ORDER BY path
-    places those parameters correctly.
+!!! warning "The label transforms are projection-only as a filter key today"
+    `@yyyy_q` and `@yyyy_quad` work in `values()` and in `order_by()` — projected under an alias or
+    not (`order_by("date__@yyyy_q")` sorts by the label directly). They cannot yet be used as a
+    `filter()` key: the label expands to a `CONCAT`/`CASE` that binds parameters, and the predicate
+    path renders that expansion twice while the text keeps one copy.
 
-    As a filter key the expansion is rendered twice while the text keeps one copy. On SQLite the
-    statement then binds more values than it has placeholders and the driver refuses it
-    (`values should be provided for all query placeholders`). On PostgreSQL the counts agree —
+    On SQLite the statement then binds more values than it has placeholders and the driver refuses
+    it (`values should be provided for all query placeholders`). On PostgreSQL the counts agree —
     placeholders are numbered as they are rendered — but the discarded copy consumes a block of
     numbers that appear nowhere in the text, so the query carries a gap in its `$n` sequence and the
     server refuses it too.
 
-    Filter on the period number instead (`"date__@quarter" => 1`), and order by the alias:
-
-    ```julia
-    query.values("q" => "date__@yyyy_q")
-    query.order_by("q")          # ✓ — orders on the projected alias
-    ```
-
-    The number transforms are unaffected in every position: they render one function call and bind
-    nothing.
+    Filter on the period number instead (`"date__@quarter" => 1`). The number transforms are
+    unaffected in every position: they render one function call and bind nothing.
 
 !!! note "`@yyyy_quad` spells its separator `-Q` too"
     `"1991-Q1"` from `@yyyy_quad` means the first *quadrimester*, not the first quarter — the two

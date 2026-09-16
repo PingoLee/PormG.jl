@@ -39,18 +39,29 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 mutable struct SQLiteParameterizedQuery <: PormGSQLiteParam
   sql::String
-  # Separate buckets for each SQL section
+  # Separate buckets for each SQL section — one per clause that can carry a `?`, in no particular
+  # order here; `_BUCKET_ORDER` below is the clause order and the only list that must match the
+  # statement text.
   cte_params::Vector{Any}
   select_params::Vector{Any}
   update_params::Vector{Any}
   join_params::Vector{Any}
   where_params::Vector{Any}
+  # #587: GROUP BY and ORDER BY had no bucket, so an ordering expression that binds — the
+  # `@yyyy_q` / `@yyyy_quad` labels expand to a CONCAT/CASE with nine operands — was filed under
+  # `:join`, which flattens BEFORE `:where` while its text renders AFTER it. Every other parameter
+  # in the statement shifted by the size of the expression, the counts still agreed, and SQLite
+  # returned the wrong rows without an error. `:group` exists because `get_order_query` copies an
+  # unprojected ordering expression into GROUP BY verbatim, `?` and all, and GROUP BY prints
+  # BEFORE HAVING — so the same values are needed twice, in two clause positions.
+  group_params::Vector{Any}
   having_params::Vector{Any}
+  order_params::Vector{Any}
   # Active bucket selector
   current_context::Symbol
 
   function SQLiteParameterizedQuery(sql::String="", current_context::Symbol=:where)
-    new(sql, Any[], Any[], Any[], Any[], Any[], Any[], current_context)
+    new(sql, Any[], Any[], Any[], Any[], Any[], Any[], Any[], Any[], current_context)
   end
 end
 get_parameter(connection::PormGSQLite) = SQLiteParameterizedQuery()
@@ -65,7 +76,9 @@ function _current_bucket(sq::SQLiteParameterizedQuery)::Vector{Any}
   ctx === :update && return sq.update_params
   ctx === :join && return sq.join_params
   ctx === :where && return sq.where_params
+  ctx === :group && return sq.group_params
   ctx === :having && return sq.having_params
+  ctx === :order && return sq.order_params
   # Fallback – warn about unknown context and route to :where so nothing silently breaks
   @warn "Unknown parameter context $(repr(ctx)), falling back to :where" ctx
   return sq.where_params
@@ -78,7 +91,7 @@ end
     set_context!(params::AbstractPormGParam, context::Symbol)
 
 Switch the active parameter bucket for positional-parameter backends (SQLite).
-Valid contexts: `:cte`, `:select`, `:update`, `:join`, `:where`, `:having`.
+Valid contexts: `:cte`, `:select`, `:update`, `:join`, `:where`, `:group`, `:having`, `:order`.
 
 For numbered-parameter backends (PostgreSQL) this is a no-op.
 """
@@ -194,7 +207,10 @@ end
 
 # Clause order. `get_final_parameters` flattens from this same tuple, so there is ONE list to edit
 # when a bucket is added — the maintenance checklist in the QueryBuilder skill points here.
-const _BUCKET_ORDER = (:cte, :select, :update, :join, :where, :having)
+#
+# `:group` and `:order` (#587) sit where their text does — GROUP BY between WHERE and HAVING,
+# ORDER BY last. The statement renderer in `execution.jl` (`query`) prints in exactly this order.
+const _BUCKET_ORDER = (:cte, :select, :update, :join, :where, :group, :having, :order)
 
 # Deliberately mirrors `_current_bucket`'s fallback rather than defining its own: an unrecognized
 # context must land in the same bucket and warn the same way from both helpers, or a future bucket
@@ -205,7 +221,9 @@ function _bucket_for(sq::PormGSQLiteParam, ctx::Symbol)::Vector{Any}
   ctx === :update && return sq.update_params
   ctx === :join && return sq.join_params
   ctx === :where && return sq.where_params
+  ctx === :group && return sq.group_params
   ctx === :having && return sq.having_params
+  ctx === :order && return sq.order_params
   @warn "Unknown parameter context $(repr(ctx)), falling back to :where" ctx
   return sq.where_params
 end
@@ -255,6 +273,31 @@ function reattach_parameters!(sq::AbstractPormGParam, values::Vector{Any})
   append!(_current_bucket(sq), values)
   return nothing
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Duplicating a run into a second clause (#587)
+#
+# One rendered fragment can be PRINTED in two clauses: `get_order_query` pushes an unprojected
+# ordering expression into GROUP BY as well as ORDER BY, so under an aggregate the same `?`s appear
+# twice in the text. On a positional backend that is two bindings, one per clause position — the
+# values bound while rendering the term (read back through a `parameter_mark`) are appended again
+# under the second clause's bucket. A no-op on numbered backends: PostgreSQL prints the same `$N`
+# in both places and binds it once.
+# ─────────────────────────────────────────────────────────────────────────────
+function bound_since(mark::ParameterMark)::Vector{Any}
+  bucket, len = mark
+  (bucket === nothing || length(bucket) <= len) && return Any[]
+  return bucket[len+1:end]
+end
+
+copy_parameters_to!(::PormGPostgresParam, ::Symbol, ::Vector{Any}) = nothing
+function copy_parameters_to!(sq::PormGSQLiteParam, ctx::Symbol, values::Vector{Any})
+  isempty(values) && return nothing
+  append!(_bucket_for(sq, ctx), values)
+  return nothing
+end
+copy_parameters_to!(instruc::SQLInstruction, ctx::Symbol, values::Vector{Any}) =
+  instruc.parameters === nothing ? nothing : copy_parameters_to!(instruc.parameters, ctx, values)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # add_parameter!  – push a value and return the placeholder string
@@ -334,7 +377,7 @@ Return all collected parameter values in the order expected by the final SQL str
 
 - **PostgreSQL**: returns the single linear vector (order already matches `\$N` numbering).
 - **SQLite**: concatenates buckets in standard SQL clause order, single-sourced from
-  `_BUCKET_ORDER`: `cte → select → update → join → where → having`
+  `_BUCKET_ORDER`: `cte → select → update → join → where → group → having → order`
   so that each positional `?` aligns with its value.
 """
 get_final_parameters(p::PormGPostgresParam)::Vector{Any} = p.parameters isa Vector{Any} ? p.parameters : collect(p.parameters)
@@ -377,30 +420,32 @@ function Base.getproperty(sq::SQLiteParameterizedQuery, name::Symbol)
   if name === :parameters
     return get_final_parameters(sq)
   elseif name === :parameter_count
-    # Computed property: sum of all bucket lengths (no drift risk)
-    return length(getfield(sq, :cte_params)) + length(getfield(sq, :select_params)) +
-           length(getfield(sq, :update_params)) + length(getfield(sq, :join_params)) +
-           length(getfield(sq, :where_params)) + length(getfield(sq, :having_params))
+    # Computed property: sum of all bucket lengths — driven from `_BUCKET_ORDER` so a bucket added
+    # there is counted here without a second hand-written list (#587 added two).
+    total = 0
+    for ctx in _BUCKET_ORDER
+      total += length(_bucket_for(sq, ctx))
+    end
+    return total
   else
     return getfield(sq, name)
   end
 end
 
 function Base.hasproperty(::SQLiteParameterizedQuery, name::Symbol)
-  return name in (:sql, :cte_params, :select_params, :update_params, :join_params, :where_params, :having_params, :current_context, :parameter_count, :parameters)
+  return name in (:sql, :cte_params, :select_params, :update_params, :join_params, :where_params,
+                  :group_params, :having_params, :order_params, :current_context, :parameter_count, :parameters)
 end
 
 # Deep copy support – execution_bulk.jl relies on deepcopy(instruction.parameters)
 function Base.deepcopy_internal(sq::SQLiteParameterizedQuery, stackdict::IdDict)
   haskey(stackdict, sq) && return stackdict[sq]::SQLiteParameterizedQuery
   new_sq = SQLiteParameterizedQuery(sq.sql, sq.current_context)
-  # Copy each bucket
-  setfield!(new_sq, :cte_params, Base.deepcopy_internal(getfield(sq, :cte_params), stackdict))
-  setfield!(new_sq, :select_params, Base.deepcopy_internal(getfield(sq, :select_params), stackdict))
-  setfield!(new_sq, :update_params, Base.deepcopy_internal(getfield(sq, :update_params), stackdict))
-  setfield!(new_sq, :join_params, Base.deepcopy_internal(getfield(sq, :join_params), stackdict))
-  setfield!(new_sq, :where_params, Base.deepcopy_internal(getfield(sq, :where_params), stackdict))
-  setfield!(new_sq, :having_params, Base.deepcopy_internal(getfield(sq, :having_params), stackdict))
+  # Copy each bucket — every slot `_BUCKET_ORDER` names, so a bucket added there is copied here.
+  for ctx in _BUCKET_ORDER
+    slot = Symbol(ctx, :_params)
+    setfield!(new_sq, slot, Base.deepcopy_internal(getfield(sq, slot), stackdict))
+  end
   # parameter_count is now computed from bucket lengths — no need to copy
   stackdict[sq] = new_sq
   return new_sq

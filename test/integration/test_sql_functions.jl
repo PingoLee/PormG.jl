@@ -260,6 +260,33 @@ end
     # …and a value no quarter can express is refused rather than matching nothing.
     @test_throws PormG.InvalidValueError M.Driver.objects.filter("dob__@quarter" => 7).values("driverid").list()
     @test_throws PormG.InvalidValueError M.Driver.objects.filter("dob__@quarter" => "abc").values("driverid").list()
+
+    # #587: ORDER BY on the label with a WHERE value present. The label binds nine operands, and
+    # before #587 SQLite filed them in a bucket that flattened BEFORE the WHERE value while the
+    # ORDER BY text printed after it — the predicate compared against the label's separator, the
+    # label received the predicate's value, and the statement returned the wrong rows (usually
+    # none) with no error. Asserted against the unordered query's row set, so "it returns rows
+    # now" cannot pass with the wrong ones, and against the label order of the rows it returns.
+    q4 = M.Driver.objects
+    q4.values("driverid", "q_label" => "dob__@yyyy_q")
+    q4.filter("dob__@month" => 4)
+    q4.order_by("dob__@yyyy_q")          # projected under ANOTHER name: not an alias hit
+    df4 = q4 |> DataFrame
+    @test nrow(df4) == nrow(df2)
+    @test sort(df4.driverid) == sort(df2.driverid)
+    @test issorted(df4.q_label)
+    @test all(endswith.(df4.q_label, "-Q2"))
+
+    # The unprojected spelling, descending, with the WHERE value bound through a joined path — a
+    # second value the misbind would have displaced.
+    q5 = M.Driver.objects
+    q5.values("driverid", "dob")
+    q5.filter("dob__@month" => 4)
+    q5.order_by("-dob__@yyyy_q")
+    df5 = q5 |> DataFrame
+    @test sort(df5.driverid) == sort(df2.driverid)
+    years5 = [Dates.year(Dates.Date(string(x)[1:10])) for x in df5.dob]
+    @test issorted(years5; rev = true)
 end
 
 @testset "Date Functions & Modifiers" begin

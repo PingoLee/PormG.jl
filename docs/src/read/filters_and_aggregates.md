@@ -88,13 +88,13 @@ a `values()` grouping key when each year's quarters must stay separate. A value 
 range raises `InvalidValueError` rather than matching nothing.
 
 !!! warning "The label transforms are projection-only today"
-    `@yyyy_q` and `@yyyy_quad` work in `values()` and in `order_by()` on a projected alias, but
+    `@yyyy_q` and `@yyyy_quad` work in `values()` and in `order_by()`, but
     **not** as a `filter()` key: the label expands to a `CONCAT`/`CASE` whose operands are rendered
     twice on the predicate path, and the second copy's parameters are kept. SQLite then binds more
     values than the text has placeholders; PostgreSQL's counts agree but its `$n` sequence has a gap
     where the discarded copy was numbered. Either way the driver refuses the statement. Filter on
     the period number instead (`"date__@quarter" => 1`), or project the label and filter on the
-    underlying column. See [Functions and Dates](functions_and_dates.md) for the `order_by` caveat.
+    underlying column. See [Functions and Dates](functions_and_dates.md).
 
 ---
 

@@ -287,6 +287,33 @@ end
         @test !(params.parameters[1] isa AbstractVector)
     end
 
+    # #466: the ARRAY collectors — a membership list whose elements are wrappers — unwrap exactly as
+    # the scalar arms do. These were the two methods that did not, which is why `blob__@in` was
+    # refused (#411) rather than supported.
+    @testset "SQLite: a list of PormGBytes expands to raw bytes, one blob per member (#466)" begin
+        params = QB.SQLiteParameterizedQuery()
+        QB.set_context!(params, :where)
+        placeholder = QB.add_parameter!(params, [PormG.PormGBytes(payload), PormG.PormGBytes(UInt8[0x01])])
+        @test placeholder == "?, ?"
+        final = QB.get_final_parameters(params)
+        @test length(final) == 2
+        @test final[1] isa Vector{UInt8} && final[1] == payload
+        @test final[2] == UInt8[0x01]
+    end
+
+    @testset "PostgreSQL: a list of PormGBytes is one array of hex text (#466)" begin
+        params = QB.PgParameterizedQuery("", Any[], 0)
+        placeholder = QB.add_parameter!(params, [PormG.PormGBytes(payload), PormG.PormGBytes(UInt8[])])
+        @test placeholder == "\$1"
+        @test length(params.parameters) == 1
+        @test params.parameters[1] == ["\\x00ff8950", "\\x"]
+        # A list with no wrapper in it is pushed untouched — element type included — so nothing
+        # else in the builder sees a copy it did not ask for.
+        strings = ["a", "b"]
+        QB.add_parameter!(params, strings)
+        @test params.parameters[2] === strings
+    end
+
     @testset "PostgreSQL: an empty payload is still one parameter" begin
         params = QB.PgParameterizedQuery("", Any[], 0)
         @test QB.add_parameter!(params, PormG.PormGBytes(UInt8[])) == "\$1"

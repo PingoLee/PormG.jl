@@ -444,6 +444,62 @@ end
     end
 
     # ─────────────────────────────────────────────────────────────────────────────
+    # BinaryField membership: `blob__@in` selects by byte value (#466)
+    # Refused by #411 because the array parameter collectors bound the `PormGBytes` wrapper
+    # itself — SQLite stored a Julia-serialized blob that matched nothing, silently. Only a live
+    # driver can prove the unwrapped elements reach the engine as bytes, so this is asserted on
+    # the ROWS that come back: exactly the two members, never the third, on both engines, with a
+    # payload carrying a 0x00 byte that a text parameter could never have carried.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "Scratch Fields: BinaryField membership filter" begin
+        slugs = ["binary-in-a-990508", "binary-in-b-990508", "binary-in-c-990508"]
+        payload_a = UInt8[0x89, 0x50, 0x00, 0xFF]
+        payload_b = UInt8[0x01]
+        payload_c = UInt8[0x89, 0x50, 0x00, 0xFE]   # differs from `a` in its last byte only
+
+        try
+            for (slug, payload) in zip(slugs, (payload_a, payload_b, payload_c))
+                _seed_field_validation_scratch!(
+                    uuid_token=string(uuid4()),
+                    canonical_url="https://example.com/f1/binary-in/$(slug)",
+                    slug=slug,
+                    payload=Dict("kind" => "binary-in")
+                )
+                row_query = M.Field_validation_scratch.objects
+                row_query.filter("slug" => slug)
+                row_query.update("blob_payload" => payload)
+            end
+
+            in_query = M.Field_validation_scratch.objects
+            in_query.filter("slug__@in" => slugs)
+            in_query.filter("blob_payload__@in" => [payload_a, payload_b])
+            in_query.values("slug", "blob_payload")
+            in_rows = in_query.list()
+            @test sort([r[:slug] for r in in_rows]) == sort(slugs[1:2])
+            @test all(r -> collect(r[:blob_payload]) in (payload_a, payload_b), in_rows)
+
+            nin_query = M.Field_validation_scratch.objects
+            nin_query.filter("slug__@in" => slugs)
+            nin_query.filter("blob_payload__@nin" => [payload_a, payload_b])
+            nin_query.values("slug")
+            @test [r[:slug] for r in nin_query.list()] == [slugs[3]]
+
+            # A single-member list is the same path, and a member no row carries selects nothing.
+            one_query = M.Field_validation_scratch.objects
+            one_query.filter("slug__@in" => slugs)
+            one_query.filter("blob_payload__@in" => [payload_c])
+            one_query.values("slug")
+            @test [r[:slug] for r in one_query.list()] == [slugs[3]]
+            none_query = M.Field_validation_scratch.objects
+            none_query.filter("slug__@in" => slugs)
+            none_query.filter("blob_payload__@in" => [UInt8[0x00]])
+            @test none_query.count() == 0
+        finally
+            _cleanup_field_validation_scratch_rows!(slugs)
+        end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
     # BinaryField max_length is a BYTE bound, enforced in two independent places
     # The ORM rejects an oversize payload before any SQL is built, and the DDL CHECK
     # (octet_length on PostgreSQL, length on SQLite) is the backstop. The ORM assertions

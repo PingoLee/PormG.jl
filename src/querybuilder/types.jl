@@ -758,7 +758,11 @@ That is a internal function, please do not use it.
   # scalar arm so `filter("uid" => uuid)` can hold one value. Widening only the vector arm left plain
   # equality on a UUIDField raising a `convert` MethodError — an untyped error on the most ordinary
   # spelling there is, which is precisely what this pair of issues exists to remove.
-  values::Union{String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,SQLObjectHandler,SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF,Base.UUID}
+  # `AbstractVector{UInt8}` on the vector arm only (#466): a `blob__@in` list holds one `Vector{UInt8}`
+  # per member. A scalar `"blob" => bytes` comparison has no filter spelling today — its
+  # `Vector{UInt8}` is parsed as a vector VALUE by `_get_pair_to_oper` and refused as "no operator"
+  # before this union is consulted; that is a separate gap, not closed here.
+  values::Union{String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,SQLObjectHandler,SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF,Base.UUID,AbstractVector{UInt8}}
   column::ColumnPart
 end
 # `OP` is internal (#202): unexported, undocumented, and the string-lookup form (`"field__@op" =>

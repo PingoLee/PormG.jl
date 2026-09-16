@@ -347,7 +347,7 @@ end
 # Widened alongside its `Pair{Vector{String},…}` twin below (#411). Not reachable from
 # `_check_filter`, which splits the key at `__@` first — but leaving one of a matched pair behind
 # is the drift that bites whoever calls it directly next.
-function _get_pair_to_oper(x::Pair{String,Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID}
+function _get_pair_to_oper(x::Pair{String,Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,AbstractVector{UInt8}}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
 # Store SQLObject, to use __@in operator
@@ -394,10 +394,12 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeFunction
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
   end
 end
-# `Base.UUID` and `Vector{UInt8}` (#411): without them a `Vector{UUID}` or `Vector{Vector{UInt8}}`
-# right-hand side never reached this method at all, so `__@in` on a UUIDField or a BinaryField
-# failed at PARSE time with a MethodError — before any formatter ran, which is why mapping the
-# formatter at the call site does not fix those two on its own.
+# `Base.UUID` and `AbstractVector{UInt8}` (#411, #466): without them a `Vector{UUID}` or a
+# `Vector{Vector{UInt8}}` right-hand side never reached this method at all, so `__@in` on a UUIDField
+# or a BinaryField failed at PARSE time with a MethodError — before any formatter ran, which is why
+# mapping the formatter at the call site does not fix those two on its own. #411 admitted the UUID
+# and refused the binary list by name, because the ARRAY collectors did not unwrap `PormGBytes`;
+# #466 taught them to, so a binary list takes the ordinary vector arm below.
 # `Vector{Any}` (#411). `[]` — the way anyone writes an empty list, and what `ids = []` gives you
 # before the first `push!` — is `Vector{Any}`, and `Any` satisfies none of the element bounds the
 # methods below dispatch on. So the most natural spelling of an empty membership list raised a
@@ -420,35 +422,7 @@ function _get_pair_to_oper(x::Pair{Vector{String},Vector{Any}})
   return _get_pair_to_oper(x.first => narrowed)
 end
 
-# A membership filter over BINARY values is refused, deliberately and by name (#411).
-#
-# `format_binary_sql` returns a `PormGBytes` wrapper, and the two ARRAY methods of `add_parameter!`
-# are the only ones that do not unwrap it — the scalar methods exist precisely to. So a mapped list
-# binds wrappers: SQLite stores a Julia-serialized blob that matches nothing (silently zero rows,
-# no error) and PostgreSQL emits a nonsense `bytea[]` literal. Supporting this properly means
-# teaching the array collectors to unwrap, which is a driver round-trip change and cannot be
-# validated without the integration suite.
-#
-# So it stays unsupported — but loudly, and naming the path the user wrote. It used to raise a
-# `MethodError` naming `_get_pair_to_oper` and a tuple type nobody typed; silently wrong rows would
-# have been worse still.
-function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:AbstractVector{UInt8}
-  # Only `@in`/`@nin` are refused HERE, for the binary-specific reason. Any other suffix — or none at
-  # all, `filter("blob" => [bytes...])` — is the ordinary "vector value, wrong operator" mistake, and
-  # the shared funnel already reports it with the list of operators that DO take a vector. Claiming
-  # "membership filter" for `blob__@gte`, or rendering `__@blob` for a path with no suffix at all,
-  # would undercut the one thing this guard is for: naming what the user actually wrote.
-  x.first[end] in ("in", "nin") ||
-    _raise_invalid_filter_operator(x.first, "binary vector", ["in", "nin"])
-  path = join(x.first[1:end-1], "__")
-  throw(FilterError(
-    "A membership filter over binary values is not supported: " *
-    "\e[4m\e[31m$(path)__@$(x.first[end])\e[0m. Binary values bind through a wrapper the list " *
-    "parameter path cannot unwrap, so this would match nothing rather than fail. Compare one value " *
-    "at a time (\e[1m\"$(path)\" => bytes\e[0m), combining them with \e[1mQor\e[0m if you need several."))
-end
-
-function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID}
+function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,AbstractVector{UInt8}}
   suffix = x.first[end]
   if suffix in ["in", "nin"]
     @pormg_debug false

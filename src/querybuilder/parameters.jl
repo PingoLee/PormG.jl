@@ -303,10 +303,24 @@ copy_parameters_to!(instruc::SQLInstruction, ctx::Symbol, values::Vector{Any}) =
 # add_parameter!  – push a value and return the placeholder string
 # ─────────────────────────────────────────────────────────────────────────────
 
-# --- PostgreSQL (unchanged behaviour) ---
+# The PostgreSQL wire form of one binary payload, shared by the scalar and the array collector
+# (#296, #466): LibPQ binds every parameter in text format, so the bytes travel as PostgreSQL's hex
+# input syntax and `byteain` decodes them server-side. Inside an array literal LibPQ quotes the
+# element and doubles its backslash (`{"\\x0102"}`), which the array parser undoes before handing
+# each element to `byteain` — so the same text serves both positions.
+_pg_bytea_text(value::PormGBytes)::String = "\\x" * bytes2hex(value.bytes)
+
+# --- PostgreSQL ---
 function add_parameter!(pq::PormGPostgresParam, value::AbstractArray; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)
   contains && (throw(FilterError("Contains option is not supported for array parameters")))
   pq.parameter_count += 1
+  # #466: a membership list over a BinaryField arrives as `PormGBytes` elements (the formatter maps
+  # per element, #411), and LibPQ's array renderer would `show` the wrapper into the literal. Unwrap
+  # to the scalar arm's hex text; `= ANY($N)` infers `bytea[]` from the column. Any other list is
+  # pushed untouched, element type included.
+  if any(v -> v isa PormGBytes, value)
+    value = Any[v isa PormGBytes ? _pg_bytea_text(v) : v for v in value]
+  end
   push!(pq.parameters, value)
   return "\$$(pq.parameter_count)$(_postgres_parameter_cast(sql_type))"
 end
@@ -322,10 +336,12 @@ end
 # --- SQLite – Contextual Bucket Strategy ---
 function add_parameter!(sq::PormGSQLiteParam, value::AbstractArray; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)
   contains && (throw(FilterError("Contains option is not supported for array parameters")))
-  # Expand array into multiple positional parameters for SQLite
+  # Expand array into multiple positional parameters for SQLite. #466: a `PormGBytes` element
+  # is unwrapped to its bytes, exactly as the scalar arm below does — SQLite.jl's `bind!(::Any)`
+  # fallback would otherwise Julia-serialize the wrapper into a BLOB that matches nothing.
   placeholders = join(fill("?", length(value)), ", ")
   for v in value
-    push!(_current_bucket(sq), v)
+    push!(_current_bucket(sq), v isa PormGBytes ? v.bytes : v)
   end
   return placeholders
 end
@@ -350,7 +366,7 @@ end
 function add_parameter!(pq::PormGPostgresParam, value::PormGBytes; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
   contains && throw(FilterError("Contains option is not supported for binary parameters"))
   pq.parameter_count += 1
-  push!(pq.parameters, "\\x" * bytes2hex(value.bytes))
+  push!(pq.parameters, _pg_bytea_text(value))
   return "\$$(pq.parameter_count)$(_postgres_parameter_cast(sql_type))"
 end
 

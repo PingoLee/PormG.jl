@@ -121,7 +121,7 @@ automatically by `migrate()` or `init_migrations()`. Its frozen v1 columns:
 | `name` | `VARCHAR(255) NOT NULL` | same | human-readable migration name |
 | `checksum` | `VARCHAR(64) NOT NULL` | same | SHA-256 hex |
 | `sql_content` | `TEXT NOT NULL DEFAULT ''` | same | full SQL applied |
-| `applied_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | `DATETIME … DEFAULT (datetime('now'))` | apply time |
+| `applied_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | `DATETIME … DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'))` | apply time; on SQLite the canonical text every `DateTimeField` stores |
 | `status` | `VARCHAR(20) NOT NULL DEFAULT 'applied'` | same | `applied` or `failed` |
 | `is_destructive` | `BOOLEAN NOT NULL DEFAULT FALSE` | `BOOLEAN … DEFAULT 0` | contained a DROP/destructive op |
 | `format_version` | `INTEGER NOT NULL DEFAULT 1` | same | migration-format contract version |
@@ -136,6 +136,12 @@ a `pormg_migrations` table **without** the column. `init_migrations` repairs tha
 PostgreSQL via `ALTER TABLE … ADD COLUMN IF NOT EXISTS`, and on SQLite by probing
 `PRAGMA table_info(pormg_migrations)` and adding the column only when absent. Pre-existing rows
 backfill to `1` through the column DEFAULT — they were genuinely written under the v1 contract.
+
+On SQLite, `applied_at` used to default to `datetime('now')`, which writes `YYYY-MM-DD HH:MM:SS`
+rather than the canonical `YYYY-MM-DDTHH:MM:SS.sss+00:00` every `DateTimeField` stores. A table
+created by an earlier release keeps that default (`CREATE TABLE IF NOT EXISTS` never revisits it),
+so PormG writes the column explicitly on every migration record, and `init_migrations` rewrites rows
+still in the old form into the canonical text — once, idempotently, with no action on your part.
 
 ## What "frozen" guarantees
 

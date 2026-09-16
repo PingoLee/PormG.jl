@@ -136,6 +136,21 @@ end
     """SELECT "format_version" FROM pormg_migrations WHERE "version" = '20250101000001000';"""))
   @test fresh[1, :format_version] == Migrations.MIGRATION_FORMAT_VERSION
 
+  # #570 (SQLite only — the PostgreSQL column is a real `timestamp`): the legacy table above still
+  # carries the `datetime('now')` default, exactly as a pre-#570 database does. The legacy row was
+  # written by that default BEFORE `init_migrations`, so it must have been repaired into the
+  # canonical text; the row recorded AFTER must be canonical although the stale default is still
+  # in force, because the INSERT now writes `applied_at` explicitly.
+  if !is_pg
+    canonical = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+00:00$"
+    stamps = DataFrame(PormG.ConnectionPool.fetch(conn,
+      """SELECT "version", "applied_at" FROM pormg_migrations
+         WHERE "version" IN ('20250101000000000', '20250101000001000') ORDER BY "version";"""))
+    @test nrow(stamps) == 2
+    @test occursin(canonical, String(stamps[1, :applied_at]))   # repaired legacy row
+    @test occursin(canonical, String(stamps[2, :applied_at]))   # explicit write under the stale default
+  end
+
   @info "Format-version backfill passed" adapter=adapter_name
 end
 

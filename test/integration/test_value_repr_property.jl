@@ -95,6 +95,13 @@ _vri_lap()  = M.Lap_times.objects.filter("raceid" => 1, "driverid" => 1, "lap" =
     try
       M.Django_contract_scratch.objects.create("label" => label, "event_time" => VR_INSTANT)
       vr_run_cases(base, "event_time", VR_INSTANT, _VRI_ENGINE; kind = :timestamp)
+      # #569: every portable `ToChar` format, measured on THIS engine against the `Dates.format`
+      # oracle. On PostgreSQL this is the only place the `postgres` half of `date_format_map` is
+      # ever evaluated — the unit twin has no PostgreSQL. The millisecond probe is deliberate: a
+      # `SS` where `MS` was meant would pass on a whole-second instant.
+      @testset "every ToChar format renders the oracle text (#569)" begin
+        vr_run_tochar_formats(base, "event_time", VR_INSTANT, _VRI_ENGINE)
+      end
     finally
       M.Django_contract_scratch.objects.filter("label" => label).delete()
     end

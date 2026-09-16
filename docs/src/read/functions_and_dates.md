@@ -365,6 +365,34 @@ query.values(
 )
 ```
 
+`ToChar` renders `to_char(x, …)` on PostgreSQL and `strftime(…)` on SQLite, and every format in
+the table below produces the **same text on both engines** for a given instant. PormG spells the
+format for each engine itself: `HH` is the 24-hour clock on both, and the `T` separator and the
+`.SSS` milliseconds render as written.
+
+| `format` | renders as |
+|---|---|
+| `"YYYY"`, `"MM"`, `"DD"`, `"HH"`, `"MI"`, `"SS"` | one component: `2009`, `03`, `29`, `06`, `00`, `00` |
+| `"YYYY-MM"`, `"YYYY-MM-DD"` | `2009-03`, `2009-03-29` |
+| `"DD/MM/YYYY"`, `"DD-MM-YYYY"` | `29/03/2009`, `29-03-2009` |
+| `"HH:MI"`, `"HH:MI:SS"`, `"HH:MI:SS.SSS"` | `06:00`, `06:00:00`, `06:00:00.000` |
+| `"YYYY-MM-DD HH:MI:SS"`, `"YYYY-MM-DD HH:MI:SS.SSS"` | `2009-03-29 06:00:00`, `2009-03-29 06:00:00.000` |
+| `"YYYY-MM-DDTHH:MI:SS"`, `"YYYY-MM-DDTHH:MI:SS.SSS"` | `2009-03-29T06:00:00`, `2009-03-29T06:00:00.000` |
+
+```julia
+# The 2009 Australian Grand Prix started at 06:00 UTC — the same string on either engine
+query = M.Race.objects
+query.filter("raceid" => 1)
+query.values("start" => ToChar("start_at", "YYYY-MM-DDTHH:MI:SS.SSS"))
+query.list(:dict)   # [Dict(:start => "2009-03-29T06:00:00.000")]
+```
+
+!!! warning "Any other format is PostgreSQL-only"
+    A format outside the table is passed to `to_char` as written — a native template such as
+    `"HH12:MI AM"` works on PostgreSQL — and raises `BackendCapabilityError` on SQLite, naming
+    the supported formats. On PostgreSQL `to_char` renders a `timestamptz` in the session time
+    zone; keep the session in UTC for the two engines to agree on the hour.
+
 ---
 
 ## Case / When Expressions

@@ -466,7 +466,7 @@ export PormGsuffix, PormGtransform, PormGTypeField, JSON_CONTAINMENT_OPERATORS
 
 # Type maps and introspection ignore lists
 export sqlite_type_map_reverse, postgres_type_map_reverse,
-       sqlite_date_format_map, sqlite_ignore_schema, postgres_ignore_table
+       date_format_map, sqlite_ignore_schema, postgres_ignore_table
 
 # on_delete handlers
 export CASCADE, RESTRICT, PROTECT, SET_NULL, SET_DEFAULT, DO_NOTHING

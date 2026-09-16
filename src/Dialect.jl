@@ -11,7 +11,7 @@ import PormG: backend_sqlite_version  # SQLite library-version probe (driver bod
 #   QueryBuildError            — the caller passed an impossible argument shape (on_conflict_clause).
 import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError
 import PormG.ConnectionPool: fetch
-import PormG: postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
+import PormG: postgres_type_map_reverse, date_format_map, sqlite_type_map_reverse
 # The canonical column IR (#507). `alter_field` renders an ALTER from a `ColumnDelta`, which is why
 # these types live in `Kernel` (layer 1) rather than in `Migrations` — this module is included
 # BEFORE it, and a submodule resolves `import PormG: …` at include time. `_has_non_negative` and
@@ -96,13 +96,16 @@ end
 # so wrapper and bind agree by construction instead of needing the counterpart operand wrapped at
 # each of the (many) comparison sites.
 #
-# Deliberately a NEW constant rather than an entry in `sqlite_date_format_map`: that map spells the
-# same idea as `"%Y-%m-%d %H:%M:%S.%f"`, which is wrong — `%f` already carries the seconds, so it
-# renders `…:09.09.000`. Reusing it would inherit the defect.
+# Derived from the `date_format_map` row for the same spelling (#569), not restated. #527 had to
+# introduce this as a NEW constant because that map then spelled the mask `"%Y-%m-%dT%H:%M:%S.%f"`
+# — `%f` already carries the seconds, so it rendered `…:09.09.000` — and reusing it would have
+# inherited the defect. #569 fixed the map on both engines, so the canonical timestamp mask now has
+# ONE owner: the row `ToChar` renders and the row date arithmetic canonicalizes through are the
+# same string, and the `+00:00` suffix is the only thing this constant adds.
 #
 # The `date(...)` sibling is deliberately NOT changed: its output already equals what
 # `Models.format_date_sql` produces for a `DateField`, so there is nothing to reconcile.
-const SQLITE_CANONICAL_DATETIME_MASK = "'%Y-%m-%dT%H:%M:%f+00:00'"
+const SQLITE_CANONICAL_DATETIME_MASK = "'" * date_format_map["YYYY-MM-DDTHH:MI:SS.SSS"].sqlite * "+00:00'"
 
 """
     _sqlite_canonical_datetime(expr, modifiers) -> String
@@ -246,18 +249,34 @@ function _parse_sqlite_interval(v::Any)
 end
 
 
-# PostgreSQL
+# `ToChar` (#569). The user-facing format is a key of `date_format_map` (`constants.jl`), which
+# carries one spelling PER ENGINE — the keys only look like `to_char` templates (`HH` is 12-hour
+# there, `T` before `H` is the `TH` ordinal suffix, `SSS` is not a pattern), so the PostgreSQL arm
+# must translate too, not pass the key through.
+#
+# PostgreSQL: a key renders its `postgres` template; anything else is passed through as a native
+# `to_char` template (the documented PostgreSQL-only escape for patterns the map does not carry),
+# with the quote escaped so the format can never close the SQL literal it is written into.
 function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   format_str = format["format"]
   locale = get(format, "locale", "")
   nlsparam = get(format, "nlsparam", "")
-  return "to_char($(column), '$(format_str)') $(locale) $(nlsparam)"
+  entry = get(date_format_map, format_str, nothing)
+  template = entry === nothing ? replace(format_str, "'" => "''") : entry.postgres
+  return "to_char($(column), '$(template)') $(locale) $(nlsparam)"
 end
-# SQLite
+# SQLite: only a key renders — `strftime` has no way to spell an arbitrary `to_char` template, so
+# an unknown format is a capability the backend lacks, named with the formats it does have. Before
+# #569 this was a bare `KeyError` from the map lookup, outside the #231 taxonomy.
 function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   format_str = format["format"]
   locale = get(format, "locale", "")
-  return "strftime('$(sqlite_date_format_map[format_str])', $(column)) $(locale)"
+  entry = get(date_format_map, format_str, nothing)
+  if entry === nothing
+    supported = join(sort(collect(keys(date_format_map))), ", ")
+    throw(BackendCapabilityError("ToChar: format \"$(format_str)\" is not supported on SQLite. Supported formats: $(supported)"))
+  end
+  return "strftime('$(entry.sqlite)', $(column)) $(locale)"
 end
 
 function SUM(column::String, format::Dict{String,Any}, conn::PormGPostgres)
@@ -2001,6 +2020,12 @@ end
     create_migrations_table(conn::PormGSQLite) -> String
 
 Generate DDL to create the pormg_migrations history table for SQLite.
+
+`applied_at` defaults to the canonical timestamp text (#570) — `SQLITE_CANONICAL_DATETIME_MASK`,
+what every `DateTimeField` stores — rather than SQLite's own `datetime('now')`, whose
+`YYYY-MM-DD HH:MM:SS` form no PormG reader anchors on. `CREATE TABLE IF NOT EXISTS` leaves an
+existing table's default alone, which is why `_record_migration` also writes the column explicitly
+and `init_migrations` repairs rows in the old form (`repair_migrations_applied_at_sql`).
 """
 function create_migrations_table(conn::PormGSQLite)::String
   return """CREATE TABLE IF NOT EXISTS pormg_migrations (
@@ -2009,11 +2034,52 @@ function create_migrations_table(conn::PormGSQLite)::String
   "name" VARCHAR(255) NOT NULL,
   "checksum" VARCHAR(64) NOT NULL,
   "sql_content" TEXT NOT NULL DEFAULT '',
-  "applied_at" DATETIME NOT NULL DEFAULT (datetime('now')),
+  "applied_at" DATETIME NOT NULL DEFAULT ($(sqlite_applied_at_now_sql())),
   "status" VARCHAR(20) NOT NULL DEFAULT 'applied',
   "is_destructive" BOOLEAN NOT NULL DEFAULT 0,
   "format_version" INTEGER NOT NULL DEFAULT 1
 );"""
+end
+
+"""
+    sqlite_applied_at_now_sql() -> String
+
+The SQLite expression that yields "now" in PormG's canonical timestamp text (#570):
+`strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')`. Used by the `pormg_migrations` DDL default and by
+the explicit `applied_at` value every migration-record INSERT writes, so the two cannot drift.
+"""
+sqlite_applied_at_now_sql() = "strftime($(SQLITE_CANONICAL_DATETIME_MASK), 'now')"
+
+# The rows `repair_migrations_applied_at_sql` rewrites, stated once so the probe and the UPDATE
+# cannot disagree: TEXT values (the #527 repair shape), without the `T` separator, that `strftime`
+# can actually parse — a value it cannot would otherwise become NULL under `NOT NULL`.
+_legacy_applied_at_predicate() =
+  """typeof("applied_at") = 'text' AND "applied_at" NOT GLOB '*T*'
+    AND strftime($(SQLITE_CANONICAL_DATETIME_MASK), "applied_at") IS NOT NULL"""
+
+"""
+    legacy_applied_at_exists_sql(conn::PormGSQLite) -> String
+
+`SELECT 1 … LIMIT 1` over exactly the rows `repair_migrations_applied_at_sql` would rewrite. The
+runner probes with this before issuing the UPDATE, so a database with nothing to repair — every
+database after its first pass — is never asked for a write: SQLite opens the write transaction at
+statement start even when the WHERE matches nothing, and a read-only file would refuse it.
+"""
+function legacy_applied_at_exists_sql(conn::PormGSQLite)::String
+  return "SELECT 1 FROM pormg_migrations WHERE $(_legacy_applied_at_predicate()) LIMIT 1;"
+end
+
+"""
+    repair_migrations_applied_at_sql(conn::PormGSQLite) -> String
+
+Idempotent UPDATE that rewrites `pormg_migrations.applied_at` rows still in SQLite's own
+`YYYY-MM-DD HH:MM:SS` form — written by the `datetime('now')` default of tables created before
+#570 — into the canonical text, preserving the instant. After the first pass the WHERE matches
+nothing; `legacy_applied_at_exists_sql` is the read-only probe for the same rows.
+"""
+function repair_migrations_applied_at_sql(conn::PormGSQLite)::String
+  return """UPDATE pormg_migrations SET "applied_at" = strftime($(SQLITE_CANONICAL_DATETIME_MASK), "applied_at")
+  WHERE $(_legacy_applied_at_predicate());"""
 end
 
 """
@@ -2031,7 +2097,9 @@ end
 Returns parameterized INSERT for recording an applied migration (SQLite).
 """
 function insert_migration_record_sql(conn::PormGSQLite)::String
-  return """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive", "format_version") VALUES (?, ?, ?, ?, ?, ?, ?);"""
+  # `applied_at` is written explicitly (#570): a table created before #570 still carries the
+  # `datetime('now')` default, and relying on it would keep writing the non-canonical form there.
+  return """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive", "format_version", "applied_at") VALUES (?, ?, ?, ?, ?, ?, ?, $(sqlite_applied_at_now_sql()));"""
 end
 
 """

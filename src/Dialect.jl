@@ -11,7 +11,7 @@ import PormG: backend_sqlite_version  # SQLite library-version probe (driver bod
 #   QueryBuildError            — the caller passed an impossible argument shape (on_conflict_clause).
 import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError
 import PormG.ConnectionPool: fetch
-import PormG: postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
+import PormG: postgres_type_map_reverse, date_format_map, sqlite_type_map_reverse
 # The canonical column IR (#507). `alter_field` renders an ALTER from a `ColumnDelta`, which is why
 # these types live in `Kernel` (layer 1) rather than in `Migrations` — this module is included
 # BEFORE it, and a submodule resolves `import PormG: …` at include time. `_has_non_negative` and
@@ -96,13 +96,16 @@ end
 # so wrapper and bind agree by construction instead of needing the counterpart operand wrapped at
 # each of the (many) comparison sites.
 #
-# Deliberately a NEW constant rather than an entry in `sqlite_date_format_map`: that map spells the
-# same idea as `"%Y-%m-%d %H:%M:%S.%f"`, which is wrong — `%f` already carries the seconds, so it
-# renders `…:09.09.000`. Reusing it would inherit the defect.
+# Derived from the `date_format_map` row for the same spelling (#569), not restated. #527 had to
+# introduce this as a NEW constant because that map then spelled the mask `"%Y-%m-%dT%H:%M:%S.%f"`
+# — `%f` already carries the seconds, so it rendered `…:09.09.000` — and reusing it would have
+# inherited the defect. #569 fixed the map on both engines, so the canonical timestamp mask now has
+# ONE owner: the row `ToChar` renders and the row date arithmetic canonicalizes through are the
+# same string, and the `+00:00` suffix is the only thing this constant adds.
 #
 # The `date(...)` sibling is deliberately NOT changed: its output already equals what
 # `Models.format_date_sql` produces for a `DateField`, so there is nothing to reconcile.
-const SQLITE_CANONICAL_DATETIME_MASK = "'%Y-%m-%dT%H:%M:%f+00:00'"
+const SQLITE_CANONICAL_DATETIME_MASK = "'" * date_format_map["YYYY-MM-DDTHH:MI:SS.SSS"].sqlite * "+00:00'"
 
 """
     _sqlite_canonical_datetime(expr, modifiers) -> String
@@ -246,18 +249,34 @@ function _parse_sqlite_interval(v::Any)
 end
 
 
-# PostgreSQL
+# `ToChar` (#569). The user-facing format is a key of `date_format_map` (`constants.jl`), which
+# carries one spelling PER ENGINE — the keys only look like `to_char` templates (`HH` is 12-hour
+# there, `T` before `H` is the `TH` ordinal suffix, `SSS` is not a pattern), so the PostgreSQL arm
+# must translate too, not pass the key through.
+#
+# PostgreSQL: a key renders its `postgres` template; anything else is passed through as a native
+# `to_char` template (the documented PostgreSQL-only escape for patterns the map does not carry),
+# with the quote escaped so the format can never close the SQL literal it is written into.
 function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   format_str = format["format"]
   locale = get(format, "locale", "")
   nlsparam = get(format, "nlsparam", "")
-  return "to_char($(column), '$(format_str)') $(locale) $(nlsparam)"
+  entry = get(date_format_map, format_str, nothing)
+  template = entry === nothing ? replace(format_str, "'" => "''") : entry.postgres
+  return "to_char($(column), '$(template)') $(locale) $(nlsparam)"
 end
-# SQLite
+# SQLite: only a key renders — `strftime` has no way to spell an arbitrary `to_char` template, so
+# an unknown format is a capability the backend lacks, named with the formats it does have. Before
+# #569 this was a bare `KeyError` from the map lookup, outside the #231 taxonomy.
 function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   format_str = format["format"]
   locale = get(format, "locale", "")
-  return "strftime('$(sqlite_date_format_map[format_str])', $(column)) $(locale)"
+  entry = get(date_format_map, format_str, nothing)
+  if entry === nothing
+    supported = join(sort(collect(keys(date_format_map))), ", ")
+    throw(BackendCapabilityError("ToChar: format \"$(format_str)\" is not supported on SQLite. Supported formats: $(supported)"))
+  end
+  return "strftime('$(entry.sqlite)', $(column)) $(locale)"
 end
 
 function SUM(column::String, format::Dict{String,Any}, conn::PormGPostgres)

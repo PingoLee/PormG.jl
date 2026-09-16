@@ -115,6 +115,15 @@ _vr_base() = VRM.Probe.objects.filter("label" => _VR_LABEL)
   end
 
   # ───────────────────────────────────────────────────────────────────────────
+  # #569: every portable `ToChar` format evaluates to the oracle's text — the SQLite half, on the
+  # millisecond-bearing probe so a `%S.%f` mask (seconds twice) or a `%S` where `%f` was meant
+  # cannot pass by coincidence. The PostgreSQL half runs in the integration twin.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "every ToChar format renders the oracle text (#569)" begin
+    vr_run_tochar_formats(_vr_base, "ts", VR_INSTANT, :sqlite)
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
   # Sibling 3: the one remaining `datetime('now')` writer. No `PormGField` can emit it —
   # `normalize_datetime_default` rejects a string it cannot parse, and the Django importer maps
   # `timezone.now` to a callable marker — so the only column that receives SQLite's own

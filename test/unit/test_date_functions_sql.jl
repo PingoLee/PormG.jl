@@ -63,12 +63,75 @@ const _EMPTY = Dict{String, Any}()
 
   # ===========================================================================
   # EXTRACT_DATE — PG to_char() vs SQLite strftime(); the format mask maps through
-  # sqlite_date_format_map. "YYYY-MM" must resolve to "%Y-%m" (byte-identical logical mask).
+  # date_format_map. "YYYY-MM" must resolve to "%Y-%m" (byte-identical logical mask).
   # ===========================================================================
   @testset "EXTRACT_DATE Y_M mask" begin
     fmt = Dict{String, Any}("format" => "YYYY-MM")
     @test occursin("to_char($(_COL), 'YYYY-MM')", Dialect.EXTRACT_DATE(_COL, fmt, _PG))
     @test occursin("strftime('%Y-%m', $(_COL))",  Dialect.EXTRACT_DATE(_COL, fmt, _SL))
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # EXTRACT_DATE (#569): every `date_format_map` key renders ITS OWN engine's spelling
+  # Until #569 the map held one string per row, used as the SQLite mask AND passed through to
+  # `to_char` as the key itself — so `HH` was 12-hour on PostgreSQL, `T` before `H` parsed as the
+  # `TH` ordinal suffix, and three SQLite masks spelled `%S.%f` (seconds twice). The rows now carry
+  # a `postgres` and a `sqlite` half; this pins that each arm reads its own half and never the key.
+  # What the halves EVALUATE to is measured in-engine by `vr_run_tochar_formats`
+  # (`helper_value_repr_cases.jl`); this file only pins the rendering.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "EXTRACT_DATE renders each engine's own template (#569)" begin
+    for (key, entry) in PormG.date_format_map
+      fmt = Dict{String, Any}("format" => key)
+      # The PostgreSQL arm renders the `postgres` half — never the key.
+      @test occursin("to_char($(_COL), '$(entry.postgres)')", Dialect.EXTRACT_DATE(_COL, fmt, _PG))
+      # The SQLite arm renders the `sqlite` half.
+      @test occursin("strftime('$(entry.sqlite)', $(_COL))", Dialect.EXTRACT_DATE(_COL, fmt, _SL))
+      # Neither half may carry the two defects the issue measured: `%S.%f` on SQLite, and a
+      # 12-hour `HH` (an `HH` not followed by `24`) or a bare `T` before `H` on PostgreSQL.
+      # These two regexes are deliberately blunt: a future row spelling `HH12` or carrying a
+      # bare `T` inside a word (`MONTH`, `TH`) would trip them too. That is the point of a
+      # portable whitelist — such a row is not portable, so add it to the oracle and to these
+      # pins together rather than loosening the regex.
+      @test !occursin("%S.%f", entry.sqlite)
+      @test !occursin(r"HH(?!24)", entry.postgres)
+      @test !occursin(r"(?<!\")T(?!\")", entry.postgres)
+    end
+    # The row the canonical timestamp mask derives from, spelled out so a regression is readable.
+    fmt = Dict{String, Any}("format" => "YYYY-MM-DDTHH:MI:SS.SSS")
+    @test occursin("to_char($(_COL), 'YYYY-MM-DD\"T\"HH24:MI:SS.MS')", Dialect.EXTRACT_DATE(_COL, fmt, _PG))
+    @test occursin("strftime('%Y-%m-%dT%H:%M:%f', $(_COL))", Dialect.EXTRACT_DATE(_COL, fmt, _SL))
+    # One canonical spelling: the mask date arithmetic canonicalizes through IS that row plus the
+    # UTC suffix — derived, so the two cannot drift apart again.
+    @test Dialect.SQLITE_CANONICAL_DATETIME_MASK == "'" * PormG.date_format_map["YYYY-MM-DDTHH:MI:SS.SSS"].sqlite * "+00:00'"
+    @test Dialect.SQLITE_CANONICAL_DATETIME_MASK == "'%Y-%m-%dT%H:%M:%f+00:00'"
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # EXTRACT_DATE (#569): a format outside the map
+  # PostgreSQL passes it through as a native `to_char` template (the documented PostgreSQL-only
+  # escape), with the single quote escaped so the format can never close the SQL literal it sits
+  # in. SQLite has no way to spell an arbitrary template, so the whitelist is fail-closed — a
+  # `BackendCapabilityError` naming the supported keys, like `EXTRACT`'s part whitelist above —
+  # where it used to be a bare `KeyError` outside the taxonomy.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "EXTRACT_DATE unmapped format: PG passes through escaped, SQLite refuses (#569)" begin
+    # A native template the map does not carry — the 12-hour clock PostgreSQL users may want.
+    fmt = Dict{String, Any}("format" => "HH12:MI AM")
+    @test occursin("to_char($(_COL), 'HH12:MI AM')", Dialect.EXTRACT_DATE(_COL, fmt, _PG))
+    @test_throws PormG.BackendCapabilityError Dialect.EXTRACT_DATE(_COL, fmt, _SL)
+    # The refusal names the supported formats, so the user can pick a portable one.
+    err = try
+      Dialect.EXTRACT_DATE(_COL, fmt, _SL)
+    catch e
+      e
+    end
+    @test occursin("HH12:MI AM", PormG.error_message(err))
+    @test occursin("YYYY-MM-DD", PormG.error_message(err))
+    # A quote inside the pass-through is doubled, not written raw into the literal.
+    quoted = Dict{String, Any}("format" => "YYYY'MM")
+    @test occursin("to_char($(_COL), 'YYYY''MM')", Dialect.EXTRACT_DATE(_COL, quoted, _PG))
+    @test !occursin("'YYYY'MM'", Dialect.EXTRACT_DATE(_COL, quoted, _PG))
   end
 
   # ===========================================================================

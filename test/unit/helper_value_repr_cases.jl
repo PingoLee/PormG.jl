@@ -193,16 +193,17 @@ const VR_CASES = VRCase[
   # #494 control: a zero-length link short-circuits to the bare left side; the outer call must
   # still resolve the column's kind rather than sniff the (now absent) marker.
   vrcase("zero_link_chain", :timestamp, c -> F(c) + Day(0) + Day(1), v -> v + Day(1)),
-  # Sibling 2: `sqlite_date_format_map` spells this mask `%S.%f`, and SQLite's `%f` is already
-  # `SS.SSS`, so the seconds render twice. Also measures the PostgreSQL half of the same map
-  # entry: `to_char`'s `HH` is 12-hour and `SSS` is not a `to_char` pattern.
+  # Sibling 2, FIXED by #569. `sqlite_date_format_map` spelled this mask `%S.%f` — SQLite's `%f`
+  # is already `SS.SSS`, so the seconds rendered twice (`…:45.45.123`) — and the PostgreSQL arm
+  # passed the KEY through to `to_char`, where `TH` is the ordinal-suffix pattern, `HH` is 12-hour
+  # and `SSS` is `SS` plus a literal `S` (`…THH:00:00.00S`). The map is now `date_format_map`, one
+  # spelling per engine, and this row is the one `SQLITE_CANONICAL_DATETIME_MASK` derives from.
+  # Every other key is measured by `vr_run_tochar_formats` below; this case stays in the table as
+  # the canonical row and the P3 control for a text-valued expression.
   vrcase("tochar_canonical_mask", :timestamp, c -> ToChar(c, "YYYY-MM-DDTHH:MI:SS.SSS"),
          v -> Dates.format(_vr_utc_naive(v), "yyyy-mm-ddTHH:MM:SS.sss"),
          result_kind = :text, compare_f = false,
-         # SQLite renders `…:45.45.123` (seconds twice). PostgreSQL renders `…THH:00:00.00S`: in
-         # `to_char`, `TH` is the ordinal-suffix pattern and `SSS` is `SS` plus a literal `S`, so
-         # the map KEY is wrong on the engine it was copied from, too. New finding on PostgreSQL.
-         sibling = "2 — sqlite_date_format_map spells %S.%f", p1 = (:sqlite, :postgres)),
+         sibling = "2 — fixed by #569; one spelling per engine"),
   # #562 FIXED: the `F` route used to resolve `@date` through `Dialect` into `CAST(col AS DATE)` —
   # NUMERIC affinity on SQLite text, so it yielded the integer year — while the pair route resolved
   # it through `QueryBuilder` into `strftime('%Y-%m-%d', …)`. There is one ladder now, and `@date`
@@ -384,6 +385,66 @@ function vr_run_cases(base::Function, col::String, stored, engine::Symbol; kind:
           @test n_miss == 0
         end
       end
+    end
+  end
+end
+
+# ── ToChar formats (#569) ─────────────────────────────────────────────────────
+# `date_format_map` (`src/constants.jl`) carries one spelling per engine for every portable
+# `ToChar` format, and its contract is that both spellings evaluate to the SAME text for a fixed
+# instant. Neither half had ever been evaluated on its engine before #569 — the rendering tests
+# pinned a spelling, and a pinned spelling proves nothing about what the engine makes of it (the
+# `%S.%f` mask sat green in a render pin for the whole life of the map).
+#
+# The oracle is Julia's own `Dates.format` over the stored instant — a third source, neither the
+# map nor the engine. `HH` is 24-hour here on purpose: that is what the SQLite `%H` half always
+# meant, so the PostgreSQL half must say `HH24` to agree with it.
+#
+# Every key of the map MUST have a row here (asserted below), so a key cannot be added with an
+# unverified half. And every row here must be a key, so the oracle cannot drift past the map.
+const VR_TOCHAR_ORACLE = Dict{String,String}(
+  "YYYY" => "yyyy",
+  "MM"   => "mm",
+  "DD"   => "dd",
+  "HH"   => "HH",
+  "MI"   => "MM",
+  "SS"   => "SS",
+  "YYYY-MM-DD" => "yyyy-mm-dd",
+  "YYYY-MM"    => "yyyy-mm",
+  "YYYY-MM-DD HH:MI:SS"     => "yyyy-mm-dd HH:MM:SS",
+  "YYYY-MM-DD HH:MI:SS.SSS" => "yyyy-mm-dd HH:MM:SS.sss",
+  "YYYY-MM-DDTHH:MI:SS"     => "yyyy-mm-ddTHH:MM:SS",
+  "YYYY-MM-DDTHH:MI:SS.SSS" => "yyyy-mm-ddTHH:MM:SS.sss",
+  "HH:MI:SS"     => "HH:MM:SS",
+  "HH:MI:SS.SSS" => "HH:MM:SS.sss",
+  "HH:MI"        => "HH:MM",
+  "DD/MM/YYYY" => "dd/mm/yyyy",
+  "DD-MM-YYYY" => "dd-mm-yyyy",
+)
+
+"""
+    vr_run_tochar_formats(base, col, stored, engine)
+
+Evaluate `ToChar(col, key)` on the live engine for EVERY key of `date_format_map` and compare the
+text the engine produced to `Dates.format` of the stored instant through the oracle above. `base()`
+must return a fresh query filtered to exactly one row whose `col` holds `stored`, a timestamp.
+
+Read raw (`vr_raw_value`), for the same reason P1 is: the claim is about what the ENGINE rendered,
+not about what PormG then parsed it into.
+"""
+function vr_run_tochar_formats(base::Function, col::String, stored, engine::Symbol)
+  engine in (:sqlite, :postgres) || throw(ArgumentError("engine must be :sqlite or :postgres"))
+  # The two tables name the same keys — a map row without an oracle, or an oracle row without a
+  # map entry, is a hole in this measurement and fails here rather than being skipped.
+  @test Set(keys(VR_TOCHAR_ORACLE)) == Set(keys(PormG.date_format_map))
+  naive = _vr_utc_naive(stored)
+  for key in sort(collect(keys(PormG.date_format_map)))
+    @testset "ToChar · $(key)" begin
+      q = base()
+      q.values("x" => ToChar(col, key))
+      raw = _vr_try(() -> vr_raw_value(q, :x))
+      # A refusal fails with the engine's message in the assertion, never as an escaped exception.
+      @test vr_observed_text(:text, raw) == Dates.format(naive, VR_TOCHAR_ORACLE[key])
     end
   end
 end

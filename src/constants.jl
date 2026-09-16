@@ -212,24 +212,42 @@ const postgres_type_map_reverse = Dict{String, String}(
   "HSTORE" => "hstore"
 )
 
-const sqlite_date_format_map = Dict{String, String}(
-  "YYYY" => "%Y",
-  "MM" => "%m",
-  "DD" => "%d",
-  "HH" => "%H",
-  "MI" => "%M",
-  "SS" => "%S",
-  "YYYY-MM-DD" => "%Y-%m-%d",
-  "YYYY-MM" => "%Y-%m",
-  "YYYY-MM-DD HH:MI:SS" => "%Y-%m-%d %H:%M:%S",
-  "YYYY-MM-DD HH:MI:SS.SSS" => "%Y-%m-%d %H:%M:%S.%f",
-  "YYYY-MM-DDTHH:MI:SS" => "%Y-%m-%dT%H:%M:%S",
-  "YYYY-MM-DDTHH:MI:SS.SSS" => "%Y-%m-%dT%H:%M:%S.%f",
-  "HH:MI:SS" => "%H:%M:%S",
-  "HH:MI:SS.SSS" => "%H:%M:%S.%f",
-  "HH:MI" => "%H:%M",
-  "DD/MM/YYYY" => "%d/%m/%Y",
-  "DD-MM-YYYY" => "%d-%m-%Y"
+# The portable `ToChar` formats (#569). Each key is the user-facing token; each value carries the
+# spelling the ENGINE parses — PostgreSQL `to_char` on the left, SQLite `strftime` on the right.
+#
+# Two spellings per row because the keys are not valid `to_char` templates, however much they look
+# like them: `HH` is the 12-hour clock in `to_char` (`HH24` is 24-hour), a `T` before `H` parses as
+# the ordinal-suffix pattern `TH` (the hour vanishes and a literal `HH` appears), and `SSS` is `SS`
+# plus a literal `S` (`MS` is milliseconds). On SQLite `%f` already spells `SS.SSS`, so a mask must
+# never write `%S.%f` — that renders the seconds twice. Until #569 this map held one string per row,
+# used it as the SQLite mask AND passed the key through to `to_char` verbatim, and neither half had
+# been evaluated on its engine.
+#
+# The contract: for a fixed instant, every key renders the SAME text on both engines, and that
+# text is what `Dates.format` produces for the matching Julia mask — `HH` is 24-hour on both. The
+# in-engine measurement is `vr_run_tochar_formats` (`test/unit/helper_value_repr_cases.jl`), whose
+# oracle table must name every key here; an entry with an unverified half cannot be added.
+#
+# `Dialect.SQLITE_CANONICAL_DATETIME_MASK` is the `YYYY-MM-DDTHH:MI:SS.SSS` row's SQLite mask plus
+# the `+00:00` UTC suffix — one canonical spelling, derived rather than restated.
+const date_format_map = Dict{String, NamedTuple{(:postgres, :sqlite), Tuple{String, String}}}(
+  "YYYY" => (postgres = "YYYY", sqlite = "%Y"),
+  "MM"   => (postgres = "MM",   sqlite = "%m"),
+  "DD"   => (postgres = "DD",   sqlite = "%d"),
+  "HH"   => (postgres = "HH24", sqlite = "%H"),
+  "MI"   => (postgres = "MI",   sqlite = "%M"),
+  "SS"   => (postgres = "SS",   sqlite = "%S"),
+  "YYYY-MM-DD" => (postgres = "YYYY-MM-DD", sqlite = "%Y-%m-%d"),
+  "YYYY-MM"    => (postgres = "YYYY-MM",    sqlite = "%Y-%m"),
+  "YYYY-MM-DD HH:MI:SS"     => (postgres = "YYYY-MM-DD HH24:MI:SS",    sqlite = "%Y-%m-%d %H:%M:%S"),
+  "YYYY-MM-DD HH:MI:SS.SSS" => (postgres = "YYYY-MM-DD HH24:MI:SS.MS", sqlite = "%Y-%m-%d %H:%M:%f"),
+  "YYYY-MM-DDTHH:MI:SS"     => (postgres = "YYYY-MM-DD\"T\"HH24:MI:SS",    sqlite = "%Y-%m-%dT%H:%M:%S"),
+  "YYYY-MM-DDTHH:MI:SS.SSS" => (postgres = "YYYY-MM-DD\"T\"HH24:MI:SS.MS", sqlite = "%Y-%m-%dT%H:%M:%f"),
+  "HH:MI:SS"     => (postgres = "HH24:MI:SS",    sqlite = "%H:%M:%S"),
+  "HH:MI:SS.SSS" => (postgres = "HH24:MI:SS.MS", sqlite = "%H:%M:%f"),
+  "HH:MI"        => (postgres = "HH24:MI",       sqlite = "%H:%M"),
+  "DD/MM/YYYY" => (postgres = "DD/MM/YYYY", sqlite = "%d/%m/%Y"),
+  "DD-MM-YYYY" => (postgres = "DD-MM-YYYY", sqlite = "%d-%m-%Y"),
 )
 
 

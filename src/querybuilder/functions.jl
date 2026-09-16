@@ -558,20 +558,42 @@ Format a date/time column as text — PostgreSQL `to_char(x, format)`, SQLite `s
 
 # Arguments
 - `x`: a field path, `F` expression, function object, or a vector of field paths.
-- `format`: a PostgreSQL `to_char` pattern, e.g. `"YYYY-MM"`, `"YYYY-MM-DD"`, `"YYYY"`.
+- `format`: one of the portable formats below, e.g. `"YYYY-MM"`, `"YYYY-MM-DD"`, `"YYYY"`.
 - `formatter`: an optional Julia-side hook applied to the returned values. Accepts a
   `Function`, or a `PormGField` whose `.formatter` is used.
 
-!!! warning "SQLite supports only the mapped formats"
-    On SQLite the pattern is translated through PormG's `strftime` map rather than passed
-    through, so only the patterns in that map work. The common date buckets (`"YYYY"`,
-    `"YYYY-MM"`, `"YYYY-MM-DD"`) are portable; exotic `to_char` patterns are PostgreSQL-only.
+# Portable formats
+
+Each format renders the **same text on both engines** for a given instant — PormG spells it for
+each engine itself (`HH` is the 24-hour clock on both; the `T` separator and the `.SSS`
+milliseconds render as written). The full list:
+
+| `format` | renders as |
+|---|---|
+| `"YYYY"`, `"MM"`, `"DD"`, `"HH"`, `"MI"`, `"SS"` | one component: `2009`, `03`, `29`, `06`, `00`, `00` |
+| `"YYYY-MM"`, `"YYYY-MM-DD"` | `2009-03`, `2009-03-29` |
+| `"DD/MM/YYYY"`, `"DD-MM-YYYY"` | `29/03/2009`, `29-03-2009` |
+| `"HH:MI"`, `"HH:MI:SS"`, `"HH:MI:SS.SSS"` | `06:00`, `06:00:00`, `06:00:00.000` |
+| `"YYYY-MM-DD HH:MI:SS"`, `"YYYY-MM-DD HH:MI:SS.SSS"` | `2009-03-29 06:00:00`, `2009-03-29 06:00:00.000` |
+| `"YYYY-MM-DDTHH:MI:SS"`, `"YYYY-MM-DDTHH:MI:SS.SSS"` | `2009-03-29T06:00:00`, `2009-03-29T06:00:00.000` |
+
+!!! warning "Any other format is PostgreSQL-only"
+    A format outside that table is passed to `to_char` as written (so a native template such as
+    `"HH12:MI AM"` works on PostgreSQL), and raises `BackendCapabilityError` on SQLite, naming
+    the supported formats — `strftime` cannot spell an arbitrary `to_char` template.
+
+!!! note "Time zone"
+    On PostgreSQL `to_char` renders a `timestamptz` in the session time zone; on SQLite the stored
+    text is UTC. Keep the session in UTC for the two engines to agree on the hour.
 
 ```julia
 using PormG.Functions: ToChar, Count
 
 # Races per month
 query.values("month" => ToChar("date", "YYYY-MM"), "n" => Count("raceid"))
+
+# A race start as the canonical timestamp text, identical on both engines
+query.values("start" => ToChar("start_at", "YYYY-MM-DDTHH:MI:SS.SSS"))
 ```
 
 Named `ToChar` since `0.3.0` (previously `To_char`, with a `formater` keyword).

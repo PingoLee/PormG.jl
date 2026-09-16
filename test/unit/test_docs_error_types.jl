@@ -37,6 +37,8 @@ using PormG.Functions: Lower
 # #194 — an outer aggregate, for the grouped-correlation claim below. `Count` is deliberately not a
 # top-level PormG export (it would collide with Base/user code), so it is named here explicitly.
 using PormG.Functions: Count
+# #569 — a text format outside the portable table, for the ToChar docstring claim below.
+using PormG.Functions: ToChar
 import DataFrames
 
 # Mock backends: dialect dispatch is by connection TYPE, so a bare subtype is enough to render
@@ -445,6 +447,15 @@ const DOCERR_CASES = [
         "read/filters_and_aggregates.md — JSONB key-existence operators require PostgreSQL",
         BackendCapabilityError,
         () -> DOCERR_RESULT_SL.objects.filter("payload__@has_key" => "wins").
+            list(show_query = :dict),
+    ),
+    # #569 — the same claim in four places: the `ToChar` docstring, `read/functions_and_dates.md`,
+    # and the `BackendCapabilityError` rows of `api.md` and `errors.md`. A format outside the
+    # portable table is passed through on PostgreSQL and refused on SQLite with the supported list.
+    (
+        "ToChar docstring + read/functions_and_dates.md + errors.md — an unmapped ToChar format raises on SQLite",
+        BackendCapabilityError,
+        () -> DOCERR_RESULT_SL.objects.values("x" => ToChar("resultid", "HH12:MI AM")).
             list(show_query = :dict),
     ),
     # #213 — the delete guards. `write/delete.md` and `errors.md` both promise UnsafeMutationError

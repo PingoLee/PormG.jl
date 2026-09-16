@@ -261,6 +261,37 @@ end
     @test_throws PormG.InvalidValueError M.Driver.objects.filter("dob__@quarter" => 7).values("driverid").list()
     @test_throws PormG.InvalidValueError M.Driver.objects.filter("dob__@quarter" => "abc").values("driverid").list()
 
+    # #586: the label as a FILTER key. The predicate path rendered the label's CONCAT/CASE
+    # expansion twice and kept both sets of parameters, so this statement bound nineteen values for
+    # ten placeholders and the driver refused it on both engines. Asserted against an independently
+    # computed set — the drivers born in Q1 of Hamilton's year — so it cannot pass with wrong rows.
+    q6 = M.Driver.objects
+    q6.values("driverid", "surname")
+    q6.filter("dob__@yyyy_q" => "1985-Q1")
+    df6 = q6 |> DataFrame
+    expected_q1_1985 = sort([r.driverid for r in eachrow(M.Driver.objects.values("driverid", "dob") |> DataFrame)
+                             if !ismissing(r.dob) && (d = Dates.Date(string(r.dob)[1:10]); Dates.year(d) == 1985 && Dates.month(d) <= 3)])
+    @test sort(df6.driverid) == expected_q1_1985
+    @test "Hamilton" in df6.surname
+
+    q7 = M.Driver.objects
+    q7.values("driverid")
+    q7.filter("dob__@yyyy_quad" => "1985-Q1")
+    df7 = q7 |> DataFrame
+    expected_quad1_1985 = sort([r.driverid for r in eachrow(M.Driver.objects.values("driverid", "dob") |> DataFrame)
+                                if !ismissing(r.dob) && (d = Dates.Date(string(r.dob)[1:10]); Dates.year(d) == 1985 && Dates.month(d) <= 4)])
+    @test sort(df7.driverid) == expected_quad1_1985
+    @test length(expected_quad1_1985) >= length(expected_q1_1985)
+
+    # …and membership over two labels is the union of the two quarters.
+    q8 = M.Driver.objects
+    q8.values("driverid")
+    q8.filter("dob__@yyyy_q__@in" => ["1985-Q1", "1985-Q2"])
+    df8 = q8 |> DataFrame
+    expected_h1_1985 = sort([r.driverid for r in eachrow(M.Driver.objects.values("driverid", "dob") |> DataFrame)
+                             if !ismissing(r.dob) && (d = Dates.Date(string(r.dob)[1:10]); Dates.year(d) == 1985 && Dates.month(d) <= 6)])
+    @test sort(df8.driverid) == expected_h1_1985
+
     # #587: ORDER BY on the label with a WHERE value present. The label binds nine operands, and
     # before #587 SQLite filed them in a bucket that flattened BEFORE the WHERE value while the
     # ORDER BY text printed after it — the predicate compared against the label's separator, the
@@ -347,7 +378,14 @@ end
         # Note: In F1 dataset, races and drivers have a big gap, so 30 days is always true.
         # We just want to check if the SQL generates correctly and executes.
         
-        query = M.Result.objects.filter("raceid__@year" => 2024,
+        # `"raceid__year"`, the race's year through the ForeignKey — not `"raceid__@year"`, the
+        # `@year` transform applied to the integer key column. The transform spelling used to be
+        # rendered as this very column by accident: its memo key (`raceid__year`) collided with the
+        # projection below, and the filter path reused the projection's rendered text. #586 stopped
+        # a filter reusing a memoized expression that binds or transforms, so the transform now
+        # renders what it says — `EXTRACT(YEAR FROM "raceid")`, which PostgreSQL rejects on an
+        # integer and SQLite evaluates to NULL, silently matching nothing.
+        query = M.Result.objects.filter("raceid__year" => 2024,
            Q(
                F("raceid__date") > F("driverid__dob") + 30,
                F("raceid__date") <= F("driverid__dob") + 10957 # Using large number to match some data

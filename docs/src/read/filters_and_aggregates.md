@@ -77,8 +77,8 @@ without inverting the logic by hand.
 | `@quadrimester` | Extract quadrimester (1-3) | `"date__@quadrimester" => 2` | `"date__@quadrimester"` |
 | `@date` | Extract date from datetime | `"created__@date" => Date(...)` | `"created__@date"` |
 | `@yyyy_mm` | Year-month string | `"date__@yyyy_mm" => "1991-10"` | `"date__@yyyy_mm"` |
-| `@yyyy_q` | Year-quarter label | — *(see note)* | `"date__@yyyy_q"` |
-| `@yyyy_quad` | Year-quadrimester label | — *(see note)* | `"date__@yyyy_quad"` |
+| `@yyyy_q` | Year-quarter label | `"date__@yyyy_q" => "1991-Q1"` | `"date__@yyyy_q"` |
+| `@yyyy_quad` | Year-quadrimester label | `"date__@yyyy_quad" => "1991-Q1"` | `"date__@yyyy_quad"` |
 
 The period transforms come in two shapes, and which one you want depends on whether the year should
 be part of the answer. `@quarter` and `@quadrimester` extract the period **number** — `1` through `4`
@@ -87,14 +87,9 @@ and `1` through `3` — so `filter("date__@quarter" => 1)` selects the first qua
 a `values()` grouping key when each year's quarters must stay separate. A value outside the period's
 range raises `InvalidValueError` rather than matching nothing.
 
-!!! warning "The label transforms are projection-only today"
-    `@yyyy_q` and `@yyyy_quad` work in `values()` and in `order_by()`, but
-    **not** as a `filter()` key: the label expands to a `CONCAT`/`CASE` whose operands are rendered
-    twice on the predicate path, and the second copy's parameters are kept. SQLite then binds more
-    values than the text has placeholders; PostgreSQL's counts agree but its `$n` sequence has a gap
-    where the discarded copy was numbered. Either way the driver refuses the statement. Filter on
-    the period number instead (`"date__@quarter" => 1`), or project the label and filter on the
-    underlying column. See [Functions and Dates](functions_and_dates.md).
+A label filter compares the whole `"YYYY-Qn"` string, so `filter("date__@yyyy_q" => "1991-Q1")`
+selects one quarter of one season, where `filter("date__@quarter" => 1)` selects that quarter of
+every season. Membership works too: `filter("date__@yyyy_q__@in" => ["1991-Q1", "1991-Q2"])`.
 
 ---
 

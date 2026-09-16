@@ -3163,9 +3163,18 @@ const _ALIGN_PG = MockPostgresAlign()
 
 # PostgreSQL's parameter vector read back in TEXT order: walk the `$N` markers left to right. This is
 # the oracle SQLite's flattened vector must equal — a `$N` printed twice (GROUP BY and ORDER BY
-# carrying one expression) yields its value twice, which is exactly what SQLite must bind.
-_pg_text_order(pg::Dict) =
-    [pg[:parameters][parse(Int, m.match[2:end])] for m in eachmatch(r"\$\d+", pg[:sql_text])]
+# carrying one expression) yields its value twice, which is exactly what SQLite must bind. The one
+# dialect split the skill names: `__@in` binds ONE array on PostgreSQL and expands to N `?` on
+# SQLite, so an array value is splatted into the walk. A binary payload never reaches this branch —
+# PostgreSQL binds it as hex TEXT, not as a byte vector — so no exclusion is needed for it.
+function _pg_text_order(pg::Dict)
+    out = Any[]
+    for m in eachmatch(r"\$\d+", pg[:sql_text])
+        v = pg[:parameters][parse(Int, m.match[2:end])]
+        v isa AbstractVector ? append!(out, v) : push!(out, v)
+    end
+    return out
+end
 
 # Render on both engines, assert the count on each and the SQLite vector against the PG walk.
 function _assert_order_by_aligned(build)
@@ -3331,4 +3340,183 @@ end
     # The whole nested run re-emits into the parent's active bucket (`:where`), as one run.
     @test sl[:parameter_buckets][:where] == vcat(Any[10, "Monza"], label_ops)
     @test sl[:parameter_buckets][:order] == []
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A composite transform in a predicate binds its operands ONCE (#586).
+#
+# `_get_filter_query(::SQLTypeOper)` rendered the left-hand side at its top and then, in the
+# fallback ladder, rendered it AGAIN through `_get_select_query` — string discarded, parameters
+# kept. A plain column binds nothing, which is how this survived; the `@yyyy_q` / `@yyyy_quad`
+# labels bind nine operands, so a predicate on one carried nineteen values for ten markers. SQLite
+# refused the statement; PostgreSQL's `$n` sequence had a gap where the discarded copy was numbered.
+# Every shape below runs the cross-backend differential — the count on both engines, the SQLite
+# vector against PostgreSQL's `$n` walk — and the PostgreSQL side additionally asserts the `$n`
+# sequence is contiguous, which is the engine-specific criterion the count alone cannot see.
+# ─────────────────────────────────────────────────────────────────────────────
+function _assert_predicate_binds_once(build)
+    sl = _assert_order_by_aligned(build)
+    pg = inspect_query(build(); connection = _ALIGN_PG)
+    refs = sort(unique(parse(Int, m.match[2:end]) for m in eachmatch(r"\$\d+", pg[:sql_text])))
+    @test refs == collect(1:length(pg[:parameters]))
+    return sl
+end
+
+@testset "a composite transform in a predicate binds once (#586)" begin
+    q_ops    = Any["-Q", 3, 1, 6, 2, 9, 3, 12, 4]   # @yyyy_q: four WHEN arms
+    quad_ops = Any["-Q", 4, 1, 8, 2, 12, 3]         # @yyyy_quad: three
+
+    # Scalar comparison, base model — operands then the comparison value, nothing else.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name")
+        q.filter("date__@yyyy_q" => "1991-Q1")
+        q
+    end
+    @test sl[:parameters] == vcat(q_ops, Any["1991-Q1"])
+    @test sl[:parameter_buckets][:where] == vcat(q_ops, Any["1991-Q1"])
+
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name")
+        q.filter("date__@yyyy_quad" => "1991-Q1")
+        q
+    end
+    @test sl[:parameters] == vcat(quad_ops, Any["1991-Q1"])
+
+    # Membership: the list expands after the operands.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name")
+        q.filter("date__@yyyy_q__@in" => ["1991-Q1", "1992-Q2"])
+        q
+    end
+    @test sl[:parameters] == vcat(q_ops, Any["1991-Q1", "1992-Q2"])
+
+    # A neighbouring WHERE value on each side, so a displaced operand would be visible.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name")
+        q.filter("year" => 1991)
+        q.filter("date__@yyyy_q" => "1991-Q1")
+        q.filter("name" => "Monza")
+        q
+    end
+    @test sl[:parameters] == vcat(Any[1991], q_ops, Any["1991-Q1", "Monza"])
+
+    # A joined path: the label over a ForeignKey's column.
+    sl = _assert_predicate_binds_once() do
+        q = M.Result.objects
+        q.values("points")
+        q.filter("raceid__date__@yyyy_q" => "1991-Q1")
+        q
+    end
+    @test sl[:parameters] == vcat(q_ops, Any["1991-Q1"])
+    @test occursin("JOIN", sl[:sql_text])
+
+    # Inside an `__@in` subquery and an Exists — nested renders lift the run as one, in text order.
+    sl = _assert_predicate_binds_once() do
+        inner = M.Race.objects
+        inner.values("raceid")
+        inner.filter("date__@yyyy_q" => "1991-Q1")
+        q = M.Result.objects
+        q.values("points")
+        q.filter("points" => 10)
+        q.filter("raceid__@in" => inner)
+        q
+    end
+    @test sl[:parameters] == vcat(Any[10], q_ops, Any["1991-Q1"])
+
+    sl = _assert_predicate_binds_once() do
+        inner = M.Race.objects
+        inner.filter("raceid" => OuterRef("raceid"))
+        inner.filter("date__@yyyy_q" => "1991-Q1")
+        q = M.Result.objects
+        q.values("points")
+        q.filter("points" => 10)
+        q.filter(Exists(inner))
+        q
+    end
+    @test sl[:parameters] == vcat(Any[10], q_ops, Any["1991-Q1"])
+
+    # Inside a CTE body: the label predicate binds under `:cte`, once.
+    sl = _assert_predicate_binds_once() do
+        body = M.Race.objects
+        body.values("raceid", "name")
+        body.filter("date__@yyyy_q" => "1991-Q1")
+        q = M.Result.objects
+        q.values("points", "r91__name")
+        _with(q, "r91", body, join_field = "raceid" => "raceid")
+        q.filter("points" => 10)
+        q
+    end
+    @test sl[:parameters] == vcat(q_ops, Any["1991-Q1", 10])
+    @test sl[:parameter_buckets][:cte] == vcat(q_ops, Any["1991-Q1"])
+
+    # Filter AND order on the same label — the #587 memo rule and the #586 single render together:
+    # WHERE's nine and its value, then ORDER BY's fresh nine.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name")
+        q.filter("date__@yyyy_q" => "1991-Q1")
+        q.order_by("date__@yyyy_q")
+        q
+    end
+    @test sl[:parameters] == vcat(q_ops, Any["1991-Q1"], q_ops)
+
+    # Projected AND filtered — the projection memoizes the label's text, and the filter path used
+    # to reuse it: nine `?` in WHERE with nothing bound for them, masked only by the discarded
+    # second render binding nine values under the right bucket by accident. WHERE renders fresh:
+    # SELECT's nine, WHERE's nine and its value.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name", "q" => "date__@yyyy_q")
+        q.filter("date__@yyyy_q" => "1991-Q1")
+        q
+    end
+    @test sl[:parameters] == vcat(q_ops, q_ops, Any["1991-Q1"])
+    @test sl[:parameter_buckets][:select] == q_ops
+    @test sl[:parameter_buckets][:where] == vcat(q_ops, Any["1991-Q1"])
+
+    # …and all three positions at once, the documented example: SELECT, WHERE, ORDER BY. The
+    # ORDER BY term is projected under `q`, so it orders by that alias (#587) and binds nothing.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name", "q" => "date__@yyyy_q")
+        q.filter("date__@yyyy_q" => "1991-Q1")
+        q.order_by("-date__@yyyy_q")
+        q
+    end
+    @test sl[:parameters] == vcat(q_ops, q_ops, Any["1991-Q1"])
+    @test occursin("ORDER BY \"q\" DESC", sl[:sql_text])
+
+    # A projected plain column filtered by path still reuses the memo — nothing to bind, and the
+    # selector is the one the projection resolved.
+    sl = _assert_predicate_binds_once() do
+        q = M.Result.objects
+        q.values("points", "d" => "raceid__date")
+        q.filter("raceid__date" => "1991-03-10")
+        q
+    end
+    @test sl[:parameters] == ["1991-03-10"]
+
+    # The number transform is the control: one function call, one value. Unchanged.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name")
+        q.filter("date__@quarter" => 1)
+        q
+    end
+    @test sl[:parameters] == [1]
+
+    # `BETWEEN` on a transform column renders the left-hand side once as well — an arm that used
+    # to re-render it. (`ISNULL` refuses a function column outright, so it has no binding shape.)
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name")
+        q.filter("date__@yyyy_q__@range" => ["1991-Q1", "1991-Q4"])
+        q
+    end
+    @test sl[:parameters] == vcat(q_ops, Any["1991-Q1", "1991-Q4"])
+    @test occursin("BETWEEN", sl[:sql_text])
 end

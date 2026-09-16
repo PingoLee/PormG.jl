@@ -1483,12 +1483,27 @@ function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
   # back, filtering the CTE's column while the ForeignKey's join sat unused in the statement.
   key = memo_key(v)
   cached = memo_projection(instruc, key)
-  if cached !== nothing
+  # #586: a memoized render is reused ONLY for a node kind that never binds a parameter — a String
+  # path, a CTE or joined-copy handle, an outer reference. A projected label (`values("q" =>
+  # "date__@yyyy_q")`) memoizes text carrying nine `?` whose values sit in `:select`; reusing that
+  # text for `filter("date__@yyyy_q" => …)` printed the markers into WHERE with nothing bound for
+  # them. The discarded second render this fix removes from `_get_filter_query(::SQLTypeOper)`
+  # happened to bind them — under the right bucket, by accident — which is why the shape ever
+  # executed on SQLite. Same rule and same gate as `get_order_query` (#587); a WHERE predicate has
+  # no alias to fall back on, so a binding expression renders afresh here on both backends (on
+  # PostgreSQL that renumbers its `$N`s, which is harmless outside DISTINCT/ORDER BY).
+  if cached !== nothing && v.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject}
     return cached.field
   else
     v_copy = deepcopy(v)
-    v_copy.field = _get_select_query(v_copy.field, instruc)
-    if key !== nothing
+    # `_as` travels with the render. This is now the ONLY render of a predicate's left-hand side —
+    # the discarded second render was the one passing `_as`, and `_get_select_query(::String)`
+    # reads it to refresh the base-model `memo_field` entry under that key.
+    v_copy.field = _get_select_query(v_copy.field, instruc, _as=v._as)
+    # Never overwrite an existing entry (#404): the first render is the one every other reader
+    # memoized against, and a fresh render of a binding node is not a better selector, only a
+    # second binding.
+    if key !== nothing && cached === nothing
       memo_projection!(instruc, key, v_copy)
     end
     return v_copy.field
@@ -2010,21 +2025,25 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     nested_mark = nested_parameter_mark(instruc)
     placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc, own_contexts=true)
     reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
-    return string(_get_filter_query(v.column, instruc), " ", v.operator, " ($placeholders)")
+    # #586: `column` was rendered before the subquery, so its markers number ahead of the
+    # subquery's — the text order. Re-rendering here would bind a composite LHS a second time.
+    return string(column, " ", v.operator, " ($placeholders)")
   else
     @pormg_debug false
-    if isa(v.column, SQLTypeField)
-      @pormg_debug false
-      _get_select_query(v.column, instruc, _as=v.column._as) # TODO, how do this i where before do operates
-    else
-      @pormg_debug false
-    end
+    # #586: the left-hand side is rendered EXACTLY ONCE, at the top of this function, and every arm
+    # below reads `column`. A second `_get_select_query(v.column, …)` used to sit here — its string
+    # discarded, its parameters kept — and for a composite transform (`@yyyy_q` expands to a
+    # CONCAT/CASE binding nine operands) that bound the expansion twice for one copy of the text:
+    # SQLite refused the statement, PostgreSQL's `$n` sequence had a nine-wide gap. The
+    # `ISNULL`/`BETWEEN` arms re-rendered the column too, free only while the memo key was
+    # non-`nothing`. `_render_membership` states the invariant this restores: no filter-LHS
+    # renderer binds a parameter of its own.
     if v.operator in ["ISNULL"]
-      return getfield(QueryBuilder, Symbol(v.operator))(_get_filter_query(v.column, instruc), v.values)
+      return getfield(QueryBuilder, Symbol(v.operator))(column, v.values)
     elseif v.operator in ("BETWEEN", "NOT BETWEEN")
       # Handle (NOT) BETWEEN with two parameters. #207: `nrange` renders NOT BETWEEN — the operator
       # string carries "BETWEEN"/"NOT BETWEEN" so both branches emit it verbatim.
-      column_sql = _get_filter_query(v.column, instruc)
+      column_sql = column
       field_name = ""
       if isa(v.column, SQLTypeField)
         if isa(v.column.field, String)

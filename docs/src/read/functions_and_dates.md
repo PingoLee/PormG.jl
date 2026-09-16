@@ -19,8 +19,8 @@ PormG provides date-related modifiers through the `__@` suffix system. These wor
 | `@quadrimester` | Extract quadrimester (1-3) | `"date__@quadrimester"` | `"date__@quadrimester" => 2` |
 | `@date` | Extract date from datetime | `"created_at__@date"` | `"created_at__@date" => Date(2023,1,1)` |
 | `@yyyy_mm` | Year-month as string | `"date__@yyyy_mm"` | `"date__@yyyy_mm" => "1991-10"` |
-| `@yyyy_q` | Year-quarter as string | `"date__@yyyy_q"` | — *(projection-only, see below)* |
-| `@yyyy_quad` | Year-quadrimester as string | `"date__@yyyy_quad"` | — *(projection-only, see below)* |
+| `@yyyy_q` | Year-quarter as string | `"date__@yyyy_q"` | `"date__@yyyy_q" => "1991-Q1"` |
+| `@yyyy_quad` | Year-quadrimester as string | `"date__@yyyy_quad"` | `"date__@yyyy_quad" => "1991-Q1"` |
 
 ### Period number or period label?
 
@@ -37,20 +37,15 @@ Both number transforms validate the comparison value: a quarter outside `1`–`4
 not a number at all, raises `InvalidValueError` instead of building SQL that silently matches
 nothing.
 
-!!! warning "The label transforms are projection-only as a filter key today"
-    `@yyyy_q` and `@yyyy_quad` work in `values()` and in `order_by()` — projected under an alias or
-    not (`order_by("date__@yyyy_q")` sorts by the label directly). They cannot yet be used as a
-    `filter()` key: the label expands to a `CONCAT`/`CASE` that binds parameters, and the predicate
-    path renders that expansion twice while the text keeps one copy.
+The labels work in every position — `values()`, `filter()` and `order_by()`, projected under an
+alias or not:
 
-    On SQLite the statement then binds more values than it has placeholders and the driver refuses
-    it (`values should be provided for all query placeholders`). On PostgreSQL the counts agree —
-    placeholders are numbered as they are rendered — but the discarded copy consumes a block of
-    numbers that appear nowhere in the text, so the query carries a gap in its `$n` sequence and the
-    server refuses it too.
-
-    Filter on the period number instead (`"date__@quarter" => 1`). The number transforms are
-    unaffected in every position: they render one function call and bind nothing.
+```julia
+q = M.Race.objects
+q.values("name", "q" => "date__@yyyy_q")
+q.filter("date__@yyyy_q" => "1991-Q1")          # the races of the first quarter of 1991
+q.order_by("-date__@yyyy_q")                    # newest label first
+```
 
 !!! note "`@yyyy_quad` spells its separator `-Q` too"
     `"1991-Q1"` from `@yyyy_quad` means the first *quadrimester*, not the first quarter — the two

@@ -276,23 +276,21 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# The label transforms are projection-only, and the docs say so (#586, #587).
-# Two pre-existing parameter defects become reachable through a documented spelling once `@yyyy_q`
-# and `@yyyy_quad` exist, so they are pinned here rather than left as prose in a warning box. Both
-# reproduce identically on the pre-#579 tree under the old `@quarter` spelling — neither is a
-# regression — but a doc claim with no test is how the claim rots.
+# The label transforms bind correctly in every position (#586, #587).
+# Two pre-existing parameter defects became reachable through a documented spelling once `@yyyy_q`
+# and `@yyyy_quad` existed — a predicate rendered the expansion twice and kept both sets of
+# parameters (#586); ORDER BY filed its parameters in a bucket that flattened before WHERE (#587).
+# Both were pinned here as `@test_broken` while the docs carried a "projection-only" warning; the
+# assertions below are the same statements, now expected to hold, so the contract is pinned rather
+# than the symptom.
 #
-# Written as `@test_broken`, following `helper_value_repr_cases.jl`: a `@test_broken` that PASSES is
-# a Julia error, so these cannot go stale silently once #586/#587 land. Each one states the CORRECT
-# behaviour, so the assertion itself documents the contract instead of the symptom.
-#
-# The two engines fail differently, and asserting the same thing on both is how this testset would
+# The two engines failed differently, and asserting the same thing on both is how this testset would
 # pass for the wrong reason. SQLite's `?` is positional at BIND time, so its criterion is the COUNT.
-# PostgreSQL numbers `$n` at RENDER time, so its counts always agree — measured, 19 params and
+# PostgreSQL numbers `$n` at RENDER time, so its counts always agreed — 19 params and
 # `max($n) == 19` — and its criterion is whether the `$n` sequence is CONTIGUOUS: the discarded
-# render consumes `$10..$18`, which appear nowhere in the text.
+# render consumed `$10..$18`, which appeared nowhere in the text.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#586/#587: a parameter-binding transform is projection-only, as documented" begin
+@testset "#586/#587: a parameter-binding transform binds once, in text position" begin
   _sqlite_placeholders(sql) = count("?", sql)
   _pg_refs(sql) = sort(unique(parse(Int, m.match[2:end]) for m in eachmatch(r"\$\d+", sql)))
 
@@ -309,22 +307,24 @@ end
       @test _pg_refs(proj_sql) == collect(1:length(proj_params))
     end
 
-    # #586 — a PREDICATE renders the expansion twice and keeps both sets of parameters.
+    # #586 — a PREDICATE used to render the expansion twice and keep both sets of parameters. Now
+    # the left-hand side renders once: the operands, then the comparison value, on both engines.
     for key in ("yyyy_q", "yyyy_quad")
       q = TLP.Tlp_row.objects
       q.values("note")
       q.filter("ts__@$(key)" => "1991-Q1")
       sql = _tlp_sql(q; conn = conn)
       params = _tlp_params(q; conn = conn)
+      @test params[end] == "1991-Q1"
       if conn === _TLP_SL
-        @test_broken length(params) == _sqlite_placeholders(sql)
+        @test length(params) == _sqlite_placeholders(sql)
       else
         ns = _pg_refs(sql)
-        # PostgreSQL's own arithmetic is satisfied — this is NOT the defect, and asserting a count
-        # here would make the PG arm green for a reason PostgreSQL does not care about.
+        # PostgreSQL's own arithmetic was always satisfied — this is NOT the defect, and asserting
+        # only a count here would make the PG arm green for a reason PostgreSQL does not care about.
         @test maximum(ns) == length(params)
-        # The defect is the gap the discarded render leaves behind.
-        @test_broken ns == collect(1:maximum(ns))
+        # The defect was the gap the discarded render left behind.
+        @test ns == collect(1:maximum(ns))
       end
     end
 

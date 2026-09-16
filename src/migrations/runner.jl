@@ -204,6 +204,31 @@ function init_migrations(connection::PormGSQLite)
   ddl = Dialect.create_migrations_table(connection)
   fetch(connection, ddl)
   _ensure_format_version_column(connection)
+  _ensure_canonical_applied_at(connection)
+  nothing
+end
+
+"""
+    _ensure_canonical_applied_at(connection::PormGSQLite)
+
+Idempotently rewrite `applied_at` rows written in SQLite's own `YYYY-MM-DD HH:MM:SS` form into
+PormG's canonical timestamp text (#570).
+
+Tables created before #570 defaulted the column to `datetime('now')`, and `CREATE TABLE IF NOT
+EXISTS` never revisits an existing default — SQLite cannot alter one in place short of a table
+rebuild. New rows are covered by `_record_migration`, which writes the column explicitly; this is
+the one-time repair for the rows that predate it.
+
+Probe first, then write — the `_ensure_format_version_column` shape. A database with nothing to
+repair (every database after its first pass) is answered by one read of a small table and never
+asked for a write: SQLite opens the write transaction at `UPDATE` statement start even when the
+WHERE matches nothing, so an unconditional UPDATE would turn a no-op `migrate()` on a read-only
+file into an error. SQLite only: the PostgreSQL column is a real `timestamp`, whose
+representation is its type.
+"""
+function _ensure_canonical_applied_at(connection::PormGSQLite)
+  legacy = DataFrame(fetch(connection, Dialect.legacy_applied_at_exists_sql(connection)))
+  nrow(legacy) > 0 && fetch(connection, Dialect.repair_migrations_applied_at_sql(connection))
   nothing
 end
 
@@ -342,9 +367,14 @@ function _record_migration(pool::PormGSQLite, version::String, name::String, che
                            sql_content::String, status::String, is_destr::Bool;
                            conn = nothing)
   is_destr_val = is_destr ? 1 : 0
-  sql = """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive", "format_version")
+  # `applied_at` is written explicitly rather than left to the column DEFAULT (#570): a table
+  # created before #570 keeps its `datetime('now')` default forever (`CREATE TABLE IF NOT EXISTS`
+  # never revisits it, and SQLite cannot alter a default in place), so only an explicit value
+  # guarantees the canonical text on every database.
+  sql = """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive", "format_version", "applied_at")
            VALUES ('$(replace(version, "'" => "''"))', '$(replace(name, "'" => "''"))', '$(replace(checksum, "'" => "''"))',
-           '$(replace(sql_content, "'" => "''"))', '$(replace(status, "'" => "''"))', $(is_destr_val), $(MIGRATION_FORMAT_VERSION));"""
+           '$(replace(sql_content, "'" => "''"))', '$(replace(status, "'" => "''"))', $(is_destr_val), $(MIGRATION_FORMAT_VERSION),
+           $(Dialect.sqlite_applied_at_now_sql()));"""
   # Release the connection iff we acquired it here (conn === nothing). When the
   # caller supplies a `conn` it owns the connection (e.g. the migration tx) and
   # frees it itself; without this, the fire-and-forget call sites (mark_applied /

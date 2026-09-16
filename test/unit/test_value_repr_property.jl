@@ -124,11 +124,12 @@ _vr_base() = VRM.Probe.objects.filter("label" => _VR_LABEL)
   end
 
   # ───────────────────────────────────────────────────────────────────────────
-  # Sibling 3: the one remaining `datetime('now')` writer. No `PormGField` can emit it —
-  # `normalize_datetime_default` rejects a string it cannot parse, and the Django importer maps
-  # `timezone.now` to a callable marker — so the only column that receives SQLite's own
-  # `YYYY-MM-DD HH:MM:SS` form is the migrations audit table's `applied_at`. Internal, but it is
-  # the same defect: text in a representation no PormG reader anchors on.
+  # Sibling 3, FIXED by #570: the one remaining `datetime('now')` writer. No `PormGField` can emit
+  # it — `normalize_datetime_default` rejects a string it cannot parse, and the Django importer maps
+  # `timezone.now` to a callable marker — so the only column that received SQLite's own
+  # `YYYY-MM-DD HH:MM:SS` form was the migrations audit table's `applied_at`. The DDL default is now
+  # the canonical mask. (The explicit write and the repair of pre-#570 rows are measured in
+  # `test_migrations_applied_at.jl`; this is the representation claim only.)
   # ───────────────────────────────────────────────────────────────────────────
   @testset "pormg_migrations.applied_at is written in the canonical form" begin
     _VR_CP.fetch(_VR_POOL, PormG.Dialect.create_migrations_table(_VR_POOL))
@@ -138,11 +139,12 @@ _vr_base() = VRM.Probe.objects.filter("label" => _VR_LABEL)
     @test length(rows) == 1
     applied_at = String(rows[1].applied_at)
     canonical = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+00:00$"
-    # Measured broken: `create_migrations_table(::PormGSQLite)` writes `DEFAULT (datetime('now'))`,
-    # i.e. `YYYY-MM-DD HH:MM:SS` — no `T`, no fraction, no offset.
-    @test_broken occursin(canonical, applied_at)
-    # …and the shape it DOES write, so the mark above is about the defect and not a typo.
-    @test occursin(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", applied_at)
+    @test occursin(canonical, applied_at)
+    # And the text is what the column's own formatter would have written for that instant — the
+    # #564 property, not just a shape: it parses through the same reader every `DateTimeField` uses.
+    parsed = PormG.Dialect._parse_sqlite_timestamp(applied_at)
+    @test parsed isa TimeZones.ZonedDateTime
+    @test Models.format_timezone_sql(parsed) == applied_at
   end
 
   # ───────────────────────────────────────────────────────────────────────────

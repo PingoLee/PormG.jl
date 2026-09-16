@@ -2020,6 +2020,12 @@ end
     create_migrations_table(conn::PormGSQLite) -> String
 
 Generate DDL to create the pormg_migrations history table for SQLite.
+
+`applied_at` defaults to the canonical timestamp text (#570) — `SQLITE_CANONICAL_DATETIME_MASK`,
+what every `DateTimeField` stores — rather than SQLite's own `datetime('now')`, whose
+`YYYY-MM-DD HH:MM:SS` form no PormG reader anchors on. `CREATE TABLE IF NOT EXISTS` leaves an
+existing table's default alone, which is why `_record_migration` also writes the column explicitly
+and `init_migrations` repairs rows in the old form (`repair_migrations_applied_at_sql`).
 """
 function create_migrations_table(conn::PormGSQLite)::String
   return """CREATE TABLE IF NOT EXISTS pormg_migrations (
@@ -2028,11 +2034,52 @@ function create_migrations_table(conn::PormGSQLite)::String
   "name" VARCHAR(255) NOT NULL,
   "checksum" VARCHAR(64) NOT NULL,
   "sql_content" TEXT NOT NULL DEFAULT '',
-  "applied_at" DATETIME NOT NULL DEFAULT (datetime('now')),
+  "applied_at" DATETIME NOT NULL DEFAULT ($(sqlite_applied_at_now_sql())),
   "status" VARCHAR(20) NOT NULL DEFAULT 'applied',
   "is_destructive" BOOLEAN NOT NULL DEFAULT 0,
   "format_version" INTEGER NOT NULL DEFAULT 1
 );"""
+end
+
+"""
+    sqlite_applied_at_now_sql() -> String
+
+The SQLite expression that yields "now" in PormG's canonical timestamp text (#570):
+`strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')`. Used by the `pormg_migrations` DDL default and by
+the explicit `applied_at` value every migration-record INSERT writes, so the two cannot drift.
+"""
+sqlite_applied_at_now_sql() = "strftime($(SQLITE_CANONICAL_DATETIME_MASK), 'now')"
+
+# The rows `repair_migrations_applied_at_sql` rewrites, stated once so the probe and the UPDATE
+# cannot disagree: TEXT values (the #527 repair shape), without the `T` separator, that `strftime`
+# can actually parse — a value it cannot would otherwise become NULL under `NOT NULL`.
+_legacy_applied_at_predicate() =
+  """typeof("applied_at") = 'text' AND "applied_at" NOT GLOB '*T*'
+    AND strftime($(SQLITE_CANONICAL_DATETIME_MASK), "applied_at") IS NOT NULL"""
+
+"""
+    legacy_applied_at_exists_sql(conn::PormGSQLite) -> String
+
+`SELECT 1 … LIMIT 1` over exactly the rows `repair_migrations_applied_at_sql` would rewrite. The
+runner probes with this before issuing the UPDATE, so a database with nothing to repair — every
+database after its first pass — is never asked for a write: SQLite opens the write transaction at
+statement start even when the WHERE matches nothing, and a read-only file would refuse it.
+"""
+function legacy_applied_at_exists_sql(conn::PormGSQLite)::String
+  return "SELECT 1 FROM pormg_migrations WHERE $(_legacy_applied_at_predicate()) LIMIT 1;"
+end
+
+"""
+    repair_migrations_applied_at_sql(conn::PormGSQLite) -> String
+
+Idempotent UPDATE that rewrites `pormg_migrations.applied_at` rows still in SQLite's own
+`YYYY-MM-DD HH:MM:SS` form — written by the `datetime('now')` default of tables created before
+#570 — into the canonical text, preserving the instant. After the first pass the WHERE matches
+nothing; `legacy_applied_at_exists_sql` is the read-only probe for the same rows.
+"""
+function repair_migrations_applied_at_sql(conn::PormGSQLite)::String
+  return """UPDATE pormg_migrations SET "applied_at" = strftime($(SQLITE_CANONICAL_DATETIME_MASK), "applied_at")
+  WHERE $(_legacy_applied_at_predicate());"""
 end
 
 """
@@ -2050,7 +2097,9 @@ end
 Returns parameterized INSERT for recording an applied migration (SQLite).
 """
 function insert_migration_record_sql(conn::PormGSQLite)::String
-  return """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive", "format_version") VALUES (?, ?, ?, ?, ?, ?, ?);"""
+  # `applied_at` is written explicitly (#570): a table created before #570 still carries the
+  # `datetime('now')` default, and relying on it would keep writing the non-canonical form there.
+  return """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive", "format_version", "applied_at") VALUES (?, ?, ?, ?, ?, ?, ?, $(sqlite_applied_at_now_sql()));"""
 end
 
 """

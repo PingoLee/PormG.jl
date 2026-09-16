@@ -40,11 +40,21 @@ const QB = PormG.QueryBuilder
     QB.set_context!(params, :cte)
     QB.add_parameter!(params, "cte_val")
 
+    # #587: GROUP BY and ORDER BY buckets, bound out of order too. GROUP BY prints between WHERE
+    # and HAVING; ORDER BY prints last.
+    QB.set_context!(params, :order)
+    QB.add_parameter!(params, "order_val")
+    QB.set_context!(params, :group)
+    QB.add_parameter!(params, "group_val")
+
     # 3. Verify final concatenation order matches SQL clause order:
-    # CTE -> SELECT -> UPDATE -> JOIN -> WHERE -> HAVING
+    # CTE -> SELECT -> UPDATE -> JOIN -> WHERE -> GROUP -> HAVING -> ORDER
     final_params = QB.get_final_parameters(params)
-    @test length(final_params) == 6
-    @test final_params == ["cte_val", "select_val", "update_val", "join_val", "where_val", "having_val"]
+    @test length(final_params) == 8
+    @test final_params == ["cte_val", "select_val", "update_val", "join_val", "where_val", "group_val", "having_val", "order_val"]
+    # The tuple every consumer reads is pinned at exactly these eight, in this order.
+    @test QB._BUCKET_ORDER == (:cte, :select, :update, :join, :where, :group, :having, :order)
+    @test params.parameter_count == 8
 
     # 4. Property access compatibility
     @test params.parameters == final_params
@@ -175,9 +185,14 @@ end
     QB.add_parameter!(params, "w")
     QB.set_context!(params, :having)
     QB.add_parameter!(params, "h")
+    QB.set_context!(params, :group)
+    QB.add_parameter!(params, "g")
+    QB.set_context!(params, :order)
+    QB.add_parameter!(params, "o")
 
     params_copy = deepcopy(params)
-    @test QB.get_final_parameters(params_copy) == ["c", "s", "u", "j", "w", "h"]
+    @test QB.get_final_parameters(params_copy) == ["c", "s", "u", "j", "w", "g", "h", "o"]
+    @test hasproperty(params_copy, :group_params) && hasproperty(params_copy, :order_params)
     @test params_copy !== params
 
     # Mutate copy
@@ -270,6 +285,33 @@ end
         # Explicitly NOT the array literal that caused the silent corruption.
         @test params.parameters[1] != "{0,255,137,80}"
         @test !(params.parameters[1] isa AbstractVector)
+    end
+
+    # #466: the ARRAY collectors — a membership list whose elements are wrappers — unwrap exactly as
+    # the scalar arms do. These were the two methods that did not, which is why `blob__@in` was
+    # refused (#411) rather than supported.
+    @testset "SQLite: a list of PormGBytes expands to raw bytes, one blob per member (#466)" begin
+        params = QB.SQLiteParameterizedQuery()
+        QB.set_context!(params, :where)
+        placeholder = QB.add_parameter!(params, [PormG.PormGBytes(payload), PormG.PormGBytes(UInt8[0x01])])
+        @test placeholder == "?, ?"
+        final = QB.get_final_parameters(params)
+        @test length(final) == 2
+        @test final[1] isa Vector{UInt8} && final[1] == payload
+        @test final[2] == UInt8[0x01]
+    end
+
+    @testset "PostgreSQL: a list of PormGBytes is one array of hex text (#466)" begin
+        params = QB.PgParameterizedQuery("", Any[], 0)
+        placeholder = QB.add_parameter!(params, [PormG.PormGBytes(payload), PormG.PormGBytes(UInt8[])])
+        @test placeholder == "\$1"
+        @test length(params.parameters) == 1
+        @test params.parameters[1] == ["\\x00ff8950", "\\x"]
+        # A list with no wrapper in it is pushed untouched — element type included — so nothing
+        # else in the builder sees a copy it did not ask for.
+        strings = ["a", "b"]
+        QB.add_parameter!(params, strings)
+        @test params.parameters[2] === strings
     end
 
     @testset "PostgreSQL: an empty payload is still one parameter" begin

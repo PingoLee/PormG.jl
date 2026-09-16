@@ -39,7 +39,7 @@ This skill is for implementation and regression analysis inside `src/querybuilde
 
 For positional backends, preserve bucket semantics and flatten order. The buckets below are the **single authoritative list** — `set_context!` sites and the `get_final_parameters` flatten order must agree with it; do not restate the list elsewhere:
 
-`:cte → :select → :update → :join → :where → :having`
+`:cte → :select → :update → :join → :where → :group → :having → :order`
 
 **A nested render does not pick a bucket (#432).** An `Exists(...)`, a projected `Subquery(...)` or an `__@in` subquery renders inside the PARENT's clause, so its values are marked, lifted and re-emitted as one clause-ordered run at the parent's marker position (`nested_parameter_mark` / `detach_nested_run!`), with `own_contexts=true` so the inner build files its values under its own clauses first. Binding order is not text order: a build binds joins last and renders them first, which is what the buckets exist to reconcile.
 

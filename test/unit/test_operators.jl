@@ -776,27 +776,40 @@ const _IN411 = _In411Event
   @test res_js[:parameters] == [["1", "2"]]
   @test res_js[:parameters] != [["[1,2]"]]
 
-  # BinaryField is REFUSED, not supported, and that is the deliberate outcome — see the guard in
-  # `_get_pair_to_oper`. `format_binary_sql` returns a `PormGBytes` wrapper and the ARRAY methods of
-  # `add_parameter!` are the only ones that do not unwrap it, so a mapped list bound wrappers: SQLite
-  # stored a Julia-serialized blob that matched NOTHING with no error, and PostgreSQL emitted a
-  # nonsense `bytea[]` literal. Silently wrong rows are worse than the refusal.
-  #
-  # Asserting the message, not just the type: a bare `@test_throws FilterError` would pass on any
-  # filter misuse and would not notice the guard being replaced by an accidental one. The earlier
-  # version of this test asserted `length(params[1]) == 2`, which counted the wrappers and reported
-  # the silent-wrong-rows path as working.
-  bin_err = @test_throws PormG.FilterError _IN411.objects.filter(
-    "blob__@in" => [UInt8[0x01, 0x02], UInt8[0x03]]).list(show_query = :dict)
-  @test occursin("binary", bin_err.value.msg)
-  @test occursin("blob__@in", bin_err.value.msg)
-  # It points at the workaround rather than just refusing.
-  @test occursin("Qor", bin_err.value.msg)
+  # BinaryField (#466). `format_binary_sql` returns a `PormGBytes` wrapper and the ARRAY methods of
+  # `add_parameter!` used not to unwrap it, so #411 refused `blob__@in` by name rather than bind
+  # wrappers: SQLite would have stored a Julia-serialized blob that matched NOTHING with no error,
+  # and PostgreSQL would have emitted a nonsense `bytea[]` literal. Both collectors unwrap now, and
+  # the assertions are on the BOUND ELEMENTS — a count (`length(params[1]) == 2`) once passed while
+  # counting the wrappers, which is exactly the silent-wrong-rows path.
+  q_bin = _IN411.objects.filter("blob__@in" => [UInt8[0x01, 0x02], UInt8[0x03]])
+  q_bin.values("id")
+  # PostgreSQL (the model's default connection here): ONE array parameter whose elements are the
+  # scalar arm's hex text, so LibPQ renders `{"\\x0102","\\x03"}` and the server decodes each
+  # element with `byteain` — no wrapper `show`.
+  res_bin_pg = q_bin.list(show_query = :dict)
+  @test occursin("= ANY(\$1)", res_bin_pg[:sql_text])
+  @test res_bin_pg[:parameters] == Any[["\\x0102", "\\x03"]]
+  @test all(v -> v isa String, res_bin_pg[:parameters][1])
+  # SQLite: one `?` per member, each bound as raw bytes — the form sqlite3_bind_blob takes.
+  res_bin_sl = PormG.QueryBuilder.inspect_query(q_bin; connection = _MockSQLiteIn411())
+  @test count(==('?'), res_bin_sl[:sql_text]) == 2
+  @test res_bin_sl[:parameters] == Any[UInt8[0x01, 0x02], UInt8[0x03]]
+  @test all(v -> v isa Vector{UInt8}, res_bin_sl[:parameters])
+  # `@nin` takes the same path with each dialect's negated renderer.
+  q_nbin = _IN411.objects.filter("blob__@nin" => [UInt8[0x01, 0x02]])
+  q_nbin.values("id")
+  res_nbin_pg = q_nbin.list(show_query = :dict)
+  @test occursin("<> ALL(\$1)", res_nbin_pg[:sql_text])
+  @test res_nbin_pg[:parameters] == Any[["\\x0102"]]
+  res_nbin_sl = PormG.QueryBuilder.inspect_query(q_nbin; connection = _MockSQLiteIn411())
+  @test occursin("NOT IN", res_nbin_sl[:sql_text])
+  @test res_nbin_sl[:parameters] == Any[UInt8[0x01, 0x02]]
 
-  # Only `@in`/`@nin` get the binary-specific sentence. Anything else is the ordinary "vector value,
-  # wrong operator" mistake and must go to the shared funnel — otherwise the guard claims
-  # "membership filter" for `@gte`, and renders a nonexistent `__@blob` lookup for a path with no
-  # suffix at all, which is the opposite of naming what the user wrote.
+  # Anything other than `@in`/`@nin` over a binary list is the ordinary "vector value, wrong
+  # operator" mistake and goes to the shared funnel, naming what the user wrote — the same two
+  # controls that held while the #411 guard existed. (A scalar `"blob" => bytes` comparison has no
+  # filter spelling today either; it is refused the same way, and is not #466's scope.)
   no_op = @test_throws PormG.FilterError _IN411.objects.filter(
     "blob" => [UInt8[0x01], UInt8[0x02]]).list(show_query = :dict)
   @test occursin("no operator", no_op.value.msg)

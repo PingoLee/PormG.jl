@@ -3134,3 +3134,389 @@ end
     @test rev_insp[:parameter_buckets][:join] == [2009, "Italy"]
     @test rev_insp[:sql_text] == sql
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ORDER BY has its own bucket (#587).
+#
+# An ordering expression that BINDS — the `@yyyy_q` / `@yyyy_quad` labels expand to a CONCAT/CASE
+# with nine operands — used to render under `:join`, which flattens BEFORE `:where` while the
+# ORDER BY text prints AFTER it. Every other value in the statement shifted by nine positions, the
+# counts still agreed, and SQLite returned the wrong rows without an error. PostgreSQL numbers `$N`
+# at render, so it was always right — which is why each shape below is asserted against PostgreSQL's
+# own `$N` walk (the cross-backend differential from the QueryBuilder skill) rather than a
+# hand-written expectation. The four shapes are the four ways the missing bucket surfaced:
+#
+#   1. the base case — WHERE value bound last, printed first;
+#   2. an aggregate ordering by an unprojected expression — `get_order_query` copies the term into
+#      GROUP BY verbatim, so the text carries the nine `?` TWICE and only nine values were bound;
+#   3. the projection memo — a label projected under another name and then ordered by path reused
+#      the memoized text (nine `?`) and bound NOTHING for it;
+#   4. a nested render — an `__@in` subquery ordering by a label filed its ORDER BY values in a
+#      bucket `detach_nested_run!` sorted ahead of the subquery's own WHERE.
+#
+# Each also asserts `assert_marker_count` on both engines — #441's half — because shapes 2 and 3
+# broke the COUNT, not the order, and an order-only assertion would have passed them.
+# ─────────────────────────────────────────────────────────────────────────────
+include("helper_marker_alignment.jl")
+struct MockPostgresAlign <: PormG.PormGPostgres end
+const _ALIGN_PG = MockPostgresAlign()
+
+# PostgreSQL's parameter vector read back in TEXT order: walk the `$N` markers left to right. This is
+# the oracle SQLite's flattened vector must equal — a `$N` printed twice (GROUP BY and ORDER BY
+# carrying one expression) yields its value twice, which is exactly what SQLite must bind. The one
+# dialect split the skill names: `__@in` binds ONE array on PostgreSQL and expands to N `?` on
+# SQLite, so an array value is splatted into the walk. A binary payload never reaches this branch —
+# PostgreSQL binds it as hex TEXT, not as a byte vector — so no exclusion is needed for it.
+function _pg_text_order(pg::Dict)
+    out = Any[]
+    for m in eachmatch(r"\$\d+", pg[:sql_text])
+        v = pg[:parameters][parse(Int, m.match[2:end])]
+        v isa AbstractVector ? append!(out, v) : push!(out, v)
+    end
+    return out
+end
+
+# Render on both engines, assert the count on each and the SQLite vector against the PG walk.
+function _assert_order_by_aligned(build)
+    sl = inspect_query(build())
+    pg = inspect_query(build(); connection = _ALIGN_PG)
+    assert_marker_count(sl, :sqlite)
+    assert_marker_count(pg, :postgres)
+    assert_bound_in_text_order(sl, _pg_text_order(pg))
+    return sl
+end
+
+@testset "ORDER BY binds under its own bucket, in text position (#587)" begin
+    # The nine operands the label binds, in the order they print.
+    label_ops = Any["-Q", 3, 1, 6, 2, 9, 3, 12, 4]
+
+    # Shape 1 — base: WHERE first, then the ordering operands. Before #587 the SQLite vector was
+    # `["-Q", 3, …, 4, "x"]`: the predicate compared `name = '-Q'` and the label's separator was "x".
+    sl = _assert_order_by_aligned() do
+        q = M.Race.objects
+        q.values("name")
+        q.filter("name" => "Monza")
+        q.order_by("date__@yyyy_q")
+        q
+    end
+    @test sl[:parameters] == vcat(Any["Monza"], label_ops)
+    @test sl[:parameter_buckets][:where] == ["Monza"]
+    @test sl[:parameter_buckets][:order] == label_ops
+    @test sl[:parameter_buckets][:group] == []      # not an aggregate: no GROUP BY is printed
+    @test sl[:parameter_buckets][:join] == []       # the bucket it used to land in
+
+    # No WHERE value at all — the ordering operands are the whole vector, and DESC changes only the
+    # text. Both were correct before #587 (nothing to misorder against) and must stay so.
+    for spelling in ("date__@yyyy_q", "-date__@yyyy_q")
+        sl = _assert_order_by_aligned() do
+            q = M.Race.objects
+            q.values("name")
+            q.order_by(spelling)
+            q
+        end
+        @test sl[:parameters] == label_ops
+    end
+
+    # LIMIT / OFFSET are interpolated literals, never bound — nothing lands after `:order`.
+    sl = _assert_order_by_aligned() do
+        q = M.Race.objects
+        q.values("name")
+        q.filter("name" => "Monza")
+        q.order_by("date__@yyyy_q")
+        q.limit(5)
+        q.offset(2)
+        q
+    end
+    @test sl[:parameters] == vcat(Any["Monza"], label_ops)
+    @test occursin("LIMIT 5", sl[:sql_text]) && occursin("OFFSET 2", sl[:sql_text])
+
+    # Shape 2 — aggregate ordering by an unprojected expression. The term is pushed into GROUP BY
+    # as well, so the text prints the nine `?` twice: once under GROUP BY (before HAVING) and once
+    # under ORDER BY (last). Before #587: 19 markers, 10 values, SQLite refused the statement.
+    sl = _assert_order_by_aligned() do
+        q = M.Race.objects
+        q.values("c" => Count("raceid"))
+        q.filter("name" => "Monza")
+        q.order_by("date__@yyyy_q")
+        q
+    end
+    @test sl[:parameters] == vcat(Any["Monza"], label_ops, label_ops)
+    @test sl[:parameter_buckets][:group] == label_ops
+    @test sl[:parameter_buckets][:order] == label_ops
+    @test count("GROUP BY", sl[:sql_text]) == 1
+
+    # …and with a HAVING value between the two copies: WHERE-less, so the vector is GROUP BY's copy,
+    # the HAVING value, ORDER BY's copy.
+    sl = _assert_order_by_aligned() do
+        q = M.Race.objects
+        q.values("name", "c" => Count("raceid"))
+        q.filter("c__@gt" => 1)
+        q.order_by("date__@yyyy_q")
+        q
+    end
+    @test sl[:parameters] == vcat(label_ops, Any[1], label_ops)
+    @test sl[:parameter_buckets][:having] == [1]
+
+    # Shape 3 — the projection memo. The label is projected under ANOTHER name, so the same-name
+    # alias branch did not fire; the term reused the memoized text and bound nothing for its nine
+    # `?`. Now it orders by the projection's output name, like the same-name case: SELECT's nine
+    # and the WHERE value are the whole vector, on both engines, and the text is `ORDER BY "q"`.
+    # (Rendering it afresh instead would bind the operands twice and, on PostgreSQL, renumber the
+    # `$N`s so the term stops matching the projection — a DISTINCT query then fails the #76 guard.)
+    sl = _assert_order_by_aligned() do
+        q = M.Race.objects
+        q.values("q" => "date__@yyyy_q")
+        q.filter("name" => "Monza")
+        q.order_by("date__@yyyy_q")
+        q
+    end
+    @test sl[:parameters] == vcat(label_ops, Any["Monza"])
+    @test sl[:parameter_buckets][:select] == label_ops
+    @test sl[:parameter_buckets][:order] == []
+    @test occursin("ORDER BY \"q\"", sl[:sql_text])
+    pg3 = inspect_query((q = M.Race.objects; q.values("q" => "date__@yyyy_q");
+                         q.filter("name" => "Monza"); q.order_by("date__@yyyy_q"); q);
+                        connection = _ALIGN_PG)
+    @test occursin("ORDER BY \"q\"", pg3[:sql_text])
+
+    # DISTINCT + the same shape builds on BOTH engines: the alias is in the projection by
+    # construction, so the #76 guard is satisfied and nothing binds twice.
+    sl = _assert_order_by_aligned() do
+        q = M.Race.objects
+        q.values("q" => "date__@yyyy_q")
+        q.distinct()
+        q.filter("name" => "Monza")
+        q.order_by("date__@yyyy_q")
+        q
+    end
+    @test sl[:parameters] == vcat(label_ops, Any["Monza"])
+    @test occursin("DISTINCT", sl[:sql_text])
+
+    # A memo hit that is NOT a projection — the label was rendered by a FILTER — has no alias to
+    # order by, so the term renders fresh under `:order`: WHERE's nine and its value, then ORDER
+    # BY's nine. (Asserted in full in the #586 testset below, once that fix is in.)
+
+    # Control for shape 3 — projected under the SAME name, ORDER BY names the alias and binds
+    # nothing: SELECT's nine and the WHERE value only. Unchanged by #587.
+    sl = _assert_order_by_aligned() do
+        q = M.Race.objects
+        q.values("date__@yyyy_q")
+        q.filter("name" => "Monza")
+        q.order_by("date__@yyyy_q")
+        q
+    end
+    @test sl[:parameters] == vcat(label_ops, Any["Monza"])
+    @test sl[:parameter_buckets][:order] == []
+    @test occursin("ORDER BY \"date__yyyy_q\"", sl[:sql_text])
+
+    # Control — a memoized String path (a plain column ordered by name) still reuses the memo and
+    # binds nothing; the bucket exists but stays empty.
+    sl = _assert_order_by_aligned() do
+        q = M.Race.objects
+        q.values("n" => "name")
+        q.filter("year" => 1991)
+        q.order_by("name")
+        q
+    end
+    @test sl[:parameters] == [1991]
+    @test sl[:parameter_buckets][:order] == []
+
+    # Shape 4 — nested. The subquery's own ORDER BY values are filed under `:order` inside the
+    # nested run, and `detach_nested_run!` lifts the run in `_BUCKET_ORDER` — so the inner WHERE
+    # value now precedes them, as it does in the text. Before #587 they sat in `:join` and were
+    # lifted AHEAD of the inner WHERE value.
+    sl = _assert_order_by_aligned() do
+        inner = M.Race.objects
+        inner.values("raceid")
+        inner.filter("name" => "Monza")
+        inner.order_by("date__@yyyy_q")
+        q = M.Result.objects
+        q.values("points")
+        q.filter("points" => 10)
+        q.filter("raceid__@in" => inner)
+        q
+    end
+    @test sl[:parameters] == vcat(Any[10, "Monza"], label_ops)
+    # The whole nested run re-emits into the parent's active bucket (`:where`), as one run.
+    @test sl[:parameter_buckets][:where] == vcat(Any[10, "Monza"], label_ops)
+    @test sl[:parameter_buckets][:order] == []
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A composite transform in a predicate binds its operands ONCE (#586).
+#
+# `_get_filter_query(::SQLTypeOper)` rendered the left-hand side at its top and then, in the
+# fallback ladder, rendered it AGAIN through `_get_select_query` — string discarded, parameters
+# kept. A plain column binds nothing, which is how this survived; the `@yyyy_q` / `@yyyy_quad`
+# labels bind nine operands, so a predicate on one carried nineteen values for ten markers. SQLite
+# refused the statement; PostgreSQL's `$n` sequence had a gap where the discarded copy was numbered.
+# Every shape below runs the cross-backend differential — the count on both engines, the SQLite
+# vector against PostgreSQL's `$n` walk — and the PostgreSQL side additionally asserts the `$n`
+# sequence is contiguous, which is the engine-specific criterion the count alone cannot see.
+# ─────────────────────────────────────────────────────────────────────────────
+function _assert_predicate_binds_once(build)
+    sl = _assert_order_by_aligned(build)
+    pg = inspect_query(build(); connection = _ALIGN_PG)
+    refs = sort(unique(parse(Int, m.match[2:end]) for m in eachmatch(r"\$\d+", pg[:sql_text])))
+    @test refs == collect(1:length(pg[:parameters]))
+    return sl
+end
+
+@testset "a composite transform in a predicate binds once (#586)" begin
+    q_ops    = Any["-Q", 3, 1, 6, 2, 9, 3, 12, 4]   # @yyyy_q: four WHEN arms
+    quad_ops = Any["-Q", 4, 1, 8, 2, 12, 3]         # @yyyy_quad: three
+
+    # Scalar comparison, base model — operands then the comparison value, nothing else.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name")
+        q.filter("date__@yyyy_q" => "1991-Q1")
+        q
+    end
+    @test sl[:parameters] == vcat(q_ops, Any["1991-Q1"])
+    @test sl[:parameter_buckets][:where] == vcat(q_ops, Any["1991-Q1"])
+
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name")
+        q.filter("date__@yyyy_quad" => "1991-Q1")
+        q
+    end
+    @test sl[:parameters] == vcat(quad_ops, Any["1991-Q1"])
+
+    # Membership: the list expands after the operands.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name")
+        q.filter("date__@yyyy_q__@in" => ["1991-Q1", "1992-Q2"])
+        q
+    end
+    @test sl[:parameters] == vcat(q_ops, Any["1991-Q1", "1992-Q2"])
+
+    # A neighbouring WHERE value on each side, so a displaced operand would be visible.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name")
+        q.filter("year" => 1991)
+        q.filter("date__@yyyy_q" => "1991-Q1")
+        q.filter("name" => "Monza")
+        q
+    end
+    @test sl[:parameters] == vcat(Any[1991], q_ops, Any["1991-Q1", "Monza"])
+
+    # A joined path: the label over a ForeignKey's column.
+    sl = _assert_predicate_binds_once() do
+        q = M.Result.objects
+        q.values("points")
+        q.filter("raceid__date__@yyyy_q" => "1991-Q1")
+        q
+    end
+    @test sl[:parameters] == vcat(q_ops, Any["1991-Q1"])
+    @test occursin("JOIN", sl[:sql_text])
+
+    # Inside an `__@in` subquery and an Exists — nested renders lift the run as one, in text order.
+    sl = _assert_predicate_binds_once() do
+        inner = M.Race.objects
+        inner.values("raceid")
+        inner.filter("date__@yyyy_q" => "1991-Q1")
+        q = M.Result.objects
+        q.values("points")
+        q.filter("points" => 10)
+        q.filter("raceid__@in" => inner)
+        q
+    end
+    @test sl[:parameters] == vcat(Any[10], q_ops, Any["1991-Q1"])
+
+    sl = _assert_predicate_binds_once() do
+        inner = M.Race.objects
+        inner.filter("raceid" => OuterRef("raceid"))
+        inner.filter("date__@yyyy_q" => "1991-Q1")
+        q = M.Result.objects
+        q.values("points")
+        q.filter("points" => 10)
+        q.filter(Exists(inner))
+        q
+    end
+    @test sl[:parameters] == vcat(Any[10], q_ops, Any["1991-Q1"])
+
+    # Inside a CTE body: the label predicate binds under `:cte`, once.
+    sl = _assert_predicate_binds_once() do
+        body = M.Race.objects
+        body.values("raceid", "name")
+        body.filter("date__@yyyy_q" => "1991-Q1")
+        q = M.Result.objects
+        q.values("points", "r91__name")
+        _with(q, "r91", body, join_field = "raceid" => "raceid")
+        q.filter("points" => 10)
+        q
+    end
+    @test sl[:parameters] == vcat(q_ops, Any["1991-Q1", 10])
+    @test sl[:parameter_buckets][:cte] == vcat(q_ops, Any["1991-Q1"])
+
+    # Filter AND order on the same label — the #587 memo rule and the #586 single render together:
+    # WHERE's nine and its value, then ORDER BY's fresh nine.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name")
+        q.filter("date__@yyyy_q" => "1991-Q1")
+        q.order_by("date__@yyyy_q")
+        q
+    end
+    @test sl[:parameters] == vcat(q_ops, Any["1991-Q1"], q_ops)
+
+    # Projected AND filtered — the projection memoizes the label's text, and the filter path used
+    # to reuse it: nine `?` in WHERE with nothing bound for them, masked only by the discarded
+    # second render binding nine values under the right bucket by accident. WHERE renders fresh:
+    # SELECT's nine, WHERE's nine and its value.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name", "q" => "date__@yyyy_q")
+        q.filter("date__@yyyy_q" => "1991-Q1")
+        q
+    end
+    @test sl[:parameters] == vcat(q_ops, q_ops, Any["1991-Q1"])
+    @test sl[:parameter_buckets][:select] == q_ops
+    @test sl[:parameter_buckets][:where] == vcat(q_ops, Any["1991-Q1"])
+
+    # …and all three positions at once, the documented example: SELECT, WHERE, ORDER BY. The
+    # ORDER BY term is projected under `q`, so it orders by that alias (#587) and binds nothing.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name", "q" => "date__@yyyy_q")
+        q.filter("date__@yyyy_q" => "1991-Q1")
+        q.order_by("-date__@yyyy_q")
+        q
+    end
+    @test sl[:parameters] == vcat(q_ops, q_ops, Any["1991-Q1"])
+    @test occursin("ORDER BY \"q\" DESC", sl[:sql_text])
+
+    # A projected plain column filtered by path still reuses the memo — nothing to bind, and the
+    # selector is the one the projection resolved.
+    sl = _assert_predicate_binds_once() do
+        q = M.Result.objects
+        q.values("points", "d" => "raceid__date")
+        q.filter("raceid__date" => "1991-03-10")
+        q
+    end
+    @test sl[:parameters] == ["1991-03-10"]
+
+    # The number transform is the control: one function call, one value. Unchanged.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name")
+        q.filter("date__@quarter" => 1)
+        q
+    end
+    @test sl[:parameters] == [1]
+
+    # `BETWEEN` on a transform column renders the left-hand side once as well — an arm that used
+    # to re-render it. (`ISNULL` refuses a function column outright, so it has no binding shape.)
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("name")
+        q.filter("date__@yyyy_q__@range" => ["1991-Q1", "1991-Q4"])
+        q
+    end
+    @test sl[:parameters] == vcat(q_ops, Any["1991-Q1", "1991-Q4"])
+    @test occursin("BETWEEN", sl[:sql_text])
+end

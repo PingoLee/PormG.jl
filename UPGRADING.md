@@ -1974,14 +1974,17 @@ than left to chance.
 
 ### Also in this change, and needing no source edit
 
-- **`__@in` now works on every field type except `BinaryField`** (see below). It was an error on
+- **`__@in` now works on every field type** (`BinaryField` since #466, see below). It was an error on
   `DateField`, `DateTimeField`, `BooleanField`, `DurationField` and `UUIDField`, and silently
   **wrong** on `JSONField`, where
   `[1, 2]` was bound as the single JSON document `"[1,2]"` and matched nothing. If you worked around
   any of those, the workaround is now unnecessary — but nothing forces you to remove it.
-- **`BinaryField` `__@in` is refused with a clear `FilterError`** instead of a `MethodError` naming an
-  internal function. It was never usable; binary values bind through a wrapper the list parameter
-  path cannot unwrap, which would match nothing rather than fail.
+- **`BinaryField` `__@in` was refused with a clear `FilterError`** by this change, instead of a
+  `MethodError` naming an internal function — binary values bind through a wrapper the list
+  parameter path could not unwrap, which would have matched nothing rather than fail. #466 taught
+  the list parameter path to unwrap, so `filter("blob__@in" => [a, b])` now works on both engines.
+  (The `Qor` of single-value comparisons the refusal message suggested never worked either — a
+  scalar `"blob" => bytes` filter has no spelling today — so there is nothing to migrate.)
 - **A plain `[]` works as an empty `__@in` list.** `[]` is a `Vector{Any}`, which no element bound
   accepted, so the most natural spelling raised a `MethodError`; `Int[]` was the only form that
   worked. A genuinely mixed list (`Any[1, "a"]`) now reports itself instead of leaking one.

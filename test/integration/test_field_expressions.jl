@@ -66,8 +66,13 @@ end
     # then aggregated with Sum(). If this fails, the issue is usually in the
     # expression compiler rather than in plain function support.
     query = M.Result.objects
+    # `"raceid__year"` (the race's year through the ForeignKey), not `"raceid__@year"` (the `@year`
+    # transform on the integer key). The transform spelling used to resolve to this column by
+    # accident — its memo key collided with the `raceid__year` projection below and the filter
+    # path reused the projection's text; #586 renders a transform as written, which on an integer
+    # key PostgreSQL rejects and SQLite evaluates to NULL.
     query.filter(
-      "raceid__@year" => 2024,
+      "raceid__year" => 2024,
       Q(
         F("raceid__date") > F("driverid__dob") + 30,
         F("raceid__date") <= F("driverid__dob") + 10957,

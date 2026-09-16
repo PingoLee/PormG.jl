@@ -347,7 +347,7 @@ end
 # Widened alongside its `Pair{Vector{String},…}` twin below (#411). Not reachable from
 # `_check_filter`, which splits the key at `__@` first — but leaving one of a matched pair behind
 # is the drift that bites whoever calls it directly next.
-function _get_pair_to_oper(x::Pair{String,Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID}
+function _get_pair_to_oper(x::Pair{String,Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,AbstractVector{UInt8}}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
 # Store SQLObject, to use __@in operator
@@ -394,10 +394,12 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeFunction
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
   end
 end
-# `Base.UUID` and `Vector{UInt8}` (#411): without them a `Vector{UUID}` or `Vector{Vector{UInt8}}`
-# right-hand side never reached this method at all, so `__@in` on a UUIDField or a BinaryField
-# failed at PARSE time with a MethodError — before any formatter ran, which is why mapping the
-# formatter at the call site does not fix those two on its own.
+# `Base.UUID` and `AbstractVector{UInt8}` (#411, #466): without them a `Vector{UUID}` or a
+# `Vector{Vector{UInt8}}` right-hand side never reached this method at all, so `__@in` on a UUIDField
+# or a BinaryField failed at PARSE time with a MethodError — before any formatter ran, which is why
+# mapping the formatter at the call site does not fix those two on its own. #411 admitted the UUID
+# and refused the binary list by name, because the ARRAY collectors did not unwrap `PormGBytes`;
+# #466 taught them to, so a binary list takes the ordinary vector arm below.
 # `Vector{Any}` (#411). `[]` — the way anyone writes an empty list, and what `ids = []` gives you
 # before the first `push!` — is `Vector{Any}`, and `Any` satisfies none of the element bounds the
 # methods below dispatch on. So the most natural spelling of an empty membership list raised a
@@ -420,35 +422,7 @@ function _get_pair_to_oper(x::Pair{Vector{String},Vector{Any}})
   return _get_pair_to_oper(x.first => narrowed)
 end
 
-# A membership filter over BINARY values is refused, deliberately and by name (#411).
-#
-# `format_binary_sql` returns a `PormGBytes` wrapper, and the two ARRAY methods of `add_parameter!`
-# are the only ones that do not unwrap it — the scalar methods exist precisely to. So a mapped list
-# binds wrappers: SQLite stores a Julia-serialized blob that matches nothing (silently zero rows,
-# no error) and PostgreSQL emits a nonsense `bytea[]` literal. Supporting this properly means
-# teaching the array collectors to unwrap, which is a driver round-trip change and cannot be
-# validated without the integration suite.
-#
-# So it stays unsupported — but loudly, and naming the path the user wrote. It used to raise a
-# `MethodError` naming `_get_pair_to_oper` and a tuple type nobody typed; silently wrong rows would
-# have been worse still.
-function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:AbstractVector{UInt8}
-  # Only `@in`/`@nin` are refused HERE, for the binary-specific reason. Any other suffix — or none at
-  # all, `filter("blob" => [bytes...])` — is the ordinary "vector value, wrong operator" mistake, and
-  # the shared funnel already reports it with the list of operators that DO take a vector. Claiming
-  # "membership filter" for `blob__@gte`, or rendering `__@blob` for a path with no suffix at all,
-  # would undercut the one thing this guard is for: naming what the user actually wrote.
-  x.first[end] in ("in", "nin") ||
-    _raise_invalid_filter_operator(x.first, "binary vector", ["in", "nin"])
-  path = join(x.first[1:end-1], "__")
-  throw(FilterError(
-    "A membership filter over binary values is not supported: " *
-    "\e[4m\e[31m$(path)__@$(x.first[end])\e[0m. Binary values bind through a wrapper the list " *
-    "parameter path cannot unwrap, so this would match nothing rather than fail. Compare one value " *
-    "at a time (\e[1m\"$(path)\" => bytes\e[0m), combining them with \e[1mQor\e[0m if you need several."))
-end
-
-function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID}
+function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,AbstractVector{UInt8}}
   suffix = x.first[end]
   if suffix in ["in", "nin"]
     @pormg_debug false
@@ -1483,12 +1457,27 @@ function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
   # back, filtering the CTE's column while the ForeignKey's join sat unused in the statement.
   key = memo_key(v)
   cached = memo_projection(instruc, key)
-  if cached !== nothing
+  # #586: a memoized render is reused ONLY for a node kind that never binds a parameter — a String
+  # path, a CTE or joined-copy handle, an outer reference. A projected label (`values("q" =>
+  # "date__@yyyy_q")`) memoizes text carrying nine `?` whose values sit in `:select`; reusing that
+  # text for `filter("date__@yyyy_q" => …)` printed the markers into WHERE with nothing bound for
+  # them. The discarded second render this fix removes from `_get_filter_query(::SQLTypeOper)`
+  # happened to bind them — under the right bucket, by accident — which is why the shape ever
+  # executed on SQLite. Same rule and same gate as `get_order_query` (#587); a WHERE predicate has
+  # no alias to fall back on, so a binding expression renders afresh here on both backends (on
+  # PostgreSQL that renumbers its `$N`s, which is harmless outside DISTINCT/ORDER BY).
+  if cached !== nothing && v.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject}
     return cached.field
   else
     v_copy = deepcopy(v)
-    v_copy.field = _get_select_query(v_copy.field, instruc)
-    if key !== nothing
+    # `_as` travels with the render. This is now the ONLY render of a predicate's left-hand side —
+    # the discarded second render was the one passing `_as`, and `_get_select_query(::String)`
+    # reads it to refresh the base-model `memo_field` entry under that key.
+    v_copy.field = _get_select_query(v_copy.field, instruc, _as=v._as)
+    # Never overwrite an existing entry (#404): the first render is the one every other reader
+    # memoized against, and a fresh render of a binding node is not a better selector, only a
+    # second binding.
+    if key !== nothing && cached === nothing
       memo_projection!(instruc, key, v_copy)
     end
     return v_copy.field
@@ -2010,21 +1999,25 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     nested_mark = nested_parameter_mark(instruc)
     placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc, own_contexts=true)
     reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
-    return string(_get_filter_query(v.column, instruc), " ", v.operator, " ($placeholders)")
+    # #586: `column` was rendered before the subquery, so its markers number ahead of the
+    # subquery's — the text order. Re-rendering here would bind a composite LHS a second time.
+    return string(column, " ", v.operator, " ($placeholders)")
   else
     @pormg_debug false
-    if isa(v.column, SQLTypeField)
-      @pormg_debug false
-      _get_select_query(v.column, instruc, _as=v.column._as) # TODO, how do this i where before do operates
-    else
-      @pormg_debug false
-    end
+    # #586: the left-hand side is rendered EXACTLY ONCE, at the top of this function, and every arm
+    # below reads `column`. A second `_get_select_query(v.column, …)` used to sit here — its string
+    # discarded, its parameters kept — and for a composite transform (`@yyyy_q` expands to a
+    # CONCAT/CASE binding nine operands) that bound the expansion twice for one copy of the text:
+    # SQLite refused the statement, PostgreSQL's `$n` sequence had a nine-wide gap. The
+    # `ISNULL`/`BETWEEN` arms re-rendered the column too, free only while the memo key was
+    # non-`nothing`. `_render_membership` states the invariant this restores: no filter-LHS
+    # renderer binds a parameter of its own.
     if v.operator in ["ISNULL"]
-      return getfield(QueryBuilder, Symbol(v.operator))(_get_filter_query(v.column, instruc), v.values)
+      return getfield(QueryBuilder, Symbol(v.operator))(column, v.values)
     elseif v.operator in ("BETWEEN", "NOT BETWEEN")
       # Handle (NOT) BETWEEN with two parameters. #207: `nrange` renders NOT BETWEEN — the operator
       # string carries "BETWEEN"/"NOT BETWEEN" so both branches emit it verbatim.
-      column_sql = _get_filter_query(v.column, instruc)
+      column_sql = column
       field_name = ""
       if isa(v.column, SQLTypeField)
         if isa(v.column.field, String)

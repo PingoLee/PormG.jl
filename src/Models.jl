@@ -2904,7 +2904,18 @@ function _duration_to_nanoseconds(value::Dates.CompoundPeriod)::Int64
 end
 
 function _duration_from_seconds_string(value::AbstractString)::String
-  match_result = match(r"^([+-]?)(\d+)(?:\.(\d+))?$", value)
+  # `String(...)` FIRST, never `match(re, value)` directly (#598). Base defines `match` only for
+  # `String`, `SubString{String}` and `AnnotatedString`; every other `AbstractString` raises
+  # `ArgumentError: regex matching is only available for the String and AnnotatedString types` —
+  # neither a `PormGError` nor anything the caller can act on.
+  #
+  # `String(x)`, NOT `string(x)`. They are not interchangeable here: `string` is identity for some
+  # `AbstractString`s — `string(::LazyString)` returns the `LazyString` — so `strip(string(value))`
+  # yields a `SubString{LazyString}` and the regex still throws. Measured, not assumed; #598's own
+  # write-up recommends the `string` spelling, and it does not hold. Every conversion on this path
+  # is therefore `String`.
+  s = String(value)
+  match_result = match(r"^([+-]?)(\d+)(?:\.(\d+))?$", s)
   match_result === nothing && throw(InvalidValueError("The duration $value is invalid"))
 
   sign, seconds_str, fraction = match_result.captures
@@ -2914,7 +2925,13 @@ function _duration_from_seconds_string(value::AbstractString)::String
 end
 
 function _normalize_duration_string(value::AbstractString)::String
-  stripped = strip(value)
+  # `strip` PRESERVES the input's string type — `strip(::LazyString)` is not a `String` — so an
+  # `::AbstractString` signature alone does not make the three regexes below safe (#598). Convert
+  # first; see `_duration_from_seconds_string` above for why it is `String` and not `string`.
+  # The failure was uneven and therefore easy to miss: the third branch uses `occursin`, which has
+  # a generic fallback, so it cleared its own guard and then died one frame down inside
+  # `_duration_from_seconds_string`.
+  stripped = strip(String(value))
   isempty(stripped) && throw(InvalidValueError("The duration cannot be empty"))
 
   if (match_result = match(r"^([+-]?)(\d+):(\d{2}):(\d{2})(?:\.(\d+))?$", stripped)) !== nothing
@@ -2985,7 +3002,11 @@ function format_uuid_sql(value::Union{Missing, Nothing})
 end
 
 function format_uuid_sql(value::AbstractString)
-  s = strip(string(value))
+  # `String`, not `string` (#598). This method is not broken either way — `occursin` has a generic
+  # `AbstractString` fallback where `match` does not — but it is the shape the other formatters are
+  # written against, and `string(::LazyString)` is the identity, so modelling `string` here is how
+  # the defect gets copied into the next regex-bearing formatter.
+  s = strip(String(value))
   occursin(_UUID_REGEX, s) || throw(InvalidValueError("Invalid UUID format: '$s'. Expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"))
   return lowercase(s)
 end
@@ -3044,7 +3065,9 @@ function format_number_sql(value::Union{Float16, Float32, Float64}) # TODO: @spr
   return @sprintf("%.17g", value)
 end
 function format_number_sql(value::AbstractString)
-  value = value |> string |> strip
+  # `String`, not `string` — same reason as `format_uuid_sql` (#598). Safe either way today, since
+  # everything below is `occursin`/`tryparse`; normalised so the family has one spelling.
+  value = value |> String |> strip
   isempty(value) && throw(InvalidValueError("The value is empty and cannot be used as a number"))
 
   if occursin(r"^[+-]?\d+,\d+$", value)
@@ -3110,11 +3133,21 @@ function format_date_sql(value::ZonedDateTime)
   return value |> Dates.Date |> string
 end
 function format_date_sql(value::AbstractString)
+  # `occursin` and `Date` both accept any `AbstractString`, so this method never had the #598
+  # dispatch bug — but it returned the ARGUMENT, so the caller's string type reached the parameter
+  # binder while the four sibling arms above all returned a `String`. `String(...)` on the way out
+  # makes this arm agree with them; it does not change which values are accepted, and
+  # `String(s::String) === s`, so the common path allocates nothing.
+  #
+  # Narrow on purpose: this is about THIS function's arms agreeing, not a family-wide contract.
+  # `format_number_sql` still returns the `SubString` its `strip` produces, and `format_text_sql`
+  # returns its argument verbatim — both deliberate, both on hotter paths, and neither feeds a
+  # downstream regex. Widening either is a separate change with a separate justification.
   if occursin(r"^\d{4}-\d{2}-\d{2}$", value)
     try
         # Validate that it's a real calendar date (e.g. not 2023-02-29)
         Date(value)
-        return value
+        return String(value)
     catch e
         # #472, as in `format_json_sql`: `DateField` is exercised by every expression-default
         # fixture (`d DATE DEFAULT CURRENT_DATE`), so this is squarely on the path the guard
@@ -3144,7 +3177,11 @@ const _DATETIME_UTC_TZ = TimeZone("UTC")
 _canonicalize_datetime_utc(value::ZonedDateTime)::String =
   Dates.format(astimezone(value, _DATETIME_UTC_TZ), _DATETIME_DATEFORMAT)
 
-function format_timezone_sql(value::String; format::String=DATETIME_FORMAT)
+function format_timezone_sql(value::AbstractString; format::AbstractString=DATETIME_FORMAT)
+  # `::AbstractString`, not `::String` (#598). `split` returns `SubString`, so
+  # `M.Race.objects.create("start_at" => split(line, ",")[2])` used to be a bare `MethodError`.
+  # Widening here is only half of it — `validate_timezone` is typed too, and leaving it `::String`
+  # just moves the same `MethodError` one frame down.
   return validate_timezone(value, format)
 end
 function format_timezone_sql(value::Union{Missing, Nothing})
@@ -3162,10 +3199,35 @@ function format_timezone_sql(value::DateTime, timezone::String)
   # through the 1-arg ::ZonedDateTime method, which canonicalizes. Never used as a bind value directly.
   return ZonedDateTime(value, TimeZone(timezone))
 end
+# The generic arm every sibling formatter already had and this one did not (#598): without it an
+# unhandled value is a bare `MethodError`, outside the #231 taxonomy. Matches `format_duration_sql`,
+# `format_uuid_sql`, `format_date_sql`, `format_json_sql` and `format_binary_sql`.
+#
+# THE WRITE PATH IS NOT WHAT THIS FIXES — `_validate_datetime_value` (`querybuilder/sanitization.jl`)
+# tests `value isa AbstractString` before it calls the formatter and sends everything else to
+# `_type_mismatch_error`, so a non-string never reached here on an insert or update. The arm earns
+# its keep on the READ path, which has no such guard: `_format_filter_value` hands the raw filter
+# value straight to the formatter, and `_rethrow_as_filter_error` converts `InvalidValueError` into
+# `FilterError` while rethrowing everything else untouched. So `filter("start_at" => Date(2020,1,1))`
+# on a DateTimeField used to surface a raw `MethodError` and now surfaces a `FilterError`. Same for
+# `deletion.jl` and `many_to_many.jl`, which call `field.formatter` with no sanitization in front.
+#
+# The keyword is declared so `format_timezone_sql(x; format = …)` lands here too rather than being a
+# `MethodError` again — nothing passes `format=` today, which is exactly why it would be missed.
+function format_timezone_sql(value; format::AbstractString=DATETIME_FORMAT)
+  throw(InvalidValueError("The datetime must be a ZonedDateTime, DateTime, or a string in the format $(format)"))
+end
 
-function format_yyyy_mm(value::String)
-  if occursin(r"^\d{4}-\d{2}$", value)
-    return value
+function format_yyyy_mm(value::AbstractString)
+  # `::AbstractString`, not `::String` (#598). This is the `__@yyyy_mm` filter-value normaliser, so
+  # `filter("date__@yyyy_mm" => split(period, ";")[1])` reaches it with a `SubString` — which used
+  # to fall through to the generic arm below and be rejected as "not a String or Integer". Returns
+  # the converted `String` rather than the argument, so the caller's type does not leak downstream.
+  # Deliberately NOT stripped: widening the accepted SHAPE is a different change from widening the
+  # accepted TYPE, and only the latter is a bug.
+  s = String(value)
+  if occursin(r"^\d{4}-\d{2}$", s)
+    return s
   else
     throw(InvalidValueError("The value $value is invalid, it must be in the format YYYY-MM"))
   end  
@@ -3180,7 +3242,7 @@ function format_yyyy_mm(value::Integer)
   end
 end
 function format_yyyy_mm(value)
-  throw(InvalidValueError("The value must be a String or Integer in the format YYYY-MM or YYYYMM"))
+  throw(InvalidValueError("The value must be a string or Integer in the format YYYY-MM or YYYYMM"))
 end    
 
 # #579 — the right-hand side of a `__@quarter` / `__@quadrimester` comparison.
@@ -3918,12 +3980,17 @@ function validate_default(default, expected_type::Type, field_name::String, conv
   end
 end
 
-function validate_timezone(value::String, format::String)
+function validate_timezone(value::AbstractString, format::AbstractString)
   # Canonicalize any datetime string to one UTC ISO-8601 form (issue #79) so SQLite's
   # lexicographic TEXT comparison matches PostgreSQL. Accepts a `Z`/`±HH:MM` offset or a
   # naive value, a `T` or single-space separator, and 0-n sub-second digits; converts the
   # instant to UTC and formats as DATETIME_FORMAT (`yyyy-mm-ddTHH:MM:SS.sss+00:00`).
-  s = replace(strip(value), ' ' => 'T', count = 1)
+  #
+  # `::AbstractString` and `String(value)` both matter (#598): the signature so `format_timezone_sql`
+  # can hand a `SubString` through, and the conversion so the `match` at the offset check below sees
+  # a type Base's regex engine accepts. `strip` alone would preserve the caller's type, and
+  # `string` would too for a `LazyString` — see `_duration_from_seconds_string`.
+  s = replace(strip(String(value)), ' ' => 'T', count = 1)
   # Julia's DateTime is millisecond-precision: truncate any sub-millisecond digits (e.g.
   # Python's microsecond `isoformat()`) so naive and offset spellings of the same instant
   # agree — the offset branch's normalize also truncates, so keep the naive branch aligned.
@@ -3955,7 +4022,7 @@ function validate_timezone(value::String, format::String)
 end
 
 """
-    normalize_sqlite_datetime_string(s::AbstractString) -> String
+    normalize_sqlite_datetime_string(value::AbstractString) -> String
 
 Normalise a raw SQLite datetime string so it can be parsed by a strict ISO 8601
 formatter (`dateformat"yyyy-mm-ddTHH:MM:SS.ssszzzz"`):
@@ -3965,7 +4032,15 @@ formatter (`dateformat"yyyy-mm-ddTHH:MM:SS.ssszzzz"`):
 - Injects `.000` when no sub-second component is present.
 - Returns the string unchanged when it does not match any expected pattern.
 """
-function normalize_sqlite_datetime_string(s::AbstractString)
+function normalize_sqlite_datetime_string(value::AbstractString)
+    # Converted at entry (#598). Both `match` calls below would otherwise throw `ArgumentError` on
+    # a non-`String` `AbstractString` — which breaks THIS FUNCTION'S OWN CONTRACT twice over: the
+    # docstring promises `-> String`, and promises to return the string unchanged when nothing
+    # matches, i.e. to fail open. It sits on the write path (`validate_timezone`) and on the SQLite
+    # READ path (`Dialect._parse_sqlite_timestamp`), which is itself documented as never throwing.
+    # Converting here is also what keeps that read path safe: it feeds this function's RESULT to a
+    # further regex, so the fail-open arm has to hand back a `String` too.
+    s = String(value)
     m = match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.(\d+)(Z|[+-]\d{2}:\d{2})$", s)
     if m !== nothing
         base_dt, ms, tz = m.captures

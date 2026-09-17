@@ -8,7 +8,8 @@ const CP = PormG.ConnectionPool   # match the sibling pool tests' idiom (avoids 
 # DB-free: mock pools (own struct, no `waiters` field → exercises the module-level registry).
 # Covers: the handoff/mode helpers (deterministic), instant wake on release, FIFO/no-barging,
 # timeout still throws PoolTimeoutError, the timeout↔handoff race, empty-slot materialize (from
-# _discard_connection!), and SQLite mode-typed handoff (split read/write).
+# _discard_connection!), SQLite mode-typed handoff (split read/write), and the sweep race a
+# handoff carrying only a slot index left open (#584).
 # ─────────────────────────────────────────────────────────────────────────────
 
 mutable struct FakeHandoffConn
@@ -84,7 +85,7 @@ _saturate(p) = [CP.acquire_connection(p; timeout_seconds = 5) for _ in 1:(p.pool
   w = CP.PoolWaiter(:any)
   push!(CP._waiters_for(p), w)
   Base.lock(() -> CP._handoff_or_free!(p, 1), p.lock) # simulate a release handing slot 1 to w
-  @test take!(w.chan) == 1                            # waiter received the slot index
+  @test take!(w.chan) == (1, c)                       # waiter received the slot AND its handle (#584)
   @test w.done
   @test p.available == [false]                        # slot stays LEASED for the waiter (no free)
   @test isempty(CP._waiters_for(p))                   # waiter dequeued
@@ -194,11 +195,11 @@ end
 
   # (a) handoff first → the slot is delivered; a later timeout is a no-op.
   p = MockPGHandoff(1)
-  CP.acquire_connection(p)                                   # lease slot 1
+  c = CP.acquire_connection(p)                               # lease slot 1
   w = CP.PoolWaiter(:any); push!(CP._waiters_for(p), w)
   Base.lock(() -> CP._handoff_or_free!(p, 1), p.lock)
   CP._pool_wait_timeout!(p, w)                               # w already done → must no-op
-  @test isready(w.chan) && take!(w.chan) == 1                # the slot index, not the timeout
+  @test isready(w.chan) && take!(w.chan) == (1, c)           # the (slot, handle) pair, not the timeout
   @test !isready(w.chan)                                     # exactly one item ever
   @test w.done && isempty(CP._waiters_for(p))
   @test p.available == [false]                               # slot stays leased for the handed waiter
@@ -223,10 +224,11 @@ end
     t2 = Threads.@spawn CP._pool_wait_timeout!(p3, w3)
     wait(t1); wait(t2)
     item = take!(w3.chan)                                    # exactly one item present (else this hangs)
-    @test item == 1 || item == CP._POOL_WAIT_TIMEOUT
+    handed = item isa Tuple && item[1] == 1                  # a (slot, handle) pair (#584) …
+    @test handed || item == CP._POOL_WAIT_TIMEOUT            # … or the timeout sentinel
     @test !isready(w3.chan)                                  # never a second (no double delivery/lease)
     @test w3.done && isempty(CP._waiters_for(p3))
-    @test (item == 1) ? (p3.available == [false]) : (p3.available == [true])   # state matches the winner
+    @test handed ? (p3.available == [false]) : (p3.available == [true])   # state matches the winner
   end
 end
 
@@ -288,4 +290,124 @@ end
   @test got_r isa FakeHandoffConn
   CP.release_connection(p, rconn2); CP.release_connection(p, got_r)
   @test count(!, p.available) == 0
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Release-origin handoff vs a pool sweep: no double lease (#584)
+#
+# A release hands the slot to a parked waiter with the released handle still IN it, which is
+# byte-identical to an ordinary lease. `_close_pool_slots!` (#47) therefore takes that handle out
+# and re-opens the slot, and a fresh acquirer can materialize its own handle there — all before the
+# waiter has re-taken `pool.lock`. The handoff now carries `(slot, handle)`, and acquire branch A
+# refuses a slot that no longer holds what it was handed (or is no longer leased) and retries.
+#
+# Deterministic on one thread: the waiter is a sticky `@async` task, and nothing between the
+# release and the fresh acquire yields (a cap-1 `put!` only notifies; the sweep's `@warn` is
+# captured by `@test_logs`, so no stderr write can yield either). `w.done && isready(w.chan)`
+# after the release pins that the handoff happened and the waiter has NOT yet consumed it.
+# The mock's `close_pool!` is the #147 no-op fallback, so the sweep body is called directly.
+#
+# Gate against the unpatched body: the waiter returns the fresh acquirer's handle — `fetch(W) === X`
+# while X is still held — so the "waiter re-parked" wait below times out.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "sweep between a release-handoff and the waiter's wake never double-leases (SQLite split, #584)" begin
+  p = MockSQLiteHandoff(2; split = true)               # writer slot 1 is the ONLY :write candidate
+  c1 = CP.acquire_connection(p; mode = :write)
+  W = @async CP.acquire_connection(p; mode = :write, timeout_seconds = 5)
+  @test _wait_until(() -> length(CP._waiters_for(p)) == 1)
+  w = CP._waiters_for(p)[1]
+
+  # 2. Release: slot 1 is handed to W under pool.lock — handle still in the slot, leased for W.
+  @test CP.release_connection(p, c1) === true
+  @test w.done && isready(w.chan)                      # handed, and not yet consumed by W
+  @test p.available[1] === false && p.connections[1] === c1
+
+  # 3. Sweep: takes c1 out, closes it, and re-opens slot 1 exactly like an ordinary lease.
+  @test_logs (:warn, r"checked out") CP._close_pool_slots!(p; drain_seconds = 0)
+  @test c1.closed && p.connections[1] === nothing && p.available[1] === true
+
+  # 4. A fresh acquirer materializes X into slot 1 through branch B, still without yielding.
+  X = CP.acquire_connection(p; mode = :write)
+  @test p.connections[1] === X && p.available[1] === false
+
+  # 5. Now W runs: (1, c1) was handed, X is there → retry → the writer slot is leased and a split
+  #    pool never expands → W parks again. Unpatched, W returns X here instead.
+  @test _wait_until(() -> length(CP._waiters_for(p)) == 1)
+  @test !istaskdone(W)
+  @test PormG.pool_stats(p).in_use == 1                # X is the single holder
+
+  # X's release hands (1, X) to W — only then does W hold X, and X's task no longer does.
+  @test CP.release_connection(p, X) === true
+  got = fetch(W)
+  @test got === X
+  @test PormG.pool_stats(p).in_use == 1
+  CP.release_connection(p, got)
+  @test count(!, p.available) == 0
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL twin of the sweep race (#584)
+#
+# Same five steps on the PG mock, which expands up to its ceiling, so the pool is saturated first
+# to make the second acquirer park. After the sweep every slot is empty and available, so the
+# waiter's retry materializes a fresh handle into the next empty slot rather than re-parking.
+# Gate: unpatched, `fetch(W) === X`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "sweep between a release-handoff and the waiter's wake never double-leases (PG, #584)" begin
+  p = MockPGHandoff(1)
+  held = _saturate(p)                                  # 10 slots leased, ceiling reached
+  W = @async CP.acquire_connection(p; timeout_seconds = 5)
+  @test _wait_until(() -> length(CP._waiters_for(p)) == 1)
+  w = CP._waiters_for(p)[1]
+
+  c1 = held[1]
+  @test CP.release_connection(p, c1) === true
+  @test w.done && isready(w.chan)
+  @test p.available[1] === false && p.connections[1] === c1
+
+  @test_logs (:warn, r"checked out") CP._close_pool_slots!(p; drain_seconds = 0)
+  @test all(c -> c === nothing, p.connections) && all(p.available)
+
+  X = CP.acquire_connection(p)                          # branch B → slot 1
+  @test p.connections[1] === X
+
+  got = fetch(W)                                        # W runs now
+  @test got isa FakeHandoffConn
+  @test got !== X                                       # ← unpatched: the same handle, twice
+  @test p.connections[2] === got                        # retried through the scan → next empty slot
+  @test PormG.pool_stats(p).in_use == 2
+  # `held[2:end]` were force-closed by the sweep and are strays now — releasing them would only
+  # warn "not found", so they are left alone; the two live leases are what must come back.
+  CP.release_connection(p, X); CP.release_connection(p, got)
+  @test count(!, p.available) == 0
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Discard-origin handoff still materializes across a sweep (#584)
+#
+# The other handoff shape: `_discard_connection!` empties the slot BEFORE handing it over, so the
+# waiter is handed `(slot, nothing)`. The sweep leaves a leased-but-empty slot alone (#47), and the
+# waiter's re-check must accept "still empty, still leased" and materialize a fresh handle — the
+# identity check must not turn the discard-origin shape into a spurious retry.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "discard-origin handoff still materializes across a sweep (#584)" begin
+  p = MockPGHandoff(1)
+  held = _saturate(p)
+  W = @async CP.acquire_connection(p; timeout_seconds = 5)
+  @test _wait_until(() -> length(CP._waiters_for(p)) == 1)
+  w = CP._waiters_for(p)[1]
+
+  victim = held[1]
+  @test CP._discard_connection!(p, victim) === true    # slot 1 emptied, handed as (1, nothing)
+  @test w.done && isready(w.chan)
+  @test p.connections[1] === nothing && p.available[1] === false
+
+  @test_logs (:warn, r"checked out") CP._close_pool_slots!(p; drain_seconds = 0)
+  @test p.connections[1] === nothing && p.available[1] === false   # leased-empty stays leased (#47)
+
+  got = fetch(W)
+  @test got isa FakeHandoffConn && got !== victim
+  @test p.connections[1] === got && p.available[1] === false      # materialized into ITS slot
+  CP.release_connection(p, got)
+  @test p.available[1] === true
 end

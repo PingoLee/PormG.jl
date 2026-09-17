@@ -134,7 +134,19 @@ function _check_function(x::Vector{String})
     end
   end
 end
-_check_function(x::String) = _check_function(String.(split(x, "__@")))
+# #603 — the single consumer arm the widened constructor surface owes under the #533 rule ("a
+# consumer per admitted member"). Every `Union{AbstractString,...}` signature in `functions.jl`,
+# `types.jl` and `object_manager.jl` normalizes at its own seam, so this arm is the backstop for the
+# paths that hand a string straight to the walk. The body already normalizes: `split` on a
+# `SubString` yields `Vector{SubString{String}}` and the broadcast makes it the `Vector{String}` the
+# arm above demands.
+_check_function(x::AbstractString) = _check_function(String.(split(x, "__@")))
+# A vector of non-`String` strings must take the `Vector{String}` arm above — which reads the whole
+# vector as ONE already-split `__@` path — and not the generic `Vector{T}` arm, which resolves
+# element by element. Widening the scalar arm alone would have silently routed
+# `split("date__@year", "__@")` to the wrong semantics instead of the `MethodError` it raises today.
+# `Vector{String}` stays strictly more specific, so this adds no ambiguity.
+_check_function(x::Vector{<:AbstractString}) = _check_function(String.(x))
 function _check_function(x::FExpression)
   return x
 end
@@ -879,6 +891,14 @@ function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction; _as::Union{N
 end
 function _resolve_window_expression(v, instruc::SQLInstruction)
   if v isa Symbol
+    return _resolve_window_expression(String(v), instruc)
+  elseif v isa AbstractString && !(v isa String)
+    # #603: normalize and recurse, exactly as the `Symbol` arm above does. Without this a
+    # `SubString` fell past every branch into the `else` and was told its TYPE was unsupported,
+    # when a window expression by column name is precisely what it was.
+    #
+    # `!(v isa String)` is load-bearing, not redundant with the ordering below: `String(s::String)`
+    # returns the SAME object, so a `String` reaching this branch would recurse into it forever.
     return _resolve_window_expression(String(v), instruc)
   elseif v isa String
     isempty(v) && throw(QueryBuildError("Window expression fields cannot be empty"))

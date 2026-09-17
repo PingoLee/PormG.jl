@@ -6,19 +6,23 @@
 # Helpers for bulk operations
 #
 
+# #603 — the exact twin of `_normalize_bulk_filters` below, with both of its failure modes: the
+# `AbstractString` guards admit a view that the `String`-typed accumulator then refuses on `push!`
+# with a raw `MethodError` (outside the PormG taxonomy), while the `Pair{String,String}` guards
+# refuse a `SubString`-keyed rename with a wrong-reason "Invalid column specification". Adjacent
+# keyword to `filters` on the same `bulk_*` call, so a caller who reaches one reaches the other.
 function _normalize_bulk_columns(columns)
   _columns::Vector{Union{String, Pair{String, String}}} = []
+  _norm(c) = c isa AbstractString ? String(c) : String(c.first) => String(c.second)
   if columns === nothing
   elseif columns isa AbstractString
-    push!(_columns, columns)
-  elseif columns isa Pair{String, String}
-    push!(_columns, columns)
+    push!(_columns, _norm(columns))
+  elseif columns isa Pair{<:AbstractString, <:AbstractString}
+    push!(_columns, _norm(columns))
   elseif columns isa Vector
     for column in columns
-      if column isa AbstractString
-        push!(_columns, column)
-      elseif column isa Pair{String, String}
-        push!(_columns, column)
+      if column isa Union{AbstractString, Pair{<:AbstractString, <:AbstractString}}
+        push!(_columns, _norm(column))
       else
         throw(QueryBuildError("Invalid column specification: $column"))
       end
@@ -132,17 +136,25 @@ end
 # end deprecation shim
 # ============================================================================
 
+# #603 — this had BOTH failure modes of the `::String`-not-`AbstractString` class, one of them worse
+# than the issue described. The scalar guard already said `AbstractString`, so a bare `SubString`
+# passed it and then died on the `push!` into the `String`-typed accumulator with a raw
+# `MethodError` — an escape from the PormG error taxonomy entirely. The vector guard said `String`,
+# so the same value inside a `Vector` was refused as an "Invalid filter specification" when it was
+# a perfectly good one. Normalizing every admitted spelling to `String` at the push closes both, and
+# keeps the accumulator concrete so nothing downstream sees a view.
 function _normalize_bulk_filters(filters)
   _filters::Vector{Union{String, Pair{String, <:Any}}} = []
+  _norm(f) = f isa AbstractString ? String(f) : String(f.first) => f.second
   if filters === nothing
   elseif filters isa AbstractString
-    push!(_filters, filters)
-  elseif filters isa Pair{String, <:Any}
-    push!(_filters, filters)
+    push!(_filters, _norm(filters))
+  elseif filters isa Pair{<:AbstractString, <:Any}
+    push!(_filters, _norm(filters))
   elseif filters isa Vector
     for f in filters
-      if f isa Union{String, Pair{String, <:Any}}
-        push!(_filters, f)
+      if f isa Union{AbstractString, Pair{<:AbstractString, <:Any}}
+        push!(_filters, _norm(f))
       else
         throw(QueryBuildError("Invalid filter specification: $f"))
       end

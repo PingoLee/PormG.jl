@@ -165,8 +165,23 @@ const WindowPartitionPart = Union{String,SQLTypeField,SQLTypeFunction,SQLTypeF,S
 # `SQLTypeJoined` likewise.
 const WindowOrderPart = Union{String,SQLTypeOrder,SQLTypeCTE,SQLTypeJoined}
 
-"""Window function argument expressions."""
+"""Window function column SLOT — what `WindowFunction.column` may hold. The vocabulary a CALLER may
+write is the wider `WindowColumnArg` below (#603)."""
 const WindowColumnPart = Union{Nothing,String,SQLTypeField,SQLTypeText,SQLTypeFunction,SQLTypeF,SQLTypeCTE,SQLTypeJoined}
+
+# #603 — the ARGUMENT vocabulary for the window VALUE functions (`Lag`, `Lead`, `FirstValue`,
+# `LastValue`, `NthValue`): what a CALLER may write, as against what the node may HOLD. Those five
+# normalize through `_norm_fn_arg` before the value reaches `WindowFunction.column`, so the slot
+# above keeps naming the concrete `String` and no view can ever be stored.
+#
+# DERIVED from its sibling, never restated. The two drift directions are not symmetric, which is
+# what makes the derivation load-bearing rather than tidy: a member added to `WindowColumnPart`
+# alone becomes a `MethodError` at the constructor and `test_node_admission.jl` catches it, because
+# that probe drives the slot THROUGH `Lag`. A member added here alone would be admitted, ride
+# through `_norm_fn_arg`'s identity arm, and die inside `convert` on the slot — outside the
+# taxonomy — and `test_node_admission` would NOT catch it, because its loop walks
+# `uniontypes(WindowColumnPart)` and would never probe a member that exists only here.
+const WindowColumnArg = Union{WindowColumnPart,AbstractString}
 
 """Optional strings (often used for aliases or configs)."""
 const OptionalString = Union{String,Nothing}
@@ -510,7 +525,11 @@ end
 # refusal, which names the supported spellings, rather than dying as a bare `MethodError` on this
 # signature. The `CTE`/`Joined` handles have their own more specific method below, so they still
 # take the `desc`-rejecting path.
-SQLOrder(field; order::Union{Integer,Nothing}=nothing, orientation::String="ASC", _as::OptionalString=nothing, nulls::Union{Symbol,Nothing}=nothing) = SQLOrder(field, order, orientation, _as, nulls)
+# #603: `orientation` and `_as` are keyword ANNOTATIONS, which do not convert — they raise
+# `TypeError`, outside `PormGError`. Widened here; `_normalize_order_orientation` already took an
+# `AbstractString`, and the struct's own slots convert on construction, so the inner constructor
+# needs no change.
+SQLOrder(field; order::Union{Integer,Nothing}=nothing, orientation::AbstractString="ASC", _as::Union{AbstractString,Nothing}=nothing, nulls::Union{Symbol,Nothing}=nothing) = SQLOrder(field, order, orientation, _as, nulls)
 # #509 — a CTE (#444) or joined-copy (#481) column inside an `SQLOrder`. Until this, the keyword
 # constructor above was the whole surface and its `field` union excluded both, so
 # `SQLOrder(CTE("ev", "seen"))` was a `MethodError` — which is why an `SQLOrder` entry in a window's
@@ -534,7 +553,7 @@ SQLOrder(field; order::Union{Integer,Nothing}=nothing, orientation::String="ASC"
 # to silently pick a winner when the two spellings disagree — first-match precedence, which is the
 # exact defect class #492/#509 exist to remove. One direction, one slot.
 function SQLOrder(field::Union{SQLTypeCTE,SQLTypeJoined}; order::Union{Integer,Nothing}=nothing,
-                  orientation::String="ASC", _as::OptionalString=nothing,
+                  orientation::AbstractString="ASC", _as::Union{AbstractString,Nothing}=nothing,
                   nulls::Union{Symbol,Nothing}=nothing)
   _reject_handle_desc_in_sqlorder(field)
   return SQLOrder(_order_field(field), order, orientation, _as, nulls)
@@ -774,10 +793,14 @@ end
 # `QueryBuildError` naming the alias / suffix spelling (#537) rather than the raw `FieldError` it
 # used to be. Do not widen the arms without a consumer: `test_op_function_column.jl` pins both the
 # served set and the refusals.
-OP(column::String, value) = OperObject(operator="=", values=value, column=SQLField(column))
+# #603: `AbstractString` on both the column and the operator. `SQLField(String(column))` because
+# `FieldPart`'s string member is `String` — widening the signature without converting only moves the
+# `MethodError` into `SQLField`. The `SQLTypeFunction` arms are disjoint from `AbstractString`, so
+# there is no ambiguity.
+OP(column::AbstractString, value) = OperObject(operator="=", values=value, column=SQLField(String(column)))
 OP(column::SQLTypeFunction, value) = OperObject(operator="=", values=value, column=column)
-OP(column::String, operator::String, value) = OperObject(operator=operator, values=value, column=SQLField(column))
-OP(column::SQLTypeFunction, operator::String, value) = OperObject(operator=operator, values=value, column=column)
+OP(column::AbstractString, operator::AbstractString, value) = OperObject(operator=String(operator), values=value, column=SQLField(String(column)))
+OP(column::SQLTypeFunction, operator::AbstractString, value) = OperObject(operator=String(operator), values=value, column=column)
 
 @kwdef mutable struct QObject <: SQLTypeQ
   filters::Vector{FilterType} # filters to be used in the query
@@ -947,7 +970,7 @@ const _ColumnHandle   = Union{SQLTypeCTE,SQLTypeJoined}
 end
 
 """
-    F(field_name::String) -> FExpression
+    F(field_name::AbstractString) -> FExpression
 
 Reference a **database column** rather than a Julia value (the Django `F()` equivalent). The
 comparison or arithmetic happens inside SQL, so no data is pulled into Julia and the update stays
@@ -985,11 +1008,17 @@ M.Result.objects.filter(pts > 10, pts < 25)   # two independent predicates on th
 
 See also [Field Expressions](read/field_expressions.md).
 """
-function F(field_name::String)
+function F(field_name::AbstractString)
+  # #603: `AbstractString` so a `SubString` out of `split(query_string, "=")` dispatches, then
+  # normalized ONCE here — `FExpression.field_name` and `.column` are `String`-typed, and a
+  # `Union{String,...}` slot without `Nothing` has no `convert` fallback, so an un-normalized view
+  # would die one frame deeper with a raw `MethodError`. `String(x)`, not `string(x)`: `string` is
+  # the identity for a `LazyString` (measured in #598).
+  normalized_name = String(field_name)
   return FExpression(
-    field_name=field_name,
+    field_name=normalized_name,
     function_name="F",
-    column=field_name
+    column=normalized_name
   )
 end
 # Arithmetic operations for F expressions
@@ -1175,7 +1204,18 @@ Base.:<=(f::FExpression, operand::_CompareOperand)   = _compare(f, "<=", operand
 # its comparison methods — a second, independent site, so it is asserted separately in
 # `test_f_date_operands.jl` rather than assumed to follow.
 for (op, sym) in ((:(==), "="), (:(!=), "!="), (:(>), ">"), (:(<), "<"), (:(>=), ">="), (:(<=), "<="))
-  @eval Base.$op(::FExpression, operand) = throw(_unsupported_compare_operand($sym, operand))
+  @eval function Base.$op(x::FExpression, operand)
+    # #603: a non-`String` `AbstractString` (a `SubString` from a query string, a `LazyString`)
+    # is outside `_CompareOperand`, so it lands HERE and used to be refused for the wrong reason —
+    # its type was fine, only its spelling was not. Normalize and re-dispatch to the
+    # `_CompareOperand` arm above rather than admitting `AbstractString` into `_CompareLiteral`:
+    # that union owes an oracle row per member (#533, and the note above it), and a method on
+    # `::AbstractString` beside one on `::_CompareOperand` — which contains `String` — is ambiguous
+    # in both directions. `String(x)` always returns a `String`, which IS in the union, so the
+    # recursion terminates in exactly one hop.
+    operand isa AbstractString && return Base.$op(x, String(operand))
+    throw(_unsupported_compare_operand($sym, operand))
+  end
 end
 Base.:(==)(::FExpression, operand::Missing) = throw(_unsupported_compare_operand("=", operand))
 Base.:(==)(::FExpression, operand::WeakRef) = throw(_unsupported_compare_operand("=", operand))
@@ -1511,7 +1551,14 @@ for (op, sym) in ((:(==), "="), (:(!=), "!="), (:(>), ">"), (:(<), "<"), (:(>=),
     _reject_joined_desc(j, "a comparison")
     return FExpression(field_name=j, operation=$sym, operand=operand, function_name="F", column="", aggregate=false)
   end
-  @eval Base.$op(::JoinedReference, operand) = throw(_unsupported_compare_operand($sym, operand))
+  @eval function Base.$op(x::JoinedReference, operand)
+    # #603: the `FExpression` twin of this branch, for the same reason and with the same
+    # termination argument — see the note on that loop above. Spelled out here rather than shared,
+    # because this family is generated independently and `test_f_date_operands.jl` asserts the two
+    # separately rather than assuming one follows the other.
+    operand isa AbstractString && return Base.$op(x, String(operand))
+    throw(_unsupported_compare_operand($sym, operand))
+  end
 end
 Base.:(==)(::JoinedReference, operand::Missing) = throw(_unsupported_compare_operand("=", operand))
 Base.:(==)(::JoinedReference, operand::WeakRef) = throw(_unsupported_compare_operand("=", operand))

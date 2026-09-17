@@ -1296,12 +1296,15 @@ end
 #
 # `__` and `@` are still rejected: `__` is the lookup separator (`driverid__surname`) and `@` the
 # operator marker, so a field spelled with either is unqueryable regardless of the hatch.
-function format_fild_name(name::String)::String
-  isempty(name) && return name
+# #603: `AbstractString` — `pk_field`, `source_field` and `target_field` all route a user-supplied
+# name through here, and every one of those slots is `String`-typed on the field struct. The return
+# annotation forces the conversion, so callers keep getting a concrete `String`.
+function format_fild_name(name::AbstractString)::String
+  isempty(name) && return String(name)
   if occursin(r"__|@", name)
     throw(ModelDefinitionError("The field name $name contains __ or @; this is not allowed"))
   end
-  return name
+  return String(name)
 end
 function format_fild_name(name::Nothing)::Nothing
   return nothing

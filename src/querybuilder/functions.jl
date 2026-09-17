@@ -42,6 +42,24 @@ end
 # SQLTypeFunction Objects (functions from sql)
 #
 
+# #603 — the one normalization the widened constructors below share.
+#
+# The seven constructors #602 widened (`Coalesce`, `Greatest`, `Least`, `NullIf`, `Replace`,
+# `Power`, `Mod`) take an UNTYPED argument and branch on `isa(v, AbstractString)` in the body. The
+# constructors below dispatch on a typed union instead, so widening the union is only half the
+# change: `FObject.column`'s string member is `String`, and a `Union{String,...}` slot without
+# `Nothing` has no `convert` fallback — an un-normalized `SubString` would die one frame deeper
+# inside `FObject` with a raw `MethodError` naming nothing the caller wrote.
+#
+# The aggregates below are the same shape for the opposite reason: they take `x` UNTYPED, so there
+# is no signature to widen — nothing refuses the view, it simply rides into `FObject.column` and
+# dies in `convert` there.
+#
+# `String(x)`, never `string(x)`: `string` is the identity for a `LazyString` (measured in #598).
+# A `String` argument comes back unchanged, so every rendered query stays byte-identical.
+_norm_fn_arg(x::AbstractString) = String(x)
+_norm_fn_arg(x::Vector{<:AbstractString}) = String.(x)
+_norm_fn_arg(x) = x
 
 """
     Sum(column; distinct=false)
@@ -49,7 +67,7 @@ end
 Computes the sum of all values in the column.
 """
 function Sum(x; distinct::Bool = false)
-  return FObject(function_name = "SUM", column = x, aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
+  return FObject(function_name = "SUM", column = _norm_fn_arg(x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
 
 """
@@ -68,7 +86,7 @@ and is exempt.
 See also [Filters and Aggregates](@ref).
 """
 function Avg(x; distinct::Bool = false)
-  return FObject(function_name = "AVG", column = x, aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
+  return FObject(function_name = "AVG", column = _norm_fn_arg(x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
 """
   Count(x; distinct::Bool = false)
@@ -89,7 +107,7 @@ df = query |> DataFrame
 ```
 """
 function Count(x; distinct::Bool = false)
-  return FObject(function_name = "COUNT", column = x, aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
+  return FObject(function_name = "COUNT", column = _norm_fn_arg(x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
 """
     Max(x)
@@ -109,7 +127,7 @@ representation (a `String` on SQLite), not a `Date`. Convert it yourself if you 
 See also [`Min`](@ref), [Filters and Aggregates](@ref).
 """
 function Max(x)
-  return FObject(function_name = "MAX", column = x, aggregate = true)
+  return FObject(function_name = "MAX", column = _norm_fn_arg(x), aggregate = true)
 end
 
 """
@@ -122,7 +140,7 @@ is the backend's own representation rather than the model field's type.
 See also [Filters and Aggregates](@ref).
 """
 function Min(x)
-  return FObject(function_name = "MIN", column = x, aggregate = true)
+  return FObject(function_name = "MIN", column = _norm_fn_arg(x), aggregate = true)
 end
 
 # #444 — aggregates DO accept a CTE column handle, and this note records why there is no guard here.
@@ -142,12 +160,17 @@ end
 # take an untyped `x` and pass it to `FObject.column`, whose union admits `SQLTypeCTE` (types.jl).
 # Nothing else is needed; do not add a guard back without re-running that differential first.
 
-function _window_part_vector(value, part_name::String)::Vector{WindowPartitionPart}
+function _window_part_vector(value, part_name::AbstractString)::Vector{WindowPartitionPart}
   value === nothing && return WindowPartitionPart[]
   values = value isa Tuple ? collect(value) : value isa AbstractVector ? collect(value) : [value]
   parts = WindowPartitionPart[]
   for item in values
     item isa Symbol && (item = String(item))
+    # #603: the same normalization one line up, for the other spelling a caller can produce. The
+    # `WindowPartitionPart` / `WindowOrderPart` vectors these push into are `Union{String,...}`
+    # WITHOUT `Nothing`, so they have no `convert` fallback — a view has to become a `String` here
+    # or the guard below refuses it for a reason ("must be strings") it already satisfied.
+    item isa AbstractString && (item = String(item))
     # #533 — the enumeration used to omit `CTE(...)` and `Joined(...)`, admitted since #444/#481, so
     # the message named fewer spellings than the guard accepted. It also gains the ordering case: an
     # `SQLOrder` used to satisfy this test through `SQLTypeOrder <: SQLTypeField` and then die at
@@ -169,6 +192,11 @@ function _window_order_vector(value)::Vector{WindowOrderPart}
   parts = WindowOrderPart[]
   for item in values
     item isa Symbol && (item = String(item))
+    # #603: the same normalization one line up, for the other spelling a caller can produce. The
+    # `WindowPartitionPart` / `WindowOrderPart` vectors these push into are `Union{String,...}`
+    # WITHOUT `Nothing`, so they have no `convert` fallback — a view has to become a `String` here
+    # or the guard below refuses it for a reason ("must be strings") it already satisfied.
+    item isa AbstractString && (item = String(item))
     # #533 — same omission as the sibling guard above: `CTE(...)` / `Joined(...)` have been admitted
     # here since #444/#481 and the message never said so.
     item isa WindowOrderPart || throw(QueryBuildError("WindowOver order_by entries must be strings, SQLOrder objects, CTE(\"name\", \"path\") or Joined(\"alias\", \"column\"). Got $(typeof(item))."))
@@ -223,14 +251,23 @@ query.values(
 
 See also [Window Functions](@ref).
 """
-function WindowOver(partition_by, order_by=WindowOrderPart[]; frame::OptionalString=nothing)
+function WindowOver(partition_by, order_by=WindowOrderPart[]; frame::Union{AbstractString,Nothing}=nothing)
+  # #603: `frame` is the third keyword on the constructor whose other two this issue widened. A
+  # keyword TYPE ANNOTATION does not convert — it raises `TypeError`, which is outside `PormGError`
+  # entirely — so the annotation is widened and the `WindowSpec` slot converts on construction.
+  #
+  # This comment lives INSIDE the body on purpose: a comment between a docstring and its `function`
+  # DETACHES the docstring. Placing it above cost `WindowOver` its docs entirely, which failed
+  # `test_docstring_coverage.jl` and then the docs build, unresolving the five `[`WindowOver`](@ref)`
+  # links in `src/PormG.jl`, this file and `types.jl` (`api.md` renders them through `@autodocs`;
+  # it contains no `@ref` of its own).
   return WindowSpec(
     partition_by=_window_part_vector(partition_by, "partition_by"),
     order_by=_window_order_vector(order_by),
     frame=frame
   )
 end
-function WindowOver(; partition_by=WindowPartitionPart[], order_by=WindowOrderPart[], frame::OptionalString=nothing)
+function WindowOver(; partition_by=WindowPartitionPart[], order_by=WindowOrderPart[], frame::Union{AbstractString,Nothing}=nothing)
   return WindowOver(partition_by, order_by; frame=frame)
 end
 
@@ -299,11 +336,11 @@ Window `LAG(x, offset)` — the value of `x` from `offset` rows **earlier** in t
 
 See also [`Lead`](@ref), [Window Functions](@ref).
 """
-function Lag(x::WindowColumnPart; offset::Integer=1, default=nothing, over::WindowSpec=WindowOver())
+function Lag(x::WindowColumnArg; offset::Integer=1, default=nothing, over::WindowSpec=WindowOver())
   offset < 0 && throw(QueryBuildError("Lag offset must be a non-negative integer"))
   kwargs = Dict{String,Any}("offset" => offset)
   default !== nothing && (kwargs["default"] = default)
-  return WindowFunction(function_name="LAG", column=x, over=over, kwargs=kwargs)
+  return WindowFunction(function_name="LAG", column=_norm_fn_arg(x), over=over, kwargs=kwargs)
 end
 
 """
@@ -316,11 +353,11 @@ identical.
 
 See also [Window Functions](@ref).
 """
-function Lead(x::WindowColumnPart; offset::Integer=1, default=nothing, over::WindowSpec=WindowOver())
+function Lead(x::WindowColumnArg; offset::Integer=1, default=nothing, over::WindowSpec=WindowOver())
   offset < 0 && throw(QueryBuildError("Lead offset must be a non-negative integer"))
   kwargs = Dict{String,Any}("offset" => offset)
   default !== nothing && (kwargs["default"] = default)
-  return WindowFunction(function_name="LEAD", column=x, over=over, kwargs=kwargs)
+  return WindowFunction(function_name="LEAD", column=_norm_fn_arg(x), over=over, kwargs=kwargs)
 end
 
 """
@@ -334,7 +371,7 @@ its docstring.
 
 See also [`NthValue`](@ref), [Window Functions](@ref).
 """
-FirstValue(x::WindowColumnPart; over::WindowSpec=WindowOver()) = WindowFunction(function_name="FIRST_VALUE", column=x, over=over)
+FirstValue(x::WindowColumnArg; over::WindowSpec=WindowOver()) = WindowFunction(function_name="FIRST_VALUE", column=_norm_fn_arg(x), over=over)
 
 """
     LastValue(x; over::WindowSpec = WindowOver())
@@ -362,7 +399,7 @@ Window `LAST_VALUE(x)` — the value of `x` in the last row of the window frame.
 
 See also [`FirstValue`](@ref), [Window Functions](@ref).
 """
-LastValue(x::WindowColumnPart; over::WindowSpec=WindowOver()) = WindowFunction(function_name="LAST_VALUE", column=x, over=over)
+LastValue(x::WindowColumnArg; over::WindowSpec=WindowOver()) = WindowFunction(function_name="LAST_VALUE", column=_norm_fn_arg(x), over=over)
 
 """
     NthValue(x, n::Integer; over::WindowSpec = WindowOver())
@@ -385,9 +422,9 @@ using PormG.Functions: NthValue, WindowOver
 
 See also [`FirstValue`](@ref), [Window Functions](@ref).
 """
-function NthValue(x::WindowColumnPart, n::Integer; over::WindowSpec=WindowOver())
+function NthValue(x::WindowColumnArg, n::Integer; over::WindowSpec=WindowOver())
   n <= 0 && throw(QueryBuildError("NthValue n must be a positive integer"))
-  return WindowFunction(function_name="NTH_VALUE", column=x, over=over, kwargs=Dict{String,Any}("n" => n))
+  return WindowFunction(function_name="NTH_VALUE", column=_norm_fn_arg(x), over=over, kwargs=Dict{String,Any}("n" => n))
 end
 
 """
@@ -415,10 +452,10 @@ Value(x::JoinedReference) = throw(QueryBuildError(
 
 Casts a column or expression to a specific SQL type.
 """
-function Cast(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, type::String)
-  return FObject(function_name = "CAST", column = x, kwargs = Dict{String, Any}("type" => type))
+function Cast(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, type::AbstractString)
+  return FObject(function_name = "CAST", column = _norm_fn_arg(x), kwargs = Dict{String, Any}("type" => String(type)))
 end
-function Cast(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, type::PormGField)
+function Cast(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, type::PormGField)
   return Cast(x, type.type)
 end
 
@@ -427,11 +464,17 @@ end
 
 Concatenates multiple strings or columns.
 """
-function Concat(x::Vector; output_field::Union{N, String, Nothing} where N <: PormGField = nothing, _as::String="")
+function Concat(x::Vector; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing, _as::AbstractString="")
   if isa(output_field, PormGField)
     output_field = output_field.type
   end
-  return FObject(function_name = "CONCAT", column = x, kwargs = Dict{String, Any}("output_field" => output_field, "as" => _as))
+  output_field = _norm_fn_arg(output_field)   # #603
+  # #603: the string ELEMENTS too. `_check_function`'s vector arm assigns its result back into this
+  # vector in place, so a `Vector{SubString{String}}` out of `split(...)` would fail the store even
+  # with the walk itself widened. The comprehension preserves the incoming element type for every
+  # spelling that already worked (`Vector{String}` in, `Vector{String}` out), so nothing moves.
+  processed_cols = [v isa AbstractString ? String(v) : v for v in x]
+  return FObject(function_name = "CONCAT", column = processed_cols, kwargs = Dict{String, Any}("output_field" => output_field, "as" => String(_as)))
 end
 # Variadic convenience: Concat("forename", Value(" "), "surname") → same as vector form
 Concat(args...; kwargs...) = Concat(collect(args); kwargs...)
@@ -441,14 +484,14 @@ Concat(args...; kwargs...) = Concat(collect(args); kwargs...)
 
 Extracts a component (YEAR, MONTH, DAY, etc.) from a date/time column.
 """
-function Extract(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined, Vector{String}}, part::String; formatter::Union{Nothing, Function, PormGField} = nothing)
+function Extract(x::Union{AbstractString, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined, Vector{<:AbstractString}}, part::AbstractString; formatter::Union{Nothing, Function, PormGField} = nothing)
   isa(formatter, PormGField) && (formatter = formatter.formatter)
-  return FObject(function_name = "EXTRACT", column = x, formatter = formatter, kwargs = Dict{String, Any}("part" => part))
+  return FObject(function_name = "EXTRACT", column = _norm_fn_arg(x), formatter = formatter, kwargs = Dict{String, Any}("part" => String(part)))
 end
 
-function Extract(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined, Vector{String}}, part::String, format::String; formatter::Union{Nothing, Function, PormGField} = nothing)
+function Extract(x::Union{AbstractString, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined, Vector{<:AbstractString}}, part::AbstractString, format::AbstractString; formatter::Union{Nothing, Function, PormGField} = nothing)
   isa(formatter, PormGField) && (formatter = formatter.formatter)
-  return FObject(function_name = "EXTRACT", column = x, formatter = formatter, kwargs = Dict{String, Any}("part" => part, "format" => format))
+  return FObject(function_name = "EXTRACT", column = _norm_fn_arg(x), formatter = formatter, kwargs = Dict{String, Any}("part" => String(part), "format" => String(format)))
 end
 # Build a WHEN fragment. When `otherwise` is provided, wrap it in a CASE automatically so
 # When(..., otherwise=x) is a complete standalone expression. When used inside Case([...]),
@@ -539,20 +582,22 @@ using PormG.Models: CharField          # field types are not part of PormG.Funct
 
 See also [`When`](@ref), [Functions and Dates](@ref).
 """
-function Case(conditions::Vector{N} where N <: SQLTypeFunction; default::Any = "NULL", output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
+function Case(conditions::Vector{N} where N <: SQLTypeFunction; default::Any = "NULL", output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   if isa(output_field, PormGField)
     output_field = output_field.type
   end
+  output_field = _norm_fn_arg(output_field)   # #603
   return FObject(function_name = "CASE", column = conditions, kwargs = Dict{String, Any}("else" => default, "output_field" => output_field))
 end
-function Case(conditions::SQLTypeFunction; default::Any = "NULL", output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
+function Case(conditions::SQLTypeFunction; default::Any = "NULL", output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   if isa(output_field, PormGField)
     output_field = output_field.type
-  end  
+  end
+  output_field = _norm_fn_arg(output_field)   # #603
   return FObject(function_name = "CASE", column = conditions, kwargs = Dict{String, Any}("else" => default, "output_field" => output_field)) 
 end
 """
-    ToChar(x, format::String; formatter = nothing)
+    ToChar(x, format::AbstractString; formatter = nothing)
 
 Format a date/time column as text — PostgreSQL `to_char(x, format)`, SQLite `strftime`.
 
@@ -600,9 +645,9 @@ Named `ToChar` since `0.3.0` (previously `To_char`, with a `formater` keyword).
 
 See also [Functions and Dates](@ref).
 """
-function ToChar(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined, Vector{String}}, format::String; formatter::Union{Nothing, Function, PormGField} = nothing)
+function ToChar(x::Union{AbstractString, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined, Vector{<:AbstractString}}, format::AbstractString; formatter::Union{Nothing, Function, PormGField} = nothing)
   isa(formatter, PormGField) && (formatter = formatter.formatter)
-  return FObject(function_name = "EXTRACT_DATE", column = x, formatter = formatter, kwargs = Dict{String, Any}("format" => format))
+  return FObject(function_name = "EXTRACT_DATE", column = _norm_fn_arg(x), formatter = formatter, kwargs = Dict{String, Any}("format" => String(format)))
 end
 
 
@@ -611,10 +656,11 @@ end
 
 Returns the first non-null value in the list of arguments.
 """
-function Coalesce(x...; output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
+function Coalesce(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   if isa(output_field, PormGField)
     output_field = output_field.type
   end
+  output_field = _norm_fn_arg(output_field)   # #603
   processed_cols = [isa(v, AbstractString) ? SQLField(String(v)) : v for v in x]
   return FObject(function_name = "COALESCE", column = processed_cols, kwargs = Dict{String, Any}("output_field" => output_field))
 end
@@ -624,10 +670,11 @@ end
 
 Returns the greatest value in the list of arguments.
 """
-function Greatest(x...; output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
+function Greatest(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   if isa(output_field, PormGField)
     output_field = output_field.type
   end
+  output_field = _norm_fn_arg(output_field)   # #603
   processed_cols = [isa(v, AbstractString) ? SQLField(String(v)) : v for v in x]
   return FObject(function_name = "GREATEST", column = processed_cols, kwargs = Dict{String, Any}("output_field" => output_field))
 end
@@ -637,10 +684,11 @@ end
 
 Returns the least value in the list of arguments.
 """
-function Least(x...; output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
+function Least(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   if isa(output_field, PormGField)
     output_field = output_field.type
   end
+  output_field = _norm_fn_arg(output_field)   # #603
   processed_cols = [isa(v, AbstractString) ? SQLField(String(v)) : v for v in x]
   return FObject(function_name = "LEAST", column = processed_cols, kwargs = Dict{String, Any}("output_field" => output_field))
 end
@@ -652,8 +700,8 @@ end
 
 Converts a string to lowercase.
 """
-function Lower(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "LOWER", column = x)
+function Lower(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+  return FObject(function_name = "LOWER", column = _norm_fn_arg(x))
 end
 
 """
@@ -661,8 +709,8 @@ end
 
 Converts a string to uppercase.
 """
-function Upper(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "UPPER", column = x)
+function Upper(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+  return FObject(function_name = "UPPER", column = _norm_fn_arg(x))
 end
 
 """
@@ -670,8 +718,8 @@ end
 
 Returns the length of a string.
 """
-function Length(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "LENGTH", column = x, formatter = Models.format_number_sql)
+function Length(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+  return FObject(function_name = "LENGTH", column = _norm_fn_arg(x), formatter = Models.format_number_sql)
 end
 
 """
@@ -679,8 +727,8 @@ end
 
 Returns the absolute value of a number.
 """
-function Abs(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "ABS", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
+function Abs(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+  return FObject(function_name = "ABS", column = _norm_fn_arg(x), aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
 """
@@ -688,8 +736,8 @@ end
 
 Rounds a number to the specified precision.
 """
-function Round(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, precision::Integer = 0)
-  return FObject(function_name = "ROUND", column = x, aggregate = _is_agg(x), kwargs = Dict{String, Any}("precision" => precision), formatter = Models.format_number_sql)
+function Round(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, precision::Integer = 0)
+  return FObject(function_name = "ROUND", column = _norm_fn_arg(x), aggregate = _is_agg(x), kwargs = Dict{String, Any}("precision" => precision), formatter = Models.format_number_sql)
 end
 
 """
@@ -720,8 +768,8 @@ end
 
 Removes leading and trailing whitespace from a string.
 """
-function Trim(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "TRIM", column = x)
+function Trim(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+  return FObject(function_name = "TRIM", column = _norm_fn_arg(x))
 end
 
 """
@@ -729,8 +777,8 @@ end
 
 Removes leading whitespace from a string.
 """
-function LTrim(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "LTRIM", column = x)
+function LTrim(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+  return FObject(function_name = "LTRIM", column = _norm_fn_arg(x))
 end
 
 """
@@ -738,8 +786,8 @@ end
 
 Removes trailing whitespace from a string.
 """
-function RTrim(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "RTRIM", column = x)
+function RTrim(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+  return FObject(function_name = "RTRIM", column = _norm_fn_arg(x))
 end
 
 """
@@ -747,8 +795,8 @@ end
 
 Returns the largest integer less than or equal to a number.
 """
-function Floor(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "FLOOR", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
+function Floor(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+  return FObject(function_name = "FLOOR", column = _norm_fn_arg(x), aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
 """
@@ -756,8 +804,8 @@ end
 
 Returns the smallest integer greater than or equal to a number.
 """
-function Ceil(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "CEIL", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
+function Ceil(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+  return FObject(function_name = "CEIL", column = _norm_fn_arg(x), aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
 
@@ -767,8 +815,8 @@ end
 
 Returns the square root of a number.
 """
-function Sqrt(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "SQRT", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
+function Sqrt(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+  return FObject(function_name = "SQRT", column = _norm_fn_arg(x), aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
 """
@@ -776,8 +824,8 @@ end
 
 Returns the exponential value (e^x) of a number.
 """
-function Exp(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "EXP", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
+function Exp(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+  return FObject(function_name = "EXP", column = _norm_fn_arg(x), aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
 """
@@ -785,8 +833,8 @@ end
 
 Returns the natural logarithm of a number.
 """
-function Ln(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "LN", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
+function Ln(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+  return FObject(function_name = "LN", column = _norm_fn_arg(x), aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
 """

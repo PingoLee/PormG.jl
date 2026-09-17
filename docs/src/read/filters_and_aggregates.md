@@ -436,7 +436,7 @@ LIMIT 1) AND
 
 ### Filter Values from Web Frameworks
 
-PormG accepts `SubString{String}` wherever a `String` filter value is expected, so values parsed directly from HTTP query strings (e.g. via `split`, `HTTP.URIs`, or Genie parameters) can be passed without an explicit `String(...)` conversion:
+PormG accepts any `AbstractString` — `SubString{String}`, `LazyString` — wherever a `String` is expected, so values parsed directly from HTTP query strings (e.g. via `split`, `HTTP.URIs`, or Genie parameters) can be passed without an explicit `String(...)` conversion:
 
 ```julia
 # SubString from a query-string parser — no conversion needed
@@ -448,7 +448,35 @@ codes = split("hamilton,vettel,alonso", ",")  # Vector{SubString{String}}
 query = M.Driver.objects.filter("driverref__@in" => codes)
 ```
 
-The same holds for a column name handed to the SQL-function constructors (`Power`, `Mod`, `Coalesce`, `Greatest`, `Least`, `NullIf`, `Replace`) and for the string form of `CharField(choices = …)` — a `SubString` is accepted wherever a `String` would be.
+This is not limited to filter values. A column name, an alias, a database key or a field keyword accepts the same spellings, so a value can travel from the request straight into the query:
+
+```julia
+# A column list and a sort key straight out of a query string
+columns = split("cols=driverid__surname,points", "=")[2]  # SubString{String}
+sort_by = split("sort=-points", "=")[2]                   # SubString{String} — "-points"
+
+query = M.Driver_standings.objects.
+    values(split(columns, ",")...).
+    order_by(sort_by)
+
+# Field references and SQL functions take them too
+query = M.Driver.objects.values(
+    "who"  => Upper(split("field=surname", "=")[2]),
+    "ref"  => F(split("field=driverref", "=")[2]),
+)
+```
+
+Concretely, a non-`String` `AbstractString` is accepted by:
+
+- **Reads** — filter values and `__@in` lists; `values()` field names and aliases; `order_by()`, including the `"-field"` descending form; `db()`.
+- **Column references** — `F(...)`, and the right-hand side of any `F` or `Joined` comparison.
+- **Aggregates** — `Sum`, `Avg`, `Count`, `Max`, `Min`.
+- **Scalar and conversion functions** — `Lower`, `Upper`, `Length`, `Abs`, `Round`, `Trim`, `LTrim`, `RTrim`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Cast`, `Extract`, `ToChar`, `Concat`, `Coalesce`, `Greatest`, `Least`, `NullIf`, `Replace`, `Power`, `Mod`, together with their `output_field` and `_as` keywords.
+- **Windows** — `WindowOver(partition_by = …, order_by = …, frame = …)`, `SQLOrder(...; orientation = …, _as = …)`, and the value functions `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`.
+- **Bulk writes** — the `filters`, `columns` and `match_on` arguments.
+- **Model fields** — `verbose_name`, `db_column`, `CharField(choices = …)`, and `to` / `through` / `how` / `related_name` / `pk_field` on `ForeignKey`, `OneToOneField` and `ManyToManyField`.
+
+Widening the accepted *type* did not widen the accepted *shape*: `values("points__@lte")` is still refused as an operator suffix in a projection whichever string type spells it.
 
 ---
 

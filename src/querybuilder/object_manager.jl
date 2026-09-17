@@ -4,7 +4,10 @@
 #
 
 # Why Vector{String}
-function _values_field(str::String)
+function _values_field(raw::AbstractString)
+  # #603: `AbstractString` so a `SubString` out of a query string dispatches, normalized ONCE here
+  # because `SQLField`'s `FieldPart` slot names the concrete `String`.
+  str = String(raw)
   check = String.(split(str, "__@"))
   if size(check, 1) == 1
     return SQLField(str, str)
@@ -82,7 +85,9 @@ _order_field(f::SQLField) = f
 # The String spelling now WORKS rather than being accepted and then failing: it is peeled and
 # validated exactly as the fluent `order_by("col")` path does, then normalized into the `SQLField`
 # every consumer requires.
-function _order_field(v::String)
+function _order_field(raw::AbstractString)
+  # #603: normalized at the seam — `v[2:end]` below and `SQLField` both want a `String`.
+  v = String(raw)
   # A leading `-` is the FLUENT spelling's direction marker. `SQLOrder` carries `orientation` of its
   # own, so consuming it here would mean two ways to say one thing and a silent winner when they
   # disagree — the first-match precedence #492/#509 exist to remove. One direction, one slot.
@@ -132,9 +137,12 @@ function _values!(q::SQLObject, values)
     elseif isa(v, SQLTypeFunction)
       push!(q.values, SQLField(_check_function(v), v._as))
     elseif isa(v, Pair)
-      if !isa(v.first, String)
+      # #603: `AbstractString`, normalized in place. The alias is only ever stored, so a
+      # `SubString` was refused for a reason that was never true of it.
+      if !isa(v.first, AbstractString)
         throw(QueryBuildError("Invalid values() pair key: $(v.first) (::$(typeof(v.first))) — use a String alias as the key in \"alias\" => expr."))
       end
+      isa(v.first, String) || (v = String(v.first) => v.second)
       if isa(v.second, Union{SQLTypeFunction,SQLTypeF})
         try
           push!(q.values, SQLField(_check_function(v.second), v.first))
@@ -168,7 +176,7 @@ function _values!(q::SQLObject, values)
         # which degraded to a bare `SQLText`. The copy changes no rendered byte — that is the whole
         # of its job here.
         push!(q.values, SQLText(v.second.field, v.second._as, v.first))
-      elseif isa(v.second, Union{String,CTEReference,JoinedReference})
+      elseif isa(v.second, Union{AbstractString,CTEReference,JoinedReference})
         # #444/#481: `"alias" => CTE("ev","sku")` and `"who" => Joined("d","surname")` take the same
         # route as `"alias" => "path"` — the handle's `_values_field` method peels and retags.
         z = _values_field(v.second)
@@ -179,7 +187,7 @@ function _values!(q::SQLObject, values)
         # the result. Fail loud instead so a wrong projection surfaces at build time.
         throw(QueryBuildError("Invalid values pair \"$(v.first)\" => ::$(typeof(v.second)): the right side must be a field name, a function (Count, Sum, …), Value(x), Subquery(inner), Exists(inner), CTE(\"name\", \"path\"), or Joined(\"alias\", \"column\")."))
       end
-    elseif isa(v, Union{String,CTEReference,JoinedReference})
+    elseif isa(v, Union{AbstractString,CTEReference,JoinedReference})
       # #444: a bare `CTE("parent","sku")` projects as `parent__sku` — see `_values_field`.
       # #481: a bare `Joined("d","surname")` projects as `d__surname`, likewise.
       push!(q.values, _values_field(v))
@@ -427,10 +435,10 @@ function _filter!(q::SQLObject, filter)
 end
 
 function _db!(q::SQLObject, keys)
-  if isempty(keys) || length(keys) > 1 || !isa(keys[1], String)
+  if isempty(keys) || length(keys) > 1 || !isa(keys[1], AbstractString)
     throw(QueryBuildError("db() expects exactly one String argument (the database key). Received: $(keys)"))
   end
-  q.connect_key = keys[1]
+  q.connect_key = String(keys[1])   # #603 — `connect_key` is `OptionalString`; keep it concrete
   return q
 end
 
@@ -497,10 +505,14 @@ end
 #
 # No docstring on purpose (#281) — see the note on `_values!` above. The user-facing contract
 # lives on the `object` docstring's `.order_by(...)` bullet.
-function _order_by!(q::SQLObject, values::NTuple{N,Union{String,SQLTypeOrder,CTEReference,JoinedReference}} where N)
+function _order_by!(q::SQLObject, values::NTuple{N,Union{AbstractString,SQLTypeOrder,CTEReference,JoinedReference}} where N)
   q.order = [] # every call of order_by, reset the order
   for v in values
-    if isa(v, String)
+    if isa(v, AbstractString)
+      # #603: normalize at the TOP of the branch, not just before `SQLField`. `v[2:end]` on a
+      # `SubString` yields another `SubString`, so converting later would still hand `SQLField` a
+      # view — and `FieldPart` names the concrete `String`.
+      v = String(v)
       # check if v constains - in the first position
       v[1:1] == "-" ? (orientation = "DESC"; v = v[2:end]) : orientation = "ASC"
       check = String.(split(v, "__@"))

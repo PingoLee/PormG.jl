@@ -6,7 +6,9 @@ Each of these functions renders DIFFERENTLY on PostgreSQL vs SQLite — PG has n
 `EXTRACT(... FROM ...)` / `to_char(...)`, SQLite must emulate with `strftime(...)` /
 integer math — and several (`QUARTER`, `QUADRIMESTER`) hand-roll a per-engine formula.
 That divergence is exactly where a one-sided edit silently breaks the other backend,
-so the two forms are pinned here side by side. No live database required: `Dialect`'s
+so the two forms are pinned here side by side. Since #571 the PostgreSQL date-part arms cast
+`::integer` — bare `EXTRACT` is `numeric` on PG ≥ 14 and reads back as a `Decimal`, where the
+SQLite arms give an `Int` — so the PG pins carry the cast. No live database required: `Dialect`'s
 date functions are pure `(column, format, conn) -> String` renderers, dispatched on the
 connection type, so we call them directly with mock connections.
 
@@ -34,12 +36,12 @@ const _EMPTY = Dict{String, Any}()
   # QUARTER / QUADRIMESTER — hand-rolled, per-engine formulas (highest drift risk)
   # ===========================================================================
   @testset "QUARTER" begin
-    @test Dialect.QUARTER(_COL, _EMPTY, _PG) == "EXTRACT(QUARTER FROM $(_COL))"
+    @test Dialect.QUARTER(_COL, _EMPTY, _PG) == "EXTRACT(QUARTER FROM $(_COL))::integer"
     @test Dialect.QUARTER(_COL, _EMPTY, _SL) == "((strftime('%m', $(_COL)) - 1) / 3) + 1"
   end
 
   @testset "QUADRIMESTER" begin
-    @test Dialect.QUADRIMESTER(_COL, _EMPTY, _PG) == "CEIL(EXTRACT(MONTH FROM $(_COL)) / 4.0)"
+    @test Dialect.QUADRIMESTER(_COL, _EMPTY, _PG) == "CEIL(EXTRACT(MONTH FROM $(_COL)) / 4.0)::integer"
     @test Dialect.QUADRIMESTER(_COL, _EMPTY, _SL) == "((strftime('%m', $(_COL)) - 1) / 4) + 1"
   end
 
@@ -54,11 +56,27 @@ const _EMPTY = Dict{String, Any}()
         ("MINUTE", "%M"), ("SECOND", "%S"), ("DOW",    "%w"), ("DOY",    "%j"),
       ]
       fmt = Dict{String, Any}("part" => part)
-      @test Dialect.EXTRACT(_COL, fmt, _PG) == "EXTRACT($part FROM $(_COL))"
+      # #571: every part SQLite can render is integer-valued there, so the PG arm casts to match.
+      # `SECOND` is the one fractional part in the whitelist: `numeric::integer` ROUNDS, SQLite's
+      # `%S` truncates, so PG truncates first.
+      pgwant = part == "SECOND" ? "trunc(EXTRACT(SECOND FROM $(_COL)))::integer" :
+                                  "EXTRACT($part FROM $(_COL))::integer"
+      @test Dialect.EXTRACT(_COL, fmt, _PG) == pgwant
       @test Dialect.EXTRACT(_COL, fmt, _SL) == "CAST(strftime('$slcode', $(_COL)) AS INTEGER)"
     end
     # The SQLite whitelist is fail-closed: an unsupported part must throw, not emit garbage.
     @test_throws PormG.BackendCapabilityError Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "WEEK"), _SL)
+    # #571: PG-only parts that are fractional by definition stay bare — a cast would be lossy and
+    # there is no SQLite twin to keep parity with. Any other PG-only part (WEEK, ISOYEAR, …) casts.
+    for part in ("EPOCH", "JULIAN", "MILLISECONDS", "MICROSECONDS")
+      @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => part), _PG) == "EXTRACT($part FROM $(_COL))"
+    end
+    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "WEEK"), _PG) == "EXTRACT(WEEK FROM $(_COL))::integer"
+    # Lower-case is what the docs spell (`Extract("date", "year")`); the cast rule is case-blind.
+    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "year"), _PG) == "EXTRACT(year FROM $(_COL))::integer"
+    # The 3-arg `Extract(x, part, format)` suffix is the caller's own cast and REPLACES the default.
+    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "EPOCH", "format" => "::bigint"), _PG) ==
+          "EXTRACT(EPOCH FROM $(_COL))::bigint"
   end
 
   # ===========================================================================
@@ -138,11 +156,11 @@ const _EMPTY = Dict{String, Any}()
   # YEAR/MONTH/DAY/Y_M wrappers — thin delegators; verify they carry the divergence through.
   # ===========================================================================
   @testset "Date-part wrappers delegate to EXTRACT / EXTRACT_DATE" begin
-    @test Dialect.YEAR(_COL, _EMPTY, _PG)  == "EXTRACT(YEAR FROM $(_COL))"
+    @test Dialect.YEAR(_COL, _EMPTY, _PG)  == "EXTRACT(YEAR FROM $(_COL))::integer"
     @test Dialect.YEAR(_COL, _EMPTY, _SL)  == "CAST(strftime('%Y', $(_COL)) AS INTEGER)"
-    @test Dialect.MONTH(_COL, _EMPTY, _PG) == "EXTRACT(MONTH FROM $(_COL))"
+    @test Dialect.MONTH(_COL, _EMPTY, _PG) == "EXTRACT(MONTH FROM $(_COL))::integer"
     @test Dialect.MONTH(_COL, _EMPTY, _SL) == "CAST(strftime('%m', $(_COL)) AS INTEGER)"
-    @test Dialect.DAY(_COL, _EMPTY, _PG)   == "EXTRACT(DAY FROM $(_COL))"
+    @test Dialect.DAY(_COL, _EMPTY, _PG)   == "EXTRACT(DAY FROM $(_COL))::integer"
     @test Dialect.DAY(_COL, _EMPTY, _SL)   == "CAST(strftime('%d', $(_COL)) AS INTEGER)"
     @test occursin("to_char($(_COL), 'YYYY-MM')", Dialect.Y_M(_COL, _EMPTY, _PG))
     @test occursin("strftime('%Y-%m', $(_COL))",  Dialect.Y_M(_COL, _EMPTY, _SL))

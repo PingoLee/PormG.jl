@@ -37,6 +37,7 @@ using PormG
 using PormG.Models
 using Dates
 import TimeZones
+import DataFrames: DataFrame          # #582 — the tabular terminal, asserted against list(:dict)
 import InteractiveUtils: subtypes
 
 # Needs the real SQLite extension (runtests.jl loads it too; re-loading is idempotent).
@@ -105,6 +106,49 @@ _vr_base() = VRM.Probe.objects.filter("label" => _VR_LABEL)
 
   @testset "INTERVAL" begin
     vr_run_cases(_vr_base, "dur", VR_DURATION, :sqlite; kind = :interval)
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # #582: `DataFrame(query)` and `list(:dict)` agree on the type of every temporal column.
+  #
+  # `DataFrames.DataFrame(::SQLObjectHandler)` used to call `query_list` directly and so skipped
+  # the #564 read-side coercion `_list_raw` applies — a temporal column was a `String` in a
+  # DataFrame and a typed value in `list()`, on the one read path most documentation examples end
+  # in. Both terminals now consult `_projection_parsers`, so this asserts type EQUALITY between
+  # them per column, on a real SQLite connection, plus the alias case that #580 widened the
+  # coercion to. The last assertion guards the P1 seam: `query_list` stays raw by contract, because
+  # `vr_raw_value` reads through it to keep P1 honest — closing #582 must not close that too.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "DataFrame(query) applies the read-side coercion (#582)" begin
+    q = _vr_base()
+    q.values("ts", "tsn", "d", "t", "dur", "x" => F("ts") + Day(1))
+    df = q |> DataFrame
+    dict = q.list(:dict)[1]
+    @test size(df, 1) == 1
+    for col in (:ts, :tsn, :d, :t, :dur, :x)
+      # Same Julia type through both terminals — the property, not a spelling.
+      @test typeof(df[1, col]) == typeof(dict[col])
+      # And a typed value, not the stored text: the coercion actually ran on the DataFrame path.
+      @test !(df[1, col] isa AbstractString)
+    end
+    # The column eltype widened with the value (a `String` column cannot hold a `ZonedDateTime`).
+    @test df[1, :ts] isa TimeZones.ZonedDateTime
+    @test df[1, :d] isa Date
+    @test df[1, :t] isa Time
+    @test df[1, :dur] isa Dates.CompoundPeriod
+    # A NULL cell passes through the parser as `missing` and the column keeps `Union{Missing,T}`.
+    VRM.Probe.objects.create("label" => "repr582_null_row")
+    qn = VRM.Probe.objects.filter("label__@in" => [_VR_LABEL, "repr582_null_row"])
+    qn.values("label", "ts")
+    dfn = qn |> DataFrame
+    @test size(dfn, 1) == 2
+    @test count(ismissing, dfn[!, :ts]) == 1
+    @test count(v -> v isa TimeZones.ZonedDateTime, dfn[!, :ts]) == 1
+    VRM.Probe.objects.filter("label" => "repr582_null_row").delete()
+    # The P1 seam: `query_list` is still the uncoerced read.
+    raw = first(QueryBuilder.Tables.rowtable(QueryBuilder.query_list(q)))
+    @test raw.ts isa AbstractString
+    @test raw.d isa AbstractString
   end
 
   # ───────────────────────────────────────────────────────────────────────────

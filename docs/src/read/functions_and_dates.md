@@ -27,7 +27,7 @@ PormG provides date-related modifiers through the `__@` suffix system. These wor
 `@quarter` and `@quadrimester` extract a **number** — `1`–`4` and `1`–`3` — so they answer "which
 quarter", independently of the year. That is what makes `filter("date__@quarter" => 1)` select Q1 of
 every season. It is the same shape as Django's `__quarter` lookup and SQL's
-`EXTRACT(QUARTER FROM …)`.
+`EXTRACT(QUARTER FROM …)` (cast `::integer` on PostgreSQL, so it reads back as an integer on both engines).
 
 `@yyyy_q` and `@yyyy_quad` build the **year-qualified label** (`"1991-Q1"`), the form you want as a
 `values()` grouping key when each year's periods must not be merged. They sit beside `@yyyy_mm`,
@@ -103,12 +103,12 @@ df = query |> DataFrame
 
 Generated SQL (PostgreSQL):
 ```sql
-SELECT EXTRACT(YEAR  FROM "race"."date") AS date__year,
-       EXTRACT(MONTH FROM "race"."date") AS date__month,
-       EXTRACT(DAY   FROM "race"."date") AS date__day,
-       COUNT("race"."raceid")            AS rows
+SELECT EXTRACT(YEAR  FROM "race"."date")::integer AS date__year,
+       EXTRACT(MONTH FROM "race"."date")::integer AS date__month,
+       EXTRACT(DAY   FROM "race"."date")::integer AS date__day,
+       COUNT("race"."raceid")                     AS rows
 FROM "race"
-WHERE EXTRACT(YEAR FROM "race"."date") = $1
+WHERE ("race"."date" >= $1 AND "race"."date" < $2)   -- the @year filter is rewritten to a sargable range
 GROUP BY 1, 2, 3
 ORDER BY "date__day" ASC
 ```
@@ -117,7 +117,7 @@ Output:
 ```
 16×4 DataFrame
  Row │ date__year  date__month  date__day  rows
-     │ Decimal?    Decimal?     Decimal?   Int64?
+     │ Int32?      Int32?       Int32?     Int64?
 ─────┼────────────────────────────────────────────
    1 │       1991            6          2       1
    2 │       1991           11          3       1

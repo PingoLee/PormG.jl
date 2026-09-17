@@ -333,7 +333,7 @@ query.cjoin_on(M.Lap; alias="b2", join_type="INNER", on=[
 query.values("id")
 ```
 
-**Generated SQL (SQLite** — PostgreSQL renders `$n` placeholders and `EXTRACT(YEAR FROM …)`**):**
+**Generated SQL (SQLite** — PostgreSQL renders `$n` placeholders and `EXTRACT(YEAR FROM …)::integer`**):**
 
 ```sql
 SELECT "Tb"."id" as "id"

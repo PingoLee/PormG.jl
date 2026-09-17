@@ -113,7 +113,7 @@ query.filter(
 df = query |> DataFrame
 ```
 
-PormG resolves the `__` paths, creates the necessary joins, and applies the `EXTRACT(MONTH FROM ...)` transform on both sides.
+PormG resolves the `__` paths, creates the necessary joins, and applies the `EXTRACT(MONTH FROM ...)::integer` transform (PostgreSQL; `CAST(strftime('%m', ...) AS INTEGER)` on SQLite) on both sides.
 
 ### Comparing Against a Literal
 

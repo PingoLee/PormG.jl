@@ -27,7 +27,7 @@ PormG provides several terminal methods to execute a query and return data in di
 | `.list()` | `Vector{PormGRow}` | Returns model-aware rows with dot-access and relationship accessors. |
 | `.list(:dict)` | `Vector{Dict{Symbol, Any}}` | Returns plain dictionaries for framework integrations. |
 | `.list(:json)` | `String` | Returns results as a JSON string for API responses. |
-| `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` for tabular output (recommended for analysis). |
+| `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` for tabular output (recommended for analysis). Temporal columns hold the same typed values as `.list()` on both engines. |
 | `.first()` | `PormGRow` or `nothing` | Returns the first matching row. |
 | `.last()` | `PormGRow` or `nothing` | Returns the last matching row (inverts `order_by`; falls back to primary-key descending when no ordering is set). |
 | `.earliest(fields...)` | `PormGRow` | Returns the earliest row ordered by `fields`; raises `DoesNotExist` when empty. |

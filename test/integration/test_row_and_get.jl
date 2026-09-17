@@ -67,6 +67,21 @@ end
     @test nrow(df_direct) == 1
     @test df_from_rows[1, :driverid] == df_direct[1, :driverid]
 
+    # #582: the two paths also agree on TEMPORAL columns. `query |> DataFrame` used to bypass the
+    # #564 read-side coercion, so on SQLite `date`/`time`/`start_at` arrived as text there while
+    # `list()` gave `Date`/`Time`/`ZonedDateTime`. Race 1 (2009 Australian GP) has all three seeded.
+    race_q = M.Race.objects.filter("raceid" => 1)
+    race_q.values("date", "time", "start_at")
+    race_df   = race_q |> DataFrame
+    race_dict = race_q.list(:dict)[1]
+    @test nrow(race_df) == 1
+    @test race_df[1, :date] isa Date
+    @test race_df[1, :time] isa Time
+    @test race_df[1, :start_at] isa ZonedDateTime
+    for col in (:date, :time, :start_at)
+        @test typeof(race_df[1, col]) == typeof(race_dict[col])
+    end
+
     # Tables.getcolumn is case-sensitive (#57): the exact declared symbol resolves; a
     # wrong-case symbol misses (the old case-insensitive normalization is incompatible
     # with case preservation and was removed).

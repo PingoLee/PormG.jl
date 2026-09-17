@@ -322,9 +322,10 @@ DEFINED AT the seam it guards, not an approximation of it — it cannot drift aw
 Not `Cast(…, "TEXT")`, which was the obvious candidate and does not work: on PostgreSQL
 `(x)::TEXT` yields PostgreSQL's own session-timezone rendering (`2031-07-04 12:30:45.123+00`),
 not `format_timezone_sql`'s canonical form, so every currently-green PostgreSQL timestamp case
-would start failing. Not `DataFrame(q)` either: it is uncoerced by ACCIDENT rather than by
-contract, and the day that divergence is closed P1 would go hollow a second time with no mark to
-force the visit.
+would start failing. Not `DataFrame(q)` either: it was uncoerced by ACCIDENT rather than by
+contract, and #582 closed that divergence — `DataFrame(query)` now applies the same coercion as
+`list()`, so it would have gone hollow with no mark to force the visit. `query_list` is the raw
+read BY CONTRACT (its own comment in `execution.jl` says so), which is why this seam survives.
 
 On PostgreSQL this is a provable no-op — `value_parser` answers `nothing` for every kind there, so
 the coerced and raw paths return the same object.

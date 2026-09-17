@@ -2175,7 +2175,12 @@ end
 """
 Creates a DataFrame directly from a SQLObjectHandler query.
 
-This extends the DataFrame constructor to work directly with PormG query objects,
+This extends the DataFrame constructor to work directly with PormG query objects. Since #582 it
+applies the same read-side value coercion as `list()`: a temporal column or expression alias
+holds `ZonedDateTime` / `Date` / `Time` / `CompoundPeriod` values on both engines, not the
+driver's raw text on SQLite. PostgreSQL DataFrames are unchanged — the driver already delivers
+typed values there. To keep the engine's own text on purpose, project it as text: `ToChar(...)`
+or `Cast(F(col), "TEXT")`.
 
 # Arguments
 - `objct::SQLObjectHandler`: The SQL object handler containing the query
@@ -2192,9 +2197,43 @@ df = query |> DataFrame  # Direct conversion to DataFrame
 ```
 """
 function DataFrames.DataFrame(objct::SQLObjectHandler)
-  return query_list(objct) |> DataFrames.DataFrame
+  # #582 — this used to be `query_list(objct) |> DataFrame`, which bypassed the #564 coercion
+  # `_list_raw` applies, so `list()` and `DataFrame(query)` disagreed on the type of every temporal
+  # column on SQLite. Same executed build, same parser table, column-wise instead of row-wise.
+  result, built, connection = _execute_select(objct)
+  df = DataFrames.DataFrame(result)
+  parsers = _projection_parsers(built, connection)
+  parsers === nothing && return df          # PostgreSQL: byte-identical to the pre-#582 path
+  for (name, parser) in parsers
+    # The wildcard recorder registers both a field's name and its `db_column`, and only one of them
+    # is in any given result — same guard as `_list_raw`'s `haskey`. `map` widens the column from
+    # `Union{Missing,String}` to `Union{Missing,T}`; the parsers pass `missing` through untouched.
+    hasproperty(df, name) && (df[!, name] = map(parser, df[!, name]))
+  end
+  return df
 end
 
+# #564 / #582 — which result-row columns need a read-side parser on THIS connection, or `nothing`
+# when none does. The one selection both row terminals (`_list_raw`) and the tabular terminal
+# (`DataFrame`) consult, so the two cannot disagree about what is coerced.
+#
+# The build records the canonical kind of each projection (`projection_kinds`), and the
+# representation table (`value_repr.jl`) says which parser undoes that kind on this backend. Django
+# resolves its own read coercion the same way — off `expression.output_field`, never off the
+# alias's spelling. There is no `connection isa PormGSQLite` test here: the backend dimension
+# belongs to the table, so a third backend becomes table entries rather than a branch. On
+# PostgreSQL every `value_parser` answers `nothing`, so this returns `nothing` after one dispatch
+# per projection.
+function _projection_parsers(built::SQLObjectHandler, connection)::Union{Nothing,Dict{Symbol,Function}}
+  parsers = nothing
+  for (name, kind) in built.object.projection_kinds
+    parser = value_parser(kind, connection)
+    parser === nothing && continue
+    parsers === nothing && (parsers = Dict{Symbol,Function}())
+    parsers[name] = parser
+  end
+  return parsers
+end
 
 function _list_raw(objct::SQLObjectHandler)
   result, built, connection = _execute_select(objct)
@@ -2217,21 +2256,9 @@ function _list_raw(objct::SQLObjectHandler)
   # column, and every `DateField`/`TimeField`/`DurationField` fell outside it and came back as raw
   # text, while PostgreSQL's driver delivered typed values for all of them.
   #
-  # The build now records the canonical kind of each projection (`projection_kinds`), and the
-  # representation table says which parser undoes that kind on this backend. Django resolves its own
-  # read coercion the same way — off `expression.output_field`, never off the alias's spelling.
-  #
-  # The `connection isa PormGSQLite` test is GONE from this site: the backend dimension belongs to
-  # the table, so a third backend becomes table entries rather than a branch here. On PostgreSQL
-  # every `value_parser` answers `nothing`, the loop below builds nothing, and this returns after one
-  # dispatch per projection.
-  parsers = nothing
-  for (name, kind) in built.object.projection_kinds
-    parser = value_parser(kind, connection)
-    parser === nothing && continue
-    parsers === nothing && (parsers = Dict{Symbol,Function}())
-    parsers[name] = parser
-  end
+  # The parser selection lives in `_projection_parsers` (above), shared with `DataFrame(query)`
+  # since #582 so the row and tabular terminals coerce the same columns.
+  parsers = _projection_parsers(built, connection)
   parsers === nothing && return rows
 
   for row in rows, (name, parser) in parsers

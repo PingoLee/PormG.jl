@@ -571,7 +571,7 @@ By default, `DateTimeField` uses `TIMESTAMPTZ`.
 - **Aware input**: `ZonedDateTime(2026, 3, 13, 9, 0, tz"America/Sao_Paulo")` keeps the source timezone semantics explicit.
 - **Naive input**: `DateTime(2026, 3, 13, 9, 0)` is currently serialized as `UTC`, not as `settings.time_zone`.
 - **Interop rule**: if the upstream system thinks in a local timezone, convert to `ZonedDateTime` before `create`, `update`, `bulk_insert`, or `bulk_update`.
-- **SQLite note**: SQLite stores datetime values as text, but PormG reconstructs `ZonedDateTime` / `DateTime` values on read so the high-level contract matches PostgreSQL.
+- **SQLite note**: SQLite stores datetime values as text, but PormG reconstructs `ZonedDateTime` / `DateTime` values on read so the high-level contract matches PostgreSQL. This applies to every read terminal — `list()`, `first()`, `get()` and `query |> DataFrame` alike.
 
 ```julia
 # Audit and logging

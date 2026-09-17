@@ -60,7 +60,7 @@ These methods finalize the query and execute it against the database:
 | `.list()` | `Vector{PormGRow}` | Returns model-aware rows with dot-access and relationship accessors. |
 | `.list(:dict)` | `Vector{Dict{Symbol, Any}}` | Returns plain dictionaries for framework integrations that need real `Dict` values. |
 | `.list(:json)` | `String` | Returns results as a JSON string. |
-| `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` for tabular output. |
+| `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` for tabular output. Temporal columns are typed (`Date`, `Time`, `ZonedDateTime`, `CompoundPeriod`) on both engines, as in `.list()`. |
 | `.count()` | `Int` | Runs `SELECT COUNT(*)` and returns the count. |
 | `.aggregate(alias => Agg(...), ...)` | `NamedTuple` | Whole-queryset aggregation (no `GROUP BY`); returns one named tuple of scalars. See [Aggregation](read/filters_and_aggregates.md). |
 | `.exists()` | `Bool` | Returns `true` if at least one row matches. |
@@ -907,7 +907,7 @@ The terminal `list()` methods return a documented, stable shape:
 | `query.list()` | `Vector{PormGRow}` |
 | `query.list(:dict)` | `Vector{Dict{Symbol, Any}}` |
 | `query.list(:json)` | JSON string |
-| `query |> DataFrame` | `DataFrame` (preferred for analytical queries) |
+| `query |> DataFrame` | `DataFrame` (preferred for analytical queries; temporal columns typed as in `list()`) |
 
 ---
 

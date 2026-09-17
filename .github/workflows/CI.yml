@@ -46,6 +46,39 @@ jobs:
       # LibPQ + SQLite (Project.toml `[extras]`/`[targets]`) so the weakdep driver
       # extensions load and the SQLite-backed unit tests run.
       - uses: julia-actions/julia-runtest@v1
+        with:
+          # OFF DELIBERATELY (#599). The input's `auto` default means "true when the PR
+          # was opened by Dependabot or CompatHelper" — and on those PRs it pins every
+          # direct dependency to the TOP of its `[compat]` range. For
+          # `Decimals = "0.4, 0.5"` that top is 0.5.x, which NO registered LibPQ release
+          # allows (every one of them pins `Decimals 0.4`), so the test environment
+          # cannot resolve and all four jobs in this matrix die in `Pkg.resolve`, before
+          # the first testset. Measured: with no pin the resolver picks Decimals 0.4.1 +
+          # LibPQ 1.18.0 and resolves clean; adding `Decimals@0.5.1` leaves LibPQ with no
+          # versions left. #593 is the receipt — 4/4 red here, green on `floor-resolve`
+          # and both `load-without-drivers`, with the bumped package (CSV) a bystander in
+          # the error tree.
+          #
+          # DO NOT "FIX" THIS BY NARROWING `Decimals`. The spanning range is load-bearing
+          # for an environment PormG's own runs never build, and #558 already reverted
+          # exactly that narrowing at the cost of the whole matrix. The contract, the
+          # measurements and the read-a-red-run rule live in
+          # `test/unit/test_compat_guards.jl` — the same place `floor-resolve` below
+          # points at, for the opposite end of the same range. That job already sets this
+          # input `false` for the mirror-image reason: it must not silently test the
+          # ceiling. Here the ceiling is simply unreachable.
+          #
+          # THE TRADE-OFF ACCEPTED: a CompatHelper PR now tests whatever the resolver
+          # picks rather than a forced ceiling. For a bump that is not part of a spanning
+          # range the resolver picks the new version anyway, so the loss is confined to a
+          # bumped package some other dependency drags back down — and that is not
+          # silently green, because the step prints the resolved versions in its log.
+          # A permanently-red job is the worse failure: one that is always red for a
+          # known irrelevant reason gets scrolled past, which is precisely the argument
+          # the `floor-resolve` comment below makes against reporting-only jobs. It was
+          # already costing real signal — #593's bump is genuinely unsafe (#598), and not
+          # one of these red jobs said so.
+          force_latest_compatible_version: false
 
   # Prove the loading contract: `using PormG` works with NO SQL driver present, and a
   # backend operation raises the friendly "load the driver" error instead of a missing

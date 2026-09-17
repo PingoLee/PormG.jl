@@ -147,6 +147,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Connect-Failure Fast-Fail Typed Error (#72)" include("unit/test_connection_pool_connect_error.jl")
     @testset "close_pool! Skips Non-pool Mocks (#147)" include("unit/test_close_pool_mock_skip.jl")
     @testset "close_pool! Drains Leases, Closes Outside the Lock (#47)" include("unit/test_close_pool_drain.jl")
+    @testset "Discard Never Double-Closes a Taken-Out Handle (#585)" include("unit/test_discard_not_found_close.jl")
     @testset "SQLite Pool + Async Worker Soak; Renewed-Handle Release (#128)" include("unit/test_sqlite_pool_soak.jl")
     @testset "SQLite `:memory:` Pool Guards (#545)" include("unit/test_sqlite_memory_pool.jl")
     @testset "Module Init & atexit Cleanup (#203)" include("unit/test_module_init.jl")

@@ -417,6 +417,9 @@ end
 # One parked acquirer. `chan` is capacity-1: exactly ONE producer — a release-handoff OR the
 # timeout Timer — ever put!s to it, decided by read-modify-writing `done` under the pool lock
 # (that lock IS the compare-and-set). `mode` types the waiter for SQLite split pools (:any on PG).
+# A handoff delivers `(slot, handle)` — the handle the slot held at handoff time, or `nothing`
+# for a slot emptied first — and acquire branch A re-checks that pair under the lock before it
+# trusts the slot (#584); the timeout delivers `_POOL_WAIT_TIMEOUT`.
 mutable struct PoolWaiter
   mode::Symbol
   chan::Channel{Any}
@@ -451,6 +454,14 @@ end
 # Called UNDER pool.lock by every capacity-freeing site. Hands slot `i` directly to the oldest
 # not-done waiter whose mode fits it (leaving available[i]=false — leased for that waiter, so no
 # barging); if none is compatible, the slot returns to `available` for the next same-mode acquirer.
+#
+# The handoff carries the handle the slot holds at this moment, not just the index (#584). A
+# release-origin handoff leaves the released handle in the slot, byte-identical to an ordinary
+# lease, so a sweep (`_close_pool_slots!`) may take that handle out and re-open the slot before
+# the waiter wakes — and a fresh acquirer can then materialize a NEW handle into it. Carrying the
+# identity lets the waiter tell, under the lock, whether the slot is still the one it was handed;
+# a mismatch retries instead of sharing the newcomer's handle. Discard-origin, retire-on-release
+# and failed-materialize handoffs all empty the slot first, so they carry `nothing`.
 function _handoff_or_free!(pool, i::Int)
   ws = _waiters_for(pool)
   idx = findfirst(w -> !w.done && _slot_fits_mode(pool, i, w.mode), ws)
@@ -460,7 +471,7 @@ function _handoff_or_free!(pool, i::Int)
     w = ws[idx]
     w.done = true                 # win the race against this waiter's timeout Timer
     deleteat!(ws, idx)
-    put!(w.chan, i)               # cap-1 + empty → never blocks; slot stays leased (available[i]=false)
+    put!(w.chan, (i, pool.connections[i]))   # cap-1 + empty → never blocks; slot stays leased (available[i]=false)
   end
   return nothing
 end
@@ -775,8 +786,9 @@ parked waiters therefore never drains: every release is handed to a waiter, so t
 expires and those fresh leases are closed too. Waiters are not woken by close — they unwind
 through their own timeout, a pre-existing #124 limitation. A slot handed to a waiter by a
 discard (empty, leased) is left leased for that waiter; one handed by a release still holds its
-handle and is indistinguishable from an ordinary lease, so it is swept like one — the narrow
-double-lease that allows under contention predates #47 and is tracked as #584.
+handle and is indistinguishable from an ordinary lease, so it is swept like one — and the waiter,
+which was handed that handle's identity, notices the slot changed and retries rather than sharing
+whatever a fresh acquirer materialized there (#584).
 
 Every handle is closed **outside** `pool.lock` and through [`_close_driver_handle!`](@ref): a
 SQLite handle the global worker still has statements for is closed only once that work drains
@@ -793,9 +805,9 @@ No double-close guard is needed on the driver side for a second *sequential* clo
 again, or the `DB` finalizer running later, is harmless — and a finalizer cannot run on a handle a
 live task still references, so an explicit close never races one. Two *concurrent* closers of the
 same SQLite handle are not guarded by the driver; the pool takes a handle out of its slot under the
-lock before closing it, so this function never races the reaper on the same handle — the second
-closers left are `_discard_connection!` on a handle it did not find and the unconditional close in
-`_recover_abandoned_connection!`'s timeout branch, both tracked as #585.
+lock before closing it, so this function never races the reaper on the same handle, and the
+discard paths close only a handle they themselves took out of a slot (#585) — whoever takes a
+handle out is its only closer.
 """
 close_pool!(pool::PostgresConnectionPool; drain_seconds::Real = _CLOSE_POOL_DRAIN_SECONDS) =
   _close_pool_slots!(pool; drain_seconds)
@@ -817,9 +829,9 @@ function _close_pool_slots!(pool::Union{PormGPostgres, PormGSQLite}; drain_secon
   #    leased: flipping it available here would let a second acquirer lease that fresh handle too.
   #    A release-origin handoff is NOT distinguishable here: it leaves the released handle in the
   #    slot with `available[i] == false`, exactly like an ordinary lease, so it is force-closed and
-  #    re-opened for lease like one — and under contention the waiter and a fresh acquirer can end
-  #    up sharing the re-materialized handle. Pre-existing (the old body flipped every slot), and
-  #    the fix is in the handoff, not here: #584 carries identity into the waiter's channel.
+  #    re-opened for lease like one. That is safe because the handoff carried the handle's identity
+  #    (#584): when the waiter wakes it finds the slot no longer holds what it was handed — or no
+  #    longer leased — and retries through the scan instead of sharing a re-materialized handle.
   handles = Any[]
   in_use = 0
   Base.lock(pool.lock) do
@@ -909,8 +921,9 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
   # once even across retries.
   before_connect_done = false
   # A slot handed to us by a release/discard (leased for us) that still needs its connection
-  # validated/materialized. `nothing` when we are doing a normal scan.
-  owned::Union{Nothing, Int} = nothing
+  # validated/materialized, as the `(slot, handle)` pair the handoff delivered (#584). `nothing`
+  # when we are doing a normal scan.
+  owned::Union{Nothing, Tuple{Int, Any}} = nothing
   ceiling = _pool_ceiling(pool)
   # Most recent `backend_connect` failure this call. When set, the terminal branch raises a truthful
   # PoolConnectError (the pool couldn't be opened) instead of the saturation PoolTimeoutError (#72).
@@ -926,8 +939,19 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
     outcome = Base.lock(pool.lock) do
       # (A) Materialize a handed-off slot (already leased for us; #124 direct handoff).
       if owned !== nothing
-        i = owned
+        i, expected = owned
         conn = pool.connections[i]
+        # The slot must still be the one we were handed: leased, and holding exactly the handle
+        # (or the emptiness) the handoff carried. Between the handoff's `put!` and this lock a
+        # sweep can take the handle out and re-open the slot, and a fresh acquirer can then
+        # materialize its own handle into it — accepting that handle would share it between two
+        # borrowers (#584). Retry through the normal scan instead; the cost is our place in the
+        # FIFO and whatever remains of our deadline, and the scan re-parks inside the same locked
+        # section as its no-capacity check, so no wakeup is lost.
+        if pool.available[i] || conn !== expected
+          @debug "Handed-off PG slot changed before the waiter woke; retrying" slot=i
+          return (:retry, nothing)
+        end
         if conn !== nothing && backend_is_alive(pool, conn)
           _monitor_note_touch!(pool, i)                   # checkout timestamp (#125)
           return (:got, conn)                          # live handle handed over — reuse as-is
@@ -936,12 +960,13 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
         # A handle the probe just REJECTED is retired here rather than silently overwritten — the old
         # driver object would otherwise be dropped on the floor for a GC finalizer to close, and the
         # #442 probe rejects far more often than the old bare `PQstatus` read did. Nil the slot with
-        # it, so the `:hook` detour below cannot re-enter and queue the same handle twice.
+        # it, so the `:hook` detour below cannot re-enter and queue the same handle twice — and hand
+        # the detour the now-empty slot, so its identity re-check expects `nothing`.
         if conn !== nothing
           push!(dead_handles, conn)
           pool.connections[i] = nothing
         end
-        before_connect_done || return (:hook, nothing)
+        before_connect_done || return (:hook, (i, nothing))
         try
           new_conn = backend_connect(pool)
           pool.connections[i] = new_conn
@@ -1030,8 +1055,9 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
     if kind === :got
       return outcome[2]
     elseif kind === :hook
-      _run_before_connect!(pool)                        # off the lock (#37); keep `owned`
+      _run_before_connect!(pool)                        # off the lock (#37)
       before_connect_done = true
+      owned = outcome[2]                                # branch A hands back `(i, nothing)`; B/C `nothing`
       continue
     elseif kind === :retry
       owned = nothing
@@ -1064,7 +1090,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
           @warn "Timeout after $(to) seconds waiting for available PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
         throw(err)
       end
-      owned = handed::Int                                # loop back to materialize the handed slot
+      owned = handed::Tuple{Int, Any}                    # loop back to materialize the handed slot
       continue
     end
   end
@@ -1083,7 +1109,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
   # See the PormGPostgres twin: hook runs off the lock at most once; `owned` is a slot handed to
   # us (leased) awaiting materialize; direct-handoff wait replaces the busy-poll (#124).
   before_connect_done = false
-  owned::Union{Nothing, Int} = nothing
+  owned::Union{Nothing, Tuple{Int, Any}} = nothing
   ceiling = _pool_ceiling(pool)
   # See the PormGPostgres twin: most recent connect failure this call → truthful PoolConnectError (#72).
   last_connect_error = Ref{Any}(nothing)
@@ -1098,8 +1124,13 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
     outcome = Base.lock(pool.lock) do
       # (A) Materialize a handed-off slot (already leased for us).
       if owned !== nothing
-        i = owned
+        i, expected = owned
         conn = pool.connections[i]
+        # Identity re-check before trusting the slot — see the PormGPostgres twin (#584).
+        if pool.available[i] || conn !== expected
+          @debug "Handed-off SQLite slot changed before the waiter woke; retrying" slot=i
+          return (:retry, nothing)
+        end
         if conn !== nothing && backend_is_alive(pool, conn)
           _monitor_note_touch!(pool, i)                   # checkout timestamp (#125)
           return (:got, conn)
@@ -1109,7 +1140,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
           push!(dead_handles, conn)
           pool.connections[i] = nothing
         end
-        before_connect_done || return (:hook, nothing)
+        before_connect_done || return (:hook, (i, nothing))
         try
           is_reader_slot = pool.split_read_write && i != pool.writer_slot
           new_conn = backend_connect(pool; read_only = is_reader_slot)
@@ -1202,6 +1233,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
     elseif kind === :hook
       _run_before_connect!(pool)
       before_connect_done = true
+      owned = outcome[2]                                # see the PormGPostgres twin
       continue
     elseif kind === :retry
       owned = nothing
@@ -1230,7 +1262,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
           @warn "Timeout after $(to) seconds waiting for available SQLite connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
         throw(err)
       end
-      owned = handed::Int
+      owned = handed::Tuple{Int, Any}
       continue
     end
   end
@@ -1346,16 +1378,14 @@ end
 #     things that can touch the slot meanwhile — `_discard_connection!` from an abandoned await, or
 #     another renewal. This is the caller that goes on to CLOSE the old handle, and it may.
 #   * `fetch`'s reconnect-and-retry (#268) renews a connection `await_result`'s `finally` has
-#     ALREADY released, so the slot is available and a concurrent borrower may acquire it inside the
-#     window. `_swap_slot!` does not see that: acquiring flips `available[i]`, it does not change
-#     `pool.connections[i]`, so the identity re-check still passes and the swap proceeds under the
-#     borrower. Tolerable only because of what that caller does NOT do — it never closes the old
-#     handle, so the borrower keeps a valid one, and `acquire_connection`'s liveness probe renews it
-#     again if it really is dead.
+#     ALREADY released. It re-leases the slot first through `_claim_idle_slot!` (#442) and renews
+#     ONLY when that claim succeeded: a slot a concurrent borrower or a parked waiter holds is left
+#     alone. It used to renew under the borrower anyway, tolerably, because it never closed the old
+#     handle — but a waiter handed the slot under one identity would, since #584, refuse the renewed
+#     handle and strand the slot, so the unclaimed case is now simply not renewed.
 #
-# So the re-check makes the SLOT safe for both; leasing is what makes the HANDLE safe for the one
-# caller that frees it. A future caller wanting to close a handle it has already released needs more
-# than this.
+# So the re-check makes the SLOT safe for both, and both callers hold the lease for the window;
+# leasing is what makes the HANDLE safe for the one caller that frees it.
 function reconnect_db(pool::PormGPostgres, conn)
   _run_before_connect!(pool)
 
@@ -1481,11 +1511,27 @@ best-effort `close` it. Used when a connection is known-dirty — e.g. a failed 
 — and renewal via `reconnect_db` also failed. Returns whether the slot was found. Never
 throws (callers run it while an original error is propagating).
 
+**A handle that is not in the pool is not closed here** (#585). Not finding it means someone
+else already took it out of its slot, and whoever takes a handle out closes it: the `close_pool!`
+sweep (`_close_pool_slots!`, #47), the reaper (`_reap_pool!`, #125), the stale-idle sweep
+(`_sweep_stale_idle!`, #442), the acquire probe's retirement of a dead handle, retire-on-return
+in `release_connection` (#125), and `_renew_or_discard_connection!` for the handle a renewal
+replaced. (`reconnect_db`'s swap-failure path closes the fresh handle it could not install and
+leaves the old one to whoever changed the slot.) Two takers leave the handle to the driver
+finalizer by design, and say so at the site: `fetch`'s reconnect-and-retry for the dead handle a
+renewal replaced, and [`_recover_abandoned_connection!`](@ref)'s outer catch, which empties the
+slot without closing because it cannot know whether the driver is still on the handle. Neither
+is a second closer — they are the taker. Closing here as well used to be harmless only because
+the second close was serialized behind the first under `pool.lock`; since #47 the takers close
+outside the lock — on
+SQLite possibly on a deferred task (#327) — so a second closer can overlap the first, and
+SQLite.jl's `_close_db!` does not guard two concurrent `sqlite3_close_v2` calls on one pointer.
+
 `close_handle = false` empties the slot but leaves the handle open. It exists for one caller —
 [`_recover_abandoned_connection!`](@ref)'s timeout branch, which is reached *precisely because* the
 driver is still on the connection — and closing there would free a SQLite handle the global worker
 may be inside `sqlite3_step` on. That caller takes the slot out of circulation now and closes the
-doomed handle later, once the driver has let go.
+doomed handle later, once the driver has let go — again only if this discard found the slot.
 """
 function _discard_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn; close_handle::Bool = true)::Bool
   found = Base.lock(pool.lock) do
@@ -1502,7 +1548,9 @@ function _discard_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn; clo
   # Close OUTSIDE the pool lock: a driver close can block on I/O. On SQLite this also
   # releases the database file write-lock an aborted `BEGIN IMMEDIATE` may still hold —
   # and is deferred if the global worker still has statements for this handle (#327).
-  close_handle && _close_driver_handle!(pool, conn)
+  # Only the handle we actually took out of a slot: one we did not find belongs to whoever did
+  # (#585 — see the docstring).
+  found && close_handle && _close_driver_handle!(pool, conn)
   found || @warn "Connection to discard not found in the pool - it may already have been replaced"
   return found
 end
@@ -1515,10 +1563,9 @@ one that claimed it (so only that caller releases it again).
 
 Exists for `fetch`'s reconnect-and-retry (#442). That path renews a connection `await_result`'s
 `finally` has ALREADY released, so the slot is `available` while the renewal runs — and
-[`reconnect_db`](@ref)'s comment fenced exactly this off: the swap re-check makes the SLOT safe, but
-*"a future caller wanting to close a handle it has already released needs more than this"*. Retiring
-the pool's other idle connections is such a caller, and so is the acquire scan's probe. Leasing the
-slot for the whole window is that "more".
+[`reconnect_db`](@ref)'s swap re-check only makes the SLOT safe: a caller that goes on to touch
+the pool's other idle connections, or that the acquire scan's probe could reach mid-renewal, needs
+the slot leased for the whole window. This claim is that lease.
 
 Two concrete hazards it closes, both requiring only two tasks and one server restart:
 
@@ -1530,10 +1577,10 @@ Two concrete hazards it closes, both requiring only two tasks and one server res
     and close — the connection the other is still renewing, costing that task its retry and possibly
     orphaning a live backend `reset!` had already re-opened.
 
-Returning `false` is not a failure: it means a concurrent borrower holds the lease, which shields the
-handle from both hazards above just as a claim would. It does NOT shield that borrower from having
-the session renewed under them — but that is the pre-existing window
-[`reconnect_db`](@ref) already documents as tolerable, unchanged here.
+Returning `false` is not a failure: it means a concurrent borrower — or a parked waiter the release
+handed the slot to (#124) — holds the lease, which shields the handle from both hazards above just
+as a claim would. The caller then leaves the slot entirely alone: renewing under a waiter would
+install a handle the waiter's identity re-check (#584) refuses, stranding the slot leased.
 """
 function _claim_idle_slot!(pool::Union{PormGPostgres, PormGSQLite}, conn)::Bool
   Base.lock(pool.lock) do
@@ -2059,12 +2106,21 @@ function _recover_abandoned_connection!(pool::Union{PormGPostgres, PormGSQLite},
         # 3. Still in flight past the budget. Take the slot out of the pool WITHOUT closing — the
         #    next acquire materializes a fresh connection into it — then keep the doomed handle
         #    alive until the driver is finally off it, and only then close.
-        _discard_connection!(pool, conn; close_handle = false)
-        _wait_settled(probe, close_seconds)
-        try
-          Base.invokelatest(close, conn)
-        catch close_failure
-          @debug "Error closing an abandoned connection" exception=close_failure
+        #
+        #    Only if the discard found the slot. The connection is leased for this whole routine,
+        #    so a `close_pool!` sweep in the meantime takes it — and closes it, on SQLite possibly
+        #    on a deferred task that polls the same ledger our settle probe is keyed to. Closing
+        #    here as well would be the second closer of one handle inside one poll window (#585);
+        #    the taker owns that close, so there is nothing left for us to wait for either.
+        if _discard_connection!(pool, conn; close_handle = false)
+          _wait_settled(probe, close_seconds)
+          try
+            Base.invokelatest(close, conn)
+          catch close_failure
+            @debug "Error closing an abandoned connection" exception=close_failure
+          end
+        else
+          @debug "Abandoned connection was already taken out of its slot; its taker closes it"
         end
       end
     catch recovery_failure
@@ -2080,9 +2136,12 @@ function _recover_abandoned_connection!(pool::Union{PormGPostgres, PormGSQLite},
       # still on it. The orphaned handle is left to the driver's own finalizer.
       #
       # Act only while the slot is still OURS. `_discard_connection!` matches by identity, so once an
-      # earlier branch has handed the slot back — released it, emptied it, or had `reconnect_db` swap
-      # a fresh handle into it — `conn` is no longer there, and blindly discarding would both warn
-      # untruthfully and (worse) risk nilling a slot a new borrower already holds.
+      # earlier branch has handed the slot back — emptied it, or had `reconnect_db` swap a fresh
+      # handle into it — `conn` is no longer there, and blindly discarding would both warn
+      # untruthfully and (worse) risk nilling a slot a new borrower already holds. A slot a release
+      # handed to a parked waiter still holds `conn`, so this would discard under that waiter; the
+      # waiter's identity re-check (#584) then sees the emptied slot and retries rather than sharing
+      # anything, which is what makes this fallback safe in that shape too.
       #
       # Known gap, deliberately not plumbed: if the failure came from inside
       # `_renew_or_discard_connection!` AFTER its swap, the slot is leased around a handle we cannot
@@ -2280,7 +2339,7 @@ function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
     # bug. Only a *dropped connection* is safe to retry, which is exactly what this asks (#268).
     if conn === nothing && !fetch_task.in_transaction &&
        backend_is_connection_error(connection, _driver_cause(root))
-      @warn "Lost connection to database. Attempting to reconnect..."
+      @warn "Lost connection to database. Retrying the statement on a renewed or freshly acquired connection..."
       # Renew the dead handle in its slot, then retry through NORMAL pool acquisition — never by
       # pinning `conn=new_conn`, which would run the retry on a connection whose lease `await_result`
       # would then release a second time. The claim below is not a substitute for that: it holds the
@@ -2291,26 +2350,42 @@ function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
       # two hazards that closes. A `false` here means a borrower already holds the lease, which is
       # equally protective, so the branch simply proceeds as it did before.
       claimed = _claim_idle_slot!(connection, fetch_task.conn)
-      new_conn = nothing
-      try
-        new_conn = reconnect_db(connection, fetch_task.conn)
-        if new_conn !== nothing
-          # Whatever killed this connection has usually killed every other one too, and the retry
-          # below re-acquires through the NORMAL pool path — which would happily hand back another
-          # corpse. Retire the rest of the idle slots first so it cannot. Strictly AFTER
-          # `reconnect_db`: sweeping first would empty this very slot, leaving `_slot_index_of`
-          # nothing to renew.
-          _sweep_stale_idle!(connection, new_conn)
+      if claimed
+        new_conn = nothing
+        try
+          new_conn = reconnect_db(connection, fetch_task.conn)
+          # When renewal produced a NEW handle (always on SQLite, on PG when `reset!` fell back),
+          # the dead one it replaced is left to the driver's finalizer, not closed here. This is
+          # the one taker that does not close what it took out (#585): the handle is a corpse the
+          # server already dropped, the slot has moved on, and nothing else references it.
+          if new_conn !== nothing
+            # Whatever killed this connection has usually killed every other one too, and the retry
+            # below re-acquires through the NORMAL pool path — which would happily hand back another
+            # corpse. Retire the rest of the idle slots first so it cannot. Strictly AFTER
+            # `reconnect_db`: sweeping first would empty this very slot, leaving `_slot_index_of`
+            # nothing to renew.
+            _sweep_stale_idle!(connection, new_conn)
+          end
+        finally
+          # Put the slot back exactly once, whichever handle now occupies it. Renewal may return the
+          # SAME object (`LibPQ.reset!` resets in place), a new one, or nothing at all if it failed.
+          release_connection(connection, new_conn === nothing ? fetch_task.conn : new_conn)
         end
-      finally
-        # Put the slot back exactly once, whichever handle now occupies it. Renewal may return the
-        # SAME object (`LibPQ.reset!` resets in place), a new one, or nothing at all if it failed.
-        claimed && release_connection(connection, new_conn === nothing ? fetch_task.conn : new_conn)
+        # Renewal failed: the slot was discarded by `reconnect_db`'s caller chain or is unusable,
+        # and a retry would only re-run the statement against the same dead pool. Propagate.
+        new_conn === nothing && throw(root)
       end
-      if new_conn !== nothing
-        retry_task = fetch_async(connection, sql; params=params, ignore_tx=ignore_tx)
-        return await_result(retry_task)
-      end
+      # `!claimed` means the slot is leased by someone else — a borrower that acquired it after
+      # `await_result` released it, or a parked waiter that release handed it to (#124) — or it is
+      # already gone. Never renew it: `_swap_slot!` matches by identity only, so a renewal here
+      # would install a fresh handle into a slot the waiter was handed under a DIFFERENT identity,
+      # and the waiter's re-check (#584) would then retry and leave the slot leased around a handle
+      # nothing releases. Whoever holds the lease retires the dead handle through their own path —
+      # a borrower's next statement fails and comes back through here, and a waiter's branch A
+      # probe rejects it — so this task just retries through normal acquisition, where the #442
+      # probe keeps corpses out of its way. The old handle is theirs to close, not ours (#585).
+      retry_task = fetch_async(connection, sql; params=params, ignore_tx=ignore_tx)
+      return await_result(retry_task)
     end
     throw(root)
   end

@@ -451,3 +451,62 @@ SSL connection has been closed unexpectedly",
   @test !PormG.backend_is_connection_error(pg, CompositeException([poisoned, poisoned]))
   @test PormG.backend_is_connection_error(pg, CompositeException([poisoned, E.AdminShutdown("", nothing)]))
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (10) The retry never renews a slot it could not claim (#584).
+#
+# `await_result`'s finally releases the failed connection BEFORE `fetch`'s catch runs, so a parked
+# acquirer can be handed that very slot — with the handle still in it — in between. The retry's
+# `_claim_idle_slot!` then returns `false`. Renewing anyway would swap a fresh handle into the slot
+# under the waiter (`_swap_slot!` matches identity only), and since the handoff now carries the
+# handle's identity, the waiter would refuse the swapped-in handle, retry, and leave the slot
+# leased around a handle nothing ever releases. So an unclaimed slot is left alone and the
+# statement simply retries through normal acquisition.
+#
+# Deterministic on one thread: `T` and `W` are sticky `@async` tasks that run in creation order at
+# the first yield. T takes the idle slot and parks on its statement; W finds no capacity and parks;
+# the statement fails; T's finally hands the slot to W; T finds it unclaimed and parks on its retry;
+# W wakes holding the ORIGINAL handle. Gate against renewing regardless of the claim: `renewals == 1`,
+# slot 1 holds a foreign handle, and both W and T's retry park until their timeouts.
+# ─────────────────────────────────────────────────────────────────────────────
+function _wait_until_442(pred; timeout = 5.0, step = 0.005)
+  t0 = time()
+  while time() - t0 < timeout
+    pred() && return true
+    sleep(step)
+  end
+  return pred()
+end
+
+@testset "fetch's retry leaves an unclaimed slot alone — no renewal under a handed-off waiter (#584)" begin
+  pool = MockPGLive442(1; fail_prefix = "SELECT", fail_times = 1)
+  c1 = pool.connections[1]
+  held = [CP.acquire_connection(pool; timeout_seconds = 5) for _ in 1:CP._pool_ceiling(pool)]
+  @test held[1] === c1
+  @test CP.release_connection(pool, c1) === true         # slot 1 is the only idle slot; 9 stay leased
+
+  # The "Lost connection" warn is emitted inside T, which inherits this block's test logger at
+  # creation, so it is captured here rather than landing on stderr (`:any`: W emits nothing).
+  T, W = @test_logs (:warn, r"Lost connection") match_mode = :any begin
+    T = @async CP.fetch(pool, "SELECT 1;")                # takes slot 1; its first run fails
+    W = @async CP.acquire_connection(pool; timeout_seconds = 5)
+    # W ends up with c1 itself: the slot was handed to it with c1 in place, and the retry left it there.
+    @test _wait_until_442(() -> istaskdone(W))
+    (T, W)
+  end
+  @test fetch(W) === c1
+  @test pool.connections[1] === c1                        # ← not swapped out under the waiter
+  @test pool.renewals == 0                                # ← never renewed
+  @test pool.available[1] === false                       # leased by W, and by W alone
+  @test !istaskdone(T)                                    # T's retry is parked behind W
+  @test length(CP._waiters_for(pool)) == 1
+
+  # Handing c1 back gives T's retry its connection; the statement re-runs and succeeds.
+  @test CP.release_connection(pool, c1) === true
+  @test fetch(T) == NamedTuple[]
+  @test count(sql -> startswith(sql, "SELECT"), pool.executed) == 2   # failed once, re-ran once
+  @test pool.renewals == 0
+
+  for c in held[2:end]; CP.release_connection(pool, c); end
+  @test count(!, pool.available) == 0                     # nothing leaked
+end

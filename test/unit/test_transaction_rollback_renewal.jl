@@ -294,11 +294,16 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Transactions (#71): _discard_connection! on an unpooled handle → false, still closed
-# The not-found path (e.g. the slot was already replaced by a concurrent reconnect) must
-# warn-and-return-false, but the handle is still best-effort closed so it never leaks.
+# Transactions (#71): _discard_connection! on an unpooled handle → false, NOT closed (#585)
+# The not-found path (e.g. the slot was already replaced by a concurrent reconnect, or taken by
+# the close_pool! sweep) must warn-and-return-false and leave the handle alone: a handle that is
+# not in any slot was taken out by someone who closes it themselves, and a second close here can
+# overlap the first now that closes run outside `pool.lock` (#47) — a double free on SQLite.
+# This testset used to assert the opposite ("still closed so it never leaks"); that recorded the
+# pre-#47 world, where the second close was serialized behind the first. The ownership audit in
+# `_discard_connection!`'s docstring is what replaced it (#585).
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "_discard_connection! not-found path still closes the handle (#71)" begin
+@testset "_discard_connection! not-found path leaves the handle to its owner (#71, #585)" begin
   pool = MockPGPool71()
   stray = FakeConn71(99)                              # never lived in this pool
 
@@ -307,7 +312,7 @@ end
   end
 
   @test found === false
-  @test stray.closed === true                         # closed even when unpooled
+  @test stray.closed === false                        # ← not ours to close
   @test pool.connections[1] isa FakeConn71            # pool untouched
   @test pool.available[1] === true
 end

@@ -192,7 +192,12 @@ function _common_kwargs(field_type::AbstractString, kwargs;
 
   _bool(name::Symbol, value) = value isa Bool ? value :
     throw(_fielderr("$field_type: '$name' must be a Boolean, got $(typeof(value))"))
-  _str_or_nothing(name::Symbol, value) = value isa Union{Nothing,String} ? value :
+  # #603: `AbstractString`, normalized to `String` on the way out. This one helper gates
+  # `verbose_name` and `db_column` on EVERY field constructor, so a `SubString` from a generated
+  # model file or a web layer was refused across the whole field surface at once. The return stays
+  # concrete so the field structs keep `String` slots and no view reaches the DDL path.
+  _str_or_nothing(name::Symbol, value) = value isa Nothing ? value :
+    value isa AbstractString ? String(value) :
     throw(_fielderr("$field_type: '$name' must be a String or nothing, got $(typeof(value))"))
 
   # Read a keyword from kwargs ONLY if this constructor accepts it. An unaccepted keyword was
@@ -355,14 +360,14 @@ mutable struct sForeignKey <: PormGField
 end
 
 """
-    ForeignKey(to::Union{String, PormGModel}; kwargs...)
+    ForeignKey(to::Union{AbstractString, PormGModel}; kwargs...)
 
 A field that creates a many-to-one relationship to another model, similar to Django's ForeignKey.
 
 The `ForeignKey` field represents a relationship where many records in the current model can reference a single record in the target model. It creates a foreign key constraint in the database and enables efficient querying of related data.
 
 # Required Arguments
-- `to::Union{String, PormGModel}`: The target model that this field references. Can be either:
+- `to::Union{AbstractString, PormGModel}`: The target model that this field references. Can be either:
   - A string with the model name (e.g., "User", "Category")  
   - A direct reference to a PormGModel instance
 
@@ -466,7 +471,7 @@ Message = Models.Model(
 # See Also
 - Django's ForeignKey documentation for conceptual understanding
 """
-function ForeignKey(to::Union{String, PormGModel}; kwargs...)
+function ForeignKey(to::Union{AbstractString, PormGModel}; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, db_constraint) =
     _common_kwargs("ForeignKey", kwargs; primary_key = false, db_index = true,
       bools = (db_constraint = true,),
@@ -479,7 +484,8 @@ function ForeignKey(to::Union{String, PormGModel}; kwargs...)
   related_name = get(kwargs, :related_name, nothing)
 
   # Validate 'to' parameter
-  !(to isa Union{String, PormGModel}) && throw(_fielderr("The 'to' parameter must be a String or PormGModel"))
+  !(to isa Union{AbstractString, PormGModel}) && throw(_fielderr("The 'to' parameter must be a String or PormGModel"))
+  to isa AbstractString && (to = String(to))   # #603
 
   # Validate boolean parameters
 
@@ -491,6 +497,10 @@ function ForeignKey(to::Union{String, PormGModel}; kwargs...)
     throw(_fielderr("The 'pk_field' must be a String, Symbol, or nothing"))
   on_delete = _get_on_delete_mode(on_delete)
   !(how isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'how' must be a String or nothing"))
+  # #603: the guard here already said `AbstractString`, but nothing converted — so a `SubString`
+  # passed validation and then died inside `sForeignKey`'s `Union{String,Nothing}` slot with a raw
+  # `MethodError`. Same shape as the bulk-filter escape; same fix.
+  how isa AbstractString && (how = String(how))
   !(related_name isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'related_name' must be a String or nothing"))
   related_name = _validate_related_name(related_name, "ForeignKey")
 
@@ -582,7 +592,7 @@ mutable struct sManyToManyField <: PormGField
 end
 
 """
-    ManyToManyField(to::Union{String, PormGModel}; kwargs...)
+    ManyToManyField(to::Union{AbstractString, PormGModel}; kwargs...)
 
 Declare a many-to-many relationship without adding a physical column to the
 owning model table. When `through` is omitted, migrations synthesize a join
@@ -599,7 +609,7 @@ Both pins exist to disambiguate **which** foreign key is which end — required 
 has two pointing at the same model, as on a self-relation. A `through` model whose foreign keys simply
 map to differently-named columns needs no pin: `db_column` is resolved on its own.
 """
-function ManyToManyField(to::Union{String, PormGModel}; kwargs...)
+function ManyToManyField(to::Union{AbstractString, PormGModel}; kwargs...)
   accepted = Set([
     :verbose_name, :through, :related_name, :db_table, :source_field, :target_field
   ])
@@ -617,9 +627,12 @@ function ManyToManyField(to::Union{String, PormGModel}; kwargs...)
   source_field = get(kwargs, :source_field, nothing)
   target_field = get(kwargs, :target_field, nothing)
 
-  !(to isa Union{String, PormGModel}) && throw(_fielderr("The 'to' parameter must be a String or PormGModel"))
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
-  !(through isa Union{Nothing, String, PormGModel}) && throw(_fielderr("The 'through' parameter must be a String, PormGModel, or nothing"))
+  !(to isa Union{AbstractString, PormGModel}) && throw(_fielderr("The 'to' parameter must be a String or PormGModel"))
+  to isa AbstractString && (to = String(to))   # #603
+  !(verbose_name isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
+  verbose_name isa AbstractString && (verbose_name = String(verbose_name))   # #603
+  !(through isa Union{Nothing, AbstractString, PormGModel}) && throw(_fielderr("The 'through' parameter must be a String, PormGModel, or nothing"))
+  through isa AbstractString && (through = String(through))                  # #603
   !(related_name isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'related_name' must be a String or nothing"))
   related_name = _validate_related_name(related_name, "ManyToManyField")
   !(db_table isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'db_table' must be a String or nothing"))
@@ -691,14 +704,14 @@ end
 const sRelationalColumn = Union{sForeignKey, sOneToOneField}
 
 """
-    OneToOneField(to::Union{String, PormGModel}; kwargs...)
+    OneToOneField(to::Union{AbstractString, PormGModel}; kwargs...)
 
 A field that creates a one-to-one relationship to another model, similar to Django's OneToOneField.
 
 The `OneToOneField` represents a strict one-to-one relationship where each record in the current model corresponds to exactly one record in the target model, and vice versa. It's essentially a ForeignKey with a unique constraint that ensures no two records can reference the same target record.
 
 # Required Arguments
-- `to::Union{String, PormGModel}`: The target model that this field references. Can be either:
+- `to::Union{AbstractString, PormGModel}`: The target model that this field references. Can be either:
   - A string with the model name (e.g., "UserProfile", "Settings")  
   - A direct reference to a PormGModel instance
 
@@ -830,7 +843,7 @@ changed: an `ALTER` that re-rendered the column unchanged, and a full table rebu
 - Django's OneToOneField documentation for conceptual understanding
 - Database normalization principles for when to use one-to-one relationships
 """
-function OneToOneField(to::Union{String, PormGModel}; kwargs...)
+function OneToOneField(to::Union{AbstractString, PormGModel}; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, db_constraint) =
     _common_kwargs("OneToOneField", kwargs; primary_key = false, unique = true, db_index = true,
       bools = (db_constraint = true,),
@@ -843,7 +856,8 @@ function OneToOneField(to::Union{String, PormGModel}; kwargs...)
   related_name = get(kwargs, :related_name, nothing)
 
   # Validate 'to' parameter
-  !(to isa Union{String, PormGModel}) && throw(_fielderr("The 'to' parameter must be a String or PormGModel"))
+  !(to isa Union{AbstractString, PormGModel}) && throw(_fielderr("The 'to' parameter must be a String or PormGModel"))
+  to isa AbstractString && (to = String(to))   # #603
 
   # Validate boolean parameters
 
@@ -851,9 +865,12 @@ function OneToOneField(to::Union{String, PormGModel}; kwargs...)
   default = validate_default(default, Union{Int64, Nothing}, "OneToOneField", format2int64)
 
   # Validate optional string parameters
-  !(pk_field isa Union{Nothing, String, Symbol}) && throw(_fielderr("The 'pk_field' must be a String, Symbol, or nothing"))
-  !(how isa Union{Nothing, String}) && throw(_fielderr("The 'how' must be a String or nothing"))
-  !(related_name isa Union{Nothing, String}) && throw(_fielderr("The 'related_name' must be a String or nothing"))
+  # #603: these three were `String`-only while `ForeignKey`'s own siblings were already
+  # `AbstractString` — one family, two spellings. Aligned on the wider one.
+  !(pk_field isa Union{Nothing, AbstractString, Symbol}) && throw(_fielderr("The 'pk_field' must be a String, Symbol, or nothing"))
+  !(how isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'how' must be a String or nothing"))
+  how isa AbstractString && (how = String(how))
+  !(related_name isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'related_name' must be a String or nothing"))
   related_name = _validate_related_name(related_name, "OneToOneField")
 
   # Resolve on_delete using similar logic as ForeignKey
@@ -1816,7 +1833,16 @@ function DateTimeField(; kwargs...)
 
   # Validate default
   default = validate_default(default, Union{ZonedDateTime, DateTime, Nothing}, "DateTimeField", normalize_datetime_default)
-  !(type isa String) && throw(_fielderr("The 'type' must be a String"))
+  # #603: the `!(type isa String)` guard that stood here is gone, because the two lines around it
+  # already cover everything it did. `type` is piped through `uppercase` above, which returns a
+  # plain `String` for ANY `AbstractString` — so no string spelling could ever reach the guard.
+  #
+  # It was NOT unreachable for every input, and the distinction is worth recording: `uppercase` has
+  # an `AbstractChar` method, so `DateTimeField(type = 'T')` produced `'T'::Char` and the guard DID
+  # fire on it. The shape check immediately below absorbs that case unchanged — a `Char` is not
+  # `== "TIMESTAMPTZ"` — so the same `FieldValidationError` is still raised, only naming the
+  # supported values instead of the type. Anything `uppercase` has no method for (a `Symbol`, an
+  # `Int`) raises there, one line earlier, and never reached the guard either.
   if type != "TIMESTAMPTZ" && type != "TIMESTAMP"
     throw(_fielderr("The 'type' must be either 'TIMESTAMPTZ' or 'TIMESTAMP'"))
   end

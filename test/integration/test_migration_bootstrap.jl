@@ -1899,6 +1899,91 @@ end
     @test "activated_at" in cols
   end
 
+  # ── Phase 8c2: a NULLABLE temporal column leaves existing rows NULL (#607) ──
+  # Phases 8b/8c above are the temporary-default path: `_add_new_field` mints a
+  # value for a new NOT NULL DateTimeField / DateField so the column can be added
+  # to a populated table, then drops it again. It used to mint one for
+  # `null = true` too, and `migrate` then backfilled EVERY existing row with its
+  # own timestamp — silent wrong data, indistinguishable from real values
+  # afterwards (1125 of 1125 `race` rows on the F1 fixture). Since #607 a
+  # nullable temporal column is a bare `ADD COLUMN … NULL`: no temporary default,
+  # no `DROP DEFAULT` on PostgreSQL, no table rebuild on SQLite, rows stay NULL.
+  #
+  # Self-contained: a dedicated `NullStamp` table is created, populated,
+  # migrated, asserted and dropped again, so Phase 8d starts from exactly the
+  # state Phase 8c left. The unit half (plan text on both engines, execution on
+  # a temp SQLite file) is test/unit/test_temporal_temporary_default.jl; this
+  # is the live-database half on the real engine, through `migrate` itself.
+  @testset "Phase 8c2: nullable DateTimeField / DateField leaves existing rows NULL (#607)" begin
+    phase8c_models = """
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        fullname = Models.CharField(null=true),
+        updated_at = Models.DateTimeField(),
+        created_date = Models.DateField(),
+        activated_at = Models.DateTimeField()
+    )
+    TypesTable = Models.Model(
+        id = Models.IDField(),
+        is_active = Models.BooleanField(default=true),
+        score = Models.DecimalField(max_digits=5, decimal_places=2, null=true),
+        created_at = Models.DateTimeField(null=true)
+    )
+    """
+    # 1. A populated table with no temporal column yet.
+    write_edge_models(phase8c_models * """
+    NullStamp = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(max_length=40)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    @assert table_exists(pool, "nullstamp") "Phase 8c2 setup: nullstamp was not created"
+    for (i, label) in enumerate(("Monza", "Spa", "Suzuka"))
+      PormG.ConnectionPool.fetch(pool, """INSERT INTO "nullstamp" ("id", "label") VALUES ($i, '$label');""")
+    end
+
+    # 2. Add the two nullable temporal columns to it.
+    write_edge_models(phase8c_models * """
+    NullStamp = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(max_length=40),
+        noted_at = Models.DateTimeField(null=true),
+        noted_on = Models.DateField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    result = Migrations.dry_run(pool, edge_settings)
+    # Only this table's statements — other tables may carry unrelated drift (see Phase 8a3).
+    nullstamp_stmts = filter(s -> occursin("nullstamp", lowercase(s)), result.statements)
+    @test length(nullstamp_stmts) == 2
+    # Bare ADD COLUMNs: no temporary default written, and no cleanup step queued behind them
+    # (`DROP DEFAULT` on PostgreSQL; the `nullstamp_new` rebuild on SQLite).
+    @test all(occursin("ADD COLUMN", uppercase(s)) for s in nullstamp_stmts)
+    @test !any(occursin("DEFAULT", uppercase(s)) for s in nullstamp_stmts)
+    @test !any(occursin("NULLSTAMP_NEW", uppercase(s)) for s in nullstamp_stmts)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    # THE assertion: every pre-existing row is still NULL in BOTH new columns. Before #607 this
+    # read 0 — each row carried the instant `migrate` ran.
+    cols = column_names(pool, "nullstamp")
+    @test "noted_at" in cols
+    @test "noted_on" in cols
+    nulls = DataFrame(PormG.ConnectionPool.fetch(pool,
+      """SELECT count(*) AS n FROM "nullstamp" WHERE "noted_at" IS NULL AND "noted_on" IS NULL;"""))
+    @test nulls[1, :n] == 3
+    total = DataFrame(PormG.ConnectionPool.fetch(pool, """SELECT count(*) AS n FROM "nullstamp";"""))
+    @test total[1, :n] == 3
+
+    # 3. Restore Phase 8c's models file; the destructive migrate drops `nullstamp`, so Phase 8d
+    # starts from the state it expects.
+    write_edge_models(phase8c_models)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    @test !table_exists(pool, "nullstamp")
+  end
+
   # ── Phase 8d: Rename a column (non-interactive = add+drop path) ───
   # Verifies that renaming a column in the model definition (e.g.
   # `fullname` → `display_name`) is handled correctly when

@@ -326,9 +326,16 @@ struct _MockSl602 <: PormG.PormGSQLite end
   # ─────────────────────────────────────────────────────────────────────────────
   # Removals pinned
   # `Dialect.VALUE` (six methods, zero callers, and the `String` arms interpolated an UNESCAPED
-  # literal into SQL) and `format_timezone_sql(::DateTime, ::String)` (zero callers since #79; its
-  # comment named a caller that did not exist) are deleted rather than widened. These rows fail if
-  # either comes back. The 1-arg `DateTime` arm — the live one — still canonicalizes to UTC.
+  # literal into SQL) and `format_timezone_sql(::DateTime, ::String)` are deleted rather than
+  # widened. These rows fail if either comes back. The 1-arg `DateTime` arm — the live one — still
+  # canonicalizes to UTC.
+  #
+  # CORRECTION (#607): the two-argument arm was deleted as having "zero callers since #79", and its
+  # own comment naming a migration-planner caller was dismissed as stale. The caller existed —
+  # `_get_temporary_default_value` reached it through the `field.formatter` SLOT, invisible to a
+  # grep by function name — so from #602's merge every NOT NULL temporal `ADD COLUMN` raised
+  # `MethodError` until #607 rewrote that line to the one-argument form the insert path uses. The
+  # arm stays deleted (this pin holds); the lesson is to grep `.formatter(` shapes, not names.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "Dead String-typed methods are gone, live siblings intact" begin
     @test !isdefined(Di602, :VALUE)

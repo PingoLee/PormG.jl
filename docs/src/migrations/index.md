@@ -243,7 +243,7 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
 !!! warning "Two column shapes SQLite refuses outright"
     Independently of foreign keys, SQLite will not `ADD COLUMN` a `UNIQUE` column at all, nor a `NOT NULL` column without a default — the refusal is about the column. So adding a **new** `OneToOneField` (which is `unique = true`), or a **new** `null = false` field that ends up with no `DEFAULT`, fails on SQLite when the table already exists. It fails on the `ADD COLUMN` itself, before any rebuild PormG queued behind it, and the migration rolls back rather than doing anything silently.
 
-    `DateTimeField` and `DateField` are the exception to the second half: PormG synthesizes a temporary default for those two, adds the column with it, and then rebuilds the table to drop it — so a new required timestamp needs none of the below.
+    `DateTimeField` and `DateField` are the exception to the second half: PormG synthesizes a temporary default for those two, adds the column with it, and then rebuilds the table to drop it — so a new required timestamp needs none of the below. That temporary default exists **only** for a `null = false` column with no `default` of its own. A `null = true` `DateTimeField` / `DateField` is added as a plain nullable column and every existing row stays `NULL` — no temporary value, no rebuild — and a column with a declared `default` backfills through that default and keeps it.
 
     PostgreSQL accepts the `UNIQUE` column, but shares the `NOT NULL` restriction: `ADD COLUMN … NOT NULL` with no default is rejected on a table that already has rows, because the existing rows would violate it.
 

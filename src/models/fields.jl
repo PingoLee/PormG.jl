@@ -963,12 +963,13 @@ mutable struct sCharField <: PormGField
 end
 
 
-function parse_choices(choices_str::String)
-  # Parse a string into a tuple of tuples
-  # println(choices_str)
+function parse_choices(choices_str::AbstractString)
+  # Parse a string into a tuple of tuples. `::AbstractString` because the `CharField` guard admits any
+  # AbstractString and used to hand a `SubString` to a `::String`-only method (#602). The regex needs a
+  # real `String` — `String(x)`, not `string(x)`, which is the identity for a `LazyString` (#598).
   choices = ()
   pattern = r"\(([^()]+)\)"
-  for m in eachmatch(pattern, choices_str)
+  for m in eachmatch(pattern, String(choices_str))
     inner = m.captures[1]
     values = split(inner, ",")
     if length(values) == 2

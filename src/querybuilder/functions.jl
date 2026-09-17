@@ -615,7 +615,7 @@ function Coalesce(x...; output_field::Union{N, String, Nothing} where N <: PormG
   if isa(output_field, PormGField)
     output_field = output_field.type
   end
-  processed_cols = [isa(v, String) ? SQLField(v) : v for v in x]
+  processed_cols = [isa(v, AbstractString) ? SQLField(String(v)) : v for v in x]
   return FObject(function_name = "COALESCE", column = processed_cols, kwargs = Dict{String, Any}("output_field" => output_field))
 end
 
@@ -628,7 +628,7 @@ function Greatest(x...; output_field::Union{N, String, Nothing} where N <: PormG
   if isa(output_field, PormGField)
     output_field = output_field.type
   end
-  processed_cols = [isa(v, String) ? SQLField(v) : v for v in x]
+  processed_cols = [isa(v, AbstractString) ? SQLField(String(v)) : v for v in x]
   return FObject(function_name = "GREATEST", column = processed_cols, kwargs = Dict{String, Any}("output_field" => output_field))
 end
 
@@ -641,7 +641,7 @@ function Least(x...; output_field::Union{N, String, Nothing} where N <: PormGFie
   if isa(output_field, PormGField)
     output_field = output_field.type
   end
-  processed_cols = [isa(v, String) ? SQLField(v) : v for v in x]
+  processed_cols = [isa(v, AbstractString) ? SQLField(String(v)) : v for v in x]
   return FObject(function_name = "LEAST", column = processed_cols, kwargs = Dict{String, Any}("output_field" => output_field))
 end
 
@@ -698,7 +698,7 @@ end
 Returns NULL if field1 equals field2, otherwise returns field1.
 """
 function NullIf(x, y)
-  return FObject(function_name = "NULLIF", column = [isa(x, String) ? SQLField(x) : x, isa(y, String) ? SQLField(y) : y])
+  return FObject(function_name = "NULLIF", column = [isa(x, AbstractString) ? SQLField(String(x)) : x, isa(y, AbstractString) ? SQLField(String(y)) : y])
 end
 
 
@@ -709,9 +709,9 @@ Replaces all occurrences of `find` with `replace` in the string.
 """
 function Replace(x, find, replace)
   return FObject(function_name = "REPLACE", column = [
-    isa(x, String) ? SQLField(x) : x, 
-    isa(find, String) ? Value(find) : find, 
-    isa(replace, String) ? Value(replace) : replace
+    isa(x, AbstractString) ? SQLField(String(x)) : x,
+    isa(find, AbstractString) ? Value(String(find)) : find,
+    isa(replace, AbstractString) ? Value(String(replace)) : replace
   ])
 end
 
@@ -795,7 +795,7 @@ end
 Returns `base` raised to the power of `exponent`.
 """
 function Power(x, y)
-  return FObject(function_name = "POWER", column = [isa(x, String) ? SQLField(x) : x, isa(y, String) ? SQLField(y) : y], formatter = Models.format_number_sql)
+  return FObject(function_name = "POWER", column = [isa(x, AbstractString) ? SQLField(String(x)) : x, isa(y, AbstractString) ? SQLField(String(y)) : y], formatter = Models.format_number_sql)
 end
 
 """
@@ -804,7 +804,7 @@ end
 Returns the remainder (modulo) of a division.
 """
 function Mod(x, y)
-  return FObject(function_name = "MOD", column = [isa(x, String) ? SQLField(x) : x, isa(y, String) ? SQLField(y) : y], formatter = Models.format_number_sql)
+  return FObject(function_name = "MOD", column = [isa(x, AbstractString) ? SQLField(String(x)) : x, isa(y, AbstractString) ? SQLField(String(y)) : y], formatter = Models.format_number_sql)
 end
 
 
@@ -882,7 +882,8 @@ QUARTER(x) = FObject(function_name = "QUARTER", column = x, formatter = Models.f
 QUADRIMESTER(x) = FObject(function_name = "QUADRIMESTER", column = x, formatter = Models.format_quadrimester_sql)
 
 
-function ISNULL(v::String , value::Bool)
+function ISNULL(v::AbstractString, value::Bool)
+  # `v` is the rendered column text (#602: `AbstractString`, so a non-`String` spelling dispatches).
   if contains(v, "(")
     throw(FilterError("Error in ISNULL: the column $(v) cannot be a function expression."))
   end

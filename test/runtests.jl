@@ -114,6 +114,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "JSON Containment Operators (#27)" include("unit/test_json_operators.jl")
     @testset "Field Validation and Operations" include("unit/test_field_validation_and_operations.jl")
     @testset "Formatters Accept Any AbstractString (#598)" include("unit/test_formatter_abstractstring.jl")
+    @testset "Dialect and Builder Accept Any AbstractString (#602)" include("unit/test_dialect_abstractstring.jl")
     @testset "Typed Exceptions on Query Surface (#197)" include("unit/test_typed_exceptions.jl")
     @testset "Semantic Error Taxonomy (#231)" include("unit/test_error_taxonomy.jl")
     @testset "Database-error Boundary (#268)" include("unit/test_database_error_boundary.jl")

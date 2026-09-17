@@ -945,9 +945,9 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
         # (or the emptiness) the handoff carried. Between the handoff's `put!` and this lock a
         # sweep can take the handle out and re-open the slot, and a fresh acquirer can then
         # materialize its own handle into it — accepting that handle would share it between two
-        # borrowers (#584). Retry through the normal scan instead; the only cost is our place in
-        # the FIFO, and the scan re-parks inside the same locked section as its no-capacity check,
-        # so no wakeup is lost.
+        # borrowers (#584). Retry through the normal scan instead; the cost is our place in the
+        # FIFO and whatever remains of our deadline, and the scan re-parks inside the same locked
+        # section as its no-capacity check, so no wakeup is lost.
         if pool.available[i] || conn !== expected
           @debug "Handed-off PG slot changed before the waiter woke; retrying" slot=i
           return (:retry, nothing)
@@ -1517,10 +1517,13 @@ sweep (`_close_pool_slots!`, #47), the reaper (`_reap_pool!`, #125), the stale-i
 (`_sweep_stale_idle!`, #442), the acquire probe's retirement of a dead handle, retire-on-return
 in `release_connection` (#125), and `_renew_or_discard_connection!` for the handle a renewal
 replaced. (`reconnect_db`'s swap-failure path closes the fresh handle it could not install and
-leaves the old one to whoever changed the slot.) The one exception is `fetch`'s
-reconnect-and-retry, which leaves the dead handle it renewed to the driver finalizer and says so
-at the site. Closing here as well used to be harmless only because the second close was
-serialized behind the first under `pool.lock`; since #47 the takers close outside the lock — on
+leaves the old one to whoever changed the slot.) Two takers leave the handle to the driver
+finalizer by design, and say so at the site: `fetch`'s reconnect-and-retry for the dead handle a
+renewal replaced, and [`_recover_abandoned_connection!`](@ref)'s outer catch, which empties the
+slot without closing because it cannot know whether the driver is still on the handle. Neither
+is a second closer — they are the taker. Closing here as well used to be harmless only because
+the second close was serialized behind the first under `pool.lock`; since #47 the takers close
+outside the lock — on
 SQLite possibly on a deferred task (#327) — so a second closer can overlap the first, and
 SQLite.jl's `_close_db!` does not guard two concurrent `sqlite3_close_v2` calls on one pointer.
 
@@ -1560,10 +1563,9 @@ one that claimed it (so only that caller releases it again).
 
 Exists for `fetch`'s reconnect-and-retry (#442). That path renews a connection `await_result`'s
 `finally` has ALREADY released, so the slot is `available` while the renewal runs — and
-[`reconnect_db`](@ref)'s comment fenced exactly this off: the swap re-check makes the SLOT safe, but
-*"a future caller wanting to close a handle it has already released needs more than this"*. Retiring
-the pool's other idle connections is such a caller, and so is the acquire scan's probe. Leasing the
-slot for the whole window is that "more".
+[`reconnect_db`](@ref)'s swap re-check only makes the SLOT safe: a caller that goes on to touch
+the pool's other idle connections, or that the acquire scan's probe could reach mid-renewal, needs
+the slot leased for the whole window. This claim is that lease.
 
 Two concrete hazards it closes, both requiring only two tasks and one server restart:
 
@@ -2134,9 +2136,12 @@ function _recover_abandoned_connection!(pool::Union{PormGPostgres, PormGSQLite},
       # still on it. The orphaned handle is left to the driver's own finalizer.
       #
       # Act only while the slot is still OURS. `_discard_connection!` matches by identity, so once an
-      # earlier branch has handed the slot back — released it, emptied it, or had `reconnect_db` swap
-      # a fresh handle into it — `conn` is no longer there, and blindly discarding would both warn
-      # untruthfully and (worse) risk nilling a slot a new borrower already holds.
+      # earlier branch has handed the slot back — emptied it, or had `reconnect_db` swap a fresh
+      # handle into it — `conn` is no longer there, and blindly discarding would both warn
+      # untruthfully and (worse) risk nilling a slot a new borrower already holds. A slot a release
+      # handed to a parked waiter still holds `conn`, so this would discard under that waiter; the
+      # waiter's identity re-check (#584) then sees the emptied slot and retries rather than sharing
+      # anything, which is what makes this fallback safe in that shape too.
       #
       # Known gap, deliberately not plumbed: if the failure came from inside
       # `_renew_or_discard_connection!` AFTER its swap, the slot is leased around a handle we cannot
@@ -2334,7 +2339,7 @@ function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
     # bug. Only a *dropped connection* is safe to retry, which is exactly what this asks (#268).
     if conn === nothing && !fetch_task.in_transaction &&
        backend_is_connection_error(connection, _driver_cause(root))
-      @warn "Lost connection to database. Attempting to reconnect..."
+      @warn "Lost connection to database. Retrying the statement on a renewed or freshly acquired connection..."
       # Renew the dead handle in its slot, then retry through NORMAL pool acquisition — never by
       # pinning `conn=new_conn`, which would run the retry on a connection whose lease `await_result`
       # would then release a second time. The claim below is not a substitute for that: it holds the

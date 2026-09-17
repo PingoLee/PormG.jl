@@ -485,11 +485,15 @@ end
   @test held[1] === c1
   @test CP.release_connection(pool, c1) === true         # slot 1 is the only idle slot; 9 stay leased
 
-  T = @async CP.fetch(pool, "SELECT 1;")                  # takes slot 1; its first run fails
-  W = @async CP.acquire_connection(pool; timeout_seconds = 5)
-
-  # W ends up with c1 itself: the slot was handed to it with c1 in place, and the retry left it there.
-  @test _wait_until_442(() -> istaskdone(W))
+  # The "Lost connection" warn is emitted inside T, which inherits this block's test logger at
+  # creation, so it is captured here rather than landing on stderr (`:any`: W emits nothing).
+  T, W = @test_logs (:warn, r"Lost connection") match_mode = :any begin
+    T = @async CP.fetch(pool, "SELECT 1;")                # takes slot 1; its first run fails
+    W = @async CP.acquire_connection(pool; timeout_seconds = 5)
+    # W ends up with c1 itself: the slot was handed to it with c1 in place, and the retry left it there.
+    @test _wait_until_442(() -> istaskdone(W))
+    (T, W)
+  end
   @test fetch(W) === c1
   @test pool.connections[1] === c1                        # ← not swapped out under the waiter
   @test pool.renewals == 0                                # ← never renewed

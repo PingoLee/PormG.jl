@@ -805,9 +805,9 @@ No double-close guard is needed on the driver side for a second *sequential* clo
 again, or the `DB` finalizer running later, is harmless — and a finalizer cannot run on a handle a
 live task still references, so an explicit close never races one. Two *concurrent* closers of the
 same SQLite handle are not guarded by the driver; the pool takes a handle out of its slot under the
-lock before closing it, so this function never races the reaper on the same handle — the second
-closers left are `_discard_connection!` on a handle it did not find and the unconditional close in
-`_recover_abandoned_connection!`'s timeout branch, both tracked as #585.
+lock before closing it, so this function never races the reaper on the same handle, and the
+discard paths close only a handle they themselves took out of a slot (#585) — whoever takes a
+handle out is its only closer.
 """
 close_pool!(pool::PostgresConnectionPool; drain_seconds::Real = _CLOSE_POOL_DRAIN_SECONDS) =
   _close_pool_slots!(pool; drain_seconds)
@@ -1511,11 +1511,24 @@ best-effort `close` it. Used when a connection is known-dirty — e.g. a failed 
 — and renewal via `reconnect_db` also failed. Returns whether the slot was found. Never
 throws (callers run it while an original error is propagating).
 
+**A handle that is not in the pool is not closed here** (#585). Not finding it means someone
+else already took it out of its slot, and whoever takes a handle out closes it: the `close_pool!`
+sweep (`_close_pool_slots!`, #47), the reaper (`_reap_pool!`, #125), the stale-idle sweep
+(`_sweep_stale_idle!`, #442), the acquire probe's retirement of a dead handle, retire-on-return
+in `release_connection` (#125), and `_renew_or_discard_connection!` for the handle a renewal
+replaced. (`reconnect_db`'s swap-failure path closes the fresh handle it could not install and
+leaves the old one to whoever changed the slot.) The one exception is `fetch`'s
+reconnect-and-retry, which leaves the dead handle it renewed to the driver finalizer and says so
+at the site. Closing here as well used to be harmless only because the second close was
+serialized behind the first under `pool.lock`; since #47 the takers close outside the lock — on
+SQLite possibly on a deferred task (#327) — so a second closer can overlap the first, and
+SQLite.jl's `_close_db!` does not guard two concurrent `sqlite3_close_v2` calls on one pointer.
+
 `close_handle = false` empties the slot but leaves the handle open. It exists for one caller —
 [`_recover_abandoned_connection!`](@ref)'s timeout branch, which is reached *precisely because* the
 driver is still on the connection — and closing there would free a SQLite handle the global worker
 may be inside `sqlite3_step` on. That caller takes the slot out of circulation now and closes the
-doomed handle later, once the driver has let go.
+doomed handle later, once the driver has let go — again only if this discard found the slot.
 """
 function _discard_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn; close_handle::Bool = true)::Bool
   found = Base.lock(pool.lock) do
@@ -1532,7 +1545,9 @@ function _discard_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn; clo
   # Close OUTSIDE the pool lock: a driver close can block on I/O. On SQLite this also
   # releases the database file write-lock an aborted `BEGIN IMMEDIATE` may still hold —
   # and is deferred if the global worker still has statements for this handle (#327).
-  close_handle && _close_driver_handle!(pool, conn)
+  # Only the handle we actually took out of a slot: one we did not find belongs to whoever did
+  # (#585 — see the docstring).
+  found && close_handle && _close_driver_handle!(pool, conn)
   found || @warn "Connection to discard not found in the pool - it may already have been replaced"
   return found
 end
@@ -2089,12 +2104,21 @@ function _recover_abandoned_connection!(pool::Union{PormGPostgres, PormGSQLite},
         # 3. Still in flight past the budget. Take the slot out of the pool WITHOUT closing — the
         #    next acquire materializes a fresh connection into it — then keep the doomed handle
         #    alive until the driver is finally off it, and only then close.
-        _discard_connection!(pool, conn; close_handle = false)
-        _wait_settled(probe, close_seconds)
-        try
-          Base.invokelatest(close, conn)
-        catch close_failure
-          @debug "Error closing an abandoned connection" exception=close_failure
+        #
+        #    Only if the discard found the slot. The connection is leased for this whole routine,
+        #    so a `close_pool!` sweep in the meantime takes it — and closes it, on SQLite possibly
+        #    on a deferred task that polls the same ledger our settle probe is keyed to. Closing
+        #    here as well would be the second closer of one handle inside one poll window (#585);
+        #    the taker owns that close, so there is nothing left for us to wait for either.
+        if _discard_connection!(pool, conn; close_handle = false)
+          _wait_settled(probe, close_seconds)
+          try
+            Base.invokelatest(close, conn)
+          catch close_failure
+            @debug "Error closing an abandoned connection" exception=close_failure
+          end
+        else
+          @debug "Abandoned connection was already taken out of its slot; its taker closes it"
         end
       end
     catch recovery_failure
@@ -2325,6 +2349,10 @@ function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
         new_conn = nothing
         try
           new_conn = reconnect_db(connection, fetch_task.conn)
+          # When renewal produced a NEW handle (always on SQLite, on PG when `reset!` fell back),
+          # the dead one it replaced is left to the driver's finalizer, not closed here. This is
+          # the one taker that does not close what it took out (#585): the handle is a corpse the
+          # server already dropped, the slot has moved on, and nothing else references it.
           if new_conn !== nothing
             # Whatever killed this connection has usually killed every other one too, and the retry
             # below re-acquires through the NORMAL pool path — which would happily hand back another

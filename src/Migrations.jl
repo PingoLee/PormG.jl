@@ -63,7 +63,7 @@ import PormG: sqlite_ignore_schema, postgres_ignore_table, _EXTRA_IGNORE_TABLES
 import PormG.ConnectionPool: SQLiteConnectionPool, close_pool!
 # #522: `_literal_default` folds a `DateTimeField` default to a UTC `ZonedDateTime` on both sides
 # of the diff, and the readers coerce a catalog datetime with the same vocabulary.
-import TimeZones: ZonedDateTime, astimezone, @tz_str
+import TimeZones: ZonedDateTime, TimeZone, astimezone, @tz_str
 import PormG: GENERATED_MODULE_RESERVED_BINDINGS
 import PormG: MODEL_PATH, PormGSettings, DB_PATH
 import PormG.AdvisoryLock

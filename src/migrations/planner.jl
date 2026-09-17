@@ -504,13 +504,15 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
     #
     # Forcing it is what keeps the plan byte-identical: were it diffed, a declared default that
     # happened to EQUAL the temporary one would produce an empty delta and no cleanup step at all.
-    # That case is vanishingly unlikely (`_get_temporary_default_value` returns `now()` / `today()`)
-    # and harmless if it happened — but "unlikely and harmless" is a reason to keep the behaviour
-    # pinned, not a reason to let it drift.
+    # That case is now unreachable rather than merely unlikely — since #607
+    # `_get_temporary_default_value` returns a value only for a NOT NULL column with NO declared
+    # default, so there is no declared default for the temporary one to equal — but "unreachable and
+    # harmless" is still a reason to keep the behaviour pinned, not a reason to let it drift.
     #
-    # PostgreSQL DOES reach here (a new `sDateTimeField` / `sDateField` gets a temporary default on
-    # both engines) and renders `DROP DEFAULT` from `new_spec.default`, which is `NoDefault` for a
-    # defaultless declared field. SQLite ignores the delta and rebuilds from the desired model.
+    # PostgreSQL DOES reach here (a new NOT NULL, defaultless `sDateTimeField` / `sDateField` gets a
+    # temporary default on both engines; a nullable one, or one with a `default`, gets none — #607)
+    # and renders `DROP DEFAULT` from `new_spec.default`, which is `NoDefault` for a defaultless
+    # declared field. SQLite ignores the delta and rebuilds from the desired model.
     # `_spec_or_degraded`, not `column_spec`: every other planner site compiles through the #69
     # fail-safe, and this one is reachable with an unresolved foreign key (the SQLite
     # `needs_sqlite_fk_rebuild` path), where a raise would abort `makemigrations` at a call site that
@@ -1117,14 +1119,36 @@ function _colect_numbered_fields(colect::Vector{Symbol})
   end
   return colect_numbered, join([string(index, " - ", colect_numbered[index]) for index in sort(collect(keys(colect_numbered)))], ", ")
 end
+# The value `_add_new_field` writes into `ADD COLUMN … DEFAULT` for a new temporal column, and then
+# drops again. It exists for ONE reason: a NOT NULL column with no declared default cannot be added to
+# a populated table — SQLite refuses the statement outright, PostgreSQL refuses it once the table has
+# rows — so the migration needs some value to backfill the existing rows with. Two shapes never need
+# it, and both used to get it anyway (#607):
+#
+#   * a `null = true` column is added as NULL, and the temporary value was written into EVERY existing
+#     row as data indistinguishable from a real timestamp afterwards (1125 of 1125 `race` rows on the
+#     fixture, 731 of which should have stayed NULL). Django adds a nullable column as NULL and asks
+#     for a one-off default only when the column is NOT NULL;
+#   * a column with a declared `default` backfills through that default — `field_to_column` already
+#     prefers `field.default` over the temporary value — so the cleanup step `_add_new_field` queues
+#     behind the temporary default was a redundant `SET DEFAULT` on PostgreSQL and a needless full
+#     table rebuild on SQLite.
+#
+# `nothing` sends `_add_new_field` down its no-temporary-default branch, the same one the #514
+# SQLite-FK-rebuild caller already exercises.
 function _get_temporary_default_value(field::PormGField, settings::PormGSettings)
-  if field |> typeof == Models.sDateTimeField
-    return field.formatter(now(), settings.time_zone) |> field.formatter
-  elseif field |> typeof == Models.sDateField
-    return field.formatter(today())    
-  else
-    return nothing
-  end
+  field isa Union{Models.sDateTimeField, Models.sDateField} || return nothing
+  (field.null || field.default !== nothing) && return nothing
+  # `now(TimeZone(…))` and one pass through the formatter — the same expression the insert path uses
+  # for `auto_now_add` (`querybuilder/execution.jl`). This used to be `field.formatter(now(),
+  # settings.time_zone) |> field.formatter`, calling a two-argument `format_timezone_sql` arm that
+  # #602 deleted as having "zero callers": the call goes through the `formatter` SLOT, not the
+  # function name, so a grep by name could not see it, and every NOT NULL temporal ADD COLUMN raised
+  # `MethodError` from the moment #602 merged until #607 rewrote this line. CI runs no integration
+  # test, and the unit suite had nothing on this path — `test_temporal_temporary_default.jl`'s
+  # NOT NULL control is that guard now.
+  field isa Models.sDateTimeField && return field.formatter(now(TimeZone(settings.time_zone)))
+  return field.formatter(today())
 end
 
 

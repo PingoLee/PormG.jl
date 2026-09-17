@@ -419,24 +419,6 @@ function NTH_VALUE(column::String, n::Integer, over_sql::String, conn::PormGSQLi
   return "NTH_VALUE($(column), $(n)) OVER ($(over_sql))"
 end
 
-function VALUE(value::Nothing, conn::PormGPostgres)
-  return "NULL"
-end
-function VALUE(value::Number, conn::PormGPostgres)
-  return "$value"
-end
-function VALUE(value::String, conn::PormGPostgres)
-  return "('$(value)')::text"
-end
-function VALUE(value::Nothing, conn::PormGSQLite)
-  return "NULL"
-end
-function VALUE(value::Number, conn::PormGSQLite)
-  return "$value"
-end
-function VALUE(value::String, conn::PormGSQLite)
-  return "'$(value)'"
-end
 function CAST(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   return """($column)::$(format["type"])"""
 end
@@ -1772,145 +1754,156 @@ function _json_extract_expr(::PormGSQLite, column::String, segments::Vector{Stri
   return string("json_extract(", column, ", '", path, "')")
 end
 
+# #602: every text-lookup renderer below takes `column::AbstractString, value::AbstractString`.
+# Both are RENDERED SQL text — `column` is the quoted column expression and `value` is the bind
+# placeholder (`$N` / `?`) `add_parameter!` returned — never the user's value, which is already
+# bound by the time the builder dispatches here (build_helpers.jl). The wide spelling is the
+# type-system contract, not a live repro: a `::String` arm beside an untyped generic sibling
+# meant a non-`String` placeholder fell to the sibling and was refused for the WRONG reason
+# (`InvalidValueError`, or `BackendCapabilityError` "requires PostgreSQL" *on* PostgreSQL).
+# The generic `(conn::PormGAbstractType, column, value)` arm stays as the guard against a
+# non-string VALUE (placeholder) reaching a renderer; a non-string column is a `MethodError`,
+# exactly as before.
+#
 # PostgreSQL JSONB containment/overlap operators (PG-only; SQLite + abstract throw a friendly
 # error, mirroring iunaccent_*). LibPQ binds `$N` placeholders, so a literal `?`/`?|`/`?&` here is
 # the jsonb operator, never a bind marker. The RHS placeholder already carries any needed cast
 # (`::jsonb` for @>, `::text[]` for ?|/?&) from add_parameter!.
-function jcontains(conn::PormGPostgres, column::String, value::String)::String
+function jcontains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) @> $(value)"                    # jsonb contains the given document
 end
-function jcontains(conn::PormGSQLite, column::String, value::String)
+function jcontains(conn::PormGSQLite, column::AbstractString, value::AbstractString)
   throw(BackendCapabilityError("The @jcontains lookup (JSONB @>) requires PostgreSQL"))
 end
-function jcontains(conn::PormGAbstractType, column::String, value)
+function jcontains(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @jcontains lookup (JSONB @>) requires PostgreSQL"))
 end
 
-function has_key(conn::PormGPostgres, column::String, value::String)::String
+function has_key(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) ? $(value)"                     # top-level key exists
 end
-function has_key(conn::PormGSQLite, column::String, value::String)
+function has_key(conn::PormGSQLite, column::AbstractString, value::AbstractString)
   throw(BackendCapabilityError("The @has_key lookup (JSONB ?) requires PostgreSQL"))
 end
-function has_key(conn::PormGAbstractType, column::String, value)
+function has_key(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @has_key lookup (JSONB ?) requires PostgreSQL"))
 end
 
-function has_any_keys(conn::PormGPostgres, column::String, value::String)::String
+function has_any_keys(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) ?| $(value)"                    # any of the given keys exists
 end
-function has_any_keys(conn::PormGSQLite, column::String, value::String)
+function has_any_keys(conn::PormGSQLite, column::AbstractString, value::AbstractString)
   throw(BackendCapabilityError("The @has_any_keys lookup (JSONB ?|) requires PostgreSQL"))
 end
-function has_any_keys(conn::PormGAbstractType, column::String, value)
+function has_any_keys(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @has_any_keys lookup (JSONB ?|) requires PostgreSQL"))
 end
 
-function has_keys(conn::PormGPostgres, column::String, value::String)::String
+function has_keys(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) ?& $(value)"                    # all of the given keys exist
 end
-function has_keys(conn::PormGSQLite, column::String, value::String)
+function has_keys(conn::PormGSQLite, column::AbstractString, value::AbstractString)
   throw(BackendCapabilityError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
 end
-function has_keys(conn::PormGAbstractType, column::String, value)
+function has_keys(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
 end
 
-function contains(conn::PormGPostgres, column::String, value::String)::String
+function contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
-function contains(conn::PormGSQLite, column::String, value::String)::String
+function contains(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
-function contains(conn::PormGAbstractType, column::String, value)
+function contains(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function icontains(conn::PormGPostgres, column::String, value::String)::String
+function icontains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) ILIKE $(value)$(_like_escape_clause())"
 end
-function icontains(conn::PormGSQLite, column::String, value::String)::String
+function icontains(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
   # pormg_lower = Unicode-aware LOWER UDF registered per-connection in PormGSQLiteExt (#78), so case
   # folding matches PostgreSQL ILIKE; case_sensitive_like=ON makes LIKE exact on the folded text.
   return "pormg_lower($(column)) LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
-function icontains(conn::PormGAbstractType, column::String, value)
+function icontains(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function iunaccent_contains(conn::PormGPostgres, column::String, value::String)::String
+function iunaccent_contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   # Uses the IMMUTABLE wrapper (see Configuration._install_immutable_unaccent!) so the
   # expression can be backed by a functional/pg_trgm index on large tables.
   return "public.immutable_unaccent($(column)) ILIKE public.immutable_unaccent($(value))$(_like_escape_clause())"
 end
-function iunaccent_contains(conn::PormGSQLite, column::String, value::String)
+function iunaccent_contains(conn::PormGSQLite, column::AbstractString, value::AbstractString)
   throw(BackendCapabilityError("The iunaccent_contains lookup requires PostgreSQL and the unaccent extension"))
   return nothing
 end
-function iunaccent_contains(conn::PormGAbstractType, column::String, value)
+function iunaccent_contains(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function iunaccent_exact(conn::PormGPostgres, column::String, value::String)::String
+function iunaccent_exact(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   # Accent- and case-insensitive equality. Uses the IMMUTABLE wrapper (see
   # Configuration._install_immutable_unaccent!) so it can be backed by a functional
   # index on LOWER(public.immutable_unaccent(column)).
   return "LOWER(public.immutable_unaccent($(column))) = LOWER(public.immutable_unaccent($(value)))"
 end
-function iunaccent_exact(conn::PormGSQLite, column::String, value::String)
+function iunaccent_exact(conn::PormGSQLite, column::AbstractString, value::AbstractString)
   throw(BackendCapabilityError("The iunaccent_exact lookup requires PostgreSQL and the unaccent extension"))
   return nothing
 end
-function iunaccent_exact(conn::PormGAbstractType, column::String, value)
+function iunaccent_exact(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function startswith(conn::PormGPostgres, column::String, value::String)::String
+function startswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
-function startswith(conn::PormGSQLite, column::String, value::String)::String
+function startswith(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
-function startswith(conn::PormGAbstractType, column::String, value)
+function startswith(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function istartswith(conn::PormGPostgres, column::String, value::String)::String
+function istartswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) ILIKE $(value)$(_like_escape_clause())"
 end
-function istartswith(conn::PormGSQLite, column::String, value::String)::String
+function istartswith(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
   # Unicode-aware case folding via the pormg_lower UDF (#78) — see icontains above.
   return "pormg_lower($(column)) LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
-function istartswith(conn::PormGAbstractType, column::String, value)
+function istartswith(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function endswith(conn::PormGPostgres, column::String, value::String)::String
+function endswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
-function endswith(conn::PormGSQLite, column::String, value::String)::String
+function endswith(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
-function endswith(conn::PormGAbstractType, column::String, value)
+function endswith(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function iendswith(conn::PormGPostgres, column::String, value::String)::String
+function iendswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) ILIKE $(value)$(_like_escape_clause())"
 end
-function iendswith(conn::PormGSQLite, column::String, value::String)::String
+function iendswith(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
   # Unicode-aware case folding via the pormg_lower UDF (#78) — see icontains above.
   return "pormg_lower($(column)) LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
-function iendswith(conn::PormGAbstractType, column::String, value)
+function iendswith(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
@@ -1923,71 +1916,71 @@ end
 # @ne / @nin. The unaccent twins stay PostgreSQL-only, mirroring their positive form.
 # ------------------------------------------------------------------------------
 
-function ncontains(conn::PormGPostgres, column::String, value::String)::String
+function ncontains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
-function ncontains(conn::PormGSQLite, column::String, value::String)::String
+function ncontains(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
-function ncontains(conn::PormGAbstractType, column::String, value)
+function ncontains(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function nicontains(conn::PormGPostgres, column::String, value::String)::String
+function nicontains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) NOT ILIKE $(value)$(_like_escape_clause())"
 end
-function nicontains(conn::PormGSQLite, column::String, value::String)::String
+function nicontains(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
   # pormg_lower = Unicode-aware LOWER UDF (#78); NOT LIKE over folded text mirrors icontains.
   return "pormg_lower($(column)) NOT LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
-function nicontains(conn::PormGAbstractType, column::String, value)
+function nicontains(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function niunaccent_contains(conn::PormGPostgres, column::String, value::String)::String
+function niunaccent_contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "public.immutable_unaccent($(column)) NOT ILIKE public.immutable_unaccent($(value))$(_like_escape_clause())"
 end
-function niunaccent_contains(conn::PormGSQLite, column::String, value::String)
+function niunaccent_contains(conn::PormGSQLite, column::AbstractString, value::AbstractString)
   throw(BackendCapabilityError("The niunaccent_contains lookup requires PostgreSQL and the unaccent extension"))
   return nothing
 end
-function niunaccent_contains(conn::PormGAbstractType, column::String, value)
+function niunaccent_contains(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function niunaccent_exact(conn::PormGPostgres, column::String, value::String)::String
+function niunaccent_exact(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "LOWER(public.immutable_unaccent($(column))) <> LOWER(public.immutable_unaccent($(value)))"
 end
-function niunaccent_exact(conn::PormGSQLite, column::String, value::String)
+function niunaccent_exact(conn::PormGSQLite, column::AbstractString, value::AbstractString)
   throw(BackendCapabilityError("The niunaccent_exact lookup requires PostgreSQL and the unaccent extension"))
   return nothing
 end
-function niunaccent_exact(conn::PormGAbstractType, column::String, value)
+function niunaccent_exact(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function nstartswith(conn::PormGPostgres, column::String, value::String)::String
+function nstartswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
-function nstartswith(conn::PormGSQLite, column::String, value::String)::String
+function nstartswith(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
-function nstartswith(conn::PormGAbstractType, column::String, value)
+function nstartswith(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function nendswith(conn::PormGPostgres, column::String, value::String)::String
+function nendswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
-function nendswith(conn::PormGSQLite, column::String, value::String)::String
+function nendswith(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
-function nendswith(conn::PormGAbstractType, column::String, value)
+function nendswith(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end

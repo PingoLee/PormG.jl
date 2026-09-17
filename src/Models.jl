@@ -3194,11 +3194,6 @@ function format_timezone_sql(value::DateTime)
   # A naive DateTime is interpreted as UTC (matches Django USE_TZ default).
   return _canonicalize_datetime_utc(ZonedDateTime(value, _DATETIME_UTC_TZ))
 end
-function format_timezone_sql(value::DateTime, timezone::String)
-  # Returns a ZonedDateTime (NOT a canonical string) — the migration planner re-feeds it
-  # through the 1-arg ::ZonedDateTime method, which canonicalizes. Never used as a bind value directly.
-  return ZonedDateTime(value, TimeZone(timezone))
-end
 # The generic arm every sibling formatter already had and this one did not (#598): without it an
 # unhandled value is a bare `MethodError`, outside the #231 taxonomy. Matches `format_duration_sql`,
 # `format_uuid_sql`, `format_date_sql`, `format_json_sql` and `format_binary_sql`.
@@ -3904,7 +3899,13 @@ end
 """
     format_string(x)
 
-Format the input `x` as a Julia source literal if it is a `String`, otherwise return `x` as is.
+Format the input `x` as a Julia source literal if it is an `AbstractString`, otherwise return `x`
+as is.
+
+`AbstractString`, not `String` (#602): the `else` branch returns its argument RAW, so a `SubString`
+(or any other non-`String` string) used to be written into the generated file unquoted and
+unescaped — exactly the source-that-does-not-parse the `escape_string` below exists to prevent, and
+silently rather than with an error.
 
 Used to render generated model files (`Model_to_str`). The value is `escape_string`d because the
 strings reaching it are no longer all pre-validated identifiers: since #317 an arbitrary live column
@@ -3917,7 +3918,7 @@ emits source that parses but silently *interpolates* — `cost\$usd` would becom
 rather than the column name. (A backslash is escaped unconditionally, `esc` or not.)
 """
 function format_string(x)
-  if x isa String
+  if x isa AbstractString
     return "\"$(escape_string(x, "\$\""))\""
   else
     return x

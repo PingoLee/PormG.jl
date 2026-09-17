@@ -448,6 +448,8 @@ codes = split("hamilton,vettel,alonso", ",")  # Vector{SubString{String}}
 query = M.Driver.objects.filter("driverref__@in" => codes)
 ```
 
+The same holds for a column name handed to the SQL-function constructors (`Power`, `Mod`, `Coalesce`, `Greatest`, `Least`, `NullIf`, `Replace`) and for the string form of `CharField(choices = …)` — a `SubString` is accepted wherever a `String` would be.
+
 ---
 
 ## Null Checks

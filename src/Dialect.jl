@@ -65,14 +65,21 @@ end
 function Y_M(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   return EXTRACT_DATE(column, Dict{String,Any}("format" => "YYYY-MM"), conn)
 end
+# #571 — the PostgreSQL date-part arms cast to `integer`. `EXTRACT(...)` is `numeric` on
+# PostgreSQL ≥ 14 (it was `double precision` before), which LibPQ delivers as a `Decimal`, while
+# the SQLite arms below are integer-valued (`CAST(... AS INTEGER)` / integer division). Same value,
+# two Julia types per engine — the one divergence inside the `Dialect` ladder that #562's collapse
+# could not fix. `::integer` rather than `::bigint` on purpose: it is what a PostgreSQL `IntegerField`
+# already reads back as, and it matches Django's `Extract.output_field = IntegerField()`.
 function QUARTER(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  return "EXTRACT(QUARTER FROM $(column))"
+  return "EXTRACT(QUARTER FROM $(column))::integer"
 end
 function QUARTER(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "((strftime('%m', $(column)) - 1) / 3) + 1"
 end
 function QUADRIMESTER(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  return "CEIL(EXTRACT(MONTH FROM $(column)) / 4.0)"
+  # `numeric / 4.0` is `numeric` and `CEIL(numeric)` is `numeric` — the cast goes outside CEIL.
+  return "CEIL(EXTRACT(MONTH FROM $(column)) / 4.0)::integer"
 end
 function QUADRIMESTER(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "((strftime('%m', $(column)) - 1) / 4) + 1"
@@ -454,12 +461,20 @@ end
 function CONCAT(column::Array{Any,1}, format::Dict{String,Any}, conn::PormGSQLite)
   return "($(join(column, " ||\n")))"
 end
+# #571 — parts PostgreSQL defines as fractional stay bare: a cast would be lossy, and SQLite's
+# fail-closed whitelist below has no twin for any of them, so there is no parity to keep.
+const _PG_EXTRACT_FRACTIONAL = ("EPOCH", "JULIAN", "MILLISECONDS", "MICROSECONDS")
 function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  if haskey(format, "format")
-    return "EXTRACT($(format["part"]) FROM $(column))$(format["format"])"
-  else
-    return "EXTRACT($(format["part"]) FROM $(column))"
-  end
+  part = format["part"]
+  bare = "EXTRACT($(part) FROM $(column))"
+  # The 3-arg `Extract(x, part, format)` suffix is the caller's own cast: it replaces the default.
+  haskey(format, "format") && return bare * format["format"]
+  up = uppercase(part)
+  up in _PG_EXTRACT_FRACTIONAL && return bare
+  # `numeric::integer` ROUNDS (45.6 → 46) where SQLite's `%S` truncates; `trunc` keeps parity.
+  up == "SECOND" && return "trunc($(bare))::integer"
+  # See the note above `QUARTER` for why `::integer` and not `::bigint`.
+  return "$(bare)::integer"
 end
 function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   part = format["part"]

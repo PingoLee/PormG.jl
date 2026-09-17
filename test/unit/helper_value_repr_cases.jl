@@ -219,10 +219,24 @@ const VR_CASES = VRCase[
          # #564's read table, not to the ladder.
          shape = (x, engine) -> engine === :sqlite ? x isa AbstractString : x isa Date,
          p3 = (:sqlite,)),
-  # New finding (P3): `EXTRACT(YEAR FROM …)` is `numeric` on PostgreSQL ≥ 14, delivered as a
-  # `Decimal`; SQLite's `CAST(strftime('%Y', …) AS INTEGER)` is an `Int`. Same value, two types.
+  # #571 FIXED: `EXTRACT(YEAR FROM …)` is `numeric` on PostgreSQL ≥ 14, delivered as a `Decimal`,
+  # while SQLite's `CAST(strftime('%Y', …) AS INTEGER)` is an `Int` — same value, two types. The
+  # PostgreSQL arm now casts `::integer`, so P3 holds on both engines. The four siblings below share
+  # the fix (`@month`/`@day` through the same `EXTRACT` arm, `@quarter`/`@quadrimester` through
+  # their own cast) and carry the pair spelling so P2 covers both routes of the one ladder (#562).
+  # The P2 nudge (`+1`) is safe for this probe; note that `_format_period_sql` REFUSES quarter 5 and
+  # quadrimester 4, so a probe in Q4 or the last quadrimester would turn the miss into a refusal.
   vrcase("at_year_f", :timestamp, c -> F("$(c)__@year"), v -> year(_vr_utc_naive(v)),
-         result_kind = :integer, p3 = (:postgres,)),
+         result_kind = :integer, pair = c -> "$(c)__@year"),
+  vrcase("at_month_f", :timestamp, c -> F("$(c)__@month"), v -> month(_vr_utc_naive(v)),
+         result_kind = :integer, pair = c -> "$(c)__@month"),
+  vrcase("at_day_f", :timestamp, c -> F("$(c)__@day"), v -> day(_vr_utc_naive(v)),
+         result_kind = :integer, pair = c -> "$(c)__@day"),
+  vrcase("at_quarter_f", :timestamp, c -> F("$(c)__@quarter"), v -> cld(month(_vr_utc_naive(v)), 3),
+         result_kind = :integer, pair = c -> "$(c)__@quarter"),
+  vrcase("at_quadrimester_f", :timestamp, c -> F("$(c)__@quadrimester"),
+         v -> cld(month(_vr_utc_naive(v)), 4),
+         result_kind = :integer, pair = c -> "$(c)__@quadrimester"),
   # ── DATE ─────────────────────────────────────────────────────────────────
   # `date(...)` == `format_date_sql` is asserted only in a comment today (`Dialect.jl:83`); this
   # is that claim as a measurement.
@@ -249,8 +263,17 @@ const VR_CASES = VRCase[
   vrcase("at_date_f", :date, c -> F("$(c)__@date"), v -> v, pair = c -> "$(c)__@date",
          shape = (x, engine) -> engine === :sqlite ? x isa AbstractString : x isa Date,
          p3 = (:sqlite,)),
+  # #571 FIXED on a DATE column too — same cast, same four siblings, same nudge caveat as above.
   vrcase("at_year_f", :date, c -> F("$(c)__@year"), v -> year(v), result_kind = :integer,
-         p3 = (:postgres,)),
+         pair = c -> "$(c)__@year"),
+  vrcase("at_month_f", :date, c -> F("$(c)__@month"), v -> month(v), result_kind = :integer,
+         pair = c -> "$(c)__@month"),
+  vrcase("at_day_f", :date, c -> F("$(c)__@day"), v -> day(v), result_kind = :integer,
+         pair = c -> "$(c)__@day"),
+  vrcase("at_quarter_f", :date, c -> F("$(c)__@quarter"), v -> cld(month(v), 3),
+         result_kind = :integer, pair = c -> "$(c)__@quarter"),
+  vrcase("at_quadrimester_f", :date, c -> F("$(c)__@quadrimester"), v -> cld(month(v), 4),
+         result_kind = :integer, pair = c -> "$(c)__@quadrimester"),
   # ── TIME ─────────────────────────────────────────────────────────────────
   # `TimeField` has no dedicated formatter — it rides `format_text_sql(::Time)` — and no SQL
   # canonicalizer or read-side parser at all. `F(time) ± duration` raises `InvalidValueError`

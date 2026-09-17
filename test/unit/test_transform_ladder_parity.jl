@@ -137,9 +137,10 @@ end
     (:sqlite, "month")   => "CAST(strftime('%m', \"Tb\".\"ts\") AS INTEGER)",
     (:sqlite, "day")     => "CAST(strftime('%d', \"Tb\".\"ts\") AS INTEGER)",
     (:sqlite, "yyyy_mm") => "strftime('%Y-%m', \"Tb\".\"ts\")",
-    (:postgres, "year")    => "EXTRACT(YEAR FROM \"Tb\".\"ts\")",
-    (:postgres, "month")   => "EXTRACT(MONTH FROM \"Tb\".\"ts\")",
-    (:postgres, "day")     => "EXTRACT(DAY FROM \"Tb\".\"ts\")",
+    # #571: the PostgreSQL arms cast `::integer` so the read-back type matches SQLite's `Int`.
+    (:postgres, "year")    => "EXTRACT(YEAR FROM \"Tb\".\"ts\")::integer",
+    (:postgres, "month")   => "EXTRACT(MONTH FROM \"Tb\".\"ts\")::integer",
+    (:postgres, "day")     => "EXTRACT(DAY FROM \"Tb\".\"ts\")::integer",
     (:postgres, "yyyy_mm") => "to_char(\"Tb\".\"ts\", 'YYYY-MM')",
   )
   for (engine, conn) in ((:sqlite, _TLP_SL), (:postgres, _TLP_PG))
@@ -193,8 +194,8 @@ end
   numeric = Dict(
     (:sqlite, "quarter")        => "((strftime('%m', \"Tb\".\"ts\") - 1) / 3) + 1",
     (:sqlite, "quadrimester")   => "((strftime('%m', \"Tb\".\"ts\") - 1) / 4) + 1",
-    (:postgres, "quarter")      => "EXTRACT(QUARTER FROM \"Tb\".\"ts\")",
-    (:postgres, "quadrimester") => "CEIL(EXTRACT(MONTH FROM \"Tb\".\"ts\") / 4.0)",
+    (:postgres, "quarter")      => "EXTRACT(QUARTER FROM \"Tb\".\"ts\")::integer",   # #571 cast
+    (:postgres, "quadrimester") => "CEIL(EXTRACT(MONTH FROM \"Tb\".\"ts\") / 4.0)::integer",
   )
   for (engine, conn) in ((:sqlite, _TLP_SL), (:postgres, _TLP_PG))
     for key in ("quarter", "quadrimester")

@@ -1,6 +1,6 @@
 module Configuration
 
-import YAML, Logging
+import YAML
 import PormG: PormGSettings, PormGBackend, PormGPostgres, PormGPostgresParam, PormGSQLite, config, PormGModel
 import PormG: model_table_name  # physical table name (db_table when set, #59) — defined in Kernel
 import PormG: ConfigurationError, InvalidConfigurationError  # semantic error taxonomy (#239); defined in Kernel
@@ -605,9 +605,6 @@ const VALID_CONFIG_KEYS = (
   "change_data",
   "django_prefix",
   "time_zone",
-  "log_queries",
-  "log_level",
-  "log_to_file",
   "model_file",
 )
 
@@ -679,25 +676,6 @@ _is_unset(v) = v === nothing || (v isa AbstractString && isempty(strip(v)))
 # URI filenames are honoured by the SQLite build shipped in `SQLite_jll`, so `file:` is a real
 # escape hatch here and not merely reserved.
 _is_sqlite_nonpath(dbname::AbstractString) = dbname == ":memory:" || startswith(dbname, "file:")
-
-# Ordered, not a Dict: `Dict` iteration order is unspecified, so a value matching two names
-# (e.g. "debug_info") previously resolved differently between runs.
-const LOG_LEVEL_NAMES = (("debug", Logging.Debug), ("info", Logging.Info),
-                         ("warn", Logging.Warn), ("error", Logging.Error))
-
-# Apply a `config: log_level:` value. Substring matching is deliberate — "warning" means `warn` —
-# but a value matching nothing used to leave the default in place silently (#348).
-function _apply_log_level!(settings::PormGSettings, v)::Nothing
-  text = lowercase(string(v))
-  for (name, level) in LOG_LEVEL_NAMES
-    if occursin(name, text)
-      settings.log_level = level
-      return nothing
-    end
-  end
-  @warn "connection.yml: unrecognised `log_level:` value; keeping the default" value=v env=settings.app_env supported=first.(LOG_LEVEL_NAMES)
-  return nothing
-end
 
 # Every message in this family is prefixed `connection.yml: ` on purpose — one `occursin` filter
 # then covers the whole family in tests, including the "a valid file emits none of them" guard.
@@ -854,11 +832,7 @@ function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{
       for (k, v) in cfg
         k_str = string(k)
         if k_str in VALID_CONFIG_KEYS
-          if k_str == "log_level"
-            _apply_log_level!(settings, v)
-          else
-            setfield!(settings, Symbol(k_str), ((isa(v, String) && startswith(v, ":")) ? Symbol(v[2:end]) : v) )
-          end
+          setfield!(settings, Symbol(k_str), ((isa(v, String) && startswith(v, ":")) ? Symbol(v[2:end]) : v) )
         elseif k_str in VALID_CONNECTION_KEYS
           # Exact membership only — no `_suggest_name` fallback in this direction, which would
           # resolve `connections:` to `options` and mislabel an internal-field attempt.
@@ -1266,9 +1240,6 @@ mutable struct Settings <: PormGSettings
   db_def_folder::String # same then key
   model_file::String
   db_config_settings::Dict{String,Any}
-  log_queries::Bool
-  log_level::Logging.LogLevel
-  log_to_file::Bool
   change_db::Bool # Enable makemigrations and migrations functionality in the app
   change_data::Bool # Enable the change of the database (upgrade, delete) in the app
   connections::Union{Nothing, PormGPostgres, PormGSQLite}
@@ -1285,9 +1256,6 @@ mutable struct Settings <: PormGSettings
       db_def_folder       = DB_PATH,
       model_file          = MODEL_FILE,
       db_config_settings  = Dict{String,Any}(),
-      log_queries         = true,
-      log_level           = Logging.Debug,
-      log_to_file         = true,
       change_db           = false,
       change_data         = false,
       connections         = nothing,
@@ -1300,9 +1268,6 @@ mutable struct Settings <: PormGSettings
       db_def_folder,
       model_file,
       db_config_settings,
-      log_queries,
-      log_level,
-      log_to_file,
       change_db,
       change_data,
       connections,

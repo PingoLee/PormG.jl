@@ -146,16 +146,11 @@ The drop comes first and names the **pre-rename** column, because that is what t
 when the plan is built; the add names the new one, because by then the rename has run. On SQLite the
 same change is one table rebuild, emitted after the `RENAME COLUMN`.
 
-Two renames on the same table in one migration are fine, and so is a rename alongside a new column:
-SQLite collapses them into a single rebuild placed after every rename and every `ADD COLUMN`.
+Two renames on the same table in one migration are fine, and so is a rename alongside a new column or an ordinary column alteration: SQLite collapses them into a single rebuild placed after every rename and every `ADD COLUMN`, and that rebuild re-creates the renamed columns' secondary indexes under their new names.
 
-!!! note "On SQLite, a rename combined with another change may leave its index for the next run"
-    The rebuild re-creates the renamed column's secondary indexes when the rename is what registered
-    it. But a rename that co-occurs with an ordinary column alteration, or with a new column, on the
-    *same* table produces one rebuild for all of them — and that one may not carry the rename, in
-    which case the renamed column's index is not re-created. No column and no data are affected, and
-    the next `makemigrations` sees the column as unindexed and plans the `CREATE INDEX`. Renaming on
-    its own, or renaming two columns together, always keeps the indexes.
+### Renaming a field that also changes `db_index`
+
+Turning `db_index` on or off *in the same change as the rename* is planned in that migration, on both backends — a `CREATE INDEX` on the new column name, or a `DROP INDEX` of the live index. Leaving `db_index` alone plans nothing at all about the index: `RENAME COLUMN` carries an index with it on both engines, so the index keeps covering the column and only its *name* still mentions the old one. That stale name is deliberate — re-creating the index on every rename would rewrite a potentially large index to fix a string.
 
 !!! warning "A rename that DROPS a constraint needs `destructive = true`"
     Renaming a field is not destructive. But if the same change also removes a `UNIQUE` constraint or
@@ -214,6 +209,27 @@ SQLite collapses them into a single rebuild placed after every rename and every 
     ```
 
     SQLite is unaffected — it has no `ALTER TABLE ADD CONSTRAINT`, so the duplicate was never possible there.
+
+## Statement Ordering
+
+A migration's statements are applied in a fixed sequence of buckets, not in the order the plan file lists them:
+
+1. `CREATE TABLE` (new models)
+2. `DROP TABLE`
+3. `RENAME COLUMN`
+4. Everything else — column alterations, `ADD CONSTRAINT`, `DROP CONSTRAINT`, `DROP INDEX`
+5. Field `CREATE INDEX`
+
+Within a bucket the order is stable but arbitrary — effectively alphabetical by table, because the plan is read back out of `pending_migrations.jl` by module binding name. **It is not a dependency order, and PormG does not compute one.**
+
+That is safe rather than lucky, and it rests on three properties the test suite pins:
+
+- **PostgreSQL never inlines a foreign key in `CREATE TABLE`.** Every key is a separate `ALTER TABLE … ADD CONSTRAINT` in bucket 4, so it runs after *every* `CREATE TABLE`. Two new tables that reference each other therefore apply in either order — which no dependency sort could achieve, because that is a cycle.
+- **`DROP TABLE` is `DROP TABLE … CASCADE` on PostgreSQL**, so a parent can be dropped before its children are cleaned up. Because `CASCADE` also removes the children's constraints, PormG emits `DROP CONSTRAINT IF EXISTS` — otherwise removing a child's foreign-key field in the same migration that drops its parent would abort on a constraint the `CASCADE` had already taken.
+- **SQLite suspends foreign-key enforcement for the whole migration** (`PRAGMA foreign_keys = OFF`, restored by renewing the connection afterwards). Its inline `REFERENCES` clauses therefore constrain nothing while DDL is running, and SQLite resolves an FK's parent table lazily in any case.
+
+!!! note "Why there is no topological sort"
+    This is the same design position as the rest of the engine: no dependency graph, no replay (see [What this means in practice](#What-this-means-in-practice)). The plan file is a flat, frozen v1 artifact whose statements are opaque SQL by the time they are executed, so ordering by dependency would mean changing the format rather than adding a sort. Keeping constraints out of the ordering problem is cheaper and handles cycles, which a sort cannot.
 
 ## Database-Specific Behavior
 
@@ -286,7 +302,20 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
     Do not run concurrent migrations against the same SQLite database.
 
 ### PostgreSQL: Advisory Locking
-PostgreSQL migrations automatically acquire an advisory lock (`pormg_migrations_{db_name}`) to prevent concurrent migration execution. This ensures safe deployment in multi-instance environments.
+`migrate()` acquires a PostgreSQL session-level advisory lock before it executes anything, so a second migrator against the same database **queues** instead of interleaving its DDL. It waits up to 30 seconds and then fails rather than proceeding unserialized.
+
+The key is the constant `pormg::migrations`, with **no database or folder qualifier** — deliberately. A PostgreSQL advisory lock is tagged with the *database OID* alongside the key, so the database is already the lock's namespace:
+
+- Every configuration pointing at one database contends on one lock, **including two different `db/` config folders that resolve to the same server and database**. Before #90 the key embedded the config folder name, so those two folders took two different locks and migrated one database concurrently.
+- Two databases cannot collide on it, however identical the key, because their locks carry different database OIDs.
+
+This is a guarantee about *one database*, not one server: `migrate()` against `analytics` does not block `migrate()` against `billing` on the same cluster, which is what you want.
+
+!!! note "Two PormG versions can take different keys"
+    Versions before this change embedded the config folder name in the key. While a rolling deploy has some instances on either side of it, the two take *different* keys and therefore do not exclude each other — transiently the very condition this fixes. Nothing in an app's source has to change; just avoid running `migrate()` from two PormG versions at once.
+
+!!! warning "A transaction-pooling proxy defeats it"
+    The lock is **session-level** — it lives on the connection that took it. Behind PgBouncer in `transaction` mode (or any pooler that reassigns server connections per transaction) the lock can be released or observed on the wrong backend. Point `migrate()` at a direct connection, or use `session` pooling.
 
 ### PostgreSQL: Identity Columns
 `IDField()` renders a PostgreSQL identity column, and `generated_always = true` makes it the stricter `GENERATED ALWAYS AS IDENTITY` — a column application code cannot supply a value for. Changing that declaration is a migration like any other, and PostgreSQL spells the three transitions differently:

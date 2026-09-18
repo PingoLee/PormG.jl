@@ -223,11 +223,22 @@ Four rules follow, and they are the ones to check a change against:
      and every `ADD COLUMN`; `_configure_order_dict_migration_plan` overwrites a key in place, so
      re-registering without `delete!` leaves it at the first registration's position. A plan-time
      refusal was tried first and rejected: `colect_addition` is a `Set`, so it fired on hash order.
-     The surviving rebuild carries only the `column_renames` its own call was given, which is why a
-     rename co-occurring with another change to that table can still lose the renamed column's index.
+     Since **#556** the `column_renames` map is owned by `_alter_table_fields`, one per table, and
+     handed to all **four** producers of that key -- the rename branch, the alteration loop,
+     `_add_new_field`, and the rebuild the deletion loop emits when a column cannot be dropped in
+     place -- so whichever registration lands last renders with the UNION of the renames. Count the
+     producers before trusting that sentence: the first pass at #556 found three and shipped a
+     fourth still broken.
+     Before that each call carried only its own, and a rename co-occurring with another change to
+     that table silently lost the renamed column's index.
 4. **`db_index` stays outside the delta**, with `index_actions` (see rule 3 of the previous section).
-   Consequence worth knowing: a rename that also flips `db_index` plans its index action one run
-   later, when the column appears on both sides of the diff. Self-healing, and deliberate.
+   That separation is unchanged; what used to follow from it is not. `index_actions` was declared
+   AFTER `_alter_table_fields` called `_resolve_table_fields`, so the rename branch had no sink and a
+   rename that also flipped `db_index` planned its index action one run later. **#556** moved the
+   declaration above that call and threads the list in, so the flip is planned in the same migration
+   on both engines. An UNCHANGED `db_index` still plans nothing at all -- `RENAME COLUMN` carries the
+   index with it, and re-creating it on every rename is the #515 regression
+   `test_rename_unique_index.jl` guards against.
 
 **Where the types live, and why it is not tidiness.** The IR's nouns are layer 1 (`src/column_ir.jl`,
 included from `Kernel`) because `Dialect` renders from a `ColumnDelta` and is included *before*

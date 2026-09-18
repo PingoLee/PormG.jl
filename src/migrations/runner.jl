@@ -535,12 +535,47 @@ end
     _order_statements(migration_plan) -> (ordered_statements, all_sql_content)
 
 Order SQL statements for safe execution:
+
 1. New tables (CREATE TABLE)
 2. Drop tables
 3. Rename fields
 4. All other alterations
+5. Field CREATE INDEX (#152)
 
-Returns the ordered statements and the concatenated SQL content for checksum.
+Returns the ordered statements and the concatenated SQL content for checksum. Statement order is
+part of the checksum input, so changing a bucket changes the digest of every plan that uses it.
+
+# Why these buckets are safe without a dependency sort (#89)
+
+There is **no topological ordering by foreign key** here, and none is needed, because PormG keeps
+FK constraints out of the ordering problem entirely. Three properties carry that, and a regression
+test pins each (`test/unit/test_migration_fk_ordering.jl`):
+
+- **PostgreSQL never inlines an FK in `CREATE TABLE`.** `Dialect.create_table(::PormGPostgres, …)`
+  emits columns only; every constraint arrives as a separate `ALTER TABLE … ADD CONSTRAINT`, which
+  lands in bucket 4 — after every `CREATE TABLE`. Two new tables referencing each other therefore
+  apply in any order, which a topological sort could not do at all: that is a *cycle*.
+- **PostgreSQL drops with `CASCADE`**, so a parent can be dropped before its children are cleaned
+  up.
+- **SQLite runs the whole migration with `PRAGMA foreign_keys = OFF`** (`_execute_migration_lifecycle`,
+  asserted via `_assert_foreign_keys_suspended`, #276), so its inline `REFERENCES` clauses constrain
+  nothing during the migration.
+
+Note the layer this function sits at: it receives the plan *after* `get_all_dicts` has read it back
+from `pending_migrations.jl`, and that reader keeps only the `OrderedDict` values — **the table name
+is already gone**. A real dependency sort is therefore not expressible here at all; it would need
+the file format to carry the dependency, which is frozen at v1
+(`docs/src/migrations/stability.md`). If the invariant above is ever deliberately broken, the guard
+test fails and that is the moment to design a format v2 — not to sort opaque SQL strings.
+
+`"Rename table"` is deliberately **not** bucketed. It does not commute with the alterations — a
+`ADD CONSTRAINT … REFERENCES <new name>` would be ordered against it only by chance — but no plan
+can contain that key today: `get_migration_plan`'s table-rename branch raises before it is ever
+registered (it calls `_alter_table_fields` with the *pre-rename* name, whose first act is a
+`current_schema[model_name]` lookup that is keyed by the DECLARED name). Bucketing it now would
+also pick the wrong answer: that same branch plans the table's column work against the OLD name, so
+a `RENAME TABLE` ordered ahead of those statements would break every one of them. Whoever repairs
+the producer decides the ordering with it.
 """
 function _order_statements(migration_plan)
   first_execution::Vector{String} = []
@@ -1103,9 +1138,36 @@ end
 # already dialect-dispatched — this hook only decides whether to wrap it in a lock.
 # ==============================================================================
 
+"""
+    MIGRATION_LOCK_KEY
+
+The advisory-lock key `migrate()` serializes on, for **every** PostgreSQL configuration.
+
+Deliberately carries no database qualifier. A PostgreSQL advisory lock is tagged
+`(database OID, key)` — the database is already the lock's namespace, so two pools opened on one
+database contend on this key and two pools on different databases cannot collide however identical
+their key is. `test/integration/common_setup.jl` relies on the same property for the suite lock.
+
+It used to be `"pormg_migrations_\$(db_def_folder)"`, which was worse than redundant: the folder name
+is not database identity, so two config folders resolving to ONE database took two different locks
+and migrated it concurrently — the exact guarantee the lock exists to provide, silently defeated
+(#90).
+
+Deriving the key from `host:port/dbname` instead was considered and rejected. One target has several
+spellings — a `url:` DSN or discrete `host`/`hostaddr`/`port`/`database`, `localhost` vs `127.0.0.1`
+vs a Unix socket (see `Configuration.VALID_CONNECTION_KEYS`) — so a string-built identity re-creates
+the "several match conditions of different strength" failure class #550 removed from connection-key
+binding. PostgreSQL's own scoping cannot be spelled wrong.
+"""
+const MIGRATION_LOCK_KEY = "pormg::migrations"
+
+# Takes the settings it does not read, so the seam exists if lock identity ever has to become
+# narrower than a database (a per-schema migration target would need it); callers stay unchanged.
+_migration_lock_key(::PormGSettings)::String = MIGRATION_LOCK_KEY
+
 function _run_locked_lifecycle(connection::PormGPostgres, settings::PormGSettings,
                                ordered_statements, all_sql, version, name, checksum, has_destructive)
-  lock_key = "pormg_migrations_$(settings.db_def_folder)"
+  lock_key = _migration_lock_key(settings)
   AdvisoryLock.with_advisory_lock(connection, lock_key; wait=true, timeout_ms=30_000) do
     _execute_migration_lifecycle(connection, settings, ordered_statements, all_sql,
                                  version, name, checksum, has_destructive)

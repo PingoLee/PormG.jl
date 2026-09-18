@@ -194,7 +194,7 @@ _fca_action(declared, live) =
 
     plan = _fca_rename_plan(FCA_PG, declared, live)
 
-    @test occursin("DROP CONSTRAINT \"$(FCA_LIVE_CONSTRAINT)\"", _fca_drop(plan))
+    @test occursin("DROP CONSTRAINT IF EXISTS \"$(FCA_LIVE_CONSTRAINT)\"", _fca_drop(plan))
     @test occursin("REFERENCES \"other_parent_t\" (\"id\")", _fca_add(plan))
     # Insertion order: DROP, RENAME, ADD. (`runner._order_statements` later hoists "Rename field"
     # into an earlier bucket, so what EXECUTES is RENAME, DROP, ADD — also correct, since
@@ -233,7 +233,7 @@ _fca_action(declared, live) =
 
     plan = _fca_rename_plan(FCA_PG, declared, live)
 
-    @test occursin("DROP CONSTRAINT \"$(FCA_LIVE_CONSTRAINT)\"", _fca_drop(plan))
+    @test occursin("DROP CONSTRAINT IF EXISTS \"$(FCA_LIVE_CONSTRAINT)\"", _fca_drop(plan))
     @test !("New foreign key: new_ref_id" in _fca_keys(plan))
   end
 

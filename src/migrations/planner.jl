@@ -455,7 +455,12 @@ function _add_new_table(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
   return nothing
 end
 
-function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::String; temporary_default_value::Any = nothing)::Nothing
+# `column_renames` (#556): this is the third producer of the shared "Alter table: <model>" key, and
+# the surviving entry is whichever registration lands LAST. It used to render its rebuild with an
+# empty rename map, so a rename co-occurring with a new column on the same table lost the renamed
+# column's secondary index. `_resolve_table_fields` now owns one accumulator per table and hands it
+# to all three producers, so every rebuild -- whichever wins -- carries the union of the renames.
+function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::String; temporary_default_value::Any = nothing, column_renames::Dict{String, String} = Dict{String, String}())::Nothing
   field = model.fields[field_name]
   Models.is_many_to_many_field(field) && return nothing
   name = _hash_field_name(model_name, field_name)
@@ -537,7 +542,8 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
                                  live_default, temp_spec.reference,
                                  temp_spec.checks, temp_spec.identity, temp_spec.raw),
                       [:default]));
-        surviving_columns = _model_physical_columns(model)))
+        surviving_columns = _model_physical_columns(model),
+        column_renames = column_renames))
   elseif conn isa PormGSQLite
     # The other half of the same invariant, and the reason the block above was not enough. The
     # rebuild's `CREATE TABLE` is rendered from the DESIRED model, so it already declares every new
@@ -565,8 +571,8 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
   end
   return nothing
 end
-function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Symbol; temporary_default_value::Any = nothing)::Nothing
-  _add_new_field(conn, migration_plan, model_name, model, field_name |> string, temporary_default_value=temporary_default_value)
+function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Symbol; temporary_default_value::Any = nothing, column_renames::Dict{String, String} = Dict{String, String}())::Nothing
+  _add_new_field(conn, migration_plan, model_name, model, field_name |> string, temporary_default_value=temporary_default_value, column_renames=column_renames)
 end
 
 """
@@ -613,8 +619,10 @@ retype with the stale `>= 0` CHECK in place, which PostgreSQL rejects). `column_
 is what puts it there.
 
 `column_renames` is passed through to the SQLite rebuild so a renamed column's secondary indexes are
-re-created against the new name (#150), and `_resolve_table_fields` ACCUMULATES it across the rename
-loop so a table renaming two columns keeps both indexes. On SQLite the rebuild entry is also
+re-created against the new name (#150). Since #556 the accumulator is owned by `_alter_table_fields`,
+one per table, and every producer of the shared `"Alter table: <model>"` key renders with it -- this
+function from both its call sites, and `_add_new_field` -- so whichever registration lands last
+carries the union of the renames rather than only its own. On SQLite the rebuild entry is also
 relocated to the end of the table's plan on every registration, because it copies by the DESIRED
 column names and so must follow every `RENAME COLUMN` and every `ADD COLUMN`.
 
@@ -755,10 +763,6 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
     end
   end    
 
-  @pormg_debug false
-  # Pass maps to resolve fields so original keys can be used for accessing model.fields
-  _resolve_table_fields(conn, model_name, live, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive)
-
   # #325: index create/drop is DEFERRED to after the whole field loop, not emitted inline.
   # `stripped_current_fields` is a `Set`, so field order is arbitrary — and on SQLite the table
   # rebuild re-creates every live secondary index verbatim (#82). A `DROP INDEX` emitted before
@@ -766,7 +770,25 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
   # Set yielded first. Collecting the actions here and flushing them below puts them after any
   # rebuild, deterministically. Each entry is `(:create | :drop, physical column, hashed name,
   # live index name or nothing)`.
+  #
+  # DECLARED BEFORE `_resolve_table_fields` since #556, and that placement is the whole fix for the
+  # first of its two gaps. The rename branch lives inside `_resolve_table_fields`, which used to run
+  # BEFORE this list existed — so a rename that also flipped `db_index` had nowhere to record the
+  # index action and simply planned none, deferring it to the next `makemigrations`. It is a plain
+  # mutable `Vector`, so a `push!` from in there lands in the list the flush loop below drains.
   index_actions = Tuple{Symbol, String, String, Union{String, Nothing}}[]
+
+  # One rename map per TABLE (#150/#556). The SQLite rebuild is registered under a single
+  # "Alter table: <model>" key and the surviving entry is whichever registration lands last, so the
+  # map has to be shared by all three producers — the rename branch, the alteration loop below, and
+  # `_add_new_field` — or the winner re-renders the rebuild with renames it never saw and the
+  # renamed column's secondary index is dropped and not re-created. It lived inside
+  # `_resolve_table_fields` until #556, which is exactly why only the rename branch honoured it.
+  sqlite_rename_map = Dict{String, String}()
+
+  @pormg_debug false
+  # Pass maps to resolve fields so original keys can be used for accessing model.fields
+  _resolve_table_fields(conn, model_name, live, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive, index_actions=index_actions, sqlite_rename_map=sqlite_rename_map)
 
   for field_name_stripped in stripped_current_fields
     original_code_key = current_fields_map[field_name_stripped]
@@ -824,8 +846,12 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
       # nothing. The IR carries the whole constraint as one `:reference` facet, `alter_field` has no
       # branch for that facet and needs none, and `_fk_constraint_action` reads it directly — so the
       # filter has nothing left to remove.
+      # `column_renames` (#556): this call re-registers the shared "Alter table: <model>" key on
+      # SQLite, so without the accumulated map it would clobber the rename branch's rebuild with one
+      # that has no renames — and the renamed column's index would not be re-created.
       _plan_column_change!(conn, migration_plan, model_name, current_schema[model_name][:model],
-                           field_name_stripped, field, delta, name)
+                           field_name_stripped, field, delta, name;
+                           column_renames = sqlite_rename_map)
 
       # Index differences are RECORDED here and emitted after the loop — see `index_actions`.
 
@@ -887,13 +913,19 @@ function _resolve_table_fields(
                                 # costs nothing and keeps a plain `Dict` caller working.
                                 model_fields_map::AbstractDict{String, String},
                                 current_fields_map::AbstractDict{String, String};
-                                interactive::Bool = true
+                                interactive::Bool = true,
+                                # Both owned by `_alter_table_fields` since #556 — see the comments
+                                # at their declarations there. `index_actions` is the sink this
+                                # function's rename branch records a `db_index` flip into; it is
+                                # flushed by the caller AFTER the whole field pass, so an index
+                                # action recorded here still lands after any table rebuild.
+                                # `sqlite_rename_map` is the per-table union of renames every
+                                # producer of the shared "Alter table:" key must render with.
+                                # Defaulted so the function stays callable on its own.
+                                index_actions::Vector{Tuple{Symbol, String, String, Union{String, Nothing}}} =
+                                  Tuple{Symbol, String, String, Union{String, Nothing}}[],
+                                sqlite_rename_map::Dict{String, String} = Dict{String, String}()
                               )::Nothing
-  # #150/#507: the SQLite rebuild that a renamed-and-altered column needs is registered under ONE
-  # key per table, so a second rename has to re-render it rather than add another — and to preserve
-  # both columns' secondary indexes it needs BOTH renames. Accumulated here and passed whole to
-  # every `_plan_column_change!` call, so whichever registration lands last carries all of them.
-  sqlite_rename_map = Dict{String, String}()
   # Check by rename field  
   while !isempty(colect_addition)
     field_name_sym = colect_addition[1]
@@ -902,7 +934,7 @@ function _resolve_table_fields(
     if colect_deletion |> isempty
       # `field_name` here is the physical column; pass the real field key so _add_new_field's
       # model.fields lookup resolves (the DDL re-derives the db_column from the field) (#50).
-      _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings))
+      _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings), column_renames = sqlite_rename_map)
     else       
       response = "no"
       if interactive
@@ -913,7 +945,7 @@ function _resolve_table_fields(
       
       if response in ["no", "n"]
         # `field_name` is the physical column; pass the real field key (see above) (#50).
-        _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings))
+        _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings), column_renames = sqlite_rename_map)
       else
         old_field_sym::Union{Symbol,Nothing} = nothing
         try
@@ -947,13 +979,14 @@ function _resolve_table_fields(
         #     on the base commit, a rename-plus-retype planned the RENAME alone and dropped the type
         #     change on the floor until the next `makemigrations` re-proposed it.
         #
-        # STATED LIMIT (#507 phase 2, deliberate): a rename that ALSO flips `db_index` plans no index
-        # action in this migration. `db_index` is outside the IR on purpose — `index_actions` owns
-        # it, because on SQLite a non-empty delta means a rebuild that re-emits every live index —
-        # and a renamed column never reaches the loop that reads it. The next `makemigrations` sees
-        # the column on both sides and plans the CREATE/DROP INDEX normally, so this self-heals one
-        # run later. The common case (an unchanged `db_index`) now correctly plans nothing at all,
-        # where the old code dropped and re-created the index under a fresh hashed name.
+        # `db_index` is outside the IR on purpose — `index_actions` owns it, because on SQLite a
+        # non-empty delta means a rebuild that re-emits every live index. Until #556 that also meant
+        # a rename which ALSO flipped `db_index` planned no index action at all, because
+        # `index_actions` was declared AFTER this function ran; it self-healed one `makemigrations`
+        # later. `_alter_table_fields` now declares the list first and passes it in, and the flip is
+        # recorded below, after the column change. The common case (an unchanged `db_index`) still
+        # correctly plans nothing at all, where the pre-#507 code dropped and re-created the index
+        # under a fresh hashed name.
         #
         # The SQLite rebuild receives the ACCUMULATED `column_renames`, so every renamed-but-surviving
         # column keeps its secondary indexes (#150) — and `_plan_column_change!` relocates the entry
@@ -961,12 +994,11 @@ function _resolve_table_fields(
         # documented as unsupported: two renames on one table now plan one correct rebuild, and a
         # rename co-occurring with a new column does too (whichever registers last, both relocate).
         #
-        # What REMAINS a limitation, narrower than before: a co-occurring column ALTERATION on the
-        # same table (a field present on both sides, handled by the loop in `_alter_table_fields`)
-        # re-registers the same key with an EMPTY rename map, so a renamed column can still lose its
-        # index to that. And `_add_new_field`'s own rebuild (#514, or a temporary default) carries no
-        # rename map either. Both are index loss on a rare combination, not a broken plan — the
-        # rebuild itself is correct in every ordering — and both are a #150 follow-up.
+        # Closed by #556: the map is owned by `_alter_table_fields`, one per table, and handed to
+        # ALL THREE producers of that key — this branch, the alteration loop, and `_add_new_field`'s
+        # rebuild (#514, or a temporary default). Whichever registration lands last therefore renders
+        # with the union of the renames, so a rename co-occurring with a column alteration or a new
+        # column on the same table no longer loses the renamed column's index.
         # The live spec's own `name` is the PRE-rename column — the catalog still knows it by that
         # name at plan time, and four statements in `Dialect.alter_field` can only learn a constraint's
         # name by asking it — which is what makes the alteration correct rather than merely present.
@@ -978,11 +1010,44 @@ function _resolve_table_fields(
         # `delta.old_spec.name` IS the pre-rename physical column, so the rename map reads it off the
         # same single source the constraint lookups use rather than recomputing it.
         sqlite_rename_map[delta.old_spec.name] = field_name
+        hashed_new_name = _hash_field_name(model_name, field_name)
         _plan_column_change!(conn, migration_plan, model_name, current_model, field_name,
                              new_field, delta,
-                             _hash_field_name(model_name, field_name);
+                             hashed_new_name;
                              old_column = old_field_name,
                              column_renames = sqlite_rename_map)
+
+        # #556: a rename that ALSO flips `db_index` now plans the index action in THIS migration.
+        # The read is identical to the alteration loop's in `_alter_table_fields` — presence of the
+        # key in `live.indexes` is the live flag, its value the index name a DROP needs — with one
+        # difference that matters: the live side must be keyed by the PRE-rename column, which is
+        # `delta.old_spec.name`, the same single source the FK drop and the four constraint lookups
+        # use. Asking for `field_name` here would read the post-rename name the catalog has never
+        # heard of, report "not indexed", and plan a CREATE INDEX on top of an index that already
+        # exists.
+        #
+        # `index_actions` is drained by `_alter_table_fields` AFTER the whole field pass, so these
+        # land after any table rebuild the rename registered; `_order_statements` then defers every
+        # "Create index on …" to the very end (#152), after the RENAME COLUMN. An UNCHANGED
+        # `db_index` still plans nothing at all — neither branch fires — which is what keeps the
+        # index following the column across a plain rename (#515) instead of being dropped and
+        # re-created under a fresh hashed name.
+        old_indexed = haskey(live.indexes, delta.old_spec.name)
+        if !new_field.primary_key && new_field.db_index && !old_indexed
+          push!(index_actions, (:create, field_name, hashed_new_name, nothing))
+        end
+        if !new_field.primary_key && old_indexed && !new_field.db_index
+          # Resolve the index NAME here, keyed on the PRE-rename column, instead of letting
+          # `_drop_index` fall back to `get_constraints_index`. That fallback asks the catalog about
+          # the column it is given -- which on this path is the POST-rename name the catalog has not
+          # heard of yet, so it answers `nothing` and `_drop_index` plans nothing at all. Measured:
+          # the drop direction of a rename+flip silently planned an empty migration.
+          live_index_name = live.indexes[delta.old_spec.name]
+          if live_index_name === nothing
+            live_index_name = get_constraints_index(conn, model_name, delta.old_spec.name)
+          end
+          push!(index_actions, (:drop, field_name, hashed_new_name, live_index_name))
+        end
         # remove the old field from colect_deletion
         filter!(x -> x != old_field_sym, colect_deletion)
       end

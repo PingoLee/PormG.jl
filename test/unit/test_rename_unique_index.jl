@@ -242,9 +242,13 @@ end
   #
   #    STATED LIMIT, and the reason the stale name is acceptable rather than merely tolerated: the
   #    index still covers the renamed column, so introspection reads `db_index = true` and the model
-  #    converges. The only visible residue is the name. A rename that ALSO flips `db_index` is
-  #    planned one run later, when the column appears on both sides of the diff — self-healing, and
-  #    tracked in the phase-3 follow-up.
+  #    converges. The only visible residue is the name.
+  #
+  #    This testset is also the GUARD on #556, which made a rename that ALSO flips `db_index` plan
+  #    its index action in the same migration instead of one run later. The flip is what earns an
+  #    action; an UNCHANGED `db_index` — this case — must still plan nothing in either direction, or
+  #    #556 would have re-grown the drop-and-re-create-on-every-rename behaviour #515 removed. The
+  #    flip cases themselves live in `test_rename_index_timing.jl`.
   # ───────────────────────────────────────────────────────────────────────────
   @testset "SQLite: a rename leaves a plain db_index alone (it follows the column)" begin
     mktempdir() do dir

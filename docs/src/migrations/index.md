@@ -146,16 +146,11 @@ The drop comes first and names the **pre-rename** column, because that is what t
 when the plan is built; the add names the new one, because by then the rename has run. On SQLite the
 same change is one table rebuild, emitted after the `RENAME COLUMN`.
 
-Two renames on the same table in one migration are fine, and so is a rename alongside a new column:
-SQLite collapses them into a single rebuild placed after every rename and every `ADD COLUMN`.
+Two renames on the same table in one migration are fine, and so is a rename alongside a new column or an ordinary column alteration: SQLite collapses them into a single rebuild placed after every rename and every `ADD COLUMN`, and that rebuild re-creates the renamed columns' secondary indexes under their new names.
 
-!!! note "On SQLite, a rename combined with another change may leave its index for the next run"
-    The rebuild re-creates the renamed column's secondary indexes when the rename is what registered
-    it. But a rename that co-occurs with an ordinary column alteration, or with a new column, on the
-    *same* table produces one rebuild for all of them — and that one may not carry the rename, in
-    which case the renamed column's index is not re-created. No column and no data are affected, and
-    the next `makemigrations` sees the column as unindexed and plans the `CREATE INDEX`. Renaming on
-    its own, or renaming two columns together, always keeps the indexes.
+### Renaming a field that also changes `db_index`
+
+Turning `db_index` on or off *in the same change as the rename* is planned in that migration, on both backends — a `CREATE INDEX` on the new column name, or a `DROP INDEX` of the live index. Leaving `db_index` alone plans nothing at all about the index: `RENAME COLUMN` carries an index with it on both engines, so the index keeps covering the column and only its *name* still mentions the old one. That stale name is deliberate — re-creating the index on every rename would rewrite a potentially large index to fix a string.
 
 !!! warning "A rename that DROPS a constraint needs `destructive = true`"
     Renaming a field is not destructive. But if the same change also removes a `UNIQUE` constraint or

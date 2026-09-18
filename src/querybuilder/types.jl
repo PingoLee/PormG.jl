@@ -1809,11 +1809,16 @@ function _normalize_row_symbol(sym::Symbol)::Symbol
 end
 
 Base.getindex(row::PormGRow, key::Symbol) = getfield(row, :_data)[_normalize_row_symbol(key)]
-Base.getindex(row::PormGRow, key::String) = getfield(row, :_data)[_normalize_row_symbol(Symbol(key))]
+# #612: `AbstractString`, not `String` — the READ side of the web-app pattern #603 was written
+# around. A value goes into the query as a `SubString` out of `split(query_string, "=")` and comes
+# back out of the row the same way (`row[split(cols, ",")[1]]`), which was a raw `MethodError`
+# naming an internal signature. `Symbol(key)` already takes any `AbstractString`, so the annotation
+# is the whole fix — nothing here needs to normalize, because the Symbol is the storage key.
+Base.getindex(row::PormGRow, key::AbstractString) = getfield(row, :_data)[_normalize_row_symbol(Symbol(key))]
 Base.haskey(row::PormGRow, key::Symbol) = haskey(getfield(row, :_data), _normalize_row_symbol(key))
-Base.haskey(row::PormGRow, key::String) = haskey(getfield(row, :_data), _normalize_row_symbol(Symbol(key)))
+Base.haskey(row::PormGRow, key::AbstractString) = haskey(getfield(row, :_data), _normalize_row_symbol(Symbol(key)))
 Base.get(row::PormGRow, key::Symbol, default) = get(getfield(row, :_data), _normalize_row_symbol(key), default)
-Base.get(row::PormGRow, key::String, default) = get(getfield(row, :_data), _normalize_row_symbol(Symbol(key)), default)
+Base.get(row::PormGRow, key::AbstractString, default) = get(getfield(row, :_data), _normalize_row_symbol(Symbol(key)), default)
 Base.keys(row::PormGRow) = keys(getfield(row, :_data))
 Base.values(row::PormGRow) = values(getfield(row, :_data))
 Base.pairs(row::PormGRow) = pairs(getfield(row, :_data))

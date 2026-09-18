@@ -700,6 +700,181 @@ end
   # the last two rows fail — the `SubString` call would resolve to a different method than the
   # `Rational` one, and Aqua would report the ambiguity against the `_CompareOperand` arm.
   # ─────────────────────────────────────────────────────────────────────────────
+  # #612 — `default=` on the string-field family
+  # #603 widened what a field constructor accepts for `verbose_name` / `db_column`; it left
+  # `default=` alone, where the accepted spelling was decided by whichever converter lambda each
+  # constructor happened to carry. That split the family FIVE ways for one keyword, and the two
+  # extremes were opposite failures rather than one shared gap:
+  #
+  #   - `x -> parse(String, x)`  TextField, EmailField, FileField, ImageField. DEAD CODE:
+  #     `parse(String, …)` has no method, so the converter could never run. Every non-`String`
+  #     default was refused, and refused with a message blaming the value's TYPE for what was
+  #     really a missing conversion.
+  #   - `x -> string(x)`  URLField, SlugField. `string` has a method for everything, so NOTHING was
+  #     refused: `URLField(default = :nope)` stored `"nope"` and `URLField(default = CharField())`
+  #     stored `"CharField()"`. Both measured on the #603 branch, both pinned below as gone.
+  #   - an inline `isa` ladder  CharField — the only one that was right.
+  #
+  # One helper (`_default_string`) is now the whole policy, so the matrix below is deliberately
+  # exhaustive rather than spot-checked: the defect was precisely that per-field behaviour diverged,
+  # and only a per-field sweep can catch it diverging again.
+  # Mutation gate: re-narrow `_default_string`'s first arm to `value isa String` and every probe row
+  # for all seven fields raises `FieldValidationError`; drop its `Integer` arm and the numeric rows
+  # raise; drop the `Bool` exclusion and the `true` rows stop raising.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "default= is one policy across the string-field family (#612)" begin
+    # `max_length` is passed where the field has one so a long default cannot fail for an unrelated
+    # reason; every field below stores its `default` in a `Union{String, Nothing}` slot.
+    text_fields = (
+      ("CharField",  (; kw...) -> Mo603.CharField(; max_length = 100, kw...)),
+      ("TextField",  (; kw...) -> Mo603.TextField(; kw...)),
+      ("EmailField", (; kw...) -> Mo603.EmailField(; kw...)),
+      ("URLField",   (; kw...) -> Mo603.URLField(; kw...)),
+      ("SlugField",  (; kw...) -> Mo603.SlugField(; kw...)),
+      ("FileField",  (; kw...) -> Mo603.FileField(; kw...)),
+      ("ImageField", (; kw...) -> Mo603.ImageField(; kw...)),
+    )
+
+    for (name, ctor) in text_fields
+      base = ctor(default = "forename")
+      @test base.default == "forename"
+
+      for probe in _PROBES603
+        f = ctor(default = probe("forename"))
+        # Identical to the `String` baseline — the whole point is that the seven now agree.
+        @test f.default == base.default == "forename"
+        # Normalized, not merely accepted. `String`, never `string`: the latter is the identity for
+        # a `LazyString`, so the old `string` spelling only produced a `String` because the struct
+        # slot re-converted two frames later.
+        @test f.default isa String
+      end
+
+      # An Integer rides through as its decimal text. Not new latitude — CharField has always had
+      # `default isa Int && (default = string(default))`; the other six now match it instead of
+      # refusing (the `parse` four) or accepting far more (the `string` two).
+      @test ctor(default = 5).default == "5"
+      @test ctor(default = 5).default isa String
+      @test ctor(default = Int32(7)).default == "7"      # generalized off Int64
+
+      # `nothing` is still the no-default spelling and is not stringified.
+      @test ctor(default = nothing).default === nothing
+
+      # Everything else is refused, by all seven. This is the half that NARROWS URLField and
+      # SlugField: before #612 their `string` converter accepted each of these silently.
+      @test_throws PormG.FieldValidationError ctor(default = :nope)
+      @test_throws PormG.FieldValidationError ctor(default = 3.5)
+      @test_throws PormG.FieldValidationError ctor(default = [1, 2])
+      # `Bool` stays refused exactly as CharField refused it — `true` in a text column is far more
+      # likely a mistake than an intent, and `Bool <: Integer` would otherwise have admitted it.
+      @test_throws PormG.FieldValidationError ctor(default = true)
+    end
+
+    # The message names the policy rather than a type union the policy no longer matches. Before
+    # #612 this came from `validate_default`'s bare `catch`, which reported
+    # "Expected type: Union{Nothing, String}" — accurate then, misleading once an Integer is taken.
+    err = try Mo603.TextField(default = :nope) catch e; e end
+    @test err isa PormG.FieldValidationError
+    @test occursin("TextField", sprint(showerror, err))
+    @test occursin("Integer", sprint(showerror, err))
+
+    # UUIDField and JSONField are audited, NOT routed through the shared helper: their converters
+    # validate the value's SHAPE, a stronger contract than "is it stringy". Measured already clean
+    # for all three spellings before #612 — pinned so routing them here later is a deliberate act.
+    uuid = "123e4567-e89b-12d3-a456-426614174000"
+    for probe in _PROBES603
+      @test Mo603.UUIDField(default = probe(uuid)).default == uuid
+      @test Mo603.JSONField(default = probe("{\"a\":1}")).default == "{\"a\":1}"
+    end
+    # …and their shape contract is intact, which is why they keep their own converters.
+    @test_throws PormG.FieldValidationError Mo603.UUIDField(default = "not-a-uuid")
+    @test_throws PormG.FieldValidationError Mo603.JSONField(default = "{not json")
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # #612 — `PormGRow`'s read accessors, the READ side of the #603 pattern
+  # A value travels out of a row the same way it went into the query: `row[split(spec, ",")[1]]`.
+  # `getindex`/`haskey`/`get` were typed `key::String`, so that was a raw `MethodError` naming an
+  # internal signature — the identical failure #603 fixed on the write side, one half-turn later.
+  # The bodies already did `Symbol(key)`, which takes any `AbstractString`, so the annotation was
+  # the entire defect.
+  #
+  # No conversion needed here, unlike every other seam in this file: the Symbol IS the storage key,
+  # so nothing string-typed is retained and no view can reach a slot.
+  # Mutation gate: re-narrow any of the three to `::String` and its probe rows raise `MethodError`.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "PormGRow read accessors take any AbstractString (#612)" begin
+    model = _drivers603("_612_row")
+    row = QB603.PormGRow(Dict{Symbol, Any}(:surname => "Senna", :points => 614.0), model)
+
+    for probe in _PROBES603
+      @test row[probe("surname")] == "Senna"
+      @test row[probe("points")] == 614.0
+      @test haskey(row, probe("surname"))
+      @test !haskey(row, probe("nonexistent"))
+      @test get(row, probe("surname"), "missing") == "Senna"
+      @test get(row, probe("nonexistent"), "fallback") == "fallback"
+    end
+
+    # The Symbol methods are untouched and still resolve to their own arms.
+    @test row[:surname] == "Senna"
+    @test which(getindex, Tuple{QB603.PormGRow, Symbol}) !==
+          which(getindex, Tuple{QB603.PormGRow, String})
+    # …while all three string spellings now share ONE method, rather than two of them having none.
+    @test which(getindex, Tuple{QB603.PormGRow, String}) ===
+          which(getindex, Tuple{QB603.PormGRow, SubString{String}}) ===
+          which(getindex, Tuple{QB603.PormGRow, LazyString})
+
+    # Widening the accepted TYPE did not widen the accepted SHAPE: an empty `__` segment is still
+    # refused, whichever spelling reaches it.
+    for probe in _PROBES603
+      @test_throws PormG.UnknownFieldError row[probe("driverid__")]
+    end
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # #612 — `Model(name)`'s no-fields guard was skipped by a view
+  # `Model(name::String)` threw a helpful `ModelDefinitionError`; a `SubString` or `LazyString` fell
+  # PAST it to `Model(name::AbstractString; fields...)` with an empty keyword slurp and silently
+  # built a fieldless model. `grep "You need to add fields" test/` returned nothing before #612 —
+  # the guard had no coverage at all, which is how it stayed half-applied.
+  #
+  # Not a mechanical widening, and that shaped the fix: Julia identifies a method by its POSITIONAL
+  # signature and keywords are not part of it, so `Model(name::AbstractString)` would REDEFINE the
+  # kwargs method rather than sit beside it. The check had to move INSIDE — which also closed the
+  # arity the old guard never covered, `Model("x", db_table = "t")` with no fields.
+  # Mutation gate: move the check back out to a `Model(name::String)` method and the SubString and
+  # LazyString rows build a fieldless model instead of throwing; delete it and every row does.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "Model(name) with no fields is refused for every string spelling (#612)" begin
+    for probe in _PROBES603
+      @test_throws PormG.ModelDefinitionError Mo603.Model(probe("drivers"))
+      # The arity the old String-only guard never saw at all.
+      @test_throws PormG.ModelDefinitionError Mo603.Model(probe("drivers"); db_table = "Drivers")
+      @test_throws PormG.ModelDefinitionError Mo603.Model(probe("drivers"); indexes = nothing)
+    end
+
+    # The message survived the move — it is the one piece of this guard users actually read.
+    err = try Mo603.Model("drivers") catch e; e end
+    @test err isa PormG.ModelDefinitionError
+    @test occursin("You need to add fields to the model", sprint(showerror, err))
+
+    # A model WITH fields is unaffected by the new early return, for every spelling.
+    for probe in _PROBES603
+      m = Mo603.Model(probe("drivers"), surname = Mo603.CharField(max_length = 100))
+      @test m.name == "drivers"
+      @test length(m.fields) == 1
+    end
+
+    # The three paths that legitimately build from an already-collected field set are NOT gated:
+    # `Model(; fields...)` routes through the `NTuple` method, and introspection / the Django
+    # importer hand in a Dict. Gating those would break `inspectdb` and `set_models`.
+    m = Mo603.Model(surname = Mo603.CharField(max_length = 100))
+    @test m.name == "" && length(m.fields) == 1
+    d = Mo603.Model("drivers", Dict{String, PormG.PormGField}("surname" => Mo603.CharField(max_length = 100)))
+    @test length(d.fields) == 1
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
   @testset "A String argument still resolves to the same method it always did" begin
     @test which(F, Tuple{String}) === which(F, Tuple{SubString{String}})
     @test which(Lower, Tuple{String}) === which(Lower, Tuple{SubString{String}})

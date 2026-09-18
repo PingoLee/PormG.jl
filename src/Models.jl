@@ -2248,6 +2248,24 @@ ConstructorStandings = Models.Model("constructor_standings",
 See also [`set_models`](@ref), [`UniqueConstraint`](@ref), [`Index`](@ref), [`ForeignKey`](@ref).
 """
 function Model(name::AbstractString; constraints = nothing, db_table = nothing, indexes = nothing, fields...)
+  # #612: the no-fields guard lives HERE, not on its own method. It used to be
+  # `Model(name::String)`, which meant a `SubString` or `LazyString` name — the spelling a web layer
+  # or a `split` hands you — missed it entirely, fell through to this method with an empty keyword
+  # slurp, and silently built a fieldless model instead of reporting the mistake.
+  #
+  # It cannot be fixed by widening that method to `::AbstractString`: Julia identifies a method by
+  # its POSITIONAL signature and keywords are not part of it, so `Model(name::AbstractString)` would
+  # REDEFINE this one rather than sit beside it. Moving the check inward is the only shape that
+  # works, and it also closes the arity the old guard never covered — `Model("x", db_table = "t")`
+  # with no fields was fieldless-and-silent for a `String` too.
+  #
+  # Only this path. The `Dict`/`NTuple` methods below are how introspection, the Django importer and
+  # the no-positional `Model(; fields...)` form build a model, and an empty field set is meaningful
+  # to none of them the way it is wrong here.
+  if isempty(fields)
+    example_usage = "\e[32musers = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())\e[0m"
+    throw(ModelDefinitionError("You need to add fields to the model, example: $example_usage"))
+  end
   # Peel `constraints`/`db_table`/`indexes` off BEFORE the `fields...` slurp — otherwise any of them
   # would flow into the `NTuple{Pair{Symbol}}` method below and trip its `isa PormGField` check (#19,
   # #347).
@@ -2330,10 +2348,6 @@ function Model(name::AbstractString, fields::Dict{Symbol, Any})
     !is_many_to_many_field(field) && push!(field_names, field_name)
   end
   return Model_Type(name=name, fields=fields_dict, field_names=field_names)
-end
-function Model(name::String)
-  example_usage = "\e[32musers = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())\e[0m"
-  throw(ModelDefinitionError("You need to add fields to the model, example: $example_usage"))
 end
 function Model(; constraints = nothing, db_table = nothing, indexes = nothing, fields...)
   # No-positional-name form (the idiomatic style — the table name is inferred from the binding
@@ -3091,9 +3105,13 @@ end
 function format_number_sql(value::AbstractArray)
   arrayref::Vector{Union{String, Integer, Missing}} = []
   for v in value
-    # Ensure nested strings (like SubString) are converted to String or Integer as required by the Union
+    # Ensure nested strings (like SubString) are converted to String or Integer as required by the
+    # Union. #612: `String`, not `string` — the scalar arm above already spells it that way, and
+    # `string` is the identity for a `LazyString` (#598). No live bug either way today, because the
+    # scalar arm returns a `SubString` and the Union slot's `convert` rescues it; the point is that
+    # the next formatter copied from here inherits the right spelling.
     res = v |> format_number_sql
-    push!(arrayref, res isa AbstractString ? string(res) : res)
+    push!(arrayref, res isa AbstractString ? String(res) : res)
   end
   # return string("(", join(arrayref, ","), ")")
   return arrayref

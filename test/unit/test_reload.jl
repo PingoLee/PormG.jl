@@ -151,7 +151,8 @@ function _run_boot_pattern_regression()
 
         # Three environments so each wrong answer names its source: `test` is what the parent
         # process's PORMG_ENV would select through the implicit load, `staging` is what the file's
-        # `default_env:` would. The application asks for `dev`, and only `dev` is right.
+        # `default_env:` would when PORMG_ENV is unset (this file forces it to `test`, so `test` is
+        # the live decoy here). The application asks for `dev`, and only `dev` is right.
         write(joinpath(db_dir, "connection.yml"),
             "default_env: staging\n" *
             join(("$(env):\n  adapter: SQLite\n  database: \":memory:\"\n"
@@ -339,4 +340,10 @@ end
     @test occursin("BOOT_APP_ENV:dev\n", output)
     @test !occursin("BOOT_APP_ENV:test", output)
     @test !occursin("BOOT_APP_ENV:staging", output)
+
+    # Second witness. If the submodule `__init__` ever fired first, the parent's `__init__` would
+    # then MIGRATE the implicit entry to "db"/dev, so the key and env markers above would still
+    # read right — only `connect_key` (a plain field, no self-heal on read) would betray it. The
+    # implicit load also warns, and that warning is in the merged transcript.
+    @test !occursin("loaded implicitly", output)
 end

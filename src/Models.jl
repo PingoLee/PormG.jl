@@ -970,7 +970,8 @@ Registration does four things:
    key, strongest match first and preferring an explicitly loaded key over one minted by the
    implicit load below, which is recorded as `implicit = true` on the entry
    (`_resolve_connect_key`). A folder that matches nothing is loaded
-   implicitly, **with a warning** — that path guesses the environment (from `default_env:`) and
+   implicitly, **with a warning** — that path guesses the environment (from `PORMG_ENV`, else
+   `default_env:`) and
    the key (the caller's own absolute path), so call `PormG.Configuration.load(path; env = ...)`
    first when you need a specific one, and expect `MissingConfigurationError` from that implicit
    load if `path` holds no `connection.yml`. See `docs/src/configuration/advanced.md`.
@@ -1052,7 +1053,8 @@ function set_models(_module::Module, path::String)::Nothing
   if isnothing(connect_key)
     # Nothing matched, so this call is about to GUESS two things at once:
     #
-    #   1. the environment — `load` is called with no `env`, so the file's `default_env:` wins.
+    #   1. the environment — `load` is called with no `env`, so `PORMG_ENV` wins when set and the
+    #      file's `default_env:` otherwise (`Configuration._effective_env`).
     #      In a server that has not selected its env yet, that is usually `dev`, i.e. production.
     #   2. the key — the entry is registered under `path`, which callers pass as an ABSOLUTE path.
     #      A later `load("db"; env=...)` then creates a SECOND entry for the same folder, and which
@@ -1066,7 +1068,7 @@ function set_models(_module::Module, path::String)::Nothing
     # precompiled package that call has to run at runtime (an `__init__`), because a module-body
     # call does not re-run when the image is loaded. See docs/src/configuration/advanced.md.
     @warn("PormG: no configured connection matches this models folder, so it is being loaded " *
-          "implicitly — the environment is taken from the file's `default_env:` and the entry is " *
+          "implicitly — the environment is taken from `PORMG_ENV`/the file's `default_env:` and the entry is " *
           "keyed by this path. Load it explicitly before registering models to choose both.",
           folder = path)
     Configuration.load(path; implicit = true)

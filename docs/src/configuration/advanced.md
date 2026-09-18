@@ -115,15 +115,17 @@ than one thing.
 
 `set_models` loads the folder itself — and that implicit load decides two things you did not state.
 
-**It guesses the environment.** `Configuration.load(path)` is called with no `env`, so the file's
-`default_env:` wins. In a server that has not selected its environment yet, that is usually `dev`,
-which in a great many deployments points at production.
+**It guesses the environment.** `Configuration.load(path)` is called with no `env`, so
+`ENV["PORMG_ENV"]` decides when it is set and the file's `default_env:` otherwise — neither of them
+chosen by your application. In a server that has not selected its environment yet, that is usually
+`dev`, which in a great many deployments points at production.
 
 **It guesses the key.** The entry is registered under `path`, which is the *absolute* path of the
 folder — not a name your application chose. A later `Configuration.load("db"; env = "prod")` no
 longer adds a second entry for that folder: it migrates the implicit one to the key you asked for
 and warns. So you end up with one entry under the right key, but with a window beforehand in which
-models bound to the absolute key and its environment came from `default_env:`. The implicit entry
+models bound to the absolute key and its environment came from `PORMG_ENV`/`default_env:`. The
+implicit entry
 is also *marked* as such — `PormG.Configuration.status(key).implicit` reads it back — and that mark,
 not the shape of the key, is what the rules below go by.
 
@@ -140,7 +142,8 @@ component.
 
 Matches are **ranked** — an exact path beats a folder-name match. Within a rank, a key you loaded
 explicitly beats one `set_models` minted implicitly, because the implicit entry is the one whose
-environment came from `default_env:` rather than from your application. PormG records that on the
+environment came from `PORMG_ENV`/`default_env:` rather than from your application. PormG records
+that on the
 entry rather than inferring it from the key's spelling, so a relative implicit key
 (`set_models(mod, "db")`) still loses to an absolute key you loaded yourself.
 
@@ -185,18 +188,21 @@ __init__() = _load_configs()          # runtime: the image's configuration did n
 end
 ```
 
-Each half does a different job, which is why dropping either one breaks something:
+Each half does a different job, which is why dropping either one breaks something. The first
+`Model.objects` access runs the self-heal (`ensure_model_initialized`), so the state right after
+`using` and the state your queries actually run against are two different columns:
 
-| Where the configuration is loaded | `connect_key` at runtime | `config` at runtime |
+| Where the configuration is loaded | After `using`, before any `.objects` | After the first `.objects` access |
 |---|---|---|
-| Module body **and** `__init__` | short key ✔ | populated ✔ |
-| Module body only | short key ✔ | **empty** — queries cannot resolve the connection |
-| `__init__` only | **absolute path** — the environment came from `default_env:` | populated |
-| Neither | absolute path | empty |
+| Module body **and** `__init__` | short key, `config` populated ✔ | unchanged ✔ |
+| Module body only | short key, `config` **empty** | the self-heal re-registers the module and **implicit-loads** it: absolute key, environment from `PORMG_ENV`/`default_env:`, one `@warn` — queries run, against a database you did not choose |
+| `__init__` only | **absolute path**, `config` populated | remapped to the short key with a `@warn`; queries then reach the environment `__init__` selected |
+| Neither | absolute path, `config` empty | as "module body only" |
 
 The module body runs at precompile time, so it is what bakes the right `connect_key` into the
 image; `__init__` runs in the session, so it is what puts the connection in `config` where a query
-can find it. Neither substitutes for the other.
+can find it. Neither substitutes for the other — and the row to fear is "module body only", the
+one that looks right after `using` and fails quietly on the first query.
 
 ### Verify the binding instead of assuming it
 
@@ -212,5 +218,6 @@ julia> RaceControl.models.Driver.connect_key   # want the short key, not an abso
 
 An absolute path is the usual sign that the implicit load ran, but the fact is recorded rather than
 inferred: `PormG.Configuration.status(RaceControl.models.Driver.connect_key).implicit` is `true`
-exactly when it did — and then the environment came from `default_env:`, not from whatever your
+exactly when it did — and then the environment came from `PORMG_ENV`/`default_env:`, not from whatever
+your
 application selected.

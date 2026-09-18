@@ -2308,7 +2308,13 @@ function Model(name::AbstractString, fields::NTuple{N, <:Pair{Symbol}}) where N
     !is_many_to_many_field(field[2]) && push!(field_names, field_name)
   end
   # println(fields_dict)
-  return Model_Type(name=name, fields=fields_dict, field_names=field_names)
+  # #612: `String(name)`, so the stored name is never a view. This is the seam BOTH user-facing
+  # forms funnel through — the kwargs `Model(name; fields...)` builds its tuple and lands here — and
+  # `Model_Type.name` is an `AbstractString` slot, so an unconverted `SubString` is retained for the
+  # model's whole process lifetime along with its entire parent buffer. Measured: a name sliced out
+  # of a 143-character request string kept all 143. The `Dict` methods below are deliberately left
+  # alone; their names come from a live catalog or a Python class, not from a request.
+  return Model_Type(name=String(name), fields=fields_dict, field_names=field_names)
 end
 # `inspectdb` path. No name normalization or validation at all (#317): the keys ARE live column names,
 # and `field_names` must agree with them key-for-key. It previously ran `format_fild_name` here while
@@ -2723,11 +2729,15 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
   # Marker comments sit directly above the model definition in the generated file (#70).
   marker = isempty(render_failures) ? "" : join(render_failures, "\n") * "\n"
   if fields == ""
-    # Every field failed to render (or the model has none): a bare `Models.Model("name")` call throws
-    # ArgumentError at include time (the single-arg constructor requires ≥1 field), which would abort
-    # loading the ENTIRE generated module (#134). Comment the definition out — with an explanatory
+    # Every field failed to render (or the model has none): a `Models.Model("name")` call with no
+    # field keywords throws `ModelDefinitionError` at include time, which would abort loading the
+    # ENTIRE generated module (#134). Comment the definition out — with an explanatory
     # marker — so the file still loads and the user sees exactly which model to fix by hand. Mirrors
     # Rails' SchemaDumper, which comments out a table it can't dump so schema.rb stays loadable.
+    #
+    # #612 widened that guard to the `db_table =` arity as well, so the commented-out line below
+    # would throw for the same reason if it were ever uncommented as-is. That is the intended
+    # reading: it is a stub to fix by hand, not a definition to restore.
     note = "# PormG: model '$(model_name_abs)' had no renderable fields — definition commented out."
     result = """$(marker)$(note)\n# $(model_var_name) = Models.Model($(format_string(model_name_abs))$db_table_part)"""
   else

@@ -563,32 +563,52 @@ ResultNoPrefixModel._module = Main
     @test res_var[:sql_text] == res_vec[:sql_text]
     @test res_var[:parameters] == res_vec[:parameters]
 
-    # #612 — the HOMOGENEOUS vector, which is the same documented signature with no `Value` in it.
-    # Until #612 only the two spellings above worked. A vector of nothing but strings stayed a
-    # `Vector{String}` and so dispatched to `_check_function(::Vector{String})`, the arm that reads
-    # a whole vector as ONE already-split `__@` path; it answered
-    # `FilterError: "forename__@surname" is invalid`, naming a path the caller never wrote. The
-    # mixed vector above escaped only because a `Value` in it makes the literal a `Vector{Any}`.
-    q_hom = DriverModel.objects
-    q_hom.values("full_name" => Concat(["forename", "surname"]))
-    res_hom = q_hom.list(show_query=:dict)
+    # #612 — an all-strings operand list, with no `Value` separator in it.
+    #
+    # Three spellings were broken, and the boundary is NOT vector-vs-variadic. `collect` of a
+    # homogeneous tuple is a `Vector{String}` just as a string vector literal is, so
+    # `Concat("forename", "surname")` failed identically to `Concat(["forename", "surname"])`.
+    # Both dispatched to `_check_function(::Vector{String})` — the arm that reads a whole vector as
+    # ONE already-split `__@` path — and answered `FilterError: "forename__@surname" is invalid`,
+    # naming a path the caller never wrote. `Vector{SubString{String}}` out of `split` reached the
+    # same arm by a second route, via the `Vector{<:AbstractString}` forward.
+    #
+    # What escaped was a HETEROGENEOUS list: the two cases above both carry `Value(" ")`, which
+    # makes the collected vector `Vector{Any}` and routes it to the per-element arm.
+    #
+    # So the three rows below CANNOT be checked against each other — all three were broken before
+    # this fix, and three identically-wrong renders would agree. They are pinned against the
+    # rendered SQL text instead, with the `Value`-bearing variadic call (which worked before and
+    # after) as the independent cross-check that the shape is right.
+    hom_sqls = Dict{String, String}()
+    for (label, build) in (
+            ("vector",   () -> Concat(["forename", "surname"])),
+            ("variadic", () -> Concat("forename", "surname")),
+            ("split",    () -> Concat(collect(split("forename,surname", ",")))),
+        )
+        q = DriverModel.objects
+        q.values("full_name" => build())
+        hom_sqls[label] = q.list(show_query=:dict)[:sql_text]
+    end
 
-    q_hvar = DriverModel.objects
-    q_hvar.values("full_name" => Concat("forename", "surname"))
-    res_hvar = q_hvar.list(show_query=:dict)
+    # An absolute assertion, not a relative one: both columns present, concatenated, no bound
+    # parameter (there is no literal to bind), and no stray `__@` path leaking into the SQL.
+    for (label, sql) in hom_sqls
+        @test contains(sql, "forename")
+        @test contains(sql, "surname")
+        @test contains(sql, "CONCAT") || contains(sql, "||")
+        @test !contains(sql, "__@")
+    end
+    # …and only then that the three agree.
+    @test length(Set(values(hom_sqls))) == 1
 
-    @test contains(res_hom[:sql_text], "CONCAT")
-    @test res_hom[:sql_text] == res_hvar[:sql_text]
-    @test res_hom[:parameters] == res_hvar[:parameters]
-
-    # The `split()` spelling a web layer actually produces. This was broken by the same arm through
-    # a second route — `Vector{SubString{String}}` takes the `Vector{<:AbstractString}` method,
-    # which forwards to the `Vector{String}` one — so widening `Concat`'s container fixes both.
-    q_split = DriverModel.objects
-    q_split.values("full_name" => Concat(collect(split("forename,surname", ","))))
-    res_split = q_split.list(show_query=:dict)
-    @test res_split[:sql_text] == res_hvar[:sql_text]
-    @test res_split[:parameters] == res_hvar[:parameters]
+    # Cross-check against the spelling that worked BEFORE the fix: adding a `Value(" ")` separator
+    # to the vector form must change the render in exactly one way — it gains the bound literal.
+    q_sep = DriverModel.objects
+    q_sep.values("full_name" => Concat(["forename", Value(" "), "surname"]))
+    res_sep = q_sep.list(show_query=:dict)
+    @test length(res_sep[:parameters]) == length(res_var[:parameters])
+    @test res_sep[:sql_text] == res_var[:sql_text]
 
     # The container is what changed; the #603 element normalization is untouched.
     @test Concat(["forename", "surname"]).column isa Vector{Any}

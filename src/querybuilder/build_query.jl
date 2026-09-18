@@ -44,7 +44,7 @@ function _record_wildcard_projection_kinds!(instruc::SQLInstruction)
 end
 
 """
-  get_select_query(object::SQLObject, instruc::SQLInstruction)
+  get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instruc::SQLInstruction)
 
   Iterates over the values of the object and generates the SELECT query for the given SQLInstruction object.
 

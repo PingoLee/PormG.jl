@@ -848,8 +848,11 @@ end
     for probe in _PROBES603
       @test_throws PormG.ModelDefinitionError Mo603.Model(probe("drivers"))
       # The arity the old String-only guard never saw at all.
+      # The arities the old `Model(name::String)` method could never see, because a method is
+      # identified by its positional signature and those calls carry keywords.
       @test_throws PormG.ModelDefinitionError Mo603.Model(probe("drivers"); db_table = "Drivers")
-      @test_throws PormG.ModelDefinitionError Mo603.Model(probe("drivers"); indexes = nothing)
+      @test_throws PormG.ModelDefinitionError Mo603.Model(probe("drivers");
+                                                          constraints = [], db_table = "Drivers")
     end
 
     # The message survived the move — it is the one piece of this guard users actually read.
@@ -862,7 +865,20 @@ end
       m = Mo603.Model(probe("drivers"), surname = Mo603.CharField(max_length = 100))
       @test m.name == "drivers"
       @test length(m.fields) == 1
+      # …and the name is NORMALIZED, not merely accepted (#612 review). `Model_Type.name` is an
+      # `AbstractString` slot, so an unconverted view is retained for the model's process lifetime
+      # together with its whole parent buffer — a name sliced out of a request string keeps the
+      # request. This is the same seam rule the header calls mandatory rather than stylistic.
+      @test m.name isa String
     end
+
+    # The measurement that rule exists for: a view into a long buffer must not survive into the
+    # model. Asserted on the parent's length, because equality alone cannot see the retention.
+    request = "GET /api?table=drivers&" * repeat("x", 120)
+    held = Mo603.Model(SubString(request, 16, 22), surname = Mo603.CharField(max_length = 100))
+    @test held.name == "drivers"
+    @test held.name isa String
+    @test !(held.name isa SubString)
 
     # The three paths that legitimately build from an already-collected field set are NOT gated:
     # `Model(; fields...)` routes through the `NTuple` method, and introspection / the Django

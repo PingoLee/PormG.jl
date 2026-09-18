@@ -245,17 +245,6 @@ FROM "driver"
 LIMIT 5
 ```
 
-`Concat` takes its operands either variadically or as a single vector — the two spellings build the
-same expression and render the same SQL:
-
-```julia
-query.values("full_name" => Concat(["forename", Value(" "), "surname"]))
-
-# A vector of plain column names works too, which is what a parsed request usually gives you
-cols = split("cols=forename,surname", "=")[2]
-query.values("full_name" => Concat(collect(split(cols, ","))))
-```
-
 Output:
 ```
 5×3 DataFrame
@@ -267,6 +256,21 @@ Output:
    3 │ Nico Rosberg       ROSBERG               7
    4 │ Fernando Alonso    ALONSO                6
    5 │ Heikki Kovalainen  KOVALAINEN           10
+```
+
+`Concat` takes its operands either variadically or as a single vector — the two spellings build the
+same expression and render the same SQL. Each example below starts from a fresh handle, because
+`values()` **replaces** the projection rather than adding to it:
+
+```julia
+# Vector form, equivalent to the variadic call above
+q = M.Driver.objects
+q.values("full_name" => Concat(["forename", Value(" "), "surname"]))
+
+# A vector of plain column names works too, which is what a parsed request usually gives you
+cols = split("cols=forename,surname", "=")[2]
+q2 = M.Driver.objects
+q2.values("full_name" => Concat(collect(split(cols, ","))))
 ```
 
 ---

@@ -758,9 +758,6 @@ end
 # filter/values path but is not a column, so `create("results" => …)` can never work — listing them
 # in a write error would advertise a capability that does not exist. Every read-path caller keeps
 # the default.
-"""
-This function checks if the given `field` is a valid field in the provided `model`. If the field is valid, it returns the field name, potentially modified based on certain conditions.
-"""
 function _unknown_field(model::PormGModel, name::AbstractString;
                        aliases::Vector{String} = String[],
                        include_accessors::Bool = true)::UnknownFieldError
@@ -792,6 +789,9 @@ function _unknown_field(model::PormGModel, name::AbstractString;
     "that contains the fields: \e[4m\e[32m$(join(choices, ", "))\e[0m$(tail)")
 end
 
+"""
+This function checks if the given `field` is a valid field in the provided `model`. If the field is valid, it returns the field name, potentially modified based on certain conditions.
+"""
 function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction)
   # check if last_column a field from the model    
   if !(field in model.field_names)

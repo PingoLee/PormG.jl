@@ -28,8 +28,9 @@ using Test
 using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField, DateTimeField, ForeignKey, JSONField,
                     UniqueConstraint, Index, add_field!
-# #612 — the two text fields whose `default=` policy the filters page now states.
-using PormG.Models: TextField, URLField
+# #612 — the text fields whose `default=` policy the filters page states, plus `UUIDField`,
+# which the page deliberately holds to a STRICTER rule than that shared policy.
+using PormG.Models: TextField, URLField, UUIDField
 using PormG.QueryBuilder: bulk_insert, bulk_update
 # #509 — the ordering wrapper and the window constructor, for the two window-page claims below.
 using PormG.QueryBuilder: SQLOrder
@@ -735,6 +736,17 @@ const DOCERR_CASES = [
         "read/filters_and_aggregates.md — a Float64 `default=` on a text field is refused (#612)",
         FieldValidationError,
         () -> TextField(default = 3.5),
+    ),
+    (
+        # #612 review. The bullet originally lumped UUIDField and JSONField in with the seven
+        # plain-text fields, which was false in BOTH directions — `JSONField(default = 3.5)` stores
+        # "3.5" where the bullet promised a refusal, and `UUIDField(default = 5)` refuses where it
+        # promised acceptance. The two cases above could not catch it because neither touches these
+        # fields. This one pins the stricter rule the page now states for them: the value must BE a
+        # valid UUID, so a string that is merely a string is not enough.
+        "read/filters_and_aggregates.md — UUIDField requires a valid UUID, not just a string (#612)",
+        FieldValidationError,
+        () -> UUIDField(default = "abc"),
     ),
 ]
 

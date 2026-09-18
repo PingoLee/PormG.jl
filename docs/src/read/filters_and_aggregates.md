@@ -493,7 +493,7 @@ Concretely, a non-`String` `AbstractString` is accepted by:
 - **Bulk writes** — the `filters`, `columns` and `match_on` arguments.
 - **Rows** — `row[key]`, `haskey(row, key)` and `get(row, key, default)` on a `PormGRow`, alongside the `Symbol` and dot-access spellings.
 - **Model fields** — `verbose_name`, `db_column`, `CharField(choices = …)`, and `to` / `through` / `how` / `related_name` / `pk_field` on `ForeignKey`, `OneToOneField` and `ManyToManyField`.
-- **Field defaults** — `default =` on `CharField`, `TextField`, `EmailField`, `URLField`, `SlugField`, `FileField`, `ImageField`, `UUIDField` and `JSONField`. These take one policy: any `AbstractString`, or an `Integer` written as its decimal text (`CharField(default = 0)` stores `"0"`). Anything else — a `Symbol`, a `Float64`, a `Bool` — is a `FieldValidationError`.
+- **Field defaults** — `default =` on the seven plain-text fields: `CharField`, `TextField`, `EmailField`, `URLField`, `SlugField`, `FileField` and `ImageField`. These share one policy: any `AbstractString`, or an `Integer` written as its decimal text (`CharField(default = 0)` stores `"0"`). Anything else — a `Symbol`, a `Float64`, a `Bool` — is a `FieldValidationError`. `UUIDField` and `JSONField` accept the same string spellings but keep their own, stricter rule: the value must *be* a valid UUID or valid JSON, so `UUIDField(default = "abc")` is refused where `TextField(default = "abc")` is not.
 - **Model names** — the positional name in `Models.Model("drivers", …)`, including the no-fields guard that refuses `Models.Model(name)` on its own.
 
 Widening the accepted *type* did not widen the accepted *shape*: `values("points__@lte")` is still refused as an operator suffix in a projection whichever string type spells it.

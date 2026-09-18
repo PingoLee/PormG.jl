@@ -17,11 +17,25 @@ Register a connection pool manually at any time using a connection string or ada
     ```
 
 !!! note "Limitation: keys are namespaced against static configs"
-    Two guards, both `InvalidConfigurationError`: a key that names an existing **directory** is
-    rejected outright (folder paths are reserved for `load()`), and a key already bound to a
-    static configuration cannot be overwritten. Re-registering an existing *dynamic* key is
-    allowed — it closes the old pool first and logs a warning, so make sure nothing is still
-    borrowing a connection from it.
+    Three guards, all `InvalidConfigurationError`. Two on the way in: a key that names an existing
+    **directory** is rejected outright (folder paths are reserved for `load()`), and a key already
+    bound to a static configuration cannot be overwritten. One on the way out: `load()` will not
+    take over a key a dynamic connection already holds — call `unregister_connection(key)` first,
+    or load the folder under a different key.
+
+    That third guard is not redundant with the first. `register_connection`'s directory check sees
+    the working directory as it is *at registration time*, so a folder created afterwards — or one
+    that exists relative to a later `cd` — slips past it. Without the refusal in `load()`, that
+    folder's configuration would silently replace your pool and close it.
+
+    It protects the **exact key**, though, not every spelling of it. A dynamic key names no
+    folder, so there is nothing for a folder to collide with: with `"db"` held dynamically,
+    `load("./db")` still succeeds and registers a *second* entry beside it. Nothing is closed or
+    replaced, but `is_loaded("db")` then answers about the dynamic entry while models importing
+    `"./db"` bind to the static one. Prefer keys that cannot be read as paths.
+
+    Re-registering an existing *dynamic* key is still allowed — it closes the old pool first and
+    logs a warning, so make sure nothing is still borrowing a connection from it.
 
 ```julia
 # PostgreSQL

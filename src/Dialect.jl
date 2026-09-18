@@ -132,6 +132,15 @@ function _sqlite_canonical_datetime(expr::AbstractString, modifiers::Vector{Stri
 end
 
 
+# A naive timestamp, with or without the `T`, with an optional fraction. Used only by the fallback
+# arm of `_parse_sqlite_timestamp` below — the canonical form with its offset is handled by
+# `normalize_sqlite_datetime_string`.
+#
+# #612: this const used to sit BETWEEN the docstring below and the function that docstring
+# describes, which detached it — and, worse, would have attached `_parse_sqlite_timestamp`'s
+# documentation to this regex had the comment alone been hoisted.
+const _SQLITE_NAIVE_TS = r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.(\d{1,3})\d*)?$"
+
 """
     _parse_sqlite_timestamp(v) -> Union{ZonedDateTime, DateTime, typeof(v)}
 
@@ -153,10 +162,6 @@ That last rule is what makes a wrong caller harmless rather than lossy: handed t
 that `CAST(col AS DATE)` yields on SQLite, or text in a representation nothing here wrote, it hands
 it straight back rather than guessing.
 """
-# A naive timestamp, with or without the `T`, with an optional fraction. Used only by the fallback
-# arm below — the canonical form with its offset is handled by `normalize_sqlite_datetime_string`.
-const _SQLITE_NAIVE_TS = r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.(\d{1,3})\d*)?$"
-
 function _parse_sqlite_timestamp(v::Any)
     v isa AbstractString || return v
     normalized = normalize_sqlite_datetime_string(v)

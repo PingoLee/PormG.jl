@@ -3758,6 +3758,15 @@ function _lookup_enum(enums, aliases, scopes::Vector{Tuple{Int, String}},
   return nothing
 end
 
+# ── Walking the abstract-ancestor chain ──────────────────────────────────────────────────────────
+# Every helper below follows `_ClassInfo.parents`, and none of them can do it with a bare class
+# name. `graph.info` describes THIS app's own classes; a parent token is a name in the CHILD's
+# module, two apps may each declare a `Base`, and an `as` alias makes the token differ from the
+# class's own name. So they read `graph.resolved[(app, token)]` — the edge classification actually
+# took — and `graph.byapp[(app, name)]`, which covers every class the walk reached, in any app.
+#
+# #612: a section banner goes ABOVE the docstring of the first function it introduces. Sitting
+# between them — even with a blank line after it — detached this docstring silently.
 """
     _inherited_statements(graph, cls) -> Vector{Tuple{Tuple{Int, String}, PyStmt}}
 
@@ -3775,13 +3784,6 @@ it used to be discarded one line later.
 Bases are walked in **reverse** declaration order, because Python resolves `class C(A, B)` left to
 right — A must win, so A's statements have to be written last.
 """
-# ── Walking the abstract-ancestor chain ──────────────────────────────────────────────────────────
-# Every helper below follows `_ClassInfo.parents`, and none of them can do it with a bare class
-# name. `graph.info` describes THIS app's own classes; a parent token is a name in the CHILD's
-# module, two apps may each declare a `Base`, and an `as` alias makes the token differ from the
-# class's own name. So they read `graph.resolved[(app, token)]` — the edge classification actually
-# took — and `graph.byapp[(app, name)]`, which covers every class the walk reached, in any app.
-
 function _inherited_statements(graph, cls::PyClass)::Vector{Tuple{Tuple{Int, String}, PyStmt}}
   out = Tuple{Tuple{Int, String}, PyStmt}[]
   seen = Set{Tuple{Int, String}}()

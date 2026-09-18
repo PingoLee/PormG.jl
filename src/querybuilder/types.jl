@@ -153,16 +153,21 @@ const FieldPart = Union{SQLTypeText,SQLTypeFunction,String,SQLTypeF,SubqueryObje
 """The left-hand side of an operator predicate: a resolved field, or a SQL function over one."""
 const ColumnPart = Union{SQLTypeField,SQLTypeFunction}
 
-"""Window PARTITION BY expressions."""
 # #444: `SQLTypeCTE` — PARTITION BY a CTE column worked before the change (the reference was a
 # plain String, already admitted here) and must keep working. #481: `SQLTypeJoined` for the same
 # reason one level up — `F("d.col")` was a plain String here too.
+#
+# #612: this comment sits ABOVE the docstring, not between it and the `const`. A comment there
+# detaches the docstring silently — `@doc` binds to the next expression and a comment is not one.
+"""Window PARTITION BY expressions."""
 const WindowPartitionPart = Union{String,SQLTypeField,SQLTypeFunction,SQLTypeF,SQLTypeCTE,SQLTypeJoined}
 
-"""Window ORDER BY expressions."""
 # #444: `SQLTypeCTE` — a window ORDER BY over a CTE column worked before the change; it is also
 # the second site (after the fluent `order_by`) where `CTE(...; desc = true)` is meaningful. #481:
 # `SQLTypeJoined` likewise.
+#
+# #612: above the docstring, not between it and the `const` — see `WindowPartitionPart`.
+"""Window ORDER BY expressions."""
 const WindowOrderPart = Union{String,SQLTypeOrder,SQLTypeCTE,SQLTypeJoined}
 
 """Window function column SLOT — what `WindowFunction.column` may hold. The vocabulary a CALLER may

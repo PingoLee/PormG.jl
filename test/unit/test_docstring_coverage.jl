@@ -25,10 +25,25 @@ using PormG
 const DOCCOV_REPO_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 const DOCCOV_OBJECT_MANAGER = joinpath(DOCCOV_REPO_ROOT, "src", "querybuilder", "object_manager.jl")
 const DOCCOV_API_MD = joinpath(DOCCOV_REPO_ROOT, "docs", "src", "api.md")
+# #612 scans whole trees rather than one file. `ext/` is in scope deliberately: the weakdep
+# extensions are source like any other and the architecture checkpoint lists them, but nothing in
+# this file had ever looked at them.
+const DOCCOV_SRC_DIR = joinpath(DOCCOV_REPO_ROOT, "src")
+const DOCCOV_EXT_DIR = joinpath(DOCCOV_REPO_ROOT, "ext")
 
 # `.md`/`.jl` are not pinned to LF in `.gitattributes`, so a Windows checkout yields CRLF (#216,
 # #228). Normalize before matching or every assertion below becomes platform-dependent.
 _doccov_read(path) = replace(read(path, String), "\r\n" => "\n")
+
+# Same enumerator shape as `test_memo_interface.jl` / `test_docs_error_type_drift.jl`: walk, keep
+# `.jl`, sort so failure output is stable. Tolerates a missing dir so the floors in the #612 scan
+# report it rather than the comprehension throwing.
+_doccov_files(dir) = isdir(dir) ? sort!([joinpath(root, f)
+                                         for (root, _, files) in walkdir(dir)
+                                         for f in files if endswith(f, ".jl")]) : String[]
+
+# Repo-relative, forward slashes, so a failure message is copy-pasteable on either platform.
+_doccov_rel(path) = replace(relpath(path, DOCCOV_REPO_ROOT), '\\' => '/')
 
 # Isolate the body of `Base.getproperty(q::ObjectHandler, …)` — shared by the two scans below.
 # The file holds a SECOND getproperty (on `Models.Model_Type`, for `.objects`) whose branches are
@@ -413,4 +428,135 @@ end
             @test isempty([s for s in names(mod) if startswith(String(s), "_") && Base.ispublic(mod, s)])
         end
     end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # No docstring is detached from its definition by an interposed comment (#612)
+    #
+    # The mechanical form of a rule this repo had already written down twice in prose and enforced
+    # zero times: `src/Models.jl:937` carries it as a standing instruction ("keep this comment ABOVE
+    # the docstring"), and the `public` testset above records it as a near-miss on `set_models` in
+    # #295. `@doc` binds to the next EXPRESSION and a comment is not one, so a `#` line between a
+    # docstring's closing `"""` and its definition silently detaches the string: written, reviewed,
+    # committed, documenting nothing.
+    #
+    # Nothing above catches it, because every assertion above is keyed on the EXPORTED or `public`
+    # surface and the offenders are internal. Seven bindings carried the bug when this scan was
+    # written, all latent, all invisible to `hasdoc`-based checks: `WindowPartitionPart`,
+    # `WindowOrderPart`, `_SQLITE_NAIVE_TS`, `_unknown_field`, `_projection_output_name`,
+    # `_inherited_statements`, `_execute_select`. `WindowOver` (#611) was the first EXPORTED name to
+    # hit it, which is the only reason a months-old trap surfaced at all — it turned this file red,
+    # then failed the docs build, unresolving five `[`WindowOver`](@ref)` links.
+    #
+    # Three of the seven were worse than detached: the stranded docstring documented a DIFFERENT
+    # function further down the file (`_parse_sqlite_timestamp`, `get_select_query`, `query_list`),
+    # so "delete the comment" would have bound the wrong text to the wrong binding. This scan
+    # reports position, not intent — it cannot tell those apart, and does not try to.
+    #
+    # ## Why the scan runs BACKWARDS from each definition
+    #
+    # The obvious forward scanner — toggle a flag on each `"""` and look ahead from each close —
+    # does not work on this repo. Two `src/` COMMENT lines carry an odd number of `"""`
+    # (`migrations/importers.jl` explaining how `"` is told from `"""`, and
+    # `migrations/introspection.jl`'s `# Example"""`), which inverts docstring parity for the whole
+    # rest of the file. Measured: a forward pass misses `_inherited_statements` entirely and
+    # under-reports `importers.jl` by roughly three quarters. Dropping `#` lines BEFORE counting
+    # markers is the fix, and it is the same ordering bug `test_memo_interface.jl` already paid for.
+    #
+    # Markers are counted with `eachmatch`, never by byte-slicing: `src/` is full of box-drawing
+    # rules and accented prose, and indexing into a multi-byte line throws `StringIndexError`.
+    #
+    # ## Why BOTH filters are needed
+    #
+    # A naive "closing `\"\"\"` then a comment then code" rule reports six false positives, all
+    # multi-line `sql = \"\"\" … \"\"\"` literals (`Dialect.jl` ×2, `migrations/runner.jl` ×3,
+    # `querybuilder/execution.jl` ×1). Neither filter removes all six alone:
+    #
+    #   - requiring the OPENER to start its own line with `\"\"\"` (not `name = \"\"\"`) still admits
+    #     `runner.jl`'s, whose opener genuinely is a docstring closer one block up;
+    #   - requiring the following code line to be DEFINITION-shaped still admits `Dialect.jl:1741`,
+    #     where the next code line is `@pormg_debug false` — a macro call, not a definition.
+    #
+    # No allowlist, deliberately, for the reason stated at :299 — a scan with an exemption list
+    # stops being a guard the first time someone appends to it.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "no docstring is detached by an interposed comment (#612)" begin
+        # A line that OPENS or CLOSES a docstring, once comments are out of the way. `\"\"\"` markers
+        # are counted by match, not by index — see the header.
+        _doccov_markers(line) = length(collect(eachmatch(r"\"\"\"", line)))
+        _doccov_is_comment(line) = startswith(strip(line), "#")
+        _doccov_is_blank(line) = isempty(strip(line))
+
+        # Definition-shaped: the things `@doc` can actually bind to. `@pormg_debug false` and
+        # `if cond` are deliberately NOT here — that is the second of the two filters.
+        _DOCCOV_DEF_KEYWORDS = ("function ", "const ", "struct ", "mutable struct ",
+                                      "abstract type ", "primitive type ", "macro ", "module ",
+                                      "baremodule ")
+        # A one-line definition: `f(x) = …`, `Base.f(x::T) = …`, `f(x)::T = …`.
+        _DOCCOV_ONELINE_DEF = r"^(?:[A-Za-z_][A-Za-z0-9_!]*\.)*[A-Za-z_][A-Za-z0-9_!]*(?:\{[^}]*\})?\([^=]*\)\s*(?:::[^=]+)?\s*=(?!=)"
+
+        function _doccov_is_def(line)
+            s = strip(line)
+            any(k -> startswith(s, k), _DOCCOV_DEF_KEYWORDS) && return true
+            return occursin(_DOCCOV_ONELINE_DEF, s)
+        end
+
+        # Given the index of a line that CLOSES a docstring-or-string block, find the line that
+        # opened it and report whether that opener began its own line with `\"\"\"`. A one-liner
+        # (`\"\"\"Short.\"\"\"`) opens and closes on the same line.
+        function _doccov_opener_is_docstring(lines, close_idx)
+            _doccov_markers(lines[close_idx]) >= 2 &&
+                return startswith(strip(lines[close_idx]), "\"\"\"")
+            k = close_idx - 1
+            while k >= 1
+                # Comment lines are skipped BEFORE their markers could be counted — the parity trap.
+                if !_doccov_is_comment(lines[k]) && _doccov_markers(lines[k]) >= 1
+                    return startswith(strip(lines[k]), "\"\"\"")
+                end
+                k -= 1
+            end
+            return false
+        end
+
+        files = vcat(_doccov_files(DOCCOV_SRC_DIR), _doccov_files(DOCCOV_EXT_DIR))
+
+        # Floors: a broken enumerator must fail, not pass vacuously — every testset in this file
+        # carries a pair like this.
+        @test isdir(DOCCOV_SRC_DIR)
+        @test isdir(DOCCOV_EXT_DIR)
+        @test length(files) >= 30
+
+        # (file, line-of-definition, the definition's own text) for each offender.
+        offenders = Tuple{String, Int, String}[]
+        for path in files
+            lines = split(_doccov_read(path), '\n')
+            for i in eachindex(lines)
+                _doccov_is_def(lines[i]) || continue
+
+                # Walk UP over the comment/blank run directly above the definition.
+                j = i - 1
+                saw_comment = false
+                while j >= 1 && (_doccov_is_comment(lines[j]) || _doccov_is_blank(lines[j]))
+                    saw_comment |= _doccov_is_comment(lines[j])
+                    j -= 1
+                end
+                # Blank lines alone are fine — Julia tolerates those. Only a COMMENT detaches.
+                (saw_comment && j >= 1) || continue
+
+                # Filter 1: the line above the run must close a `\"\"\"` block…
+                endswith(strip(lines[j]), "\"\"\"") || continue
+                # …and Filter 2: that block must be a DOCSTRING, not a `sql = \"\"\" … \"\"\"` literal.
+                _doccov_opener_is_docstring(lines, j) || continue
+
+                push!(offenders, (_doccov_rel(path), i, strip(lines[i])))
+            end
+        end
+
+        # Name every offender in the failure output: the fix is "move one of these two things", and
+        # which one depends on whether the docstring belongs to the binding below it.
+        if !isempty(offenders)
+            @info "Detached docstrings (#612): a comment sits between the docstring and the definition" offenders
+        end
+        @test offenders == Tuple{String, Int, String}[]
+    end
+
 end

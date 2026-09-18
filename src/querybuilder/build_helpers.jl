@@ -738,10 +738,10 @@ function _get_join_type_override(q::SQLObject, join_path::String)
   config === nothing && return nothing
   return config.join_type
 end
-"""
-This function checks if the given `field` is a valid field in the provided `model`. If the field is valid, it returns the field name, potentially modified based on certain conditions.
-"""
 # The one place an unknown field name becomes a typed error (#446).
+#
+# #612: this block sits ABOVE the docstring. Between it and `function`, it detached the docstring
+# silently — `@doc` binds to the next expression and a comment is not one.
 #
 # Returns the exception; the call site throws it — the convention `test_docs_error_type_drift.jl`
 # pins for `_unsupported_conn` / `_write_not_allowed` / `_fielderr`. A helper that threw internally
@@ -758,6 +758,9 @@ This function checks if the given `field` is a valid field in the provided `mode
 # filter/values path but is not a column, so `create("results" => …)` can never work — listing them
 # in a write error would advertise a capability that does not exist. Every read-path caller keeps
 # the default.
+"""
+This function checks if the given `field` is a valid field in the provided `model`. If the field is valid, it returns the field name, potentially modified based on certain conditions.
+"""
 function _unknown_field(model::PormGModel, name::AbstractString;
                        aliases::Vector{String} = String[],
                        include_accessors::Bool = true)::UnknownFieldError

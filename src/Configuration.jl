@@ -922,7 +922,11 @@ function _warn_pool_takeover(msg::String, path::String, existing::String,
   return nothing
 end
 
-function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,PormGSettings} = config)
+# `implicit = true` is `Models.set_models`' channel and nobody else's: it records on the new entry
+# that the application did not choose this configuration (#553). `Models._pick_connect_key` and
+# the migrate branch below read that flag; before #553 both inferred it from `isabspath`, which the
+# relative `set_models(mod, "db")` form inverts.
+function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,PormGSettings} = config, implicit::Bool = false)
   # create settings if does not exists
   path === nothing && (path = DB_PATH )
 
@@ -952,7 +956,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   selected_env = _effective_env(env, _peek_default_env(db_settings_file))
 
   # #550: one folder, one entry. `config[path] = …` used to add a SECOND entry whenever the same
-  # folder was already registered under a different spelling — typically an absolute path minted
+  # folder was already registered under a different spelling — typically the absolute path minted
   # by the implicit load in `set_models`. Two entries meant two pools and possibly two databases
   # for one folder, and which one a query reached depended on which key its model bound to: a
   # safety check written against `config["db"]` could be inspecting an entry the queries never
@@ -961,10 +965,12 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   key = path
   existing = _resolve_loaded_key(path, config)
   if existing !== nothing && existing != path
-    if isabspath(existing) && !isabspath(path)
+    if config[existing].implicit && !implicit
       # The caller is naming the folder explicitly; the entry we hold was minted implicitly, with
-      # an environment nobody chose. Migrate to the caller's key. Models still bound to the old
-      # one are remapped by `Models.ensure_model_initialized`, which warns when it does.
+      # an environment nobody chose — its own `implicit` flag says so (#553; this used to be read
+      # off the key's spelling, so an explicit absolute-path load was migrated away as if it were
+      # implicit). Migrate to the caller's key. Models still bound to the old one are remapped by
+      # `Models.ensure_model_initialized`, which warns when it does.
       #
       # `close_pool!` waits up to its drain budget for checked-out connections and then closes them
       # anyway (#47), so a migration during live traffic may block `load` for a few seconds and
@@ -972,9 +978,9 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
       # this change exists to eliminate, and makes `load` behave differently depending on
       # transient runtime state — so migrate, but say how much was in use, because that is the
       # number that explains a request dying a moment later.
-      _warn_pool_takeover("PormG: this folder was already loaded under an implicit absolute-path " *
-                          "key; re-registering it under the key you asked for and discarding the " *
-                          "implicit entry.", path, existing, config)
+      _warn_pool_takeover("PormG: this folder was already loaded under a key the implicit load " *
+                          "minted; re-registering it under the key you asked for and discarding " *
+                          "the implicit entry.", path, existing, config)
       config[existing].connections !== nothing && close_pool!(config[existing].connections)
       delete!(config, existing)
     else
@@ -998,7 +1004,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   # silently changed that lock's identity for one folder. `key` and `path` name the same folder,
   # so this loses nothing — `read_db_connection_data` below is still given `path`, the spelling
   # that was checked against the filesystem above.
-  config[key] = Settings(app_env = selected_env, db_def_folder=key)
+  config[key] = Settings(app_env = selected_env, db_def_folder = key, implicit = implicit)
   settings::PormGSettings = config[key]
 
   settings.db_config_settings = read_db_connection_data(path, settings)
@@ -1216,7 +1222,9 @@ end
     status(path_or_key::String) -> NamedTuple
 
 Return a compact server-oriented status payload describing whether a
-configuration is loaded and reachable.
+configuration is loaded and reachable. `implicit` is `true` for an entry that
+`Models.set_models` minted through its implicit load rather than one the
+application loaded itself (#553).
 """
 function status(path_or_key::String)
   key = _resolve_loaded_key(path_or_key)
@@ -1229,6 +1237,7 @@ function status(path_or_key::String)
       app_env = nothing,
       db_def_folder = nothing,
       dynamic = false,
+      implicit = false,
     )
   end
 
@@ -1241,6 +1250,7 @@ function status(path_or_key::String)
     app_env = settings.app_env,
     db_def_folder = settings.db_def_folder,
     dynamic = settings.db_def_folder == "dynamic_connection",
+    implicit = settings.implicit,
   )
 end
 
@@ -1264,6 +1274,11 @@ mutable struct Settings <: PormGSettings
   connections::Union{Nothing, PormGPostgres, PormGSQLite}
   time_zone::String
   django_prefix::Union{Nothing, String}
+  # #553: `true` only for an entry `Models.set_models` minted through its implicit load, recorded
+  # at construction via `load(...; implicit = true)`. Not in `VALID_CONFIG_KEYS`, so YAML cannot set
+  # it. `Models._pick_connect_key` and `load`'s migrate branch both key on it — both used to infer
+  # it from `isabspath(key)`, which the relative `set_models(mod, "db")` form inverts.
+  implicit::Bool
 
   Settings(;
       app_env             = haskey(ENV, "PORMG_ENV") ? ENV["PORMG_ENV"] : "dev",           
@@ -1277,7 +1292,8 @@ mutable struct Settings <: PormGSettings
       change_data         = false,
       connections         = nothing,
           time_zone           = UTC_TIMEZONE,
-      django_prefix       = nothing
+      django_prefix       = nothing,
+      implicit            = false
   ) =
   new(
       app_env,
@@ -1291,7 +1307,8 @@ mutable struct Settings <: PormGSettings
       change_data,
       connections,
       time_zone,
-      django_prefix
+      django_prefix,
+      implicit
   )
 end
 

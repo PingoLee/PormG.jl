@@ -26,7 +26,8 @@ import Logging
     change_data = false,
     connections = mock_pool,
     time_zone = "UTC",
-    django_prefix = nothing
+    django_prefix = nothing,
+    implicit = false
   )
 
   # Register the mock settings in the global config

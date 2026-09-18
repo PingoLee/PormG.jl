@@ -106,6 +106,7 @@ end
         @test missing.loaded == false
         @test missing.reachable == false
         @test missing.adapter === nothing
+        @test missing.implicit == false
 
         # A loaded SQLite in-memory configuration should be reachable.
         PormG.Configuration.load(db_dir; env="test")
@@ -117,6 +118,7 @@ end
         @test loaded.adapter == "SQLite"
         @test loaded.app_env == "test"
         @test loaded.dynamic == false
+        @test loaded.implicit == false                    # an application load, never the implicit one (#553)
 
         _cleanup_configuration_test_keys([db_dir])
     end

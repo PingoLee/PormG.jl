@@ -123,7 +123,9 @@ which in a great many deployments points at production.
 folder — not a name your application chose. A later `Configuration.load("db"; env = "prod")` no
 longer adds a second entry for that folder: it migrates the implicit one to the key you asked for
 and warns. So you end up with one entry under the right key, but with a window beforehand in which
-models bound to the absolute key and its environment came from `default_env:`.
+models bound to the absolute key and its environment came from `default_env:`. The implicit entry
+is also *marked* as such — `PormG.Configuration.status(key).implicit` reads it back — and that mark,
+not the shape of the key, is what the rules below go by.
 
 PormG emits a `@warn` when this implicit load fires. It does not raise: `@import_models` injects an
 `__init__` that swallows every exception, so a throw would be invisible and the module would
@@ -137,8 +139,10 @@ absolute path only when the working directory lines up, so PormG also matches on
 component.
 
 Matches are **ranked** — an exact path beats a folder-name match. Within a rank, a key you loaded
-explicitly beats one minted implicitly under an absolute path, because the implicit entry is the one
-whose environment came from `default_env:` rather than from your application.
+explicitly beats one `set_models` minted implicitly, because the implicit entry is the one whose
+environment came from `default_env:` rather than from your application. PormG records that on the
+entry rather than inferring it from the key's spelling, so a relative implicit key
+(`set_models(mod, "db")`) still loses to an absolute key you loaded yourself.
 
 Only when that still leaves several candidates is the binding genuinely ambiguous — two configured
 folders that end in the same name (`db` and `vendor_app/db`), say. PormG then warns, lists every
@@ -206,5 +210,7 @@ julia> RaceControl.models.Driver.connect_key   # want the short key, not an abso
 "db"
 ```
 
-A value that is an absolute path means the implicit load ran and the environment came from
-`default_env:` — not from whatever your application selected.
+An absolute path is the usual sign that the implicit load ran, but the fact is recorded rather than
+inferred: `PormG.Configuration.status(RaceControl.models.Driver.connect_key).implicit` is `true`
+exactly when it did — and then the environment came from `default_env:`, not from whatever your
+application selected.

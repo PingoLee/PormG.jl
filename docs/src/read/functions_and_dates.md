@@ -217,6 +217,7 @@ numeric string. A value no single date can express (a fraction, a year outside t
 | `Upper("field")` | Convert to uppercase | `"name_upper" => Upper("surname")` |
 | `Length("field")` | String length | `"name_len" => Length("surname")` |
 | `Concat(args...)` | Concatenate fields/values | `"full" => Concat("forename", Value(" "), "surname")` |
+| `Concat(vector)` | Same, operands in a vector | `"full" => Concat(["forename", "surname"])` |
 | `Trim("field")` | Trim leading/trailing whitespace | `"clean" => Trim("name")` |
 | `LTrim("field")` | Trim leading whitespace | `"clean" => LTrim("name")` |
 | `RTrim("field")` | Trim trailing whitespace | `"clean" => RTrim("name")` |
@@ -242,6 +243,17 @@ SELECT CONCAT("driver"."forename", $1::text, "driver"."surname")  AS full_name,
        LENGTH("driver"."surname")                                 AS name_length
 FROM "driver"
 LIMIT 5
+```
+
+`Concat` takes its operands either variadically or as a single vector — the two spellings build the
+same expression and render the same SQL:
+
+```julia
+query.values("full_name" => Concat(["forename", Value(" "), "surname"]))
+
+# A vector of plain column names works too, which is what a parsed request usually gives you
+cols = split("cols=forename,surname", "=")[2]
+query.values("full_name" => Concat(collect(split(cols, ","))))
 ```
 
 Output:

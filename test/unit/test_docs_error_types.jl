@@ -28,6 +28,8 @@ using Test
 using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField, DateTimeField, ForeignKey, JSONField,
                     UniqueConstraint, Index, add_field!
+# #612 — the two text fields whose `default=` policy the filters page now states.
+using PormG.Models: TextField, URLField
 using PormG.QueryBuilder: bulk_insert, bulk_update
 # #509 — the ordering wrapper and the window constructor, for the two window-page claims below.
 using PormG.QueryBuilder: SQLOrder
@@ -714,6 +716,25 @@ const DOCERR_CASES = [
             q.values("resultid")
             q.list(show_query = :dict)
         end,
+    ),
+    (
+        # #612. The page states the `default=` policy — any AbstractString, or an Integer as its
+        # decimal text — and then names what happens to everything else. That last clause is the
+        # claim pinned here, and it is worth pinning because the refusal is NEW for `URLField` and
+        # `SlugField`: their old `string(x)` converter stringified a Symbol silently, so a reader of
+        # the old page could reasonably have believed the opposite.
+        "read/filters_and_aggregates.md — a Symbol `default=` is refused (#612)",
+        FieldValidationError,
+        () -> URLField(default = :not_a_string),
+    ),
+    (
+        # #612, the other half of the same sentence. For the four fields whose dead
+        # `parse(String, x)` converter refused every non-`String` spelling, the page's claim is now
+        # about which values are refused rather than that anything is — a `Float64` is the nearest
+        # miss to the `Integer` the policy does accept.
+        "read/filters_and_aggregates.md — a Float64 `default=` on a text field is refused (#612)",
+        FieldValidationError,
+        () -> TextField(default = 3.5),
     ),
 ]
 

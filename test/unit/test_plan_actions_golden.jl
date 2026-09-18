@@ -283,7 +283,7 @@ end
 #     AFTER   ALTER TABLE "child_t" DROP CONSTRAINT IF EXISTS "child_t_col_HASH_fk";
 #     WHY     #89. `drop_table` on PostgreSQL is `DROP TABLE ... CASCADE`, which also drops every FK
 #             constraint pointing AT the dropped table -- and `_order_statements` runs "Drop table"
-#             (bucket 2) before "Remove foreign key: ..." (bucket 5). Dropping a parent table and
+#             (bucket 2) before "Remove foreign key: ..." (bucket 4). Dropping a parent table and
 #             removing the child's FK field in ONE migration therefore reached this statement with
 #             the constraint already gone and aborted the whole migration. Only the FK drop moved:
 #             the PRIMARY KEY / UNIQUE / CHECK drops in this corpus come from `alter_field`, not

@@ -311,8 +311,8 @@ The key is the constant `pormg::migrations`, with **no database or folder qualif
 
 This is a guarantee about *one database*, not one server: `migrate()` against `analytics` does not block `migrate()` against `billing` on the same cluster, which is what you want.
 
-!!! note "Upgrading past PormG 0.5 changes the key"
-    The key used to embed the config folder name. While a rolling deploy has some instances on the old version and some on the new, the two take *different* keys and therefore do not exclude each other — transiently the very condition this fixes. Nothing in an app's source has to change; just avoid running `migrate()` from two versions at once.
+!!! note "Two PormG versions can take different keys"
+    Versions before this change embedded the config folder name in the key. While a rolling deploy has some instances on either side of it, the two take *different* keys and therefore do not exclude each other — transiently the very condition this fixes. Nothing in an app's source has to change; just avoid running `migrate()` from two PormG versions at once.
 
 !!! warning "A transaction-pooling proxy defeats it"
     The lock is **session-level** — it lives on the connection that took it. Behind PgBouncer in `transaction` mode (or any pooler that reassigns server connections per transaction) the lock can be released or observed on the wrong backend. Point `migrate()` at a direct connection, or use `session` pooling.

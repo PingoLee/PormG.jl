@@ -139,7 +139,7 @@ end
 
     # ─────────────────────────────────────────────────────────────────────────
     # HAZARD 1 (live bug): a CASCADE drop makes the child's DROP CONSTRAINT a no-op target
-    # "Drop table" is bucket 2 and "Remove foreign key: …" is bucket 5, so dropping a parent table
+    # "Drop table" is bucket 2 and "Remove foreign key: …" is bucket 4, so dropping a parent table
     # and removing the child's FK field in ONE migration reached the DROP CONSTRAINT after the
     # parent's CASCADE had already removed it — and PostgreSQL aborts on a missing constraint. The
     # ordering is fine; the unguarded DROP was not.
@@ -174,6 +174,12 @@ end
     # this issue's to choose: that same branch plans the table's column work against the OLD name,
     # so whoever repairs the producer decides whether RENAME TABLE goes before or after it. Filed
     # as a follow-up; when it is fixed, this testset is the thing that should fail.
+    #
+    # It therefore names the EXACT mechanism. A bare `raised !== nothing` was written first and
+    # review falsified it by execution: repairing only the `current_schema` lookup advances the path
+    # one line to a second, independent defect (`rename_table` is passed a Symbol, and with the two
+    # names reversed), which raises `MethodError` and keeps a "did anything throw?" assertion green.
+    # Both known blockers are pinned below, so the file only goes quiet once BOTH are cleared.
     # ─────────────────────────────────────────────────────────────────────────
     @testset "no plan can carry a \"Rename table\" step (the producer raises first)" begin
         settings = PormG.Configuration.Settings()
@@ -199,7 +205,14 @@ end
                 end
             end
         end
-        @test raised !== nothing
+        # Blocker 1: the `current_schema[old_model_name]` lookup, keyed by the declared name.
+        @test raised isa KeyError
+        @test raised.key === :old_t
+
+        # Blocker 2, one line further on and independent: `Dialect.rename_table` takes two Strings,
+        # the producer hands it a Symbol — and passes (new, old) where the method reads (old, new),
+        # so even fixing the type would render `ALTER TABLE "<new>" RENAME TO "<old>"`.
+        @test_throws MethodError Dialect.rename_table(FKPG89, :new_t, "old_t")
     end
 
     # ─────────────────────────────────────────────────────────────────────────

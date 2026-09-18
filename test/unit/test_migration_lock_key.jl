@@ -34,9 +34,9 @@ import PormG: PormGPostgres
 # Defining a method on `PormG.AdvisoryLock.with_advisory_lock` for our own type is an ordinary
 # qualified definition, and it dispatches on nothing else in the suite. It deliberately does NOT
 # invoke `f`, so no migration lifecycle runs.
-struct LockKeyProbePg89 <: PormGPostgres end
+struct LockKeyProbePg90 <: PormGPostgres end
 const LOCK_KEY_OBSERVED = Ref{String}("")
-function PormG.AdvisoryLock.with_advisory_lock(f::Function, pool::LockKeyProbePg89,
+function PormG.AdvisoryLock.with_advisory_lock(f::Function, pool::LockKeyProbePg90,
                                                key::AbstractString; kwargs...)
     LOCK_KEY_OBSERVED[] = String(key)
     return :intercepted
@@ -94,7 +94,7 @@ end
         settings = Settings(db_def_folder = "db_prod_a")
 
         # The lifecycle never runs: the probe returns without invoking the body.
-        result = Migrations._run_locked_lifecycle(LockKeyProbePg89(), settings,
+        result = Migrations._run_locked_lifecycle(LockKeyProbePg90(), settings,
                                                   String[], "", "v", "n", "checksum", false)
         @test result === :intercepted
         @test LOCK_KEY_OBSERVED[] == Migrations.MIGRATION_LOCK_KEY
@@ -103,7 +103,7 @@ end
         # And a second folder reaches the lock under the SAME key — the mutual exclusion #90 asks
         # for, observed at the call site rather than inferred from the helper.
         LOCK_KEY_OBSERVED[] = ""
-        Migrations._run_locked_lifecycle(LockKeyProbePg89(), Settings(db_def_folder = "db_prod_b"),
+        Migrations._run_locked_lifecycle(LockKeyProbePg90(), Settings(db_def_folder = "db_prod_b"),
                                          String[], "", "v", "n", "checksum", false)
         @test LOCK_KEY_OBSERVED[] == Migrations.MIGRATION_LOCK_KEY
     end

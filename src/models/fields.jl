@@ -66,6 +66,47 @@ function _binary_default_bytes(value)
   throw(_fielderr(_binary_default_message(value)))
 end
 
+# ── Text `default=` policy (#612) ───────────────────────────────────────────
+# One policy for every plain-text field. Before #612 the accepted spelling was decided by whichever
+# converter lambda each constructor happened to carry, which split the family FIVE ways for the same
+# keyword — and the two extremes were both wrong:
+#
+#   `parse(String, x)`  TextField, EmailField, FileField, ImageField. DEAD CODE: `parse(String, …)`
+#                       has no method, so the converter could never run. Every non-`String` default
+#                       was refused, blaming the value's type for what was a missing conversion.
+#   `string(x)`         URLField, SlugField. The opposite failure — `string` has a method for
+#                       everything, so nothing was ever refused: `URLField(default = :nope)` stored
+#                       `"nope"`, and `URLField(default = CharField())` stored `"CharField()"`.
+#   an inline ladder    CharField. The only one that was right, and written where nothing could
+#                       reuse it.
+#
+# `String(x)`, not `string(x)` (#598): `string` is the IDENTITY for a `LazyString`, so the `string`
+# spelling only ever produced a `String` because the field structs' `Union{String, Nothing}` slot
+# re-converts on the way in. Normalizing here means the concrete type is decided at the seam rather
+# than two frames later, which is the shape `_str_or_nothing` and the #603 constructors follow.
+#
+# `Integer` rides through as its decimal text — not new latitude, but CharField's own
+# `default isa Int && (default = string(default))`, generalized off `Int64`. `Bool` is excluded
+# deliberately, exactly as CharField excluded it: `true` in a text column is far likelier to be a
+# mistake than an intent, and `"true"` is not a useful thing to have stored silently.
+#
+# Called DIRECTLY rather than handed to `validate_default`, which is why the message below is the
+# one the user sees. `validate_default` wraps its converter in a bare `catch` that replaces any
+# message with "Expected type: Union{Nothing, String}" — accurate before #612, misleading now that
+# an `Integer` is accepted, and it is the layer whose relabelling hid the dead `parse` for this
+# long. Nothing here can throw from inside a slow call, so the #472 `InterruptException` carve-out
+# that `catch` exists for has nothing to guard.
+#
+# `UUIDField` and `JSONField` are deliberately NOT routed here: `format_uuid_sql` / `format_json_sql`
+# validate the value's SHAPE, a stronger contract than this one, and both were measured already
+# clean for every `AbstractString` spelling.
+function _default_string(field_type::AbstractString, value)
+  value === nothing && return nothing
+  value isa AbstractString && return String(value)
+  value isa Integer && !(value isa Bool) && return string(value)
+  throw(_fielderr("$(field_type): 'default' must be a String, an Integer or nothing, got $(typeof(value))."))
+end
+
 # ── Common keyword handling (#260) ──────────────────────────────────────────
 # Every field constructor used to open with the same four blocks copy-pasted: an `accepted` Set, an
 # unexpected-keyword `@warn` loop, a `get(kwargs, :x, default)` per keyword, and a type guard per
@@ -1175,10 +1216,11 @@ function CharField(; kwargs...)
   # so the declared model never matched its own table and `makemigrations` churned forever. A future
   # MySQL backend enforces its own limit at render time (#60), not here.
   max_length < 1 && throw(_fielderr("The max_length must be greater than 1"))
-  default isa Int && (default = string(default))
-  if !(default isa Nothing) && !(default isa AbstractString) 
-    throw(_fielderr("The default value must be a string, but got $(default) ($(typeof(default)))"))
-  end
+  # #612: was an inline `isa Int` coercion plus an `isa AbstractString` guard — correct, but the
+  # only correct one in the family and unreachable from the six constructors that needed it. The
+  # shared helper is that same ladder, so CharField's accepted set does not move; what moves is
+  # that the other plain-text fields now agree with it.
+  default = _default_string("CharField", default)
   if !(default isa Nothing) && length(default) > max_length
     throw(_fielderr("The default value exceeds the max_length, but got $(length(default)) and max_length is $(max_length)"))
   end
@@ -2058,7 +2100,7 @@ function EmailField(; kwargs...)
   default = get(kwargs, :default, nothing)
 
   # Validate default
-  default = validate_default(default, Union{String, Nothing}, "EmailField", x -> parse(String, x))
+  default = _default_string("EmailField", default)   # #612
   # Return the field instance
   return sEmailField(
     verbose_name,
@@ -2310,7 +2352,7 @@ function ImageField(; kwargs...)
   default = get(kwargs, :default, nothing)
 
   # Validate default
-  default = validate_default(default, Union{String, Nothing}, "ImageField", x -> parse(String, x))
+  default = _default_string("ImageField", default)   # #612
   # Return the field instance
   return sImageField(
     verbose_name,
@@ -2338,7 +2380,7 @@ function FileField(; kwargs...)
     _common_kwargs("FileField", kwargs; editable = true, extra = (:upload_to, :max_length))
 
   default = get(kwargs, :default, nothing)
-  default = validate_default(default, Union{String, Nothing}, "FileField", x -> parse(String, x))
+  default = _default_string("FileField", default)    # #612
 
   return sImageField(
     verbose_name,
@@ -2413,7 +2455,7 @@ function TextField(; kwargs...)
   default = get(kwargs, :default, nothing)
 
   # Validate default
-  default = validate_default(default, Union{String, Nothing}, "TextField", x -> parse(String, x))
+  default = _default_string("TextField", default)    # #612
   # Return the field instance
   return sTextField(
     verbose_name,
@@ -2831,7 +2873,7 @@ function URLField(; kwargs...)
   max_length isa Int || throw(_fielderr("The max_length must be an integer"))
   max_length < 1 && throw(_fielderr("The max_length must be greater than 0"))
 
-  default = validate_default(default, Union{String, Nothing}, "URLField", x -> string(x))
+  default = _default_string("URLField", default)     # #612
 
   return sURLField(
     verbose_name,
@@ -2912,7 +2954,7 @@ function SlugField(; kwargs...)
   max_length > 255 && throw(_fielderr("The max_length must be less than or equal to 255"))
   max_length < 1 && throw(_fielderr("The max_length must be greater than 0"))
 
-  default = validate_default(default, Union{String, Nothing}, "SlugField", x -> string(x))
+  default = _default_string("SlugField", default)    # #612
 
   return sSlugField(
     verbose_name,

@@ -498,6 +498,23 @@ query = M.Driver.objects.values(
 )
 ```
 
+The value comes back **out** of the row the same way it went in — a row is keyed by any string
+spelling too, so the column name parsed from the request can be reused to read the result:
+
+```julia
+cols = split("cols=driverid__surname,points", "=")[2]   # SubString{String}
+
+row = M.Driver_standings.objects.
+    values(split(cols, ",")...).
+    order_by("-points").
+    first()
+
+key = split(cols, ",")[1]        # SubString{String} — no String(...) needed
+row[key]                         # "Verstappen"
+haskey(row, key)                 # true
+get(row, key, "absent")          # "Verstappen"
+```
+
 Concretely, a non-`String` `AbstractString` is accepted by:
 
 - **Reads** — filter values and `__@in` lists; `values()` field names and aliases; `order_by()`, including the `"-field"` descending form; `db()`.
@@ -506,7 +523,10 @@ Concretely, a non-`String` `AbstractString` is accepted by:
 - **Scalar and conversion functions** — `Lower`, `Upper`, `Length`, `Abs`, `Round`, `Trim`, `LTrim`, `RTrim`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Cast`, `Extract`, `ToChar`, `Concat`, `Coalesce`, `Greatest`, `Least`, `NullIf`, `Replace`, `Power`, `Mod`, together with their `output_field` and `_as` keywords.
 - **Windows** — `WindowOver(partition_by = …, order_by = …, frame = …)`, `SQLOrder(...; orientation = …, _as = …)`, and the value functions `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`.
 - **Bulk writes** — the `filters`, `columns` and `match_on` arguments.
+- **Rows** — `row[key]`, `haskey(row, key)` and `get(row, key, default)` on a `PormGRow`, alongside the `Symbol` and dot-access spellings.
 - **Model fields** — `verbose_name`, `db_column`, `CharField(choices = …)`, and `to` / `through` / `how` / `related_name` / `pk_field` on `ForeignKey`, `OneToOneField` and `ManyToManyField`.
+- **Field defaults** — `default =` on the seven plain-text fields: `CharField`, `TextField`, `EmailField`, `URLField`, `SlugField`, `FileField` and `ImageField`. These share one policy: any `AbstractString`, or an `Integer` written as its decimal text (`CharField(default = 0)` stores `"0"`). Anything else — a `Symbol`, a `Float64`, a `Bool` — is a `FieldValidationError`. `UUIDField` and `JSONField` are not part of that policy — each validates what the value *means*, so neither is simply stricter nor simply looser. `UUIDField` accepts any string spelling of a well-formed UUID and refuses everything else, including an `Integer`: `UUIDField(default = "abc")` is refused where `TextField(default = "abc")` is not. `JSONField` refuses a string that is not valid JSON, and in the other direction accepts any value it can serialize — `3.5`, `true`, `[1, 2]` and `Dict("a" => 1)` all store their JSON text, where the seven plain-text fields refuse all four.
+- **Model names** — the positional name in `Models.Model("drivers", …)`, including the no-fields guard that refuses `Models.Model(name)` on its own.
 
 Widening the accepted *type* did not widen the accepted *shape*: `values("points__@lte")` is still refused as an operator suffix in a projection whichever string type spells it.
 

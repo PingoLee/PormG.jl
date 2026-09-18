@@ -469,11 +469,33 @@ function Concat(x::Vector; output_field::Union{N, AbstractString, Nothing} where
     output_field = output_field.type
   end
   output_field = _norm_fn_arg(output_field)   # #603
-  # #603: the string ELEMENTS too. `_check_function`'s vector arm assigns its result back into this
-  # vector in place, so a `Vector{SubString{String}}` out of `split(...)` would fail the store even
-  # with the walk itself widened. The comprehension preserves the incoming element type for every
-  # spelling that already worked (`Vector{String}` in, `Vector{String}` out), so nothing moves.
-  processed_cols = [v isa AbstractString ? String(v) : v for v in x]
+  # #603: the string ELEMENTS too, so no view is ever stored on the node. The original reason was
+  # that `_check_function`'s vector arm assigns its result back in place and a narrowly-typed vector
+  # would fail that store; since #612 made the container `Any[]` the store cannot fail, so this is
+  # now about what the node HOLDS rather than about the walk surviving. Still wanted: a `SubString`
+  # reaching the renderer retains its whole parent buffer.
+  #
+  # #612: `Any[...]`, not a type-preserving comprehension. A HOMOGENEOUS string vector —
+  # `Concat(["forename", "surname"])`, the documented signature's most obvious spelling — stayed a
+  # `Vector{String}` and so dispatched to `_check_function(::Vector{String})`, the arm that reads a
+  # whole vector as ONE already-split `__@` path. It answered
+  # `FilterError: "forename__@surname" is invalid`, naming a path the caller never wrote.
+  #
+  # What escaped was a HETEROGENEOUS argument list, not the variadic form as such: `collect` of a
+  # homogeneous tuple is a `Vector{String}` too, so `Concat("forename", "surname")` was broken in
+  # exactly the same way. Every `Concat` in the docs and tests happens to carry a `Value(" ")`
+  # separator, which makes the collected vector `Vector{Any}` and routes it to the per-element arm
+  # — that accident, not the spelling, is why this went unseen.
+  #
+  # Widening the CONTAINER rather than the walk, because the walk's `Vector{String}` semantics is
+  # correct where it is reached from: `_check_function(::AbstractString)` splits a path on `__@` and
+  # hands the pieces straight to it. Concat's payload is a list of operands, never one split path,
+  # so the fix belongs at the seam that knows which of the two this is.
+  #
+  # Not the `SQLField(String(v))` wrap that `Coalesce`/`Greatest`/`Least` use to dodge the same arm:
+  # Concat's elements legitimately carry `__@` transform paths (`Concat("date__@year", ...)`), and
+  # wrapping would strip the per-element resolution that makes those work.
+  processed_cols = Any[v isa AbstractString ? String(v) : v for v in x]
   return FObject(function_name = "CONCAT", column = processed_cols, kwargs = Dict{String, Any}("output_field" => output_field, "as" => String(_as)))
 end
 # Variadic convenience: Concat("forename", Value(" "), "surname") → same as vector form

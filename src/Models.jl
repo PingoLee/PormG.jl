@@ -2248,6 +2248,24 @@ ConstructorStandings = Models.Model("constructor_standings",
 See also [`set_models`](@ref), [`UniqueConstraint`](@ref), [`Index`](@ref), [`ForeignKey`](@ref).
 """
 function Model(name::AbstractString; constraints = nothing, db_table = nothing, indexes = nothing, fields...)
+  # #612: the no-fields guard lives HERE, not on its own method. It used to be
+  # `Model(name::String)`, which meant a `SubString` or `LazyString` name — the spelling a web layer
+  # or a `split` hands you — missed it entirely, fell through to this method with an empty keyword
+  # slurp, and silently built a fieldless model instead of reporting the mistake.
+  #
+  # It cannot be fixed by widening that method to `::AbstractString`: Julia identifies a method by
+  # its POSITIONAL signature and keywords are not part of it, so `Model(name::AbstractString)` would
+  # REDEFINE this one rather than sit beside it. Moving the check inward is the only shape that
+  # works, and it also closes the arity the old guard never covered — `Model("x", db_table = "t")`
+  # with no fields was fieldless-and-silent for a `String` too.
+  #
+  # Only this path. The `Dict`/`NTuple` methods below are how introspection, the Django importer and
+  # the no-positional `Model(; fields...)` form build a model, and an empty field set is meaningful
+  # to none of them the way it is wrong here.
+  if isempty(fields)
+    example_usage = "\e[32musers = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())\e[0m"
+    throw(ModelDefinitionError("You need to add fields to the model, example: $example_usage"))
+  end
   # Peel `constraints`/`db_table`/`indexes` off BEFORE the `fields...` slurp — otherwise any of them
   # would flow into the `NTuple{Pair{Symbol}}` method below and trip its `isa PormGField` check (#19,
   # #347).
@@ -2290,7 +2308,13 @@ function Model(name::AbstractString, fields::NTuple{N, <:Pair{Symbol}}) where N
     !is_many_to_many_field(field[2]) && push!(field_names, field_name)
   end
   # println(fields_dict)
-  return Model_Type(name=name, fields=fields_dict, field_names=field_names)
+  # #612: `String(name)`, so the stored name is never a view. This is the seam BOTH user-facing
+  # forms funnel through — the kwargs `Model(name; fields...)` builds its tuple and lands here — and
+  # `Model_Type.name` is an `AbstractString` slot, so an unconverted `SubString` is retained for the
+  # model's whole process lifetime along with its entire parent buffer. Measured: a name sliced out
+  # of a 143-character request string kept all 143. The `Dict` methods below are deliberately left
+  # alone; their names come from a live catalog or a Python class, not from a request.
+  return Model_Type(name=String(name), fields=fields_dict, field_names=field_names)
 end
 # `inspectdb` path. No name normalization or validation at all (#317): the keys ARE live column names,
 # and `field_names` must agree with them key-for-key. It previously ran `format_fild_name` here while
@@ -2330,10 +2354,6 @@ function Model(name::AbstractString, fields::Dict{Symbol, Any})
     !is_many_to_many_field(field) && push!(field_names, field_name)
   end
   return Model_Type(name=name, fields=fields_dict, field_names=field_names)
-end
-function Model(name::String)
-  example_usage = "\e[32musers = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())\e[0m"
-  throw(ModelDefinitionError("You need to add fields to the model, example: $example_usage"))
 end
 function Model(; constraints = nothing, db_table = nothing, indexes = nothing, fields...)
   # No-positional-name form (the idiomatic style — the table name is inferred from the binding
@@ -2709,11 +2729,15 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
   # Marker comments sit directly above the model definition in the generated file (#70).
   marker = isempty(render_failures) ? "" : join(render_failures, "\n") * "\n"
   if fields == ""
-    # Every field failed to render (or the model has none): a bare `Models.Model("name")` call throws
-    # ArgumentError at include time (the single-arg constructor requires ≥1 field), which would abort
-    # loading the ENTIRE generated module (#134). Comment the definition out — with an explanatory
+    # Every field failed to render (or the model has none): a `Models.Model("name")` call with no
+    # field keywords throws `ModelDefinitionError` at include time, which would abort loading the
+    # ENTIRE generated module (#134). Comment the definition out — with an explanatory
     # marker — so the file still loads and the user sees exactly which model to fix by hand. Mirrors
     # Rails' SchemaDumper, which comments out a table it can't dump so schema.rb stays loadable.
+    #
+    # #612 widened that guard to the `db_table =` arity as well, so the commented-out line below
+    # would throw for the same reason if it were ever uncommented as-is. That is the intended
+    # reading: it is a stub to fix by hand, not a definition to restore.
     note = "# PormG: model '$(model_name_abs)' had no renderable fields — definition commented out."
     result = """$(marker)$(note)\n# $(model_var_name) = Models.Model($(format_string(model_name_abs))$db_table_part)"""
   else
@@ -3091,9 +3115,13 @@ end
 function format_number_sql(value::AbstractArray)
   arrayref::Vector{Union{String, Integer, Missing}} = []
   for v in value
-    # Ensure nested strings (like SubString) are converted to String or Integer as required by the Union
+    # Ensure nested strings (like SubString) are converted to String or Integer as required by the
+    # Union. #612: `String`, not `string` — the scalar arm above already spells it that way, and
+    # `string` is the identity for a `LazyString` (#598). No live bug either way today, because the
+    # scalar arm returns a `SubString` and the Union slot's `convert` rescues it; the point is that
+    # the next formatter copied from here inherits the right spelling.
     res = v |> format_number_sql
-    push!(arrayref, res isa AbstractString ? string(res) : res)
+    push!(arrayref, res isa AbstractString ? String(res) : res)
   end
   # return string("(", join(arrayref, ","), ")")
   return arrayref

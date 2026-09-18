@@ -217,6 +217,7 @@ numeric string. A value no single date can express (a fraction, a year outside t
 | `Upper("field")` | Convert to uppercase | `"name_upper" => Upper("surname")` |
 | `Length("field")` | String length | `"name_len" => Length("surname")` |
 | `Concat(args...)` | Concatenate fields/values | `"full" => Concat("forename", Value(" "), "surname")` |
+| `Concat(vector)` | Same, operands in a vector | `"full" => Concat(["forename", "surname"])` |
 | `Trim("field")` | Trim leading/trailing whitespace | `"clean" => Trim("name")` |
 | `LTrim("field")` | Trim leading whitespace | `"clean" => LTrim("name")` |
 | `RTrim("field")` | Trim trailing whitespace | `"clean" => RTrim("name")` |
@@ -255,6 +256,21 @@ Output:
    3 │ Nico Rosberg       ROSBERG               7
    4 │ Fernando Alonso    ALONSO                6
    5 │ Heikki Kovalainen  KOVALAINEN           10
+```
+
+`Concat` takes its operands either variadically or as a single vector — the two spellings build the
+same expression and render the same SQL. Each example below starts from a fresh handle, because
+`values()` **replaces** the projection rather than adding to it:
+
+```julia
+# Vector form, equivalent to the variadic call above
+q = M.Driver.objects
+q.values("full_name" => Concat(["forename", Value(" "), "surname"]))
+
+# A vector of plain column names works too, which is what a parsed request usually gives you
+cols = split("cols=forename,surname", "=")[2]
+q2 = M.Driver.objects
+q2.values("full_name" => Concat(collect(split(cols, ","))))
 ```
 
 ---

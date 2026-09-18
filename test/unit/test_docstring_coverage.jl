@@ -25,10 +25,25 @@ using PormG
 const DOCCOV_REPO_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 const DOCCOV_OBJECT_MANAGER = joinpath(DOCCOV_REPO_ROOT, "src", "querybuilder", "object_manager.jl")
 const DOCCOV_API_MD = joinpath(DOCCOV_REPO_ROOT, "docs", "src", "api.md")
+# #612 scans whole trees rather than one file. `ext/` is in scope deliberately: the weakdep
+# extensions are source like any other and the architecture checkpoint lists them, but nothing in
+# this file had ever looked at them.
+const DOCCOV_SRC_DIR = joinpath(DOCCOV_REPO_ROOT, "src")
+const DOCCOV_EXT_DIR = joinpath(DOCCOV_REPO_ROOT, "ext")
 
 # `.md`/`.jl` are not pinned to LF in `.gitattributes`, so a Windows checkout yields CRLF (#216,
 # #228). Normalize before matching or every assertion below becomes platform-dependent.
 _doccov_read(path) = replace(read(path, String), "\r\n" => "\n")
+
+# Same enumerator shape as `test_memo_interface.jl` / `test_docs_error_type_drift.jl`: walk, keep
+# `.jl`, sort so failure output is stable. Tolerates a missing dir so the floors in the #612 scan
+# report it rather than the comprehension throwing.
+_doccov_files(dir) = isdir(dir) ? sort!([joinpath(root, f)
+                                         for (root, _, files) in walkdir(dir)
+                                         for f in files if endswith(f, ".jl")]) : String[]
+
+# Repo-relative, forward slashes, so a failure message is copy-pasteable on either platform.
+_doccov_rel(path) = replace(relpath(path, DOCCOV_REPO_ROOT), '\\' => '/')
 
 # Isolate the body of `Base.getproperty(q::ObjectHandler, …)` — shared by the two scans below.
 # The file holds a SECOND getproperty (on `Models.Model_Type`, for `.objects`) whose branches are
@@ -412,5 +427,132 @@ end
                     PormG.Migrations, PormG.Configuration, PormG.ConnectionPool, PormG.Utils)
             @test isempty([s for s in names(mod) if startswith(String(s), "_") && Base.ispublic(mod, s)])
         end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # No docstring is detached from its definition (#612)
+    #
+    # The mechanical form of a rule this repo had already written down twice in prose and enforced
+    # zero times: `src/Models.jl:937` carries it as a standing instruction ("keep this comment ABOVE
+    # the docstring"), and the `public` testset above records it as a near-miss on `set_models` in
+    # #295. `@doc` binds to the next EXPRESSION, so anything that stops the docstring and the
+    # definition being adjacent — a comment, OR A BLANK LINE — silently detaches it: the string is
+    # written, reviewed, committed, and documents nothing.
+    #
+    # Nothing above catches it, because every assertion above is keyed on the EXPORTED or `public`
+    # surface and the offenders are internal. Seven bindings carried it when this scan was written,
+    # all latent: `WindowPartitionPart`, `WindowOrderPart`, `_SQLITE_NAIVE_TS`, `_unknown_field`,
+    # `_projection_output_name`, `_inherited_statements`, `_execute_select`. `WindowOver` (#611) was
+    # the first EXPORTED name to hit it, which is the only reason a months-old trap surfaced at all
+    # — it turned this file red, then failed the docs build, unresolving five `@ref` links.
+    #
+    # Four of the seven were worse than detached: the stranded docstring documented a DIFFERENT
+    # function further down the file (`_parse_sqlite_timestamp`, `get_select_query`, `query_list`,
+    # `_solve_field`), so "delete the comment" would have bound the wrong text to the wrong binding.
+    # This scan reports position, not intent — it cannot tell those apart and does not try to.
+    #
+    # ## Why this asks the PARSER instead of matching text
+    #
+    # The first version of this scan matched source shapes: find a `"""` closer, then a comment run,
+    # then a definition-shaped line. It was calibrated to exactly the seven, and it was still wrong
+    # twice over. It missed every detachment spelled with a BLANK line rather than a comment (a
+    # measured `hasdoc = false`, identical defect), and its definition predicate could not see the
+    # shapes this repo most uses — `Base.@kwdef struct` (`types.jl:225/242/255/264`, `Models.jl`),
+    # `Base.:(==)` operator methods (`column_ir.jl:107/218/358`, `types.jl:1181`), `where {T}`
+    # signatures, `@inline`, `@enum`, and one-liners with a default argument (`f(x, y = 1) = …`,
+    # where the `=` defeats the argument-list pattern). It also needed two hand-tuned filters purely
+    # to reject `sql = """ … """` literals.
+    #
+    # Julia already knows all of this. An ATTACHED docstring parses into a `Core.@doc` macrocall
+    # carrying the definition; a DETACHED one is left standing as a bare `String` expression in the
+    # enclosing block, which is a no-op nobody writes on purpose. So the whole class is "a string
+    # literal standing alone in a statement position", the parser decides what a definition is, and
+    # a `sql = """…"""` literal is an assignment rather than a bare expression and never appears.
+    # No definition-shape list, no false-positive filters, no allowlist (the reason for that last
+    # one is stated at :299).
+    #
+    # One honest limit, stated because the first version of this comment overclaimed: the walk
+    # descends only into the CONTAINERS listed below, so a bare string inside a function body — an
+    # ordinary block value, never a docstring — is out of scope, and so is anything nested deeper
+    # than a container chain. That list is not a definition-shape list (the parser still decides
+    # what a definition is), but it is a list, and pretending otherwise is the same class of defect
+    # this guard exists to catch.
+    #
+    # Calibrated both ways: this reports exactly the seven against the pre-fix tree and none after.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "no docstring is detached from its definition (#612)" begin
+        # The CONTAINERS a top-level definition can sit inside. Not a list of definition shapes —
+        # the parser decides what a definition is — but a list of what the walk may descend into.
+        #
+        # Descending into anything else is what makes this wrong in the other direction, and it was
+        # measured: a SHORT-FORM definition (`_key_a(::CrossJoin)::String = ""`, `types.jl:285`) is
+        # `Expr(:(=), sig, Expr(:block, …))`, so a rule that excluded only function-like heads
+        # walked into every short-form body in the repo and reported 19 string literals as detached
+        # docstrings. `:(=)` is not a container, so it is not here, and those bodies are unreachable.
+        #
+        # `:if` / `:let` / `:try` / `:struct` / `:macrocall` are here because they were the gap in
+        # the first version of this scan: a docstring detached inside a top-level `if`, a `@static
+        # if`, or a per-field docstring inside a `struct` was missed entirely. That gap is reachable
+        # — `src/precompile.jl` and `ext/PormGSQLiteExt.jl` both wrap real definitions in a
+        # top-level `if ccall(:jl_generating_output, …)` guard.
+        #
+        # A function BODY is deliberately out of scope: `@doc` never binds there, and a measured
+        # sweep of this repo found 29 bare strings inside bodies (`"%Y"`, `"BEGIN;"`, `":memory:"`)
+        # that are all legitimate block values.
+        _DOCCOV_CONTAINERS = (:toplevel, :block, :module, :if, :elseif, :let, :try, :struct,
+                              :while, :for, :macrocall)
+        _DOCCOV_STATEMENT_POS = (:toplevel, :block, :module)
+
+        function _doccov_scan_detached!(offenders, node, path, line)
+            node isa Expr || return line
+            node.head in _DOCCOV_CONTAINERS || return line
+            for arg in node.args
+                if arg isa LineNumberNode
+                    line = arg.line
+                elseif arg isa String || (arg isa Expr && arg.head === :string)
+                    # A string standing as its own expression. An ATTACHED docstring is a
+                    # `Core.@doc` macrocall carrying the definition, so this is exactly the defect.
+                    # Guarded on statement position: the docstring of an ATTACHED pair is also a
+                    # bare `String` argument, but of the `:macrocall`, which is not a statement
+                    # container — so walking through `@doc` and `@static` costs no false positive.
+                    node.head in _DOCCOV_STATEMENT_POS &&
+                        push!(offenders, (_doccov_rel(path), line))
+                else
+                    line = _doccov_scan_detached!(offenders, arg, path, line)
+                end
+            end
+            return line
+        end
+
+        files = vcat(_doccov_files(DOCCOV_SRC_DIR), _doccov_files(DOCCOV_EXT_DIR))
+
+        # Floors: a broken enumerator must fail, not pass vacuously — every testset in this file
+        # carries a pair like this.
+        @test isdir(DOCCOV_SRC_DIR)
+        @test isdir(DOCCOV_EXT_DIR)
+        @test length(files) >= 30
+
+        offenders = Tuple{String, Int}[]
+        unparsed = String[]
+        for path in files
+            parsed = try
+                Meta.parseall(_doccov_read(path); filename = path)
+            catch
+                push!(unparsed, _doccov_rel(path))
+                nothing
+            end
+            parsed === nothing || _doccov_scan_detached!(offenders, parsed, path, 0)
+        end
+
+        # A file that will not parse would silently drop out of the scan, which is the same vacuous
+        # pass the floors above guard against — `src/` parses by definition, since PormG loads.
+        @test unparsed == String[]
+
+        # Name every offender: the fix is "move one of these two things", and which one depends on
+        # whether the docstring belongs to the binding below it.
+        if !isempty(offenders)
+            @info "Detached docstrings (#612): a string literal is standing alone, not bound to a definition" offenders
+        end
+        @test offenders == Tuple{String, Int}[]
     end
 end

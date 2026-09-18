@@ -2126,21 +2126,6 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
 end
 
 
-"""
-Fetches a list of records from the database for the given `SQLObjectHandler`.
-
-# Returns
-- The result of the database query as returned by `fetch`.
-
-# Example
-```julia
-query = M.Result |> object
-query.filter("raceid__year" => 2020)
-query.values("driverid__forename", "constructorid__name", "laps" => Count("laps"))
-query.order_by("-laps")
-df = query |> DataFrame
-```
-"""
 # #564 — the shared body of `query_list`, returning the BUILT handler alongside the result.
 #
 # `query()` writes its per-build artifacts — `parameters`, and now `projection_kinds` — onto the copy
@@ -2148,6 +2133,10 @@ df = query |> DataFrame
 # the kind map to `_list_raw`, which holds the ORIGINAL handler: the map went out of scope the
 # moment the result came back. Splitting the body is what closes that, and it changes nothing about
 # `query_list` itself, whose signature and behaviour are untouched.
+#
+# #612: the docstring that used to sit above this comment belongs to `query_list`, not to
+# this helper — its example ends `query |> DataFrame`. The split left it stranded here, so
+# BOTH functions were undocumented: this one by accident, `query_list` by omission.
 function _execute_select(objct::SQLObjectHandler)
   # Resolve settings
   settings, connection, conn_key = get_settings(objct)
@@ -2163,6 +2152,21 @@ function _execute_select(objct::SQLObjectHandler)
   return fetch(settings, sql, q.object.parameters), q, connection
 end
 
+"""
+Fetches a list of records from the database for the given `SQLObjectHandler`.
+
+# Returns
+- The result of the database query as returned by `fetch`.
+
+# Example
+```julia
+query = M.Result |> object
+query.filter("raceid__year" => 2020)
+query.values("driverid__forename", "constructorid__name", "laps" => Count("laps"))
+query.order_by("-laps")
+df = query |> DataFrame
+```
+"""
 function query_list(objct::SQLObjectHandler; show_query::Symbol = :execute)
   if show_query !== :execute
     settings, connection, conn_key = get_settings(objct)

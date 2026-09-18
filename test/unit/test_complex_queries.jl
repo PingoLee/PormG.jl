@@ -562,6 +562,69 @@ ResultNoPrefixModel._module = Main
     # Both forms must generate the same SQL
     @test res_var[:sql_text] == res_vec[:sql_text]
     @test res_var[:parameters] == res_vec[:parameters]
+
+    # #612 — an all-strings operand list, with no `Value` separator in it.
+    #
+    # Three spellings were broken, and the boundary is NOT vector-vs-variadic. `collect` of a
+    # homogeneous tuple is a `Vector{String}` just as a string vector literal is, so
+    # `Concat("forename", "surname")` failed identically to `Concat(["forename", "surname"])`.
+    # Both dispatched to `_check_function(::Vector{String})` — the arm that reads a whole vector as
+    # ONE already-split `__@` path — and answered `FilterError: "forename__@surname" is invalid`,
+    # naming a path the caller never wrote. `Vector{SubString{String}}` out of `split` reached the
+    # same arm by a second route, via the `Vector{<:AbstractString}` forward.
+    #
+    # What escaped was a HETEROGENEOUS list: the two cases above both carry `Value(" ")`, which
+    # makes the collected vector `Vector{Any}` and routes it to the per-element arm.
+    #
+    # So the three rows below CANNOT be checked against each other — all three were broken before
+    # this fix, and three identically-wrong renders would agree. Each is pinned ABSOLUTELY, and the
+    # `Value`-bearing spelling above (which worked before AND after, so it is the only genuinely
+    # independent reference available) is used to show what a separator actually changes.
+    hom = Dict{String, Tuple{String, Vector{Any}}}()
+    for (label, build) in (
+            ("vector",   () -> Concat(["forename", "surname"])),
+            ("variadic", () -> Concat("forename", "surname")),
+            ("split",    () -> Concat(collect(split("forename,surname", ",")))),
+        )
+        q = DriverModel.objects
+        q.values("full_name" => build())
+        r = q.list(show_query=:dict)
+        hom[label] = (r[:sql_text], collect(Any, r[:parameters]))
+    end
+
+    for (label, (sql, params)) in hom
+        @test contains(sql, "forename")
+        @test contains(sql, "surname")
+        # Unconditional `CONCAT`, matching the two rows above against this same mock PostgreSQL
+        # connection. A `contains(sql, "CONCAT") || contains(sql, "||")` disjunction here would
+        # silently admit a SQLite-shaped render from a PostgreSQL connection — i.e. it would stop
+        # catching a dialect-routing regression that the neighbouring rows still catch.
+        @test contains(sql, "CONCAT")
+        # No stray `__@` path: this is the actual defect's signature, since the bug rendered the
+        # operand list as one already-split path rather than as operands.
+        @test !contains(sql, "__@")
+        # Nothing to bind — there is no literal in an all-columns operand list. Asserted rather
+        # than described: it is half of what distinguishes this render from the separator one below.
+        @test isempty(params)
+    end
+    # …and only then that the three agree.
+    @test length(Set(first.(values(hom)))) == 1
+
+    # The independent reference. `res_var` is the `Value(" ")` spelling, which rendered correctly
+    # before this fix and still does, so it is not part of what #612 changed. Adding the separator
+    # must change the render in exactly one way — it gains one bound literal — and that is the
+    # comparison that makes the rows above meaningful rather than self-referential.
+    hom_sql, hom_params = hom["vector"]
+    @test isempty(hom_params)
+    @test length(res_var[:parameters]) == 1
+    @test res_var[:parameters][1] == " "
+    @test res_var[:sql_text] != hom_sql
+    # Same operands, same order, in both — the separator adds to the render, it does not reshape it.
+    @test contains(res_var[:sql_text], "forename") && contains(res_var[:sql_text], "surname")
+
+    # The container is what changed; the #603 element normalization is untouched.
+    @test Concat(["forename", "surname"]).column isa Vector{Any}
+    @test all(e -> e isa String, Concat(collect(split("forename,surname", ","))).column)
   end
 
   # ===== Section: Case/When expression as filter RHS =====

@@ -1,15 +1,3 @@
-"""
-  get_select_query(object::SQLObject, instruc::SQLInstruction)
-
-  Iterates over the values of the object and generates the SELECT query for the given SQLInstruction object.
-
-  #### ALERT
-  - This internal function is called by the `build` function.
-
-  #### Arguments
-  - `object::SQLObject`: The object containing the values to be selected.
-  - `instruc::SQLInstruction`: The SQLInstruction object to which the SELECT query will be added.
-"""
 # #441: the name a projection is RENDERED under. `custom_as` holds it for an aliased field path
 # (`"s" => "parent__sku"`); `_as` holds it for everything else. Same expression `_query_select` and
 # `get_order_query` use to decide a slot's alias, so the three agree by construction.
@@ -55,6 +43,18 @@ function _record_wildcard_projection_kinds!(instruc::SQLInstruction)
   return nothing
 end
 
+"""
+  get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instruc::SQLInstruction)
+
+  Iterates over the values of the object and generates the SELECT query for the given SQLInstruction object.
+
+  #### ALERT
+  - This internal function is called by the `build` function.
+
+  #### Arguments
+  - `object::SQLObject`: The object containing the values to be selected.
+  - `instruc::SQLInstruction`: The SQLInstruction object to which the SELECT query will be added.
+"""
 function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instruc::SQLInstruction)
   for i in eachindex(values) # linear indexing
     v_copy = deepcopy(values[i])

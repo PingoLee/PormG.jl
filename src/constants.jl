@@ -70,7 +70,12 @@ const PormGsuffix = Dict{String,Union{Int64, String}}(
   "iunaccent_contains" => "iunaccent_contains",
   "iunaccent_exact" => "iunaccent_exact",
   "startswith" => "startswith",
+  # #604: the case-insensitive prefix/suffix twins. Their `Dialect` renderers shipped complete with
+  # #78 (PG `ILIKE`, SQLite `pormg_lower(col) LIKE pormg_lower(val)`) and were unreachable for want
+  # of this key alone — `filter("surname__@istartswith" => "ham")` raised FilterError.
+  "istartswith" => "istartswith",
   "endswith" => "endswith",
+  "iendswith" => "iendswith",
   "range" => "BETWEEN",
   # #207: negated twins of the pattern/range lookups above. Each LIKE-family value is the operator
   # name itself — it doubles as the `Dialect.<name>` dispatch symbol in _get_filter_query(::SQLTypeOper)
@@ -81,7 +86,9 @@ const PormGsuffix = Dict{String,Union{Int64, String}}(
   "niunaccent_contains" => "niunaccent_contains",
   "niunaccent_exact" => "niunaccent_exact",
   "nstartswith" => "nstartswith",
+  "nistartswith" => "nistartswith",   # #604
   "nendswith" => "nendswith",
+  "niendswith" => "niendswith",       # #604
   "nrange" => "NOT BETWEEN",
   # #27: PostgreSQL JSONB containment/overlap operators. Each maps to a Dialect renderer of the
   # same name (PG emits the operator; SQLite/abstract throw a friendly PG-only error). Distinct
@@ -95,6 +102,42 @@ const PormGsuffix = Dict{String,Union{Int64, String}}(
 # #27: the JSON containment/overlap operators, routed to a dedicated render branch in
 # _get_filter_query(::SQLTypeOper) and gated PostgreSQL-only.
 const JSON_CONTAINMENT_OPERATORS = ("jcontains", "has_key", "has_any_keys", "has_keys")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# The LIKE-family pattern lookups (#604)
+#
+# Grouped by the wildcard shape `_apply_like_wildcards` (`querybuilder/parameters.jl`) gives the
+# bound value, because that shape IS the distinction between them. One list in total, because this
+# family used to be restated as a literal at six consumption sites and `istartswith`/`iendswith`
+# reached none of them: they had complete Dialect renderers and were unreachable. Every name here
+# is also a `PormGsuffix` key whose value is the name itself, which doubles as the
+# `Dialect.<name>` dispatch symbol.
+#
+# `test/unit/test_operators.jl` holds that correspondence to three sources, not two: these tuples,
+# `PormGsuffix`, and `Dialect` itself read back by reflection. The third is the one that matters —
+# a comparison between this file and `PormGsuffix` is two halves of the same declaration and cannot
+# see a renderer that only `Dialect` knows about, which is exactly what `istartswith` was.
+# ──────────────────────────────────────────────────────────────────────────────
+const LIKE_CONTAINS_OPERATORS = ("contains", "icontains", "iunaccent_contains",
+                                 "ncontains", "nicontains", "niunaccent_contains")
+const LIKE_PREFIX_OPERATORS   = ("startswith", "istartswith", "nstartswith", "nistartswith")
+const LIKE_SUFFIX_OPERATORS   = ("endswith", "iendswith", "nendswith", "niendswith")
+
+# Everything that takes `%` decoration (and, with it, `escape_like_pattern`). Deliberately NOT the
+# same set as PATTERN_LOOKUP_OPERATORS below: `iunaccent_exact` / `niunaccent_exact` render through
+# Dialect but compare with `=` / `<>`, so a wildcard on their value would be wrong.
+#
+# Defined as the union rather than spelled out, so the gate and the shapes cannot drift apart: the
+# builder gates the wildcard call on membership HERE, `_apply_like_wildcards` picks the shape from
+# the three sets above, and the only way to add a wildcard operator is to put it in one of them.
+# `test/unit/test_operators.jl` pins the rest: the difference between this tuple and
+# PATTERN_LOOKUP_OPERATORS is exactly the two `*_exact` names.
+const LIKE_WILDCARD_OPERATORS = (LIKE_CONTAINS_OPERATORS..., LIKE_PREFIX_OPERATORS...,
+                                 LIKE_SUFFIX_OPERATORS...)
+
+# Every operator whose SQL comes from `getfield(Dialect, Symbol(op))` in the pattern branch of
+# `_get_filter_query(::SQLTypeOper, …)`.
+const PATTERN_LOOKUP_OPERATORS = (LIKE_WILDCARD_OPERATORS..., "iunaccent_exact", "niunaccent_exact")
 
 const PormGtransform = Dict{String,Union{Int64, String}}(
   "date" => "DATE",

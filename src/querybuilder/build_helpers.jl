@@ -122,8 +122,11 @@ function _check_function(x::Vector{String})
       resp = getfield(@__MODULE__, Symbol(PormGtransform[x[end]]))(x[1:end-1])
       return _check_function(resp)
     else
-      joined_keys_with_prefix_func = join(map(key -> " \e[32m@" * key, keys(PormGtransform) |> collect), ", ")
-      joined_keys_with_prefix_oper = join(map(key -> " \e[33m@" * key, keys(PormGsuffix) |> collect), ", ")
+      # Sorted, as `_raise_invalid_filter_operator` already sorts its own copy of this list (#604):
+      # `keys(Dict)` order is a hash artifact, so adding one operator silently reshuffled the whole
+      # message. An error a user reads should not reorder between releases.
+      joined_keys_with_prefix_func = join(map(key -> " \e[32m@" * key, sort!(collect(keys(PormGtransform)))), ", ")
+      joined_keys_with_prefix_oper = join(map(key -> " \e[33m@" * key, sort!(collect(keys(PormGsuffix)))), ", ")
       if haskey(PormGsuffix, x[end])
         yes = "you can use \"column__@\e[32m$(x[end])\e[0m\""
         not = "you can not use \"column__\e[31m@$(x[end])__@function\e[0m\". valid functions are:\n$(joined_keys_with_prefix_func)\e[0m\nvalid operators are:\n$(joined_keys_with_prefix_oper)\e[0m"
@@ -674,11 +677,20 @@ function _insert_join(
 end
 
 function _check_if_field_is_a_operator(field::String)
-  common_operators = ["exact", "iexact", "contains", "icontains", "iunaccent_contains", "iunaccent_exact", "in", "gt", "gte", "lt", "lte",
-    "startswith", "istartswith", "endswith", "iendswith", "range", "date",
-    "ncontains", "nicontains", "niunaccent_contains", "niunaccent_exact", "nstartswith", "nendswith", "nrange",  # #207
+  # The pattern family comes from the shared constant (#604) rather than a literal copy — this list
+  # named `istartswith`/`iendswith` while `PormGsuffix` did not, so it told the user to add the `@`
+  # and the `@` spelling then raised a FilterError of its own. The rest stays literal on purpose:
+  # this is the "you forgot the `@`" hint, not the lookup registry, so it also spans transforms.
+  #
+  # It additionally names 11 Django lookups PormG implements nowhere — exact, iexact, iso_year, week,
+  # week_day, iso_week_day, hour, minute, second, regex, iregex: keys of neither PormGsuffix nor
+  # PormGtransform. For those the hint is actively wrong, since it instructs a spelling that then
+  # fails — #604's own dead end, surviving 11 more times. Left as-is deliberately: each needs its own
+  # wire-or-drop decision and a follow-up issue, not a silent prune while fixing something else.
+  common_operators = [PATTERN_LOOKUP_OPERATORS...,
+    "exact", "iexact", "in", "gt", "gte", "lt", "lte", "range", "nrange", "date", "isnull",
     "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",
-    "hour", "minute", "second", "isnull", "regex", "iregex"]
+    "hour", "minute", "second", "regex", "iregex"]
   if field in common_operators
     throw(FilterError("The filter operator '\e[31m$field\e[0m' requires '@' prefix. Use '\e[32m$field\e[0m' => ... as part of '__\e[33m@$field\e[0m' syntax. Example: \e[36mq.filter(\"name__@$field\" => value)\e[0m"))
   end
@@ -2068,9 +2080,9 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     elseif haskey(instruc.object.model.fields, v.column.field)
       placeholders = nothing
       try
-        # Determine if this is a LIKE-based operator and which wildcard pattern to use
-        is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith",
-                                    "ncontains", "nicontains", "niunaccent_contains", "nstartswith", "nendswith"]
+        # Does this operator take `%` decoration? `add_parameter!` then routes the value through
+        # `_apply_like_wildcards`, which picks the shape from the same constants (#604).
+        is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
         placeholders = add_parameter!(instruc,
           _format_filter_value(instruc.object.model.fields[v.column.field].formatter, v.values, v.operator),
           contains=is_like_op, operator=v.operator)
@@ -2096,15 +2108,13 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       end
     elseif (_vc_field = memo_field(instruc, memo_key(v.column))) !== nothing # #474
       @pormg_debug false
-      is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith",
-                                  "ncontains", "nicontains", "niunaccent_contains", "nstartswith", "nendswith"]
+      is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
       placeholders = add_parameter!(instruc,
         _format_filter_value(_vc_field.formatter, v.values, v.operator),
         contains=is_like_op, operator=v.operator)
     elseif isa(v.column, SQLTypeField)
       @pormg_debug false
-      is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith",
-                                  "ncontains", "nicontains", "niunaccent_contains", "nstartswith", "nendswith"]
+      is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
       placeholders = add_parameter!(instruc, v.values, contains=is_like_op, operator=v.operator)
     else
       @pormg_debug false
@@ -2116,8 +2126,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     return string(column, " ", v.operator, " ", placeholders)
   elseif v.operator in ["IN", "NOT IN"]
     return _render_membership(column, v.operator, placeholders, instruc)
-  elseif v.operator in ["contains", "icontains", "iunaccent_contains", "iunaccent_exact", "startswith", "endswith",
-                        "ncontains", "nicontains", "niunaccent_contains", "niunaccent_exact", "nstartswith", "nendswith"]
+  elseif v.operator in PATTERN_LOOKUP_OPERATORS
     @pormg_debug false
     return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, placeholders)
   else

@@ -1989,6 +1989,18 @@ function nstartswith(conn::PormGAbstractType, column::AbstractString, value)
   return nothing
 end
 
+function nistartswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "$(column) NOT ILIKE $(value)$(_like_escape_clause())"
+end
+function nistartswith(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+  # pormg_lower = Unicode-aware LOWER UDF (#78); NOT LIKE over folded text mirrors istartswith.
+  return "pormg_lower($(column)) NOT LIKE pormg_lower($(value))$(_like_escape_clause())"
+end
+function nistartswith(conn::PormGAbstractType, column::AbstractString, value)
+  throw(InvalidValueError("The value must be a String"))
+  return nothing
+end
+
 function nendswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
@@ -1996,6 +2008,18 @@ function nendswith(conn::PormGSQLite, column::AbstractString, value::AbstractStr
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
 function nendswith(conn::PormGAbstractType, column::AbstractString, value)
+  throw(InvalidValueError("The value must be a String"))
+  return nothing
+end
+
+function niendswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "$(column) NOT ILIKE $(value)$(_like_escape_clause())"
+end
+function niendswith(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+  # pormg_lower = Unicode-aware LOWER UDF (#78); NOT LIKE over folded text mirrors iendswith.
+  return "pormg_lower($(column)) NOT LIKE pormg_lower($(value))$(_like_escape_clause())"
+end
+function niendswith(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end

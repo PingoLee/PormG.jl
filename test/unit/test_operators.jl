@@ -209,6 +209,23 @@ const _E = _OperTestEvent
     @test contains(r_ew[:sql_text], "LIKE") || contains(r_ew[:sql_text], "ILIKE")
     @test contains(r_ew[:sql_text], "ESCAPE")
     @test r_ew[:parameters] == ["%wis"]
+
+    # istartswith → ILIKE 'val%' (#604). The renderers shipped with #78; only the wiring was
+    # missing, so before that fix this filter raised FilterError instead of building a query.
+    # The wildcard must be on ONE side only — the bug's silent form was an undecorated value,
+    # i.e. an accidental iexact.
+    q_isw = _D.objects.filter("nationality__@istartswith" => "brit")
+    r_isw = q_isw.list(show_query=:dict)
+    @test contains(r_isw[:sql_text], "ILIKE") || contains(r_isw[:sql_text], "pormg_lower")
+    @test contains(r_isw[:sql_text], "ESCAPE")
+    @test r_isw[:parameters] == ["brit%"]
+
+    # iendswith → ILIKE '%val' (#604)
+    q_iew = _D.objects.filter("forename__@iendswith" => "WIS")
+    r_iew = q_iew.list(show_query=:dict)
+    @test contains(r_iew[:sql_text], "ILIKE") || contains(r_iew[:sql_text], "pormg_lower")
+    @test contains(r_iew[:sql_text], "ESCAPE")
+    @test r_iew[:parameters] == ["%WIS"]
   end
 
   # =========================================================================
@@ -247,6 +264,22 @@ const _E = _OperTestEvent
     @test contains(r_new[:sql_text], "NOT LIKE")
     @test contains(r_new[:sql_text], "ESCAPE")
     @test r_new[:parameters] == ["%wis"]
+
+    # nistartswith → NOT ILIKE 'val%' (#604). New in Dialect, added so the #207 negated set stays
+    # complete once istartswith/iendswith became reachable — the docs state the "every pattern
+    # lookup has a negated twin" rule universally.
+    q_nisw = _D.objects.filter("nationality__@nistartswith" => "brit")
+    r_nisw = q_nisw.list(show_query=:dict)
+    @test contains(r_nisw[:sql_text], "NOT ILIKE") || contains(r_nisw[:sql_text], "NOT LIKE")
+    @test contains(r_nisw[:sql_text], "ESCAPE")
+    @test r_nisw[:parameters] == ["brit%"]
+
+    # niendswith → NOT ILIKE '%val' (#604)
+    q_niew = _D.objects.filter("forename__@niendswith" => "WIS")
+    r_niew = q_niew.list(show_query=:dict)
+    @test contains(r_niew[:sql_text], "NOT ILIKE") || contains(r_niew[:sql_text], "NOT LIKE")
+    @test contains(r_niew[:sql_text], "ESCAPE")
+    @test r_niew[:parameters] == ["%WIS"]
   end
 
   # =========================================================================
@@ -578,6 +611,159 @@ const _E = _OperTestEvent
   end
 
 end  # end "PormGsuffix — Operator SQL Generation"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pattern-lookup registry completeness: no operator may be half-wired (#604)
+#
+# This file's header claims it verifies "every operator alias defined in PormGsuffix". It did not:
+# `istartswith` and `iendswith` had complete Dialect renderers (three arms each, shipped with #78)
+# and were absent from PormGsuffix, from `_apply_like_wildcards` and from every operator list in
+# build_helpers.jl — so they were unreachable and `filter("x__@istartswith" => v)` raised
+# FilterError. Six sites restated the family as a literal; nothing checked that they agreed.
+#
+# These assertions close that by measuring the correspondence instead of restating a list, so the
+# next lookup added to one place and not the others fails here rather than becoming a dead
+# definition. Each one is red against the unpatched code: the set equality drops the two missing
+# PormGsuffix keys, and the wildcard loop gets an undecorated value back.
+#
+# Deliberately NOT routed through a projection alias: the HAVING/alias path renders the operator
+# name as a bare SQL token for the whole LIKE family (pre-existing, unrelated to #604), so an alias
+# here would fail for the wrong reason.
+# ─────────────────────────────────────────────────────────────────────────────
+# The missing-`@` hint is reached from the field-path walk, which requires the model to carry a
+# `_module`: a bare `Model(...)` has `_module === nothing` and dies in join resolution first
+# (`foreing_table_module::Module = …model._module::Module`) before the hint can fire. That is an
+# artifact of the shared `_OperTest*` fixtures, not of the code under test. So this check gets its
+# own model rather than mutating `_D`, which `test_complex_queries.jl` shares. `Main` is a fine
+# `_module` here — it is only consulted to resolve a foreign key, and this path has none.
+if !isdefined(Main, :_OperHintDriver)
+  _OperHintDriver = Model("drivers",
+    id       = IDField(),
+    forename = CharField(),
+    surname  = CharField()
+  )
+  _OperHintDriver.connect_key = "default"
+  _OperHintDriver._module = Main
+end
+
+@testset "Pattern-lookup registry is internally consistent (#604)" begin
+
+  # A PormGsuffix entry whose value equals its key IS the `Dialect.<name>` dispatch symbol — that is
+  # the documented convention in constants.jl. Every such entry is therefore either a pattern lookup
+  # or a JSON containment operator, and nothing else. This is the bidirectional check: it catches a
+  # suffix with no renderer AND a renderer reachable from no suffix.
+  @testset "PormGsuffix self-mapping keys == pattern ∪ JSON operators" begin
+    self_mapping = Set(k for (k, v) in PormG.PormGsuffix if v == k)
+    declared = union(Set(PormG.PATTERN_LOOKUP_OPERATORS), Set(PormG.JSON_CONTAINMENT_OPERATORS))
+    # Report the asymmetry explicitly — a bare set comparison prints two 16-element sets and makes
+    # the reader diff them by eye.
+    @test setdiff(self_mapping, declared) == Set{String}()   # suffix with no declared renderer
+    @test setdiff(declared, self_mapping) == Set{String}()   # renderer reachable from no suffix
+    @test self_mapping == declared
+  end
+
+  # The direction the two sets above CANNOT cover, and the one #604 actually needed: both sides of
+  # that comparison are written in constants.jl, so a renderer that exists only in Dialect — named by
+  # no constant and no suffix — is invisible to it. That is precisely what `istartswith` was. Reading
+  # the renderers back out of Dialect closes it: a three-arm text-lookup renderer that nothing
+  # declares now fails HERE, at the moment it is written, instead of shipping dead.
+  #
+  # The probe is the shared signature of the family: `(PormGPostgres, AbstractString, AbstractString)`.
+  # It is discriminating rather than accidentally clean — Dialect has eight other three-argument
+  # functions taking a PG connection (`create_table`, `drop_field`, `rename_table`, …) and this
+  # signature excludes every one, because they are typed `::String` while the lookups widened to
+  # `::AbstractString` in #603. That is also the one way to get a false positive: a future widening
+  # pass that retypes a DDL helper to `AbstractString` turns this red on a non-lookup. It fails
+  # CLOSED, which is the right direction — go look, then add the name to the skip or fix the cause.
+  @testset "Every text-lookup renderer in Dialect is declared by a constant" begin
+    sig = Tuple{PormG.PormGPostgres, AbstractString, AbstractString}
+    reflected = Set{String}()
+    for n in names(PormG.Dialect, all = true)
+      startswith(String(n), "#") && continue          # gensyms from closures/macros
+      isdefined(PormG.Dialect, n) || continue
+      f = getfield(PormG.Dialect, n)
+      f isa Function || continue
+      hasmethod(f, sig) && push!(reflected, String(n))
+    end
+    declared = union(Set(PormG.PATTERN_LOOKUP_OPERATORS), Set(PormG.JSON_CONTAINMENT_OPERATORS))
+    # A renderer nothing declares — the #604 shape, and the half no constants-only check can see.
+    @test setdiff(reflected, declared) == Set{String}()
+    # A declared name whose renderer does not exist — a typo in a constant.
+    @test setdiff(declared, reflected) == Set{String}()
+  end
+
+  # Every operator the render branch dispatches to must actually have a method for all three
+  # connection arms, or `getfield(Dialect, Symbol(op))(conn, col, ph)` is a MethodError at query time.
+  @testset "Every PATTERN_LOOKUP_OPERATORS name has all three Dialect arms" begin
+    for op in PormG.PATTERN_LOOKUP_OPERATORS
+      @test isdefined(PormG.Dialect, Symbol(op))
+      f = getfield(PormG.Dialect, Symbol(op))
+      @test hasmethod(f, Tuple{PormG.PormGPostgres, AbstractString, AbstractString})
+      @test hasmethod(f, Tuple{PormG.PormGSQLite, AbstractString, AbstractString})
+      @test hasmethod(f, Tuple{PormG.PormGAbstractType, AbstractString, Any})
+    end
+  end
+
+  # The wildcard shape, measured end-to-end through the public filter surface for every member of
+  # each shape group. The probe value carries a literal `%`, so this also pins that the value is run
+  # through escape_like_pattern — an undecorated operator skips escaping as well as wildcarding,
+  # which would let user input act as a wildcard.
+  @testset "Each shape group decorates and escapes its value" begin
+    for (group, decorate) in ((PormG.LIKE_CONTAINS_OPERATORS, v -> "%$(v)%"),
+                              (PormG.LIKE_PREFIX_OPERATORS,   v -> "$(v)%"),
+                              (PormG.LIKE_SUFFIX_OPERATORS,   v -> "%$(v)"))
+      for op in group
+        r = _D.objects.filter("forename__@$(op)" => "a%b").list(show_query=:dict)
+        # `a%b` escapes to `a\%b`; the decoration then wraps THAT, never the raw value.
+        @test r[:parameters] == [decorate("a\\%b")]
+        @test contains(r[:sql_text], "ESCAPE")
+        # A negated operator must render the NOT form. "NOT ILIKE" contains "ILIKE", so asserting
+        # the positive token alone would pass on either — assert the "NOT " prefix explicitly.
+        if startswith(op, "n")
+          @test contains(r[:sql_text], "NOT LIKE") || contains(r[:sql_text], "NOT ILIKE")
+        else
+          @test !contains(r[:sql_text], "NOT LIKE") && !contains(r[:sql_text], "NOT ILIKE")
+        end
+      end
+    end
+  end
+
+  # The two *_exact lookups are in the render list but NOT in the wildcard list, and that asymmetry
+  # is load-bearing: they compare with = / <>, so decorating or escaping their value would change
+  # what they match. Pin the gap so a future "simplification" cannot collapse the two lists.
+  @testset "The *_exact lookups render but take no wildcards" begin
+    exact_only = setdiff(Set(PormG.PATTERN_LOOKUP_OPERATORS), Set(PormG.LIKE_WILDCARD_OPERATORS))
+    @test exact_only == Set(["iunaccent_exact", "niunaccent_exact"])
+    for op in exact_only
+      r = _D.objects.filter("forename__@$(op)" => "a%b").list(show_query=:dict)
+      @test r[:parameters] == ["a%b"]              # verbatim: no escape, no wildcard
+      @test !contains(r[:sql_text], "ESCAPE")
+    end
+  end
+
+  # The "you forgot the @" hint must not name a spelling that then fails. That exact two-step dead
+  # end was #604's user-visible face: the hint listed `istartswith`, and `@istartswith` was not a
+  # lookup. Checking the hint list against PormGsuffix wholesale would fail on the ~11 Django
+  # lookups PormG does not implement, so this asserts only the property that broke.
+  @testset "The missing-@ hint names only reachable pattern lookups" begin
+    for op in PormG.PATTERN_LOOKUP_OPERATORS
+      # `filter()` is lazy — the field path is only resolved at build time, so the terminal call is
+      # what raises. Silence the @error log _check_filter emits on the way out.
+      e = try
+        Logging.with_logger(Logging.NullLogger()) do
+          _OperHintDriver.objects.filter("forename__$(op)" => "x").list(show_query=:dict)
+        end
+        nothing
+      catch err
+        err
+      end
+      @test e isa PormG.FilterError
+      @test occursin("requires '@' prefix", PormG.error_message(e))
+      # …and the spelling it recommends builds a query rather than raising.
+      @test haskey(PormG.PormGsuffix, op)
+    end
+  end
+end
 
 # =============================================================================
 # F-expression date arithmetic with explicit Julia duration types (#25).

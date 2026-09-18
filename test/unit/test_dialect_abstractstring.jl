@@ -77,9 +77,9 @@ struct _MockSl602 <: PormG.PormGSQLite end
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Dialect text-lookup family: direct dispatch on every renderer
-  # Each of the 18 operators has a PostgreSQL arm, a SQLite arm and an untyped generic sibling. On
+  # Each of the 20 operators has a PostgreSQL arm, a SQLite arm and an untyped generic sibling. On
   # PostgreSQL every operator EMITS; on SQLite the four JSONB and the four unaccent operators throw
-  # `BackendCapabilityError` and the other ten emit. The assertion is exact on both counts: the
+  # `BackendCapabilityError` and the other twelve emit. The assertion is exact on both counts: the
   # `SubString`/`LazyString` spelling must produce the SAME text, or the SAME exception type, as
   # the `String` spelling — never the generic sibling's wrong-reason refusal.
   # Mutation gate: re-narrow any specialised arm to `::String` and its `SubString` row on
@@ -91,11 +91,13 @@ struct _MockSl602 <: PormG.PormGSQLite end
            :contains, :icontains, :iunaccent_contains, :iunaccent_exact,
            :startswith, :istartswith, :endswith, :iendswith,
            :ncontains, :nicontains, :niunaccent_contains, :niunaccent_exact,
-           :nstartswith, :nendswith]
+           # #604 added the negated case-insensitive prefix/suffix twins. They are NOT PG-only: like
+           # `nicontains`, they emit on SQLite through the pormg_lower UDF (#78).
+           :nstartswith, :nistartswith, :nendswith, :niendswith]
     json_ops = Set([:jcontains, :has_key, :has_any_keys, :has_keys])
     sqlite_pg_only = union(json_ops, Set([:iunaccent_contains, :iunaccent_exact,
                                           :niunaccent_contains, :niunaccent_exact]))
-    @test length(ops) == 18
+    @test length(ops) == 20
 
     col = "\"drivers\".\"surname\""
     for op in ops

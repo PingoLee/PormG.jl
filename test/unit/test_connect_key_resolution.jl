@@ -505,3 +505,108 @@ end
     rm(root; recursive = true, force = true)
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `Configuration.load` refuses a key a dynamic connection already holds (#620)
+# The mirror of `register_connection`'s "Cannot overwrite static connection". A dynamic entry is
+# not a folder, but `_resolve_loaded_key` short-circuits on an exact `haskey` hit BEFORE the loop
+# that skips the `dynamic_connection` sentinel — so `existing == path`, neither the migrate nor
+# the reuse branch runs (both require `existing != path`), and `load` fell straight through to
+# `close_pool!` + `config[key] = Settings(...)`. A tenant pool was replaced by a folder-backed
+# entry and closed, with nothing said beyond the pool-close log line.
+#
+# The guard is keyed on `path` at the TOP of `load`, ahead of the missing-folder refusal, because
+# the common multi-tenant key names no folder at all — see the "no folder" case below, where the
+# old answer told the user to create one.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "load refuses to take over a dynamic connection's key (#620)" begin
+  saved = copy(PormG.config)
+  root = mktempdir()
+  _yml(p) = write(p, "default_env: test\ntest:\n  adapter: SQLite\n  database: \":memory:\"\n" *
+                     "  config:\n    change_db: true\n    change_data: true\n")
+  try
+    empty!(PormG.config)
+    app = joinpath(root, "app")
+    mkpath(app)
+    cd(app) do
+      # Registered while no `db` folder exists. `register_connection`'s own `isdir(key)` guard
+      # reads the working directory at REGISTRATION time, which is exactly why it cannot cover
+      # this: the folder appears afterwards, or a later `cd` lands somewhere it already exists.
+      Configuration.register_connection("db", "file::memory:?cache=shared"; adapter = "SQLite")
+      @test PormG.config["db"].db_def_folder == "dynamic_connection"
+      pool_before = PormG.config["db"].connections
+
+      mkpath("db")
+      _yml(joinpath("db", "connection.yml"))
+
+      err = try
+        Configuration.load("db"; env = "test")
+        nothing
+      catch e
+        e
+      end
+      @test err isa PormG.InvalidConfigurationError
+      # The message is the whole user-facing deliverable here, so pin that it names the cause
+      # and the escape rather than merely asserting the type.
+      @test occursin("dynamic connection", err.msg)
+      @test occursin("unregister_connection(\"db\")", err.msg)
+
+      # The refusal is only half the claim: the entry it refused to overwrite must be untouched.
+      # Pre-fix this is where the defect showed — `db_def_folder` became "db" and `connections`
+      # was a different pool object, the original having been closed.
+      @test PormG.config["db"].db_def_folder == "dynamic_connection"
+      @test PormG.config["db"].connections === pool_before
+
+      # The escape the message names actually works, and the folder then loads normally.
+      Configuration.unregister_connection("db")
+      @test Configuration.load("db"; env = "test") == "db"
+      @test PormG.config["db"].db_def_folder == "db"
+
+      # The guard must not widen into "load never replaces anything": a STATIC entry under the
+      # same key still reloads in place, as it always has.
+      @test Configuration.load("db"; env = "test") == "db"
+      @test PormG.config["db"].db_def_folder == "db"
+    end
+
+    # The shape that motivated putting the guard ahead of the missing-folder refusal: a dynamic
+    # key that names NO folder. The old answer was a MissingConfigurationError telling the user
+    # to create a folder of that name — advice which manufactures the collision above.
+    empty!(PormG.config)
+    cd(app) do
+      Configuration.register_connection("tenant7", "file::memory:?cache=shared"; adapter = "SQLite")
+      err = try
+        Configuration.load("tenant7"; env = "test")
+        nothing
+      catch e
+        e
+      end
+      @test err isa PormG.InvalidConfigurationError
+      @test !(err isa Configuration.MissingConfigurationError)
+      @test PormG.config["tenant7"].db_def_folder == "dynamic_connection"
+    end
+
+    # The NEGATIVE half, and the assertion that pins the design: the guard covers the EXACT key
+    # only. The rejected alternative fix — making `_resolve_loaded_key`'s `haskey` shortcut skip
+    # the sentinel — was refused because `is_loaded`/`status`/`ping` document resolving dynamic
+    # keys. Under it this `load` would start throwing, so this is what fails if anyone tries it.
+    # A second entry under a different spelling is the intended outcome: a dynamic key names no
+    # folder, so there is nothing for the folder to collide WITH.
+    # Its own directory: `register_connection`'s `isdir(key)` guard refuses "db" once the folder
+    # above exists, so this case cannot reuse `app`.
+    empty!(PormG.config)
+    app3 = joinpath(root, "app3")
+    mkpath(app3)
+    cd(app3) do
+      Configuration.register_connection("db", "file::memory:?cache=shared"; adapter = "SQLite")
+      mkpath("db")
+      _yml(joinpath("db", "connection.yml"))
+      @test Configuration.load("./db"; env = "test") == "./db"
+      @test sort(collect(keys(PormG.config))) == ["./db", "db"]
+      @test PormG.config["db"].db_def_folder == "dynamic_connection"   # untouched
+    end
+  finally
+    empty!(PormG.config)
+    merge!(PormG.config, saved)
+    rm(root; recursive = true, force = true)
+  end
+end

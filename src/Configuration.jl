@@ -904,6 +904,37 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   # create settings if does not exists
   path === nothing && (path = DB_PATH )
 
+  # #620: the mirror of `register_connection`'s "Cannot overwrite static connection" refusal.
+  # `_resolve_loaded_key` short-circuits on an exact key hit BEFORE its loop skips the
+  # `dynamic_connection` sentinel, so the reuse/migrate block below cannot tell that this key
+  # names a dynamically registered pool rather than a folder — it falls through to `close_pool!`
+  # and replaces the entry, destroying a tenant connection with nothing said beyond the
+  # pool-close log line. Refusing rather than warning because the two entries are different
+  # KINDS: `register_connection` re-registering a dynamic key over a dynamic key is a same-kind
+  # replacement, which is why a warning suffices there and not here.
+  #
+  # Checked HERE, keyed on `path`, rather than beside the write it protects — the common
+  # multi-tenant shape is a key that names no folder at all (`register_connection("tenant7", …)`),
+  # and the missing-folder refusal below would otherwise answer it by telling the user to CREATE
+  # a folder of that name, which manufactures exactly this collision. Equivalent for the refusal
+  # itself: `_resolve_loaded_key` returns `path` whenever `haskey(config, path)`, so a dynamic
+  # exact hit always yields `key == path`, and when it does not hit, `key` comes from the folder
+  # loop, which skips the sentinel and so is never dynamic.
+  #
+  # Known false positive, accepted: a STATIC folder literally named `dynamic_connection` stores
+  # the sentinel as its real `db_def_folder`, so its reload is refused. That folder is already
+  # unusable — both resolvers skip it, so no model can bind to it — and de-conflicting it means
+  # taking the sentinel out of band, which is a `Kernel` change (see the follow-up issue).
+  if haskey(config, path) && config[path].db_def_folder == "dynamic_connection"
+    throw(InvalidConfigurationError(
+      "Cannot load \"$(path)\": that key already holds a dynamic connection registered with " *
+      "`register_connection`, and loading would close its pool. Either call " *
+      "`unregister_connection(\"$(path)\")` first if the dynamic connection is finished with, " *
+      "or load this configuration under a different key — the string you pass to `load` becomes " *
+      "the key, so another spelling of the same folder (e.g. `abspath(\"$(path)\")`) registers " *
+      "alongside it."))
+  end
+
   @pormg_debug false
 
   db_settings_file = joinpath(path, PORMG_DB_CONFIG_FILE_NAME)

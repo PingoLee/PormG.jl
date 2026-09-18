@@ -145,9 +145,13 @@ function _run_boot_pattern_regression()
         mkpath(src_dir)
         mkpath(db_dir)
 
-        # PormG only — no Revise, so the child pays for one precompile, not two.
+        # No Revise, so the child pays for one precompile, not two. `Pkg` IS listed, although it is a
+        # stdlib: under `Pkg.test` the child inherits a sandboxed load path with no default
+        # environment and no `@stdlib`, so the child script's `using Pkg` resolves only through
+        # this project. A developer's shell masks that (CI caught it on PR #621).
         _write_scratch_project(pkg_root, pkg_name, _BOOT_APP_UUID,
-                               ["PormG" => "7d8d7541-4d3d-4580-80a2-17064efb0993"])
+                               ["Pkg"   => "44cfe95a-1eb2-52ea-b672-e2afdf69b78f",
+                                "PormG" => "7d8d7541-4d3d-4580-80a2-17064efb0993"])
 
         # Three environments so each wrong answer names its source: `test` is what the parent
         # process's PORMG_ENV would select through the implicit load, `staging` is what the file's

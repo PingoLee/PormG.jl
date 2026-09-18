@@ -447,7 +447,7 @@ end
     # renders nothing for it. `_quote_table_ddl` preserves the case, so `"Driver"` -> `"driver"` is
     # visible in the DDL, which is the #390 difference made concrete.
     @test haskey(plan, :pit_stop)
-    @test occursin("DROP CONSTRAINT \"pit_stop_driverid_live390_fk\"", plan[:pit_stop]["Remove foreign key: driver_id"])
+    @test occursin("DROP CONSTRAINT IF EXISTS \"pit_stop_driverid_live390_fk\"", plan[:pit_stop]["Remove foreign key: driver_id"])
     @test occursin("REFERENCES \"driver\" (\"id\")", plan[:pit_stop]["New foreign key: driver_id"])
     @test !haskey(plan[:pit_stop], "Alter field: driver_id")
 

@@ -535,16 +535,48 @@ end
     _order_statements(migration_plan) -> (ordered_statements, all_sql_content)
 
 Order SQL statements for safe execution:
+
 1. New tables (CREATE TABLE)
 2. Drop tables
-3. Rename fields
-4. All other alterations
+3. Rename tables
+4. Rename fields
+5. All other alterations
+6. Field CREATE INDEX (#152)
 
-Returns the ordered statements and the concatenated SQL content for checksum.
+Returns the ordered statements and the concatenated SQL content for checksum. Statement order is
+part of the checksum input, so changing a bucket changes the digest of every plan that uses it.
+
+# Why these buckets are safe without a dependency sort (#89)
+
+There is **no topological ordering by foreign key** here, and none is needed, because PormG keeps
+FK constraints out of the ordering problem entirely. Three properties carry that, and a regression
+test pins each (`test/unit/test_migration_fk_ordering.jl`):
+
+- **PostgreSQL never inlines an FK in `CREATE TABLE`.** `Dialect.create_table(::PormGPostgres, …)`
+  emits columns only; every constraint arrives as a separate `ALTER TABLE … ADD CONSTRAINT`, which
+  lands in bucket 5 — after every `CREATE TABLE`. Two new tables referencing each other therefore
+  apply in any order, which a topological sort could not do at all: that is a *cycle*.
+- **PostgreSQL drops with `CASCADE`**, so a parent can be dropped before its children are cleaned
+  up.
+- **SQLite runs the whole migration with `PRAGMA foreign_keys = OFF`** (`_execute_migration_lifecycle`,
+  asserted via `_assert_foreign_keys_suspended`, #276), so its inline `REFERENCES` clauses constrain
+  nothing during the migration.
+
+Note the layer this function sits at: it receives the plan *after* `get_all_dicts` has read it back
+from `pending_migrations.jl`, and that reader keeps only the `OrderedDict` values — **the table name
+is already gone**. A real dependency sort is therefore not expressible here at all; it would need
+the file format to carry the dependency, which is frozen at v1
+(`docs/src/migrations/stability.md`). If the invariant above is ever deliberately broken, the guard
+test fails and that is the moment to design a format v2 — not to sort opaque SQL strings.
+
+`"Rename table"` gets its own bucket ahead of the alterations because it does **not** commute with
+them: a `ADD CONSTRAINT … REFERENCES <new name>` emitted in the same migration would otherwise be
+ordered against the rename only by chance.
 """
 function _order_statements(migration_plan)
   first_execution::Vector{String} = []
   second_execution::Vector{String} = []
+  rename_table_execution::Vector{String} = []   # #89: must precede any FK naming the new table
   third_execution::Vector{String} = []
   last_execution::Vector{String} = []
   index_execution::Vector{String} = []   # #152: field CREATE INDEX runs AFTER same-table rebuilds
@@ -555,6 +587,13 @@ function _order_statements(migration_plan)
         push!(first_execution, value)
       elseif key == "Drop table"
         push!(second_execution, value)
+      elseif key == "Rename table"
+        # #89: exact match, not `contains`. "Rename table" used to fall through to
+        # `last_execution`, where it shared a bucket with "New foreign key: …" — so a constraint
+        # referencing the table's NEW name was ordered against the rename by insertion order alone.
+        # Checked before the "Rename field" branch below, which is a SUBSTRING test and would
+        # otherwise be unaffected only by luck of spelling.
+        push!(rename_table_execution, value)
       elseif contains(key, "Rename field")
         push!(third_execution, value)
       elseif startswith(key, "Create index")
@@ -574,7 +613,8 @@ function _order_statements(migration_plan)
     end
   end
 
-  ordered = vcat(first_execution, second_execution, third_execution, last_execution, index_execution)
+  ordered = vcat(first_execution, second_execution, rename_table_execution,
+                 third_execution, last_execution, index_execution)
   all_sql = join(ordered, "\n")
   return ordered, all_sql
 end

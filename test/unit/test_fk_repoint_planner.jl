@@ -238,7 +238,7 @@ _fr_add(plan)  = _fr_step(plan, "New foreign key: parent_id")
              Models.ForeignKey(_fr_other_parent(), pk_field = "id", null = true),
              _fr_live_fk(to_table = "parent_t"))
 
-    @test occursin("DROP CONSTRAINT \"$(FR_LIVE_CONSTRAINT)\"", _fr_drop(plan))
+    @test occursin("DROP CONSTRAINT IF EXISTS \"$(FR_LIVE_CONSTRAINT)\"", _fr_drop(plan))
     @test occursin("REFERENCES \"other_parent_t\" (\"id\")", _fr_add(plan))
     @test occursin("FOREIGN KEY (\"parent_id\")", _fr_add(plan))
 
@@ -265,7 +265,7 @@ _fr_add(plan)  = _fr_step(plan, "New foreign key: parent_id")
              Models.ForeignKey(_fr_other_parent(), unique = true, pk_field = "id", null = true),
              _fr_live_o2o(to_table = "parent_t"))
 
-    @test occursin("DROP CONSTRAINT \"$(FR_LIVE_CONSTRAINT)\"", _fr_drop(plan))
+    @test occursin("DROP CONSTRAINT IF EXISTS \"$(FR_LIVE_CONSTRAINT)\"", _fr_drop(plan))
     @test occursin("REFERENCES \"other_parent_t\" (\"id\")", _fr_add(plan))
     @test !occursin("TYPE bigint", _fr_step(plan, "Alter field: parent_id"))
   end
@@ -302,7 +302,7 @@ _fr_add(plan)  = _fr_step(plan, "New foreign key: parent_id")
              Models.ForeignKey(_fr_renamed_parent(), pk_field = "id", null = true),
              _fr_live_fk(pk_field = "id"))
 
-    @test occursin("DROP CONSTRAINT \"$(FR_LIVE_CONSTRAINT)\"", _fr_drop(plan))
+    @test occursin("DROP CONSTRAINT IF EXISTS \"$(FR_LIVE_CONSTRAINT)\"", _fr_drop(plan))
     @test occursin("REFERENCES \"parent_t\" (\"parent_pk\")", _fr_add(plan))
   end
 
@@ -322,7 +322,7 @@ _fr_add(plan)  = _fr_step(plan, "New foreign key: parent_id")
              Models.ForeignKey(_fr_parent(), pk_field = "id", null = true, on_delete = Models.CASCADE),
              _fr_live_fk(on_delete = nothing))
 
-    @test occursin("DROP CONSTRAINT \"$(FR_LIVE_CONSTRAINT)\"", _fr_drop(plan))
+    @test occursin("DROP CONSTRAINT IF EXISTS \"$(FR_LIVE_CONSTRAINT)\"", _fr_drop(plan))
     @test occursin("ON DELETE CASCADE", _fr_add(plan))
 
     # ── the churn controls ──
@@ -449,7 +449,7 @@ _fr_add(plan)  = _fr_step(plan, "New foreign key: parent_id")
 
     steps = collect(keys(plan[:child_t]))
     # The DROP names the OLD column, because that is what the live catalog knows it by.
-    @test occursin("DROP CONSTRAINT \"$(FR_LIVE_CONSTRAINT)\"", plan[:child_t]["Remove foreign key: parent_id"])
+    @test occursin("DROP CONSTRAINT IF EXISTS \"$(FR_LIVE_CONSTRAINT)\"", plan[:child_t]["Remove foreign key: parent_id"])
     @test occursin("REFERENCES \"other_parent_t\" (\"id\")", plan[:child_t]["New foreign key: new_parent_id"])
     @test findfirst(==("Remove foreign key: parent_id"), steps) <
           findfirst(==("Rename field: new_parent_id"), steps) <

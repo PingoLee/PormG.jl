@@ -1679,8 +1679,14 @@ function rename_field(conn::Union{PormGSQLite,PormGPostgres}, table_name::Union{
   return """ALTER TABLE "$(_quote_table_ddl(table_name))" RENAME COLUMN "$(_quote_table_ddl(old_field_name))" TO "$(_quote_table_ddl(new_field_name))";"""
 end
 
+# `IF EXISTS`, and it is a fix rather than defensiveness (#89). `drop_table` on PostgreSQL is
+# `DROP TABLE ... CASCADE`, which also drops every FK constraint POINTING AT the dropped table --
+# and `_order_statements` runs "Drop table" (bucket 2) BEFORE "Remove foreign key: ..." (bucket 4).
+# So dropping a parent table and removing the child's FK field in one migration reached this
+# statement with the constraint already gone, and the whole migration aborted. The ordering is
+# fine; asking to drop a constraint that a CASCADE already took is what was not.
 function drop_foreign_key(conn::PormGPostgres, table_name::Symbol, constraint_name::String)
-  return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP CONSTRAINT "$(_quote_table_ddl(constraint_name))";"""
+  return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP CONSTRAINT IF EXISTS "$(_quote_table_ddl(constraint_name))";"""
 end
 
 # NOTE (#83): there is intentionally no `drop_foreign_key(::PormGSQLite, …)`. SQLite has no

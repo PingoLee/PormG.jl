@@ -278,6 +278,17 @@ end
 #     corpus that isolate the identity slot, and the `/SL` goldens are EMPTY because SQLite has no
 #     flavour to change. `identity_drop` (DROP arm) and `identity_cross` (ADD arm) are unchanged.
 # ─────────────────────────────────────────────────────────────────────────────
+# `fk_drop`, `fk_repoint`, `fk_on_delete_change`, `fk_drop_constraint_only`, `rename_and_repoint` (PG)
+#     BEFORE  ALTER TABLE "child_t" DROP CONSTRAINT "child_t_col_HASH_fk";
+#     AFTER   ALTER TABLE "child_t" DROP CONSTRAINT IF EXISTS "child_t_col_HASH_fk";
+#     WHY     #89. `drop_table` on PostgreSQL is `DROP TABLE ... CASCADE`, which also drops every FK
+#             constraint pointing AT the dropped table -- and `_order_statements` runs "Drop table"
+#             (bucket 2) before "Remove foreign key: ..." (bucket 5). Dropping a parent table and
+#             removing the child's FK field in ONE migration therefore reached this statement with
+#             the constraint already gone and aborted the whole migration. Only the FK drop moved:
+#             the PRIMARY KEY / UNIQUE / CHECK drops in this corpus come from `alter_field`, not
+#             `drop_foreign_key`, and are unchanged.
+
 const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   "unchanged/PG" => [
   ],
@@ -477,7 +488,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "fk_drop/PG" => [
     "Remove foreign key: col" =>
-      "ALTER TABLE \"child_t\" DROP CONSTRAINT \"child_t_col_HASH_fk\";",
+      "ALTER TABLE \"child_t\" DROP CONSTRAINT IF EXISTS \"child_t_col_HASH_fk\";",
   ],
   "fk_drop/SL" => [
     "Alter table: child_t" =>
@@ -485,7 +496,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "fk_repoint/PG" => [
     "Remove foreign key: col" =>
-      "ALTER TABLE \"child_t\" DROP CONSTRAINT \"child_t_col_HASH_fk\";",
+      "ALTER TABLE \"child_t\" DROP CONSTRAINT IF EXISTS \"child_t_col_HASH_fk\";",
     "New foreign key: col" =>
       "ALTER TABLE \"child_t\" ADD CONSTRAINT \"child_t_col_HASH_fk\" FOREIGN KEY (\"col\") REFERENCES \"other_parent_t\" (\"id\") ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED;",
   ],
@@ -495,7 +506,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "fk_on_delete/PG" => [
     "Remove foreign key: col" =>
-      "ALTER TABLE \"child_t\" DROP CONSTRAINT \"child_t_col_HASH_fk\";",
+      "ALTER TABLE \"child_t\" DROP CONSTRAINT IF EXISTS \"child_t_col_HASH_fk\";",
     "New foreign key: col" =>
       "ALTER TABLE \"child_t\" ADD CONSTRAINT \"child_t_col_HASH_fk\" FOREIGN KEY (\"col\") REFERENCES \"parent_t\" (\"id\") ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED;",
   ],
@@ -505,7 +516,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "fk_constraint_off/PG" => [
     "Remove foreign key: col" =>
-      "ALTER TABLE \"child_t\" DROP CONSTRAINT \"child_t_col_HASH_fk\";",
+      "ALTER TABLE \"child_t\" DROP CONSTRAINT IF EXISTS \"child_t_col_HASH_fk\";",
   ],
   "fk_constraint_off/SL" => [
     "Alter table: child_t" =>
@@ -581,7 +592,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "rename_and_repoint/PG" => [
     "Remove foreign key: col" =>
-      "ALTER TABLE \"child_t\" DROP CONSTRAINT \"child_t_col_HASH_fk\";",
+      "ALTER TABLE \"child_t\" DROP CONSTRAINT IF EXISTS \"child_t_col_HASH_fk\";",
     "Rename field: col2" =>
       "ALTER TABLE \"child_t\" RENAME COLUMN \"col\" TO \"col2\";",
     "New foreign key: col2" =>

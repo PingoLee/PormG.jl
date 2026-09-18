@@ -484,6 +484,48 @@ end
     @test query.count() == 25095
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Case-insensitive prefix / suffix lookups return the same ROWS on both engines (#604)
+# @istartswith / @iendswith were defined in Dialect but unreachable until #604, so nothing ever
+# executed them. Counts below were derived from the fixture independently (raw surname scan with
+# Julia's own startswith/lowercase) and are IDENTICAL on db_2 and db_sl — which is the #78 property
+# the pormg_lower UDF exists for, now covering the prefix/suffix forms too: PostgreSQL folds via
+# ILIKE, SQLite via pormg_lower, and "RÄIKKÖNEN" must find "Räikkönen" on both.
+# 861 = drivers with a non-NULL surname; the negated twins are the exact complement of that.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Case-insensitive prefix/suffix lookups (#604)" begin
+    # Case-SENSITIVE controls: only the stored capitalisation matches. These are what make the
+    # case-insensitive assertions meaningful rather than trivially true.
+    @test M.Driver.objects.filter("surname__@startswith" => "Räikkönen").count() == 1
+    @test M.Driver.objects.filter("surname__@startswith" => "RÄIKKÖNEN").count() == 0
+    @test M.Driver.objects.filter("surname__@endswith"   => "nen").count() == 4
+    @test M.Driver.objects.filter("surname__@endswith"   => "NEN").count() == 0
+
+    # Case-INSENSITIVE: every spelling of the accented term finds the same single driver. Upper-case
+    # accented input is the #78 case — SQLite's built-in LOWER() folds ASCII only and would return 0.
+    for term in ("Räikkönen", "RÄIKKÖNEN", "räikkönen")
+        @test M.Driver.objects.filter("surname__@istartswith" => term).count() == 1
+    end
+    @test M.Driver.objects.filter("surname__@iendswith" => "NEN").count() == 4
+    @test M.Driver.objects.filter("surname__@iendswith" => "nen").count() == 4
+
+    # The wildcard is anchored on ONE side: a prefix lookup must not behave like @icontains.
+    # "ikkönen" is a mid-string substring of "Räikkönen", so a leaked leading % would show up here.
+    @test M.Driver.objects.filter("surname__@istartswith" => "ikkönen").count() == 0
+    @test M.Driver.objects.filter("surname__@icontains"   => "ikkönen").count() == 1
+
+    # Negated twins are the exact complement over the 861 non-NULL surnames.
+    @test M.Driver.objects.filter("surname__@nistartswith" => "RÄIKKÖNEN").count() == 860
+    @test M.Driver.objects.filter("surname__@niendswith"   => "NEN").count() == 857
+
+    # The documented examples (docs/src/read/filters_and_aggregates.md → Prefix / Suffix) return
+    # the rows the docs claim, in the case-insensitive spelling as well as the exact one.
+    ver  = Set(String.((M.Driver.objects.filter("surname__@startswith"  => "Ver").values("surname") |> DataFrame).surname))
+    iver = Set(String.((M.Driver.objects.filter("surname__@istartswith" => "ver").values("surname") |> DataFrame).surname))
+    @test "Verstappen" in ver
+    @test ver == iver
+end
+
 
 @testset "Date Operations" begin
     query = M.Race.objects;

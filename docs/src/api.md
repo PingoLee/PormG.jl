@@ -182,6 +182,15 @@ PormG uses `__@` suffixes for lookup operators and field transforms:
 | `field__@isnull` | `IS NULL / IS NOT NULL` | `"dob__@isnull" => true` |
 | `field__@contains` | `LIKE '%val%'` | `"name__@contains" => "Monaco"` |
 | `field__@icontains` | `ILIKE '%val%'` | `"name__@icontains" => "monaco"` |
+| `field__@startswith` | `LIKE 'val%'` | `"surname__@startswith" => "Ver"` |
+| `field__@istartswith` | `ILIKE 'val%'` | `"surname__@istartswith" => "ver"` |
+| `field__@endswith` | `LIKE '%val'` | `"surname__@endswith" => "sen"` |
+| `field__@iendswith` | `ILIKE '%val'` | `"surname__@iendswith" => "SEN"` |
+
+Every pattern lookup above has a negated twin (`@ncontains`, `@nistartswith`, …) and the
+PostgreSQL-only accent-insensitive pair `@iunaccent_contains` / `@iunaccent_exact`. The full table,
+with NULL semantics and indexing notes, is in
+[Filters and Aggregates](read/filters_and_aggregates.md#Comparison-Operators).
 
 ### Transform Functions
 

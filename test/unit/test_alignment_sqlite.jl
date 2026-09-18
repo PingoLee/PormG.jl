@@ -820,6 +820,50 @@ end
     @test contains(insp[:sql_text], "LIKE")
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Case-insensitive prefix/suffix lookups on SQLite (#604)
+# @istartswith / @iendswith fold through the pormg_lower UDF (#78) exactly as @icontains does, so
+# they must wrap BOTH sides and still carry the ESCAPE clause — the value is escaped first and the
+# wildcard appended after, and `\` has no case, so folding leaves the escape intact. Asserting
+# pormg_lower alone would pass on a renderer that had dropped the escape, so ESCAPE is checked too.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Alignment Verification - Case-Insensitive Prefix/Suffix SQLite (#604)" begin
+    # istartswith → pormg_lower(col) LIKE pormg_lower(?) with 'val%'
+    insp_isw = M.Result.objects.filter("driverid__surname__@istartswith" => "ham") |> inspect_query
+    @test contains(insp_isw[:sql_text], "pormg_lower")
+    @test contains(insp_isw[:sql_text], "LIKE")
+    @test contains(insp_isw[:sql_text], "ESCAPE")
+    @test !contains(insp_isw[:sql_text], "NOT LIKE")
+    @test "ham%" in insp_isw[:parameter_buckets][:where]
+
+    # iendswith → pormg_lower(col) LIKE pormg_lower(?) with '%val'
+    insp_iew = M.Result.objects.filter("driverid__surname__@iendswith" => "TON") |> inspect_query
+    @test contains(insp_iew[:sql_text], "pormg_lower")
+    @test contains(insp_iew[:sql_text], "ESCAPE")
+    @test !contains(insp_iew[:sql_text], "NOT LIKE")
+    @test "%TON" in insp_iew[:parameter_buckets][:where]
+
+    # nistartswith → pormg_lower(col) NOT LIKE pormg_lower(?) with 'val%'
+    insp_nisw = M.Result.objects.filter("driverid__surname__@nistartswith" => "ham") |> inspect_query
+    @test contains(insp_nisw[:sql_text], "pormg_lower")
+    @test contains(insp_nisw[:sql_text], "NOT LIKE")
+    @test contains(insp_nisw[:sql_text], "ESCAPE")
+    @test "ham%" in insp_nisw[:parameter_buckets][:where]
+
+    # niendswith → pormg_lower(col) NOT LIKE pormg_lower(?) with '%val'
+    insp_niew = M.Result.objects.filter("driverid__surname__@niendswith" => "TON") |> inspect_query
+    @test contains(insp_niew[:sql_text], "pormg_lower")
+    @test contains(insp_niew[:sql_text], "NOT LIKE")
+    @test contains(insp_niew[:sql_text], "ESCAPE")
+    @test "%TON" in insp_niew[:parameter_buckets][:where]
+
+    # A `%` in the VALUE is escaped, not treated as a wildcard — the escape survives folding because
+    # the backslash is case-less. This is the assertion that would have caught the silent form of
+    # #604, where an unwired operator skipped decoration AND escaping together.
+    insp_esc = M.Result.objects.filter("driverid__surname__@istartswith" => "a%b") |> inspect_query
+    @test "a\\%b%" in insp_esc[:parameter_buckets][:where]
+end
+
 @testset "Alignment Verification - Prefix/Suffix Operators (@lt, @lte, @gt, @gte combined)" begin
     # Test all comparison operators together on different fields
     q = M.Result.objects.filter(

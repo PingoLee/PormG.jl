@@ -107,23 +107,32 @@ end
 """
     _apply_like_wildcards(value::Any, operator::String)::Any
 
-Apply appropriate LIKE wildcards based on the operator:
-- contains/icontains/iunaccent_contains (and their negated n… twins): %value%
-- startswith / nstartswith: value%
-- endswith / nendswith: %value
-- Other operators: no wildcards
+Apply appropriate LIKE wildcards based on the operator, which is what each of the three operator
+sets in `src/constants.jl` names (#604 — the membership lists used to be spelled out here, and
+`istartswith`/`iendswith` were in none of them despite having complete Dialect renderers):
+
+- `LIKE_CONTAINS_OPERATORS`: `%value%`
+- `LIKE_PREFIX_OPERATORS`: `value%`
+- `LIKE_SUFFIX_OPERATORS`: `%value`
+- Anything else: the value is returned untouched — no wildcards and, note, no escaping either.
+
+That last branch is unreachable on the live path and is a fallback, not a supported case: the only
+caller passes `contains = v.operator in LIKE_WILDCARD_OPERATORS`, and those three sets partition
+`LIKE_WILDCARD_OPERATORS` exactly. So `iunaccent_exact` / `niunaccent_exact` never arrive here at
+all — they are excluded one level up, which is what keeps their `=` / `<>` comparison matching the
+value verbatim.
 
 The negated pattern operators (#207) decorate the value identically to their positive twin — only
-the Dialect renderer differs (NOT LIKE vs LIKE), so the wildcard placement is the same.
+the Dialect renderer differs (NOT LIKE vs LIKE), so the wildcard placement is the same. Same for the
+case-insensitive twins (#604): folding happens in SQL, so `istartswith` decorates like `startswith`.
 """
 function _apply_like_wildcards(value::Any, operator::String)::Any
   escaped = escape_like_pattern(string(value))
-  if operator in ["contains", "icontains", "iunaccent_contains",
-                  "ncontains", "nicontains", "niunaccent_contains"]
+  if operator in LIKE_CONTAINS_OPERATORS
     return string("%", escaped, "%")
-  elseif operator in ["startswith", "nstartswith"]
+  elseif operator in LIKE_PREFIX_OPERATORS
     return string(escaped, "%")
-  elseif operator in ["endswith", "nendswith"]
+  elseif operator in LIKE_SUFFIX_OPERATORS
     return string("%", escaped)
   else
     return value

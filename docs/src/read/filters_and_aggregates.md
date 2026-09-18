@@ -31,6 +31,10 @@ These work in both `filter()` and `values()`.
 | `@isnull` | `IS NULL / IS NOT NULL` | Null check | `"dob__@isnull" => true` |
 | `@contains` | `LIKE '%val%'` | Case-sensitive substring | `"name__@contains" => "Monaco"` |
 | `@icontains` | `ILIKE '%val%'` | Case-insensitive substring | `"name__@icontains" => "monaco"` |
+| `@startswith` | `LIKE 'val%'` | Case-sensitive prefix | `"surname__@startswith" => "Ver"` |
+| `@istartswith` | `ILIKE 'val%'` | Case-insensitive prefix | `"surname__@istartswith" => "ver"` |
+| `@endswith` | `LIKE '%val'` | Case-sensitive suffix | `"surname__@endswith" => "sen"` |
+| `@iendswith` | `ILIKE '%val'` | Case-insensitive suffix | `"surname__@iendswith" => "SEN"` |
 | `@iunaccent_contains` | `immutable_unaccent(col) ILIKE immutable_unaccent('%val%')` | Accent- & case-insensitive substring (PostgreSQL only) | `"surname__@iunaccent_contains" => "raikkonen"` |
 | `@iunaccent_exact` | `LOWER(immutable_unaccent(col)) = LOWER(immutable_unaccent(val))` | Accent- & case-insensitive equality (PostgreSQL only) | `"surname__@iunaccent_exact" => "raikkonen"` |
 
@@ -45,7 +49,9 @@ without inverting the logic by hand.
 | `@ncontains` | `NOT LIKE '%val%'` | Case-sensitive substring absent | `"name__@ncontains" => "Racing"` |
 | `@nicontains` | `NOT ILIKE '%val%'` | Case-insensitive substring absent | `"name__@nicontains" => "racing"` |
 | `@nstartswith` | `NOT LIKE 'val%'` | Does not start with | `"surname__@nstartswith" => "M"` |
+| `@nistartswith` | `NOT ILIKE 'val%'` | Does not start with, case-insensitive | `"surname__@nistartswith" => "m"` |
 | `@nendswith` | `NOT LIKE '%val'` | Does not end with | `"surname__@nendswith" => "son"` |
+| `@niendswith` | `NOT ILIKE '%val'` | Does not end with, case-insensitive | `"surname__@niendswith" => "SON"` |
 | `@nrange` | `NOT BETWEEN a AND b` | Outside two bounds | `"laps__@nrange" => [1, 10]` |
 | `@niunaccent_contains` | `immutable_unaccent(col) NOT ILIKE immutable_unaccent('%val%')` | Accent- & case-insensitive substring absent (PostgreSQL only) | `"surname__@niunaccent_contains" => "raikkonen"` |
 | `@niunaccent_exact` | `LOWER(immutable_unaccent(col)) <> LOWER(immutable_unaccent(val))` | Accent- & case-insensitive inequality (PostgreSQL only) | `"surname__@niunaccent_exact" => "raikkonen"` |
@@ -159,19 +165,45 @@ count = query.count()
     (`"surname__@icontains" => "RÄIKKÖNEN"` finds `"Räikkönen"` on both backends). It folds case but
     preserves accents; for accent-insensitive matching use the PostgreSQL-only `@iunaccent_*` lookups below.
 
-### Prefix / Suffix (`@startswith`, `@endswith`)
+### Prefix / Suffix (`@startswith`, `@endswith`, `@istartswith`, `@iendswith`)
 
-Case-sensitive anchored matches — `@startswith` renders `LIKE 'value%'` and `@endswith` renders `LIKE '%value'` (the wildcard is added on one side only):
+Anchored matches — the wildcard is added on one side only. `@startswith` renders `LIKE 'value%'`
+and `@endswith` renders `LIKE '%value'`; the `i` forms are their case-insensitive twins and render
+`ILIKE` instead:
 
 ```julia
 # Surnames beginning with "Ver" (e.g. Verstappen)
 M.Driver.objects.filter("surname__@startswith" => "Ver")
 
-# Surnames ending in "sen" (e.g. Häkkinen → no; Raikkonen → no; Magnussen → yes)
+# Surnames ending in "sen" (e.g. Magnussen)
 M.Driver.objects.filter("surname__@endswith" => "sen")
+
+# Case-insensitive: matches "Verstappen" whatever case the query term is in
+M.Driver.objects.filter("surname__@istartswith" => "ver")
+M.Driver.objects.filter("surname__@iendswith" => "SEN")
 ```
 
-Both escape `%` and `_` in the bound value, so user input is matched literally.
+All four escape `%` and `_` in the bound value, so user input is matched literally.
+
+!!! note
+    `@istartswith` / `@iendswith` fold case exactly as [`@icontains`](#Case-Insensitive-(@icontains)) does:
+    `ILIKE` on PostgreSQL, `pormg_lower(col) LIKE pormg_lower(val)` on SQLite. So accented text folds
+    the same way on both backends, and accents are preserved — for accent-insensitive prefix matching
+    there is no `@iunaccent_startswith`; use `@iunaccent_contains` or the PostgreSQL-only
+    `@iunaccent_exact` below.
+
+!!! tip "Indexing an anchored match"
+    `@startswith` compares the bare column, so a btree index can serve it as a range scan — but on
+    PostgreSQL **only** if that index uses `text_pattern_ops` / `varchar_pattern_ops`, or the database
+    was initialised in the C locale. A default-collation btree does not accelerate `LIKE 'val%'`, which
+    is the classic surprise here. SQLite gets the optimisation on BINARY-collated columns, which is
+    what `PRAGMA case_sensitive_like = ON` (set by PormG) preserves.
+
+    The case-insensitive forms wrap the column, so no plain index covers them at all — on PostgreSQL
+    back them with an expression index (`lower(col) text_pattern_ops`, or `pg_trgm`), as you would for
+    [`@iunaccent_contains`](#Accent-Insensitive-(@iunaccent_contains,-@iunaccent_exact)). On SQLite the
+    wrapper is the `pormg_lower` UDF, which PormG registers per connection; an index over it would only
+    be usable by clients that register the same function, so treat the `i` forms as unindexed there.
 
 ### Accent-Insensitive (`@iunaccent_contains`, `@iunaccent_exact`)
 

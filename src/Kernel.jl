@@ -463,6 +463,11 @@ export DEFAULT_POOL_TIMEOUT, LAST_INSERT_ID_LABEL, DATETIME_FORMAT, UTC_TIMEZONE
 
 # Query-builder vocabulary
 export PormGsuffix, PormGtransform, PormGTypeField, JSON_CONTAINMENT_OPERATORS
+# The LIKE-family pattern lookups (#604), grouped by wildcard shape. `QueryBuilder` imports these
+# by name (`src/QueryBuilder.jl`); `using .Kernel` in `src/PormG.jl` only BINDS them in `PormG`, so
+# they stay off the public `names(PormG)` surface exactly as JSON_CONTAINMENT_OPERATORS does.
+export LIKE_CONTAINS_OPERATORS, LIKE_PREFIX_OPERATORS, LIKE_SUFFIX_OPERATORS,
+       LIKE_WILDCARD_OPERATORS, PATTERN_LOOKUP_OPERATORS
 
 # Type maps and introspection ignore lists
 export sqlite_type_map_reverse, postgres_type_map_reverse,

@@ -562,6 +562,37 @@ ResultNoPrefixModel._module = Main
     # Both forms must generate the same SQL
     @test res_var[:sql_text] == res_vec[:sql_text]
     @test res_var[:parameters] == res_vec[:parameters]
+
+    # #612 — the HOMOGENEOUS vector, which is the same documented signature with no `Value` in it.
+    # Until #612 only the two spellings above worked. A vector of nothing but strings stayed a
+    # `Vector{String}` and so dispatched to `_check_function(::Vector{String})`, the arm that reads
+    # a whole vector as ONE already-split `__@` path; it answered
+    # `FilterError: "forename__@surname" is invalid`, naming a path the caller never wrote. The
+    # mixed vector above escaped only because a `Value` in it makes the literal a `Vector{Any}`.
+    q_hom = DriverModel.objects
+    q_hom.values("full_name" => Concat(["forename", "surname"]))
+    res_hom = q_hom.list(show_query=:dict)
+
+    q_hvar = DriverModel.objects
+    q_hvar.values("full_name" => Concat("forename", "surname"))
+    res_hvar = q_hvar.list(show_query=:dict)
+
+    @test contains(res_hom[:sql_text], "CONCAT")
+    @test res_hom[:sql_text] == res_hvar[:sql_text]
+    @test res_hom[:parameters] == res_hvar[:parameters]
+
+    # The `split()` spelling a web layer actually produces. This was broken by the same arm through
+    # a second route — `Vector{SubString{String}}` takes the `Vector{<:AbstractString}` method,
+    # which forwards to the `Vector{String}` one — so widening `Concat`'s container fixes both.
+    q_split = DriverModel.objects
+    q_split.values("full_name" => Concat(collect(split("forename,surname", ","))))
+    res_split = q_split.list(show_query=:dict)
+    @test res_split[:sql_text] == res_hvar[:sql_text]
+    @test res_split[:parameters] == res_hvar[:parameters]
+
+    # The container is what changed; the #603 element normalization is untouched.
+    @test Concat(["forename", "surname"]).column isa Vector{Any}
+    @test all(e -> e isa String, Concat(collect(split("forename,surname", ","))).column)
   end
 
   # ===== Section: Case/When expression as filter RHS =====

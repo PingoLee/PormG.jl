@@ -213,22 +213,21 @@ end
       @test Coalesce("points", "wins"; output_field = probe("INTEGER")).kwargs["output_field"] == "INTEGER"
     end
 
-    # `Concat`'s vector ELEMENTS. Two things are true here and only one of them is this issue's:
+    # `Concat`'s vector ELEMENTS, and the container that holds them.
     #
-    #   - The comprehension must preserve the incoming element type, or a spelling that rendered
-    #     before would render differently now. That is a TYPE-CONTRACT row — deliberately not a
-    #     rendering one, see below.
-    #   - A HOMOGENEOUS string vector cannot be rendered at all, before or after this change:
-    #     `Concat(["forename", "surname"])` reaches `_check_function(::Vector{String})`, which reads
-    #     the whole vector as one already-split `__@` path and raises
-    #     `FilterError: "forename__@surname" is invalid`. That is a PRE-EXISTING defect, unrelated
-    #     to #603 and not fixed here — measured identical on both sides of this diff. It is why the
-    #     rows below stop at the element type instead of comparing SQL, and it is filed separately.
+    # These rows used to pin `Vector{String}` and said so explicitly: the homogeneous vector could
+    # not be rendered at all, before or after #603, because it reached
+    # `_check_function(::Vector{String})` — the arm that reads a whole vector as one already-split
+    # `__@` path — and raised `FilterError: "forename__@surname" is invalid`. That was recorded here
+    # as a PRE-EXISTING defect measured identical on both sides of the #603 diff, and filed
+    # separately. #612 is that filing, so the recorded expectation is now the fixed one: the
+    # container is `Vector{Any}` and every spelling renders.
     #
-    # The documented spelling is variadic, which produces a `Vector{Any}` and renders fine — that is
-    # the row carrying the actual rendering guarantee, asserted in the end-to-end testsets below.
-    @test Concat(["forename", "surname"]).column isa Vector{String}
-    @test Concat(collect(split("forename,surname", ","))).column isa Vector{String}
+    # Elements are still normalized to `String` — that half of #603 is unchanged and still gated,
+    # because `_check_function`'s walk assigns back into this vector in place.
+    @test Concat(["forename", "surname"]).column isa Vector{Any}
+    @test Concat(["forename", "surname"]).column == ["forename", "surname"]
+    @test all(e -> e isa String, Concat(collect(split("forename,surname", ","))).column)
     @test Concat(collect(split("forename,surname", ","))).column == ["forename", "surname"]
   end
 

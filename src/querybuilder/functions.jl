@@ -471,9 +471,25 @@ function Concat(x::Vector; output_field::Union{N, AbstractString, Nothing} where
   output_field = _norm_fn_arg(output_field)   # #603
   # #603: the string ELEMENTS too. `_check_function`'s vector arm assigns its result back into this
   # vector in place, so a `Vector{SubString{String}}` out of `split(...)` would fail the store even
-  # with the walk itself widened. The comprehension preserves the incoming element type for every
-  # spelling that already worked (`Vector{String}` in, `Vector{String}` out), so nothing moves.
-  processed_cols = [v isa AbstractString ? String(v) : v for v in x]
+  # with the walk itself widened.
+  #
+  # #612: `Any[...]`, not a type-preserving comprehension. A HOMOGENEOUS string vector —
+  # `Concat(["forename", "surname"])`, the documented signature's most obvious spelling — stayed a
+  # `Vector{String}` and so dispatched to `_check_function(::Vector{String})`, the arm that reads a
+  # whole vector as ONE already-split `__@` path. It answered
+  # `FilterError: "forename__@surname" is invalid`, naming a path the caller never wrote. Only the
+  # variadic form escaped, because `collect(args)` yields a `Vector{Any}` and takes the per-element
+  # arm — which is why every `Concat` in the docs and tests is variadic and this went unseen.
+  #
+  # Widening the CONTAINER rather than the walk, because the walk's `Vector{String}` semantics is
+  # correct where it is reached from: `_check_function(::AbstractString)` splits a path on `__@` and
+  # hands the pieces straight to it. Concat's payload is a list of operands, never one split path,
+  # so the fix belongs at the seam that knows which of the two this is.
+  #
+  # Not the `SQLField(String(v))` wrap that `Coalesce`/`Greatest`/`Least` use to dodge the same arm:
+  # Concat's elements legitimately carry `__@` transform paths (`Concat("date__@year", ...)`), and
+  # wrapping would strip the per-element resolution that makes those work.
+  processed_cols = Any[v isa AbstractString ? String(v) : v for v in x]
   return FObject(function_name = "CONCAT", column = processed_cols, kwargs = Dict{String, Any}("output_field" => output_field, "as" => String(_as)))
 end
 # Variadic convenience: Concat("forename", Value(" "), "surname") → same as vector form

@@ -1,6 +1,6 @@
 module Configuration
 
-import YAML, Logging
+import YAML
 import PormG: PormGSettings, PormGBackend, PormGPostgres, PormGPostgresParam, PormGSQLite, config, PormGModel
 import PormG: model_table_name  # physical table name (db_table when set, #59) — defined in Kernel
 import PormG: ConfigurationError, InvalidConfigurationError  # semantic error taxonomy (#239); defined in Kernel
@@ -605,9 +605,6 @@ const VALID_CONFIG_KEYS = (
   "change_data",
   "django_prefix",
   "time_zone",
-  "log_queries",
-  "log_level",
-  "log_to_file",
   "model_file",
 )
 
@@ -679,25 +676,6 @@ _is_unset(v) = v === nothing || (v isa AbstractString && isempty(strip(v)))
 # URI filenames are honoured by the SQLite build shipped in `SQLite_jll`, so `file:` is a real
 # escape hatch here and not merely reserved.
 _is_sqlite_nonpath(dbname::AbstractString) = dbname == ":memory:" || startswith(dbname, "file:")
-
-# Ordered, not a Dict: `Dict` iteration order is unspecified, so a value matching two names
-# (e.g. "debug_info") previously resolved differently between runs.
-const LOG_LEVEL_NAMES = (("debug", Logging.Debug), ("info", Logging.Info),
-                         ("warn", Logging.Warn), ("error", Logging.Error))
-
-# Apply a `config: log_level:` value. Substring matching is deliberate — "warning" means `warn` —
-# but a value matching nothing used to leave the default in place silently (#348).
-function _apply_log_level!(settings::PormGSettings, v)::Nothing
-  text = lowercase(string(v))
-  for (name, level) in LOG_LEVEL_NAMES
-    if occursin(name, text)
-      settings.log_level = level
-      return nothing
-    end
-  end
-  @warn "connection.yml: unrecognised `log_level:` value; keeping the default" value=v env=settings.app_env supported=first.(LOG_LEVEL_NAMES)
-  return nothing
-end
 
 # Every message in this family is prefixed `connection.yml: ` on purpose — one `occursin` filter
 # then covers the whole family in tests, including the "a valid file emits none of them" guard.
@@ -854,11 +832,7 @@ function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{
       for (k, v) in cfg
         k_str = string(k)
         if k_str in VALID_CONFIG_KEYS
-          if k_str == "log_level"
-            _apply_log_level!(settings, v)
-          else
-            setfield!(settings, Symbol(k_str), ((isa(v, String) && startswith(v, ":")) ? Symbol(v[2:end]) : v) )
-          end
+          setfield!(settings, Symbol(k_str), ((isa(v, String) && startswith(v, ":")) ? Symbol(v[2:end]) : v) )
         elseif k_str in VALID_CONNECTION_KEYS
           # Exact membership only — no `_suggest_name` fallback in this direction, which would
           # resolve `connections:` to `options` and mislabel an internal-field attempt.
@@ -922,7 +896,11 @@ function _warn_pool_takeover(msg::String, path::String, existing::String,
   return nothing
 end
 
-function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,PormGSettings} = config)
+# `implicit = true` is `Models.set_models`' channel and nobody else's: it records on the new entry
+# that the application did not choose this configuration (#553). `Models._pick_connect_key` and
+# the migrate branch below read that flag; before #553 both inferred it from `isabspath`, which the
+# relative `set_models(mod, "db")` form inverts.
+function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,PormGSettings} = config, implicit::Bool = false)
   # create settings if does not exists
   path === nothing && (path = DB_PATH )
 
@@ -952,7 +930,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   selected_env = _effective_env(env, _peek_default_env(db_settings_file))
 
   # #550: one folder, one entry. `config[path] = …` used to add a SECOND entry whenever the same
-  # folder was already registered under a different spelling — typically an absolute path minted
+  # folder was already registered under a different spelling — typically the absolute path minted
   # by the implicit load in `set_models`. Two entries meant two pools and possibly two databases
   # for one folder, and which one a query reached depended on which key its model bound to: a
   # safety check written against `config["db"]` could be inspecting an entry the queries never
@@ -961,10 +939,12 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   key = path
   existing = _resolve_loaded_key(path, config)
   if existing !== nothing && existing != path
-    if isabspath(existing) && !isabspath(path)
+    if config[existing].implicit && !implicit
       # The caller is naming the folder explicitly; the entry we hold was minted implicitly, with
-      # an environment nobody chose. Migrate to the caller's key. Models still bound to the old
-      # one are remapped by `Models.ensure_model_initialized`, which warns when it does.
+      # an environment nobody chose — its own `implicit` flag says so (#553; this used to be read
+      # off the key's spelling, so an explicit absolute-path load was migrated away as if it were
+      # implicit). Migrate to the caller's key. Models still bound to the old one are remapped by
+      # `Models.ensure_model_initialized`, which warns when it does.
       #
       # `close_pool!` waits up to its drain budget for checked-out connections and then closes them
       # anyway (#47), so a migration during live traffic may block `load` for a few seconds and
@@ -972,9 +952,9 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
       # this change exists to eliminate, and makes `load` behave differently depending on
       # transient runtime state — so migrate, but say how much was in use, because that is the
       # number that explains a request dying a moment later.
-      _warn_pool_takeover("PormG: this folder was already loaded under an implicit absolute-path " *
-                          "key; re-registering it under the key you asked for and discarding the " *
-                          "implicit entry.", path, existing, config)
+      _warn_pool_takeover("PormG: this folder was already loaded under a key the implicit load " *
+                          "minted; re-registering it under the key you asked for and discarding " *
+                          "the implicit entry.", path, existing, config)
       config[existing].connections !== nothing && close_pool!(config[existing].connections)
       delete!(config, existing)
     else
@@ -998,7 +978,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   # silently changed that lock's identity for one folder. `key` and `path` name the same folder,
   # so this loses nothing — `read_db_connection_data` below is still given `path`, the spelling
   # that was checked against the filesystem above.
-  config[key] = Settings(app_env = selected_env, db_def_folder=key)
+  config[key] = Settings(app_env = selected_env, db_def_folder = key, implicit = implicit)
   settings::PormGSettings = config[key]
 
   settings.db_config_settings = read_db_connection_data(path, settings)
@@ -1216,7 +1196,9 @@ end
     status(path_or_key::String) -> NamedTuple
 
 Return a compact server-oriented status payload describing whether a
-configuration is loaded and reachable.
+configuration is loaded and reachable. `implicit` is `true` for an entry that
+`Models.set_models` minted through its implicit load rather than one the
+application loaded itself (#553).
 """
 function status(path_or_key::String)
   key = _resolve_loaded_key(path_or_key)
@@ -1229,6 +1211,7 @@ function status(path_or_key::String)
       app_env = nothing,
       db_def_folder = nothing,
       dynamic = false,
+      implicit = false,
     )
   end
 
@@ -1241,6 +1224,7 @@ function status(path_or_key::String)
     app_env = settings.app_env,
     db_def_folder = settings.db_def_folder,
     dynamic = settings.db_def_folder == "dynamic_connection",
+    implicit = settings.implicit,
   )
 end
 
@@ -1256,42 +1240,40 @@ mutable struct Settings <: PormGSettings
   db_def_folder::String # same then key
   model_file::String
   db_config_settings::Dict{String,Any}
-  log_queries::Bool
-  log_level::Logging.LogLevel
-  log_to_file::Bool
   change_db::Bool # Enable makemigrations and migrations functionality in the app
   change_data::Bool # Enable the change of the database (upgrade, delete) in the app
   connections::Union{Nothing, PormGPostgres, PormGSQLite}
   time_zone::String
   django_prefix::Union{Nothing, String}
+  # #553: `true` only for an entry `Models.set_models` minted through its implicit load, recorded
+  # at construction via `load(...; implicit = true)`. Not in `VALID_CONFIG_KEYS`, so YAML cannot set
+  # it. `Models._pick_connect_key` and `load`'s migrate branch both key on it — both used to infer
+  # it from `isabspath(key)`, which the relative `set_models(mod, "db")` form inverts.
+  implicit::Bool
 
   Settings(;
       app_env             = haskey(ENV, "PORMG_ENV") ? ENV["PORMG_ENV"] : "dev",           
       db_def_folder       = DB_PATH,
       model_file          = MODEL_FILE,
       db_config_settings  = Dict{String,Any}(),
-      log_queries         = true,
-      log_level           = Logging.Debug,
-      log_to_file         = true,
       change_db           = false,
       change_data         = false,
       connections         = nothing,
           time_zone           = UTC_TIMEZONE,
-      django_prefix       = nothing
+      django_prefix       = nothing,
+      implicit            = false
   ) =
   new(
       app_env,
       db_def_folder,
       model_file,
       db_config_settings,
-      log_queries,
-      log_level,
-      log_to_file,
       change_db,
       change_data,
       connections,
       time_zone,
-      django_prefix
+      django_prefix,
+      implicit
   )
 end
 

@@ -831,21 +831,20 @@ this replaced OR'd both conditions together and `break`ed on the first `config` 
 either — and `config` is a `Dict`, so a folder-name match on an earlier-hashed key beat an exact
 path match on a later one. Which database a model reached was decided by hash order.
 
-**Explicit beats implicit (#550).** When one rank holds several candidates, a key that is an
-absolute path loses to one that is not. An absolute-path key is the signature of the implicit load
-below — `set_models` registers the entry under the caller's own path, with the environment taken
-from `default_env:` rather than from the application. A short key is what an explicit
-`Configuration.load("db"; env = ...)` mints. When a single folder carries both, the explicit entry
-is the one the application asked for, and the implicit one is the entry whose environment nobody
-chose. Ranking alone is not enough here: both keys match at the path rank, and a plain
-lexicographic tiebreak picks the absolute path **every time**, because `/` (0x2F) sorts below every
-letter and digit.
+**Explicit beats implicit (#550, recorded since #553).** When one rank holds several candidates, an
+entry minted by the implicit load below loses to one the application loaded itself. `set_models`
+registers the implicit entry under the caller's own path, with the environment taken from
+`PORMG_ENV`/`default_env:` rather than from the application, and marks it
+`Settings.implicit = true` — the only place that flag is ever set. `Configuration.load` mints every
+explicit entry with it `false`, and YAML cannot reach it. When a single folder carries both, the
+explicit entry is the one the application asked for. Ranking alone is not enough here: both keys
+match at the path rank, and a plain lexicographic tiebreak picks an absolute path **every time**,
+because `/` (0x2F) sorts below every letter and digit.
 
-`isabspath` is a *proxy* for "was minted implicitly", not a recorded fact, and it is exact only for
-the `@import_models` route, which always passes an absolute folder. A direct
-`set_models(mod, "db")` implicit-loads under the relative string, and this rule cannot tell that
-entry from an explicit one. Recording implicitness on the settings object would make it exact;
-until then the proxy holds for the path the incident came from.
+The flag replaced `isabspath(key)` as the signal. That proxy was exact only for the
+`@import_models` route, which always passes an absolute folder; `set_models(mod, "db")`
+implicit-loads under the relative string, so an explicitly loaded absolute key lost to it. The
+key's spelling no longer matters.
 
 **Unique, or ambiguous.** When the preference above still leaves more than one candidate, the
 choice is genuinely arbitrary: we warn naming every candidate, then take the lexicographically
@@ -868,8 +867,10 @@ function _resolve_connect_key(path::AbstractString, config)
     tag = _folder_tag(path)
     tag_usable = _usable_folder_tag(tag)
 
-    by_path = String[]
-    by_name = String[]
+    # Each candidate carries the entry's `implicit` flag (#553): the picker below never sees the
+    # settings objects, and the flag travelling with the key is what stops the two disagreeing.
+    by_path = Pair{String,Bool}[]
+    by_name = Pair{String,Bool}[]
     for (k, v) in config
         folder = v.db_def_folder
         # `add_connection` entries carry this sentinel instead of a real folder, so every one of
@@ -877,9 +878,9 @@ function _resolve_connect_key(path::AbstractString, config)
         # the same reason; the two resolvers should not disagree about what a folder is.
         folder == "dynamic_connection" && continue
         if _canonical_folder_path(folder) == target
-            push!(by_path, k)
+            push!(by_path, k => v.implicit)
         elseif tag_usable && _folder_tag(folder) == tag
-            push!(by_name, k)
+            push!(by_name, k => v.implicit)
         end
     end
 
@@ -894,15 +895,23 @@ end
 # Precondition: `candidates` is non-empty. Both call sites in `_resolve_connect_key` guard with
 # `isempty`, and the `::String` return leaves nowhere to report an empty set, so this is an
 # internal contract rather than a validated argument.
-function _pick_connect_key(candidates::Vector{String}, path::AbstractString, rank::String)::String
-    length(candidates) == 1 && return only(candidates)
+#
+# Each candidate is `key => implicit`, the flag read off the settings entry by `_resolve_connect_key`
+# (#553). A bare `Vector{String}` is a `MethodError` on purpose: the flag used to be inferred here
+# from `isabspath(key)`, and a call site that still passes keys alone must not silently get that
+# rule back.
+function _pick_connect_key(candidates::Vector{Pair{String,Bool}}, path::AbstractString,
+                           rank::String)::String
+    length(candidates) == 1 && return first(only(candidates))
 
     # Narrow to the explicitly loaded keys FIRST, then break any remaining tie inside that set.
     # Doing it the other way round — preferring only when exactly one explicit key exists, and
-    # otherwise sorting the whole list — puts the absolute keys back in the running, and `/`
-    # (0x2F) sorts below every letter, so a single implicit key beat TWO explicit ones.
-    explicit = filter(!isabspath, candidates)
-    preferred = isempty(explicit) ? candidates : explicit
+    # otherwise sorting the whole list — puts the implicit keys back in the running, and an
+    # absolute path sorts below every letter (`/` is 0x2F), so a single implicit key beat TWO
+    # explicit ones.
+    keys_all = first.(candidates)
+    explicit = [k for (k, implicit) in candidates if !implicit]
+    preferred = isempty(explicit) ? keys_all : explicit
     chosen = first(sort(preferred))
 
     # The prose is chosen by RANK, not by which branch we took. The two ranks describe opposite
@@ -920,8 +929,9 @@ function _pick_connect_key(candidates::Vector{String}, path::AbstractString, ran
 
     # Orthogonal to the rank: did the explicit/implicit preference actually decide this?
     decided = length(preferred) < length(candidates) ?
-        "Binding to the explicitly loaded key; the others were minted implicitly, so their " *
-        "environment came from `default_env:` rather than from your application. " :
+        "Binding to the key your application loaded; the others are recorded as minted by " *
+        "`set_models`' implicit load, so their environment came from `PORMG_ENV`/`default_env:` " *
+        "rather than from your application. " :
         "Nothing distinguishes them, so the lexicographically first is used and the choice at " *
         "least stays the same on every boot. "
 
@@ -930,7 +940,7 @@ function _pick_connect_key(candidates::Vector{String}, path::AbstractString, ran
     # warning naming no actionable item.
     @warn("PormG: $problem, so the binding is ambiguous and queries may reach the wrong " *
           "database. " * decided * remedy,
-          folder = path, rank = rank, candidates = sort(candidates), chosen = chosen)
+          folder = path, rank = rank, candidates = sort(keys_all), chosen = chosen)
     return chosen
 end
 
@@ -958,8 +968,10 @@ Registration does four things:
    is filled in here from the Julia binding, lowercased (`Race = Model(...)` → table `race`).
 2. **Binds the connection.** `path` is matched against the configured folders to find the connection
    key, strongest match first and preferring an explicitly loaded key over one minted by the
-   implicit load below (`_resolve_connect_key`). A folder that matches nothing is loaded
-   implicitly, **with a warning** — that path guesses the environment (from `default_env:`) and
+   implicit load below, which is recorded as `implicit = true` on the entry
+   (`_resolve_connect_key`). A folder that matches nothing is loaded
+   implicitly, **with a warning** — that path guesses the environment (from `PORMG_ENV`, else
+   `default_env:`) and
    the key (the caller's own absolute path), so call `PormG.Configuration.load(path; env = ...)`
    first when you need a specific one, and expect `MissingConfigurationError` from that implicit
    load if `path` holds no `connection.yml`. See `docs/src/configuration/advanced.md`.
@@ -1041,21 +1053,25 @@ function set_models(_module::Module, path::String)::Nothing
   if isnothing(connect_key)
     # Nothing matched, so this call is about to GUESS two things at once:
     #
-    #   1. the environment — `load` is called with no `env`, so the file's `default_env:` wins.
+    #   1. the environment — `load` is called with no `env`, so `PORMG_ENV` wins when set and the
+    #      file's `default_env:` otherwise (`Configuration._effective_env`).
     #      In a server that has not selected its env yet, that is usually `dev`, i.e. production.
     #   2. the key — the entry is registered under `path`, which callers pass as an ABSOLUTE path.
     #      A later `load("db"; env=...)` then creates a SECOND entry for the same folder, and which
     #      one a query uses depends on which the model happened to bind to. A safety check written
     #      against `config["db"]` is then inspecting an entry the queries never reach.
+    #      The entry is marked `implicit = true` (#553): that flag, not the key's spelling, is what
+    #      `_pick_connect_key` and `Configuration.load`'s migrate branch use to prefer the
+    #      application's own entry over this one.
     #
     # The fix belongs at the call site: `Configuration.load(path; env = ...)` FIRST — and for a
     # precompiled package that call has to run at runtime (an `__init__`), because a module-body
     # call does not re-run when the image is loaded. See docs/src/configuration/advanced.md.
     @warn("PormG: no configured connection matches this models folder, so it is being loaded " *
-          "implicitly — the environment is taken from the file's `default_env:` and the entry is " *
+          "implicitly — the environment is taken from `PORMG_ENV`/the file's `default_env:` and the entry is " *
           "keyed by this path. Load it explicitly before registering models to choose both.",
           folder = path)
-    Configuration.load(path)
+    Configuration.load(path; implicit = true)
     # Re-resolve rather than assume `path` became the key: since #550 `Configuration.load` reuses
     # an entry already held under another spelling of this folder instead of adding a second one,
     # so the key it registered is not necessarily the string we handed it.

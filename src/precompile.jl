@@ -1,5 +1,4 @@
 using PrecompileTools
-import Logging
 
 @setup_workload begin
   # Mock settings to allow Model and QueryBuilder compilation Without actual DB connection
@@ -19,14 +18,12 @@ import Logging
     db_def_folder = "precompile",
     model_file = "models.jl",
     db_config_settings = Dict{String, Any}(),
-    log_queries = false,
-    log_level = Logging.Error,
-    log_to_file = false,
     change_db = false,
     change_data = false,
     connections = mock_pool,
     time_zone = "UTC",
-    django_prefix = nothing
+    django_prefix = nothing,
+    implicit = false
   )
 
   # Register the mock settings in the global config

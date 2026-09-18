@@ -11,7 +11,8 @@ model's queries reached was decided by hash order, and nothing was logged when i
 The resolver is pure apart from its warnings, so its rules pin deterministically here:
 
   1. the strongest rank wins (exact path over folder name);
-  2. within a rank, an explicitly loaded key beats an implicitly minted absolute-path one;
+  2. within a rank, an explicitly loaded key beats one `set_models` minted implicitly — recorded on
+     the entry as `implicit = true`, never inferred from the key's spelling (#553);
   3. anything still tied is a warned ambiguity resolved lexicographically, for reproducibility.
 
 Rule 2 is not decoration. The incident behind #550 is one folder registered TWICE — once implicitly
@@ -108,7 +109,7 @@ end
     mkpath(joinpath(app, "db"))
     cd(app) do
       abs_key = joinpath(app, "db")          # what the implicit load in set_models registers
-      cfg = Dict(abs_key => _S550(db_def_folder = abs_key),
+      cfg = Dict(abs_key => _S550(db_def_folder = abs_key, implicit = true),
                  "db"    => _S550(db_def_folder = "db"))
 
       # The lexicographic trap this rule exists to defeat: sort() puts the absolute path first.
@@ -121,6 +122,40 @@ end
       end
     end
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The recorded flag decides, not the key's spelling (#553)
+# `_pick_connect_key` used `isabspath(key)` as a stand-in for "minted by the implicit load". That
+# is exact on the `@import_models` route, which always registers an absolute folder, and inverted
+# for the other documented form: `set_models(mod, "db")` implicit-loads under the RELATIVE string,
+# so an application that loaded "/srv/app/db" explicitly lost to its own implicit entry. The fact
+# is now recorded on the settings entry, and the key's shape is irrelevant.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "The recorded flag decides, not the key's spelling (#553)" begin
+  # The trap the proxy walked into, documented: filtering on `!isabspath` keeps "db".
+  @test filter(!isabspath, ["/srv/app/db", "db"]) == ["db"]
+
+  # Same candidates with the fact attached: the explicit absolute key wins, and the warning says
+  # the losers were recorded as implicit rather than hedging about their spelling.
+  key = @test_logs((:warn, r"recorded as minted by `set_models`' implicit load"), match_mode = :any,
+                   PormG.Models._pick_connect_key(["/srv/app/db" => false, "db" => true],
+                                                  "x/db", "folder name"))
+  @test key == "/srv/app/db"
+
+  # Through the resolver, which reads the flag off each settings entry.
+  cfg = Dict("/srv/app/db" => _S550(db_def_folder = "/srv/app/db"),
+             "db"          => _S550(db_def_folder = "db", implicit = true))
+  key = @test_logs (:warn,) match_mode = :any PormG.Models._resolve_connect_key("x/db", cfg)
+  @test key == "/srv/app/db"
+
+  # The flag defaults to explicit — a plain `Settings()` is what `Configuration.load` mints.
+  @test !_S550().implicit
+
+  # A bare key vector is no longer a candidate list. The flag travels with the key so the two
+  # cannot disagree, and the old signature must fail by dispatch rather than silently fall back
+  # to the spelling rule.
+  @test_throws MethodError PormG.Models._pick_connect_key(["/b/db", "/a/db"], "/c/db", "path")
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -144,31 +179,31 @@ end
   @test (@test_logs((:warn,), match_mode = :any,
                     PormG.Models._resolve_connect_key("third_app/db", cfg))) == "alpha"
 
-  # Two ABSOLUTE keys for the same folder: the explicit-beats-implicit filter finds no explicit
+  # Two IMPLICIT keys for the same folder: the explicit-beats-implicit filter finds no explicit
   # candidate, so it falls through to the reproducible sort rather than preferring at random.
-  @test PormG.Models._pick_connect_key(["/b/db", "/a/db"], "/c/db", "path") == "/a/db"
+  @test PormG.Models._pick_connect_key(["/b/db" => true, "/a/db" => true], "/c/db", "path") == "/a/db"
 
   # TWO explicit candidates plus one implicit: the preference must narrow to the explicit SET
   # first and break the tie inside it. Preferring only when exactly one explicit key exists put
   # the absolute key back in the running, and "/" sorts below every letter — so a single implicit
   # key beat two explicit ones, which is the very outcome the rule exists to prevent.
-  @test PormG.Models._pick_connect_key(["/x/db", "db_b", "db_a"], "other/db", "folder name") == "db_a"
+  @test PormG.Models._pick_connect_key(["/x/db" => true, "db_b" => false, "db_a" => false], "other/db", "folder name") == "db_a"
 
   # The prose must follow the RANK, because the two ranks describe opposite situations and their
   # remedies contradict each other. A rank-agnostic message is wrong at one of them, and both
   # wordings shipped wrong before this was asserted.
   @test_logs((:warn, r"registered under more than one configuration key"), match_mode = :any,
-             PormG.Models._pick_connect_key(["/b/db", "/a/db"], "/c/db", "path"))
+             PormG.Models._pick_connect_key(["/b/db" => true, "/a/db" => true], "/c/db", "path"))
   @test_logs((:warn, r"Load the folder once"), match_mode = :any,
-             PormG.Models._pick_connect_key(["/b/db", "/a/db"], "/c/db", "path"))
+             PormG.Models._pick_connect_key(["/b/db" => true, "/a/db" => true], "/c/db", "path"))
   @test_logs((:warn, r"distinct final components"), match_mode = :any,
-             PormG.Models._pick_connect_key(["db_b", "db_a"], "other/db", "folder name"))
+             PormG.Models._pick_connect_key(["db_b" => false, "db_a" => false], "other/db", "folder name"))
 
   # The candidate list must be the FULL set. Narrowing it to the preferred keys dropped exactly
   # the implicit duplicates the warning is telling the reader to go and remove.
   full = nothing
   logs = Test.collect_test_logs() do
-    PormG.Models._pick_connect_key(["/x/db", "db_b", "db_a"], "other/db", "folder name")
+    PormG.Models._pick_connect_key(["/x/db" => true, "db_b" => false, "db_a" => false], "other/db", "folder name")
   end
   for rec in logs[1]
     haskey(rec.kwargs, :candidates) && (full = rec.kwargs[:candidates])
@@ -258,7 +293,9 @@ end
       mkpath(joinpath(app, "db"))
       cd(app) do
         abs_key = joinpath(app, "db")
-        PormG.config[abs_key] = _S550(db_def_folder = abs_key)
+        # The incident shape: the absolute entry is the one the implicit load minted, and since
+        # #553 that is a recorded flag rather than something read off the key's spelling.
+        PormG.config[abs_key] = _S550(db_def_folder = abs_key, implicit = true)
         PormG.config["db"]    = _S550(db_def_folder = "db")
 
         # A model carrying a key that is NOT in config — the shape left behind when a package is
@@ -318,6 +355,12 @@ end
     # The exact value is knowable here, so assert it rather than merely its shape.
     @test haskey(PormG.config, db)
     @test Base.invokelatest(getfield, scratch, :Thing).connect_key == db
+    @test PormG.config[db].implicit                 # recorded on the entry (#553), not read off the key
+
+    # An explicit reload of that same key rebuilds the entry unflagged: `existing == path`, so no
+    # migrate/reuse branch runs and the fact recorded is this caller's, not the old entry's.
+    Configuration.load(db; env = "test")
+    @test !PormG.config[db].implicit
 
     # Second call, now that the folder IS configured under that key: resolves silently.
     @test_logs(min_level = Logging.Warn,
@@ -349,9 +392,11 @@ end
           "default_env: test\ntest:\n  adapter: SQLite\n  database: \":memory:\"\n" *
           "  config:\n    change_db: true\n    change_data: true\n")
 
-    # 1. The implicit shape: the folder first registered under its ABSOLUTE path.
-    Configuration.load(db; env = "test")
+    # 1. The implicit shape: the folder first registered under its ABSOLUTE path, flagged the way
+    #    `set_models`' implicit branch flags it (#553 — the flag, not the path shape, is the fact).
+    Configuration.load(db; env = "test", implicit = true)
     @test collect(keys(PormG.config)) == [db]
+    @test PormG.config[db].implicit
 
     # 2. The application then loads it explicitly by short name, from its own root. Before #550
     #    this added a rival entry; now it migrates, because an explicit key beats an implicit one.
@@ -359,6 +404,7 @@ end
       @test_logs((:warn,), match_mode = :any, Configuration.load("db"; env = "test"))
       @test collect(keys(PormG.config)) == ["db"]        # exactly one entry, and it is the explicit one
       @test !haskey(PormG.config, db)                     # the implicit entry is gone, not shadowed
+      @test !PormG.config["db"].implicit                  # and the survivor is the explicit one
     end
 
     # 3. The reverse order must NOT demote: an absolute-path load over an existing short key
@@ -372,7 +418,7 @@ end
 
     # 4. `load_many` reports the key that was really registered, not the string it was handed.
     empty!(PormG.config)
-    Configuration.load(db; env = "test")
+    Configuration.load(db; env = "test", implicit = true)
     cd(app) do
       @test Configuration.load_many(["db"]; env = "test") == ["db"]
     end
@@ -389,7 +435,7 @@ end
 
     # 6. `load` reports the key it registered — the caller's spelling is not always it.
     empty!(PormG.config)
-    Configuration.load(db; env = "test")
+    Configuration.load(db; env = "test", implicit = true)
     cd(app) do
       @test Configuration.load("db"; env = "test") == "db"        # migrated to the explicit key
       @test Configuration.load(db; env = "test") == "db"          # reused, not re-registered
@@ -412,7 +458,7 @@ end
     #    by pre-populating the LOCAL dict with the implicit absolute key.
     empty!(PormG.config)
     local_cfg2 = Dict{String,PormG.PormGSettings}()
-    Configuration.load(db; env = "test", config = local_cfg2)
+    Configuration.load(db; env = "test", config = local_cfg2, implicit = true)
     @test collect(keys(local_cfg2)) == [db]
     cd(app) do
       @test Configuration.load("db"; env = "test", config = local_cfg2) == "db"
@@ -438,6 +484,20 @@ end
             Configuration._resolve_loaded_key("./db") == "db"
       @test PormG.Models._resolve_connect_key("db/", PormG.config) ==
             Configuration._resolve_loaded_key("db/") == "db"
+    end
+
+    # 9. Two EXPLICIT spellings of one folder — absolute first, short second — are one entry, kept
+    #    under the first key (#553). Before, the absolute one was taken for the implicit load and
+    #    migrated away; it was the application's own choice, so now it is reused, with the same
+    #    "already loaded under a different key" warning the reverse order (step 3) always had.
+    empty!(PormG.config)
+    Configuration.load(db; env = "test")
+    @test !PormG.config[db].implicit
+    cd(app) do
+      @test_logs((:warn, r"already loaded under a different key"), match_mode = :any,
+                 Configuration.load("db"; env = "test"))
+      @test collect(keys(PormG.config)) == [db]
+      @test !haskey(PormG.config, "db")
     end
   finally
     empty!(PormG.config)

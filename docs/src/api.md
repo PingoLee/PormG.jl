@@ -623,7 +623,8 @@ Returns a rich status payload:
 
 ```julia
 s = PormG.Configuration.status("db")
-# (key="db", loaded=true, reachable=true, adapter="PostgreSQL", app_env="prod")
+# (key="db", loaded=true, reachable=true, adapter="PostgreSQL", app_env="prod",
+#  db_def_folder="db", dynamic=false, implicit=false)
 ```
 
 For the full configuration guide, see [Configuration](configuration/index.md).

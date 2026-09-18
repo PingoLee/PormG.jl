@@ -113,6 +113,19 @@ function resolve_import_models_path(source_file::AbstractString, import_path::Ab
     return isempty(candidates) ? normpath(import_path) : first(candidates)
 end
 
+# Define an `__init__` in the models submodule that re-runs `set_models` with the folder baked
+# in as a literal. Two facts about it, measured in #552 rather than assumed:
+#
+#   * It is NOT what makes model registration survive precompilation. It is defined by
+#     `Core.eval` after the submodule has closed, and in a restored image it is not observed to
+#     run at all. The recovery comes from `Models.ensure_model_initialized` cases 2b/2c, which
+#     read `__pormg_init_path__` on the first `.objects` access.
+#   * If a Julia release ever DID run it, it would fire before the parent package's `__init__`,
+#     with `config` still empty, so `set_models` would implicit-load: absolute key, environment
+#     from PORMG_ENV/`default_env:` — the #550 incident. `test/unit/test_reload.jl`'s
+#     boot-pattern testset is what would notice.
+#
+# It is kept as a no-cost belt, not as the mechanism.
 function ensure_models_init!(mod::Module, dir_path::AbstractString)
     if isdefined(mod, :__init__)
         return nothing
@@ -150,7 +163,7 @@ function _post_import_setup(calling_module::Module, source_file::String,
     # Obtain the freshly-created submodule
     mod = getfield(calling_module, alias)
 
-    # Inject __init__() so model registration survives precompilation
+    # Inject __init__() into the submodule (a belt only — see the note on `ensure_models_init!`)
     try
         ensure_models_init!(mod, dir_path)
     catch e
@@ -179,7 +192,8 @@ The `alias` must match the module name defined in the file.
 The macro automatically:
 - Resolves the path relative to the calling file
 - Registers models for the current session
-- Injects an `__init__()` function for post-precompilation re-registration
+- Injects an `__init__()` into the model module (see `ensure_models_init!` for what that does
+  and does not guarantee — post-precompilation recovery is `Models.ensure_model_initialized`)
 - Handles World Age issues in Julia 1.12+
 
 Users do NOT need to manually add an `__init__()` function to their model files.

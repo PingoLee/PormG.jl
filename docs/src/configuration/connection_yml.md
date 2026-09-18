@@ -121,7 +121,7 @@ The PostgreSQL-only keys are inert under `adapter: SQLite`, so a block may carry
 
 ## Configuration Settings (`config:`)
 
-At the core of `connection.yml` is the `config` sub-dictionary. This section governs runtime permissions, logging, timezones, and naming conventions for the loaded environment:
+At the core of `connection.yml` is the `config` sub-dictionary. This section governs runtime permissions, timezones, and naming conventions for the loaded environment:
 
 ### Unrecognised keys
 
@@ -129,9 +129,8 @@ At the core of `connection.yml` is the `config` sub-dictionary. This section gov
     Every level of the file is checked on load, and anything unrecognised emits a `@warn` naming the
     key — plus a *"did you mean"* when the name is close to a real one:
 
-    - **Under `config:`** — only `change_db`, `change_data`, `django_prefix`, `time_zone`,
-      `log_queries`, `log_level`, `log_to_file` and `model_file` are accepted
-      (e.g. `djago_prefix` → `django_prefix`).
+    - **Under `config:`** — only `change_db`, `change_data`, `django_prefix`, `time_zone` and
+      `model_file` are accepted (e.g. `djago_prefix` → `django_prefix`).
     - **Directly under an environment block** — only the keys in the table above
       (e.g. `sslmod` → `sslmode`). Spellings borrowed from other tools are recognised too:
       `user` → `username`, `pool` → `pool_size`, `dbname` → `database`, `ENGINE` → `adapter`.
@@ -141,10 +140,9 @@ At the core of `connection.yml` is the `config` sub-dictionary. This section gov
       environment key written under `config:`, is reported as misplaced and tells you where it
       belongs, rather than being reported as unknown.
 
-    A malformed `config:` (one that is not a block of settings) and an unrecognised `log_level:`
-    value are reported the same way. An environment block that is not a block of settings, and one
-    with no `adapter:`, raise `InvalidConfigurationError` instead — they leave nothing to connect
-    with.
+    A malformed `config:` (one that is not a block of settings) is reported the same way. An
+    environment block that is not a block of settings, and one with no `adapter:`, raise
+    `InvalidConfigurationError` instead — they leave nothing to connect with.
 
 !!! warning "Both default to `false`, and a key under the wrong environment is silent"
     Omit the `config:` block and you get `change_data: false` **and** `change_db: false` — writes

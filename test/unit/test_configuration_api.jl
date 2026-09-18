@@ -106,6 +106,7 @@ end
         @test missing.loaded == false
         @test missing.reachable == false
         @test missing.adapter === nothing
+        @test missing.implicit == false
 
         # A loaded SQLite in-memory configuration should be reachable.
         PormG.Configuration.load(db_dir; env="test")
@@ -117,6 +118,7 @@ end
         @test loaded.adapter == "SQLite"
         @test loaded.app_env == "test"
         @test loaded.dynamic == false
+        @test loaded.implicit == false                    # an application load, never the implicit one (#553)
 
         _cleanup_configuration_test_keys([db_dir])
     end
@@ -757,9 +759,6 @@ end
                     "    change_data: true\n" *
                     "    django_prefix: myapp\n" *
                     "    time_zone: 'America/Sao_Paulo'\n" *
-                    "    log_queries: false\n" *
-                    "    log_level: 'warn'\n" *
-                    "    log_to_file: false\n" *
                     "    model_file: 'custom_models.jl'\n"
                 )
             end
@@ -776,9 +775,6 @@ end
             @test s.change_data == true
             @test s.django_prefix == "myapp"
             @test s.time_zone == "America/Sao_Paulo"
-            @test s.log_queries == false
-            @test s.log_level == Logging.Warn
-            @test s.log_to_file == false
             @test s.model_file == "custom_models.jl"
 
             _cleanup_configuration_test_keys([db_dir])
@@ -1166,65 +1162,36 @@ end
         end
     end
 
-    @testset "log_level: values" begin
+    @testset "the removed log_* keys are reported as unrecognised (#387)" begin
+        # `log_queries`, `log_level` and `log_to_file` were allowlisted, parsed, stored on `Settings`
+        # and documented — and nothing in src/ ever read them. Silence on load therefore read as
+        # "recognised and applied" once #348 started warning on every other unknown key. Removed
+        # rather than wired: they now trip the same warning as any other dead key, naming it.
         mktempdir() do temp_root
             db_dir = _write_348_yml(joinpath(temp_root, "db"),
                 "dev:\n" *
                 "  adapter: SQLite\n" *
                 "  database: \":memory:\"\n" *
                 "  config:\n" *
-                "    log_level: 'verbose'\n")
+                "    log_queries: false\n")
 
             warns = _load_348(db_dir)
+            by_key = _by_key(warns)
 
             @test length(warns) == 1
-            @test occursin("unrecognised `log_level:` value", warns[1].message)
-            @test PormG.Configuration.get_settings(db_dir).log_level == Logging.Debug
+            @test haskey(by_key, "log_queries")
+            @test occursin("unrecognised config key; ignored", by_key["log_queries"].message)
+            @test _kw(by_key["log_queries"])[:env] == "dev"
 
             _cleanup_configuration_test_keys([db_dir])
         end
 
-        # Substring matching is deliberate and must survive the Dict -> ordered-tuple change.
-        mktempdir() do temp_root
-            db_dir = _write_348_yml(joinpath(temp_root, "db"),
-                "dev:\n" *
-                "  adapter: SQLite\n" *
-                "  database: \":memory:\"\n" *
-                "  config:\n" *
-                "    log_level: 'warning'\n")
-
-            @test isempty(_load_348(db_dir))
-            @test PormG.Configuration.get_settings(db_dir).log_level == Logging.Warn
-
-            _cleanup_configuration_test_keys([db_dir])
+        # Gone from the struct and the allowlist, not merely from the docs: a slot that survived
+        # would be exactly the "stored but never read" shape this closes.
+        for k in ("log_queries", "log_level", "log_to_file")
+            @test !hasfield(PormG.Configuration.Settings, Symbol(k))
+            @test !(k in PormG.Configuration.VALID_CONFIG_KEYS)
         end
-
-        # A value containing two level names must resolve deterministically: the matcher walks
-        # LOG_LEVEL_NAMES in order and stops at the FIRST hit. The `Dict` + no-`break` loop this
-        # replaced took the LAST match in an unspecified iteration order.
-        #
-        # `info_warn` is the value that discriminates. It must be `Info` (first in declared order);
-        # last-match-wins yields `Warn`. A value like `debug_or_error` proves nothing — it happens
-        # to come back `Debug` under both.
-        mktempdir() do temp_root
-            db_dir = _write_348_yml(joinpath(temp_root, "db"),
-                "dev:\n" *
-                "  adapter: SQLite\n" *
-                "  database: \":memory:\"\n" *
-                "  config:\n" *
-                "    log_level: 'info_warn'\n")
-
-            @test isempty(_load_348(db_dir))
-            @test PormG.Configuration.get_settings(db_dir).log_level == Logging.Info
-
-            _cleanup_configuration_test_keys([db_dir])
-        end
-
-        # Order-independent statement of the same contract, so a reordering of the tuple is caught
-        # even where a two-name value happens to agree.
-        @test first(PormG.Configuration.LOG_LEVEL_NAMES)[1] == "debug"
-        @test [n for (n, _) in PormG.Configuration.LOG_LEVEL_NAMES] ==
-              ["debug", "info", "warn", "error"]
     end
 
     @testset "the legacy env: key keeps its own warning and gains no second one" begin
@@ -1360,9 +1327,6 @@ end
                 "    change_data: true\n" *
                 "    django_prefix: myapp\n" *
                 "    time_zone: 'UTC'\n" *
-                "    log_queries: false\n" *
-                "    log_level: 'warn'\n" *
-                "    log_to_file: false\n" *
                 "    model_file: 'custom_models.jl'\n")
 
             @test isempty(_load_348(db_dir))
@@ -1371,7 +1335,6 @@ end
             s = PormG.Configuration.get_settings(db_dir)
             @test s.change_data == true
             @test s.django_prefix == "myapp"
-            @test s.log_level == Logging.Warn
 
             _cleanup_configuration_test_keys([db_dir])
         end

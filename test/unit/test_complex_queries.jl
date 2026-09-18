@@ -577,10 +577,10 @@ ResultNoPrefixModel._module = Main
     # makes the collected vector `Vector{Any}` and routes it to the per-element arm.
     #
     # So the three rows below CANNOT be checked against each other — all three were broken before
-    # this fix, and three identically-wrong renders would agree. They are pinned against the
-    # rendered SQL text instead, with the `Value`-bearing variadic call (which worked before and
-    # after) as the independent cross-check that the shape is right.
-    hom_sqls = Dict{String, String}()
+    # this fix, and three identically-wrong renders would agree. Each is pinned ABSOLUTELY, and the
+    # `Value`-bearing spelling above (which worked before AND after, so it is the only genuinely
+    # independent reference available) is used to show what a separator actually changes.
+    hom = Dict{String, Tuple{String, Vector{Any}}}()
     for (label, build) in (
             ("vector",   () -> Concat(["forename", "surname"])),
             ("variadic", () -> Concat("forename", "surname")),
@@ -588,27 +588,39 @@ ResultNoPrefixModel._module = Main
         )
         q = DriverModel.objects
         q.values("full_name" => build())
-        hom_sqls[label] = q.list(show_query=:dict)[:sql_text]
+        r = q.list(show_query=:dict)
+        hom[label] = (r[:sql_text], collect(Any, r[:parameters]))
     end
 
-    # An absolute assertion, not a relative one: both columns present, concatenated, no bound
-    # parameter (there is no literal to bind), and no stray `__@` path leaking into the SQL.
-    for (label, sql) in hom_sqls
+    for (label, (sql, params)) in hom
         @test contains(sql, "forename")
         @test contains(sql, "surname")
-        @test contains(sql, "CONCAT") || contains(sql, "||")
+        # Unconditional `CONCAT`, matching the two rows above against this same mock PostgreSQL
+        # connection. A `contains(sql, "CONCAT") || contains(sql, "||")` disjunction here would
+        # silently admit a SQLite-shaped render from a PostgreSQL connection — i.e. it would stop
+        # catching a dialect-routing regression that the neighbouring rows still catch.
+        @test contains(sql, "CONCAT")
+        # No stray `__@` path: this is the actual defect's signature, since the bug rendered the
+        # operand list as one already-split path rather than as operands.
         @test !contains(sql, "__@")
+        # Nothing to bind — there is no literal in an all-columns operand list. Asserted rather
+        # than described: it is half of what distinguishes this render from the separator one below.
+        @test isempty(params)
     end
     # …and only then that the three agree.
-    @test length(Set(values(hom_sqls))) == 1
+    @test length(Set(first.(values(hom)))) == 1
 
-    # Cross-check against the spelling that worked BEFORE the fix: adding a `Value(" ")` separator
-    # to the vector form must change the render in exactly one way — it gains the bound literal.
-    q_sep = DriverModel.objects
-    q_sep.values("full_name" => Concat(["forename", Value(" "), "surname"]))
-    res_sep = q_sep.list(show_query=:dict)
-    @test length(res_sep[:parameters]) == length(res_var[:parameters])
-    @test res_sep[:sql_text] == res_var[:sql_text]
+    # The independent reference. `res_var` is the `Value(" ")` spelling, which rendered correctly
+    # before this fix and still does, so it is not part of what #612 changed. Adding the separator
+    # must change the render in exactly one way — it gains one bound literal — and that is the
+    # comparison that makes the rows above meaningful rather than self-referential.
+    hom_sql, hom_params = hom["vector"]
+    @test isempty(hom_params)
+    @test length(res_var[:parameters]) == 1
+    @test res_var[:parameters][1] == " "
+    @test res_var[:sql_text] != hom_sql
+    # Same operands, same order, in both — the separator adds to the render, it does not reshape it.
+    @test contains(res_var[:sql_text], "forename") && contains(res_var[:sql_text], "surname")
 
     # The container is what changed; the #603 element normalization is untouched.
     @test Concat(["forename", "surname"]).column isa Vector{Any}

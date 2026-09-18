@@ -466,32 +466,58 @@ end
     # Julia already knows all of this. An ATTACHED docstring parses into a `Core.@doc` macrocall
     # carrying the definition; a DETACHED one is left standing as a bare `String` expression in the
     # enclosing block, which is a no-op nobody writes on purpose. So the whole class is "a string
-    # literal standing alone at top level", the parser decides what a definition is, and a `sql =
-    # """…"""` literal is an assignment rather than a bare expression and never appears. No shape
-    # list, no filters, no allowlist (the reason for that last one is stated at :299).
+    # literal standing alone in a statement position", the parser decides what a definition is, and
+    # a `sql = """…"""` literal is an assignment rather than a bare expression and never appears.
+    # No definition-shape list, no false-positive filters, no allowlist (the reason for that last
+    # one is stated at :299).
+    #
+    # One honest limit, stated because the first version of this comment overclaimed: the walk
+    # descends only into the CONTAINERS listed below, so a bare string inside a function body — an
+    # ordinary block value, never a docstring — is out of scope, and so is anything nested deeper
+    # than a container chain. That list is not a definition-shape list (the parser still decides
+    # what a definition is), but it is a list, and pretending otherwise is the same class of defect
+    # this guard exists to catch.
     #
     # Calibrated both ways: this reports exactly the seven against the pre-fix tree and none after.
     # ─────────────────────────────────────────────────────────────────────────
     @testset "no docstring is detached from its definition (#612)" begin
-        # Recurse only through the containers a top-level definition can sit in. Deliberately NOT
-        # into function bodies: a bare string inside one is an ordinary (if pointless) statement,
-        # not a docstring, and `@doc` never binds there.
+        # The CONTAINERS a top-level definition can sit inside. Not a list of definition shapes —
+        # the parser decides what a definition is — but a list of what the walk may descend into.
+        #
+        # Descending into anything else is what makes this wrong in the other direction, and it was
+        # measured: a SHORT-FORM definition (`_key_a(::CrossJoin)::String = ""`, `types.jl:285`) is
+        # `Expr(:(=), sig, Expr(:block, …))`, so a rule that excluded only function-like heads
+        # walked into every short-form body in the repo and reported 19 string literals as detached
+        # docstrings. `:(=)` is not a container, so it is not here, and those bodies are unreachable.
+        #
+        # `:if` / `:let` / `:try` / `:struct` / `:macrocall` are here because they were the gap in
+        # the first version of this scan: a docstring detached inside a top-level `if`, a `@static
+        # if`, or a per-field docstring inside a `struct` was missed entirely. That gap is reachable
+        # — `src/precompile.jl` and `ext/PormGSQLiteExt.jl` both wrap real definitions in a
+        # top-level `if ccall(:jl_generating_output, …)` guard.
+        #
+        # A function BODY is deliberately out of scope: `@doc` never binds there, and a measured
+        # sweep of this repo found 29 bare strings inside bodies (`"%Y"`, `"BEGIN;"`, `":memory:"`)
+        # that are all legitimate block values.
+        _DOCCOV_CONTAINERS = (:toplevel, :block, :module, :if, :elseif, :let, :try, :struct,
+                              :while, :for, :macrocall)
+        _DOCCOV_STATEMENT_POS = (:toplevel, :block, :module)
+
         function _doccov_scan_detached!(offenders, node, path, line)
             node isa Expr || return line
-            if node.head === :toplevel || node.head === :block
-                for arg in node.args
-                    if arg isa LineNumberNode
-                        line = arg.line
-                    elseif arg isa String || (arg isa Expr && arg.head === :string)
-                        # A string standing as its own expression. An attached docstring is a
-                        # `Core.@doc` macrocall instead, so this is exactly the defect.
+            node.head in _DOCCOV_CONTAINERS || return line
+            for arg in node.args
+                if arg isa LineNumberNode
+                    line = arg.line
+                elseif arg isa String || (arg isa Expr && arg.head === :string)
+                    # A string standing as its own expression. An ATTACHED docstring is a
+                    # `Core.@doc` macrocall carrying the definition, so this is exactly the defect.
+                    # Guarded on statement position: the docstring of an ATTACHED pair is also a
+                    # bare `String` argument, but of the `:macrocall`, which is not a statement
+                    # container — so walking through `@doc` and `@static` costs no false positive.
+                    node.head in _DOCCOV_STATEMENT_POS &&
                         push!(offenders, (_doccov_rel(path), line))
-                    else
-                        line = _doccov_scan_detached!(offenders, arg, path, line)
-                    end
-                end
-            elseif node.head === :module
-                for arg in node.args
+                else
                     line = _doccov_scan_detached!(offenders, arg, path, line)
                 end
             end

@@ -784,9 +784,24 @@ end
       @test Mo603.UUIDField(default = probe(uuid)).default == uuid
       @test Mo603.JSONField(default = probe("{\"a\":1}")).default == "{\"a\":1}"
     end
-    # …and their shape contract is intact, which is why they keep their own converters.
+    # …and their VALUE contract is intact, which is why they keep their own converters. Pinned in
+    # both directions, because "stricter" is a one-directional word and these two are not: each is
+    # stricter than `_default_string` on some inputs and looser on others. The doc bullet for them
+    # was wrong twice — once for lumping them into the shared policy, once for calling them merely
+    # stricter — and both times because nothing here asserted what they actually accept.
     @test_throws PormG.FieldValidationError Mo603.UUIDField(default = "not-a-uuid")
     @test_throws PormG.FieldValidationError Mo603.JSONField(default = "{not json")
+    # UUIDField is stricter in BOTH directions than the text family: an Integer is refused too.
+    @test_throws PormG.FieldValidationError Mo603.UUIDField(default = 5)
+    # JSONField is LOOSER: it serializes anything `format_json_sql` handles, where the seven
+    # plain-text fields refuse every one of these.
+    @test Mo603.JSONField(default = 3.5).default == "3.5"
+    @test Mo603.JSONField(default = true).default == "true"
+    @test Mo603.JSONField(default = [1, 2]).default == "[1,2]"
+    @test Mo603.JSONField(default = Dict("a" => 1)).default == "{\"a\":1}"
+    for v in Any[3.5, true, [1, 2]]
+      @test_throws PormG.FieldValidationError Mo603.TextField(default = v)
+    end
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -847,7 +862,6 @@ end
   @testset "Model(name) with no fields is refused for every string spelling (#612)" begin
     for probe in _PROBES603
       @test_throws PormG.ModelDefinitionError Mo603.Model(probe("drivers"))
-      # The arity the old String-only guard never saw at all.
       # The arities the old `Model(name::String)` method could never see, because a method is
       # identified by its positional signature and those calls carry keywords.
       @test_throws PormG.ModelDefinitionError Mo603.Model(probe("drivers"); db_table = "Drivers")
@@ -878,7 +892,6 @@ end
     held = Mo603.Model(SubString(request, 16, 22), surname = Mo603.CharField(max_length = 100))
     @test held.name == "drivers"
     @test held.name isa String
-    @test !(held.name isa SubString)
 
     # The three paths that legitimately build from an already-collected field set are NOT gated:
     # `Model(; fields...)` routes through the `NTuple` method, and introspection / the Django

@@ -39,15 +39,19 @@ Tracks **breaking / behavior changes in PormG** that require source-code changes
 
 ---
 
-## Unreleased — next `0.6.0`
+## Unreleased — next `0.7.0`
 
 _Changes merged but not yet cut into a release. A consumer dev'ing PormG at HEAD is running these,
 and `PormG.upgrade_guide` surfaces them by default. When the maintainer next rolls changes into a
-consuming app, `/pormg-cut-release` stamps every entry below with `0.6.0`, dates them, and tags it._
+consuming app, `/pormg-cut-release` stamps every entry below with `0.7.0`, dates them, and tags it._
+
+---
+
+## 0.6.0 — 2026-09-18
 
 ## `DataFrame(query)` now applies the same temporal coercion as `list()` on SQLite (#582)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **Recorded**: 2026-09-16
 - **PormG ref**: #582; `src/querybuilder/execution.jl` (`DataFrames.DataFrame(::SQLObjectHandler)`,
   `_projection_parsers`)
@@ -106,7 +110,7 @@ To keep the engine's own text on purpose, project it as text — `values("d" => 
 
 ## `ToChar` formats render the same text on both engines; `HH` is 24-hour on PostgreSQL too (#569)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #569 ; `src/constants.jl`, `src/Dialect.jl`
 - **Recorded**: 2026-09-16
 - **Severity**: behavior change — on PostgreSQL, a `ToChar` format containing `HH` changes from the
@@ -158,7 +162,7 @@ app referenced it.
 
 ## `@quarter` / `@quadrimester` return the period number; the label moves to `@yyyy_q` / `@yyyy_quad` (#579)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #579 ; `src/constants.jl`, `src/querybuilder/functions.jl`, `src/Models.jl`
 - **Recorded**: 2026-09-15
 - **Severity**: breaking — a `values()` projection of `__@quarter` changes type, and a previously
@@ -215,7 +219,7 @@ expansion without altering it.
 
 ## `field__@date` renders one engine-correct expression on both spellings (#562)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #562 ; `src/Dialect.jl`, `src/querybuilder/functions.jl`, `src/querybuilder/build_helpers.jl`
 - **Recorded**: 2026-09-15
 - **Severity**: behavior change — the SQL and the returned type of `__@date` change on both engines.
@@ -274,7 +278,7 @@ used to raise a bare `QueryBuildError`. Code catching the specific subtype needs
 
 ## Temporal columns and expressions now read back as Julia values on SQLite (#564)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #564 ; `src/querybuilder/execution.jl`, `src/querybuilder/build_query.jl`, `src/value_repr.jl`, `src/Dialect.jl`
 - **Recorded**: 2026-09-15
 - **Severity**: behavior change
@@ -360,7 +364,7 @@ No data migration is needed: nothing about what is STORED changed, only what `li
 
 ## Nested integer-days arithmetic now renders temporally, and PostgreSQL's integer-days SQL changed shape (#568)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #568 ; `src/querybuilder/execution.jl`
 - **Recorded**: 2026-09-15
 - **Severity**: behavior change
@@ -451,7 +455,7 @@ the one case where the loud failure was the better one.
 
 ## `@range` / `@nrange` raise `FilterError`, not `InvalidValueError` (#467)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #467 ; `src/querybuilder/build_helpers.jl`
 - **Recorded**: 2026-09-15
 - **Severity**: behavior change — only for code that catches a *specific* `PormGError` subtype.
@@ -518,7 +522,7 @@ end
 
 ## `create()` / `update()` raise `UnknownFieldError` for an unknown field name, not `InvalidValueError` (#462)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #462 ; `src/querybuilder/sanitization.jl`, `src/querybuilder/build_helpers.jl`
 - **Recorded**: 2026-09-15
 - **Severity**: behavior change — only for code that catches a *specific* `PormGError` subtype.
@@ -588,7 +592,7 @@ end
 
 ## SQLite date arithmetic now renders in the stored timestamp format, and rows written by the old one need a one-time repair (#527)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #527 ; `src/Dialect.jl`, `src/querybuilder/execution.jl`
 - **Recorded**: 2026-09-14
 - **Severity**: behavior change
@@ -681,7 +685,7 @@ Measured against SQLite 3.53.4, running it twice over a `DATETIME`-declared colu
 
 ## A correlated `Subquery`/`Exists` projected beside an aggregate now raises unless its correlation column is grouped (#194)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #194 ; `src/querybuilder/build_query.jl`, `src/querybuilder/build_helpers.jl`, `src/querybuilder/types.jl`
 - **Recorded**: 2026-09-14
 - **Severity**: behavior change (narrow) — a shape that was already wrong on SQLite and already refused by PostgreSQL now raises at build time on both. Part of the `0.6.x` pre-publish wave.
@@ -766,7 +770,7 @@ M.Driver.objects.values("nationality", "n_standings" => Subquery(standings))
 
 ## `makemigrations` reads an adopted schema as facts, so the first run after upgrading may plan one-time changes (#522)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #522 ; `src/migrations/introspection.jl`, `src/migrations/column_spec.jl`, `src/migrations/planner.jl`
 - **Recorded**: 2026-09-14
 - **Severity**: behavior change
@@ -816,7 +820,7 @@ only ever proposed; nothing runs without `migrate`.
 
 ## One models folder now resolves to exactly one connection key (#550)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #550 ; `src/Models.jl`, `src/Configuration.jl`, `src/Kernel.jl`
 - **Recorded**: 2026-09-11
 - **Severity**: behavior change
@@ -920,7 +924,7 @@ them separate folders — that shape is no longer representable.
 
 ## Table columns are created in declaration order, not field-name hash order (#544)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #544 ; `src/Models.jl`, `src/migrations/planner.jl`, `src/migrations/introspection.jl`, `src/querybuilder/ctes.jl`
 - **Recorded**: 2026-09-11
 - **Severity**: behavior change
@@ -993,7 +997,7 @@ No source edit. If you pin generated DDL in your own tests, re-record it once:
 
 ## SQLite `:memory:` refuses split read/write, and warns when a pool opens a second connection (#545)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #545 ; `src/ConnectionPool.jl`
 - **Recorded**: 2026-09-11
 - **Severity**: behavior change
@@ -1060,7 +1064,7 @@ test:
 
 ## `database: ":memory:"` is a SQLite keyword, no longer a relative path (#545)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #545 ; `src/Configuration.jl`
 - **Recorded**: 2026-09-10
 - **Severity**: behavior change
@@ -1129,7 +1133,7 @@ test:
 
 ## A multi-CTE query renders its `WITH` clause in declaration order
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: `src/querybuilder/types.jl`, `src/querybuilder/ctes.jl`, `.github/workflows/CI.yml`
 - **Recorded**: 2026-09-10
 - **Severity**: **behavior change (very narrow)** — the rendered SQL string for a query with two or
@@ -1182,7 +1186,7 @@ git grep -n "\.with(" -- '*.jl'    # multi-CTE queries; zero hits means this ent
 
 ## An ordering term is no longer a field expression (#533)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #533 ; `src/Kernel.jl`, `src/querybuilder/types.jl`, `src/querybuilder/object_manager.jl`, `src/querybuilder/functions.jl`, `src/querybuilder/execution.jl`
 - **Recorded**: 2026-09-10
 - **Severity**: breaking
@@ -1270,7 +1274,7 @@ query.order_by(SQLOrder("surname"; orientation = "DESC"))
 
 ## Expression and reference nodes are immutable `struct`s (#508)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #508 ; `src/querybuilder/types.jl`, `src/querybuilder/build_helpers.jl`, `src/querybuilder/ctes.jl`, `src/querybuilder/execution.jl`, `src/querybuilder/memos.jl`
 - **Recorded**: 2026-09-10
 - **Severity**: breaking
@@ -1329,7 +1333,7 @@ query.update("points" => F("points") + 1)
 
 ## `ForeignKey` / `OneToOneField` — `on_update`, `deferrable` and `initially_deferred` are removed (#516)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #516 ; `src/models/fields.jl`, `src/migrations/introspection.jl`, `src/migrations/column_spec.jl`
 - **Recorded**: 2026-09-07
 - **Severity**: breaking
@@ -1383,7 +1387,7 @@ removed because nothing implemented it, not because the semantics were rejected.
 
 ## The `"<cte>__<col>"` string is back, and a CTE name that shadows a model field is now an error (#492)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #492 (partially reverses #444 — its namespace split stays, only the *spelling*
   changes; #431/#434 stay fixed, by a loud guard instead of by construction); completed by #509,
   which extends the same gate to the one clause it had missed;
@@ -1471,7 +1475,7 @@ q.values("points", "driverid__surname", "n" => "totals__n")
 
 ## `migrate()` on a changed foreign key now needs `destructive = true` (#498)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #498; `src/migrations/planner.jl`, `src/Models.jl`, `src/migrations/introspection.jl`
 - **Recorded**: 2026-09-06
 - **Severity**: **behavior change** — a migration that previously generated nothing now generates
@@ -1529,7 +1533,7 @@ apply the constraint swap by hand.
 
 ## `ForeignKey(…, unique=true)` no longer needs rewriting to `OneToOneField` (#437)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #437 (retracts the migration advised by #417, below under `0.5.0`);
   `src/migrations/planner.jl`, `src/models/fields.jl`
 - **Recorded**: 2026-09-05
@@ -1571,7 +1575,7 @@ profile_id = Models.OneToOneField(Driver)               # preferred, unchanged
 
 ## A non-literal column DEFAULT is now dropped on every column type, textual ones included (#475)
 
-- **Version**: Unreleased
+- **Version**: 0.6.0
 - **PormG ref**: #475, #472, #455; `src/migrations/introspection.jl`, `src/migrations/runner.jl`,
   `docs/src/schema_conventions.md`
 - **Recorded**: 2026-09-04

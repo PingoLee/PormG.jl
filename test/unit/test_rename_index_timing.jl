@@ -243,6 +243,57 @@ _rit_index_cols(pool, name) =
     end
 
     # ─────────────────────────────────────────────────────────────────────────
+    # GAP 2, the producer the first pass MISSED — a rebuild-forcing DELETION
+    # `_resolve_table_fields`' deletion loop renders the same shared key when SQLite cannot drop a
+    # column in place (here: the doomed column is indexed). Its guard only skips when a rebuild is
+    # ALREADY registered, and a PURE rename — empty delta — registers none, so this branch runs and
+    # is the last writer. It passed no rename map at all, so the renamed column's index was filtered
+    # out as referencing a column that does not survive.
+    #
+    # Found by review, by execution, after the first pass had asserted in four places that "all
+    # three producers" were covered. There are four.
+    # Mutation gate: drop `column_renames` from the deletion rebuild and the index assertion fails.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "SQLite: rename + a rebuild-forcing deletion keeps the renamed column's index" begin
+        mktempdir() do dir
+            pool = SQLiteConnectionPool(joinpath(dir, "rit556del.sqlite"); pool_size = 1)
+            try
+                fetch(pool, """CREATE TABLE "child_t" (
+                                 "id"       INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,
+                                 "old_code" TEXT(40) NULL,
+                                 "doomed"   TEXT(40) NULL)""")
+                fetch(pool, """CREATE INDEX "child_t_old_code_rit00004_idx" ON "child_t" ("old_code")""")
+                # An index on `doomed` is what makes SQLite refuse a plain DROP COLUMN and forces the
+                # rebuild — the branch under test.
+                fetch(pool, """CREATE INDEX "child_t_doomed_rit00004_idx" ON "child_t" ("doomed")""")
+                fetch(pool, """INSERT INTO "child_t" ("id", "old_code", "doomed") VALUES (1, 'X', 'bye')""")
+
+                # A PURE rename (same type, same everything) so the rename plans no rebuild of its
+                # own and the deletion's rebuild is the only — hence last — registration.
+                declared = Models.Model("child_t", id = Models.IDField(),
+                             new_code = Models.CharField(max_length = 40, null = true, db_index = true))
+                livem = Models.Model("child_t", id = Models.IDField(),
+                             old_code = Models.CharField(max_length = 40, null = true, db_index = true),
+                             doomed = Models.CharField(max_length = 40, null = true, db_index = true))
+                plan = _rit_plan(pool, livem, declared)
+
+                @test "Alter table: child_t" in _rit_steps(plan)
+
+                _rit_apply!(pool, plan)
+
+                idx = get_constraints_index(pool, :child_t, "new_code")
+                @test idx !== nothing
+                @test _rit_index_cols(pool, idx) == ["new_code"]
+                # The deletion really happened, so the rebuild is not a no-op.
+                cols = sort(string.((fetch(pool, """PRAGMA table_info("child_t")""") |> DataFrame).name))
+                @test cols == ["id", "new_code"]
+            finally
+                close_pool!(pool)
+            end
+        end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
     # GAP 2, the other producer — a rename co-occurring with a NEW column
     # `_add_new_field` re-renders the same key when the new column needs a temporary default (a
     # NOT NULL column with no default), and it passed no rename map at all. Whichever of the two

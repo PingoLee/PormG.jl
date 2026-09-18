@@ -21,6 +21,26 @@ using Test
 using PormG
 import PormG.Migrations
 import PormG.Configuration: Settings
+import PormG: PormGPostgres
+
+# A probe pool that intercepts the lock instead of taking one. Suffixed name: `runtests.jl` includes
+# every unit file into ONE module.
+#
+# This exists because asserting on `_migration_lock_key` alone does NOT test the fix. Review found
+# that a variant which added the constant and the helper but left `_run_locked_lifecycle` calling
+# `"pormg_migrations_$(settings.db_def_folder)"` passed every other assertion in this file. The
+# defect #90 reports is at the CALL SITE, so one test has to reach it.
+#
+# Defining a method on `PormG.AdvisoryLock.with_advisory_lock` for our own type is an ordinary
+# qualified definition, and it dispatches on nothing else in the suite. It deliberately does NOT
+# invoke `f`, so no migration lifecycle runs.
+struct LockKeyProbePg89 <: PormGPostgres end
+const LOCK_KEY_OBSERVED = Ref{String}("")
+function PormG.AdvisoryLock.with_advisory_lock(f::Function, pool::LockKeyProbePg89,
+                                               key::AbstractString; kwargs...)
+    LOCK_KEY_OBSERVED[] = String(key)
+    return :intercepted
+end
 
 @testset "Migration advisory-lock identity (#90)" begin
 
@@ -58,6 +78,34 @@ import PormG.Configuration: Settings
         # A path separator in the key would be the tell that a folder crept back in.
         @test !occursin('/', Migrations.MIGRATION_LOCK_KEY)
         @test !occursin('\\', Migrations.MIGRATION_LOCK_KEY)
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # THE CALL SITE — `migrate()` actually locks on this key
+    # The three testsets around this one pin `_migration_lock_key`; this is the only one that pins
+    # the behaviour #90 is about. `_run_locked_lifecycle` is the sole consumer, and nothing in the
+    # suite referenced it before this file existed.
+    # Mutation gate: restore `lock_key = "pormg_migrations_$(settings.db_def_folder)"` at the call
+    # site and this fails while every other assertion here still passes — which is exactly the hole
+    # review found.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "the migration runner locks on that key, not on the folder" begin
+        LOCK_KEY_OBSERVED[] = ""
+        settings = Settings(db_def_folder = "db_prod_a")
+
+        # The lifecycle never runs: the probe returns without invoking the body.
+        result = Migrations._run_locked_lifecycle(LockKeyProbePg89(), settings,
+                                                  String[], "", "v", "n", "checksum", false)
+        @test result === :intercepted
+        @test LOCK_KEY_OBSERVED[] == Migrations.MIGRATION_LOCK_KEY
+        @test !occursin("db_prod_a", LOCK_KEY_OBSERVED[])
+
+        # And a second folder reaches the lock under the SAME key — the mutual exclusion #90 asks
+        # for, observed at the call site rather than inferred from the helper.
+        LOCK_KEY_OBSERVED[] = ""
+        Migrations._run_locked_lifecycle(LockKeyProbePg89(), Settings(db_def_folder = "db_prod_b"),
+                                         String[], "", "v", "n", "checksum", false)
+        @test LOCK_KEY_OBSERVED[] == Migrations.MIGRATION_LOCK_KEY
     end
 
     # ─────────────────────────────────────────────────────────────────────────

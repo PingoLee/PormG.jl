@@ -19,7 +19,11 @@
 # handles for free. The day property 1 is broken, the first testset here fails, and that is the
 # moment to design a format v2 rather than to sort opaque SQL strings.
 #
-# Two REAL ordering hazards the accident never covered are also pinned here; both were live bugs.
+# One REAL hazard the accident never covered is also pinned here — a PostgreSQL DROP CONSTRAINT
+# reached after a parent's DROP TABLE ... CASCADE had already taken the constraint. A second
+# candidate ("Rename table" sharing a bucket with "New foreign key: …") turned out to be
+# unreachable rather than live; the testset below pins that instead, so it fails the day the
+# producer is repaired.
 # =============================================================================
 
 using Test
@@ -110,8 +114,11 @@ end
         a2b, b2 = _fk_cycle_models()
         _, ba = _plan_new_tables(FKPG89, [b2, a2b])
 
-        shape(v) = sort([occursin("CREATE TABLE", uppercase(s)) ? "CREATE" :
-                         occursin("ADD CONSTRAINT", uppercase(s)) ? "ADDFK" : "OTHER" for s in v])
+        # NOT sorted: sorting would compare multisets, and the same two models always plan two
+        # CREATEs and two ADDs whatever the order — a near-tautology. The claim is that the
+        # SEQUENCE is the same, which is what "declaration order does not change the plan" means.
+        shape(v) = [occursin("CREATE TABLE", uppercase(s)) ? "CREATE" :
+                    occursin("ADD CONSTRAINT", uppercase(s)) ? "ADDFK" : "OTHER" for s in v]
         @test shape(ab) == shape(ba)
         # In both orders the CREATEs still all precede the ADD CONSTRAINTs.
         for v in (ab, ba)
@@ -155,34 +162,44 @@ end
     end
 
     # ─────────────────────────────────────────────────────────────────────────
-    # HAZARD 2 (live bug): "Rename table" shared a bucket with "New foreign key: …"
-    # A constraint referencing the table's NEW name was ordered against the rename by insertion
-    # order alone. "Rename table" now has its own bucket ahead of the alterations.
-    # Mutation gate: the FK is deliberately registered FIRST in the dict, so before the fix both
-    # landed in `last_execution` in insertion order and the FK preceded the rename — failing here.
+    # "Rename table" is UNREACHABLE, and that is why it is not bucketed
+    # An earlier pass at #89 gave this key its own ordering bucket, on the reasoning that it shares
+    # `last_execution` with "New foreign key: …" and so is ordered against a constraint naming the
+    # renamed table only by chance. The reasoning is sound and the premise is false: no plan can
+    # contain the key. `get_migration_plan`'s table-rename branch calls `_alter_table_fields` with
+    # the PRE-rename name, and that function's first act is a `current_schema[model_name]` lookup
+    # keyed by the DECLARED name — so it raises before the registration one line below it.
+    #
+    # This testset pins the reachability fact rather than an ordering, because the ordering is not
+    # this issue's to choose: that same branch plans the table's column work against the OLD name,
+    # so whoever repairs the producer decides whether RENAME TABLE goes before or after it. Filed
+    # as a follow-up; when it is fixed, this testset is the thing that should fail.
     # ─────────────────────────────────────────────────────────────────────────
-    @testset "Rename table precedes a foreign key naming the renamed table" begin
-        plan = [OrderedDict{String,String}(
-            "New foreign key: a_id" =>
-                """ALTER TABLE "b_t" ADD CONSTRAINT b_fk FOREIGN KEY (a_id) REFERENCES a_new ("id");""",
-            "Rename table" => Dialect.rename_table(FKPG89, "a_old", "a_new"),
-        )]
-        ordered, _ = Migrations._order_statements(plan)
-        ren = findfirst(s -> occursin("RENAME TO", uppercase(s)), ordered)
-        fk  = findfirst(s -> occursin("ADD CONSTRAINT", uppercase(s)), ordered)
-        @test ren !== nothing && fk !== nothing
-        @test ren < fk
+    @testset "no plan can carry a \"Rename table\" step (the producer raises first)" begin
+        settings = PormG.Configuration.Settings()
+        settings.change_db = true
+        declared = Models.Model("new_t"; id = Models.IDField(), n = Models.IntegerField())
+        livem    = Models.Model("old_t"; id = Models.IDField(), n = Models.IntegerField())
+        current_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+            :new_t => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared, :exist => false))
 
-        # "Rename table" must not be swept up by the "Rename field" substring branch, nor disturb
-        # it: a plan carrying both keeps table-rename first, then the column rename.
-        plan2 = [OrderedDict{String,String}(
-            "Rename field: code" =>
-                Dialect.rename_field(FKPG89, "a_new", "old_code", "code"),
-            "Rename table" => Dialect.rename_table(FKPG89, "a_old", "a_new"),
-        )]
-        ordered2, _ = Migrations._order_statements(plan2)
-        @test findfirst(s -> occursin("RENAME TO", uppercase(s)), ordered2) <
-              findfirst(s -> occursin("RENAME COLUMN", uppercase(s)), ordered2)
+        # "no" to "is this a new table?", then "1" to pick `old_t` as its former name — the answers
+        # that reach the `"Rename table"` registration.
+        path, io2 = mktemp(); write(io2, "no\n1\n"); close(io2)
+        raised = open(path) do stdin_file
+            redirect_stdin(stdin_file) do
+                redirect_stdout(devnull) do
+                    try
+                        Migrations.get_migration_plan(PormGModel[livem], current_schema, FKPG89,
+                                                      settings; interactive = true)
+                        nothing
+                    catch e
+                        e
+                    end
+                end
+            end
+        end
+        @test raised !== nothing
     end
 
     # ─────────────────────────────────────────────────────────────────────────

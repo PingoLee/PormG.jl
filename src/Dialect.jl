@@ -1685,6 +1685,13 @@ end
 # So dropping a parent table and removing the child's FK field in one migration reached this
 # statement with the constraint already gone, and the whole migration aborted. The ordering is
 # fine; asking to drop a constraint that a CASCADE already took is what was not.
+#
+# Known cost, accepted: on a REPOINT the planner emits this DROP and a matching ADD under the same
+# constraint name, taken from `get_constraints_fk` at plan time. If the executing session resolves
+# that name differently from the planning one -- the `search_path` case `_add_fk_constraint_in_
+# alteration` already documents -- the DROP used to abort the migration and now silently no-ops,
+# leaving the old constraint in place beside the new one. Narrowing `IF EXISTS` to the deletion
+# path would not help: the CASCADE hazard reaches the repoint path too.
 function drop_foreign_key(conn::PormGPostgres, table_name::Symbol, constraint_name::String)
   return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP CONSTRAINT IF EXISTS "$(_quote_table_ddl(constraint_name))";"""
 end

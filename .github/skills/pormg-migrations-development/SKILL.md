@@ -224,8 +224,11 @@ Four rules follow, and they are the ones to check a change against:
      re-registering without `delete!` leaves it at the first registration's position. A plan-time
      refusal was tried first and rejected: `colect_addition` is a `Set`, so it fired on hash order.
      Since **#556** the `column_renames` map is owned by `_alter_table_fields`, one per table, and
-     handed to all three producers of that key -- the rename branch, the alteration loop and
-     `_add_new_field` -- so whichever registration lands last renders with the UNION of the renames.
+     handed to all **four** producers of that key -- the rename branch, the alteration loop,
+     `_add_new_field`, and the rebuild the deletion loop emits when a column cannot be dropped in
+     place -- so whichever registration lands last renders with the UNION of the renames. Count the
+     producers before trusting that sentence: the first pass at #556 found three and shipped a
+     fourth still broken.
      Before that each call carried only its own, and a rename co-occurring with another change to
      that table silently lost the renamed column's index.
 4. **`db_index` stays outside the delta**, with `index_actions` (see rule 3 of the previous section).

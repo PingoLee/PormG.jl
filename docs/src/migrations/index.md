@@ -216,16 +216,15 @@ A migration's statements are applied in a fixed sequence of buckets, not in the 
 
 1. `CREATE TABLE` (new models)
 2. `DROP TABLE`
-3. `RENAME TABLE`
-4. `RENAME COLUMN`
-5. Everything else — column alterations, `ADD CONSTRAINT`, `DROP CONSTRAINT`, `DROP INDEX`
-6. Field `CREATE INDEX`
+3. `RENAME COLUMN`
+4. Everything else — column alterations, `ADD CONSTRAINT`, `DROP CONSTRAINT`, `DROP INDEX`
+5. Field `CREATE INDEX`
 
 Within a bucket the order is stable but arbitrary — effectively alphabetical by table, because the plan is read back out of `pending_migrations.jl` by module binding name. **It is not a dependency order, and PormG does not compute one.**
 
 That is safe rather than lucky, and it rests on three properties the test suite pins:
 
-- **PostgreSQL never inlines a foreign key in `CREATE TABLE`.** Every key is a separate `ALTER TABLE … ADD CONSTRAINT` in bucket 5, so it runs after *every* `CREATE TABLE`. Two new tables that reference each other therefore apply in either order — which no dependency sort could achieve, because that is a cycle.
+- **PostgreSQL never inlines a foreign key in `CREATE TABLE`.** Every key is a separate `ALTER TABLE … ADD CONSTRAINT` in bucket 4, so it runs after *every* `CREATE TABLE`. Two new tables that reference each other therefore apply in either order — which no dependency sort could achieve, because that is a cycle.
 - **`DROP TABLE` is `DROP TABLE … CASCADE` on PostgreSQL**, so a parent can be dropped before its children are cleaned up. Because `CASCADE` also removes the children's constraints, PormG emits `DROP CONSTRAINT IF EXISTS` — otherwise removing a child's foreign-key field in the same migration that drops its parent would abort on a constraint the `CASCADE` had already taken.
 - **SQLite suspends foreign-key enforcement for the whole migration** (`PRAGMA foreign_keys = OFF`, restored by renewing the connection afterwards). Its inline `REFERENCES` clauses therefore constrain nothing while DDL is running, and SQLite resolves an FK's parent table lazily in any case.
 
@@ -311,6 +310,9 @@ The key is the constant `pormg::migrations`, with **no database or folder qualif
 - Two databases cannot collide on it, however identical the key, because their locks carry different database OIDs.
 
 This is a guarantee about *one database*, not one server: `migrate()` against `analytics` does not block `migrate()` against `billing` on the same cluster, which is what you want.
+
+!!! note "Upgrading past PormG 0.5 changes the key"
+    The key used to embed the config folder name. While a rolling deploy has some instances on the old version and some on the new, the two take *different* keys and therefore do not exclude each other — transiently the very condition this fixes. Nothing in an app's source has to change; just avoid running `migrate()` from two versions at once.
 
 !!! warning "A transaction-pooling proxy defeats it"
     The lock is **session-level** — it lives on the connection that took it. Behind PgBouncer in `transaction` mode (or any pooler that reassigns server connections per transaction) the lock can be released or observed on the wrong backend. Point `migrate()` at a direct connection, or use `session` pooling.

@@ -278,7 +278,7 @@ end
 #     corpus that isolate the identity slot, and the `/SL` goldens are EMPTY because SQLite has no
 #     flavour to change. `identity_drop` (DROP arm) and `identity_cross` (ADD arm) are unchanged.
 # ─────────────────────────────────────────────────────────────────────────────
-# `fk_drop`, `fk_repoint`, `fk_on_delete_change`, `fk_drop_constraint_only`, `rename_and_repoint` (PG)
+# `fk_drop`, `fk_repoint`, `fk_on_delete`, `fk_constraint_off`, `rename_and_repoint` (PG)
 #     BEFORE  ALTER TABLE "child_t" DROP CONSTRAINT "child_t_col_HASH_fk";
 #     AFTER   ALTER TABLE "child_t" DROP CONSTRAINT IF EXISTS "child_t_col_HASH_fk";
 #     WHY     #89. `drop_table` on PostgreSQL is `DROP TABLE ... CASCADE`, which also drops every FK

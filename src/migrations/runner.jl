@@ -1103,9 +1103,36 @@ end
 # already dialect-dispatched — this hook only decides whether to wrap it in a lock.
 # ==============================================================================
 
+"""
+    MIGRATION_LOCK_KEY
+
+The advisory-lock key `migrate()` serializes on, for **every** PostgreSQL configuration.
+
+Deliberately carries no database qualifier. A PostgreSQL advisory lock is tagged
+`(database OID, key)` — the database is already the lock's namespace, so two pools opened on one
+database contend on this key and two pools on different databases cannot collide however identical
+their key is. `test/integration/common_setup.jl` relies on the same property for the suite lock.
+
+It used to be `"pormg_migrations_\$(db_def_folder)"`, which was worse than redundant: the folder name
+is not database identity, so two config folders resolving to ONE database took two different locks
+and migrated it concurrently — the exact guarantee the lock exists to provide, silently defeated
+(#90).
+
+Deriving the key from `host:port/dbname` instead was considered and rejected. One target has several
+spellings — a `url:` DSN or discrete `host`/`hostaddr`/`port`/`database`, `localhost` vs `127.0.0.1`
+vs a Unix socket (see `Configuration.VALID_CONNECTION_KEYS`) — so a string-built identity re-creates
+the "several match conditions of different strength" failure class #550 removed from connection-key
+binding. PostgreSQL's own scoping cannot be spelled wrong.
+"""
+const MIGRATION_LOCK_KEY = "pormg::migrations"
+
+# Takes the settings it does not read, so the seam exists if lock identity ever has to become
+# narrower than a database (a per-schema migration target would need it); callers stay unchanged.
+_migration_lock_key(::PormGSettings)::String = MIGRATION_LOCK_KEY
+
 function _run_locked_lifecycle(connection::PormGPostgres, settings::PormGSettings,
                                ordered_statements, all_sql, version, name, checksum, has_destructive)
-  lock_key = "pormg_migrations_$(settings.db_def_folder)"
+  lock_key = _migration_lock_key(settings)
   AdvisoryLock.with_advisory_lock(connection, lock_key; wait=true, timeout_ms=30_000) do
     _execute_migration_lifecycle(connection, settings, ordered_statements, all_sql,
                                  version, name, checksum, has_destructive)

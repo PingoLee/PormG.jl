@@ -286,7 +286,17 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
     Do not run concurrent migrations against the same SQLite database.
 
 ### PostgreSQL: Advisory Locking
-PostgreSQL migrations automatically acquire an advisory lock (`pormg_migrations_{db_name}`) to prevent concurrent migration execution. This ensures safe deployment in multi-instance environments.
+`migrate()` acquires a PostgreSQL session-level advisory lock before it executes anything, so a second migrator against the same database **queues** instead of interleaving its DDL. It waits up to 30 seconds and then fails rather than proceeding unserialized.
+
+The key is the constant `pormg::migrations`, with **no database or folder qualifier** — deliberately. A PostgreSQL advisory lock is tagged with the *database OID* alongside the key, so the database is already the lock's namespace:
+
+- Every configuration pointing at one database contends on one lock, **including two different `db/` config folders that resolve to the same server and database**. Before #90 the key embedded the config folder name, so those two folders took two different locks and migrated one database concurrently.
+- Two databases cannot collide on it, however identical the key, because their locks carry different database OIDs.
+
+This is a guarantee about *one database*, not one server: `migrate()` against `analytics` does not block `migrate()` against `billing` on the same cluster, which is what you want.
+
+!!! warning "A transaction-pooling proxy defeats it"
+    The lock is **session-level** — it lives on the connection that took it. Behind PgBouncer in `transaction` mode (or any pooler that reassigns server connections per transaction) the lock can be released or observed on the wrong backend. Point `migrate()` at a direct connection, or use `session` pooling.
 
 ### PostgreSQL: Identity Columns
 `IDField()` renders a PostgreSQL identity column, and `generated_always = true` makes it the stricter `GENERATED ALWAYS AS IDENTITY` — a column application code cannot supply a value for. Changing that declaration is a migration like any other, and PostgreSQL spells the three transitions differently:

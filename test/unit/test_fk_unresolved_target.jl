@@ -23,7 +23,7 @@ uses a parent the lowercase gets WRONG — a spaced name, or a `db_table`-pinned
 
 DB-free: mock connections render SQL through `inspect_query` / `Dialect`, no socket.
 """
-# julia --project=. test/unit/test_fk_unresolved_target.jl
+# julia --project=test/integration test/unit/test_fk_unresolved_target.jl
 
 using Test
 using PormG

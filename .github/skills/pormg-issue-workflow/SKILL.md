@@ -150,7 +150,7 @@ fixture copy. The in-flight check below still applies.
 
 ```bash
 # EnterWorktree (branches from origin/main), then from inside it:
-bash scripts/worktree_setup.sh          # Manifest, db_sl fixtures, f1.sqlite, Pkg.instantiate()
+bash scripts/worktree_setup.sh          # fixtures, f1.sqlite, instantiate BOTH test envs
 git branch -m fix/<N>-<slug>            # EnterWorktree can only produce worktree-<name>
 ```
 
@@ -182,11 +182,10 @@ Two rules the worktree does **not** enforce for you:
 
 Gotchas that are not visible from the repo:
 
-- **`worktree_setup.sh` does not provision the integration environment.** It instantiates
-  `--project=.` only. Any `julia --project=test/integration …` (doc-example scripts — see step 4)
-  needs a one-time `julia --project=test/integration -e 'using Pkg; Pkg.instantiate()'`. That then
-  shows `test/integration/Project.toml` as modified — a **line-endings-only** diff with no hunks.
-  `git checkout --` it before staging.
+- **`worktree_setup.sh` provisions both test environments** — the package env *and*
+  `test/integration`, which is the one that can run a single test file (#624). It also reverts the
+  **line-endings-only** diff that instantiating leaves on `test/integration/Project.toml`. If you
+  instantiate that env by hand, `git checkout --` that file before staging.
 - **`f1.sqlite` is 42 MB of gitignored local state.** The script's copy is guarded, but if another
   session is mid-write, wait rather than copy a torn WAL.
 - **Never `git add -A`.** `.claude/settings.local.json` churns in every worktree. Stage explicit
@@ -229,9 +228,9 @@ suite that fails tells you far less than the narrow slice that fails.
 
 | Rung | What | quick | standard | high |
 |---|---|---|---|---|
-| 1 | The new or changed test file alone | ✅ | ✅ | ✅ |
+| 1 | The new or changed test file alone — `julia --project=test/integration test/unit/test_x.jl` | ✅ | ✅ | ✅ |
 | 2 | The **guard tests your change could trip** — see below | ✅ | ✅ | ✅ |
-| 3 | `julia --project=. test/runtests.jl` (full unit) | — CI's job | ✅ | ✅ |
+| 3 | `julia --project=. -e 'using Pkg; Pkg.test()'` (full unit) | — CI's job | ✅ | ✅ |
 | 4 | **Integration slice** — only the files your diff reaches — **ask the user first** | — | when the diff reaches integration | ✅ |
 | 5 | Full `test/integration/runtests.jl` — **only if the diff is in the rung-5 table below** | — | if triggered | ✅ |
 
@@ -239,6 +238,17 @@ suite that fails tells you far less than the narrow slice that fails.
 Ubuntu and Windows for every PR — a wider matrix than you would run locally. It runs **no**
 integration test, so a skipped rung 4 or 5 is not covered by anything. A tier that hands rung 3 to CI
 owes CI a look afterwards (§7).
+
+**Spell the project, and never hand a test script to `--project=.` (#624).** Rungs 1 and 2 run a
+single file, which needs the SQL driver extensions; `--project=test/integration` carries them
+(`[deps]` + PormG via `[sources]`) and works for unit and integration files alike. Rung 3 goes
+through `Pkg.test()` because that is what CI runs and it resolves the drivers from `[targets].test`.
+Handing a `test/unit/…` script to `--project=.` is the spelling that cannot work — LibPQ and SQLite
+are `[weakdeps]`, so `Pkg.instantiate()` never installs them. It *looks* fine in a checkout carrying
+a pre-#34 `Manifest.toml`, right up until a `Pkg.resolve()` silently drops them;
+`test/unit/test_documented_commands.jl` guards it. Rung 3 also runs Aqua dependably, which a bare
+`--project=.` run does only when Aqua happens to be in your default `@v#.#` environment. The
+exception is `test/integration/<file>.jl`, where `common_setup.jl` redirects the env for you.
 
 **Rung 2 is the one people skip.** This repo has meta-tests that fail on changes far from the code
 you touched. Before running the full suite, ask which of these your diff could reach:

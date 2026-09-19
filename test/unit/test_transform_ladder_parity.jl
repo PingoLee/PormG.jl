@@ -27,7 +27,7 @@ and matched nothing — silently, with a wrong-typed value accepted just as quie
 
 Everything renders through mock connections — no live database, no fixture.
 
-julia --project=. test/unit/test_transform_ladder_parity.jl
+julia --project=test/integration test/unit/test_transform_ladder_parity.jl
 """
 
 using Test

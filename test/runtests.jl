@@ -122,6 +122,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Error-contract Drift Guard (#239)" include("unit/test_docs_error_type_drift.jl")
     @testset "Documented Error Types (#239)" include("unit/test_docs_error_types.jl")
     @testset "Kernel Layering" include("unit/test_kernel_layering.jl")
+    @testset "Documented Test Commands (#624)" include("unit/test_documented_commands.jl")
     @testset "DateTime UTC Canonicalization (#79)" include("unit/test_datetime_canonicalization.jl")
     @testset "Value Representation Table (#564)" include("unit/test_value_repr_table.jl")
     @testset "Read Value Coercion (#564)" include("unit/test_read_value_coercion.jl")
@@ -219,7 +220,7 @@ end
 # the unit suite cannot reach — e.g. run_in_transaction commit/rollback semantics
 # (test/integration/test_transactions.jl).
 #
-#     PORMG_INTEGRATION_TESTS=true julia -t auto --project=. test/runtests.jl
+#     PORMG_INTEGRATION_TESTS=true julia -t auto --project=test/integration test/runtests.jl
 if get(ENV, "PORMG_INTEGRATION_TESTS", "false") == "true"
     @testset "PormG Integration Tests" begin
         # These require a real database (Postgres/SQLite)
@@ -228,4 +229,8 @@ if get(ENV, "PORMG_INTEGRATION_TESTS", "false") == "true"
 end
 
 
-# julia -t auto --project=. test/runtests.jl
+# Full unit suite (what CI runs; resolves the LibPQ/SQLite weakdeps from [targets].test):
+#     julia --project=. -e 'using Pkg; Pkg.test()'
+# One file, unit or integration — that env carries the drivers as direct deps:
+#     julia --project=test/integration test/unit/test_<name>.jl
+# See test/load_drivers.jl for why `--project=.` cannot run a test script (#624).

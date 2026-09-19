@@ -44,7 +44,7 @@ control pins the reversed order to document why.
 Both backends run: `test_alignment_sqlite.jl` is SQLite-only by construction, so a cross-backend
 divergence — which is the entire defect class — cannot surface there.
 """
-# julia --project=. test/unit/test_parameter_alignment_nested.jl
+# julia --project=test/integration test/unit/test_parameter_alignment_nested.jl
 
 using Test
 using PormG

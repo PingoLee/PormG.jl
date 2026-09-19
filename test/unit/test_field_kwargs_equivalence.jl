@@ -32,7 +32,7 @@ The fixture is generated, not authored. If a default legitimately changes, regen
 (see the failure message) and review the diff — a one-line fixture change is the signal that a
 user-visible default moved.
 """
-# julia --project=. test/unit/test_field_kwargs_equivalence.jl
+# julia --project=test/integration test/unit/test_field_kwargs_equivalence.jl
 
 using Test
 using PormG
@@ -159,7 +159,7 @@ else
         `_common_kwargs` against the table in this file's docstring.
 
         If it WAS intended, regenerate the fixture and review its diff as part of the change:
-          FKE_REGEN=1 julia --project=. test/unit/test_field_kwargs_equivalence.jl
+          FKE_REGEN=1 julia --project=test/integration test/unit/test_field_kwargs_equivalence.jl
         """ * join(diffs, "\n")
     end
     @test actual == expected

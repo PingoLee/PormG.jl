@@ -18,7 +18,7 @@ pool_size = 1)` — the #545 rule, a wider `:memory:` pool is N databases), each
 `PormG.config` under its own key. The DDL path against a real file and the PostgreSQL arm are
 `test/integration/test_migration_bootstrap.jl`'s (the format-version backfill testset).
 
-julia --project=. test/unit/test_migrations_applied_at.jl
+julia --project=test/integration test/unit/test_migrations_applied_at.jl
 """
 
 using Test

@@ -311,9 +311,9 @@ suite rather than a slice (the DDL path only executes in `test_migration_bootstr
 rung-5 table in [`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md) → *Verify*.
 
 ```powershell
-julia --project=. test/runtests.jl                                                              # unit — no permission needed
-julia -t auto --project=test/integration test/integration/runtests.jl                           # rung 5 — ask first
-$env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl       # rung 5, SQLite (-t 1 required)
+julia --project=. -e 'using Pkg; Pkg.test()'                                               # unit — no permission needed
+julia -t auto --project=test/integration test/integration/runtests.jl                      # rung 5 — ask first
+$env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl  # rung 5, SQLite (-t 1 required)
 julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate(); include("docs/make.jl")'
 ```
 

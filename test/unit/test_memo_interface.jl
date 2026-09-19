@@ -29,7 +29,7 @@ that again to buy a refusal that dispatch already gives away.
 
 Static text scan plus a live dispatch check — no database.
 """
-# julia --project=. test/unit/test_memo_interface.jl
+# julia --project=test/integration test/unit/test_memo_interface.jl
 
 using Test
 using PormG

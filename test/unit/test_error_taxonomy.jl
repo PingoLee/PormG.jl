@@ -9,7 +9,7 @@ integration tests (test_row_and_get, test_cjoin, test_deletes, …).
 
 No database required: every assertion fires at query-build/validation time.
 """
-# julia -t auto --project=. test/unit/test_error_taxonomy.jl
+# julia -t auto --project=test/integration test/unit/test_error_taxonomy.jl
 
 using Test
 using InteractiveUtils: subtypes   # walk the taxonomy by TYPE, not by export list

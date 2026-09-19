@@ -46,7 +46,7 @@ naming the models it walked.
 Mock pools skip the `_exists` probe (`should_check_related_existence`), so every fixture here
 traverses its complete declared graph with no database and no pruning.
 """
-# julia --project=. test/unit/test_delete_collector_traversal.jl
+# julia --project=test/integration test/unit/test_delete_collector_traversal.jl
 
 using Test
 using PormG

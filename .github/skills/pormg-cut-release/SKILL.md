@@ -124,8 +124,8 @@ the single worst place to inherit a flake from an unstated default.
      which shipped in 0.3.0 still telling apps to wait for a cut that had already happened.
    - Leave already-stamped (older) entries untouched.
 
-5. **Verify the parser.** Run `julia --project=. test/unit/test_upgrade_guide.jl` (via a runner that
-   loads drivers, or the full `test/runtests.jl`). Then assert the stamp actually landed — the count
+5. **Verify the parser.** Run `julia --project=test/integration test/unit/test_upgrade_guide.jl` — that
+   env carries the drivers, which `--project=.` cannot (#624). Then assert the stamp actually landed — the count
    must match step 1's, at the new version, with `## Unreleased` now empty:
 
    ```bash

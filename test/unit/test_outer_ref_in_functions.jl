@@ -31,7 +31,7 @@ Sibling coverage:
   - `test_node_admission.jl` → the invariant that found this; its `KNOWN_GAPS` pin for #535 is gone.
   - `test_exists_correlated.jl` (integration) → the driver round-trip against the F1 fixture.
 
-julia --project=. test/unit/test_outer_ref_in_functions.jl
+julia --project=test/integration test/unit/test_outer_ref_in_functions.jl
 """
 
 using Test

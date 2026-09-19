@@ -17,7 +17,7 @@ Scope note: this file only proves no page names the **wrong** type. The companio
 `test/integration/test_docs_error_types.jl` proves the **right** type is actually raised for each
 documented scenario — that is the check a plausible-but-wrong type would slip past here.
 """
-# julia --project=. test/unit/test_docs_error_type_drift.jl
+# julia --project=test/integration test/unit/test_docs_error_type_drift.jl
 
 using Test
 

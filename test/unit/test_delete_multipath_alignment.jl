@@ -52,7 +52,7 @@ something these testsets prove.
 Both backends run. PostgreSQL's `\$N` travels with the text by construction, which is why every bug
 in this family has been SQLite-only — but the COUNT half fails on both, and did here.
 """
-# julia --project=. test/unit/test_delete_multipath_alignment.jl
+# julia --project=test/integration test/unit/test_delete_multipath_alignment.jl
 
 using Test
 using PormG

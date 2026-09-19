@@ -10,7 +10,7 @@ This file tests:
 - Field validation functions
 - Write operation metadata (auto_now_add, auto_now, defaults, formatters)
 """
-# julia -t auto --project=. test\unit\test_field_validation_and_operations.jl 2>&1 | tee test_output.txt
+# julia -t auto --project=test/integration test/unit/test_field_validation_and_operations.jl 2>&1 | tee test_output.txt
 
 using Test
 using PormG

@@ -8,7 +8,7 @@ This file covers:
 - SQL type assignment (UUID, JSONB, VARCHAR) matches expected values
 - Invalid input rejection for each field type
 """
-# julia --project=. test/unit/test_new_field_types.jl
+# julia --project=test/integration test/unit/test_new_field_types.jl
 
 using Test
 using PormG

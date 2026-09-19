@@ -1,4 +1,4 @@
-# julia --project=. test/unit/test_reverse_join_mixed_case_binding.jl
+# julia --project=test/integration test/unit/test_reverse_join_mixed_case_binding.jl
 #
 # #343 — a reverse relation must reach a model whose Julia BINDING carries internal capitals.
 #

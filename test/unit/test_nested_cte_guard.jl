@@ -44,7 +44,7 @@ Sibling coverage:
   - `test_cte_ergonomics.jl` (#44)  -> CROSS-joined CTEs and `F()` correlation.
   - `test_alignment_sqlite.jl`      -> the positional bucket contract these values ride on.
 """
-# julia --project=. test/unit/test_nested_cte_guard.jl
+# julia --project=test/integration test/unit/test_nested_cte_guard.jl
 
 using Test
 using PormG

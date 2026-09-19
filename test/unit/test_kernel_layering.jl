@@ -8,7 +8,7 @@ runs `using LibPQ`.
 
 No database required.
 """
-# julia -t auto --project=. test/unit/test_kernel_layering.jl
+# julia -t auto --project=test/integration test/unit/test_kernel_layering.jl
 
 using Test
 using InteractiveUtils: subtypes   # walk the taxonomy by TYPE, not by export list

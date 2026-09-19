@@ -24,7 +24,7 @@ not just for its happy path.
 
 No database: the parsers are pure functions of a string, and the table is pure dispatch.
 
-julia --project=. test/unit/test_read_value_coercion.jl
+julia --project=test/integration test/unit/test_read_value_coercion.jl
 """
 
 using Test

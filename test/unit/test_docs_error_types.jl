@@ -22,7 +22,7 @@ Claims that genuinely need live data — the unprojected-FK read, `create()` val
 #74 fan-out guard's reverse relation — are asserted in
 `test/integration/test_docs_error_types.jl` instead.
 """
-# julia --project=. test/unit/test_docs_error_types.jl
+# julia --project=test/integration test/unit/test_docs_error_types.jl
 
 using Test
 using PormG

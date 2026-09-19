@@ -33,7 +33,7 @@ Three things are pinned:
 
 Everything renders through mock connections — no live database.
 
-julia --project=. test/unit/test_op_function_column.jl
+julia --project=test/integration test/unit/test_op_function_column.jl
 """
 
 using Test

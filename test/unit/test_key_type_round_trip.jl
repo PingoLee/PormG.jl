@@ -36,7 +36,7 @@ using DataFrames
 using JSON
 # The convergence testset opens a real (temporary) SQLite file, so it needs the weakdep extension.
 # `runtests.jl` loads it for the whole suite; this guard is what makes the file runnable on its own
-# (`julia --project=. test/unit/test_key_type_round_trip.jl`) without double-loading under the suite.
+# (`julia --project=test/integration test/unit/test_key_type_round_trip.jl`) without double-loading under the suite.
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 using PormG.Models
 import PormG.ConnectionPool: SQLiteConnectionPool, fetch

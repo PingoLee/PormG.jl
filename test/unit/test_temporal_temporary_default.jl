@@ -29,7 +29,7 @@ column), a real temporary SQLite file for SQLite (its rebuild path queries `PRAG
 and the execution oracle needs a database anyway). The live-database half on both engines is
 `test/integration/test_migration_bootstrap.jl` → Phase 8c2.
 
-    julia --project=. test/unit/test_temporal_temporary_default.jl
+    julia --project=test/integration test/unit/test_temporal_temporary_default.jl
 """
 
 using Test

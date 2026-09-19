@@ -26,7 +26,7 @@ renderer and the compiler dispatch on them alone, so a bare marker struct is a s
 BOTH engines — no PostgreSQL server, no temp SQLite file. The live-database half is
 test/integration/test_migration_bootstrap.jl.
 
-    julia -t auto --project=. test/unit/test_column_spec.jl
+    julia -t auto --project=test/integration test/unit/test_column_spec.jl
 """
 
 using Test

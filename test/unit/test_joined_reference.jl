@@ -28,7 +28,7 @@
 #   - `test_cte_reference.jl`            → `CTE(name, path)`, the same move one level down.
 #   - `test_relation_alias_namespace.jl` → #474: which names may coexist, and the memo namespaces.
 #
-# julia --project=. test/unit/test_joined_reference.jl
+# julia --project=test/integration test/unit/test_joined_reference.jl
 
 using Test
 using PormG

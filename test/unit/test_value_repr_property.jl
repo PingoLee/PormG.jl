@@ -29,7 +29,7 @@ PostgreSQL arm lives in `test/integration/test_value_repr_property.jl`, which ru
 table against whichever engine `PORMG_DB` selects; CI runs no integration test, so that arm is
 local only.
 
-julia --project=. test/unit/test_value_repr_property.jl
+julia --project=test/integration test/unit/test_value_repr_property.jl
 """
 
 using Test

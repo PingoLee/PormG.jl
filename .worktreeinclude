@@ -1,7 +1,17 @@
 # .worktreeinclude — gitignored local state auto-copied into each new worktree at creation
 # (Claude Code feature; .gitignore syntax; only files that match a pattern AND are gitignored
 # are copied, so tracked files are never duplicated). This gives a fresh worktree the untracked
-# state it needs to load PormG and run the unit suite without any manual copying.
+# fixtures it needs, plus a warm start for both test environments.
+#
+# The ROOT Manifest.toml is deliberately absent from the list below (#624). Copying it
+# propagated the main checkout's pre-#34 manifest — which still lists LibPQ/SQLite as hard
+# `[deps]` — into every worktree, and since `Pkg.instantiate()` only warns about a stale
+# manifest instead of re-resolving it, that made the package-env spelling of the unit suite
+# look green everywhere until the first re-resolve silently dropped both. Let instantiate resolve
+# the truth instead; it is seconds against an already-populated depot.
+#
+# test/integration/Manifest.toml IS copied: that environment lists both drivers in `[deps]`,
+# so its manifest is correct rather than a survival, and the copy is a genuine warm start.
 #
 # NOT listed on purpose:
 #   - test/integration/db_2/migrations  — TRACKED (already present in every worktree).
@@ -9,10 +19,11 @@
 #                                          on demand (guarded) by scripts/worktree_setup.sh,
 #                                          needed only for db_sl integration runs.
 #
-# Still run after creation: `julia --project=. -e 'import Pkg; Pkg.instantiate()'`
-# (instantiate is not a file copy, so .worktreeinclude cannot do it). See scripts/worktree_setup.sh.
+# Still run after creation: `bash scripts/worktree_setup.sh`, which instantiates BOTH the
+# package env and test/integration (instantiate is not a file copy, so .worktreeinclude
+# cannot do it) and copies the guarded f1.sqlite.
 
-Manifest.toml
+test/integration/Manifest.toml
 test/integration/db_sl/connection.yml
 test/integration/db_2/connection.yml
 test/integration/db_sl/migrations/

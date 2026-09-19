@@ -150,7 +150,9 @@ end
 # FRAGILE: anonymous closure numbers (#98#99, #106#107, etc.) change whenever a
 # new closure is added or removed ABOVE them in QueryBuilder. The isdefined guard
 # makes stale entries safe — they silently become no-ops. Regenerate by running:
-#   julia -t auto --project=. test/performance/snoop_compile.jl
+#   julia -t auto --project=@pormg-snoop test/performance/snoop_compile.jl
+# (that script's header has the one-off recipe for building @pormg-snoop — the package env
+#  carries neither the profiling [extras] nor a SQL driver, #624)
 if ccall(:jl_generating_output, Cint, ()) == 1
   let QB = QueryBuilder
     # QueryBuilder execution closures -----------------------------------------

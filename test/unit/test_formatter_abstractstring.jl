@@ -1,7 +1,7 @@
 """
 Unit tests for #598 — the value formatters accept any `AbstractString`, not just `String`.
 
-    julia --project=. test/unit/test_formatter_abstractstring.jl
+    julia --project=test/integration test/unit/test_formatter_abstractstring.jl
 
 # The contract
 

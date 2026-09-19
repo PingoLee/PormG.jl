@@ -14,7 +14,7 @@ the specific-subtype/hierarchy contract lives in `test/unit/test_error_taxonomy.
 
 No database is required: every assertion fires at query-build/validation time.
 """
-# julia -t auto --project=. test/unit/test_typed_exceptions.jl
+# julia -t auto --project=test/integration test/unit/test_typed_exceptions.jl
 
 using Test
 using PormG

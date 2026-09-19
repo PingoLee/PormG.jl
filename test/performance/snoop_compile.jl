@@ -5,7 +5,18 @@
 ##   export PORMG_DB=db_sl
 ##   export PORMG_SNOOP_MODE=light   # optional: faster representative subset
 ##   export PORMG_PROFILEVIEW=1      # optional: open flamegraph after profiling
-##   julia -t auto --project=. test/performance/snoop_compile.jl
+##   julia -t auto --project=@pormg-snoop test/performance/snoop_compile.jl
+##
+## The project matters, and `--project=.` is NOT usable here (#624): this script needs BOTH
+## the profiling extras (SnoopCompile, SnoopCompileCore — `[extras]`) and a SQL driver
+## (`[weakdeps]`), and `Pkg.instantiate()` on the package env installs neither. It also does
+## real database work, so it cannot fall back the way a mock-only unit test can. Build a
+## throwaway SHARED environment once — this touches no tracked file:
+##
+##   julia --project=@pormg-snoop -e 'using Pkg; Pkg.develop(path=pwd()); \
+##     Pkg.add(["SnoopCompile", "SnoopCompileCore", "SQLite"])'
+##
+## (add "LibPQ" too for PORMG_DB=db_2, and "ProfileView" for PORMG_PROFILEVIEW=1.)
 ##    
 ## Output
 ##   snoop_out/PormG.jl  — raw precompile directives inferred from the workload
@@ -17,7 +28,8 @@
 ##   4. Optionally open a flamegraph with ProfileView.
 ##
 ## NOTE: SnoopCompile and related tooling are dev-only profiling deps kept in
-##       [extras]. Install them with `Pkg.instantiate()` from the repo root.
+##       [extras]. `Pkg.instantiate()` does NOT install [extras] — use the
+##       @pormg-snoop environment above.
 
 # ── Step 1: load the profiling packages BEFORE any workload ───────────────────
 using SnoopCompile

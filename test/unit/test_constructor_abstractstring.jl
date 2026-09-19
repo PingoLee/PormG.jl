@@ -2,7 +2,7 @@
 The public CONSTRUCTOR surface accepts any `AbstractString` (#603) — the third and widest slice of
 the `::String`-not-`AbstractString` class that #598 opened and #602 continued.
 
-Run: `julia --project=. test/unit/test_constructor_abstractstring.jl`
+Run: `julia --project=test/integration test/unit/test_constructor_abstractstring.jl`
 
 ## The contract
 

@@ -25,7 +25,7 @@ quietly stops meaning anything.
 
 No database.
 
-julia --project=. test/unit/test_value_repr_table.jl
+julia --project=test/integration test/unit/test_value_repr_table.jl
 """
 
 using Test

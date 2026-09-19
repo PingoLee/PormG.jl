@@ -30,7 +30,7 @@ answer for `col` and return `nothing` for anything else, which is what a real ca
 time. The first version answered for every column, and it hid a defect in this very change — see
 `Post-review coverage`. A mock that cannot answer "no" cannot catch a wrong question.
 
-    julia --project=. test/unit/test_plan_actions_golden.jl
+    julia --project=test/integration test/unit/test_plan_actions_golden.jl
 """
 
 using Test

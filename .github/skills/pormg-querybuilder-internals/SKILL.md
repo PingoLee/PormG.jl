@@ -403,11 +403,11 @@ diff is in the rung-5 table in [`pormg-issue-workflow`](../pormg-issue-workflow/
 *Verify*. The full suite on both engines is a release gate, not a per-issue step.
 
 ```powershell
-julia --project=. test/unit/test_alignment_sqlite.jl                              # no permission needed
-julia --project=. test/unit/test_inspect_query.jl                                 # no permission needed
-julia -t auto --project=test/integration test/integration/test_having.jl          # rung 4 slice — ask first
-julia -t auto --project=test/integration test/integration/test_cjoin.jl           # rung 4 slice — ask first
-julia -t auto --project=test/integration test/integration/test_cte.jl             # rung 4 slice — ask first
+julia --project=test/integration test/unit/test_alignment_sqlite.jl       # no permission needed
+julia --project=test/integration test/unit/test_inspect_query.jl          # no permission needed
+julia -t auto --project=test/integration test/integration/test_having.jl  # rung 4 slice — ask first
+julia -t auto --project=test/integration test/integration/test_cjoin.jl   # rung 4 slice — ask first
+julia -t auto --project=test/integration test/integration/test_cte.jl     # rung 4 slice — ask first
 ```
 
 ## Anti-Patterns

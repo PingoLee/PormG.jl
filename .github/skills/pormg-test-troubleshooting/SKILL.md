@@ -27,15 +27,26 @@ for the fix itself.
 
 ## Test layout & how to run a narrow slice
 
-- `test/runtests.jl` — unit suite (`julia --project=. test/runtests.jl`). No live DB required;
+- `test/runtests.jl` — unit suite (`julia --project=. -e 'using Pkg; Pkg.test()'`). No live DB required;
   SQLite `:memory:` only. This is what CI (`.github/workflows/CI.yml`) runs — integration tests are
   **not** part of CI, they're local/dev-only.
 - `test/integration/runtests.jl` — phased integration suite against a live DB (migration bootstrap
   → fixture seeding → behavioral tests → advanced features → internals/security). Run via
   `test/runtests.jl` with `PORMG_INTEGRATION_TESTS=true`, or directly.
 - Always run the **narrowest relevant file** first (e.g.
-  `julia --project=. test/unit/test_order_by_nulls.jl`), and only broaden to the full suite once
-  it's green — this repo's other skills all specify this same narrow-first order.
+  `julia --project=test/integration test/unit/test_order_by_nulls.jl`), and only broaden to the full
+  suite once it's green — this repo's other skills all specify this same narrow-first order.
+
+**Spell the project; `--project=.` cannot run a unit-test script (#624).** A single file — unit or
+integration — needs the SQL driver extensions, and `--project=test/integration` is the env that
+carries them. The package env never can: LibPQ and SQLite are `[weakdeps]`, so `Pkg.instantiate()`
+does not install them, which is why the full suite goes through `Pkg.test()` (it resolves them from
+`[targets].test`, exactly as CI does). A checkout holding a pre-#34 `Manifest.toml` makes
+`--project=.` *look* fine until the first `Pkg.resolve()` — measured: one resolve, two unrelated JLL
+bumps reported, both driver entries gone. That mirage is the whole of #624, and
+`test/unit/test_documented_commands.jl` now guards against re-documenting it. (A
+`test/integration/…` script is the exception — `common_setup.jl` redirects the env before anything
+loads, which is why the integration commands below still work either way.)
 
 Environment variables that change test behavior:
 
@@ -61,11 +72,11 @@ has isolated the failure, or when the rung-5 table in
 [`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md) → *Verify* says the diff owes one.
 
 ```powershell
-# Unit suite (CI-equivalent)
-julia --project=. test/runtests.jl
+# Unit suite (CI-equivalent — julia-actions/julia-runtest calls exactly this)
+julia --project=. -e 'using Pkg; Pkg.test()'
 
-# Unit suite against SQLite instead of the default backend assumptions
-$env:PORMG_DB="db_sl"; julia --project=. test/runtests.jl
+# A single unit file (rungs 1-2). --project=test/integration carries LibPQ + SQLite
+julia --project=test/integration test/unit/test_order_by_nulls.jl
 
 # Full integration suite, PostgreSQL
 julia -t auto --project=test/integration test/integration/runtests.jl
@@ -73,9 +84,10 @@ julia -t auto --project=test/integration test/integration/runtests.jl
 # Full integration suite, SQLite (-t 1 required — SQLite does not tolerate -t auto)
 $env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl
 
-# Everything, via the unit entrypoint's opt-in integration block
-# (--project=. is correct here: this is the UNIT entrypoint; common_setup.jl redirects from there)
-$env:PORMG_INTEGRATION_TESTS="true"; julia -t auto --project=. test/runtests.jl
+# Everything, via the unit entrypoint's opt-in integration block.
+# NOT Pkg.test(): from its sandbox, common_setup.jl declines to redirect the env and its
+# `using Revise` then fails — Revise is a weakdep and is not in [targets].test.
+$env:PORMG_INTEGRATION_TESTS="true"; julia -t auto --project=test/integration test/runtests.jl
 ```
 
 ## Known recurring failure classes

@@ -40,7 +40,7 @@ Sibling coverage:
   - `test_f_expression_immutability.jl` → #457/#508, the other contract on these same nodes.
   - `test/integration/test_field_expressions.jl` → the driver round-trip, which no mock can prove.
 
-julia --project=. test/unit/test_f_date_operands.jl
+julia --project=test/integration test/unit/test_f_date_operands.jl
 """
 
 using Test
@@ -50,7 +50,7 @@ using PormG.QueryBuilder: F, inspect_query
 using PormG: Joined
 using PormG: Interval   # #527 — the `Interval("HH:MM:SS")` spelling of a sub-day duration
 using Dates
-import TimeZones   # #536 — the `ZonedDateTime` oracle row; a PormG dependency, so `--project=.` resolves it
+import TimeZones   # #536 — the `ZonedDateTime` oracle row; a direct dep of test/integration
 import PormG.QueryBuilder as QB
 
 # Dedicated config key + mock types: `runtests.jl` includes every unit file into one `Main`, so a

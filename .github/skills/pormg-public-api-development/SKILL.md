@@ -181,7 +181,7 @@ raw = (M.Result.objects.filter("constructorid" => 131).values("points") |> DataF
 
 Rules and gotchas:
 
-- **Run it with `--project=test/integration`, never `Pkg.activate(".")`.** A `[weakdeps]` package (#34) cannot be `using`-ed by name from the package environment, and `Manifest.toml` is gitignored so a fresh checkout has no installed copy to fall back on — `Pkg.activate(".")` is the one choice guaranteed to fail with *"the SQLite backend requires SQLite"*. (The suite survives `--project=.` only because `common_setup.jl` redirects the environment and `test/load_drivers.jl` falls back to `Base.require` by UUID; a bare scratch script does neither.) Same rule as [`general.instructions.md`](../../instructions/general.instructions.md) → *Verification*.
+- **Run it with `--project=test/integration`, never `Pkg.activate(".")`.** A `[weakdeps]` package (#34) cannot be `using`-ed by name from the package environment, and `Manifest.toml` is gitignored so a fresh checkout has no installed copy to fall back on — `Pkg.activate(".")` is the one choice guaranteed to fail with *"the SQLite backend requires SQLite"*. (The *integration* suite survives `--project=.` only because `common_setup.jl` redirects the environment before anything loads; a bare scratch script does not, and neither does a unit file — `test/load_drivers.jl`'s `Base.require`-by-UUID branch needs the drivers already in the manifest, which is true only of a pre-#34 one and stops being true at the next `Pkg.resolve()`. That is #624.) Same rule as [`general.instructions.md`](../../instructions/general.instructions.md) → *Verification*.
 - **Shortcut:** a script already inside `test/integration/` can `include("common_setup.jl")` instead of writing the preamble — it redirects the environment, loads the drivers (via `test/load_drivers.jl`), `cd`s, and defines `M`, honouring `PORMG_DB` to pick db_sl or db_2. Heavier (also pulls in Test/CSV/Revise and the pool tuning), but it cannot drift from how the suite actually runs.
 - **Verify the value, not just execution.** For aggregates/computed columns, recompute the answer independently (raw row scan, plain `Sum`, etc.) and assert equality — a query that runs can still be wrong.
 - **Query a field by the exact case it was declared** — field lookups are case-sensitive (#57). The F1 models declare **lowercase** fields, so their paths are lowercase (`constructorid__name`); a camelCase path like `constructorId__name` throws *because the field is `constructorid`*, not because PormG folds case. (House style is lowercase snake_case; mixed-case is supported for legacy columns.)
@@ -241,10 +241,10 @@ slice unless the diff is in the rung-5 table in
 [`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md) → *Verify*.
 
 ```powershell
-julia --project=. test/runtests.jl                                                              # unit — no permission needed
-julia -t auto --project=test/integration test/integration/test_bulk_copy.jl                     # rung 4 slice — ask first
-julia -t auto --project=test/integration test/integration/runtests.jl                           # rung 5 — ask; release gate
-$env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl       # rung 5, SQLite (-t 1 required)
+julia --project=. -e 'using Pkg; Pkg.test()'                                               # unit — no permission needed
+julia -t auto --project=test/integration test/integration/test_bulk_copy.jl                # rung 4 slice — ask first
+julia -t auto --project=test/integration test/integration/runtests.jl                      # rung 5 — ask; release gate
+$env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl  # rung 5, SQLite (-t 1 required)
 julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate(); include("docs/make.jl")'
 ```
 

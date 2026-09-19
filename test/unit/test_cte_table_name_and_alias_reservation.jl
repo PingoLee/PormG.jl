@@ -32,7 +32,7 @@
 #   - `test_cjoin_on.jl`                 → the #45 surface, including duplicate-alias refusal
 #                                          between two user aliases.
 #
-# julia --project=. test/unit/test_cte_table_name_and_alias_reservation.jl
+# julia --project=test/integration test/unit/test_cte_table_name_and_alias_reservation.jl
 
 using Test
 using PormG

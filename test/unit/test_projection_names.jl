@@ -41,7 +41,7 @@ keeps both.
 `"*"` is compared as the PHYSICAL columns the database expands it to. A `field_names` check is wrong
 in BOTH directions, which the `db_column` testset below demonstrates rather than asserts.
 """
-# julia --project=. test/unit/test_projection_names.jl
+# julia --project=test/integration test/unit/test_projection_names.jl
 
 using Test
 using PormG

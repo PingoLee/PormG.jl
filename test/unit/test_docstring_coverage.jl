@@ -17,7 +17,7 @@ Two invariants that nothing else enforces:
 
 Runs WITHOUT a live database: it inspects module namespaces and scans source text.
 """
-# julia --project=. test/unit/test_docstring_coverage.jl
+# julia --project=test/integration test/unit/test_docstring_coverage.jl
 
 using Test
 using PormG

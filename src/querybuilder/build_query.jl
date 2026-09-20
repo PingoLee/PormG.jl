@@ -448,11 +448,37 @@ end
 # against `custom_as`/`_as`; the first half selects the namespace for the `tab_field_cache` hit.
 function _resolve_having_filter_value(alias::MemoKey, raw_value, instruc::SQLInstruction,
                                       operator::AbstractString)
+  # #576: the formatter choice and the format CALL were one expression repeated seven times, and
+  # not one of the seven was guarded — so every documented HAVING spelling reported a wrong-typed
+  # value as the write path's `InvalidValueError`. Splitting the choice out leaves exactly one
+  # format call to guard, and `_guarded_format` guards it.
+  #
+  # The message is alias-shaped on purpose. `_rethrow_as_filter_error`'s default wording names a
+  # *field*, and there is no field here: `alias[2]` is an output name the user invented in
+  # `values(...)`, and the type is whatever formatter the ladder below resolved for it.
+  formatter = _having_alias_formatter(alias, instruc)
+  formatted_value = _guarded_format(formatter, raw_value, operator, alias[2],
+                                    _formatter_type_label(formatter);
+                                    subject = "projection alias")
+  return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
+end
+
+# The formatter a HAVING/alias filter value must satisfy, resolved from whatever the alias projects.
+#
+# #576: the final `IntegerField().formatter` is a FALLBACK, and before this it was also the arm that
+# caught every non-aggregate projection — the loop only ever inspected `SQLTypeFunction`, and
+# `F("happened")` is an `FExpression`. So `values("id", "d2" => F("happened")).filter("d2" => ...)`
+# forced `format_number_sql` onto a date, and did so for WELL-TYPED values too: a real `Date` raised
+# "not a valid number". That half is not an error-type problem and no handler could have papered
+# over it — it is simply wrong, which is why the bare-reference arm below exists.
+#
+# Deliberately narrow: only a bare `F("col")` naming a field of the queried model is resolved.
+# `F("a") + Day(1)` carries an `operation` whose result type is not the column's, and a joined path
+# (`F("driverid__surname")`) is not a key of `model.fields`; both keep the fallback rather than get
+# a guess. Widening either is its own change with its own test.
+function _having_alias_formatter(alias::MemoKey, instruc::SQLInstruction)
   memoized = memo_field(instruc, alias)
-  if memoized !== nothing
-    formatted_value = _format_filter_value(memoized.formatter, raw_value, operator)
-    return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
-  end
+  memoized === nothing || return memoized.formatter
 
   for selected_value in instruc.object.values
     selected_alias = selected_value.custom_as !== nothing ? selected_value.custom_as : selected_value._as
@@ -460,31 +486,26 @@ function _resolve_having_filter_value(alias::MemoKey, raw_value, instruc::SQLIns
     # Comparing the whole key here would never match — the review flagged the String-vs-key mismatch
     # as latent, and typing the key is what turns it into a compile-visible one.
     selected_alias == alias[2] || continue
+    isa(selected_value, SQLTypeField) || continue
+    projected = selected_value.field
 
-    if isa(selected_value, SQLTypeField) && isa(selected_value.field, SQLTypeFunction)
-      sql_function = selected_value.field
-
-      if sql_function.formatter !== nothing
-        formatted_value = _format_filter_value(sql_function.formatter, raw_value, operator)
-        return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
-      elseif sql_function.function_name == "AVG"
-        formatted_value = _format_filter_value(Models.format_number_sql, raw_value, operator)
-        return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
-      elseif haskey(PormGTypeField, sql_function.function_name)
-        formatted_value = _format_filter_value(getfield(Models, PormGTypeField[sql_function.function_name]), raw_value, operator)
-        return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
-      elseif sql_function.function_name in ["SUM", "COUNT"]
-        formatted_value = _format_filter_value(Models.format_number_sql, raw_value, operator)
-        return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
-      elseif sql_function.function_name in ["MAX", "MIN"] && sql_function.column isa String && haskey(instruc.object.model.fields, sql_function.column)
-        formatted_value = _format_filter_value(instruc.object.model.fields[sql_function.column].formatter, raw_value, operator)
-        return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
+    if isa(projected, SQLTypeFunction)
+      projected.formatter === nothing || return projected.formatter
+      projected.function_name == "AVG" && return Models.format_number_sql
+      haskey(PormGTypeField, projected.function_name) &&
+        return getfield(Models, PormGTypeField[projected.function_name])
+      projected.function_name in ("SUM", "COUNT") && return Models.format_number_sql
+      if projected.function_name in ("MAX", "MIN") && projected.column isa String &&
+         haskey(instruc.object.model.fields, projected.column)
+        return instruc.object.model.fields[projected.column].formatter
       end
+    elseif isa(projected, FExpression) && projected.operation === nothing &&
+           projected.column isa String && haskey(instruc.object.model.fields, projected.column)
+      return instruc.object.model.fields[projected.column].formatter   # #576: the bare `F("col")`
     end
   end
 
-  formatted_value = _format_filter_value(IntegerField().formatter, raw_value, operator)
-  return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
+  return IntegerField().formatter
 end
 
 """

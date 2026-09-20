@@ -91,7 +91,7 @@ be part of the answer. `@quarter` and `@quadrimester` extract the period **numbe
 and `1` through `3` — so `filter("date__@quarter" => 1)` selects the first quarter of *every* year.
 `@yyyy_q` and `@yyyy_quad` build the year-qualified **label** (`"1991-Q1"`), which is what you want as
 a `values()` grouping key when each year's quarters must stay separate. A value outside the period's
-range raises `InvalidValueError` rather than matching nothing.
+range raises `FilterError` rather than matching nothing.
 
 A label filter compares the whole `"YYYY-Qn"` string, so `filter("date__@yyyy_q" => "1991-Q1")`
 selects one quarter of one season, where `filter("date__@quarter" => 1)` selects that quarter of

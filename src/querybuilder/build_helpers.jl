@@ -1668,14 +1668,28 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
   f_meta === nothing && return nothing
   _is_date_field(f_meta) || return nothing                          # DATE only, not TIMESTAMP(TZ)
 
-  bind(x) = add_parameter!(instruc, f_meta.formatter(x))
+  # #576: this rewrite runs AHEAD of every branch in `_get_filter_query`, so for `@date` / `@yyyy_mm`
+  # / `@year` on a plain `DateField` it — not the transform ladder — is what formats the user's
+  # value, and it was the leak nobody had named. `raw_field` is the spelling the user wrote (a
+  # String, or a `CTEReference`/`JoinedReference` that prints as one) and `f_meta` is the terminal
+  # field, so both message labels are real here rather than synthesised.
+  bind(x) = add_parameter!(instruc, _guarded_format(f_meta.formatter, x, "=", raw_field, f_meta.type))
 
   if bucket == :date
     # Same granularity as the column: no range, operator unchanged — just drop the to_char.
+    # This `bind` is the only one handed the RAW value; the range arms below bind computed `Date`s.
     return string(column_sql, " ", v.operator, " ", bind(v.values))
   end
 
-  first_of_period, next_period = bucket == :yyyy_mm ? _yyyy_mm_bucket_bounds(v.values) : _year_bucket_bounds(v.values)
+  # `_year_bucket_bounds` raises `FilterError` on every rejection already, but
+  # `_yyyy_mm_bucket_bounds` opens with `Models.format_yyyy_mm(value)`, which raises
+  # `InvalidValueError` on a bad shape — the same leak, one call deeper. Guarded here rather than
+  # inside the helper, because the helper has no field to name.
+  first_of_period, next_period = try
+    bucket == :yyyy_mm ? _yyyy_mm_bucket_bounds(v.values) : _year_bucket_bounds(v.values)
+  catch e
+    _rethrow_as_filter_error(e, raw_field, f_meta.type, v.values)
+  end
 
   if v.operator == ">="
     return string(column_sql, " >= ", bind(first_of_period))
@@ -1887,20 +1901,68 @@ _format_filter_value(formatter, values, operator::AbstractString) =
 # guarded kept leaking `InvalidValueError` for two releases while every sibling operator converted.
 # One definition means the next operator branch cannot diverge by being written somewhere else.
 #
-# It is not yet the ONLY re-raise on the read path: `_resolve_having_filter_value` (build_query.jl)
-# and the `SQLTypeFunction` transform branches below still format outside any guard and still leak
-# `InvalidValueError`. #576 tracks routing them here; this is the helper they route to.
+# Since #576 it is the only re-raise on the read path: the HAVING ladder (build_query.jl), the
+# `SQLTypeFunction` transform branches, the #474 memo arm, the `F(...)` operand (execution.jl) and
+# the sargable rewrite all reach it, most of them through `_guarded_format` below. Before that, one
+# of thirteen formatter call sites was guarded.
 #
 # **Call it only from inside a `catch`.** The non-`InvalidValueError` arm is `rethrow(e)`, which is
 # legal in a function only while a handler is dynamically in scope; called anywhere else it raises
-# `"rethrow(exc) not allowed outside a catch block"` and masks the error it was handed. The two
-# call sites below are both `catch` bodies.
-_rethrow_as_filter_error(e, field_name, field_type, values) =
+# `"rethrow(exc) not allowed outside a catch block"` and masks the error it was handed. In practice
+# `_guarded_format` is the caller, and its `catch` is the only one that needs to exist.
+_rethrow_as_filter_error(e, field_name, field_type, values; subject::AbstractString = "field") =
   e isa InvalidValueError ?
-    throw(FilterError("The \e[4m\e[31m$(field_name)\e[0m field is the type " *
+    throw(FilterError("The \e[4m\e[31m$(field_name)\e[0m $(subject) is the type " *
                       "\e[4m\e[32m$(field_type)\e[0m. Please check the value: " *
                       "\e[4m\e[31m$(values)\e[0m")) :
     rethrow(e)
+
+# #576: the guarded form of the format step. `_rethrow_as_filter_error` above fixed the `catch`
+# body; this fixes the `try`. #467 was never a missing message -- it was a branch that formatted
+# where the guard was not, and eleven more such branches existed behind it (the HAVING ladder, the
+# transform ladder, the #474 memo arm, the `F(...)` operand, and the sargable rewrite that runs
+# ahead of all of them). A site that formats through here cannot forget to convert.
+#
+# Two guarded sites deliberately do NOT route through it, because they do not format a single
+# operand: the `BETWEEN` arm formats two and must bind neither until both succeed, and the sargable
+# rewrite guards a bounds computation rather than a formatter call. Both use
+# `_rethrow_as_filter_error` directly, so the message and the type check still have one definition.
+#
+# Both labels are arguments because the sites cannot agree on where they come from: a model field
+# carries `.type`, a projection alias carries only its own spelling and whichever formatter the
+# HAVING ladder resolved for it, and the transform ladder has an `FObject` with neither. `subject`
+# names what the message is talking about, so an alias is not told it is a field.
+_guarded_format(formatter, values, operator::AbstractString, label, type_label;
+                subject::AbstractString = "field") =
+  try
+    _format_filter_value(formatter, values, operator)
+  catch e
+    _rethrow_as_filter_error(e, label, type_label, values; subject = subject)
+  end
+
+# #576: the type label for a site that has a formatter but no `PormGField` to read `.type` off.
+# Every read-path coercion helper is named `format_<t>_sql` in `Models`, so what the value has to
+# satisfy is RECOVERABLE from the formatter rather than guessed — `format_number_sql` -> "number".
+# A formatter outside the convention (`format_yyyy_mm`) falls back to its own name, which is still
+# a truthful answer to "what rejected this"; inventing a prettier one would not be.
+function _formatter_type_label(formatter)::String
+  n = string(nameof(formatter))
+  m = match(r"^format_(.+)_sql$", n)
+  return m === nothing ? n : replace(m.captures[1], '_' => ' ')
+end
+
+# #576: message labels for a site whose column is a TRANSFORM rather than a field. The transform
+# ladder has an `FObject`, which carries neither a `.type` nor the `field_name` local the `BETWEEN`
+# arm uses, so both labels are recovered instead of invented: the name is the alias if the node has
+# one and the underlying column otherwise, and the subject names the transform, so the message says
+# which of the two — the column or the `__@` suffix on it — is being talked about.
+function _transform_filter_labels(node, formatter)
+  fobj = node isa SQLTypeField ? node.field : node
+  name = fobj._as !== nothing                            ? fobj._as :
+         (node isa SQLTypeField && node._as !== nothing) ? node._as :
+                                                           string(fobj.column)
+  return (name, _formatter_type_label(formatter), "$(fobj.function_name) transform")
+end
 
 # The single renderer for `IN` / `NOT IN` (#411). Extracted so the WHERE path and the HAVING path
 # cannot drift: `get_filter_query`'s aggregate-alias branch used to build its own
@@ -1982,16 +2044,21 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     return string(column, " ", v.operator, " ", placeholders)
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formatter !== nothing
     @pormg_debug false
+    # #576: this is the arm `filter("happened__@month" => "abc")` lands in once the sargable rewrite
+    # above has declined it, and it formatted outside any guard, so it reported the write path's
+    # `InvalidValueError` on a read. Guarded now, like every sibling.
+    _label, _type, _subject = _transform_filter_labels(v.column, v.column.field.formatter)
     placeholders = add_parameter!(instruc,
-      _format_filter_value(v.column.field.formatter, v.values, v.operator))
+      _guarded_format(v.column.field.formatter, v.values, v.operator, _label, _type; subject = _subject))
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && haskey(PormGTypeField, v.column.field.function_name)
     # Through the same helper as the other sites (#411). These work today only because
     # `PormGTypeField` maps to `format_number_sql` / `format_text_sql` — the two formatters that
     # happen to carry an `AbstractArray` method, which is precisely the coincidence this issue is
     # about. Leaving them raw would keep that coincidence load-bearing.
+    _fmt = getfield(Models, PormGTypeField[v.column.field.function_name])
+    _label, _type, _subject = _transform_filter_labels(v.column, _fmt)   # #576
     placeholders = add_parameter!(instruc,
-      _format_filter_value(getfield(Models, PormGTypeField[v.column.field.function_name]), v.values, v.operator))
-    # value = getfield(Models, PormGTypeField[v.column.field.function_name])(v.values)
+      _guarded_format(_fmt, v.values, v.operator, _label, _type; subject = _subject))
   elseif isa(v.column, SQLTypeFunction) && haskey(PormGTypeField, v.column.function_name)
     # Function with formatter
     @pormg_debug false
@@ -1999,8 +2066,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # `PormGTypeField` maps to `format_number_sql` / `format_text_sql` — the two formatters that
     # happen to carry an `AbstractArray` method, which is precisely the coincidence this issue is
     # about. Leaving them raw would keep that coincidence load-bearing.
+    _fmt = getfield(Models, PormGTypeField[v.column.function_name])
+    _label, _type, _subject = _transform_filter_labels(v.column, _fmt)   # #576
     placeholders = add_parameter!(instruc,
-      _format_filter_value(getfield(Models, PormGTypeField[v.column.function_name]), v.values, v.operator))
+      _guarded_format(_fmt, v.values, v.operator, _label, _type; subject = _subject))
   elseif isa(v.column, SQLTypeFunction)
     # #537 — a function column none of the branches above can bind. `OP(::SQLTypeFunction, …)` is a
     # constructor arm PormG itself relies on — `When(OP(MONTH(x), "<=", N))` builds `Y_Q` / `Y_QUAD`,
@@ -2081,39 +2150,45 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
         return string(column_sql, " ", v.operator, " ", p1, " AND ", p2)
       end
     elseif haskey(instruc.object.model.fields, v.column.field)
-      placeholders = nothing
-      try
-        # Does this operator take `%` decoration? `add_parameter!` then routes the value through
-        # `_apply_like_wildcards`, which picks the shape from the same constants (#604).
-        is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
-        placeholders = add_parameter!(instruc,
-          _format_filter_value(instruc.object.model.fields[v.column.field].formatter, v.values, v.operator),
-          contains=is_like_op, operator=v.operator)
-      catch e
-        @pormg_debug false
-        # #411: this used to string-match `"The date"` && `"is invalid"`. That fired for exactly one
-        # case — `format_date_sql(::AbstractString)`, whose message is literally "The date $value is
-        # invalid" — and for nothing else. The `format_date_sql` CATCH-ALL says "The date must be a
-        # Date, DateTime, …", and no other field type's formatter mentions dates at all, so a
-        # wrong-typed value on any non-Date field escaped as a raw `InvalidValueError`, whose own
-        # docstring scopes it to the insert/update coercion helpers rather than to a filter.
-        #
-        # Widening it to a type check makes the filter path report its own house type consistently.
-        # It is a deliberate behavior change, not a no-op: `filter("n" => "abc")` on an IntegerField
-        # now raises `FilterError` where it raised `InvalidValueError`. Both are `PormGError`.
-        #
-        # #467 moved the `BETWEEN`/`NOT BETWEEN` branch onto the same helper, so `@range`/`@nrange`
-        # no longer leak `InvalidValueError`. Both operator branches share one definition — but the
-        # HAVING/alias path and the transform branches still format outside any guard (#576), so
-        # this is not yet the only re-raise on the read path.
-        _rethrow_as_filter_error(e, v.column.field,
-                                 instruc.object.model.fields[v.column.field].type, v.values)
-      end
+      # Does this operator take `%` decoration? `add_parameter!` then routes the value through
+      # `_apply_like_wildcards`, which picks the shape from the same constants (#604).
+      is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
+      _f_meta = instruc.object.model.fields[v.column.field]
+      # #576: was a hand-written `try` whose `catch` carried the note below; it is now the shared
+      # `_guarded_format`, which also moves `add_parameter!` OUT of the guard. That is what #467
+      # said it wanted ("`add_parameter!` stays outside the new `try`") and what the `BETWEEN` arm
+      # above already does — only the operand formatting is being converted, never the binding.
+      placeholders = add_parameter!(instruc,
+        _guarded_format(_f_meta.formatter, v.values, v.operator, v.column.field, _f_meta.type),
+        contains=is_like_op, operator=v.operator)
+      # Why the conversion exists at all, kept from #411's `catch` body:
+      #
+      # it used to string-match `"The date"` && `"is invalid"`. That fired for exactly one case —
+      # `format_date_sql(::AbstractString)`, whose message is literally "The date $value is
+      # invalid" — and for nothing else. The `format_date_sql` CATCH-ALL says "The date must be a
+      # Date, DateTime, …", and no other field type's formatter mentions dates at all, so a
+      # wrong-typed value on any non-Date field escaped as a raw `InvalidValueError`, whose own
+      # docstring scopes it to the insert/update coercion helpers rather than to a filter.
+      #
+      # Widening it to a type check makes the filter path report its own house type consistently.
+      # It is a deliberate behavior change, not a no-op: `filter("n" => "abc")` on an IntegerField
+      # raises `FilterError` where it raised `InvalidValueError`. Both are `PormGError`.
+      #
+      # #467 brought `BETWEEN`/`NOT BETWEEN` onto the same helper; #576 brought the remaining
+      # eleven sites, so every formatter call on the read path now reaches one re-raise instead of
+      # one in thirteen doing so.
     elseif (_vc_field = memo_field(instruc, memo_key(v.column))) !== nothing # #474
       @pormg_debug false
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
+      # #576: unguarded, and still SUSPECTED rather than confirmed — no input was found that both
+      # lands here and fails coercion (a `values(...)` alias reused in `filter()` is rejected by
+      # the field walk first, as `UnknownFieldError`). Guarded for the same reason as the
+      # `execution.jl` arm: the guard is free, and reachability is a property of today's callers.
+      # `_vc_field` is a real field, so no label has to be synthesised — the memo key's second half
+      # is the spelling the user wrote.
       placeholders = add_parameter!(instruc,
-        _format_filter_value(_vc_field.formatter, v.values, v.operator),
+        _guarded_format(_vc_field.formatter, v.values, v.operator,
+                        memo_key(v.column)[2], _vc_field.type),
         contains=is_like_op, operator=v.operator)
     elseif isa(v.column, SQLTypeField)
       @pormg_debug false

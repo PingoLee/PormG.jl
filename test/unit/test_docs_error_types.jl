@@ -26,8 +26,8 @@ Claims that genuinely need live data — the unprojected-FK read, `create()` val
 
 using Test
 using PormG
-using PormG.Models: Model, CharField, IDField, IntegerField, DateTimeField, ForeignKey, JSONField,
-                    UniqueConstraint, Index, add_field!
+using PormG.Models: Model, CharField, IDField, IntegerField, DateField, DateTimeField, ForeignKey,
+                    JSONField, UniqueConstraint, Index, add_field!
 # #612 — the text fields whose `default=` policy the filters page states, plus `UUIDField`,
 # which the page deliberately holds to a STRICTER rule than that shared policy.
 using PormG.Models: TextField, URLField, UUIDField
@@ -92,6 +92,15 @@ end
 const DOCERR_LAP_PG = let m = Model("docerr_lap_docerr_pg",
         id = IDField(), points = IntegerField(null = true),
         updated_at = DateTimeField(auto_now = true, null = true))
+    m.connect_key = "docerr_pg"; m._module = Main; m
+end
+
+# #576 — the period-transform claims on read/functions_and_dates.md and read/filters_and_aggregates.md
+# name an error TYPE, and both named the wrong one: the transform ladder formatted outside the
+# filter path's re-raise, so it reported the write path's `InvalidValueError`. Its own model because
+# no other fixture here carries a `DateField`, and a period transform needs one.
+const DOCERR_RACE_PG = let m = Model("docerr_race_docerr_pg",
+        raceid = IDField(), name = CharField(), date = DateField())
     m.connect_key = "docerr_pg"; m._module = Main; m
 end
 
@@ -437,6 +446,20 @@ const DOCERR_CASES = [
         "read/filters_and_aggregates.md — a JSON path key with spaces is not addressable",
         InvalidValueError,
         () -> DOCERR_RESULT_PG.objects.filter("payload__bad key" => 1).list(show_query = :dict),
+    ),
+    # #576. Both pages state the type for a period transform's rejected value, and both said
+    # `InvalidValueError` — the write path's type, on a read. Neither claim was executed here
+    # before, which is why it survived #411 and #467 untouched: the transform ladder is a different
+    # branch from the scalar and `BETWEEN` arms those issues converted.
+    (
+        "read/filters_and_aggregates.md — a period number outside its range",
+        FilterError,
+        () -> DOCERR_RACE_PG.objects.filter("date__@quarter" => 9).list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md — a period transform compared against a non-number",
+        FilterError,
+        () -> DOCERR_RACE_PG.objects.filter("date__@quarter" => "abc").list(show_query = :dict),
     ),
     # Intentional PG/SQLite divergence: these pages tell the reader the lookup is PostgreSQL-only
     # and raises on SQLite. Asserting it on the SQLite mock keeps the documented divergence honest.

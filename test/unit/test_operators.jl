@@ -1177,3 +1177,120 @@ end
   q2.filter("tot__@gt" => 5)
   @test q2.list(show_query = :dict)[:parameters] == [5]
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Error-type parity, the rest of it: every read path reports FilterError (#576)
+#
+# #411 converted the scalar/membership branches and #467 the `BETWEEN` arm. Twelve of the thirteen
+# formatter call sites on the read path were still outside the guard, so the SAME user mistake
+# reported `InvalidValueError` — the write path's type — depending only on which spelling was used.
+#
+# One case per converted arm, because the point is that the CLASS is closed. Each asserts the CAUSE
+# as well as the type: `FilterError` is the filter path's long-tail bucket, so a bare `@test_throws`
+# would pass on an operator-validity error too, which is not what this pins.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "every read path reports FilterError, not InvalidValueError (#576)" begin
+  # ── The HAVING / aggregate-alias ladder (`_resolve_having_filter_value`) ──
+  # This is the documented alias spelling, and all seven of its arms formatted unguarded. The
+  # message is alias-shaped: there is no field here, only a name the caller invented in `values()`.
+  sum_q = _IN411.objects
+  sum_q.values("code", "tot" => PormG.Functions.Sum("n"))
+  sum_err = @test_throws PormG.FilterError sum_q.filter(
+    "tot__@gt" => "abc").list(show_query = :dict)
+  @test occursin("projection alias is the type", sum_err.value.msg)
+  @test occursin("tot", sum_err.value.msg)
+
+  # `MAX`/`MIN` resolve the formatter from the aggregated COLUMN, a different arm from `SUM`'s.
+  max_q = _IN411.objects
+  max_q.values("code", "mx" => PormG.Functions.Max("happened"))
+  max_err = @test_throws PormG.FilterError max_q.filter(
+    "mx__@gt" => "not-a-date").list(show_query = :dict)
+  @test occursin("projection alias is the type", max_err.value.msg)
+
+  # ── The transform ladder (`SQLTypeFunction` branches in `_get_filter_query`) ──
+  # `@month`/`@day` extract a number, so a non-numeric value is the mistake. These reached
+  # `format_number_sql` with no `try` around it at all.
+  month_err = @test_throws PormG.FilterError _IN411.objects.filter(
+    "happened__@month" => "abc").list(show_query = :dict)
+  @test occursin("transform is the type", month_err.value.msg)
+  @test_throws PormG.FilterError _IN411.objects.filter(
+    "happened__@day" => "abc").list(show_query = :dict)
+
+  # `@quarter` validates a RANGE rather than a type, through `format_quarter_sql`. Same leak, and
+  # it is the one the docs named by error type, so both doc pages moved with this commit.
+  quarter_err = @test_throws PormG.FilterError _IN411.objects.filter(
+    "happened__@quarter" => 9).list(show_query = :dict)
+  @test occursin("transform is the type", quarter_err.value.msg)
+
+  # ── The sargable rewrite (`_render_sargable_date_range`) ──
+  # Not named by the issue, and the one that actually fires for these spellings: on a plain
+  # `DateField` the rewrite short-circuits AHEAD of the ladder above, so guarding the ladder alone
+  # would have left `@date` and `@yyyy_mm` leaking while the tests for `@month` went green.
+  date_err = @test_throws PormG.FilterError _IN411.objects.filter(
+    "happened__@date" => "not-a-date").list(show_query = :dict)
+  @test occursin("field is the type", date_err.value.msg)
+  # `@yyyy_mm` leaks one call deeper — `_yyyy_mm_bucket_bounds` opens with `Models.format_yyyy_mm`,
+  # whose `InvalidValueError` escaped before the bounds guard. Its sibling `_year_bucket_bounds`
+  # already raised `FilterError` throughout, which is why `@year` was never on the leak list.
+  @test_throws PormG.FilterError _IN411.objects.filter(
+    "happened__@yyyy_mm" => "nonsense").list(show_query = :dict)
+
+  # ── Controls: the conversion must not swallow a well-typed value ──
+  # Every spelling above, with a value its formatter accepts, still builds.
+  ok_sum = _IN411.objects
+  ok_sum.values("code", "tot" => PormG.Functions.Sum("n"))
+  ok_sum.filter("tot__@gt" => 10)
+  @test ok_sum.list(show_query = :dict)[:parameters] == [10]
+  @test _IN411.objects.filter("happened__@month" => 3).list(show_query = :dict) isa Dict
+  @test _IN411.objects.filter("happened__@date" => Date("1991-10-01")).list(show_query = :dict) isa Dict
+  @test _IN411.objects.filter("happened__@yyyy_mm" => "1991-10").list(show_query = :dict) isa Dict
+
+  # ── The guard converts InvalidValueError and NOTHING else ──
+  # `format_bool_sql` has no generic arm, so a wrong-typed value on a BooleanField raises a bare
+  # `MethodError`. `_rethrow_as_filter_error`'s non-`InvalidValueError` arm is `rethrow(e)`, and
+  # this pins that it stays that way: a guard that converted everything would hide real bugs.
+  @test_throws MethodError _IN411.objects.filter(
+    "ok" => Date("1991-10-01")).list(show_query = :dict)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A non-aggregate projection alias resolves its own formatter, not IntegerField's (#576)
+#
+# The HAVING ladder only ever inspected `SQLTypeFunction`, and a bare `F("col")` is an
+# `FExpression`. Everything it did not recognise fell to `IntegerField().formatter`, so filtering a
+# projected date alias forced `format_number_sql` onto it.
+#
+# This half is NOT an error-type problem and no consuming app could have had a working handler
+# around it: it rejected WELL-TYPED values too. A real `Date` raised "is not a valid number". That
+# is why the well-typed case below is the primary assertion and the error type is secondary —
+# reversing the two would let a fix that only relabels the error pass.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a plain F() projection alias filters on its own type (#576)" begin
+  # The case that was broken for correct input. Asserting the bound parameter, not merely that it
+  # did not throw: the alias must format through the DATE formatter, so the value binds as the
+  # column's own representation rather than as a number.
+  q = _IN411.objects
+  q.values("id", "d2" => F("happened"))
+  q.filter("d2" => Date("2026-06-15"))
+  @test q.list(show_query = :dict)[:parameters] == ["2026-06-15"]
+
+  # And a genuinely wrong value on the same alias now reports the filter path's type.
+  bad = _IN411.objects
+  bad.values("id", "d2" => F("happened"))
+  bad_err = @test_throws PormG.FilterError bad.filter(
+    "d2" => "not-a-date").list(show_query = :dict)
+  @test occursin("projection alias is the type", bad_err.value.msg)
+
+  # Deliberately NOT widened: an alias over arithmetic (`F("n") + 1`) or over a joined path keeps
+  # the `IntegerField` fallback, because neither one's result type is the column's. Pinned so the
+  # narrowness is a decision on the record rather than an accident of the `operation === nothing`
+  # test — if a later change resolves these too, this assertion is where it announces itself.
+  arith = _IN411.objects
+  arith.values("id", "d3" => F("n") + 1)
+  arith.filter("d3" => 5)
+  # Two parameters, in clause order: the `1` the arithmetic binds in the SELECT bucket, then the
+  # filter's own `5` in HAVING. Asserting the whole vector rather than just the filter value keeps
+  # the bucket order visible — this alias reaches the fallback formatter, and a change that started
+  # resolving `F("n") + 1` to the column's formatter would still bind `5` and pass a narrower test.
+  @test arith.list(show_query = :dict)[:parameters] == [1, 5]
+end

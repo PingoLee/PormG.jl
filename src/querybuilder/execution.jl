@@ -1643,7 +1643,21 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     numeric_column = f === nothing || f.formatter === Models.format_number_sql
     sql_type = numeric_column && operand isa Union{Integer,Float16,Float32,Float64} && !(operand isa Bool) ?
                _infer_parameter_sql_type(operand, instruc) : nothing
-    return add_parameter!(instruc, _format_filter_value(formatter, operand, operation); sql_type=sql_type)
+    # #576: unguarded, and the issue listed it as SUSPECTED. It still is — no input was found that
+    # reaches `InvalidValueError` here. This arm admits `Integer`/`Float`/`UUID`/`Time` only, and
+    # every mismatched pair those can form against a real column (`format_number_sql(::UUID)`,
+    # `(::Time)`, `format_text_sql(::UUID)`) has no method at all, so it raises `MethodError`, which
+    # `_rethrow_as_filter_error` rethrows untouched by design. Guarded anyway, because the guard is
+    # free and the reachability argument is about today's formatter method tables, not about this
+    # call site — but it fixes no observed leak, and the tests below do not pretend otherwise.
+    #
+    # `field_name` is in scope, but `f` may be `nothing` (a nested expression, an unresolvable
+    # path) — there the formatter came from the OPERAND's own type above, so the type label comes
+    # from the formatter rather than from a column that was never found.
+    return add_parameter!(instruc,
+      _guarded_format(formatter, operand, operation, field_name,
+                      f !== nothing ? f.type : _formatter_type_label(formatter));
+      sql_type=sql_type)
   elseif isa(operand, String)
     # Check if it's a field reference
     if contains(operand, "__") || operand in instruc.object.model.field_names

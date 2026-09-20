@@ -45,6 +45,69 @@ _Changes merged but not yet cut into a release. A consumer dev'ing PormG at HEAD
 and `PormG.upgrade_guide` surfaces them by default. When the maintainer next rolls changes into a
 consuming app, `/pormg-cut-release` stamps every entry below with `0.7.0`, dates them, and tags it._
 
+## Every read path now raises `FilterError` for a value it cannot coerce (#576)
+
+- **Version**: Unreleased
+- **Recorded**: 2026-09-20
+- **PormG ref**: #576; `src/querybuilder/build_helpers.jl` (`_guarded_format`,
+  `_render_sargable_date_range`, the `SQLTypeFunction` branches, the #474 memo arm),
+  `src/querybuilder/build_query.jl` (`_resolve_having_filter_value`, `_having_alias_formatter`),
+  `src/querybuilder/execution.jl`
+- **Severity**: behavior change — error type on the read path, plus one path that was simply broken
+
+### What changed
+
+#411 converted the scalar and membership filter branches from `InvalidValueError` to `FilterError`,
+and #467 converted `@range` / `@nrange`. Twelve of the thirteen formatter call sites on the read
+path were still outside that guard, so the same mistake reported the *write* path's type depending
+only on which spelling you used. All of them now report `FilterError`:
+
+```julia
+# before -> InvalidValueError          after -> FilterError
+Race.objects.values("c", "tot" => Sum("n")).filter("tot__@gt" => "abc")   # aggregate alias
+Race.objects.values("c", "mx" => Max("date")).filter("mx__@gt" => "nope") # MAX/MIN alias
+Race.objects.filter("date__@month" => "abc")                              # transform suffix
+Race.objects.filter("date__@quarter" => 9)                                # period out of range
+Race.objects.filter("date__@date" => "not-a-date")                        # sargable rewrite
+Race.objects.filter("date__@yyyy_mm" => "nonsense")                       # sargable rewrite
+```
+
+The last two were never listed on #576: on a plain `DateField` the sargable rewrite short-circuits
+*ahead* of the transform ladder, so it — not the ladder — is what formats those values.
+
+A wrong-typed value that produces a `MethodError` rather than an `InvalidValueError` is unchanged
+and still surfaces as `MethodError`; the guard converts one type, not everything.
+
+### Also fixed: a non-aggregate projection alias was broken for well-typed values
+
+`_resolve_having_filter_value` only recognised `SQLTypeFunction` projections, so everything else
+fell through to `IntegerField`'s formatter:
+
+```julia
+q = Race.objects
+q.values("id", "d2" => F("date"))
+q.filter("d2" => Date(2026, 6, 15))
+# before -> InvalidValueError: The value '2026-06-15' is not a valid number
+# after  -> binds "2026-06-15" through the DateField formatter
+```
+
+This is not a compatibility concern — no handler could have made it work — but if you avoided
+filtering on a plain `F(...)` alias because of it, the workaround is no longer needed. An alias over
+*arithmetic* (`F("n") + 1`) or over a joined path deliberately keeps the old fallback.
+
+### What you need to do
+
+If you catch `InvalidValueError` around a **read**, change it to `FilterError`, or catch
+`PormGError` for both. Writes are untouched: `create`, `update` and the bulk writers still raise
+`InvalidValueError`, which is what its docstring scopes it to.
+
+```bash
+grep -rnE 'InvalidValueError' <your app>/ | grep -viE 'insert|update|bulk|create|save'
+```
+
+This supersedes the "**The conversion is still not complete**" note on #467's 0.6.0 entry, which
+named three shapes; there were seven.
+
 ---
 
 ## 0.6.0 — 2026-09-18
@@ -482,12 +545,10 @@ Both are `PormGError`, so `catch e; e isa PormGError` is unaffected. Only a `cat
 edit #411 already asked for on the scalar and membership operators. Well-typed operands bind exactly
 as before.
 
-**The conversion is still not complete**, so do not drop an `InvalidValueError` handler from a read
-path wholesale. At least three shapes continue to raise it and are tracked in #576: a wrong-typed value
-compared against an **aggregate alias** (`filter("tot__@gt" => "abc")` over a `Sum(...)`
-projection), the same against a `Max(...)`/`Min(...)` alias, and a **transform suffix**
-(`filter("happened__@month" => "abc")`). Convert the handlers around the operators named above;
-leave the ones guarding those three until #576 lands.
+**#576 completed the conversion** — see its entry above, which supersedes the caveat that stood here.
+When this entry was written, the aggregate-alias, transform-suffix and sargable-rewrite paths still
+raised `InvalidValueError`, and it told you to keep the handlers guarding them. Do the whole
+migration in one pass against #576's entry instead; it names every shape, not the three known then.
 
 ### How to find the calls to migrate
 

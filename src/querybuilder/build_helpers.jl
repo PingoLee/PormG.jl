@@ -676,24 +676,55 @@ function _insert_join(
   end
 end
 
+# #619: the names the hint may mention but PormG does not implement, mapped to the nearest spelling
+# that does work. This is a MESSAGE table, not a registry — nothing dispatches on it, and membership
+# here grants no behavior. It exists so "there is no such lookup" can still be useful for the names
+# where a real alternative exists. `test/unit/test_operators.jl` asserts every key is unreachable
+# from both registries, so an entry cannot outlive the wiring of its own name.
+const UNIMPLEMENTED_LOOKUP_HINTS = Dict{String,String}(
+  "exact"        => "a bare `field => value` already IS an exact match",
+  "iexact"       => "the nearest are `__@iunaccent_exact` and `__@icontains`",
+  "iso_year"     => "the nearest is `__@year`",
+  "week"         => "there is no week transform either; `__@month` and `__@yyyy_mm` are the nearest buckets",
+  "week_day"     => "there is no weekday transform either",
+  "iso_week_day" => "there is no weekday transform either",
+  "hour"         => "there is no time-part transform either; `__@date` truncates a timestamp to its day",
+  "minute"       => "there is no time-part transform either",
+  "second"       => "there is no time-part transform either",
+  "regex"        => "the nearest are `__@contains`, `__@startswith` and `__@endswith`",
+  "iregex"       => "the nearest is `__@icontains`",
+)
+
 function _check_if_field_is_a_operator(field::String)
   # The pattern family comes from the shared constant (#604) rather than a literal copy — this list
   # named `istartswith`/`iendswith` while `PormGsuffix` did not, so it told the user to add the `@`
   # and the `@` spelling then raised a FilterError of its own. The rest stays literal on purpose:
   # this is the "you forgot the `@`" hint, not the lookup registry, so it also spans transforms.
   #
-  # It additionally names 11 Django lookups PormG implements nowhere — exact, iexact, iso_year, week,
-  # week_day, iso_week_day, hour, minute, second, regex, iregex: keys of neither PormGsuffix nor
-  # PormGtransform. For those the hint is actively wrong, since it instructs a spelling that then
-  # fails — #604's own dead end, surviving 11 more times. Left as-is deliberately: each needs its own
-  # wire-or-drop decision and a follow-up issue, not a silent prune while fixing something else.
+  # #619: it also names 11 Django lookups PormG implements nowhere — keys of neither `PormGsuffix`
+  # nor `PormGtransform` — and for those it used to instruct a spelling that then failed, which is
+  # #604's own two-step dead end surviving 11 more times. The MEMBERSHIP is deliberate and stays:
+  # this is a near-miss hint, and a reader who typed `surname__regex` is better served by being told
+  # PormG has no regex lookup than by the generic "no such field". Only the WORDING was wrong.
   common_operators = [PATTERN_LOOKUP_OPERATORS...,
     "exact", "iexact", "in", "gt", "gte", "lt", "lte", "range", "nrange", "date", "isnull",
     "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",
     "hour", "minute", "second", "regex", "iregex"]
-  if field in common_operators
+  field in common_operators || return nothing
+
+  # Reachability is COMPUTED from the registries, never listed a third time. That is the whole
+  # defect-prevention: wiring a name into `PormGsuffix` or `PormGtransform` later flips its hint by
+  # itself, so the two halves cannot drift the way the #604 list and `PormGsuffix` did. A second
+  # hand-maintained list of "implemented" names would be the same bug wearing the fix's clothes.
+  if haskey(PormGsuffix, field) || haskey(PormGtransform, field)
     throw(FilterError("The filter operator '\e[31m$field\e[0m' requires '@' prefix. Use '\e[32m$field\e[0m' => ... as part of '__\e[33m@$field\e[0m' syntax. Example: \e[36mq.filter(\"name__@$field\" => value)\e[0m"))
   end
+
+  # No example here, on purpose: an example is a promise, and there is no spelling of this name that
+  # builds a query.
+  alternative = get(UNIMPLEMENTED_LOOKUP_HINTS, field, "")
+  throw(FilterError("PormG has no '\e[31m$field\e[0m' lookup, so no spelling of it works" *
+                    (isempty(alternative) ? "." : " — $alternative.")))
 end
 
 # #474: `"CROSS"` is NOT in this list, and its absence is the fix rather than an oversight. Every

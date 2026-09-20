@@ -763,6 +763,65 @@ end
       @test haskey(PormG.PormGsuffix, op)
     end
   end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # #619: the WHOLE hint list, reconciled against both registries.
+  #
+  # The loop above is scoped to `PATTERN_LOOKUP_OPERATORS` because widening it used to fail: the
+  # hint also names 11 Django lookups PormG implements nowhere, and it promised each of them a
+  # `__@name` spelling that then raised — #604's dead end, 11 more times. The membership was never
+  # the defect (a near-miss hint is worth giving), the wording was, so the invariant this asserts
+  # is conditional rather than universal: an example IFF the name is reachable.
+  #
+  # Reconciling against `PormGsuffix ∪ PormGtransform` rather than against a list is what makes it
+  # non-rotting — wire one of the 11 and this test starts demanding the example form for it,
+  # without anyone remembering to come back here.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "Every name in the missing-@ hint is worded by its reachability (#619)" begin
+    # The hint list is a local inside `_check_if_field_is_a_operator`; probing through the public
+    # surface is deliberate — it is the message a user sees that is under test, not the literal.
+    hint_names = [PormG.PATTERN_LOOKUP_OPERATORS...,
+      "exact", "iexact", "in", "gt", "gte", "lt", "lte", "range", "nrange", "date", "isnull",
+      "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",
+      "hour", "minute", "second", "regex", "iregex"]
+
+    for name in hint_names
+      e = try
+        Logging.with_logger(Logging.NullLogger()) do
+          _OperHintDriver.objects.filter("forename__$(name)" => "x").list(show_query=:dict)
+        end
+        nothing
+      catch err
+        err
+      end
+      # Every name in the list is recognised as a near-miss, reachable or not.
+      @test e isa PormG.FilterError
+      msg = PormG.error_message(e)
+
+      if haskey(PormG.PormGsuffix, name) || haskey(PormG.PormGtransform, name)
+        @test occursin("requires '@' prefix", msg)
+        @test occursin("q.filter(\"name__@$(name)\"", msg)   # the example, which must work
+      else
+        # No example, and it says so. Asserting the ABSENCE of the example is the assertion that
+        # would have failed before this fix — the type and the near-miss recognition would not.
+        @test occursin("PormG has no", msg)
+        @test !occursin("requires '@' prefix", msg)
+        @test !occursin("q.filter(", msg)
+      end
+    end
+
+    # The 11 are named here so the count is visible rather than implied: if one gets wired, this
+    # list is where the change is declared, and the loop above proves the message moved with it.
+    unreachable = [n for n in hint_names
+                   if !haskey(PormG.PormGsuffix, n) && !haskey(PormG.PormGtransform, n)]
+    @test sort(unreachable) == sort(["exact", "iexact", "iso_year", "week", "week_day",
+                                     "iso_week_day", "hour", "minute", "second", "regex", "iregex"])
+
+    # The alternatives table is a message table, not a registry: every key must be one of the
+    # unreachable names. An entry for a name that later gets wired would advertise a detour around
+    # a lookup that works.
+    @test isempty(setdiff(keys(PormG.QueryBuilder.UNIMPLEMENTED_LOOKUP_HINTS), unreachable))
+  end
 end
 
 # =============================================================================

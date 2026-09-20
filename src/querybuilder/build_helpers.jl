@@ -682,7 +682,10 @@ end
 # where a real alternative exists. `test/unit/test_operators.jl` asserts every key is unreachable
 # from both registries, so an entry cannot outlive the wiring of its own name.
 const UNIMPLEMENTED_LOOKUP_HINTS = Dict{String,String}(
-  "exact"        => "a bare `field => value` already IS an exact match",
+  # Worded as the affirmative it is: `exact` is the ONE name here whose behaviour PormG has, just
+  # under no lookup spelling at all. "no spelling of it works — a bare `field => value` already IS
+  # an exact match" read as a contradiction, so this entry says what to write instead of what fails.
+  "exact"        => "write it as a bare `field => value`, which already IS an exact match",
   "iexact"       => "the nearest are `__@iunaccent_exact` and `__@icontains`",
   "iso_year"     => "the nearest is `__@year`",
   "week"         => "there is no week transform either; `__@month` and `__@yyyy_mm` are the nearest buckets",
@@ -1932,15 +1935,22 @@ _format_filter_value(formatter, values, operator::AbstractString) =
 # guarded kept leaking `InvalidValueError` for two releases while every sibling operator converted.
 # One definition means the next operator branch cannot diverge by being written somewhere else.
 #
-# Since #576 it is the only re-raise on the read path: the HAVING ladder (build_query.jl), the
+# Since #576 it is the only re-raise on the FILTER path: the HAVING ladder (build_query.jl), the
 # `SQLTypeFunction` transform branches, the #474 memo arm, the `F(...)` operand (execution.jl) and
 # the sargable rewrite all reach it, most of them through `_guarded_format` below. Before that, one
-# of thirteen formatter call sites was guarded.
+# of thirteen formatter call sites was guarded — see the count in that helper's comment.
+#
+# "Filter path", not "read path", and the difference is one pair of functions: `_m2m_format_owner` /
+# `_m2m_format_related` (`many_to_many.jl`) call a field formatter unguarded, and the owner one is
+# reached on a read via `manager.all()`. They are not guarded because their input is a row's own
+# primary key, never a value the caller typed, so there is no wrong-typed value to report — but the
+# claim is narrowed rather than left to mean more than it does.
 #
 # **Call it only from inside a `catch`.** The non-`InvalidValueError` arm is `rethrow(e)`, which is
 # legal in a function only while a handler is dynamically in scope; called anywhere else it raises
-# `"rethrow(exc) not allowed outside a catch block"` and masks the error it was handed. In practice
-# `_guarded_format` is the caller, and its `catch` is the only one that needs to exist.
+# `"rethrow(exc) not allowed outside a catch block"` and masks the error it was handed. There are
+# exactly three callers, all inside a `catch`: `_guarded_format` below, the `BETWEEN` arm, and the
+# sargable rewrite's bounds guard.
 _rethrow_as_filter_error(e, field_name, field_type, values; subject::AbstractString = "field") =
   e isa InvalidValueError ?
     throw(FilterError("The \e[4m\e[31m$(field_name)\e[0m $(subject) is the type " *
@@ -1950,13 +1960,17 @@ _rethrow_as_filter_error(e, field_name, field_type, values; subject::AbstractStr
 
 # #576: the guarded form of the format step. `_rethrow_as_filter_error` above fixed the `catch`
 # body; this fixes the `try`. #467 was never a missing message -- it was a branch that formatted
-# where the guard was not, and eleven more such branches existed behind it (the HAVING ladder, the
-# transform ladder, the #474 memo arm, the `F(...)` operand, and the sargable rewrite that runs
-# ahead of all of them). A site that formats through here cannot forget to convert.
+# where the guard was not, and the rest of them were still out there.
 #
-# Two guarded sites deliberately do NOT route through it, because they do not format a single
-# operand: the `BETWEEN` arm formats two and must bind neither until both succeed, and the sargable
-# rewrite guards a bounds computation rather than a formatter call. Both use
+# The count, on one definition of "site" so the numbers reconcile: there were 13 `_format_filter_value`
+# call sites on the read path (3 transform ladder, 1 `#474` memo arm, 7 HAVING, 1 `execution.jl`,
+# 1 plain model field). Exactly ONE -- the plain-field arm -- sat inside a `try`. #576 routed the
+# other 12 through here.
+#
+# Two further sites call a formatter DIRECTLY rather than through `_format_filter_value`, so they
+# are not among the 13 and do not route through here either: the `BETWEEN` arm formats two operands
+# and must bind neither until both succeed (guarded since #467), and the sargable rewrite guards a
+# bounds computation rather than a formatter call (guarded by #576). Both call
 # `_rethrow_as_filter_error` directly, so the message and the type check still have one definition.
 #
 # Both labels are arguments because the sites cannot agree on where they come from: a model field
@@ -1974,24 +1988,36 @@ _guarded_format(formatter, values, operator::AbstractString, label, type_label;
 # #576: the type label for a site that has a formatter but no `PormGField` to read `.type` off.
 # Every read-path coercion helper is named `format_<t>_sql` in `Models`, so what the value has to
 # satisfy is RECOVERABLE from the formatter rather than guessed — `format_number_sql` -> "number".
-# A formatter outside the convention (`format_yyyy_mm`) falls back to its own name, which is still
-# a truthful answer to "what rejected this"; inventing a prettier one would not be.
+#
+# The `format_<t>` arm without the `_sql` suffix exists for `format_yyyy_mm`, the one formatter
+# outside the convention. Falling through to the bare function name was the first cut and it put
+# "is the type format_yyyy_mm" — an internal symbol — in a sentence a user reads; truthful and
+# unreadable are not the same bar. `yyyy-mm` is what that formatter actually demands.
 function _formatter_type_label(formatter)::String
   n = string(nameof(formatter))
   m = match(r"^format_(.+)_sql$", n)
-  return m === nothing ? n : replace(m.captures[1], '_' => ' ')
+  m === nothing || return replace(m.captures[1], '_' => ' ')
+  m2 = match(r"^format_(.+)$", n)
+  return m2 === nothing ? n : replace(m2.captures[1], '_' => '-')
 end
 
 # #576: message labels for a site whose column is a TRANSFORM rather than a field. The transform
 # ladder has an `FObject`, which carries neither a `.type` nor the `field_name` local the `BETWEEN`
-# arm uses, so both labels are recovered instead of invented: the name is the alias if the node has
-# one and the underlying column otherwise, and the subject names the transform, so the message says
-# which of the two — the column or the `__@` suffix on it — is being talked about.
+# arm uses, so both labels are recovered instead of invented: the name is the underlying column and
+# the subject names the transform, so the message says which of the two — the column or the `__@`
+# suffix on it — is being talked about.
+#
+# The COLUMN, not `_as`, and that ordering is the fix for a message that undercut this cluster's
+# other half. `_as` holds the flattened spelling `happened__month` — without the `@` — which is
+# exactly the dead spelling #619 exists to tell users does not work; a reader pasting it back got
+# "requires '@' prefix". `fobj.column` is a live spelling in every case, including a joined path
+# (`driverid__dob`). `_as` stays as the fallback for a node whose column is not a plain String.
 function _transform_filter_labels(node, formatter)
   fobj = node isa SQLTypeField ? node.field : node
-  name = fobj._as !== nothing                            ? fobj._as :
-         (node isa SQLTypeField && node._as !== nothing) ? node._as :
-                                                           string(fobj.column)
+  name = (fobj.column isa AbstractString && !isempty(fobj.column)) ? fobj.column :
+         fobj._as !== nothing                                      ? fobj._as :
+         (node isa SQLTypeField && node._as !== nothing)           ? node._as :
+                                                                     string(fobj.column)
   return (name, _formatter_type_label(formatter), "$(fobj.function_name) transform")
 end
 
@@ -2205,18 +2231,22 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       # It is a deliberate behavior change, not a no-op: `filter("n" => "abc")` on an IntegerField
       # raises `FilterError` where it raised `InvalidValueError`. Both are `PormGError`.
       #
-      # #467 brought `BETWEEN`/`NOT BETWEEN` onto the same helper; #576 brought the remaining
-      # eleven sites, so every formatter call on the read path now reaches one re-raise instead of
-      # one in thirteen doing so.
+      # #467 brought `BETWEEN`/`NOT BETWEEN` onto the same helper; #576 brought the remaining 12
+      # `_format_filter_value` sites, so every formatter call on the read path now reaches one
+      # re-raise instead of one in thirteen doing so.
     elseif (_vc_field = memo_field(instruc, memo_key(v.column))) !== nothing # #474
       @pormg_debug false
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
-      # #576: unguarded, and still SUSPECTED rather than confirmed — no input was found that both
-      # lands here and fails coercion (a `values(...)` alias reused in `filter()` is rejected by
-      # the field walk first, as `UnknownFieldError`). Guarded for the same reason as the
-      # `execution.jl` arm: the guard is free, and reachability is a property of today's callers.
-      # `_vc_field` is a real field, so no label has to be synthesised — the memo key's second half
-      # is the spelling the user wrote.
+      # #576: unguarded, and CONFIRMED — this is the ordinary joined-path filter, not an exotic
+      # one. Any FK traversal lands here, because `"driverid__dob"` is not a key of `model.fields`,
+      # so `filter("driverid__dob" => "not-a-date")` reported `InvalidValueError` on what is
+      # plausibly the most common wrong-typed filter a consuming app writes.
+      #
+      # The issue listed it as "suspected, no reproducing input found", and the first cut of this
+      # fix repeated that label after probing only ALIAS reuse (`values("x" => …)` then
+      # `filter("x" => …)`), which the field walk rejects earlier as `UnknownFieldError`. The
+      # probe was wrong, not the arm. `_vc_field` is a real field, so no label is synthesised —
+      # the memo key's second half is the path the user wrote.
       placeholders = add_parameter!(instruc,
         _guarded_format(_vc_field.formatter, v.values, v.operator,
                         memo_key(v.column)[2], _vc_field.type),

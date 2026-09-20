@@ -63,16 +63,22 @@ path were still outside that guard, so the same mistake reported the *write* pat
 only on which spelling you used. All of them now report `FilterError`:
 
 ```julia
-# before -> InvalidValueError          after -> FilterError
-Race.objects.values("c", "tot" => Sum("n")).filter("tot__@gt" => "abc")   # aggregate alias
-Race.objects.values("c", "mx" => Max("date")).filter("mx__@gt" => "nope") # MAX/MIN alias
-Race.objects.filter("date__@month" => "abc")                              # transform suffix
-Race.objects.filter("date__@quarter" => 9)                                # period out of range
-Race.objects.filter("date__@date" => "not-a-date")                        # sargable rewrite
-Race.objects.filter("date__@yyyy_mm" => "nonsense")                       # sargable rewrite
+# before -> InvalidValueError                       after -> FilterError
+M.Result.objects.filter("driverid__dob" => "nope")                         # ANY joined path
+M.Result.objects.filter("driverid__dob__@contains" => "x")                 # …incl. a lookup on one
+M.Result.objects.values("constructorid", "tot" => Sum("points")).filter("tot__@gt" => "abc")  # alias
+M.Race.objects.values("year", "mx" => Max("date")).filter("mx__@gt" => "nope")     # MAX/MIN alias
+M.Race.objects.filter("date__@month" => "abc")                             # transform suffix
+M.Race.objects.filter("date__@quarter" => 9)                               # period out of range
+M.Race.objects.filter("date__@date" => "not-a-date")                       # sargable rewrite
+M.Race.objects.filter("date__@yyyy_mm" => "nonsense")                      # sargable rewrite
 ```
 
-The last two were never listed on #576: on a plain `DateField` the sargable rewrite short-circuits
+**The first two are the ones most likely to be in your code**, and #576 did not list them: it
+marked the joined-path site "suspected, no reproducing input found". Any foreign-key traversal
+reaches it, because `"driverid__dob"` is not a key of the queried model's own fields.
+
+The last two were not listed either: on a plain `DateField` the sargable rewrite short-circuits
 *ahead* of the transform ladder, so it — not the ladder — is what formats those values.
 
 A wrong-typed value that produces a `MethodError` rather than an `InvalidValueError` is unchanged
@@ -84,16 +90,31 @@ and still surfaces as `MethodError`; the guard converts one type, not everything
 fell through to `IntegerField`'s formatter:
 
 ```julia
-q = Race.objects
-q.values("id", "d2" => F("date"))
+q = M.Race.objects
+q.values("raceid", "d2" => F("date"))
 q.filter("d2" => Date(2026, 6, 15))
 # before -> InvalidValueError: The value '2026-06-15' is not a valid number
 # after  -> binds "2026-06-15" through the DateField formatter
 ```
 
-This is not a compatibility concern — no handler could have made it work — but if you avoided
-filtering on a plain `F(...)` alias because of it, the workaround is no longer needed. An alias over
-*arithmetic* (`F("n") + 1`) or over a joined path deliberately keeps the old fallback.
+**This one changes bound values, not just error types, so read it even if you catch nothing.** The
+alias now formats through its own column's formatter, so for any non-numeric column the parameter
+changes — and these cases never raised, so nothing announced them:
+
+| alias projects a column of type | filter value | before | after |
+|---|---|---|---|
+| `CharField` / `TextField` | `5` | binds `5` | binds `"5"` |
+| `BooleanField` | `1` | binds `1` | binds `true` |
+| `DateField` / `DateTimeField` | `Date(2026, 6, 15)` | **raised** | binds `"2026-06-15"` |
+| any numeric field | `7` | binds `7` | binds `7` — unchanged |
+
+On SQLite this is the difference between matching and not: a TEXT column compared against the
+integer `5` finds nothing, while `'5'` finds the row. The new value is the one the ordinary
+`filter("name" => 5)` spelling has always bound, so the alias now agrees with the plain filter
+instead of disagreeing with it — but if you built around the old behavior, that is where to look.
+
+An alias over *arithmetic* (`F("points") + 1`) or over a joined path deliberately keeps the old
+`IntegerField` fallback, because neither one's result type is the column's.
 
 ### What you need to do
 
@@ -106,7 +127,7 @@ grep -rnE 'InvalidValueError' <your app>/ | grep -viE 'insert|update|bulk|create
 ```
 
 This supersedes the "**The conversion is still not complete**" note on #467's 0.6.0 entry, which
-named three shapes; there were seven.
+named three shapes and told you to keep the handlers around them. The list above is the full one.
 
 ---
 
@@ -546,9 +567,10 @@ edit #411 already asked for on the scalar and membership operators. Well-typed o
 as before.
 
 **#576 completed the conversion** — see its entry above, which supersedes the caveat that stood here.
-When this entry was written, the aggregate-alias, transform-suffix and sargable-rewrite paths still
-raised `InvalidValueError`, and it told you to keep the handlers guarding them. Do the whole
-migration in one pass against #576's entry instead; it names every shape, not the three known then.
+When this entry was written it named three still-leaking shapes — a `Sum(...)` alias, a
+`Max(...)`/`Min(...)` alias and a transform suffix — and told you to keep the handlers guarding
+them. Those were the three that were known; joined-path filters and the sargable date rewrite were
+leaking too and went unmentioned. Do the whole migration in one pass against #576's entry instead.
 
 ### How to find the calls to migrate
 

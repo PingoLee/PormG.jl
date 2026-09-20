@@ -1607,7 +1607,26 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # build_helpers.jl): run it through the field's formatter, then bind the formatted string with no
     # explicit cast, letting PostgreSQL infer the type from the comparison context exactly as an
     # ordinary `filter("date" => Date(...))` already does.
-    return add_parameter!(instruc, _format_date_operand(operand, field_name, instruc; left_kind = left_kind))
+    # #576: this arm formats through `_format_date_operand` rather than `_format_filter_value`, so
+    # it is not one of the thirteen — but it is a read-path formatter call one arm above the one
+    # that WAS guarded, and leaving it out would make the "every formatter call on the read path
+    # reaches one re-raise" claim false. No leak is reachable today (the operand union here is
+    # `Date`/`DateTime`/`ZonedDateTime` and each has a concrete method), so this is the same
+    # free-guard case as the two arms below it.
+    # The label is DERIVED, not asserted: `_format_date_operand` picks `format_timezone_sql` for a
+    # TIMESTAMP column and `format_date_sql` for a DATE one, so a hardcoded "date" would give the
+    # wrong answer to "what rejected this" on exactly the timestamp path this guard exists for.
+    # Computed inside the `catch`, so the happy path pays nothing for it.
+    formatted_date = try
+      _format_date_operand(operand, field_name, instruc; left_kind = left_kind)
+    catch e
+      _kind = left_kind === nothing ? _operand_column_kind(field_name, instruc) : left_kind
+      _rethrow_as_filter_error(e, field_name,
+                               _kind isa CDateTime ? _formatter_type_label(Models.format_timezone_sql) :
+                                                     _formatter_type_label(Models.format_date_sql),
+                               operand)
+    end
+    return add_parameter!(instruc, formatted_date)
   elseif operation in _COMPARISON_OPERATIONS && isa(operand, Union{Integer,Float16,Float32,Float64,Base.UUID,Dates.Time})
     # #536 — every other `_CompareLiteral` scalar on the right of a COMPARISON, bound the way the
     # pair spelling binds it: through the rooted column's formatter, with no explicit SQL type. The

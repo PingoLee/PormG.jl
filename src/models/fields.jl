@@ -107,6 +107,45 @@ function _default_string(field_type::AbstractString, value)
   throw(_fielderr("$(field_type): 'default' must be a String, an Integer or nothing, got $(typeof(value))."))
 end
 
+# ── Integer width keywords (#614) ───────────────────────────────────────────
+# `max_length` is declared `::Int` on four field structs (`Union{Int, Nothing}` on `sBinaryField`),
+# and the guards in front of those slots were written to match the ANNOTATION rather than the
+# concept: `max_length isa Int`. That is the same concrete-where-abstract naming #614 found in
+# `format2int64`, one keyword over, and the refusal it produced said something that was simply not
+# true — `CharField(max_length = Int32(50))` was rejected with "The max_length must be an integer".
+#
+# Scope is exactly those five `max_length` sites. `DecimalField`s `max_digits` / `decimal_places`
+# had the same SYMPTOM but a different mechanism — they go through
+# `validate_default(…, Int, "DecimalField", format2int64)` and are fixed by the converter widening
+# alone — so do not route them here.
+#
+# Widening the type is all that moves. Each call site keeps its own accepted SHAPE, because each
+# still runs its own pre-steps first: `CharField`, `URLField` and `SlugField` still parse a numeric
+# String on the line above, `BinaryField` still accepts `nothing` and still parses one, and
+# `PasswordField` still takes an integer only. Nothing here makes a new spelling legal at a site
+# that did not already take that spelling as an `Int64`.
+#
+# `Bool` is excluded exactly as `_default_string` excludes it: `Bool <: Integer`, so without the
+# carve-out `max_length = true` would silently become a one-character column.
+#
+# Called directly rather than through `validate_default` — same reason as `_default_string`. These
+# messages name the keyword and the type that arrived; `validate_default`'s bare `catch` would
+# replace them with "Expected type: Int64", which is the wording this fix exists to stop producing.
+function _int_kwarg(field_type::AbstractString, name::AbstractString, value)
+  (value isa Integer && !(value isa Bool)) ||
+    throw(_fielderr("$(field_type): '$(name)' must be an Integer, got $(typeof(value))."))
+  try
+    return Int(value)
+  catch e
+    # The `try` is not decoration: `Int(big(2)^70)` and `Int(typemax(UInt64))` raise `InexactError`,
+    # which would leave the field constructor as a raw `InexactError` — outside the #231/#239
+    # taxonomy, and exactly the hole `_binary_default_bytes`' comment above names for a converter
+    # whose result nothing re-checks.
+    (e isa InterruptException || e isa StackOverflowError) && rethrow()   # #472
+    throw(_fielderr("$(field_type): '$(name)' does not fit in a 64-bit integer, got $(value)."))
+  end
+end
+
 # ── Common keyword handling (#260) ──────────────────────────────────────────
 # Every field constructor used to open with the same four blocks copy-pasted: an `accepted` Set, an
 # unexpected-keyword `@warn` loop, a `get(kwargs, :x, default)` per keyword, and a type guard per
@@ -1209,7 +1248,7 @@ function CharField(; kwargs...)
   choices = get(kwargs, :choices, nothing)
 
   max_length isa AbstractString && (max_length = parse(Int, max_length))
-  max_length isa Int || throw(_fielderr("The max_length must be an integer"))
+  max_length = _int_kwarg("CharField", "max_length", max_length)   # #614
   # No upper bound (#325). The old 255 ceiling was a MySQL-ism — PostgreSQL's `varchar` takes up to
   # 10,485,760 characters and SQLite ignores the declared length. Worse, it was LOSSY on read-back:
   # introspecting a live `varchar(500)` had to retype the column to TextField and drop the length,
@@ -2204,7 +2243,7 @@ function PasswordField(; kwargs...)
 
   max_length = get(kwargs, :max_length, 128)
 
-  !(max_length isa Int) && throw(_fielderr("The 'max_length' must be an Integer"))
+  max_length = _int_kwarg("PasswordField", "max_length", max_length)   # #614
   max_length < 64 && throw(_fielderr("The 'max_length' must be at least 64 to store password hashes"))
   
   # Return the field instance
@@ -2623,9 +2662,11 @@ function BinaryField(; kwargs...)
       max_length = nothing
     end
   end
-  if !(max_length isa Union{Nothing, Int})
-    throw(_fielderr("The 'max_length' must be an integer or nothing"))
-  elseif max_length isa Int && max_length <= 0
+  # #614: `nothing` is still the no-limit spelling; anything else goes through the shared integer
+  # keyword policy. This was an `isa Int` check, so `BinaryField(max_length = Int32(50))` was
+  # refused as "not an integer or nothing" — about a value that is plainly an integer.
+  max_length === nothing || (max_length = _int_kwarg("BinaryField", "max_length", max_length))
+  if max_length isa Int && max_length <= 0
     throw(_fielderr("The 'max_length' must be a positive integer"))
   end
   # Return the field instance
@@ -2870,7 +2911,7 @@ function URLField(; kwargs...)
   default = get(kwargs, :default, nothing)
 
   max_length isa AbstractString && (max_length = parse(Int, max_length))
-  max_length isa Int || throw(_fielderr("The max_length must be an integer"))
+  max_length = _int_kwarg("URLField", "max_length", max_length)   # #614
   max_length < 1 && throw(_fielderr("The max_length must be greater than 0"))
 
   default = _default_string("URLField", default)     # #612
@@ -2950,7 +2991,7 @@ function SlugField(; kwargs...)
   default = get(kwargs, :default, nothing)
 
   max_length isa AbstractString && (max_length = parse(Int, max_length))
-  max_length isa Int || throw(_fielderr("The max_length must be an integer"))
+  max_length = _int_kwarg("SlugField", "max_length", max_length)   # #614
   max_length > 255 && throw(_fielderr("The max_length must be less than or equal to 255"))
   max_length < 1 && throw(_fielderr("The max_length must be greater than 0"))
 

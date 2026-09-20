@@ -3972,17 +3972,86 @@ function format_string(x)
   end
 end
 
-# convert string to Int64
+# ── Numeric `default=` / width coercion (#598 → #614) ──────────────────────────────────────────
+# The converters `validate_default` hands the nine numeric constructors (`IDField`, `ForeignKey`,
+# `OneToOneField`, the four integer fields, `FloatField`, `DecimalField`) plus `DecimalField`'s
+# `max_digits`/`decimal_places` and `BinaryField`'s `max_length`.
+#
+# #614: `format2int64` had NO `Integer` method — only `AbstractString` and `Decimals.Decimal`. A
+# plain `Int64` never reached it (it satisfies `validate_default`'s `default isa expected_type` fast
+# path and returns early), so every OTHER integral spelling missed both methods, raised a
+# `MethodError`, and `validate_default`'s bare `catch` relabelled it as
+# "Expected type: Union{Nothing, Int64}, got: Int32" — blaming the value's TYPE for a missing
+# CONVERSION, the same shape as the dead `parse(String, x)` #612 removed from the text family.
+# `format2float64` spelled it differently and broke identically: `Union{Int, AbstractString}` names
+# the concrete `Int64` where `Real` is meant. Net effect: `CharField(default = Int32(5))` stored
+# "5" while `IntegerField(default = Int32(5))` was refused — a width fine in a TEXT column rejected
+# by an INTEGER one.
+#
+# The policy below is not invented here. `Migrations._coerce_default`
+# (`src/migrations/introspection.jl`) has always done exactly this — `Bool` refused, `Integer` to
+# `Int64`, `Real` to `Float64`, `AbstractString` through these converters — and its docstring says
+# it applies "the coercion each field constructor's `validate_default` converter applies". It did
+# not; the two sides of that seam disagreed, which is the drift that helper exists to prevent.
+# `_fk_default_or_warn` in the same file open-codes the `Integer` arm for the same reason.
+#
+# `Bool` is excluded deliberately, matching `_default_string`s carve-out (`src/models/fields.jl`)
+# and `_coerce_default`s two `value isa Bool && throw` lines. `Bool <: Integer <: Real`, so a
+# naive widening would silently store `true` as `1`; it is refused on these fields today and stays
+# refused. (`_fk_default_or_warn` is cited above only for its `Integer` arm — it deliberately does
+# NOT refuse a `Bool`, because a SQLite 0/1 boolean default is what the column really stores.)
+#
+# One arm of the seam still differs and is NOT closed here: `format2int64(::Decimals.Decimal)`
+# predates all of this, so `IntegerField(default = Decimal(0,5,0))` stores 5 while
+# `_coerce_default(Decimal(0,5,0), CInt64())` refuses it as "not a valid default for this column
+# type". Neither side moved in #614; naming it so the next reader does not mistake the agreement
+# below for a total one.
+#
+# These throws are mostly invisible: `validate_default` wraps the converter in a bare `catch` and
+# substitutes its own "Expected type: …" text. That imprecision is known and deliberate here — an
+# out-of-range `IntegerField(default = big(2)^70)` still reports a type mismatch rather than a
+# magnitude one (#614 kept `validate_default` untouched). The `Migrations` callers above invoke
+# these directly and DO see the message.
 function format2int64(x::AbstractString)::Int64
-  return parse(Int64, x |> string) 
+  return parse(Int64, x |> string)
 end
 function format2int64(x::Decimals.Decimal)::Int64
   return Int64(x)
 end
+function format2int64(x::Integer)::Int64
+  # #614. `Int64(x)` rather than `parse(Int64, string(x))`: the value is already integral, and the
+  # round trip through text would only add a way to fail. An out-of-range `BigInt`/`UInt64` raises
+  # `InexactError` here, which `validate_default` relabels — a refusal either way.
+  x isa Bool && throw(FieldValidationError("a boolean is not an integer default"))
+  return Int64(x)
+end
 
 # convert string to Float64
-function format2float64(x::Union{Int, AbstractString})::Float64
-  return parse(Float64, x |> string) 
+function format2float64(x::AbstractString)::Float64
+  return parse(Float64, x |> string)
+end
+function format2float64(x::Real)::Float64
+  # #614: was the single method `format2float64(x::Union{Int, AbstractString})`. `Int` there was
+  # the concrete `Int64` alias, so `Float32`, `Int32`, a `BigInt` and a `Rational` were all refused
+  # by a signature that reads as though it accepts "an integer".
+  #
+  # `Real` also admits `Decimals.Decimal` (`Decimal <: Real`, and `Float64(::Decimal)` is defined),
+  # which is new latitude on `FloatField`/`DecimalField` and closes an asymmetry: `format2int64`
+  # has had a `Decimal` method since long before this, and its float sibling had none.
+  x isa Bool && throw(FieldValidationError("a boolean is not a numeric default"))
+  v = Float64(x)
+  # The finiteness check is what keeps the widening ADDITIVE, and it was missing on the first pass
+  # (found in review). `Float64(big"1e400")` does not raise the way `Int64(big(2)^70)` does — it
+  # SATURATES to `Inf`, so without this the widening would turn a value `main` refused outright
+  # into a silently stored `DEFAULT Inf`. New spellings must not reach a state the old signature
+  # could not.
+  #
+  # It does NOT make `Inf` unrepresentable as a default: a literal `FloatField(default = Inf)` is
+  # already a `Float64`, so it satisfies `validate_default`s `default isa expected_type` fast path
+  # and never reaches any converter. That hole predates #614 and is left alone here rather than
+  # closed as a side effect — this guard is about what THIS change made reachable.
+  isfinite(v) || throw(FieldValidationError("$(x) is out of range for a 64-bit float"))
+  return v
 end
 
 

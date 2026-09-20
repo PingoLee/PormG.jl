@@ -1,6 +1,6 @@
 ---
 name: pormg-cut-release
-description: Cut a PormG release train — bump Project.toml once, stamp the ## Unreleased UPGRADING.md entries with the new version, date and tag it, and open a fresh ## Unreleased. Maintainer-invoked, typically right before rolling changes into a consuming app.
+description: "Cut a PormG release train — bump Project.toml once, stamp the ## Unreleased UPGRADING.md entries with the new version, date and tag it, and open a fresh ## Unreleased. Maintainer-invoked, typically right before rolling changes into a consuming app."
 ---
 
 # PormG — Cut a Release Train

@@ -34,8 +34,7 @@ every season. It is the same shape as Django's `__quarter` lookup and SQL's
 which works the same way for months.
 
 Both number transforms validate the comparison value: a quarter outside `1`–`4`, or a value that is
-not a number at all, raises `InvalidValueError` instead of building SQL that silently matches
-nothing.
+not a number at all, raises `FilterError` instead of building SQL that silently matches nothing.
 
 The labels work in every position — `values()`, `filter()` and `order_by()`, projected under an
 alias or not:

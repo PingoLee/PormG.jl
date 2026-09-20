@@ -15,7 +15,7 @@ Why a dedicated file?
 using Test
 using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField, DateField, DateTimeField,
-                    BooleanField, DurationField, UUIDField, JSONField, BinaryField
+                    BooleanField, DurationField, UUIDField, JSONField, BinaryField, ForeignKey
 using PormG.QueryBuilder: Q
 using Dates
 import Logging
@@ -763,6 +763,107 @@ end
       @test haskey(PormG.PormGsuffix, op)
     end
   end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # #619: the WHOLE hint list, reconciled against both registries.
+  #
+  # The loop above is scoped to `PATTERN_LOOKUP_OPERATORS` because widening it used to fail: the
+  # hint also names 11 Django lookups PormG implements nowhere, and it promised each of them a
+  # `__@name` spelling that then raised — #604's dead end, 11 more times. The membership was never
+  # the defect (a near-miss hint is worth giving), the wording was, so the invariant this asserts
+  # is conditional rather than universal: an example IFF the name is reachable.
+  #
+  # Reconciling against `PormGsuffix ∪ PormGtransform` rather than against a list is what makes it
+  # non-rotting — wire one of the 11 and this test starts demanding the example form for it,
+  # without anyone remembering to come back here.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "Every name in the missing-@ hint is worded by its reachability (#619)" begin
+    # The hint list is a local inside `_check_if_field_is_a_operator`; probing through the public
+    # surface is deliberate — it is the message a user sees that is under test, not the literal.
+    hint_names = [PormG.PATTERN_LOOKUP_OPERATORS...,
+      "exact", "iexact", "in", "gt", "gte", "lt", "lte", "range", "nrange", "date", "isnull",
+      "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",
+      "hour", "minute", "second", "regex", "iregex"]
+
+    for name in hint_names
+      e = try
+        Logging.with_logger(Logging.NullLogger()) do
+          _OperHintDriver.objects.filter("forename__$(name)" => "x").list(show_query=:dict)
+        end
+        nothing
+      catch err
+        err
+      end
+      # Every name in the list is recognised as a near-miss, reachable or not.
+      @test e isa PormG.FilterError
+      msg = PormG.error_message(e)
+
+      if haskey(PormG.PormGsuffix, name) || haskey(PormG.PormGtransform, name)
+        @test occursin("requires '@' prefix", msg)
+        @test occursin("q.filter(\"name__@$(name)\"", msg)   # the example, which must work
+      else
+        # No example, and it says so. Asserting the ABSENCE of the example is the assertion that
+        # would have failed before this fix — the type and the near-miss recognition would not.
+        @test occursin("PormG has no", msg)
+        @test !occursin("requires '@' prefix", msg)
+        @test !occursin("q.filter(", msg)
+      end
+    end
+
+    # The 11 are named here so the count is visible rather than implied: if one gets wired, this
+    # list is where the change is declared, and the loop above proves the message moved with it.
+    unreachable = [n for n in hint_names
+                   if !haskey(PormG.PormGsuffix, n) && !haskey(PormG.PormGtransform, n)]
+    @test sort(unreachable) == sort(["exact", "iexact", "iso_year", "week", "week_day",
+                                     "iso_week_day", "hour", "minute", "second", "regex", "iregex"])
+
+    # The alternatives table is a message table, not a registry: every key must be one of the
+    # unreachable names. An entry for a name that later gets wired would advertise a detour around
+    # a lookup that works.
+    @test isempty(setdiff(keys(PormG.QueryBuilder.UNIMPLEMENTED_LOOKUP_HINTS), unreachable))
+
+    # …and every `__@spelling` the alternatives RECOMMEND must itself be reachable. Without this the
+    # fix reproduces #604 one level down: the keys are computed, but the suggestions inside the
+    # values are free prose, so renaming `iunaccent_exact` would leave the hint advertising a dead
+    # spelling — the exact defect this whole issue is about, moved into the remedy.
+    for (name, hint) in PormG.QueryBuilder.UNIMPLEMENTED_LOOKUP_HINTS
+      for m in eachmatch(r"__@([a-z_]+)", hint)
+        suggested = m.captures[1]
+        @test haskey(PormG.PormGsuffix, suggested) || haskey(PormG.PormGtransform, suggested)
+      end
+    end
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # #619: a name OUTSIDE the hint list is not claimed by it.
+  #
+  # The loop above proves each listed name gets the right message; on its own that would also pass
+  # if the function threw its new "PormG has no …" error for everything. This is the discriminating
+  # case — an ordinary misspelling must still fall through to the field walk's own error.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "The missing-@ hint claims only the names it lists (#619)" begin
+    e = try
+      Logging.with_logger(Logging.NullLogger()) do
+        _OperHintDriver.objects.filter("forename__notalookup" => "x").list(show_query=:dict)
+      end
+      nothing
+    catch err
+      err
+    end
+    @test e !== nothing
+    msg = PormG.error_message(e)
+    @test !occursin("PormG has no", msg)
+    @test !occursin("requires '@' prefix", msg)
+
+    # Asserted POSITIVELY as well, and this is the half that matters: three negative assertions
+    # certify whatever the current message happens to be, so they would still pass if the
+    # fall-through error were junk. It currently IS junk — `QueryBuildError: The field 'CharField()'
+    # does not have a 'how' property` names the field's type object and an internal property, and
+    # never mentions `notalookup`. That is a pre-existing defect outside this cluster's scope and is
+    # filed as a follow-up; pinning the OFFENDING NAME is the minimum this test can demand without
+    # freezing the bad wording, and it fails the day the message stops naming what the user typed.
+    @test occursin("notalookup", msg) broken = true
+  end
 end
 
 # =============================================================================
@@ -916,9 +1017,27 @@ if !isdefined(Main, :_In411Event)
   struct _MockSQLiteIn411 <: PormG.PormGSQLite end
   PormG.config["in411_sl"] = PormG.Configuration.Settings(
     connections = _MockSQLiteIn411(), change_data = true)
+
+  # #576: a RELATED pair, because the `#474` memo arm is only reachable across a join. A filter on
+  # `"driverid__dob"` never consults `model.fields` (the path is not a key of it), so it resolves
+  # through the memo — which is the arm the issue called unreachable. `_module` is set because the
+  # field walk resolves the foreign model through it.
+  _In411Result = Model("in411_results",
+    resultid = IDField(),
+    points   = IntegerField(),
+    eventid  = ForeignKey(_In411Event, pk_field = "id", null = true,
+                          related_name = "in411_results"),
+  )
+  # Only the ROOT model of a query needs `_module` — the field walk reads it off the model the
+  # query is rooted at. `_In411Event` does not get one: it is shared by ~15 testsets in this file,
+  # and mutating a shared fixture for a need the measurement does not support is how fixtures start
+  # coupling testsets together.
+  _In411Result.connect_key = "default"
+  _In411Result._module = Main
 end
 
 const _IN411 = _In411Event
+const _IN411R = _In411Result
 
 # ─────────────────────────────────────────────────────────────────────────────
 # `__@in` renders and binds correctly for every field type.
@@ -1176,4 +1295,170 @@ end
   q2.values("code", "tot" => PormG.Functions.Sum("n"))
   q2.filter("tot__@gt" => 5)
   @test q2.list(show_query = :dict)[:parameters] == [5]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Error-type parity, the rest of it: every read path reports FilterError (#576)
+#
+# #411 converted the scalar/membership branches and #467 the `BETWEEN` arm. Twelve of the thirteen
+# formatter call sites on the read path were still outside the guard, so the SAME user mistake
+# reported `InvalidValueError` — the write path's type — depending only on which spelling was used.
+#
+# One case per converted arm, because the point is that the CLASS is closed. Each asserts the CAUSE
+# as well as the type: `FilterError` is the filter path's long-tail bucket, so a bare `@test_throws`
+# would pass on an operator-validity error too, which is not what this pins.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "every read path reports FilterError, not InvalidValueError (#576)" begin
+  # ── The HAVING / aggregate-alias ladder (`_resolve_having_filter_value`) ──
+  # This is the documented alias spelling, and all seven of its arms formatted unguarded. The
+  # message is alias-shaped: there is no field here, only a name the caller invented in `values()`.
+  sum_q = _IN411.objects
+  sum_q.values("code", "tot" => PormG.Functions.Sum("n"))
+  sum_err = @test_throws PormG.FilterError sum_q.filter(
+    "tot__@gt" => "abc").list(show_query = :dict)
+  @test occursin("projection alias is the type", sum_err.value.msg)
+  @test occursin("tot", sum_err.value.msg)
+
+  # `MAX`/`MIN` resolve the formatter from the aggregated COLUMN, a different arm from `SUM`'s.
+  max_q = _IN411.objects
+  max_q.values("code", "mx" => PormG.Functions.Max("happened"))
+  max_err = @test_throws PormG.FilterError max_q.filter(
+    "mx__@gt" => "not-a-date").list(show_query = :dict)
+  @test occursin("projection alias is the type", max_err.value.msg)
+
+  # ── The transform ladder (`SQLTypeFunction` branches in `_get_filter_query`) ──
+  # `@month`/`@day` extract a number, so a non-numeric value is the mistake. These reached
+  # `format_number_sql` with no `try` around it at all.
+  month_err = @test_throws PormG.FilterError _IN411.objects.filter(
+    "happened__@month" => "abc").list(show_query = :dict)
+  @test occursin("transform is the type", month_err.value.msg)
+  @test_throws PormG.FilterError _IN411.objects.filter(
+    "happened__@day" => "abc").list(show_query = :dict)
+
+  # `@quarter` validates a RANGE rather than a type, through `format_quarter_sql`. Same leak, and
+  # it is the one the docs named by error type, so both doc pages moved with this commit.
+  quarter_err = @test_throws PormG.FilterError _IN411.objects.filter(
+    "happened__@quarter" => 9).list(show_query = :dict)
+  @test occursin("transform is the type", quarter_err.value.msg)
+
+  # ── The sargable rewrite (`_render_sargable_date_range`) ──
+  # Not named by the issue, and the one that actually fires for these spellings: on a plain
+  # `DateField` the rewrite short-circuits AHEAD of the ladder above, so guarding the ladder alone
+  # would have left `@date` and `@yyyy_mm` leaking while the tests for `@month` went green.
+  date_err = @test_throws PormG.FilterError _IN411.objects.filter(
+    "happened__@date" => "not-a-date").list(show_query = :dict)
+  @test occursin("field is the type", date_err.value.msg)
+  # `@yyyy_mm` leaks one call deeper — `_yyyy_mm_bucket_bounds` opens with `Models.format_yyyy_mm`,
+  # whose `InvalidValueError` escaped before the bounds guard. Its sibling `_year_bucket_bounds`
+  # already raised `FilterError` throughout, which is why `@year` was never on the leak list.
+  @test_throws PormG.FilterError _IN411.objects.filter(
+    "happened__@yyyy_mm" => "nonsense").list(show_query = :dict)
+
+  # ── The #474 memo arm: an ordinary JOINED-PATH filter ──
+  # The issue listed this arm as "suspected, no reproducing input found", and the first cut of the
+  # fix repeated that after probing only alias reuse — which the field walk rejects earlier. The
+  # reachable shape is any FK traversal: `"eventid__happened"` is not a key of `model.fields`, so
+  # every joined filter resolves through the memo. That makes this plausibly the MOST common
+  # wrong-typed filter in a consuming app, and it was leaking `InvalidValueError` like the rest.
+  fk_err = @test_throws PormG.FilterError _IN411R.objects.filter(
+    "eventid__happened" => "not-a-date").list(show_query = :dict)
+  @test occursin("field is the type", fk_err.value.msg)
+  @test occursin("eventid__happened", fk_err.value.msg)
+  @test_throws PormG.FilterError _IN411R.objects.filter(
+    "eventid__n" => "abc").list(show_query = :dict)
+  # Through a pattern operator too, which reaches the same arm by a different branch of the caller.
+  @test_throws PormG.FilterError _IN411R.objects.filter(
+    "eventid__n__@contains" => "x").list(show_query = :dict)
+
+  # ── Controls: the conversion must not swallow a well-typed value ──
+  # Every spelling above, with a value its formatter accepts, still builds. Asserting the BOUND
+  # PARAMETER, not merely that it did not throw: a guard that swallowed an error and bound
+  # something else would pass an `isa Dict` check, which is what these assertions used to be.
+  ok_sum = _IN411.objects
+  ok_sum.values("code", "tot" => PormG.Functions.Sum("n"))
+  ok_sum.filter("tot__@gt" => 10)
+  @test ok_sum.list(show_query = :dict)[:parameters] == [10]
+  @test _IN411.objects.filter("happened__@month" => 3).list(show_query = :dict)[:parameters] == [3]
+  @test _IN411.objects.filter(
+    "happened__@date" => Date("1991-10-01")).list(show_query = :dict)[:parameters] == ["1991-10-01"]
+  # The sargable rewrite turns a bucket into a half-open range, so this binds two bounds.
+  @test _IN411.objects.filter(
+    "happened__@yyyy_mm" => "1991-10").list(show_query = :dict)[:parameters] == ["1991-10-01", "1991-11-01"]
+  @test _IN411R.objects.filter("eventid__n" => 5).list(show_query = :dict)[:parameters] == [5]
+
+  # ── The guard converts InvalidValueError and NOTHING else ──
+  # `format_bool_sql` has no generic arm, so a wrong-typed value on a BooleanField raises a bare
+  # `MethodError`. `_rethrow_as_filter_error`'s non-`InvalidValueError` arm is `rethrow(e)`, and
+  # this pins that it stays that way: a guard that converted everything would hide real bugs.
+  @test_throws MethodError _IN411.objects.filter(
+    "ok" => Date("1991-10-01")).list(show_query = :dict)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A non-aggregate projection alias resolves its own formatter, not IntegerField's (#576)
+#
+# The HAVING ladder only ever inspected `SQLTypeFunction`, and a bare `F("col")` is an
+# `FExpression`. Everything it did not recognise fell to `IntegerField().formatter`, so filtering a
+# projected date alias forced `format_number_sql` onto it.
+#
+# This half is NOT an error-type problem and no consuming app could have had a working handler
+# around it: it rejected WELL-TYPED values too. A real `Date` raised "is not a valid number". That
+# is why the well-typed case below is the primary assertion and the error type is secondary —
+# reversing the two would let a fix that only relabels the error pass.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a plain F() projection alias filters on its own type (#576)" begin
+  # The case that was broken for correct input. Asserting the bound parameter, not merely that it
+  # did not throw: the alias must format through the DATE formatter, so the value binds as the
+  # column's own representation rather than as a number.
+  q = _IN411.objects
+  q.values("id", "d2" => F("happened"))
+  q.filter("d2" => Date("2026-06-15"))
+  @test q.list(show_query = :dict)[:parameters] == ["2026-06-15"]
+
+  # And a genuinely wrong value on the same alias now reports the filter path's type.
+  bad = _IN411.objects
+  bad.values("id", "d2" => F("happened"))
+  bad_err = @test_throws PormG.FilterError bad.filter(
+    "d2" => "not-a-date").list(show_query = :dict)
+  @test occursin("projection alias is the type", bad_err.value.msg)
+
+  # The BOUND VALUE changes for every non-numeric column, not just for the ones that used to raise
+  # — the old fallback coerced through `format_number_sql` whatever the alias projected. These two
+  # never threw before and never throw now, so only the parameter shows the difference, and on
+  # SQLite it is the difference between matching and not: a TEXT column compared against `5` finds
+  # nothing while `'5'` finds the row. That makes it a silent result change, which is why it is
+  # pinned here and named in UPGRADING rather than filed under "it used to raise".
+  txt = _IN411.objects
+  txt.values("id", "c2" => F("code"))
+  txt.filter("c2" => 5)
+  @test txt.list(show_query = :dict)[:parameters] == ["5"]        # was: 5
+
+  flag = _IN411.objects
+  flag.values("id", "b2" => F("ok"))
+  flag.filter("b2" => 1)
+  @test flag.list(show_query = :dict)[:parameters] == [true]      # was: 1
+
+  # A numeric column is the case where old and new agree, which is what makes the two above a
+  # targeted change rather than a blanket re-coercion.
+  num = _IN411.objects
+  num.values("id", "n2" => F("n"))
+  num.filter("n2" => 7)
+  @test num.list(show_query = :dict)[:parameters] == [7]
+
+  # The same value through the ordinary non-alias spelling, to show which way the alias moved: it
+  # now agrees with the plain filter instead of disagreeing with it.
+  @test _IN411.objects.filter("code" => 5).list(show_query = :dict)[:parameters] == ["5"]
+
+  # Deliberately NOT widened: an alias over arithmetic (`F("n") + 1`) or over a joined path keeps
+  # the `IntegerField` fallback, because neither one's result type is the column's. Pinned so the
+  # narrowness is a decision on the record rather than an accident of the `operation === nothing`
+  # test — if a later change resolves these too, this assertion is where it announces itself.
+  arith = _IN411.objects
+  arith.values("id", "d3" => F("n") + 1)
+  arith.filter("d3" => 5)
+  # Two parameters, in clause order: the `1` the arithmetic binds in the SELECT bucket, then the
+  # filter's own `5` in HAVING. Asserting the whole vector rather than just the filter value keeps
+  # the bucket order visible — this alias reaches the fallback formatter, and a change that started
+  # resolving `F("n") + 1` to the column's formatter would still bind `5` and pass a narrower test.
+  @test arith.list(show_query = :dict)[:parameters] == [1, 5]
 end

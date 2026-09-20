@@ -89,13 +89,24 @@ const _Ev = _YmTestEvent
   # =========================================================================
   # 3. Reject malformed values (the accept/reject contract)
   # =========================================================================
-  @testset "Malformed bucket values throw InvalidValueError" begin
+  # #576 split this testset's one type into two, along the line the taxonomy always drew: a FILTER
+  # reports `FilterError`, and the coercion helper it calls still reports `InvalidValueError`. The
+  # helper's type never changed — what changed is that the filter path now converts it instead of
+  # letting it escape, so the two halves below assert different types on purpose.
+  @testset "Malformed bucket values are refused (FilterError from a filter, InvalidValueError from the formatter)" begin
     # 4-digit string (year only) — missing the month component.
-    @test_throws PormG.InvalidValueError _Ev.objects.filter("happened__@yyyy_mm" => "2025").list(show_query=:dict)
+    @test_throws PormG.FilterError _Ev.objects.filter("happened__@yyyy_mm" => "2025").list(show_query=:dict)
     # Bare 6-digit *string* is NOT accepted (only the dashed string or a 6-digit Integer).
-    @test_throws PormG.InvalidValueError _Ev.objects.filter("happened__@yyyy_mm" => "202501").list(show_query=:dict)
-    # 4-digit integer is not a YYYYMM bucket.
-    @test_throws PormG.InvalidValueError format_yyyy_mm(2025)
+    @test_throws PormG.FilterError _Ev.objects.filter("happened__@yyyy_mm" => "202501").list(show_query=:dict)
+    # A DateTimeField reaches `format_yyyy_mm` by a DIFFERENT converted site: the sargable rewrite
+    # declines a timestamp column (this file's header says so), so the transform ladder handles it.
+    # Same user-visible type, two code paths — and this file existed to pin the operator while
+    # covering only the DateField one.
+    @test_throws PormG.FilterError _Ev.objects.filter("logged_at__@yyyy_mm" => "2025").list(show_query=:dict)
+
+    # Called directly, `format_yyyy_mm` is a coercion helper and not a filter, so it keeps its own
+    # type — this is the boundary #576 moved, stated as an assertion rather than left implicit.
+    @test_throws PormG.InvalidValueError format_yyyy_mm(2025)   # 4-digit integer is not a bucket
     # Non String/Integer value.
     @test_throws PormG.InvalidValueError format_yyyy_mm(2025.0)
   end

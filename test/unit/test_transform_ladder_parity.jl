@@ -242,20 +242,23 @@ end
 # The `Concat` node carried no formatter, so `filter("date__@quarter" => "abc")` bound the string
 # and returned nothing. Naming the function let a formatter be attached; the range check follows
 # `@year`'s precedent of refusing a value no bucket can express rather than building SQL that
-# silently matches nothing. The type is `InvalidValueError`, matching the sibling `@month`/`@day`
-# formatters exactly — #576 owns moving that whole family to `FilterError`.
+# silently matches nothing. The type WAS `InvalidValueError`, matching the sibling `@month`/`@day`
+# formatters exactly, and this comment named #576 as the issue that would move the whole family to
+# `FilterError`. #576 has landed and it did: `format_quarter_sql` still raises `InvalidValueError`,
+# but the filter path now converts it, so what a CALLER sees here is `FilterError`. The refusal
+# itself — the whole point of #579 — is unchanged, which is why only the type moved below.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#579: a value no period can express is refused, not bound" begin
   for (backend, conn) in _TLP_BACKENDS
     for (key, over) in (("quarter", 5), ("quadrimester", 4))
       # Not a number at all.
-      @test_throws PormG.InvalidValueError _tlp_sql(
+      @test_throws PormG.FilterError _tlp_sql(
         (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)" => "abc"); q); conn = conn)
       # A number, but outside the period range — the case a plain numeric formatter would accept
       # and then match nothing with.
-      @test_throws PormG.InvalidValueError _tlp_sql(
+      @test_throws PormG.FilterError _tlp_sql(
         (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)" => over); q); conn = conn)
-      @test_throws PormG.InvalidValueError _tlp_sql(
+      @test_throws PormG.FilterError _tlp_sql(
         (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)" => 0); q); conn = conn)
       # The in-range values all build.
       for v in 1:(key == "quarter" ? 4 : 3)
@@ -270,7 +273,7 @@ end
       @test _tlp_params(
         (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)__@in" => [1, 2]); q);
         conn = conn) == (conn === _TLP_SL ? [1, 2] : [[1, 2]])
-      @test_throws PormG.InvalidValueError _tlp_sql(
+      @test_throws PormG.FilterError _tlp_sql(
         (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)__@in" => [1, over]); q); conn = conn)
     end
   end

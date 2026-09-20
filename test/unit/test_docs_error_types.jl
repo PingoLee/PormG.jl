@@ -31,6 +31,8 @@ using PormG.Models: Model, CharField, IDField, IntegerField, DateTimeField, Fore
 # #612 — the text fields whose `default=` policy the filters page states, plus `UUIDField`,
 # which the page deliberately holds to a STRICTER rule than that shared policy.
 using PormG.Models: TextField, URLField, UUIDField
+# #614 — the numeric half of the same page bullet.
+using PormG.Models: FloatField
 using PormG.QueryBuilder: bulk_insert, bulk_update
 # #509 — the ordering wrapper and the window constructor, for the two window-page claims below.
 using PormG.QueryBuilder: SQLOrder
@@ -747,6 +749,48 @@ const DOCERR_CASES = [
         "read/filters_and_aggregates.md — UUIDField requires a valid UUID, not just a string (#612)",
         FieldValidationError,
         () -> UUIDField(default = "abc"),
+    ),
+    (
+        # #614. The numeric paragraph the page gained states that `Bool` is refused "throughout,
+        # exactly as it is for the plain-text fields". Worth pinning for the same reason the #612
+        # Symbol case above is: `Bool <: Integer`, so the widening that made `Int32` work would
+        # have made `true` work too had the carve-out not been written deliberately — and a stored
+        # `1` is a silent wrong default, not a visible one.
+        "read/filters_and_aggregates.md — a Bool `default=` on a numeric field is refused (#614)",
+        FieldValidationError,
+        () -> IntegerField(default = true),
+    ),
+    (
+        # #614, the width half of the same sentence. Same reasoning, different keyword: without the
+        # carve-out `max_length = true` is a one-character column.
+        "read/filters_and_aggregates.md — a Bool `max_length` is refused (#614)",
+        FieldValidationError,
+        () -> CharField(max_length = true),
+    ),
+    (
+        # #614. The page's last claim: a value too large for a 64-bit integer is refused rather
+        # than wrapped. This is the one the implementation has to work for — `Int64(big(2)^70)` is
+        # an `InexactError`, which would otherwise reach the caller raw, outside the #231/#239
+        # taxonomy the page's own error table promises.
+        "read/filters_and_aggregates.md — an out-of-range Integer `default=` is refused (#614)",
+        FieldValidationError,
+        () -> IntegerField(default = big(2)^70),
+    ),
+    (
+        # #614, the width half again — `_int_kwarg`'s `try` is what makes this a
+        # `FieldValidationError` rather than an `InexactError`.
+        "read/filters_and_aggregates.md — an out-of-range `max_length` is refused (#614)",
+        FieldValidationError,
+        () -> CharField(max_length = big(2)^70),
+    ),
+    (
+        # #614 review. The page's out-of-range sentence covers the float half too, and that half is
+        # the one the implementation had to be CORRECTED for: `Float64(big"1e400")` saturates to
+        # `Inf` instead of raising the way `Int64(big(2)^70)` does, so the first pass of the
+        # widening silently stored `DEFAULT Inf` where `main` had refused the value outright.
+        "read/filters_and_aggregates.md — an out-of-range Real `default=` is refused, not saturated (#614)",
+        FieldValidationError,
+        () -> FloatField(default = big"1e400"),
     ),
 ]
 

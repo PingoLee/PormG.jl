@@ -257,9 +257,12 @@ end
     @test n_filtered == n_expected
     @test n_filtered > 0
 
-    # …and a value no quarter can express is refused rather than matching nothing.
-    @test_throws PormG.InvalidValueError M.Driver.objects.filter("dob__@quarter" => 7).values("driverid").list()
-    @test_throws PormG.InvalidValueError M.Driver.objects.filter("dob__@quarter" => "abc").values("driverid").list()
+    # …and a value no quarter can express is refused rather than matching nothing. The REFUSAL is
+    # what #579 asserts here and it is unchanged; only the type moved, in #576: `format_quarter_sql`
+    # still raises `InvalidValueError`, but this is a `.filter(...)` — a read — and the filter path
+    # now converts it, as `docs/src/errors.md` has always promised for any filter.
+    @test_throws PormG.FilterError M.Driver.objects.filter("dob__@quarter" => 7).values("driverid").list()
+    @test_throws PormG.FilterError M.Driver.objects.filter("dob__@quarter" => "abc").values("driverid").list()
 
     # #586: the label as a FILTER key. The predicate path rendered the label's CONCAT/CASE
     # expansion twice and kept both sets of parameters, so this statement bound nineteen values for

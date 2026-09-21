@@ -57,10 +57,22 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
         # Django accepts Decimal for IntegerField by coercing through int(value).
         # PormG should accept exact integer-valued Decimal inputs as well, but it
         # must still reject fractional Decimal values to avoid silent truncation.
+        # This is the VALUE path, and #632 did not move it: `validate_field_data`'s integer arm
+        # has its own `Int64(value)` try (`querybuilder/sanitization.jl`) and never routed through
+        # `format2int64`.
         @test validate_field_data(mock_int_model, "age", parse(Decimal, "25"), "insert") === true
         @test validate_field_data(mock_int_model, "age", parse(Decimal, "25.0"), "insert") === true
         @test_throws PormGError validate_field_data(mock_int_model, "age", parse(Decimal, "25.5"), "insert")
-        @test Models.format2int64(parse(Decimal, "25.0")) == 25
+        # #632 — this line used to read `@test Models.format2int64(parse(Decimal, "25.0")) == 25`,
+        # reaching past the value path into the converter. That method is deleted: an integer
+        # `default=` must be written as an integer, because `Migrations._coerce_default` refuses a
+        # `Decimal` on an integer column and the two sides have to agree. The assertion is replaced
+        # rather than dropped, because the SPLIT is now the contract and is worth pinning: a
+        # Decimal is still a valid integer VALUE and is no longer a valid integer DEFAULT.
+        @test_throws MethodError Models.format2int64(parse(Decimal, "25.0"))
+        @test_throws PormGError Models.IntegerField(default = parse(Decimal, "25.0"))
+        # The value path, restated against the same input, so the two halves sit side by side.
+        @test validate_field_data(mock_int_model, "age", parse(Decimal, "25.0"), "insert") === true
         @test_throws PormGError validate_field_data(mock_int_model, "age", nothing, "insert")
         
         @test validate_field_data(mock_int_model, "big_val", 9223372036854775807, "insert") === true

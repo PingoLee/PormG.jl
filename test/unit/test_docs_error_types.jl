@@ -33,6 +33,8 @@ using PormG.Models: Model, CharField, IDField, IntegerField, DateField, DateTime
 using PormG.Models: TextField, URLField, UUIDField
 # #614 — the numeric half of the same page bullet.
 using PormG.Models: FloatField
+# #632 — the same bullet's `Decimal` rule, which needs the type to state its refusing half.
+import Decimals
 using PormG.QueryBuilder: bulk_insert, bulk_update
 # #509 — the ordering wrapper and the window constructor, for the two window-page claims below.
 using PormG.QueryBuilder: SQLOrder
@@ -835,6 +837,19 @@ const DOCERR_CASES = [
         "read/filters_and_aggregates.md — an out-of-range Real `default=` is refused, not saturated (#614)",
         FieldValidationError,
         () -> FloatField(default = big"1e400"),
+    ),
+    (
+        # #632. The page's numeric paragraph now states the `Decimal` rule explicitly, in both
+        # directions. Only the refusing half can be a DOCERR case (this table asserts raises); the
+        # accepting half — `FloatField(default = Decimal(...))` — is pinned by value in
+        # `test_numeric_default_and_widths.jl`, which is where the two sides are compared.
+        #
+        # Worth pinning rather than trusting: until #632 this exact call SUCCEEDED and stored 5,
+        # while the page said nothing about `Decimal` at all. The sentence and the code agreeing is
+        # new, and this is the thing that keeps them agreeing.
+        "read/filters_and_aggregates.md — a Decimal `default=` on an integer field is refused (#632)",
+        FieldValidationError,
+        () -> IntegerField(default = Decimals.Decimal(0, 5, 0)),
     ),
     # #631. `fields.md` → DateField now states the four accepted `default=` spellings AND what a
     # value outside them does. The positive half is pinned by value in

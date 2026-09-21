@@ -4016,11 +4016,39 @@ end
 # refused. (`_fk_default_or_warn` is cited above only for its `Integer` arm — it deliberately does
 # NOT refuse a `Bool`, because a SQLite 0/1 boolean default is what the column really stores.)
 #
-# One arm of the seam still differs and is NOT closed here: `format2int64(::Decimals.Decimal)`
-# predates all of this, so `IntegerField(default = Decimal(0,5,0))` stores 5 while
-# `_coerce_default(Decimal(0,5,0), CInt64())` refuses it as "not a valid default for this column
-# type". Neither side moved in #614; naming it so the next reader does not mistake the agreement
-# below for a total one.
+# #632 closed the last arm of the seam, and it closed it by NARROWING the declared side:
+# `format2int64(::Decimals.Decimal)` is gone. Before, `IntegerField(default = Decimal(0,5,0))`
+# stored 5 while `_coerce_default(Decimal(0,5,0), CInt64())` refused it as "not a valid default for
+# this column type" — so `LiteralDefault`'s `isequal` was not the real comparison `_coerce_default`
+# exists to guarantee (#522). Three reasons the DECLARED side is the one that moved:
+#
+#   - `_coerce_default` is the stated owner of this policy ("the coercion each field constructor's
+#     `validate_default` converter applies"), and its integer branch is Bool refused / Integer to
+#     Int64 / AbstractString parsed, with no Decimal arm and a catch-all refusal. Moving the live
+#     side would have meant rewriting the rule to match an accident.
+#   - `docs/src/read/filters_and_aggregates.md` already documented the integer `default=` contract
+#     WITHOUT `Decimal`. The narrowing makes the code match a page that was already right.
+#   - The acceptance was spelling-dependent, not value-dependent, which is the part that makes it
+#     an accident rather than a feature. `Int64(::Decimal)` only works at scale 0, and nothing
+#     normalizes a Decimal on the way in:
+#         Decimal(0,  5,  0) =  5    -> 5
+#         Decimal(0,  5, -1) =  0.5  -> ArgumentError   (right answer, wrong reason)
+#         Decimal(0, 50, -1) =  5.0  -> ArgumentError   (integral, and still refused)
+#     `parse(Decimal, "5.0")` happens to normalize to scale 0 and so DID work, which is why the
+#     gap read as harmless: whether a value was accepted depended on how the Decimal was built,
+#     not on what it denoted. Widening the live side would have copied that onto both sides.
+#
+# This is `default=` only. The VALUE path is unchanged and still takes an integer-valued Decimal on
+# an integer column — `validate_field_data`'s integer arm (`querybuilder/sanitization.jl`) has
+# always had its own `Int64(value)` try and never routed through here, so the Django-parity rule it
+# implements is untouched. The split is deliberate and pinned in
+# `test_field_validation_and_operations.jl`: a Decimal is a valid integer VALUE, not a valid
+# integer DEFAULT, because only the default has to agree with what introspection reads back.
+#
+# `format2float64(::Real)` is deliberately UNTOUCHED: `Decimal <: Real`, so `FloatField` and
+# `DecimalField` still take one, and `_coerce_default`'s `CFloat64`/`CDecimal` arm always did. The
+# two families differ because the columns differ — a float column can hold a scaled value and an
+# integer column cannot — so this is the asymmetry being correct, not a second gap.
 #
 # These throws are mostly invisible: `validate_default` wraps the converter in a bare `catch` and
 # substitutes its own "Expected type: …" text. That imprecision is known and deliberate here — an
@@ -4030,9 +4058,11 @@ end
 function format2int64(x::AbstractString)::Int64
   return parse(Int64, x |> string)
 end
-function format2int64(x::Decimals.Decimal)::Int64
-  return Int64(x)
-end
+# (#632) There is no `format2int64(::Decimals.Decimal)`. Its absence is the fix, so it is named
+# here rather than left as a silence: a `Decimal` now misses both methods, raises a `MethodError`,
+# and `validate_default`'s `catch` relabels it into the taxonomy as a `FieldValidationError` — the
+# same refusal `_coerce_default` gives. See the seam paragraph above for why the declared side is
+# the one that moved.
 function format2int64(x::Integer)::Int64
   # #614. `Int64(x)` rather than `parse(Int64, string(x))`: the value is already integral, and the
   # round trip through text would only add a way to fail. An out-of-range `BigInt`/`UInt64` raises

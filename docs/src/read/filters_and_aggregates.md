@@ -539,6 +539,8 @@ number takes the abstract type, not `Int64` — the spelling matters no more her
 
 `Bool` is refused throughout, exactly as it is for the plain-text fields: `IntegerField(default = true)` is a `FieldValidationError`, not a stored `1`, and so is `CharField(max_length = true)`. A value out of range is refused rather than silently coerced: `IntegerField(default = big(2)^70)` and `CharField(max_length = big(2)^70)` raise rather than wrapping, and `FloatField(default = big"1e400")` raises rather than storing `Inf`.
 
+A `Decimals.Decimal` is accepted on `FloatField` and `DecimalField` and refused on the integer family — `IntegerField(default = Decimal(0, 5, 0))` is a `FieldValidationError`. The asymmetry is the columns, not an oversight: a float column can hold a scaled value and an integer column cannot, so an integer default has to be written as an integer. Write `IntegerField(default = 5)`, or `IntegerField(default = "5")` if the value arrives as text.
+
 ---
 
 ## Null Checks

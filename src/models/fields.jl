@@ -40,10 +40,13 @@ end
 # ── BinaryField `default=` helpers (#296) ───────────────────────────────────
 # `_binary_default_bytes` is handed to `validate_default`, which only calls it when the value is
 # not already `Union{Vector{UInt8}, Nothing}` — so it normalizes the other byte-vector spellings
-# (`codeunits`, reinterpreted buffers, views) into a plain `Vector{UInt8}`. It must throw rather
-# than return a wrong type: `validate_default` does not re-check its converter's result, and
-# before #296 that hole let a `Vector{UInt8}` through into a `Union{String,Nothing}` field,
-# surfacing as a raw `MethodError` outside the error taxonomy.
+# (`codeunits`, reinterpreted buffers, views) into a plain `Vector{UInt8}`. It throws rather than
+# returning a wrong type: before #296 `validate_default` did not re-check its converter's result,
+# and that hole let a `Vector{UInt8}` through into a `Union{String,Nothing}` field, surfacing as a
+# raw `MethodError` outside the error taxonomy. #631 closed the hole itself — `validate_default`
+# now re-checks — so this throw is no longer the only thing standing between here and a
+# `MethodError`. It stays because throwing HERE keeps the message below, which names the byte
+# spellings; the generic re-check can only say that the converter returned the wrong type.
 #
 # `BinaryField` rejects non-byte defaults itself, before calling `validate_default`, so that this
 # message survives — `validate_default`'s bare `catch` would otherwise replace it.
@@ -139,8 +142,9 @@ function _int_kwarg(field_type::AbstractString, name::AbstractString, value)
   catch e
     # The `try` is not decoration: `Int(big(2)^70)` and `Int(typemax(UInt64))` raise `InexactError`,
     # which would leave the field constructor as a raw `InexactError` — outside the #231/#239
-    # taxonomy, and exactly the hole `_binary_default_bytes`' comment above names for a converter
-    # whose result nothing re-checks.
+    # taxonomy. (This helper is called DIRECTLY, not through `validate_default`, so #631's
+    # return-type re-check does not cover it; the sibling hole that comment describes is closed,
+    # this one is still guarded here.)
     (e isa InterruptException || e isa StackOverflowError) && rethrow()   # #472
     throw(_fielderr("$(field_type): '$(name)' does not fit in a 64-bit integer, got $(value)."))
   end
@@ -1899,7 +1903,7 @@ The `DateField` stores calendar dates in YYYY-MM-DD format and is ideal for birt
 - `blank::Bool = false`: Whether the field can be left blank in forms
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
-- `default::Union{String, Nothing} = nothing`: Default value for the field (YYYY-MM-DD format)
+- `default::Union{Date, Nothing} = nothing`: Default value for the field. The four accepted input spellings are listed under *Date Input Formats* below; all of them are stored as a `Date`
 - `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 - `auto_now::Bool = false`: Whether to automatically set to current date on every save
@@ -1959,11 +1963,13 @@ last_modified_date = DateField(auto_now=true)
 ```
 
 # Date Input Formats
-The field accepts various input formats:
+`default=` accepts all four spellings and stores a `Date` for every one of them (#631 — three of
+these raised a raw `MethodError` until the `default=` converter stopped being the SQL formatter):
 - **Julia Date**: `Date(2024, 7, 28)`
-- **DateTime**: `DateTime(2024, 7, 28, 10, 30)` (time ignored)
-- **String ISO**: `"2024-07-28"`
-- **String formats**: Various date strings parseable by Julia
+- **DateTime**: `DateTime(2024, 7, 28, 10, 30)` — the time is dropped
+- **ZonedDateTime**: its LOCAL calendar date
+- **String**: anything `Date(::AbstractString)` parses, i.e. `"2024-07-28"`. A malformed separator or
+  an impossible calendar date (`"2023-02-29"`) raises [`FieldValidationError`](@ref)
 """
 function DateField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, auto_now, auto_now_add, db_default) =
@@ -1971,8 +1977,10 @@ function DateField(; kwargs...)
 
   default = get(kwargs, :default, nothing)
 
-  # Validate default
-  default = validate_default(default, Union{Date, Nothing}, "DateField", format_date_sql)
+  # Validate default. `normalize_date_default`, NOT the `format_date_sql` formatter passed below:
+  # the formatter renders a value into SQL text and returns a String, which is not what this slot
+  # holds (#631). The two roles are separate on purpose — see that function's docstring.
+  default = validate_default(default, Union{Date, Nothing}, "DateField", normalize_date_default)
   # Return the field instance
   return sDateField(
     verbose_name,
@@ -2090,6 +2098,65 @@ function DateTimeField(; kwargs...)
     format_timezone_sql, db_default
   )  
 end
+
+"""
+    normalize_date_default(value)
+
+The converter every `DateField` default goes through: a `Date` as it is, a `DateTime` or
+`ZonedDateTime` reduced to its calendar date, a string parsed by `Date(::AbstractString)`.
+
+Module-level for `normalize_datetime_default`'s reason (#522) — `Migrations._coerce_default`'s
+`CDate` arm calls THIS function, so the live side lands on the value a declaration stores. Until
+#631 that arm open-coded the same three lines, and its docstring said so.
+
+It exists at all because `DateField` used to hand `validate_default` the field's **formatter**,
+`format_date_sql`, which is the right function for a different job: it renders a value into SQL
+text, so every one of its arms returns a `String`. The `default` slot is `Union{Date, Nothing}`, and
+`validate_default` did not re-check its converter's result — so `DateField(default = "2024-01-01")`,
+the spelling `docs/src/fields.md` advertises, put a `String` into a `Date` slot and died with a raw
+`MethodError` outside the #231/#239 taxonomy. The two roles have incompatible codomains; the
+formatter slot still holds `format_date_sql` (that part was never wrong) and the `default=` converter
+is this.
+
+`DateTime`/`ZonedDateTime` drop the time rather than refusing it, which is the contract
+`docs/src/fields.md` states and what `format_date_sql` did before. A `ZonedDateTime` yields its
+LOCAL calendar date — `Date(::ZonedDateTime)` — matching both the old converter and the `CDate` arm.
+"""
+function normalize_date_default(value)
+  if value === nothing
+    nothing
+  elseif value isa Date
+    value
+  elseif value isa Union{DateTime, ZonedDateTime}
+    Date(value)
+  elseif value isa AbstractString
+    try
+      Date(String(value))
+    catch e
+      # #472, as in `normalize_datetime_default` below: a program-state failure is not "this value
+      # is not a valid default". `DateField` is exercised by every expression-default fixture
+      # (`d DATE DEFAULT CURRENT_DATE`), so this sits squarely on the path introspection's
+      # warn-and-drop guard depends on not disguising a cancelled import.
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      throw(_fielderr("Invalid default value for DateField. The date $(value) is invalid: " *
+                      "$(_one_line_date_error(e))"))
+    end
+  else
+    throw(_fielderr("Invalid default value for DateField. Expected a Date, DateTime, " *
+                    "ZonedDateTime, or a parseable date string such as \"2024-07-28\"."))
+  end
+end
+
+# Kept beside the only caller: the message above quotes the parse failure so a wrong SEPARATOR and a
+# wrong CALENDAR DATE ("2023-02-29") read differently, and `sprint(showerror, e)` on an
+# `ArgumentError` can carry a newline that would break the single-line error convention.
+#
+# That message is NOT what a `DateField(default = "nope")` caller sees — `validate_default` wraps
+# the converter in a bare `catch` and substitutes its own "Expected type: …" text, the same known
+# imprecision the `format2int64` block in `Models.jl` records. It is written for the caller that
+# does see it: `Migrations._coerce_default` invokes this directly, and `_default_or_drop` logs the
+# message into its warn-and-drop line, where naming the offending date is the whole value.
+_one_line_date_error(e)::String = replace(sprint(showerror, e), r"\s*\n\s*" => " ")
 
 """
     normalize_datetime_default(value)

@@ -836,6 +836,28 @@ const DOCERR_CASES = [
         FieldValidationError,
         () -> FloatField(default = big"1e400"),
     ),
+    # #631. `fields.md` → DateField now states the four accepted `default=` spellings AND what a
+    # value outside them does. The positive half is pinned by value in
+    # `test_default_converter_contract.jl`; the three cases below are the error-TYPE half, which is
+    # this file's job. They matter more than the usual doc claim: until #631 each of them reached
+    # the caller as a bare `MethodError`, i.e. the page named a type the code could not raise.
+    (
+        "fields.md — a malformed DateField `default=` string is refused (#631)",
+        FieldValidationError,
+        () -> DateField(default = "28/07/2024"),
+    ),
+    (
+        # Separate from the malformed case on purpose: this string has the right SHAPE, so it is
+        # the one that proves the calendar is checked rather than a regex.
+        "fields.md — an impossible calendar date as a DateField `default=` is refused (#631)",
+        FieldValidationError,
+        () -> DateField(default = "2023-02-29"),
+    ),
+    (
+        "fields.md — a numeric DateField `default=` is refused (#631)",
+        FieldValidationError,
+        () -> DateField(default = 42),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

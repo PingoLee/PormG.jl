@@ -4089,27 +4089,62 @@ Validate the default value for a field based on the expected type.
   stale from before the #231/#239 error taxonomy. Nothing in the repo would have caught it:
   `test_docs_error_type_drift.jl` scans `docs/src` prose and counts raise sites on non-comment
   `src/` lines, and a stale type name in a docstring is neither.)
+- If the converter *returns* a value outside `expected_type`, a [`FieldValidationError`](@ref) is
+  thrown too (#631). That is a PormG bug rather than a bad default, and the message says so — see
+  the carve-out below for why the distinction is worth two messages.
 
 An `InterruptException` or `StackOverflowError` raised *inside* the converter is NOT a bad
 default and propagates untouched — see the comment on the carve-out below.
 """
 function validate_default(default, expected_type::Type, field_name::String, converter::Function)
-  if (default isa expected_type)
-    return default
-  else
-    try
-      return converter(default)
-    catch e
-      # #472: a program-state failure is not "this value is not a valid default". Without this,
-      # Ctrl-C during a large `convert_schema_to_models` run reached the caller relabelled as a
-      # FieldValidationError — so introspection's warn-and-drop guard would swallow the interrupt,
-      # retry the constructor and report a cancelled import as a bad column default. Same carve-out
-      # as `_fk_default_or_warn` and the `Model_to_str` render-failure path.
-      (e isa InterruptException || e isa StackOverflowError) && rethrow()
-      @pormg_debug false
-      throw(FieldValidationError("Invalid default value for $field_name. Expected type: $expected_type, got: $(typeof(default)). Please provide a value of type $expected_type."))
-    end
+  (default isa expected_type) && return default
+
+  converted = try
+    converter(default)
+  catch e
+    # #472: a program-state failure is not "this value is not a valid default". Without this,
+    # Ctrl-C during a large `convert_schema_to_models` run reached the caller relabelled as a
+    # FieldValidationError — so introspection's warn-and-drop guard would swallow the interrupt,
+    # retry the constructor and report a cancelled import as a bad column default. Same carve-out
+    # as `_fk_default_or_warn` and the `Model_to_str` render-failure path.
+    (e isa InterruptException || e isa StackOverflowError) && rethrow()
+    @pormg_debug false
+    throw(FieldValidationError("Invalid default value for $field_name. Expected type: $expected_type, got: $(typeof(default)). Please provide a value of type $expected_type."))
   end
+
+  # #631. Until this line the converter's RESULT was returned unchecked, so a converter whose
+  # codomain did not match its `expected_type` put a wrong-typed value into the struct slot and the
+  # failure surfaced as a raw `MethodError` from `convert` — OUTSIDE this function's `catch`, and so
+  # outside the #231/#239 taxonomy. Three converters could do it and all three were live defects:
+  # `format_date_sql` on every input (`DateField`, fixed in #631 by giving it
+  # `normalize_date_default` instead), and `format_uuid_sql` / `format_json_sql` on `missing`, where
+  # both return `missing` into a `Union{String, Nothing}` slot.
+  #
+  # The hole was named three times before it was closed — `_binary_default_bytes` and `_int_kwarg`
+  # in `models/fields.jl`, and `Migrations._coerce_default`'s docstring — each time as a reason for
+  # a local workaround. Those workarounds stay; this makes the next one unnecessary.
+  #
+  # KNOWN GAP, 32-bit only. Three sites pass `expected_type = Int` with `format2int64`, which is
+  # declared `::Int64`: `DecimalField`'s `max_digits`/`decimal_places` and `BinaryField`'s string
+  # `max_length` branch. Where `Int === Int64` (every platform this is tested on) they agree. On a
+  # 32-bit build `Int === Int32`, so `DecimalField(max_digits = "12")` would fail this check and
+  # report a "PormG bug" for a perfectly good width. Spelling `Int64` at those sites fixes that
+  # and opens the mirror-image hole — the slots are `::Int`, so an out-of-range value would then
+  # reach `convert(Int32, ::Int64)` and raise a raw `InexactError` OUTSIDE this function, which is
+  # precisely the class #631 closed. Neither spelling is right; the width keywords want
+  # `_int_kwarg`'s treatment (it maps `InexactError` into the taxonomy) rather than
+  # `validate_default`'s. Left as-is and filed rather than settled here, because picking a side is
+  # a decision and there is no 32-bit CI job to measure it against.
+  (converted isa expected_type) && return converted
+
+  # Deliberately NOT the message above. That one blames the caller's value, which is right when the
+  # converter threw and wrong here: the value was accepted and the CONVERTER is at fault, so the
+  # text names the returned type and the converter rather than the argument.
+  @pormg_debug false
+  throw(FieldValidationError("Internal: the default converter for $field_name returned a " *
+                             "$(typeof(converted)), which $expected_type cannot hold. The value " *
+                             "$(repr(default)) was accepted but could not be stored; this is a " *
+                             "PormG bug, please report it."))
 end
 
 function validate_timezone(value::AbstractString, format::AbstractString)

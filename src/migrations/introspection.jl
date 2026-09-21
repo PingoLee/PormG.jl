@@ -317,16 +317,20 @@ end
     _coerce_default(value, ctype::CanonicalType)
 
 The Julia value a DECLARED field stores for this default — the coercion each field constructor's
-`validate_default` converter applies (`format2int64`, `parse(Bool, …)`, `Date(…)`,
+`validate_default` converter applies (`format2int64`, `parse(Bool, …)`, `normalize_date_default`,
 `normalize_datetime_default`, `format_uuid_sql`, …), keyed on the canonical type instead of on a
 struct, so the live side lands on exactly the value the declared side holds and `LiteralDefault`'s
 `isequal` is a real comparison (#522). Throws `FieldValidationError` for a literal the type cannot
 hold, the category the constructors throw (#239); the caller turns that into the warn-and-drop the
 readers have always done.
 
-One fix rides along: a `DATE … DEFAULT '2024-01-01'` column used to reach `DateField`'s converter,
-which returned the String into a `Union{Date, Nothing}` slot — a `MethodError`, not a
-`FieldValidationError`, so it escaped the drop guard and aborted the whole schema read.
+The `CDate` arm used to be the one place that did NOT share the constructor's converter: a
+`DATE … DEFAULT '2024-01-01'` column reached `DateField`'s converter, `format_date_sql`, which
+returned the String into a `Union{Date, Nothing}` slot — a `MethodError`, not a
+`FieldValidationError`, so it escaped the drop guard and aborted the whole schema read. This
+function worked around it by open-coding `Date(String(value))`. #631 fixed the constructor side
+instead (`Models.normalize_date_default`) and this arm now calls it, so the workaround is gone and
+`CDate` shares one definition with `CDateTime` the way #522 intended.
 """
 function _coerce_default(value, ctype::CanonicalType)
   value === nothing && return nothing
@@ -350,9 +354,17 @@ function _coerce_default(value, ctype::CanonicalType)
   elseif ctype isa Union{CText, CJSON, CUnsupported}
     value isa AbstractString && return String(value)
   elseif ctype isa CDate
-    value isa Date && return value
-    value isa Union{DateTime, ZonedDateTime} && return Date(value)
-    value isa AbstractString && return Date(String(value))
+    # #631: was three open-coded lines duplicating what `DateField`'s converter should have done.
+    # Now the same call shape as the `CDateTime` arm below.
+    #
+    # The refusal changes TYPE, not reachability. An unparseable string used to raise a raw
+    # `ArgumentError` from `Date(…)` and a wrong-typed literal fell through to the catch-all at the
+    # bottom; both now arrive as a `FieldValidationError`. `_default_or_drop`'s `catch` is bare
+    # (interrupt carve-out only), so every one of those was already warned-and-dropped — nothing
+    # escaped and no schema read aborted on this path. What improves is that the refusal is inside
+    # the #231/#239 taxonomy, and that the warn line's `reason` now names the offending date
+    # instead of reading "Day: 29 out of range (1:28)".
+    return Models.normalize_date_default(value)
   elseif ctype isa CDateTime
     # The catalog's own rendering first (`_parse_catalog_timestamp`), then the constructor's ladder.
     if value isa AbstractString

@@ -514,9 +514,26 @@ Merchandise = Models.Model(
 
 **Current Contract**:
 - Accepts `Date` directly.
-- Also accepts `DateTime` and `ZonedDateTime`, coercing them to the calendar date before SQL generation.
+- Also accepts `DateTime` and `ZonedDateTime`, coercing them to the calendar date. A `ZonedDateTime`
+  yields its *local* calendar date.
 - Accepts `YYYY-MM-DD` strings.
-- This means `DateField` is currently permissive; it does not yet reject datetime values automatically.
+- This means `DateField` is permissive about the *input* spelling; it does not reject datetime
+  values automatically. It is not permissive about what it *stores* — every accepted spelling lands
+  on a `Date`.
+
+The same four spellings hold for `default=`, which stores a `Date` for each of them:
+
+```julia
+Models.DateField(default = Date(2024, 7, 28))              # Date("2024-07-28")
+Models.DateField(default = "2024-07-28")                   # Date("2024-07-28")
+Models.DateField(default = DateTime(2024, 7, 28, 10, 30))  # Date("2024-07-28") — time dropped
+Models.DateField(default = ZonedDateTime(2024, 7, 28, tz"UTC"))  # Date("2024-07-28")
+```
+
+A default that is not one of those — a malformed date string, an impossible calendar date such as
+`"2023-02-29"`, or a number — is refused with `FieldValidationError`. Until PormG 0.7 three of the
+four spellings above raised a bare `MethodError` instead, because `default=` reused the field's SQL
+formatter (which returns a string) as its converter.
 
 ```julia
 # Personal information

@@ -1,6 +1,6 @@
 ---
 name: pormg-issue-cluster
-description: Work several issues as one group — build a cluster from contended files rather than shared labels, tier it by its worst member, order it by dependency then importance, land one commit and one UPGRADING entry per issue, and close out N issues at once. Sits above pormg-issue-workflow; run pormg-board first to decide which cluster is next.
+description: Work several issues as one group — build a cluster from contended files rather than shared labels, tier it by its worst member, order it by dependency then importance, land one commit and one upgrade-log entry per issue, and close out N issues at once. Sits above pormg-issue-workflow; run pormg-board first to decide which cluster is next.
 ---
 
 # PormG Issue Cluster

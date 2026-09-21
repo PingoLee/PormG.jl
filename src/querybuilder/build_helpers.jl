@@ -1191,7 +1191,7 @@ end
 #
 # Refusing on BOTH backends rather than only on SQLite is the "keep PostgreSQL and SQLite aligned"
 # rule: a query that builds on one engine and is refused on the other is a worse trap than one
-# refused on both. The removal of the working PostgreSQL shapes is recorded in `UPGRADING.md`.
+# refused on both. The removal of the working PostgreSQL shapes is recorded in the upgrade log.
 #
 # NOT guarded, on purpose: a CTE declared inside a CTE **body**. That renders through
 # `build_cte_clause` → `query(…, cte=…)`, so its values bind in `:cte` during the same pass that

@@ -271,7 +271,7 @@ _reverse_relation(child::PormGModel, model_name::Symbol, binding::Symbol,
 # group, which keeps the rename in a pure-foreign-key group down to the ONE member that used to win
 # the race. A group containing a `ManyToManyField` is different: many-to-many never entered the old
 # count at all, so its accessor was unconditionally the bare model name and every m2m in a group of
-# two or more is renamed. The `UPGRADING.md` entry states both halves.
+# two or more is renamed. The upgrade-log entry states both halves.
 _derived_reverse_accessor(model_name::Symbol, field_name::AbstractString, count::Int)::String =
   count > 1 ? lowercase(string(model_name, "_", field_name)) : String(model_name)
 

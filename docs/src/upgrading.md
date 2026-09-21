@@ -77,7 +77,7 @@ bottom** — GitHub sorts the listing oldest-first, so the newest entry is the l
 whose `- **Version**:` is **≤ your pin**. Everything you did not skip is what changed since you
 pinned.
 
-A handful of the oldest entries carry no `- **Version**:` bullet at all. Those predate the
+Fourteen of the oldest entries carry no `- **Version**:` bullet at all. Those predate the
 versioning policy and shipped before `0.2.0`; if your pin is `0.2.0` or later they do not apply to
 you, and `upgrade_guide` filters them out for you.
 

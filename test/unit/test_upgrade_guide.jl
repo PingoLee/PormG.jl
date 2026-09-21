@@ -466,14 +466,18 @@ const PRE_0_2_HISTORY = Set([
 
             got = [e.title for e in PormG._read_upgrading_entries(dir)]
 
-            # The assertion that kills a deleted or re-keyed sort: by filename this is
-            # ["bbb", "ccc", "ddd", "aaa"], and `bbb` is the oldest release.
+            # One assertion against a hand-computed constant, deliberately — it pins the key AND
+            # the stability at once, and every weaker restatement beside it (`first(got) != "bbb"`,
+            # a filtered-subsequence check) is implied by it and cannot fail on its own. This
+            # file removed a line for that reason; adding two back would be the same defect.
+            #
+            # What it discriminates: by filename this is ["bbb","ccc","ddd","aaa"], so a deleted
+            # `sort!` is red; re-keying by title gives ["ddd","ccc","bbb","aaa"], red; dropping
+            # `rev = true` from the filename sort gives ["aaa","ddd","ccc","bbb"], red; and an
+            # unstable sort permutes the three 0.6.0 entries, red. It does NOT discriminate
+            # `alg = MergeSort` from the default, because Julia's default sort is already stable —
+            # the `alg` is documentation of intent, not a behavior this can pin.
             @test got == ["ccc", "ddd", "aaa", "bbb"]
-            @test first(got) != "bbb"
-
-            # Stability, stated separately: the three 0.6.0 entries keep filename-descending (=
-            # `Recorded`-descending) order rather than being permuted among themselves.
-            @test filter(in(["ccc", "ddd", "aaa"]), got) == ["ccc", "ddd", "aaa"]
         end
     end
 
@@ -494,13 +498,22 @@ const PRE_0_2_HISTORY = Set([
     # checkout, an rsync filter, a Docker layer copying only `src/` — would be indistinguishable
     # from good news, in the one tool whose whole job is to tell an app what it still has to port.
     @testset "a missing or empty log throws rather than reporting nothing to port (#638)" begin
+        # The type alone is NOT enough here. Two different faults throw the same `ArgumentError`,
+        # so swapping the two message strings — or collapsing the guards into one — would leave
+        # every assertion below green while a consuming app is handed a diagnosis naming the wrong
+        # cause. Assert on the message for the missing-vs-empty pair, which is the distinction the
+        # guards exist to draw. (Whether these should be a `PormGError` at all is #639.)
         mktempdir() do dir
             absent = joinpath(dir, "no-such-log")
             @test_throws ArgumentError PormG._upgrading_files(absent)
+            @test occursin("does not exist",
+                           sprint(showerror, try PormG._upgrading_files(absent) catch e; e end))
 
             # present but empty — the case a directory makes newly reachable
             @test_throws ArgumentError PormG._upgrading_files(dir)
             @test_throws ArgumentError PormG._read_upgrading_entries(dir)
+            @test occursin("holds no `.md` entry files",
+                           sprint(showerror, try PormG._upgrading_files(dir) catch e; e end))
 
             # …and a non-`.md` file is not an entry, so a directory holding only one is still empty
             write(joinpath(dir, "README.txt"), "not an entry")
@@ -542,9 +555,10 @@ const PRE_0_2_HISTORY = Set([
         with_section = "## A real entry (#9601)\n\n- **Version**: 0.6.0\n- **Recorded**: 2026-09-21\n\n" *
                        "Body.\n\n## Template for new entries\n\n<!--\n## `<api>` — <summary>\n\n" *
                        "- **Version**: Unreleased\n- **Recorded**: <YYYY-MM-DD>\n-->\n"
+        # The title-set equality already excludes the `<api>` placeholder; a separate
+        # `!any(occursin("<api>"), …)` beside it could not fail on its own.
         cut = PormG._parse_upgrading(with_section)
         @test [e.title for e in cut] == ["A real entry (#9601)"]
-        @test !any(e -> occursin("<api>", e.title), cut)
     end
 
     # ── every cut release has a dated row ──────────────────────────────────────

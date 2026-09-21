@@ -819,7 +819,7 @@ Encrypted_telemetry = Models.Model("encrypted_telemetry",
     PostgreSQL, a table rebuild with `CAST(… AS BLOB)` on SQLite — which reinterprets the existing
     text as its UTF-8 bytes. If the column actually held *encoded* text (hex, Base64), substitute
     `decode(col, 'hex')` / `decode(col, 'base64')` in the generated plan before applying it. See
-    [`UPGRADING.md`](https://github.com/PingoLee/PormG.jl/blob/main/UPGRADING.md).
+    [the change log](https://github.com/PingoLee/PormG.jl/tree/main/upgrading).
 
 ---
 

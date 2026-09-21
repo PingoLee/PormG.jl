@@ -800,7 +800,7 @@ NULL-preserving, and it agrees byte-for-byte with what `format_binary_sql` now w
 
 **It reinterprets; it does not decode.** A column holding hex or Base64 *text* becomes the bytes of
 those characters, not the payload they encode. PormG cannot tell the difference, so it emits the
-faithful-reinterpretation form and `UPGRADING.md` tells the operator to substitute
+faithful-reinterpretation form and the upgrade log tells the operator to substitute
 `decode(col, 'base64')` / `decode(col, 'hex')` in the generated migration when that is what the
 column actually held. `makemigrations` writes a reviewable plan before anything runs, which is
 where that substitution belongs.

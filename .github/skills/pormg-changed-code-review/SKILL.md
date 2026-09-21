@@ -89,8 +89,10 @@ git diff -- . ':(exclude)src' ':(exclude)test'
 **Slice 3 must be an exclusion, never a hand-written folder list.** A list like
 `git diff -- docs ext .github db` silently drops every changed file at the repo root — including
 `Project.toml` and `UPGRADING.md`, the two this skill has explicit heuristics for (see *Other
-folders* below and the `UPGRADING.md` non-negotiable). Reconcile slice 3 against the
-`--name-only` output before moving on: every path not under `src` or `test` must have appeared.
+folders* below and the upgrade-log non-negotiable), and the whole `upgrading/` log alongside them.
+Reconcile slice 3 against the `--name-only` output before moving on: every path not under `src` or
+`test` must have appeared. **An added file under `upgrading/` is the one most easily missed** — it
+is untracked until staged, so a review run before `git add` does not see it at all.
 
 **The slicing is independent of the target** — take whichever target the table gave you and append
 the same three pathspecs:

@@ -133,6 +133,6 @@ The taxonomy replaced the untyped errors and driver-native exceptions PormG used
 several releases — so a `catch` block written against an older version may no longer match. The
 deliberate clean break is spelled out in [Error taxonomy](api.md#Error-taxonomy).
 
-If you are upgrading an app, `UPGRADING.md` carries the greps and the concrete `before → after`
+If you are upgrading an app, the change log carries the greps and the concrete `before → after`
 edits for each step — run `PormG.upgrade_guide(from = v"<your pinned version>")` to see only what
 applies to you, and read [Upgrading PormG](upgrading.md) for the workflow.

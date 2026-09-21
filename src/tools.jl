@@ -136,62 +136,152 @@ function install_ai_skills(target_dir::String = pwd())
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# upgrade_guide — version-scoped emitter over UPGRADING.md (issue #216)
+# upgrade_guide — version-scoped emitter over the `upgrading/` change log (issue #216)
 # ─────────────────────────────────────────────────────────────────────────────
+#
+# PormG versions per *release train*, not per PR: a breaking/behavior PR adds ONE NEW FILE to
+# `upgrading/` carrying `- **Version**: Unreleased`, without touching Project.toml, and the
+# maintainer cuts a train (bump + stamp + tag) via `/pormg-cut-release`. This is the read side of
+# that model — it turns the log into the slice a given consuming app still has to port.
+#
+# One file per entry is deliberate (#638, ported from Nitro #192). The log used to be a single
+# `UPGRADING.md` whose `## Unreleased` header was the one anchor every session prepended to, which
+# made a merge conflict CERTAIN between any two concurrent sessions that both owed an entry — and
+# certain in the one file whose whole job is to be the compatibility story (14 merge commits touch
+# it on `main`, 5 of them recording a conflict resolution). A file per entry makes that conflict
+# unrepresentable rather than merely auto-resolvable. `UPGRADING.md` survives as the authoring
+# contract and is no longer parsed.
+#
+# The entry GRAMMAR below is unchanged by that split, on purpose: a one-entry file is a single
+# heading segment, so the #438 contract (a `## ` heading plus a line-start `- **Version**:` or
+# `- **Recorded**:` bullet), the release-marker filter and the tail trimmer all still hold — they
+# now describe what may appear inside one file rather than between entries in one log.
 
-# Unstamped ("pre-0.2 history") UPGRADING.md entries sort just below 0.2.0: under any
-# 0.2.x release, but above every 0.1.x. So a consumer coming from before the versioning
-# policy still sees them, while one already on ≥ 0.2.0 does not.
+# An entry with no `- **Version**:` bullet at all — the "pre-0.2 history", written before the
+# versioning policy existed — sorts just below 0.2.0: under any 0.2.x release, but above every
+# 0.1.x. So a consumer coming from before the versioning policy still sees them, while one already
+# on ≥ 0.2.0 does not. That population is closed; `test_upgrade_guide.jl` pins it by filename.
 const _UNSTAMPED_VERSION = v"0.2.0-"
 
-# Entries under the `## Unreleased` heading carry `- **Version**: Unreleased` — changes merged but
-# not yet cut into a release train (the release-train model). They sort ABOVE every real version so
-# a consumer dev'ing PormG at HEAD sees the uncut work they are actually running; the maintainer's
-# `/pormg-cut-release` command later rewrites `Unreleased` to the assigned release number.
+# An uncut entry carries `- **Version**: Unreleased` — merged but not yet cut into a release train
+# (the release-train model). They sort ABOVE every real version so a consumer dev'ing PormG at HEAD
+# sees the uncut work they are actually running; the maintainer's `/pormg-cut-release` command
+# later rewrites `Unreleased` to the assigned release number, in each entry's own file.
 const _UNRELEASED_VERSION = v"1000000.0.0"
 
 # `_UNRELEASED_VERSION` is an internal sort key, never a user-facing version. Render it as the
-# literal `UPGRADING.md` token so output reads "0.3.0 → Unreleased" and not "0.3.0 → 1000000.0.0".
+# literal change-log token so output reads "0.3.0 → Unreleased" and not "0.3.0 → 1000000.0.0".
 _version_label(v::VersionNumber) = v == _UNRELEASED_VERSION ? "Unreleased" : string(v)
 
 const _UpgradeEntry = @NamedTuple{version::VersionNumber, title::String, body::String}
 
-# A release marker heading — `## 0.3.0 — 2026-07-24` or `## Unreleased — next \`0.4.0\``, both
-# written by `/pormg-cut-release`. It groups the entries of one release; it is NOT an entry title.
+# A release marker heading — `## 0.3.0 — 2026-07-24` or `## Unreleased — next \`0.4.0\``, the two
+# forms the single-file log's cut step used to write. It grouped the entries of one release; it is
+# NOT an entry title. The per-file log writes no markers at all (a release lives in each entry's
+# `- **Version**:` bullet, its date in `UPGRADING.md`'s *Release trains* table), but the filter
+# stays: one added to an entry file by hand must be ignored, not become the entry's title, and
+# hand-fed text in the tests still carries them.
 #
 # The em-dash separator is REQUIRED, not decoration: without it this also matches a real entry whose
 # title merely starts with a version (`## 0.5.0 config format is now strict`), and that entry's
 # whole segment is then skipped as a marker — it disappears from the guide SILENTLY, no error.
-# Both forms `/pormg-cut-release` writes carry the separator, so requiring it costs nothing.
 const _RELEASE_MARKER = r"^(?:Unreleased|\d+\.\d+\.\d+)\s+—"
 
 _asver(v::VersionNumber) = v
 _asver(v::AbstractString) = VersionNumber(v)
 
 """
-    _read_upgrading_entries() -> Vector{_UpgradeEntry}
+    _upgrading_dir() -> String
 
-Parse the `UPGRADING.md` bundled with the resolved PormG install into change entries,
+Absolute path to the `upgrading/` change log bundled with the resolved PormG install. Split out so
+the test suite reads the same directory the reader does, instead of recomputing the join and
+drifting from it.
+"""
+function _upgrading_dir()
+    dir = joinpath(Base.pkgdir(@__MODULE__), "upgrading")
+    isdir(dir) || throw(ArgumentError(
+        "upgrading/ not found next to the installed PormG (looked in $(dirname(dir)))."))
+    return dir
+end
+
+"""
+    _upgrading_files(dir = _upgrading_dir()) -> Vector{String}
+
+Every change-entry file in `dir`, newest-first by filename.
+
+**Every `.md` in the directory is an entry — there is no name-pattern gate**, deliberately. A
+reader that skipped files not matching `<date>-<slug>.md` would make a mis-named entry vanish from
+the guide silently, which is precisely the failure class #438 exists to prevent. The naming
+convention is enforced by the test suite, where a violation is loud, rather than by the reader,
+where it would be mute.
+
+`isfile` is not redundant beside that: a *directory* named `x.md` would otherwise reach `read` and
+throw a bare `SystemError` out of `upgrade_guide`, in a consuming app that has no idea what
+`upgrading/` is.
+
+**An empty directory throws rather than returning nothing**, and that is the whole point of the
+check. `upgrade_guide` renders an empty result as *"nothing to port"* — which is exactly what a
+consumer who is already up to date sees, so a log that failed to ship would be indistinguishable
+from good news. Under the single-file log this needed a zero-byte tracked file; a directory is
+trimmed by a sparse checkout, an rsync filter or a Docker layer that copies only `src/` far more
+easily, so the hole got wider when the layout changed (#638).
+
+`dir` is a parameter so the suite can exercise the ordering and both error paths on a fixture. The
+shipped log is a corpus whose filename order and version order happen to agree, so it cannot test
+the sort at all.
+"""
+function _upgrading_files(dir::AbstractString = _upgrading_dir())
+    # Repeated from `_upgrading_dir` on purpose: the default argument runs that check, but an
+    # EXPLICIT `dir` bypasses it, and `readdir` on a missing path throws a raw `IOError` naming a
+    # temp path. Both entry points owe a consuming app the same diagnosis.
+    isdir(dir) || throw(ArgumentError(
+        "the PormG upgrade log directory $dir does not exist."))
+    files = [joinpath(dir, f) for f in sort(readdir(dir), rev = true)
+             if endswith(f, ".md") && isfile(joinpath(dir, f))]
+    isempty(files) && throw(ArgumentError(
+        "the PormG upgrade log at $dir holds no `.md` entry files. This is a broken install, " *
+        "not an empty change log — `upgrade_guide` would otherwise report \"nothing to port\", " *
+        "which is indistinguishable from being up to date."))
+    return files
+end
+
+"""
+    _read_upgrading_entries(dir = _upgrading_dir()) -> Vector{_UpgradeEntry}
+
+Parse the `upgrading/` change log bundled with the resolved PormG install into change entries,
 newest-first. `body` is the entry's markdown with its PormG-internal `### Per-app rollout`
 table trimmed off. Unstamped pre-0.2 entries get `version = _UNSTAMPED_VERSION`.
+
+The sort is the contract, not the directory listing. Under the single-file log, newest-first was a
+property of the hand-maintained layout that the parser merely preserved — nothing enforced it.
+Sorting by version here makes it hold by construction; `MergeSort` is stable, so entries sharing a
+version keep `_upgrading_files`' filename-descending (= `Recorded`-date-descending) order.
+
+That distinction is invisible against the shipped log, whose filename order already agrees with its
+version order — so the sort is only load-bearing when the two DISAGREE, which is what a `z` hotfix
+stamped onto an older-dated entry, or a corrected `Recorded` date, produces. `dir` exists so the
+suite can build exactly that case; see `test/unit/test_upgrade_guide.jl`.
 """
-function _read_upgrading_entries()
-    path = joinpath(Base.pkgdir(@__MODULE__), "UPGRADING.md")
-    isfile(path) || throw(ArgumentError(
-        "UPGRADING.md not found next to the installed PormG (looked in $(dirname(path)))."))
-    return _parse_upgrading(read(path, String))
+function _read_upgrading_entries(dir::AbstractString = _upgrading_dir())
+    entries = _UpgradeEntry[]
+    for path in _upgrading_files(dir)
+        append!(entries, _parse_upgrading(read(path, String)))
+    end
+    return sort!(entries; by = e -> e.version, rev = true, alg = MergeSort)
 end
 
 """
     _parse_upgrading(text::AbstractString) -> Vector{_UpgradeEntry}
 
-Parse raw `UPGRADING.md` text into change entries, newest-first (see `_read_upgrading_entries`).
-Split out so the parser can be exercised on hand-fed text — the CRLF-robustness regression in
-particular — without touching the on-disk file.
+Parse one change-entry file's raw text into change entries, in heading order (see
+`_read_upgrading_entries`, which sorts). Split out so the parser can be exercised on hand-fed text —
+the CRLF-robustness regression in particular — without touching the on-disk files. A well-formed
+file yields exactly one entry; the multi-entry texts in `test_upgrade_guide.jl` pin the grammar on
+shapes the shipped log can no longer produce.
 
 An entry is delimited by its own `## ` heading and runs to the next one — the marker
-`UPGRADING.md`'s *"Writing an entry"* rules actually mandate. The `---` rules between entries are
-decorative and the parser does not depend on them.
+`UPGRADING.md`'s *"Writing an entry"* rules actually mandate. `---` rules are decorative and the
+parser does not depend on them.
 
 #438: it used to split on `^---\$` and gate each block on a `- **Recorded**:` bullet, neither of
 which the writing rules ever asked for. Nine headings written to spec were lost — three
@@ -199,30 +289,37 @@ which the writing rules ever asked for. Nine headings written to spec were lost 
 `#346`, and `#300` since `0.4.0` shipped) were merged into a neighbour's body and rendered under
 its title. `upgrade_guide(from = v"0.4.0")` returned 3 entries of 11.
 
-Line endings are normalized to `\\n` up front: a Windows checkout can store `UPGRADING.md`
-with `\\r\\n` (only `*.jl`/`*.sh` are pinned to `eol=lf`), and a `(?m)…\$` anchor never sees past
-a trailing `\\r` — so headings and bullets would match inconsistently and the parse would be
-platform-dependent.
+Line endings are normalized to `\\n` up front: a Windows checkout can store an entry file with
+`\\r\\n` (`.gitattributes` pins `*.md` to `eol=lf`, but a file that never went through git is not
+covered), and a `(?m)…\$` anchor never sees past a trailing `\\r` — so headings and bullets would
+match inconsistently and the parse would be platform-dependent.
 """
 function _parse_upgrading(text::AbstractString)
     text = replace(text, "\r\n" => "\n", "\r" => "\n")
 
     # Drop the "## Template for new entries" section: its body is an HTML comment holding a
     # fake `## …` heading and a `- **Version**:` placeholder that would parse as a bogus entry.
-    tmpl = findfirst("## Template for new entries", text)
-    tmpl === nothing || (text = text[1:prevind(text, first(tmpl))])
+    #
+    # ANCHORED TO A COLUMN-0 HEADING, not matched as a raw substring anywhere in the text. Since
+    # #638 the only text this parser ever sees is an ENTRY FILE, so a bare `findfirst` truncated any
+    # entry that merely *quoted* the contract — and an entry about the upgrade log is the obvious
+    # one to write. Below its `- **Version**:` bullet that loss is silent: the entry keeps its title
+    # and version and ships a shortened body, which no guard can see, because every check that
+    # compares the log against a parse runs through THIS function on both sides.
+    tmpl = match(r"(?m)^##[ \t]+Template for new entries", text)
+    tmpl === nothing || (text = text[1:prevind(text, tmpl.offset)])
 
     entries = _UpgradeEntry[]
 
     # Segment on the entry heading itself. Each segment runs from its `## ` to just before the
-    # next one, so a body ALWAYS starts at its own heading: a release marker written directly
-    # above the first entry of a release (`/pormg-cut-release` emits it with no `---` between) is
-    # its own skipped segment rather than something to trim off, and every entry renders
-    # identically no matter where it sits in a release.
+    # next one, so a body ALWAYS starts at its own heading: a release marker written above an
+    # entry (the single-file log's cut step emitted one with no `---` between) is its own skipped
+    # segment rather than something to trim off, and every entry renders identically.
     #
-    # The flip side is that a stray `## ` inside an entry body would split that entry. There is
-    # none today, and `test_upgrade_guide.jl` fails if one appears: it asserts every non-marker
-    # heading below the first release marker comes back as a parsed entry.
+    # The flip side is that a stray `## ` inside an entry body would split that entry — and in the
+    # per-file log that is a SECOND entry in a file. There is none today, and
+    # `test_upgrade_guide.jl` fails if one appears: it asserts every file yields exactly one entry
+    # and that every non-marker heading in the directory comes back as a parsed title.
     heads = collect(eachmatch(r"(?m)^##[ \t]+(.+?)[ \t]*$", text))
     for (i, h) in enumerate(heads)
         occursin(_RELEASE_MARKER, h[1]) && continue
@@ -285,8 +382,8 @@ end
 #
 # Known residual, deliberately not chased further: a line-start `<!--` that is never closed, in a
 # body that ends with a prose `-->`, is still peeled along with everything between them. It needs
-# all four conditions at once, `UPGRADING.md` contains no such shape, and the text really is an
-# HTML comment unless a code fence makes it literal — which no regex can know. Tightening past
+# all four conditions at once, no entry under `upgrading/` contains such a shape, and the text really
+# is an HTML comment unless a code fence makes it literal — which no regex can know. Tightening past
 # this point costs more than it buys.
 const _TRAILING_RULE    = r"(?:\A|\n)[ ]{0,3}---[ \t]*\z"
 const _TRAILING_COMMENT = r"(?:\A|\n)[ ]{0,3}<!--(?:(?!-->|<!--)[\s\S])*-->[ \t]*\z"
@@ -318,13 +415,14 @@ end
 """
     upgrade_guide([io::IO = stdout]; from, to = <current code>, structured = false)
 
-Print the `UPGRADING.md` entries a consuming app must work through to move from PormG
+Print the change-log entries a consuming app must work through to move from PormG
 version `from` up to `to`. The default `to` covers the **current code** — every released
-entry **plus** the uncut `## Unreleased` changes the install is running (release-train model),
-so a consumer dev'ing PormG at HEAD sees work that has not been stamped with a release number
-yet. Pass `to = pkgversion(PormG)` to scope to the installed *release* only. Reads the
-`UPGRADING.md` shipped with the *resolved* PormG install, so the scope is accurate against the
-version your app actually depends on — not a latest-on-GitHub copy that may not match.
+entry **plus** the uncut entries still marked `Unreleased` that the install is running
+(release-train model), so a consumer dev'ing PormG at HEAD sees work that has not been stamped
+with a release number yet. Pass `to = pkgversion(PormG)` to scope to the installed *release*
+only. Reads the `upgrading/` log shipped with the *resolved* PormG install — one file per entry —
+so the scope is accurate against the version your app actually depends on, not a latest-on-GitHub
+copy that may not match.
 
 Entries print newest-first; each keeps its "How to find the calls to migrate" grep and its
 `before → after`, with the PormG-internal per-app rollout table trimmed off.

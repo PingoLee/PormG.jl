@@ -209,6 +209,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Migration Format Stability (v1)" include("unit/test_migration_format_v1.jl")
     @testset "Schema Conventions Freeze (#33)" include("unit/test_schema_conventions.jl")
     @testset "REPL Display — Base.show (#534)" include("unit/test_repl_display.jl")
+    @testset "JSON Serialization — PormGRow lower (#641)" include("unit/test_json_serialization.jl")
     @testset "Public Export Surface (#35)" include("unit/test_public_exports.jl")
     @testset "Docstring Coverage (#212)" include("unit/test_docstring_coverage.jl")
     @testset "Upgrade Guide Emitter (#216)" include("unit/test_upgrade_guide.jl")

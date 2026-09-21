@@ -389,7 +389,7 @@ Umbrella for model-definition-time failures — `catch DefinitionError` covers b
 constructor argument ([`FieldValidationError`](@ref)) and a bad model/schema shape
 ([`ModelDefinitionError`](@ref)). They almost always surface together: one `include("models.jl")`
 can raise either, and a handler that names only one silently misses the other — which is exactly
-what `UPGRADING.md`'s own #239 migration recipe did.
+what the upgrade log's own #239 migration recipe did.
 """
 abstract type DefinitionError <: PormGError end
 

@@ -79,6 +79,36 @@ driver.save()
 
 For framework integrations that require plain dictionaries, use `.list(:dict)`. For tabular analysis, pipe the query to `DataFrame`.
 
+### Serializing rows to JSON
+
+`JSON.json` on a `PormGRow` — or on the `Vector{PormGRow}` that `.list()` returns — emits the row's
+columns and nothing else. For rows as returned by a query, that is exactly the JSON `.list(:json)`
+produces:
+
+```julia
+using JSON
+
+query = M.Driver.objects.filter("nationality" => "Brazilian").
+    values("driverref", "surname").
+    order_by("driverref")
+
+JSON.json(query.list()) == query.list(:json)   # => true
+```
+
+(Both read the row's stored columns, so an edited row — `driver.nationality = "British"` before
+`.save()` — serializes what you set, while a fresh `.list(:json)` re-queries the database.)
+
+The difference is where the result can go. `.list(:json)` hands back a `String`, so nesting it inside
+a larger response object double-encodes it; serializing the rows directly does not:
+
+```julia
+JSON.json((count = query.count(), drivers = query.list()))
+# => {"count":32,"drivers":[{"driverref":"barrichello","surname":"Barrichello"}, ...]}
+```
+
+Durations go through the same formatter either way, so a `DurationField` reads as `"00:01:49.088"`
+rather than as a struct dump, on both engines.
+
 !!! warning "No lazy FK traversal — project related columns up front"
     PormG never lazily loads a related row. Accessing a `ForeignKey` or `OneToOneField`
     you did not project (`row.driverid`, or traversing further with

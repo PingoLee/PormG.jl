@@ -56,10 +56,26 @@ const ALLOWED_DOC_MENTIONS = [
     ("the deliberate clean-break warning", r"deliberately \*\*not\*\* `<: ArgumentError`"),
 ]
 
-# `src/tools.jl`'s two deliberate keeps: `upgrade_guide(from=…)` missing its required kwarg, and a
-# missing path. Both are Julia-level API misuse, not a PormG domain error.
+# `src/tools.jl`'s four deliberate keeps, all reached through `upgrade_guide`:
+#   1. `upgrade_guide(from=…)` missing its required kwarg  — Julia-level API misuse
+#   2. `_upgrading_dir()` — `upgrading/` is not next to the install
+#   3. `_upgrading_files(dir)` — an explicitly-passed directory does not exist (#638)
+#   4. `_upgrading_files(dir)` — that directory holds no `.md` entry files (#638)
+#
+# 3 and 4 were added when the change log became one file per entry (#638): an empty directory
+# otherwise made `upgrade_guide` print "nothing to port", which is exactly what a consumer already
+# up to date sees.
+#
+# KNOWN TAXONOMY GAP, deliberately not closed here — see #639. Sites 2 and 4 are not caller
+# misuse at all; both are a broken install, and the docstring for 4 says so in those words. They
+# arguably belong under `ConfigurationError <: PormGError`, which is what a consuming app's
+# `catch PormGError` would actually be positioned to handle. They are kept as `ArgumentError`
+# because retyping only the NEW one would be worse than either consistent choice — you would get
+# `ArgumentError` for a missing `upgrading/` and a `PormGError` for an empty one, for the same
+# cause — and retyping all four is a behavior change that owes an `upgrading/` entry. Raising this
+# number is therefore not automatically "fine": check whether the new throw is caller misuse first.
 const ALLOWED_SRC_ARGUMENTERROR = Dict(
-    "src/tools.jl" => 2,   # upgrade_guide's missing kwarg / missing path — Julia-level misuse
+    "src/tools.jl" => 4,   # upgrade_guide's kwarg + three upgrade-log path guards (#638, #639)
     "src/Utils.jl" => 1,   # @import_models non-literal path — macro (Julia-level) misuse
 )
 

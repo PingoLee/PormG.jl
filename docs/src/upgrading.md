@@ -16,29 +16,32 @@ the work to an AI agent.
     your database tables.
 
 The change log itself lives in
-[`UPGRADING.md`](https://github.com/PingoLee/PormG.jl/blob/main/UPGRADING.md) in the PormG
-repository — one entry per breaking change, newest first. You rarely need to open it:
-[`upgrade_guide`](@ref PormG.upgrade_guide) renders exactly the slice that applies to you.
+[`upgrading/`](https://github.com/PingoLee/PormG.jl/tree/main/upgrading) in the PormG repository —
+**one file per breaking change**, named `YYYY-MM-DD-<slug>.md` so the directory reads newest-first.
+You rarely need to open it: [`upgrade_guide`](@ref PormG.upgrade_guide) renders exactly the slice
+that applies to you. The rules for writing an entry are in
+[`UPGRADING.md`](https://github.com/PingoLee/PormG.jl/blob/main/UPGRADING.md), which is the
+contract, not the log.
 
 ## How PormG versions: release trains
 
 PormG bumps **per release train, not per pull request**.
 
 - **`y` is the breaking slot.** Any release that forces an edit in your app bumps `y` and carries a
-  matching `UPGRADING.md` entry. Pin `PormG = "0.3"` and Pkg will hold you there until you choose to
+  matching change-log entry. Pin `PormG = "0.3"` and Pkg will hold you there until you choose to
   move.
 - **`z` is safe.** A purely additive train, or a hotfix to a tagged one. Nothing to port.
-- **During a train,** every breaking or behavior-changing PR appends its entry to the
-  `## Unreleased` section of `UPGRADING.md` without bumping `Project.toml` — that still holds the
-  last cut train's version.
-- **Cutting a train** bumps `y` once, stamps every `Unreleased` entry with that number, dates and
-  tags the section, and opens a fresh empty `## Unreleased`.
+- **During a train,** every breaking or behavior-changing PR adds one new file to `upgrading/`
+  marked `- **Version**: Unreleased`, without bumping `Project.toml` — that still holds the last
+  cut train's version.
+- **Cutting a train** bumps `y` once and stamps every `Unreleased` entry with that number, then
+  dates and tags the release.
 
 So one `y` bump can carry several entries. They are applied together, newest-first, as one rollout.
 
 !!! info "Tracking `HEAD` instead of a release"
     If you `dev` or path-depend on PormG rather than installing a released version, you are running
-    the last cut train **plus** whatever has accumulated under `## Unreleased` since.
+    the last cut train **plus** every entry still marked `Unreleased` since.
     `upgrade_guide` includes that uncut work by default, because it is what your app is actually
     running — pass `to = pkgversion(PormG)` to scope to the released surface only.
 
@@ -69,8 +72,8 @@ PormG.upgrade_guide(from = v"0.2.0", to = v"0.3.0")
 ```
 
 Without a Julia session handy you can do the same by eye: open
-[`UPGRADING.md`](https://github.com/PingoLee/PormG.jl/blob/main/UPGRADING.md), read from the top, and
-stop at the first entry whose `- **Version**:` is **≤ your pin**. Everything above that line is what
+[`upgrading/`](https://github.com/PingoLee/PormG.jl/tree/main/upgrading), read the files newest
+first, and skip any whose `- **Version**:` is **≤ your pin**. Everything you did not skip is what
 changed since you pinned.
 
 ### 2. Find the call sites

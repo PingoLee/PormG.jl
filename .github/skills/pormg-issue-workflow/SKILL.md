@@ -59,7 +59,7 @@ The tier is **high**, however small the diff looks, if it touches any of:
 | Parameter binding — the buckets in `src/querybuilder/`, `src/Dialect.jl` rendering | a misbind is silent wrong data, and #432 found a test *asserting* one as correct |
 | `src/ConnectionPool.jl`, `src/Configuration.jl` transactions, `src/AdvisoryLock.jl` | pool and rollback failures are shared-state failures; unit coverage is mocks |
 | `src/Backend.jl` or either `ext/` driver extension | a qualified-method mistake fails at `using LibPQ`, not at `using PormG` — precompiling the package does not catch it |
-| An `UPGRADING.md` entry, a `[compat]` change, or a new public export | breaking-change surface |
+| An upgrade-log entry, a `[compat]` change, or a new public export | breaking-change surface |
 | A non-maintainer issue (see §1) | scope itself is unverified |
 
 **The table only raises the tier; it never lowers it.** A user can name a lower tier than the table
@@ -129,10 +129,16 @@ coming from issue text.
    [`pormg-public-api-development`](../pormg-public-api-development/SKILL.md) → *Test Placement
    Rules*: user-visible failure → integration regression; builder/rendering/validation root cause →
    unit test; **both** when the bug spans both layers.
-4. Decide whether `UPGRADING.md` is owed. The rule is in `UPGRADING.md` itself: an entry is only for
-   changes that **force** a consuming-app source edit. A new arity, a new kwarg, a fix to something
-   that was already broken — all additive, no entry, and **never** a `Project.toml` bump (release
-   trains, see `/pormg-cut-release`).
+4. Decide whether an **upgrade-log entry** is owed. The rule is in
+   [`UPGRADING.md`](../../../UPGRADING.md) itself: an entry is only for changes that **force** a
+   consuming-app source edit. A new arity, a new kwarg, a fix to something that was already broken —
+   all additive, no entry, and **never** a `Project.toml` bump (release trains, see
+   `/pormg-cut-release`). When one *is* owed it is **one new file**,
+   `upgrading/<YYYY-MM-DD>-<slug>.md`, carrying `- **Version**: Unreleased`, a
+   *"How to find the calls to migrate"* grep and a concrete `before → after`. Copy the template
+   from `UPGRADING.md`, which is the contract and holds no entries — **do not append to it.**
+   What makes it an entry for `upgrade_guide` is its `## ` heading plus a `- **Version**:` bullet at
+   the **start of a line**; `---` rules are visual and the parser ignores them (#438).
 5. **Establish whether the repro is hermetic** — does reproducing it need a live database, or only
    mock connections and an inline model module? This is not a detail; it decides two things at once.
    A hermetic issue verifies in seconds at rung 1, contends for nothing, and is therefore safe to
@@ -211,7 +217,7 @@ the plan does. Come back to the user — do not improvise past it — when:
 | Trigger | Why it voids the plan |
 |---|---|
 | The premise does not reproduce | You were authorized to fix a bug that may not be the bug |
-| The fix needs a breaking change or an `UPGRADING.md` entry that was not in the plan | Compatibility surface the user did not agree to, and it moves the tier to `high` |
+| The fix needs a breaking change or an upgrade-log entry that was not in the plan | Compatibility surface the user did not agree to, and it moves the tier to `high` |
 | The escalation table raises the tier above what the plan assumed | The plan priced a cheaper run than the change deserves |
 | Scope must grow materially beyond the issue's task list | Narrowing needs disclosure; *widening* needs consent |
 | A previously-green test is red and no third source adjudicates it | §4 forbids moving the goalposts on your own authority |
@@ -263,6 +269,8 @@ you touched. Before running the full suite, ask which of these your diff could r
 | `test_kernel_layering.jl` | add a file to `src/` or move shared vocabulary |
 | `test_column_spec.jl` | add or remove a `PormGField` slot or field struct — the compiler's classification must cover every slot (#507) |
 | `test_db_column.jl` | add or remove a field struct, or give one an inner constructor |
+| `test_upgrade_guide.jl` | **add or reshape an entry under `upgrading/`** (#453) — several testsets parse the *real* log via `pkgdir`, asserting the full entry-title set, one entry per file, and the `YYYY-MM-DD-<slug>.md` name against its own `- **Recorded**:` bullet |
+| `test_skill_stubs.jl` | add a skill, or edit a `.github/skills/*/SKILL.md` frontmatter block — the `.claude/` stub is pinned byte-for-byte |
 
 **When your fix makes an EXISTING test fail, adjudicate — do not assume either side.** Two reflexes
 are available and both are wrong. *"The test is older, so my fix must be broken"* leaves the bug half
@@ -399,7 +407,12 @@ No approval in between, and no "here is the diff, shall I commit?". The maintain
 the PR is what they read *first* — which is exactly why §4 and §5 are not optional: arriving
 unverified spends the only check that is left.
 
-Stage explicit paths, never `git add -A`. Put `Closes #N` in the PR body so the issue auto-closes
+Stage explicit paths, never `git add -A` — and **if you owe an upgrade-log entry,
+`git add upgrading/<your file>` explicitly.** It is a *new, untracked* file since #638, so
+`git commit -a` does not pick it up. Nothing catches the omission: the suite passes locally because
+the file is in your working tree, and passes on CI because every assertion is relative to the files
+that *are* there. The behavior change would merge with no entry and nothing would say so.
+Put `Closes #N` in the PR body so the issue auto-closes
 with a back-reference — only when the PR actually completes the issue. Record in the PR body **the
 tier you worked at and which rungs CI is covering for you**, plus what you deliberately did not do
 and why: deferred guards, declined findings, scope you widened and on whose say-so, and whether the
@@ -471,4 +484,5 @@ every `test/integration/` run, which needs permission each time regardless of th
 - Do not run a repro that terminates backends or wipes a fixture without getting the database to yourself first — "which database is free" is a different question from "will my test kill your connections"
 - Do not `git add -A` in a worktree
 - Do not narrow an issue's task list without saying so
-- Do not add an `UPGRADING.md` entry for an additive change, or bump `Project.toml` in a fix PR
+- Do not add an upgrade-log entry for an additive change, or bump `Project.toml` in a fix PR
+- Do not append an entry to `UPGRADING.md` — it is the contract; entries are files under `upgrading/`

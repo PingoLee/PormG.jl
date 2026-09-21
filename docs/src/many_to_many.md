@@ -309,7 +309,7 @@ When you access a `ManyToManyField` on a fetched `PormGRow`, PormG returns a **M
     reached as manager methods (`driver.sponsors.add(...)`), never as free functions in your
     namespace. That makes them the same kind of surface as the bang-free fluent terminals
     (`q.update(...)`, `q.delete()`), and matches Django's `add`/`remove`/`clear`/`set`.
-    (Renamed from `add!`/`remove!`/`clear!`/`set!` in 0.3.0 — see `UPGRADING.md`.)
+    (Renamed from `add!`/`remove!`/`clear!`/`set!` in 0.3.0 — see the change log.)
 
 ### Model-level vs instance-level access
 

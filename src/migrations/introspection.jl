@@ -40,7 +40,7 @@
 # reaches them for the first time as of #292, because before it the PostgreSQL path never emitted
 # `on_delete` at all and so could not contradict anything. The `@warn` above is what names the
 # column for case 1; case 2 surfaces at registration with the model and field named. See the
-# `## Unreleased` entry in UPGRADING.md.
+# uncut entry under `upgrading/`.
 #
 # Shared by all three FK branches — the two SQLite ones and the PostgreSQL one. Before #292 the
 # SQLite branches dropped the default silently and PostgreSQL passed it through unguarded, so this

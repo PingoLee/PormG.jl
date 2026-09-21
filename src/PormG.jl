@@ -230,7 +230,7 @@ export with_tx_context, in_transaction_context  # Transaction context helpers
 # `docs/src/api.md` says so — `public` (Julia 1.11+) records that without putting them in scope on
 # a bare `using PormG`, and keeps them on the API page under `Private = false` (#289).
 public setup, install_ai_skills
-export upgrade_guide  # version-scoped UPGRADING.md emitter (#216)
+export upgrade_guide  # version-scoped emitter over the `upgrading/` log (#216)
 
 include("Migrations.jl")
 using .Migrations

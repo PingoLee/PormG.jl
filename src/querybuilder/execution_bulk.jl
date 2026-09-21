@@ -642,7 +642,7 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
   # predicate that matches nothing, where before it raised "move this to match_on=". Accepted for
   # one reason only — `_is_legacy_dynamic_filter` is half of a shim already marked for deletion
   # (see the DEPRECATION SHIM block below), so #335 narrows the reach of a helper that is on its
-  # way out rather than degrading permanent behavior. No `UPGRADING.md` entry is owed: the bar
+  # way out rather than degrading permanent behavior. No upgrade-log entry is owed: the bar
   # there is a change that FORCES a consuming-app source edit, and a call that was raising a
   # migration error was already being told to change.
   #

@@ -409,7 +409,7 @@ and no `db_table` is emitted.
 
 !!! note "Existing generated files keep working"
     The older spelling, `Models.Model("dash_dim_uf", …)`, still addresses the table `dash_dim_uf`.
-    The new form only appears when you regenerate — see `UPGRADING.md` for the one case that forces
+    The new form only appears when you regenerate — see the change log for the one case that forces
     an edit.
 
 ## Supported Django Fields

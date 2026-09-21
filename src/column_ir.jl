@@ -90,12 +90,20 @@ end
 
 A database-side expression default (`DEFAULT now()`, `DEFAULT gen_random_uuid()`).
 
-**Not reachable from `column_spec` today**, and that is deliberate rather than an oversight: no
-`PormGField` has a slot that can spell one, so the declared side can never produce it, and
-introspection *drops* an expression default it cannot represent (`_field_or_drop_default`, #472/#475)
-rather than carrying it. The variant exists because #496 — a `db_default` slot — is exactly the
-change that makes it reachable, and having the IR half already defined means #496 is a pure addition
-here instead of a re-shaping. It is constructible and compares correctly; that much is covered.
+**Reachable from both sides of the diff since #496**, which is what this variant was defined ahead
+of. The declared side produces one from a field's `db_default` slot (`Migrations._column_default`);
+the live side produces one in `Migrations._default_or_drop`, which before #496 dropped an expression
+default it could not represent (#472/#475) and now carries it.
+
+`sql` is the **canonical** form — [`canonical_db_default`](@ref) — never the raw text, and both
+construction sites are required to go through it. That is not tidiness: the two sides are compared
+as strings, so a column whose declared spelling normalised differently from its live one would
+differ from itself on every run, which is the #325 churn class. One normaliser, applied twice.
+
+Equality is plain `String` comparison and is left that way on purpose — the IR must not claim two
+different expressions are the same. The one place the diff is lenient is the `NoDefault` /
+`ExpressionDefault` pair, and that lives in `_defaults_equal` beside the comparator table, where it
+is visible as an action rule rather than hidden in a type's `==`.
 """
 struct ExpressionDefault <: ColumnDefault
   sql::String
@@ -110,6 +118,258 @@ Base.:(==)(a::LiteralDefault, b::LiteralDefault)::Bool = isequal(a.value, b.valu
 # hash(b)` contract and misbehaves the moment one lands in a `Set` or a `Dict` key. Phase 1 wrote
 # these while nothing hashed a spec; phase 2 keys plan actions off the delta, so they now earn it.
 Base.hash(d::LiteralDefault, h::UInt) = hash(d.value, hash(:LiteralDefault, h))
+
+# True when `s` is ONE parenthesized group, i.e. the outer `(` closes on the final character.
+# Balance-checked rather than regex-anchored: the `r"^\((.+)\)$"` this replaces rewrote `(a) + (b)`
+# to `a) + (b`. Parens inside a string literal do not count.
+#
+# Third home, same reason each time — it keeps moving to the lowest layer that needs it. It was
+# `_pg_wrapped_in_parens`, beside the PostgreSQL cleaner it was written for, until the SQLite
+# default reader needed the identical predicate (#472); it moved here in #496, because
+# `canonical_db_default` normalises the DECLARED side of a `db_default` and layer 1 is the only
+# place `Models`, `Dialect` and `Migrations` can all reach. It is plain string logic; neither
+# backend is in it, which is what has made every move safe.
+#
+# It skips `"…"` as well as `'…'` since #496, matching `is_valid_db_default_sql` twenty lines below.
+# Two scanners in one file with different ideas of what a literal is is the shape that gets copied
+# wrong later, and the divergence was reachable rather than theoretical: a quoted identifier
+# containing a `)` — `("a)b")` — made the old version answer `false`, so `canonical_db_default` left
+# the wrapper on, SQLite's renderer added a second one, and `PRAGMA table_info` reported back a
+# different string than was declared. That is a permanent `:default` delta, the exact churn class
+# this file exists to prevent. Found in review.
+function _wrapped_in_parens(s::AbstractString)::Bool
+  (ncodeunits(s) >= 2 && first(s) == '(' && last(s) == ')') || return false
+  depth = 0
+  in_literal = false          # '…'
+  in_ident = false            # "…"
+  last_i = lastindex(s)
+  i = firstindex(s)
+  while i <= last_i
+    ch = s[i]
+    if in_literal
+      if ch == '\''
+        j = nextind(s, i)
+        if j <= last_i && s[j] == '\''   # `''` is an escaped quote, not the end of the literal
+          i = nextind(s, j); continue
+        end
+        in_literal = false
+      end
+    elseif in_ident
+      if ch == '"'
+        j = nextind(s, i)
+        if j <= last_i && s[j] == '"'    # `""` is an escaped quote inside an identifier
+          i = nextind(s, j); continue
+        end
+        in_ident = false
+      end
+    elseif ch == '\''
+      in_literal = true
+    elseif ch == '"'
+      in_ident = true
+    elseif ch == '('
+      depth += 1
+    elseif ch == ')'
+      depth -= 1
+      depth == 0 && return i == last_i
+    end
+    i = nextind(s, i)
+  end
+  return false
+end
+
+# ── db_default: the declarable expression default (#496) ─────────────────────────────────────────
+#
+# #475 chose to DROP a non-literal column DEFAULT uniformly; #496 is the other half it named — a
+# `db_default` slot on the field structs, after Django's `Field.db_default`, so the expression is
+# stored verbatim and rendered verbatim. Everything in this block is LAYER 1 for the #239 reason:
+# the vocabulary is read by `Models` (the field constructors, include step 107), by `Dialect` (the
+# two `field_to_column` renderers, step 118) and by `Migrations` (the compiler and the schema
+# readers, step 226). A constant defined part-way down that chain cannot be named by the steps
+# above it.
+#
+# WHERE PORMG DEPARTS FROM DJANGO, deliberately. Django's `db_default` takes an expression OBJECT
+# (`Now()`, `TruncMonth(…)`) compiled per backend, so portability falls out by construction and the
+# diff compares objects rather than text. PormG takes the raw string, which is LESS magic — nothing
+# is inferred — but it cannot know which engines a given expression is valid on. Hence the two
+# shapes: a bare `String` asserts portability and is checked against the vocabulary below; a
+# `NamedTuple` names its engines.
+
+"""
+    PORTABLE_DB_DEFAULTS
+
+The expressions PormG will render on **both** engines from a bare-`String` `db_default`.
+
+Exactly two, and the shortness is the point rather than an accident of effort. An entry has to
+survive the full round trip — PormG renders it, the engine stores it, the schema reader reads it
+back — *identically on both backends*, or a column carrying it would churn forever on one of them.
+These two qualify because they are `literal-value` keywords in SQLite's `DEFAULT` grammar (so they
+render bare, with no parentheses, and `PRAGMA table_info` echoes them verbatim) and
+`SQLValueFunction` nodes in PostgreSQL (so the deparser prints them back as themselves).
+
+`now()` is deliberately **not** folded in as a synonym for `CURRENT_TIMESTAMP`. The rule
+`parse_canonical_type` states for types applies here verbatim: collapse two spellings only when
+PormG *renders* them identically, so the database cannot tell them apart. PormG renders `now()` as
+`now()`, so a user who declares one against a database that reports the other genuinely disagrees
+with it, and folding would hide a real (one-off) rewrite.
+
+Anything outside this tuple must name its engine — see [`canonical_db_default`](@ref).
+"""
+const PORTABLE_DB_DEFAULTS = ("CURRENT_TIMESTAMP", "CURRENT_DATE")
+
+"""
+    canonical_db_default(sql) -> String
+
+The comparison form of a `db_default` expression: whitespace trimmed, balanced outer parentheses
+removed, and a [`PORTABLE_DB_DEFAULTS`](@ref) spelling folded to upper case.
+
+**Applied to both sides of the diff, through this one function**, which is the whole reason it lives
+here rather than in either caller. The declared side goes through it in the field constructor; the
+live side goes through it in `Migrations._default_or_drop`. If only one side normalised, a column
+would differ from itself forever — the #325 churn class in a new costume.
+
+Each step is FORCED by something measured, not chosen for tidiness:
+
+  * **outer parens** — SQLite's grammar requires `DEFAULT (expr)` for anything outside its
+    `literal-value` set, so PormG adds a layer when it renders; `PRAGMA table_info` then reports the
+    text back with that layer *already removed* (measured on SQLite 3.53.4:
+    `DEFAULT (abs(random()) % 10)` reads back as `abs(random()) % 10`, and the bare form is a syntax
+    error). Stripping here makes the renderer's addition and the catalog's removal exact inverses.
+    `_pg_clean_default` strips a layer on the PostgreSQL side for its own reasons, so the same
+    normalisation keeps the two engines describing one expression the same way.
+  * **case** — SQLite echoes the source text including its case; PostgreSQL's deparser always prints
+    these two keywords upper case. Folding the vocabulary is what lets `db_default =
+    "current_timestamp"` converge against either catalog.
+  * **whitespace** — `Model_to_str` → reload → re-canonicalise is a real cycle, so this must be
+    idempotent: `canonical_db_default(canonical_db_default(x)) == canonical_db_default(x)`.
+
+Only the vocabulary is case-folded. An opaque expression keeps its case, because a `"MyCol"` inside
+it may be a quoted identifier, where case is significant on both engines.
+"""
+function canonical_db_default(sql::AbstractString)::String
+  s = String(strip(sql))
+  # UNBOUNDED, unlike `_pg_strip_trailing_casts`'s `for _ in 1:8`, and the difference is deliberate.
+  # Each pass removes at least the two parentheses it matched, so the loop is strictly decreasing
+  # and cannot spin — there is nothing for a bound to protect against. A bound would instead COST
+  # the idempotence this function promises: `((((((((( 1 )))))))))` would stop at `(1)` on the first
+  # call and reduce further on the second, so `canonical(canonical(x)) != canonical(x)` for a deep
+  # enough nesting. Found in review.
+  while _wrapped_in_parens(s)
+    inner = String(strip(s[nextind(s, firstindex(s)):prevind(s, lastindex(s))]))
+    isempty(inner) && break
+    s = inner
+  end
+  up = uppercase(s)
+  return up in PORTABLE_DB_DEFAULTS ? up : s
+end
+
+"""
+    db_default_is_portable(sql) -> Bool
+
+Whether this expression renders on both engines, i.e. whether its canonical form is in
+[`PORTABLE_DB_DEFAULTS`](@ref). A `db_default` that is not portable must name the engine it belongs
+to; the field constructors refuse a bare string that fails this.
+"""
+db_default_is_portable(sql::AbstractString)::Bool = canonical_db_default(sql) in PORTABLE_DB_DEFAULTS
+
+"""
+    is_valid_db_default_sql(sql) -> Bool
+
+Whether `sql` is *well-formed enough* to be rendered into a column definition.
+
+**This is not a security boundary and does not pretend to be one.** The trust question for #496 was
+settled explicitly: a `db_default` is author-supplied schema text, the same category as `db_table`
+and `db_column`, which PormG already renders verbatim. Someone who can write a models file can
+already run arbitrary Julia.
+
+What it is, is a guard against three ways a *typo* stops being a typo and silently changes a schema,
+all of them invisible in the generated DDL:
+
+  * a `--`, or a `/*`, outside a string literal **comments out the rest of the column list**, so a
+    `CREATE TABLE` quietly loses every column after this one;
+  * an unterminated `'` swallows the remainder of the statement the same way;
+  * a top-level `;` splits one DDL statement into two, and PostgreSQL's simple query protocol —
+    which is what a parameterless `execute` uses — runs both;
+  * a top-level `,` **injects an entire extra column** into the `CREATE TABLE` it sits in
+    (`db_default = "0, evil TEXT DEFAULT 'x'"`). Added in review: it is at least as easy to type as
+    a stray `;`, and it was the one statement-breaking character the first version of this scanner
+    let through.
+
+`depth` counts **both** `()` and `[]`, and the brackets are not decoration. A comma at depth 0 is
+never valid in a column default, but "depth" has to include an array constructor or the rule
+misfires on `ARRAY['a'::text, 'b'::text]` — which is precisely what PostgreSQL's deparser prints for
+`DEFAULT ARRAY['a','b']`, so the first version of the comma rule refused a value a real catalog
+produces. Found in the delta review, after the docstring had claimed every legitimate comma lives
+inside a function call's parentheses. It does not; some live inside brackets.
+
+Parentheses are balance-checked for the same reason [`_wrapped_in_parens`](@ref) balance-checks
+rather than regex-matching: the renderer adds a paren layer on SQLite, and an unbalanced expression
+would make that layer land in the wrong place.
+
+Every one of these stays legal *inside* a literal, which is what makes the guard usable at all:
+`'a;b'`, `'--'`, `'a,b'` and `'it''s'` all pass.
+
+`(` and `[` share one counter, so mismatched delimiters balance against each other and `(a]` is
+accepted. That is deliberate rather than overlooked: it is a typo both engines reject loudly when
+the DDL is applied, which puts it in the "fails at the database" category this guard already leaves
+alone — the guard exists for text that changes the statement *silently*, not for text that is
+merely wrong. Known false rejections, all conservative and all
+rare: a PostgreSQL dollar-quoted body containing any of them, a `/* … */` comment that IS closed
+(every `/*` is refused, not only an unterminated one), and the backslash-escape spellings `E'\\''`
+and `'a\\'b'`, which this walk reads as an unterminated literal because standard SQL escapes a
+quote by doubling it.
+
+Two callers, two policies, and the split is deliberate: a field constructor treats `false` as a
+`FieldValidationError` (the user wrote it; the remedy is one edit), while the schema readers treat it
+as drop-and-warn. A reader that threw would abort an entire `convert_schema_to_models` run over one
+column — the #472 failure this codebase spent an issue removing.
+"""
+function is_valid_db_default_sql(sql::AbstractString)::Bool
+  s = strip(sql)
+  isempty(s) && return false
+  depth = 0
+  in_single = false          # '…'  — a SQL string literal; '' escapes a quote
+  in_double = false          # "…"  — a quoted identifier on both engines
+  last_i = lastindex(s)
+  i = firstindex(s)
+  while i <= last_i
+    ch = s[i]
+    if in_single
+      if ch == '\''
+        j = nextind(s, i)
+        if j <= last_i && s[j] == '\''
+          i = nextind(s, j); continue
+        end
+        in_single = false
+      end
+    elseif in_double
+      if ch == '"'
+        j = nextind(s, i)
+        if j <= last_i && s[j] == '"'
+          i = nextind(s, j); continue
+        end
+        in_double = false
+      end
+    elseif ch == '\''
+      in_single = true
+    elseif ch == '"'
+      in_double = true
+    elseif ch == ';'
+      return false
+    elseif ch == ',' && depth == 0
+      return false          # injects a whole extra column definition — see the docstring
+    elseif ch == '(' || ch == '['
+      depth += 1
+    elseif ch == ')' || ch == ']'
+      depth -= 1
+      depth < 0 && return false
+    elseif ch == '-' || ch == '/'
+      j = nextind(s, i)
+      j <= last_i && s[j] == (ch == '-' ? '-' : '*') && return false
+    end
+    i = nextind(s, i)
+  end
+  return !in_single && !in_double && depth == 0
+end
 
 # ── CHECK-expressed bounds ───────────────────────────────────────────────────────────────────────
 #
@@ -301,6 +561,36 @@ _references_equal(a::Nothing, b::Nothing)::Bool = true
 _references_equal(a::ForeignKeyRef, b::ForeignKeyRef)::Bool = a == b
 _references_equal(a, b)::Bool = false
 
+# Do the two sides of the diff agree about the column's DEFAULT?
+#
+# Plain `==` for every pair but one. The exception is the #496 upgrade path, and it is the single
+# deliberate asymmetry in this file:
+#
+#     declared NoDefault  vs  live ExpressionDefault  ⇒  AGREE
+#
+# Before #496 the schema readers DROPPED an expression default, so the live side of such a column
+# read back as `NoDefault` and a model declaring nothing converged. `docs/src/schema_conventions.md`
+# promises exactly that, in as many words — *"PormG will not propose dropping a default it cannot
+# see … no `DROP DEFAULT` is generated against your live `now()`"*. #496 makes the reader CARRY the
+# expression, so without this arm that same model would suddenly differ from its own table and
+# `makemigrations` would plan `ALTER COLUMN … DROP DEFAULT` against a real database default — on
+# every existing app, on its first run after upgrading, and unprompted on PostgreSQL because
+# `DROP DEFAULT` is not classified destructive. This keeps the promise now that PormG *can* see it.
+#
+# The cost, stated rather than hidden: declaring a `db_default` and later deleting the keyword also
+# plans nothing. A state-based engine cannot tell "never declared" from "deliberately removed" —
+# there is no migration history to consult — so one of the two has to be silent, and silence on the
+# destructive one is the only defensible choice. `Migrations.check` reports the column either way,
+# which is what keeps it visible; removing a database default stays a by-hand operation.
+#
+# Every OTHER pairing still plans, and that is what stops this being a hole:
+#   NoDefault      → ExpressionDefault   adding one is planned (SET DEFAULT)
+#   ExpressionDefault → other expression  changing one is planned
+#   ExpressionDefault → LiteralDefault    #475's quoting distinction survives
+#   LiteralDefault → ExpressionDefault    ditto, in the other direction
+_defaults_equal(a::ColumnDefault, b::ColumnDefault)::Bool = a == b
+_defaults_equal(::NoDefault, ::ExpressionDefault)::Bool = true
+
 """
     COLUMN_DELTA_COMPARATORS
 
@@ -322,7 +612,9 @@ const COLUMN_DELTA_COMPARATORS = (
   :nullable    => (new_spec, old_spec) -> new_spec.nullable == old_spec.nullable,
   :primary_key => (new_spec, old_spec) -> new_spec.primary_key == old_spec.primary_key,
   :unique      => (new_spec, old_spec) -> new_spec.unique == old_spec.unique,
-  :default     => (new_spec, old_spec) -> new_spec.default == old_spec.default,
+  # `_defaults_equal`, not `==` — see its comment above for the one asymmetric pair (#496). The
+  # precedent for a custom predicate in this table is `:reference`, two lines down.
+  :default     => (new_spec, old_spec) -> _defaults_equal(new_spec.default, old_spec.default),
   :reference   => (new_spec, old_spec) -> _references_equal(new_spec.reference, old_spec.reference),
   :checks      => (new_spec, old_spec) -> new_spec.checks == old_spec.checks,
   :identity    => (new_spec, old_spec) -> new_spec.identity == old_spec.identity,
@@ -355,7 +647,21 @@ function column_delta(new_spec::ColumnSpec, old_spec::ColumnSpec)::Vector{Symbol
 end
 
 # `name` and `raw` are excluded by construction — see the `ColumnSpec` docstring.
-Base.:(==)(a::ColumnSpec, b::ColumnSpec)::Bool = isempty(column_delta(a, b))
+#
+# BOTH DIRECTIONS, since #496. `column_delta` is directional by construction — its arguments are
+# `(new_spec, old_spec)` and it answers *"what must change to get from old to new"* — and
+# `_defaults_equal` adds one genuinely one-way rule to it: a live expression default the declared
+# side does not mention is not a change, while declaring one where the database has none is. An
+# `==` defined as `isempty(column_delta(a, b))` would inherit that and stop being symmetric — and
+# `hash` (below, unchanged, which folds `s.default` strictly) would then disagree with it on
+# exactly that pair.
+#
+# Asking the table twice keeps `==` symmetric AND strict on that pair, without a second hand-written
+# copy of the facet list — which is the whole reason `COLUMN_DELTA_SLOTS` is derived rather than
+# written beside the table. Every other comparator is already symmetric, so the second call is
+# redundant for them and cheap.
+Base.:(==)(a::ColumnSpec, b::ColumnSpec)::Bool =
+  isempty(column_delta(a, b)) && isempty(column_delta(b, a))
 
 # Excludes `name` and `raw` to match `==` above; the default field-wise hash would include both and
 # break the `a == b ⇒ hash(a) == hash(b)` contract for exactly the pairs this IR exists to call equal.

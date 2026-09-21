@@ -150,12 +150,23 @@ end
       # deliberately does not reuse the reader's code). Those are the drifts that are actually
       # reachable, and the PostgreSQL half of this pairing catches a real one — see the serial-key
       # testset below, where check() and the reader genuinely DO disagree by construction.
-      logs, _ = Test.collect_test_logs() do
+      #
+      # #496 CHANGED WHAT THE IMPORTER SIDE OF THIS PAIRING IS READ FROM, and the replacement is
+      # strictly stronger. It used to compare `check`'s findings against the importer's WARNINGS;
+      # the importer no longer warns for these columns (it describes them instead), so that set is
+      # now empty and the assertion would have passed vacuously against an empty `reported` too.
+      # Comparing against the columns that actually came back carrying a `db_default` reads the
+      # importer's OUTCOME rather than its logging, which is the thing that has to agree.
+      logs, models = Test.collect_test_logs() do
         convert_schema_to_models(pool; include_table = ["lap_note"])
       end
-      warned = Set(("lap_note", string(Dict(l.kwargs)[:column])) for l in logs
-                   if l.level == Logging.Warn && occursin("could not be represented", l.message))
-      @test warned == reported
+      imported = only(m for m in models if lowercase(string(m.name)) == "lap_note")
+      carried = Set(("lap_note", col) for (col, f) in imported.fields
+                    if hasfield(typeof(f), :db_default) && f.db_default !== nothing)
+      @test carried == reported
+      # …and the importer is silent about them now, which is the other half of the same fact.
+      @test !any(l.level == Logging.Warn && occursin("could not be represented", l.message)
+                 for l in logs)
 
       # Ordering is deterministic, so `show` output and these tests do not depend on PRAGMA order.
       @test issorted([(String(f.kind), f.table, only(f.columns)) for f in result.findings])
@@ -279,8 +290,10 @@ end
             PormG.Migrations._pg_expression_default_findings(fk_key; ignore_table = String[])) ==
         Set(["driver_id"])
 
-  # …and the reader agrees, which is the actual contract: it emits NO warning for `id`, so a
-  # finding there would be check() inventing work the importer never reported.
+  # …and the reader agrees, which is the actual contract: it reads NO default for `id` at all, so a
+  # finding there would be check() inventing work the importer never did. Read from the importer's
+  # OUTCOME rather than its warnings since #496 — it no longer warns for an expression default,
+  # because it now carries one (see the SQLite agreement testset above for the same substitution).
   logs, model = Test.collect_test_logs() do
     PormG.Migrations.convertSQLToModel(
       DataFrame(table_name = ["lap_note"],
@@ -292,10 +305,12 @@ end
                 foreign_keys = [missing], indexes = [missing])[1, :])
   end
   @test model.fields["id"] isa PormG.Models.sIDField
-  warned = Set(string(Dict(l.kwargs)[:column]) for l in logs
-               if l.level == Logging.Warn && occursin("could not be represented", l.message))
-  @test warned == Set(["created_at"])
-  @test warned == Set(only(f.columns) for f in findings)
+  # The key arm carries NOTHING — `sIDField` has neither slot, which is why check() skips it.
+  @test !hasfield(typeof(model.fields["id"]), :db_default)
+  carried = Set(col for (col, f) in model.fields
+                if hasfield(typeof(f), :db_default) && f.db_default !== nothing)
+  @test carried == Set(["created_at"])
+  @test carried == Set(only(f.columns) for f in findings)
 
   # NARROW, and this is the control that keeps it narrow: `nextval(...)` on a NON-key column
   # reaches the generic arm, IS dropped by the importer, and so IS still reported.
@@ -362,9 +377,16 @@ end
       @test by["uuid_key"].fields["id"] isa PormG.Models.sUUIDField
       @test by["code_key"].fields["code"] isa PormG.Models.sCharField
       @test by["profile"].fields["driver_id"] isa PormG.Models.sOneToOneField
-      warned = Set((string(Dict(l.kwargs)[:table]), string(Dict(l.kwargs)[:column])) for l in logs
-                   if l.level == Logging.Warn && occursin("could not be represented", l.message))
-      @test warned == reported
+      # Read from the importer's OUTCOME rather than its warnings since #496: an expression default
+      # is carried, not dropped, so there is nothing to warn about. The relation arm is included,
+      # which is the one this substitution had to get right — `_default_or_drop` claims an
+      # expression BEFORE the `:reference` branch now, so a foreign key describes its default like
+      # any other column instead of reporting it in foreign-key wording.
+      carried = Set((tbl, col) for (tbl, m) in by for (col, f) in m.fields
+                    if hasfield(typeof(f), :db_default) && f.db_default !== nothing)
+      @test carried == reported
+      @test !any(l.level == Logging.Warn && occursin("could not be represented", l.message)
+                 for l in logs)
     finally
       PormG.ConnectionPool.close_pool!(pool)
     end

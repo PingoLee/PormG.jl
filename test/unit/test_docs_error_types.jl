@@ -625,6 +625,27 @@ const DOCERR_CASES = [
                 id       = IDField(),
                 parentid = ForeignKey("Docerr_Never_Declared", pk_field = "id"))),
     ),
+    # #496. Two claims the *Column defaults* section makes about `db_default`, and both are
+    # triggerable with no database, which is why they belong in this file rather than its
+    # integration twin. The second is the one that matters most: the whole promise of the pinned
+    # form is that a models file can never emit DDL the target engine would reject, and a page
+    # saying so is worthless if the type it names has drifted.
+    (
+        "schema_conventions.md — `default` and `db_default` together raise (#496)",
+        FieldValidationError,
+        () -> IntegerField(default = 5, db_default = "CURRENT_DATE"),
+    ),
+    (
+        "schema_conventions.md — a non-portable bare-String db_default raises (#496)",
+        FieldValidationError,
+        () -> DateTimeField(db_default = "now()"),
+    ),
+    (
+        "schema_conventions.md — rendering an engine-pinned db_default on the other engine raises (#496)",
+        BackendCapabilityError,
+        () -> PormG.Dialect.field_to_column("uid", UUIDField(db_default = (postgres = "gen_random_uuid()",)),
+                                            DocErrMockSQLite()),
+    ),
     # #446. `errors.md` has promised `UnknownFieldError` for "the field name does not exist on the
     # model" since the taxonomy landed, and until now the code raised a bare `KeyError` for every one
     # of these shapes — an untyped error naming an internal dict lookup, for the single most common

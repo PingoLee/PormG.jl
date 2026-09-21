@@ -25,7 +25,7 @@ using Dates
 using TimeZones
 import OrderedCollections: OrderedDict
 import PormG: Models, Migrations, Dialect, PormGModel
-import PormG: ColumnSpec, LiteralDefault, NoDefault, CheckKind, NonNegativeCheck, ByteLengthCheck,
+import PormG: ColumnSpec, LiteralDefault, NoDefault, ExpressionDefault, CheckKind, NonNegativeCheck, ByteLengthCheck,
               ColumnIdentity, ForeignKeyRef
 import PormG: CInt16, CInt32, CInt64, CFloat64, CDecimal, CBool, CText, CVarChar, CDate, CDateTime,
               CTime, CInterval, CUUID, CJSON, CBytes, CUnsupported
@@ -330,11 +330,17 @@ end
 # Defaults: the fix that rides along, and the standing drop policy — with check() in agreement
 # A `DATE … DEFAULT '2024-01-02'` column used to abort the WHOLE schema read (a `MethodError` out of
 # `DateField`'s converter, which is not the `FieldValidationError` the drop guard catches). It reads
-# as a `Date` now. A literal the type cannot hold, and a SQL expression, are dropped with the same
-# warning as before — and `check` reports the expression from the same classification, warning
-# nothing itself (its test pins that).
+# as a `Date` now.
+#
+# #496 SPLIT THE TWO REMAINING CASES APART, and keeping them distinguishable is the point of this
+# testset. A LITERAL the type cannot hold (`INTEGER DEFAULT 'abc'`) is still dropped, still out
+# loud. A SQL EXPRESSION is no longer dropped at all — it is carried as an `ExpressionDefault` and
+# reaches the models file as `db_default=`. They used to share an outcome and a warning; they now
+# differ in both, which is the whole of #496, and a test that could not tell them apart would miss
+# a regression in either direction. `check` reports the expression from the same classification and
+# warns nothing itself.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "a DATE literal default reads; an unrepresentable one drops out loud; check() agrees (#522)" begin
+@testset "a DATE literal default reads; a bad literal drops; an expression is carried (#522, #496)" begin
   mktempdir() do dir
     pool = SQLiteConnectionPool(joinpath(dir, "defaults.sqlite"); pool_size = 1)
     try
@@ -343,12 +349,15 @@ end
                                       "n" INTEGER DEFAULT 'abc',
                                       "created" DATETIME DEFAULT CURRENT_TIMESTAMP,
                                       "note" TEXT DEFAULT 'n');""")
-      # Two columns warn: `n` (a literal INTEGER cannot hold) and `created` (an expression).
-      live = @test_logs (:warn, r"could not be represented") (:warn, r"could not be represented") match_mode=:all read_live_schema(pool; include_table = ["d"])
+      # ONE column warns now: `n`, a literal an INTEGER column cannot hold. `created` used to warn
+      # beside it and no longer does — it is an EXPRESSION, and #496 represents those.
+      live = @test_logs (:warn, r"could not be represented") match_mode=:all read_live_schema(pool; include_table = ["d"])
       cols = live[1].columns
       @test cols["day"].default == LiteralDefault(Date(2024, 1, 2))
       @test cols["n"].default == NoDefault()
-      @test cols["created"].default == NoDefault()
+      # The #496 half: carried, canonical, and NOT a literal — a `LiteralDefault("CURRENT_TIMESTAMP")`
+      # here would be the exact corruption #475 removed, re-rendering as `DEFAULT 'CURRENT_TIMESTAMP'`.
+      @test cols["created"].default == ExpressionDefault("CURRENT_TIMESTAMP")
       @test cols["note"].default == LiteralDefault("n")
       # The declared side converges with the fixed read.
       @test isempty(column_delta(Models.DateField(default = Date(2024, 1, 2), null = true), cols["day"], pool; name = "day").changed)

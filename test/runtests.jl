@@ -170,6 +170,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Introspection PK Guards" include("unit/test_introspection_guards.jl")
     @testset "Physical-column Identity (#325)" include("unit/test_column_equivalence.jl")
     @testset "Canonical Column IR (#507)" include("unit/test_column_spec.jl")
+    @testset "db_default: a declarable expression DEFAULT (#496)" include("unit/test_db_default.jl")
     @testset "Live schema readers compile to ColumnSpec (#522)" include("unit/test_live_schema_reader.jl")
     @testset "Key Type Round Trip (#408/#409/#417)" include("unit/test_key_type_round_trip.jl")
     @testset "OneToOneField Row Paths (#418)" include("unit/test_one_to_one_row_paths.jl")

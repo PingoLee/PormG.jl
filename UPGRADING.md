@@ -1666,6 +1666,16 @@ profile_id = Models.OneToOneField(Driver)               # preferred, unchanged
   apps that declared a model default matching a database expression — a shape the previous entry
   (#472) described as the way a textual column behaved. Part of the `0.5.x` pre-publish wave.
 
+**Superseded in part by #496.** The *classification* this entry introduced stands, and so does the
+hazard it warns about below — declaring a `default=` that matches a database expression is still the
+one response that corrupts data, and still unprompted on PostgreSQL. What no longer holds is the
+outcome: an expression default is no longer **dropped**. #496 added a `db_default` slot, so such a
+column imports as `db_default=(postgres="now()",)` and round-trips. Substitute "described as a
+`db_default`" for "dropped" throughout; the advice to keep it out of `default=` is unchanged.
+
+#496 has no entry of its own, and that is the rule rather than an omission: it forces no app edit,
+because a model declaring nothing on such a column still converges by design.
+
 ### What changed
 
 Introspection used to decide whether a `DEFAULT` survived by whether the *field type* refused it. A

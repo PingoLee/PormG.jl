@@ -49,15 +49,12 @@ function _fk_default_or_warn(default_val, table_name, column_name)
   default_val === nothing && return nothing
   ismissing(default_val) && return nothing
 
-  # An expression default arrives pre-classified from the cleaners (#475). Behaviourally this arm
-  # changes nothing — `format2int64` never parsed `nextval('s'::regclass)` either, so the `catch`
-  # below already warned and dropped it — but the tag is not an `Integer` and not something
-  # `format2int64` accepts, so routing it explicitly keeps the reported `reason` honest instead of
-  # letting it read as a failed numeric parse.
-  if default_val isa _ExpressionDefault
-    @warn "Foreign key default could not be represented as a field default; emitting the relation without it." table = string(table_name) column = string(column_name) default = string(default_val)
-    return nothing
-  end
+  # The `_ExpressionDefault` arm that stood here was REMOVED in #496, not relocated by accident: the
+  # sole caller (`_default_or_drop`) now claims an expression default before it reaches the
+  # `:reference` branch, and carries it as a `db_default` instead of dropping it. A relation's
+  # expression default is no longer a foreign-key problem — `sForeignKey` and `sOneToOneField` have
+  # the slot like every other struct — so nothing can arrive here as a tag any more. Left as a note
+  # rather than as dead code with a stale comment.
 
   try
     # `Bool <: Integer`, so a SQLite 0/1 boolean default converts to 0/1 — which is what the
@@ -174,42 +171,11 @@ function _is_sql_literal_token(s::AbstractString)::Bool
   return occursin(_SQL_NUMERIC_LITERAL, t)
 end
 
-# True when `s` is ONE parenthesized group, i.e. the outer `(` closes on the final character.
-# Balance-checked rather than regex-anchored: the `r"^\((.+)\)$"` this replaces rewrote `(a) + (b)`
-# to `a) + (b`. Parens inside a string literal do not count.
-#
-# Shared by BOTH engines and therefore kept with the other cross-backend helpers (#472). It was
-# `_pg_wrapped_in_parens`, next to the PostgreSQL cleaner it was written for, until the SQLite
-# default reader needed the identical predicate — at which point the prefix named an engine rather
-# than a contract. It is plain string logic; neither backend is in it.
-function _wrapped_in_parens(s::AbstractString)::Bool
-  (ncodeunits(s) >= 2 && first(s) == '(' && last(s) == ')') || return false
-  depth = 0
-  in_literal = false
-  last_i = lastindex(s)
-  i = firstindex(s)
-  while i <= last_i
-    ch = s[i]
-    if in_literal
-      if ch == '\''
-        j = nextind(s, i)
-        if j <= last_i && s[j] == '\''   # `''` is an escaped quote, not the end of the literal
-          i = nextind(s, j); continue
-        end
-        in_literal = false
-      end
-    elseif ch == '\''
-      in_literal = true
-    elseif ch == '('
-      depth += 1
-    elseif ch == ')'
-      depth -= 1
-      depth == 0 && return i == last_i
-    end
-    i = nextind(s, i)
-  end
-  return false
-end
+# `_wrapped_in_parens` moved to `src/column_ir.jl` (layer 1) in #496 and is imported at the top of
+# this module. It kept its contract exactly — plain string logic, neither backend in it — and moved
+# for the same reason it moved here from `_pg_wrapped_in_parens` in #472: a third caller appeared
+# below this layer. `canonical_db_default` normalises the DECLARED side of a `db_default`, in a
+# field constructor at include step 107, and `Migrations` is step 226.
 
 # Build a field from an introspected column, dropping the column's DEFAULT if the field type
 # refuses it, or `nothing` never having been a default at all.
@@ -438,13 +404,41 @@ function _default_or_drop(table_name, probe::ColumnSpec, raw,
   _integer_key_arm(arm, probe.type) && return NoDefault()
   cleaned = _clean_default(raw, probe.type, conn)
   cleaned === nothing && return NoDefault()
+  # #496: an expression default is CARRIED now, not dropped — the `db_default` slot can express one.
+  # This test sits ABOVE the `:reference` branch on purpose: before #496 a relation's expression
+  # default was reported in the foreign-key wording by `_fk_default_or_warn`, but an expression is
+  # not a relational fact and `sForeignKey`/`sOneToOneField` carry the slot like every other struct.
+  # Routing it here first is what makes the answer uniform across all arms, which is the property
+  # #475 established and this issue has to preserve.
+  #
+  # THE TEXT STORED IS THE CLEANER'S OUTPUT, not `raw`, and that is what makes the column converge
+  # with itself. The cleaner is applied on EVERY read, so its output is a fixed point: PostgreSQL
+  # re-prints a stored default through its own deparser (`DEFAULT (random() * 10)` on an integer
+  # column comes back as `((random() * (10)::double precision))::integer`), and
+  # `_pg_clean_default` reduces that back to the same text it produced the first time. Storing `raw`
+  # instead would put the deparser's spelling in the models file, which is longer, and no more
+  # stable. `canonical_db_default` then normalises both sides of the diff identically.
+  #
+  # A value the guard rejects is DROPPED and warned rather than raised: a reader that threw would
+  # abort the whole `convert_schema_to_models` run over one column, which is the #472 failure.
+  #
+  # IT IS REACHABLE FROM A REAL CATALOG, and an earlier version of this comment claimed otherwise
+  # ("both readers re-print a PARSED expression, so neither can contain a top-level `;` or an
+  # unterminated quote"). That enumeration was true of the characters the guard rejected when it was
+  # written and stopped being true when the comma rule arrived: a deparsed expression certainly can
+  # contain a top-level comma. It cannot today, because `depth` counts brackets so `ARRAY[…]` is
+  # accepted — but the arm is a policy, not a formality, and `check` applies the SAME predicate so
+  # it never advises pasting a value this would refuse. Found in the delta review.
+  if cleaned isa _ExpressionDefault
+    if !is_valid_db_default_sql(cleaned.sql)
+      @warn _DEFAULT_DROPPED_MESSAGE table = string(table_name) column = probe.name default = string(cleaned) field_type = _inspectdb_field_name(probe, table_name, conn) reason = "the DEFAULT is a SQL expression PormG cannot render back safely (it contains a statement terminator, a top-level comma, a comment marker, or unbalanced quotes, parentheses or brackets)"
+      return NoDefault()
+    end
+    return ExpressionDefault(canonical_db_default(cleaned.sql))
+  end
   if arm === :reference
     value = _fk_default_or_warn(cleaned, table_name, probe.name)
     return value === nothing ? NoDefault() : _literal_default(value)
-  end
-  if cleaned isa _ExpressionDefault
-    @warn _DEFAULT_DROPPED_MESSAGE table = string(table_name) column = probe.name default = string(cleaned) field_type = _inspectdb_field_name(probe, table_name, conn) reason = "the DEFAULT is a SQL expression, not a literal value; PormG has no field-level representation for one"
-    return NoDefault()
   end
   value = try
     _coerce_default(cleaned, probe.type)

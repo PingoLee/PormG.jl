@@ -53,6 +53,13 @@ import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CBool, CText, CDa
               CheckKind, NonNegativeCheck, ByteLengthCheck,
               ColumnIdentity, ForeignKeyRef, ColumnSpec, ColumnDelta,
               reference_delta, column_delta, COLUMN_DELTA_COMPARATORS, COLUMN_DELTA_SLOTS
+# #496's layer-1 half. `_wrapped_in_parens` lived in `migrations/introspection.jl` until this issue
+# (and in the PostgreSQL cleaner before #472); it moved down to Kernel because
+# `canonical_db_default` normalises the DECLARED side of a `db_default` inside a field constructor,
+# at include step 107. Underscore-private, so `using .Kernel` does not bind it and it has to be
+# named here.
+import PormG: PORTABLE_DB_DEFAULTS, canonical_db_default, db_default_is_portable,
+              is_valid_db_default_sql, _wrapped_in_parens
 # The two forward type maps (`sqlite_type_map` / `postgres_type_map`) were imported here until #522
 # retired them: the readers compile a catalog type through `parse_canonical_type` now, and nothing
 # maps a rendered type back to a field struct any more.

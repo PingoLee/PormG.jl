@@ -71,9 +71,10 @@ println(result)
 
 It is read-only, works on both engines, and needs no migration history — so it is also useful before
 you have run `makemigrations` even once. Today it reports columns whose `DEFAULT` is a SQL
-expression (`now()`, `CURRENT_TIMESTAMP`, `gen_random_uuid()`): those columns import **without** a
-default, and a model that declares one anyway will propose overwriting the database's expression
-with a quoted literal. Full rules: [Column defaults](../schema_conventions.md#Column-defaults).
+expression (`now()`, `CURRENT_TIMESTAMP`, `gen_random_uuid()`). Those columns import as
+`db_default=` carrying exactly the text it prints, so its output is what you paste into the model —
+and declaring one as `default=` instead would propose overwriting the database's expression with a
+quoted literal. Full rules: [Column defaults](../schema_conventions.md#Column-defaults).
 
 
 ### Discarding a Pending Migration

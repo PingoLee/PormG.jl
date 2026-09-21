@@ -88,7 +88,7 @@ to be compared:
   * `to_table` resolves `ForeignKeyRef.table`, the physical parent — it is never compared on its own,
     which is what stopped every foreign key reporting a difference on every run (#360).
 """
-const SCHEMA_ATTRS = (:type, :primary_key, :unique, :null, :default, :db_column,
+const SCHEMA_ATTRS = (:type, :primary_key, :unique, :null, :default, :db_default, :db_column,
                       :max_length, :max_digits, :decimal_places,
                       :to, :to_table, :pk_field, :on_delete, :db_constraint,
                       :generated, :generated_always, :auto_increment)
@@ -248,7 +248,20 @@ end
 _slot(field::PormGField, name::Symbol, fallback) =
   hasfield(typeof(field), name) ? getfield(field, name) : fallback
 
-function _column_default(field::PormGField)::ColumnDefault
+function _column_default(field::PormGField, conn::Union{PormGPostgres, PormGSQLite})::ColumnDefault
+  # #496: a `db_default` wins, and it is asked FIRST for two reasons. It is mutually exclusive with
+  # `default` at construction, so there is no precedence question to get wrong; and
+  # `Dialect.db_default_sql` is where an expression pinned to the other engine raises, so routing
+  # the declared side through it makes the engine check unskippable on the diff path too — not only
+  # when DDL is finally rendered.
+  #
+  # The text stored is the CANONICAL one — `canonical_db_default` strips the outer parentheses
+  # `db_default_sql` just added for SQLite's grammar, so the IR holds the bare expression on both
+  # engines. That is the point rather than a wasted round trip: the live side stores what the
+  # catalog reports, and `PRAGMA table_info` reports those same parens already stripped, so passing
+  # both sides through one normaliser is what makes the two spellings meet.
+  db_expr = Dialect.db_default_sql(field, conn)
+  db_expr === nothing || return ExpressionDefault(canonical_db_default(db_expr))
   value = _slot(field, :default, nothing)
   value === nothing && return NoDefault()
   return _literal_default(value)
@@ -356,7 +369,7 @@ function column_spec(field::PormGField, conn::Union{PormGPostgres, PormGSQLite};
                     _slot(field, :null, false)::Bool,
                     _slot(field, :primary_key, false)::Bool,
                     _slot(field, :unique, false)::Bool,
-                    _column_default(field),
+                    _column_default(field, conn),
                     _column_reference(field),
                     _column_checks(field),
                     _column_identity(field, conn),
@@ -394,7 +407,8 @@ re-issued rather than assumed intact. `sRelationalColumn`, never a bare `isa sFo
 FK/O2O pair is spelled once in `src/models/fields.jl` (#408/#409/#418/#437) — and `sManyToManyField`
 is outside that union, which is what keeps a join table from being reported as a column reference.
 """
-function _degraded_spec(field::PormGField, marker::String; name::AbstractString = "")::ColumnSpec
+function _degraded_spec(field::PormGField, conn::Union{PormGPostgres, PormGSQLite}, marker::String;
+                        name::AbstractString = "")::ColumnSpec
   reference = (field isa Models.sRelationalColumn && field.db_constraint) ?
               ForeignKeyRef(nothing, nothing, "<unresolved>", nothing) : nothing
   return ColumnSpec(String(name),
@@ -402,7 +416,24 @@ function _degraded_spec(field::PormGField, marker::String; name::AbstractString 
                     _slot(field, :null, false)::Bool,
                     _slot(field, :primary_key, false)::Bool,
                     _slot(field, :unique, false)::Bool,
-                    _column_default(field),
+                    # `_column_default` can RAISE since #496 (a `db_default` pinned to the other
+                    # engine), and this function is reached from inside `_spec_or_degraded`'s
+                    # `catch` — so an unguarded call would let a second exception escape the
+                    # fail-safe and mask the original one. Degrading to `NoDefault()` does not fail
+                    # open: the spec already carries `CUnsupported(marker)` for its type, so the
+                    # diff reports `:type` and the column is planned as changed regardless of what
+                    # the default facet says. Found in review.
+                    (try
+                       _column_default(field, conn)
+                     catch e
+                       # The same carve-out `_spec_or_degraded` and `Model_to_str`'s render-failure
+                       # path both make: interrupted or corrupted program state is not "this
+                       # default is unrepresentable", so Ctrl-C during a large read must abort
+                       # rather than be swallowed into a `NoDefault()`. A bare `catch` here would
+                       # have eaten it; flagged in the delta review.
+                       (e isa InterruptException || e isa StackOverflowError) && rethrow()
+                       NoDefault()
+                     end),
                     reference,
                     CheckKind[],
                     nothing,
@@ -429,10 +460,24 @@ function _spec_or_degraded(field::PormGField, conn::Union{PormGPostgres, PormGSQ
   try
     return column_spec(field, conn; name = name)
   catch e
-    (e isa InterruptException || e isa StackOverflowError) && rethrow()
+    # `BackendCapabilityError` joins the rethrow list for #496, and it is a different KIND of
+    # exception from the two above it — not corrupted program state, but a user contract violation
+    # this wrapper must not launder. It means a `db_default` is pinned to the other engine, which is
+    # foreseen and has exactly one remedy (name this engine's spelling, or `nothing`). Degrading it
+    # would turn a precise, actionable refusal into a silent `CUnsupported` column, and
+    # `makemigrations` would then plan DDL for a column whose default it had just refused to render.
+    # That is the opposite of what the fail-safe is for: this wrapper's own comment above says it
+    # exists for the UNFORESEEN failure.
+    #
+    # The rethrow is a TYPE catch, and it is correctly scoped today by fact rather than by
+    # construction: `db_default_sql` is the only `BackendCapabilityError` producer reachable from
+    # `column_spec` (the others — `ToChar`, window frames, JSONB lookups, `unaccent` — are all
+    # query-builder paths). If a type renderer ever grew one, it would abort `makemigrations` where
+    # it used to degrade, so a new throw of this type under `column_spec` needs a look at this line.
+    (e isa InterruptException || e isa StackOverflowError || e isa BackendCapabilityError) && rethrow()
     @warn "Could not compile a column for the migration diff; treating it as changed so a " *
           "migration is generated" column=(name === "" ? "<unnamed>" : name) field_type=typeof(field) exception=e
-    return _degraded_spec(field, marker; name = name)
+    return _degraded_spec(field, conn, marker; name = name)
   end
 end
 
@@ -601,6 +646,36 @@ end
 _integer_key_arm(arm::Symbol, ctype::CanonicalType)::Bool =
   arm === :id_pk && ctype isa Union{CInt16, CInt32, CInt64}
 
+"""
+    _arm_carries_db_default(arm, ctype, conn) -> Bool
+
+Whether the field [`field_from_spec`](@ref) builds for this arm has a `db_default` slot to put an
+expression default into (#496).
+
+**Asked by both sides, so `Migrations.check` and the importer cannot disagree** — `check`'s
+`_expression_default_finding` decides whether to report a column with it, and `field_from_spec`
+gates the slot it passes on it. That second call is what makes this a shared rule rather than a
+mirror of the if/else below; a mirror is the `_pg_key_arm_ignores_default` shape #522 deleted for
+drifting, and the same reason [`_key_arm`](@ref) is stated once.
+
+The arms that do NOT carry it are exactly the ones that compile to an `sIDField`, and `sIDField` has
+no slot on purpose: PostgreSQL rejects a column that is both `GENERATED … AS IDENTITY` and carries a
+`DEFAULT`, so giving it one would make invalid DDL declarable.
+
+That is broader than `_integer_key_arm`, and the gap it closes was a live defect: a `BLOB PRIMARY
+KEY DEFAULT (randomblob(16))` lands on `:id_pk`, compiles to `IDField` on the `else` branch below
+— discarding the expression — yet `check` still reported it and told the user to *"declare it as
+`db_default=`"*. `IDField` does not accept the keyword, so following that advice produced an
+"Unexpected parameter … will be ignored" warning and changed nothing. Found in review.
+
+The one `:id_pk` arm that DOES carry it is a lengthless `TEXT` key on SQLite, which
+`_inspectdb_field` compiles to `UUIDField(primary_key = true)` — the single lengthless textual key
+PormG can declare.
+"""
+_arm_carries_db_default(arm::Symbol, ctype::CanonicalType,
+                        conn::Union{PormGPostgres, PormGSQLite})::Bool =
+  arm !== :id_pk || (conn isa PormGSQLite && ctype isa CText)
+
 # The inverse of `Models._foreign_key_on_delete_sql` for the values a catalog can hold: the stored
 # clause back to the spelling a models file declares. `NO ACTION` is `nothing` — lossless, because
 # `nothing` and `DO_NOTHING` both render it (#292, `_pg_confdeltype_to_on_delete`) — and `RESTRICT`
@@ -654,20 +729,56 @@ this is a second line of defence, not the policy.
 function field_from_spec(spec::ColumnSpec, table::LiveTable,
                          conn::Union{PormGPostgres, PormGSQLite})::PormGField
   default = spec.default isa LiteralDefault ? spec.default.value : nothing
+  # #496: an expression default becomes a `db_default=` in the generated models file instead of
+  # being discarded. The PIN is recorded here rather than in the reader, because `ColumnSpec` carries
+  # no engine — and it does not need to: the connection that read the column IS its origin engine,
+  # by construction. A portable spelling comes back as a bare `String` so a models file generated
+  # from SQLite still works on PostgreSQL; anything else is pinned to the engine it was read from,
+  # which is what "pinned to its origin engine" means operationally.
+  # GATED on the same predicate `Migrations.check` asks, so the two are one rule rather than two
+  # readings of one. The arms that answer `false` all compile to an `sIDField` below and would drop
+  # the keyword anyway — `_inspectdb_field`'s `:id_pk` branches simply do not pass it — so this
+  # changes no output today. What it changes is the failure mode: re-pointing one of those branches
+  # at a slot-bearing field now disagrees with `check` HERE, at one line, instead of in the gap
+  # between two files. The mirror it replaces is the `_pg_key_arm_ignores_default` /
+  # `_sqlite_key_arm_ignores_default` shape #522 deleted for drifting; flagged in the delta review
+  # before it could grow back.
+  db_default = _arm_carries_db_default(_inspectdb_key_arm(spec), spec.type, conn) ?
+               _db_default_from_spec(spec, conn) : nothing
   indexed = haskey(table.indexes, spec.name)
+  # `db_default` sits OUTSIDE the retry closure while `default` is inside it, and the asymmetry is
+  # deliberate rather than an oversight: `_field_or_drop_default` exists to rebuild the field when a
+  # constructor REFUSES a literal, and a `db_default` cannot cause that. It is already canonical and
+  # already passed `is_valid_db_default_sql` in `_default_or_drop`; the portable/pinned refusal
+  # cannot fire because introspection always supplies a pin or a vocabulary spelling; and both
+  # cannot be set at once because `_default_or_drop` returns either a literal or an expression,
+  # never both.
   return _field_or_drop_default(table.name, spec.name, default) do d
-    _inspectdb_field(spec, table.name, conn, indexed, d)
+    _inspectdb_field(spec, table.name, conn, indexed, d, db_default)
   end
 end
 
+# The `db_default` an introspected column declares, or `nothing`.
+_db_default_from_spec(spec::ColumnSpec, conn::Union{PormGPostgres, PormGSQLite}) =
+  if !(spec.default isa ExpressionDefault)
+    nothing
+  elseif db_default_is_portable(spec.default.sql)
+    canonical_db_default(spec.default.sql)
+  elseif conn isa PormGPostgres
+    (postgres = spec.default.sql,)
+  else
+    (sqlite = spec.default.sql,)
+  end
+
 function _inspectdb_field(spec::ColumnSpec, table_name::AbstractString,
-                          conn::Union{PormGPostgres, PormGSQLite}, indexed::Bool, default)::PormGField
+                          conn::Union{PormGPostgres, PormGSQLite}, indexed::Bool, default,
+                          db_default = nothing)::PormGField
   ctype = spec.type
   nullable = spec.nullable
   arm = _inspectdb_key_arm(spec)
   if arm === :uuid_pk
     return Models.UUIDField(primary_key = true, unique = spec.unique, null = false,
-                            db_index = indexed, default = default)
+                            db_index = indexed, default = default, db_default = db_default)
   elseif arm === :reference
     ref = spec.reference
     # The physical parent table is what the readers record; the binding is DERIVED from it, exactly
@@ -680,20 +791,23 @@ function _inspectdb_field(spec::ColumnSpec, table_name::AbstractString,
       # A pk-fk is a `OneToOneField(primary_key = true)`, the Django profile-table shape (#409).
       # `null = false`: a key is conceptually NOT NULL, whatever SQLite happens to permit.
       Models.OneToOneField(binding; pk_field = ref.column, primary_key = true, unique = true,
-                           null = false, on_delete = on_delete, default = default, db_index = true)
+                           null = false, on_delete = on_delete, default = default,
+                           db_default = db_default, db_index = true)
     elseif spec.unique
       # A UNIQUE non-key foreign key IS a one-to-one (#417); both readers have said so since #409.
       Models.OneToOneField(binding; pk_field = ref.column, unique = true, null = nullable,
-                           on_delete = on_delete, default = default, db_index = indexed)
+                           on_delete = on_delete, default = default, db_default = db_default,
+                           db_index = indexed)
     else
       Models.ForeignKey(binding; pk_field = ref.column, null = nullable, on_delete = on_delete,
-                        default = default, db_index = indexed)
+                        default = default, db_default = db_default, db_index = indexed)
     end
     field.to_table = parent_table
     return field
   elseif arm === :varchar_pk
     return Models.CharField(primary_key = true, max_length = ctype.length, unique = spec.unique,
-                            null = false, db_index = indexed, default = default)
+                            null = false, db_index = indexed, default = default,
+                            db_default = db_default)
   elseif arm === :id_pk
     if conn isa PormGPostgres
       # INTENTIONAL ENGINE DIVERGENCE, documented: on PostgreSQL every fall-through key stays an
@@ -730,7 +844,7 @@ function _inspectdb_field(spec::ColumnSpec, table_name::AbstractString,
             "the one declaration that renders it on SQLite. If the key holds text that is not a " *
             "UUID, declare the column by hand." table = string(table_name) column = spec.name
       return Models.UUIDField(primary_key = true, unique = spec.unique, null = false,
-                              db_index = indexed, default = default)
+                              db_index = indexed, default = default, db_default = db_default)
     else
       @warn "inspectdb: no PormG field declares a primary key of this type; emitting IDField. A " *
             "declared IDField will NOT match this column, so makemigrations plans a retype unless " *
@@ -739,8 +853,10 @@ function _inspectdb_field(spec::ColumnSpec, table_name::AbstractString,
     end
   end
 
-  # `:generic` — by canonical type. `base` is the kwarg set every constructor accepts.
-  base = (unique = spec.unique, null = nullable, default = default, db_index = indexed)
+  # `:generic` — by canonical type. `base` is the kwarg set every constructor accepts, so #496's
+  # `db_default` reaches all sixteen generic types through this one line.
+  base = (unique = spec.unique, null = nullable, default = default, db_default = db_default,
+          db_index = indexed)
   if ctype isa CInt16
     return Models.PositiveSmallIntegerField(; base...)
   elseif ctype isa CInt32

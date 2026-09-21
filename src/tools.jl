@@ -205,23 +205,48 @@ function _upgrading_dir()
 end
 
 """
-    _upgrading_files() -> Vector{String}
+    _upgrading_files(dir = _upgrading_dir()) -> Vector{String}
 
-Every change-entry file in `upgrading/`, newest-first by filename.
+Every change-entry file in `dir`, newest-first by filename.
 
 **Every `.md` in the directory is an entry — there is no name-pattern gate**, deliberately. A
 reader that skipped files not matching `<date>-<slug>.md` would make a mis-named entry vanish from
 the guide silently, which is precisely the failure class #438 exists to prevent. The naming
 convention is enforced by the test suite, where a violation is loud, rather than by the reader,
 where it would be mute.
+
+`isfile` is not redundant beside that: a *directory* named `x.md` would otherwise reach `read` and
+throw a bare `SystemError` out of `upgrade_guide`, in a consuming app that has no idea what
+`upgrading/` is.
+
+**An empty directory throws rather than returning nothing**, and that is the whole point of the
+check. `upgrade_guide` renders an empty result as *"nothing to port"* — which is exactly what a
+consumer who is already up to date sees, so a log that failed to ship would be indistinguishable
+from good news. Under the single-file log this needed a zero-byte tracked file; a directory is
+trimmed by a sparse checkout, an rsync filter or a Docker layer that copies only `src/` far more
+easily, so the hole got wider when the layout changed (#638).
+
+`dir` is a parameter so the suite can exercise the ordering and both error paths on a fixture. The
+shipped log is a corpus whose filename order and version order happen to agree, so it cannot test
+the sort at all.
 """
-function _upgrading_files()
-    dir = _upgrading_dir()
-    return [joinpath(dir, f) for f in sort(readdir(dir), rev = true) if endswith(f, ".md")]
+function _upgrading_files(dir::AbstractString = _upgrading_dir())
+    # Repeated from `_upgrading_dir` on purpose: the default argument runs that check, but an
+    # EXPLICIT `dir` bypasses it, and `readdir` on a missing path throws a raw `IOError` naming a
+    # temp path. Both entry points owe a consuming app the same diagnosis.
+    isdir(dir) || throw(ArgumentError(
+        "the PormG upgrade log directory $dir does not exist."))
+    files = [joinpath(dir, f) for f in sort(readdir(dir), rev = true)
+             if endswith(f, ".md") && isfile(joinpath(dir, f))]
+    isempty(files) && throw(ArgumentError(
+        "the PormG upgrade log at $dir holds no `.md` entry files. This is a broken install, " *
+        "not an empty change log — `upgrade_guide` would otherwise report \"nothing to port\", " *
+        "which is indistinguishable from being up to date."))
+    return files
 end
 
 """
-    _read_upgrading_entries() -> Vector{_UpgradeEntry}
+    _read_upgrading_entries(dir = _upgrading_dir()) -> Vector{_UpgradeEntry}
 
 Parse the `upgrading/` change log bundled with the resolved PormG install into change entries,
 newest-first. `body` is the entry's markdown with its PormG-internal `### Per-app rollout`
@@ -231,10 +256,15 @@ The sort is the contract, not the directory listing. Under the single-file log, 
 property of the hand-maintained layout that the parser merely preserved — nothing enforced it.
 Sorting by version here makes it hold by construction; `MergeSort` is stable, so entries sharing a
 version keep `_upgrading_files`' filename-descending (= `Recorded`-date-descending) order.
+
+That distinction is invisible against the shipped log, whose filename order already agrees with its
+version order — so the sort is only load-bearing when the two DISAGREE, which is what a `z` hotfix
+stamped onto an older-dated entry, or a corrected `Recorded` date, produces. `dir` exists so the
+suite can build exactly that case; see `test/unit/test_upgrade_guide.jl`.
 """
-function _read_upgrading_entries()
+function _read_upgrading_entries(dir::AbstractString = _upgrading_dir())
     entries = _UpgradeEntry[]
-    for path in _upgrading_files()
+    for path in _upgrading_files(dir)
         append!(entries, _parse_upgrading(read(path, String)))
     end
     return sort!(entries; by = e -> e.version, rev = true, alg = MergeSort)
@@ -269,8 +299,15 @@ function _parse_upgrading(text::AbstractString)
 
     # Drop the "## Template for new entries" section: its body is an HTML comment holding a
     # fake `## …` heading and a `- **Version**:` placeholder that would parse as a bogus entry.
-    tmpl = findfirst("## Template for new entries", text)
-    tmpl === nothing || (text = text[1:prevind(text, first(tmpl))])
+    #
+    # ANCHORED TO A COLUMN-0 HEADING, not matched as a raw substring anywhere in the text. Since
+    # #638 the only text this parser ever sees is an ENTRY FILE, so a bare `findfirst` truncated any
+    # entry that merely *quoted* the contract — and an entry about the upgrade log is the obvious
+    # one to write. Below its `- **Version**:` bullet that loss is silent: the entry keeps its title
+    # and version and ships a shortened body, which no guard can see, because every check that
+    # compares the log against a parse runs through THIS function on both sides.
+    tmpl = match(r"(?m)^##[ \t]+Template for new entries", text)
+    tmpl === nothing || (text = text[1:prevind(text, tmpl.offset)])
 
     entries = _UpgradeEntry[]
 

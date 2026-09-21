@@ -17,8 +17,8 @@ the work to an AI agent.
 
 The change log itself lives in
 [`upgrading/`](https://github.com/PingoLee/PormG.jl/tree/main/upgrading) in the PormG repository —
-**one file per breaking change**, named `YYYY-MM-DD-<slug>.md` so the directory reads newest-first.
-You rarely need to open it: [`upgrade_guide`](@ref PormG.upgrade_guide) renders exactly the slice
+**one file per breaking change**, named `YYYY-MM-DD-<slug>.md` so the directory sorts
+chronologically. You rarely need to open it: [`upgrade_guide`](@ref PormG.upgrade_guide) renders exactly the slice
 that applies to you. The rules for writing an entry are in
 [`UPGRADING.md`](https://github.com/PingoLee/PormG.jl/blob/main/UPGRADING.md), which is the
 contract, not the log.
@@ -72,9 +72,14 @@ PormG.upgrade_guide(from = v"0.2.0", to = v"0.3.0")
 ```
 
 Without a Julia session handy you can do the same by eye: open
-[`upgrading/`](https://github.com/PingoLee/PormG.jl/tree/main/upgrading), read the files newest
-first, and skip any whose `- **Version**:` is **≤ your pin**. Everything you did not skip is what
-changed since you pinned.
+[`upgrading/`](https://github.com/PingoLee/PormG.jl/tree/main/upgrading) and work **up from the
+bottom** — GitHub sorts the listing oldest-first, so the newest entry is the last one — skipping any
+whose `- **Version**:` is **≤ your pin**. Everything you did not skip is what changed since you
+pinned.
+
+A handful of the oldest entries carry no `- **Version**:` bullet at all. Those predate the
+versioning policy and shipped before `0.2.0`; if your pin is `0.2.0` or later they do not apply to
+you, and `upgrade_guide` filters them out for you.
 
 ### 2. Find the call sites
 

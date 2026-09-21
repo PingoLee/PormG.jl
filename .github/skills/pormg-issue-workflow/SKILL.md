@@ -409,9 +409,20 @@ unverified spends the only check that is left.
 
 Stage explicit paths, never `git add -A` — and **if you owe an upgrade-log entry,
 `git add upgrading/<your file>` explicitly.** It is a *new, untracked* file since #638, so
-`git commit -a` does not pick it up. Nothing catches the omission: the suite passes locally because
-the file is in your working tree, and passes on CI because every assertion is relative to the files
-that *are* there. The behavior change would merge with no entry and nothing would say so.
+`git commit -a` does not pick it up. Nothing in the test suite catches the omission: it passes
+locally because the file is in your working tree, and passes on CI because every assertion is
+relative to the files that *are* there. The behavior change would merge with no entry and nothing
+would say so.
+
+**That is the one safety regression #638 bought**, so do not rely on remembering it — run this
+immediately before committing, and treat any output as a stop:
+
+```bash
+git status --porcelain upgrading/     # expect: nothing, or `A ` lines. A `??` line is unstaged.
+```
+
+Under the old layout the entry was an edit to a *tracked* file, so `git diff`, `git commit -a` and
+any glance at the working tree surfaced it. Now only this does.
 Put `Closes #N` in the PR body so the issue auto-closes
 with a back-reference — only when the PR actually completes the issue. Record in the PR body **the
 tier you worked at and which rungs CI is covering for you**, plus what you deliberately did not do

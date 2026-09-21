@@ -355,6 +355,17 @@ const PRE_0_2_HISTORY = Set([
     # leftover — and every assertion would pass while the entry is missing from the guide. Nitro
     # measured exactly that with a planted `foo.markdown` before its own port shipped.
     #
+    # The independence is REAL BUT PARTIAL, and the scope is worth stating so nobody over-trusts it:
+    # the `.md` filter is genuinely covered, but the derivation below still uses the parser's own
+    # heading regex, so a regression in THAT moves both sides together. `_RELEASE_MARKER` is pinned
+    # separately on hand-fed text (testsets C/D), which leaves the heading regex as the one shared
+    # piece.
+    #
+    # Note for whoever hits this red without having touched the log: it also fires on a gitignored
+    # editor artifact (`….md~`, `….md.swp`), because those are neither `.md` nor absent. That is
+    # the same assertion as the `foo.md.orig` case it is built for, and `git status` will look
+    # clean while it is red. Delete the artifact.
+    #
     # This also guards the one hazard heading-based segmentation introduces — a stray `## ` inside
     # an entry body would split that entry, and the orphaned half would show up here as an
     # unparsed heading instead of silently truncating the entry.
@@ -409,7 +420,6 @@ const PRE_0_2_HISTORY = Set([
         gone  = sort(collect(setdiff(PRE_0_2_HISTORY, unstamped)))
         @test extra == String[]
         @test gone  == String[]
-        @test length(unstamped) == length(PRE_0_2_HISTORY)
     end
 
     # ══ #638 — one file per entry, and the directory is the log ════════════════════════════════
@@ -431,21 +441,110 @@ const PRE_0_2_HISTORY = Set([
 
     # ── newest-first holds by construction, not by layout ──────────────────────
     # Under the single-file log, newest-first was a property of a hand-maintained layout that the
-    # parser merely preserved. `_read_upgrading_entries` now sorts by version with a stable sort,
-    # so within one version the filename-descending (= `Recorded`-descending) order survives.
-    @testset "entries come back newest-first, stable within a version (#638)" begin
+    # parser merely preserved. `_read_upgrading_entries` now sorts by version with a stable sort.
+    #
+    # THIS MUST BE TESTED ON A FIXTURE, NOT ON THE SHIPPED LOG, and the first cut of this testset
+    # got that wrong in a way worth recording: it asserted `issorted(entries; by = version)` over
+    # the live corpus, which is the direct postcondition of the `sort!` on the line above it AND
+    # already true of the input, because every entry's `Recorded` date happens to agree with its
+    # release order. Deleting the `sort!` outright left the whole file green. A sort is only
+    # load-bearing where filename order and version order DISAGREE — a `z` hotfix stamped onto an
+    # older-dated entry, or a `Recorded` date corrected after a cut — and the shipped log cannot
+    # express that case. Hence `dir`.
+    @testset "the reader sorts by version, stably, not by filename (#638)" begin
+        mktempdir() do dir
+            entry(name, ver, rec, title) = write(joinpath(dir, name),
+                "## $title\n\n- **Version**: $ver\n- **Recorded**: $rec\n\nBody.\n")
+
+            # Filename order (descending) is deliberately NOT version order:
+            #   by filename:  bbb(09-09) ccc(05-05) ddd(04-04) aaa(03-03)
+            #   by version:   ccc ddd aaa  (0.6.0, ties keep filename order) then bbb (0.3.0)
+            entry("2026-09-09-bbb.md", "0.3.0", "2026-09-09", "bbb")   # newest date, OLDEST version
+            entry("2026-05-05-ccc.md", "0.6.0", "2026-05-05", "ccc")
+            entry("2026-04-04-ddd.md", "0.6.0", "2026-04-04", "ddd")
+            entry("2026-03-03-aaa.md", "0.6.0", "2026-03-03", "aaa")
+
+            got = [e.title for e in PormG._read_upgrading_entries(dir)]
+
+            # The assertion that kills a deleted or re-keyed sort: by filename this is
+            # ["bbb", "ccc", "ddd", "aaa"], and `bbb` is the oldest release.
+            @test got == ["ccc", "ddd", "aaa", "bbb"]
+            @test first(got) != "bbb"
+
+            # Stability, stated separately: the three 0.6.0 entries keep filename-descending (=
+            # `Recorded`-descending) order rather than being permuted among themselves.
+            @test filter(in(["ccc", "ddd", "aaa"]), got) == ["ccc", "ddd", "aaa"]
+        end
+    end
+
+    # ── the shipped log is consistent with that contract ─────────────────────────
+    # Kept as a weaker companion to the fixture above, because it guards a different thing: that
+    # nobody has shipped an entry whose `Recorded` date contradicts its release order. That is not
+    # an error — the sort handles it — but it is worth knowing about, since it is the only way the
+    # rendered order stops matching the directory listing a reader browses on GitHub.
+    @testset "shipped entries come back newest-first (#638)" begin
         entries = PormG._read_upgrading_entries()
         @test !isempty(entries)
         @test issorted(entries; by = e -> e.version, rev = true)
+    end
 
-        recorded(e) = (m = match(r"(?m)^-[ \t]+\*\*Recorded\*\*:[ \t]*(\d{4}-\d{2}-\d{2})", e.body);
-                       m === nothing ? "" : m[1])
-        for i in 2:length(entries)
-            entries[i].version == entries[i - 1].version || continue
-            # same version: the earlier one in the output must not be the older one by date
-            @test (entries[i - 1].title, recorded(entries[i - 1]) >= recorded(entries[i])) ==
-                  (entries[i - 1].title, true)
+    # ── a broken install must not read as "you are up to date" ───────────────────
+    # `upgrade_guide` renders an empty result as "nothing to port", which is exactly what a consumer
+    # already on the latest version sees. So a log that failed to ship — trimmed by a sparse
+    # checkout, an rsync filter, a Docker layer copying only `src/` — would be indistinguishable
+    # from good news, in the one tool whose whole job is to tell an app what it still has to port.
+    @testset "a missing or empty log throws rather than reporting nothing to port (#638)" begin
+        mktempdir() do dir
+            absent = joinpath(dir, "no-such-log")
+            @test_throws ArgumentError PormG._upgrading_files(absent)
+
+            # present but empty — the case a directory makes newly reachable
+            @test_throws ArgumentError PormG._upgrading_files(dir)
+            @test_throws ArgumentError PormG._read_upgrading_entries(dir)
+
+            # …and a non-`.md` file is not an entry, so a directory holding only one is still empty
+            write(joinpath(dir, "README.txt"), "not an entry")
+            @test_throws ArgumentError PormG._upgrading_files(dir)
+
+            # A DIRECTORY named `x.md` is not an entry either. Without the `isfile` filter this
+            # reaches `read` and throws a bare `SystemError` at a consuming app instead.
+            mkpath(joinpath(dir, "notafile.md"))
+            @test_throws ArgumentError PormG._upgrading_files(dir)
+
+            # one real entry beside them is enough, and the non-entries stay out of the result
+            write(joinpath(dir, "2026-09-21-9500-real.md"),
+                  "## A real entry (#9500)\n\n- **Version**: 0.6.0\n- **Recorded**: 2026-09-21\n\nBody.\n")
+            @test length(PormG._upgrading_files(dir)) == 1
+            @test [e.title for e in PormG._read_upgrading_entries(dir)] == ["A real entry (#9500)"]
         end
+    end
+
+    # ── an entry may quote the contract without losing its body ─────────────────
+    # `_parse_upgrading` cuts the authoring template out of the text it is given. That branch
+    # existed for `UPGRADING.md`, which is no longer parsed — so since #638 the only text it can
+    # act on is an ENTRY FILE, and a bare substring match truncated any entry that merely mentioned
+    # the template by name. Below the `- **Version**:` bullet the loss is SILENT: the entry keeps
+    # its title and version and ships a shortened body. Nothing else can catch that, because every
+    # log-versus-parse check runs through this same function on both sides.
+    @testset "an entry quoting the template keeps its body (#638)" begin
+        quoted = "## An entry about the upgrade log itself (#9600)\n\n" *
+                 "- **Version**: Unreleased\n- **Recorded**: 2026-09-21\n\n" *
+                 "### What changed\n\n" *
+                 "Copy the block under `## Template for new entries` into a new file.\n\n" *
+                 "TRAILING PROSE THAT MUST SURVIVE.\n"
+        parsed = PormG._parse_upgrading(quoted)
+        @test length(parsed) == 1
+        @test parsed[1].title == "An entry about the upgrade log itself (#9600)"
+        @test occursin("TRAILING PROSE THAT MUST SURVIVE.", parsed[1].body)
+
+        # …while a REAL template section, written as a column-0 heading, is still cut — otherwise
+        # its commented-out `- **Version**:` placeholder parses as a bogus entry.
+        with_section = "## A real entry (#9601)\n\n- **Version**: 0.6.0\n- **Recorded**: 2026-09-21\n\n" *
+                       "Body.\n\n## Template for new entries\n\n<!--\n## `<api>` — <summary>\n\n" *
+                       "- **Version**: Unreleased\n- **Recorded**: <YYYY-MM-DD>\n-->\n"
+        cut = PormG._parse_upgrading(with_section)
+        @test [e.title for e in cut] == ["A real entry (#9601)"]
+        @test !any(e -> occursin("<api>", e.title), cut)
     end
 
     # ── every cut release has a dated row ──────────────────────────────────────

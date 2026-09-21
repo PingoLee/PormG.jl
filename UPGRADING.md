@@ -18,7 +18,7 @@ rollout log; the log itself lives in [`upgrading/`](upgrading/).
 ## Where the entries live
 
 **One file per change, under [`upgrading/`](upgrading/)**, named `YYYY-MM-DD-<slug>.md` — the date
-from the entry's own `- **Recorded**:` bullet, so the directory sorts newest-first, and a slug
+from the entry's own `- **Recorded**:` bullet, so the directory sorts chronologically, and a slug
 leading with the issue number when there is one (`2026-09-20-576-every-read-path-raises-filtererror.md`).
 **The slug is lowercase** — digits, dots and dashes only; `test/unit/test_upgrade_guide.jl` pins the
 whole name against `^\d{4}-\d{2}-\d{2}-[a-z0-9.-]+\.md$`, and the extension must be `.md`.
@@ -41,6 +41,9 @@ Consequences worth knowing before you add one:
   dates are recorded in *Release trains* below.
 - **Order inside one version is presentation only.** `upgrade_guide(from = …)` scopes by version,
   never by position; entries sharing a version render newest `Recorded` date first.
+- **A directory listing is not the reading order.** `ls`, GitHub's tree view and Explorer all sort
+  *ascending*, so browsing `upgrading/` shows the OLDEST entry first. `upgrade_guide` reverses it
+  and then sorts by version; read its output, or read the listing bottom-up.
 
 ## Writing an entry
 

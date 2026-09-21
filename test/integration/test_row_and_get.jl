@@ -43,6 +43,51 @@ import TimeZones: ZonedDateTime
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PormGRow: JSON.json(row) serializes the ROW, and agrees with list(:json) (#641)
+# A PormGRow has no JSON method of its own, so JSON.jl reflected over its slots, walked into
+# `_model` and re-serialized the model graph along every path through it — 1.8 MB from one row on
+# the 14-model F1 fixture, and an OOM-kill on a production schema. `src/querybuilder/execution.jl`
+# now defines `StructUtils.lower` for it, routed through the SAME `_json_row` that builds
+# `list(:json)`, so the two emitters cannot disagree about one row. That agreement is the assertion
+# here: a real query, real driver-delivered values, both paths, one string.
+#
+# Guarded on the method's presence for the same reason the unit file is: on unpatched code the
+# serialization is an allocation storm, and a `Task` with a timeout cannot stop it — a Julia task
+# cannot be killed.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "JSON.json(row) agrees with list(:json) (#641)" begin
+    _su = PormG.QueryBuilder.JSON.StructUtils
+    # `methods(...)` rather than `which(...)` — the latter throws on an ambiguity instead of
+    # answering, which would turn this guard into an error rather than a failure.
+    has_lower = any(m -> m.module === PormG.QueryBuilder, methods(_su.lower, Tuple{Any, PormGRow}))
+    @test has_lower
+
+    if has_lower
+        q = M.Driver.objects.filter("nationality" => "Brazilian").
+            values("driverid", "driverref", "surname").
+            order_by("driverid")
+
+        rows = q.list()
+        # The exact count, not `!isempty`: the F1 fixture holds 32 Brazilian drivers on both
+        # engines, and a slice run against a half-seeded database is a real failure mode here. One
+        # row standing in for thirty-two would hide it.
+        @test length(rows) == 32
+
+        # Both emitters build a plain `Dict{String,Any}` from the same keys via `_json_row`, so the
+        # rendered strings are identical — not merely equivalent documents. Asserted as strings
+        # first, because that is the stronger claim; the parse below says what went wrong when it
+        # ever stops holding.
+        @test JSON.json(rows) == q.list(:json)
+        @test JSON.parse(JSON.json(rows)) == JSON.parse(q.list(:json))
+
+        # A single row lowers to its own columns and nothing else — no model, no schema vocabulary.
+        one = JSON.parse(JSON.json(rows[1]))
+        @test Set(keys(one)) == Set(["driverid", "driverref", "surname"])
+        @test one["driverid"] == rows[1].driverid
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PormGRow: single-row fetch helpers and DataFrames compatibility
 # Verifies first()/get() row returns, typed get() failures, and the Tables.jl
 # row-table interface used by DataFrame(query.list()).

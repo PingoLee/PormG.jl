@@ -2350,11 +2350,41 @@ function _json_value(v::Union{Dates.Period, Dates.CompoundPeriod})
   end
 end
 
+# The ONE row -> JSON shape, and the only place it is written. Two emitters call it: `list(:json)`
+# below, on a raw `_list_raw` dict, and the `lower` hook further down, on a `PormGRow`'s `_data`.
+#
+# One function rather than the same comprehension in both, because "the same JSON either way" is the
+# contract and a restated rule drifts silently while still type-checking (the #474 defect shape).
+_json_row(data::Dict{Symbol, Any}) = Dict(String(k) => _json_value(v) for (k, v) in data)
+
 """Return a JSON string without allocating `PormGRow` wrappers."""
 function list(objct::SQLObjectHandler, ::Val{:json}; show_query::Symbol = :execute)
   show_query !== :execute && return query_list(objct, show_query=show_query)
-  return JSON.json([Dict(String(k) => _json_value(v) for (k, v) in row) for row in _list_raw(objct)])
+  return JSON.json([_json_row(row) for row in _list_raw(objct)])
 end
+
+# #641 — a `PormGRow` handed to `JSON.json` used to serialize the SCHEMA, not the row.
+#
+# JSON.jl has no method for `PormGRow`, so it reflects over all three slots and walks into
+# `_model::PormGModel` — the model graph, which is a dense, cyclic DAG (`Model_Type.fields` ->
+# `sForeignKey.to` -> `Model_Type.related_objects` -> `ReverseRelation.model_resolved` -> ...). The
+# writer breaks true cycles with an ANCESTOR stack, so it terminates, but it memoizes nothing: every
+# distinct PATH through the graph is serialized again. That is exponential in the schema's density,
+# and it is the whole bug — a 26-character row measured 1,843,565 characters and 5.3s of CPU on the
+# 14-model F1 fixture, and an application schema OOM-killed the process at 28.5 GB.
+#
+# Exactly the defect `src/display.jl` (#534) fixed for `Base.show`, one hop over: same graph, same
+# absence of a method, serialization instead of display. And like that fix it is cheap, because ONE
+# method on the type a user actually hands to a serializer bounds the whole thing.
+#
+# `getfield(r, :_data)`, never `r.x` — display.jl's rule 3, for the same reason: `PormGRow` overloads
+# `getproperty`, so property access would run the many-to-many / lazy-traversal dispatch from inside
+# a serializer.
+#
+# `::JSON.JSONStyle` (the abstract parent of the read and write styles) and `StructUtils` both exist
+# from JSON 1.0.0, which JSON exports — so this holds at the declared `JSON = "1"` floor and needs no
+# new dependency.
+JSON.StructUtils.lower(::JSON.JSONStyle, r::PormGRow) = _json_row(getfield(r, :_data))
 
 function list(objct::SQLObjectHandler, ::Val{F}; kwargs...) where F
   throw(QueryBuildError("Unknown list format :$F. Expected :row, :dict, or :json."))

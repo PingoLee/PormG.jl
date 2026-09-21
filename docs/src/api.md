@@ -59,7 +59,7 @@ These methods finalize the query and execute it against the database:
 | :--- | :--- | :--- |
 | `.list()` | `Vector{PormGRow}` | Returns model-aware rows with dot-access and relationship accessors. |
 | `.list(:dict)` | `Vector{Dict{Symbol, Any}}` | Returns plain dictionaries for framework integrations that need real `Dict` values. |
-| `.list(:json)` | `String` | Returns results as a JSON string. |
+| `.list(:json)` | `String` | Returns results as a JSON string. `JSON.json` on the rows from `.list()` produces the same string — see [Serializing rows to JSON](read/index.md#Serializing-rows-to-JSON). |
 | `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` for tabular output. Temporal columns are typed (`Date`, `Time`, `ZonedDateTime`, `CompoundPeriod`) on both engines, as in `.list()`. |
 | `.count()` | `Int` | Runs `SELECT COUNT(*)` and returns the count. |
 | `.aggregate(alias => Agg(...), ...)` | `NamedTuple` | Whole-queryset aggregation (no `GROUP BY`); returns one named tuple of scalars. See [Aggregation](read/filters_and_aggregates.md). |
@@ -917,6 +917,7 @@ The terminal `list()` methods return a documented, stable shape:
 | `query.list()` | `Vector{PormGRow}` |
 | `query.list(:dict)` | `Vector{Dict{Symbol, Any}}` |
 | `query.list(:json)` | JSON string |
+| `JSON.json(query.list())` | JSON string — identical to `query.list(:json)`, and nests without double-encoding |
 | `query |> DataFrame` | `DataFrame` (preferred for analytical queries; temporal columns typed as in `list()`) |
 
 ---

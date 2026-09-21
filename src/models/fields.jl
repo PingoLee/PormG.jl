@@ -197,7 +197,102 @@ end
 # `choices`, `on_delete`, …), which are accepted but passed through untouched. `exclude` drops a
 # common keyword a constructor genuinely does not take (`PasswordField` has no `unique`, `db_index`
 # or `default`).
-const _COMMON_FIELD_KWARGS = (:verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable)
+const _COMMON_FIELD_KWARGS = (:verbose_name, :unique, :blank, :null, :db_index, :db_column, :default,
+                              :db_default, :editable)
+
+# The engines a `db_default` can be pinned to, in the order a normalised NamedTuple lists them.
+# ORDER IS LOAD-BEARING: `(postgres = "x", sqlite = "y")` and `(sqlite = "y", postgres = "x")` are
+# NOT `==` in Julia, so without a canonical order two identical declarations would compare unequal
+# in `_model_to_str_general`'s struct diff (emitting a spurious kwarg) and in the column IR
+# (planning a migration that changes nothing).
+const _DB_DEFAULT_ENGINES = (:postgres, :sqlite)
+
+"""
+    DbDefault
+
+The type of a `db_default` slot: a portable `String`, a `NamedTuple` pinning the expression per
+engine, or `nothing`. See [`_db_default_kwarg`](@ref) for why the pin is encoded in the value's type
+rather than in a second slot.
+
+The slot is **appended last** on every struct that has it, and that placement is load-bearing rather
+than lazy: ten of the 23 declare `default::Union{String, Nothing}`, so a `db_default` sitting beside
+it would type-check if the two positional arguments were ever swapped. Appending also means no
+existing positional argument moves, which is what `Models.field_without_db_column` (it rebuilds a
+field by walking `1:fieldcount(T)`) and every hand-written constructor call depend on.
+"""
+const DbDefault = Union{String, NamedTuple, Nothing}
+
+"""
+    _db_default_kwarg(field_type, value) -> Union{String, NamedTuple, Nothing}
+
+Validate and normalise a `db_default=` keyword (#496). The VALUE'S TYPE is the engine pin:
+
+  * a `String` asserts the expression renders on **both** engines, and is therefore accepted only
+    for the closed vocabulary in `PORTABLE_DB_DEFAULTS`;
+  * a `NamedTuple` over `(:postgres, :sqlite)` pins it, and an explicit `nothing` for an engine is
+    the deliberate "no database default on this one" opt-out.
+
+Encoding the pin in the type rather than in a second `db_default_engine` slot makes three bad states
+unrepresentable instead of validated: an engine with no text, text with no engine, and an unknown
+engine name. It also keeps `Model_to_str` free — a NamedTuple interpolates into valid Julia source
+and Julia's own `show` escapes the strings inside it, so the round trip needs no new escaper.
+
+Every accepted expression is stored in its [`canonical_db_default`](@ref) form, which is what the
+live side is also stored in; that shared normalisation is what makes a column converge with itself.
+"""
+function _db_default_kwarg(field_type::AbstractString, value)
+  value === nothing && return nothing
+
+  _one(engine, sql) = begin
+    sql isa AbstractString || throw(_fielderr(
+      "$field_type: 'db_default' entry for `$engine` must be a String or nothing, got $(typeof(sql))"))
+    is_valid_db_default_sql(sql) || throw(_fielderr(
+      "$field_type: 'db_default' for `$engine` is not a well-formed column default expression: " *
+      "$(repr(String(sql))). It is rendered verbatim into DDL, so it may not contain a bare `;` or " *
+      "`,`, a `--` or `/*` comment, an unterminated quote, or unbalanced parentheses or brackets " *
+      "— each of those silently changes the statement around it rather than failing. Quote them " *
+      "if they are data (`'a;b'` and `'a,b'` are both fine)."))
+    return canonical_db_default(sql)
+  end
+
+  if value isa AbstractString
+    is_valid_db_default_sql(value) || return _one(:both, value)   # reuse the message
+    db_default_is_portable(value) || throw(_fielderr(
+      "$field_type: db_default = $(repr(String(value))) is not one of the expressions PormG can " *
+      "render on both engines ($(join(PORTABLE_DB_DEFAULTS, ", "))), so PormG cannot know which " *
+      "engine it is valid on. Name the engine: " *
+      "db_default = (postgres = $(repr(String(value))),). A pinned expression renders on that " *
+      "engine and raises on the other, so a models file can never emit DDL the database will " *
+      "reject. Add a `sqlite = …` entry (or `sqlite = nothing`) to cover both."))
+    return canonical_db_default(value)
+  end
+
+  if value isa NamedTuple
+    ks = keys(value)
+    isempty(ks) && throw(_fielderr(
+      "$field_type: 'db_default' must name at least one engine, e.g. " *
+      "db_default = (postgres = \"now()\",). Pass `nothing` for no database default."))
+    for k in ks
+      k in _DB_DEFAULT_ENGINES || throw(_fielderr(
+        "$field_type: 'db_default' has no engine named `$k`. The engines are " *
+        "$(join(("`$e`" for e in _DB_DEFAULT_ENGINES), " and ")); a bare String is the portable " *
+        "form."))
+    end
+    # Normalised in `_DB_DEFAULT_ENGINES` order, and only over the keys actually given — see the
+    # constant's comment for why an omitted key must stay omitted rather than become `nothing`.
+    present = Tuple(k for k in _DB_DEFAULT_ENGINES if k in ks)
+    normalised = NamedTuple{present}(Tuple(
+      value[k] === nothing ? nothing : _one(k, value[k]) for k in present))
+    all(v -> v === nothing, values(normalised)) && throw(_fielderr(
+      "$field_type: 'db_default' declares no expression for any engine — every entry is `nothing`. " *
+      "Pass `db_default = nothing` (or omit it) if the column has no database default."))
+    return normalised
+  end
+
+  throw(_fielderr(
+    "$field_type: 'db_default' must be a String (one of $(join(PORTABLE_DB_DEFAULTS, ", "))), a " *
+    "NamedTuple naming the engine (e.g. `(postgres = \"now()\",)`), or nothing — got $(typeof(value))"))
+end
 
 # #516: the three keywords `ForeignKey`/`OneToOneField` accepted and no renderer ever emitted. Each
 # group maps to why the declared value and the emitted DDL were unrelated in BOTH directions — a user
@@ -287,6 +382,26 @@ function _common_kwargs(field_type::AbstractString, kwargs;
   # (test_field_kwargs_equivalence.jl pins this).
   _take(key::Symbol, default) = key in accepted ? get(kwargs, key, default) : default
 
+  # #496. Extracted HERE rather than by each constructor the way `:default` is, because unlike
+  # `default` — whose accepted Julia type varies per field (`Int64`, `Date`, `Vector{UInt8}`, …) —
+  # a `db_default` is raw schema text with one contract for every field type. One validator, not 23.
+  db_default = _db_default_kwarg(field_type, _take(:db_default, nothing))
+  # `default` and `db_default` are mutually exclusive, which is a departure from Django and the
+  # reason is PormG-specific. Django's `default` never touches DDL, so the two are orthogonal there.
+  # PormG's `default` is BOTH rendered into the column definition and filled in Julia on the insert
+  # path — so a field carrying both would emit one `DEFAULT` clause while every PormG-written INSERT
+  # supplied the other value, and the `db_default` would be exercised only by rows some other client
+  # wrote. That is a silent trap, not a feature. Refusing also keeps `_column_default` total: the IR
+  # has one `default` slot and never needs a precedence rule.
+  if db_default !== nothing && :default in accepted && get(kwargs, :default, nothing) !== nothing
+    throw(_fielderr(
+      "$field_type: 'default' and 'db_default' cannot both be set. `default` is applied by PormG " *
+      "when it writes the row AND rendered into the column definition; `db_default` is applied by " *
+      "the database. Declaring both means the database's expression would never be exercised by a " *
+      "PormG insert. Keep `default` for a value PormG should write, or `db_default` for one the " *
+      "database should compute."))
+  end
+
   common = (
     verbose_name = _str_or_nothing(:verbose_name, _take(:verbose_name, nothing)),
     unique       = _bool(:unique,   _take(:unique,   unique)),
@@ -296,6 +411,7 @@ function _common_kwargs(field_type::AbstractString, kwargs;
     db_column    = _str_or_nothing(:db_column, _take(:db_column, nothing)),
     editable     = _bool(:editable, _take(:editable, editable)),
     primary_key  = _bool(:primary_key, _take(:primary_key, primary_key === nothing ? false : primary_key)),
+    db_default   = db_default,
   )
   # The constructor's own Boolean keywords, same extraction and guard.
   declared = NamedTuple{keys(bools)}(map(k -> _bool(k, get(kwargs, k, bools[k])), keys(bools)))
@@ -383,6 +499,14 @@ function IDField(; kwargs...)
      generated, generated_always) =
     _common_kwargs("IDField", kwargs;
       primary_key = true, unique = true, db_index = true,
+      # `db_default` is excluded, and it is FORCED rather than chosen (#496). `sIDField` renders
+      # `GENERATED … AS IDENTITY` on PostgreSQL (`Dialect.field_to_column`), and PostgreSQL rejects
+      # a column that is both an identity column and carries a `DEFAULT`. Accepting the keyword
+      # here would make invalid DDL *declarable*, which is the one outcome #496's design forbids —
+      # so `sIDField` has no slot either, and the two agree by construction. The schema readers
+      # never populate one for this arm for the same reason (`_integer_key_arm`), and
+      # `Migrations.check` keeps its matching carve-out.
+      exclude = (:db_default,),
       bools = (auto_increment = true, generated = true, generated_always = false))
 
   default = validate_default(get(kwargs, :default, nothing), Union{Int64, Nothing}, "IDField", format2int64)
@@ -437,6 +561,7 @@ mutable struct sForeignKey <: PormGField
   #
   # A NEW producer that writes a non-canonical name here reintroduces #390's churn.
   to_table::Union{String, Nothing}
+  db_default::DbDefault
 end
 
 """
@@ -459,6 +584,7 @@ The `ForeignKey` field represents a relationship where many records in the curre
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = true`: Whether to create a database index on this field (recommended for performance)
 - `default::Union{Int64, Nothing} = nothing`: Default value for the field (ID of the referenced record)
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 - `pk_field::Union{String, Symbol, Nothing} = nothing`: Which field in the target model to reference (defaults to primary key)
 - `on_delete::Union{Function, String, Nothing} = nothing`: Action when the referenced object is deleted
@@ -552,7 +678,7 @@ Message = Models.Model(
 - Django's ForeignKey documentation for conceptual understanding
 """
 function ForeignKey(to::Union{AbstractString, PormGModel}; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, db_constraint) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, db_constraint, db_default) =
     _common_kwargs("ForeignKey", kwargs; primary_key = false, db_index = true,
       bools = (db_constraint = true,),
       extra = (:pk_field, :on_delete, :how, :related_name))
@@ -606,7 +732,8 @@ function ForeignKey(to::Union{AbstractString, PormGModel}; kwargs...)
     "BIGINT",
     format_number_sql,
     db_constraint,
-    nothing  # to_table — introspection-only breadcrumb (#360), never set from a declaration
+    nothing,  # to_table — introspection-only breadcrumb (#360), never set from a declaration
+    db_default
   )
 end
 
@@ -761,6 +888,7 @@ mutable struct sOneToOneField <: PormGField
   # It must exist on BOTH structs: since #417 BOTH schema readers emit a `OneToOneField` whenever
   # the foreign key column is also UNIQUE, or is itself the primary key (#409).
   to_table::Union{String, Nothing}
+  db_default::DbDefault
 end
 
 # The two field types that declare a physical relational column on their OWN table: a foreign key,
@@ -803,6 +931,7 @@ The `OneToOneField` represents a strict one-to-one relationship where each recor
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = true`: Whether to create a database index on this field (recommended for performance)
 - `default::Union{Int64, Nothing} = nothing`: Default value for the field (ID of the referenced record)
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 - `pk_field::Union{String, Symbol, Nothing} = nothing`: Which field in the target model to reference (defaults to primary key)
 - `on_delete::Union{Function, String, Nothing} = nothing`: Action when the referenced object is deleted
@@ -924,7 +1053,7 @@ changed: an `ALTER` that re-rendered the column unchanged, and a full table rebu
 - Database normalization principles for when to use one-to-one relationships
 """
 function OneToOneField(to::Union{AbstractString, PormGModel}; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, db_constraint) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, db_constraint, db_default) =
     _common_kwargs("OneToOneField", kwargs; primary_key = false, unique = true, db_index = true,
       bools = (db_constraint = true,),
       extra = (:pk_field, :on_delete, :how, :related_name))
@@ -981,7 +1110,8 @@ function OneToOneField(to::Union{AbstractString, PormGModel}; kwargs...)
     "BIGINT",
     format_number_sql,
     db_constraint,
-    nothing  # to_table — introspection-only breadcrumb (#360), never set from a declaration
+    nothing,  # to_table — introspection-only breadcrumb (#360), never set from a declaration
+    db_default
   )
 end
 
@@ -1057,6 +1187,7 @@ mutable struct sCharField <: PormGField
   type::String
   formatter::Function
   choices::Union{NTuple{N, Tuple{AbstractString, AbstractString}}, Nothing} where N
+  db_default::DbDefault
 end
 
 
@@ -1116,6 +1247,7 @@ The `CharField` is the most commonly used field for storing textual data with a 
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `db_column::Union{String, Nothing} = nothing`: Map this field to a differently-named physical column (Django `db_column`). Authoritative across DDL, queries, and migrations (#50); defaults to the field name
 - `default::Union{String, Nothing} = nothing`: Default value for the field
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `choices::Union{NTuple{N, Tuple{AbstractString, AbstractString}}, Nothing} = nothing`: Restricted set of valid values
 - `editable::Bool = true`: Whether the field should be editable in forms
 
@@ -1240,7 +1372,7 @@ Task = Models.Model(
 - Database design best practices for string field sizing
 """
 function CharField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, db_default) =
     _common_kwargs("CharField", kwargs; primary_key = false, editable = true, extra = (:max_length, :choices))
 
   max_length = get(kwargs, :max_length, 250)
@@ -1286,7 +1418,7 @@ function CharField(; kwargs...)
       end
     end
   end
-  return sCharField(verbose_name, primary_key, max_length, unique, blank, null, db_index, db_column, default, editable, "VARCHAR", format_text_sql, choices)
+  return sCharField(verbose_name, primary_key, max_length, unique, blank, null, db_index, db_column, default, editable, "VARCHAR", format_text_sql, choices, db_default)
 end
 
 
@@ -1302,6 +1434,7 @@ mutable struct sIntegerField <: PormGField
   editable::Bool
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 """
@@ -1318,6 +1451,7 @@ The `IntegerField` stores whole numbers within the 32-bit signed integer range (
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{Int64, Nothing} = nothing`: Default value for the field
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 
 # Examples
@@ -1366,14 +1500,14 @@ Review = Models.Model(
 
 """
 function IntegerField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
     _common_kwargs("IntegerField", kwargs)
 
   default = validate_default(get(kwargs, :default, nothing), Union{Int64, Nothing}, "IntegerField", format2int64)
 
   return sIntegerField(
     verbose_name, false, unique, blank, null, db_index, db_column, default, editable,
-    "INTEGER", format_number_sql
+    "INTEGER", format_number_sql, db_default
   )
 end
 
@@ -1389,6 +1523,7 @@ mutable struct sPositiveSmallIntegerField <: PormGField
   editable::Bool
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 # Upper bound of a signed 2-byte integer; matches Django's PositiveSmallIntegerField range (0..32767).
@@ -1417,6 +1552,7 @@ re-derived whenever the table is recreated during an alter.
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{Int64, Nothing} = nothing`: Default value for the field (must be 0..32767)
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 
 # Database Mapping
@@ -1434,7 +1570,7 @@ Standing = Models.Model(
 ```
 """
 function PositiveSmallIntegerField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
     _common_kwargs("PositiveSmallIntegerField", kwargs)
 
   default = get(kwargs, :default, nothing)
@@ -1456,7 +1592,7 @@ function PositiveSmallIntegerField(; kwargs...)
     default,
     editable,
     "SMALLINT",
-    format_number_sql
+    format_number_sql, db_default
   )
 end
 
@@ -1472,6 +1608,7 @@ mutable struct sPositiveIntegerField <: PormGField
   editable::Bool
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 # Upper bound of a signed 4-byte integer; matches Django's PositiveIntegerField range (0..2147483647).
@@ -1500,6 +1637,7 @@ engine adds or drops when a column's type transitions into or out of this field.
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{Int64, Nothing} = nothing`: Default value for the field (must be 0..2147483647)
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 
 # Database Mapping
@@ -1517,7 +1655,7 @@ Lap_times = Models.Model(
 ```
 """
 function PositiveIntegerField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
     _common_kwargs("PositiveIntegerField", kwargs)
 
   default = get(kwargs, :default, nothing)
@@ -1539,7 +1677,7 @@ function PositiveIntegerField(; kwargs...)
     default,
     editable,
     "INTEGER UNSIGNED",
-    format_number_sql
+    format_number_sql, db_default
   )
 end
 
@@ -1555,6 +1693,7 @@ mutable struct sBigIntegerField <: PormGField
   editable::Bool
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 """
@@ -1571,6 +1710,7 @@ The `BigIntegerField` stores large whole numbers within the 64-bit signed intege
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{Int64, Nothing} = nothing`: Default value for the field
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 
 # Database Mapping
@@ -1628,7 +1768,7 @@ SocialMedia = Models.Model(
 - **Application Code**: May need updates if expecting different ranges
 """
 function BigIntegerField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
     _common_kwargs("BigIntegerField", kwargs)
 
   default = get(kwargs, :default, nothing)
@@ -1648,7 +1788,7 @@ function BigIntegerField(; kwargs...)
     default,
     editable,
     "BIGINT",
-    format_number_sql
+    format_number_sql, db_default
   )  
 end
 
@@ -1664,6 +1804,7 @@ mutable struct sBooleanField <: PormGField
   editable::Bool
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 
@@ -1681,6 +1822,7 @@ The `BooleanField` stores binary true/false values and is ideal for flags, switc
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{Bool, Nothing} = nothing`: Default value for the field (true or false)
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 
 # Examples
@@ -1704,7 +1846,7 @@ The field handles various input formats:
 - **NULL**: When `null=true`, accepts `NULL`/`nothing`
 """
 function BooleanField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
     _common_kwargs("BooleanField", kwargs)
 
   default = get(kwargs, :default, nothing)
@@ -1723,7 +1865,7 @@ function BooleanField(; kwargs...)
     default,
     editable,
     "BOOLEAN",
-    format_bool_sql
+    format_bool_sql, db_default
   )  
 end
 
@@ -1741,6 +1883,7 @@ mutable struct sDateField <: PormGField
   auto_now_add::Bool
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 """
@@ -1757,6 +1900,7 @@ The `DateField` stores calendar dates in YYYY-MM-DD format and is ideal for birt
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{String, Nothing} = nothing`: Default value for the field (YYYY-MM-DD format)
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = false`: Whether the field should be editable in forms
 - `auto_now::Bool = false`: Whether to automatically set to current date on every save
 - `auto_now_add::Bool = false`: Whether to automatically set to current date on creation only
@@ -1822,7 +1966,7 @@ The field accepts various input formats:
 - **String formats**: Various date strings parseable by Julia
 """
 function DateField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable, auto_now, auto_now_add) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, auto_now, auto_now_add, db_default) =
     _common_kwargs("DateField", kwargs; bools = (auto_now = false, auto_now_add = false))
 
   default = get(kwargs, :default, nothing)
@@ -1843,7 +1987,7 @@ function DateField(; kwargs...)
     auto_now,
     auto_now_add,
     "DATE",
-    format_date_sql
+    format_date_sql, db_default
   )  
 end
 
@@ -1861,6 +2005,7 @@ mutable struct sDateTimeField <: PormGField
   auto_now_add::Bool
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 """
@@ -1875,6 +2020,7 @@ A field for storing date and time values with timezone information.
 - `null::Bool`: If `true`, allows NULL values in the database. Default: `false`
 - `db_index::Bool`: If `true`, creates a database index for faster queries. Default: `false`
 - `default::Union{DateTime, Nothing, String}`: Default value for the field. Can be a DateTime object, ISO string, or `nothing`. Default: `nothing`
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool`: If `true`, field can be edited in forms. Default: `false`
 - `auto_now::Bool`: If `true`, automatically updates to current datetime on every save. Default: `false`
 - `auto_now_add::Bool`: If `true`, automatically sets to current datetime when record is created. Default: `false`
@@ -1905,7 +2051,7 @@ deadline = DateTimeField(null=true, blank=true)```
 ```
 """
 function DateTimeField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable, auto_now, auto_now_add) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, auto_now, auto_now_add, db_default) =
     _common_kwargs("DateTimeField", kwargs; bools = (auto_now = false, auto_now_add = false), extra = (:type,))
 
   default = get(kwargs, :default, nothing)
@@ -1941,7 +2087,7 @@ function DateTimeField(; kwargs...)
     auto_now,
     auto_now_add,
     type,
-    format_timezone_sql
+    format_timezone_sql, db_default
   )  
 end
 
@@ -1996,6 +2142,7 @@ mutable struct sDecimalField <: PormGField
   decimal_places::Int
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 """
@@ -2010,6 +2157,7 @@ A field for storing decimal numbers with fixed precision and scale.
 - `null::Bool`: If `true`, allows NULL values in the database. Default: `false`
 - `db_index::Bool`: If `true`, creates a database index for faster queries. Default: `false`
 - `default::Union{Float64, Nothing}`: Default value for the field. Default: `nothing`
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool`: If `true`, field can be edited in forms. Default: `false`
 - `max_digits::Int`: Maximum number of digits allowed (including decimal places). Default: `10`
 - `decimal_places::Int`: Number of decimal places to store. Default: `2`
@@ -2043,7 +2191,7 @@ discount = DecimalField(
 ```
 """
 function DecimalField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, db_default) =
     _common_kwargs("DecimalField", kwargs; primary_key = false, extra = (:max_digits, :decimal_places))
 
   default = get(kwargs, :default, nothing)
@@ -2079,7 +2227,7 @@ function DecimalField(; kwargs...)
     max_digits,
     decimal_places,
     "DECIMAL",
-    format_number_sql
+    format_number_sql, db_default
   )
 end
 
@@ -2095,6 +2243,7 @@ mutable struct sEmailField <: PormGField
   editable::Bool
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 """
@@ -2109,6 +2258,7 @@ A field for storing and validating email addresses.
 - `null::Bool`: If `true`, allows NULL values in the database. Default: `false`
 - `db_index::Bool`: If `true`, creates a database index for faster queries. Default: `false`
 - `default::Union{String, Nothing}`: Default email address. Default: `nothing`
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool`: If `true`, field can be edited in forms. Default: `false`
 
 # Examples
@@ -2133,7 +2283,7 @@ primary_email = EmailField(
 ```
 """
 function EmailField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
     _common_kwargs("EmailField", kwargs)
 
   default = get(kwargs, :default, nothing)
@@ -2152,7 +2302,7 @@ function EmailField(; kwargs...)
     default,
     editable,
     "VARCHAR",
-    format_text_sql
+    format_text_sql, db_default
   )  
 end
 
@@ -2176,6 +2326,7 @@ mutable struct sPasswordField <: PormGField
   formatter::Function
   max_length::Int  # Length of stored hash (Django uses VARCHAR(128))
   auto_hash::Bool  # Accepted for Django compat; PormG performs no hashing
+  db_default::DbDefault
 end
 
 """
@@ -2238,8 +2389,8 @@ Users can continue to log in without any password reset.
 - Django's password management documentation
 """
 function PasswordField(; kwargs...)
-  (; verbose_name, blank, null, db_column, editable, auto_hash) =
-    _common_kwargs("PasswordField", kwargs; editable = true, exclude = (:unique, :db_index, :default), extra = (:max_length,), bools = (auto_hash = true,))
+  (; verbose_name, blank, null, db_column, editable, auto_hash, db_default) =
+    _common_kwargs("PasswordField", kwargs; editable = true, exclude = (:unique, :db_index, :default, :db_default), extra = (:max_length,), bools = (auto_hash = true,))
 
   max_length = get(kwargs, :max_length, 128)
 
@@ -2260,7 +2411,7 @@ function PasswordField(; kwargs...)
     "VARCHAR",
     format_text_sql,
     max_length,
-    auto_hash
+    auto_hash, db_default
   )
 end
 
@@ -2276,6 +2427,7 @@ mutable struct sFloatField <: PormGField
   editable::Bool
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 """
@@ -2290,6 +2442,7 @@ A field for storing floating-point numbers with double precision.
 - `null::Bool`: If `true`, allows NULL values in the database. Default: `false`
 - `db_index::Bool`: If `true`, creates a database index for faster queries. Default: `false`
 - `default::Union{Float64, String, Int64, Nothing}`: Default value for the field. Default: `nothing`
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool`: If `true`, field can be edited in forms. Default: `false`
 
 # Examples
@@ -2305,7 +2458,7 @@ weight = FloatField(null=true)
 ```
 """
 function FloatField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, db_default) =
     _common_kwargs("FloatField", kwargs; primary_key = false)
 
   default = get(kwargs, :default, nothing)
@@ -2331,7 +2484,7 @@ function FloatField(; kwargs...)
     default,
     editable,
     "FLOAT",
-    format_number_sql
+    format_number_sql, db_default
   )  
 end
 
@@ -2347,6 +2500,7 @@ mutable struct sImageField <: PormGField
   editable::Bool
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 """
@@ -2361,6 +2515,7 @@ A field for storing image file references and metadata.
 - `null::Bool`: If `true`, allows NULL values in the database. Default: `false`
 - `db_index::Bool`: If `true`, creates a database index for faster queries. Default: `false`
 - `default::Union{String, Nothing}`: Default image path or URL. Default: `nothing`
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool`: If `true`, field can be edited in forms. Default: `false`
 
 # Examples
@@ -2385,7 +2540,7 @@ banner = ImageField(
 ```
 """
 function ImageField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
     _common_kwargs("ImageField", kwargs)
 
   default = get(kwargs, :default, nothing)
@@ -2404,7 +2559,7 @@ function ImageField(; kwargs...)
     default,
     editable,
     "BLOB",
-    format_text_sql
+    format_text_sql, db_default
   )  
 end
 
@@ -2415,7 +2570,7 @@ Django-compatibility alias for storing file upload paths. Behaves identically to
 Accepted kwargs: `verbose_name`, `unique`, `blank`, `null`, `db_index`, `default`, `editable`, `upload_to`, `max_length`.
 """
 function FileField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
     _common_kwargs("FileField", kwargs; editable = true, extra = (:upload_to, :max_length))
 
   default = get(kwargs, :default, nothing)
@@ -2432,7 +2587,7 @@ function FileField(; kwargs...)
     default,
     editable,
     "BLOB",
-    format_text_sql
+    format_text_sql, db_default
   )
 end
 
@@ -2448,6 +2603,7 @@ mutable struct sTextField <: PormGField
   editable::Bool
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 """
@@ -2462,6 +2618,7 @@ A field for storing large amounts of text without length restrictions.
 - `null::Bool`: If `true`, allows NULL values in the database. Default: `false`
 - `db_index::Bool`: If `true`, creates a database index for faster queries. Default: `false`
 - `default::Union{String, Nothing}`: Default text content. Default: `nothing`
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool`: If `true`, field can be edited in forms. Default: `false`
 
 # Examples  
@@ -2488,7 +2645,7 @@ template = TextField(
 ```
 """
 function TextField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
     _common_kwargs("TextField", kwargs)
 
   default = get(kwargs, :default, nothing)
@@ -2507,7 +2664,7 @@ function TextField(; kwargs...)
     default,
     editable,
     "TEXT",
-    format_text_sql
+    format_text_sql, db_default
   )  
 end
 
@@ -2523,6 +2680,7 @@ mutable struct sTimeField <: PormGField
   editable::Bool
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 """
@@ -2546,7 +2704,7 @@ Team_store = Models.Model("team_store",
 See also [`DateField`](@ref), [`DateTimeField`](@ref), [`DurationField`](@ref).
 """
 function TimeField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
     _common_kwargs("TimeField", kwargs)
 
   default = get(kwargs, :default, nothing)
@@ -2565,7 +2723,7 @@ function TimeField(; kwargs...)
     default,
     editable,
     "TIME",
-    format_text_sql
+    format_text_sql, db_default
   )  
 end
 
@@ -2582,6 +2740,7 @@ mutable struct sBinaryField <: PormGField
   type::String
   formatter::Function
   max_length::Union{Int, Nothing}
+  db_default::DbDefault
 end
 
 """
@@ -2604,6 +2763,7 @@ bytes of an encoded string, decode it yourself: `hex2bytes(s)`, `base64decode(s)
   Enforced both before the query is built and by a `CHECK` constraint in the DDL —
   `octet_length` on PostgreSQL, `length` on SQLite. `nothing` means unbounded.
 - `default::Union{Vector{UInt8}, Nothing} = nothing`: rendered into the DDL as a byte literal
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
   (`'\\x…'::bytea` / `X'…'`). Must be a `Vector{UInt8}`; a `String` raises
   `FieldValidationError` rather than guessing whether you meant its code units or a decoded
   encoding. Keep it small — it is written verbatim into generated model files.
@@ -2635,7 +2795,7 @@ Technical_document.objects.create(
 See also [`FileField`](@ref), [`TextField`](@ref), [`CharField`](@ref).
 """
 function BinaryField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
     _common_kwargs("BinaryField", kwargs; extra = (:max_length,))
 
   default = get(kwargs, :default, nothing)
@@ -2686,7 +2846,7 @@ function BinaryField(; kwargs...)
     # lets the migration planner diff two BinaryFields without knowing the backend.
     "BLOB",
     format_binary_sql,
-    max_length
+    max_length, db_default
   )
 end
 
@@ -2702,6 +2862,7 @@ mutable struct sDurationField <: PormGField
   editable::Bool
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 """
@@ -2726,7 +2887,7 @@ Pit_task = Models.Model("pit_task",
 See also [`TimeField`](@ref), [`DateTimeField`](@ref).
 """
 function DurationField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
     _common_kwargs("DurationField", kwargs)
 
   default = get(kwargs, :default, nothing)
@@ -2757,7 +2918,7 @@ function DurationField(; kwargs...)
     default,
     editable,
     "INTERVAL",
-    format_duration_sql
+    format_duration_sql, db_default
   )
 end
 
@@ -2778,6 +2939,7 @@ mutable struct sUUIDField <: PormGField
   type::String
   formatter::Function
   auto_add::Bool
+  db_default::DbDefault
 end
 
 """
@@ -2796,6 +2958,7 @@ Values are validated against the standard UUID format (8-4-4-4-12 hex digits).
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{String, Nothing} = nothing`: Default UUID value as a string
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = true`: Whether the field should be editable in forms
 - `auto_add::Bool = false`: If true, automatically generates a UUID (`uuid4()`) when creating a new record without a provided value.
 
@@ -2815,7 +2978,7 @@ Session = Models.Model(
 ```
 """
 function UUIDField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, auto_add) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, auto_add, db_default) =
     _common_kwargs("UUIDField", kwargs; primary_key = false, editable = true, bools = (auto_add = false,))
 
   default = get(kwargs, :default, nothing)
@@ -2849,7 +3012,7 @@ function UUIDField(; kwargs...)
     editable,
     "UUID",
     format_uuid_sql,
-    auto_add
+    auto_add, db_default
   )
 end
 
@@ -2870,6 +3033,7 @@ mutable struct sURLField <: PormGField
   editable::Bool
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 """
@@ -2888,6 +3052,7 @@ with `http://`, `https://`, or `ftp://`.
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{String, Nothing} = nothing`: Default URL value
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = true`: Whether the field should be editable in forms
 
 # Database Mapping
@@ -2904,7 +3069,7 @@ Circuit = Models.Model(
 ```
 """
 function URLField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
     _common_kwargs("URLField", kwargs; editable = true, extra = (:max_length,))
 
   max_length = get(kwargs, :max_length, 200)
@@ -2928,7 +3093,7 @@ function URLField(; kwargs...)
     default,
     editable,
     "VARCHAR",
-    format_text_sql
+    format_text_sql, db_default
   )
 end
 
@@ -2949,6 +3114,7 @@ mutable struct sSlugField <: PormGField
   editable::Bool
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 """
@@ -2968,6 +3134,7 @@ human-readable URL fragments derived from titles or names.
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = true`: Whether to create a database index on this field (true by default for slugs)
 - `default::Union{String, Nothing} = nothing`: Default slug value
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = true`: Whether the field should be editable in forms
 
 # Database Mapping
@@ -2984,7 +3151,7 @@ Race = Models.Model(
 ```
 """
 function SlugField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
     _common_kwargs("SlugField", kwargs; db_index = true, editable = true, extra = (:max_length,))
 
   max_length = get(kwargs, :max_length, 50)
@@ -3009,7 +3176,7 @@ function SlugField(; kwargs...)
     default,
     editable,
     "VARCHAR",
-    format_text_sql
+    format_text_sql, db_default
   )
 end
 
@@ -3029,6 +3196,7 @@ mutable struct sJSONField <: PormGField
   editable::Bool
   type::String
   formatter::Function
+  db_default::DbDefault
 end
 
 """
@@ -3047,6 +3215,7 @@ being sent to the database.
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{String, Nothing} = nothing`: Default JSON value as a string
+- `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = true`: Whether the field should be editable in forms
 
 # Database Mapping
@@ -3068,7 +3237,7 @@ Race = Models.Model(
 - PostgreSQL JSONB supports GIN indexing for efficient key/value lookups.
 """
 function JSONField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
     _common_kwargs("JSONField", kwargs; editable = true)
 
   default = get(kwargs, :default, nothing)
@@ -3101,7 +3270,7 @@ function JSONField(; kwargs...)
     default,
     editable,
     "JSONB",
-    format_json_sql
+    format_json_sql, db_default
   )
 end
 

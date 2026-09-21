@@ -10,6 +10,9 @@ import PormG: backend_sqlite_version  # SQLite library-version probe (driver bod
 #                                lookup, an extract part SQLite lacks, too old a SQLite library).
 #   QueryBuildError            — the caller passed an impossible argument shape (on_conflict_clause).
 import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError
+# #496: the `db_default` vocabulary (Kernel, layer 1). `db_default_sql` below renders from it, and
+# `Migrations._column_default` compiles the declared side through the same function.
+import PormG: PORTABLE_DB_DEFAULTS
 import PormG.ConnectionPool: fetch
 import PormG: postgres_type_map_reverse, date_format_map, sqlite_type_map_reverse
 # The canonical column IR (#507). `alter_field` renders an ALTER from a `ColumnDelta`, which is why
@@ -675,9 +678,83 @@ end
 import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sRelationalColumn, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField, sBinaryField, sImageField
 
 """
+    db_default_sql(field, conn) -> Union{String, Nothing}
+
+The DDL text a field's `db_default` contributes on `conn`'s engine (#496), or `nothing` when it has
+none. Raises `BackendCapabilityError` when the expression is pinned to the *other* engine.
+
+**One resolver, and every production DDL path goes through it** — both `field_to_column` methods
+(so `create_table`, both `add_field`s and `rebuild_table`) and `Migrations._column_default` on the
+declared side of the diff, which is where every real `ColumnDelta` is built. That is what makes the
+engine check unskippable in practice: a pinned expression cannot leak into DDL the target database
+will reject.
+
+The one seam it does not physically guard is `alter_field`, which renders `SET DEFAULT` straight off
+the delta's `ExpressionDefault`. A HAND-BUILT delta therefore bypasses this function — which is
+exactly what the pre-#496 unit test did to reach that branch at all. Nothing in production builds
+one, but "unreachable without asking" is a statement about the call graph, not about the types.
+
+Three shapes in, three answers out:
+
+  * `nothing` (no slot, or unset) → `nothing`;
+  * a `String` → itself. It is in `PORTABLE_DB_DEFAULTS` by construction, because the field
+    constructor refuses any other bare string;
+  * a `NamedTuple` → its entry for this engine. An entry of `nothing` is the deliberate
+    "no database default on this engine" opt-out and yields `nothing`; a MISSING entry is the pin,
+    and raises.
+
+**SQLite parenthesises**, and this is the one intentional engine divergence in #496. SQLite's
+column-`DEFAULT` grammar accepts a bare token only for its `literal-value` set — measured on 3.53.4,
+`DEFAULT abs(random())` is a syntax error while `DEFAULT (abs(random()))` is accepted — so PormG adds
+exactly one layer for anything outside the vocabulary. `PRAGMA table_info` then reports the text back
+with that layer already stripped, which is why [`canonical_db_default`](@ref) strips outer parens:
+the renderer's addition and the catalog's removal are exact inverses, and the column converges with
+itself. PostgreSQL accepts both spellings and is given the text verbatim.
+
+`BackendCapabilityError` rather than a new exception type: its documented meaning is already *"the
+active backend cannot do this … the remedy is to change the request or the backend"*, which is this
+case exactly.
+"""
+function db_default_sql(field, conn::PormGBackend)::Union{String, Nothing}
+  hasfield(typeof(field), :db_default) || return nothing
+  spec = getfield(field, :db_default)
+  spec === nothing && return nothing
+
+  engine = conn isa PormGPostgres ? :postgres : :sqlite
+  sql = if spec isa AbstractString
+    String(spec)
+  elseif spec isa NamedTuple
+    if !haskey(spec, engine)
+      pinned = join(("$k = $(repr(String(spec[k])))" for k in keys(spec) if spec[k] !== nothing), ", ")
+      throw(BackendCapabilityError(
+        "db_default is pinned to $(join(keys(spec), " and ")) ($pinned) and this migration targets " *
+        "$engine. PormG renders a pinned expression verbatim and will not guess a translation for " *
+        "another engine — emitting it here would produce DDL $engine rejects. Add the $engine " *
+        "spelling (`$engine = \"…\"`), declare that the column has no database default there " *
+        "(`$engine = nothing`), or use one of the portable expressions " *
+        "($(join(PORTABLE_DB_DEFAULTS, ", ")))."))
+    end
+    v = spec[engine]
+    v === nothing && return nothing        # explicit per-engine opt-out
+    String(v)
+  else
+    return nothing
+  end
+
+  # The vocabulary renders bare on both engines; everything else gets SQLite's required parens.
+  conn isa PormGSQLite && !(uppercase(sql) in PORTABLE_DB_DEFAULTS) && return "($sql)"
+  return sql
+end
+
+"""
     _format_default_sql_value(default_value, conn) -> String
 
 Render a field's `default` as a SQL literal for `conn`'s dialect.
+
+**A `db_default` must never reach this function.** It quotes an `AbstractString`, which is exactly
+the #475 damage — `DEFAULT 'now()'` stores five characters in every row instead of calling the
+function. The two are mutually exclusive at construction, and every call site asks
+[`db_default_sql`](@ref) first.
 
 Only binary payloads actually diverge, and they have no portable spelling: PostgreSQL wants
 `'\\x0102'::bytea`, SQLite wants `X'0102'` (#296). Everything else delegates to the
@@ -935,8 +1012,14 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGPostgre
     push!(constraints, "NOT NULL")
   end
 
-  # Default value
-  if field.default !== nothing || temporary_default !== nothing
+  # Default value. A `db_default` (#496) is rendered VERBATIM and takes precedence: it is mutually
+  # exclusive with `default` at construction, and a column that computes its own default needs no
+  # temporary one for an ADD COLUMN backfill. `db_default_sql` is also where a pinned expression
+  # aimed at the other engine raises, so asking it first is what keeps the check unskippable.
+  db_expr = db_default_sql(field, conn)
+  if db_expr !== nothing
+    push!(constraints, "DEFAULT $db_expr")
+  elseif field.default !== nothing || temporary_default !== nothing
     default_value = field.default !== nothing ? field.default : temporary_default
     push!(constraints, "DEFAULT $(_format_default_sql_value(default_value, conn))")
   end
@@ -962,11 +1045,32 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGPostgre
   return join(["\"$(_quote_table_ddl(col_name))\"", base_type, join(constraints, " ")], " ")
 end
 
-function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite; temporary_default::Any=nothing)::String
+"""
+`defer_db_default` (#496) renders the column WITHOUT its `db_default` and as nullable, for the one
+caller that cannot take it: `ALTER TABLE … ADD COLUMN`.
+
+SQLite refuses `ADD COLUMN` with a non-constant default on a table that has rows — measured on
+3.53.4, `Cannot add a column with non-constant default`, for `CURRENT_TIMESTAMP` and for a
+parenthesised expression alike (an EMPTY table accepts both, but the planner cannot know which it
+faces and must not ask). `NOT NULL` is dropped with it, because `ADD COLUMN … NOT NULL` needs a
+default to fill existing rows and the default is exactly what was just removed.
+
+Neither omission survives the migration: `_add_new_field` queues a table rebuild behind the
+`ADD COLUMN`, and the rebuild re-renders every column from the DESIRED model through this same
+function with the flag OFF — so the finished table carries the real default and the real
+nullability. The rows are filled in between by the backfill `UPDATE` that `_add_new_field` emits,
+which is also what keeps SQLite's result equal to PostgreSQL's (there, `ADD COLUMN … DEFAULT expr`
+backfills by itself).
+"""
+function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite;
+                         temporary_default::Any=nothing, defer_db_default::Bool=false)::String
   # Resolve the physical column name (db_column when set, else the field name) — #50.
   col_name = field_db_column(field, col_name)
   # Determine the base SQL type
   base_type = _get_column_type(field, conn)
+  # #496: is this the deferred ADD COLUMN rendering? Computed before the nullability block, which
+  # has to know.
+  deferring = defer_db_default && db_default_sql(field, conn) !== nothing
 
   # Build constraints
   constraints::Vector{String} = String[]
@@ -981,15 +1085,22 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite;
 
   # Unique
   field.unique && push!(constraints, "UNIQUE")
-  # Nullability (default is NOT NULL if 'null' is false)
-  if hasproperty(field, :null) && field.null
+  # Nullability (default is NOT NULL if 'null' is false). `deferring` forces NULL: the default that
+  # would have filled existing rows is being withheld from this statement, and SQLite refuses
+  # `ADD COLUMN … NOT NULL` without one. The queued rebuild restores the declared nullability.
+  if (hasproperty(field, :null) && field.null) || deferring
     push!(constraints, "NULL")
   else
     push!(constraints, "NOT NULL")
   end
 
-  # Default value
-  if field.default !== nothing || temporary_default !== nothing
+  # Default value. See the PostgreSQL twin above; `db_default_sql` has already added SQLite's
+  # required parentheses for a non-vocabulary expression, because the grammar accepts a bare token
+  # only for its `literal-value` set.
+  db_expr = deferring ? nothing : db_default_sql(field, conn)
+  if db_expr !== nothing
+    push!(constraints, "DEFAULT $db_expr")
+  elseif !deferring && (field.default !== nothing || temporary_default !== nothing)
     default_value = field.default !== nothing ? field.default : temporary_default
     push!(constraints, "DEFAULT $(_format_default_sql_value(default_value, conn))")
   end
@@ -1393,13 +1504,18 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   #
   #   * `LiteralDefault` — a value PormG renders, exactly as before (`_format_default_sql_value` on
   #     `.value`, which IS `field.default`).
-  #   * `ExpressionDefault` — a database-side expression, emitted verbatim. `column_spec` cannot
-  #     produce one yet: no `PormGField` has a slot that spells it, and introspection drops an
-  #     expression default it cannot represent (#472/#475). #496 is the change that makes it
-  #     reachable, and the branch is here so that #496 is a pure addition to the compiler rather
-  #     than a re-shaping of the renderer. It is covered by a unit test that hands `alter_field` a
-  #     hand-built delta, because nothing else can reach it.
-  #   * `NoDefault` — DROP.
+  #   * `ExpressionDefault` — a database-side expression, emitted verbatim. Reachable since #496,
+  #     which added the `db_default` slot that spells one; the branch predated it so that #496 was a
+  #     pure addition to the compiler rather than a re-shaping of the renderer, and it needed no
+  #     change when that landed. `.sql` is the CANONICAL form — outer parentheses stripped — which
+  #     is what PostgreSQL wants here; SQLite needs a paren layer and never reaches this method
+  #     (its `alter_field` rebuilds the table through `field_to_column`, which asks
+  #     `db_default_sql` and gets them added). A mis-pinned expression has already raised in
+  #     `Migrations._column_default` before the delta existed, so nothing here can emit DDL aimed
+  #     at the wrong engine.
+  #   * `NoDefault` — DROP. Note this is NOT reached for the one asymmetric case #496 introduced:
+  #     a live expression default the model does not declare never enters the delta at all
+  #     (`_defaults_equal`, `src/column_ir.jl`), so PormG cannot propose dropping it.
   if :default in delta
     new_default = delta.new_spec.default
     if new_default isa LiteralDefault
@@ -1518,8 +1634,17 @@ one-to-one is `unique = true` and so is ineligible here anyway — but for the s
 accident of the gate.
 """
 function sqlite_add_column_can_inline_fk(field::PormGField, temporary_default::Any)::Bool
+  # `db_default` disqualifies inlining for a reason the other terms only imply (#496): SQLite
+  # refuses `ADD COLUMN` with a NON-CONSTANT default outright — measured on 3.53.4, a populated
+  # table answers `Cannot add a column with non-constant default` for `CURRENT_TIMESTAMP` and for a
+  # parenthesized expression alike, while an EMPTY table accepts both. PormG cannot know which it is
+  # facing at plan time and must not ask, so any `db_default` routes through the table rebuild —
+  # which is the same place this predicate's `false` already sends a column.
+  # Both `sRelationalColumn` structs carry the slot, so it is read directly rather than through a
+  # `hasfield` guard — the `isa` below already establishes it.
   return field isa sRelationalColumn && field.db_constraint &&
          field.null && field.default === nothing && temporary_default === nothing &&
+         field.db_default === nothing &&
          !field.unique && !field.primary_key
 end
 
@@ -1560,7 +1685,10 @@ end
 # silently producing a constraint-less column was the #514 bug in its purest form. It fires only for
 # `db_constraint = true`, and the rebuild branch reaches the same resolver anyway.
 function add_field(conn::PormGSQLite, table_name::Union{String,Symbol}, field_name::String, field::PormGField; temporary_default::Any=nothing, model::Union{PormGModel,Nothing}=nothing)
-  column_sql = field_to_column(field_name, field, conn, temporary_default=temporary_default)
+  # `defer_db_default = true` — this is the one statement SQLite will not accept a non-constant
+  # default on (#496). `_add_new_field` queues the rebuild that puts it back.
+  column_sql = field_to_column(field_name, field, conn, temporary_default=temporary_default,
+                               defer_db_default=true)
   if model !== nothing && sqlite_add_column_can_inline_fk(field, temporary_default)
     column_sql *= " " * _foreign_key_references_sql(field; column = field_name, model = model)
   end

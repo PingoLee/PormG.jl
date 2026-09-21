@@ -86,6 +86,16 @@ const FKE_PROBES = [
     ("db_column",      (db_column = "col_x",)),
     ("editable_true",  (editable = true,)),
     ("editable_false", (editable = false,)),
+    # #496. Both SHAPES of `db_default`, because the value's type is the engine pin and the two
+    # travel different validation paths: a bare `String` is checked against `PORTABLE_DB_DEFAULTS`
+    # and canonicalised, a `NamedTuple` has its keys validated and reordered. One probe would leave
+    # half of `_db_default_kwarg` unpinned. Still one keyword each, per the rule above.
+    #
+    # The portable probe MUST use a vocabulary spelling: a non-vocabulary bare string is a
+    # `FieldValidationError`, which would land as an `ERROR:` row and trip the no-error assertion
+    # below — correctly, but for the wrong reason.
+    ("db_default_portable", (db_default = "CURRENT_TIMESTAMP",)),
+    ("db_default_pinned",   (db_default = (postgres = "now()",),)),
 ]
 
 # Full struct state as a stable string. Functions (the `formatter` field) compare by name — two
@@ -137,8 +147,9 @@ else
 
     # Guard the guard: an empty or truncated harness would pass a naive comparison.
     @test length(actual) == length(FKE_CTORS) * length(FKE_PROBES)
-    # 26 constructors x 11 probes. Was 297 until #408 retired AutoField, which took 11 rows with it.
-    @test length(actual) >= 286
+    # 26 constructors x 13 probes. Was 297 until #408 retired AutoField, which took 11 rows with it,
+    # and 286 until #496 added the two `db_default` probes (+52).
+    @test length(actual) >= 338
     # No probe may error — every common keyword must remain accepted (or ignored with a warning) by
     # every constructor. An ERROR row would mean a keyword stopped being accepted, which breaks the
     # `Model_to_str` round-trip contract (generated model files reload through this kwargs form).

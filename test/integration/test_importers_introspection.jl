@@ -894,13 +894,30 @@ end
                             ["id", "created_at", "d", "n", "ok", "note", "note_expr"]
     @test Set(keys(expr_model.fields)) == Set(expected_cols)
 
-    # 2. The unrepresentable defaults are dropped, and the COLUMN keeps its real type — dropping
-    #    the default must not degrade `timestamptz` to text, which would be a different way to
-    #    "not crash" while still corrupting the imported schema.
+    # 2. The expression defaults are CARRIED as `db_default` (#496) and the COLUMN keeps its real
+    #    type — representing the default must not degrade `timestamptz` to text, which would be a
+    #    different way to "not crash" while still corrupting the imported schema. `default=` stays
+    #    empty on all of them: a value landing there is the #475 corruption, because it re-renders
+    #    as a quoted literal.
     @test expr_model.fields["created_at"] isa PormG.Models.sDateTimeField
     @test expr_model.fields["created_at"].default === nothing
     @test expr_model.fields["d"].default === nothing
     @test expr_model.fields["n"].default === nothing
+
+    # 2b. …and the expression itself, per engine. `CURRENT_DATE` is in the portable vocabulary on
+    #     BOTH engines, so it comes back as a bare String rather than pinned — which is what lets a
+    #     models file generated here render on the other backend. Everything else is pinned to the
+    #     engine it was read from. This is the half a "the default is gone" assertion cannot reach,
+    #     and it is read from a REAL catalog rather than a synthetic row, so it also pins the exact
+    #     spelling `pg_get_expr` / `PRAGMA table_info` hands back.
+    @test expr_model.fields["d"].db_default == "CURRENT_DATE"
+    if is_pg
+      @test expr_model.fields["created_at"].db_default == (postgres = "now()",)
+      @test expr_model.fields["n"].db_default == (postgres = "random() * (10)::double precision",)
+    else
+      @test expr_model.fields["created_at"].db_default == "CURRENT_TIMESTAMP"
+      @test expr_model.fields["n"].db_default == (sqlite = "abs(random()) % 10",)
+    end
 
     # 3. …and NOT NULL survived. The guard rebuilds the field without the default, so a retry that
     #    lost the other kwargs would report this column nullable and make every `makemigrations`
@@ -911,14 +928,16 @@ end
     @test expr_model.fields["ok"].default == 5
     @test expr_model.fields["note"].default == "Ferrari"
 
-    # 4b. #475: and the textual column whose default is an EXPRESSION is dropped like any other.
-    #     This used to be kept as a quoted literal, silently — decided by `TextField` accepting any
-    #     `String` rather than by anything about the schema, so the same expression reached opposite
-    #     outcomes on `note_expr` and on `created_at` in this very table. The pair of assertions is
-    #     the point: one column of each kind, same type, same table, and they now differ only in
-    #     whether the DDL quoted the value.
+    # 4b. #475/#496: the textual column whose default is an EXPRESSION reaches the same answer as
+    #     every other type. This used to be kept as a quoted literal, silently — decided by
+    #     `TextField` accepting any `String` rather than by anything about the schema, so the same
+    #     expression reached opposite outcomes on `note_expr` and on `created_at` in this very
+    #     table. The pair of assertions is still the point: one column of each kind, same type, same
+    #     table, one answer. What changed in #496 is WHICH answer — described rather than discarded.
     @test expr_model.fields["note_expr"] isa PormG.Models.sTextField
     @test expr_model.fields["note_expr"].default === nothing
+    @test expr_model.fields["note_expr"].db_default ==
+          (is_pg ? (postgres = "concat('a'::text, 'b'::text)",) : "CURRENT_TIMESTAMP")
 
     # 5. PostgreSQL-only: `gen_random_uuid()` on a UUID column, the most common uuid default there
     #    is. It reaches a DIFFERENT arm from the generic one (the `uuid` branch), which is why the
@@ -926,34 +945,65 @@ end
     if is_pg
       @test expr_model.fields["u"] isa PormG.Models.sUUIDField
       @test expr_model.fields["u"].default === nothing
+      @test expr_model.fields["u"].db_default == (postgres = "gen_random_uuid()",)
     end
 
-    # 6. The failure is REPORTED, naming the table and each column — not silent. This is the half
-    #    a "does not crash" assertion cannot reach.
+    # 6. NOTHING IS REPORTED any more. The warning existed to tell the user a default had been
+    #    thrown away; #496 throws none away, so emitting it would be a standing lie repeated on
+    #    every import. Asserted as an explicit emptiness rather than deleted, because "we stopped
+    #    warning deliberately" and "the warning quietly stopped firing" are different bugs.
     expr_warns = filter(l -> l.level == Logging.Warn &&
                              occursin("could not be represented", l.message), expr_logs)
-    @test length(expr_warns) == (is_pg ? 5 : 4)
-    expr_warned_cols = Set(string(Dict(w.kwargs)[:column]) for w in expr_warns)
-    @test expr_warned_cols == Set(is_pg ? ["created_at", "d", "n", "u", "note_expr"] :
-                                          ["created_at", "d", "n", "note_expr"])
-    @test all(string(Dict(w.kwargs)[:table]) == "pormg_it_expr_defaults" for w in expr_warns)
+    @test isempty(expr_warns)
+    # The columns that USED to be reported, kept as a named set because section 6b below still
+    # checks `check()` against exactly this list — the diagnostic survives even though the warning
+    # does not.
+    expr_expected_cols = Set(is_pg ? ["created_at", "d", "n", "u", "note_expr"] :
+                                     ["created_at", "d", "n", "note_expr"])
 
-    # 7. The generated model file carries no default for the dropped columns. `Model_to_str` is
-    #    what `inspectdb` writes to disk, so this is the artifact the user actually gets — and a
-    #    `default=` re-emitted here would be a quoted literal, silently changing the semantics on
-    #    the next migration.
+    # 7. The generated model file carries the expression as `db_default=` and never as `default=`.
+    #    `Model_to_str` is what `inspectdb` writes to disk, so this is the artifact the user
+    #    actually gets — and a `default=` re-emitted here would be a quoted literal, silently
+    #    changing the semantics on the next migration.
     expr_src = PormG.Models.Model_to_str(expr_model)
     @test occursin("created_at", expr_src)
-    @test !occursin(r"created_at\s*=[^\n]*default", expr_src)
-    @test occursin(r"ok\s*=[^\n]*default\s*=\s*5", expr_src)   # …while a real default IS emitted
+    @test occursin(r"created_at\s*=[^\n]*db_default=", expr_src)
+    # `[^_]default=` so the `db_default=` on the same line cannot satisfy this by accident — the
+    # whole assertion is that the expression did NOT land in the corrupting slot.
+    @test !occursin(r"created_at\s*=[^\n]*[^_]default=", expr_src)
+    @test occursin(r"ok\s*=[^\n]*[^_]default\s*=\s*5", expr_src)   # …while a real default IS emitted
 
-    # 7b. #475, at the artifact the user actually gets. The generated file must carry NO default
-    #     for the textual expression column — that line used to read `default="CURRENT_TIMESTAMP"`
-    #     (or `default="concat(...)"`), which re-renders as `DEFAULT '<text>'` and stores those
-    #     characters in every new row. And it must STILL carry the textual literal, because the two
-    #     assertions together are what distinguish "fixed" from "dropped every text default".
-    @test !occursin(r"note_expr\s*=[^\n]*default", expr_src)
-    @test occursin(r"note\s*=[^\n]*default\s*=\s*\"Ferrari\"", expr_src)
+    # 7b. #475/#496, at the artifact the user actually gets. That line used to read
+    #     `default="CURRENT_TIMESTAMP"` (or `default="concat(...)"`), which re-renders as
+    #     `DEFAULT '<text>'` and stores those characters in every new row. It now reads
+    #     `db_default=…`, which re-renders as the expression. And the textual LITERAL must still be
+    #     emitted as `default=`, because the two assertions together are what distinguish "fixed"
+    #     from "routed every text default into the new slot".
+    @test occursin(r"note_expr\s*=[^\n]*db_default=", expr_src)
+    @test !occursin(r"note_expr\s*=[^\n]*[^_]default=", expr_src)
+    @test occursin(r"note\s*=[^\n]*[^_]default\s*=\s*\"Ferrari\"", expr_src)
+
+    # ── 6c. THE ROUND TRIP (#496) ────────────────────────────────────────────
+    # The acceptance criterion of the issue, and the only assertion that proves the declared
+    # spelling matches what the catalog hands back: compile every imported field against the SAME
+    # live table it was read from and require an EMPTY delta. A non-empty one here is the #325
+    # churn class — `makemigrations` proposing DDL on every run for a column nobody changed — and
+    # it is invisible to every other assertion in this section, all of which would pass on a
+    # spelling that never converges.
+    live_tables = PormG.Migrations.read_live_schema(pool)
+    live_expr_tbl = only(t for t in live_tables if t.name == "pormg_it_expr_defaults")
+    compared = 0
+    for (col, f) in expr_model.fields
+      haskey(live_expr_tbl.columns, col) || continue
+      delta = PormG.Migrations.column_delta(f, live_expr_tbl.columns[col], pool; name = col)
+      @test isempty(delta.changed)
+      compared += 1
+    end
+    # COUNT THE COMPARISONS. The loop above keys model fields against live column names, which
+    # coincide only because this fixture declares no `db_column`; if they ever diverged, every
+    # iteration would `continue` and this section — the only assertion here that can catch the #325
+    # churn class — would pass while testing nothing.
+    @test compared == length(expected_cols)
 
     # ── 6b. check() reports the same columns, against the live engine (#475) ─────
     # The unit twin proves the two agree on a temp SQLite database. This proves it on whichever
@@ -962,7 +1012,7 @@ end
     chk = PormG.Migrations.check(pool, settings; include_table = ["pormg_it_expr_defaults"])
     @test chk.backend === (is_pg ? :postgres : :sqlite)
     chk_cols = Set(only(f.columns) for f in chk.findings)
-    @test chk_cols == expr_warned_cols            # the importer and the report cannot disagree
+    @test chk_cols == expr_expected_cols          # the importer and the report cannot disagree
     @test all(f.kind === :expression_default for f in chk.findings)
     @test all(f.table == "pormg_it_expr_defaults" for f in chk.findings)
     # The literal-defaulted columns are absent from the report, not merely outnumbered by it.

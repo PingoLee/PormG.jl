@@ -485,7 +485,30 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
   needs_sqlite_fk_rebuild = conn isa PormGSQLite && field isa Models.sRelationalColumn &&
                             field.db_constraint &&
                             !Dialect.sqlite_add_column_can_inline_fk(field, temporary_default_value)
-  if temporary_default_value !== nothing || needs_sqlite_fk_rebuild
+  # #496, and the third reason SQLite rebuilds after an ADD COLUMN. SQLite refuses `ADD COLUMN` with
+  # a NON-CONSTANT default on a table that has rows — measured on 3.53.4, `Cannot add a column with
+  # non-constant default`, for `CURRENT_TIMESTAMP` and a parenthesised expression alike. An EMPTY
+  # table accepts both, but the planner has no way to know which it faces and must not query to find
+  # out, so any `db_default` takes the safe route: `Dialect.add_field` renders the column WITHOUT its
+  # default and as nullable (`defer_db_default`), and the rebuild below restores both.
+  #
+  # The backfill in between is what keeps the two engines equal. PostgreSQL's
+  # `ADD COLUMN … DEFAULT expr` fills existing rows by itself; SQLite's deferred column arrives all
+  # NULL, so without the UPDATE a NOT NULL rebuild would fail on the copy and a nullable one would
+  # leave a silent divergence. `WHERE … IS NULL` rather than an unconditional SET because the plan is
+  # a list of statements that may be re-run against a partially-migrated database.
+  needs_sqlite_db_default_rebuild = conn isa PormGSQLite &&
+                                    Dialect.db_default_sql(field, conn) !== nothing
+  if needs_sqlite_db_default_rebuild
+    physical = Models.field_db_column(field, field_name)
+    expr = Dialect.db_default_sql(field, conn)
+    _configure_order_dict_migration_plan(migration_plan, model_name,
+      "Backfill db_default: $field_name",
+      """UPDATE "$(Dialect._quote_table_ddl(string(model_name)))" """ *
+      """SET "$(Dialect._quote_table_ddl(physical))" = $expr """ *
+      """WHERE "$(Dialect._quote_table_ddl(physical))" IS NULL;""")
+  end
+  if temporary_default_value !== nothing || needs_sqlite_fk_rebuild || needs_sqlite_db_default_rebuild
     # SQLite requires a full table recreation to drop the temporary default.
     # Use the same stable "Alter table:" key so multiple datetime fields being
     # added at once don't produce duplicate recreation statements.
@@ -1210,7 +1233,13 @@ end
 # SQLite-FK-rebuild caller already exercises.
 function _get_temporary_default_value(field::PormGField, settings::PormGSettings)
   field isa Union{Models.sDateTimeField, Models.sDateField} || return nothing
-  (field.null || field.default !== nothing) && return nothing
+  # `db_default` joins `default` here for the same reason the comment above gives for `default`
+  # (#496): the column already backfills from its OWN `DEFAULT`, so a temporary one is a redundant
+  # `SET DEFAULT` on PostgreSQL and a needless full table rebuild on SQLite. It is not merely
+  # wasteful — the temporary default EXISTS TO BE DROPPED, and the cleanup step forces a `[:default]`
+  # delta whose new side is `NoDefault`, so leaving this out would have `_add_new_field` queue a
+  # `DROP DEFAULT` that destroys the real expression default it had just rendered.
+  (field.null || field.default !== nothing || field.db_default !== nothing) && return nothing
   # `now(TimeZone(…))` and one pass through the formatter — the same expression the insert path uses
   # for `auto_now_add` (`querybuilder/execution.jl`). This used to be `field.formatter(now(),
   # settings.time_zone) |> field.formatter`, calling a two-argument `format_timezone_sql` arm that

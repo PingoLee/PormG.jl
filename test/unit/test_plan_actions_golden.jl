@@ -1046,8 +1046,8 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   # ───────────────────────────────────────────────────────────────────────────
   @testset "an uncompilable column reports CHANGED, and two of them still differ" begin
     good = column_spec(Models.IntegerField(), GPG507; name = "col")
-    bad  = Migrations._degraded_spec(Models.IntegerField(), "<uncompilable:new>"; name = "col")
-    bad2 = Migrations._degraded_spec(Models.IntegerField(), "<uncompilable:old>"; name = "col")
+    bad  = Migrations._degraded_spec(Models.IntegerField(), GPG507, "<uncompilable:new>"; name = "col")
+    bad2 = Migrations._degraded_spec(Models.IntegerField(), GPG507, "<uncompilable:old>"; name = "col")
 
     # Against a column that DID compile, the answer is `:type` — exactly what the pre-phase-2
     # fail-safe returned, which is why plan text does not move on this path.
@@ -1063,7 +1063,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
     # A degraded FK keeps its PRESENCE, so `:add`/`:drop` stay right, while its unresolvable target
     # compares unequal to any real one — a constraint that may have moved is re-issued, not assumed
     # intact.
-    bad_fk = Migrations._degraded_spec(_g_declared_fk(), "<uncompilable:new>"; name = "col")
+    bad_fk = Migrations._degraded_spec(_g_declared_fk(), GPG507, "<uncompilable:new>"; name = "col")
     live   = column_spec(_g_live_fk(), GPG507; name = "col")
     plain  = column_spec(Models.BigIntegerField(null = true), GPG507; name = "col")
     @test _fk_constraint_action(bad_fk, plain) === :add
@@ -1077,7 +1077,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
     # pre-phase-2 `_fk_constraint_action`: `sManyToManyField` carries a `.to` but NO
     # `db_constraint` slot, so `hasfield(typeof(f), :to) && f.db_constraint` raised a `FieldError`
     # on the same input.
-    m2m = Migrations._degraded_spec(Models.ManyToManyField(_g_parent()), "<uncompilable:old>"; name = "col")
+    m2m = Migrations._degraded_spec(Models.ManyToManyField(_g_parent()), GPG507, "<uncompilable:old>"; name = "col")
     @test m2m.reference === nothing
     @test _fk_constraint_action(nothing, m2m) === :none
   end

@@ -110,8 +110,8 @@ end
 
     # The mutation this guards, spelled out: give both sides the SAME marker and they compare equal,
     # which is why the entry point passes two different ones.
-    same_a = _degraded_spec(boom_a, "<uncompilable>"; name = "boom")
-    same_b = _degraded_spec(boom_b, "<uncompilable>"; name = "boom")
+    same_a = _degraded_spec(boom_a, _FS_PG, "<uncompilable>"; name = "boom")
+    same_b = _degraded_spec(boom_b, _FS_PG, "<uncompilable>"; name = "boom")
     @test same_a == same_b
     @test isempty(PormG.column_delta(same_a, same_b))
 
@@ -129,7 +129,7 @@ end
   # re-issued rather than assumed intact).
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "a degraded foreign key is re-issued, not assumed intact" begin
-    bad_fk = _degraded_spec(_fs_boom_field(), "<uncompilable:new>"; name = "parent_id")
+    bad_fk = _degraded_spec(_fs_boom_field(), _FS_PG, "<uncompilable:new>"; name = "parent_id")
     plain  = column_spec(BigIntegerField(null = true), _FS_PG; name = "parent_id")
 
     @test bad_fk.reference !== nothing

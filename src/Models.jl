@@ -25,6 +25,11 @@ import PormG: _fk_targets_equal
 #   FieldValidationError — `validate_default`, which despite living here is called only from
 #                          field constructors in src/models/fields.jl to check a `default=` kwarg.
 import PormG: ModelDefinitionError, InvalidValueError, FieldValidationError
+# #496's `db_default` vocabulary and normaliser (Kernel, layer 1). The field constructors validate a
+# declared `db_default` here, at include step 107 — which is why these live in Kernel rather than in
+# `Dialect` (step 118) beside the renderer that also reads them.
+import PormG: PORTABLE_DB_DEFAULTS, canonical_db_default, db_default_is_portable,
+              is_valid_db_default_sql
 import PormG: PormGSettings, config, Configuration
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, DO_NOTHING, PROTECT
 using Printf
@@ -3963,6 +3968,16 @@ The `esc` argument REPLACES `escape_string`'s default rather than adding to it, 
 as well as `\$`. Both are needed: an unescaped `"` closes the literal early, and an unescaped `\$`
 emits source that parses but silently *interpolates* — `cost\$usd` would become the value of `usd`
 rather than the column name. (A backslash is escaped unconditionally, `esc` or not.)
+
+**One value type deliberately takes the raw `else` branch and is still correct: a `NamedTuple`**, the
+pinned form of #496's `db_default`. Interpolating one emits `(postgres = "now()", sqlite = nothing)`,
+which is valid Julia that parses back to an equal value, because Julia's own `show` for a
+`NamedTuple` renders its `String` fields as escaped literals — verified for `'`, `"`, `\$`, `\\` and
+`\$\$`-quoted bodies. A `format_string(::NamedTuple)` method was considered and rejected: it would be
+a second escaper competing with the one above, and the round trip is pinned by a test
+(`test_db_default.jl`) rather than by hand-rolled escaping. What must NOT take this branch is a
+`Symbol` — it would emit a bare identifier — which is exactly why `db_default` pins its engine with a
+`NamedTuple` rather than a `Symbol` slot.
 """
 function format_string(x)
   if x isa AbstractString

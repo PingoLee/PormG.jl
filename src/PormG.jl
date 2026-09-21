@@ -57,6 +57,10 @@ import .Kernel: _canonical_folder_path, _folder_tag, _usable_folder_tag
 # `using .Kernel` does not bind them here — and a submodule's `import PormG: _byte_bound` would
 # then warn "undeclared at import time" and resolve to nothing.
 import .Kernel: _fk_targets_equal, _references_equal, _has_non_negative, _byte_bound
+# #496: the balanced-paren predicate `canonical_db_default` normalises with. It was in
+# `migrations/introspection.jl` and moved to Kernel because a FIELD CONSTRUCTOR (include step 107)
+# now normalises a declared `db_default`, and `Migrations` is step 226.
+import .Kernel: _wrapped_in_parens
 # The canonical column IR itself (#507). Bound here rather than exported by `Kernel`, so that
 # `Dialect.alter_field` and `Migrations.column_spec` can `import PormG: …` it while a
 # `using PormG.Kernel` elsewhere does not inherit two dozen `C*` type names.
@@ -66,6 +70,11 @@ import .Kernel: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CBool, CText, C
                 CheckKind, NonNegativeCheck, ByteLengthCheck,
                 ColumnIdentity, ForeignKeyRef, ColumnSpec, ColumnDelta,
                 reference_delta, column_delta, COLUMN_DELTA_COMPARATORS, COLUMN_DELTA_SLOTS
+# #496's `db_default` vocabulary and normaliser. Bound here for the same reason as the line above:
+# `Models`, `Dialect` and `Migrations` each `import PormG: …` them, and a `using PormG.Kernel`
+# elsewhere should not inherit them.
+import .Kernel: PORTABLE_DB_DEFAULTS, canonical_db_default, db_default_is_portable,
+                is_valid_db_default_sql
 # Physical-table-name resolution (#59). Deliberately NOT exported — internal plumbing reached as
 # `PormG.model_table_name`, so it stays off the public surface guard. Lives in Kernel because
 # layer-2 `Configuration` needs it and is included before `Models`.

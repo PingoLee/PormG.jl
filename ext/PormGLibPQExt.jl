@@ -71,11 +71,8 @@ function _preflight_conninfo(conn_str::AbstractString)
   # host `u`, port `1234`, dbname `SEC@localhost/db` — and `u:pa@ss/SEC@localhost/db` is host `ss`
   # with the same dbname. Both parse cleanly, pass the host and port checks, and a connect error can
   # quote the host or the dbname. Wherever the `/` falls, the `@` that really ended the password lands
-  # in the PATH, so a URL whose parsed dbname holds an `@` is refused — unless the tail ALSO holds a
-  # `?` followed by a real keyword and `=` (`u:1234/x?sslmode=SEC@h/db`), which moves the `@` into that
-  # option's value instead. That residual is not refused here, because which options may legitimately
-  # hold an `@` is its own question (`?user=me@server` is Azure's documented form) — tracked in #662.
-  # `redact_secret` still masks such a string in every `connection=` field.
+  # in the PATH, so a URL whose parsed dbname holds an `@` is refused. (When the tail ALSO holds a `?`,
+  # the `@` lands in a query option instead — see the URL-option check after the loop, #662.)
   #
   # Checked BEFORE the loop so the message is the `/` remedy whatever order libpq lists its options
   # in (`u:pa/ss@h` also has port `pa`, and "not an integer" would point at the wrong character).
@@ -84,7 +81,8 @@ function _preflight_conninfo(conn_str::AbstractString)
   # cannot be reached through a URL any more — not even as `%40`, because libpq decodes the path
   # before we see it. The keyword form (`dbname=…`) is not ambiguous and stays accepted, so the rule
   # is gated on libpq's own URL test: the two prefixes, case-sensitive, at the very start.
-  if startswith(conn_str, "postgresql://") || startswith(conn_str, "postgres://")
+  is_url = startswith(conn_str, "postgresql://") || startswith(conn_str, "postgres://")
+  if is_url
     any(opt -> opt.keyword == "dbname" && !ismissing(opt.val) && occursin('@', opt.val), parsed) &&
       throw(PormG.InvalidConfigurationError(
         "the PostgreSQL connection URL's database name contains an `@`. If it came from a URL " *
@@ -106,9 +104,76 @@ function _preflight_conninfo(conn_str::AbstractString)
           "holding an `@` or `:`, percent-encode them as %40 / %3A"))
     end
   end
+  # The last shape of the unencoded-`/` leak (#662): when the password's tail also holds a `?` and a
+  # real keyword, `postgresql://u:1234/x?sslmode=SEC@h/db` is host `u`, port `1234`, dbname `x` and
+  # sslmode `SEC@h/db`, so the `@` that ended the password lands in that OPTION's value, past every
+  # check above. libpq then quotes the value at connect time (`invalid sslmode value: "SEC@h/db"`).
+  #
+  # So in a URL, an option value may hold an `@` only if its keyword is on an ALLOW-list. A deny-list
+  # of the keywords libpq validates was the obvious alternative, and measuring it showed why not:
+  # besides the enum options, `service` (`definition of service "…" not found`), `hostaddr`,
+  # `keepalives`, `tcp_user_timeout` and `ssl_min_protocol_version` all echo the value before any
+  # network I/O, and `client_encoding`, `options` or a certificate path echo it once a server
+  # answers. A deny-list leaks through whatever it forgot and whatever a later libpq adds; an
+  # allow-list refuses instead, and the keyword form is never ambiguous, so it stays open for a value
+  # that really holds an `@`. Runs AFTER the loop so the host/port messages above keep precedence.
+  #
+  # The allow-list alone is not enough, because the password's tail can span SEVERAL options and only
+  # the last one receives the `@`: `u:1234/x?sslmode=SEC&application_name=@h/db` is sslmode `SEC` (no
+  # `@`) and application_name `@h/db` (allowed), and libpq still echoes `invalid sslmode value: "SEC"`
+  # before any network I/O (review finding). So an allow-listed value is refused too when its `@`
+  # looks like the one that ended a password: nothing before it, nothing after it (a URL with no host,
+  # `postgresql://u:PASS@`), or a host tail after it — a `/`, `?`, `:` or `,` (path, query, port,
+  # second host). `user=me@server`, `a@b.com` and `etl@nightly`
+  # carry none of those. The shape test only applies when the value's LAST `@` arrived raw — `@` plus
+  # the tail after it occurs verbatim in the string: a correctly percent-encoded password like
+  # `p%40ss%2Fx` decodes to `p@ss/x` and must not be refused, and percent-encoding is also the remedy
+  # for a legitimate value that trips the test. It is the last `@` and not the whole value, because a
+  # password that encoded its own `@` but not its `/` (`…&user=a%40b@h/db`) still ends in a raw one.
+  #
+  # Known residual: an allow-listed option that takes the `@` with a bare host and no port, path or
+  # query after it — `u:1234/x?service=SEC&user=me@h`, from a password that literally ends in
+  # `/x?service=SEC&user=me`. It has the same raw shape as Azure's `…?service=prod&user=me@server`, so
+  # no rule over the string can tell them apart, and `SEC` is echoed at connect time. The user value
+  # itself can reach output too: a server that asks for a password makes LibPQ.jl prompt
+  # `Enter password for PostgreSQL user …`, and an auth failure quotes the user, but both need the
+  # URL's username to resolve as a reachable host.
+  if is_url
+    for opt in parsed
+      (ismissing(opt.val) || !occursin('@', opt.val)) && continue
+      if !(opt.keyword in _URL_AT_OK_KEYWORDS)
+        throw(PormG.InvalidConfigurationError(
+          "the PostgreSQL connection URL's `$(opt.keyword)` option contains an `@`. " * _URL_AT_REMEDY *
+          " A `$(opt.keyword)` value that really contains an `@` must be given in the keyword form"))
+      end
+      val = opt.val
+      tail = val[nextind(val, findlast('@', val)):end]
+      if occursin("@" * tail, conn_str) && (startswith(val, '@') || isempty(tail) || any(in("/?:,"), tail))
+        throw(PormG.InvalidConfigurationError(
+          "the PostgreSQL connection URL's `$(opt.keyword)` option ends in what looks like a host: an " *
+          "unencoded `@` followed by a host, port or path. " * _URL_AT_REMEDY *
+          " A `$(opt.keyword)` value that really looks like this must percent-encode its `@` as %40"))
+      end
+    end
+  end
   # `C_NULL` with no message is libpq's out-of-memory case; let `LibPQ.Connection` report it.
   return nothing
 end
+
+# The URL options whose value may carry an `@` (#662). Every other option is refused in URL form.
+const _URL_AT_OK_KEYWORDS = (
+  "user",                        # Azure's documented `user=me@server`, and e-mail-shaped role names
+  "password",                    # a percent-encoded `@` decodes to one; libpq never echoes a password
+  "sslpassword",                 # the same, for the client key's passphrase
+  "application_name",            # free text the server stores and never rejects
+  "fallback_application_name",   # the same
+)
+
+# Both #662 refusals share it. libpq ends a URL's credentials at the first `/` OR the first `@`, and
+# either way a `?` later in the password carries the rest of it into the query.
+const _URL_AT_REMEDY =
+  "If it came from a URL password, percent-encode the password's `/` as %2F, `?` as %3F and `@` as " *
+  "%40 — libpq ends the credentials at the first `/` or `@`, and a later `?` moves the rest into the query."
 
 # Mask everything libpq quoted. libpq quotes every value it echoes into a parse message, so masking
 # from the FIRST `"` to the LAST one removes every echoed fragment at once:

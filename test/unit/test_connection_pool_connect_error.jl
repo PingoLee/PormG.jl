@@ -175,6 +175,31 @@ end
     ("unencoded / after an integer", "postgresql://u:1234/SEC658@localhost/f1", ["SEC658"], "%2F"),
     ("unencoded @ then / in URL password", "postgresql://u:pa@ss/SEC658@localhost/f1",
      ["SEC658", "ss/"], "%2F"),
+    # The same `/`, with a `?keyword=` in the tail too (#662): the `@` lands in that OPTION's value,
+    # past the dbname check, and libpq quoted it (`invalid sslmode value: "…"`). `service` is the case
+    # the issue's list of enum keywords missed; it echoes before any network I/O as well.
+    ("unencoded / then ?sslmode= in URL password", "postgresql://u:1234/x?sslmode=SEC662@h/f1",
+     ["SEC662"], "%3F"),
+    ("unencoded / then ?service= in URL password", "postgresql://u:1234/x?service=SEC662@h/f1",
+     ["SEC662"], "%3F"),
+    # The tail can span several options, and only the last one takes the `@`: when that one is
+    # allow-listed, the fragment sits `@`-free in an earlier option and was still echoed (review
+    # finding, #662) — `invalid sslmode value: "SEC662"`.
+    ("?keyword= tail ending in an allow-listed option", "postgresql://u:1234/x?sslmode=SEC662&application_name=@h/f1",
+     ["SEC662"], "%3F"),
+    ("?keyword= tail ending in user=…@host/db", "postgresql://u:1234/x?service=SEC662&user=me@h/f1",
+     ["SEC662"], "%3F"),
+    # A password that percent-encoded its own `@` but not its `/`: the decoded value `a@b@h/f1` is
+    # nowhere in the string, but its LAST `@` still arrived raw (delta review, #662).
+    ("?keyword= tail, own @ encoded", "postgresql://u:1234/x?sslmode=SEC662&user=a%40b@h/f1",
+     ["SEC662"], "%3F"),
+    # …and one whose real URL had no host at all (`postgresql://u:PASS@`), so nothing follows the `@`.
+    ("?keyword= tail, no host after @", "postgresql://u:1234/x?sslmode=SEC662&user=me@",
+     ["SEC662"], "%3F"),
+    # No `/` at all: libpq ends the credentials at the first `@` (`pa`), the host at the `?`, and the
+    # rest of the password is the query.
+    ("unencoded @ then ?keyword= in URL password", "postgresql://u:pa@ss?sslmode=SEC662@h/f1",
+     ["SEC662"], "%3F"),
   ]
   # Warm the preflight→classify→raise path on a throwaway pool before timing anything, for the #382
   # reason given above: cold, the FIRST case measured 3.4 s here, all of it JIT.
@@ -243,6 +268,20 @@ end
   @test pre("postgresql://u:p%2Fw@localhost/f1") === nothing
   @test pre("host=localhost dbname=f1@archive") === nothing
   @test pre("host=localhost dbname='f1@archive'") === nothing
+  # The #662 URL-option refusal spares its allow-list — Azure's `user=me@server` above all — and,
+  # like #658's, the keyword form, where a path holding an `@` carries no ambiguity.
+  @test pre("postgresql://localhost/f1?user=pingo@server") === nothing
+  @test pre("postgresql://pingo%40server:pw@localhost/f1") === nothing
+  @test pre("postgresql://localhost/f1?application_name=etl@nightly") === nothing
+  @test pre("postgresql://localhost/f1?fallback_application_name=etl@nightly") === nothing
+  @test pre("postgresql://localhost/f1?sslpassword=key@phrase") === nothing
+  @test pre("host=localhost dbname=f1 sslrootcert=/etc/ca@2026.pem") === nothing
+  # The host-tail test only reads a RAW `@`: a percent-encoded password whose decoded form is `@`
+  # then `/` must pass, in the userinfo and in the query alike — and so must the encoded spelling of
+  # an allow-listed value that the test refuses raw, since that is the remedy the message gives.
+  @test pre("postgresql://pingo:p%40ss%2Fx@localhost/f1") === nothing
+  @test pre("postgresql://localhost/f1?password=p%40ss%2Fx") === nothing
+  @test pre("postgresql://localhost/f1?application_name=etl%40nightly%3Av2") === nothing
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -260,6 +299,30 @@ end
       @test err isa PormG.InvalidConfigurationError
       @test occursin("keyword form", sprint(showerror, err))
       @test !occursin("archive", sprint(showerror, err))
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Connection-string preflight: the documented cost of the #662 refusal
+# In a URL, only the allow-listed options may hold an `@`, so a certificate path or a Unix-socket
+# directory containing one must move to the keyword form — and an allow-listed value whose raw `@` is
+# followed by a host tail must be percent-encoded. The message names the option, never its value.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a URL option holding an `@` outside the #662 rules is refused toward its remedy" begin
+  pre = LibPQExt657._preflight_conninfo
+  for (dsn, keyword, remedy, secret) in (
+      ("postgresql://localhost/f1?sslrootcert=/etc/ca@2026.pem", "sslrootcert", "keyword form", "2026"),
+      ("postgresql:///f1?host=/run/pg@main", "host", "keyword form", "main"),
+      ("postgresql://%2Frun%2Fpg%40main/f1", "host", "keyword form", "main"),
+      ("postgresql://localhost/f1?application_name=etl@nightly:v2", "application_name", "as %40", "nightly"))
+    @testset "$dsn" begin
+      err = try; pre(dsn); nothing; catch e; e; end
+      @test err isa PormG.InvalidConfigurationError
+      msg = sprint(showerror, err)
+      @test occursin(remedy, msg)
+      @test occursin("`$keyword`", msg)
+      @test !occursin(secret, msg)
     end
   end
 end

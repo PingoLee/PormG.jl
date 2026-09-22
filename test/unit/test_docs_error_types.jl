@@ -769,6 +769,41 @@ const DOCERR_CASES = [
             q.list(show_query = :dict)
         end,
     ),
+    # #566. The page states that a subquery cannot see a CTE its enclosing query declares (#444:
+    # one CTE namespace per query), and names both spellings — so both are pinned. The page used to
+    # call this "not blocked, but not validated"; every spelling was already refused.
+    (
+        "read/subqueries_and_ctes.md — a subquery cannot reference its enclosing query's CTE (handle) (#566)",
+        UnknownFieldError,
+        () -> begin
+            ev = DOCERR_STATUS_PG.objects
+            ev.values("statusid", "status")
+            q = DOCERR_RESULT_PG.objects
+            q.with("ev" => ev, join_field = "statusid" => "statusid")
+            inner = DOCERR_RESULT_PG.objects
+            inner.filter(CTE("ev", "status") => "Finished")
+            inner.filter("resultid" => OuterRef("resultid"))
+            q.filter(Exists(inner))
+            q.values("resultid")
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "read/subqueries_and_ctes.md — a subquery cannot reference its enclosing query's CTE (string) (#566)",
+        UnknownFieldError,
+        () -> begin
+            ev = DOCERR_STATUS_PG.objects
+            ev.values("statusid", "status")
+            q = DOCERR_RESULT_PG.objects
+            q.with("ev" => ev, join_field = "statusid" => "statusid")
+            inner = DOCERR_RESULT_PG.objects
+            inner.filter("ev__status" => "Finished")
+            inner.filter("resultid" => OuterRef("resultid"))
+            q.filter(Exists(inner))
+            q.values("resultid")
+            q.list(show_query = :dict)
+        end,
+    ),
     (
         # #488. A `cjoin_on` target given as a model OBJECT may come from anywhere, so a model
         # registered on a different connection from the one the query runs on is refused when the

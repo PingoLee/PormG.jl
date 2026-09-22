@@ -568,9 +568,13 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # has to repeat it.
     if !haskey(instruct.object.ctes, cte_name)
       declared = isempty(instruct.object.ctes) ? "none" : join(sort(collect(keys(instruct.object.ctes))), ", ")
+      # #566: when an enclosing query declares it, the hint REPLACES the "add it with .with()"
+      # advice rather than following it — declaring the CTE on this (sub)query is the #433 refusal.
+      hint = _outer_cte_hint(instruct, cte_name)
       throw(UnknownFieldError(
         "CTE \e[4m\e[31m$(cte_name)\e[0m is not declared on this query; declared CTEs: " *
-        "\e[4m\e[32m$(declared)\e[0m. Add it with \e[4m\e[32m.with(\"$(cte_name)\" => subquery)\e[0m."))
+        "\e[4m\e[32m$(declared)\e[0m." *
+        (isempty(hint) ? " Add it with \e[4m\e[32m.with(\"$(cte_name)\" => subquery)\e[0m." : hint)))
     end
     cte_dict = instruct.object.ctes[cte_name]
     # #433: this is NOT an internal invariant, which is what it claimed to be until the #433 audit.
@@ -755,7 +759,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # #446: through the shared funnel. This site built the same sentence by hand with UNSORTED field
     # names and a slightly different tail, so a user saw one format when they typo'd the first path
     # segment and another when they typo'd a later one — for the same mistake.
-    throw(_unknown_field(instruct.object.model, vector[1]))
+    # #566: the string spelling of a subquery reaching for its parent's CTE lands here, not in the
+    # CTE arm above, because the inner query has no CTE of that name to route it there.
+    throw(_unknown_field(instruct.object.model, vector[1]; hint = _outer_cte_hint(instruct, vector[1])))
   end
 
   # #447: skipping the config lookups for a CTE hop (inside `_finish_hop!`) is what stopped a

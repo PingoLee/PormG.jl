@@ -1362,7 +1362,7 @@ Task = Models.Model(
 - **Increasing Length**: Safe operation
 - **Decreasing Length**: Requires data validation
 - **Adding Choices**: Application-level change only
-- **Changing Column Name**: rename the field — the column follows the field name; `db_column` is not currently honored by schema generation
+- **Changing Column Name**: the physical column is `db_column` when set, else the field name, and `db_column` is authoritative across DDL, queries and the migration diff (#50). The diff compares physical columns, so renaming the field while `db_column` pins the old name plans nothing. Changing the physical name — renaming an unpinned field, or changing `db_column` — reads as one column gone and another added: interactive `makemigrations` asks whether they are the same field and plans a `RENAME COLUMN` if you say so; otherwise it plans `ADD COLUMN` plus `DROP COLUMN`, which loses the column's data. See *Renaming a field* in the migrations guide
 
 # Notes
 - The field uses VARCHAR type which is efficient for short to medium strings

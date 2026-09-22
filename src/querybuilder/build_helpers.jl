@@ -867,7 +867,8 @@ end
 # the default.
 function _unknown_field(model::PormGModel, name::AbstractString;
                        aliases::Vector{String} = String[],
-                       include_accessors::Bool = true)::UnknownFieldError
+                       include_accessors::Bool = true,
+                       hint::String = "")::UnknownFieldError
   choices = sort(collect(model.field_names))
   accessors = include_accessors ? sort(collect(keys(model.related_objects))) : String[]
   tail = isempty(accessors) ? "" :
@@ -891,9 +892,30 @@ function _unknown_field(model::PormGModel, name::AbstractString;
   tail *= looks_like_alias_ref ?
     "\n  If you meant a \e[4m\e[32mcjoin_on\e[0m joined copy: \e[4m\e[31mF(\"alias.column\")\e[0m " *
     "was removed in #481 — write \e[4m\e[32mJoined(\"alias\", \"column\")\e[0m instead." : ""
+  tail *= hint
   return UnknownFieldError(
     "the column \e[4m\e[31m$(name)\e[0m not found in \e[4m\e[32m$(Models.model_table_name(model))\e[0m, " *
     "that contains the fields: \e[4m\e[32m$(join(choices, ", "))\e[0m$(tail)")
+end
+
+# #566 — a subquery reaching for a CTE its ENCLOSING query declares. Correct to refuse: each query
+# has its own CTE namespace (#444), so the inner build genuinely has no such CTE. But the bare
+# refusal reads "declared CTEs: none" (or "column not found") while the caller can see the `.with()`
+# two lines up, which looks like PormG lost the CTE rather than like a scoping rule. This names the
+# rule. The whole `outer` chain is walked, not one level: a filter `Exists` nested in another filter
+# `Exists` is legal, so the declaring query can be further up. Returns "" when no enclosing query
+# declares `name`. It only ever changes a message, never which error is raised.
+function _outer_cte_hint(instruct::SQLInstruction, name::AbstractString)::String
+  outer = instruct.outer
+  while outer !== nothing
+    haskey(outer.object.ctes, name) && return (
+      "\n  \e[4m\e[31m$(name)\e[0m is declared on an ENCLOSING query, and a subquery " *
+      "(Subquery, Exists, __@in) has its own CTE namespace: it cannot see its parent's " *
+      "\e[4m\e[32m.with(...)\e[0m (#444). Put the condition on the CTE in the enclosing query's " *
+      "own \e[4m\e[32m.filter(...)\e[0m instead.")
+    outer = outer.outer
+  end
+  return ""
 end
 
 """

@@ -468,8 +468,14 @@ const DOCERR_CASES = [
     # #618 — the *Which Lookups Work on an Aggregate Alias* section says `@range`, `@nrange` and
     # `@isnull` are WHERE-only and raise when the query is built. The three are served on the WHERE
     # path by arms that return above the shared operator ladder, so an alias never reaches a renderer
-    # for them; the refusal names the lookup the caller typed rather than the internal SQL token,
-    # which is the half a plain "it raises" assertion would not have caught.
+    # for them.
+    #
+    # These entries pin the doc's TYPE claim only, which is this harness's documented design. They do
+    # NOT pin the message: the pre-#618 path raised `FilterError` too (leaking the internal token —
+    # "Invalid filter operator: BETWEEN is not a supported operator" — to someone who typed `@range`),
+    # so all three pass unchanged against the unpatched code. The wording half is pinned in
+    # `test/unit/test_alignment_sqlite.jl`'s #618 testset, which asserts the user's spelling appears
+    # and that `BETWEEN`/`ISNULL` do not; deleting the guard fails that block and not this one.
     (
         "read/filters_and_aggregates.md — @range on a projection alias is WHERE-only",
         FilterError,

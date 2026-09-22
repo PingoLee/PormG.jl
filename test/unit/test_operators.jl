@@ -1657,10 +1657,23 @@ end
                                              q.filter("c" => UInt8[0x01, 0x02]);
                                              q.list(show_query = :dict))
   @test occursin("vector value but no operator", alias_err.value.msg)
-  @test occursin("c", alias_err.value.msg)
+  # The funnel's actionable example, not the bare alias name: `occursin("c", …)` would be a
+  # tautology — "c" occurs in the message this assertion's neighbour already requires, and in almost
+  # any English sentence, so it could not fail. `c__@in` is what discriminates, and it is the
+  # spelling the guard's `label` argument produces.
+  @test occursin("c__@in", alias_err.value.msg)
 
-  # …and a BINARY one is the case that must still work: `Max` over a BinaryField resolves
-  # `format_binary_sql`, so the payload binds as one blob under `:having`.
+  # …and a BINARY one passes the guard rather than being refused: `Max` over a BinaryField resolves
+  # `format_binary_sql`, so the payload binds as one blob under `:having`. This asserts the GUARD's
+  # decision — that a binary-typed alias is not swept up by the refusal — and nothing more.
+  #
+  # SQLITE MOCK ONLY, deliberately, and not for convenience. Measured against the live PostgreSQL:
+  # `function max(bytea) does not exist`, so this statement builds and then fails at the server there.
+  # `F("blob")` is not a portable substitute either — a non-aggregate alias filter lands in HAVING and
+  # PostgreSQL then rejects the ungrouped projection ("column must appear in the GROUP BY clause").
+  # So there is no portable spelling for filtering a binary projection alias today; the guard stays
+  # permissive because narrowing it is a behavior change beyond #596, but nothing here or in the docs
+  # advertises the shape as supported.
   bin_alias = _IN411.objects
   bin_alias.values("b" => PormG.QueryBuilder.Max("blob"))
   bin_alias.filter("b" => UInt8[0x01, 0x02])

@@ -940,9 +940,9 @@ HAVING MAX("Tb"."name") ILIKE $1 ESCAPE '\'    -- bound: "United%"
 
 Three further consequences worth knowing:
 
-- **`@range`, `@nrange` and `@isnull` are `WHERE`-only.** On an alias they raise `FilterError` when the
-  query is built, naming the lookup and pointing at the column. Use `@gt`/`@lt` pairs on the alias, or
-  filter the underlying field.
+- **`@range`, `@nrange`, `@isnull` and the JSONB lookups are `WHERE`-only.** On an alias they raise
+  `FilterError` when the query is built, naming the lookup and the alias. Use `@gt`/`@lt` pairs on the
+  alias, or filter the underlying field.
 - An operator that is PostgreSQL-only on a column is PostgreSQL-only on an alias too.
   `@iunaccent_contains` and `@iunaccent_exact` raise
   [`BackendCapabilityError`](../errors.md) on SQLite from `HAVING` exactly as they do from `WHERE`.

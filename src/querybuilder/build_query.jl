@@ -541,8 +541,16 @@ end
 # the caller never typed. Refuse earlier, in the caller's own vocabulary, and say where the lookup does
 # work. Supporting them on an alias is a separate change: `BETWEEN` needs two formatted operands and
 # `_resolve_having_filter_value` formats one.
+#
+# The JSON four are here for the same reason at lower severity: they never reach `_render_predicate`
+# (`_resolve_having_filter_value` refuses first), so nothing leaked — but the message blamed the
+# VALUE's type ("the c projection alias is the type number. Please check the value: {"a":1}") for what
+# is really "this lookup has no alias renderer". Same confusion, quieter.
 const _ALIAS_UNSUPPORTED_OPERATORS = Dict("BETWEEN" => "@range", "NOT BETWEEN" => "@nrange",
-                                          "ISNULL" => "@isnull")
+                                          "ISNULL" => "@isnull",
+                                          "jcontains" => "@jcontains", "has_key" => "@has_key",
+                                          "has_any_keys" => "@has_any_keys",
+                                          "has_keys" => "@has_keys")
 function _guard_alias_clause_operator(v::SQLTypeOper, label::AbstractString)
   spelling = get(_ALIAS_UNSUPPORTED_OPERATORS, v.operator, nothing)
   spelling === nothing && return nothing
@@ -635,6 +643,23 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         # `build()` and the instruction is discarded — but it matches what
         # `_get_select_query(::ExistsObject)` already does for `correlated_projection`, and it stops
         # the next caller who catches one of these from inheriting a wrong context.
+        # Both guards run BEFORE the left-hand side is resolved. Neither depends on anything the
+        # render produces, and `_having_alias_lhs` can now bind (#595) — so refusing afterwards would
+        # file a binding projection's operands into `:having` and then throw them away. Waste rather
+        # than a defect, since the instruction is discarded with the throw, but the ordering is free.
+        #
+        # #596: an alias is a bare path too, so `values("c" => Count("id")); filter("c" => bytes)`
+        # reaches here. There is no `PormGField` to hand the guard — the alias's type comes from
+        # `_having_alias_formatter` — so decide on that formatter: `format_binary_sql` is what a
+        # projection over a `BinaryField` resolves to, and only that one may carry a payload.
+        # (`ImageField`/`FileField` share `type == "BLOB"` but carry `format_text_sql`, so the
+        # formatter test is as tight as the WHERE side's `_is_binary_field` struct test.)
+        _guard_alias_scalar_bytes(v, _having_alias_formatter(having_key, instruc), having_key[2])
+        # #618: refuse, in this clause, the operators `_render_predicate` has no arm for. `BETWEEN` /
+        # `NOT BETWEEN` / `ISNULL` are served on the WHERE path by arms that return ABOVE that ladder,
+        # so they never reached the extraction. Naming the user's own spelling matters here: the
+        # internal token is `BETWEEN`, but nobody types that — they type `@range`.
+        _guard_alias_clause_operator(v, having_key[2])
         set_context!(instruc, :having)
         try
           field = _having_alias_lhs(having_key, having_cached, instruc)
@@ -646,16 +671,6 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
           # compare with `=` and must NOT be decorated, which is why that tuple and
           # `PATTERN_LOOKUP_OPERATORS` are deliberately different sets (`constants.jl`).
           is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
-          # #596: an alias is a bare path too, so `values("c" => Count("id")); filter("c" => bytes)`
-          # reaches here. There is no `PormGField` to hand the guard — the alias's type comes from
-          # `_having_alias_formatter` — so decide on that formatter: `format_binary_sql` is what a
-          # projection over a `BinaryField` resolves to, and only that one may carry a payload.
-          _guard_alias_scalar_bytes(v, _having_alias_formatter(having_key, instruc), having_key[2])
-          # #618: refuse, in this clause, the operators `_render_predicate` has no arm for. `BETWEEN` /
-          # `NOT BETWEEN` / `ISNULL` are served on the WHERE path by arms that return ABOVE that ladder,
-          # so they never reached the extraction. Naming the user's own spelling matters here: the
-          # internal token is `BETWEEN`, but nobody types that — they type `@range`.
-          _guard_alias_clause_operator(v, having_key[2])
           placeholder = add_parameter!(instruc,
                                        _resolve_having_filter_value(having_key, v.values, instruc, v.operator),
                                        contains=is_like_op, operator=v.operator)

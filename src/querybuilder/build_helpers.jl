@@ -2242,6 +2242,11 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     _label, _type, _subject = _transform_filter_labels(v.column, v.column.field.formatter)
     # #596: a transform column is a bare path, so `date__@year => UInt8[1, 2]` reaches here as an
     # equality. No transform yields bytes, so this is always the refusal.
+    #
+    # This is the ONE of the three transform arms a public spelling reaches: the string forms
+    # (`@year`, `@month`, `@yyyy_mm`, …) always attach a formatter (`functions.jl`), so they land
+    # here. The two arms below need a function node with `formatter === nothing`, which no public
+    # spelling produces — they carry the same guard as a fail-safe, and say so there.
     _guard_scalar_bytes(v, nothing, _label)
     # #618: the transform arms reach the `Dialect` dispatch below, so their SQL keyword and `ESCAPE`
     # clause were always right — but they bound the value with no `contains=` / `operator=`, so a
@@ -2257,7 +2262,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # about. Leaving them raw would keep that coincidence load-bearing.
     _fmt = getfield(Models, PormGTypeField[v.column.field.function_name])
     _label, _type, _subject = _transform_filter_labels(v.column, _fmt)   # #576
-    _guard_scalar_bytes(v, nothing, _label)   # #596
+    _guard_scalar_bytes(v, nothing, _label)   # #596 — fail-safe; no public spelling reaches this arm
     placeholders = add_parameter!(instruc,
       _guarded_format(_fmt, v.values, v.operator, _label, _type; subject = _subject),
       contains = v.operator in LIKE_WILDCARD_OPERATORS, operator = v.operator)   # #618
@@ -2270,7 +2275,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # about. Leaving them raw would keep that coincidence load-bearing.
     _fmt = getfield(Models, PormGTypeField[v.column.function_name])
     _label, _type, _subject = _transform_filter_labels(v.column, _fmt)   # #576
-    _guard_scalar_bytes(v, nothing, _label)   # #596
+    _guard_scalar_bytes(v, nothing, _label)   # #596 — fail-safe; no public spelling reaches this arm
     placeholders = add_parameter!(instruc,
       _guarded_format(_fmt, v.values, v.operator, _label, _type; subject = _subject),
       contains = v.operator in LIKE_WILDCARD_OPERATORS, operator = v.operator)   # #618

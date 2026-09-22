@@ -3711,6 +3711,21 @@ end
     # `@range`, i.e. an internal token leaking into a user-facing message. Refused earlier now, in the
     # caller's own vocabulary. (Supporting them on an alias is a separate change: BETWEEN needs two
     # formatted operands and `_resolve_having_filter_value` formats one.)
+    # The JSONB four are on the same list at lower severity: they never reached `_render_predicate`
+    # (`_resolve_having_filter_value` refused first), so nothing leaked — but the message blamed the
+    # VALUE's type ("the c projection alias is the type number. Please check the value: {…}") for what
+    # is really "this lookup has no alias renderer". Same confusion, quieter.
+    for (spelling, value) in (("jcontains", Dict("a" => 1)), ("has_key", "a"),
+                              ("has_any_keys", ["a", "b"]), ("has_keys", ["a", "b"]))
+        err = @test_throws PormG.FilterError (q = M.Race.objects;
+                                             q.values("n2" => Count("raceid"));
+                                             q.filter("n2__@$(spelling)" => value);
+                                             inspect_query(q))
+        @test occursin("@$(spelling)", err.value.msg)
+        @test occursin("n2", err.value.msg)
+        @test !occursin("is the type", err.value.msg)   # not a value-type complaint any more
+    end
+
     for (spelling, value) in (("range", [1, 5]), ("nrange", [1, 5]), ("isnull", true))
         err = @test_throws PormG.FilterError (q = M.Race.objects;
                                              q.values("n2" => Count("raceid"));
@@ -3721,11 +3736,20 @@ end
         @test occursin("n2", msg)                    # and which alias
         @test !occursin("BETWEEN", msg)              # never the internal token
         @test !occursin("ISNULL", msg)
-        # Same lookup on a real COLUMN still works — the refusal is clause-scoped, not global.
+        # Same lookup on a real COLUMN still renders — the refusal is clause-scoped, not global.
+        # Asserted on the SQL and the bound vector rather than on "it did not throw": an `isa Dict`
+        # control passes against a build that silently stopped emitting the predicate at all.
         ok = M.Race.objects
         ok.values("name")
         ok.filter(spelling == "isnull" ? ("name__@isnull" => true) : ("year__@$(spelling)" => value))
-        @test inspect_query(ok) isa Dict
+        ok_sql = inspect_query(ok)
+        if spelling == "isnull"
+            @test occursin("IS NULL", ok_sql[:sql_text])
+            @test ok_sql[:parameters] == []
+        else
+            @test occursin(spelling == "nrange" ? "NOT BETWEEN" : "BETWEEN", ok_sql[:sql_text])
+            @test ok_sql[:parameters] == [1, 5]
+        end
     end
 
     # An operator no renderer knows is refused at build time. The alias branch had no `else` arm at

@@ -26,6 +26,11 @@ import PormG.QueryBuilder: Q, Qor, F, Exists, OuterRef, Subquery, Count, Concat,
 # guard passes). `OperObject`/`SQLField` build the unknown-operator case, which has no fluent spelling.
 import PormG.QueryBuilder: Max, OperObject, SQLField
 
+# Error messages carry ANSI colour when `Base.have_color` is true and are stripped by `_emsg` when it
+# is not. A local run is non-TTY so the codes are gone; CI runs with colour ON. Any `occursin` whose
+# needle SPANS a colorized token therefore passes locally and fails on CI. Match plain text instead.
+_plain(msg::AbstractString) = replace(msg, r"\e\[[0-9;]*m" => "")
+
 @testset "SQLite Parameter Alignment Verification (Real Models)" begin
     # 1. Positional Cross-Check with Real Schema
     q = M.Result.objects
@@ -3859,7 +3864,9 @@ end
                                                        q.values("n" => "name");
                                                        q.filter("n" => "Monza");
                                                        inspect_query(q))
-    @test occursin("declared aliases: name", alias_miss.value.msg)
+    # `_plain`: the alias list is colorized, so this needle spans "declared aliases: " +
+    # "\e[4m\e[32mname\e[0m". Matches locally (non-TTY, `_emsg` strips) and fails on CI (colour on).
+    @test occursin("declared aliases: name", _plain(alias_miss.value.msg))
 
     # An aggregate over a joined path binds nothing either, so it reuses the memo and keeps the ONE
     # join it registered — a fresh render must not have produced a second one.

@@ -1036,6 +1036,12 @@ if !isdefined(Main, :_In411Event)
   _In411Result._module = Main
 end
 
+# Error messages carry ANSI colour when `Base.have_color` is true and are stripped by `_emsg` when it
+# is not. A local run is non-TTY so the codes are gone; CI runs with colour ON, so they are present.
+# Any `occursin` whose needle SPANS a colorized token therefore passes locally and fails on CI —
+# which is exactly how two assertions on this branch reached the PR green. Match plain text instead.
+_plain(msg::AbstractString) = replace(msg, r"\e\[[0-9;]*m" => "")
+
 const _IN411 = _In411Event
 const _IN411R = _In411Result
 
@@ -1568,7 +1574,11 @@ end
   # is untouched; a binary membership filter is spelled `blob__@in => [bytes_a, bytes_b]` (#466).
   suffixed = @test_throws PormG.FilterError _IN411.objects.filter(
     "blob__@in" => UInt8[0x01, 0x02]).list(show_query = :dict)
-  @test occursin("is the type BLOB", suffixed.value.msg)
+  # `_plain` because this phrase spans a COLORIZED token — the message is
+  # "is the type \e[4m\e[32mBLOB\e[0m". `_emsg` keeps the escapes when `Base.have_color` is true and
+  # strips them otherwise, so a local run (non-TTY, color off) matches and CI (color on) does not.
+  # This assertion shipped green locally and failed on all five CI jobs; match the plain text.
+  @test occursin("is the type BLOB", _plain(suffixed.value.msg))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

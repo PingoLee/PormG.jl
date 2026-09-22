@@ -3704,6 +3704,30 @@ end
     @test sl_tr[:parameters] == ["1991-03%"]   # before #618: "1991-03", undecorated and unescaped
     @test !occursin("istartswith", sl_tr[:sql_text])
 
+    # `@range` / `@nrange` / `@isnull` are WHERE-only on an alias, and the refusal must name the
+    # LOOKUP THE USER TYPED. On the WHERE path those three are served by arms that `return` ABOVE the
+    # shared ladder, so the extraction never picked them up — which first surfaced as
+    # `"Invalid filter operator: BETWEEN is not a supported operator"` on a query whose author wrote
+    # `@range`, i.e. an internal token leaking into a user-facing message. Refused earlier now, in the
+    # caller's own vocabulary. (Supporting them on an alias is a separate change: BETWEEN needs two
+    # formatted operands and `_resolve_having_filter_value` formats one.)
+    for (spelling, value) in (("range", [1, 5]), ("nrange", [1, 5]), ("isnull", true))
+        err = @test_throws PormG.FilterError (q = M.Race.objects;
+                                             q.values("n2" => Count("raceid"));
+                                             q.filter("n2__@$(spelling)" => value);
+                                             inspect_query(q))
+        msg = err.value.msg
+        @test occursin("@$(spelling)", msg)          # the user's spelling
+        @test occursin("n2", msg)                    # and which alias
+        @test !occursin("BETWEEN", msg)              # never the internal token
+        @test !occursin("ISNULL", msg)
+        # Same lookup on a real COLUMN still works — the refusal is clause-scoped, not global.
+        ok = M.Race.objects
+        ok.values("name")
+        ok.filter(spelling == "isnull" ? ("name__@isnull" => true) : ("year__@$(spelling)" => value))
+        @test inspect_query(ok) isa Dict
+    end
+
     # An operator no renderer knows is refused at build time. The alias branch had no `else` arm at
     # all, so anything at all reached the server as a bare token; the shared ladder brings WHERE's
     # refusal with it.

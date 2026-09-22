@@ -521,6 +521,38 @@ function _having_alias_lhs(alias::MemoKey, cached, instruc::SQLInstruction)
   return _get_select_query(source.field, instruc, _as = source._as)
 end
 
+# `_guard_scalar_bytes`'s alias twin (#596). Same decision, different evidence: a projection alias has
+# no `PormGField`, only whatever formatter `_having_alias_formatter` resolved for it, so binary-ness is
+# read off that. `format_binary_sql` is what a projection over a `BinaryField` resolves to and is the
+# only formatter that may carry a byte payload; every other alias refuses one, through the same funnel
+# the WHERE arms use so the message is the one a user already knows.
+function _guard_alias_scalar_bytes(v::SQLTypeOper, formatter, label::AbstractString)
+  (v.operator == "=" && v.values isa Vector{UInt8}) || return nothing
+  formatter === Models.format_binary_sql && return nothing
+  _raise_invalid_filter_operator([String(label)], "vector",
+                                 ["in", "nin", "range", "nrange", "has_any_keys", "has_keys", "jcontains"])
+end
+
+# The operators `_render_predicate` has no arm for, refused in the clause that cannot serve them (#618).
+#
+# On the WHERE path `ISNULL` and `BETWEEN`/`NOT BETWEEN` are handled by arms that `return` *before* the
+# shared ladder, so extracting the ladder did not carry them — and an alias filter reaching the ladder
+# with one of them got `"Invalid filter operator: BETWEEN is not a supported operator"`, naming a token
+# the caller never typed. Refuse earlier, in the caller's own vocabulary, and say where the lookup does
+# work. Supporting them on an alias is a separate change: `BETWEEN` needs two formatted operands and
+# `_resolve_having_filter_value` formats one.
+const _ALIAS_UNSUPPORTED_OPERATORS = Dict("BETWEEN" => "@range", "NOT BETWEEN" => "@nrange",
+                                          "ISNULL" => "@isnull")
+function _guard_alias_clause_operator(v::SQLTypeOper, label::AbstractString)
+  spelling = get(_ALIAS_UNSUPPORTED_OPERATORS, v.operator, nothing)
+  spelling === nothing && return nothing
+  throw(FilterError(
+    "The \e[31m$(spelling)\e[0m lookup is not supported on the projection alias " *
+    "\e[31m$(label)\e[0m. It is available on a column — filter the underlying field instead, " *
+    "or compare the alias with \e[32m@gt\e[0m / \e[32m@lt\e[0m / \e[32m@gte\e[0m / " *
+    "\e[32m@lte\e[0m / \e[32m@in\e[0m."))
+end
+
 function _having_alias_formatter(alias::MemoKey, instruc::SQLInstruction)
   memoized = memo_field(instruc, alias)
   memoized === nothing || return memoized.formatter
@@ -595,25 +627,46 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         # Switch to having context for positional parameters. #595 moved this ABOVE the left-hand
         # side: resolving it can now RENDER, and a render binds — those values belong in `:having`
         # with the comparison value, ahead of it, exactly as they print.
+        # The restore is in a `finally` because this block can throw from four places now, and three
+        # of them are new: the fresh render in `_having_alias_lhs` (#595), `_render_predicate`'s
+        # unknown-operator `FilterError` and the SQLite-refusing `Dialect` arms'
+        # `BackendCapabilityError` (#618), plus the two #596 guards. Leaving `:having` active would
+        # file a later clause's values in the wrong bucket. Harmless today — every such throw escapes
+        # `build()` and the instruction is discarded — but it matches what
+        # `_get_select_query(::ExistsObject)` already does for `correlated_projection`, and it stops
+        # the next caller who catches one of these from inheriting a wrong context.
         set_context!(instruc, :having)
-        field = _having_alias_lhs(having_key, having_cached, instruc)
-        # #618: `contains=` / `operator=` are what run `_apply_like_wildcards` (and with it
-        # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias
-        # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the
-        # term matched as a wildcard. The gate is membership in `LIKE_WILDCARD_OPERATORS`, exactly as
-        # the three WHERE binding arms in `build_helpers.jl` spell it; the `*_exact` pattern lookups
-        # compare with `=` and must NOT be decorated, which is why that tuple and
-        # `PATTERN_LOOKUP_OPERATORS` are deliberately different sets (`constants.jl`).
-        is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
-        placeholder = add_parameter!(instruc,
-                                     _resolve_having_filter_value(having_key, v.values, instruc, v.operator),
-                                     contains=is_like_op, operator=v.operator)
-        # #618: one ladder, shared with the WHERE path — see `_render_predicate`. It absorbs the #411
-        # `IN`/`NOT IN` membership case this branch used to special-case, adds the
-        # `PATTERN_LOOKUP_OPERATORS` → `Dialect` dispatch it never had, and brings the
-        # unknown-operator refusal that was missing here entirely.
-        push!(instruc.having, _render_predicate(string(field), v.operator, placeholder, instruc))
-        set_context!(instruc, :where)
+        try
+          field = _having_alias_lhs(having_key, having_cached, instruc)
+          # #618: `contains=` / `operator=` are what run `_apply_like_wildcards` (and with it
+          # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias
+          # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the
+          # term matched as a wildcard. The gate is membership in `LIKE_WILDCARD_OPERATORS`, exactly as
+          # the three WHERE binding arms in `build_helpers.jl` spell it; the `*_exact` pattern lookups
+          # compare with `=` and must NOT be decorated, which is why that tuple and
+          # `PATTERN_LOOKUP_OPERATORS` are deliberately different sets (`constants.jl`).
+          is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
+          # #596: an alias is a bare path too, so `values("c" => Count("id")); filter("c" => bytes)`
+          # reaches here. There is no `PormGField` to hand the guard — the alias's type comes from
+          # `_having_alias_formatter` — so decide on that formatter: `format_binary_sql` is what a
+          # projection over a `BinaryField` resolves to, and only that one may carry a payload.
+          _guard_alias_scalar_bytes(v, _having_alias_formatter(having_key, instruc), having_key[2])
+          # #618: refuse, in this clause, the operators `_render_predicate` has no arm for. `BETWEEN` /
+          # `NOT BETWEEN` / `ISNULL` are served on the WHERE path by arms that return ABOVE that ladder,
+          # so they never reached the extraction. Naming the user's own spelling matters here: the
+          # internal token is `BETWEEN`, but nobody types that — they type `@range`.
+          _guard_alias_clause_operator(v, having_key[2])
+          placeholder = add_parameter!(instruc,
+                                       _resolve_having_filter_value(having_key, v.values, instruc, v.operator),
+                                       contains=is_like_op, operator=v.operator)
+          # #618: one ladder, shared with the WHERE path — see `_render_predicate`. It absorbs the #411
+          # `IN`/`NOT IN` membership case this branch used to special-case, adds the
+          # `PATTERN_LOOKUP_OPERATORS` → `Dialect` dispatch it never had, and brings the
+          # unknown-operator refusal that was missing here entirely.
+          push!(instruc.having, _render_predicate(string(field), v.operator, placeholder, instruc))
+        finally
+          set_context!(instruc, :where)
+        end
         continue
       end
       push!(instruc._where, _get_filter_query(v, instruc))

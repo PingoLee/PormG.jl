@@ -465,6 +465,29 @@ const DOCERR_CASES = [
         FilterError,
         () -> DOCERR_RACE_PG.objects.filter("date__@quarter" => "abc").list(show_query = :dict),
     ),
+    # #618 — the *Which Lookups Work on an Aggregate Alias* section says `@range`, `@nrange` and
+    # `@isnull` are WHERE-only and raise when the query is built. The three are served on the WHERE
+    # path by arms that return above the shared operator ladder, so an alias never reaches a renderer
+    # for them; the refusal names the lookup the caller typed rather than the internal SQL token,
+    # which is the half a plain "it raises" assertion would not have caught.
+    (
+        "read/filters_and_aggregates.md — @range on a projection alias is WHERE-only",
+        FilterError,
+        () -> DOCERR_RACE_PG.objects.values("n" => Count("raceid")).
+            filter("n__@range" => [1, 5]).list(show_query = :dict),
+    ),
+    (
+        "read/filters_and_aggregates.md — @nrange on a projection alias is WHERE-only",
+        FilterError,
+        () -> DOCERR_RACE_PG.objects.values("n" => Count("raceid")).
+            filter("n__@nrange" => [1, 5]).list(show_query = :dict),
+    ),
+    (
+        "read/filters_and_aggregates.md — @isnull on a projection alias is WHERE-only",
+        FilterError,
+        () -> DOCERR_RACE_PG.objects.values("n" => Count("raceid")).
+            filter("n__@isnull" => true).list(show_query = :dict),
+    ),
     # Intentional PG/SQLite divergence: these pages tell the reader the lookup is PostgreSQL-only
     # and raises on SQLite. Asserting it on the SQLite mock keeps the documented divergence honest.
     (

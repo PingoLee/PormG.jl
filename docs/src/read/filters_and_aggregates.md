@@ -900,20 +900,23 @@ query.filter("late_season__@gt" => 8)
 ```
 
 ```sql
-SELECT "Tb"."year", COUNT(CASE WHEN "Tb"."round" > $1 THEN $2 ELSE NULL END) as "late_season"
+SELECT "Tb"."year", COUNT(CASE WHEN "Tb"."round" > $1 THEN $2::bigint ELSE NULL END) as "late_season"
 FROM "race" as "Tb"
 GROUP BY 1
-HAVING COUNT(CASE WHEN "Tb"."round" > $3 THEN $4 ELSE NULL END) > $5
+HAVING COUNT(CASE WHEN "Tb"."round" > $3 THEN $4::bigint ELSE NULL END) > $5
 ```
+
+Note the operands appear twice and bind twice — `$1`/`$2` for the projection, `$3`/`$4` for the
+`HAVING` copy. That is correct: the expression is evaluated in two clauses.
 
 For more complex expressions, see [Field Expressions](field_expressions.md).
 
 ### Which Lookups Work on an Aggregate Alias
 
-**All of them.** A filter on a projection alias goes through the same operator rendering as a filter
-on a column, so the comparison operators, `@in` / `@nin`, `@range`, and the whole pattern family
-(`@contains`, `@istartswith`, `@iendswith`, …) mean the same thing in `HAVING` that they mean in
-`WHERE` — including the `%` decoration and the escaping of a `%` or `_` you typed yourself:
+A filter on a projection alias renders through the same operator ladder as a filter on a column, so
+the comparison operators, `@in` / `@nin`, and the whole pattern family (`@contains`, `@istartswith`,
+`@iendswith`, …) mean the same thing in `HAVING` that they mean in `WHERE` — including the `%`
+decoration and the escaping of a `%` or `_` you typed yourself:
 
 ```julia
 # Seasons whose alphabetically-last Grand Prix name begins with "United"
@@ -935,8 +938,11 @@ HAVING MAX("Tb"."name") ILIKE $1 ESCAPE '\'    -- bound: "United%"
     *"The last_driver projection alias is the type number. Please check the value: V"*. Aggregate
     the column from the model that owns it, or filter it in `WHERE` instead.
 
-Two further consequences worth knowing:
+Three further consequences worth knowing:
 
+- **`@range`, `@nrange` and `@isnull` are `WHERE`-only.** On an alias they raise `FilterError` when the
+  query is built, naming the lookup and pointing at the column. Use `@gt`/`@lt` pairs on the alias, or
+  filter the underlying field.
 - An operator that is PostgreSQL-only on a column is PostgreSQL-only on an alias too.
   `@iunaccent_contains` and `@iunaccent_exact` raise
   [`BackendCapabilityError`](../errors.md) on SQLite from `HAVING` exactly as they do from `WHERE`.

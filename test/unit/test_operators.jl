@@ -1570,3 +1570,102 @@ end
     "blob__@in" => UInt8[0x01, 0x02]).list(show_query = :dict)
   @test occursin("is the type BLOB", suffixed.value.msg)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admitting a flat `Vector{UInt8}` must not widen anything else (#596)
+#
+# The first cut of the parse method above reimplemented the two-branch SCALAR shape, so its suffix
+# branch built an `OperObject` directly instead of going through the vector arm's ladder. That
+# silently dropped all four of that ladder's guards at once. Every case below was a clean
+# `FilterError` before #596, so each is a regression this pins shut — and the `@range` truncation is
+# the one that was SILENT, which is exactly the class the commit set out to remove.
+#
+# It now delegates: `_vector_oper_from_suffix` is ONE body with two callers, so a guard cannot be
+# present for `Vector{Int}` and missing for `Vector{UInt8}`. The `Int` control rides along in each
+# loop for that reason — the two must report identically.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a byte payload does not bypass the vector ladder's guards (#596)" begin
+  # A suffix that is not a membership/range/JSON operator: refused, naming the OPERATOR the user
+  # typed. Before: `@gt` built `WHERE "n" > ?, ?` (SQLite syntax error, PG bound the whole vector);
+  # `@icontains` reached `format_text_sql(::UInt8)` as an untyped MethodError outside the #231
+  # taxonomy; `@isnull` reached `ISNULL(::String, ::Vector{UInt8})`, likewise untyped.
+  for op in ("gt", "gte", "lt", "icontains", "istartswith", "isnull", "ne")
+    bytes_err = @test_throws PormG.FilterError _IN411.objects.filter(
+      "n__@$(op)" => UInt8[0x01, 0x02]).list(show_query = :dict)
+    int_err = @test_throws PormG.FilterError _IN411.objects.filter(
+      "n__@$(op)" => Int[1, 2]).list(show_query = :dict)
+    @test occursin("@$(op)", bytes_err.value.msg)
+    # The payload and the plain integer list must report IDENTICALLY — that equality is the
+    # regression test for the delegation, not the individual message.
+    @test bytes_err.value.msg == int_err.value.msg
+  end
+
+  # `@range` / `@nrange` arity. A 3-element payload used to render a TRUNCATED `BETWEEN` over the
+  # first two bytes with no error at all — valid SQL, wrong query, on both engines. A 1-element one
+  # threw `BoundsError`, which is not even a `PormGError` (#239).
+  for op in ("range", "nrange")
+    for bad in (UInt8[0x01], UInt8[0x01, 0x02, 0x03], UInt8[])
+      err = @test_throws PormG.FilterError _IN411.objects.filter(
+        "n__@$(op)" => bad).list(show_query = :dict)
+      @test occursin("requires exactly 2 values", err.value.msg)
+      @test occursin("got $(length(bad))", err.value.msg)
+    end
+    # Two values is the legal arity and still renders.
+    ok = _IN411.objects
+    ok.filter("n__@$(op)" => UInt8[0x01, 0x02])
+    @test count("?", PormG.QueryBuilder.inspect_query(ok;
+                       connection = _MockSQLiteIn411())[:sql_text]) == 2
+  end
+
+  # `@in` / `@nin` keep working through the shared ladder — the branch that WAS correct.
+  in_ok = _IN411.objects
+  in_ok.filter("blob__@in" => [UInt8[0x01], UInt8[0x02]])
+  @test length(PormG.QueryBuilder.inspect_query(in_ok;
+                 connection = _MockSQLiteIn411())[:parameters]) == 2
+
+  # ── Bare-path arms other than the base-model one ──────────────────────────────
+  # A TRANSFORM column is a bare path, so a payload reaches the transform render arms. No transform
+  # yields bytes, so every one is a refusal. Before: `WHERE CAST(strftime('%Y',…) AS INTEGER) = ?, ?`.
+  for path in ("happened__@year", "happened__@month", "happened__@yyyy_mm")
+    err = @test_throws PormG.FilterError _IN411.objects.filter(
+      path => UInt8[0x01, 0x02]).list(show_query = :dict)
+    @test occursin("vector value but no operator", err.value.msg)
+  end
+
+  # A JSON PATH lookup is the arm where this was silent on PostgreSQL rather than loud: the PG branch
+  # binds `string(v.values)`, which stringified the payload's Julia `repr` into
+  # `#>> '{"kind"}' = 'UInt8[0x01, 0x02]'` — valid SQL, zero rows, no error, on the engine most
+  # consuming apps run. A JSON value is never a byte payload.
+  # Its own model, because a JSON path lookup resolves a row-join and so needs `_module` — which the
+  # shared `_In411Event` deliberately does not have (see its fixture note; ~15 testsets share it).
+  _json596 = Model("json596", id = IDField(), payload = JSONField())
+  _json596.connect_key = "default"
+  _json596._module = Main
+  json_err = @test_throws PormG.FilterError _json596.objects.filter(
+    "payload__kind" => UInt8[0x01, 0x02]).list(show_query = :dict)
+  @test occursin("vector value but no operator", json_err.value.msg)
+  @test occursin("payload__kind", json_err.value.msg)
+  # The control: the same lookup with an ordinary scalar still renders.
+  json_ok = _json596.objects
+  json_ok.filter("payload__kind" => "binary-in")
+  @test length(json_ok.list(show_query = :dict)[:parameters]) == 1
+
+  # A PROJECTION ALIAS is a bare path too, and it has no `PormGField` to decide with — the guard
+  # reads the formatter `_having_alias_formatter` resolved instead. A non-binary alias refuses…
+  alias_err = @test_throws PormG.FilterError (q = _IN411.objects;
+                                             q.values("c" => PormG.QueryBuilder.Count("id"));
+                                             q.filter("c" => UInt8[0x01, 0x02]);
+                                             q.list(show_query = :dict))
+  @test occursin("vector value but no operator", alias_err.value.msg)
+  @test occursin("c", alias_err.value.msg)
+
+  # …and a BINARY one is the case that must still work: `Max` over a BinaryField resolves
+  # `format_binary_sql`, so the payload binds as one blob under `:having`.
+  bin_alias = _IN411.objects
+  bin_alias.values("b" => PormG.QueryBuilder.Max("blob"))
+  bin_alias.filter("b" => UInt8[0x01, 0x02])
+  res_bin_alias = PormG.QueryBuilder.inspect_query(bin_alias; connection = _MockSQLiteIn411())
+  @test res_bin_alias[:parameters] == Any[UInt8[0x01, 0x02]]
+  @test count("?", res_bin_alias[:sql_text]) == 1
+  @test occursin("HAVING", res_bin_alias[:sql_text])
+end

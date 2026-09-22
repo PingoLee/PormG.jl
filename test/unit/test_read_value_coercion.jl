@@ -279,6 +279,9 @@ end
     @test emit(D.Decimal(0, 1, -6))                     == "{\"v\":0.000001}"
     @test emit(D.Decimal(0, 12345678901234567, -2))     == "{\"v\":123456789012345.67}"   # was 1.2345678901234567e14
     @test emit(D.Decimal(0, 123456789012345678901, -2)) == "{\"v\":1234567890123456789.01}" # was 1.2345678901234568e18
+    # 19 significant digits. This exact value and its old rendering are QUOTED in
+    # `docs/src/read/index.md`, so the doc's claim is pinned here rather than left as prose.
+    @test emit(D.Decimal(0, 1234567890123456789, -2))   == "{\"v\":12345678901234567.89}"  # was 1.2345678901234568e16
 
     # (2) A NUMBER, not a string — and the document is valid, which is the other half of the risk a
     # raw splice carries. `J.parse` answers both at once: it throws on a malformed document, and the
@@ -304,9 +307,32 @@ end
     # Each of these is a document-corrupting splice if it ever passed. `01`, `1.` and `.5` are the
     # subtle ones: all three are things a reader assumes JSON accepts, and the spec does not.
     for bad in ("", " ", "abc", "01", "1.", ".5", "1e", "1E", "NaN", "Inf", "-Inf",
-                "1,5", "0x1f", " 1", "1 ", "99.99\"", "1]")
+                "1,5", "0x1f", " 1", "1 ", "99.99\"", "1]",
+                # The anchor cases. `^…$` ACCEPTS these two — PCRE's `$` matches before a trailing
+                # newline — which is why the pattern is spelled `\A…\z`. Neither is reachable from
+                # `Decimals`, and `"1\n"` would even have spliced to valid JSON; they are here
+                # because a guard that answers "provably a JSON number" may not accept a string it
+                # was not meant to.
+                "1\n", "99.99\n",
+                # Non-ASCII digits, for the `[0-9]`-not-`\d` spelling.
+                "١٢٣")
       @test !occursin(re, bad)
     end
+
+    # THE BRANCH, not just the pattern. Everything above tests `_JSON_NUMBER_RE` as a constant, which
+    # leaves the `occursin(...) ? JSONText : v` ternary — the whole reason the guard exists — covered
+    # by nothing: delete the guard and splice unconditionally, and every assertion above still passes.
+    #
+    # `string(Decimal(0, 0, 3))` is `"0000"`, which the pattern correctly rejects for its leading
+    # zeros. So this value takes the fail-open path and serializes as the untouched `Decimal` would.
+    # Remove the guard and it splices to `{"v":0000}`, which `JSON.parse` refuses — the invalid
+    # document the guard is for.
+    #
+    # Constructed, not observed: `parse(Decimal, "0.000")` normalises to `Decimal(0, 0, 0)`, so LibPQ
+    # cannot hand PormG this shape. That is why the branch needs a built value to reach it at all, and
+    # why it would otherwise go untested forever.
+    @test emit(D.Decimal(0, 0, 3)) == "{\"v\":0.0}"
+    @test !occursin(re, string(D.Decimal(0, 0, 3)))
 
     # The `AbstractFloat` trap, and the reason the signature names `Decimals.Decimal` exactly.
     # `Decimal <: AbstractFloat` is TRUE, so an arm written `::AbstractFloat` would capture every

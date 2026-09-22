@@ -57,22 +57,31 @@
 # hanging the test runner key on exactly that
 # (`test/unit/test_json_serialization.jl`, `test/integration/test_row_and_get.jl`).
 
-# The model name, defensively. Rule-1 content is one `getfield` away in every case, but a
-# `SQLObjectQuery` reaches it in two hops through a slot typed on an abstract (`model::PormGModel`),
-# so a half-built or introspection-time handle is worth surviving rather than asserting. `"?"` keeps
-# the document well-formed and the key present, which is what a reader needs from a marker.
-function _jl_name(x, slot::Symbol)
+# One guarded slot read, shared by every hop below.
+function _jl_slot(x, slot::Symbol)
   try
-    v = getfield(x, slot)
-    v === nothing && return "?"
-    return v isa AbstractString ? String(v) : string(v)
+    return getfield(x, slot)
   catch e
+    # The two this repo always rethrows. Swallowing an `InterruptException` here would turn a Ctrl-C
+    # into a marker reading `"?"` — a wrong answer that looks like a legitimate one.
     (e isa InterruptException || e isa StackOverflowError) && rethrow()
-    return "?"
+    return nothing
   end
 end
 
-_jl_query_model(q) = _jl_name(try getfield(q, :model) catch; nothing end, :name)
+# `"?"` rather than a throw or a missing key: a marker's job is to be a well-formed leaf naming what
+# the value was, and a reader can act on `"?"` where an exception from inside a serializer helps
+# nobody. Reachable only from a genuinely incomplete handle — the exact-document tests pin every
+# marker's real content, so a renamed slot cannot quietly start answering `"?"` everywhere.
+function _jl_name(x, slot::Symbol)
+  v = _jl_slot(x, slot)
+  v === nothing && return "?"
+  return v isa AbstractString ? String(v) : string(v)
+end
+
+# Two hops, both guarded the same way — `SQLObjectQuery.model` is typed on an abstract
+# (`model::PormGModel`), so a half-built or introspection-time handle is worth surviving.
+_jl_query_model(q) = _jl_name(_jl_slot(q, :model), :name)
 
 # A one-key object rather than a bare string, because additive later is cheap and removing is
 # breaking: this can grow a second key without breaking a consumer, where a string could not grow at
@@ -82,10 +91,12 @@ _jl_query_model(q) = _jl_name(try getfield(q, :model) catch; nothing end, :name)
 JSON.StructUtils.lower(::JSON.JSONStyle, m::Models.Model_Type) =
   Dict("pormg_model" => _jl_name(m, :name))
 
-# On the ABSTRACT type, so all 24 field structs are covered by one method — and so a field struct
-# added later cannot reintroduce the dump by forgetting one. The constructor name, never a slot
-# value: `sCharField` -> `CharField`, via the same helper `show` uses. That is a two-line name strip
-# with no truncation and no user data in it, which is the one thing worth sharing with `display.jl`.
+# On the ABSTRACT type, so EVERY field struct is covered by one method — 25 of them today, and the
+# point is that a struct added later cannot reintroduce the dump by forgetting one, so the count is a
+# snapshot rather than the claim. (`src/display.jl` makes the same argument for `show` and still says
+# 24; it was right when written.) The constructor name, never a slot value: `sCharField` ->
+# `CharField`, via the same helper `show` uses — a two-line name strip with no truncation and no user
+# data in it, which is the one thing worth sharing with `display.jl`.
 JSON.StructUtils.lower(::JSON.JSONStyle, f::Kernel.PormGField) =
   Dict("pormg_field" => _d_field_type_name(f))
 
@@ -112,4 +123,4 @@ JSON.StructUtils.lower(s::JSON.JSONStyle, h::QueryBuilder.ObjectHandler) =
 # The model only. NOT `text` — rendered SQL in a document by default is a surprise — and not the
 # memo dicts, and above all not `connection`.
 JSON.StructUtils.lower(::JSON.JSONStyle, i::QueryBuilder.InstructionObject) =
-  Dict("pormg_instruction" => _jl_query_model(try getfield(i, :object) catch; nothing end))
+  Dict("pormg_instruction" => _jl_query_model(_jl_slot(i, :object)))

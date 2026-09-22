@@ -127,10 +127,13 @@ end
     # A NUMBER, never a string. This is the cross-engine contract the shape decision bought.
     @test all(row -> row["points"] isa Number, parsed)
 
-    # And an integral DecimalField is `14`, not `14.0`. The fixture's points are whole numbers, which
-    # makes this the one assertion here that fails on unpatched PostgreSQL — the `Float64` round-trip
-    # rendered every one of them with a trailing `.0`.
-    @test !occursin(".0", q.list(:json))
+    # An integral DecimalField must arrive as `14`, not `14.0`, and `isa Integer` is what says so.
+    # Three weaker spellings were tried first and ALL of them pass against unpatched PostgreSQL:
+    # `isa Number` (a `Float64` is one), `== [14, 8, 9, 5, 2]` (because `14.0 == 14` is `true` in
+    # Julia), and `JSON.json(rows) == q.list(:json)` (both emitters shared the defect). This is the
+    # assertion that actually discriminates, and it is not fixture-coupled the way a
+    # `!occursin(".0", …)` check would be — a future row holding `10.05` contains that substring.
+    @test all(row -> row["points"] isa Integer, parsed)
     @test [row["points"] for row in parsed] == [14, 8, 9, 5, 2]
 
     # The #641 cross-emitter agreement has to survive a raw-spliced column too: `JSONText` bypasses
@@ -183,7 +186,7 @@ end
         @test JSON.json(M.Driver) == "{\"pormg_model\":\"driver\"}"
 
         # One relational field reached 2,158,654 on its own — the abstract `PormGField` method is what
-        # bounds all 24 structs, so the FK and a plain column are both asserted.
+        # bounds every field struct, so the FK and a plain column are both asserted.
         @test length(JSON.json(M.Result.fields["driverid"])) < 200
         @test length(JSON.json(M.Driver.fields["surname"])) < 200
 

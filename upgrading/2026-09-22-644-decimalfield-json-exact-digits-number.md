@@ -33,8 +33,19 @@ the two engines keep agreeing. PostgreSQL hands back a `Decimals.Decimal` for ev
 SQLite's `NUMERIC` affinity hands back an `Int64` for a whole one and a `Float64` for a fractional
 one — three Julia types for one declared column, one JSON shape.
 
-Exactness is a property of the *document*. A consumer whose JSON parser converts every number to a
-double — JavaScript's `JSON.parse` does — still rounds past about sixteen significant digits. What
+**Two limits, both narrower than "decimals are exact now".**
+
+*Scalars only.* A decimal that is the column's own value is covered. One nested inside a container — a
+PostgreSQL `numeric[]`, delivered as a `Vector{Decimal}` — is not reached and still goes through a
+`Float64`. That is the same boundary the `DurationField` formatter has had since it shipped.
+
+*PostgreSQL only, past ~15 digits.* SQLite has no exact decimal type: a `DECIMAL(p, s)` column takes
+`NUMERIC` affinity, which converts the value **as it is stored**, so `12345678901234567.89` becomes the
+integer `12345678901234568` before PormG ever reads it. Nothing on the read path can recover that. On
+SQLite a `DecimalField` is precise only within what an `Int64`/`Float64` holds.
+
+Exactness is otherwise a property of the *document*. A consumer whose JSON parser converts every number
+to a double — JavaScript's `JSON.parse` does — still rounds past about sixteen significant digits. What
 changed is that PormG is no longer the party losing the digits.
 
 One repair rides along: at the declared `[compat] JSON = "1"` floor, JSON `1.0.0` raised

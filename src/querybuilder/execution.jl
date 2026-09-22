@@ -2377,16 +2377,33 @@ end
 # consumer to parse; the maintainer chose the number on that trade (#644).
 #
 # GUARDED, because `JSONText` is a raw splice with no escaping: text that is not a JSON number would
-# produce an INVALID DOCUMENT, strictly worse than the lossy value this fixes. The guard is not
-# hypothetical across the declared `Decimals = "0.4, 0.5"` range — measured, 0.4.1 prints
-# `Decimal(0, 1, -20)` as `0.00000000000000000001` while 0.5.0 prints `1E-20`. Both are valid JSON
-# numbers and both must pass, which is why the pattern is the JSON spec's own number production and
-# not "whatever Decimals printed when this was written". `Project.toml` cannot carry that note —
-# CompatHelper strips comments — so it lives here.
+# produce an INVALID DOCUMENT, strictly worse than the lossy value this fixes.
+#
+# The guard is not hypothetical across the declared `Decimals = "0.4, 0.5"` range, because the two
+# majors do not print the same text. 0.4.1 renders positionally via `Base.print`; 0.5.x renders via
+# `Base.string` -> `scientific_notation`, which uses exponent form whenever the exponent is positive.
+# Measured: 0.4.1 prints `Decimal(0, 1, -20)` as `0.00000000000000000001` where 0.5.0 prints `1E-20`.
+# Both are valid JSON numbers, which is the point — the pattern is the JSON spec's own number
+# production rather than "whatever Decimals printed when this was written".
+#
+# The SHAPE is therefore version-dependent even though the VALUE is not, and the difference is not
+# confined to extremes: `parse` normalises, so PostgreSQL's `"10.00"` from a `NUMERIC(10,2)` arrives as
+# `Decimal(0, 1, 1)` — exponent 1 — which 0.4.1 prints `10` and 0.5.x would print `1E+1`. Numerically
+# equal, valid JSON either way, and unreachable today because every LibPQ release pins `Decimals 0.4`
+# (see `test/unit/test_compat_guards.jl`) and SQLite never yields a `Decimal` at all. Worth knowing
+# before anyone widens that pin: the engines would still agree with each other, but the emitted text
+# would change. `Project.toml` cannot carry this note — CompatHelper strips comments — so it is here.
 #
 # FAIL-OPEN like the arm above: anything the guard rejects, and any throw, hands back the untouched
 # value, which serializes exactly as it did before.
-const _JSON_NUMBER_RE = r"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?$"
+# `\A` and `\z`, NOT `^` and `$`. PCRE's `$` matches before a trailing newline, so the `^…$` spelling
+# accepts `"1\n"` — verified. That particular string splices to `{"v":1\n}`, which is still valid JSON
+# (a newline is whitespace there), and `Decimals` cannot produce it anyway, so this is not a live
+# hole. It is tightened regardless: this guard's entire job is to answer "is this PROVABLY valid JSON
+# number text", and a pattern that accepts a string it was not meant to accept cannot answer that.
+# `[0-9]` rather than `\d` for the same reason — `\d` is ASCII-only here by default, but spelling it
+# out removes the question.
+const _JSON_NUMBER_RE = r"\A-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?\z"
 
 function _json_value(v::Decimals.Decimal)
   try

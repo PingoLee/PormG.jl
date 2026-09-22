@@ -208,7 +208,12 @@ end
         # Asserted per token so a failure names WHICH one escaped. Never assert on the DSN's value —
         # a failure message is CI output, and the point is that the secret does not travel.
         for token in ("password", "connection_string", "dbname", "host=", "user=", "pool_size")
-            @test !occursin(token, doc)
+            # Hoisted (#649). `@test !occursin(token, doc)` prints BOTH operands on Julia's
+            # `Evaluated:` line, and this assertion can only fail when `doc` holds the reflected
+            # live pool — so the un-hoisted form published the DSN, password included, at precisely
+            # the moment redaction had regressed. Same rule as `test_internals.jl`.
+            present = occursin(token, doc)
+            @test !present
         end
 
         # And the row path is untouched — #641's fix still serializes data, not markers.

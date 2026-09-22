@@ -132,6 +132,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Migrations applied_at Canonical Form (#570)" include("unit/test_migrations_applied_at.jl")
     @testset "Reload Regressions" include("unit/test_reload.jl")
     @testset "Configuration API" include("unit/test_configuration_api.jl")
+    @testset "Connection-String Redaction (#649)" include("unit/test_redact_secret.jl")
     @testset "bulk_update Column Scope" include("unit/test_bulk_update_column_scope.jl")
     @testset "Bulk Default-Fill Scope (#331)" include("unit/test_bulk_default_fill_scope.jl")
     @testset "Bulk Fill-Column Collision (#335)" include("unit/test_bulk_fill_column_collision.jl")

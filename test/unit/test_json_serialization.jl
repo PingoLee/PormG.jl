@@ -370,23 +370,9 @@ if HAS_GRAPH_LOWER
     end
   end
 
-  # ───────────────────────────────────────────────────────────────────────────
-  # Coverage swept from `methods`, not from the list above. `test_repl_display.jl` records the outcome
-  # this prevents: a `Base.delete_method` sweep there found 8 of 15 methods with no assertion behind
-  # them at all. A hand-maintained case list cannot notice the method it forgot.
-  # ───────────────────────────────────────────────────────────────────────────
-  @testset "every lower method PormG defines is exercised" begin
-    ours = [m for m in methods(SU641.lower) if m.module === PormG]
-    @test !isempty(ours)
-
-    covered = Set{Any}(typeof(value) for (_, (value, _)) in GRAPH_CASES)
-    for m in ours
-      T = m.sig.parameters[3]
-      # `any(<:)` rather than set membership, so the abstract `PormGField` method is satisfied by
-      # `sCharField` and friends rather than demanding a value of the abstract type itself.
-      @test any(C -> C <: T, covered)
-    end
-  end
+  # (The `methods`-swept coverage assertion that used to sit here moved to the FOOT of this file
+  # with #649: it now has to be satisfied by GRAPH_CASES *and* CONFIG_CASES together, and
+  # CONFIG_CASES is defined below. Keeping it here would have silently checked half the methods.)
 
   # ───────────────────────────────────────────────────────────────────────────
   # Controls. `sCharField` is no longer one — it IS a `PormGField`, so it is covered now and has moved
@@ -460,5 +446,215 @@ if HAS_GRAPH_LOWER
     half = Models.Model("j_half", id = Models.IDField(), other = Models.ForeignKey("J_missing"))
     @test J641.json(half) == "{\"pormg_model\":\"j_half\"}"
     @test J641.json(getfield(half, :fields)["other"]) == "{\"pormg_field\":\"ForeignKey\"}"
+  end
+end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# #649 — the credential types. `JSON.json` on a connection pool, on a `Settings`, or on
+# `PormG.config` never touches the model graph, so it reached NONE of the methods above; #643 said
+# so in its own header and left this to a follow-up.
+#
+# **These cases are kept apart from GRAPH_CASES on purpose, because the defect is a different kind
+# of thing.** Above, reverting the fix costs megabytes and a ceiling catches it. Here, measured on
+# an unpatched build with a fake DSN:
+#
+#     JSON.json(pool)        355 chars   contains the password
+#     JSON.json(Settings)    616 chars   contains the DSN password AND the raw YAML password
+#     JSON.json(config)      630 chars   same, once per entry
+#
+# 355 characters. No honest ceiling separates that from a fixed 33, so a ceiling assertion here
+# would pass against completely unpatched code — green theater of exactly the kind this file's
+# header warns about. PER-TOKEN ABSENCE is the only assertion that discriminates, and it is also
+# what the issue asked for independently.
+#
+# The tokens below are ours: this fixture's DSN is invented, so asserting on the VALUE is both safe
+# to print in a CI failure and strictly stronger than asserting on the key names around it. The
+# integration half (`test/integration/test_internals.jl`) faces a real DSN and can only assert on
+# tokens and shapes; it never prints what it is looking for.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Invented, and deliberately distinctive: a substring that could occur in ordinary output would make
+# the absence assertions below unfalsifiable.
+const FAKE_DSN_PW   = "j649_fake_dsn_password"
+const FAKE_DSN_USER = "j649_fake_dsn_username"
+const FAKE_YAML_PW  = "j649_fake_yaml_password"
+const FAKE_DSN = "host=localhost port=5432 password=$FAKE_DSN_PW dbname=f1 user=$FAKE_DSN_USER"
+
+# Pools construct without connecting — the constructors only allocate slots — so this stays
+# hermetic. Nothing below opens a socket or reads a configuration file.
+_pg_pool() = PormG.ConnectionPool.PostgresConnectionPool(FAKE_DSN; pool_size = 2)
+_sl_pool() = PormG.ConnectionPool.SQLiteConnectionPool("/tmp/j649.sqlite"; pool_size = 1)
+
+_settings649() = PormG.Configuration.Settings(
+  # Explicit, NOT inherited — see the note in `test_repl_display.jl`: `ENV["PORMG_ENV"]` is
+  # "test" under `Pkg.test()` and unset when this file is run alone.
+  app_env            = "dev",
+  connections        = _pg_pool(),
+  db_def_folder      = "j649_folder",
+  change_data        = true,
+  # The second, INDEPENDENT egress: the raw parsed YAML block, which is not reached through the
+  # pool. `redact_secret` reads a connection string and cannot see a `password:` key at all, which
+  # is why the fix omits this dict rather than filtering it.
+  db_config_settings = Dict{String, Any}(
+    "adapter"  => "PostgreSQL",
+    "password" => FAKE_YAML_PW,
+    "url"      => "postgres://u:$(FAKE_YAML_PW)@h/db",
+  ),
+)
+
+const CONFIG_CASES = Pair{String, Tuple{Any, String}}[
+  "PostgresConnectionPool" => (_pg_pool(), "{\"pormg_connection\":\"PostgreSQL\"}"),
+  "SQLiteConnectionPool"   => (_sl_pool(), "{\"pormg_connection\":\"SQLite\"}"),
+  # A fieldless dispatch marker is a legitimate member of the family — the abstract method has to
+  # survive one, which is the case that would throw if a slot were read unguarded.
+  "engine marker"          => (PormG.Migrations._PostgresEngine(), "{\"pormg_connection\":\"PostgreSQL\"}"),
+  "Settings"               => (_settings649(),
+    "{\"pormg_settings\":{\"app_env\":\"dev\",\"change_data\":true,\"change_db\":false," *
+    "\"connection\":\"PostgreSQL\",\"db_def_folder\":\"j649_folder\",\"django_prefix\":null," *
+    "\"implicit\":false,\"model_file\":\"models.jl\",\"time_zone\":\"UTC\"}}"),
+]
+
+const CONFIG_TYPES = [
+  PormG.Kernel.PormGBackend, PormG.Kernel.PormGSettings,
+  PormG.ConnectionPool.PostgresConnectionPool, PormG.ConnectionPool.SQLiteConnectionPool,
+  PormG.Configuration.Settings,
+]
+
+# The gate, same shape as the model-graph one above: assert the methods exist before anything calls
+# `JSON.json` on a value that would otherwise reflect a credential into this process's output.
+const HAS_CONFIG_LOWER = all(T -> _lower_owned_by(T, PormG), CONFIG_TYPES)
+
+@testset "every credential type has a JSON lower method (#649)" begin
+  @test HAS_CONFIG_LOWER
+  # The abstract types are queried alongside the concrete ones. Only the concrete query proves a
+  # real pool dispatches to the abstract method; the abstract query alone would still pass if
+  # someone narrowed the signature to one struct.
+  for T in CONFIG_TYPES
+    @testset "$(nameof(T))" begin
+      @test _lower_owned_by(T, PormG)
+    end
+  end
+end
+
+if HAS_CONFIG_LOWER
+  # ───────────────────────────────────────────────────────────────────────────
+  # Exact documents. `Settings` is the one marker in the file with a body rather than a name — the
+  # issue asked for the non-secret fields — so the assertion pins WHICH fields, and equally which
+  # are absent.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "each credential type lowers to its marker document" begin
+    for (label, (value, expected)) in CONFIG_CASES
+      @testset "$label" begin
+        # Parsed equality rather than string equality for the multi-key `Settings` document: Julia
+        # 1.13 changed string hashing (#544) and CI runs 1.12 and 1.13, so an exact multi-key
+        # string is a cross-version flake. The single-key markers are compared as strings.
+        if label == "Settings"
+          @test J641.parse(J641.json(value)) == J641.parse(expected)
+        else
+          @test J641.json(value) == expected
+        end
+      end
+    end
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # THE ASSERTION THIS ISSUE EXISTS FOR. Per token, absence only, on values we invented.
+  #
+  # `Dict("held" => …)` and the vector are not padding: a pool is met nested inside something a
+  # handler is serializing far more often than on its own, and the whole point of putting the
+  # method on the ABSTRACT type is that every container holding one is bounded by it.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "no credential survives serialization" begin
+    settings = _settings649()
+    # `PormG.config` is a `Dict{String,PormGSettings}`; JSON's own `lower(::AbstractDict)` walks it
+    # to our method, so the real global needs no separate arm — asserted here with a stand-in of
+    # the same type rather than by mutating the process-wide config.
+    config_like = Dict{String, PormG.PormGSettings}("j649" => settings)
+
+    holders = Pair{String, Any}[
+      "pool"                => _pg_pool(),
+      "pool in a Dict"      => Dict("held" => _pg_pool()),
+      "pool in a Vector"    => [_pg_pool(), _sl_pool()],
+      "Settings"            => settings,
+      "Settings in a Dict"  => Dict("held" => settings),
+      "config-shaped Dict"  => config_like,
+    ]
+
+    for (label, value) in holders
+      @testset "$label" begin
+        doc = J641.json(value)
+        # The credentials themselves, and then the slot names that only appear if reflection ran.
+        for token in (FAKE_DSN_PW, FAKE_DSN_USER, FAKE_YAML_PW,
+                      "connection_string", "db_config_settings",
+                      "password", "available", "pool_size", "localhost", "postgres://")
+          @test !occursin(token, doc)
+        end
+      end
+    end
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # The leaf invariant, extended to this family. Same argument as the model-graph block: the marker
+  # shape is what removes the EDGE, and a `Settings` returns a nested Dict, so "leaves only" is a
+  # live claim here rather than a trivially satisfied one.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "no lowered credential value holds a PormG type" begin
+    _is_pormg2(x) = (m = parentmodule(typeof(x)); m === PormG || parentmodule(m) === PormG)
+
+    function leaves_only2(x, depth = 0)
+      depth > 6 && return false
+      x === nothing && return true
+      x isa Union{AbstractString, Number, Bool, Symbol} && return true
+      x isa AbstractDict && return all(p -> leaves_only2(last(p), depth + 1), collect(x))
+      x isa AbstractVector && return all(v -> leaves_only2(v, depth + 1), x)
+      return !_is_pormg2(x)
+    end
+
+    for (label, (value, _)) in CONFIG_CASES
+      @testset "$label" begin
+        @test leaves_only2(SU641.lower(STYLE641, value))
+      end
+    end
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Lowering a `Settings` must not reach the pool for anything — no connection checkout, no driver.
+  # A pool whose slots were never filled is the ordinary case; one holding a value that raises on
+  # access is the case that proves nothing walked into it.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "lowering a Settings never walks into the pool" begin
+    pool = _pg_pool()
+    # A slot holding a value whose own serialization would throw. If anything below reflected into
+    # `connections`, this would surface as an error rather than a marker.
+    setfield!(pool, :connections, Any[ErrorException("must not be serialized"), nothing])
+    st = PormG.Configuration.Settings(connections = pool, db_def_folder = "j649_folder")
+
+    @test J641.json(pool) == "{\"pormg_connection\":\"PostgreSQL\"}"
+    doc = J641.json(st)
+    @test !occursin("must not be serialized", doc)
+    @test !occursin(FAKE_DSN_PW, doc)
+  end
+end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Coverage swept from `methods`, not from either list above — and it runs LAST, because it must see
+# both. `test_repl_display.jl` records the outcome this prevents: a `Base.delete_method` sweep there
+# found 8 of 15 methods with no assertion behind them at all. A hand-maintained case list cannot
+# notice the method it forgot, which is precisely how #649's two methods could have arrived with
+# exact-document tests and no credential test.
+# ═════════════════════════════════════════════════════════════════════════════
+@testset "every lower method PormG defines is exercised" begin
+  ours = [m for m in methods(SU641.lower) if m.module === PormG]
+  @test !isempty(ours)
+
+  covered = Set{Any}(typeof(value) for (_, (value, _)) in vcat(GRAPH_CASES, CONFIG_CASES))
+  for m in ours
+    T = m.sig.parameters[3]
+    # `any(<:)` rather than set membership, so the abstract `PormGField`, `PormGBackend` and
+    # `PormGSettings` methods are satisfied by a concrete specimen rather than demanding a value of
+    # the abstract type itself.
+    @testset "$(T)" begin
+      @test any(C -> C <: T, covered)
+    end
   end
 end

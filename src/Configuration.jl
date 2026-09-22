@@ -22,9 +22,98 @@ export set_before_connect_hook, ensure_before_connect!
 # `public` (Julia 1.11+) — user-facing but not exported (#289). `docs/src/api.md` gives these their
 # own "Configuration API" section and `configuration/server.md` calls them qualified. Required for
 # them to survive `Private = false` in the api.md `@autodocs` block; see the note in QueryBuilder.jl.
-public is_loaded, load_many, ping, status, get_tx_connection
+public is_loaded, load_many, ping, status, get_tx_connection, redact_secret
 
-const _REDACT_CONNECTION_STRING_RE = Regex("(?i)(password|user)=[^\\s]+")
+# ── The redaction rule (#649) ────────────────────────────────────────────────
+#
+# ONE owner, here, for both patterns and the function. They used to be duplicated byte-for-byte in
+# `ConnectionPool.jl`, which is not a tidiness point: the duplicate is how a widened rule applies at
+# one set of call sites and silently not at the other. `ConnectionPool` imports the name instead.
+#
+# A connection string arrives in one of two dialects, and PormG accepts BOTH — `connection.yml`'s
+# `url:` key is documented as "passed through verbatim", so a libpq DSN and a URI are equally likely
+# to be what a pool is holding.
+
+# Keyword/value DSN (libpq conninfo): `password=… user=…`.
+#
+# The value class stays `[^\s]+` — to the next WHITESPACE, which is libpq's own rule. Tightening it
+# to `[^\s&]+` would read a URL query string more precisely, but `&` is a legal unquoted password
+# character, so it would make `password=p&w` emit `password=****&w` and leak the tail. Under-
+# redaction is the bug being fixed here; over-redaction is the safe direction, so a query string
+# keeps swallowing to the next space.
+#
+# Three shapes of value, and each one was a leak before it was covered. **Every claim here was
+# checked against the real `PQconninfoParse`**, not against what the syntax looks like it should
+# mean — the first two holes came from reading the grammar rather than asking libpq:
+#
+#   'quoted'      libpq quotes a value containing a space, and a bare `[^\s]+` stops AT that space:
+#                 `password='s3 cret'` masked the first half and printed ` cret'`. The arm is
+#                 written unrolled (`'[^'\]*+(?:\\.[^'\]*+)*+'`) rather than as `(?:[^'\]|\\.)*`,
+#                 because a backtrackable group repeat costs one PCRE2 JIT stack frame per
+#                 iteration and threw `JIT stack limit reached` at ~43 KB. See the note below.
+#   back\ slash   libpq honours `\` OUTSIDE quotes too: `password=s3\ cret` parses as `s3 cret`,
+#                 and stopping at whitespace printed ` cret`. The unquoted arm therefore takes
+#                 `\\.` as one unit. Its two branches are disjoint on the first character
+#                 (`[^\s\\]` cannot match a backslash), so the alternation is unambiguous.
+#   spaces        "Spaces around a setting's equal sign are optional" — `password = s3cret` is a
+#                 valid conninfo and matched nothing at all before.
+#
+# The unquoted class stays "to the next whitespace" and is NOT tightened to stop at `&`: `&` is a
+# legal unquoted password character, so that spelling would emit `password=****&w` and leak the
+# tail. Under-redaction is the bug class; over-redaction is the safe direction.
+#   bare space   And the one libpq does NOT accept, which is why it matters most: PormG's own DSN
+#                builder interpolates a YAML value raw (`_build_connection_pool!`), so a
+#                `password: corr3ct horse battery` becomes `password=corr3ct horse battery`. libpq
+#                rejects that DSN — which GUARANTEES the connect fails, and the failure path is the
+#                redaction path (`PoolConnectError`). A value therefore runs on across whitespace
+#                until the next `key=` token, so the whole passphrase is masked instead of its first
+#                word. (The builder's missing quoting is a separate defect: such a password cannot
+#                connect at all. Filed separately; this arm makes sure it cannot also leak.)
+#
+# `(?is)` — the `s` is load-bearing and was a leak: `.` does not match a newline without it, so the
+# one escape `\\.` missed was `\` + LF, and `password=abc\<LF>tail` printed the tail. `.` occurs in
+# this pattern only inside the two `\\.` constructs, so DOTALL changes nothing else.
+const _REDACT_CONNECTION_STRING_RE =
+  Regex("(?is)(password|user)\\s*+=\\s*+('[^'\\\\]*+(?:\\\\.[^'\\\\]*+)*+'|" *
+        "(?:[^\\s\\\\]|\\\\.)++(?:\\s++(?![A-Za-z_][A-Za-z_0-9]*+\\s*+=)(?:[^\\s\\\\]|\\\\.)++)*+)")
+
+# URL/URI DSN: `scheme://user:password@host:port/db?query`. Only the userinfo section is masked, so
+# scheme, host, port, database and query survive — "where was it pointing" is the whole reason to
+# redact rather than omit.
+#
+#   [^/@\n\r] ONLY `/` and a line break terminate a userinfo run. Every other character — `?`, `#`,
+#             a space, a tab — is one libpq reads as part of the credential, verified with
+#             `PQconninfoParse`: `postgres://u:SEC?RETpw@host/db` is password `SEC?RETpw`,
+#             `postgres://u:abc SECRET@host/db` is password `abc SECRET`, and `postgres://u:p/w@h/db`
+#             is no password at all. Every character excluded here on URI-grammar grounds turned out
+#             to be a DSN that went through COMPLETELY unredacted — which is how `?`/`#` and then
+#             whitespace were each found, one after the other. **The rule is libpq's, not the URI
+#             RFC's.** Do not narrow this class back toward the grammar.
+#
+#             The line break stays excluded deliberately, and it is the one concession to this being
+#             public API that people will point at arbitrary log text: without it a stray `://` on
+#             one line would reach for an `@` many lines later. Bounded to a line, the worst case is
+#             one over-redacted line. The accepted cost is that a line holding a `://` and a later
+#             `@` over-redacts — `see https://ex.com?x=1 and write to ops@ex.com` becomes
+#             `see https://****@ex.com`. No connection string has that shape.
+#   (?:…@)++  repeat over `@`-terminated runs, so the split lands on the LAST `@` before the path.
+#             libpq actually splits on the FIRST (`postgres://u:p@ss@h/db` is password `p`, host
+#             `ss@h`), so this OVER-redacts that string rather than leaking — which is the correct
+#             direction, and it matches WHATWG URL parsing, which other consumers of a `url:` value
+#             use. Do not "correct" it toward the first `@`: that is the leaky direction.
+#
+# BOTH quantifiers are possessive, and that is load-bearing rather than micro-optimisation. The
+# backtrackable spelling `(?:[^/@\s]*@)+` throws `PCRE.exec error: JIT stack limit reached` on an
+# adversarial input (measured: 250k `@`), because a reconsiderable repeat costs one JIT stack frame
+# per iteration. `redact_secret` runs INSIDE error constructors — `PoolConnectError` — so a throw
+# here would replace the real failure with a regex error. Possessive, the same input takes ~2 ms.
+#
+# The one accepted cost: a PATHLESS URL whose query holds an `@` over-redacts
+# (`https://example.com?x=a@b` -> `https://****@b`). No PormG connection string has that shape, and
+# over-redaction is the safe direction.
+#
+# No `(?i)`: the pattern holds no letter outside a negated class, so it is already case-neutral.
+const _REDACT_URL_USERINFO_RE = Regex("://(?:[^/@\\n\\r]*+@)++")
 
 # Dynamic connection resolver hook
 const _CONNECTION_RESOLVER = Ref{Union{Nothing, Function}}(nothing)
@@ -63,13 +152,66 @@ function set_connection_resolver(f::Function)
   _CONNECTION_RESOLVER[] = f
 end
 
+# `AbstractString`, not `String`: this is public, documented API now, and `split`/`strip` hand back
+# a `SubString`. `replace` returns a `String` either way.
+#
+# This comment sits ABOVE the docstring on purpose. Julia does not attach a docstring across an
+# intervening comment at statement position, so a comment between the closing `"""` and `function`
+# silently leaves the function undocumented — `?redact_secret` empty, and nothing for the
+# `Private = false` autodocs block in `docs/src/api.md` to render. `test_docstring_coverage.jl`
+# guards it (#612) and caught exactly this.
 """
-    redact_secret(conn_str::String)
+    redact_secret(conn_str::AbstractString) -> String
 
-Replace sensitive connection string fields such as `password` or `user` with masked values before logging.
+Mask the credentials in a connection string before it is logged, displayed, or embedded in an
+exception. Both dialects PormG accepts are handled:
+
+  * **keyword/value DSN** (libpq conninfo) — `password=…` and `user=…` become `password=****` and
+    `user=****`, case-insensitively. Spaces around the `=` are allowed (libpq permits them), a
+    quoted value (`password='s3 cret'`) is masked whole, a backslash escape does not end the value,
+    and a value containing unescaped whitespace is masked up to the next `key=` token rather than
+    to the first space.
+  * **URL DSN** — `scheme://user:password@host…` becomes `scheme://****:****@host…`, and
+    `scheme://user@host…` becomes `scheme://****@host…`. Only the userinfo section is touched:
+    scheme, host, port, database and query parameters survive, so a connect failure still shows
+    *where* it was pointing.
+
+Where it errs, it errs toward masking more. Three cases do so deliberately, because the alternative
+in each is a leak: credentials passed as URL *query* parameters (`?user=u&password=p`) swallow the
+parameters that follow them; an empty value (`password= dbname=f1`) swallows the next token; and a
+line carrying both a `://` and a later `@` masks between them. Under-redaction is the bug class this
+rule exists to prevent, so over-redaction is the direction it fails in.
+
+Redaction is **monotone**: applying it again never reveals more than the first pass did, and for
+every well-formed connection string it is a fixed point. (A malformed one — an unbalanced quote
+beside an escaped quote — can mask slightly further on a second pass. That direction is safe, which
+is why the weaker guarantee is the one stated.)
+
+This is the **only** redaction rule in PormG. Every site that puts a connection string into a log,
+an exception, a `show`, or a JSON document routes through it, so a new dialect is taught here once
+rather than at the call site.
+
+```julia
+julia> PormG.Configuration.redact_secret("host=localhost password=s3cret user=pingo")
+"host=localhost password=**** user=****"
+
+julia> PormG.Configuration.redact_secret("postgresql://pingo:s3cret@localhost:5432/f1")
+"postgresql://****:****@localhost:5432/f1"
+```
 """
-function redact_secret(conn_str::String)::String
-  return replace(conn_str, _REDACT_CONNECTION_STRING_RE => s"\1=****")
+function redact_secret(conn_str::AbstractString)::String
+  # Keyword form first — the smaller change from the pre-#649 behaviour. The two passes are in fact
+  # order-independent: the only strings both can touch nest a URL inside a DSN value
+  # (`password=a://b@c`), and either order masks those completely.
+  masked = replace(conn_str, _REDACT_CONNECTION_STRING_RE => s"\1=****")
+
+  # A function rather than a constant replacement, to keep the SHAPE of the userinfo. "This URL
+  # carries no password" is exactly the signal someone debugging an authentication failure needs,
+  # and collapsing both forms to `****:****@` would invent a password that was never there.
+  return replace(masked, _REDACT_URL_USERINFO_RE => function (m)
+    userinfo = m[4:prevind(m, lastindex(m))]   # strip the leading "://" and the trailing "@"
+    return occursin(':', userinfo) ? "://****:****@" : "://****@"
+  end)
 end
 
 # app environments

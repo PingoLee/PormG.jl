@@ -627,6 +627,28 @@ s = PormG.Configuration.status("db")
 #  db_def_folder="db", dynamic=false, implicit=false)
 ```
 
+### `Configuration.redact_secret(conn_str)`
+
+Masks the credentials in a connection string. This is the single rule PormG applies everywhere a
+connection string could be seen — log lines, exception messages, REPL display — and it handles both
+dialects PormG accepts:
+
+```julia
+julia> PormG.Configuration.redact_secret("host=localhost password=s3cret user=pingo")
+"host=localhost password=**** user=****"
+
+julia> PormG.Configuration.redact_secret("postgresql://pingo:s3cret@localhost:5432/f1")
+"postgresql://****:****@localhost:5432/f1"
+```
+
+Only the credentials are masked — host, port, database and query parameters survive, so a connect
+failure still shows where it was pointing. The result is a fixed point: redacting twice changes
+nothing.
+
+Pools and `Settings` already render and serialize safely on their own (see
+[Credentials never leave through `show` or `JSON.json`](configuration/advanced.md#Credentials-never-leave-through-show-or-JSON.json));
+call this directly when you want the connection string itself in output you control.
+
 For the full configuration guide, see [Configuration](configuration/index.md).
 
 ---

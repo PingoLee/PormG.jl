@@ -107,7 +107,7 @@ These are the keys PormG reads **directly under an environment block** — the p
 | `adapter` | both | **Required.** `PostgreSQL` or `SQLite`. A block without it raises `InvalidConfigurationError` on load. |
 | `database` | both | Database name (PostgreSQL) or file path (SQLite). A relative SQLite path resolves inside the config folder — except for the two keyword forms, `:memory:` and a `file:` URI, which are passed to SQLite verbatim (see [In-memory databases](#In-memory-databases)). |
 | `host` | both | Server host on PostgreSQL. **On SQLite it is the database file name and takes precedence over `database:`** — a historical quirk, not a typo. |
-| `url` | PostgreSQL | A complete connection string. When present, **every other PostgreSQL target key is ignored** — PormG passes it through verbatim. Setting it under `adapter: SQLite` does nothing and warns; use `database:` there. |
+| `url` | PostgreSQL | A complete connection string, in either the libpq keyword form or the URL form (`postgres://user:password@host/db`). When present, **every other PostgreSQL target key is ignored** — PormG passes it through verbatim. Both forms are redacted wherever PormG logs, displays or serializes the connection — see [Credentials never leave through `show` or `JSON.json`](advanced.md#Credentials-never-leave-through-show-or-JSON.json). Setting it under `adapter: SQLite` does nothing and warns; use `database:` there. |
 | `username`, `password`, `port`, `hostaddr` | PostgreSQL | Standard credentials/target. Forwarded into the libpq DSN. |
 | `passfile`, `connect_timeout`, `client_encoding` | PostgreSQL | Forwarded into the libpq DSN verbatim. |
 | `sslmode`, `sslrootcert`, `sslcert`, `sslkey` | PostgreSQL | TLS settings, forwarded into the libpq DSN verbatim. |

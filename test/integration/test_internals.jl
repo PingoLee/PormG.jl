@@ -358,3 +358,119 @@ end
 
 
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Credential containment against a REAL connection (#649).
+#
+# The unit half (`test/unit/test_redact_secret.jl`, `test_json_serialization.jl`,
+# `test_repl_display.jl`) is hermetic and asserts on invented credentials, which is what lets it
+# check VALUES. This file faces the live DSN for the selected database, so it asserts on TOKENS and
+# SHAPES only and never on the secret itself — a failure message is CI output, and the whole point
+# is that the credential does not travel.
+#
+# That constraint is why the `show` assertions are written as "`password=` NOT followed by the
+# mask" rather than "the password is absent": the card legitimately CONTAINS `password=****`, so a
+# bare token check cannot distinguish a redacted DSN from a raw one.
+#
+# **Every assertion here tests a hoisted `Bool`, never the call itself**, and that is not style.
+# Julia's `@test` prints an `Evaluated:` line carrying BOTH arguments of a call, so
+# `@test !occursin(RAW_KV, rendered)` publishes the entire rendered card — live DSN included — to
+# CI output, and does so precisely when redaction has regressed. Measured on 1.12:
+#
+#     Expression: !(occursin(RAW_KV, secret_text))
+#      Evaluated: !(occursin(r"...", "host=h password=THE_LIVE_SECRET user=admin"))
+#
+# `leaked = occursin(...); @test !leaked` prints `Expression: !leaked` and no `Evaluated:` line at
+# all. A test that turns a leak into a PUBLISHED leak is worse than no test.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Credential containment: live pool, Settings and config (#649)" begin
+  settings = PormG.config[PORMG_DB_FOLDER]
+  pool = settings.connections
+  @test pool isa PormG.Kernel.PormGBackend   # the fixture is only a fixture if it is a real pool
+
+  J649 = PormG.QueryBuilder.JSON
+
+  # An un-redacted credential in either dialect. `password=` / `user=` not followed by the mask is
+  # the keyword form; `://…:…@` is the URL form, which was invisible to the rule before #649.
+  RAW_KV  = r"(?i)(password|user)\s*=\s*(?!\*\*\*\*)"
+  # The middle class must exclude `:` as well as `*`, or the `:` inside a CORRECTLY redacted
+  # `://****:****@` satisfies "at least one non-mask character" and the assertion goes red on the
+  # fixed behaviour — then prints the card. Verified: old pattern matched `://****:****@`, this one
+  # does not, and both still match `://pingo:s3cret@` and `://pingo@`.
+  # The class mirrors `_REDACT_URL_USERINFO_RE` and must MOVE WITH IT: only `/` and a line break
+  # terminate a userinfo run, because `?`, `#`, spaces and tabs are all ordinary password
+  # characters to libpq. A guard whose class is narrower than the rule's cannot see the very class
+  # of leak the rule was widened for.
+  RAW_URL = r"://[^/@\n\r]*[^*:/@\n\r][^/@\n\r]*@"
+
+  # ── JSON: no DSN at all, in any form ──────────────────────────────────────
+  # Stricter than the display route by design (see `src/json_lower.jl`): a document travels, so it
+  # carries no connection string even redacted.
+  @testset "JSON.json emits no connection string" begin
+    for (label, value) in ("pool" => pool, "Settings" => settings, "config" => PormG.config)
+      @testset "$label" begin
+        doc = J649.json(value)
+        for token in ("connection_string", "db_config_settings", "password", "user=",
+                      "dbname", "host=", "pool_size", "available", "://")
+          # Hoisted — see the header. `@test !occursin(token, doc)` would print `doc`.
+          present = occursin(token, doc)
+          @testset "$token" begin
+            @test !present
+          end
+        end
+      end
+    end
+  end
+
+  # ── show: a redacted DSN on the card, none at all on the compact route ────
+  @testset "Base.show never renders a live credential" begin
+    for (label, value) in ("pool" => pool, "Settings" => settings, "config" => PormG.config)
+      @testset "$label" begin
+        compact = sprint(show, value)
+        card    = repr(MIME"text/plain"(), value)
+
+        # Neither route may carry an unmasked credential in either dialect. Every check is
+        # hoisted to a `Bool` before `@test` sees it — see the header.
+        for (route, rendered) in ("compact" => compact, "card" => card)
+          @testset "$route" begin
+            unmasked_kv  = occursin(RAW_KV, rendered)
+            unmasked_url = occursin(RAW_URL, rendered)
+            reflected_cs = occursin("connection_string", rendered)
+            reflected_yaml = occursin("db_config_settings", rendered)
+            @test !unmasked_kv
+            @test !unmasked_url
+            @test !reflected_cs
+            @test !reflected_yaml
+          end
+        end
+
+        # The compact route promises more than "masked": no DSN at all. `password=****` nested
+        # inside another value's rendering would pass every assertion above and still be wrong.
+        any_dsn = occursin("password", compact)
+        @test !any_dsn
+      end
+    end
+  end
+
+  # ── the card actually shows something, so the tests above are not vacuous ─
+  # A `show` that rendered nothing at all would satisfy every absence assertion in this testset.
+  # This is the non-vacuity floor.
+  @testset "the card is not empty" begin
+    card = repr(MIME"text/plain"(), pool)
+    # Hoisted like everything else in this block, and the third one is the reason the rule is
+    # absolute rather than a style preference: a POSITIVE `occursin` prints its haystack on failure
+    # exactly as a negated one does, and this assertion's failure condition IS "the mask is missing
+    # from the card" — i.e. redaction regressed and `card` holds the raw DSN.
+    names_pool = occursin("Pool(", card)
+    has_dsn_line = occursin("dsn:", card)
+    @test names_pool
+    @test has_dsn_line
+    # …and the DSN it shows went through the redaction rule, evidenced by the mask being present.
+    # (PostgreSQL's DSN carries a password; SQLite's connection string is a file path, so the mask
+    # is only asserted where the source string actually had something to mask.)
+    if pool isa PormG.PormGPostgres && occursin("password", pool.connection_string)
+      masked = occursin("password=****", card)
+      @test masked
+    end
+  end
+end

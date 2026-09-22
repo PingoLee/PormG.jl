@@ -80,6 +80,54 @@ dev:
 
 ---
 
+## Credentials never leave through `show` or `JSON.json`
+
+A connection pool holds the connection string it was built from, and for PostgreSQL that string *is*
+the credential. `Configuration.Settings` holds the pool, and `PormG.config` holds the settings — so
+any of the three is one `JSON.json` or one REPL `show` away from a password, in exactly the places
+application state gets serialized without much thought: a debug endpoint, a health check that dumps
+config, an error reporter attaching context.
+
+PormG bounds all three. The two routes deliberately promise different things:
+
+| | what it emits |
+|---|---|
+| `JSON.json(pool)` | `{"pormg_connection":"PostgreSQL"}` — no connection string, in any form |
+| `JSON.json(settings)` | a `pormg_settings` object: `app_env`, `db_def_folder`, `model_file`, `time_zone`, `django_prefix`, `change_db`, `change_data`, `implicit`, and the backend name. Never the pool's DSN, never `db_config_settings` |
+| `JSON.json(PormG.config)` | the same, once per configured key |
+| `show(pool)` — nested, e.g. inside a `Vector` | `Pool(PostgreSQL, 10 slots)` — no connection string |
+| the REPL card, when you type the value | the above **plus** the connection string, redacted |
+
+```julia
+julia> pool = PormG.config["db"].connections
+Pool(PostgreSQL, 10 slots)
+  dsn: host=127.0.0.1 port=5432 password=**** dbname=formula1 user=****
+```
+
+**Why JSON is stricter than the display.** A card is read by a human who asked for it, at a
+terminal, and "which database is this pointed at?" is the only reason to type a pool — so the card
+answers it, redacted. A JSON document *travels*: to a debug endpoint, a log aggregator, an error
+reporter, a third party. Redaction is a denylist, and a denylist is one unfamiliar DSN dialect away
+from emitting a password, which is an acceptable risk at a terminal and not on a wire.
+
+If you do want the connection string in a document, ask for it explicitly:
+
+```julia
+PormG.Configuration.redact_secret(pool.connection_string)
+```
+
+`redact_secret` is the single owner of the redaction rule and the same one every log line and
+exception uses. It covers both dialects PormG accepts — the libpq keyword form
+(`password=…`, `user=…`, quoted values included) and the URL form
+(`postgres://user:password@host/db` → `postgres://****:****@host/db`).
+
+**`db_config_settings` is never emitted at all**, by either route. It is the raw parsed YAML block
+for your environment, so it can hold a `password:` key, a `url:` carrying an entire DSN, or paths
+to TLS private keys — and being an arbitrary user-supplied dictionary, there is nothing to redact
+it *with*. Read it directly if you need it; PormG will not put it in a document for you.
+
+---
+
 ## Advisory Locks
 
 Use advisory locks to ensure long-running tasks (migrations, seeds, imports) do not run in parallel across processes.

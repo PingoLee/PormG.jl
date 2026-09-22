@@ -360,7 +360,11 @@ end
                                    :TextField, :TimeField, :UniqueConstraint, :URLField, :UUIDField,
                                    :set_models],
             PormG.Migrations   => [:MIGRATION_FORMAT_VERSION],
-            PormG.Configuration => [:get_tx_connection, :is_loaded, :load_many, :ping, :status],
+            # `redact_secret` joined the set with #649: `docs/src/api.md` documents it as the
+            # supported way to put a connection string into output you control, which is only
+            # an honest instruction if the name is API.
+            PormG.Configuration => [:get_tx_connection, :is_loaded, :load_many, :ping,
+                                    :redact_secret, :status],
         )
         for (mod, want) in expected
             @testset "$(nameof(mod))" begin

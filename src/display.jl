@@ -1,7 +1,17 @@
-# ── Layer 4: REPL display (#534) ─────────────────────────────────────────────
+# ── Layer 4: REPL display (#534, #649) ───────────────────────────────────────
 #
-# Every `Base.show` PormG defines for a MODEL-BEARING type lives here, in one file, because the
-# rules they share are the whole point and are easy to break one method at a time:
+# Every `Base.show` PormG defines lives here, in one file, because the rules they share are the
+# whole point and are easy to break one method at a time. Two families are covered, for two
+# different reasons:
+#
+#   * the MODEL-BEARING types (#534), where the defect is a SIZE — `show_default` walked a cyclic
+#     schema graph and rendered 1.6 MB for one handle;
+#   * the CREDENTIAL-BEARING types (#649) — the connection pools and `Settings` — where the defect
+#     is a LEAK. `show_default` printed `connection_string` verbatim, DSN password and all. Those
+#     documents are a few hundred characters, so no size ceiling would ever have caught them; see
+#     the section at the foot of this file.
+#
+# The rules:
 #
 #   1. **A `show` never throws.** A display method that raises poisons the REPL for every value
 #      printed afterwards, including the exception you were trying to read. Anything that could
@@ -726,4 +736,126 @@ function _d_pk_name(model)
     hasfield(typeof(f), :primary_key) && getfield(f, :primary_key) === true && return Symbol(fname)
   end
   return nothing
+end
+
+# ── Connection pools and Settings (#649) ─────────────────────────────────────
+#
+# These are NOT model-bearing, and they are here for the other reason in the file header: before
+# these methods, `show_default` walked their slots and printed `connection_string` — for PostgreSQL
+# the libpq DSN, credentials included. Measured on a fake DSN: `sprint(show, pool)` was 196
+# characters and contained the password; a `Settings` was 382 and additionally leaked
+# `db_config_settings`, the raw parsed YAML, which carries a `password:` key of its own.
+#
+# So the defect here is QUALITATIVE. #534's ceilings work because its defect was a size; a ceiling
+# proves nothing about these, and `test/unit/test_repl_display.jl` asserts per-token absence for
+# them instead.
+#
+# Two routes, and the split is deliberate:
+#
+#   * the 2-arg `show` — what `show_default` calls for a NESTED slot, and what a `Vector` or `Dict`
+#     of pools renders through — names the backend and the pool shape and carries NO connection
+#     string at all. Nested output is where a value appears without anyone having asked for it.
+#   * the `MIME"text/plain"` card — what you get when you type the value at the REPL, having asked
+#     — carries the connection string through `Configuration.redact_secret`. "Which database is
+#     this pointed at?" is the only reason to type a pool, and answering it is the whole point of
+#     redacting rather than omitting.
+#
+# `redact_secret` is the single owner of that rule (`src/Configuration.jl`), and it covers both the
+# libpq DSN and the URL dialect. This file adds no second pattern.
+
+# One guarded slot read, rule 3 (`getfield`, never a property) and rule 1 (never throws) in one
+# place. The `default` is what an incomplete handle renders as — these types are reachable
+# mid-construction, and a display is the wrong place to discover it.
+function _d_slot(x, slot::Symbol, default)
+  hasfield(typeof(x), slot) || return default
+  try
+    v = getfield(x, slot)
+    return v === nothing ? default : v
+  catch e
+    (e isa InterruptException || e isa StackOverflowError) && rethrow()
+    return default
+  end
+end
+
+# The backend family a value belongs to. `PormGBackend` has exactly two children today, but a
+# downstream pool type is a supported shape, so the fallback names the struct rather than guessing
+# one of the two — a mislabelled engine is a worse answer than an unfamiliar one.
+_d_backend_label(x) =
+  x isa Kernel.PormGPostgres ? "PostgreSQL" :
+  x isa Kernel.PormGSQLite   ? "SQLite"     : String(nameof(typeof(x)))
+
+# A DSN is wider than `_d_trunc`'s 40-column leaf bound and stays useful to the end — `dbname` sits
+# at the tail of the libpq form — so the card gets its own, wider bound. Still bounded: the input is
+# a connection string, but nothing stops a consuming app from putting a novel in one.
+_d_dsn(s::AbstractString) = _d_trunc(String(s), 160)
+
+# Defined on the ABSTRACT type so BOTH pool structs, the `_PostgresEngine`/`_SQLiteEngine` dispatch
+# markers, every pool-shaped test mock and any pool type added later are covered by one method —
+# the same argument `show(::PormGField)` makes above. That is why every slot read below is guarded
+# by `hasfield`: a fieldless marker is a legitimate member of this family.
+function Base.show(io::IO, b::Kernel.PormGBackend)
+  print(io, "Pool(", _d_backend_label(b))
+  n = _d_slot(b, :pool_size, nothing)
+  n === nothing || print(io, ", ", n, " slot", n == 1 ? "" : "s")
+  # No connection string on this route, redacted or otherwise — see the note above.
+  print(io, ")")
+end
+
+# The redacted connection string a card may show, or `nothing` when this member of the family holds
+# none (a dispatch marker, a fieldless mock). Shared by both cards below so the redaction happens in
+# exactly one place on the display side — the Settings card renders it itself rather than nesting
+# the pool's card, which would put the line at the wrong indent.
+function _d_redacted_dsn(b)
+  hasfield(typeof(b), :connection_string) || return nothing
+  # Rule 1: a redaction that somehow raised must not poison the REPL, and it must certainly not
+  # fall through to printing the raw string. Degrade to a marker instead.
+  try
+    return _d_dsn(Configuration.redact_secret(String(getfield(b, :connection_string))))
+  catch e
+    (e isa InterruptException || e isa StackOverflowError) && rethrow()
+    return "<unrenderable>"
+  end
+end
+
+function Base.show(io::IO, ::MIME"text/plain", b::Kernel.PormGBackend)
+  show(io, b)
+  dsn = _d_redacted_dsn(b)
+  dsn === nothing || print(io, "\n  dsn: ", dsn)
+end
+
+# `Settings` is `PormGSettings`' only concrete subtype today; the method goes on the abstract for
+# the reason above.
+#
+# `db_config_settings` is ABSENT from both routes, and that is a decision rather than an oversight
+# (#649): it is the raw parsed YAML environment block, stored with no copy and no sanitisation, and
+# its documented keys include `password`, `url` (an entire DSN), and `sslkey`/`sslcert`. It is a
+# user-supplied dict, so there is nothing to redact it WITH — `redact_secret` reads a connection
+# string and cannot see a raw `password:` key. An allowlist over it would have to be maintained
+# against `VALID_CONNECTION_KEYS` forever, and the one value worth showing (`adapter`) is already
+# the backend label below. Do not "improve" this into a denylist.
+function Base.show(io::IO, s::Kernel.PormGSettings)
+  print(io, "Settings(", _d_value(_d_slot(s, :app_env, "?")))
+  conn = _d_slot(s, :connections, nothing)
+  conn === nothing || print(io, ", ", _d_backend_label(conn))
+  print(io, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", s::Kernel.PormGSettings)
+  show(io, s)
+  println(io)
+  println(io, "  folder:     ", _d_value(_d_slot(s, :db_def_folder, "?")))
+  println(io, "  model file: ", _d_value(_d_slot(s, :model_file, "?")))
+  println(io, "  time zone:  ", _d_value(_d_slot(s, :time_zone, "?")))
+  prefix = _d_slot(s, :django_prefix, nothing)
+  prefix === nothing || println(io, "  prefix:     ", _d_value(prefix))
+  println(io, "  writes:     change_db=", _d_slot(s, :change_db, "?"),
+                     " change_data=", _d_slot(s, :change_data, "?"))
+  conn = _d_slot(s, :connections, nothing)
+  if conn === nothing
+    print(io, "  connection: none")
+  else
+    print(io, "  connection: ", sprint(show, conn))
+    dsn = _d_redacted_dsn(conn)
+    dsn === nothing || print(io, "\n  dsn:        ", dsn)
+  end
 end

@@ -42,9 +42,7 @@ export pool_stats
 # ambiguous and therefore undefined (#35). Callers in this package use `CP.close_pool!`.
 
 # Import transaction context helpers from Configuration
-import PormG.Configuration: get_tx_connection, get_tx_pool, with_tx_context, transaction_connection_for, get_settings, ensure_before_connect!, connection_key_for_pool, in_transaction_context, current_transaction_depth
-
-const _REDACT_CONNECTION_STRING_RE = Regex("(?i)(password|user)=[^\\s]+")
+import PormG.Configuration: get_tx_connection, get_tx_pool, with_tx_context, transaction_connection_for, get_settings, ensure_before_connect!, connection_key_for_pool, in_transaction_context, current_transaction_depth, redact_secret
 
 # #218: a raw-SQL manual-params array/tuple the caller binds with backend-native placeholders
 # ($1,$2 on PostgreSQL, ? on SQLite). PormG performs NO placeholder translation — the caller
@@ -125,15 +123,6 @@ function _run_before_connect!(pool::Union{PormGPostgres, PormGSQLite})
                            "before_connect hook aborted the connection", key, 1, 0.0))
   end
   return nothing
-end
-
-"""
-    redact_secret(conn_str::String)
-
-Replace sensitive connection string fields such as `password` or `user` with masked values before logging.
-"""
-function redact_secret(conn_str::String)::String
-  return replace(conn_str, _REDACT_CONNECTION_STRING_RE => s"\1=****")
 end
 
 function _unwrap_async_exception(exception)

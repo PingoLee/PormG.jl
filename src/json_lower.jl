@@ -1,4 +1,4 @@
-# ── Layer 4: JSON lowering for the model graph (#643) ────────────────────────
+# ── Layer 4: JSON lowering for the model graph and the credential types (#643, #649) ─────────
 #
 # Four rules, shared by every method here. They are written down together because #534 found the
 # failure mode: shared rules that live nowhere break one method at a time, and each break
@@ -44,9 +44,32 @@
 # walks into the pool and out through `connection_string` — measured, the 2.18 MB document above
 # contains `password`. `Configuration.redact_secret` exists precisely because that string is a
 # secret, and it is applied at every logging site; struct reflection was the same egress with no
-# redaction. That arm closes this type's path. It does NOT close the others — `JSON.json` on a pool,
-# on a `Settings`, or on `PormG.config` never touches the model graph and so reaches none of these
-# methods. That is a separate issue, deliberately not fixed here.
+# redaction. That arm closes this type's path.
+#
+# ## The credential family (#649)
+#
+# #643 closed that leak for the path THROUGH THE MODEL GRAPH, and only that path: `JSON.json` on a
+# pool, on a `Settings`, or on `PormG.config` reaches none of the methods above. #649 closes the
+# rest, and the two halves are different defects wearing one file:
+#
+#   * The model-graph methods answer a SIZE. Reverted, they measure megabytes.
+#   * The credential methods answer a LEAK, and nothing more. Reverted, they measure 355 characters
+#     for a pool and 616 for a `Settings` — so a ceiling assertion passes against completely
+#     unpatched code, and only PER-TOKEN ABSENCE discriminates. `test/unit/test_json_serialization.jl`
+#     keeps the two case lists separate for exactly that reason.
+#
+# **These methods emit no connection string at all, not even a redacted one** — the one place this
+# file is stricter than `src/display.jl`, which renders `redact_secret(connection_string)` on a
+# card. That is not an inconsistency, it is rule 3's display/wire line applied to a secret:
+#
+#   * A `show` is read by a human who asked for it, at a terminal. "Which database is this pointed
+#     at?" is the only reason to type a pool, so the card answers it, redacted.
+#   * A JSON document TRAVELS — to a debug endpoint, an error reporter, a log aggregator, a third
+#     party. `redact_secret` is a denylist, and a denylist is one unfamiliar DSN dialect away from
+#     emitting a password. That is an acceptable risk on a terminal and not on a wire.
+#
+# A caller who genuinely wants the DSN in a document asks for it:
+# `Configuration.redact_secret(pool.connection_string)`, which is public API.
 #
 # ## Why `PormGRow`'s hook is NOT here
 #
@@ -82,6 +105,11 @@ end
 # Two hops, both guarded the same way — `SQLObjectQuery.model` is typed on an abstract
 # (`model::PormGModel`), so a half-built or introspection-time handle is worth surviving.
 _jl_query_model(q) = _jl_name(_jl_slot(q, :model), :name)
+
+# A `Bool` slot, kept as a JSON boolean rather than stringified through `_jl_name` — `"false"` and
+# `false` are different values to a consumer, and the second is what the slot holds. `nothing` (an
+# unreadable slot) stays `nothing`, which is JSON `null`: a missing flag must not read as `false`.
+_jl_flag(x, slot::Symbol) = (v = _jl_slot(x, slot); v === nothing ? nothing : v === true)
 
 # A one-key object rather than a bare string, because additive later is cheap and removing is
 # breaking: this can grow a second key without breaking a consumer, where a string could not grow at
@@ -124,3 +152,52 @@ JSON.StructUtils.lower(s::JSON.JSONStyle, h::QueryBuilder.ObjectHandler) =
 # memo dicts, and above all not `connection`.
 JSON.StructUtils.lower(::JSON.JSONStyle, i::QueryBuilder.InstructionObject) =
   Dict("pormg_instruction" => _jl_query_model(_jl_slot(i, :object)))
+
+# ── The credential family (#649) ─────────────────────────────────────────────
+
+# On `PormGBackend`, the parent of `PormGPostgres` and `PormGSQLite`, so ONE method covers both pool
+# structs, the `_PostgresEngine`/`_SQLiteEngine` dispatch markers, every pool-shaped test mock, and
+# any pool type added later — the argument the `PormGField` arm above makes, applied to the family
+# whose slots are the credential. The label comes from `src/display.jl` so the two serializers agree
+# on what to call a backend, the same sharing `_d_field_type_name` already gets.
+#
+# A one-key marker, and nothing else: not `pool_size`, not `available`, and above all not
+# `connection_string` in any form. Every slot left out is a slot that cannot regress into a
+# document later.
+JSON.StructUtils.lower(::JSON.JSONStyle, b::Kernel.PormGBackend) =
+  Dict("pormg_connection" => _d_backend_label(b))
+
+# `Settings` carries real configuration a health check has a legitimate reason to serialize, so this
+# is the one marker in the file with a body rather than a name — the issue asked for the non-secret
+# fields. Nested under a single `pormg_settings` key to keep the marker convention: a consumer can
+# be given another field later, where a bare string could not grow at all.
+#
+# Two slots are absent, and both are deliberate:
+#
+#   * `connections` — replaced by the backend label. See the file header for why no DSN travels.
+#   * `db_config_settings` — the raw parsed YAML environment block, stored with no copy and no
+#     sanitisation. Its documented keys include `password`, `url` (an entire DSN) and
+#     `sslkey`/`sslcert`, plus the `pass`/`passwd`/`pwd` aliases and two nested blocks. It is a
+#     USER-SUPPLIED dict, so there is nothing to redact it with: `redact_secret` reads a connection
+#     string and cannot see a raw `password:` key. An allowlist over it would have to track
+#     `VALID_CONNECTION_KEYS` forever, and its one useful value — `adapter` — is already the
+#     backend label. Emitting nothing is the answer; do not turn this into a denylist.
+#
+# Every leaf is a `String`, `Bool` or `nothing`, so rule 1 holds and the `leaves_only` invariant
+# test covers this arm unchanged.
+function JSON.StructUtils.lower(::JSON.JSONStyle, s::Kernel.PormGSettings)
+  conn = _jl_slot(s, :connections)
+  return Dict("pormg_settings" => Dict{String, Any}(
+    "app_env"       => _jl_name(s, :app_env),
+    "db_def_folder" => _jl_name(s, :db_def_folder),
+    "model_file"    => _jl_name(s, :model_file),
+    "time_zone"     => _jl_name(s, :time_zone),
+    # `nothing` is a legitimate value here, not a missing slot, so it lowers to JSON `null` rather
+    # than to `_jl_name`'s `"?"` — the marker for a slot that could not be read at all.
+    "django_prefix" => (v = _jl_slot(s, :django_prefix); v === nothing ? nothing : string(v)),
+    "change_db"     => _jl_flag(s, :change_db),
+    "change_data"   => _jl_flag(s, :change_data),
+    "implicit"      => _jl_flag(s, :implicit),
+    "connection"    => conn === nothing ? nothing : _d_backend_label(conn),
+  ))
+end

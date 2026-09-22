@@ -537,3 +537,166 @@ const CEILINGS = Dict{String,Tuple{Int,Int}}(
     @test length(limited) < CEILING
   end
 end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# #649 — the credential-bearing types: the connection pools and `Settings`.
+#
+# These are NOT model-bearing, and they are in this file because the failure mode is the same
+# absence — no method, so `show_default` walks the slots — with a different consequence. Measured on
+# an unpatched build with a fake DSN:
+#
+#     sprint(show, pool)      196 chars   contains the DSN password
+#     _plain(Settings)        382 chars   contains it, plus `db_config_settings`' raw YAML password
+#     _plain(config)          439 chars   the same, once per entry
+#
+# **So there are no CEILINGS entries below, and that is the point.** Everything above this line is
+# quantitative because #534's defect was a size; 196 characters is an ordinary display, so a ceiling
+# would pass against completely unpatched code. The assertion that discriminates here is per-token
+# absence of a credential we invented.
+#
+# The two routes are asserted separately, because they promise different things — the compact form
+# (what `show_default` calls for a NESTED slot) carries no connection string at all, while the card
+# carries a REDACTED one. Asserting only the card would miss a nested pool dumping its DSN inside
+# some other value's rendering.
+# ═════════════════════════════════════════════════════════════════════════════
+
+const D649_PW   = "d649_fake_dsn_password"
+const D649_USER = "d649_fake_dsn_username"
+const D649_YAML = "d649_fake_yaml_password"
+const D649_DSN  = "host=localhost port=5432 password=$D649_PW dbname=f1 user=$D649_USER"
+
+# A legal `Settings.connections` value carrying no slots whatsoever — the shape every dispatch
+# marker and pool-shaped mock in the repo has, and the one that exercises the `hasfield` guards in
+# `_d_slot` / `_d_redacted_dsn`.
+struct D649FieldlessPool <: PormG.PormGPostgres end
+
+# A backend in NEITHER family — legal, since `PormGBackend` can be subtyped directly — which is the
+# only thing that reaches `_d_backend_label`'s fallback arm.
+struct D649OtherBackend <: PormG.Kernel.PormGBackend end
+
+# Hermetic: a pool constructor allocates slots and opens nothing.
+_d649_pg() = PormG.ConnectionPool.PostgresConnectionPool(D649_DSN; pool_size = 2)
+_d649_sl() = PormG.ConnectionPool.SQLiteConnectionPool("/tmp/d649.sqlite"; pool_size = 1)
+
+_d649_settings() = PormG.Configuration.Settings(
+  # Explicit, NOT inherited: `Settings()` defaults `app_env` from `ENV["PORMG_ENV"]`, and
+  # `test/runtests.jl` sets that to "test". Without this the exact renderings below pass when
+  # the file is run alone and fail inside the suite.
+  app_env            = "dev",
+  connections        = _d649_pg(),
+  db_def_folder      = "d649_folder",
+  change_data        = true,
+  db_config_settings = Dict{String, Any}("adapter" => "PostgreSQL", "password" => D649_YAML),
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Exact renderings. Both methods, both routes, so a change to either is a deliberate act rather
+# than something noticed later — the same standard the model-graph methods are held to above.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "pools and Settings render exactly (#649)" begin
+  @test _inner(_d649_pg()) == "Pool(PostgreSQL, 2 slots)"
+  # Singular, because "1 slots" is the kind of thing that survives forever once shipped.
+  @test _inner(_d649_sl()) == "Pool(SQLite, 1 slot)"
+  # A fieldless dispatch marker has no `pool_size` and no `connection_string`; the abstract method
+  # must survive it rather than raise from inside a display (rule 1).
+  @test _inner(PormG.Migrations._PostgresEngine()) == "Pool(PostgreSQL)"
+  @test _plain(PormG.Migrations._PostgresEngine()) == "Pool(PostgreSQL)"
+
+  # The card carries the DSN, redacted by the one owner of that rule.
+  @test _plain(_d649_pg()) ==
+        "Pool(PostgreSQL, 2 slots)\n  dsn: host=localhost port=5432 password=**** dbname=f1 user=****"
+
+  @test _inner(_d649_settings()) == "Settings(\"dev\", PostgreSQL)"
+  # A `Settings` with no pool still renders, and says so rather than omitting the line.
+  @test _inner(PormG.Configuration.Settings(app_env = "dev")) == "Settings(\"dev\")"
+  @test occursin("connection: none", _plain(PormG.Configuration.Settings(app_env = "dev")))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE ASSERTION THIS SECTION EXISTS FOR. Per token, absence only, over both routes and over the
+# containers these are actually met in — a `Settings` inside `PormG.config` is the shape a health
+# check dumps, and it reaches the pool two hops down.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "no display route leaks a credential (#649)" begin
+  settings = _d649_settings()
+  cases = Pair{String, Any}[
+    "pool"               => _d649_pg(),
+    "sqlite pool"        => _d649_sl(),
+    "Settings"           => settings,
+    "config-shaped Dict" => Dict{String, PormG.PormGSettings}("d649" => settings),
+    "pool in a Vector"   => [_d649_pg(), _d649_sl()],
+    "pool in a Dict"     => Dict("held" => _d649_pg()),
+  ]
+
+  for (label, value) in cases
+    @testset "$label" begin
+      for (route, rendered) in ("compact" => _inner(value), "card" => _plain(value))
+        # The credentials themselves…
+        @test !occursin(D649_PW, rendered)
+        @test !occursin(D649_USER, rendered)
+        @test !occursin(D649_YAML, rendered)
+        # …and the slot names that only appear if `show_default` reflected.
+        @test !occursin("db_config_settings", rendered)
+        @test !occursin("connection_string", rendered)
+        @test !occursin("ReentrantLock", rendered)
+        # The compact route promises MORE than absence of the secret: no DSN at all, redacted or
+        # not. `password=****` on a nested value would satisfy every assertion above and still be
+        # the wrong contract.
+        route == "compact" && @test !occursin("password", rendered)
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The card's DSN goes through `redact_secret` rather than through a second pattern living here.
+# Asserted on the URL dialect specifically: that form was invisible to the rule before #649, so a
+# display that quietly kept its own copy of the old pattern would pass the DSN cases above and leak
+# here.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the card redacts both DSN dialects (#649)" begin
+  url_pool = PormG.ConnectionPool.PostgresConnectionPool(
+    "postgresql://$D649_USER:$D649_PW@localhost:5432/f1"; pool_size = 1)
+
+  card = _plain(url_pool)
+  @test !occursin(D649_PW, card)
+  @test !occursin(D649_USER, card)
+  @test occursin("postgresql://****:****@localhost:5432/f1", card)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rule 1, for the two new methods: a display never throws. These types are reachable mid-
+# construction and from downstream code, and a `show` that raises poisons the REPL for every value
+# printed afterwards — including the exception you were trying to read.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a credential display never throws (#649)" begin
+  broken = _d649_pg()
+  # A slot holding a value whose own display would be unhelpful, and one that is outright the wrong
+  # type for the slot's usual contents.
+  setfield!(broken, :connections, Any[ErrorException("must not be rendered"), nothing])
+  @test _inner(broken) isa String
+  @test !occursin("must not be rendered", _plain(broken))
+
+  # A backend with NO slots at all. `Settings.connections` is typed
+  # `Union{Nothing, PormGPostgres, PormGSQLite}`, so "a slot holding something that is not a pool"
+  # is unrepresentable — `setfield!` raises — and an earlier draft of this block wrote
+  # `setfield!(odd, :connections, nothing)` on a field that was already `nothing`, which tested
+  # precisely nothing. A fieldless mock is the real edge: it IS a legal `connections` value and it
+  # answers `hasfield` false for every slot the two methods read.
+  settings = PormG.Configuration.Settings(app_env = "dev", connections = D649FieldlessPool())
+  # Labelled by FAMILY, not by struct name — a `PormGPostgres` subtype reads "PostgreSQL" whatever
+  # it is called, which is what makes one method cover every present and future pool type.
+  @test _inner(settings) == "Settings(\"dev\", PostgreSQL)"
+  card = _plain(settings)
+  @test occursin("connection: Pool(PostgreSQL)", card)
+  # No slot count, because there is no `pool_size` to read…
+  @test !occursin("slot", card)
+  # …and no `dsn:` line, because there is no connection string to redact. Neither is a `nothing`
+  # rendered into the output, and neither is a raise from reading an absent slot.
+  @test !occursin("dsn:", card)
+
+  # The fallback arm of `_d_backend_label`, which nothing else reaches: a backend that is neither
+  # of the two families. It names the struct rather than guessing one of them — a mislabelled
+  # engine is a worse answer than an unfamiliar one.
+  @test _inner(D649OtherBackend()) == "Pool(D649OtherBackend)"
+end

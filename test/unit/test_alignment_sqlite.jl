@@ -21,6 +21,10 @@ include("../integration/db_sl/models.jl")
 import .models as M
 PormG.Models.set_models(M, "mock_sl_path")
 import PormG.QueryBuilder: Q, Qor, F, Exists, OuterRef, Subquery, Count, Concat, inspect_query, Case, When, Sum, Avg, Value, Round, _with
+# #618: `Max` gives a CharField-typed projection alias, the shape a pattern lookup can actually reach
+# (`_having_alias_formatter` resolves `format_text_sql` for MAX over a text column, so the value
+# guard passes). `OperObject`/`SQLField` build the unknown-operator case, which has no fluent spelling.
+import PormG.QueryBuilder: Max, OperObject, SQLField
 
 @testset "SQLite Parameter Alignment Verification (Real Models)" begin
     # 1. Positional Cross-Check with Real Schema
@@ -3563,4 +3567,150 @@ end
     end
     @test sl[:parameters] == vcat(q_ops, Any["1991-Q1", "1991-Q4"])
     @test occursin("BETWEEN", sl[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A pattern lookup on a projection alias renders through Dialect, and binds decorated (#618).
+#
+# The HAVING/projection-alias branch in `get_filter_query` was a hand-rolled duplicate of the WHERE
+# predicate render, and it was missing both halves of the pattern path: it printed
+# `"$(field) $(operator) $(placeholder)"` for anything that was not `IN`/`NOT IN`, so the LOOKUP NAME
+# reached the server as a SQL token — `HAVING MAX("Tb"."name") istartswith $1` — and it called
+# `add_parameter!` with no `contains=`/`operator=`, so the value was bound with no `%` and, worse, no
+# `escape_like_pattern`. The two halves are coupled: the keyword and the `ESCAPE` clause come from the
+# Dialect arm, the `%` and the backslash-escaping from the binding flags, and either alone is wrong.
+#
+# The fix routes both clauses through one `_render_predicate` ladder, so the assertions below are
+# written as WHERE-vs-HAVING equivalences wherever the two can be compared: a divergence is the
+# defect, and an equivalence cannot be satisfied by re-inlining a second ladder that happens to agree
+# today. The registry sweep is the other half — it walks `PATTERN_LOOKUP_OPERATORS` rather than a
+# hand-listed few, because #604 showed this family grows and a hand-list is how a member gets missed.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a pattern lookup on a projection alias renders through Dialect (#618)" begin
+    # `Max("name")` over a CharField: `_having_alias_formatter` resolves `format_text_sql`, so the
+    # term passes the value guard and reaches the render — which is what made this reachable.
+    alias_q() = (q = M.Race.objects; q.values("nm" => Max("name"));
+                 q.filter("nm__@istartswith" => "Mon"); q)
+    # The same lookup on the same physical column, in WHERE. This is the oracle: HAVING must apply
+    # the identical operator rendering and the identical value decoration.
+    where_q() = (q = M.Race.objects; q.values("name");
+                 q.filter("name__@istartswith" => "Mon"); q)
+
+    sl_alias = _assert_order_by_aligned(alias_q)          # cross-backend differential + marker count
+    pg_alias = inspect_query(alias_q(); connection = _ALIGN_PG)
+    sl_where = inspect_query(where_q())
+    pg_where = inspect_query(where_q(); connection = _ALIGN_PG)
+
+    # The render half. Before #618 the HAVING text was `MAX("Tb"."name") istartswith $1` — the
+    # PormGsuffix key printed as SQL, which neither engine parses.
+    @test occursin("ILIKE", pg_alias[:sql_text])
+    @test occursin("ESCAPE", pg_alias[:sql_text])
+    @test !occursin("istartswith", pg_alias[:sql_text])
+    @test !occursin("istartswith", sl_alias[:sql_text])
+    # SQLite folds case with the registered `pormg_lower` UDF (#78) rather than ILIKE; whatever the
+    # dialect does for a column it must do for an aggregate, so compare the shapes directly.
+    @test occursin("pormg_lower", sl_alias[:sql_text]) == occursin("pormg_lower", sl_where[:sql_text])
+    @test occursin("ESCAPE", sl_alias[:sql_text]) == occursin("ESCAPE", sl_where[:sql_text])
+
+    # The bind half, and the reason the two halves cannot be split: the Dialect arm emits `ESCAPE`,
+    # but only `contains=` puts a `%` on the value. Before #618 this bound "Mon".
+    @test sl_alias[:parameters] == ["Mon%"]
+    @test pg_alias[:parameters] == ["Mon%"]
+    @test sl_alias[:parameters] == sl_where[:parameters]      # WHERE is the oracle
+    @test pg_alias[:parameters] == pg_where[:parameters]
+    # It lands in `:having`, not `:where` — the clause context the branch already set is preserved.
+    @test sl_alias[:parameter_buckets][:having] == ["Mon%"]
+    @test sl_alias[:parameter_buckets][:where] == []
+
+    # `escape_like_pattern` is the half a missing `contains=` silently drops, and it is the one with a
+    # security shape: a `%` or `_` the CALLER typed is data, not a wildcard. `"50%_x"` must bind with
+    # both metacharacters escaped and exactly one trailing wildcard added.
+    esc_q() = (q = M.Race.objects; q.values("nm" => Max("name"));
+               q.filter("nm__@istartswith" => "50%_x"); q)
+    sl_esc = inspect_query(esc_q())
+    @test sl_esc[:parameters] == ["50\\%\\_x%"]
+    @test inspect_query(esc_q(); connection = _ALIGN_PG)[:parameters] == ["50\\%\\_x%"]
+
+    # …and a contains/suffix operator decorates on the other side, so the shape is the operator's,
+    # not a blanket append. `_apply_like_wildcards` picks it from the three LIKE_* tuples.
+    con_q() = (q = M.Race.objects; q.values("nm" => Max("name"));
+               q.filter("nm__@icontains" => "onz"); q)
+    @test inspect_query(con_q())[:parameters] == ["%onz%"]
+    end_q() = (q = M.Race.objects; q.values("nm" => Max("name"));
+               q.filter("nm__@iendswith" => "za"); q)
+    @test inspect_query(end_q())[:parameters] == ["%za"]
+
+    # ── The registry sweep ────────────────────────────────────────────────────────
+    # Every PATTERN_LOOKUP_OPERATORS name, not a hand-picked three. Two properties per name, both of
+    # which the old bare-infix render violated for ALL of them: the lookup name never appears as SQL,
+    # and the rendered HAVING predicate is byte-identical to what the same Dialect arm produces for
+    # the same left-hand side. The second is what makes this a real assertion rather than a smoke
+    # test — it pins the alias path to `Dialect`, not merely to "not the operator name".
+    # The oracle is asked of `Dialect` per engine rather than derived from a hardcoded list of
+    # PG-only names: four of these (`*unaccent*`) refuse on SQLite and two of those four are also
+    # `LIKE_WILDCARD_OPERATORS` members, so any split written here by hand is a second declaration
+    # that can drift from `Dialect`. Asking the arm directly cannot.
+    _LHS = "MAX(\"Tb\".\"name\")"
+    for op in PormG.PATTERN_LOOKUP_OPERATORS
+        build() = (q = M.Race.objects; q.values("nm" => Max("name"));
+                   q.filter("nm__@$(op)" => "Mon"); q)
+        for (conn, ph) in ((_ALIGN_PG, "\$1"), (MockSQLite(), "?"))
+            # What the Dialect arm itself produces for this left-hand side, or the capability error
+            # it raises. The alias path must reproduce it exactly.
+            oracle = try
+                getfield(PormG.Dialect, Symbol(op))(conn, _LHS, ph)
+            catch e
+                e
+            end
+            if oracle isa Exception
+                # PostgreSQL-only lookup: HAVING must report the capability error, as WHERE does.
+                # Before #618 it rendered `HAVING MAX(...) iunaccent_exact ?` and failed at the
+                # server instead — a PormG operator name surfacing as a SQL syntax error.
+                @test_throws typeof(oracle) inspect_query(build(); connection = conn)
+            else
+                d = inspect_query(build(); connection = conn)
+                @test strip(split(d[:sql_text], "HAVING")[end]) == strip(oracle)
+                @test !occursin(op, d[:sql_text])     # the lookup name never reaches the SQL
+            end
+        end
+    end
+
+    # ── Controls: what the shared ladder must NOT have changed ────────────────────
+    # Comparison on an alias — the ordinary HAVING spelling the docs show.
+    cmp_q() = (q = M.Race.objects; q.values("n" => Count("raceid")); q.filter("n__@gt" => 5); q)
+    sl_cmp = _assert_order_by_aligned(cmp_q)
+    @test occursin("COUNT(\"Tb\".\"raceid\") > ?", sl_cmp[:sql_text])
+    @test sl_cmp[:parameters] == [5]
+
+    # Membership on an alias — #411's fix lived in the branch this commit deleted, so it has to be
+    # re-proved through the shared ladder: parenthesised on SQLite, `= ANY(...)` on PostgreSQL.
+    in_q() = (q = M.Race.objects; q.values("nm" => Max("name"));
+              q.filter("nm__@in" => ["Monza", "Imola"]); q)
+    sl_in = inspect_query(in_q())
+    pg_in = inspect_query(in_q(); connection = _ALIGN_PG)
+    @test occursin("IN (?, ?)", sl_in[:sql_text])
+    @test occursin("= ANY(\$1)", pg_in[:sql_text])
+    nin_q() = (q = M.Race.objects; q.values("nm" => Max("name"));
+               q.filter("nm__@nin" => ["Monza"]); q)
+    @test occursin("<> ALL(\$1)", inspect_query(nin_q(); connection = _ALIGN_PG)[:sql_text])
+
+    # A pattern lookup over a TRANSFORM column shares the bind half (its render half was already
+    # right — it reaches the same Dialect dispatch). `@yyyy_mm` is a `ToChar` carrying
+    # `format_yyyy_mm`, so the value must satisfy `^\d{4}-\d{2}$`: the issue's own literal example
+    # ("199") never reaches the binding at all, the formatter rejects it first.
+    tr_q() = (q = M.Race.objects; q.values("name");
+              q.filter("date__@yyyy_mm__@istartswith" => "1991-03"); q)
+    sl_tr = inspect_query(tr_q())
+    @test sl_tr[:parameters] == ["1991-03%"]   # before #618: "1991-03", undecorated and unescaped
+    @test !occursin("istartswith", sl_tr[:sql_text])
+
+    # An operator no renderer knows is refused at build time. The alias branch had no `else` arm at
+    # all, so anything at all reached the server as a bare token; the shared ladder brings WHERE's
+    # refusal with it.
+    bad = OperObject(operator = "totally_not_an_operator", values = "x",
+                     column = SQLField("nm", "nm"))
+    bad_q = M.Race.objects
+    bad_q.values("nm" => Max("name"))
+    push!(bad_q.object.filter, bad)
+    @test_throws PormG.FilterError inspect_query(bad_q)
 end

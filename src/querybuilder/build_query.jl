@@ -555,15 +555,22 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         field = having_cached.field
         # Switch to having context for positional parameters
         set_context!(instruc, :having)
-        placeholder = add_parameter!(instruc, _resolve_having_filter_value(having_key, v.values, instruc, v.operator))
-        # #411: `IN`/`NOT IN` need the dialect-aware renderer, not string concatenation. Concatenating
-        # produced `HAVING MAX(x) IN $1` on PostgreSQL and `HAVING MAX(x) IN ?, ?` on SQLite — no
-        # parentheses, no `= ANY` — which is a syntax error on both. Every other operator is a plain
-        # infix and stays that way.
-        push!(instruc.having,
-              v.operator in ("IN", "NOT IN") ?
-                _render_membership(string(field), v.operator, placeholder, instruc) :
-                "$(field) $(v.operator) $(placeholder)")
+        # #618: `contains=` / `operator=` are what run `_apply_like_wildcards` (and with it
+        # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias
+        # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the
+        # term matched as a wildcard. The gate is membership in `LIKE_WILDCARD_OPERATORS`, exactly as
+        # the three WHERE binding arms in `build_helpers.jl` spell it; the `*_exact` pattern lookups
+        # compare with `=` and must NOT be decorated, which is why that tuple and
+        # `PATTERN_LOOKUP_OPERATORS` are deliberately different sets (`constants.jl`).
+        is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
+        placeholder = add_parameter!(instruc,
+                                     _resolve_having_filter_value(having_key, v.values, instruc, v.operator),
+                                     contains=is_like_op, operator=v.operator)
+        # #618: one ladder, shared with the WHERE path — see `_render_predicate`. It absorbs the #411
+        # `IN`/`NOT IN` membership case this branch used to special-case, adds the
+        # `PATTERN_LOOKUP_OPERATORS` → `Dialect` dispatch it never had, and brings the
+        # unknown-operator refusal that was missing here entirely.
+        push!(instruc.having, _render_predicate(string(field), v.operator, placeholder, instruc))
         set_context!(instruc, :where)
         continue
       end

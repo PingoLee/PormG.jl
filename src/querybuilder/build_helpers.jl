@@ -2066,6 +2066,44 @@ function _render_membership(column::AbstractString, operator::AbstractString, pl
   end
 end
 
+# The operator ladder every filter predicate renders through, whatever clause it lands in (#618).
+#
+# It used to be inlined at the tail of `_get_filter_query(::SQLTypeOper, …)` — the WHERE path — while
+# the HAVING/projection-alias branch in `get_filter_query` (`build_query.jl`) hand-rolled its own
+# two-case version: `IN`/`NOT IN` through `_render_membership` (#411) and a bare
+# `"$(field) $(operator) $(placeholder)"` for everything else. So a pattern lookup on an alias
+# printed the LOOKUP NAME as a SQL token — `HAVING MAX("Tb"."name") istartswith $1` — which is a
+# syntax error on both engines, and an operator no renderer knows at all was never refused there.
+#
+# The duplication is the cause, not the symptom: four defects have now landed in those ten lines
+# (#411 the membership render, #576 the formatter choice, #618 this, #595 the memo reuse). One ladder
+# with two call sites is what makes a fifth divergence unrepresentable, and it is why the extraction
+# is the fix rather than a fourth patch. `_render_membership` above is the precedent — it was already
+# shared by both clauses for exactly this reason.
+#
+# `column` is the already-rendered left-hand side (a quoted column, a transform expression, or a
+# projection's aggregate text); `placeholders` is whatever `add_parameter!` returned, which is
+# dialect-dependent by design. Neither is re-rendered here, and this function binds nothing — the
+# caller owns the binding, including the `contains=` / `operator=` wildcard decoration a
+# `LIKE_WILDCARD_OPERATORS` value needs.
+function _render_predicate(column::AbstractString, operator::AbstractString, placeholders,
+                           instruc::SQLInstruction)::String
+  if operator in ["=", ">", "<", ">=", "<=", "<>", "!="]
+    return string(column, " ", operator, " ", placeholders)
+  elseif operator in ["IN", "NOT IN"]
+    return _render_membership(column, operator, placeholders, instruc)
+  elseif operator in PATTERN_LOOKUP_OPERATORS
+    @pormg_debug false
+    # The `ESCAPE` clause an escaped pattern needs comes from these arms and the `%` from the
+    # caller's `contains=`; the two halves are useless apart. The SQLite-refusing arms
+    # (`iunaccent_exact` / `niunaccent_exact`) raise `BackendCapabilityError` from here, so an alias
+    # filter reports the same capability error a WHERE filter does.
+    return getfield(Dialect, Symbol(operator))(instruc.connection, column, placeholders)
+  else
+    throw(FilterError("Invalid filter operator: $(operator) is not a supported operator."))
+  end
+end
+
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   @pormg_debug false
   # #352/#373: rewrite a non-sargable date-bucket comparison (to_char/EXTRACT on the column) into a
@@ -2105,8 +2143,13 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # above has declined it, and it formatted outside any guard, so it reported the write path's
     # `InvalidValueError` on a read. Guarded now, like every sibling.
     _label, _type, _subject = _transform_filter_labels(v.column, v.column.field.formatter)
+    # #618: the transform arms reach the `Dialect` dispatch below, so their SQL keyword and `ESCAPE`
+    # clause were always right — but they bound the value with no `contains=` / `operator=`, so a
+    # pattern lookup over a transform column got no `%` and no `escape_like_pattern`. That is the same
+    # bind half as the HAVING/alias branch, so all three arms here take the two kwargs too.
     placeholders = add_parameter!(instruc,
-      _guarded_format(v.column.field.formatter, v.values, v.operator, _label, _type; subject = _subject))
+      _guarded_format(v.column.field.formatter, v.values, v.operator, _label, _type; subject = _subject),
+      contains = v.operator in LIKE_WILDCARD_OPERATORS, operator = v.operator)
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && haskey(PormGTypeField, v.column.field.function_name)
     # Through the same helper as the other sites (#411). These work today only because
     # `PormGTypeField` maps to `format_number_sql` / `format_text_sql` — the two formatters that
@@ -2115,7 +2158,8 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     _fmt = getfield(Models, PormGTypeField[v.column.field.function_name])
     _label, _type, _subject = _transform_filter_labels(v.column, _fmt)   # #576
     placeholders = add_parameter!(instruc,
-      _guarded_format(_fmt, v.values, v.operator, _label, _type; subject = _subject))
+      _guarded_format(_fmt, v.values, v.operator, _label, _type; subject = _subject),
+      contains = v.operator in LIKE_WILDCARD_OPERATORS, operator = v.operator)   # #618
   elseif isa(v.column, SQLTypeFunction) && haskey(PormGTypeField, v.column.function_name)
     # Function with formatter
     @pormg_debug false
@@ -2126,7 +2170,8 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     _fmt = getfield(Models, PormGTypeField[v.column.function_name])
     _label, _type, _subject = _transform_filter_labels(v.column, _fmt)   # #576
     placeholders = add_parameter!(instruc,
-      _guarded_format(_fmt, v.values, v.operator, _label, _type; subject = _subject))
+      _guarded_format(_fmt, v.values, v.operator, _label, _type; subject = _subject),
+      contains = v.operator in LIKE_WILDCARD_OPERATORS, operator = v.operator)   # #618
   elseif isa(v.column, SQLTypeFunction)
     # #537 — a function column none of the branches above can bind. `OP(::SQLTypeFunction, …)` is a
     # constructor arm PormG itself relies on — `When(OP(MONTH(x), "<=", N))` builds `Y_Q` / `Y_QUAD`,
@@ -2261,16 +2306,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     end
   end
 
-  if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!="]
-    return string(column, " ", v.operator, " ", placeholders)
-  elseif v.operator in ["IN", "NOT IN"]
-    return _render_membership(column, v.operator, placeholders, instruc)
-  elseif v.operator in PATTERN_LOOKUP_OPERATORS
-    @pormg_debug false
-    return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, placeholders)
-  else
-    throw(FilterError("Invalid filter operator: $(v.operator) is not a supported operator."))
-  end
+  # #618: the ladder lives in `_render_predicate` so the HAVING/alias branch renders through the
+  # same one. Behavior here is unchanged, which is why the existing WHERE coverage is the
+  # regression test for the extraction itself.
+  return _render_predicate(column, v.operator, placeholders, instruc)
 end
 function _get_filter_query(q::SQLTypeQ, instruc::SQLInstruction)
   resp = []

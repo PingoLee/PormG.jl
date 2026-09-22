@@ -890,6 +890,41 @@ query.filter("avg_perf__@gt" => 5)
 
 For more complex expressions, see [Field Expressions](field_expressions.md).
 
+### Which Lookups Work on an Aggregate Alias
+
+**All of them.** A filter on a projection alias goes through the same operator rendering as a filter
+on a column, so the comparison operators, `@in` / `@nin`, `@range`, and the whole pattern family
+(`@contains`, `@istartswith`, `@iendswith`, …) mean the same thing in `HAVING` that they mean in
+`WHERE` — including the `%` decoration and the escaping of a `%` or `_` you typed yourself:
+
+```julia
+# Seasons whose alphabetically-last Grand Prix name begins with "United"
+query = M.Race.objects
+query.values("year", "last_gp" => Max("name"))
+query.filter("last_gp__@istartswith" => "United")
+```
+
+```sql
+HAVING MAX("Tb"."name") ILIKE $1 ESCAPE '\'    -- bound: "United%"
+```
+
+!!! note "The aggregated column must belong to the queried model"
+
+    PormG types the alias from the projection so it can validate the filter value, and for
+    `Max`/`Min` it can only do that when the aggregated column is a field of the model being
+    queried. `Max("name")` on `M.Race` resolves to that `CharField`; `Max("driverid__surname")` — a
+    joined path — falls back to a numeric reading and rejects a text term with
+    *"The last_driver projection alias is the type number. Please check the value: V"*. Aggregate
+    the column from the model that owns it, or filter it in `WHERE` instead.
+
+Two further consequences worth knowing:
+
+- An operator that is PostgreSQL-only on a column is PostgreSQL-only on an alias too.
+  `@iunaccent_contains` and `@iunaccent_exact` raise
+  [`BackendCapabilityError`](../errors.md) on SQLite from `HAVING` exactly as they do from `WHERE`.
+- An operator PormG does not implement is refused when the query is built, naming the operator —
+  it is never passed through to the database as a bare token.
+
 ---
 
 ## Common Aggregation Patterns

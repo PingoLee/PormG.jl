@@ -19,6 +19,9 @@ What this file pins, and all of it is behaviour that actually shipped broken:
    leaks** — first `?` and `#`, then whitespace. libpq is more permissive than the grammar, and
    each time the class was narrower than libpq's rule, the entire connection string went through
    unredacted. The lesson is in the source comment: **the rule is libpq's, not the RFC's.**
+   The one character libpq's scan DOES stop at, `/`, turned out to be the third leak (#658): libpq
+   reads no password from `u:pa/ss@h`, but it reads the password's tail as the dbname. So the rule is
+   **every reading at once** — libpq's userinfo, and the userinfo the user meant.
 4. **The rule was DUPLICATED** — byte-identical copies of the pattern and the function in
    `Configuration.jl` and `ConnectionPool.jl`. That is not untidiness: it is the mechanism by which
    a widened rule applies at one set of call sites and silently not at the other. The structural
@@ -117,9 +120,22 @@ const REDACT_CASES = Pair{String, Tuple{String, String}}[
   # from URI grammar rather than from libpq — meant such a password was never redacted at all.
   "url ? in password"   => ("postgres://u:SEC?RETpw@host/db", "postgres://****:****@host/db"),
   "url # in password"   => ("postgres://u:SEC#RETpw@host/db", "postgres://****:****@host/db"),
-  # `/` genuinely DOES terminate — libpq reads no password from this one — so it stays excluded.
-  # This is the case that stops the class being widened too far.
-  "url / ends userinfo" => ("postgres://u:SEC/RET@host/db", "postgres://u:SEC/RET@host/db"),
+  # An unencoded `/` in the password (#658). This row used to assert the string came back UNCHANGED,
+  # on the reasoning that libpq reads no password from it — true, but libpq reads the password's
+  # tail as a DBNAME instead, so "no password parsed" never meant "nothing secret here". The row
+  # recorded the leak as the rule; it now pins the mask.
+  "url / in password"   => ("postgres://u:SEC/RET@host/db", "postgres://****:****@host/db"),
+  # The issue's three shapes, which libpq parses three different ways — host `u` + port `pa`; host
+  # `u` + an integer port, which the #657 port check lets through; and userinfo `u:pa` + host `ss`.
+  # All three put the password's tail in the dbname, and all three must mask to the last `@`.
+  "url / pw, alpha tail"=> ("postgresql://u:pa/ssSEC658@localhost/db",
+                            "postgresql://****:****@localhost/db"),
+  "url / pw, digit head"=> ("postgresql://u:1234/SEC658@localhost/db",
+                            "postgresql://****:****@localhost/db"),
+  "url @ then / in pw"  => ("postgresql://u:pa@ss/SEC658@localhost/db",
+                            "postgresql://****:****@localhost/db"),
+  # The remedy the error message gives: a percent-encoded `/` is already fine, and stays fine.
+  "url %2F in password" => ("postgresql://u:p%2Fw@h/db", "postgresql://****:****@h/db"),
   # Whitespace in the userinfo: the same mistake as `?`/`#`, found the same way. libpq reads
   # `abc SECRETTAIL` as the whole password, so excluding whitespace meant the ENTIRE DSN went
   # through untouched — not a fragment, the whole string. Three shapes, because the user half leaks
@@ -133,8 +149,15 @@ const REDACT_CASES = Pair{String, Tuple{String, String}}[
                             "connecting to postgres://myhost\nfailed; mail ops@example.com"),
   # `://` with no `@` is not userinfo and must not be touched — the SQLite URI spelling.
   "url sqlite triple"   => ("sqlite:///var/data/app.sqlite3", "sqlite:///var/data/app.sqlite3"),
-  # An `@` AFTER the query separator belongs to a parameter value, not to an authority.
-  "url @ after query"   => ("postgres://localhost/f1?opt=a@b", "postgres://localhost/f1?opt=a@b"),
+  # An `@` in the query OVER-redacts (#658). Before, this row asserted the string came back
+  # unchanged, because the userinfo class stopped at `/`. It cannot stop there any more: a password
+  # holding `/` puts the credential's tail on the far side of it, and a tail holding `?` puts it in
+  # the query too (`u:pa/ss?SEC@h`). Losing `localhost/f1` from a log line is the price of never
+  # leaking that tail, and it is the safe direction.
+  "url @ after query"   => ("postgres://localhost/f1?opt=a@b", "postgres://****@b"),
+  # The same, with a `?` after the `/`: libpq rejects this one at parse time, which is exactly when
+  # the pool reports `connection=` — so the whole tail must go.
+  "url / then ? in pw"  => ("postgres://u:pa/ss?SEC658@h/db", "postgres://****:****@h/db"),
   # Credentials as query parameters. The keyword rule catches them, and swallows the parameters
   # that follow on the same token — accepted over-redaction, recorded here as intended rather than
   # accidental. Scheme, host and database all sit before the `?` and survive.
@@ -162,7 +185,8 @@ const REDACT_CASES = Pair{String, Tuple{String, String}}[
 const FAKE_SECRETS = ("s3cret", "s3cr3t", "topsecret", "pingo", "admin",
                       "PINGO", "S3CRET", "p@ss", "p&w", "s3 cret",
                       "cret", "RETpw", "SEC?RETpw", "SEC#RETpw",
-                      "SECRETTAIL", "SECRET", "corr3ct", "horse", "battery", "hunter")
+                      "SECRETTAIL", "SECRET", "corr3ct", "horse", "battery", "hunter",
+                      "SEC658", "RET@", "ss/", "p%2Fw")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The rule itself, as exact documents. Per-case `@testset` so a failure names the dialect that
@@ -258,6 +282,10 @@ end
     "adversarial quoted"   => "password=" * SQ * repeat("a", 1_000_000),
     "adversarial closed"   => "password=" * SQ * repeat("a", 1_000_000) * SQ * " host=h",
     "adversarial unquoted" => "password=" * repeat("a", 1_000_000) * " host=h",
+    # Many `://` and no `@` on the line (#658). Once `/` stopped ending a userinfo run, each failed
+    # `://` scanned to the line's end — quadratic, 12 s for this 520 KB line before `(*SKIP)`. The
+    # timing half is asserted in the testset below; here it only has to return.
+    "many schemes, no @ on the line" => repeat("see http://x ", 40_000) * "\nops@example.com",
     "trailing @"           => "postgres://pingo@",
     "bare scheme"          => "postgres://",
     "colons only"          => "::::",
@@ -275,6 +303,24 @@ end
       elseif label == "unicode"
         @test !occursin("ségret", out)
       end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The URL rule must stay LINEAR in the line length (#658).
+# Widening the userinfo class across `/` made every `://` that never reaches an `@` scan to the end
+# of its line, so a log line full of URLs cost N². `(*SKIP)` restores linear time; this pins it,
+# because the output is identical either way and only a clock can tell the two spellings apart.
+# Measured: 12 s (quadratic) against ~1 ms (linear) on the first input. The 1 s bound is two orders of
+# magnitude clear of both, so it does not flake on a slow CI runner and still fails the regression.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the URL rule is linear on many `://` with no `@` on the same line (#658)" begin
+  for (label, input) in ["prose with URLs" => repeat("see http://x ", 40_000) * "\nops@example.com",
+                         "bare schemes"    => repeat("://", 40_000) * "\n@"]
+    @testset "$label" begin
+      R649(input)                     # compile outside the clock
+      @test (@elapsed R649(input)) < 1.0
     end
   end
 end

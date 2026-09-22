@@ -81,14 +81,22 @@ const _REDACT_CONNECTION_STRING_RE =
 # scheme, host, port, database and query survive — "where was it pointing" is the whole reason to
 # redact rather than omit.
 #
-#   [^/@\n\r] ONLY `/` and a line break terminate a userinfo run. Every other character — `?`, `#`,
-#             a space, a tab — is one libpq reads as part of the credential, verified with
-#             `PQconninfoParse`: `postgres://u:SEC?RETpw@host/db` is password `SEC?RETpw`,
-#             `postgres://u:abc SECRET@host/db` is password `abc SECRET`, and `postgres://u:p/w@h/db`
-#             is no password at all. Every character excluded here on URI-grammar grounds turned out
-#             to be a DSN that went through COMPLETELY unredacted — which is how `?`/`#` and then
-#             whitespace were each found, one after the other. **The rule is libpq's, not the URI
-#             RFC's.** Do not narrow this class back toward the grammar.
+#   [^@\n\r]  ONLY a line break terminates a userinfo run. Every other character — `?`, `#`, a
+#             space, a tab — is one libpq reads as part of the credential, verified with
+#             `PQconninfoParse`: `postgres://u:SEC?RETpw@host/db` is password `SEC?RETpw`, and
+#             `postgres://u:abc SECRET@host/db` is password `abc SECRET`. Every character excluded
+#             here on URI-grammar grounds turned out to be a DSN that went through COMPLETELY
+#             unredacted — which is how `?`/`#` and then whitespace were each found, one after the
+#             other. Do not narrow this class back toward the grammar.
+#
+#             `/` is the one character libpq's own userinfo scan DOES stop at, and excluding it here
+#             on that ground was the third leak (#658). `postgres://u:pa/ssSEC@h/db` is no password
+#             to libpq — it is host `u`, port `pa`, dbname `ssSEC@h/db` — so the credential was not
+#             parsed but PRINTED, by every `connection=` field and log keyword. So the rule is not
+#             libpq's reading alone: it is **every reading at once**, libpq's userinfo and the one the
+#             user meant, which in practice means "to the last `@` on the line". The LibPQ extension
+#             refuses those strings before connecting (`_preflight_conninfo`); this is what keeps the
+#             refusal's own `PoolConnectError` from quoting them.
 #
 #             The line break stays excluded deliberately, and it is the one concession to this being
 #             public API that people will point at arbitrary log text: without it a stray `://` on
@@ -96,7 +104,7 @@ const _REDACT_CONNECTION_STRING_RE =
 #             one over-redacted line. The accepted cost is that a line holding a `://` and a later
 #             `@` over-redacts — `see https://ex.com?x=1 and write to ops@ex.com` becomes
 #             `see https://****@ex.com`. No connection string has that shape.
-#   (?:…@)++  repeat over `@`-terminated runs, so the split lands on the LAST `@` before the path.
+#   @(?:…@)*+ repeat over `@`-terminated runs, so the split lands on the LAST `@` on the line.
 #             libpq actually splits on the FIRST (`postgres://u:p@ss@h/db` is password `p`, host
 #             `ss@h`), so this OVER-redacts that string rather than leaking — which is the correct
 #             direction, and it matches WHATWG URL parsing, which other consumers of a `url:` value
@@ -108,12 +116,22 @@ const _REDACT_CONNECTION_STRING_RE =
 # per iteration. `redact_secret` runs INSIDE error constructors — `PoolConnectError` — so a throw
 # here would replace the real failure with a regex error. Possessive, the same input takes ~2 ms.
 #
-# The one accepted cost: a PATHLESS URL whose query holds an `@` over-redacts
-# (`https://example.com?x=a@b` -> `https://****@b`). No PormG connection string has that shape, and
-# over-redaction is the safe direction.
+# The accepted cost, widened by #658: a URL whose PATH or QUERY holds an `@` over-redacts up to it —
+# `postgres://localhost/f1?opt=a@b` -> `postgres://****@b`, and a SQLite `file://` URI whose path
+# holds one likewise. Stopping at a `?` that follows a `/` would spare those, and leak
+# `postgres://u:pa/ss?SEC@h/db` — whose tail libpq rejects at parse time, exactly when `connection=`
+# is printed. Over-redaction is the safe direction.
+#
+# `(*SKIP)` after the FIRST run, and only there — this is the one construct in the pattern that is
+# about time rather than stack. Once `/` stopped ending a run (#658), every `://` that fails to reach
+# an `@` scans to the end of its line, and a line of N such `://` costs N² — measured at 12 s for one
+# 520 KB line of `see http://x ` (the old `/`-bounded class did it in 1 ms). `(*SKIP)` restarts the
+# search where the failed run ended, which is sound because every `://` INSIDE that run ends at the
+# same place and fails the same way. Inside the repeat it would be wrong: a later run failing would
+# discard the `@` runs already matched, so the remaining runs are a plain `*+`.
 #
 # No `(?i)`: the pattern holds no letter outside a negated class, so it is already case-neutral.
-const _REDACT_URL_USERINFO_RE = Regex("://(?:[^/@\\n\\r]*+@)++")
+const _REDACT_URL_USERINFO_RE = Regex("://[^@\\n\\r]*+(*SKIP)@(?:[^@\\n\\r]*+@)*+")
 
 # Dynamic connection resolver hook
 const _CONNECTION_RESOLVER = Ref{Union{Nothing, Function}}(nothing)

@@ -645,6 +645,12 @@ Only the credentials are masked — host, port, database and query parameters su
 failure still shows where it was pointing. The result is a fixed point: redacting twice changes
 nothing.
 
+Where the rule is unsure, it masks more rather than less. In a URL it masks everything from `://`
+to the **last** `@` on the line, because a password holding an unencoded `/` or `@` puts part of
+itself after that character. So a URL whose path or query contains an `@`
+(`postgres://localhost/f1?opt=a@b`) loses its host and database from the output
+(`postgres://****@b`).
+
 Pools and `Settings` already render and serialize safely on their own (see
 [Credentials never leave through `show` or `JSON.json`](configuration/advanced.md#Credentials-never-leave-through-show-or-JSON.json));
 call this directly when you want the connection string itself in output you control.

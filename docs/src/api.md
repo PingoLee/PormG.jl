@@ -792,7 +792,7 @@ field, and for the few with their own `showerror` it returns the richer renderin
 | Type | Raised when |
 | :--- | :--- |
 | `ConfigurationError` *(abstract)* | Umbrella for configuration failures — covers `InvalidConfigurationError`, `MissingConfigurationError`, **and** `WritesDisabledError` (listed in the Querying table above, where users meet it). |
-| `InvalidConfigurationError` | Configuration is present but unusable — unsupported adapter, unknown connection key, malformed `extensions`, a model not bound to a connection (or bound to an entry whose pool was never built), a missing driver package, or an attempt to overwrite a static connection. |
+| `InvalidConfigurationError` | The configuration — or the install it runs from — is unusable: unsupported adapter, unknown connection key, malformed `extensions`, a model not bound to a connection (or bound to an entry whose pool was never built), a missing driver package, an attempt to overwrite a static connection, or a missing or empty `upgrading/` log bundled with the install (`upgrade_guide`). |
 | `MissingConfigurationError` | No configuration folder / `connection.yml`, or the selected environment has no matching block. **Not on the `using PormG` surface** — name it `PormG.Configuration.MissingConfigurationError`. |
 | `MigrationError` *(abstract)* | Umbrella for migration-engine failures — `catch` it to get both cases below. |
 | `InvalidMigrationError` | A duplicate index name in a plan, an invalid answer to an interactive `makemigrations` prompt, or an unimplemented `migrate_to(version)` path. |

@@ -24,8 +24,9 @@
 #     count). Walks `subtypes(PormGError)` rather than the export list, so it also sees the types
 #     reachable only by qualified name — a new subtype is covered without touching the test.
 #   • `test/unit/test_docs_error_type_drift.jl` — no `throw(ArgumentError(` in `src/` outside
-#     `tools.jl`'s two Julia-level keeps, no `docs/src` page promising `ArgumentError`, the retired
-#     `_argerr` alias stays retired, and every funnel call site throws its result.
+#     `tools.jl`'s one Julia-level keep (and `Utils.jl`'s macro keep), no `docs/src` page
+#     promising `ArgumentError`, the retired `_argerr` alias stays retired, and every funnel call
+#     site throws its result.
 #   • `test/unit/test_error_taxonomy.jl` — hierarchy shape, the clean break from `ArgumentError`,
 #     and `error_message` coverage for every concrete member.
 #
@@ -425,11 +426,11 @@ end
 """
     ConfigurationError <: PormGError  (abstract)
 
-Umbrella for connection-configuration failures — `catch` it to get every case below. Like
-[`FieldAccessError`](@ref), this is an abstract mid-node rather than a throwable type, so the
-pre-existing `MissingConfigurationError` can live *inside* the bucket instead of
-beside it. `catch ConfigurationError` must not have holes; that class of surprise is the reason
-this taxonomy exists.
+Umbrella for configuration failures — the connection setup, and the install PormG runs from —
+`catch` it to get every case below. Like [`FieldAccessError`](@ref), this is an abstract mid-node
+rather than a throwable type, so the pre-existing `MissingConfigurationError` can live *inside*
+the bucket instead of beside it. `catch ConfigurationError` must not have holes; that class of
+surprise is the reason this taxonomy exists.
 
 Subtypes: [`InvalidConfigurationError`](@ref), [`WritesDisabledError`](@ref) (the `change_data:
 false` write switch — its remedy is a config edit), and `Configuration.MissingConfigurationError`
@@ -440,11 +441,12 @@ abstract type ConfigurationError <: PormGError end
 """
     InvalidConfigurationError(msg) <: ConfigurationError <: PormGError
 
-Connection configuration is present but unusable or inconsistent — an unsupported adapter, an
-unknown connection key, a malformed `extensions` setting, an unsupported PostgreSQL extension,
-a model not bound to a connection (or bound to an entry whose pool was never built), a missing
-driver package (`using LibPQ` / `using SQLite` forgotten), or an attempt to overwrite a static
-connection.
+The configuration — or the install it runs from — is unusable or inconsistent: an unsupported
+adapter, an unknown connection key, a malformed `extensions` setting, an unsupported PostgreSQL
+extension, a model not bound to a connection (or bound to an entry whose pool was never built), a
+missing driver package (`using LibPQ` / `using SQLite` forgotten), an attempt to overwrite a
+static connection, or a missing or empty `upgrading/` log bundled with the install
+(`upgrade_guide`, #639).
 """
 struct InvalidConfigurationError <: ConfigurationError
   msg::String

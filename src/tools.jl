@@ -191,15 +191,20 @@ _asver(v::VersionNumber) = v
 _asver(v::AbstractString) = VersionNumber(v)
 
 """
-    _upgrading_dir() -> String
+    _upgrading_dir(root = pkgdir(PormG)) -> String
 
 Absolute path to the `upgrading/` change log bundled with the resolved PormG install. Split out so
 the test suite reads the same directory the reader does, instead of recomputing the join and
-drifting from it.
+drifting from it. `root` is a parameter only so the suite can reach the missing-log path; the
+shipped install always has one.
+
+A missing log throws `InvalidConfigurationError`, not `ArgumentError` (#639): nothing the
+caller passed is wrong — the install is broken — and a consuming app's `catch e isa PormGError` has
+to be able to see it.
 """
-function _upgrading_dir()
-    dir = joinpath(Base.pkgdir(@__MODULE__), "upgrading")
-    isdir(dir) || throw(ArgumentError(
+function _upgrading_dir(root::AbstractString = Base.pkgdir(@__MODULE__))
+    dir = joinpath(root, "upgrading")
+    isdir(dir) || throw(InvalidConfigurationError(
         "upgrading/ not found next to the installed PormG (looked in $(dirname(dir)))."))
     return dir
 end
@@ -229,16 +234,20 @@ easily, so the hole got wider when the layout changed (#638).
 `dir` is a parameter so the suite can exercise the ordering and both error paths on a fixture. The
 shipped log is a corpus whose filename order and version order happen to agree, so it cannot test
 the sort at all.
+
+Both error paths throw `InvalidConfigurationError` (#639). The empty directory is a broken
+install by definition; the missing one is too, because only an internal caller can pass `dir` —
+from `upgrade_guide` a missing log is caught by `_upgrading_dir` first, with the same type.
 """
 function _upgrading_files(dir::AbstractString = _upgrading_dir())
     # Repeated from `_upgrading_dir` on purpose: the default argument runs that check, but an
     # EXPLICIT `dir` bypasses it, and `readdir` on a missing path throws a raw `IOError` naming a
-    # temp path. Both entry points owe a consuming app the same diagnosis.
-    isdir(dir) || throw(ArgumentError(
+    # temp path. Both entry points owe a consuming app the same diagnosis, and the same type.
+    isdir(dir) || throw(InvalidConfigurationError(
         "the PormG upgrade log directory $dir does not exist."))
     files = [joinpath(dir, f) for f in sort(readdir(dir), rev = true)
              if endswith(f, ".md") && isfile(joinpath(dir, f))]
-    isempty(files) && throw(ArgumentError(
+    isempty(files) && throw(InvalidConfigurationError(
         "the PormG upgrade log at $dir holds no `.md` entry files. This is a broken install, " *
         "not an empty change log — `upgrade_guide` would otherwise report \"nothing to port\", " *
         "which is indistinguishable from being up to date."))
@@ -432,6 +441,12 @@ Entries print newest-first; each keeps its "How to find the calls to migrate" gr
 
 Pass `structured = true` to get the entries back as data instead of printing — a `Vector`
 of `(; version, title, body)` named tuples, newest-first — for programmatic consumers.
+
+# Throws
+- `ArgumentError` when `from` is omitted — a mistake in the call itself.
+- `InvalidConfigurationError` (`<: ConfigurationError <: PormGError`) when the bundled
+  `upgrading/` log is missing or holds no entries — a broken install, which would otherwise print
+  *"nothing to port"* and read as being up to date.
 
 # Examples
 ```julia

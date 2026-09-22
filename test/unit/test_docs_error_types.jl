@@ -902,6 +902,14 @@ const DOCERR_CASES = [
         FieldValidationError,
         () -> DateField(default = 42),
     ),
+    # #639 — `errors.md`'s row and `upgrade_guide`'s `# Throws` docstring both promise this. A
+    # broken install cannot be staged on the real one, so an empty temp directory stands in for the
+    # shipped log; `upgrade_guide` reaches the same guard through `_read_upgrading_entries`.
+    (
+        "errors.md / src/tools.jl — upgrade_guide docstring: an empty upgrade log is a broken install (#639)",
+        InvalidConfigurationError,
+        () -> mktempdir(PormG._read_upgrading_entries),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

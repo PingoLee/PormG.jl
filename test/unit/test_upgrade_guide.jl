@@ -498,31 +498,33 @@ const PRE_0_2_HISTORY = Set([
     # checkout, an rsync filter, a Docker layer copying only `src/` — would be indistinguishable
     # from good news, in the one tool whose whole job is to tell an app what it still has to port.
     @testset "a missing or empty log throws rather than reporting nothing to port (#638)" begin
-        # The type alone is NOT enough here. Two different faults throw the same `ArgumentError`,
-        # so swapping the two message strings — or collapsing the guards into one — would leave
-        # every assertion below green while a consuming app is handed a diagnosis naming the wrong
-        # cause. Assert on the message for the missing-vs-empty pair, which is the distinction the
-        # guards exist to draw. (Whether these should be a `PormGError` at all is #639.)
+        # The type alone is NOT enough here. Two different faults throw the same
+        # `InvalidConfigurationError`, so swapping the two message strings — or collapsing the
+        # guards into one — would leave every type assertion below green while a consuming app is
+        # handed a diagnosis naming the wrong cause. Assert on the message for the missing-vs-empty
+        # pair, which is the distinction the guards exist to draw. (The type itself is #639's, and
+        # its catchability is asserted in the next testset.)
+        ICE = PormG.InvalidConfigurationError
         mktempdir() do dir
             absent = joinpath(dir, "no-such-log")
-            @test_throws ArgumentError PormG._upgrading_files(absent)
+            @test_throws ICE PormG._upgrading_files(absent)
             @test occursin("does not exist",
                            sprint(showerror, try PormG._upgrading_files(absent) catch e; e end))
 
             # present but empty — the case a directory makes newly reachable
-            @test_throws ArgumentError PormG._upgrading_files(dir)
-            @test_throws ArgumentError PormG._read_upgrading_entries(dir)
+            @test_throws ICE PormG._upgrading_files(dir)
+            @test_throws ICE PormG._read_upgrading_entries(dir)
             @test occursin("holds no `.md` entry files",
                            sprint(showerror, try PormG._upgrading_files(dir) catch e; e end))
 
             # …and a non-`.md` file is not an entry, so a directory holding only one is still empty
             write(joinpath(dir, "README.txt"), "not an entry")
-            @test_throws ArgumentError PormG._upgrading_files(dir)
+            @test_throws ICE PormG._upgrading_files(dir)
 
             # A DIRECTORY named `x.md` is not an entry either. Without the `isfile` filter this
             # reaches `read` and throws a bare `SystemError` at a consuming app instead.
             mkpath(joinpath(dir, "notafile.md"))
-            @test_throws ArgumentError PormG._upgrading_files(dir)
+            @test_throws ICE PormG._upgrading_files(dir)
 
             # one real entry beside them is enough, and the non-entries stay out of the result
             write(joinpath(dir, "2026-09-21-9500-real.md"),
@@ -530,6 +532,39 @@ const PRE_0_2_HISTORY = Set([
             @test length(PormG._upgrading_files(dir)) == 1
             @test [e.title for e in PormG._read_upgrading_entries(dir)] == ["A real entry (#9500)"]
         end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # upgrade_guide errors: a broken install is catchable as `PormGError` (#639)
+    # The three log guards used to throw `ArgumentError`, so the `catch e isa PormGError` that
+    # docs/src/errors.md tells a consuming app to write caught none of them. They are a broken
+    # install, not caller misuse; only the missing `from` kwarg stays `ArgumentError`.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "a broken log is a ConfigurationError, a missing `from` is not (#639)" begin
+        caught(f) = try f(); nothing catch e; e end
+
+        mktempdir() do root
+            # No `upgrading/` next to the install. `root` stands in for `pkgdir`, which cannot be
+            # broken on the real install — this guard had no test at all before #639.
+            e = caught(() -> PormG._upgrading_dir(root))
+            @test e isa PormG.ConfigurationError
+            @test e isa PormG.PormGError           # the type a consumer's catch block names
+            @test !(e isa ArgumentError)
+            @test occursin("not found next to the installed PormG", sprint(showerror, e))
+
+            # The missing and the empty directory: one supertype check each — their messages are
+            # asserted in the testset above.
+            @test caught(() -> PormG._upgrading_files(joinpath(root, "nope"))) isa PormG.PormGError
+            @test caught(() -> PormG._upgrading_files(root)) isa PormG.PormGError
+        end
+
+        # The default still resolves the shipped log, so the new `root` argument changed nothing.
+        @test PormG._upgrading_dir() == joinpath(pkgdir(PormG), "upgrading")
+
+        # The one deliberate keep: omitting `from` is a mistake in the call, not in the install.
+        e = caught(() -> PormG.upgrade_guide())
+        @test e isa ArgumentError
+        @test !(e isa PormG.PormGError)
     end
 
     # ── an entry may quote the contract without losing its body ─────────────────

@@ -138,6 +138,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Bulk Fill-Column Collision (#335)" include("unit/test_bulk_fill_column_collision.jl")
     @testset "Bulk No-Mutation Contract (#132)" include("unit/test_bulk_no_mutation.jl")
     @testset "Bulk Parameter-Limit Chunking (#84)" include("unit/test_bulk_param_limit.jl")
+    @testset "bulk_update Per-Chunk Parameters (#73)" include("unit/test_bulk_update_chunk_parameters.jl")
     @testset "bulk_insert ON CONFLICT (#123)" include("unit/test_bulk_on_conflict.jl")
     @testset "update_or_create (#30)" include("unit/test_update_or_create.jl")
     @testset "Fluent parity: get_or_create/last/aggregate/page (#208, #272)" include("unit/test_fluent_parity_208.jl")

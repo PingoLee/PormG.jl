@@ -462,7 +462,33 @@ function Base.hasproperty(::SQLiteParameterizedQuery, name::Symbol)
                   :group_params, :having_params, :order_params, :current_context, :parameter_count, :parameters)
 end
 
-# Deep copy support – execution_bulk.jl relies on deepcopy(instruction.parameters)
+# ─────────────────────────────────────────────────────────────────────────────
+# _fork_parameters – a fresh collector that starts from an existing one's bindings (#73)
+#
+# `bulk_update` re-runs one statement per chunk, and every chunk must carry the same fixed prefix:
+# the static-filter WHERE values `build()` bound, which on PostgreSQL also pins the `$1…$k` numbering
+# already baked into `instruction._where`. The loop used to accumulate each chunk's rows into the
+# built collector and rewind it with `deepcopy` of a snapshot at every chunk boundary — a rewind a
+# row that threw mid-chunk never reached. A fork instead leaves the source untouched by construction:
+# only the containers are new, and the bound VALUES are shared, because nothing mutates a value once
+# `add_parameter!` has pushed it. That also keeps a large `__@in` filter list from being deep-copied
+# once per chunk.
+# ─────────────────────────────────────────────────────────────────────────────
+_fork_parameters(pq::PgParameterizedQuery) =
+  PgParameterizedQuery(pq.sql, collect(Any, pq.parameters), pq.parameter_count)
+
+function _fork_parameters(sq::SQLiteParameterizedQuery)
+  fork = SQLiteParameterizedQuery(sq.sql, sq.current_context)
+  # Every slot `_BUCKET_ORDER` names, so a bucket added there is forked here without a second list.
+  for ctx in _BUCKET_ORDER
+    slot = Symbol(ctx, :_params)
+    setfield!(fork, slot, copy(getfield(sq, slot)))
+  end
+  return fork
+end
+
+# Deep copy support – `deepcopy` of a query or an instruction reaches the collector through the
+# generic walk; `test_parameters.jl` pins that the copy's buckets are independent.
 function Base.deepcopy_internal(sq::SQLiteParameterizedQuery, stackdict::IdDict)
   haskey(stackdict, sq) && return stackdict[sq]::SQLiteParameterizedQuery
   new_sq = SQLiteParameterizedQuery(sq.sql, sq.current_context)

@@ -167,6 +167,14 @@ end
     # libpq's "invalid integer value" error quoted it (delta review, #657).
     ("unencoded @ and : in URL password", "postgresql://u:pa@ss:PORTSEC657@localhost/f1",
      ["PORTSEC657"], "not an integer"),
+    # An unencoded `/` in a URL password (#658). libpq's userinfo scan stops at the first `/`, so each
+    # of these parses cleanly and the password's tail lands in the DBNAME. They leaked through the
+    # `connection=` field — the redaction stopped at `/` too — and, for the two whose port is an
+    # integer or whose host is a password fragment, at connect time through LibPQ's Memento logger.
+    ("unencoded / in URL password", "postgresql://u:pa/ssSEC658@localhost/f1", ["ssSEC658"], "%2F"),
+    ("unencoded / after an integer", "postgresql://u:1234/SEC658@localhost/f1", ["SEC658"], "%2F"),
+    ("unencoded @ then / in URL password", "postgresql://u:pa@ss/SEC658@localhost/f1",
+     ["SEC658", "ss/"], "%2F"),
   ]
   # Warm the preflight→classify→raise path on a throwaway pool before timing anything, for the #382
   # reason given above: cold, the FIRST case measured 3.4 s here, all of it JIT.
@@ -230,6 +238,30 @@ end
   @test pre("host=localhost port=5432 dbname=f1") === nothing
   @test pre("host=localhost port=+5432 dbname=f1") === nothing   # strtol takes a sign; so must we
   @test pre("postgresql://[::1]:5432/f1") === nothing
+  # The #658 dbname refusal is URL-only: the remedy it prints (a percent-encoded `/`) must pass, and a
+  # keyword-form dbname holding an `@` carries no URL ambiguity at all.
+  @test pre("postgresql://u:p%2Fw@localhost/f1") === nothing
+  @test pre("host=localhost dbname=f1@archive") === nothing
+  @test pre("host=localhost dbname='f1@archive'") === nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Connection-string preflight: the documented cost of the #658 refusal
+# A URL cannot name a database containing `@` — not even as `%40`, because libpq decodes the path
+# before the preflight sees it. Pinned so the cost stays deliberate: the message must point at the
+# keyword form, which is the only spelling left for such a database.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a URL naming a database with an `@` is refused toward the keyword form (#658)" begin
+  pre = LibPQExt657._preflight_conninfo
+  for dsn in ("postgresql://localhost/f1@archive", "postgresql://localhost/f1%40archive",
+              "postgres://localhost/f1@archive")
+    @testset "$dsn" begin
+      err = try; pre(dsn); nothing; catch e; e; end
+      @test err isa PormG.InvalidConfigurationError
+      @test occursin("keyword form", sprint(showerror, err))
+      @test !occursin("archive", sprint(showerror, err))
+    end
+  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

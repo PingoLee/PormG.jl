@@ -60,14 +60,37 @@ function _preflight_conninfo(conn_str::AbstractString)
   # `redact_secret` recognise it. The host libpq PARSED is the exact test — no re-derivation of its
   # URL grammar here — and no DNS name or IP address contains an `@`, so refusing costs nothing. A
   # host starting with `/` is a Unix-socket directory, which may legitimately contain one.
-  # (The sibling shape, an unencoded `/` in the password, is not refused: it parses into an odd but
-  # legal dbname, so telling it apart needs a design call — tracked in #658. That
-  # includes `u:pa@ss/SEC@h`, which parses to host `ss`: no check on host or port can see it.)
   #
   # `port` gets the same treatment, and more strictly: when the password's tail holds a `:` as well
   # (`u:pa@ss:SEC@localhost`) the tail lands in PORT — `"SEC@localhost"` — and libpq's `invalid
   # integer value "…" for connection option "port"` quotes it at connect time. A port entry that is
   # not an integer is refused outright, `@` or not: libpq rejects it anyway, only later and louder.
+  #
+  # And `dbname` (#658), for the sibling shape: an unencoded `/` in a URL password. libpq's userinfo
+  # scan stops at the first `/`, so `postgresql://u:1234/SEC@localhost/db` has NO userinfo — it is
+  # host `u`, port `1234`, dbname `SEC@localhost/db` — and `u:pa@ss/SEC@localhost/db` is host `ss`
+  # with the same dbname. Both parse cleanly, pass the host and port checks, and a connect error can
+  # quote the host or the dbname. Wherever the `/` falls, the `@` that really ended the password lands
+  # in the PATH, so a URL whose parsed dbname holds an `@` is refused — unless the tail ALSO holds a
+  # `?` followed by a real keyword and `=` (`u:1234/x?sslmode=SEC@h/db`), which moves the `@` into that
+  # option's value instead. That residual is not refused here, because which options may legitimately
+  # hold an `@` is its own question (`?user=me@server` is Azure's documented form) — tracked in #662.
+  # `redact_secret` still masks such a string in every `connection=` field.
+  #
+  # Checked BEFORE the loop so the message is the `/` remedy whatever order libpq lists its options
+  # in (`u:pa/ss@h` also has port `pa`, and "not an integer" would point at the wrong character).
+  #
+  # The cost is real and accepted, unlike the host rule's: a database literally named with an `@`
+  # cannot be reached through a URL any more — not even as `%40`, because libpq decodes the path
+  # before we see it. The keyword form (`dbname=…`) is not ambiguous and stays accepted, so the rule
+  # is gated on libpq's own URL test: the two prefixes, case-sensitive, at the very start.
+  if startswith(conn_str, "postgresql://") || startswith(conn_str, "postgres://")
+    any(opt -> opt.keyword == "dbname" && !ismissing(opt.val) && occursin('@', opt.val), parsed) &&
+      throw(PormG.InvalidConfigurationError(
+        "the PostgreSQL connection URL's database name contains an `@`. If it came from a URL " *
+        "password, percent-encode its `/` as %2F and `@` as %40 — libpq ends the credentials at the " *
+        "first `/`. A database whose name really contains an `@` must be given in the keyword form"))
+  end
   for opt in parsed
     ismissing(opt.val) && continue
     if opt.keyword == "host"

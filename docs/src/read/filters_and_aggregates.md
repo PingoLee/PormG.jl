@@ -929,14 +929,23 @@ query.filter("last_gp__@istartswith" => "United")
 HAVING MAX("Tb"."name") ILIKE $1 ESCAPE '\'    -- bound: "United%"
 ```
 
-!!! note "The aggregated column must belong to the queried model"
+PormG types the alias from the projection so it can validate the filter value. `Max` / `Min` and a
+bare `F(...)` take the type of the column they name, including a column reached through a
+relation or a CTE:
 
-    PormG types the alias from the projection so it can validate the filter value, and for
-    `Max`/`Min` it can only do that when the aggregated column is a field of the model being
-    queried. `Max("name")` on `M.Race` resolves to that `CharField`; `Max("driverid__surname")` — a
-    joined path — falls back to a numeric reading and rejects a text term with
-    *"The last_driver projection alias is the type number. Please check the value: V"*. Aggregate
-    the column from the model that owns it, or filter it in `WHERE` instead.
+```julia
+# Constructors whose alphabetically-last driver surname begins with "V"
+query = M.Result.objects
+query.values("constructorid__name", "last_driver" => Max("driverid__surname"))
+query.filter("last_driver__@istartswith" => "V")
+```
+
+```sql
+HAVING MAX("Tb_2"."surname") ILIKE $1 ESCAPE '\'    -- bound: "V%"
+```
+
+An aggregate over arithmetic (`Max(F("points") + 1)`) names no single column, so its alias is read
+as a number.
 
 Three further consequences worth knowing:
 

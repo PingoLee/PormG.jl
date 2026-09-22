@@ -1456,10 +1456,11 @@ end
   # now agrees with the plain filter instead of disagreeing with it.
   @test _IN411.objects.filter("code" => 5).list(show_query = :dict)[:parameters] == ["5"]
 
-  # Deliberately NOT widened: an alias over arithmetic (`F("n") + 1`) or over a joined path keeps
-  # the `IntegerField` fallback, because neither one's result type is the column's. Pinned so the
-  # narrowness is a decision on the record rather than an accident of the `operation === nothing`
-  # test — if a later change resolves these too, this assertion is where it announces itself.
+  # Deliberately NOT widened: an alias over arithmetic (`F("n") + 1`) keeps the `IntegerField`
+  # fallback, because its result type is not the column's. Pinned so the narrowness is a decision
+  # on the record rather than an accident of the `operation === nothing` test — if a later change
+  # resolves this too, this assertion is where it announces itself. (#576 held a joined path to the
+  # same fallback; #652 widened that half — a joined path names one column — see the testset below.)
   arith = _IN411.objects
   arith.values("id", "d3" => F("n") + 1)
   arith.filter("d3" => 5)
@@ -1476,6 +1477,72 @@ end
   # side: PostgreSQL numbers `$n` at render, and its authoritative text-order walk reads `[1, 1, 5]`
   # both before and after the fix. SQLite now matches it; before, it did not.
   @test arith.list(show_query = :dict)[:parameters] == [1, 1, 5]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A joined-path Max/Min or bare-F projection alias filters on the joined column's type (#652)
+#
+# #576 typed an alias only when its column was a key of the queried model's `fields`, so
+# `Max("eventid__code")` fell to the `IntegerField` fallback and refused a TEXT term as "the type
+# number" — the shape #618's documented alias pattern lookups invite first ("the alphabetically last
+# driver per constructor"). The terminal field is already in the memo the join walk writes while the
+# SELECT renders, so the alias takes that field's formatter. Both mocks, because the pattern lookup
+# renders per dialect (`ILIKE` on PostgreSQL, `LIKE` on SQLite) and must bind the same decorated term.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a joined-path Max/Min or F projection alias takes the joined column's type (#652)" begin
+  for (backend, conn) in (("PostgreSQL", nothing), ("SQLite", _MockSQLiteIn411()))
+    @testset "$backend" begin
+      _inspect(q) = conn === nothing ? q.list(show_query = :dict) :
+                                       PormG.QueryBuilder.inspect_query(q; connection = conn)
+
+      # The issue's own shape: a text lookup on a joined `Max`. The primary assertion is the BOUND
+      # value — `"V%"` proves the text formatter ran and the `%` decoration applied; the old
+      # fallback raised before binding anything.
+      for agg in (PormG.Functions.Max, PormG.Functions.Min)
+        q = _IN411R.objects
+        q.values("points", "mx" => agg("eventid__code"))
+        q.filter("mx__@istartswith" => "V")
+        res = _inspect(q)
+        @test res[:parameters] == ["V%"]
+        # The HAVING predicate aggregates the JOINED column, not a base-model one.
+        @test occursin(r"HAVING .*(MAX|MIN)\(\"Tb_1\"\.\"code\"\)", res[:sql_text])
+      end
+
+      # A joined DATE column formats as a date — the value binds as the column's own text form, which
+      # is the half no error-type fix could have produced: `format_number_sql` rejected a real `Date`.
+      qd = _IN411R.objects
+      qd.values("points", "last" => PormG.Functions.Max("eventid__happened"))
+      qd.filter("last__@gt" => Date("2020-01-01"))
+      @test _inspect(qd)[:parameters] == ["2020-01-01"]
+
+      # A wrong-typed term on the same alias still refuses — and names the column's REAL type. Before
+      # the fix the message said "number" for a date column the caller never declared as one.
+      qbad = _IN411R.objects
+      qbad.values("points", "last" => PormG.Functions.Max("eventid__happened"))
+      qbad.filter("last__@gt" => "not-a-date")
+      bad = @test_throws PormG.FilterError _inspect(qbad)
+      @test occursin("projection alias is the type date", _plain(bad.value.msg))
+
+      # #576's other declared-narrow case, same root: a bare `F` over a joined path. The oracle is
+      # the ordinary WHERE filter on the same joined column — the alias must bind what the column
+      # would. PostgreSQL only: on SQLite the alias path keeps a native number
+      # (`_sqlite_preserve_native_parameter`) where the WHERE path binds the formatted text. That split
+      # predates #652 and holds for a base-model alias too, so it is not this change's to settle.
+      if conn === nothing
+        qf = _IN411R.objects
+        qf.values("points", "c" => F("eventid__code"))
+        qf.filter("c" => 5)
+        where_bound = _inspect(_IN411R.objects.filter("eventid__code" => 5))[:parameters]
+        @test where_bound == ["5"]
+        @test _inspect(qf)[:parameters] == where_bound
+      end
+      # And a text term — the fallback refused this outright as "the type number".
+      qs = _IN411R.objects
+      qs.values("points", "c" => F("eventid__code"))
+      qs.filter("c" => "V")
+      @test _inspect(qs)[:parameters] == ["V"]
+    end
+  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

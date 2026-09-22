@@ -747,3 +747,28 @@ _ran_join_line(sql::AbstractString, alias::AbstractString) =
   @test text_order == ["n1", "w1"]          # the join's literal renders before WHERE's
   @test sl[:parameters] == text_order       # SQLite's flattened vector agrees
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A Max over a CTE column types its projection alias from that column (#652)
+# `_retag_cte_field!` turns `Max("g__code")`'s column into a `CTEReference`, and `CTE("g", "code")`
+# is one from the start — neither is a key of the base model's `fields`, so both fell to the
+# `IntegerField` fallback and refused a text term. The terminal field sits under the handle's own
+# `:cte` `MemoKey`, which is what the alias formatter now reads. Both spellings, because they reach
+# the handle by different routes (retag vs constructor) and the fix must not depend on which.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a Max over a CTE column types its alias from that column (#652)" begin
+  for (backend, conn) in (("PostgreSQL", _RAN_PG), ("SQLite", _RAN_SL))
+    @testset "$backend" begin
+      for column in ("g__code", CTE("g", "code"))
+        q = RAN.Ran_child.objects
+        q.with("g" => _ran_grand(), join_field = "grand" => "id", join_type = "INNER")
+        q.values("note", "mx" => PormG.Functions.Max(column))
+        q.filter("mx__@istartswith" => "V")
+        res = inspect_query(q; connection = conn)
+        # The decorated TEXT term binds — the fallback raised "the type number" before binding.
+        @test res[:parameters] == ["V%"]
+        @test occursin(r"HAVING .*MAX\(\"R1_1\"\.\"code\"\)", res[:sql_text])
+      end
+    end
+  end
+end

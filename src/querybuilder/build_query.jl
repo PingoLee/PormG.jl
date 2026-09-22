@@ -472,10 +472,10 @@ end
 # "not a valid number". That half is not an error-type problem and no handler could have papered
 # over it — it is simply wrong, which is why the bare-reference arm below exists.
 #
-# Deliberately narrow: only a bare `F("col")` naming a field of the queried model is resolved.
-# `F("a") + Day(1)` carries an `operation` whose result type is not the column's, and a joined path
-# (`F("driverid__surname")`) is not a key of `model.fields`; both keep the fallback rather than get
-# a guess. Widening either is its own change with its own test.
+# Deliberately narrow: only a projection naming ONE column is resolved — a field of the queried
+# model, or (#652) a joined / CTE path, through `_alias_column_field`. `F("a") + Day(1)` carries an
+# `operation` whose result type is not the column's, so arithmetic keeps the fallback rather than
+# get a guess.
 # The projection an alias names, as the USER wrote it — the unrendered node.
 #
 # Three places hold a projection and only this one is the source: `instruc.select` holds rendered
@@ -575,18 +575,36 @@ function _having_alias_formatter(alias::MemoKey, instruc::SQLInstruction)
       haskey(PormGTypeField, projected.function_name) &&
         return getfield(Models, PormGTypeField[projected.function_name])
       projected.function_name in ("SUM", "COUNT") && return Models.format_number_sql
-      if projected.function_name in ("MAX", "MIN") && projected.column isa String &&
-         haskey(instruc.object.model.fields, projected.column)
-        return instruc.object.model.fields[projected.column].formatter
+      if projected.function_name in ("MAX", "MIN")
+        column_field = _alias_column_field(projected.column, instruc)
+        column_field === nothing || return column_field.formatter
       end
-    elseif isa(projected, FExpression) && projected.operation === nothing &&
-           projected.column isa String && haskey(instruc.object.model.fields, projected.column)
-      return instruc.object.model.fields[projected.column].formatter   # #576: the bare `F("col")`
+    elseif isa(projected, FExpression) && projected.operation === nothing
+      column_field = _alias_column_field(projected.column, instruc)   # #576: the bare `F("col")`
+      column_field === nothing || return column_field.formatter
     end
   end
 
   return IntegerField().formatter
 end
+
+# The field a `Max`/`Min` or bare-`F` projection's column names, or `nothing` when it names none.
+#
+# #652: #576 resolved only a key of `model.fields`, so `Max("driverid__surname")` — the most natural
+# text aggregate there is — fell to the `IntegerField` fallback and refused every text term. The
+# terminal field is not a guess: the join walk records it under the path's `MemoKey` while the
+# SELECT renders (`build_joins.jl`, the `memo_field!` after the walk; `_build_row_join` for a
+# CTE/joined handle), and `build()` renders the SELECT before the filters, so it is there when this
+# runs — the same entry the WHERE path's joined-path arm reads. A `CTEReference`/`JoinedReference`
+# column is what `_retag_cte_field!`/`_retag_joined_field!` leave behind, and `memo_key(ref)` names
+# its namespace. Anything else — arithmetic, a nested function — names no single column and keeps
+# the fallback on purpose: its result type is not a column's.
+_alias_column_field(column::String, instruc::SQLInstruction) =
+  haskey(instruc.object.model.fields, column) ? instruc.object.model.fields[column] :
+                                                memo_field(instruc, memo_key(:base, column))
+_alias_column_field(column::Union{CTEReference,JoinedReference}, instruc::SQLInstruction) =
+  memo_field(instruc, memo_key(column))
+_alias_column_field(::Any, ::SQLInstruction) = nothing
 
 """
   get_filter_query(object::SQLObject, instruc::SQLInstruction)

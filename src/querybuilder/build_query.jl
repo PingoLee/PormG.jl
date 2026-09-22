@@ -476,17 +476,97 @@ end
 # `F("a") + Day(1)` carries an `operation` whose result type is not the column's, and a joined path
 # (`F("driverid__surname")`) is not a key of `model.fields`; both keep the fallback rather than get
 # a guess. Widening either is its own change with its own test.
+# The projection an alias names, as the USER wrote it — the unrendered node.
+#
+# Three places hold a projection and only this one is the source: `instruc.select` holds rendered
+# copies, `instruc.cache` (the memo) holds only their SQL TEXT, and `instruc.object.values` holds the
+# originals. #595 needs the original, because reusing the text is exactly the defect there.
+#
+# #474: `alias` is a MemoKey; this matches on the OUTPUT name, which is its second half. Comparing
+# the whole key would never match — the review flagged the String-vs-key mismatch as latent, and
+# typing the key is what turns it into a compile-visible one.
+function _projected_source(alias::MemoKey, instruc::SQLInstruction)
+  for selected_value in instruc.object.values
+    selected_alias = selected_value.custom_as !== nothing ? selected_value.custom_as : selected_value._as
+    selected_alias == alias[2] || continue
+    isa(selected_value, SQLTypeField) || continue
+    return selected_value
+  end
+  return nothing
+end
+
+# The left-hand side a HAVING/alias predicate renders against (#595).
+#
+# The branch used to take `memo_projection(...).field` unconditionally — the projection's already
+# rendered SQL text. When the projected expression BINDS, that text carries placeholders whose values
+# were filed under `:select`, and printing it again under HAVING emits markers with nothing behind
+# them. `values("c" => Count(Case([When("year" => 1991, then = 1)]))).filter("c__@gt" => 0)` is two
+# lines of exported API and produced five markers for three bound values: SQLite cannot bind the
+# statement at all. (PostgreSQL numbers `$n` at render, so reprinting the text reuses `$1`/`$2` and
+# is correct there — the same PG-is-fine/SQLite-is-broken split as #586 and #587.)
+#
+# The gate is the one `_get_filter_query(::SQLTypeField)` (#586, build_helpers.jl) and
+# `get_order_query` (#587) already use, applied to the third and last consumer of the memo: reuse the
+# text only for node kinds that cannot bind, and otherwise render the source afresh so the expression
+# binds its own values in the clause it prints in. An aggregate legitimately appears twice in the
+# statement, so binding twice is the correct reading, not a duplicate.
+#
+# Callers must have switched to `:having` first — the fresh render binds, and it must bind there.
+function _having_alias_lhs(alias::MemoKey, cached, instruc::SQLInstruction)
+  source = _projected_source(alias, instruc)
+  # No source (the memo was written by a non-projection path) or a kind that binds nothing: the
+  # memoized text is safe, and reusing it keeps the common case byte-identical.
+  (source === nothing ||
+   source.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject}) && return cached.field
+  return _get_select_query(source.field, instruc, _as = source._as)
+end
+
+# `_guard_scalar_bytes`'s alias twin (#596). Same decision, different evidence: a projection alias has
+# no `PormGField`, only whatever formatter `_having_alias_formatter` resolved for it, so binary-ness is
+# read off that. `format_binary_sql` is what a projection over a `BinaryField` resolves to and is the
+# only formatter that may carry a byte payload; every other alias refuses one, through the same funnel
+# the WHERE arms use so the message is the one a user already knows.
+function _guard_alias_scalar_bytes(v::SQLTypeOper, formatter, label::AbstractString)
+  (v.operator == "=" && v.values isa Vector{UInt8}) || return nothing
+  formatter === Models.format_binary_sql && return nothing
+  _raise_invalid_filter_operator([String(label)], "vector",
+                                 ["in", "nin", "range", "nrange", "has_any_keys", "has_keys", "jcontains"])
+end
+
+# The operators `_render_predicate` has no arm for, refused in the clause that cannot serve them (#618).
+#
+# On the WHERE path `ISNULL` and `BETWEEN`/`NOT BETWEEN` are handled by arms that `return` *before* the
+# shared ladder, so extracting the ladder did not carry them — and an alias filter reaching the ladder
+# with one of them got `"Invalid filter operator: BETWEEN is not a supported operator"`, naming a token
+# the caller never typed. Refuse earlier, in the caller's own vocabulary, and say where the lookup does
+# work. Supporting them on an alias is a separate change: `BETWEEN` needs two formatted operands and
+# `_resolve_having_filter_value` formats one.
+#
+# The JSON four are here for the same reason at lower severity: they never reach `_render_predicate`
+# (`_resolve_having_filter_value` refuses first), so nothing leaked — but the message blamed the
+# VALUE's type ("the c projection alias is the type number. Please check the value: {"a":1}") for what
+# is really "this lookup has no alias renderer". Same confusion, quieter.
+const _ALIAS_UNSUPPORTED_OPERATORS = Dict("BETWEEN" => "@range", "NOT BETWEEN" => "@nrange",
+                                          "ISNULL" => "@isnull",
+                                          "jcontains" => "@jcontains", "has_key" => "@has_key",
+                                          "has_any_keys" => "@has_any_keys",
+                                          "has_keys" => "@has_keys")
+function _guard_alias_clause_operator(v::SQLTypeOper, label::AbstractString)
+  spelling = get(_ALIAS_UNSUPPORTED_OPERATORS, v.operator, nothing)
+  spelling === nothing && return nothing
+  throw(FilterError(
+    "The \e[31m$(spelling)\e[0m lookup is not supported on the projection alias " *
+    "\e[31m$(label)\e[0m. It is available on a column — filter the underlying field instead, " *
+    "or compare the alias with \e[32m@gt\e[0m / \e[32m@lt\e[0m / \e[32m@gte\e[0m / " *
+    "\e[32m@lte\e[0m / \e[32m@in\e[0m."))
+end
+
 function _having_alias_formatter(alias::MemoKey, instruc::SQLInstruction)
   memoized = memo_field(instruc, alias)
   memoized === nothing || return memoized.formatter
 
-  for selected_value in instruc.object.values
-    selected_alias = selected_value.custom_as !== nothing ? selected_value.custom_as : selected_value._as
-    # #474: `alias` is a MemoKey; this loop matches on the OUTPUT name, which is its second half.
-    # Comparing the whole key here would never match — the review flagged the String-vs-key mismatch
-    # as latent, and typing the key is what turns it into a compile-visible one.
-    selected_alias == alias[2] || continue
-    isa(selected_value, SQLTypeField) || continue
+  selected_value = _projected_source(alias, instruc)
+  if selected_value !== nothing
     projected = selected_value.field
 
     if isa(projected, SQLTypeFunction)
@@ -552,19 +632,56 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
           # exactly that spelling, and never the internal namespace half.
           throw(_unknown_field(instruc.object.model, v.column.field;
                                aliases = memo_projection_names(instruc)))
-        field = having_cached.field
-        # Switch to having context for positional parameters
+        # Switch to having context for positional parameters. #595 moved this ABOVE the left-hand
+        # side: resolving it can now RENDER, and a render binds — those values belong in `:having`
+        # with the comparison value, ahead of it, exactly as they print.
+        # The restore is in a `finally` because this block can throw from four places now, and three
+        # of them are new: the fresh render in `_having_alias_lhs` (#595), `_render_predicate`'s
+        # unknown-operator `FilterError` and the SQLite-refusing `Dialect` arms'
+        # `BackendCapabilityError` (#618), plus the two #596 guards. Leaving `:having` active would
+        # file a later clause's values in the wrong bucket. Harmless today — every such throw escapes
+        # `build()` and the instruction is discarded — but it matches what
+        # `_get_select_query(::ExistsObject)` already does for `correlated_projection`, and it stops
+        # the next caller who catches one of these from inheriting a wrong context.
+        # Both guards run BEFORE the left-hand side is resolved. Neither depends on anything the
+        # render produces, and `_having_alias_lhs` can now bind (#595) — so refusing afterwards would
+        # file a binding projection's operands into `:having` and then throw them away. Waste rather
+        # than a defect, since the instruction is discarded with the throw, but the ordering is free.
+        #
+        # #596: an alias is a bare path too, so `values("c" => Count("id")); filter("c" => bytes)`
+        # reaches here. There is no `PormGField` to hand the guard — the alias's type comes from
+        # `_having_alias_formatter` — so decide on that formatter: `format_binary_sql` is what a
+        # projection over a `BinaryField` resolves to, and only that one may carry a payload.
+        # (`ImageField`/`FileField` share `type == "BLOB"` but carry `format_text_sql`, so the
+        # formatter test is as tight as the WHERE side's `_is_binary_field` struct test.)
+        _guard_alias_scalar_bytes(v, _having_alias_formatter(having_key, instruc), having_key[2])
+        # #618: refuse, in this clause, the operators `_render_predicate` has no arm for. `BETWEEN` /
+        # `NOT BETWEEN` / `ISNULL` are served on the WHERE path by arms that return ABOVE that ladder,
+        # so they never reached the extraction. Naming the user's own spelling matters here: the
+        # internal token is `BETWEEN`, but nobody types that — they type `@range`.
+        _guard_alias_clause_operator(v, having_key[2])
         set_context!(instruc, :having)
-        placeholder = add_parameter!(instruc, _resolve_having_filter_value(having_key, v.values, instruc, v.operator))
-        # #411: `IN`/`NOT IN` need the dialect-aware renderer, not string concatenation. Concatenating
-        # produced `HAVING MAX(x) IN $1` on PostgreSQL and `HAVING MAX(x) IN ?, ?` on SQLite — no
-        # parentheses, no `= ANY` — which is a syntax error on both. Every other operator is a plain
-        # infix and stays that way.
-        push!(instruc.having,
-              v.operator in ("IN", "NOT IN") ?
-                _render_membership(string(field), v.operator, placeholder, instruc) :
-                "$(field) $(v.operator) $(placeholder)")
-        set_context!(instruc, :where)
+        try
+          field = _having_alias_lhs(having_key, having_cached, instruc)
+          # #618: `contains=` / `operator=` are what run `_apply_like_wildcards` (and with it
+          # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias
+          # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the
+          # term matched as a wildcard. The gate is membership in `LIKE_WILDCARD_OPERATORS`, exactly as
+          # the three WHERE binding arms in `build_helpers.jl` spell it; the `*_exact` pattern lookups
+          # compare with `=` and must NOT be decorated, which is why that tuple and
+          # `PATTERN_LOOKUP_OPERATORS` are deliberately different sets (`constants.jl`).
+          is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
+          placeholder = add_parameter!(instruc,
+                                       _resolve_having_filter_value(having_key, v.values, instruc, v.operator),
+                                       contains=is_like_op, operator=v.operator)
+          # #618: one ladder, shared with the WHERE path — see `_render_predicate`. It absorbs the #411
+          # `IN`/`NOT IN` membership case this branch used to special-case, adds the
+          # `PATTERN_LOOKUP_OPERATORS` → `Dialect` dispatch it never had, and brings the
+          # unknown-operator refusal that was missing here entirely.
+          push!(instruc.having, _render_predicate(string(field), v.operator, placeholder, instruc))
+        finally
+          set_context!(instruc, :where)
+        end
         continue
       end
       push!(instruc._where, _get_filter_query(v, instruc))

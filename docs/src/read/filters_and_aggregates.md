@@ -888,7 +888,66 @@ query.values(
 query.filter("avg_perf__@gt" => 5)
 ```
 
+The projected expression may itself carry values — arithmetic operands, a `Case`/`When` arm, a
+`Value(...)`. Those are bound separately for each clause the expression prints in, so a conditional
+count reads the same in `HAVING` as it does in `SELECT`:
+
+```julia
+# Seasons with more than eight races after round 10
+query = M.Race.objects
+query.values("year", "late_season" => Count(Case([When("round__@gt" => 10, then = 1)])))
+query.filter("late_season__@gt" => 8)
+```
+
+```sql
+SELECT "Tb"."year", COUNT(CASE WHEN "Tb"."round" > $1 THEN $2::bigint ELSE NULL END) as "late_season"
+FROM "race" as "Tb"
+GROUP BY 1
+HAVING COUNT(CASE WHEN "Tb"."round" > $3 THEN $4::bigint ELSE NULL END) > $5
+```
+
+Note the operands appear twice and bind twice — `$1`/`$2` for the projection, `$3`/`$4` for the
+`HAVING` copy. That is correct: the expression is evaluated in two clauses.
+
 For more complex expressions, see [Field Expressions](field_expressions.md).
+
+### Which Lookups Work on an Aggregate Alias
+
+A filter on a projection alias renders through the same operator ladder as a filter on a column, so
+the comparison operators, `@in` / `@nin`, and the whole pattern family (`@contains`, `@istartswith`,
+`@iendswith`, …) mean the same thing in `HAVING` that they mean in `WHERE` — including the `%`
+decoration and the escaping of a `%` or `_` you typed yourself:
+
+```julia
+# Seasons whose alphabetically-last Grand Prix name begins with "United"
+query = M.Race.objects
+query.values("year", "last_gp" => Max("name"))
+query.filter("last_gp__@istartswith" => "United")
+```
+
+```sql
+HAVING MAX("Tb"."name") ILIKE $1 ESCAPE '\'    -- bound: "United%"
+```
+
+!!! note "The aggregated column must belong to the queried model"
+
+    PormG types the alias from the projection so it can validate the filter value, and for
+    `Max`/`Min` it can only do that when the aggregated column is a field of the model being
+    queried. `Max("name")` on `M.Race` resolves to that `CharField`; `Max("driverid__surname")` — a
+    joined path — falls back to a numeric reading and rejects a text term with
+    *"The last_driver projection alias is the type number. Please check the value: V"*. Aggregate
+    the column from the model that owns it, or filter it in `WHERE` instead.
+
+Three further consequences worth knowing:
+
+- **`@range`, `@nrange`, `@isnull` and the JSONB lookups are `WHERE`-only.** On an alias they raise
+  `FilterError` when the query is built, naming the lookup and the alias. Use `@gt`/`@lt` pairs on the
+  alias, or filter the underlying field.
+- An operator that is PostgreSQL-only on a column is PostgreSQL-only on an alias too.
+  `@iunaccent_contains` and `@iunaccent_exact` raise
+  [`BackendCapabilityError`](../errors.md) on SQLite from `HAVING` exactly as they do from `WHERE`.
+- An operator PormG does not implement is refused when the query is built, naming the operator —
+  it is never passed through to the database as a bare token.
 
 ---
 

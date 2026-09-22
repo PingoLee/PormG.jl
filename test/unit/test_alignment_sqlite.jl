@@ -21,6 +21,15 @@ include("../integration/db_sl/models.jl")
 import .models as M
 PormG.Models.set_models(M, "mock_sl_path")
 import PormG.QueryBuilder: Q, Qor, F, Exists, OuterRef, Subquery, Count, Concat, inspect_query, Case, When, Sum, Avg, Value, Round, _with
+# #618: `Max` gives a CharField-typed projection alias, the shape a pattern lookup can actually reach
+# (`_having_alias_formatter` resolves `format_text_sql` for MAX over a text column, so the value
+# guard passes). `OperObject`/`SQLField` build the unknown-operator case, which has no fluent spelling.
+import PormG.QueryBuilder: Max, OperObject, SQLField
+
+# Error messages carry ANSI colour when `Base.have_color` is true and are stripped by `_emsg` when it
+# is not. A local run is non-TTY so the codes are gone; CI runs with colour ON. Any `occursin` whose
+# needle SPANS a colorized token therefore passes locally and fails on CI. Match plain text instead.
+_plain(msg::AbstractString) = replace(msg, r"\e\[[0-9;]*m" => "")
 
 @testset "SQLite Parameter Alignment Verification (Real Models)" begin
     # 1. Positional Cross-Check with Real Schema
@@ -3563,4 +3572,321 @@ end
     end
     @test sl[:parameters] == vcat(q_ops, Any["1991-Q1", "1991-Q4"])
     @test occursin("BETWEEN", sl[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A pattern lookup on a projection alias renders through Dialect, and binds decorated (#618).
+#
+# The HAVING/projection-alias branch in `get_filter_query` was a hand-rolled duplicate of the WHERE
+# predicate render, and it was missing both halves of the pattern path: it printed
+# `"$(field) $(operator) $(placeholder)"` for anything that was not `IN`/`NOT IN`, so the LOOKUP NAME
+# reached the server as a SQL token — `HAVING MAX("Tb"."name") istartswith $1` — and it called
+# `add_parameter!` with no `contains=`/`operator=`, so the value was bound with no `%` and, worse, no
+# `escape_like_pattern`. The two halves are coupled: the keyword and the `ESCAPE` clause come from the
+# Dialect arm, the `%` and the backslash-escaping from the binding flags, and either alone is wrong.
+#
+# The fix routes both clauses through one `_render_predicate` ladder, so the assertions below are
+# written as WHERE-vs-HAVING equivalences wherever the two can be compared: a divergence is the
+# defect, and an equivalence cannot be satisfied by re-inlining a second ladder that happens to agree
+# today. The registry sweep is the other half — it walks `PATTERN_LOOKUP_OPERATORS` rather than a
+# hand-listed few, because #604 showed this family grows and a hand-list is how a member gets missed.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a pattern lookup on a projection alias renders through Dialect (#618)" begin
+    # `Max("name")` over a CharField: `_having_alias_formatter` resolves `format_text_sql`, so the
+    # term passes the value guard and reaches the render — which is what made this reachable.
+    alias_q() = (q = M.Race.objects; q.values("nm" => Max("name"));
+                 q.filter("nm__@istartswith" => "Mon"); q)
+    # The same lookup on the same physical column, in WHERE. This is the oracle: HAVING must apply
+    # the identical operator rendering and the identical value decoration.
+    where_q() = (q = M.Race.objects; q.values("name");
+                 q.filter("name__@istartswith" => "Mon"); q)
+
+    sl_alias = _assert_order_by_aligned(alias_q)          # cross-backend differential + marker count
+    pg_alias = inspect_query(alias_q(); connection = _ALIGN_PG)
+    sl_where = inspect_query(where_q())
+    pg_where = inspect_query(where_q(); connection = _ALIGN_PG)
+
+    # The render half. Before #618 the HAVING text was `MAX("Tb"."name") istartswith $1` — the
+    # PormGsuffix key printed as SQL, which neither engine parses.
+    @test occursin("ILIKE", pg_alias[:sql_text])
+    @test occursin("ESCAPE", pg_alias[:sql_text])
+    @test !occursin("istartswith", pg_alias[:sql_text])
+    @test !occursin("istartswith", sl_alias[:sql_text])
+    # SQLite folds case with the registered `pormg_lower` UDF (#78) rather than ILIKE; whatever the
+    # dialect does for a column it must do for an aggregate, so compare the shapes directly.
+    @test occursin("pormg_lower", sl_alias[:sql_text]) == occursin("pormg_lower", sl_where[:sql_text])
+    @test occursin("ESCAPE", sl_alias[:sql_text]) == occursin("ESCAPE", sl_where[:sql_text])
+
+    # The bind half, and the reason the two halves cannot be split: the Dialect arm emits `ESCAPE`,
+    # but only `contains=` puts a `%` on the value. Before #618 this bound "Mon".
+    @test sl_alias[:parameters] == ["Mon%"]
+    @test pg_alias[:parameters] == ["Mon%"]
+    @test sl_alias[:parameters] == sl_where[:parameters]      # WHERE is the oracle
+    @test pg_alias[:parameters] == pg_where[:parameters]
+    # It lands in `:having`, not `:where` — the clause context the branch already set is preserved.
+    @test sl_alias[:parameter_buckets][:having] == ["Mon%"]
+    @test sl_alias[:parameter_buckets][:where] == []
+
+    # `escape_like_pattern` is the half a missing `contains=` silently drops, and it is the one with a
+    # security shape: a `%` or `_` the CALLER typed is data, not a wildcard. `"50%_x"` must bind with
+    # both metacharacters escaped and exactly one trailing wildcard added.
+    esc_q() = (q = M.Race.objects; q.values("nm" => Max("name"));
+               q.filter("nm__@istartswith" => "50%_x"); q)
+    sl_esc = inspect_query(esc_q())
+    @test sl_esc[:parameters] == ["50\\%\\_x%"]
+    @test inspect_query(esc_q(); connection = _ALIGN_PG)[:parameters] == ["50\\%\\_x%"]
+
+    # …and a contains/suffix operator decorates on the other side, so the shape is the operator's,
+    # not a blanket append. `_apply_like_wildcards` picks it from the three LIKE_* tuples.
+    con_q() = (q = M.Race.objects; q.values("nm" => Max("name"));
+               q.filter("nm__@icontains" => "onz"); q)
+    @test inspect_query(con_q())[:parameters] == ["%onz%"]
+    end_q() = (q = M.Race.objects; q.values("nm" => Max("name"));
+               q.filter("nm__@iendswith" => "za"); q)
+    @test inspect_query(end_q())[:parameters] == ["%za"]
+
+    # ── The registry sweep ────────────────────────────────────────────────────────
+    # Every PATTERN_LOOKUP_OPERATORS name, not a hand-picked three. Two properties per name, both of
+    # which the old bare-infix render violated for ALL of them: the lookup name never appears as SQL,
+    # and the rendered HAVING predicate is byte-identical to what the same Dialect arm produces for
+    # the same left-hand side. The second is what makes this a real assertion rather than a smoke
+    # test — it pins the alias path to `Dialect`, not merely to "not the operator name".
+    # The oracle is asked of `Dialect` per engine rather than derived from a hardcoded list of
+    # PG-only names: four of these (`*unaccent*`) refuse on SQLite and two of those four are also
+    # `LIKE_WILDCARD_OPERATORS` members, so any split written here by hand is a second declaration
+    # that can drift from `Dialect`. Asking the arm directly cannot.
+    _LHS = "MAX(\"Tb\".\"name\")"
+    for op in PormG.PATTERN_LOOKUP_OPERATORS
+        build() = (q = M.Race.objects; q.values("nm" => Max("name"));
+                   q.filter("nm__@$(op)" => "Mon"); q)
+        for (conn, ph) in ((_ALIGN_PG, "\$1"), (MockSQLite(), "?"))
+            # What the Dialect arm itself produces for this left-hand side, or the capability error
+            # it raises. The alias path must reproduce it exactly.
+            oracle = try
+                getfield(PormG.Dialect, Symbol(op))(conn, _LHS, ph)
+            catch e
+                e
+            end
+            if oracle isa Exception
+                # PostgreSQL-only lookup: HAVING must report the capability error, as WHERE does.
+                # Before #618 it rendered `HAVING MAX(...) iunaccent_exact ?` and failed at the
+                # server instead — a PormG operator name surfacing as a SQL syntax error.
+                @test_throws typeof(oracle) inspect_query(build(); connection = conn)
+            else
+                d = inspect_query(build(); connection = conn)
+                @test strip(split(d[:sql_text], "HAVING")[end]) == strip(oracle)
+                @test !occursin(op, d[:sql_text])     # the lookup name never reaches the SQL
+            end
+        end
+    end
+
+    # ── Controls: what the shared ladder must NOT have changed ────────────────────
+    # Comparison on an alias — the ordinary HAVING spelling the docs show.
+    cmp_q() = (q = M.Race.objects; q.values("n" => Count("raceid")); q.filter("n__@gt" => 5); q)
+    sl_cmp = _assert_order_by_aligned(cmp_q)
+    @test occursin("COUNT(\"Tb\".\"raceid\") > ?", sl_cmp[:sql_text])
+    @test sl_cmp[:parameters] == [5]
+
+    # Membership on an alias — #411's fix lived in the branch this commit deleted, so it has to be
+    # re-proved through the shared ladder: parenthesised on SQLite, `= ANY(...)` on PostgreSQL.
+    in_q() = (q = M.Race.objects; q.values("nm" => Max("name"));
+              q.filter("nm__@in" => ["Monza", "Imola"]); q)
+    sl_in = inspect_query(in_q())
+    pg_in = inspect_query(in_q(); connection = _ALIGN_PG)
+    @test occursin("IN (?, ?)", sl_in[:sql_text])
+    @test occursin("= ANY(\$1)", pg_in[:sql_text])
+    nin_q() = (q = M.Race.objects; q.values("nm" => Max("name"));
+               q.filter("nm__@nin" => ["Monza"]); q)
+    @test occursin("<> ALL(\$1)", inspect_query(nin_q(); connection = _ALIGN_PG)[:sql_text])
+
+    # A pattern lookup over a TRANSFORM column shares the bind half (its render half was already
+    # right — it reaches the same Dialect dispatch). `@yyyy_mm` is a `ToChar` carrying
+    # `format_yyyy_mm`, so the value must satisfy `^\d{4}-\d{2}$`: the issue's own literal example
+    # ("199") never reaches the binding at all, the formatter rejects it first.
+    tr_q() = (q = M.Race.objects; q.values("name");
+              q.filter("date__@yyyy_mm__@istartswith" => "1991-03"); q)
+    sl_tr = inspect_query(tr_q())
+    @test sl_tr[:parameters] == ["1991-03%"]   # before #618: "1991-03", undecorated and unescaped
+    @test !occursin("istartswith", sl_tr[:sql_text])
+
+    # `@range` / `@nrange` / `@isnull` are WHERE-only on an alias, and the refusal must name the
+    # LOOKUP THE USER TYPED. On the WHERE path those three are served by arms that `return` ABOVE the
+    # shared ladder, so the extraction never picked them up — which first surfaced as
+    # `"Invalid filter operator: BETWEEN is not a supported operator"` on a query whose author wrote
+    # `@range`, i.e. an internal token leaking into a user-facing message. Refused earlier now, in the
+    # caller's own vocabulary. (Supporting them on an alias is a separate change: BETWEEN needs two
+    # formatted operands and `_resolve_having_filter_value` formats one.)
+    # The JSONB four are on the same list at lower severity: they never reached `_render_predicate`
+    # (`_resolve_having_filter_value` refused first), so nothing leaked — but the message blamed the
+    # VALUE's type ("the c projection alias is the type number. Please check the value: {…}") for what
+    # is really "this lookup has no alias renderer". Same confusion, quieter.
+    for (spelling, value) in (("jcontains", Dict("a" => 1)), ("has_key", "a"),
+                              ("has_any_keys", ["a", "b"]), ("has_keys", ["a", "b"]))
+        err = @test_throws PormG.FilterError (q = M.Race.objects;
+                                             q.values("n2" => Count("raceid"));
+                                             q.filter("n2__@$(spelling)" => value);
+                                             inspect_query(q))
+        @test occursin("@$(spelling)", err.value.msg)
+        @test occursin("n2", err.value.msg)
+        @test !occursin("is the type", err.value.msg)   # not a value-type complaint any more
+    end
+
+    for (spelling, value) in (("range", [1, 5]), ("nrange", [1, 5]), ("isnull", true))
+        err = @test_throws PormG.FilterError (q = M.Race.objects;
+                                             q.values("n2" => Count("raceid"));
+                                             q.filter("n2__@$(spelling)" => value);
+                                             inspect_query(q))
+        msg = err.value.msg
+        @test occursin("@$(spelling)", msg)          # the user's spelling
+        @test occursin("n2", msg)                    # and which alias
+        @test !occursin("BETWEEN", msg)              # never the internal token
+        @test !occursin("ISNULL", msg)
+        # Same lookup on a real COLUMN still renders — the refusal is clause-scoped, not global.
+        # Asserted on the SQL and the bound vector rather than on "it did not throw": an `isa Dict`
+        # control passes against a build that silently stopped emitting the predicate at all.
+        ok = M.Race.objects
+        ok.values("name")
+        ok.filter(spelling == "isnull" ? ("name__@isnull" => true) : ("year__@$(spelling)" => value))
+        ok_sql = inspect_query(ok)
+        if spelling == "isnull"
+            @test occursin("IS NULL", ok_sql[:sql_text])
+            @test ok_sql[:parameters] == []
+        else
+            @test occursin(spelling == "nrange" ? "NOT BETWEEN" : "BETWEEN", ok_sql[:sql_text])
+            @test ok_sql[:parameters] == [1, 5]
+        end
+    end
+
+    # An operator no renderer knows is refused at build time. The alias branch had no `else` arm at
+    # all, so anything at all reached the server as a bare token; the shared ladder brings WHERE's
+    # refusal with it.
+    bad = OperObject(operator = "totally_not_an_operator", values = "x",
+                     column = SQLField("nm", "nm"))
+    bad_q = M.Race.objects
+    bad_q.values("nm" => Max("name"))
+    push!(bad_q.object.filter, bad)
+    @test_throws PormG.FilterError inspect_query(bad_q)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A HAVING predicate on a projection that BINDS renders its own values (#595).
+#
+# The alias branch took `memo_projection(...).field` — the projection's already-rendered SQL text —
+# and printed it under HAVING verbatim. When the projected expression binds, those placeholders'
+# values were filed under `:select`, so the reprint emitted markers with nothing behind them. This is
+# the third and last consumer of the memo to get the gate that #586 put on the WHERE path and #587 on
+# ORDER BY: reuse the text only for node kinds that cannot bind, otherwise render afresh.
+#
+# The issue recorded this as latent, "not reachable through the public surface today". It is
+# reachable: `Case`/`When` are exported, and `Count(Case([When(...)]))` filtered by its alias needs no
+# more than the two lines below. `_having_alias_formatter` resolves COUNT to `format_number_sql`, so
+# the value guard passes and the branch is entered with binding text. Measured before the fix:
+# five markers, three bound values — SQLite cannot bind the statement.
+#
+# Note which engine catches it. PostgreSQL numbers `$n` AT RENDER, so reprinting the text reuses
+# `$1`/`$2` and stays correct — `_assert_predicate_binds_once`'s contiguity check passes on the
+# unpatched code. It is `assert_marker_count` on the SQLite side that fails, which is why every shape
+# here goes through the differential rather than a PostgreSQL-only assertion.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a HAVING predicate on a binding projection renders its own values (#595)" begin
+    case_ops = Any[1991, 1]      # the two operands `Case([When("year" => 1991, then = 1)])` binds
+
+    # The reachable shape. Ungrouped: the aggregate is the only projection, so no GROUP BY prints
+    # and the whole vector is SELECT's copy, HAVING's copy, then the comparison value.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("c" => Count(Case([When("year" => 1991, then = 1)])))
+        q.filter("c__@gt" => 0)
+        q
+    end
+    @test sl[:parameters] == vcat(case_ops, case_ops, Any[0])
+    @test sl[:parameter_buckets][:select] == case_ops
+    @test sl[:parameter_buckets][:having] == vcat(case_ops, Any[0])
+    # The operands bind BEFORE the comparison value, because that is the order they print in.
+    @test sl[:parameter_buckets][:having][end] == 0
+
+    # Grouped: a GROUP BY column between the two copies. `:group` stays empty (the grouping term is
+    # a plain column, which binds nothing), and the run still reads SELECT, HAVING, in text order.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("year", "c" => Count(Case([When("year" => 1991, then = 1)])))
+        q.filter("c__@gt" => 0)
+        q
+    end
+    @test sl[:parameters] == vcat(case_ops, case_ops, Any[0])
+    @test sl[:parameter_buckets][:group] == []
+    @test occursin("GROUP BY", sl[:sql_text])
+
+    # A neighbouring WHERE value on the same query, so a displaced operand would be visible: WHERE
+    # flattens before HAVING, and SELECT before both.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("year", "c" => Count(Case([When("year" => 1991, then = 1)])))
+        q.filter("name" => "Monza")
+        q.filter("c__@gt" => 0)
+        q
+    end
+    @test sl[:parameters] == vcat(case_ops, Any["Monza"], case_ops, Any[0])
+    @test sl[:parameter_buckets][:where] == ["Monza"]
+
+    # Membership over the same binding alias — the operands precede the list, once per clause.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("c" => Count(Case([When("year" => 1991, then = 1)])))
+        q.filter("c__@in" => [0, 1])
+        q
+    end
+    @test sl[:parameters] == vcat(case_ops, case_ops, Any[0, 1])
+
+    # ── Controls: the memo reuse that must NOT have changed ───────────────────────
+    # A non-binding aggregate keeps reusing the memoized text — that is the common case and the
+    # reason the gate is on node kind rather than "always render fresh". Nothing binds for the LHS,
+    # so `:select` stays empty and `:having` holds only the comparison value.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("c" => Count("raceid"))
+        q.filter("c__@gt" => 5)
+        q
+    end
+    @test sl[:parameters] == [5]
+    @test sl[:parameter_buckets][:select] == []
+    @test sl[:parameter_buckets][:having] == [5]
+    # …and the HAVING left-hand side is still the projection's own expression, not a re-derivation.
+    @test occursin("HAVING COUNT(\"Tb\".\"raceid\") > ?", sl[:sql_text])
+
+    # The `String`/CTE/Joined arm of the gate is DEFENSIVE, not decorative, and this is why: a plain
+    # column projected under a new name memoizes under its PATH, not the alias, so filtering by the
+    # alias never reaches the HAVING branch at all — it is refused as an unknown field, listing the
+    # aliases that were actually declared (#446/#474). Asserted so that if a later change makes
+    # alias-on-label reachable, the arm that keeps reusing the memo for it is already in place and
+    # this test says what changed.
+    alias_miss = @test_throws PormG.UnknownFieldError (q = M.Race.objects;
+                                                       q.values("n" => "name");
+                                                       q.filter("n" => "Monza");
+                                                       inspect_query(q))
+    # `_plain`: the alias list is colorized, so this needle spans "declared aliases: " +
+    # "\e[4m\e[32mname\e[0m". Matches locally (non-TTY, `_emsg` strips) and fails on CI (colour on).
+    @test occursin("declared aliases: name", _plain(alias_miss.value.msg))
+
+    # An aggregate over a joined path binds nothing either, so it reuses the memo and keeps the ONE
+    # join it registered — a fresh render must not have produced a second one.
+    sl = _assert_predicate_binds_once() do
+        q = M.Result.objects
+        q.values("driverid__surname", "n" => Count("resultid"))
+        q.filter("n__@gte" => 1)
+        q
+    end
+    @test sl[:parameters] == [1]
+    @test count("JOIN", sl[:sql_text]) == 1
+
+    # #618 and #595 in one query: a binding aggregate compared through the shared render ladder.
+    # The operands bind under `:having` and the comparison value is decorated — both fixes, one shape.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("c" => Count(Case([When("year" => 1991, then = 1)])), "nm" => Max("name"))
+        q.filter("c__@gt" => 0)
+        q.filter("nm__@istartswith" => "Mon")
+        q
+    end
+    @test sl[:parameters] == vcat(case_ops, case_ops, Any[0, "Mon%"])
 end

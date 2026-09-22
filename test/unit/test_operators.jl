@@ -1036,6 +1036,12 @@ if !isdefined(Main, :_In411Event)
   _In411Result._module = Main
 end
 
+# Error messages carry ANSI colour when `Base.have_color` is true and are stripped by `_emsg` when it
+# is not. A local run is non-TTY so the codes are gone; CI runs with colour ON, so they are present.
+# Any `occursin` whose needle SPANS a colorized token therefore passes locally and fails on CI —
+# which is exactly how two assertions on this branch reached the PR green. Match plain text instead.
+_plain(msg::AbstractString) = replace(msg, r"\e\[[0-9;]*m" => "")
+
 const _IN411 = _In411Event
 const _IN411R = _In411Result
 
@@ -1111,10 +1117,11 @@ const _IN411R = _In411Result
   @test occursin("NOT IN", res_nbin_sl[:sql_text])
   @test res_nbin_sl[:parameters] == Any[UInt8[0x01, 0x02]]
 
-  # Anything other than `@in`/`@nin` over a binary list is the ordinary "vector value, wrong
+  # Anything other than `@in`/`@nin` over a binary LIST is the ordinary "vector value, wrong
   # operator" mistake and goes to the shared funnel, naming what the user wrote — the same two
-  # controls that held while the #411 guard existed. (A scalar `"blob" => bytes` comparison has no
-  # filter spelling today either; it is refused the same way, and is not #466's scope.)
+  # controls that held while the #411 guard existed. A list of payloads
+  # (`Vector{Vector{UInt8}}`) is what these two pin; a flat `Vector{UInt8}` is one payload and has
+  # been a valid scalar comparison since #596, which is a different type and a different method.
   no_op = @test_throws PormG.FilterError _IN411.objects.filter(
     "blob" => [UInt8[0x01], UInt8[0x02]]).list(show_query = :dict)
   @test occursin("no operator", no_op.value.msg)
@@ -1456,9 +1463,232 @@ end
   arith = _IN411.objects
   arith.values("id", "d3" => F("n") + 1)
   arith.filter("d3" => 5)
-  # Two parameters, in clause order: the `1` the arithmetic binds in the SELECT bucket, then the
-  # filter's own `5` in HAVING. Asserting the whole vector rather than just the filter value keeps
-  # the bucket order visible — this alias reaches the fallback formatter, and a change that started
-  # resolving `F("n") + 1` to the column's formatter would still bind `5` and pass a narrower test.
-  @test arith.list(show_query = :dict)[:parameters] == [1, 5]
+  # THREE parameters, in clause order: the `1` the arithmetic binds in SELECT, the `1` it binds
+  # again in HAVING, then the filter's own `5`. Asserting the whole vector rather than just the
+  # filter value keeps the bucket order visible — this alias reaches the fallback formatter, and a
+  # change that started resolving `F("n") + 1` to the column's formatter would still bind `5` and
+  # pass a narrower test.
+  #
+  # #595 changed this expectation, deliberately: it used to read `[1, 5]`, which was the defect
+  # written down as design. The HAVING clause reprinted the projection's memoized text — `("n" + ?)`
+  # — with nothing bound for its `?`, so SQLite got three markers for two values and could not bind
+  # the statement. Adjudicated against the cross-backend differential rather than against either
+  # side: PostgreSQL numbers `$n` at render, and its authoritative text-order walk reads `[1, 1, 5]`
+  # both before and after the fix. SQLite now matches it; before, it did not.
+  @test arith.list(show_query = :dict)[:parameters] == [1, 1, 5]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A scalar equality filter on a BinaryField has a spelling (#596)
+#
+# `filter("blob" => bytes)` was refused at parse time: `UInt8 <: Number`, so a byte payload reached
+# the vector arm of `_get_pair_to_oper`, and every branch there slices off a trailing operator
+# segment that a bare field path does not have. It fell through to "a vector value but no
+# operator" — the very spelling #411's refusal message had prescribed as the workaround for
+# `blob__@in`. It never worked.
+#
+# The fix admits it at parse (the types are unambiguous: `Vector{UInt8}` is one payload,
+# `Vector{Vector{UInt8}}` is a membership list) and decides binary-ness at RENDER, where the field is
+# known. That split is what makes it work through `Q`/`Qor` as well — those reach `_check_filter`
+# with no model in scope, so a parse-time field lookup could never have covered them, and the `Q`
+# case below is asserted for exactly that reason.
+#
+# `_IN411` renders through the PostgreSQL mock (`connect_key = "default"`); the SQLite side is taken
+# by passing `_MockSQLiteIn411()` to `inspect_query`, the same pattern the #411/#466 block above uses.
+# Both engines matter here because they bind a blob differently: SQLite binds the bytes, PostgreSQL
+# the `\x`-prefixed hex text.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a scalar equality filter on a BinaryField binds one blob (#596)" begin
+  payload = UInt8[0x89, 0x50, 0x00, 0xFF]     # carries a 0x00 a text parameter could not carry
+
+  # One marker either way — the payload is ONE value, which is the whole distinction from an
+  # `@in` list, and the thing the old parse refused to express.
+  q_sl = _IN411.objects
+  q_sl.filter("blob" => payload)
+  res_sl = PormG.QueryBuilder.inspect_query(q_sl; connection = _MockSQLiteIn411())
+  @test res_sl[:parameters] == Any[payload]
+  @test count("?", res_sl[:sql_text]) == 1
+  @test occursin("\"blob\" = ?", res_sl[:sql_text])
+
+  res_pg = _IN411.objects.filter("blob" => payload).list(show_query = :dict)
+  @test res_pg[:parameters] == Any["\\x" * bytes2hex(payload)]
+  @test occursin("\"blob\" = \$1", res_pg[:sql_text])
+
+  # Through `Q(...)`, which reaches `_check_filter` with no model in scope. A parse-time,
+  # model-aware fix would have left this one refused; deciding at render covers it for free.
+  q_wrapped = _IN411.objects
+  q_wrapped.filter(Q("blob" => payload))
+  @test PormG.QueryBuilder.inspect_query(q_wrapped;
+          connection = _MockSQLiteIn411())[:parameters] == Any[payload]
+
+  # An empty payload is still ONE value, not zero — the empty-list shape `_render_membership`
+  # special-cases does not apply, because this is not a membership filter.
+  q_empty = _IN411.objects
+  q_empty.filter("blob" => UInt8[])
+  res_empty = PormG.QueryBuilder.inspect_query(q_empty; connection = _MockSQLiteIn411())
+  @test res_empty[:parameters] == Any[UInt8[]]
+  @test count("?", res_empty[:sql_text]) == 1
+
+  # ── The refusals that must survive ────────────────────────────────────────────
+  # A byte payload against a NON-binary field is still the "vector value, no operator" mistake and
+  # must report it with the SAME message. That is the acceptance criterion, and it is why the render
+  # guard calls the shared funnel rather than inventing a second wording.
+  non_bin = @test_throws PormG.FilterError _IN411.objects.filter(
+    "n" => UInt8[0x01, 0x02]).list(show_query = :dict)
+  @test occursin("was given a vector value but no operator", non_bin.value.msg)
+  @test occursin("n__@in", non_bin.value.msg)      # the example names the real field
+
+  # The guard keys on the field STRUCT, not on `type == "BLOB"` — `ImageField`/`FileField` carry that
+  # same type string and hold no bytes (#296). A text field is refused like any other non-binary.
+  txt = @test_throws PormG.FilterError _IN411.objects.filter(
+    "code" => UInt8[0x01]).list(show_query = :dict)
+  @test occursin("was given a vector value but no operator", txt.value.msg)
+
+  # ── Every resolver arm, not just the base-model one ───────────────────────────
+  # A JOINED path resolves its field through the memo (#474), not `model.fields`, so it is a separate
+  # arm and needs the same guard. Guarding only the base-model arm let
+  # `filter("eventid__n" => UInt8[1, 2])` bind TWO parameters and compare the column against the
+  # first byte — silently, because a payload reaching `add_parameter!` as a bare `AbstractArray`
+  # expands to one marker per byte. Both directions are pinned so the omission cannot come back.
+  joined_bin = _IN411R.objects
+  joined_bin.filter("eventid__blob" => payload)
+  res_joined = PormG.QueryBuilder.inspect_query(joined_bin; connection = _MockSQLiteIn411())
+  @test res_joined[:parameters] == Any[payload]
+  @test count("?", res_joined[:sql_text]) == 1
+
+  joined_non_bin = @test_throws PormG.FilterError _IN411R.objects.filter(
+    "eventid__n" => UInt8[0x01, 0x02]).list(show_query = :dict)
+  @test occursin("was given a vector value but no operator", joined_non_bin.value.msg)
+  @test occursin("eventid__n__@in", joined_non_bin.value.msg)   # the path the user wrote
+
+  # A LIST of payloads with no operator keeps meaning what it always did. It is a different type and
+  # takes a different method, so admitting the scalar cannot have widened it.
+  lst = @test_throws PormG.FilterError _IN411.objects.filter(
+    "blob" => [UInt8[0x01], UInt8[0x02]]).list(show_query = :dict)
+  @test occursin("no operator", lst.value.msg)
+
+  # And a suffix still wins over the bare-path reading. `blob__@in => UInt8[1, 2]` is read as a
+  # membership list whose members are the NUMBERS 1 and 2, so `format_binary_sql` is mapped over
+  # each and refuses a bare `UInt8` — verified byte-for-byte identical on the unpatched code. The
+  # new method delegates whenever the last segment is a `PormGsuffix` key precisely so this reading
+  # is untouched; a binary membership filter is spelled `blob__@in => [bytes_a, bytes_b]` (#466).
+  suffixed = @test_throws PormG.FilterError _IN411.objects.filter(
+    "blob__@in" => UInt8[0x01, 0x02]).list(show_query = :dict)
+  # `_plain` because this phrase spans a COLORIZED token — the message is
+  # "is the type \e[4m\e[32mBLOB\e[0m". `_emsg` keeps the escapes when `Base.have_color` is true and
+  # strips them otherwise, so a local run (non-TTY, color off) matches and CI (color on) does not.
+  # This assertion shipped green locally and failed on all five CI jobs; match the plain text.
+  @test occursin("is the type BLOB", _plain(suffixed.value.msg))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admitting a flat `Vector{UInt8}` must not widen anything else (#596)
+#
+# The first cut of the parse method above reimplemented the two-branch SCALAR shape, so its suffix
+# branch built an `OperObject` directly instead of going through the vector arm's ladder. That
+# silently dropped all four of that ladder's guards at once. Every case below was a clean
+# `FilterError` before #596, so each is a regression this pins shut — and the `@range` truncation is
+# the one that was SILENT, which is exactly the class the commit set out to remove.
+#
+# It now delegates: `_vector_oper_from_suffix` is ONE body with two callers, so a guard cannot be
+# present for `Vector{Int}` and missing for `Vector{UInt8}`. The `Int` control rides along in each
+# loop for that reason — the two must report identically.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a byte payload does not bypass the vector ladder's guards (#596)" begin
+  # A suffix that is not a membership/range/JSON operator: refused, naming the OPERATOR the user
+  # typed. Before: `@gt` built `WHERE "n" > ?, ?` (SQLite syntax error, PG bound the whole vector);
+  # `@icontains` reached `format_text_sql(::UInt8)` as an untyped MethodError outside the #231
+  # taxonomy; `@isnull` reached `ISNULL(::String, ::Vector{UInt8})`, likewise untyped.
+  for op in ("gt", "gte", "lt", "icontains", "istartswith", "isnull", "ne")
+    bytes_err = @test_throws PormG.FilterError _IN411.objects.filter(
+      "n__@$(op)" => UInt8[0x01, 0x02]).list(show_query = :dict)
+    int_err = @test_throws PormG.FilterError _IN411.objects.filter(
+      "n__@$(op)" => Int[1, 2]).list(show_query = :dict)
+    @test occursin("@$(op)", bytes_err.value.msg)
+    # The payload and the plain integer list must report IDENTICALLY — that equality is the
+    # regression test for the delegation, not the individual message.
+    @test bytes_err.value.msg == int_err.value.msg
+  end
+
+  # `@range` / `@nrange` arity. A 3-element payload used to render a TRUNCATED `BETWEEN` over the
+  # first two bytes with no error at all — valid SQL, wrong query, on both engines. A 1-element one
+  # threw `BoundsError`, which is not even a `PormGError` (#239).
+  for op in ("range", "nrange")
+    for bad in (UInt8[0x01], UInt8[0x01, 0x02, 0x03], UInt8[])
+      err = @test_throws PormG.FilterError _IN411.objects.filter(
+        "n__@$(op)" => bad).list(show_query = :dict)
+      @test occursin("requires exactly 2 values", err.value.msg)
+      @test occursin("got $(length(bad))", err.value.msg)
+    end
+    # Two values is the legal arity and still renders.
+    ok = _IN411.objects
+    ok.filter("n__@$(op)" => UInt8[0x01, 0x02])
+    @test count("?", PormG.QueryBuilder.inspect_query(ok;
+                       connection = _MockSQLiteIn411())[:sql_text]) == 2
+  end
+
+  # `@in` / `@nin` keep working through the shared ladder — the branch that WAS correct.
+  in_ok = _IN411.objects
+  in_ok.filter("blob__@in" => [UInt8[0x01], UInt8[0x02]])
+  @test length(PormG.QueryBuilder.inspect_query(in_ok;
+                 connection = _MockSQLiteIn411())[:parameters]) == 2
+
+  # ── Bare-path arms other than the base-model one ──────────────────────────────
+  # A TRANSFORM column is a bare path, so a payload reaches the transform render arms. No transform
+  # yields bytes, so every one is a refusal. Before: `WHERE CAST(strftime('%Y',…) AS INTEGER) = ?, ?`.
+  for path in ("happened__@year", "happened__@month", "happened__@yyyy_mm")
+    err = @test_throws PormG.FilterError _IN411.objects.filter(
+      path => UInt8[0x01, 0x02]).list(show_query = :dict)
+    @test occursin("vector value but no operator", err.value.msg)
+  end
+
+  # A JSON PATH lookup is the arm where this was silent on PostgreSQL rather than loud: the PG branch
+  # binds `string(v.values)`, which stringified the payload's Julia `repr` into
+  # `#>> '{"kind"}' = 'UInt8[0x01, 0x02]'` — valid SQL, zero rows, no error, on the engine most
+  # consuming apps run. A JSON value is never a byte payload.
+  # Its own model, because a JSON path lookup resolves a row-join and so needs `_module` — which the
+  # shared `_In411Event` deliberately does not have (see its fixture note; ~15 testsets share it).
+  _json596 = Model("json596", id = IDField(), payload = JSONField())
+  _json596.connect_key = "default"
+  _json596._module = Main
+  json_err = @test_throws PormG.FilterError _json596.objects.filter(
+    "payload__kind" => UInt8[0x01, 0x02]).list(show_query = :dict)
+  @test occursin("vector value but no operator", json_err.value.msg)
+  @test occursin("payload__kind", json_err.value.msg)
+  # The control: the same lookup with an ordinary scalar still renders.
+  json_ok = _json596.objects
+  json_ok.filter("payload__kind" => "binary-in")
+  @test length(json_ok.list(show_query = :dict)[:parameters]) == 1
+
+  # A PROJECTION ALIAS is a bare path too, and it has no `PormGField` to decide with — the guard
+  # reads the formatter `_having_alias_formatter` resolved instead. A non-binary alias refuses…
+  alias_err = @test_throws PormG.FilterError (q = _IN411.objects;
+                                             q.values("c" => PormG.QueryBuilder.Count("id"));
+                                             q.filter("c" => UInt8[0x01, 0x02]);
+                                             q.list(show_query = :dict))
+  @test occursin("vector value but no operator", alias_err.value.msg)
+  # The funnel's actionable example, not the bare alias name: `occursin("c", …)` would be a
+  # tautology — "c" occurs in the message this assertion's neighbour already requires, and in almost
+  # any English sentence, so it could not fail. `c__@in` is what discriminates, and it is the
+  # spelling the guard's `label` argument produces.
+  @test occursin("c__@in", alias_err.value.msg)
+
+  # …and a BINARY one passes the guard rather than being refused: `Max` over a BinaryField resolves
+  # `format_binary_sql`, so the payload binds as one blob under `:having`. This asserts the GUARD's
+  # decision — that a binary-typed alias is not swept up by the refusal — and nothing more.
+  #
+  # SQLITE MOCK ONLY, deliberately, and not for convenience. Measured against the live PostgreSQL:
+  # `function max(bytea) does not exist`, so this statement builds and then fails at the server there.
+  # `F("blob")` is not a portable substitute either — a non-aggregate alias filter lands in HAVING and
+  # PostgreSQL then rejects the ungrouped projection ("column must appear in the GROUP BY clause").
+  # So there is no portable spelling for filtering a binary projection alias today; the guard stays
+  # permissive because narrowing it is a behavior change beyond #596, but nothing here or in the docs
+  # advertises the shape as supported.
+  bin_alias = _IN411.objects
+  bin_alias.values("b" => PormG.QueryBuilder.Max("blob"))
+  bin_alias.filter("b" => UInt8[0x01, 0x02])
+  res_bin_alias = PormG.QueryBuilder.inspect_query(bin_alias; connection = _MockSQLiteIn411())
+  @test res_bin_alias[:parameters] == Any[UInt8[0x01, 0x02]]
+  @test count("?", res_bin_alias[:sql_text]) == 1
+  @test occursin("HAVING", res_bin_alias[:sql_text])
 end

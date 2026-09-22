@@ -359,6 +359,41 @@ end
 function _get_pair_to_oper(x::Pair{String,T}) where T<:Union{AbstractString,Number,Bool,Dates.Date,Dates.DateTime,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
+# A FLAT `Vector{UInt8}` is one binary payload, not a list of small numbers (#596).
+#
+# `UInt8 <: Number`, so a byte payload used to land in the vector arm below, whose every branch
+# slices `x.first[1:end-1]` — it assumes the last path segment is the operator. With a bare path
+# nothing matched and the pair was refused as "a vector value but no operator", which is the
+# spelling #411's own error message had prescribed as the workaround for `blob__@in`. It never worked.
+#
+# This method is strictly more specific than that arm, so it wins dispatch, and it mirrors the scalar
+# shape above exactly: a `PormGsuffix` key in the last segment delegates back to the ladder (so
+# `blob__@in => UInt8[1, 2]` keeps meaning a two-element IN list of the numbers 1 and 2), and a bare
+# path builds the equality the scalar arm builds.
+#
+# It deliberately does NOT decide whether the field is binary. It cannot: `_check_filter` is handed
+# only the pair, and the `Q` / `Qor` / `When` routes reach it with no model at all — a parse-time
+# decision would fix `filter("blob" => bytes)` and leave `filter(Q("blob" => bytes))` refused. The
+# render path already resolves the field, applies `format_binary_sql` and binds one blob through the
+# scalar `PormGBytes` collector arms; the type check for a NON-binary field lives there with it, so
+# every spelling behaves the same.
+#
+# The distinction is unambiguous by type: `Vector{Vector{UInt8}}` (a list of payloads, #466) and
+# `Vector{Int}` are different types and still take the vector arm.
+#
+# ONLY the bare-path case is this method's business. A suffixed path goes to
+# `_vector_oper_from_suffix` — the vector arm's own ladder, shared rather than restated, because
+# restating it is how the first cut of this fix lost the `@range` arity check and the
+# wrong-operator refusal. `PormGsuffix` is the right membership test for "is the last segment an
+# operator": a TRANSFORM segment (`@year`, `@yyyy_mm`) is not in it, so `date__@year => bytes` stays a
+# bare-path equality over a transform column and is refused at render like any other non-binary field.
+function _get_pair_to_oper(x::Pair{Vector{String},Vector{UInt8}})
+  haskey(PormGsuffix, x.first[end]) && return _vector_oper_from_suffix(x)
+  return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
+end
+function _get_pair_to_oper(x::Pair{String,Vector{UInt8}})
+  return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
+end
 # Widened alongside its `Pair{Vector{String},…}` twin below (#411). Not reachable from
 # `_check_filter`, which splits the key at `__@` first — but leaving one of a matched pair behind
 # is the drift that bites whoever calls it directly next.
@@ -415,6 +450,9 @@ end
 # mapping the formatter at the call site does not fix those two on its own. #411 admitted the UUID
 # and refused the binary list by name, because the ARRAY collectors did not unwrap `PormGBytes`;
 # #466 taught them to, so a binary list takes the ordinary vector arm below.
+# A FLAT `Vector{UInt8}` — one payload rather than a list of them — does NOT take that arm: #596 gave
+# it its own, strictly more specific method above, because every branch here slices off a trailing
+# operator segment that a bare field path does not have.
 # `Vector{Any}` (#411). `[]` — the way anyone writes an empty list, and what `ids = []` gives you
 # before the first `push!` — is `Vector{Any}`, and `Any` satisfies none of the element bounds the
 # methods below dispatch on. So the most natural spelling of an empty membership list raised a
@@ -438,6 +476,19 @@ function _get_pair_to_oper(x::Pair{Vector{String},Vector{Any}})
 end
 
 function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,AbstractVector{UInt8}}
+  return _vector_oper_from_suffix(x)
+end
+
+# The suffix ladder for a VECTOR right-hand side, extracted so the `Vector{UInt8}` method above can
+# reach it (#596). It cannot get here by delegation — a `Pair{Vector{String},Vector{UInt8}}` dispatches
+# to its own, more specific method — and the first cut of #596 reimplemented the two-branch SCALAR
+# shape instead. That silently dropped all four guards below: `blob__@gt => UInt8[1,2]` built a
+# comparison against a vector (`WHERE "n" > ?, ?`, a syntax error), `@icontains` reached
+# `format_text_sql(::UInt8)` as an untyped `MethodError`, and `@range => UInt8[1,2,3]` rendered a
+# silently TRUNCATED `BETWEEN` over the first two bytes — the exact silent-wrong-query shape #596 set
+# out to remove, reintroduced one method up. One body, two callers, so a guard cannot be missing from
+# one of them.
+function _vector_oper_from_suffix(x::Pair{Vector{String},<:AbstractVector})
   suffix = x.first[end]
   if suffix in ["in", "nin"]
     @pormg_debug false
@@ -1575,6 +1626,12 @@ end
 #     (a JSON number stays a number → `5 = 5`, not `5 = '5'`) and comparisons need no cast.
 function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
   op = v.operator
+  # #596: a JSON path lookup (`payload__kind`) is a bare path, so admitting a flat `Vector{UInt8}` at
+  # parse made it reachable here — and this is the one arm where it was SILENT: the PostgreSQL branch
+  # does `string(v.values)`, which stringified the payload's Julia `repr` into
+  # `#>> '{"kind"}' = 'UInt8[0x01, 0x02]'` — valid SQL, zero rows, no error. A JSON value is never a
+  # byte payload, so the refusal is unconditional.
+  _guard_scalar_bytes(v, nothing)
   is_pg = instruc.connection isa PormGPostgres
   if op == "ISNULL"
     # Render IS NULL directly — the shared ISNULL() rejects any column containing "(", which a
@@ -2066,6 +2123,84 @@ function _render_membership(column::AbstractString, operator::AbstractString, pl
   end
 end
 
+# The render-time half of #596: a flat `Vector{UInt8}` is only a byte payload if the column can hold
+# bytes.
+#
+# The parse ladder admits `"blob" => bytes` without knowing the field, because it cannot know it —
+# `_check_filter` is handed only the pair, and `Q`/`Qor`/`When` reach it with no model at all. The
+# field IS known here, at every arm that resolves one, so this is where the decision belongs.
+#
+# It must be called from EVERY arm, which is the mistake this helper exists to make hard to repeat:
+# guarding only the base-model arm left `filter("eventid__n" => UInt8[1, 2])` — a joined path to an
+# IntegerField — binding two parameters and comparing a column against the FIRST byte, silently.
+# Measured: refused on the unpatched code, two markers with the guard on one arm only. A payload
+# reaching `add_parameter!` as a bare `AbstractArray` expands to one marker per byte, so a missing
+# guard is silent wrong data, not a loud failure.
+#
+# `f_meta === nothing` means the arm resolved no field, and then this fails CLOSED: nothing has
+# proved the column holds bytes.
+#
+# Keyed on the field STRUCT via `_is_binary_field`, never on `f_meta.type` — `ImageField` and
+# `FileField` also carry `type == "BLOB"` and hold no bytes (#296).
+#
+# The refusal is the funnel the parse ladder used, with the same `allowed` list, so a non-binary
+# field reports the message it has always reported for an operator-less vector value.
+function _guard_scalar_bytes(v::SQLTypeOper, f_meta, label::AbstractString)
+  (v.operator == "=" && v.values isa Vector{UInt8}) || return nothing
+  (f_meta !== nothing && _is_binary_field(f_meta)) && return nothing
+  _raise_invalid_filter_operator([String(label)], "vector",
+                                 ["in", "nin", "range", "nrange", "has_any_keys", "has_keys", "jcontains"])
+end
+# Label-deriving form, for the arms that have no field name of their own to pass (the JSON-path
+# lookup). Best effort: the path the user wrote, falling back to the rendered column.
+function _guard_scalar_bytes(v::SQLTypeOper, f_meta)
+  label = if isa(v.column, SQLTypeField) && isa(v.column.field, String)
+    v.column.field
+  else
+    k = memo_key(v.column)
+    k === nothing ? string(v.column) : k[2]
+  end
+  return _guard_scalar_bytes(v, f_meta, label)
+end
+
+# The operator ladder every filter predicate renders through, whatever clause it lands in (#618).
+#
+# It used to be inlined at the tail of `_get_filter_query(::SQLTypeOper, …)` — the WHERE path — while
+# the HAVING/projection-alias branch in `get_filter_query` (`build_query.jl`) hand-rolled its own
+# two-case version: `IN`/`NOT IN` through `_render_membership` (#411) and a bare
+# `"$(field) $(operator) $(placeholder)"` for everything else. So a pattern lookup on an alias
+# printed the LOOKUP NAME as a SQL token — `HAVING MAX("Tb"."name") istartswith $1` — which is a
+# syntax error on both engines, and an operator no renderer knows at all was never refused there.
+#
+# The duplication is the cause, not the symptom: four defects have now landed in those ten lines
+# (#411 the membership render, #576 the formatter choice, #618 this, #595 the memo reuse). One ladder
+# with two call sites is what makes a fifth divergence unrepresentable, and it is why the extraction
+# is the fix rather than a fourth patch. `_render_membership` above is the precedent — it was already
+# shared by both clauses for exactly this reason.
+#
+# `column` is the already-rendered left-hand side (a quoted column, a transform expression, or a
+# projection's aggregate text); `placeholders` is whatever `add_parameter!` returned, which is
+# dialect-dependent by design. Neither is re-rendered here, and this function binds nothing — the
+# caller owns the binding, including the `contains=` / `operator=` wildcard decoration a
+# `LIKE_WILDCARD_OPERATORS` value needs.
+function _render_predicate(column::AbstractString, operator::AbstractString, placeholders,
+                           instruc::SQLInstruction)::String
+  if operator in ["=", ">", "<", ">=", "<=", "<>", "!="]
+    return string(column, " ", operator, " ", placeholders)
+  elseif operator in ["IN", "NOT IN"]
+    return _render_membership(column, operator, placeholders, instruc)
+  elseif operator in PATTERN_LOOKUP_OPERATORS
+    @pormg_debug false
+    # The `ESCAPE` clause an escaped pattern needs comes from these arms and the `%` from the
+    # caller's `contains=`; the two halves are useless apart. The SQLite-refusing arms
+    # (`iunaccent_exact` / `niunaccent_exact`) raise `BackendCapabilityError` from here, so an alias
+    # filter reports the same capability error a WHERE filter does.
+    return getfield(Dialect, Symbol(operator))(instruc.connection, column, placeholders)
+  else
+    throw(FilterError("Invalid filter operator: $(operator) is not a supported operator."))
+  end
+end
+
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   @pormg_debug false
   # #352/#373: rewrite a non-sargable date-bucket comparison (to_char/EXTRACT on the column) into a
@@ -2105,8 +2240,21 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # above has declined it, and it formatted outside any guard, so it reported the write path's
     # `InvalidValueError` on a read. Guarded now, like every sibling.
     _label, _type, _subject = _transform_filter_labels(v.column, v.column.field.formatter)
+    # #596: a transform column is a bare path, so `date__@year => UInt8[1, 2]` reaches here as an
+    # equality. No transform yields bytes, so this is always the refusal.
+    #
+    # This is the ONE of the three transform arms a public spelling reaches: the string forms
+    # (`@year`, `@month`, `@yyyy_mm`, …) always attach a formatter (`functions.jl`), so they land
+    # here. The two arms below need a function node with `formatter === nothing`, which no public
+    # spelling produces — they carry the same guard as a fail-safe, and say so there.
+    _guard_scalar_bytes(v, nothing, _label)
+    # #618: the transform arms reach the `Dialect` dispatch below, so their SQL keyword and `ESCAPE`
+    # clause were always right — but they bound the value with no `contains=` / `operator=`, so a
+    # pattern lookup over a transform column got no `%` and no `escape_like_pattern`. That is the same
+    # bind half as the HAVING/alias branch, so all three arms here take the two kwargs too.
     placeholders = add_parameter!(instruc,
-      _guarded_format(v.column.field.formatter, v.values, v.operator, _label, _type; subject = _subject))
+      _guarded_format(v.column.field.formatter, v.values, v.operator, _label, _type; subject = _subject),
+      contains = v.operator in LIKE_WILDCARD_OPERATORS, operator = v.operator)
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && haskey(PormGTypeField, v.column.field.function_name)
     # Through the same helper as the other sites (#411). These work today only because
     # `PormGTypeField` maps to `format_number_sql` / `format_text_sql` — the two formatters that
@@ -2114,8 +2262,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # about. Leaving them raw would keep that coincidence load-bearing.
     _fmt = getfield(Models, PormGTypeField[v.column.field.function_name])
     _label, _type, _subject = _transform_filter_labels(v.column, _fmt)   # #576
+    _guard_scalar_bytes(v, nothing, _label)   # #596 — fail-safe; no public spelling reaches this arm
     placeholders = add_parameter!(instruc,
-      _guarded_format(_fmt, v.values, v.operator, _label, _type; subject = _subject))
+      _guarded_format(_fmt, v.values, v.operator, _label, _type; subject = _subject),
+      contains = v.operator in LIKE_WILDCARD_OPERATORS, operator = v.operator)   # #618
   elseif isa(v.column, SQLTypeFunction) && haskey(PormGTypeField, v.column.function_name)
     # Function with formatter
     @pormg_debug false
@@ -2125,8 +2275,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # about. Leaving them raw would keep that coincidence load-bearing.
     _fmt = getfield(Models, PormGTypeField[v.column.function_name])
     _label, _type, _subject = _transform_filter_labels(v.column, _fmt)   # #576
+    _guard_scalar_bytes(v, nothing, _label)   # #596 — fail-safe; no public spelling reaches this arm
     placeholders = add_parameter!(instruc,
-      _guarded_format(_fmt, v.values, v.operator, _label, _type; subject = _subject))
+      _guarded_format(_fmt, v.values, v.operator, _label, _type; subject = _subject),
+      contains = v.operator in LIKE_WILDCARD_OPERATORS, operator = v.operator)   # #618
   elseif isa(v.column, SQLTypeFunction)
     # #537 — a function column none of the branches above can bind. `OP(::SQLTypeFunction, …)` is a
     # constructor arm PormG itself relies on — `When(OP(MONTH(x), "<=", N))` builds `Y_Q` / `Y_QUAD`,
@@ -2211,6 +2363,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       # `_apply_like_wildcards`, which picks the shape from the same constants (#604).
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
       _f_meta = instruc.object.model.fields[v.column.field]
+      _guard_scalar_bytes(v, _f_meta, v.column.field)   # #596
       # #576: was a hand-written `try` whose `catch` carried the note below; it is now the shared
       # `_guarded_format`, which also moves `add_parameter!` OUT of the guard. That is what #467
       # said it wanted ("`add_parameter!` stays outside the new `try`") and what the `BETWEEN` arm
@@ -2237,6 +2390,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     elseif (_vc_field = memo_field(instruc, memo_key(v.column))) !== nothing # #474
       @pormg_debug false
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
+      _guard_scalar_bytes(v, _vc_field, memo_key(v.column)[2])   # #596: the joined-path twin
       # #576: unguarded, and CONFIRMED — this is the ordinary joined-path filter, not an exotic
       # one. Any FK traversal lands here, because `"driverid__dob"` is not a key of `model.fields`,
       # so `filter("driverid__dob" => "not-a-date")` reported `InvalidValueError` on what is
@@ -2254,6 +2408,18 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     elseif isa(v.column, SQLTypeField)
       @pormg_debug false
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
+      # #596: this arm resolves no field, so it cannot prove the column holds bytes — and it binds
+      # `v.values` RAW, which would send a payload to `add_parameter!(::AbstractArray)` and expand it
+      # into one marker per byte. Fail closed by passing no field.
+      #
+      # NO TEST REACHES THIS CALL, and that is a statement about the arm, not a gap in coverage:
+      # every spelling we could construct resolves through `model.fields` or the memo first, so the
+      # review's mutation of this line left the whole #596 testset green while mutating either of the
+      # other two call sites failed it loudly. Kept as a fail-safe rather than deleted because the arm
+      # itself is a fallback whose reachability is not pinned by anything — if a future column kind
+      # lands here, the silent expansion is what it would get. Do not "cover" it by reaching in past
+      # the public API; if a real spelling is ever found, that is the test.
+      _guard_scalar_bytes(v, nothing, string(v.column.field))
       placeholders = add_parameter!(instruc, v.values, contains=is_like_op, operator=v.operator)
     else
       @pormg_debug false
@@ -2261,16 +2427,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     end
   end
 
-  if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!="]
-    return string(column, " ", v.operator, " ", placeholders)
-  elseif v.operator in ["IN", "NOT IN"]
-    return _render_membership(column, v.operator, placeholders, instruc)
-  elseif v.operator in PATTERN_LOOKUP_OPERATORS
-    @pormg_debug false
-    return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, placeholders)
-  else
-    throw(FilterError("Invalid filter operator: $(v.operator) is not a supported operator."))
-  end
+  # #618: the ladder lives in `_render_predicate` so the HAVING/alias branch renders through the
+  # same one. Behavior here is unchanged, which is why the existing WHERE coverage is the
+  # regression test for the extraction itself.
+  return _render_predicate(column, v.operator, placeholders, instruc)
 end
 function _get_filter_query(q::SQLTypeQ, instruc::SQLInstruction)
   resp = []

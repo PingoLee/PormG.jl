@@ -500,6 +500,70 @@ end
     end
 
     # ─────────────────────────────────────────────────────────────────────────────
+    # BinaryField scalar equality: `blob => bytes` selects by byte value (#596)
+    # The spelling #411's refusal message prescribed as the workaround for `blob__@in`, which never
+    # actually parsed — `UInt8 <: Number`, so the payload was read as a vector VALUE and refused for
+    # having no operator. Only a live driver can prove the single bound blob reaches the engine as
+    # bytes rather than as an array literal or a Julia-serialized wrapper, and the two backends bind
+    # it differently (SQLite the bytes, PostgreSQL `\x`-prefixed hex text), so this is asserted on
+    # the ROWS: exactly the matching row, never its near-twin, with payloads that differ in their
+    # last byte only and carry a 0x00 no text parameter could have carried.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "Scratch Fields: BinaryField scalar equality filter" begin
+        slugs = ["binary-eq-a-990596", "binary-eq-b-990596"]
+        payload_a = UInt8[0x89, 0x50, 0x00, 0xFF]
+        payload_b = UInt8[0x89, 0x50, 0x00, 0xFE]   # differs from `a` in its last byte only
+
+        try
+            for (slug, payload) in zip(slugs, (payload_a, payload_b))
+                _seed_field_validation_scratch!(
+                    uuid_token=string(uuid4()),
+                    canonical_url="https://example.com/f1/binary-eq/$(slug)",
+                    slug=slug,
+                    payload=Dict("kind" => "binary-eq")
+                )
+                row_query = M.Field_validation_scratch.objects
+                row_query.filter("slug" => slug)
+                row_query.update("blob_payload" => payload)
+            end
+
+            # The whole point: one payload, one row. A byte-for-byte comparison, not a prefix.
+            eq_query = M.Field_validation_scratch.objects
+            eq_query.filter("slug__@in" => slugs)
+            eq_query.filter("blob_payload" => payload_a)
+            eq_query.values("slug", "blob_payload")
+            eq_rows = eq_query.list()
+            @test [r[:slug] for r in eq_rows] == [slugs[1]]
+            @test collect(eq_rows[1][:blob_payload]) == payload_a
+
+            # …and the near-twin is reachable by its own payload, so the match is the bytes and not
+            # an artefact of row order or of the slug filter.
+            twin_query = M.Field_validation_scratch.objects
+            twin_query.filter("slug__@in" => slugs)
+            twin_query.filter("blob_payload" => payload_b)
+            twin_query.values("slug")
+            @test [r[:slug] for r in twin_query.list()] == [slugs[2]]
+
+            # A payload no row carries selects nothing — the filter is not silently a no-op.
+            miss_query = M.Field_validation_scratch.objects
+            miss_query.filter("slug__@in" => slugs)
+            miss_query.filter("blob_payload" => UInt8[0x00])
+            @test miss_query.count() == 0
+
+            # The same comparison through `Q(...)`, which reaches the filter parser with no model in
+            # scope. It works because binary-ness is decided at render, not at parse — a parse-time
+            # field lookup could not have seen the model here at all.
+            q_query = M.Field_validation_scratch.objects
+            q_query.filter("slug__@in" => slugs)
+            q_query.filter(Q("blob_payload" => payload_a))
+            q_query.values("slug")
+            @test [r[:slug] for r in q_query.list()] == [slugs[1]]
+        finally
+            _cleanup_field_validation_scratch_rows!(slugs)
+        end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
     # BinaryField max_length is a BYTE bound, enforced in two independent places
     # The ORM rejects an oversize payload before any SQL is built, and the DDL CHECK
     # (octet_length on PostgreSQL, length on SQLite) is the backstop. The ORM assertions

@@ -1,4 +1,4 @@
-# julia -t auto --project=. test/integration/test_docs_error_types.jl
+# julia -t auto --project=test/integration test/integration/test_docs_error_types.jl
 
 if !isdefined(Main, :PormG)
     include("common_setup.jl")

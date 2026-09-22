@@ -270,12 +270,12 @@ end
 # $env:PORMG_DB="db_sl"; 
 # export PORMG_DB=db_sl
 # Sqlite doesn't work well with -t auto, so we can run it without threads for now
-# julia -t auto --project=. -i test/integration/common_setup.jl
-# julia -t auto --project=. test/integration/test_database_setup.jl
-# julia -t auto --project=. test/integration/test_migration_bootstrap.jl
-# julia -t auto --project=. test/integration/test_many_to_many.jl
-# julia -t auto --project=. test/integration/runtests.jl
-# $env:PORMG_DB="db_sl"; julia -t 1 --project=. test/integration/runtests.jl
+# julia -t auto --project=test/integration -i test/integration/common_setup.jl
+# julia -t auto --project=test/integration test/integration/test_database_setup.jl
+# julia -t auto --project=test/integration test/integration/test_migration_bootstrap.jl
+# julia -t auto --project=test/integration test/integration/test_many_to_many.jl
+# julia -t auto --project=test/integration test/integration/runtests.jl
+# $env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl
 # 2>&1 | Tee-Object -FilePath "test_sf_out.txt"
 #
 # Concurrent sessions queue on the per-database advisory lock above — nothing to set, and the

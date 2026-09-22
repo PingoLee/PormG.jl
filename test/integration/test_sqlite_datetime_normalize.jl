@@ -1,5 +1,5 @@
 # Minimal regression test for SQLite DateTimeField normalization (Option 2).
-# Run with: $env:PORMG_DB="db_sl"; julia -t 1 --project=. test/integration/test_sqlite_datetime_normalize.jl
+# Run with: $env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/test_sqlite_datetime_normalize.jl
 
 include(joinpath(@__DIR__, "common_setup.jl"))
 using Dates, TimeZones, Test

@@ -1,4 +1,4 @@
-# julia -t auto  --project=. test/integration/test_subqueries.jl
+# julia -t auto --project=test/integration test/integration/test_subqueries.jl
 
 if !isdefined(Main, :PormG)
     include("common_setup.jl")

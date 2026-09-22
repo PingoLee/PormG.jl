@@ -235,6 +235,91 @@ end
   end
 
   # ───────────────────────────────────────────────────────────────────────────
+  # #644 — a `DecimalField` reaches JSON as its EXACT decimal digits, still shaped as a NUMBER.
+  #
+  # The issue's premise was wrong and the correction is the reason this testset looks the way it
+  # does. `Decimals.Decimal <: AbstractFloat`, so `JSON` never struct-reflected it — it took the
+  # NUMBER path and rounded through a `Float64`. Measured on the unpatched code:
+  #
+  #   exact 123456789012345.67      ->  1.2345678901234567e14
+  #   exact 1234567890123456789.01  ->  1.2345678901234568e18
+  #   exact 5                       ->  5.0
+  #
+  # So every width up to ~16 significant digits was already correct, and `DecimalField(10, 2)` — the
+  # constructor default — never drifted at all. That is why the interesting cases here are the long
+  # ones: a testset built from `DecimalField(10, 2)` values would have passed before the fix.
+  #
+  # Two things must hold at once and only ONE of them is about the value:
+  #
+  #   1. the digits survive — `Float64` is out of the path at any declared width;
+  #   2. the document stays a JSON NUMBER, unquoted, so PostgreSQL (which hands back a `Decimal`)
+  #      and SQLite (a `Float64`, via NUMERIC affinity) keep emitting one shape for one column.
+  #
+  # Hence the assertions are on the SERIALIZED TEXT rather than on `_json_value`'s return: a test
+  # that checked only the return value passes identically against a plain `string(v)`, which is the
+  # one plausible alternative implementation that silently QUOTES the column and breaks (2). That is
+  # the green-theater shape for this fix, so it is closed deliberately.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "a Decimal serializes as its exact digits, unquoted (#644)" begin
+    # Reached through PormG, never `using Decimals`/`using JSON`: both are `[deps]` of PormG but
+    # neither is in `[targets].test`, so a direct import fails under `Pkg.test()`. Same reason
+    # `test/unit/test_json_serialization.jl` spells `PormG.QueryBuilder.JSON`.
+    D = PormG.QueryBuilder.Decimals
+    J = PormG.QueryBuilder.JSON
+    # `_json_row`, not `_json_value` — that is the shared shape BOTH emitters go through
+    # (`list(:json)` and the `PormGRow` lower hook), so this covers them together.
+    emit(v) = J.json(PormG.QueryBuilder._json_row(Dict{Symbol, Any}(:v => v)))
+
+    # (1) The digits. Every spelling below is byte-identical on Decimals 0.4.1 and 0.5.0 — measured,
+    # because the declared range is `"0.4, 0.5"` and the two majors DO disagree elsewhere (0.4.1
+    # prints `Decimal(0, 1, -20)` positionally, 0.5.0 prints `1E-20`). That extreme is deliberately
+    # not asserted as text here; the pattern block below covers both of its spellings instead.
+    @test emit(D.Decimal(0, 9999, -2))                  == "{\"v\":99.99}"
+    @test emit(D.Decimal(1, 123456, -2))                == "{\"v\":-1234.56}"
+    @test emit(D.Decimal(0, 1, -6))                     == "{\"v\":0.000001}"
+    @test emit(D.Decimal(0, 12345678901234567, -2))     == "{\"v\":123456789012345.67}"   # was 1.2345678901234567e14
+    @test emit(D.Decimal(0, 123456789012345678901, -2)) == "{\"v\":1234567890123456789.01}" # was 1.2345678901234568e18
+
+    # (2) A NUMBER, not a string — and the document is valid, which is the other half of the risk a
+    # raw splice carries. `J.parse` answers both at once: it throws on a malformed document, and the
+    # type of what comes back is what distinguishes `99.99` from `"99.99"`.
+    for d in (D.Decimal(0, 9999, -2), D.Decimal(0, 5, 0), D.Decimal(1, 123456, -2))
+      @test J.parse(emit(d))["v"] isa Number
+    end
+    # An integral decimal is `5` — neither `5.0` (the old float round-trip) nor `"5"` (a string fix).
+    @test emit(D.Decimal(0, 5, 0)) == "{\"v\":5}"
+    @test emit(D.Decimal(0, 0, 0)) == "{\"v\":0}"
+
+    # The guard on the splice, asserted against the PATTERN directly. `JSONText` performs no
+    # escaping, so text that is not a JSON number would emit an INVALID DOCUMENT — strictly worse
+    # than the lossy value the fix replaces. A real `Decimal` cannot reach the reject branch on
+    # either declared major, which is exactly why the branch needs its own test rather than a value
+    # that happens to trip it.
+    re = PormG.QueryBuilder._JSON_NUMBER_RE
+    for ok in ("0", "-0", "5", "99.99", "-1234.56", "0.000001",
+               "0.00000000000000000001",          # Decimals 0.4.1 spelling of Decimal(0, 1, -20)
+               "1E-20", "1e+20", "-2.5e-3")       # Decimals 0.5.0 spelling, and the sign variants
+      @test occursin(re, ok)
+    end
+    # Each of these is a document-corrupting splice if it ever passed. `01`, `1.` and `.5` are the
+    # subtle ones: all three are things a reader assumes JSON accepts, and the spec does not.
+    for bad in ("", " ", "abc", "01", "1.", ".5", "1e", "1E", "NaN", "Inf", "-Inf",
+                "1,5", "0x1f", " 1", "1 ", "99.99\"", "1]")
+      @test !occursin(re, bad)
+    end
+
+    # The `AbstractFloat` trap, and the reason the signature names `Decimals.Decimal` exactly.
+    # `Decimal <: AbstractFloat` is TRUE, so an arm written `::AbstractFloat` would capture every
+    # `FloatField` value in the result set and reshape it as well. These fail if it is ever widened.
+    jv = PormG.QueryBuilder._json_value
+    @test jv(99.99) === 99.99
+    @test jv(Float32(1.5)) === Float32(1.5)
+    @test jv(42) === 42
+    @test jv(true) === true
+    @test emit(99.99) == "{\"v\":99.99}"
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
   # THE RECORDER. A parser only runs if the build recorded a kind for that output name, so the map is
   # half the fix and the half a value-level test cannot reach. Asserted white-box on a mock
   # connection, because the failures below are invisible on any single-column result.

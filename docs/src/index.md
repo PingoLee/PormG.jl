@@ -275,7 +275,7 @@ PormG is designed to be fully wire-format compatible with tables managed by Djan
 
 *   **TIMESTAMPTZ Contract**: Naive `DateTime` values are treated as UTC, while timezone-aware `ZonedDateTime` values preserve the exact UTC instant across backends. (SQLite stores ISO 8601 strings and normalizes on read).
 *   **DateField Truncation**: Temporal inputs like `DateTime` or `ZonedDateTime` are automatically truncated to their calendar date portion when saved into a `DateField`, matching Django's silent truncation behavior instead of throwing errors.
-*   **DecimalField Precision**: Underpinned by `NUMERIC` types, `DecimalField(max_digits, decimal_places)` prevents float drift in round-trips (e.g. `99.99` is retrieved precisely as `99.99` in `Decimals.Decimal` format).
+*   **DecimalField Precision**: Underpinned by `NUMERIC` types, `DecimalField(max_digits, decimal_places)` prevents float drift in round-trips (e.g. `99.99` is retrieved precisely as `99.99` in `Decimals.Decimal` format). `.list(:json)` carries the same exactness out: the column serializes as a JSON number holding its exact digits, never routed through a `Float64`.
 *   **Auto Temporal Fields**: 
     *   `auto_now_add=true`: Automatically populated with the transaction's timezone-aware timestamp upon `INSERT`, then frozen during subsequent updates.
     *   `auto_now=true`: Automatically populated upon `INSERT` and refreshed with the system timestamp on every `UPDATE`.

@@ -88,6 +88,58 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# DecimalField: list(:json) emits the exact digits, as a NUMBER, on both engines (#644)
+# `Decimals.Decimal <: AbstractFloat`, so JSON.jl never struct-reflected it — it routed the value
+# through a `Float64`, which loses digits past ~16 significant figures and reshapes everything else
+# (an integral `14` became `14.0`, and `0.000001` became `1.0e-6`). `_json_value` now hands JSON the
+# digits `sDecimalField`'s own formatter writes, spliced as a raw JSON number.
+#
+# What only a LIVE run can say, and the reason this testset exists next to the unit one: that the
+# value the DRIVER delivers reaches that arm. The engines do not agree on the Julia type at all —
+# PostgreSQL/LibPQ hands back a `Decimals.Decimal` for every value, while SQLite's NUMERIC affinity
+# hands back an `Int64` for an integral one and a `Float64` for a fractional one — so three distinct
+# types reach `_json_value` for one declared column, and the JSON has to come out the same anyway.
+# That equivalence is the assertion; it is also what the `JSONText` shape was chosen for, since a
+# string arm would have made PostgreSQL emit `"14"` where SQLite emitted `14`.
+#
+# The fixture cannot show the DRIFT half: `Constructor_results.points` is `DecimalField(10, 2)`, and
+# every width up to ~16 digits was already correct. `test/unit/test_read_value_coercion.jl` owns that
+# dimension, with the long values the unpatched code got wrong.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a DecimalField serializes as an exact JSON number (#644)" begin
+    q = M.Constructor_results.objects
+    q.filter("points__@gte" => 1)
+    q.values("constructorresultsid", "points")
+    q.order_by("constructorresultsid")
+    q.limit(5)
+
+    rows = q.list()
+    @test length(rows) == 5
+
+    # The engine-specific half, asserted rather than assumed — if a driver ever starts handing back
+    # something else, the JSON assertions below would still pass while testing nothing about Decimal.
+    if PORMG_DB_FOLDER == "db_2"
+        @test all(r -> r[:points] isa PormG.QueryBuilder.Decimals.Decimal, rows)
+    end
+
+    parsed = JSON.parse(q.list(:json))
+
+    # A NUMBER, never a string. This is the cross-engine contract the shape decision bought.
+    @test all(row -> row["points"] isa Number, parsed)
+
+    # And an integral DecimalField is `14`, not `14.0`. The fixture's points are whole numbers, which
+    # makes this the one assertion here that fails on unpatched PostgreSQL — the `Float64` round-trip
+    # rendered every one of them with a trailing `.0`.
+    @test !occursin(".0", q.list(:json))
+    @test [row["points"] for row in parsed] == [14, 8, 9, 5, 2]
+
+    # The #641 cross-emitter agreement has to survive a raw-spliced column too: `JSONText` bypasses
+    # the writer's escaping, so if it ever rendered differently in the two code paths the documented
+    # `JSON.json(query.list()) == query.list(:json)` contract would break here first.
+    @test JSON.json(rows) == q.list(:json)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PormGRow: single-row fetch helpers and DataFrames compatibility
 # Verifies first()/get() row returns, typed get() failures, and the Tables.jl
 # row-table interface used by DataFrame(query.list()).

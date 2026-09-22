@@ -2350,6 +2350,55 @@ function _json_value(v::Union{Dates.Period, Dates.CompoundPeriod})
   end
 end
 
+# #644 — a `DecimalField` serializes as its EXACT decimal digits, emitted as a JSON number.
+#
+# The issue reported `{"s":0,"c":12345,"q":-2}` from struct reflection. That is NOT what happens, and
+# the truth is worse in one direction and much narrower in another. `Decimals.Decimal <: AbstractFloat`,
+# so `JSON` takes its number path and routes the value through a `Float64`:
+#
+#   exact 12345678901234567.89  ->  1.2345678901234568e16   (the last digits are wrong)
+#   exact 5                     ->  5.0
+#
+# So a `DecimalField(10, 2)` — the constructor default, and every width up to ~16 significant digits —
+# is CORRECT today; the defect appears only past what a `Float64` holds. That is exactly the drift
+# `DecimalField` exists to prevent (`docs/src/index.md` promises it), so it is still silent wrong
+# data — just not by the mechanism, nor at the width, the issue describes.
+#
+# At the declared `[compat] JSON = "1"` FLOOR it is not lossy but fatal: measured, JSON 1.0.0 raises
+# `MethodError: no method matching +(::Nothing, ::Int64)` on any `Decimal`, so `list(:json)` over a
+# PostgreSQL `DecimalField` cannot run at all there; 1.1.0 onward emits the lossy number. CI's
+# `floor-resolve` job resolves that floor, and this arm is what makes it honest — after it the value
+# never reaches `JSON` as a `Decimal` at any version in the range.
+#
+# `JSON.JSONText`, not a string: it splices the digits UNQUOTED, so the column stays a JSON number
+# and the two engines keep agreeing (SQLite's NUMERIC affinity hands back a `Float64`, which already
+# serialized as a number — a string here would make them disagree). Django's `DjangoJSONEncoder` and
+# DRF's `COERCE_DECIMAL_TO_STRING` both choose a string, which is exact end-to-end but obliges every
+# consumer to parse; the maintainer chose the number on that trade (#644).
+#
+# GUARDED, because `JSONText` is a raw splice with no escaping: text that is not a JSON number would
+# produce an INVALID DOCUMENT, strictly worse than the lossy value this fixes. The guard is not
+# hypothetical across the declared `Decimals = "0.4, 0.5"` range — measured, 0.4.1 prints
+# `Decimal(0, 1, -20)` as `0.00000000000000000001` while 0.5.0 prints `1E-20`. Both are valid JSON
+# numbers and both must pass, which is why the pattern is the JSON spec's own number production and
+# not "whatever Decimals printed when this was written". `Project.toml` cannot carry that note —
+# CompatHelper strips comments — so it lives here.
+#
+# FAIL-OPEN like the arm above: anything the guard rejects, and any throw, hands back the untouched
+# value, which serializes exactly as it did before.
+const _JSON_NUMBER_RE = r"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?$"
+
+function _json_value(v::Decimals.Decimal)
+  try
+    txt = Models.format_number_sql(v)
+    txt isa AbstractString || return v
+    return occursin(_JSON_NUMBER_RE, txt) ? JSON.JSONText(txt) : v
+  catch e
+    (e isa InterruptException || e isa StackOverflowError) && rethrow()
+    return v
+  end
+end
+
 # The ONE row -> JSON shape, and the only place it is written. Two emitters call it: `list(:json)`
 # below, on a raw `_list_raw` dict, and the `lower` hook further down, on a `PormGRow`'s `_data`.
 #

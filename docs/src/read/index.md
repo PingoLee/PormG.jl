@@ -109,6 +109,33 @@ JSON.json((count = query.count(), drivers = query.list()))
 Durations go through the same formatter either way, so a `DurationField` reads as `"00:01:49.088"`
 rather than as a struct dump, on both engines.
 
+A `DecimalField` goes through the same formatter too, and comes out as a JSON **number** carrying its
+exact digits — not as a string, and not routed through a `Float64`:
+
+```julia
+query = M.Constructor_results.objects
+query.values("points")
+query.order_by("constructorresultsid")
+query.limit(5)
+
+query.list(:json)
+# => [{"points":14},{"points":8},{"points":9},{"points":5},{"points":2}]
+```
+
+A whole value reads as `14`, not `14.0`, and a fractional one keeps its scale — `{"points":0.5}`.
+
+Exact means exact at any declared width: a `DecimalField(24, 2)` holding `12345678901234567.89`
+serializes with all nineteen digits, where a `Float64` would have rendered
+`1.2345678901234568e16`. The two engines agree on the JSON even though they disagree on the Julia
+type `.list()` hands you — PostgreSQL returns a `Decimals.Decimal`, while SQLite's `NUMERIC` affinity
+returns an `Int64` for a whole value and a `Float64` for a fractional one.
+
+!!! note "Reading it back"
+    The digits are exact in the JSON *document*. Whether they survive the consumer is the consumer's
+    parser: JavaScript's `JSON.parse` converts every number to a double, so a value wider than about
+    sixteen significant digits is rounded on arrival. Nothing PormG emits can prevent that — reach
+    for a big-decimal JSON parser on that side if the width matters.
+
 !!! warning "No lazy FK traversal — project related columns up front"
     PormG never lazily loads a related row. Accessing a `ForeignKey` or `OneToOneField`
     you did not project (`row.driverid`, or traversing further with

@@ -88,6 +88,136 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# DecimalField: list(:json) emits the exact digits, as a NUMBER, on both engines (#644)
+# `Decimals.Decimal <: AbstractFloat`, so JSON.jl never struct-reflected it — it routed the value
+# through a `Float64`, which loses digits past ~16 significant figures and reshapes everything else
+# (an integral `14` became `14.0`, and `0.000001` became `1.0e-6`). `_json_value` now hands JSON the
+# digits `sDecimalField`'s own formatter writes, spliced as a raw JSON number.
+#
+# What only a LIVE run can say, and the reason this testset exists next to the unit one: that the
+# value the DRIVER delivers reaches that arm. The engines do not agree on the Julia type at all —
+# PostgreSQL/LibPQ hands back a `Decimals.Decimal` for every value, while SQLite's NUMERIC affinity
+# hands back an `Int64` for an integral one and a `Float64` for a fractional one — so three distinct
+# types reach `_json_value` for one declared column, and the JSON has to come out the same anyway.
+# That equivalence is the assertion; it is also what the `JSONText` shape was chosen for, since a
+# string arm would have made PostgreSQL emit `"14"` where SQLite emitted `14`.
+#
+# The fixture cannot show the DRIFT half: `Constructor_results.points` is `DecimalField(10, 2)`, and
+# every width up to ~16 digits was already correct. `test/unit/test_read_value_coercion.jl` owns that
+# dimension, with the long values the unpatched code got wrong.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a DecimalField serializes as an exact JSON number (#644)" begin
+    q = M.Constructor_results.objects
+    q.filter("points__@gte" => 1)
+    q.values("constructorresultsid", "points")
+    q.order_by("constructorresultsid")
+    q.limit(5)
+
+    rows = q.list()
+    @test length(rows) == 5
+
+    # The engine-specific half, asserted rather than assumed — if a driver ever starts handing back
+    # something else, the JSON assertions below would still pass while testing nothing about Decimal.
+    if PORMG_DB_FOLDER == "db_2"
+        @test all(r -> r[:points] isa PormG.QueryBuilder.Decimals.Decimal, rows)
+    end
+
+    parsed = JSON.parse(q.list(:json))
+
+    # A NUMBER, never a string. This is the cross-engine contract the shape decision bought.
+    @test all(row -> row["points"] isa Number, parsed)
+
+    # An integral DecimalField must arrive as `14`, not `14.0`, and `isa Integer` is what says so.
+    # Three weaker spellings were tried first and ALL of them pass against unpatched PostgreSQL:
+    # `isa Number` (a `Float64` is one), `== [14, 8, 9, 5, 2]` (because `14.0 == 14` is `true` in
+    # Julia), and `JSON.json(rows) == q.list(:json)` (both emitters shared the defect). This is the
+    # assertion that actually discriminates, and it is not fixture-coupled the way a
+    # `!occursin(".0", …)` check would be — a future row holding `10.05` contains that substring.
+    @test all(row -> row["points"] isa Integer, parsed)
+    @test [row["points"] for row in parsed] == [14, 8, 9, 5, 2]
+
+    # The #641 cross-emitter agreement has to survive a raw-spliced column too: `JSONText` bypasses
+    # the writer's escaping, so if it ever rendered differently in the two code paths the documented
+    # `JSON.json(query.list()) == query.list(:json)` contract would break here first.
+    @test JSON.json(rows) == q.list(:json)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The model graph lowers to a marker, at real schema scale (#643)
+# #641/#642 bounded `PormGRow`. Everything else on the graph still expanded: `JSON.json` reflects over
+# any struct it has no method for, and the graph is a dense cyclic DAG, so every distinct PATH through
+# it was serialized again. Measured on THIS fixture before `src/json_lower.jl`:
+#
+#     JSON.json(M.Driver)                      2,175,304 chars   3.6 s
+#     JSON.json(M.Result.fields["driverid"])   2,158,654 chars          (one sForeignKey)
+#     JSON.json(a ReverseRelation)             3,087,881 chars          (the worst node)
+#     JSON.json(build(query))                  2,177,351 chars
+#
+# `test/unit/test_json_serialization.jl` owns the shape — exact marker documents, the leaf invariant,
+# the coverage sweep — against a 3-model fixture where the same reverts are 5–10 KB. Two things only a
+# live run can say are here instead:
+#
+#   1. the SCALE. A 3-model fixture cannot distinguish "bounded" from "small graph"; 2.1 MB -> 26
+#      chars can only be shown where the graph is actually dense.
+#   2. the CREDENTIAL half. An `InstructionObject` carries a live `connection`, so reflection walked
+#      into the pool and out through `connection_string` — which holds the libpq DSN, password
+#      included. `Configuration.redact_secret` exists because that string is a secret and is applied
+#      at every logging site; struct reflection was the same egress with none of it. The unit file
+#      asserts this against an INERT mock, which by construction has no DSN to leak. Only here is
+#      there a real one.
+#
+# Guarded on method presence for the reason the unit file is: unpatched, these calls are multi-second
+# multi-megabyte allocation storms, and a Julia task cannot be killed.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the model graph lowers to a marker, not the schema (#643)" begin
+    _su = PormG.QueryBuilder.JSON.StructUtils
+    # `methods(...)`, not `which(...)` — see the #641 testset above. `PormG`, not `PormG.QueryBuilder`:
+    # `src/json_lower.jl` is a plain include, so its methods report the package module.
+    has_graph_lower = all((PormG.Models.Model_Type, PormG.PormGField,
+                           PormG.Models.ReverseRelation,
+                           PormG.QueryBuilder.InstructionObject)) do T
+        any(m -> m.module === PormG, methods(_su.lower, Tuple{Any, T}))
+    end
+    @test has_graph_lower
+
+    if has_graph_lower
+        # 2,175,304 -> 26. A ceiling of 200 is four orders of magnitude clear of the revert.
+        @test length(JSON.json(M.Driver)) < 200
+        @test JSON.json(M.Driver) == "{\"pormg_model\":\"driver\"}"
+
+        # One relational field reached 2,158,654 on its own — the abstract `PormGField` method is what
+        # bounds every field struct, so the FK and a plain column are both asserted.
+        @test length(JSON.json(M.Result.fields["driverid"])) < 200
+        @test length(JSON.json(M.Driver.fields["surname"])) < 200
+
+        # The worst node in the graph, and the whole fields collection of a real model.
+        @test length(JSON.json(first(values(M.Driver.related_objects)))) < 200
+        @test length(JSON.json(M.Driver.fields)) < 2_000
+
+        # A handle, and the query inside it.
+        @test length(JSON.json(M.Driver.objects)) < 200
+        @test length(JSON.json(M.Driver.objects.object)) < 200
+
+        # The credential contract, on a REAL connection. `build` is what attaches the live pool, so
+        # this is the object a debugging `JSON.json` would actually be handed.
+        instruction = PormG.QueryBuilder.build(
+            M.Driver.objects.filter("nationality" => "Brazilian").values("surname").object)
+        doc = JSON.json(instruction)
+
+        @test length(doc) < 200
+        # Asserted per token so a failure names WHICH one escaped. Never assert on the DSN's value —
+        # a failure message is CI output, and the point is that the secret does not travel.
+        for token in ("password", "connection_string", "dbname", "host=", "user=", "pool_size")
+            @test !occursin(token, doc)
+        end
+
+        # And the row path is untouched — #641's fix still serializes data, not markers.
+        row_json = JSON.json(M.Driver.objects.filter("driverref" => "hamilton").values("surname").list())
+        @test row_json == "[{\"surname\":\"Hamilton\"}]"
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PormGRow: single-row fetch helpers and DataFrames compatibility
 # Verifies first()/get() row returns, typed get() failures, and the Tables.jl
 # row-table interface used by DataFrame(query.list()).

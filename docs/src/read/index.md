@@ -109,6 +109,68 @@ JSON.json((count = query.count(), drivers = query.list()))
 Durations go through the same formatter either way, so a `DurationField` reads as `"00:01:49.088"`
 rather than as a struct dump, on both engines.
 
+A `DecimalField` goes through the same formatter too, and comes out as a JSON **number** carrying the
+digits the value actually has — not as a string, and not re-rounded through a `Float64` on the way out:
+
+```julia
+query = M.Constructor_results.objects
+query.values("points")
+query.order_by("constructorresultsid")
+query.limit(5)
+
+query.list(:json)
+# => [{"points":14},{"points":8},{"points":9},{"points":5},{"points":2}]
+```
+
+A whole value reads as `14`, not `14.0`, and a fractional one keeps its scale — `{"points":0.5}`.
+
+**On PostgreSQL that is exact at any declared width.** A
+`DecimalField(max_digits = 24, decimal_places = 2)` holding `12345678901234567.89` serializes with all
+nineteen digits, where routing it through a `Float64` would have rendered `1.2345678901234568e16`.
+LibPQ delivers a `NUMERIC` as a `Decimals.Decimal`, so nothing on the path narrows it.
+
+**On SQLite it is not, and the loss happens on the way IN.** SQLite has no exact decimal type. A column
+PormG declares as `DECIMAL(p, s)` gets SQLite's `NUMERIC` affinity, which converts the value as it is
+stored — preferring an integer conversion, and silently dropping what will not fit:
+
+```
+declared DECIMAL(24, 2), inserted   SQLite stores   read back
+  14                                integer         14                      (Int64)
+  0.5                               real            0.5                     (Float64)
+  1.000000000000000000001           integer         1                       (Int64)
+  123456789012345.67                real            1.2345678901234567e14   (Float64)
+  12345678901234567.89              integer         12345678901234568       (Int64)
+```
+
+Note the third row: the fractional part is not rounded, it is discarded, and the value becomes a plain
+`1`. Nothing on the read path can recover any of this, and `.list(:json)` faithfully reports what is
+actually stored. A `DecimalField` on SQLite is a precise column only within what an `Int64` or a
+`Float64` represents — roughly fifteen significant digits for a fractional value, wider for a whole
+one. Use PostgreSQL where the precision is the point.
+
+!!! note "The two engines emit the same JSON *type*, not always the same text"
+    Both emit a number, never a string. The **text** agrees while the value SQLite stored prints the
+    digits the decimal has: every whole value, and fractional values below about a million. Past that,
+    Julia renders a `Float64` in exponent form, so the same column reads:
+
+    ```
+    stored 1234567.89    PostgreSQL {"amount":1234567.89}    SQLite {"amount":1.23456789e6}
+    ```
+
+    Both parse to the same number, so a consumer that parses is unaffected; a consumer comparing
+    response text is not. This is the deliberate side of the trade — PostgreSQL delivers an exact
+    `Decimal` and PormG emits its digits rather than re-rounding them to match SQLite's rendering.
+
+This applies to a **column's own value**. A decimal nested inside a container — a PostgreSQL
+`numeric[]`, which LibPQ delivers as a `Vector{Decimal}` — is not reached, and still serializes through
+a `Float64`. That is the same limit the duration formatter above has, and it is unchanged by this.
+
+!!! note "Reading it back"
+    The digits are exact in the JSON *document*. Whether they survive the consumer is the consumer's
+    parser: JavaScript's `JSON.parse` converts every number to a double, so a value wider than about
+    sixteen significant digits is rounded on arrival. Nothing PormG emits can prevent that — reach
+    for a big-decimal JSON parser on that side if the width matters.
+
 !!! warning "No lazy FK traversal — project related columns up front"
     PormG never lazily loads a related row. Accessing a `ForeignKey` or `OneToOneField`
     you did not project (`row.driverid`, or traversing further with
@@ -130,6 +192,28 @@ rather than as a struct dump, on both engines.
     ```
 
 ---
+
+### Serializing a model, a query or a field
+
+Rows are the thing worth serializing; a *model* is not. Handing one to `JSON.json` gives you a short
+marker naming it, never its schema:
+
+```julia
+JSON.json(M.Driver)                      # => {"pormg_model":"driver"}
+JSON.json(M.Driver.fields["surname"])    # => {"pormg_field":"CharField"}
+JSON.json(M.Driver.objects)              # => {"pormg_query":"driver"}
+```
+
+That is a deliberate floor, not an export format. The model graph is cyclic and densely
+cross-referenced, so serializing it by reflection re-walks every path through it — on the F1
+schema these docs use, one model produced 2,175,304 characters, and a real application schema
+exhausted memory. The marker makes that unrepresentable: nothing PormG hands a serializer can contain
+another PormG value.
+
+Nothing you would want in a response is affected, because a model never belonged in one. If you need
+schema information as data, read it off the model directly rather than serializing the model:
+`M.Driver.field_names` for the columns, or `keys(M.Driver.fields)` for every declared field —
+`field_names` covers only fields that own a real column, so it omits a `ManyToManyField`.
 
 ## Query Styles
 

@@ -2350,6 +2350,98 @@ function _json_value(v::Union{Dates.Period, Dates.CompoundPeriod})
   end
 end
 
+# #644 — a `DecimalField` serializes as its EXACT decimal digits, emitted as a JSON number.
+#
+# The issue reported `{"s":0,"c":12345,"q":-2}` from struct reflection. That is NOT what happens, and
+# the truth is worse in one direction and much narrower in another. `Decimals.Decimal <: AbstractFloat`,
+# so `JSON` takes its number path and routes the value through a `Float64`:
+#
+#   exact 12345678901234567.89  ->  1.2345678901234568e16   (the last digits are wrong)
+#   exact 5                     ->  5.0
+#
+# So a `DecimalField(10, 2)` — the constructor default, and every width up to ~16 significant digits —
+# is CORRECT today; the defect appears only past what a `Float64` holds. That is exactly the drift
+# `DecimalField` exists to prevent (`docs/src/index.md` promises it), so it is still silent wrong
+# data — just not by the mechanism, nor at the width, the issue describes.
+#
+# At the declared `[compat] JSON = "1"` FLOOR it is not lossy but fatal: measured, JSON 1.0.0 raises
+# `MethodError: no method matching +(::Nothing, ::Int64)` on any `Decimal`, so `list(:json)` over a
+# PostgreSQL `DecimalField` cannot run at all there; 1.1.0 onward emits the lossy number. CI's
+# `floor-resolve` job resolves that floor, and this arm is what makes it honest: every path a real
+# value can take now hands `JSON` a `JSONText` or a `String`, both of which render at 1.0.0. Only the
+# degenerate paths below — the formatter returning a non-string, or throwing — still pass the `Decimal`
+# through, and neither is reachable from a driver. That distinction is not academic: the first version
+# of this arm returned the `Decimal` on the rejected-text path too, and `floor-resolve` went red.
+#
+# `JSON.JSONText`, not a string: it splices the digits UNQUOTED, so the column stays a JSON NUMBER on
+# both engines — SQLite's NUMERIC affinity hands back an `Int64`/`Float64`, which already serialized as
+# a number, and a string here would have changed the column's JSON TYPE on PostgreSQL only. Django's
+# `DjangoJSONEncoder` and DRF's `COERCE_DECIMAL_TO_STRING` both choose a string, which is exact
+# end-to-end but obliges every consumer to parse; the maintainer chose the number on that trade (#644).
+#
+# Be precise about what that buys, because the first version of this comment over-claimed it: the two
+# engines agree on the JSON *type*, not on the TEXT. Julia prints a `Float64` at or above 1e6 in
+# exponent form, so from a million up SQLite emits `1.23456789e6` where PostgreSQL now emits
+# `1234567.89` — measured, and an ordinary money amount, not an edge case. Unpatched they agreed there,
+# on SQLite's lossy rendering; this arm deliberately prefers PostgreSQL's exact text over that
+# agreement, since a `Decimal` that reached us intact should not be re-rounded on the way out.
+# `docs/src/read/index.md` states the boundary user-facing.
+#
+# GUARDED, because `JSONText` is a raw splice with no escaping: text that is not a JSON number would
+# produce an INVALID DOCUMENT, strictly worse than the lossy value this fixes.
+#
+# The guard is not hypothetical across the declared `Decimals = "0.4, 0.5"` range, because the two
+# majors do not print the same text. 0.4.1 renders positionally via `Base.print`; 0.5.x renders via
+# `Base.string` -> `scientific_notation`, which uses exponent form whenever the exponent is positive.
+# Measured: 0.4.1 prints `Decimal(0, 1, -20)` as `0.00000000000000000001` where 0.5.0 prints `1E-20`.
+# Both are valid JSON numbers, which is the point — the pattern is the JSON spec's own number
+# production rather than "whatever Decimals printed when this was written".
+#
+# The SHAPE is therefore version-dependent even though the VALUE is not, and the difference is not
+# confined to extremes: `parse` normalises, so PostgreSQL's `"10.00"` from a `NUMERIC(10,2)` arrives as
+# `Decimal(0, 1, 1)` — exponent 1 — which 0.4.1 prints `10` and 0.5.x would print `1E+1`. Numerically
+# equal, valid JSON either way, and unreachable today because every LibPQ release pins `Decimals 0.4`
+# (see `test/unit/test_compat_guards.jl`) and SQLite never yields a `Decimal` at all. Worth knowing
+# before anyone widens that pin: the engines would still agree with each other, but the emitted text
+# would change. `Project.toml` cannot carry this note — CompatHelper strips comments — so it is here.
+#
+# FAIL-OPEN like the arm above: anything the guard rejects, and any throw, hands back the untouched
+# value, which serializes exactly as it did before.
+# `\A` and `\z`, NOT `^` and `$`. PCRE's `$` matches before a trailing newline, so the `^…$` spelling
+# accepts `"1\n"` — verified. That particular string splices to `{"v":1\n}`, which is still valid JSON
+# (a newline is whitespace there), and `Decimals` cannot produce it anyway, so this is not a live
+# hole. It is tightened regardless: this guard's entire job is to answer "is this PROVABLY valid JSON
+# number text", and a pattern that accepts a string it was not meant to accept cannot answer that.
+# `[0-9]` rather than `\d`, and this one is LOAD-BEARING rather than stylistic — do not "simplify" it.
+# Julia compiles regexes with PCRE's UCP flag, so `\d` is UNICODE-aware here: measured,
+# `occursin(r"\A\d+\z", "١٢٣")` is `true`. With `\d` the pattern would accept `"1٢"` — the ASCII `[1-9]`
+# satisfies the lead and `\d*` swallows the Arabic-Indic digit — and splice it raw as a JSON number,
+# which is exactly the invalid document this guard exists to prevent. `[0-9]` rejects it.
+const _JSON_NUMBER_RE = r"\A-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?\z"
+
+# The rejected-text fallback is the decimal's TEXT, not the `Decimal` — and CI's `floor-resolve` job is
+# what established that it has to be. Handing the value back unchanged looks like the obvious fail-open
+# and is the opposite of one at the declared floor: JSON 1.0.0 raises
+# `MethodError: no method matching +(::Nothing, ::Int64)` on any `Decimal`, so the "safe" path was a
+# HARD ERROR there — precisely the regression the #564 arm above refuses to introduce. The text is
+# exact, always renders, and renders at every version in the range; it is a JSON string rather than a
+# number only for a value whose text is not a JSON number in the first place, so there is no consistency
+# being given up. Unreachable from a driver either way (`parse` normalises), which is why only a
+# constructed value and a CI job resolving the floor could find it.
+#
+# The two remaining `return v` paths — no text at all, because the formatter returned a non-string or
+# threw — keep the pre-#644 behavior, since there is nothing better to hand over than what shipped.
+function _json_value(v::Decimals.Decimal)
+  try
+    txt = Models.format_number_sql(v)
+    txt isa AbstractString || return v
+    return occursin(_JSON_NUMBER_RE, txt) ? JSON.JSONText(txt) : String(txt)
+  catch e
+    (e isa InterruptException || e isa StackOverflowError) && rethrow()
+    return v
+  end
+end
+
 # The ONE row -> JSON shape, and the only place it is written. Two emitters call it: `list(:json)`
 # below, on a raw `_list_raw` dict, and the `lower` hook further down, on a `PormGRow`'s `_data`.
 #

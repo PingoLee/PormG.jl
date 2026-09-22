@@ -28,7 +28,7 @@ macro pormg_debug(ex)
 end
 export @pormg_debug
 
-import DataFrames, OrderedCollections, Dates, Logging, YAML
+import DataFrames, OrderedCollections, Dates, Logging, YAML, JSON
 
 # NOTE: LibPQ and SQLite are weak dependencies (Project.toml `[weakdeps]`). Core never
 # names a concrete driver type; all driver work goes through the backend generics in
@@ -245,6 +245,12 @@ include("tools.jl")
 # every layer above and are depended on by nothing. They must land AFTER `QueryBuilder`, since the
 # types they dispatch on are defined there (#534).
 include("display.jl")
+
+# Layer 4 as well, and it must land after `display.jl`: it reuses that file's `_d_field_type_name`
+# for the one thing the two serializers legitimately share, a field struct's constructor name. Same
+# ordering constraint as `display.jl` otherwise — the query types it dispatches on come from
+# `QueryBuilder` (#643).
+include("json_lower.jl")
 
 include("precompile.jl")
 

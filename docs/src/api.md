@@ -59,7 +59,7 @@ These methods finalize the query and execute it against the database:
 | :--- | :--- | :--- |
 | `.list()` | `Vector{PormGRow}` | Returns model-aware rows with dot-access and relationship accessors. |
 | `.list(:dict)` | `Vector{Dict{Symbol, Any}}` | Returns plain dictionaries for framework integrations that need real `Dict` values. |
-| `.list(:json)` | `String` | Returns results as a JSON string. `JSON.json` on the rows from `.list()` produces the same string — see [Serializing rows to JSON](read/index.md#Serializing-rows-to-JSON). |
+| `.list(:json)` | `String` | Returns results as a JSON string. `JSON.json` on the rows from `.list()` produces the same string. A `DurationField` reads as `"00:01:49.088"` and a `DecimalField` as a JSON number carrying its exact digits — see [Serializing rows to JSON](read/index.md#Serializing-rows-to-JSON). |
 | `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` for tabular output. Temporal columns are typed (`Date`, `Time`, `ZonedDateTime`, `CompoundPeriod`) on both engines, as in `.list()`. |
 | `.count()` | `Int` | Runs `SELECT COUNT(*)` and returns the count. |
 | `.aggregate(alias => Agg(...), ...)` | `NamedTuple` | Whole-queryset aggregation (no `GROUP BY`); returns one named tuple of scalars. See [Aggregation](read/filters_and_aggregates.md). |

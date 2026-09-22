@@ -465,34 +465,23 @@ const DOCERR_CASES = [
         FilterError,
         () -> DOCERR_RACE_PG.objects.filter("date__@quarter" => "abc").list(show_query = :dict),
     ),
-    # #618 — the *Which Lookups Work on an Aggregate Alias* section says `@range`, `@nrange` and
-    # `@isnull` are WHERE-only and raise when the query is built. The three are served on the WHERE
-    # path by arms that return above the shared operator ladder, so an alias never reaches a renderer
-    # for them.
-    #
-    # These entries pin the doc's TYPE claim only, which is this harness's documented design. They do
-    # NOT pin the message: the pre-#618 path raised `FilterError` too (leaking the internal token —
-    # "Invalid filter operator: BETWEEN is not a supported operator" — to someone who typed `@range`),
-    # so all three pass unchanged against the unpatched code. The wording half is pinned in
-    # `test/unit/test_alignment_sqlite.jl`'s #618 testset, which asserts the user's spelling appears
-    # and that `BETWEEN`/`ISNULL` do not; deleting the guard fails that block and not this one.
+    # #654 — the *Which Lookups Work on an Aggregate Alias* section says `@isnull` on a `Count` alias
+    # raises when the query is built: COUNT never returns NULL, so the lookup could never match. (The
+    # three #618 entries that stood here — `@range` / `@nrange` / `@isnull` being WHERE-only — went
+    # with the claim when #654 supported them.) Type claim only, per this harness's design; the
+    # message is pinned in `test/unit/test_alignment_sqlite.jl`'s #654 testset.
     (
-        "read/filters_and_aggregates.md — @range on a projection alias is WHERE-only",
-        FilterError,
-        () -> DOCERR_RACE_PG.objects.values("n" => Count("raceid")).
-            filter("n__@range" => [1, 5]).list(show_query = :dict),
-    ),
-    (
-        "read/filters_and_aggregates.md — @nrange on a projection alias is WHERE-only",
-        FilterError,
-        () -> DOCERR_RACE_PG.objects.values("n" => Count("raceid")).
-            filter("n__@nrange" => [1, 5]).list(show_query = :dict),
-    ),
-    (
-        "read/filters_and_aggregates.md — @isnull on a projection alias is WHERE-only",
+        "read/filters_and_aggregates.md — @isnull on a Count alias can never match",
         FilterError,
         () -> DOCERR_RACE_PG.objects.values("n" => Count("raceid")).
             filter("n__@isnull" => true).list(show_query = :dict),
+    ),
+    # The JSONB lookups are still `WHERE`-only on an alias, and the same section says so.
+    (
+        "read/filters_and_aggregates.md — a JSONB lookup on a projection alias is WHERE-only",
+        FilterError,
+        () -> DOCERR_RACE_PG.objects.values("n" => Count("raceid")).
+            filter("n__@has_key" => "a").list(show_query = :dict),
     ),
     # Intentional PG/SQLite divergence: these pages tell the reader the lookup is PostgreSQL-only
     # and raises on SQLite. Asserting it on the SQLite mock keeps the documented divergence honest.

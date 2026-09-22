@@ -1546,6 +1546,34 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# A joined-path @range formats both operands through the joined column (#654)
+# The WHERE `BETWEEN` arm formatted only a key of `model.fields`; a joined path bound its operands
+# RAW, so `["x", "y"]` on a date column went to the database as two strings instead of refusing, and a
+# real `Date` bound as a `Date` where its `@gt` twin binds the text form. Found while moving that arm
+# into `_render_predicate`; it reads the terminal field from the memo, as the joined equality arm does.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a joined-path @range formats its operands through the joined column (#654)" begin
+  for (backend, conn) in (("PostgreSQL", nothing), ("SQLite", _MockSQLiteIn411()))
+    @testset "$backend" begin
+      _inspect(q) = conn === nothing ? q.list(show_query = :dict) :
+                                       PormG.QueryBuilder.inspect_query(q; connection = conn)
+      ok = _inspect(_IN411R.objects.filter(
+        "eventid__happened__@range" => [Date("2020-01-01"), Date("2021-01-01")]))
+      # The oracle is the same column's `@gt`: a range operand must bind what a scalar one does.
+      twin = _inspect(_IN411R.objects.filter("eventid__happened__@gt" => Date("2020-01-01")))
+      @test ok[:parameters] == ["2020-01-01", "2021-01-01"]
+      @test ok[:parameters][1] == twin[:parameters][1]
+      @test occursin(r"\"Tb_1\"\.\"happened\" BETWEEN", ok[:sql_text])
+
+      # A wrong-typed pair now refuses at build time, naming the path the caller wrote.
+      bad = @test_throws PormG.FilterError _inspect(_IN411R.objects.filter(
+        "eventid__happened__@nrange" => ["x", "y"]))
+      @test occursin("eventid__happened", _plain(bad.value.msg))
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # A scalar equality filter on a BinaryField has a spelling (#596)
 #
 # `filter("blob" => bytes)` was refused at parse time: `UInt8 <: Number`, so a byte payload reached

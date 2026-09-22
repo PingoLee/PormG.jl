@@ -947,11 +947,41 @@ HAVING MAX("Tb_2"."surname") ILIKE $1 ESCAPE '\'    -- bound: "V%"
 An aggregate over arithmetic (`Max(F("points") + 1)`) names no single column, so its alias is read
 as a number.
 
+`@range` and `@nrange` work on an alias too. Both bounds are checked against the alias's type:
+
+```julia
+# Seasons with between 10 and 16 races
+query = M.Race.objects
+query.values("year", "n" => Count("raceid"))
+query.filter("n__@range" => [10, 16])
+```
+
+```sql
+HAVING COUNT("Tb"."raceid") BETWEEN $1 AND $2    -- bound: 10, 16
+```
+
+`@isnull` works on a `Max`, `Min`, `Sum` or `Avg` alias, and is true for a group in which every value
+is `NULL`:
+
+```julia
+# Seasons where no race has a recorded start time
+query = M.Race.objects
+query.values("year", "latest_start" => Max("time"))
+query.filter("latest_start__@isnull" => true)
+```
+
+```sql
+HAVING MAX("Tb"."time") IS NULL
+```
+
+On a `Count` alias it raises `FilterError` when the query is built, because `COUNT` never returns
+`NULL` (an empty group counts 0) and the filter could never match. Compare the count with `=> 0`
+instead.
+
 Three further consequences worth knowing:
 
-- **`@range`, `@nrange`, `@isnull` and the JSONB lookups are `WHERE`-only.** On an alias they raise
-  `FilterError` when the query is built, naming the lookup and the alias. Use `@gt`/`@lt` pairs on the
-  alias, or filter the underlying field.
+- **The JSONB lookups are `WHERE`-only.** On an alias they raise `FilterError` when the query is
+  built, naming the lookup and the alias. Filter the underlying field instead.
 - An operator that is PostgreSQL-only on a column is PostgreSQL-only on an alias too.
   `@iunaccent_contains` and `@iunaccent_exact` raise
   [`BackendCapabilityError`](../errors.md) on SQLite from `HAVING` exactly as they do from `WHERE`.

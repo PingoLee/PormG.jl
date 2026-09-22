@@ -952,9 +952,13 @@ QUARTER(x) = FObject(function_name = "QUARTER", column = x, formatter = Models.f
 QUADRIMESTER(x) = FObject(function_name = "QUADRIMESTER", column = x, formatter = Models.format_quadrimester_sql)
 
 
-function ISNULL(v::AbstractString, value::Bool)
+function ISNULL(v::AbstractString, value::Bool; aggregate::Bool = false)
   # `v` is the rendered column text (#602: `AbstractString`, so a non-`String` spelling dispatches).
-  if contains(v, "(")
+  # `aggregate` (#654): the HAVING alias branch passes it for a `Max`/`Min`/`Sum`/`Avg` projection,
+  # whose rendered text is a call by construction — `MAX("Tb"."name") IS NULL` is meaningful there
+  # (every value in the group is NULL). The caller decides from the projection node, never from the
+  # text, so the refusal below is unchanged for every other column.
+  if !aggregate && contains(v, "(")
     throw(FilterError("Error in ISNULL: the column $(v) cannot be a function expression."))
   end
   if value

@@ -1,6 +1,7 @@
 using Test
 using PormG
 import Logging
+import LibPQ   # `LibPQ.conninfo` — libpq's own conninfo parser, no server needed (#650)
 
 if !haskey(ENV, "PORMG_ENV")
     ENV["PORMG_ENV"] = "test"
@@ -1134,9 +1135,10 @@ end
             dsn = settings.connections.connection_string
 
             @test !isempty(dsn)
-            @test occursin("dbname=pormg_348", dsn)
-            @test occursin("user=pormg_user", dsn)
-            @test occursin("host=127.0.0.1", dsn)
+            # Every value is single-quoted since #650 — see the DSN quoting testset below.
+            @test occursin("dbname='pormg_348'", dsn)
+            @test occursin("user='pormg_user'", dsn)
+            @test occursin("host='127.0.0.1'", dsn)
 
             PormG.Configuration.close_pool!(settings.connections)
         end
@@ -1416,5 +1418,95 @@ end
                   PormG.Configuration.VALID_OPTION_KEYS...)
             @test _documented(k)
         end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL DSN building: every connection.yml value is quoted and escaped (#650)
+# `_build_connection_pool!` interpolated each value raw, so a password with a space made libpq
+# reject the whole DSN ("missing = after horse"), a `'` or `\` was read as something else, and a
+# Windows certificate path lost its backslashes. Each case asserts the EXACT built string and then
+# hands it to `LibPQ.conninfo` — libpq's own `PQconninfoParse` — so "libpq agrees" is measured, not
+# assumed, and the test stays hermetic (the pool is lazy; nothing connects).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL DSN values are quoted and escaped (#650)" begin
+    # Build the DSN a connection.yml `dev:` block produces, without connecting.
+    function _dsn_650(block::String)
+        mktempdir() do temp_root
+            db_dir = _write_348_yml(joinpath(temp_root, "db"), "dev:\n  adapter: PostgreSQL\n" * block)
+            settings = PormG.Configuration.Settings(app_env="dev", db_def_folder=db_dir)
+            settings.db_config_settings = PormG.Configuration.read_db_connection_data(db_dir, settings)
+            PormG.Configuration._build_connection_pool!(settings, db_dir)
+            dsn = settings.connections.connection_string
+            PormG.Configuration.close_pool!(settings.connections)
+            return dsn
+        end
+    end
+
+    # What libpq reads back out of a DSN: keyword => value, set options only. A DSN libpq rejects
+    # throws `ConninfoParseError` here, which is the pre-fix failure mode for the space case.
+    _libpq_reads(dsn) = Dict(o.keyword => o.val for o in LibPQ.conninfo(dsn) if !ismissing(o.val))
+
+    @testset "an ordinary config builds the fully quoted form" begin
+        # The deliberate form change: quoting is unconditional, so plain values are quoted too.
+        dsn = _dsn_650("  host: 127.0.0.1\n  port: 5432\n  database: f1\n" *
+                       "  username: bob\n  password: s3cret\n")
+        @test dsn == "host='127.0.0.1' port='5432' password='s3cret' dbname='f1' user='bob'"
+        reads = _libpq_reads(dsn)
+        @test reads["host"] == "127.0.0.1"
+        @test reads["port"] == "5432"
+        @test reads["password"] == "s3cret"
+        @test reads["dbname"] == "f1"
+        @test reads["user"] == "bob"
+    end
+
+    # YAML single-quoted scalars: `\` is literal and `''` is one `'`, so each yml value below is
+    # exactly the Julia string in the second column.
+    cases = [
+        # (yml key,     yml scalar,                     value libpq must read,      DSN fragment)
+        ("password",    raw"'corr3ct horse battery'",   "corr3ct horse battery",    raw"password='corr3ct horse battery'"),
+        ("password",    raw"'it''s'",                   "it's",                     raw"password='it\'s'"),
+        ("password",    raw"'back\slash'",              raw"back\slash",            raw"password='back\\slash'"),
+        ("password",    raw"''",                        "",                         raw"password=''"),
+        ("username",    raw"'o''brien jr'",             "o'brien jr",               raw"user='o\'brien jr'"),
+        ("sslrootcert", raw"'C:\certs\root ca.crt'",    raw"C:\certs\root ca.crt",  raw"sslrootcert='C:\\certs\\root ca.crt'"),
+    ]
+    libpq_key = Dict("username" => "user")
+
+    for (key, scalar, expected, fragment) in cases
+        @testset "$key = $(repr(expected))" begin
+            dsn = _dsn_650("  host: 127.0.0.1\n  database: f1\n  $key: $scalar\n")
+            @test occursin(fragment, dsn)
+            # libpq must parse the whole DSN and read back the original value, byte for byte —
+            # and the neighbouring keys must survive, which is what the space case broke.
+            reads = _libpq_reads(dsn)
+            @test get(reads, get(libpq_key, key, key), nothing) == expected
+            @test reads["host"] == "127.0.0.1"
+            @test reads["dbname"] == "f1"
+        end
+    end
+
+    @testset "a NUL in a value is rejected at build, naming the key and not the value" begin
+        # A NUL cannot travel in any conninfo. Unguarded, the C-string conversion at connect time
+        # threw an ArgumentError quoting the WHOLE DSN, and PoolConnectError kept it as its cause —
+        # the password in clear beside the redacted copy. YAML `"\0"` is a real NUL byte.
+        err = try
+            _dsn_650("  host: 127.0.0.1\n  password: \"SEC\\0RET\"\n")
+            nothing
+        catch e
+            e
+        end
+        @test err isa PormG.InvalidConfigurationError
+        msg = sprint(showerror, err)
+        @test occursin("`password`", msg)
+        @test !occursin("SEC", msg) && !occursin("RET", msg)
+    end
+
+    @testset "a quoted password is still masked whole by redact_secret" begin
+        # The builder's output now lands in the redaction rule's quoted arm; no fragment of a
+        # passphrase containing a space or an escaped quote may survive into a log line.
+        dsn = _dsn_650("  host: 127.0.0.1\n  username: bob\n  password: 'corr3ct horse ''b\\x'\n")
+        red = PormG.Configuration.redact_secret(dsn)
+        @test red == "host='127.0.0.1' password=**** user=****"
     end
 end

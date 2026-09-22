@@ -109,8 +109,8 @@ These are the keys PormG reads **directly under an environment block** — the p
 | `host` | both | Server host on PostgreSQL. **On SQLite it is the database file name and takes precedence over `database:`** — a historical quirk, not a typo. |
 | `url` | PostgreSQL | A complete connection string, in either the libpq keyword form or the URL form (`postgres://user:password@host/db`). When present, **every other PostgreSQL target key is ignored** — PormG passes it through verbatim. Both forms are redacted wherever PormG logs, displays or serializes the connection — see [Credentials never leave through `show` or `JSON.json`](advanced.md#Credentials-never-leave-through-show-or-JSON.json). Setting it under `adapter: SQLite` does nothing and warns; use `database:` there. |
 | `username`, `password`, `port`, `hostaddr` | PostgreSQL | Standard credentials/target. Forwarded into the libpq DSN. |
-| `passfile`, `connect_timeout`, `client_encoding` | PostgreSQL | Forwarded into the libpq DSN verbatim. |
-| `sslmode`, `sslrootcert`, `sslcert`, `sslkey` | PostgreSQL | TLS settings, forwarded into the libpq DSN verbatim. |
+| `passfile`, `connect_timeout`, `client_encoding` | PostgreSQL | Forwarded into the libpq DSN. |
+| `sslmode`, `sslrootcert`, `sslcert`, `sslkey` | PostgreSQL | TLS settings, forwarded into the libpq DSN. |
 | `extensions` | PostgreSQL | List of extensions to require — see [PostgreSQL Extensions](#PostgreSQL-Extensions). Ignored with a warning on SQLite. |
 | `sqlite_split_read_write` | SQLite | Split the pool into read and write connections. |
 | `pool_size`, `pool_timeout`, `idle_timeout`, `max_lifetime`, `leak_detection_threshold`, `fail_fast_on_connect` | both | Connection-pool tuning — documented in [Advanced Configuration](advanced.md). |
@@ -118,6 +118,8 @@ These are the keys PormG reads **directly under an environment block** — the p
 | `config` | both | The settings sub-dictionary described in the next section. |
 
 The PostgreSQL-only keys are inert under `adapter: SQLite`, so a block may carry both sets without harm. `hostaddr`, `port`, `password`, `passfile`, `connect_timeout`, `client_encoding` and the four `ssl*` keys reach libpq under exactly the names written here; `username` and `database` are translated to libpq's `user=` and `dbname=` for you.
+
+Every forwarded value is single-quoted and escaped for libpq, so write it exactly as it is: a password such as `corr3ct horse 'battery'`, or a certificate path such as `C:\certs\root ca.crt`, needs no quoting of its own beyond what YAML requires. YAML's own typing still applies first, so quote any value YAML would read as a number or a boolean — `password: 007` reaches libpq as `7`, and `password: '007'` as `007`. A value containing a NUL character cannot be sent to PostgreSQL at all and is rejected when the connection is built. (Only `url:` is passed through untouched, so a value inside it follows libpq's own quoting rules.)
 
 ## Configuration Settings (`config:`)
 

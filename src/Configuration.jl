@@ -61,14 +61,14 @@ public is_loaded, load_many, ping, status, get_tx_connection, redact_secret
 # The unquoted class stays "to the next whitespace" and is NOT tightened to stop at `&`: `&` is a
 # legal unquoted password character, so that spelling would emit `password=****&w` and leak the
 # tail. Under-redaction is the bug class; over-redaction is the safe direction.
-#   bare space   And the one libpq does NOT accept, which is why it matters most: PormG's own DSN
-#                builder interpolates a YAML value raw (`_build_connection_pool!`), so a
-#                `password: corr3ct horse battery` becomes `password=corr3ct horse battery`. libpq
-#                rejects that DSN — which GUARANTEES the connect fails, and the failure path is the
-#                redaction path (`PoolConnectError`). A value therefore runs on across whitespace
-#                until the next `key=` token, so the whole passphrase is masked instead of its first
-#                word. (The builder's missing quoting is a separate defect: such a password cannot
-#                connect at all. Filed separately; this arm makes sure it cannot also leak.)
+#   bare space   And the one libpq does NOT accept, which is why it matters most: a hand-written or
+#                `url:`-supplied DSN can carry `password=corr3ct horse battery`. libpq rejects it —
+#                which GUARANTEES the connect fails, and the failure path is the redaction path
+#                (`PoolConnectError`). A value therefore runs on across whitespace until the next
+#                `key=` token, so the whole passphrase is masked instead of its first word. PormG's
+#                own builder produced exactly this shape until #650 (it interpolated a YAML value
+#                raw); it now quotes every value (`_conninfo_value`), so its DSNs land in the quoted
+#                arm above. This arm stays for every DSN PormG did not build.
 #
 # `(?is)` — the `s` is load-bearing and was a leak: `.` does not match a newline without it, so the
 # one escape `\\.` missed was `\` + LF, and `password=abc\<LF>tail` printed the tail. `.` occurs in
@@ -495,6 +495,26 @@ function _normalize_pool_timeout(v::Real)::Float64
   return DEFAULT_POOL_TIMEOUT
 end
 
+# One libpq conninfo value, quoted and escaped (#650). An unquoted conninfo value ends at the first
+# whitespace and treats `\` as an escape, so a raw `password: corr3ct horse` made libpq reject the
+# whole DSN, `password: ""` swallowed the next `key=` token as its value, and a Windows path lost its
+# backslashes. Inside single quotes only `\` and `'` are special, and both are escaped here.
+#
+# Applied to EVERY value, not only the ones that look like they need it: libpq accepts a quoted value
+# wherever an unquoted one is legal, and a "does this need quoting?" predicate is where the next
+# escape gets missed. The cost is that every built DSN reads `host='127.0.0.1'` — deliberate.
+#
+# A NUL is the one byte no conninfo can carry, quoted or not, and letting it through was a LEAK:
+# converting the DSN to a C string throws `ArgumentError: embedded NULs are not allowed in C strings:
+# "<the whole DSN>"`, which `PoolConnectError` keeps as its cause — the password printed verbatim
+# beside the redacted copy. Rejected here instead, naming the key and never the value.
+function _conninfo_value(key::AbstractString, v)
+  s = string(v)
+  '\0' in s && throw(InvalidConfigurationError(
+    "connection.yml: `$key` contains a NUL character, which a PostgreSQL connection string cannot carry"))
+  return "'" * replace(s, "\\" => "\\\\", "'" => "\\'") * "'"
+end
+
 function _build_connection_pool!(settings::PormGSettings, path::String)
   # Extract pool size from config (defaults to 3)
   pool_size = haskey(settings.db_config_settings, "pool_size") ?
@@ -575,14 +595,14 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
       # Standard parameters loop
       for key in ["host", "hostaddr", "port", "password", "passfile", "connect_timeout", "client_encoding", "sslmode", "sslrootcert", "sslcert", "sslkey"]
         get!(settings.db_config_settings, key, nothing)
-        settings.db_config_settings[key] !== nothing && push!(dns, string("$key=", settings.db_config_settings[key]))
+        settings.db_config_settings[key] !== nothing && push!(dns, string("$key=", _conninfo_value(key, settings.db_config_settings[key])))
       end
 
       get!(settings.db_config_settings, "database", nothing)
-      settings.db_config_settings["database"] !== nothing && push!(dns, string("dbname=", settings.db_config_settings["database"]))
+      settings.db_config_settings["database"] !== nothing && push!(dns, string("dbname=", _conninfo_value("database", settings.db_config_settings["database"])))
 
       get!(settings.db_config_settings, "username", nothing)
-      settings.db_config_settings["username"] !== nothing && push!(dns, string("user=", settings.db_config_settings["username"]))
+      settings.db_config_settings["username"] !== nothing && push!(dns, string("user=", _conninfo_value("username", settings.db_config_settings["username"])))
 
       dns_str = join(dns, " ")
     end

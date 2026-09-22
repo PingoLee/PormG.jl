@@ -39,6 +39,11 @@ What is pinned here (deterministic, DB-free — rendered via `inspect_query`, bo
     values in text order. This is the control that stops the guard being written one level too
     high — that nesting is correct today and must stay legal.
   - CONTROLS: the same consumers with no nested CTE still render unchanged.
+  - #566, the other half of "a CTE inside a subquery": a subquery that REFERENCES a CTE only its
+    enclosing query declares is refused too (#444: each query has its own CTE namespace), in both
+    spellings, and the message names that rule. A CTE on the outer query beside a subquery that
+    does not reference it is legal. Together with the #433 testsets these pin every shape the
+    *Rules and limitations* list in `docs/src/read/subqueries_and_ctes.md` states.
 
 Sibling coverage:
   - `test_cte_ergonomics.jl` (#44)  -> CROSS-joined CTEs and `F()` correlation.
@@ -424,5 +429,146 @@ end
     end, conn)
     @test occursin("IN (SELECT", in_insp[:sql_text])
     @test in_insp[:parameters] == ["PLAINVAL"]
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #566: a subquery cannot see its ENCLOSING query's CTE, and the refusal says why
+# The docs used to call "a CTE inside a subquery" an unblocked-but-untested edge. It is refused in
+# every spelling: declared inside (#433, above) or reached for from inside (here, #444's per-query
+# namespace). The refusal was already correct; what #566 changed is the message, which read
+# "declared CTEs: none" (or "column gv not found") while the caller's `.with()` was in plain sight.
+# ─────────────────────────────────────────────────────────────────────────────
+import PormG.QueryBuilder: OuterRef
+
+# The outer query declares `gv`; the inner one does not.
+_ncg_outer_with_cte() = begin
+  q = NCG.Ncg_parent.objects
+  q.with("gv" => _ncg_grand_cte(), join_field = "grandparent" => "id")
+  q
+end
+
+# The inner query reaches for `gv` in one of the two spellings a caller can write.
+_ncg_inner_reaching(spelling::Symbol) = begin
+  s = NCG.Ncg_child.objects
+  s.filter(spelling === :handle ? (CTE("gv", "code") => "X") : ("gv__code" => "X"))
+  s
+end
+
+const _NCG_REACHING_CONSUMERS = [
+  ("Exists(...) in a filter", spelling -> begin
+    q = _ncg_outer_with_cte()
+    s = _ncg_inner_reaching(spelling)
+    s.filter("parent" => OuterRef("id"))
+    q.filter(Exists(s))
+    q.values("sku")
+    q
+  end),
+  ("Subquery(...) projected in values()", spelling -> begin
+    q = _ncg_outer_with_cte()
+    s = _ncg_inner_reaching(spelling)
+    s.filter("parent" => OuterRef("id"))
+    s.values("id")
+    s.limit(1)
+    q.values("sku", "cid" => Subquery(s))
+    q
+  end),
+  ("__@in membership filter", spelling -> begin
+    q = _ncg_outer_with_cte()
+    s = _ncg_inner_reaching(spelling)
+    s.values("parent")
+    q.filter("id__@in" => s)
+    q.values("sku")
+    q
+  end),
+]
+
+# The needles are plain-text runs of the hint, chosen so none spans an ANSI-colorized token: an
+# `occursin` across a color escape passes off-TTY and fails on every CI job.
+_ncg_names_outer_rule(msg) =
+  occursin("is declared on an ENCLOSING query", msg) && occursin("has its own CTE namespace", msg)
+
+@testset "a subquery reaching for its enclosing query's CTE is refused, and says why (#566)" begin
+  for (label, build_for) in _NCG_REACHING_CONSUMERS, spelling in (:handle, :string)
+    @testset "$label, $(spelling) spelling" begin
+      for (backend, conn) in _NCG_BACKENDS
+        err = _ncg_err(() -> build_for(spelling), conn)
+        # The type did not change with #566 — only the text — so no caller catching it moves.
+        @test err isa PormG.UnknownFieldError
+        msg = sprint(showerror, err)
+        @test occursin("gv", msg)
+        # Unpatched, both spellings raise with no mention of the enclosing query at all.
+        @test _ncg_names_outer_rule(msg)
+        @test occursin("#444", msg)
+        # …and never offers the remedy #433 refuses: declaring the CTE on the subquery itself.
+        @test !occursin("Add it with", msg)
+      end
+    end
+  end
+end
+
+@testset "the #566 hint walks past an intermediate subquery" begin
+  # Exists inside Exists, both in filters, is legal — so the query declaring `gv` can sit two
+  # levels up. A one-level lookup would miss it and fall back to the bare message.
+  for (backend, conn) in _NCG_BACKENDS
+    err = _ncg_err(() -> begin
+      q = _ncg_outer_with_cte()
+      mid = NCG.Ncg_child.objects
+      mid.filter("parent" => OuterRef("id"))
+      leaf = NCG.Ncg_child.objects
+      leaf.filter(CTE("gv", "code") => "X")
+      leaf.filter("id" => OuterRef("id"))
+      mid.filter(Exists(leaf))
+      q.filter(Exists(mid))
+      q.values("sku")
+      q
+    end, conn)
+    @test err isa PormG.UnknownFieldError
+    @test _ncg_names_outer_rule(sprint(showerror, err))
+  end
+end
+
+@testset "the #566 hint appears only when an enclosing query declares the CTE" begin
+  for (backend, conn) in _NCG_BACKENDS
+    # Top level, no enclosing query: the plain message, unchanged.
+    top = _ncg_err(() -> begin
+      q = NCG.Ncg_child.objects
+      q.filter(CTE("gv", "code") => "X")
+      q.values("note")
+      q
+    end, conn)
+    @test top isa PormG.UnknownFieldError
+    @test !_ncg_names_outer_rule(sprint(showerror, top))
+    # At the top level declaring it IS the fix, so that advice stays.
+    @test occursin("Add it with", sprint(showerror, top))
+
+    # Inside a subquery, but the enclosing query declares nothing: blaming a parent that has no
+    # such CTE would send the reader after a `.with()` that is not there.
+    bare = _ncg_err(() -> begin
+      q = NCG.Ncg_parent.objects
+      s = _ncg_inner_reaching(:string)
+      s.filter("parent" => OuterRef("id"))
+      q.filter(Exists(s))
+      q.values("sku")
+      q
+    end, conn)
+    @test bare isa PormG.UnknownFieldError
+    @test !_ncg_names_outer_rule(sprint(showerror, bare))
+  end
+end
+
+@testset "a CTE on the outer query beside a subquery that ignores it builds (#566)" begin
+  # Shape (b) of #566. It is NOT "a CTE inside a subquery", but it is the legal neighbour of every
+  # refusal above, and the doc names it so a reader knows where the line is.
+  for (backend, conn) in _NCG_BACKENDS
+    insp = _ncg_sql(() -> begin
+      q = _ncg_outer_with_cte()
+      q.values("sku", "gv__code", "pid" => Subquery(_ncg_inner_plain()))
+      q
+    end, conn)
+    @test startswith(insp[:sql_text], "WITH \"gv\" AS (")
+    @test occursin("as \"pid\"", insp[:sql_text])
+    # CTE body first, then the subquery's value — text order, on both engines.
+    @test insp[:parameters] == ["CTEVAL", "PLAINVAL"]
   end
 end

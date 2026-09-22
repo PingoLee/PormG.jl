@@ -143,3 +143,97 @@ if PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
         end
     end
 end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DSN quoting against a real server (#650) — PostgreSQL only.
+#
+# The unit suite asserts the built DSN and parses it with `LibPQ.conninfo`; this proves the real
+# client accepts it and a CONNECT completes. (The passfile arm proves the path parsed and the
+# connect succeeded; under `trust` auth it would pass without libpq reading the file — the #650
+# defect was the parse failure, which it catches either way.) Two arms:
+#   • passfile — always runs. The fixture's password goes into a libpq password file stored under a
+#     directory whose name holds a space, and the DSN carries only `passfile=`. Before #650 the
+#     unquoted path split at the space and libpq rejected the DSN. Needs no privilege.
+#   • a password with a space, a quote and a backslash — needs a throwaway role, so it runs only
+#     when the fixture user holds CREATEROLE, and is skipped with the reason otherwise.
+# Both build through `_build_connection_pool!` from a copy of the fixture's own connection block,
+# so the shared fixture pool is never touched.
+# ─────────────────────────────────────────────────────────────────────────────
+if PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
+    # A settings object built from the fixture's target, with the credential fields overridden.
+    function _settings_650(overrides::Dict{String,Any})
+        src = PormG.config[PORMG_DB_FOLDER].db_config_settings
+        cfg = Dict{String,Any}("adapter" => "PostgreSQL")
+        for k in ("host", "hostaddr", "port", "database", "username")
+            v = get(src, k, nothing)
+            v === nothing || (cfg[k] = v)
+        end
+        merge!(cfg, overrides)
+        s = PormG.Configuration.Settings(app_env = "dev", db_def_folder = "issue_650")
+        s.db_config_settings = cfg
+        PormG.Configuration._build_connection_pool!(s, "")
+        return s.connections
+    end
+
+    _select_one(pool) = DataFrame(PormG.ConnectionPool.fetch(pool, "SELECT 1 AS one;")).one[1]
+
+    @testset "connects through a passfile path containing a space (#650)" begin
+        src = PormG.config[PORMG_DB_FOLDER].db_config_settings
+        mktempdir() do root
+            dir = joinpath(root, "dir with space")
+            mkpath(dir)
+            passfile = joinpath(dir, "pg pass")
+            # libpq passfile line: host:port:db:user:password, with `\` and `:` backslash-escaped.
+            pw = replace(string(src["password"]), "\\" => "\\\\", ":" => "\\:")
+            write(passfile, "*:*:*:*:$pw\n")
+            chmod(passfile, 0o600)                 # libpq ignores a group/world-readable passfile
+
+            # PGPASSWORD would satisfy the connect on its own and make the passfile irrelevant.
+            withenv("PGPASSWORD" => nothing, "PGPASSFILE" => nothing) do
+                pool = _settings_650(Dict{String,Any}("passfile" => passfile))
+                try
+                    @test occursin("passfile='$passfile'", pool.connection_string)
+                    @test _select_one(pool) == 1
+                finally
+                    try; PormG.ConnectionPool.close_pool!(pool); catch; end
+                end
+            end
+        end
+    end
+
+    @testset "connects with a password holding a space, a quote and a backslash (#650)" begin
+        fixture = PormG.config[PORMG_DB_FOLDER].connections
+        can_create = DataFrame(PormG.ConnectionPool.fetch(fixture,
+            "SELECT rolcreaterole AS ok FROM pg_roles WHERE rolname = current_user;")).ok[1]
+        if !can_create
+            @info "#650: fixture user lacks CREATEROLE — skipping the live space-password connect; the passfile arm and the unit LibPQ.conninfo round-trip still cover the DSN"
+            @test_skip "requires CREATEROLE to create a throwaway role"
+        else
+            role = "pormg_650_" * string(rand(UInt32); base = 16)
+            password = raw"corr3ct horse 'battery' \x"
+            # DDL cannot take bind parameters, so the server quotes both values (`%I`/`%L`).
+            q = PormG.QueryBuilder.PgParameterizedQuery("", Any[], 0)
+            p1 = PormG.QueryBuilder.add_parameter!(q, role)
+            p2 = PormG.QueryBuilder.add_parameter!(q, password)
+            ddl = DataFrame(PormG.ConnectionPool.fetch(fixture,
+                "SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', $p1::text, $p2::text) AS sql;";
+                params = q)).sql[1]
+            PormG.ConnectionPool.fetch(fixture, ddl)
+            try
+                pool = _settings_650(Dict{String,Any}("username" => role, "password" => password))
+                try
+                    @test _select_one(pool) == 1
+                finally
+                    try; PormG.ConnectionPool.close_pool!(pool); catch; end
+                end
+            finally
+                q = PormG.QueryBuilder.PgParameterizedQuery("", Any[], 0)
+                p1 = PormG.QueryBuilder.add_parameter!(q, role)
+                drop = DataFrame(PormG.ConnectionPool.fetch(fixture,
+                    "SELECT format('DROP ROLE IF EXISTS %I', $p1::text) AS sql;"; params = q)).sql[1]
+                PormG.ConnectionPool.fetch(fixture, drop)
+            end
+        end
+    end
+end

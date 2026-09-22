@@ -101,7 +101,7 @@ PormG bounds all three. The two routes deliberately promise different things:
 ```julia
 julia> pool = PormG.config["db"].connections
 Pool(PostgreSQL, 10 slots)
-  dsn: host=127.0.0.1 port=5432 password=**** dbname=formula1 user=****
+  dsn: host='127.0.0.1' port='5432' password=**** dbname='formula1' user=****
 ```
 
 **Why JSON is stricter than the display.** A card is read by a human who asked for it, at a

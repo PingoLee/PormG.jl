@@ -314,8 +314,12 @@ end
                 # because a guard that answers "provably a JSON number" may not accept a string it
                 # was not meant to.
                 "1\n", "99.99\n",
-                # Non-ASCII digits, for the `[0-9]`-not-`\d` spelling.
-                "١٢٣")
+                # The `[0-9]`-not-`\d` case, and `"1٢"` is the one that DISCRIMINATES. Julia compiles
+                # with PCRE's UCP flag, so `\d` is unicode-aware — `occursin(r"\A\d+\z", "١٢٣")` is
+                # `true`. A pure non-ASCII string is rejected either way (no ASCII lead digit), so
+                # `"١٢٣"` alone would pass under `\d` too and prove nothing; `"1٢"` fails only with
+                # `[0-9]`. Swap the character class and this line goes red, which is the point.
+                "١٢٣", "1٢", "1٢3")
       @test !occursin(re, bad)
     end
 
@@ -331,6 +335,14 @@ end
     # Constructed, not observed: `parse(Decimal, "0.000")` normalises to `Decimal(0, 0, 0)`, so LibPQ
     # cannot hand PormG this shape. That is why the branch needs a built value to reach it at all, and
     # why it would otherwise go untested forever.
+    #
+    # THESE TWO ARE DECIMALS-VERSION-DEPENDENT, and they are the only assertions in this file that are.
+    # `string(Decimal(0, 0, 3))` is `"0000"` on 0.4.x but `"0E+3"` on 0.5.x — measured — and `"0E+3"`
+    # the pattern ACCEPTS, so both invert there. That is latent rather than live: every LibPQ release
+    # pins `Decimals 0.4` (`test/unit/test_compat_guards.jl`), CI's `test` matrix resolves 0.4.1 through
+    # it, and `floor-resolve` downgrades further into 0.4.x. Whoever widens that pin fixes these two
+    # alongside the shape change the `_json_value` comment already warns about — pick a value whose
+    # text is rejected on BOTH majors rather than re-deriving this one.
     @test emit(D.Decimal(0, 0, 3)) == "{\"v\":0.0}"
     @test !occursin(re, string(D.Decimal(0, 0, 3)))
 

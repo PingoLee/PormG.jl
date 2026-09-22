@@ -18,10 +18,14 @@ shape, and the documented equality between them still holds.
 Three classes of value move; everything else is byte-identical:
 
 ```
-whole value      14.0                   ->  14
-small scale      1.0e-6                 ->  0.000001
-past Float64     1.2345678901234568e16  ->  12345678901234567.89
+whole value        14.0                   ->  14
+small scale        1.0e-6                 ->  0.000001
+fractional >= 1e6  1.23456789e6           ->  1234567.89
+past Float64       1.2345678901234568e16  ->  12345678901234567.89
 ```
+
+The third row is the one most likely to be in a recorded response body: any fractional decimal at or
+above a million was rendered in exponent form and now is not. A seven-figure money amount hits it.
 
 A `DecimalField(10, 2)` — the constructor default — never drifted, because every width up to about
 sixteen significant digits round-trips through a `Float64` exactly. So if your decimal columns are
@@ -29,9 +33,15 @@ narrow and fractional, the only change you will see is the loss of a trailing `.
 
 It is **not** a string. Django's `DjangoJSONEncoder` and DRF's `COERCE_DECIMAL_TO_STRING` both
 serialize a decimal as `"99.99"`; PormG emits `99.99` instead, so consumers need no parsing step and
-the two engines keep agreeing. PostgreSQL hands back a `Decimals.Decimal` for every value while
-SQLite's `NUMERIC` affinity hands back an `Int64` for a whole one and a `Float64` for a fractional
-one — three Julia types for one declared column, one JSON shape.
+the column keeps one JSON **type** on both engines. PostgreSQL hands back a `Decimals.Decimal` for
+every value while SQLite's `NUMERIC` affinity hands back an `Int64` for a whole one and a `Float64` for
+a fractional one — three Julia types, one JSON type.
+
+The **text** is a different claim, and a narrower one: it agrees while the value SQLite stored prints
+the digits the decimal has, which covers every whole value and fractional values below about a million.
+Past that PostgreSQL emits `1234567.89` where SQLite emits `1.23456789e6`. Before this change they
+agreed there — on SQLite's rendering — so if you compare response text across engines, this is where
+that stops working. Both still parse to the same number.
 
 **Two limits, both narrower than "decimals are exact now".**
 

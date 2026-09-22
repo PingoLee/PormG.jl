@@ -2370,11 +2370,19 @@ end
 # `floor-resolve` job resolves that floor, and this arm is what makes it honest — after it the value
 # never reaches `JSON` as a `Decimal` at any version in the range.
 #
-# `JSON.JSONText`, not a string: it splices the digits UNQUOTED, so the column stays a JSON number
-# and the two engines keep agreeing (SQLite's NUMERIC affinity hands back a `Float64`, which already
-# serialized as a number — a string here would make them disagree). Django's `DjangoJSONEncoder` and
-# DRF's `COERCE_DECIMAL_TO_STRING` both choose a string, which is exact end-to-end but obliges every
-# consumer to parse; the maintainer chose the number on that trade (#644).
+# `JSON.JSONText`, not a string: it splices the digits UNQUOTED, so the column stays a JSON NUMBER on
+# both engines — SQLite's NUMERIC affinity hands back an `Int64`/`Float64`, which already serialized as
+# a number, and a string here would have changed the column's JSON TYPE on PostgreSQL only. Django's
+# `DjangoJSONEncoder` and DRF's `COERCE_DECIMAL_TO_STRING` both choose a string, which is exact
+# end-to-end but obliges every consumer to parse; the maintainer chose the number on that trade (#644).
+#
+# Be precise about what that buys, because the first version of this comment over-claimed it: the two
+# engines agree on the JSON *type*, not on the TEXT. Julia prints a `Float64` at or above 1e6 in
+# exponent form, so from a million up SQLite emits `1.23456789e6` where PostgreSQL now emits
+# `1234567.89` — measured, and an ordinary money amount, not an edge case. Unpatched they agreed there,
+# on SQLite's lossy rendering; this arm deliberately prefers PostgreSQL's exact text over that
+# agreement, since a `Decimal` that reached us intact should not be re-rounded on the way out.
+# `docs/src/read/index.md` states the boundary user-facing.
 #
 # GUARDED, because `JSONText` is a raw splice with no escaping: text that is not a JSON number would
 # produce an INVALID DOCUMENT, strictly worse than the lossy value this fixes.
@@ -2401,8 +2409,11 @@ end
 # (a newline is whitespace there), and `Decimals` cannot produce it anyway, so this is not a live
 # hole. It is tightened regardless: this guard's entire job is to answer "is this PROVABLY valid JSON
 # number text", and a pattern that accepts a string it was not meant to accept cannot answer that.
-# `[0-9]` rather than `\d` for the same reason — `\d` is ASCII-only here by default, but spelling it
-# out removes the question.
+# `[0-9]` rather than `\d`, and this one is LOAD-BEARING rather than stylistic — do not "simplify" it.
+# Julia compiles regexes with PCRE's UCP flag, so `\d` is UNICODE-aware here: measured,
+# `occursin(r"\A\d+\z", "١٢٣")` is `true`. With `\d` the pattern would accept `"1٢"` — the ASCII `[1-9]`
+# satisfies the lead and `\d*` swallows the Arabic-Indic digit — and splice it raw as a JSON number,
+# which is exactly the invalid document this guard exists to prevent. `[0-9]` rejects it.
 const _JSON_NUMBER_RE = r"\A-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?\z"
 
 function _json_value(v::Decimals.Decimal)

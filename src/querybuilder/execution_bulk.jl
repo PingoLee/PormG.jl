@@ -1820,27 +1820,32 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   end
   safe_set_clause = join(safe_set_parts, ", ")
 
-  # Security: Create parameterized query
-  parameters_initial =  deepcopy(instruction.parameters)
+  # Security: Create parameterized query.
+  # `base_parameters` holds what `build()` bound — the static-filter WHERE values, and on PostgreSQL
+  # the `$1…$k` numbering already rendered into `instruction._where`. It is the fixed prefix of
+  # every chunk's statement and is never written after this point: each chunk binds its rows into
+  # its own fork (#73), so a row that throws mid-chunk discards only that local collector.
+  base_parameters = instruction.parameters
   joined_columns = unique(vcat(fields_df, dinanic_filters))
 
   # Cap the chunk so `fixed + effective_chunk × ncols` stays under the backend's bind-parameter
   # limit (#84). Each row binds one param per set column *and* per match key (joined_columns);
-  # the static-filter WHERE params in `parameters_initial` are re-included on every chunk, so
+  # the static-filter WHERE params in `base_parameters` are re-included on every chunk, so
   # they are the per-statement fixed overhead.
   effective_chunk = _effective_chunk_size(chunk_size, length(joined_columns),
-    parameters_initial.parameter_count, _backend_parameter_limit(connection), :bulk_update,
+    base_parameters.parameter_count, _backend_parameter_limit(connection), :bulk_update,
     _backend_label(connection))
   effective_chunk < chunk_size &&
     @debug "bulk_update: capped chunk_size $chunk_size → $effective_chunk to respect the backend bind-parameter limit" model = model.name
 
   results = []
+  # For bulk update VALUES, use :select context
+  new_chunk_parameters() = (p = _fork_parameters(base_parameters); set_context!(p, :select); p)
   update_loop = () -> begin
     count::Integer = 0
     total::Integer = size(df, 1)
     rows = String[]
-    # For bulk update VALUES, use :select context
-    set_context!(instruction.parameters, :select)
+    chunk_parameters = new_chunk_parameters()
     param_placeholders::Vector{String} = String[]
     for (index, row) in enumerate(eachrow(df))
       try
@@ -1853,7 +1858,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
             validate_field_data(model, field, row[mapping[field]], "bulk_update"; allow_primary_key = false)
         end
 
-        param_placeholders = [add_parameter!(instruction.parameters, model.fields[field].formatter(row[mapping[field]])) for field in joined_columns]
+        param_placeholders = [add_parameter!(chunk_parameters, model.fields[field].formatter(row[mapping[field]])) for field in joined_columns]
       catch e
         _depuration_values_bulk_insert(fields_df, mapping, model, row, index)
         e isa PormGError && rethrow()   # keep the taxonomy type; the depuration log above carries the row context
@@ -1862,12 +1867,11 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
       push!(rows, "($(join(param_placeholders, ", ")))")
       count += 1
       if count == effective_chunk || index == total
-        res = _bulk_update(model, settings, connection, joined_columns, rows, safe_set_clause, dinanic_filters, show_query, instruction)
+        res = _bulk_update(model, settings, connection, joined_columns, rows, safe_set_clause, dinanic_filters, show_query, instruction, chunk_parameters)
         push!(results, res)
         count = 0
         rows = String[]
-        instruction.parameters = deepcopy(parameters_initial) # reset parameters to initial state
-        set_context!(instruction.parameters, :select) # restore context for next chunk
+        chunk_parameters = new_chunk_parameters()
         param_placeholders = String[]
       end
     end
@@ -1902,7 +1906,8 @@ function _bulk_update(model::PormGModel,
   safe_set_clause::String, 
   dinanic_filters::Vector{String}, 
   show_query::Symbol,
-  instruction::Union{SQLInstruction, Nothing})
+  instruction::Union{SQLInstruction, Nothing},
+  parameters::AbstractPormGParam)
 
   @pormg_debug false
   if instruction !== nothing && instruction.join |> length > 0
@@ -1961,9 +1966,9 @@ function _bulk_update(model::PormGModel,
   end
 
   if show_query !== :execute
-    return _show_query_result(show_query, sql, connection, model, :update, parameters=instruction.parameters)
+    return _show_query_result(show_query, sql, connection, model, :update, parameters=parameters)
   else 
     # Execute the query for the given connection type.
-    fetch(connection, sql, instruction.parameters)
+    fetch(connection, sql, parameters)
   end  
 end

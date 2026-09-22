@@ -336,14 +336,19 @@ end
     # cannot hand PormG this shape. That is why the branch needs a built value to reach it at all, and
     # why it would otherwise go untested forever.
     #
-    # THESE TWO ARE DECIMALS-VERSION-DEPENDENT, and they are the only assertions in this file that are.
-    # `string(Decimal(0, 0, 3))` is `"0000"` on 0.4.x but `"0E+3"` on 0.5.x — measured — and `"0E+3"`
-    # the pattern ACCEPTS, so both invert there. That is latent rather than live: every LibPQ release
-    # pins `Decimals 0.4` (`test/unit/test_compat_guards.jl`), CI's `test` matrix resolves 0.4.1 through
-    # it, and `floor-resolve` downgrades further into 0.4.x. Whoever widens that pin fixes these two
-    # alongside the shape change the `_json_value` comment already warns about — pick a value whose
-    # text is rejected on BOTH majors rather than re-deriving this one.
-    @test emit(D.Decimal(0, 0, 3)) == "{\"v\":0.0}"
+    # The expected document is the decimal's TEXT, quoted. This assertion is why the fallback returns
+    # text rather than the `Decimal`: the first version expected `{"v":0.0}` — the `Decimal` rendered by
+    # JSON — and CI's `floor-resolve` job went red on it with
+    # `MethodError: no method matching +(::Nothing, ::Int64)`, because JSON 1.0.0 cannot serialize a
+    # `Decimal` at all. A fail-open that raises at the declared `[compat]` floor is not one.
+    #
+    # DECIMALS-VERSION-DEPENDENT, and the only assertions in this file that are: `string(Decimal(0,0,3))`
+    # is `"0000"` on 0.4.x but `"0E+3"` on 0.5.x — measured — and `"0E+3"` the pattern ACCEPTS, so both
+    # invert there. Latent, not live: every LibPQ release pins `Decimals 0.4`
+    # (`test/unit/test_compat_guards.jl`), the `test` matrix resolves 0.4.1 through it, and
+    # `floor-resolve` downgrades within 0.4.x. Whoever widens that pin picks a value whose text is
+    # rejected on BOTH majors rather than re-deriving this one.
+    @test emit(D.Decimal(0, 0, 3)) == "{\"v\":\"0000\"}"
     @test !occursin(re, string(D.Decimal(0, 0, 3)))
 
     # The `AbstractFloat` trap, and the reason the signature names `Decimals.Decimal` exactly.

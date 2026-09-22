@@ -2367,8 +2367,11 @@ end
 # At the declared `[compat] JSON = "1"` FLOOR it is not lossy but fatal: measured, JSON 1.0.0 raises
 # `MethodError: no method matching +(::Nothing, ::Int64)` on any `Decimal`, so `list(:json)` over a
 # PostgreSQL `DecimalField` cannot run at all there; 1.1.0 onward emits the lossy number. CI's
-# `floor-resolve` job resolves that floor, and this arm is what makes it honest — after it the value
-# never reaches `JSON` as a `Decimal` at any version in the range.
+# `floor-resolve` job resolves that floor, and this arm is what makes it honest: every path a real
+# value can take now hands `JSON` a `JSONText` or a `String`, both of which render at 1.0.0. Only the
+# degenerate paths below — the formatter returning a non-string, or throwing — still pass the `Decimal`
+# through, and neither is reachable from a driver. That distinction is not academic: the first version
+# of this arm returned the `Decimal` on the rejected-text path too, and `floor-resolve` went red.
 #
 # `JSON.JSONText`, not a string: it splices the digits UNQUOTED, so the column stays a JSON NUMBER on
 # both engines — SQLite's NUMERIC affinity hands back an `Int64`/`Float64`, which already serialized as
@@ -2416,11 +2419,23 @@ end
 # which is exactly the invalid document this guard exists to prevent. `[0-9]` rejects it.
 const _JSON_NUMBER_RE = r"\A-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?\z"
 
+# The rejected-text fallback is the decimal's TEXT, not the `Decimal` — and CI's `floor-resolve` job is
+# what established that it has to be. Handing the value back unchanged looks like the obvious fail-open
+# and is the opposite of one at the declared floor: JSON 1.0.0 raises
+# `MethodError: no method matching +(::Nothing, ::Int64)` on any `Decimal`, so the "safe" path was a
+# HARD ERROR there — precisely the regression the #564 arm above refuses to introduce. The text is
+# exact, always renders, and renders at every version in the range; it is a JSON string rather than a
+# number only for a value whose text is not a JSON number in the first place, so there is no consistency
+# being given up. Unreachable from a driver either way (`parse` normalises), which is why only a
+# constructed value and a CI job resolving the floor could find it.
+#
+# The two remaining `return v` paths — no text at all, because the formatter returned a non-string or
+# threw — keep the pre-#644 behavior, since there is nothing better to hand over than what shipped.
 function _json_value(v::Decimals.Decimal)
   try
     txt = Models.format_number_sql(v)
     txt isa AbstractString || return v
-    return occursin(_JSON_NUMBER_RE, txt) ? JSON.JSONText(txt) : v
+    return occursin(_JSON_NUMBER_RE, txt) ? JSON.JSONText(txt) : String(txt)
   catch e
     (e isa InterruptException || e isa StackOverflowError) && rethrow()
     return v

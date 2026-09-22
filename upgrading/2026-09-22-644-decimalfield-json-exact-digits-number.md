@@ -61,7 +61,8 @@ changed is that PormG is no longer the party losing the digits.
 One repair rides along: at the declared `[compat] JSON = "1"` floor, JSON `1.0.0` raised
 `MethodError: no method matching +(::Nothing, ::Int64)` on any `Decimal`, so `list(:json)` over a
 PostgreSQL `DecimalField` could not run at all there. It now works at every version in the range,
-because the value no longer reaches `JSON` as a `Decimal`.
+because every value a driver can deliver reaches `JSON` as spliced number text or as a string, never as
+a `Decimal`.
 
 ### How to find the calls to migrate
 

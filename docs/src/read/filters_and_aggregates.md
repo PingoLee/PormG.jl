@@ -929,20 +929,59 @@ query.filter("last_gp__@istartswith" => "United")
 HAVING MAX("Tb"."name") ILIKE $1 ESCAPE '\'    -- bound: "United%"
 ```
 
-!!! note "The aggregated column must belong to the queried model"
+PormG types the alias from the projection so it can validate the filter value. `Max` / `Min` and a
+bare `F(...)` take the type of the column they name, including a column reached through a
+relation or a CTE:
 
-    PormG types the alias from the projection so it can validate the filter value, and for
-    `Max`/`Min` it can only do that when the aggregated column is a field of the model being
-    queried. `Max("name")` on `M.Race` resolves to that `CharField`; `Max("driverid__surname")` — a
-    joined path — falls back to a numeric reading and rejects a text term with
-    *"The last_driver projection alias is the type number. Please check the value: V"*. Aggregate
-    the column from the model that owns it, or filter it in `WHERE` instead.
+```julia
+# Constructors whose alphabetically-last driver surname begins with "V"
+query = M.Result.objects
+query.values("constructorid__name", "last_driver" => Max("driverid__surname"))
+query.filter("last_driver__@istartswith" => "V")
+```
+
+```sql
+HAVING MAX("Tb_2"."surname") ILIKE $1 ESCAPE '\'    -- bound: "V%"
+```
+
+An aggregate over arithmetic (`Max(F("points") + 1)`) names no single column, so its alias is read
+as a number.
+
+`@range` and `@nrange` work on an alias too. Both bounds are checked against the alias's type:
+
+```julia
+# Seasons with between 10 and 16 races
+query = M.Race.objects
+query.values("year", "n" => Count("raceid"))
+query.filter("n__@range" => [10, 16])
+```
+
+```sql
+HAVING COUNT("Tb"."raceid") BETWEEN $1 AND $2    -- bound: 10, 16
+```
+
+`@isnull` works on a `Max`, `Min`, `Sum` or `Avg` alias, and is true for a group in which every value
+is `NULL`:
+
+```julia
+# Seasons where no race has a recorded start time
+query = M.Race.objects
+query.values("year", "latest_start" => Max("time"))
+query.filter("latest_start__@isnull" => true)
+```
+
+```sql
+HAVING MAX("Tb"."time") IS NULL
+```
+
+On a `Count` alias it raises `FilterError` when the query is built, because `COUNT` never returns
+`NULL` (an empty group counts 0) and the filter could never match. Compare the count with `=> 0`
+instead.
 
 Three further consequences worth knowing:
 
-- **`@range`, `@nrange`, `@isnull` and the JSONB lookups are `WHERE`-only.** On an alias they raise
-  `FilterError` when the query is built, naming the lookup and the alias. Use `@gt`/`@lt` pairs on the
-  alias, or filter the underlying field.
+- **The JSONB lookups are `WHERE`-only.** On an alias they raise `FilterError` when the query is
+  built, naming the lookup and the alias. Filter the underlying field instead.
 - An operator that is PostgreSQL-only on a column is PostgreSQL-only on an alias too.
   `@iunaccent_contains` and `@iunaccent_exact` raise
   [`BackendCapabilityError`](../errors.md) on SQLite from `HAVING` exactly as they do from `WHERE`.

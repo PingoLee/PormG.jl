@@ -351,6 +351,16 @@ end
 """
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:Union{AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID}
   if haskey(PormGsuffix, x.first[end])
+    suffix = x.first[end]
+    # #654: the two lookups whose value SHAPE is fixed, checked where the vector arm checks range
+    # arity. A scalar `@range` reached the renderer and indexed `[2]` into it — a raw `BoundsError`
+    # in WHERE, and in HAVING once #654 let an alias reach the range binder. A non-`Bool` `@isnull`
+    # reached `ISNULL` as a `MethodError`, and once that arm joined the shared ladder, as
+    # "ISNULL is not a supported operator" — a token nobody types, blaming the operator for the value.
+    suffix in ("range", "nrange") &&
+      throw(FilterError("Error in filter, '$(suffix)' operator requires exactly 2 values, got 1"))
+    suffix == "isnull" && !(x.second isa Bool) &&
+      throw(FilterError("Error in filter, 'isnull' takes true or false, got $(repr(x.second))"))
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__"))) # TODO, maybe I need to check if the column is valid and process the function before store
@@ -1976,11 +1986,14 @@ end
 # MEMBERSHIP lookup, so the rhs is a list of values" licenses the map — which is exactly why Django
 # puts the mixin on the lookup class.
 #
-# Everything that is not `IN`/`NOT IN` passes through untouched, so `BETWEEN` (which indexes its two
-# operands separately, below) and every scalar comparison are unaffected.
+# `BETWEEN`/`NOT BETWEEN` are the other iterable lookup — Django's `Range` carries the same mixin —
+# and #654 routes them through here too, so their two operands are formatted in ONE guarded call and
+# neither binds until both succeed (the #467 contract, which the WHERE arm used to hand-roll). Every
+# scalar comparison passes through untouched.
+const _ITERABLE_LOOKUP_OPERATORS = ("IN", "NOT IN", "BETWEEN", "NOT BETWEEN")
 _format_filter_value(formatter, values, operator::AbstractString) =
-  operator in ("IN", "NOT IN") && values isa AbstractArray ? [formatter(v) for v in values] :
-                                                             formatter(values)
+  operator in _ITERABLE_LOOKUP_OPERATORS && values isa AbstractArray ? [formatter(v) for v in values] :
+                                                                       formatter(values)
 
 # The filter path's shared re-raise (#411, #467). A formatter reports a value it cannot coerce as
 # `InvalidValueError`, whose own docstring scopes it to the insert/update coercion helpers — on a
@@ -2006,8 +2019,8 @@ _format_filter_value(formatter, values, operator::AbstractString) =
 # **Call it only from inside a `catch`.** The non-`InvalidValueError` arm is `rethrow(e)`, which is
 # legal in a function only while a handler is dynamically in scope; called anywhere else it raises
 # `"rethrow(exc) not allowed outside a catch block"` and masks the error it was handed. There are
-# exactly three callers, all inside a `catch`: `_guarded_format` below, the `BETWEEN` arm, and the
-# sargable rewrite's bounds guard.
+# exactly two callers, both inside a `catch`: `_guarded_format` below and the sargable rewrite's
+# bounds guard. (The `BETWEEN` arm was a third until #654 routed it through `_guarded_format`.)
 _rethrow_as_filter_error(e, field_name, field_type, values; subject::AbstractString = "field") =
   e isa InvalidValueError ?
     throw(FilterError("The \e[4m\e[31m$(field_name)\e[0m $(subject) is the type " *
@@ -2024,11 +2037,11 @@ _rethrow_as_filter_error(e, field_name, field_type, values; subject::AbstractStr
 # 1 plain model field). Exactly ONE -- the plain-field arm -- sat inside a `try`. #576 routed the
 # other 12 through here.
 #
-# Two further sites call a formatter DIRECTLY rather than through `_format_filter_value`, so they
-# are not among the 13 and do not route through here either: the `BETWEEN` arm formats two operands
-# and must bind neither until both succeed (guarded since #467), and the sargable rewrite guards a
-# bounds computation rather than a formatter call (guarded by #576). Both call
-# `_rethrow_as_filter_error` directly, so the message and the type check still have one definition.
+# One further site calls a formatter DIRECTLY rather than through `_format_filter_value`: the
+# sargable rewrite guards a bounds computation rather than a formatter call (guarded by #576), and
+# calls `_rethrow_as_filter_error` directly, so the message and the type check still have one
+# definition. The `BETWEEN` arm was the other until #654 — its two operands now format here, as one
+# iterable lookup, which is what keeps "bind neither until both succeed" (#467) true in both clauses.
 #
 # Both labels are arguments because the sites cannot agree on where they come from: a model field
 # carries `.type`, a projection alias carries only its own spelling and whichever formatter the
@@ -2163,6 +2176,24 @@ function _guard_scalar_bytes(v::SQLTypeOper, f_meta)
   return _guard_scalar_bytes(v, f_meta, label)
 end
 
+# Bind an already-FORMATTED value in the shape `_render_predicate` expects for `operator` (#654).
+#
+# Two operators do not fit "one value, one placeholder": `BETWEEN`/`NOT BETWEEN` bind their two
+# operands as two parameters, in text order, and hand back the pair; `ISNULL` binds nothing and
+# hands back its `Bool` polarity. Everything else is the ordinary single bind, with the wildcard
+# decoration a `LIKE_WILDCARD_OPERATORS` value needs. Shared by the WHERE `BETWEEN` arm and the
+# HAVING alias branch so the two clauses cannot bind a range differently — that divergence is the
+# failure mode `_render_predicate` exists to remove, one step earlier.
+function _bind_predicate_value(instruc::SQLInstruction, operator::AbstractString, formatted)
+  if operator in ("BETWEEN", "NOT BETWEEN")
+    return (add_parameter!(instruc, formatted[1]), add_parameter!(instruc, formatted[2]))
+  elseif operator == "ISNULL"
+    return formatted
+  end
+  return add_parameter!(instruc, formatted,
+                        contains = operator in LIKE_WILDCARD_OPERATORS, operator = operator)
+end
+
 # The operator ladder every filter predicate renders through, whatever clause it lands in (#618).
 #
 # It used to be inlined at the tail of `_get_filter_query(::SQLTypeOper, …)` — the WHERE path — while
@@ -2183,12 +2214,26 @@ end
 # dialect-dependent by design. Neither is re-rendered here, and this function binds nothing — the
 # caller owns the binding, including the `contains=` / `operator=` wildcard decoration a
 # `LIKE_WILDCARD_OPERATORS` value needs.
+#
+# #654 finished the extraction. `BETWEEN`/`NOT BETWEEN` and `ISNULL` were served by WHERE arms that
+# returned ABOVE this ladder, so the alias branch could not reach them and #618 refused them there.
+# They are arms here now, with the two shapes that made them early returns stated as the argument:
+# `BETWEEN` takes a 2-tuple of placeholders (`_bind_predicate_value`), and `ISNULL` takes the `Bool`
+# polarity itself, because it binds nothing. A `BETWEEN` that arrives with anything but a 2-tuple
+# — a transform arm, which binds one vector — falls through to the unknown-operator refusal it
+# always reached. `aggregate` is the alias branch's explicit licence to put an aggregate call under
+# `IS NULL`, which `ISNULL` otherwise refuses (#197); it is never inferred from the column text.
 function _render_predicate(column::AbstractString, operator::AbstractString, placeholders,
-                           instruc::SQLInstruction)::String
+                           instruc::SQLInstruction; aggregate::Bool = false)::String
   if operator in ["=", ">", "<", ">=", "<=", "<>", "!="]
     return string(column, " ", operator, " ", placeholders)
   elseif operator in ["IN", "NOT IN"]
     return _render_membership(column, operator, placeholders, instruc)
+  elseif operator in ("BETWEEN", "NOT BETWEEN") && placeholders isa Tuple{Any,Any}
+    # #207: `nrange` renders NOT BETWEEN — the operator string carries it, so it is emitted verbatim.
+    return string(column, " ", operator, " ", placeholders[1], " AND ", placeholders[2])
+  elseif operator == "ISNULL" && placeholders isa Bool
+    return ISNULL(column, placeholders; aggregate = aggregate)
   elseif operator in PATTERN_LOOKUP_OPERATORS
     @pormg_debug false
     # The `ESCAPE` clause an escaped pattern needs comes from these arms and the `%` from the
@@ -2325,39 +2370,31 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # `ISNULL`/`BETWEEN` arms re-rendered the column too, free only while the memo key was
     # non-`nothing`. `_render_membership` states the invariant this restores: no filter-LHS
     # renderer binds a parameter of its own.
-    if v.operator in ["ISNULL"]
-      return getfield(QueryBuilder, Symbol(v.operator))(column, v.values)
+    # #654: `ISNULL` and `BETWEEN` used to RETURN from here, rendering their own SQL above the
+    # shared ladder — which is why the alias branch could not reach them. They only bind now, and
+    # fall through to `_render_predicate` like every other operator.
+    if v.operator == "ISNULL"
+      placeholders = v.values   # the `Bool` polarity; `IS [NOT] NULL` binds nothing
     elseif v.operator in ("BETWEEN", "NOT BETWEEN")
-      # Handle (NOT) BETWEEN with two parameters. #207: `nrange` renders NOT BETWEEN — the operator
-      # string carries "BETWEEN"/"NOT BETWEEN" so both branches emit it verbatim.
-      column_sql = column
-      field_name = ""
-      if isa(v.column, SQLTypeField)
-        if isa(v.column.field, String)
-          field_name = v.column.field
-        end
-      end
-
-      if field_name != "" && haskey(instruc.object.model.fields, field_name)
-        f_meta = instruc.object.model.fields[field_name]
-        # #467: the two operands are formatted through the SAME re-raise as every other operator.
-        # They used to sit outside the guard, so `"date__@range" => ["x", "y"]` was the one filter
-        # shape that still reported a wrong-typed value as `InvalidValueError`. `field_name` is the
-        # branch's own local, which is why the message can be built here at all: `v.column.field` is
-        # not guaranteed to be a String in this branch.
-        formatted = try
-          (f_meta.formatter(v.values[1]), f_meta.formatter(v.values[2]))
-        catch e
-          _rethrow_as_filter_error(e, field_name, f_meta.type, v.values)
-        end
-        p1 = add_parameter!(instruc, formatted[1])
-        p2 = add_parameter!(instruc, formatted[2])
-        return string(column_sql, " ", v.operator, " ", p1, " AND ", p2)
+      # #467: both operands format in ONE guard and neither binds until both succeed — the
+      # iterable-lookup arm of `_format_filter_value` is what does that now.
+      #
+      # The joined-path arm is new with #654. A path that is not a key of `model.fields`
+      # (`"driverid__dob__@range"`) used to bind both operands RAW — no formatter, so
+      # `["x", "y"]` on a date column went to the database as two strings instead of refusing, and
+      # a `Date` bound as a `Date` rather than as the text form its equality twin binds. It takes the
+      # terminal field from the memo exactly as the joined-path equality arm below does (#474/#576).
+      range_field, range_label = if v.column isa SQLField && v.column.field isa String &&
+                                    haskey(instruc.object.model.fields, v.column.field)
+        instruc.object.model.fields[v.column.field], v.column.field
+      elseif v.column isa SQLField && (_rf = memo_field(instruc, memo_key(v.column))) !== nothing
+        _rf, memo_key(v.column)[2]
       else
-        p1 = add_parameter!(instruc, v.values[1])
-        p2 = add_parameter!(instruc, v.values[2])
-        return string(column_sql, " ", v.operator, " ", p1, " AND ", p2)
+        nothing, ""
       end
+      formatted = range_field === nothing ? v.values :
+        _guarded_format(range_field.formatter, v.values, v.operator, range_label, range_field.type)
+      placeholders = _bind_predicate_value(instruc, v.operator, formatted)
     elseif haskey(instruc.object.model.fields, v.column.field)
       # Does this operator take `%` decoration? `add_parameter!` then routes the value through
       # `_apply_like_wildcards`, which picks the shape from the same constants (#604).

@@ -456,10 +456,17 @@ function _resolve_having_filter_value(alias::MemoKey, raw_value, instruc::SQLIns
   # The message is alias-shaped on purpose. `_rethrow_as_filter_error`'s default wording names a
   # *field*, and there is no field here: `alias[2]` is an output name the user invented in
   # `values(...)`, and the type is whatever formatter the ladder below resolved for it.
+  # #654: `@isnull`'s value is the predicate's polarity, not a value of the alias's type, so it is
+  # not formatted — `format_number_sql(true)` would be a category error, not a check.
+  operator == "ISNULL" && return raw_value
   formatter = _having_alias_formatter(alias, instruc)
   formatted_value = _guarded_format(formatter, raw_value, operator, alias[2],
                                     _formatter_type_label(formatter);
                                     subject = "projection alias")
+  # #654: a range is two scalars formatted as one iterable lookup, so the SQLite native-value rule
+  # applies per operand — exactly what each would get as the right-hand side of a `@gte`/`@lte`.
+  operator in ("BETWEEN", "NOT BETWEEN") &&
+    return [_sqlite_preserve_native_parameter(r, f, instruc) for (r, f) in zip(raw_value, formatted_value)]
   return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
 end
 
@@ -472,10 +479,10 @@ end
 # "not a valid number". That half is not an error-type problem and no handler could have papered
 # over it — it is simply wrong, which is why the bare-reference arm below exists.
 #
-# Deliberately narrow: only a bare `F("col")` naming a field of the queried model is resolved.
-# `F("a") + Day(1)` carries an `operation` whose result type is not the column's, and a joined path
-# (`F("driverid__surname")`) is not a key of `model.fields`; both keep the fallback rather than get
-# a guess. Widening either is its own change with its own test.
+# Deliberately narrow: only a projection naming ONE column is resolved — a field of the queried
+# model, or (#652) a joined / CTE path, through `_alias_column_field`. `F("a") + Day(1)` carries an
+# `operation` whose result type is not the column's, so arithmetic keeps the fallback rather than
+# get a guess.
 # The projection an alias names, as the USER wrote it — the unrendered node.
 #
 # Three places hold a projection and only this one is the source: `instruc.select` holds rendered
@@ -535,20 +542,14 @@ end
 
 # The operators `_render_predicate` has no arm for, refused in the clause that cannot serve them (#618).
 #
-# On the WHERE path `ISNULL` and `BETWEEN`/`NOT BETWEEN` are handled by arms that `return` *before* the
-# shared ladder, so extracting the ladder did not carry them — and an alias filter reaching the ladder
-# with one of them got `"Invalid filter operator: BETWEEN is not a supported operator"`, naming a token
-# the caller never typed. Refuse earlier, in the caller's own vocabulary, and say where the lookup does
-# work. Supporting them on an alias is a separate change: `BETWEEN` needs two formatted operands and
-# `_resolve_having_filter_value` formats one.
-#
-# The JSON four are here for the same reason at lower severity: they never reach `_render_predicate`
-# (`_resolve_having_filter_value` refuses first), so nothing leaked — but the message blamed the
-# VALUE's type ("the c projection alias is the type number. Please check the value: {"a":1}") for what
-# is really "this lookup has no alias renderer". Same confusion, quieter.
-const _ALIAS_UNSUPPORTED_OPERATORS = Dict("BETWEEN" => "@range", "NOT BETWEEN" => "@nrange",
-                                          "ISNULL" => "@isnull",
-                                          "jcontains" => "@jcontains", "has_key" => "@has_key",
+# #618 put `@range`, `@nrange` and `@isnull` here too: their WHERE arms returned above the shared
+# ladder, so an alias filter reaching it got `"Invalid filter operator: BETWEEN is not a supported
+# operator"`, naming a token the caller never typed. #654 moved those arms into the ladder, so only
+# the JSON four remain. They never reach `_render_predicate` (`_resolve_having_filter_value` refuses
+# first), but the message blamed the VALUE's type ("the c projection alias is the type number.
+# Please check the value: {"a":1}") for what is really "this lookup has no alias renderer" — a JSONB
+# operator over an aggregate has no obvious meaning, so refuse in the caller's own vocabulary.
+const _ALIAS_UNSUPPORTED_OPERATORS = Dict("jcontains" => "@jcontains", "has_key" => "@has_key",
                                           "has_any_keys" => "@has_any_keys",
                                           "has_keys" => "@has_keys")
 function _guard_alias_clause_operator(v::SQLTypeOper, label::AbstractString)
@@ -558,7 +559,29 @@ function _guard_alias_clause_operator(v::SQLTypeOper, label::AbstractString)
     "The \e[31m$(spelling)\e[0m lookup is not supported on the projection alias " *
     "\e[31m$(label)\e[0m. It is available on a column — filter the underlying field instead, " *
     "or compare the alias with \e[32m@gt\e[0m / \e[32m@lt\e[0m / \e[32m@gte\e[0m / " *
-    "\e[32m@lte\e[0m / \e[32m@in\e[0m."))
+    "\e[32m@lte\e[0m / \e[32m@in\e[0m / \e[32m@range\e[0m."))
+end
+
+# May `@isnull` put this alias's aggregate under `IS NULL`? (#654)
+#
+# `ISNULL` refuses any column text containing `(` (#197), and an aggregate alias renders as a call,
+# so the alias branch has to say so explicitly — decided from the projection NODE, never sniffed from
+# the rendered text. `MAX`/`MIN`/`SUM`/`AVG` return NULL exactly when every value in the group is
+# NULL, which is a real question to ask. `COUNT` never returns NULL, so the lookup could never match
+# — refused rather than rendered, because a filter that is silently always-false is the worse
+# failure. Anything else (a bare `F("col")`, arithmetic, another function) answers `false`, which
+# leaves `ISNULL`'s own guard to decide exactly as it does in `WHERE`.
+const _ISNULL_AGGREGATES = ("MAX", "MIN", "SUM", "AVG")
+function _alias_isnull_aggregate(alias::MemoKey, instruc::SQLInstruction)::Bool
+  source = _projected_source(alias, instruc)
+  source === nothing && return false
+  projected = source.field
+  projected isa SQLTypeFunction || return false
+  projected.function_name == "COUNT" && throw(FilterError(
+    "The \e[31m@isnull\e[0m lookup can never match the projection alias \e[31m$(alias[2])\e[0m: " *
+    "COUNT never returns NULL — an empty group counts 0. Compare it with \e[32m$(alias[2])__@gt\e[0m " *
+    "=> 0 or \e[32m$(alias[2])\e[0m => 0 instead."))
+  return projected.function_name in _ISNULL_AGGREGATES
 end
 
 function _having_alias_formatter(alias::MemoKey, instruc::SQLInstruction)
@@ -575,18 +598,36 @@ function _having_alias_formatter(alias::MemoKey, instruc::SQLInstruction)
       haskey(PormGTypeField, projected.function_name) &&
         return getfield(Models, PormGTypeField[projected.function_name])
       projected.function_name in ("SUM", "COUNT") && return Models.format_number_sql
-      if projected.function_name in ("MAX", "MIN") && projected.column isa String &&
-         haskey(instruc.object.model.fields, projected.column)
-        return instruc.object.model.fields[projected.column].formatter
+      if projected.function_name in ("MAX", "MIN")
+        column_field = _alias_column_field(projected.column, instruc)
+        column_field === nothing || return column_field.formatter
       end
-    elseif isa(projected, FExpression) && projected.operation === nothing &&
-           projected.column isa String && haskey(instruc.object.model.fields, projected.column)
-      return instruc.object.model.fields[projected.column].formatter   # #576: the bare `F("col")`
+    elseif isa(projected, FExpression) && projected.operation === nothing
+      column_field = _alias_column_field(projected.column, instruc)   # #576: the bare `F("col")`
+      column_field === nothing || return column_field.formatter
     end
   end
 
   return IntegerField().formatter
 end
+
+# The field a `Max`/`Min` or bare-`F` projection's column names, or `nothing` when it names none.
+#
+# #652: #576 resolved only a key of `model.fields`, so `Max("driverid__surname")` — the most natural
+# text aggregate there is — fell to the `IntegerField` fallback and refused every text term. The
+# terminal field is not a guess: the join walk records it under the path's `MemoKey` while the
+# SELECT renders (`build_joins.jl`, the `memo_field!` after the walk; `_build_row_join` for a
+# CTE/joined handle), and `build()` renders the SELECT before the filters, so it is there when this
+# runs — the same entry the WHERE path's joined-path arm reads. A `CTEReference`/`JoinedReference`
+# column is what `_retag_cte_field!`/`_retag_joined_field!` leave behind, and `memo_key(ref)` names
+# its namespace. Anything else — arithmetic, a nested function — names no single column and keeps
+# the fallback on purpose: its result type is not a column's.
+_alias_column_field(column::String, instruc::SQLInstruction) =
+  haskey(instruc.object.model.fields, column) ? instruc.object.model.fields[column] :
+                                                memo_field(instruc, memo_key(:base, column))
+_alias_column_field(column::Union{CTEReference,JoinedReference}, instruc::SQLInstruction) =
+  memo_field(instruc, memo_key(column))
+_alias_column_field(::Any, ::SQLInstruction) = nothing
 
 """
   get_filter_query(object::SQLObject, instruc::SQLInstruction)
@@ -655,30 +696,31 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         # (`ImageField`/`FileField` share `type == "BLOB"` but carry `format_text_sql`, so the
         # formatter test is as tight as the WHERE side's `_is_binary_field` struct test.)
         _guard_alias_scalar_bytes(v, _having_alias_formatter(having_key, instruc), having_key[2])
-        # #618: refuse, in this clause, the operators `_render_predicate` has no arm for. `BETWEEN` /
-        # `NOT BETWEEN` / `ISNULL` are served on the WHERE path by arms that return ABOVE that ladder,
-        # so they never reached the extraction. Naming the user's own spelling matters here: the
-        # internal token is `BETWEEN`, but nobody types that — they type `@range`.
+        # #618: refuse, in this clause, the operators `_render_predicate` has no arm for — since #654
+        # only the JSON four. Naming the user's own spelling matters here: the internal token is
+        # `jcontains`, but nobody types that — they type `@jcontains`.
         _guard_alias_clause_operator(v, having_key[2])
+        # #654: `@isnull` on a COUNT alias refuses here, ahead of any render, for the reason above.
+        isnull_aggregate = v.operator == "ISNULL" && _alias_isnull_aggregate(having_key, instruc)
         set_context!(instruc, :having)
         try
           field = _having_alias_lhs(having_key, having_cached, instruc)
           # #618: `contains=` / `operator=` are what run `_apply_like_wildcards` (and with it
           # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias
           # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the
-          # term matched as a wildcard. The gate is membership in `LIKE_WILDCARD_OPERATORS`, exactly as
-          # the three WHERE binding arms in `build_helpers.jl` spell it; the `*_exact` pattern lookups
-          # compare with `=` and must NOT be decorated, which is why that tuple and
-          # `PATTERN_LOOKUP_OPERATORS` are deliberately different sets (`constants.jl`).
-          is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
-          placeholder = add_parameter!(instruc,
-                                       _resolve_having_filter_value(having_key, v.values, instruc, v.operator),
-                                       contains=is_like_op, operator=v.operator)
+          # term matched as a wildcard. `_bind_predicate_value` applies that gate — membership in
+          # `LIKE_WILDCARD_OPERATORS`, exactly as the WHERE binding arms in `build_helpers.jl` spell
+          # it; the `*_exact` pattern lookups compare with `=` and must NOT be decorated, which is why
+          # that tuple and `PATTERN_LOOKUP_OPERATORS` are deliberately different sets
+          # (`constants.jl`). #654: it also binds a range's two operands, and nothing for `@isnull`.
+          placeholder = _bind_predicate_value(instruc, v.operator,
+                          _resolve_having_filter_value(having_key, v.values, instruc, v.operator))
           # #618: one ladder, shared with the WHERE path — see `_render_predicate`. It absorbs the #411
           # `IN`/`NOT IN` membership case this branch used to special-case, adds the
           # `PATTERN_LOOKUP_OPERATORS` → `Dialect` dispatch it never had, and brings the
           # unknown-operator refusal that was missing here entirely.
-          push!(instruc.having, _render_predicate(string(field), v.operator, placeholder, instruc))
+          push!(instruc.having, _render_predicate(string(field), v.operator, placeholder, instruc;
+                                                  aggregate = isnull_aggregate))
         finally
           set_context!(instruc, :where)
         end

@@ -3709,17 +3709,11 @@ end
     @test sl_tr[:parameters] == ["1991-03%"]   # before #618: "1991-03", undecorated and unescaped
     @test !occursin("istartswith", sl_tr[:sql_text])
 
-    # `@range` / `@nrange` / `@isnull` are WHERE-only on an alias, and the refusal must name the
-    # LOOKUP THE USER TYPED. On the WHERE path those three are served by arms that `return` ABOVE the
-    # shared ladder, so the extraction never picked them up — which first surfaced as
-    # `"Invalid filter operator: BETWEEN is not a supported operator"` on a query whose author wrote
-    # `@range`, i.e. an internal token leaking into a user-facing message. Refused earlier now, in the
-    # caller's own vocabulary. (Supporting them on an alias is a separate change: BETWEEN needs two
-    # formatted operands and `_resolve_having_filter_value` formats one.)
-    # The JSONB four are on the same list at lower severity: they never reached `_render_predicate`
-    # (`_resolve_having_filter_value` refused first), so nothing leaked — but the message blamed the
-    # VALUE's type ("the c projection alias is the type number. Please check the value: {…}") for what
-    # is really "this lookup has no alias renderer". Same confusion, quieter.
+    # The JSONB four are refused on an alias, and the refusal must name the LOOKUP THE USER TYPED.
+    # They never reached `_render_predicate` (`_resolve_having_filter_value` refused first), so nothing
+    # leaked — but the message blamed the VALUE's type ("the c projection alias is the type number.
+    # Please check the value: {…}") for what is really "this lookup has no alias renderer". (#618 also
+    # refused `@range` / `@nrange` / `@isnull` here; #654 supports them — see the next testset.)
     for (spelling, value) in (("jcontains", Dict("a" => 1)), ("has_key", "a"),
                               ("has_any_keys", ["a", "b"]), ("has_keys", ["a", "b"]))
         err = @test_throws PormG.FilterError (q = M.Race.objects;
@@ -3731,32 +3725,6 @@ end
         @test !occursin("is the type", err.value.msg)   # not a value-type complaint any more
     end
 
-    for (spelling, value) in (("range", [1, 5]), ("nrange", [1, 5]), ("isnull", true))
-        err = @test_throws PormG.FilterError (q = M.Race.objects;
-                                             q.values("n2" => Count("raceid"));
-                                             q.filter("n2__@$(spelling)" => value);
-                                             inspect_query(q))
-        msg = err.value.msg
-        @test occursin("@$(spelling)", msg)          # the user's spelling
-        @test occursin("n2", msg)                    # and which alias
-        @test !occursin("BETWEEN", msg)              # never the internal token
-        @test !occursin("ISNULL", msg)
-        # Same lookup on a real COLUMN still renders — the refusal is clause-scoped, not global.
-        # Asserted on the SQL and the bound vector rather than on "it did not throw": an `isa Dict`
-        # control passes against a build that silently stopped emitting the predicate at all.
-        ok = M.Race.objects
-        ok.values("name")
-        ok.filter(spelling == "isnull" ? ("name__@isnull" => true) : ("year__@$(spelling)" => value))
-        ok_sql = inspect_query(ok)
-        if spelling == "isnull"
-            @test occursin("IS NULL", ok_sql[:sql_text])
-            @test ok_sql[:parameters] == []
-        else
-            @test occursin(spelling == "nrange" ? "NOT BETWEEN" : "BETWEEN", ok_sql[:sql_text])
-            @test ok_sql[:parameters] == [1, 5]
-        end
-    end
-
     # An operator no renderer knows is refused at build time. The alias branch had no `else` arm at
     # all, so anything at all reached the server as a bare token; the shared ladder brings WHERE's
     # refusal with it.
@@ -3766,6 +3734,111 @@ end
     bad_q.values("nm" => Max("name"))
     push!(bad_q.object.filter, bad)
     @test_throws PormG.FilterError inspect_query(bad_q)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# @range / @nrange / @isnull on a projection alias render through the one ladder (#654)
+# #618 refused all three on an alias: their WHERE arms returned ABOVE `_render_predicate`, so the
+# shared ladder never learned them. #654 moved them into it — `BETWEEN` takes a pair of placeholders,
+# `ISNULL` takes its polarity — so `HAVING COUNT(x) BETWEEN $1 AND $2` is one spelling, not two
+# predicates. `BETWEEN` is the first TWO-parameter operator to reach the `:having` bucket, which is
+# why the proof is the cross-backend differential: PostgreSQL numbers `$n` as it binds, so its text
+# order is authoritative, and SQLite's flat vector must equal it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "@range / @nrange / @isnull on a projection alias (#654)" begin
+    # ── @range / @nrange: both operands bound, in :having, in text order ─────────
+    for (spelling, keyword) in (("range", "BETWEEN"), ("nrange", "NOT BETWEEN"))
+        rng_q() = (q = M.Race.objects; q.values("year", "n" => Count("raceid"));
+                   q.filter("n__@$(spelling)" => [10, 16]); q)
+        sl = _assert_order_by_aligned(rng_q)
+        pg = inspect_query(rng_q(); connection = _ALIGN_PG)
+        @test occursin("HAVING COUNT(\"Tb\".\"raceid\") $(keyword) ? AND ?", sl[:sql_text])
+        @test occursin("HAVING COUNT(\"Tb\".\"raceid\") $(keyword) \$1 AND \$2", pg[:sql_text])
+        @test sl[:parameters] == [10, 16]
+        @test sl[:parameter_buckets][:having] == [10, 16]
+        @test sl[:parameter_buckets][:where] == []
+        # `range` must not be read as a prefix of `nrange`'s keyword: the plain lookup is BETWEEN only.
+        spelling == "range" && @test !occursin("NOT BETWEEN", sl[:sql_text])
+    end
+
+    # ── Behind a projection that BINDS (#595's shape) ────────────────────────────
+    # The HAVING left-hand side re-renders the CASE, which binds its own two operands into `:having`
+    # AHEAD of the range's — `COUNT(CASE WHEN year = ? THEN ? END) BETWEEN ? AND ?`. A range bound
+    # before its left-hand side, or once per pair instead of per operand, misaligns every marker.
+    case_q() = (q = M.Race.objects;
+                q.values("circuitid", "c" => Count(Case([When("year" => 1991, then = 1)])));
+                q.filter("c__@range" => [1, 3]); q)
+    sl_case = _assert_order_by_aligned(case_q)
+    @test sl_case[:parameter_buckets][:having] == [1991, 1, 1, 3]
+    @test occursin(r"HAVING COUNT\(CASE.*END\s*\) BETWEEN \? AND \?"s, sl_case[:sql_text])
+
+    # ── Both operands format through the alias's type, in ONE guard (#467) ───────
+    # A `Max` over a date column is typed as a date (#652), so each operand binds as its text form and
+    # a wrong-typed pair refuses as a FilterError naming the alias — never a raw InvalidValueError.
+    date_q() = (q = M.Race.objects; q.values("year", "last" => Max("date"));
+                q.filter("last__@range" => [Date("1991-01-01"), Date("1991-12-31")]); q)
+    @test _assert_order_by_aligned(date_q)[:parameters] == ["1991-01-01", "1991-12-31"]
+    bad_err = @test_throws PormG.FilterError (q = M.Race.objects; q.values("year", "last" => Max("date"));
+                                             q.filter("last__@range" => ["x", "y"]); inspect_query(q))
+    @test occursin("projection alias is the type", bad_err.value.msg)
+
+    # ── Arity survives: still enforced where the filter is parsed ────────────────
+    # A PIN, not a regression test: the vector cases pass on the pre-#654 code too, because the
+    # parse-time check fires before #618's refusal did. PR #651 regressed exactly this once and
+    # rendered a silently truncated BETWEEN, which is why it is pinned for an alias now that one can
+    # reach the range binder.
+    for vals in ([1], [1, 2, 3])
+        err = @test_throws PormG.FilterError (q = M.Race.objects; q.values("year", "n" => Count("raceid"));
+                                             q.filter("n__@range" => vals); inspect_query(q))
+        @test occursin("requires exactly 2 values, got $(length(vals))", err.value.msg)
+    end
+    # The SCALAR case is the real regression test. It was never checked: `"year__@range" => 5` died
+    # as a raw `BoundsError` in WHERE, and the same error reached HAVING once the alias could bind a
+    # range. Now the parse step refuses both in the vector arm's words.
+    for key in ("n__@range", "year__@nrange")
+        err = @test_throws PormG.FilterError (q = M.Race.objects; q.values("year", "n" => Count("raceid"));
+                                             q.filter(key => 5); inspect_query(q))
+        @test occursin("requires exactly 2 values, got 1", err.value.msg)
+    end
+    # A non-Bool `@isnull` is refused as a VALUE problem in the user's vocabulary — never as
+    # "ISNULL is not a supported operator", which the move into the shared ladder would otherwise say.
+    for key in ("n__@isnull", "name__@isnull")
+        err = @test_throws PormG.FilterError (q = M.Race.objects; q.values("year", "n" => Max("round"));
+                                             q.filter(key => "true"); inspect_query(q))
+        @test occursin("takes true or false", err.value.msg)
+        @test !occursin("ISNULL", err.value.msg)
+    end
+
+    # ── @isnull: per aggregate ───────────────────────────────────────────────────
+    # MAX/MIN/SUM/AVG are NULL exactly when every value in the group is — a real question. The render
+    # binds nothing, so both engines agree trivially; the assertion that matters is the SQL.
+    for (agg, fname) in ((Max, "MAX"), (PormG.Functions.Min, "MIN"), (Sum, "SUM"), (Avg, "AVG"))
+        for (polarity, suffix) in ((true, "IS NULL"), (false, "IS NOT NULL"))
+            isn_q() = (q = M.Race.objects; q.values("year", "x" => agg("round"));
+                       q.filter("x__@isnull" => polarity); q)
+            sl_isn = _assert_order_by_aligned(isn_q)
+            @test occursin("HAVING $(fname)(\"Tb\".\"round\") $(suffix)", sl_isn[:sql_text])
+            @test sl_isn[:parameters] == []
+        end
+    end
+    # COUNT never returns NULL, so the lookup could never match — refused rather than rendered as a
+    # filter that is silently always-false. The message names the alias and says why.
+    cnt_err = @test_throws PormG.FilterError (q = M.Race.objects; q.values("year", "n" => Count("raceid"));
+                                             q.filter("n__@isnull" => true); inspect_query(q))
+    @test occursin("COUNT never returns NULL", cnt_err.value.msg)
+    @test occursin("n", cnt_err.value.msg)
+    # A bare column alias takes `ISNULL`'s own rule, exactly as in WHERE: no call, so it renders.
+    f_q() = (q = M.Race.objects; q.values("year", "nm" => F("name")); q.filter("nm__@isnull" => false); q)
+    @test occursin("HAVING \"Tb\".\"name\" IS NOT NULL", inspect_query(f_q())[:sql_text])
+
+    # ── The WHERE forms are unchanged by the move into the ladder ────────────────
+    # Same lookups on real columns, asserted on SQL and bound vector — the refactor's regression test.
+    w_rng = inspect_query((q = M.Race.objects; q.values("name"); q.filter("year__@range" => [1990, 1991]); q))
+    @test occursin("WHERE \"Tb\".\"year\" BETWEEN ? AND ?", w_rng[:sql_text])
+    @test w_rng[:parameters] == [1990, 1991]
+    w_isn = inspect_query((q = M.Race.objects; q.values("name"); q.filter("name__@isnull" => true); q))
+    @test occursin("WHERE \"Tb\".\"name\" IS NULL", w_isn[:sql_text])
+    @test w_isn[:parameters] == []
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

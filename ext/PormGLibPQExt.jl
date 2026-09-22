@@ -13,10 +13,103 @@ using PormG
 import PormG: PormGPostgres, PormGPostgresParam
 import LibPQ
 
+# ── Connection-string preflight (#657) ───────────────────────────────────────
+#
+# A connection string that libpq cannot PARSE leaks its credential two ways, and both happen inside
+# `LibPQ.Connection` before PormG can intervene:
+#
+#   * `LibPQ.conninfo(str)` reports a parse failure through its Memento logger — `error(LOGGER, …)`
+#     PRINTS `[error | LibPQ]: missing "=" after "horse" in connection info string` and then throws.
+#     libpq's parse messages quote the fragment they choked on, and for an unquoted passphrase
+#     (`password=corr3ct horse battery`) or a bad percent-escape (`postgresql://u:p%zzSECRET@h/db` →
+#     `invalid percent-encoded token: "p%zzSECRET"`) that fragment IS the password.
+#   * A NUL byte never reaches libpq at all: Julia's `Cstring` conversion throws
+#     `ArgumentError: embedded NULs are not allowed in C strings: "<the whole DSN>"`.
+#
+# Either one then became `PoolConnectError.cause`, rendered verbatim beside the redacted
+# `connection=` field. So the string is checked HERE, before `LibPQ.Connection` sees it: this is the
+# one sink every DSN source reaches — the builder, `url:`, `register_connection`, the resolver —
+# which is why the check is not per source. `PQconninfoParse` is called directly (not through
+# `LibPQ.conninfo`) precisely to skip the Memento line.
+#
+# The NUL check must come FIRST: `PQconninfoParse` takes a `Cstring`, so a NUL makes the ccall itself
+# throw the leaking `ArgumentError`.
+function _preflight_conninfo(conn_str::AbstractString)
+  '\0' in conn_str && throw(PormG.InvalidConfigurationError(
+    "the PostgreSQL connection string contains a NUL character, which a PostgreSQL connection string cannot carry"))
+  err_ref = Ref{Ptr{UInt8}}(C_NULL)
+  ci_ptr = LibPQ.libpq_c.PQconninfoParse(conn_str, err_ref)
+  # Read the parsed options (`LibPQ.conninfo(::Ptr)` only walks the array — it does not log) before
+  # freeing them; they are needed for the host check below.
+  parsed = ci_ptr == C_NULL ? LibPQ.ConnectionOption[] :
+           try LibPQ.conninfo(ci_ptr) finally LibPQ.libpq_c.PQconninfoFree(ci_ptr) end
+  if err_ref[] != C_NULL
+    msg = unsafe_string(err_ref[])
+    LibPQ.libpq_c.PQfreemem(err_ref[])
+    throw(PormG.InvalidConfigurationError(
+      "the PostgreSQL connection string could not be parsed: " * _mask_libpq_quoted(chomp(msg)) *
+      # The example deliberately names no `password=`/`user=` key: `PoolConnectError` renders this
+      # message through `redact_secret`, which would mask the example into `(password=****)`.
+      ". A value containing spaces must be single-quoted ('two words'); in a URL, " *
+      "percent-encode reserved characters"))
+  end
+  # A string that PARSES can still leak: libpq splits a URL's userinfo at the FIRST `@`, so a password
+  # holding an unencoded `@` — `postgresql://u:pa@ssSEC@localhost/db` — becomes password `pa` and host
+  # `ssSEC@localhost`, and the connect failure then quotes that host (`could not translate host name
+  # "ssSEC@localhost"`) through LibPQ's Memento logger and into the cause, where no `://` lets
+  # `redact_secret` recognise it. The host libpq PARSED is the exact test — no re-derivation of its
+  # URL grammar here — and no DNS name or IP address contains an `@`, so refusing costs nothing. A
+  # host starting with `/` is a Unix-socket directory, which may legitimately contain one.
+  # (The sibling shape, an unencoded `/` in the password, is not refused: it parses into an odd but
+  # legal dbname, so telling it apart needs a design call — tracked in #658. That
+  # includes `u:pa@ss/SEC@h`, which parses to host `ss`: no check on host or port can see it.)
+  #
+  # `port` gets the same treatment, and more strictly: when the password's tail holds a `:` as well
+  # (`u:pa@ss:SEC@localhost`) the tail lands in PORT — `"SEC@localhost"` — and libpq's `invalid
+  # integer value "…" for connection option "port"` quotes it at connect time. A port entry that is
+  # not an integer is refused outright, `@` or not: libpq rejects it anyway, only later and louder.
+  for opt in parsed
+    ismissing(opt.val) && continue
+    if opt.keyword == "host"
+      any(h -> occursin('@', h) && !startswith(strip(h), '/'), split(opt.val, ',')) &&
+        throw(PormG.InvalidConfigurationError(
+          "the PostgreSQL connection string's host contains an `@`, which no host name can. If it " *
+          "came from a URL password, percent-encode the `@` as %40 — the password ends at the first one"))
+    elseif opt.keyword == "port"
+      # `lstrip('+')`: libpq reads the port with `strtol`, which takes a sign, so `+5432` is legal.
+      any(p -> !all(isdigit, lstrip(strip(p), '+')), split(opt.val, ',')) &&
+        throw(PormG.InvalidConfigurationError(
+          "the PostgreSQL connection string's port is not an integer. If it came from a URL password " *
+          "holding an `@` or `:`, percent-encode them as %40 / %3A"))
+    end
+  end
+  # `C_NULL` with no message is libpq's out-of-memory case; let `LibPQ.Connection` report it.
+  return nothing
+end
+
+# Mask everything libpq quoted. libpq quotes every value it echoes into a parse message, so masking
+# from the FIRST `"` to the LAST one removes every echoed fragment at once:
+# `missing "=" after "horse" in connection info string` → `missing "****" in connection info string`.
+# Masking quote PAIRS instead would leak: the echoed value can itself contain a `"`, and then the
+# pairing is off by one and the tail of the value lands outside every pair. Losing the template text
+# between the first and last quote is the price, and over-masking is the safe direction.
+# `redact_secret` still runs over the result — and again when `PoolConnectError` renders it.
+function _mask_libpq_quoted(msg::AbstractString)::String
+  first_q = findfirst('"', msg)
+  first_q === nothing && return PormG.Configuration.redact_secret(msg)
+  last_q = findlast('"', msg)
+  tail = last_q == first_q ? "" : msg[nextind(msg, last_q):end]
+  return PormG.Configuration.redact_secret(msg[1:first_q] * "****\"" * tail)
+end
+
+function _open_connection(pool::PormGPostgres)
+  _preflight_conninfo(pool.connection_string)
+  return LibPQ.Connection(pool.connection_string)
+end
+
 # ── Backend interface methods ────────────────────────────────────────────────
 
-PormG.backend_connect(pool::PormGPostgres; read_only::Bool = false) =
-  LibPQ.Connection(pool.connection_string)
+PormG.backend_connect(pool::PormGPostgres; read_only::Bool = false) = _open_connection(pool)
 
 function PormG.backend_renew_connection(pool::PormGPostgres, conn::LibPQ.Connection; read_only::Bool = false)
   # Reset the existing handle in place; if that fails, open a fresh connection.
@@ -28,7 +121,7 @@ function PormG.backend_renew_connection(pool::PormGPostgres, conn::LibPQ.Connect
     return conn
   catch e
     @debug "PG connection reset failed; opening a new connection" exception=e
-    return LibPQ.Connection(pool.connection_string)
+    return _open_connection(pool)
   end
 end
 
@@ -169,6 +262,9 @@ end
 # so they degrade to the normal wait-to-deadline path. LibPQ raises the same `PQConnectionError` (message
 # only, no SQLSTATE) for auth and host failures alike, so this is message-substring based (#72).
 function PormG.backend_is_permanent_connect_error(pool::PormGPostgres, e)
+  # A connection string `_preflight_conninfo` refused (NUL, unparseable) is the most permanent
+  # failure there is: the same string fails the same way on every retry (#657).
+  e isa PormG.InvalidConfigurationError && return true
   msg = lowercase(string(e))
   return occursin("password authentication failed", msg) ||
          occursin("no pg_hba.conf entry", msg) ||

@@ -59,6 +59,7 @@ Catch the umbrella when you want a category, the concrete type when you want a r
 | any query, connection lost mid-flight | `OperationalError` | Transient. Retry the **whole transaction**, never the statement |
 | any query, pool saturated | `PoolTimeoutError` | Raise `pool_size`/`pool_timeout` — see [Advanced Configuration](configuration/advanced.md) |
 | any query, database unreachable | `PoolConnectError` | Carries the `cause` and a redacted connection string |
+| any query, PostgreSQL connection string libpq cannot parse | `PoolConnectError` | Fails fast; `cause` is an `InvalidConfigurationError` with the quoted fragment masked — see [Advanced Configuration](configuration/advanced.md) |
 | `with_advisory_lock(...; wait = false)` | `OperationalError` | Lock held elsewhere. **Never raised on SQLite** — see [Advisory Locks](advisory_lock.md) |
 | `with_advisory_lock(...; on_missing_lock = :error)` on SQLite | `BackendCapabilityError` | SQLite has no advisory locks; the body would run unprotected, so it is refused instead |
 

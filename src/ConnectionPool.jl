@@ -98,6 +98,13 @@ redacted connection string; catchable so apps can translate it distinctly (e.g. 
 
 Reparented from `Exception` to `PormGError` (#239), so `catch PormGError` covers connection failures
 too. Catching `PoolConnectError` specifically is unaffected.
+
+A connection string the driver cannot even *parse* — a NUL byte, an unquoted space inside a value, a
+malformed percent-escape in a URL — is permanent too, and its `cause` is an
+`InvalidConfigurationError` whose message masks the fragment libpq quoted (#657). Every rendering of
+the error — `showerror`, `show`/`repr`/`string`, and PormG's own log lines — passes the cause through
+`redact_secret`; the `cause` field itself is the raw object, so reflecting on it (`e.cause`, `dump`,
+`getfield`) is outside that guarantee.
 """
 struct PoolConnectError <: PoolError
   adapter::String        # "PostgreSQL" | "SQLite"
@@ -107,10 +114,24 @@ struct PoolConnectError <: PoolError
   elapsed_seconds::Float64
 end
 
+# Render a connect-failure cause for display or a log line. The ONE place a cause becomes text, so
+# `showerror` and every `@debug`/`@error` below agree (#657). A driver error can quote the connection
+# string it was handed — Julia's C-string conversion echoes the whole DSN on an embedded NUL — so the
+# text goes through `redact_secret`. The LibPQ extension refuses such strings before the driver sees
+# them; this is the backstop for any path or driver that does not.
+_redacted_cause(cause) = redact_secret(cause isa Exception ? sprint(showerror, cause) : string(cause))
+
+# The 2-arg `show` too, not only `showerror`: `"$e"`, `string(e)` and `repr(e)` go through it, and the
+# default method prints every field — the raw `cause` included. `@error "…: $e"` is an ordinary line to
+# write in an app, so the backstop has to cover it. The cause appears as its redacted text.
+Base.show(io::IO, e::PoolConnectError) = print(io,
+  "PoolConnectError(", repr(e.adapter), ", ", repr(_redacted_cause(e.cause)), ", ", repr(e.connection),
+  ", ", e.attempts, ", ", e.elapsed_seconds, ")")
+
 Base.showerror(io::IO, e::PoolConnectError) = print(io,
   "PoolConnectError: could not open a ", e.adapter, " connection after ", e.attempts, " attempt(s) / ",
   round(e.elapsed_seconds, digits=1), "s: ",
-  (e.cause isa Exception ? sprint(showerror, e.cause) : string(e.cause)),
+  _redacted_cause(e.cause),
   " (connection=", e.connection, "). Check credentials, host, and database name in connection.yml.")
 
 function _run_before_connect!(pool::Union{PormGPostgres, PormGSQLite})
@@ -967,7 +988,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
           fast_fail = _on_connect_failure!(pool, e, last_connect_error)
           _handoff_or_free!(pool, i)                    # pass the slot on / free it
           fast_fail && return (:connect_failed, e)
-          @debug "Failed to materialize handed-off PG connection $i: $e" connection_string=redact_secret(pool.connection_string)
+          @debug "Failed to materialize handed-off PG connection" slot=i cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
           return (:retry, nothing)
         end
       end
@@ -995,7 +1016,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
             return (:got, new_conn)
           catch e
             _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
-            @debug "Failed to create PG connection $i: $e" connection_string=redact_secret(pool.connection_string)
+            @debug "Failed to create PG connection" slot=i cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
             pool.available[i] = true
             continue
           end
@@ -1020,7 +1041,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
           return (:got, new_conn)
         catch e
           _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
-          @debug "Failed to expand PG pool: $e" connection_string=redact_secret(pool.connection_string)
+          @debug "Failed to expand PG pool" cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
         end
       end
 
@@ -1142,7 +1163,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
           fast_fail = _on_connect_failure!(pool, e, last_connect_error)
           _handoff_or_free!(pool, i)
           fast_fail && return (:connect_failed, e)
-          @debug "Failed to materialize handed-off SQLite connection $i: $e" connection_string=redact_secret(pool.connection_string)
+          @debug "Failed to materialize handed-off SQLite connection" slot=i cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
           return (:retry, nothing)
         end
       end
@@ -1171,7 +1192,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
             return (:got, new_conn)
           catch e
             _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
-            @debug "Failed to create SQLite connection $i: $e" connection_string=redact_secret(pool.connection_string)
+            @debug "Failed to create SQLite connection" slot=i cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
             pool.available[i] = true
             continue
           end
@@ -1198,7 +1219,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
           return (:got, new_conn)
         catch e
           _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
-          @debug "Failed to expand SQLite pool: $e" connection_string=redact_secret(pool.connection_string)
+          @debug "Failed to expand SQLite pool" cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
         end
       end
 
@@ -1388,7 +1409,7 @@ function reconnect_db(pool::PormGPostgres, conn)
     # Reset in place, or recreate if the reset fails (handled in the extension).
     backend_renew_connection(pool, conn)
   catch e
-    @error "Failed to renew PG connection $i: $e"
+    @error "Failed to renew PG connection" slot=i cause=_redacted_cause(e)
     nothing
   end
   new_conn === nothing && return nothing
@@ -1424,7 +1445,7 @@ function reconnect_db(pool::PormGSQLite, conn)
     # SQLite has no in-place reset; the extension opens a fresh DB handle.
     backend_renew_connection(pool, conn; read_only = is_reader_slot)
   catch e
-    @error "Failed to recreate SQLite connection $i: $e"
+    @error "Failed to recreate SQLite connection" slot=i cause=_redacted_cause(e)
     nothing
   end
   new_conn === nothing && return nothing

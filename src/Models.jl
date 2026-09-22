@@ -4016,11 +4016,39 @@ end
 # refused. (`_fk_default_or_warn` is cited above only for its `Integer` arm — it deliberately does
 # NOT refuse a `Bool`, because a SQLite 0/1 boolean default is what the column really stores.)
 #
-# One arm of the seam still differs and is NOT closed here: `format2int64(::Decimals.Decimal)`
-# predates all of this, so `IntegerField(default = Decimal(0,5,0))` stores 5 while
-# `_coerce_default(Decimal(0,5,0), CInt64())` refuses it as "not a valid default for this column
-# type". Neither side moved in #614; naming it so the next reader does not mistake the agreement
-# below for a total one.
+# #632 closed the last arm of the seam, and it closed it by NARROWING the declared side:
+# `format2int64(::Decimals.Decimal)` is gone. Before, `IntegerField(default = Decimal(0,5,0))`
+# stored 5 while `_coerce_default(Decimal(0,5,0), CInt64())` refused it as "not a valid default for
+# this column type" — so `LiteralDefault`'s `isequal` was not the real comparison `_coerce_default`
+# exists to guarantee (#522). Three reasons the DECLARED side is the one that moved:
+#
+#   - `_coerce_default` is the stated owner of this policy ("the coercion each field constructor's
+#     `validate_default` converter applies"), and its integer branch is Bool refused / Integer to
+#     Int64 / AbstractString parsed, with no Decimal arm and a catch-all refusal. Moving the live
+#     side would have meant rewriting the rule to match an accident.
+#   - `docs/src/read/filters_and_aggregates.md` already documented the integer `default=` contract
+#     WITHOUT `Decimal`. The narrowing makes the code match a page that was already right.
+#   - The acceptance was spelling-dependent, not value-dependent, which is the part that makes it
+#     an accident rather than a feature. `Int64(::Decimal)` only works at scale 0, and nothing
+#     normalizes a Decimal on the way in:
+#         Decimal(0,  5,  0) =  5    -> 5
+#         Decimal(0,  5, -1) =  0.5  -> ArgumentError   (right answer, wrong reason)
+#         Decimal(0, 50, -1) =  5.0  -> ArgumentError   (integral, and still refused)
+#     `parse(Decimal, "5.0")` happens to normalize to scale 0 and so DID work, which is why the
+#     gap read as harmless: whether a value was accepted depended on how the Decimal was built,
+#     not on what it denoted. Widening the live side would have copied that onto both sides.
+#
+# This is `default=` only. The VALUE path is unchanged and still takes an integer-valued Decimal on
+# an integer column — `validate_field_data`'s integer arm (`querybuilder/sanitization.jl`) has
+# always had its own `Int64(value)` try and never routed through here, so the Django-parity rule it
+# implements is untouched. The split is deliberate and pinned in
+# `test_field_validation_and_operations.jl`: a Decimal is a valid integer VALUE, not a valid
+# integer DEFAULT, because only the default has to agree with what introspection reads back.
+#
+# `format2float64(::Real)` is deliberately UNTOUCHED: `Decimal <: Real`, so `FloatField` and
+# `DecimalField` still take one, and `_coerce_default`'s `CFloat64`/`CDecimal` arm always did. The
+# two families differ because the columns differ — a float column can hold a scaled value and an
+# integer column cannot — so this is the asymmetry being correct, not a second gap.
 #
 # These throws are mostly invisible: `validate_default` wraps the converter in a bare `catch` and
 # substitutes its own "Expected type: …" text. That imprecision is known and deliberate here — an
@@ -4030,9 +4058,11 @@ end
 function format2int64(x::AbstractString)::Int64
   return parse(Int64, x |> string)
 end
-function format2int64(x::Decimals.Decimal)::Int64
-  return Int64(x)
-end
+# (#632) There is no `format2int64(::Decimals.Decimal)`. Its absence is the fix, so it is named
+# here rather than left as a silence: a `Decimal` now misses both methods, raises a `MethodError`,
+# and `validate_default`'s `catch` relabels it into the taxonomy as a `FieldValidationError` — the
+# same refusal `_coerce_default` gives. See the seam paragraph above for why the declared side is
+# the one that moved.
 function format2int64(x::Integer)::Int64
   # #614. `Int64(x)` rather than `parse(Int64, string(x))`: the value is already integral, and the
   # round trip through text would only add a way to fail. An out-of-range `BigInt`/`UInt64` raises
@@ -4089,27 +4119,62 @@ Validate the default value for a field based on the expected type.
   stale from before the #231/#239 error taxonomy. Nothing in the repo would have caught it:
   `test_docs_error_type_drift.jl` scans `docs/src` prose and counts raise sites on non-comment
   `src/` lines, and a stale type name in a docstring is neither.)
+- If the converter *returns* a value outside `expected_type`, a [`FieldValidationError`](@ref) is
+  thrown too (#631). That is a PormG bug rather than a bad default, and the message says so — see
+  the carve-out below for why the distinction is worth two messages.
 
 An `InterruptException` or `StackOverflowError` raised *inside* the converter is NOT a bad
 default and propagates untouched — see the comment on the carve-out below.
 """
 function validate_default(default, expected_type::Type, field_name::String, converter::Function)
-  if (default isa expected_type)
-    return default
-  else
-    try
-      return converter(default)
-    catch e
-      # #472: a program-state failure is not "this value is not a valid default". Without this,
-      # Ctrl-C during a large `convert_schema_to_models` run reached the caller relabelled as a
-      # FieldValidationError — so introspection's warn-and-drop guard would swallow the interrupt,
-      # retry the constructor and report a cancelled import as a bad column default. Same carve-out
-      # as `_fk_default_or_warn` and the `Model_to_str` render-failure path.
-      (e isa InterruptException || e isa StackOverflowError) && rethrow()
-      @pormg_debug false
-      throw(FieldValidationError("Invalid default value for $field_name. Expected type: $expected_type, got: $(typeof(default)). Please provide a value of type $expected_type."))
-    end
+  (default isa expected_type) && return default
+
+  converted = try
+    converter(default)
+  catch e
+    # #472: a program-state failure is not "this value is not a valid default". Without this,
+    # Ctrl-C during a large `convert_schema_to_models` run reached the caller relabelled as a
+    # FieldValidationError — so introspection's warn-and-drop guard would swallow the interrupt,
+    # retry the constructor and report a cancelled import as a bad column default. Same carve-out
+    # as `_fk_default_or_warn` and the `Model_to_str` render-failure path.
+    (e isa InterruptException || e isa StackOverflowError) && rethrow()
+    @pormg_debug false
+    throw(FieldValidationError("Invalid default value for $field_name. Expected type: $expected_type, got: $(typeof(default)). Please provide a value of type $expected_type."))
   end
+
+  # #631. Until this line the converter's RESULT was returned unchecked, so a converter whose
+  # codomain did not match its `expected_type` put a wrong-typed value into the struct slot and the
+  # failure surfaced as a raw `MethodError` from `convert` — OUTSIDE this function's `catch`, and so
+  # outside the #231/#239 taxonomy. Three converters could do it and all three were live defects:
+  # `format_date_sql` on every input (`DateField`, fixed in #631 by giving it
+  # `normalize_date_default` instead), and `format_uuid_sql` / `format_json_sql` on `missing`, where
+  # both return `missing` into a `Union{String, Nothing}` slot.
+  #
+  # The hole was named three times before it was closed — `_binary_default_bytes` and `_int_kwarg`
+  # in `models/fields.jl`, and `Migrations._coerce_default`'s docstring — each time as a reason for
+  # a local workaround. Those workarounds stay; this makes the next one unnecessary.
+  #
+  # KNOWN GAP, 32-bit only. Three sites pass `expected_type = Int` with `format2int64`, which is
+  # declared `::Int64`: `DecimalField`'s `max_digits`/`decimal_places` and `BinaryField`'s string
+  # `max_length` branch. Where `Int === Int64` (every platform this is tested on) they agree. On a
+  # 32-bit build `Int === Int32`, so `DecimalField(max_digits = "12")` would fail this check and
+  # report a "PormG bug" for a perfectly good width. Spelling `Int64` at those sites fixes that
+  # and opens the mirror-image hole — the slots are `::Int`, so an out-of-range value would then
+  # reach `convert(Int32, ::Int64)` and raise a raw `InexactError` OUTSIDE this function, which is
+  # precisely the class #631 closed. Neither spelling is right; the width keywords want
+  # `_int_kwarg`'s treatment (it maps `InexactError` into the taxonomy) rather than
+  # `validate_default`'s. Left as-is and filed rather than settled here, because picking a side is
+  # a decision and there is no 32-bit CI job to measure it against.
+  (converted isa expected_type) && return converted
+
+  # Deliberately NOT the message above. That one blames the caller's value, which is right when the
+  # converter threw and wrong here: the value was accepted and the CONVERTER is at fault, so the
+  # text names the returned type and the converter rather than the argument.
+  @pormg_debug false
+  throw(FieldValidationError("Internal: the default converter for $field_name returned a " *
+                             "$(typeof(converted)), which $expected_type cannot hold. The value " *
+                             "$(repr(default)) was accepted but could not be stored; this is a " *
+                             "PormG bug, please report it."))
 end
 
 function validate_timezone(value::AbstractString, format::AbstractString)

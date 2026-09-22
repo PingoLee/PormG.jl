@@ -39,8 +39,16 @@ width guard, and nothing but an exhaustive pass catches one of them drifting bac
 `Migrations._coerce_default` (`src/migrations/introspection.jl`) has always done exactly this
 policy — `Bool` refused, `Integer` to `Int64`, `Real` to `Float64` — and its docstring says it
 applies "the coercion each field constructor's `validate_default` converter applies". It did not.
-The last testset here pins the two sides together for the `Integer` / `Real` arms, and pins the one
-arm that still diverges (`Decimals.Decimal` on an integer column) so it cannot pass for agreement.
+The last testset here pins the two sides together.
+
+#614 left one arm diverging and pinned it as such: `format2int64(::Decimals.Decimal)` let the
+declared side take a `Decimal` on an integer column where `_coerce_default` refused one. #632 closed
+it by dropping that method — the declared side narrowed, because `_coerce_default` is the stated
+owner of the policy, `docs/src/read/filters_and_aggregates.md` already documented the integer
+contract without `Decimal`, and the old acceptance was spelling-dependent rather than
+value-dependent (`Int64(::Decimal)` works only at scale 0, so an integral `Decimal(0, 50, -1)` was
+refused while `Decimal(0, 5, 0)` was not). `FloatField` / `DecimalField` still take a `Decimal` on
+both sides; that asymmetry is the columns differing, not a second gap.
 
 ## Mutation gates
 
@@ -259,14 +267,17 @@ end
 # this fix that was false for every integral spelling but `Int64`: the live side accepted an
 # `Integer` and the declared side refused it, which is the drift that helper exists to prevent.
 #
-# NOT a claim that the two sides agree on everything — see the `Decimal` rows at the end, which
-# pin the one arm that still differs. Narrowed after review, where the original wording ("pins the
-# two sides together") claimed more than the assertions checked.
+# #632 closed the last arm. This testset was written under #614 with a caveat — it asserted
+# agreement on the `Integer` / `Real` arms and pinned `Decimals.Decimal` on an integer column as a
+# KNOWN divergence, "so that closing the gap later is a visible change to this file rather than a
+# silent one". That is what happened: the `Decimal` rows below are now agreement rows, and the
+# caveat is gone rather than reworded.
 #
-# Mutation gate: revert either converter in `src/Models.jl` and this testset raises where
-# `_coerce_default` returns.
+# Mutation gates, one per site:
+#   - revert either converter in `src/Models.jl`            -> the Integer / Real loop raises
+#   - restore `format2int64(::Decimals.Decimal)`            -> the Decimal refusal rows fail
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "constructor default= agrees with Migrations._coerce_default (#614)" begin
+@testset "constructor default= agrees with Migrations._coerce_default (#614, #632)" begin
   coerce = PormG.Migrations._coerce_default
 
   for probe in (Int32(5), Int16(5), UInt8(5), big(5), 5)
@@ -287,15 +298,33 @@ end
   @test_throws PormG.FieldValidationError FloatField(default = true)
   @test_throws PormG.FieldValidationError coerce(true, PormG.CFloat64())
 
-  # The one arm that still DIVERGES, pinned as it is rather than as it ought to be.
-  # `format2int64(::Decimals.Decimal)` predates #614, so the declared side takes a `Decimal` on an
-  # integer column; `_coerce_default` refuses one. #614 moved neither side. Asserted so that
-  # closing the gap later is a visible change to this file rather than a silent one, and so the
-  # testset name cannot be read as a claim of total agreement.
-  @test IntegerField(default = Decimal(0, 5, 0)).default === Int64(5)
-  @test_throws PormG.FieldValidationError coerce(Decimal(0, 5, 0), PormG.CInt64())
-  # On the float column they DO agree, which is what makes the integer arm the odd one out.
-  @test FloatField(default = Decimal(0, 5, 0)).default === coerce(Decimal(0, 5, 0), PormG.CFloat64()) === 5.0
+  # #632 — the arm that used to diverge. `format2int64(::Decimals.Decimal)` is gone, so BOTH sides
+  # refuse a `Decimal` on an integer column. Four spellings rather than one, because the old
+  # acceptance was spelling-dependent rather than value-dependent — `Int64(::Decimal)` only worked
+  # at scale 0, so `Decimal(0, 50, -1)` (= 5.0, integral) was refused while `Decimal(0, 5, 0)`
+  # (= 5) was accepted. Sweeping all four is what pins the new rule as one rule.
+  for d in (Decimal(0, 5, 0),     # 5    — used to be ACCEPTED as 5 on the declared side
+            Decimal(0, 50, -1),   # 5.0  — integral, and refused anyway: the wart
+            Decimal(0, 5, -1),    # 0.5  — an integer column cannot hold it
+            Decimal(1, 5, 0))     # -5   — the sign arm, in case a future fix forgets it
+    @test_throws PormG.FieldValidationError IntegerField(default = d)
+    @test_throws PormG.FieldValidationError coerce(d, PormG.CInt64())
+  end
+
+  # The refusal reaches every constructor that shares `format2int64`, not just `IntegerField`.
+  # Cheap, and it is the assertion that would catch someone re-adding the method for one field.
+  @test_throws PormG.FieldValidationError IDField(default = Decimal(0, 5, 0))
+  @test_throws PormG.FieldValidationError BigIntegerField(default = Decimal(0, 5, 0))
+  @test_throws PormG.FieldValidationError PositiveIntegerField(default = Decimal(0, 5, 0))
+  @test_throws PormG.FieldValidationError PositiveSmallIntegerField(default = Decimal(0, 5, 0))
+
+  # The FLOAT family is deliberately untouched and still takes a `Decimal` on both sides. This is
+  # the control that keeps the rows above from being read as "PormG refuses Decimals": the two
+  # families differ because the COLUMNS differ, not because one of them was overlooked.
+  for d in (Decimal(0, 5, 0), Decimal(0, 50, -1), Decimal(0, 5, -1))
+    @test FloatField(default = d).default === coerce(d, PormG.CFloat64())
+  end
+  @test FloatField(default = Decimal(0, 5, -1)).default === 0.5
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

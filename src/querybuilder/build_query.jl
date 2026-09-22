@@ -476,17 +476,57 @@ end
 # `F("a") + Day(1)` carries an `operation` whose result type is not the column's, and a joined path
 # (`F("driverid__surname")`) is not a key of `model.fields`; both keep the fallback rather than get
 # a guess. Widening either is its own change with its own test.
+# The projection an alias names, as the USER wrote it — the unrendered node.
+#
+# Three places hold a projection and only this one is the source: `instruc.select` holds rendered
+# copies, `instruc.cache` (the memo) holds only their SQL TEXT, and `instruc.object.values` holds the
+# originals. #595 needs the original, because reusing the text is exactly the defect there.
+#
+# #474: `alias` is a MemoKey; this matches on the OUTPUT name, which is its second half. Comparing
+# the whole key would never match — the review flagged the String-vs-key mismatch as latent, and
+# typing the key is what turns it into a compile-visible one.
+function _projected_source(alias::MemoKey, instruc::SQLInstruction)
+  for selected_value in instruc.object.values
+    selected_alias = selected_value.custom_as !== nothing ? selected_value.custom_as : selected_value._as
+    selected_alias == alias[2] || continue
+    isa(selected_value, SQLTypeField) || continue
+    return selected_value
+  end
+  return nothing
+end
+
+# The left-hand side a HAVING/alias predicate renders against (#595).
+#
+# The branch used to take `memo_projection(...).field` unconditionally — the projection's already
+# rendered SQL text. When the projected expression BINDS, that text carries placeholders whose values
+# were filed under `:select`, and printing it again under HAVING emits markers with nothing behind
+# them. `values("c" => Count(Case([When("year" => 1991, then = 1)]))).filter("c__@gt" => 0)` is two
+# lines of exported API and produced five markers for three bound values: SQLite cannot bind the
+# statement at all. (PostgreSQL numbers `$n` at render, so reprinting the text reuses `$1`/`$2` and
+# is correct there — the same PG-is-fine/SQLite-is-broken split as #586 and #587.)
+#
+# The gate is the one `_get_filter_query(::SQLTypeField)` (#586, build_helpers.jl) and
+# `get_order_query` (#587) already use, applied to the third and last consumer of the memo: reuse the
+# text only for node kinds that cannot bind, and otherwise render the source afresh so the expression
+# binds its own values in the clause it prints in. An aggregate legitimately appears twice in the
+# statement, so binding twice is the correct reading, not a duplicate.
+#
+# Callers must have switched to `:having` first — the fresh render binds, and it must bind there.
+function _having_alias_lhs(alias::MemoKey, cached, instruc::SQLInstruction)
+  source = _projected_source(alias, instruc)
+  # No source (the memo was written by a non-projection path) or a kind that binds nothing: the
+  # memoized text is safe, and reusing it keeps the common case byte-identical.
+  (source === nothing ||
+   source.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject}) && return cached.field
+  return _get_select_query(source.field, instruc, _as = source._as)
+end
+
 function _having_alias_formatter(alias::MemoKey, instruc::SQLInstruction)
   memoized = memo_field(instruc, alias)
   memoized === nothing || return memoized.formatter
 
-  for selected_value in instruc.object.values
-    selected_alias = selected_value.custom_as !== nothing ? selected_value.custom_as : selected_value._as
-    # #474: `alias` is a MemoKey; this loop matches on the OUTPUT name, which is its second half.
-    # Comparing the whole key here would never match — the review flagged the String-vs-key mismatch
-    # as latent, and typing the key is what turns it into a compile-visible one.
-    selected_alias == alias[2] || continue
-    isa(selected_value, SQLTypeField) || continue
+  selected_value = _projected_source(alias, instruc)
+  if selected_value !== nothing
     projected = selected_value.field
 
     if isa(projected, SQLTypeFunction)
@@ -552,9 +592,11 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
           # exactly that spelling, and never the internal namespace half.
           throw(_unknown_field(instruc.object.model, v.column.field;
                                aliases = memo_projection_names(instruc)))
-        field = having_cached.field
-        # Switch to having context for positional parameters
+        # Switch to having context for positional parameters. #595 moved this ABOVE the left-hand
+        # side: resolving it can now RENDER, and a render binds — those values belong in `:having`
+        # with the comparison value, ahead of it, exactly as they print.
         set_context!(instruc, :having)
+        field = _having_alias_lhs(having_key, having_cached, instruc)
         # #618: `contains=` / `operator=` are what run `_apply_like_wildcards` (and with it
         # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias
         # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the

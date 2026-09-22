@@ -1456,9 +1456,17 @@ end
   arith = _IN411.objects
   arith.values("id", "d3" => F("n") + 1)
   arith.filter("d3" => 5)
-  # Two parameters, in clause order: the `1` the arithmetic binds in the SELECT bucket, then the
-  # filter's own `5` in HAVING. Asserting the whole vector rather than just the filter value keeps
-  # the bucket order visible — this alias reaches the fallback formatter, and a change that started
-  # resolving `F("n") + 1` to the column's formatter would still bind `5` and pass a narrower test.
-  @test arith.list(show_query = :dict)[:parameters] == [1, 5]
+  # THREE parameters, in clause order: the `1` the arithmetic binds in SELECT, the `1` it binds
+  # again in HAVING, then the filter's own `5`. Asserting the whole vector rather than just the
+  # filter value keeps the bucket order visible — this alias reaches the fallback formatter, and a
+  # change that started resolving `F("n") + 1` to the column's formatter would still bind `5` and
+  # pass a narrower test.
+  #
+  # #595 changed this expectation, deliberately: it used to read `[1, 5]`, which was the defect
+  # written down as design. The HAVING clause reprinted the projection's memoized text — `("n" + ?)`
+  # — with nothing bound for its `?`, so SQLite got three markers for two values and could not bind
+  # the statement. Adjudicated against the cross-backend differential rather than against either
+  # side: PostgreSQL numbers `$n` at render, and its authoritative text-order walk reads `[1, 1, 5]`
+  # both before and after the fix. SQLite now matches it; before, it did not.
+  @test arith.list(show_query = :dict)[:parameters] == [1, 1, 5]
 end

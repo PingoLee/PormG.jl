@@ -3714,3 +3714,124 @@ end
     push!(bad_q.object.filter, bad)
     @test_throws PormG.FilterError inspect_query(bad_q)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A HAVING predicate on a projection that BINDS renders its own values (#595).
+#
+# The alias branch took `memo_projection(...).field` — the projection's already-rendered SQL text —
+# and printed it under HAVING verbatim. When the projected expression binds, those placeholders'
+# values were filed under `:select`, so the reprint emitted markers with nothing behind them. This is
+# the third and last consumer of the memo to get the gate that #586 put on the WHERE path and #587 on
+# ORDER BY: reuse the text only for node kinds that cannot bind, otherwise render afresh.
+#
+# The issue recorded this as latent, "not reachable through the public surface today". It is
+# reachable: `Case`/`When` are exported, and `Count(Case([When(...)]))` filtered by its alias needs no
+# more than the two lines below. `_having_alias_formatter` resolves COUNT to `format_number_sql`, so
+# the value guard passes and the branch is entered with binding text. Measured before the fix:
+# five markers, three bound values — SQLite cannot bind the statement.
+#
+# Note which engine catches it. PostgreSQL numbers `$n` AT RENDER, so reprinting the text reuses
+# `$1`/`$2` and stays correct — `_assert_predicate_binds_once`'s contiguity check passes on the
+# unpatched code. It is `assert_marker_count` on the SQLite side that fails, which is why every shape
+# here goes through the differential rather than a PostgreSQL-only assertion.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a HAVING predicate on a binding projection renders its own values (#595)" begin
+    case_ops = Any[1991, 1]      # the two operands `Case([When("year" => 1991, then = 1)])` binds
+
+    # The reachable shape. Ungrouped: the aggregate is the only projection, so no GROUP BY prints
+    # and the whole vector is SELECT's copy, HAVING's copy, then the comparison value.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("c" => Count(Case([When("year" => 1991, then = 1)])))
+        q.filter("c__@gt" => 0)
+        q
+    end
+    @test sl[:parameters] == vcat(case_ops, case_ops, Any[0])
+    @test sl[:parameter_buckets][:select] == case_ops
+    @test sl[:parameter_buckets][:having] == vcat(case_ops, Any[0])
+    # The operands bind BEFORE the comparison value, because that is the order they print in.
+    @test sl[:parameter_buckets][:having][end] == 0
+
+    # Grouped: a GROUP BY column between the two copies. `:group` stays empty (the grouping term is
+    # a plain column, which binds nothing), and the run still reads SELECT, HAVING, in text order.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("year", "c" => Count(Case([When("year" => 1991, then = 1)])))
+        q.filter("c__@gt" => 0)
+        q
+    end
+    @test sl[:parameters] == vcat(case_ops, case_ops, Any[0])
+    @test sl[:parameter_buckets][:group] == []
+    @test occursin("GROUP BY", sl[:sql_text])
+
+    # A neighbouring WHERE value on the same query, so a displaced operand would be visible: WHERE
+    # flattens before HAVING, and SELECT before both.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("year", "c" => Count(Case([When("year" => 1991, then = 1)])))
+        q.filter("name" => "Monza")
+        q.filter("c__@gt" => 0)
+        q
+    end
+    @test sl[:parameters] == vcat(case_ops, Any["Monza"], case_ops, Any[0])
+    @test sl[:parameter_buckets][:where] == ["Monza"]
+
+    # Membership over the same binding alias — the operands precede the list, once per clause.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("c" => Count(Case([When("year" => 1991, then = 1)])))
+        q.filter("c__@in" => [0, 1])
+        q
+    end
+    @test sl[:parameters] == vcat(case_ops, case_ops, Any[0, 1])
+
+    # ── Controls: the memo reuse that must NOT have changed ───────────────────────
+    # A non-binding aggregate keeps reusing the memoized text — that is the common case and the
+    # reason the gate is on node kind rather than "always render fresh". Nothing binds for the LHS,
+    # so `:select` stays empty and `:having` holds only the comparison value.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("c" => Count("raceid"))
+        q.filter("c__@gt" => 5)
+        q
+    end
+    @test sl[:parameters] == [5]
+    @test sl[:parameter_buckets][:select] == []
+    @test sl[:parameter_buckets][:having] == [5]
+    # …and the HAVING left-hand side is still the projection's own expression, not a re-derivation.
+    @test occursin("HAVING COUNT(\"Tb\".\"raceid\") > ?", sl[:sql_text])
+
+    # The `String`/CTE/Joined arm of the gate is DEFENSIVE, not decorative, and this is why: a plain
+    # column projected under a new name memoizes under its PATH, not the alias, so filtering by the
+    # alias never reaches the HAVING branch at all — it is refused as an unknown field, listing the
+    # aliases that were actually declared (#446/#474). Asserted so that if a later change makes
+    # alias-on-label reachable, the arm that keeps reusing the memo for it is already in place and
+    # this test says what changed.
+    alias_miss = @test_throws PormG.UnknownFieldError (q = M.Race.objects;
+                                                       q.values("n" => "name");
+                                                       q.filter("n" => "Monza");
+                                                       inspect_query(q))
+    @test occursin("declared aliases: name", alias_miss.value.msg)
+
+    # An aggregate over a joined path binds nothing either, so it reuses the memo and keeps the ONE
+    # join it registered — a fresh render must not have produced a second one.
+    sl = _assert_predicate_binds_once() do
+        q = M.Result.objects
+        q.values("driverid__surname", "n" => Count("resultid"))
+        q.filter("n__@gte" => 1)
+        q
+    end
+    @test sl[:parameters] == [1]
+    @test count("JOIN", sl[:sql_text]) == 1
+
+    # #618 and #595 in one query: a binding aggregate compared through the shared render ladder.
+    # The operands bind under `:having` and the comparison value is decorated — both fixes, one shape.
+    sl = _assert_predicate_binds_once() do
+        q = M.Race.objects
+        q.values("c" => Count(Case([When("year" => 1991, then = 1)])), "nm" => Max("name"))
+        q.filter("c__@gt" => 0)
+        q.filter("nm__@istartswith" => "Mon")
+        q
+    end
+    @test sl[:parameters] == vcat(case_ops, case_ops, Any[0, "Mon%"])
+end

@@ -888,6 +888,24 @@ query.values(
 query.filter("avg_perf__@gt" => 5)
 ```
 
+The projected expression may itself carry values — arithmetic operands, a `Case`/`When` arm, a
+`Value(...)`. Those are bound separately for each clause the expression prints in, so a conditional
+count reads the same in `HAVING` as it does in `SELECT`:
+
+```julia
+# Seasons with more than eight races after round 10
+query = M.Race.objects
+query.values("year", "late_season" => Count(Case([When("round__@gt" => 10, then = 1)])))
+query.filter("late_season__@gt" => 8)
+```
+
+```sql
+SELECT "Tb"."year", COUNT(CASE WHEN "Tb"."round" > $1 THEN $2 ELSE NULL END) as "late_season"
+FROM "race" as "Tb"
+GROUP BY 1
+HAVING COUNT(CASE WHEN "Tb"."round" > $3 THEN $4 ELSE NULL END) > $5
+```
+
 For more complex expressions, see [Field Expressions](field_expressions.md).
 
 ### Which Lookups Work on an Aggregate Alias

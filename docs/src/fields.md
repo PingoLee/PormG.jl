@@ -813,6 +813,22 @@ Encrypted_telemetry = Models.Model("encrypted_telemetry",
 )
 ```
 
+**Filtering on bytes.** A payload compares as one value, byte for byte, and a list of payloads is a
+membership filter:
+
+```julia
+# Equality — one blob, one bound parameter
+Technical_document.objects.filter("file_data" => read("aero.pdf"))
+
+# Membership — a list of payloads
+Technical_document.objects.filter("file_data__@in" => [read("aero.pdf"), read("floor.pdf")])
+```
+
+Mind the difference in the value's *shape*: `filter("file_data" => bytes)` takes a `Vector{UInt8}`
+and `filter("file_data__@in" => [a, b])` takes a vector **of** them. Passing a flat `Vector{UInt8}`
+to `@in` reads it as a list of small integers and is refused, and passing a `Vector{UInt8}` to a
+non-binary field is refused as an operator-less vector value.
+
 !!! note "Migrating a column created by an earlier PormG"
     Earlier versions rendered `BinaryField` as `TEXT` on both backends. The next `makemigrations`
     after upgrading proposes a type change — `ALTER … TYPE bytea USING convert_to(…, 'UTF8')` on

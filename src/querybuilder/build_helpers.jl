@@ -359,6 +359,37 @@ end
 function _get_pair_to_oper(x::Pair{String,T}) where T<:Union{AbstractString,Number,Bool,Dates.Date,Dates.DateTime,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
+# A FLAT `Vector{UInt8}` is one binary payload, not a list of small numbers (#596).
+#
+# `UInt8 <: Number`, so a byte payload used to land in the vector arm below, whose every branch
+# slices `x.first[1:end-1]` — it assumes the last path segment is the operator. With a bare path
+# nothing matched and the pair was refused as "a vector value but no operator", which is the
+# spelling #411's own error message had prescribed as the workaround for `blob__@in`. It never worked.
+#
+# This method is strictly more specific than that arm, so it wins dispatch, and it mirrors the scalar
+# shape above exactly: a `PormGsuffix` key in the last segment delegates back to the ladder (so
+# `blob__@in => UInt8[1, 2]` keeps meaning a two-element IN list of the numbers 1 and 2), and a bare
+# path builds the equality the scalar arm builds.
+#
+# It deliberately does NOT decide whether the field is binary. It cannot: `_check_filter` is handed
+# only the pair, and the `Q` / `Qor` / `When` routes reach it with no model at all — a parse-time
+# decision would fix `filter("blob" => bytes)` and leave `filter(Q("blob" => bytes))` refused. The
+# render path already resolves the field, applies `format_binary_sql` and binds one blob through the
+# scalar `PormGBytes` collector arms; the type check for a NON-binary field lives there with it, so
+# every spelling behaves the same.
+#
+# The distinction is unambiguous by type: `Vector{Vector{UInt8}}` (a list of payloads, #466) and
+# `Vector{Int}` are different types and still take the vector arm.
+function _get_pair_to_oper(x::Pair{Vector{String},Vector{UInt8}})
+  if haskey(PormGsuffix, x.first[end])
+    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  else
+    return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
+  end
+end
+function _get_pair_to_oper(x::Pair{String,Vector{UInt8}})
+  return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
+end
 # Widened alongside its `Pair{Vector{String},…}` twin below (#411). Not reachable from
 # `_check_filter`, which splits the key at `__@` first — but leaving one of a matched pair behind
 # is the drift that bites whoever calls it directly next.
@@ -415,6 +446,9 @@ end
 # mapping the formatter at the call site does not fix those two on its own. #411 admitted the UUID
 # and refused the binary list by name, because the ARRAY collectors did not unwrap `PormGBytes`;
 # #466 taught them to, so a binary list takes the ordinary vector arm below.
+# A FLAT `Vector{UInt8}` — one payload rather than a list of them — does NOT take that arm: #596 gave
+# it its own, strictly more specific method above, because every branch here slices off a trailing
+# operator segment that a bare field path does not have.
 # `Vector{Any}` (#411). `[]` — the way anyone writes an empty list, and what `ids = []` gives you
 # before the first `push!` — is `Vector{Any}`, and `Any` satisfies none of the element bounds the
 # methods below dispatch on. So the most natural spelling of an empty membership list raised a
@@ -2066,6 +2100,35 @@ function _render_membership(column::AbstractString, operator::AbstractString, pl
   end
 end
 
+# The render-time half of #596: a flat `Vector{UInt8}` is only a byte payload if the column can hold
+# bytes.
+#
+# The parse ladder admits `"blob" => bytes` without knowing the field, because it cannot know it —
+# `_check_filter` is handed only the pair, and `Q`/`Qor`/`When` reach it with no model at all. The
+# field IS known here, at every arm that resolves one, so this is where the decision belongs.
+#
+# It must be called from EVERY arm, which is the mistake this helper exists to make hard to repeat:
+# guarding only the base-model arm left `filter("eventid__n" => UInt8[1, 2])` — a joined path to an
+# IntegerField — binding two parameters and comparing a column against the FIRST byte, silently.
+# Measured: refused on the unpatched code, two markers with the guard on one arm only. A payload
+# reaching `add_parameter!` as a bare `AbstractArray` expands to one marker per byte, so a missing
+# guard is silent wrong data, not a loud failure.
+#
+# `f_meta === nothing` means the arm resolved no field, and then this fails CLOSED: nothing has
+# proved the column holds bytes.
+#
+# Keyed on the field STRUCT via `_is_binary_field`, never on `f_meta.type` — `ImageField` and
+# `FileField` also carry `type == "BLOB"` and hold no bytes (#296).
+#
+# The refusal is the funnel the parse ladder used, with the same `allowed` list, so a non-binary
+# field reports the message it has always reported for an operator-less vector value.
+function _guard_scalar_bytes(v::SQLTypeOper, f_meta, label::AbstractString)
+  (v.operator == "=" && v.values isa Vector{UInt8}) || return nothing
+  (f_meta !== nothing && _is_binary_field(f_meta)) && return nothing
+  _raise_invalid_filter_operator([String(label)], "vector",
+                                 ["in", "nin", "range", "nrange", "has_any_keys", "has_keys", "jcontains"])
+end
+
 # The operator ladder every filter predicate renders through, whatever clause it lands in (#618).
 #
 # It used to be inlined at the tail of `_get_filter_query(::SQLTypeOper, …)` — the WHERE path — while
@@ -2256,6 +2319,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       # `_apply_like_wildcards`, which picks the shape from the same constants (#604).
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
       _f_meta = instruc.object.model.fields[v.column.field]
+      _guard_scalar_bytes(v, _f_meta, v.column.field)   # #596
       # #576: was a hand-written `try` whose `catch` carried the note below; it is now the shared
       # `_guarded_format`, which also moves `add_parameter!` OUT of the guard. That is what #467
       # said it wanted ("`add_parameter!` stays outside the new `try`") and what the `BETWEEN` arm
@@ -2282,6 +2346,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     elseif (_vc_field = memo_field(instruc, memo_key(v.column))) !== nothing # #474
       @pormg_debug false
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
+      _guard_scalar_bytes(v, _vc_field, memo_key(v.column)[2])   # #596: the joined-path twin
       # #576: unguarded, and CONFIRMED — this is the ordinary joined-path filter, not an exotic
       # one. Any FK traversal lands here, because `"driverid__dob"` is not a key of `model.fields`,
       # so `filter("driverid__dob" => "not-a-date")` reported `InvalidValueError` on what is
@@ -2299,6 +2364,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     elseif isa(v.column, SQLTypeField)
       @pormg_debug false
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
+      # #596: this arm resolves no field, so it cannot prove the column holds bytes — and it binds
+      # `v.values` RAW, which would send a payload to `add_parameter!(::AbstractArray)` and expand it
+      # into one marker per byte. Fail closed by passing no field.
+      _guard_scalar_bytes(v, nothing, string(v.column.field))
       placeholders = add_parameter!(instruc, v.values, contains=is_like_op, operator=v.operator)
     else
       @pormg_debug false

@@ -165,7 +165,9 @@ to proceed or `false` to abort the connection attempt.
 
 It runs only when a new connection must be opened (not on connection reuse) and
 is invoked outside the pool lock. Decide inside the callback which connections
-need setup, e.g. `basename(settings.db_def_folder) == "db_esus"`.
+need setup, e.g. `basename(settings.db_def_folder) == "db_esus"`. To single out
+connections created by `register_connection`, check `settings.dynamic` rather than the folder
+name.
 
 Typical uses include VPN setup, credential refresh, or SSH tunnel activation.
 When no hook is registered, connections proceed normally.
@@ -546,7 +548,7 @@ function _resolve_loaded_key(path_or_key::String,
   # spellings name one folder.
   target_path = _canonical_folder_path(path_or_key)
   for (key, settings) in config
-    settings.db_def_folder == "dynamic_connection" && continue
+    settings.dynamic && continue
     if _canonical_folder_path(settings.db_def_folder) == target_path
       return key
     end
@@ -848,8 +850,8 @@ end
     VALID_CONFIG_KEYS
 
 Allowed user-facing keys in a `connection.yml` `config:` block (#365).
-Internal `Settings` fields (`app_env`, `db_def_folder`, `db_config_settings`, `connections`)
-are intentionally excluded to prevent tampering from YAML.
+Internal `Settings` fields (`app_env`, `db_def_folder`, `db_config_settings`, `connections`,
+`implicit`, `dynamic`) are intentionally excluded to prevent tampering from YAML.
 """
 const VALID_CONFIG_KEYS = (
   "change_db",
@@ -1156,8 +1158,8 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   path === nothing && (path = DB_PATH )
 
   # #620: the mirror of `register_connection`'s "Cannot overwrite static connection" refusal.
-  # `_resolve_loaded_key` short-circuits on an exact key hit BEFORE its loop skips the
-  # `dynamic_connection` sentinel, so the reuse/migrate block below cannot tell that this key
+  # `_resolve_loaded_key` short-circuits on an exact key hit BEFORE its loop skips dynamic
+  # entries, so the reuse/migrate block below cannot tell that this key
   # names a dynamically registered pool rather than a folder — it falls through to `close_pool!`
   # and replaces the entry, destroying a tenant connection with nothing said beyond the
   # pool-close log line. Refusing rather than warning because the two entries are different
@@ -1170,13 +1172,12 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   # a folder of that name, which manufactures exactly this collision. Equivalent for the refusal
   # itself: `_resolve_loaded_key` returns `path` whenever `haskey(config, path)`, so a dynamic
   # exact hit always yields `key == path`, and when it does not hit, `key` comes from the folder
-  # loop, which skips the sentinel and so is never dynamic.
+  # loop, which skips dynamic entries and so never yields one.
   #
-  # Known false positive, accepted: a STATIC folder literally named `dynamic_connection` stores
-  # the sentinel as its real `db_def_folder`, so its reload is refused. That folder is already
-  # unusable — both resolvers skip it, so no model can bind to it — and de-conflicting it means
-  # taking the sentinel out of band, which is a `Kernel` change (see the follow-up issue).
-  if haskey(config, path) && config[path].db_def_folder == "dynamic_connection"
+  # Keyed on the `dynamic` flag, not on `db_def_folder`: a STATIC folder literally named
+  # `dynamic_connection` stores that string as its real folder, and was refused here while the
+  # check compared against the label (#623).
+  if haskey(config, path) && config[path].dynamic
     throw(InvalidConfigurationError(
       "Cannot load \"$(path)\": that key already holds a dynamic connection registered with " *
       "`register_connection`, and loading would close its pool. Either call " *
@@ -1348,7 +1349,7 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
 
   if haskey(config, key)
     existing = config[key]
-    if existing.db_def_folder != "dynamic_connection"
+    if !existing.dynamic
       throw(InvalidConfigurationError("Cannot overwrite static connection '$(key)'. This key is bound to folder '$(existing.db_def_folder)'."))
     end
     
@@ -1356,10 +1357,13 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
     close_pool!(key)
   end
 
-  # Create a minimal Settings object
+  # Create a minimal Settings object. `dynamic = true` is what marks the entry (#623);
+  # `db_def_folder` holds a label only, kept so a `before_connect` hook reading the folder still
+  # gets a string — nothing in PormG compares against it.
   settings = Settings(
     app_env = haskey(ENV, "PORMG_ENV") ? ENV["PORMG_ENV"] : DEV,
-    db_def_folder = "dynamic_connection"
+    db_def_folder = "dynamic_connection",
+    dynamic = true
   )
   
   settings.db_config_settings = Dict{String, Any}(
@@ -1480,7 +1484,8 @@ end
 Return a compact server-oriented status payload describing whether a
 configuration is loaded and reachable. `implicit` is `true` for an entry that
 `Models.set_models` minted through its implicit load rather than one the
-application loaded itself (#553).
+application loaded itself (#553). `dynamic` is `true` for an entry created by
+`register_connection` rather than loaded from a folder (#623).
 """
 function status(path_or_key::String)
   key = _resolve_loaded_key(path_or_key)
@@ -1505,7 +1510,7 @@ function status(path_or_key::String)
     adapter = get(settings.db_config_settings, "adapter", nothing),
     app_env = settings.app_env,
     db_def_folder = settings.db_def_folder,
-    dynamic = settings.db_def_folder == "dynamic_connection",
+    dynamic = settings.dynamic,
     implicit = settings.implicit,
   )
 end
@@ -1532,6 +1537,11 @@ mutable struct Settings <: PormGSettings
   # it. `Models._pick_connect_key` and `load`'s migrate branch both key on it — both used to infer
   # it from `isabspath(key)`, which the relative `set_models(mod, "db")` form inverts.
   implicit::Bool
+  # #623: `true` only for an entry `register_connection` created, recorded at construction. Not in
+  # `VALID_CONFIG_KEYS`, so YAML cannot set it. Every "is this a folder?" check keys on it — they
+  # used to compare `db_def_folder` against the literal "dynamic_connection", which a static folder
+  # of that name also stores, so that folder read as dynamic.
+  dynamic::Bool
 
   Settings(;
       app_env             = haskey(ENV, "PORMG_ENV") ? ENV["PORMG_ENV"] : "dev",           
@@ -1543,7 +1553,8 @@ mutable struct Settings <: PormGSettings
       connections         = nothing,
           time_zone           = UTC_TIMEZONE,
       django_prefix       = nothing,
-      implicit            = false
+      implicit            = false,
+      dynamic             = false
   ) =
   new(
       app_env,
@@ -1555,7 +1566,8 @@ mutable struct Settings <: PormGSettings
       connections,
       time_zone,
       django_prefix,
-      implicit
+      implicit,
+      dynamic
   )
 end
 

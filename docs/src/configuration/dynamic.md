@@ -45,6 +45,11 @@ PormG.register_connection("tenant_01", "postgres://user:pass@localhost/db_01")
 PormG.register_connection("temp_cache", "cache.db"; adapter="SQLite")
 ```
 
+To tell a dynamic entry from a folder-backed one, read `PormG.Configuration.status(key).dynamic`,
+or `settings.dynamic` inside a `before_connect` hook. Do not compare `db_def_folder`: a dynamic
+entry stores the label `"dynamic_connection"` there, and so does a static folder of that name
+loaded as `load("dynamic_connection")`.
+
 ---
 
 ## Lazy Connection Resolution (Recommended)

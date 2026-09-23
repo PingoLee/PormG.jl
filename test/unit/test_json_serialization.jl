@@ -511,7 +511,7 @@ const CONFIG_CASES = Pair{String, Tuple{Any, String}}[
   "Settings"               => (_settings649(),
     "{\"pormg_settings\":{\"app_env\":\"dev\",\"change_data\":true,\"change_db\":false," *
     "\"connection\":\"PostgreSQL\",\"db_def_folder\":\"j649_folder\",\"django_prefix\":null," *
-    "\"implicit\":false,\"model_file\":\"models.jl\",\"time_zone\":\"UTC\"}}"),
+    "\"dynamic\":false,\"implicit\":false,\"model_file\":\"models.jl\",\"time_zone\":\"UTC\"}}"),
 ]
 
 const CONFIG_TYPES = [
@@ -555,6 +555,14 @@ if HAS_CONFIG_LOWER
         end
       end
     end
+  end
+
+  # The marker document above has every flag `false`, so a slot mix-up in the lowering
+  # (`"dynamic" => _jl_flag(s, :implicit)`) would pass it. Set the two flags apart (#623).
+  @testset "Settings flags lower from their own slots" begin
+    doc = J641.parse(J641.json(PormG.Configuration.Settings(db_def_folder = "j623", dynamic = true)))
+    @test doc["pormg_settings"]["dynamic"] === true
+    @test doc["pormg_settings"]["implicit"] === false
   end
 
   # ───────────────────────────────────────────────────────────────────────────

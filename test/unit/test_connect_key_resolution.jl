@@ -261,20 +261,28 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# `dynamic_connection` entries are not folders and must not be matched
-# `add_connection` registers settings with this sentinel instead of a real folder. Every such
-# entry would otherwise collide with every other, and `Configuration._resolve_loaded_key` already
-# skips them — the two resolvers must not disagree about what counts as a folder.
+# Dynamic entries are not folders and must not be matched
+# `register_connection` entries carry no real folder. Every such entry would otherwise collide with
+# every other, and `Configuration._resolve_loaded_key` already skips them — the two resolvers must
+# not disagree about what counts as a folder. They are recognised by the `dynamic` flag (#623), not
+# by the `"dynamic_connection"` label in `db_def_folder`.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "dynamic_connection entries are skipped" begin
-  cfg = Dict("dyn1" => _S550(db_def_folder = "dynamic_connection"),
-             "dyn2" => _S550(db_def_folder = "dynamic_connection"))
+@testset "dynamic entries are skipped" begin
+  cfg = Dict("dyn1" => _S550(db_def_folder = "dynamic_connection", dynamic = true),
+             "dyn2" => _S550(db_def_folder = "dynamic_connection", dynamic = true))
   @test PormG.Models._resolve_connect_key("dynamic_connection", cfg) === nothing
 
   # A real folder alongside them still resolves, unaffected.
-  cfg2 = Dict("dyn1" => _S550(db_def_folder = "dynamic_connection"),
+  cfg2 = Dict("dyn1" => _S550(db_def_folder = "dynamic_connection", dynamic = true),
               "db"   => _S550(db_def_folder = "db"))
   @test PormG.Models._resolve_connect_key("../db", cfg2) == "db"
+
+  # The flag decides, not the string (#623): a dynamic entry whose folder slot happens to hold a
+  # real folder name is still skipped by BOTH resolvers. Pre-fix both compared the slot against
+  # the literal, so this entry was taken for a folder.
+  cfg3 = Dict{String,PormG.PormGSettings}("dyn" => _S550(db_def_folder = "db", dynamic = true))
+  @test PormG.Models._resolve_connect_key("db", cfg3) === nothing
+  @test Configuration._resolve_loaded_key("db/", cfg3) === nothing
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -510,7 +518,7 @@ end
 # `Configuration.load` refuses a key a dynamic connection already holds (#620)
 # The mirror of `register_connection`'s "Cannot overwrite static connection". A dynamic entry is
 # not a folder, but `_resolve_loaded_key` short-circuits on an exact `haskey` hit BEFORE the loop
-# that skips the `dynamic_connection` sentinel — so `existing == path`, neither the migrate nor
+# that skips dynamic entries — so `existing == path`, neither the migrate nor
 # the reuse branch runs (both require `existing != path`), and `load` fell straight through to
 # `close_pool!` + `config[key] = Settings(...)`. A tenant pool was replaced by a folder-backed
 # entry and closed, with nothing said beyond the pool-close log line.
@@ -533,7 +541,7 @@ end
       # reads the working directory at REGISTRATION time, which is exactly why it cannot cover
       # this: the folder appears afterwards, or a later `cd` lands somewhere it already exists.
       Configuration.register_connection("db", "file::memory:?cache=shared"; adapter = "SQLite")
-      @test PormG.config["db"].db_def_folder == "dynamic_connection"
+      @test PormG.config["db"].dynamic
       pool_before = PormG.config["db"].connections
 
       mkpath("db")
@@ -554,13 +562,14 @@ end
       # The refusal is only half the claim: the entry it refused to overwrite must be untouched.
       # Pre-fix this is where the defect showed — `db_def_folder` became "db" and `connections`
       # was a different pool object, the original having been closed.
-      @test PormG.config["db"].db_def_folder == "dynamic_connection"
+      @test PormG.config["db"].dynamic
       @test PormG.config["db"].connections === pool_before
 
       # The escape the message names actually works, and the folder then loads normally.
       Configuration.unregister_connection("db")
       @test Configuration.load("db"; env = "test") == "db"
       @test PormG.config["db"].db_def_folder == "db"
+      @test !PormG.config["db"].dynamic
 
       # The guard must not widen into "load never replaces anything": a STATIC entry under the
       # same key still reloads in place, as it always has.
@@ -582,12 +591,12 @@ end
       end
       @test err isa PormG.InvalidConfigurationError
       @test !(err isa Configuration.MissingConfigurationError)
-      @test PormG.config["tenant7"].db_def_folder == "dynamic_connection"
+      @test PormG.config["tenant7"].dynamic
     end
 
     # The NEGATIVE half, and the assertion that pins the design: the guard covers the EXACT key
     # only. The rejected alternative fix — making `_resolve_loaded_key`'s `haskey` shortcut skip
-    # the sentinel — was refused because `is_loaded`/`status`/`ping` document resolving dynamic
+    # dynamic entries — was refused because `is_loaded`/`status`/`ping` document resolving dynamic
     # keys. Under it this `load` would start throwing, so this is what fails if anyone tries it.
     # A second entry under a different spelling is the intended outcome: a dynamic key names no
     # folder, so there is nothing for the folder to collide WITH.
@@ -602,8 +611,66 @@ end
       _yml(joinpath("db", "connection.yml"))
       @test Configuration.load("./db"; env = "test") == "./db"
       @test sort(collect(keys(PormG.config))) == ["./db", "db"]
-      @test PormG.config["db"].db_def_folder == "dynamic_connection"   # untouched
+      @test PormG.config["db"].dynamic                                  # untouched
+      @test !PormG.config["./db"].dynamic
     end
+  finally
+    empty!(PormG.config)
+    merge!(PormG.config, saved)
+    rm(root; recursive = true, force = true)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A static folder NAMED `dynamic_connection` is a static folder (#623)
+# `register_connection` used to mark its entries by writing the literal "dynamic_connection" into
+# `db_def_folder`, and every consumer compared against it. A static folder of that name stored the
+# same string as its real folder, so it read as dynamic: `status(...).dynamic` was `true`, both
+# resolvers skipped it (no model could bind to it), and since #620 its reload threw, naming a
+# `register_connection` pool that did not exist. The fact now lives on `Settings.dynamic`, set only
+# by `register_connection`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a static folder named dynamic_connection is not dynamic (#623)" begin
+  saved = copy(PormG.config)
+  root = mktempdir()
+  try
+    empty!(PormG.config)
+    cd(root) do
+      mkpath("dynamic_connection")
+      write(joinpath("dynamic_connection", "connection.yml"),
+            "default_env: test\ntest:\n  adapter: SQLite\n  database: \":memory:\"\n")
+      key = Configuration.load("dynamic_connection"; env = "test")
+      @test key == "dynamic_connection"
+      @test !PormG.config[key].dynamic
+      @test !Configuration.status(key).dynamic
+
+      # Pre-fix, the #620 guard refused this reload as a dynamic takeover.
+      @test Configuration.load("dynamic_connection"; env = "test") == key
+
+      # Both resolvers find it through a spelling that is NOT the literal key — an exact key hit
+      # short-circuits `_resolve_loaded_key` before the loop that used to skip it.
+      @test Configuration._resolve_loaded_key(abspath("dynamic_connection")) == key
+      @test PormG.Models._resolve_connect_key("./dynamic_connection", PormG.config) == key
+    end
+
+    # `register_connection` must refuse to overwrite it as a static entry. From a directory
+    # holding no folder of that name, its `isdir(key)` guard does not fire, so this refusal is
+    # the only thing standing. Pre-fix the entry read as dynamic: re-registering it closed the
+    # folder's pool and swapped in a tenant pool with nothing but a warning.
+    pool_before = PormG.config["dynamic_connection"].connections
+    cd(mktempdir()) do
+      err = try
+        Configuration.register_connection("dynamic_connection", "file::memory:?cache=shared";
+                                          adapter = "SQLite")
+        nothing
+      catch e
+        e
+      end
+      @test err isa PormG.InvalidConfigurationError
+      @test occursin("Cannot overwrite static connection", err.msg)
+    end
+    @test PormG.config["dynamic_connection"].connections === pool_before
+    @test !PormG.config["dynamic_connection"].dynamic
   finally
     empty!(PormG.config)
     merge!(PormG.config, saved)

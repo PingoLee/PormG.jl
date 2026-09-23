@@ -878,10 +878,11 @@ function _resolve_connect_key(path::AbstractString, config)
     by_name = Pair{String,Bool}[]
     for (k, v) in config
         folder = v.db_def_folder
-        # `add_connection` entries carry this sentinel instead of a real folder, so every one of
-        # them would collide with every other. `Configuration._resolve_loaded_key` skips them for
-        # the same reason; the two resolvers should not disagree about what a folder is.
-        folder == "dynamic_connection" && continue
+        # `register_connection` entries carry no real folder, so every one of them would collide
+        # with every other. `Configuration._resolve_loaded_key` skips them for the same reason; the
+        # two resolvers should not disagree about what a folder is. Keyed on the flag, not the
+        # folder string, which a static folder named `dynamic_connection` also holds (#623).
+        v.dynamic && continue
         if _canonical_folder_path(folder) == target
             push!(by_path, k => v.implicit)
         elseif tag_usable && _folder_tag(folder) == tag

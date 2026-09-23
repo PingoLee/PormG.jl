@@ -46,6 +46,8 @@ using PormG.Functions: Lower
 using PormG.Functions: Count
 # #569 — a text format outside the portable table, for the ToChar docstring claim below.
 using PormG.Functions: ToChar
+# #40 — the `Extract` part-spelling claim on the PostgreSQL guide.
+using PormG.Functions: Extract
 import DataFrames
 
 # Mock backends: dialect dispatch is by connection TYPE, so a bare subtype is enough to render
@@ -506,6 +508,58 @@ const DOCERR_CASES = [
         () -> DOCERR_RESULT_SL.objects.values("x" => ToChar("resultid", "HH12:MI AM")).
             list(show_query = :dict),
     ),
+    # #40 — `postgres.md`'s *PostgreSQL-only lookups and functions* section and its divergence table
+    # promise `BackendCapabilityError` on SQLite for each of these. `@has_key` and `@iunaccent_contains`
+    # are pinned above for the filters page; the three sibling JSONB operators, the negated unaccent
+    # lookups and the `Extract` part spelling were stated nowhere else, so nothing held them.
+    (
+        "postgres.md — `@jcontains` raises on SQLite",
+        BackendCapabilityError,
+        () -> DOCERR_RESULT_SL.objects.filter("payload__@jcontains" => Dict("wins" => 1)).
+            list(show_query = :dict),
+    ),
+    (
+        "postgres.md — `@has_any_keys` raises on SQLite",
+        BackendCapabilityError,
+        () -> DOCERR_RESULT_SL.objects.filter("payload__@has_any_keys" => ["wins", "poles"]).
+            list(show_query = :dict),
+    ),
+    (
+        "postgres.md — `@has_keys` raises on SQLite",
+        BackendCapabilityError,
+        () -> DOCERR_RESULT_SL.objects.filter("payload__@has_keys" => ["wins", "poles"]).
+            list(show_query = :dict),
+    ),
+    (
+        "postgres.md — `@niunaccent_*` lookups raise on SQLite",
+        BackendCapabilityError,
+        () -> DOCERR_DRIVER_SL.objects.filter("surname__@niunaccent_exact" => "raikkonen").
+            list(show_query = :dict),
+    ),
+    # The page tells the reader to spell the part in capitals because SQLite accepts only the eight
+    # upper-case spellings. Both halves: a part SQLite has no equivalent for, and a lower-case
+    # spelling of a part it does support — the one PostgreSQL accepts and SQLite refuses.
+    (
+        "postgres.md — an `Extract` part outside the portable eight raises on SQLite",
+        BackendCapabilityError,
+        () -> DOCERR_RESULT_SL.objects.values("x" => Extract("resultid", "EPOCH")).
+            list(show_query = :dict),
+    ),
+    (
+        "postgres.md — a lower-case `Extract` part raises on SQLite",
+        BackendCapabilityError,
+        () -> DOCERR_RESULT_SL.objects.values("x" => Extract("resultid", "year")).
+            list(show_query = :dict),
+    ),
+    # The SQLite `without_foreign_keys` refuses to nest before touching the database, so a mock pool
+    # bound as the ambient transaction connection is enough to reach the guard.
+    (
+        "postgres.md + without_foreign_keys docstring — nesting it inside a transaction raises on SQLite",
+        TransactionError,
+        () -> with_tx_context(DocErrMockSQLite(), nothing) do
+            without_foreign_keys(() -> nothing, DocErrMockSQLite())
+        end,
+    ),
     # #213 — the delete guards. `write/delete.md` and `errors.md` both promise UnsafeMutationError
     # for each of these query shapes; every one is refused before SQL is generated, so a mock
     # connection is enough. The four are separate cases on purpose: they are four independent
@@ -707,7 +761,7 @@ const DOCERR_CASES = [
         () -> DateTimeField(db_default = "now()"),
     ),
     (
-        "schema_conventions.md — rendering an engine-pinned db_default on the other engine raises (#496)",
+        "schema_conventions.md + postgres.md — rendering an engine-pinned db_default on the other engine raises (#496)",
         BackendCapabilityError,
         () -> PormG.Dialect.field_to_column("uid", UUIDField(db_default = (postgres = "gen_random_uuid()",)),
                                             DocErrMockSQLite()),

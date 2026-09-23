@@ -62,6 +62,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "JSON/JSONB Lookups (#27)"      begin include("test_json_fields.jl")         end
     @testset "Django Data-Type Contracts"   begin include("test_django_contract.jl")    end
     @testset "Importer / Introspection"     begin include("test_importers_introspection.jl") end
+    @testset "Table Rename (#615)"          begin include("test_migration_rename_table.jl") end
     # ── Phase 4: Internals & Security ────────────────────────────────
     @testset "Internals & Security"         begin include("test_internals.jl")          end
 

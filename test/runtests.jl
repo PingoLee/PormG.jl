@@ -197,6 +197,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Migration Runner (checksum, guardrails)" include("unit/test_migrations_runner.jl")
     @testset "Migration Advisory-Lock Identity (#90)" include("unit/test_migration_lock_key.jl")
     @testset "Migration Statement Ordering: FK invariant (#89)" include("unit/test_migration_fk_ordering.jl")
+    @testset "Migration Diff: makemigrations renames a table (#615)" include("unit/test_migration_rename_table.jl")
     @testset "Rename Index Timing (#556)" include("unit/test_rename_index_timing.jl")
     @testset "Migration Schema Check (#475)" include("unit/test_migrations_check.jl")
     @testset "SQLite Rebuild Index Filter (#116)" include("unit/test_sqlite_index_filter.jl")

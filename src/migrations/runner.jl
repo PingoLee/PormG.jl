@@ -538,9 +538,10 @@ Order SQL statements for safe execution:
 
 1. New tables (CREATE TABLE)
 2. Drop tables
-3. Rename fields
-4. All other alterations
-5. Field CREATE INDEX (#152)
+3. Rename tables (#615)
+4. Rename fields
+5. All other alterations
+6. Field CREATE INDEX (#152)
 
 Returns the ordered statements and the concatenated SQL content for checksum. Statement order is
 part of the checksum input, so changing a bucket changes the digest of every plan that uses it.
@@ -553,7 +554,7 @@ test pins each (`test/unit/test_migration_fk_ordering.jl`):
 
 - **PostgreSQL never inlines an FK in `CREATE TABLE`.** `Dialect.create_table(::PormGPostgres, …)`
   emits columns only; every constraint arrives as a separate `ALTER TABLE … ADD CONSTRAINT`, which
-  lands in bucket 4 — after every `CREATE TABLE`. Two new tables referencing each other therefore
+  lands in bucket 5 — after every `CREATE TABLE`. Two new tables referencing each other therefore
   apply in any order, which a topological sort could not do at all: that is a *cycle*.
 - **PostgreSQL drops with `CASCADE`**, so a parent can be dropped before its children are cleaned
   up.
@@ -568,18 +569,32 @@ the file format to carry the dependency, which is frozen at v1
 (`docs/src/migrations/stability.md`). If the invariant above is ever deliberately broken, the guard
 test fails and that is the moment to design a format v2 — not to sort opaque SQL strings.
 
-`"Rename table"` is deliberately **not** bucketed. It does not commute with the alterations — a
-`ADD CONSTRAINT … REFERENCES <new name>` would be ordered against it only by chance — but no plan
-can contain that key today: `get_migration_plan`'s table-rename branch raises before it is ever
-registered (it calls `_alter_table_fields` with the *pre-rename* name, whose first act is a
-`current_schema[model_name]` lookup that is keyed by the DECLARED name). Bucketing it now would
-also pick the wrong answer: that same branch plans the table's column work against the OLD name, so
-a `RENAME TABLE` ordered ahead of those statements would break every one of them. Whoever repairs
-the producer decides the ordering with it.
+# `"Rename table"` runs before every column statement (#615)
+
+A renamed table's step gets its own bucket, after `DROP TABLE` and ahead of everything that names a
+column, and `get_migration_plan` renders ALL of that table's column work against the NEW name (while
+asking the live catalog by the old one, which is what it still holds at plan time). The opposite
+answer — keep the column work on the old name and rename last — was the one the pre-#615 producer
+half-attempted, and it cannot be made coherent:
+
+- **The declared model renders the new name whatever the caller passes.** The SQLite rebuild,
+  PostgreSQL's model-based `alter_field`, `_add_constrains` and `_add_new_field`'s rebuild all name
+  the table through `model_table_name(declared)`, so a rename-last plan would mix both names.
+- **Other tables re-point to the new name.** A child whose foreign key targets the renamed model
+  diffs as a `:repoint` (`REFERENCES "<new>"`), which lands in bucket 5 and can only execute once
+  the rename has run. On SQLite the child's rebuild also runs `PRAGMA foreign_key_check`, which
+  reports a violation for a parent table that does not exist yet — so rename-last aborts there.
+- **Buckets 4 and 6 straddle the "everything else" bucket.** A rename in bucket 5 would sit between
+  a `RENAME COLUMN` and a `CREATE INDEX` for the same table, so one of them would always target a
+  name that no longer (or not yet) exists.
+
+The child re-point is redundant — PostgreSQL's rename follows the table's OID and SQLite ≥ 3.26
+rewrites the child's `REFERENCES` clause itself — but correct once the rename runs first.
 """
 function _order_statements(migration_plan)
   first_execution::Vector{String} = []
   second_execution::Vector{String} = []
+  rename_table_execution::Vector{String} = []   # #615: before anything that names a column
   third_execution::Vector{String} = []
   last_execution::Vector{String} = []
   index_execution::Vector{String} = []   # #152: field CREATE INDEX runs AFTER same-table rebuilds
@@ -590,6 +605,8 @@ function _order_statements(migration_plan)
         push!(first_execution, value)
       elseif key == "Drop table"
         push!(second_execution, value)
+      elseif key == "Rename table"
+        push!(rename_table_execution, value)
       elseif contains(key, "Rename field")
         push!(third_execution, value)
       elseif startswith(key, "Create index")
@@ -609,7 +626,7 @@ function _order_statements(migration_plan)
     end
   end
 
-  ordered = vcat(first_execution, second_execution, third_execution, last_execution, index_execution)
+  ordered = vcat(first_execution, second_execution, rename_table_execution, third_execution, last_execution, index_execution)
   all_sql = join(ordered, "\n")
   return ordered, all_sql
 end

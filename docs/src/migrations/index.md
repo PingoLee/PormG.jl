@@ -216,17 +216,20 @@ A migration's statements are applied in a fixed sequence of buckets, not in the 
 
 1. `CREATE TABLE` (new models)
 2. `DROP TABLE`
-3. `RENAME COLUMN`
-4. Everything else — column alterations, `ADD CONSTRAINT`, `DROP CONSTRAINT`, `DROP INDEX`
-5. Field `CREATE INDEX`
+3. `RENAME TABLE`
+4. `RENAME COLUMN`
+5. Everything else — column alterations, `ADD CONSTRAINT`, `DROP CONSTRAINT`, `DROP INDEX`
+6. Field `CREATE INDEX`
 
 Within a bucket the order is stable but arbitrary — effectively alphabetical by table, because the plan is read back out of `pending_migrations.jl` by module binding name. **It is not a dependency order, and PormG does not compute one.**
 
 That is safe rather than lucky, and it rests on three properties the test suite pins:
 
-- **PostgreSQL never inlines a foreign key in `CREATE TABLE`.** Every key is a separate `ALTER TABLE … ADD CONSTRAINT` in bucket 4, so it runs after *every* `CREATE TABLE`. Two new tables that reference each other therefore apply in either order — which no dependency sort could achieve, because that is a cycle.
+- **PostgreSQL never inlines a foreign key in `CREATE TABLE`.** Every key is a separate `ALTER TABLE … ADD CONSTRAINT` in bucket 5, so it runs after *every* `CREATE TABLE`. Two new tables that reference each other therefore apply in either order — which no dependency sort could achieve, because that is a cycle.
 - **`DROP TABLE` is `DROP TABLE … CASCADE` on PostgreSQL**, so a parent can be dropped before its children are cleaned up. Because `CASCADE` also removes the children's constraints, PormG emits `DROP CONSTRAINT IF EXISTS` — otherwise removing a child's foreign-key field in the same migration that drops its parent would abort on a constraint the `CASCADE` had already taken.
 - **SQLite suspends foreign-key enforcement for the whole migration** (`PRAGMA foreign_keys = OFF`, restored by renewing the connection afterwards). Its inline `REFERENCES` clauses therefore constrain nothing while DDL is running, and SQLite resolves an FK's parent table lazily in any case.
+
+**A renamed table is renamed before anything else touches it.** When `makemigrations` asks whether a model with no table is a rename and you pick its former name, the plan holds `ALTER TABLE "<old>" RENAME TO "<new>"` in bucket 3, and every column change for that table is written against the **new** name — PormG reads the old table's live constraints and indexes at planning time, when the database still has nothing else. Tables whose foreign key points at the renamed one also re-point it to the new name: redundant, since both engines carry the constraint across a rename, but correct, and it runs after the rename. On SQLite that re-point rebuilds the child table. Because the re-point drops a constraint on PostgreSQL (and the child rebuild drops a table on SQLite), renaming a table that another table references is classed as **destructive**: `migrate()` refuses it until you opt in with `destructive = true`, exactly as for a field rename that drops a constraint.
 
 !!! note "Why there is no topological sort"
     This is the same design position as the rest of the engine: no dependency graph, no replay (see [What this means in practice](#What-this-means-in-practice)). The plan file is a flat, frozen v1 artifact whose statements are opaque SQL by the time they are executed, so ordering by dependency would mean changing the format rather than adding a sort. Keeping constraints out of the ordering problem is cheaper and handles cycles, which a sort cannot.

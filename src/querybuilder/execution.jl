@@ -1143,7 +1143,29 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
   end
 end
 
+# SQLite creates `sqlite_sequence` lazily, the first time the database creates an AUTOINCREMENT
+# table, so a database with none has no table to read or write (#674). PormG's own DDL always emits
+# AUTOINCREMENT; a legacy or imported schema often does not. Without the table there is no counter to
+# keep in step: SQLite assigns the next rowid as `MAX(rowid) + 1`. Asked on every call rather than
+# cached, because an AUTOINCREMENT table created later in the session brings the table into being.
+function _sqlite_has_sequence_table(settings::PormGSettings)::Bool
+  df = fetch(settings, "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence';") |> DataFrames.DataFrame
+  return DataFrames.nrow(df) > 0
+end
+
+# sqlite_sequence.name has no UNIQUE constraint, so `INSERT OR REPLACE` appends a duplicate row
+# instead of overwriting. Upsert by hand: UPDATE the existing row (collapsing any duplicates a prior
+# buggy run left, all to the same value), then INSERT only if no row exists yet. `table_literal` is
+# the physical table name with single quotes already doubled.
+function _sqlite_sequence_upsert!(settings::PormGSettings, table_literal::AbstractString, value::Int64)
+  fetch(settings, "UPDATE sqlite_sequence SET seq = $(value) WHERE name = '$(table_literal)';")
+  fetch(settings, "INSERT INTO sqlite_sequence (name, seq) SELECT '$(table_literal)', $(value) " *
+                  "WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = '$(table_literal)');")
+  return nothing
+end
+
 function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::Vector{String}, settings::PormGSettings)
+  _sqlite_has_sequence_table(settings) || return nothing   # no AUTOINCREMENT table, nothing to resync (#674)
   for field in pk_field
     safe_field_name = safe_column_identifier(Models.model_column(model, field), connection)  # db_column (#50)
     safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
@@ -1161,15 +1183,7 @@ function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::
         # resolve to its integer seq value instead of being silently skipped
         # (tryparse(Int64, "5.0") === nothing). A non-numeric value yields `nothing` → skipped.
         parsed_id = max_id isa Real ? floor(Int64, max_id) : tryparse(Int64, string(max_id))
-        if parsed_id !== nothing
-          # sqlite_sequence.name has no UNIQUE constraint, so `INSERT OR REPLACE` appends a
-          # duplicate row instead of overwriting. Upsert by hand: UPDATE the existing row
-          # (collapsing any duplicates a prior buggy run left, all to the same value), then
-          # INSERT only if no row exists yet.
-          fetch(settings, "UPDATE sqlite_sequence SET seq = $(parsed_id) WHERE name = '$(safe_table_literal)';")
-          fetch(settings, "INSERT INTO sqlite_sequence (name, seq) SELECT '$(safe_table_literal)', $(parsed_id) " *
-                          "WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = '$(safe_table_literal)');")
-        end
+        parsed_id !== nothing && _sqlite_sequence_upsert!(settings, safe_table_literal, parsed_id)
       end
     end
   end

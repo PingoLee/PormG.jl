@@ -318,7 +318,7 @@ any resync would run, on both the automatic bulk paths and an explicit `resync_s
 
 | | PostgreSQL | SQLite |
 | :--- | :--- | :--- |
-| Mechanism | resolve the column's owned sequence, then `setval` it to `MAX(pk) + 1` | upsert into `sqlite_sequence` |
+| Mechanism | resolve the column's owned sequence, then `setval` it to `MAX(pk) + 1` | upsert into `sqlite_sequence`; skipped when the database has no `sqlite_sequence` (no `AUTOINCREMENT` table), where SQLite already assigns `MAX(rowid) + 1` |
 | `bulk_copy` | supported | not supported — raises `BackendCapabilityError` |
 | `bulk_insert` self-heal | on an unexpected duplicate-key error, repairs and retries the chunk once | no retry; the error propagates |
 | A failed repair | see below | always propagates |

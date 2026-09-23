@@ -1743,8 +1743,9 @@ Filters already attached to `objct` are kept: they are AND'd with the `match_on=
 and the `filters=` predicates, so a handler scoped with `.filter("year" => 1988)` only updates
 rows of that year. The handler itself is never modified — `filters=` is not written back onto it.
 A handler carrying state an `UPDATE` cannot express raises `UnsafeMutationError`: `limit()`,
-`offset()`, `order_by()`, `distinct()`, aggregate annotations, a CTE (`.with`), or a
-`cjoin`/`on`/`cjoin_on` join. A plain `values()` projection is ignored. A filter that traverses a
+`offset()`, `order_by()`, `distinct()`, aggregate annotations, a CTE (`.with`), a
+`cjoin`/`on`/`cjoin_on` join, or a filter on a `values()` alias. A plain `values()` projection is
+ignored. A filter that traverses a
 relation (`"driverid__surname" => …`) raises `QueryBuildError`, as the columns do.
 
 The caller's DataFrame is never mutated (and never copied — the pipeline works on a

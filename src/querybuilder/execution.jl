@@ -1984,6 +1984,64 @@ function _reject_unsafe_mutation_shape(q::SQLObject, op::String)
       "Remove the aggregation or filter by primary key."
     ))
   end
+
+  # #668: a filter that resolves through a `values()` projection. The terminals build without the
+  # projection (an UPDATE has none), so such a filter cannot mean what it meant on a read: a plain
+  # alias key routed to HAVING was dropped (the #74 shape), and a key that also names a model field
+  # (`values("points" => F("points") - 100)`) silently filtered the raw column instead.
+  alias = _first_projection_alias_filter(q)
+  alias === nothing || throw(UnsafeMutationError(
+    "Cannot call $op with a filter on the values() alias \"$(alias)\". An UPDATE has no " *
+    "projection, so the filter cannot resolve through it — PormG would have to drop it or apply it " *
+    "to a different expression. Filter on the underlying field, or resolve the rows first and " *
+    "pass .filter(\"pk__@in\" => ids)."
+  ))
+  return nothing
+end
+
+# The names a filter key resolves through the projection memo instead of the model (#668). A read
+# looks a filter column up by `memo_key` — as the HAVING alias in `get_filter_query`, and as the
+# memoized left-hand side in `_get_filter_query(::SQLTypeField)`, nested in `Q`/`Qor` or not. Only
+# base-rooted names are reachable from a filter key, and a plain path projected under its own name
+# (`values("points")`) renders the column itself, so dropping it changes nothing.
+function _projection_filter_names(q::SQLObject)::Set{String}
+  names = Set{String}()
+  for v in q.values
+    if v isa SQLTypeText   # `Value(x)`: memoized under its output name (`get_select_query`)
+      name = _projection_output_name(v)
+      name === nothing || push!(names, name)
+    elseif v isa SQLField
+      key = memo_key(v)
+      (key === nothing || key[1] !== :base) && continue
+      (v.field isa String && v.field == key[2]) && continue
+      push!(names, key[2])
+    end
+  end
+  return names
+end
+
+function _first_projection_alias_filter(q::SQLObject)::Union{Nothing,String}
+  names = _projection_filter_names(q)
+  isempty(names) && return nothing
+  for f in q.filter
+    hit = _projection_alias_in_filter(f, names)
+    hit === nothing || return hit
+  end
+  return nothing
+end
+
+# Recursive in the shape of `_guard_no_aggregate_predicate` (build_query.jl), with its depth cap.
+function _projection_alias_in_filter(f, names::Set{String}, depth::Int = 0)::Union{Nothing,String}
+  depth > 32 && return nothing
+  if f isa SQLTypeOper
+    col = f.column
+    (col isa SQLTypeField && col.field isa String && col.field in names) && return col.field
+  elseif f isa Union{SQLTypeQ,SQLTypeQor}
+    for g in (f isa SQLTypeQ ? f.filters : f.or)
+      hit = _projection_alias_in_filter(g, names, depth + 1)
+      hit === nothing || return hit
+    end
+  end
   return nothing
 end
 
@@ -2000,7 +2058,14 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
 
   _reject_unsafe_mutation_shape(real_obj, "update()")
 
-  instruction = build(real_obj, table_alias=table_alias, connection=connection) 
+  # #668: an UPDATE has no projection, so the statement is built from a private copy with `values()`
+  # emptied — the #665 shape `bulk_update` uses. Built as-is, a binding projection (`Value(5)`,
+  # `F("points") * 2`) filed its operands into the `:select` bucket, which flattens ahead of SET and
+  # WHERE: a positional misbind on SQLite (wrong value, wrong rows, no error), and bound-but-unused
+  # `$N` on PostgreSQL. Aggregates and alias filters were refused above, so emptying drops nothing.
+  work = deepcopy(real_obj)
+  empty!(work.values)
+  instruction = build(work, table_alias=table_alias, connection=connection)
 
   # Don't allow to update a field without filter
   instruction._where |> isempty && throw(UnsafeMutationError("update() requires a filter — refusing to update every row. Add .filter(...) before .update(...)."))

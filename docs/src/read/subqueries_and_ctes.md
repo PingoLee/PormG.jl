@@ -113,7 +113,7 @@ query.values("driverid", "surname")
 !!! note
     Declaring a CTE **inside another CTE's body** is fine and stays supported — `with("outer" => q)` where `q` itself calls `with("inner" => ...)` renders a nested `WITH` and binds correctly on both backends. The restriction is only on subqueries used in a filter or a projection.
 
-Likewise, a CTE can only be referenced by a statement that actually emits a `WITH` clause. Reads (`list`, `first`, `count`, `exists`) do; `update(...)` and `bulk_update(...)` do not, so referencing a CTE from either raises a `QueryBuildError` rather than building SQL against a relation the statement never declares.
+Likewise, a CTE can only be referenced by a statement that actually emits a `WITH` clause. Reads (`list`, `first`, `count`, `exists`) do; `update(...)` does not, so referencing a CTE from it raises a `QueryBuildError` rather than building SQL against a relation the statement never declares. `bulk_update(...)` does not emit one either, and refuses a handler that declares a CTE up front with an `UnsafeMutationError` — the type `delete()` uses below, because the refusal is about the statement being a mutation.
 
 `delete()` refuses a CTE-scoped queryset for a related reason: it re-uses the query you are deleting as a scoping subquery (`DELETE ... WHERE pk IN (<your query>)`, plus one per cascade), which puts the `WITH` in exactly the nested position described above. Resolve the CTE first and filter on its result:
 

@@ -1700,6 +1700,32 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
 end
 
 
+# #665: the handler state a bulk UPDATE cannot express. `update()`'s three guards (limit/offset/
+# order_by, distinct, aggregates) apply unchanged, plus two that only this terminal needs:
+# - a CTE: the statement never renders the handler's `WITH`, so a filter naming it would reach
+#   the database dangling, and a nested WITH binds into `:cte` ahead of the chunk rows (#433).
+#   UnsafeMutationError, as in `delete()`, because the axis is "this is a mutation".
+# - a `cjoin`/`on`/`cjoin_on` join: build() always emits it, and the join guard in the chunk
+#   builder would then blame a `__` path the caller never wrote.
+function _reject_unsafe_bulk_update_shape(q::SQLObject)
+  _reject_unsafe_mutation_shape(q, "bulk_update()")
+  if !isempty(q.ctes)
+    throw(UnsafeMutationError(
+      "Cannot call bulk_update() on a query that declares a CTE " *
+      "($(join(collect(keys(q.ctes)), ", "))). The bulk UPDATE does not render the handler's WITH clause. " *
+      "Resolve the CTE first and filter on its result, e.g. .filter(\"pk__@in\" => ids)."
+    ))
+  end
+  if !isempty(q.custom_join) || !isempty(q.alias_join)
+    throw(UnsafeMutationError(
+      "Cannot call bulk_update() on a query with cjoin()/on()/cjoin_on() joins. " *
+      "bulk_update() updates the model's own table and does not join. Filter on the model's own " *
+      "fields, or resolve the joined rows first and pass them as .filter(\"pk__@in\" => ids)."
+    ))
+  end
+  return nothing
+end
+
 """
 Performs a bulk update operation on a database table using the provided `DataFrame` and a query object.
 
@@ -1709,8 +1735,17 @@ Performs a bulk update operation on a database table using the provided `DataFra
 - `columns`: (Optional) The **participating fields and their mappings** — the single place a DataFrame column is mapped to a model field. Each entry is a `String` (DataFrame column == model field) or a `Pair{String, String}` of `"df_col" => "model_field"`. A `Vector` of these is accepted. If `nothing`, columns are auto-detected from the DataFrame. Fields selected by `match_on` are used for matching only and are **not** SET.
 - `match_on`: (Optional) The **per-row match keys** that identify which row each DataFrame row updates (the SQL merge condition `Tb.field = source.col`). Bare **model field names** only — the source column is the `columns=` mapping for that field **when you declared one**, otherwise a DataFrame column with the field's own name. A value PormG auto-populates for a field left out of `columns=` (`auto_now`, or a static `default` when `columns=` is omitted — an explicit `columns=` already suppresses static defaults on an update) is not a declared mapping: your same-named column outranks it, and with no caller source at all the call raises `UnknownFieldError` rather than matching every row against one per-call constant. If omitted, the model primary key(s) are used and must be present in the DataFrame, under the same precedence. A match key is **matched, never written** — it stays out of the `SET` clause, so using an `auto_now` field as a key does not refresh that timestamp.
 - `filters`: (Optional) **Constant** predicates AND'd onto the `WHERE` clause, applied to every row. Each entry is a `Pair{String, T}` of `"model_field" => value` (e.g. `"category_id" => 172100`, `"points__@in" => [18, 25]`). When `match_on` is provided, every `filters` entry must be such a constant predicate. A per-row match key in `filters` is rejected with a migration error — move it to `match_on`.
-- `show_query::Bool`: (Optional) If `true`, prints the generated SQL query. Defaults to `false`.
+- `show_query::Symbol`: (Optional) `:execute` (the default) runs the update. The dry-run modes (`:sql`, `:dict`, `:inspection`, `:params`, `:none`) build the statement without executing it and return it in that form — one result per chunk, as a `Vector` when there is more than one chunk (`:none` returns `nothing` per chunk).
 - `chunk_size::Integer`: (Optional) Number of rows to process per chunk. Defaults to `1000`.
+
+# Handler scope
+Filters already attached to `objct` are kept: they are AND'd with the `match_on=` merge condition
+and the `filters=` predicates, so a handler scoped with `.filter("year" => 1988)` only updates
+rows of that year. The handler itself is never modified — `filters=` is not written back onto it.
+A handler carrying state an `UPDATE` cannot express raises `UnsafeMutationError`: `limit()`,
+`offset()`, `order_by()`, `distinct()`, aggregate annotations, a CTE (`.with`), or a
+`cjoin`/`on`/`cjoin_on` join. A plain `values()` projection is ignored. A filter that traverses a
+relation (`"driverid__surname" => …`) raises `QueryBuildError`, as the columns do.
 
 The caller's DataFrame is never mutated (and never copied — the pipeline works on a
 zero-copy wrapper), so the operation is safe in asynchronous contexts without a `copy=` knob.
@@ -1767,6 +1802,14 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   # check if is allowed to insert
   !settings.change_data && throw(_write_not_allowed("bulk_update", conn_key))
 
+  # #665: the statement is built from a private copy of the handler. The caller's handler is never
+  # written, and its filters are the statement's scope, AND'd with match_on= and filters= — the
+  # Django shape (`queryset.filter(pk__in=…).update(…)`) and what `update()`/`delete()` already do.
+  # Before this, the handler's filters were cleared in place: its scope was silently dropped, and
+  # `filters=` was left behind on the caller's handler.
+  work = deepcopy(objct)
+  _reject_unsafe_bulk_update_shape(work.object)
+
   # If no rows then nothing to do
   if size(df_o, 1) == 0
     @warn("Warning in bulk_update, the DataFrame is empty")
@@ -1785,13 +1828,14 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
 
   _ensure_unique_bulk_update_keys!(df, mapping, dinanic_filters)
 
-  objct.object.filter = [] # clear the filters
-  if size(static_filters, 1) > 0
-    for filter in static_filters
-      objct.filter(filter)
-    end
+  # An UPDATE has no projection. A plain `values()` left on the handler would still be rendered by
+  # build() into the `:select` bucket — the bucket every chunk binds its rows into — so it is
+  # dropped here rather than misbound (aggregates were already refused above).
+  empty!(work.object.values)
+  for filter in static_filters
+    work.filter(filter)
   end
-  instruction = build(objct.object, connection=connection)
+  instruction = build(work.object, connection=connection)
 
   # Build a list of row value strings by applying each model field formatter.
   rows = String[]

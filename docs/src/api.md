@@ -445,7 +445,8 @@ Key contracts:
 - DataFrame columns are matched **case-sensitively** for both `columns` and `match_on`. A column that differs only in case from the model field (e.g. `RaceId` vs `raceid`) raises an error naming the candidate; normalize headers with `rename!(df, lowercase.(names(df)))` or map explicitly with `"DF_COL" => "field"` in `columns=`.
 - If `match_on` is omitted, PormG infers the model primary key columns and uses those to identify rows.
 - A per-row match key passed in `filters=` (a bare string or `"df_col" => "field"` pair) raises a migration error directing you to `match_on=`; there is no silent fallback. Likewise, the pre-#107 pair grammar in `match_on=` (`["record_id" => "id"]`) raises a migration error showing the rewrite (`columns=[..., "record_id" => "id"], match_on=["id"]`). Both migration errors are temporary deprecation aids and will be removed in a future release.
-- `bulk_update()` rebuilds the `WHERE` clause from `match_on=` and `filters=` and does not preserve filters that were already attached to the handler.
+- Filters already attached to the handler are kept: they are AND'd with `match_on=` and `filters=`, as `update()` honors them. The handler itself is never modified — `bulk_update()` builds from a private copy, and `filters=` is not written back onto it.
+- A handler carrying `limit()`, `offset()`, `order_by()`, `distinct()`, an aggregate annotation, a CTE, or a `cjoin`/`on`/`cjoin_on` join raises `UnsafeMutationError`; a plain `values()` projection is ignored.
 - Constant lookup filters on base-table columns are supported, but relation traversals that would require JOINs are rejected.
 - Foreign-key columns accept scalar primary-key values, including `0` when that referenced row exists; use `nothing` or `missing` to write SQL `NULL` on nullable FK columns.
 - The same dry-run modes available elsewhere apply here: `:sql`, `:dict`, `:inspection`, `:params`, and `:none`.
@@ -774,7 +775,7 @@ field, and for the few with their own `showerror` it returns the richer renderin
 | `LazyTraversalError` | An unprojected `ForeignKey` or `OneToOneField` was read off a fetched row — project it in `values(...)` first. |
 | `FilterError` | Invalid filter argument/shape, or an operator misused on a JSON/subquery column. |
 | `QueryBuildError` | Structural/API misuse while building a query (joins, CTEs, projection, ordering, window/bulk config). **The long-tail default** — it is the bucket for query-shape misuse that isn't one of the sharper categories, so `catch QueryBuildError` says little beyond "PormG rejected the query shape". Catch a sharper subtype when you need to branch on the cause. |
-| `UnsafeMutationError` | An `update()`/`delete()` was requested without a filter (or another unsafe shape). |
+| `UnsafeMutationError` | An `update()`/`delete()` was requested without a filter, or an `update()`/`delete()`/`bulk_update()` on another unsafe shape. |
 | `ProtectedError` | A `delete()` was refused because rows reference the target through a `ForeignKey` with `on_delete = PROTECT`/`RESTRICT` — the data forbids it; delete or reassign the referencing rows first. |
 | `BackendCapabilityError` | The active backend cannot do this: PG-only lookups on SQLite (JSONB, `iunaccent_*`), explicit window `frame=` on SQLite, `bulk_copy` on SQLite, `with_advisory_lock(...; on_missing_lock = :error)` on SQLite, a `ToChar` format outside the portable table on SQLite, or a too-old SQLite library. Change the query or the backend. |
 | `InvalidValueError` | A **value** failed coercion/type validation on insert/update, an identifier failed the safety check, or an interval/duration could not be parsed. |

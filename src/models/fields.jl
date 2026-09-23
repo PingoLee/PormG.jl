@@ -117,16 +117,23 @@ end
 # `format2int64`, one keyword over, and the refusal it produced said something that was simply not
 # true — `CharField(max_length = Int32(50))` was rejected with "The max_length must be an integer".
 #
-# Scope is exactly those five `max_length` sites. `DecimalField`s `max_digits` / `decimal_places`
-# had the same SYMPTOM but a different mechanism — they go through
-# `validate_default(…, Int, "DecimalField", format2int64)` and are fixed by the converter widening
-# alone — so do not route them here.
+# Every integer width keyword goes through here: the five `max_length` sites (#614) and, since #646,
+# `DecimalField`'s `max_digits` / `decimal_places`. Those two, and `BinaryField`'s String branch,
+# went through `validate_default(x, Int, …, format2int64)` instead, and that pairing is wrong on a
+# 32-bit build: `format2int64` returns `Int64`, `Int === Int32` there, so #631's result re-check
+# refused a valid width as "a PormG bug" — and spelling `Int64` instead lets an out-of-range width
+# reach the `::Int` slot as a raw `InexactError`. Converting to `Int` HERE, inside the `try`, is what
+# makes the word size irrelevant.
 #
-# Widening the type is all that moves. Each call site keeps its own accepted SHAPE, because each
-# still runs its own pre-steps first: `CharField`, `URLField` and `SlugField` still parse a numeric
-# String on the line above, `BinaryField` still accepts `nothing` and still parses one, and
-# `PasswordField` still takes an integer only. Nothing here makes a new spelling legal at a site
-# that did not already take that spelling as an `Int64`.
+# `strings = true` is how a site keeps the numeric-String spelling it already took — `CharField`,
+# `URLField`, `SlugField`, `BinaryField` and `DecimalField` opt in, `PasswordField` (integer only)
+# does not. It replaced a bare `parse(Int, …)` pre-step at three sites, which let a non-numeric
+# String escape as a raw `ArgumentError`. It is still `parse(Int, …)` — the parser every site used —
+# with its two failures told apart by exception type: `OverflowError` gets the range message (on
+# either word size), anything else "not a number". NOT `tryparse(BigInt, …)`, which looks
+# equivalent and is not: GMP skips interior whitespace, so `"8 8"` parsed as a width of 88 (caught
+# in review). Nothing here makes a new spelling legal at a site that did not already take it;
+# `BinaryField` still maps a digit-free String to `nothing` before calling in.
 #
 # `Bool` is excluded exactly as `_default_string` excludes it: `Bool <: Integer`, so without the
 # carve-out `max_length = true` would silently become a one-character column.
@@ -134,9 +141,23 @@ end
 # Called directly rather than through `validate_default` — same reason as `_default_string`. These
 # messages name the keyword and the type that arrived; `validate_default`'s bare `catch` would
 # replace them with "Expected type: Int64", which is the wording this fix exists to stop producing.
-function _int_kwarg(field_type::AbstractString, name::AbstractString, value)
+function _int_kwarg(field_type::AbstractString, name::AbstractString, value; strings::Bool = false)
+  # The bound is `Int`'s, which is word-size dependent, so the message names both ends rather than
+  # asserting a width (#646).
+  throw_out_of_range() = throw(_fielderr("$(field_type): '$(name)' is out of range, got $(value) " *
+                                         "(it must fit in an Int, $(typemin(Int)) to $(typemax(Int)))."))
+  if strings && value isa AbstractString
+    value = try
+      parse(Int, value)
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()   # #472
+      # `OverflowError` is a well-formed number too wide for `Int`; anything else is not a number.
+      e isa OverflowError && throw_out_of_range()
+      throw(_fielderr("$(field_type): '$(name)' must be an Integer or a numeric String, got $(repr(value))."))
+    end
+  end
   (value isa Integer && !(value isa Bool)) ||
-    throw(_fielderr("$(field_type): '$(name)' must be an Integer, got $(typeof(value))."))
+    throw(_fielderr("$(field_type): '$(name)' must be an Integer$(strings ? " or a numeric String" : ""), got $(typeof(value))."))
   try
     return Int(value)
   catch e
@@ -146,7 +167,7 @@ function _int_kwarg(field_type::AbstractString, name::AbstractString, value)
     # return-type re-check does not cover it; the sibling hole that comment describes is closed,
     # this one is still guarded here.)
     (e isa InterruptException || e isa StackOverflowError) && rethrow()   # #472
-    throw(_fielderr("$(field_type): '$(name)' does not fit in a 64-bit integer, got $(value)."))
+    throw_out_of_range()
   end
 end
 
@@ -1384,8 +1405,7 @@ function CharField(; kwargs...)
   default = get(kwargs, :default, nothing)
   choices = get(kwargs, :choices, nothing)
 
-  max_length isa AbstractString && (max_length = parse(Int, max_length))
-  max_length = _int_kwarg("CharField", "max_length", max_length)   # #614
+  max_length = _int_kwarg("CharField", "max_length", max_length; strings = true)   # #614, #646
   # No upper bound (#325). The old 255 ceiling was a MySQL-ism — PostgreSQL's `varchar` takes up to
   # 10,485,760 characters and SQLite ignores the declared length. Worse, it was LOSSY on read-back:
   # introspecting a live `varchar(500)` had to retype the column to TextField and drop the length,
@@ -2274,8 +2294,9 @@ function DecimalField(; kwargs...)
   
   # Validate default using validate_default
   default = validate_default(default, Union{Float64, Nothing}, "DecimalField", format2float64)
-  max_digits = validate_default(max_digits, Int, "DecimalField", format2int64)
-  decimal_places = validate_default(decimal_places, Int, "DecimalField", format2int64)
+  # #646: width keywords, not defaults — `validate_default` paired `Int` with an `Int64` converter.
+  max_digits = _int_kwarg("DecimalField", "max_digits", max_digits; strings = true)
+  decimal_places = _int_kwarg("DecimalField", "decimal_places", decimal_places; strings = true)
   
   # Validate scale vs precision
   if decimal_places > max_digits
@@ -2883,17 +2904,13 @@ function BinaryField(; kwargs...)
     throw(_fielderr(_binary_default_message(default)))
   end
   default = validate_default(default, Union{Vector{UInt8}, Nothing}, "BinaryField", _binary_default_bytes)
-  if max_length isa AbstractString
-    if occursin(r"\d+", max_length)
-      max_length = validate_default(max_length, Int, "BinaryField", format2int64)
-    else
-      max_length = nothing
-    end
-  end
+  # A String with no digit in it means "no limit". One WITH a digit is parsed by `_int_kwarg` below
+  # (#646 — it went through `validate_default(…, Int, …, format2int64)`, wrong on a 32-bit build).
+  max_length isa AbstractString && !occursin(r"\d", max_length) && (max_length = nothing)
   # #614: `nothing` is still the no-limit spelling; anything else goes through the shared integer
   # keyword policy. This was an `isa Int` check, so `BinaryField(max_length = Int32(50))` was
   # refused as "not an integer or nothing" — about a value that is plainly an integer.
-  max_length === nothing || (max_length = _int_kwarg("BinaryField", "max_length", max_length))
+  max_length === nothing || (max_length = _int_kwarg("BinaryField", "max_length", max_length; strings = true))
   if max_length isa Int && max_length <= 0
     throw(_fielderr("The 'max_length' must be a positive integer"))
   end
@@ -3143,8 +3160,7 @@ function URLField(; kwargs...)
   max_length = get(kwargs, :max_length, 200)
   default = get(kwargs, :default, nothing)
 
-  max_length isa AbstractString && (max_length = parse(Int, max_length))
-  max_length = _int_kwarg("URLField", "max_length", max_length)   # #614
+  max_length = _int_kwarg("URLField", "max_length", max_length; strings = true)   # #614, #646
   max_length < 1 && throw(_fielderr("The max_length must be greater than 0"))
 
   default = _default_string("URLField", default)     # #612
@@ -3225,8 +3241,7 @@ function SlugField(; kwargs...)
   max_length = get(kwargs, :max_length, 50)
   default = get(kwargs, :default, nothing)
 
-  max_length isa AbstractString && (max_length = parse(Int, max_length))
-  max_length = _int_kwarg("SlugField", "max_length", max_length)   # #614
+  max_length = _int_kwarg("SlugField", "max_length", max_length; strings = true)   # #614, #646
   max_length > 255 && throw(_fielderr("The max_length must be less than or equal to 255"))
   max_length < 1 && throw(_fielderr("The max_length must be greater than 0"))
 

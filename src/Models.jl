@@ -3990,8 +3990,9 @@ end
 
 # ── Numeric `default=` / width coercion (#598 → #614) ──────────────────────────────────────────
 # The converters `validate_default` hands the nine numeric constructors (`IDField`, `ForeignKey`,
-# `OneToOneField`, the four integer fields, `FloatField`, `DecimalField`) plus `DecimalField`'s
-# `max_digits`/`decimal_places` and `BinaryField`'s `max_length`.
+# `OneToOneField`, the four integer fields, `FloatField`, `DecimalField`). The integer WIDTH keywords
+# (`max_length`, `max_digits`, `decimal_places`) do not come here — they go through `_int_kwarg` in
+# `src/models/fields.jl` (#614, #646).
 #
 # #614: `format2int64` had NO `Integer` method — only `AbstractString` and `Decimals.Decimal`. A
 # plain `Int64` never reached it (it satisfies `validate_default`'s `default isa expected_type` fast
@@ -4155,17 +4156,11 @@ function validate_default(default, expected_type::Type, field_name::String, conv
   # in `models/fields.jl`, and `Migrations._coerce_default`'s docstring — each time as a reason for
   # a local workaround. Those workarounds stay; this makes the next one unnecessary.
   #
-  # KNOWN GAP, 32-bit only. Three sites pass `expected_type = Int` with `format2int64`, which is
-  # declared `::Int64`: `DecimalField`'s `max_digits`/`decimal_places` and `BinaryField`'s string
-  # `max_length` branch. Where `Int === Int64` (every platform this is tested on) they agree. On a
-  # 32-bit build `Int === Int32`, so `DecimalField(max_digits = "12")` would fail this check and
-  # report a "PormG bug" for a perfectly good width. Spelling `Int64` at those sites fixes that
-  # and opens the mirror-image hole — the slots are `::Int`, so an out-of-range value would then
-  # reach `convert(Int32, ::Int64)` and raise a raw `InexactError` OUTSIDE this function, which is
-  # precisely the class #631 closed. Neither spelling is right; the width keywords want
-  # `_int_kwarg`'s treatment (it maps `InexactError` into the taxonomy) rather than
-  # `validate_default`'s. Left as-is and filed rather than settled here, because picking a side is
-  # a decision and there is no 32-bit CI job to measure it against.
+  # Pair `expected_type` with a converter whose codomain it actually holds. `Int` with
+  # `format2int64` (declared `::Int64`) agrees only where `Int === Int64`: on a 32-bit build this
+  # check refused a valid width as "a PormG bug". That was `DecimalField`'s `max_digits` /
+  # `decimal_places` and `BinaryField`'s String `max_length` until #646 moved all three onto
+  # `_int_kwarg`, which converts to `Int` itself — do not route a width keyword back through here.
   (converted isa expected_type) && return converted
 
   # Deliberately NOT the message above. That one blames the caller's value, which is right when the

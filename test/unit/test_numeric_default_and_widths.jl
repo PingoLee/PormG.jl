@@ -243,21 +243,104 @@ end
   end
 
   # Each site keeps its own accepted SHAPE — the widening is about the integer type only.
-  # CharField / URLField / SlugField parse a numeric String on the line above the guard;
-  # BinaryField accepts `nothing` as "no limit" and parses a numeric String of its own.
+  # CharField / URLField / SlugField / BinaryField take a numeric String (since #646 through
+  # `_int_kwarg(…; strings = true)`); BinaryField also accepts `nothing` as "no limit".
   @test CharField(max_length = "50").max_length === 50
   @test URLField(max_length = "50").max_length === 50
   @test SlugField(max_length = "50").max_length === 50
   @test BinaryField(max_length = nothing).max_length === nothing
   @test BinaryField(max_length = "50").max_length === 50
 
-  # `DecimalField`'s two precision keywords ride `format2int64` through `validate_default`, so they
-  # are fixed by the converter widening rather than by `_int_kwarg` — covered here because the user
-  # cannot tell the two mechanisms apart and both were broken the same way.
+  # `DecimalField`'s two precision keywords went through `validate_default` + `format2int64` when
+  # this testset was written; #646 moved them onto `_int_kwarg` with the rest (next testset). Kept
+  # here because the user cannot tell the two mechanisms apart and both were broken the same way.
   @test DecimalField(max_digits = Int32(8)).max_digits === 8
   @test DecimalField(decimal_places = Int32(3)).decimal_places === 3
   @test DecimalField(max_digits = UInt8(8)).max_digits === 8
   @test_throws PormG.FieldValidationError DecimalField(max_digits = 3.5)
+end
+
+# Every width keyword that takes a String spelling. `decimal_places` rides with `max_digits = 20`
+# so the probe width never trips the scale-vs-precision check instead of the one under test.
+const _STRING_WIDTH_SITES646 = (
+  ("CharField",    "max_length",     :max_length,     w -> CharField(max_length = w)),
+  ("URLField",     "max_length",     :max_length,     w -> URLField(max_length = w)),
+  ("SlugField",    "max_length",     :max_length,     w -> SlugField(max_length = w)),
+  ("BinaryField",  "max_length",     :max_length,     w -> BinaryField(max_length = w)),
+  ("DecimalField", "max_digits",     :max_digits,     w -> DecimalField(max_digits = w)),
+  ("DecimalField", "decimal_places", :decimal_places, w -> DecimalField(max_digits = 20, decimal_places = w)),
+)
+
+# The exception a constructor raised, or `nothing` if it returned.
+_raised646(thunk) = try thunk(); nothing catch e; e end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #646 — every width keyword goes through `_int_kwarg`, String spellings included
+# `max_digits` / `decimal_places` and `BinaryField`'s String `max_length` went through
+# `validate_default(x, Int, …, format2int64)`. `format2int64` returns `Int64`, so on a 32-bit build
+# (`Int === Int32`) #631's result re-check refused a valid width as "a PormG bug"; spelling `Int64`
+# there instead would have let an out-of-range width reach the `::Int` slot as a raw `InexactError`.
+# `_int_kwarg` converts to `Int` itself and maps the overflow into the taxonomy, so the word size
+# stops mattering. `CharField` / `URLField` / `SlugField` had the sibling defect one step earlier: a
+# bare `parse(Int, …)` pre-step, so a non-numeric String escaped as a raw `ArgumentError`.
+#
+# No 32-bit job exists to reproduce the original refusal, so the assertions pin the PATH instead:
+# every refusal is a FieldValidationError whose message names the keyword. `validate_default`'s
+# `catch` could not produce that — it replaces the text with "Expected type: Int64".
+# Mutation gates, one per site:
+#   - restore `validate_default(max_digits, Int, "DecimalField", format2int64)` -> the DecimalField
+#     'max_digits' message rows fail (same for 'decimal_places')
+#   - restore BinaryField's digit-branch `validate_default` call                -> its "1x" row fails
+#   - restore `max_length isa AbstractString && (max_length = parse(Int, …))`  -> that site's "1x"
+#     row raises ArgumentError
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "width keywords route through _int_kwarg on every String site (#646)" begin
+  for (name, kw, slot, ctor) in _STRING_WIDTH_SITES646
+    @testset "$name / $kw" begin
+      # Every site keeps the String spellings it took before — still `parse(Int, …)` underneath, so
+      # surrounding whitespace, a sign and a `0x` prefix are accepted exactly as they were.
+      @test _stored614(ctor, "8", slot) === 8
+      @test _stored614(ctor, " 8 ", slot) === 8
+      @test _stored614(ctor, "+8", slot) === 8
+      @test _stored614(ctor, "0x8", slot) === 8
+      @test _stored614(ctor, Int32(8), slot) === 8
+
+      # Out of range, on the changed path: a refusal inside the taxonomy on either word size. The
+      # 20-digit String is the one that reached `format2int64` / `parse(Int, …)` before.
+      for probe in (big(2)^70, typemax(UInt64), "99999999999999999999")
+        err = _raised646(() -> ctor(probe))
+        @test err isa PormG.FieldValidationError
+        @test err isa PormG.FieldValidationError && occursin("'$kw'", sprint(showerror, err))
+      end
+
+      # Not an integer at all. The message must name the keyword — the path discriminator above.
+      # Every String here contains a digit, so none is BinaryField's "no digits means no limit"
+      # spelling. The last four are the ones `tryparse(BigInt, …)` — tried first, caught in review —
+      # silently read as 10, 88, -8 and -16: GMP skips interior whitespace, so a typo became a width.
+      for probe in ("1x", "1_0", 3.5, :wide, true, "1 0", "8 8", "+-8", "0x-10")
+        err = _raised646(() -> ctor(probe))
+        @test err isa PormG.FieldValidationError
+        @test err isa PormG.FieldValidationError && occursin("'$kw'", sprint(showerror, err))
+      end
+    end
+  end
+
+  # BinaryField's own rule is untouched: a String with no digit in it means "no limit". Pinned so
+  # routing the digit branch through `_int_kwarg` cannot quietly start refusing it.
+  @test BinaryField(max_length = "abc").max_length === nothing
+  @test BinaryField(max_length = SubString("x12", 2)).max_length === 12
+
+  # PasswordField never took a String and does not start now — it does not opt in to `strings`.
+  # The message check keeps the 64-character floor from standing in for the type refusal.
+  err = _raised646(() -> PasswordField(max_length = "100"))
+  @test err isa PormG.FieldValidationError
+  @test err isa PormG.FieldValidationError && occursin("'max_length' must be an Integer, got String", sprint(showerror, err))
+
+  # The scale-vs-precision check still runs after both keywords are parsed — asserted by message,
+  # because a parse refusal would also be a FieldValidationError.
+  err = _raised646(() -> DecimalField(max_digits = "4", decimal_places = "6"))
+  @test err isa PormG.FieldValidationError
+  @test err isa PormG.FieldValidationError && occursin("cannot be greater than", sprint(showerror, err))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

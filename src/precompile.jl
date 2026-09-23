@@ -138,36 +138,26 @@ end
 
 # ── Snoop-generated precompile hints ─────────────────────────────────────────
 #
-# These directives cover the execution-path inference gaps that @compile_workload
-# cannot reach because it uses a mock pool (no live DB → no .list() execution).
+# Named-method directives from a SnoopCompile run (test/performance/snoop_compile.jl) for inference
+# the workload above does not reach. Statement EXECUTION is not this file's job any more: the
+# SQLite extension runs a real end-to-end workload (the workload at the end of `ext/PormGSQLiteExt.jl`), because only an
+# extension has a driver loaded at precompile time.
 #
-# SnoopCompile (test/performance/snoop_compile.jl, full mode) identified ~6.7 s
-# of cold-start inference here:
-#   • QueryBuilder execution closures — 5.7s (anonymous closures + filter/join helpers)
-#   • Base Dict row-assembly — 0.67s  (merge!/setindex! on typed Symbol dicts)
-#   • SQLite bind — 0.05s             (parameter binding for Float64/Int64)
+# Only directives that name a method belong here, and even those go stale quietly: `Base.precompile`
+# returns `false` on a signature that no longer matches rather than throwing. So
+# `test/unit/test_precompile_hints.jl` evaluates every one of them and fails when it stops matching.
+# The same test keeps out the shape this file used to carry — six directives naming anonymous
+# closures by generated number (`Symbol("#106#107")`, worth 3.13 s when snooped) behind an
+# `isdefined` guard. Those numbers shift whenever a closure is added above them, the guard turned
+# every stale one into a no-op, and by the time they were removed three no longer existed and the
+# fourth named a different closure.
 #
-# FRAGILE: anonymous closure numbers (#98#99, #106#107, etc.) change whenever a
-# new closure is added or removed ABOVE them in QueryBuilder. The isdefined guard
-# makes stale entries safe — they silently become no-ops. Regenerate by running:
+# Regenerate with:
 #   julia -t auto --project=@pormg-snoop test/performance/snoop_compile.jl
 # (that script's header has the one-off recipe for building @pormg-snoop — the package env
 #  carries neither the profiling [extras] nor a SQL driver, #624)
 if ccall(:jl_generating_output, Cint, ()) == 1
   let QB = QueryBuilder
-    # QueryBuilder execution closures -----------------------------------------
-    isdefined(QB, Symbol("#106#107")) &&
-      Base.precompile(Tuple{getfield(QB, Symbol("#106#107"))})                    # 3.13 s
-    isdefined(QB, Symbol("#98#99")) &&
-      Base.precompile(Tuple{getfield(QB, Symbol("#98#99"))})                      # 1.68 s
-    isdefined(QB, Symbol("#9#10")) &&
-      Base.precompile(Tuple{getfield(QB, Symbol("#9#10")), QB.SQLTypeQor})        # 0.18 s
-    isdefined(QB, Symbol("#9#10")) &&
-      Base.precompile(Tuple{getfield(QB, Symbol("#9#10")), QB.OperObject})        # 0.15 s
-    isdefined(QB, Symbol("#100#101")) &&
-      Base.precompile(Tuple{getfield(QB, Symbol("#100#101"))})                    # 0.12 s
-    isdefined(QB, Symbol("#9#10")) &&
-      Base.precompile(Tuple{getfield(QB, Symbol("#9#10")), QB.SQLTypeQ})          # 0.09 s
     Base.precompile(Tuple{typeof(QB._get_filter_query), QB.QorObject, QB.InstructionObject})  # 0.11 s
     Base.precompile(Tuple{typeof(QB.deepcopy), QB.QObject})                       # 0.08 s
     Base.precompile(Tuple{QB.ChainCaller{typeof(QB._order_by!), QB.ObjectHandler}, String, Vararg{String}})  # 0.04 s
@@ -203,5 +193,5 @@ if ccall(:jl_generating_output, Cint, ()) == 1
   Base.precompile(Tuple{typeof(merge!), Dict{Symbol, Any}, Dict{Symbol, Int64}})                                   # 0.03 s
   Base.precompile(Tuple{typeof(merge!), Dict{Symbol, Any}, Dict{Symbol, Union{Missing, Int64}}})                   # 0.03 s
 
-  # SQLite parameter binding precompiles moved to ext/PormGSQLiteExt.jl (SQLite is a weakdep).
+  # SQLite parameter binding is compiled for real by the extension's workload (the workload at the end of ext/PormGSQLiteExt.jl).
 end

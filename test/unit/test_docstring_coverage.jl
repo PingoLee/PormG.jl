@@ -497,8 +497,8 @@ end
         # `:if` / `:let` / `:try` / `:struct` / `:macrocall` are here because they were the gap in
         # the first version of this scan: a docstring detached inside a top-level `if`, a `@static
         # if`, or a per-field docstring inside a `struct` was missed entirely. That gap is reachable
-        # — `src/precompile.jl` and `ext/PormGSQLiteExt.jl` both wrap real definitions in a
-        # top-level `if ccall(:jl_generating_output, …)` guard.
+        # — `src/precompile.jl` wraps code in a top-level `if ccall(:jl_generating_output, …)`
+        # guard, and `ext/PormGSQLiteExt.jl` in a top-level `@setup_workload` macrocall.
         #
         # A function BODY is deliberately out of scope: `@doc` never binds there, and a measured
         # sweep of this repo found 29 bare strings inside bodies (`"%Y"`, `"BEGIN;"`, `":memory:"`)

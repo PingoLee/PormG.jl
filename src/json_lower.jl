@@ -198,6 +198,7 @@ function JSON.StructUtils.lower(::JSON.JSONStyle, s::Kernel.PormGSettings)
     "change_db"     => _jl_flag(s, :change_db),
     "change_data"   => _jl_flag(s, :change_data),
     "implicit"      => _jl_flag(s, :implicit),
+    "dynamic"       => _jl_flag(s, :dynamic),
     "connection"    => conn === nothing ? nothing : _d_backend_label(conn),
   ))
 end

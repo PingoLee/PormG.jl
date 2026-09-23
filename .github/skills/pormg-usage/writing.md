@@ -1,190 +1,179 @@
-# PormG Usage — Migrations, Writing Data & Bulk Operations
+# PormG Usage — Writing Data, Bulk Operations & Transactions
 
-Supporting file for [`SKILL.md`](SKILL.md). Read this when **changing data or schema**. For setup, querying, joins, and aggregations see `SKILL.md`; for the field-type table see [`reference.md`](reference.md).
+Supporting file for [`SKILL.md`](SKILL.md). Read it when **changing data**: create, update, delete,
+upserts, bulk loads, many-to-many, transactions, primary-key allocation. Schema changes (migrations)
+are in [`models.md`](models.md). Full detail:
+[Writing](https://pingolee.github.io/PormG.jl/stable/write/),
+[Transactions](https://pingolee.github.io/PormG.jl/stable/write/transaction/).
 
-All defaults from `SKILL.md` still apply: write through `M.Model.objects`, never interpolate user data into SQL, prefer parameterized queries.
+## Rows and single-record writes
 
-## Migrations
-
-Always follow this ordered flow:
+`create`, `get`, `first`, `last` and `list` return `PormGRow` values. A row is dirty-tracked:
+assign a field, then `save()` writes only the changed columns.
 
 ```julia
-using PormG
-
-# 1. First-time initialization (safe to run on existing DBs)
-PormG.Migrations.init_migrations("db")
-
-# 2. Check current state
-PormG.Migrations.status("db")
-
-# 3. Generate migration plan from current models
-PormG.Migrations.makemigrations("db")
-
-# 4. Dry-run: review SQL before executing (check for destructive ops)
-PormG.Migrations.dry_run("db")
-
-# 5. Apply migrations
-PormG.Migrations.migrate("db")
-
-# For destructive changes (column drops, renames), opt in explicitly:
-PormG.Migrations.migrate("db", destructive=true)
+row = M.Status.objects.create("statusid" => 900, "status" => "Provisional")  # a PormGRow
+row.pk                        # the primary key, whatever the column is called
+row.status = "Confirmed"      # marks the field dirty
+row.save()                    # UPDATE … WHERE pk; a no-op when nothing changed
+row.delete()                  # (total, per-table counts), cascading like query.delete()
 ```
 
-> **Never** skip `dry_run()` before a destructive migration. If it reports DROP columns, require explicit approval.
+- `save()` needs a model with exactly one primary key, and a row fetched with that key projected.
+- `row.save(show_query = :sql)` shows the planned `UPDATE` without running it.
 
-## Writing Data
+### Upserts
 
-### Create a single record
 ```julia
-driver = M.Driver.objects.create(
-    "forename"    => "Ayrton",
-    "surname"     => "Senna",
-    "nationality" => "Brazilian",
-    "driverref"   => "senna"
-)
-# Returns a PormGRow (since #166) — the same row object get()/first()/list() return,
-# fully populated (including the new PK) and ready to mutate and save().
-new_id = driver[:driverid]
+# Fetch-or-insert; never modifies an existing row. `defaults` are used only on insert.
+row, created = M.Status.objects.get_or_create("statusid" => 900;
+                                              defaults = ["status" => "Provisional"])
+
+# Insert-or-update in one INSERT … ON CONFLICT … DO UPDATE. `defaults` is the SET.
+row, created = M.Status.objects.update_or_create("statusid" => 900;
+                                                 defaults = ["status" => "Confirmed"])
 ```
 
-### Mutate a fetched row and persist with `row.save()`
-`get()`, `first()`, `list()`, and `create()` return `PormGRow` values (and `update_or_create()`
-returns `(row::PormGRow, created::Bool)`). Assigning a field marks it dirty; `save()` writes only
-the changed columns.
-```julia
-driver = M.Driver.objects.get("driverref" => "senna")   # a PormGRow
-driver.nationality = "Brazil"        # dirty-tracked on assignment
-driver.save()                        # UPDATE ... WHERE <pk> = ...; returns the PormGRow
-# save() is a no-op (returns the row unchanged) when nothing was mutated.
-# Inspect without executing: driver.save(show_query=:sql)
-```
+The lookup pairs become the `ON CONFLICT` target, so a real `UNIQUE`/primary-key constraint must
+back them.
 
-### Update matching records (queryset)
-```julia
-n = M.Driver.objects.
-    filter("driverid" => 1).
-    update("nationality" => "Brazil")
-# Queryset .update() returns the matched-row count (Int), not a row.
+## Update and delete querysets
 
-# With F-expression (atomic, at the database)
-M.Result.objects.
-    filter("resultid__@in" => [1, 2, 3]).
-    update("points" => F("points") * 1.1)
-```
-
-### Delete records
 ```julia
-# Delete with filter
+n = M.Result.objects.
+    filter("raceid" => 1, "positionorder" => 1).
+    update("points" => F("points") + 1)          # returns the matched-row count (Int)
+
 M.Result.objects.filter("raceid__year__@lt" => 1960).delete()
-
-# Inspect before deleting (never executes)
-sql = M.Result.objects.filter("raceid" => 999).delete(show_query=:sql)
-
-# Delete all (requires explicit opt-in to prevent accidents)
-M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+M.Result.objects.filter("raceid" => 999).delete(show_query = :sql)   # inspect, never runs
 ```
 
-## Many-to-Many Relationships
+Safety guards (each raises; see [`errors.md`](errors.md)):
 
-Access a `ManyToMany` field on a fetched row to get a relation manager, then call its
-bang-free methods (`add`/`remove`/`clear`/`set`/`all` — renamed from `add!`/… in 0.3.0).
-Targets may be primary keys or row objects. (The example assumes the model declares the
-relation — here `Driver` has a `sponsors` `ManyToManyField`.)
+- `update`/`delete` with **no filter** → `UnsafeMutationError`. To delete every row, opt in:
+  `M.Model.objects.delete(allow_delete_all = true)`.
+- `delete` with `limit`/`offset`/`order_by`/`distinct`/aggregates → `UnsafeMutationError`.
+- Deleting a row a `PROTECT`/`RESTRICT` key still references → `ProtectedError`.
+- A connection with `change_data: false` refuses every write → `WritesDisabledError`.
+
+## Many-to-many
+
+Reading a `ManyToManyField` off a fetched row gives a manager. Its methods take primary keys or rows.
+In this example, `Driver` declares `sponsors = Models.ManyToManyField(Sponsor, related_name = "drivers")`:
+
 ```julia
 driver = M.Driver.objects.get("driverref" => "senna")
-
-driver.sponsors.add(1, 2)                 # link sponsors 1 and 2
-driver.sponsors.remove(2)                 # unlink sponsor 2
-changes = driver.sponsors.set(1, 4, 5)    # replace the whole set → (added=…, removed=…)
-driver.sponsors.clear()                   # unlink all
-rows = driver.sponsors.all() |> DataFrame # query the related rows
+driver.sponsors.add(1, 2)
+driver.sponsors.remove(2)
+changes = driver.sponsors.set(1, 4, 5)       # replace the whole set → (added = …, removed = …)
+driver.sponsors.clear()
+rows = driver.sponsors.all() |> DataFrame
 ```
 
-## Bulk Operations
+Filter across the relation with `__` like any other: `filter("sponsors__name" => "Marlboro")`.
 
-For large datasets, always use bulk operations instead of loops:
+## Bulk operations
+
+Never loop `create()` over a batch. The bulk writers take a `DataFrame`:
 
 ```julia
-using CSV, DataFrames
+bulk_insert(M.Status.objects, df)                         # every backend
+bulk_insert(M.Status.objects, df, chunk_size = 500)
+bulk_insert(M.Status.objects, df, on_conflict = :nothing) # skip rows that violate a unique key
+bulk_insert(M.Status.objects, df,                         # upsert
+    on_conflict = (action = :update, target = ["statusid"], set = ["status"]))
 
-# Standard batch insert (all dialects)
-df = CSV.File("drivers.csv") |> DataFrame
-bulk_insert(M.Driver.objects, df)
-bulk_insert(M.Driver.objects, df, chunk_size=500)  # custom chunk size
+bulk_copy(M.Lap_times.objects, laps_df)                   # PostgreSQL COPY: much faster, no ON CONFLICT
 
-# Ultra-fast COPY (PostgreSQL only — 10-100x faster than bulk_insert)
-bulk_copy(M.Driver.objects, df)
-bulk_copy(M.Driver.objects, df, chunk_size=10_000)
-
-# Map DataFrame columns to model fields
-bulk_copy(M.Driver.objects, df, columns=[
-    "first_name" => "forename",
-    "last_name"  => "surname"
-])
-
-# Batch update from DataFrame
 bulk_update(M.Result.objects, df,
-    columns  = ["points"],     # participating fields (+ any "df_col" => "field" mappings)
-    match_on = ["resultid"]    # per-row merge keys, bare model field names (WHERE)
-)
-# `columns=` is the ONLY place a df column is mapped to a model field; a field
-# selected by match_on= is used for matching, never SET. `filters=` is reserved
-# for *constant* predicates AND'd onto every row (e.g. filters =
-# ["constructorid" => 131]). Putting a per-row DataFrame column in filters=,
-# or a "df_col" => "field" pair in match_on=, raises a migration error.
+    columns  = ["points"],        # the fields to SET (a "df_col" => "field" pair maps a column)
+    match_on = ["resultid"])      # per-row match keys, bare field names
 ```
 
-**Pre-process CSV nulls before bulk operations:**
+- `columns = ["df_col" => "field"]` is the only place a DataFrame column is mapped to a field.
+  `filters = [...]` on `bulk_update` holds **constant** predicates ANDed onto every row.
+- `bulk_copy` on SQLite raises `BackendCapabilityError`. Use `bulk_insert` there.
+- Omit the auto primary-key column, or leave it all `missing`, and the database assigns the ids.
+  **Never** prefill `max(id) + 1`. A column mixing blank and explicit ids is rejected.
+- Normalize CSV sentinels such as `"\N"` to `missing` before loading. Never weaken a field to
+  accept dirty data.
+
+### Primary keys and sequences
+
 ```julia
-for col in [:position, :milliseconds, :rank]
-    df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
+# Reserve ids BEFORE inserting — to wire a child table's FK in the same load
+drivers_df = allocate_primary_keys(M.Driver.objects, drivers_df)   # fills the driverid column
+atomic("db") do
+    bulk_insert(M.Driver.objects, drivers_df)
+    bulk_insert(M.Result.objects, results_df)    # built from drivers_df.driverid
 end
+
+# After writing EXPLICIT primary keys row by row, repair the sequence once
+resync_sequences(M.Driver)
 ```
+
+`bulk_insert`/`bulk_copy` resync automatically after explicit ids. The row-level writers (`create`,
+`get_or_create`, `update_or_create`) do not, so a later auto-id insert collides until you call
+`resync_sequences`.
 
 ## Transactions
 
-Wrap multiple writes so they commit together or all roll back on error. `atomic(db) do … end`
-is the friendly alias of `run_in_transaction`; both take a db-key `String`.
-```julia
-using PormG
+`atomic(db) do … end` is the friendly name for `run_in_transaction`. `db` is a db-key `String`
+(or a settings/pool object). Everything inside commits together or rolls back together.
 
+```julia
 atomic("db") do
-    M.Race.objects.create("year" => 2025, "name" => "New Race", "date" => today())
+    race = M.Race.objects.create("year" => 2025, "round" => 1, "circuitid" => 1,
+                                 "name" => "Test GP", "date" => Date(2025, 3, 16))
     bulk_insert(M.Result.objects, results_df)
 end
-# All operations commit together, or all roll back on error.
 ```
 
-**Nested `atomic` = SAVEPOINT.** A nested `atomic`/`run_in_transaction` on the same db becomes
-a savepoint (partial rollback), not a second top-level transaction:
-```julia
-atomic("db") do
-    M.Race.objects.create("year" => 2025, "name" => "New Race", "date" => today())
-    try
-        atomic("db") do                       # SAVEPOINT
-            M.Result.objects.create("raceid" => 1, "driverid" => 1, "points" => 25)
-        end                                    # rolls back to the savepoint on error…
-    catch
-        # …leaving the outer Race insert intact; the outer transaction continues.
-    end
-end
+- **A nested `atomic` on the same db is a SAVEPOINT.** If it throws, only its own work rolls
+  back, and the outer transaction continues when you catch the error:
+  ```julia
+  atomic("db") do
+      M.Status.objects.create("statusid" => 901, "status" => "Kept")
+      try
+          atomic("db") do                        # SAVEPOINT
+              M.Status.objects.create("statusid" => 902, "status" => "Discarded")
+              error("validation failed")
+          end
+      catch
+      end                                        # 901 commits, 902 does not
+  end
+  ```
+- `with_savepoint(f, settings, "name")` is the explicit form, with a fixed, non-user-controlled
+  name. It is a no-op outside a transaction. Prefer nested `atomic`.
+- `atomic("db"; durable = true)` insists on being the outermost transaction and raises
+  `TransactionError` inside another one.
+- **Retry the whole transaction, never a statement.** A lost connection inside one raises
+  `OperationalError` and the transaction is gone.
+- `in_transaction_context()` reports whether the current task is inside one. Tasks spawned
+  inside a transaction join it — see [`async.md`](async.md).
 
-# Force a real top-level transaction (throws if one is already active):
-atomic("db"; durable=true) do
-    # ...
-end
-```
+**Row locking** (PostgreSQL; a silent no-op on SQLite). Inside a transaction, `select_for_update()`
+locks the matched rows until `COMMIT`:
 
-**Row locking — `select_for_update()`** (PostgreSQL; silent no-op on SQLite). Chainable; must
-run inside a transaction, and locks the matched rows until COMMIT:
 ```julia
 atomic("db") do
     standing = M.Constructor_standings.objects.
         filter("constructorid" => 131, "raceid" => 1120).
-        select_for_update().                   # kwargs: nowait, skip_locked, no_key
-        list() |> first
+        select_for_update().                   # also: nowait = true, skip_locked = true
+        first()
     M.Constructor_standings.objects.
-        filter("constructorstandingsid" => standing[:constructorstandingsid]).
-        update("points" => standing[:points] + 25)
+        filter("constructorstandingsid" => standing.constructorstandingsid).
+        update("points" => F("points") + 25)
 end
 ```
+
+**Suspending foreign keys** — you almost never need it. Inside a transaction, foreign-key checks
+already wait until `COMMIT` on both backends, so a plain `atomic` handles writing children before
+parents. `without_foreign_keys` is still **one** transaction; it does not commit in chunks. It exists
+for repairing a database that is already inconsistent, or for deliberately planting a violation in
+a SQLite test. Write it as the outermost block: `without_foreign_keys("db") do … end`.
+
+The two engines differ. On SQLite it sets `PRAGMA foreign_keys = OFF`, refuses to nest inside
+another transaction (`TransactionError`), and with `check_on_exit = true` rolls back with
+`UnsafeMutationError` if orphans remain. On PostgreSQL it defers the constraints: it nests without
+complaint, and an orphan is refused at `COMMIT` as an `IntegrityError` (PingoLee/PormG.jl#686).

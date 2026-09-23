@@ -1,6 +1,6 @@
 ---
 name: pormg-usage
-description: Answer PormG usage questions and write consumer-style examples for model definitions, @import_models, migration flow, fluent queries, joins, F/Q/Qor expressions, aggregations, and bulk operations.
+description: Answer PormG usage questions and write consumer-style code — model definitions, @import_models, migrations, fluent queries, joins, F/Q/Qor, aggregations, SQL functions, subqueries/CTEs, window functions, writes and bulk operations, transactions, async, and PormGError handling.
 ---
 
 # PormG.jl — AI Usage Guide

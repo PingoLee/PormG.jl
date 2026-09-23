@@ -90,17 +90,33 @@ function setup(path::String = DB_PATH)
 end
 
 """
-    install_ai_skills(target_dir::String = pwd())
+    install_ai_skills(target_dir::String = pwd(); io::IO = stdout)
+        -> (; installed_dir, written, stale, referenced_in)
 
-Copy PormG's AI skill blueprint into the target project's `.github/skills/pormg-usage/`
-directory. This helps AI assistants (GitHub Copilot, Claude, Cursor, and other agents)
-provide accurate PormG code suggestions.
+Copy PormG's `pormg-usage` skill bundle into `<target_dir>/.github/skills/pormg-usage/`, the
+file set an AI coding assistant (GitHub Copilot, Claude, Cursor, …) reads to learn the PormG API.
+Re-running it **is** the update mechanism: every shipped file is overwritten with the copy from the
+PormG version your project resolves, so run it again after each PormG bump.
 
-The blueprint ships with the PormG package under `.github/skills/pormg-usage/` and is a
-multi-file bundle — `SKILL.md` plus the supporting `reference.md`/`writing.md` it links to.
-The **whole directory** is copied so none of `SKILL.md`'s relative links dangle after install.
+The bundle is flat — `SKILL.md`, a router, plus the topic files it links to — and the whole
+directory is copied so none of its relative links dangle after install.
+
+It writes **only** inside that directory, and reports what it found rather than acting on it:
+
+- `written` — the files it copied, by name.
+- `stale` — files already in the target directory that this PormG version does not ship. Usually
+  a topic file an older PormG installed and a later one renamed; possibly a file you added
+  yourself. They are **left in place** — delete them if they came from PormG, because an assistant
+  browsing the directory would still read their outdated content.
+- `referenced_in` — the project's agent-instruction files (`AGENTS.md`, `CLAUDE.md`,
+  `.github/copilot-instructions.md`, `.github/instructions/*.md`) that mention `pormg-usage`.
+  Copying the files does not make an assistant read them: when this is empty the function prints a
+  one-line pointer to add to one of those files. It never edits them itself — many projects keep a
+  hand-curated skills table there.
+
+Returns `nothing` when the bundle could not be found or copied (the failure is logged).
 """
-function install_ai_skills(target_dir::String = pwd())
+function install_ai_skills(target_dir::String = pwd(); io::IO = stdout)
     # Resolve the package root the same way `upgrade_guide` does (works for a
     # registry install, not just a dev checkout). The blueprint moved from
     # `.cursor/skills/` to `.github/skills/` — see commit ee2ad67.
@@ -110,28 +126,89 @@ function install_ai_skills(target_dir::String = pwd())
     try
         if !isdir(skill_src_dir)
             @warn "Could not find PormG skill blueprint" expected_path=skill_src_dir
-            return
+            return nothing
         end
 
-        # Copy every file in the bundle so sibling links (SKILL.md → reference.md /
-        # writing.md) resolve in the consumer project. Flat bundle only — per-file
-        # (not a whole-dir replace) so any files the consumer added alongside it are
-        # left intact; add a recursive walk here if the bundle ever grows subdirs.
+        # Copy every file in the bundle so SKILL.md's sibling links resolve in the consumer
+        # project. Flat bundle only — per-file (not a whole-dir replace) so any files the
+        # consumer added alongside it are left intact; add a recursive walk here if the bundle
+        # ever grows subdirs (`isfile` skips them, so their links would dangle — #206, #253).
         files = filter(f -> isfile(joinpath(skill_src_dir, f)), readdir(skill_src_dir))
         if isempty(files)
             @warn "PormG skill blueprint has no files to install" source=skill_src_dir
-            return
+            return nothing
         end
+
+        # Listed BEFORE copying: afterwards every shipped name is present by construction. Dotfiles
+        # (`.DS_Store`, editor swap files) are the filesystem's, not a stale topic file.
+        existing = isdir(target_skill_dir) ?
+            filter(f -> !startswith(f, ".") && isfile(joinpath(target_skill_dir, f)),
+                   readdir(target_skill_dir)) : String[]
+        stale = sort!(setdiff(existing, files))
 
         mkpath(target_skill_dir)
         for f in files
             cp(joinpath(skill_src_dir, f), joinpath(target_skill_dir, f); force=true)
         end
 
-        println(_emsg("\e[32mPormG AI skill installed ($(length(files)) files) → $target_skill_dir\e[0m"))
-        println("Your coding assistant now understands PormG's query API, models, migrations, and write path.")
+        referenced_in = _skill_references(target_dir)
+
+        # Report what happened, not what the assistant now "knows" (#253): the copy wires
+        # nothing up on its own, so an unreferenced bundle is worth saying out loud.
+        println(io, _emsg(io, "\e[32mPormG AI skill installed → $target_skill_dir\e[0m"))
+        println(io, "  wrote: ", join(files, ", "))
+        if !isempty(stale)
+            println(io, _emsg(io, "  \e[33mnot shipped by this PormG version (left in place):\e[0m ",) *
+                join(stale, ", "))
+            println(io, "    Delete them if an older PormG installed them — their content is outdated.")
+        end
+        if isempty(referenced_in)
+            println(io, _emsg(io, "  \e[33mNothing in this project points an assistant at the skill yet.\e[0m"))
+            println(io, "  Add this line to AGENTS.md, CLAUDE.md, or your agent instructions:")
+            println(io, "    ", _SKILL_POINTER_LINE)
+        else
+            println(io, "  referenced from: ", join(referenced_in, ", "))
+        end
+
+        return (; installed_dir = target_skill_dir, written = files, stale, referenced_in)
     catch e
         @error "Failed to install AI skills" exception=e
+        return nothing
+    end
+end
+
+# The line `install_ai_skills` suggests when no instruction file mentions the bundle yet.
+const _SKILL_POINTER_LINE =
+    "- Using PormG (models, queries, writes, errors, async): read `.github/skills/pormg-usage/SKILL.md` first."
+
+# Read-only scan of the files agent tools load by convention. Relative paths, in a stable order,
+# for the report; a file that merely exists without naming the bundle does not count.
+#
+# It runs AFTER the copy, so it must not be able to fail the install: an unreadable instruction
+# file or directory is skipped with a warning. Letting it throw would reach `install_ai_skills`'s
+# catch-all and report "Failed to install" for a bundle that was in fact written.
+function _skill_references(target_dir::AbstractString)
+    candidates = [joinpath(target_dir, f) for f in
+        ("AGENTS.md", "CLAUDE.md", joinpath(".github", "copilot-instructions.md"))]
+    instructions_dir = joinpath(target_dir, ".github", "instructions")
+    if isdir(instructions_dir)
+        try
+            append!(candidates, [joinpath(instructions_dir, f)
+                                 for f in sort(readdir(instructions_dir)) if endswith(f, ".md")])
+        catch e
+            @warn "Could not list agent instructions; skipping them" path=instructions_dir exception=e
+        end
+    end
+    return [relpath(p, target_dir) for p in candidates if _mentions_skill(p)]
+end
+
+function _mentions_skill(path::AbstractString)
+    isfile(path) || return false
+    try
+        return occursin("pormg-usage", read(path, String))
+    catch e
+        @warn "Could not read agent instructions; skipping it" path exception=e
+        return false
     end
 end
 

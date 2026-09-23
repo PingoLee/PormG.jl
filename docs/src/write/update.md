@@ -165,6 +165,26 @@ update_q = M.Driver.objects.filter("nationality" => "British")
 update_q.update("nationality" => "English")
 ```
 
+### Projections Are Ignored
+
+An `UPDATE` has no projection, so `.update()` ignores any `values()` set on the handler. The
+statement binds only the `SET` values and the filter values, which means a handler you just read
+from can be updated as is. A filter on a `values()` **alias** is the exception. On a read, that
+filter resolves through the projection: as a `HAVING` predicate, or as the projected expression when
+the alias reuses a field's name or sits inside `Q`/`Qor`. An `UPDATE` carries no projection, so PormG
+would have to drop the filter or apply it to a different expression. It raises
+`UnsafeMutationError` instead. Filter on the underlying field.
+
+```julia
+q = M.Result.objects.filter("raceid" => 1034)
+q.values("driverid__surname", "double_points" => F("points") * 2)
+rows = q.list()                    # the read uses the projection
+q.update("positiontext" => "D")    # the projection is ignored; still scoped to raceid 1034
+
+q.filter("double_points__@gt" => 20)
+q.update("positiontext" => "D")    # ERROR: UnsafeMutationError — filter on "points__@gt" => 10 instead
+```
+
 ### `change_data` Guard
 
 If the connection is configured with `change_data: false`, any call to `.update()` raises a `WritesDisabledError` at the ORM layer before generating SQL. This applies to both normal execution and `show_query=:dict` dry-runs.

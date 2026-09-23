@@ -2126,6 +2126,49 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# UPDATE: a values() projection is ignored, and a filter on its alias is refused (#668)
+# update() used to build the handler with its projection. A binding entry (`Value(5)`,
+# `F("id") * 2`) bound its operand ahead of SET and WHERE, so on SQLite the statement wrote the
+# projection's value into `name` and matched `test_result` against the new name — zero rows, no
+# error — and on PostgreSQL the surplus parameter was rejected. A filter on the alias was dropped,
+# widening the UPDATE. Asserted by reading the rows back: the returned count alone cannot tell a
+# misbind from a miss.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "UPDATE: values() projection is ignored and its alias filter refused (#668)" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+
+    M.Just_a_test_deletion.objects.create("name" => "proj-a", "test_result" => 1)
+    M.Just_a_test_deletion.objects.create("name" => "proj-b", "test_result" => 2)
+    M.Just_a_test_deletion.objects.create("name" => "proj-c", "test_result" => 3)
+    proj_names() = [r[:name] for r in M.Just_a_test_deletion.objects.order_by("test_result").list()]
+
+    try
+        # A bound literal in the projection: only the test_result = 2 row is renamed.
+        q = M.Just_a_test_deletion.objects.filter("test_result" => 2)
+        q.values("name", "bonus" => Value(5))
+        @test q.update("name" => "proj-b-updated") == 1
+        @test proj_names() == ["proj-a", "proj-b-updated", "proj-c"]
+
+        # An F expression with a bound operand: same contract.
+        q = M.Just_a_test_deletion.objects.filter("test_result" => 3)
+        q.values("id", "double_id" => F("id") * 2)
+        @test q.update("name" => "proj-c-updated") == 1
+        @test proj_names() == ["proj-a", "proj-b-updated", "proj-c-updated"]
+
+        # A filter on the alias is refused before any SQL is sent: no row changes.
+        q = M.Just_a_test_deletion.objects.filter("test_result__@gte" => 1)
+        q.values("id", "double_id" => F("id") * 2)
+        q.filter("double_id__@gt" => 0)
+        @test_throws PormG.UnsafeMutationError q.update("name" => "proj-widened")
+        @test proj_names() == ["proj-a", "proj-b-updated", "proj-c-updated"]
+    finally
+        M.Just_a_test_deletion.objects.exists() &&
+            M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #379 — a match_on key reads the CALLER's column, not PormG's injected fill
 #
 # `bulk_update` resolved a merge key mapping-first, and since #335 PormG's own auto-populated

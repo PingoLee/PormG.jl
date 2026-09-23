@@ -639,6 +639,26 @@ const DOCERR_CASES = [
                           DataFrames.DataFrame(resultid = [1], points = [9]),
                           columns = ["points"], match_on = ["resultid"], show_query = :dict),
     ),
+    # #668 — `write/update.md` → Projections Are Ignored, `write/bulk.md` and `errors.md` promise that
+    # a filter on a `values()` alias raises `UnsafeMutationError` from `update()` and `bulk_update()`:
+    # it is a HAVING predicate, and an UPDATE would otherwise drop it.
+    (
+        "write/update.md + errors.md — update() with a filter on a values() alias raises (#668)",
+        UnsafeMutationError,
+        () -> DOCERR_RESULT_PG.objects.filter("points" => 0).
+                  values("resultid", "double_points" => PormG.QueryBuilder.F("points") * 2).
+                  filter("double_points__@gt" => 20).
+                  update("points" => 1, show_query = :dict),
+    ),
+    (
+        "write/bulk.md + errors.md — bulk_update with a filter on a values() alias raises (#668)",
+        UnsafeMutationError,
+        () -> bulk_update(DOCERR_RESULT_PG.objects.filter("points" => 0).
+                              values("resultid", "double_points" => PormG.QueryBuilder.F("points") * 2).
+                              filter("double_points__@gt" => 20),
+                          DataFrames.DataFrame(resultid = [1], points = [9]),
+                          columns = ["points"], match_on = ["resultid"], show_query = :dict),
+    ),
     (
         "write/bulk.md — a bulk_update handler filter that traverses a relation raises (#665)",
         QueryBuildError,

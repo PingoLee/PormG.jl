@@ -167,7 +167,7 @@ end
 @testset "#537 controls: the served OP spellings still render" begin
   for (backend, conn) in _OPF_BACKENDS
     # `OP` over a served function (EXTRACT) as a WHERE predicate: non-aggregate, formatter known.
-    # Upper-case part, as `MONTH(x)` itself passes it — the SQLite renderer accepts nothing else.
+    # Upper-case part, as `MONTH(x)` itself passes it (any case renders since #684).
     q1 = OPF.Opf_row.objects
     q1.values("note")
     q1.filter(OP(Extract("seen", "MONTH"), "<=", 4))

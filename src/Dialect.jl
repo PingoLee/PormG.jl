@@ -468,21 +468,24 @@ function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGPostgres)
 end
 function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   part = format["part"]
-  strftime_format = if part == "YEAR"
+  # #684 — PostgreSQL's EXTRACT takes the field in any case, so match case-blind here too. ASCII
+  # only: `uppercase` folds `ſ`/`ı` to `S`/`I`, which would admit spellings PostgreSQL rejects.
+  up = isascii(part) ? uppercase(part) : part
+  strftime_format = if up == "YEAR"
     "%Y"
-  elseif part == "MONTH"
+  elseif up == "MONTH"
     "%m"
-  elseif part == "DAY"
+  elseif up == "DAY"
     "%d"
-  elseif part == "HOUR"
+  elseif up == "HOUR"
     "%H"
-  elseif part == "MINUTE"
+  elseif up == "MINUTE"
     "%M"
-  elseif part == "SECOND"
+  elseif up == "SECOND"
     "%S"
-  elseif part == "DOW"
+  elseif up == "DOW"
     "%w"
-  elseif part == "DOY"
+  elseif up == "DOY"
     "%j"
   else
     throw(BackendCapabilityError("Unsupported extract part for SQLite: $part"))

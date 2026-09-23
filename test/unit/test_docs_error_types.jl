@@ -548,19 +548,12 @@ const DOCERR_CASES = [
         () -> DOCERR_DRIVER_SL.objects.filter("surname__@niunaccent_exact" => "raikkonen").
             list(show_query = :dict),
     ),
-    # The page tells the reader to spell the part in capitals because SQLite accepts only the eight
-    # upper-case spellings. Both halves: a part SQLite has no equivalent for, and a lower-case
-    # spelling of a part it does support — the one PostgreSQL accepts and SQLite refuses.
+    # A part SQLite has no equivalent for. The spelling is case-blind since #684, so a lower-case
+    # portable part renders instead — `test_date_functions_sql.jl` pins that half.
     (
-        "postgres.md — an `Extract` part outside the portable eight raises on SQLite",
+        "postgres.md + read/functions_and_dates.md — an `Extract` part outside the portable eight raises on SQLite",
         BackendCapabilityError,
         () -> DOCERR_RESULT_SL.objects.values("x" => Extract("resultid", "EPOCH")).
-            list(show_query = :dict),
-    ),
-    (
-        "postgres.md — a lower-case `Extract` part raises on SQLite",
-        BackendCapabilityError,
-        () -> DOCERR_RESULT_SL.objects.values("x" => Extract("resultid", "year")).
             list(show_query = :dict),
     ),
     # The SQLite `without_foreign_keys` refuses to nest before touching the database, so a mock pool

@@ -369,6 +369,10 @@ query.values(
 )
 ```
 
+The part is case-insensitive (`"year"` and `"YEAR"` are the same). `YEAR`, `MONTH`, `DAY`, `HOUR`,
+`MINUTE`, `SECOND`, `DOW` and `DOY` run on both engines; any other PostgreSQL `EXTRACT` field raises
+`BackendCapabilityError` on SQLite — see [PostgreSQL](../postgres.md).
+
 ### `ToChar` — Format as String
 
 ```julia

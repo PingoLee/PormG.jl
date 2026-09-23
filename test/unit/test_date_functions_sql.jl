@@ -21,6 +21,8 @@ Sibling coverage:
 using Test
 using PormG
 import PormG.Dialect
+using PormG.QueryBuilder: inspect_query
+using PormG.Functions: Extract
 
 # Mock connections — only their type matters (dispatch selects the PG vs SQLite body).
 struct _PgDateFnConn <: PormG.PormGPostgres end
@@ -29,6 +31,19 @@ const _PG    = _PgDateFnConn()
 const _SL    = _SlDateFnConn()
 const _COL   = "\"t\".\"d\""            # a pre-quoted column reference
 const _EMPTY = Dict{String, Any}()
+
+# #684 — one mock model, so the case-blind part is also pinned through the fluent `Extract` path the
+# docs teach, not only at the renderer. Own config key: `runtests.jl` shares one `Main`.
+PormG.backend_sqlite_version(::_SlDateFnConn) = 3045000
+PormG.config["datefn_mock"] = PormG.Configuration.Settings(
+  connections = _SL, change_data = true, db_def_folder = "datefn_mock",
+)
+module DateFnModels
+import PormG
+import PormG.Models
+Datefn_race = Models.Model("datefn_race", id = Models.IDField(), date = Models.DateField(null = true))
+PormG.Models.set_models(@__MODULE__, "datefn_mock")
+end
 
 @testset "Date/time function cross-DB SQL parity (#25)" begin
 
@@ -77,6 +92,28 @@ const _EMPTY = Dict{String, Any}()
     # The 3-arg `Extract(x, part, format)` suffix is the caller's own cast and REPLACES the default.
     @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "EPOCH", "format" => "::bigint"), _PG) ==
           "EXTRACT(EPOCH FROM $(_COL))::bigint"
+  end
+
+  # #684: PostgreSQL takes the part in any case, so SQLite must too — otherwise the docs' own
+  # `Extract("date", "year")` ran on one engine only. The whitelist stays fail-closed in every case.
+  @testset "EXTRACT part is case-blind on SQLite (#684)" begin
+    for (spelling, canon) in [("year", "YEAR"), ("Year", "YEAR"), ("dow", "DOW"), ("second", "SECOND")]
+      @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => spelling), _SL) ==
+            Dialect.EXTRACT(_COL, Dict{String, Any}("part" => canon), _SL)
+    end
+    err = try Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "week"), _SL); nothing catch e; e end
+    @test err isa PormG.BackendCapabilityError
+    @test occursin("week", PormG.error_message(err))   # the caller's own spelling, not ours
+    # The fold is ASCII-only: Julia's `uppercase("ſecond") == "SECOND"`, and PostgreSQL rejects it.
+    @test_throws PormG.BackendCapabilityError Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "ſecond"), _SL)
+
+    q = DateFnModels.Datefn_race.objects
+    q.values("y" => Extract("date", "year"), "w" => Extract("date", "dow"))
+    slsql = inspect_query(q; connection = _SL)[:sql_text]
+    @test occursin("CAST(strftime('%Y', ", slsql)
+    @test occursin("CAST(strftime('%w', ", slsql)
+    # PostgreSQL renders the part as written — unchanged by #684.
+    @test occursin("EXTRACT(year FROM ", inspect_query(q; connection = _PG)[:sql_text])
   end
 
   # ===========================================================================

@@ -226,10 +226,10 @@ M.Result.objects.
   default = …)` for more branches.
 - `ToChar` accepts any PostgreSQL format on PostgreSQL. On SQLite only a portable subset works, and
   anything else raises `BackendCapabilityError`.
-- **Write `Extract` parts in capitals** (`"YEAR"`, `"MONTH"`, `"DAY"`, `"HOUR"`, `"MINUTE"`,
-  `"SECOND"`, `"DOW"`, `"DOY"`). PostgreSQL accepts any case, but SQLite accepts only those eight
-  spellings and raises `BackendCapabilityError` for anything else, `"year"` included (PingoLee/PormG.jl#684). For
-  plain date parts the `__@year`-style transforms are simpler still.
+- **Portable `Extract` parts** are `"YEAR"`, `"MONTH"`, `"DAY"`, `"HOUR"`, `"MINUTE"`, `"SECOND"`,
+  `"DOW"` and `"DOY"`, in any case. PostgreSQL accepts any `EXTRACT` field, but SQLite raises
+  `BackendCapabilityError` for anything outside those eight. For plain date parts the
+  `__@year`-style transforms are simpler still.
 
 Full reference: [Functions and Dates](https://pingolee.github.io/PormG.jl/stable/read/functions_and_dates/).
 

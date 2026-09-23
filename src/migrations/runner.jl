@@ -451,6 +451,9 @@ Includes basic drift detection by comparing live database tables against
 the history of applied migrations.
 """
 function status(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings)::MigrationStatus
+  # #683: every folder-reading entry point refuses a `register_connection` entry first — its
+  # `db_def_folder` is a label, and `joinpath` would read `./dynamic_connection/` instead.
+  Configuration._require_folder_backed(settings, "status")
   has_table = _migrations_table_exists(connection)
   
   applied = NamedTuple[]
@@ -684,6 +687,7 @@ Validates ordering, checksums, destructive actions, and SQL generation.
 Does NOT modify the database or move files.
 """
 function dry_run(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings)::DryRunResult
+  Configuration._require_folder_backed(settings, "dry_run")
   migration_plan = _load_migration_plan(settings)
   ordered_statements, all_sql = _order_statements(migration_plan)
   
@@ -1157,6 +1161,8 @@ function migrate(connection::PormGBackend, settings::PormGSettings;
                  dry_run_only::Bool = false,
                  name::String = "pending_migration")
   # --- Phase 1: Validate ---
+  # Before `init_migrations` and the extension install below: both write to the database (#683).
+  Configuration._require_folder_backed(settings, "migrate")
   if !settings.change_db
     @warn("The database is not set to change_db, so the migration plan will not be applied.")
     return nothing
@@ -1458,6 +1464,7 @@ For now, this validates the target version against the current history.
 """
 function migrate_to(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings, 
                     target_version::String; interactive::Bool = true, destructive::Bool = false)
+  Configuration._require_folder_backed(settings, "migrate_to")
   init_migrations(connection)
   
   applied = _get_applied_migrations(connection)
@@ -1596,6 +1603,7 @@ or `nothing` when there is no pending migration. Pairs with [`status`](@ref), wh
 whether a pending file exists.
 """
 function discard_pending_migration(settings::PormGSettings; backup::Bool = true)
+  Configuration._require_folder_backed(settings, "discard_pending_migration")
   pending_path = joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")
   if !isfile(pending_path)
     @info(_emsg("\e[32mNo pending migration to discard.\e[0m"))

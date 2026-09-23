@@ -1046,6 +1046,22 @@ const DOCERR_CASES = [
         InvalidConfigurationError,
         () -> mktempdir(PormG._read_upgrading_entries),
     ),
+    # #683 — a `register_connection` entry has no models folder. The entry is added and removed
+    # inside the call so no other case sees a dynamic key in `config`; the refusal fires before
+    # the mock connection is ever touched.
+    (
+        "configuration/dynamic.md / errors.md — migrations on a dynamic connection are refused (#683)",
+        InvalidConfigurationError,
+        () -> begin
+            PormG.config["docerr_dynamic"] = PormG.Configuration.Settings(
+                connections = DocErrMockPostgres(), dynamic = true, db_def_folder = "dynamic_connection")
+            try
+                PormG.Migrations.dry_run("docerr_dynamic")
+            finally
+                delete!(PormG.config, "docerr_dynamic")
+            end
+        end,
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

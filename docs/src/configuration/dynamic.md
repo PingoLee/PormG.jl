@@ -50,6 +50,23 @@ or `settings.dynamic` inside a `before_connect` hook. Do not compare `db_def_fol
 entry stores the label `"dynamic_connection"` there, and so does a static folder of that name
 loaded as `load("dynamic_connection")`.
 
+!!! warning "Migrations and model import need a folder"
+    A dynamic connection has no models folder, so the migration workflow and the model importers
+    refuse it with `InvalidConfigurationError`: `makemigrations`, `migrate`, `migrate_to`, `status`,
+    `dry_run` and `discard_pending_migration` from `PormG.Migrations`, and
+    `import_models_from_sqlite` / `import_models_from_postgres`. Before this refusal they followed
+    the `"dynamic_connection"` label as a path relative to the working directory, so a static folder
+    of that name stood in for the tenant: `dry_run` reported *its* pending plan,
+    `discard_pending_migration` moved it, and with `change_db` enabled `makemigrations` overwrote it
+    with the tenant's diff and `migrate` applied it to the tenant's database.
+
+    To migrate a tenant database, give it a folder: a `connection.yml` pointing at that database,
+    loaded with `Configuration.load(folder)`, and run the migration against that key.
+    `import_models_from_django` still accepts a dynamic `db` when you pass `output_path`, because
+    the output then goes to a real folder. The calls that only touch the database — the
+    `pormg_migrations` history-table calls (`init_migrations`, `mark_applied`, `mark_failed`,
+    `remove_migration_record`) and the read-only `check` — accept a dynamic key as before.
+
 ---
 
 ## Lazy Connection Resolution (Recommended)

@@ -922,6 +922,104 @@ PormG quotes the alias in `ORDER BY` and never adds it to `GROUP BY`.
 
 ---
 
+## Filtering on a Window Result
+
+A window alias **cannot** be passed to `filter()` in the query that computes it. SQL evaluates window
+functions after `WHERE` and after `HAVING`, so no clause at that level can hold the predicate. PormG
+refuses it when the query is built, with a `QueryBuildError`, before any SQL reaches the database:
+
+```julia
+query = M.Result.objects.filter("raceid" => 306)
+query.values("points", "r" => Rank(over=WindowOver(order_by=["-points"])))
+query.filter("r" => 1)   # QueryBuildError — "r" projects a window function
+```
+
+The same applies to a window inside arithmetic (`Rank(...) + 1`), to any lookup suffix
+(`"r__@lte" => 3`), and to the alias inside `Q(...)` or `Qor(...)`.
+
+To filter on a window, compute it one level down in a [CTE](subqueries_and_ctes.md), join the CTE
+back on the primary key, and filter on its column. The outer query sees the CTE's `rk` as an ordinary
+column, so the predicate goes into its `WHERE`. This query returns the winner of every race in the
+1991 season:
+
+```julia
+using PormG.Functions: Rank, WindowOver
+
+# 1. Rank each result within its race, highest points first
+ranked = M.Result.objects.filter("raceid__year" => 1991).
+    values("resultid", "rk" => Rank(over=WindowOver(partition_by="raceid", order_by=["-points"])))
+
+# 2. Join the ranked rows back and keep rank 1
+query = M.Result.objects
+query.with("ranked" => ranked, join_field="resultid" => "resultid")
+query.filter("raceid__year" => 1991, "ranked__rk" => 1)
+query.values("raceid__round", "raceid__name", "driverid__surname", "points")
+query.order_by("raceid__round")
+df = query |> DataFrame
+```
+
+Result:
+
+```
+16×4 DataFrame
+ Row │ raceid__round  raceid__name              driverid__surname  points
+     │ Int64          String                    String             Float64
+─────┼─────────────────────────────────────────────────────────────────────
+   1 │             1  United States Grand Prix  Senna                 10.0
+   2 │             2  Brazilian Grand Prix      Senna                 10.0
+   3 │             3  San Marino Grand Prix     Senna                 10.0
+   4 │             4  Monaco Grand Prix         Senna                 10.0
+   5 │             5  Canadian Grand Prix       Piquet                10.0
+   6 │             6  Mexican Grand Prix        Patrese               10.0
+   7 │             7  French Grand Prix         Mansell               10.0
+   8 │             8  British Grand Prix        Mansell               10.0
+   9 │             9  German Grand Prix         Mansell               10.0
+  10 │            10  Hungarian Grand Prix      Senna                 10.0
+  11 │            11  Belgian Grand Prix        Senna                 10.0
+  12 │            12  Italian Grand Prix        Mansell               10.0
+  13 │            13  Portuguese Grand Prix     Patrese               10.0
+  14 │            14  Spanish Grand Prix        Mansell               10.0
+  15 │            15  Japanese Grand Prix       Berger                10.0
+  16 │            16  Australian Grand Prix     Senna                  5.0
+```
+
+The Australian Grand Prix was stopped early in heavy rain and awarded half points, so its winner has
+`5.0`. The rank is still 1, because the window compares points within each race.
+
+Generated SQL (PostgreSQL):
+
+```sql
+WITH "ranked" AS (
+  SELECT
+    "Tb"."resultid" as "resultid",
+    RANK() OVER (PARTITION BY "Tb"."raceid" ORDER BY "Tb"."points" DESC) as "rk"
+  FROM "result" as "Tb"
+  INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
+  WHERE "Tb_1"."year" = $1
+)
+SELECT
+    "R1_1"."round" as "raceid__round",
+    "R1_1"."name" as "raceid__name",
+    "R1_2"."surname" as "driverid__surname",
+    "R1"."points" as "points"
+FROM "result" as "R1"
+INNER JOIN "race" AS "R1_1" ON "R1"."raceid" = "R1_1"."raceid"
+INNER JOIN "driver" AS "R1_2" ON "R1"."driverid" = "R1_2"."driverid"
+LEFT JOIN "ranked" AS "R1_3" ON "R1"."resultid" = "R1_3"."resultid"
+WHERE "R1_1"."year" = $2
+  AND "R1_3"."rk" = $3
+ORDER BY "raceid__round" ASC NULLS LAST
+```
+
+Filter the CTE body to the rows you need (here, the 1991 season): without that filter, the window
+ranks the whole table. A ranking column (`Rank`, `DenseRank`, `RowNumber`) is an integer, and a
+value function's column (`Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`) has the type of the
+column it reads, so `filter("ranked__prev" => "Senna")` works on `Lag("driverid__surname")`.
+
+For a small result, fetching the rows and filtering them in Julia is also fine.
+
+---
+
 ## SQLite Support
 
 All window functions work on SQLite **3.25.0 and later** (released 2018-09-15). PormG checks the SQLite library version at query time and throws a clear `BackendCapabilityError` if the library is too old.
@@ -952,6 +1050,7 @@ The only SQLite limitation is **explicit frame specifications** (`frame=` argume
 ### Current Limitations
 
 - **Aggregate-over-window** (`SUM(...) OVER (...)`) is not yet implemented. Use a CTE to aggregate first, then apply the window in the outer query.
+- **Filtering on a window alias** in the query that computes it raises a `QueryBuildError`. Filter on the column of a CTE instead — see [Filtering on a Window Result](#Filtering-on-a-Window-Result).
 - **Named `WINDOW` clauses** (`WINDOW w AS (...)`) are not supported. Each function carries its own inline `OVER`.
 - **SQLite explicit frame specs** throw a `BackendCapabilityError`. Use PostgreSQL for frame-bound queries.
 

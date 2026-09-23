@@ -673,6 +673,10 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
           # exactly that spelling, and never the internal namespace half.
           throw(_unknown_field(instruc.object.model, v.column.field;
                                aliases = memo_projection_names(instruc)))
+        # #685: a window alias reaches this branch exactly as an aggregate one does, and HAVING is
+        # no home for it either — see `_guard_window_alias_predicate`. First of the guards, so it
+        # refuses before anything below resolves, renders or binds.
+        _guard_window_alias_predicate(_projected_source(having_key, instruc), having_key[2])
         # Switch to having context for positional parameters. #595 moved this ABOVE the left-hand
         # side: resolving it can now RENDER, and a render binds — those values belong in `:having`
         # with the comparison value, ahead of it, exactly as they print.
@@ -728,6 +732,7 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
       end
       push!(instruc._where, _get_filter_query(v, instruc))
     elseif isa(v, Union{SQLTypeQor,SQLTypeQ,SQLTypeF})
+      _guard_window_alias_in_q(v, instruc)   # #685
       push!(instruc._where, _get_filter_query(v, instruc))
     else
       throw(FilterError("Invalid filter entry: $(v) (::$(typeof(v))) is not a Q, Qor, or operator expression."))
@@ -755,9 +760,7 @@ function _guard_no_aggregate_predicate(filter, depth::Int = 0)
     if col isa WindowFunction
       throw(QueryBuildError(
         "\e[4m\e[31mOP($(col.function_name)(…), …)\e[0m — a window function cannot be a WHERE " *
-        "predicate: SQL evaluates windows after WHERE. Compute it in a CTE and filter on its column — " *
-        "\e[4m\e[32m.with(\"ranked\" => q, join_field = …)\e[0m then " *
-        "\e[4m\e[32mfilter(\"ranked__rk\" => 1)\e[0m (#537)."))
+        "predicate: SQL evaluates windows after WHERE. " * _WINDOW_PREDICATE_ADVICE * " (#537)."))
     elseif col isa SQLTypeFunction && _is_agg(col)
       throw(QueryBuildError(
         "\e[4m\e[31mOP($(col.function_name)(…), …)\e[0m — an aggregate cannot be a WHERE predicate. " *
@@ -771,6 +774,68 @@ function _guard_no_aggregate_predicate(filter, depth::Int = 0)
   elseif filter isa SQLTypeQor
     for f in filter.or
       _guard_no_aggregate_predicate(f, depth + 1)
+    end
+  end
+  return nothing
+end
+
+# The spelling that DOES filter on a window, shared by the #537 refusal above and the #685 one below
+# so they cannot drift. It
+# was advice nobody could follow until #685: a window in a CTE body died typing its column
+# (`_set_field_from_sql_function(::WindowFunction, …)`, ctes.jl), so the #537 message named a route
+# that raised. The CTE materializes the window one query level down, where the outer WHERE can see it.
+const _WINDOW_PREDICATE_ADVICE =
+  "Compute it in a CTE and filter on its column — " *
+  "\e[4m\e[32m.with(\"ranked\" => q, join_field = \"<pk>\" => \"<pk>\")\e[0m, joined on the primary key, then " *
+  "\e[4m\e[32mfilter(\"ranked__rk\" => 1)\e[0m — or filter the fetched rows in Julia"
+
+# #685 — `values("r" => Rank(…)); filter("r" => 1)` is the alias spelling of #537's window case. A
+# plain key that names a projection alias is routed to HAVING (the documented aggregate spelling), and
+# nothing looked at WHAT the alias projects, so a window rendered `HAVING RANK() OVER (…) = ?`: a
+# `StatementError` on both engines, after the SQL was already sent. No placement at this query level
+# is right — SQL evaluates windows after WHERE *and* HAVING — so refuse at build time and name the
+# level where it is: a CTE. (Django ≥ 4.2 wraps the query in a subquery instead; #685 chose the
+# explicit route, per the less-magic half of the design stance.)
+#
+# `_is_window_expr` walks `FExpression`/`FObject`, so `Rank(…) + 1` refuses too — it rendered the
+# same HAVING. `source` is `nothing` when the memo was written by a non-projection path; that is not
+# a window, and the existing ladder handles it.
+function _guard_window_alias_predicate(source, label::AbstractString)
+  (source !== nothing && _is_window_expr(source.field)) || return nothing
+  throw(QueryBuildError(
+    "\e[4m\e[31mfilter(\"$(label)\" => …)\e[0m — \e[31m$(label)\e[0m projects a window function, " *
+    "and a window cannot be filtered in the query that computes it: SQL evaluates windows after " *
+    "WHERE and HAVING. " * _WINDOW_PREDICATE_ADVICE * " (#685)."))
+end
+
+# #685 — the same refusal for an alias inside `Q(...)`/`Qor(...)`. Only a TOP-LEVEL alias key takes
+# the HAVING branch in `get_filter_query`; inside a `Q` the key resolves through
+# `_get_filter_query(::SQLTypeField)`, which reuses the projection's memoized text, so a window alias
+# printed `RANK() OVER (…)` straight into WHERE — the same late driver error by another spelling.
+#
+# The check lives HERE, on the predicate walk, and not in `_get_filter_query(::SQLTypeField)` where
+# the text is reused: that function also renders a SELECT-side `When("r" => 1)`, and
+# `CASE WHEN RANK() OVER (…) = 1 …` in the select list is legal SQL. The clause cannot be told apart
+# there on PostgreSQL, whose parameter object keeps no context. The alias test is the top-level
+# branch's — a plain key naming no model field — so a model field that shares its name with a window
+# alias (`values("r" => "points", "points" => Rank(…)); filter(Q("points" => 5.0))`) still filters the
+# column, exactly as it does unwrapped. Recursive with `_guard_no_aggregate_predicate`'s depth cap.
+function _guard_window_alias_in_q(filter, instruc::SQLInstruction, depth::Int = 0)
+  depth > 32 && return nothing
+  if filter isa SQLTypeOper
+    col = filter.column
+    (col isa SQLTypeField && col.field isa String && !contains(col.field, "__") &&
+     !(col.field in instruc.object.model.field_names)) || return nothing
+    key = memo_key(col)
+    memo_projection(instruc, key) === nothing && return nothing
+    _guard_window_alias_predicate(_projected_source(key, instruc), col.field)
+  elseif filter isa SQLTypeQ
+    for f in filter.filters
+      _guard_window_alias_in_q(f, instruc, depth + 1)
+    end
+  elseif filter isa SQLTypeQor
+    for f in filter.or
+      _guard_window_alias_in_q(f, instruc, depth + 1)
     end
   end
   return nothing

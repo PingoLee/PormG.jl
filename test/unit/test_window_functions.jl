@@ -2,6 +2,7 @@ using Test
 using PormG
 using PormG.Models: Model, IDField, IntegerField, FloatField
 using PormG.QueryBuilder: WindowOver, Rank, DenseRank, RowNumber, Lag, NthValue, inspect_query, Count, Sum
+using PormG.Functions: Case, When
 
 struct WindowMockPostgres <: PormG.PormGPostgres end
 struct WindowMockSQLite <: PormG.PormGSQLite end
@@ -348,4 +349,186 @@ end
   group_by_line = match(r"GROUP BY[^\n]+", sql)
   @test group_by_line !== nothing
   @test !contains(group_by_line.match, "rn")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #685 fixtures. `_window_err` builds AND renders, returning the exception or `nothing`: a refusal
+# must happen by render time at the latest, and construction alone proves nothing. Both mock
+# backends, because the bug reproduced on both — PostgreSQL rejects a window in HAVING outright and
+# SQLite rejects HAVING on a query with no aggregate.
+# ─────────────────────────────────────────────────────────────────────────────
+const _WINDOW_685_MODELS = (("PostgreSQL", WindowPgResult), ("SQLite", WindowSlResult))
+
+_window_err(build) = try
+  inspect_query(build())
+  nothing
+catch e
+  e
+end
+
+_window_msg(err) = err === nothing ? "" : PormG.error_message(err)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Window alias filter (#685): refused at build time instead of rendered as HAVING
+# A projection alias is routed to HAVING — right for an aggregate, never right for a window, since
+# SQL evaluates windows after WHERE AND HAVING. Before the fix every spelling here rendered
+# `HAVING RANK() OVER (…) = ?` and failed at the driver; now each is a typed `QueryBuildError` naming
+# the alias and the CTE route. Covers the bare alias, a window nested in arithmetic (the detection
+# walks the expression), a value function, a lookup suffix, and the Q/Qor wrappers that reach the
+# alias through the WHERE path rather than the HAVING branch.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#685: filter on a window alias is refused, not rendered as HAVING" begin
+  for (backend, Model_) in _WINDOW_685_MODELS
+    rank = () -> Rank(over = WindowOver(order_by = ["-points"]))
+    for (label, alias, build) in (
+        ("bare Rank alias", "r", () -> (q = Model_.objects; q.filter("raceid" => 306);
+                                        q.values("points", "r" => rank()); q.filter("r" => 1); q)),
+        ("Rank nested in arithmetic", "r", () -> (q = Model_.objects;
+                                        q.values("points", "r" => rank() + 1); q.filter("r" => 2); q)),
+        ("Lag value alias", "prev", () -> (q = Model_.objects;
+                                        q.values("points", "prev" => Lag("points", over = WindowOver(order_by = ["raceid"])));
+                                        q.filter("prev__@gt" => 5.0); q)),
+        ("lookup suffix on a Rank alias", "r", () -> (q = Model_.objects;
+                                        q.values("points", "r" => rank()); q.filter("r__@lte" => 3); q)),
+        # Inside Q/Qor the alias skips the HAVING branch and resolves through the memo instead, which
+        # printed `RANK() OVER (…)` into WHERE — the same late failure by another spelling.
+        ("Rank alias inside Q", "r", () -> (q = Model_.objects;
+                                        q.values("points", "r" => rank()); q.filter(Q("r" => 1)); q)),
+        ("Rank alias inside Qor", "r", () -> (q = Model_.objects;
+                                        q.values("points", "r" => rank()); q.filter(Qor("r" => 1, "r" => 2)); q)),
+      )
+      @testset "$backend — $label" begin
+        err = _window_err(build)
+        @test err isa PormG.QueryBuildError
+        msg = _window_msg(err)
+        # The message names the caller's own alias and the route that works.
+        @test occursin("\"$(alias)\"", msg)
+        @test occursin(".with(", msg)
+        @test occursin("#685", msg)
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Window alias filter (#685) controls: the refusal is exactly as wide as the window case
+# An aggregate alias beside a window alias must still filter through HAVING, and ordering on the
+# window alias must still work — the guard looks at what the FILTERED alias projects, not at whether
+# a window exists anywhere in the projection.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#685 controls: aggregate alias HAVING and window-alias ORDER BY still render" begin
+  for (backend, Model_) in _WINDOW_685_MODELS
+    @testset "$backend" begin
+      q = Model_.objects
+      q.values("constructorid", "total" => Count("resultid"),
+               "rk" => Rank(over = WindowOver(order_by = ["constructorid"])))
+      q.filter("total__@gte" => 2)
+      q.order_by("rk")
+      sql = replace(inspect_query(q)[:sql_text], r"\s+" => " ")
+      @test occursin("HAVING COUNT(", sql)
+      @test !occursin(r"HAVING[^\n]*OVER", sql)
+      @test occursin("ORDER BY \"rk\"", sql)
+    end
+
+    @testset "$backend — a window alias inside a SELECT-side CASE still renders" begin
+      # `When("r" => 1)` is a predicate on the window alias too, but in the select list, where a
+      # window is legal. The refusal is for filter clauses only; this rendered before #685 and must
+      # keep rendering.
+      q = Model_.objects
+      q.values("points", "r" => Rank(over = WindowOver(order_by = ["-points"])),
+               "top" => Case([When("r" => 1, then = 1)], default = 0))
+      sql = inspect_query(q)[:sql_text]
+      @test occursin(r"CASE\s+WHEN RANK\(\) OVER", sql)
+      @test !occursin("WHERE", sql)
+    end
+
+    @testset "$backend — a model field sharing a window alias's name filters the column" begin
+      # "points" names a model field AND the window's output alias. The filter key is the field, so
+      # it filters the column — unwrapped and inside Q alike — and is not refused.
+      for wrap in (identity, Q)
+        q = Model_.objects
+        q.values("r" => "points", "points" => Rank(over = WindowOver(order_by = ["raceid"])))
+        q.filter(wrap("points" => 5.0))
+        sql = inspect_query(q)[:sql_text]
+        @test occursin(r"WHERE \(?\"Tb\"\.\"points\" = ", sql)
+      end
+    end
+  end
+end
+
+# A CTE joins back through the model registry, which the standalone `Model(...)` fixtures above
+# never enter — so the CTE route gets its own `set_models` module, one config key per backend.
+PormG.config["window_685_pg"] = PormG.Configuration.Settings(connections = WindowMockPostgres(), change_data = true,
+                                                                  db_def_folder = "window_685_pg")
+PormG.config["window_685_sl"] = PormG.Configuration.Settings(connections = WindowMockSQLite(), change_data = true,
+                                                                  db_def_folder = "window_685_sl")
+
+module Window685Pg
+import PormG, PormG.Models
+Result = Models.Model("window_results", resultid = Models.IDField(), raceid = Models.IntegerField(),
+                      points = Models.FloatField(), surname = Models.CharField())
+PormG.Models.set_models(@__MODULE__, "window_685_pg")
+end
+
+module Window685Sl
+import PormG, PormG.Models
+Result = Models.Model("window_results", resultid = Models.IDField(), raceid = Models.IntegerField(),
+                      points = Models.FloatField(), surname = Models.CharField())
+PormG.Models.set_models(@__MODULE__, "window_685_sl")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Window columns in a CTE body (#685): the route the refusal points at really works
+# `_set_field_from_sql_function` could not type a window column, so a CTE body projecting `Rank`
+# raised "RANK is not a recognized function" — the #537 message named a route that did not exist.
+# A ranking column types as an integer; a value function types as its column, so the outer filter
+# binds its value with that column's formatter. The outer predicate lands in WHERE, on the CTE's
+# joined column, with the parameters in print order.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#685: a window column in a CTE body is typed and filterable from the outer query" begin
+  for (backend, Model_) in (("PostgreSQL", Window685Pg.Result), ("SQLite", Window685Sl.Result))
+    @testset "$backend — Rank" begin
+      ranked = Model_.objects
+      ranked.values("resultid", "rk" => Rank(over = WindowOver(partition_by = "raceid", order_by = ["-points"])))
+      q = Model_.objects
+      q.with("ranked" => ranked, join_field = "resultid" => "resultid")
+      q.filter("raceid" => 306)
+      q.values("raceid", "points")
+      q.filter("ranked__rk" => 1)
+      inspection = inspect_query(q)
+      sql = replace(inspection[:sql_text], r"\s+" => " ")
+      @test occursin("RANK() OVER (PARTITION BY", sql)
+      @test occursin(r"WHERE \"R1\"\.\"raceid\" = (\?|\$1) AND \"R1_1\"\.\"rk\" = (\?|\$2)", sql)
+      @test !occursin("HAVING", sql)
+      @test inspection[:parameters] == Any[306, 1]
+    end
+
+    @testset "$backend — Lag types as its column" begin
+      # A text column is the discriminating case: typed as an integer (the fallback every other
+      # arm uses), the outer filter would refuse "Senna" as "not a valid number".
+      prev = Model_.objects
+      prev.values("resultid", "prev" => Lag("surname", over = WindowOver(order_by = ["raceid"])))
+      q = Model_.objects
+      q.with("lagged" => prev, join_field = "resultid" => "resultid")
+      q.values("raceid", "points")
+      q.filter("lagged__prev" => "Senna")
+      inspection = inspect_query(q)
+      # LAG's default offset binds first, inside the CTE body; the outer value follows it.
+      @test occursin(r"WHERE \"R1_1\"\.\"prev\" = (\?|\$2)", inspection[:sql_text])
+      @test inspection[:parameters] == Any[1, "Senna"]
+    end
+
+    @testset "$backend — an untypeable window argument is a typed refusal" begin
+      # `Lag(F("points"))` carries an FExpression, which names no column the arm can type from. It
+      # must be a QueryBuildError inside the taxonomy, never a MethodError from a missing arm.
+      prev = Model_.objects
+      prev.values("resultid", "prev" => Lag(F("points"), over = WindowOver(order_by = ["raceid"])))
+      q = Model_.objects
+      q.with("lagged" => prev, join_field = "resultid" => "resultid")
+      q.values("raceid")
+      err = _window_err(() -> q)
+      @test err isa PormG.QueryBuildError
+      @test occursin("LAG", _window_msg(err))
+    end
+  end
 end

@@ -137,9 +137,12 @@ M.Lap_times.objects.
 - `LastValue`/`NthValue` under the default frame only see rows up to the current one. An explicit
   `frame = "ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"` fixes that, but
   **`frame=` is PostgreSQL-only** and raises `BackendCapabilityError` on SQLite.
-- `order_by` on a window alias works. **Do not `filter` on one**: PormG currently renders it as
-  `HAVING`, which both engines reject at execution with a `StatementError` (PingoLee/PormG.jl#685). To keep, say,
-  only the top-ranked row, compute the window and filter the rows in Julia.
+- `order_by` on a window alias works. `filter` on one raises `QueryBuildError` at build time: SQL
+  evaluates windows after `WHERE` and `HAVING`. To keep, say, only the top-ranked row, rank in a CTE
+  and filter on its column from the outer query:
+  `ranked = M.Result.objects.values("resultid", "rk" => Rank(over = WindowOver(partition_by = "raceid", order_by = ["-points"])))`,
+  then `q.with("ranked" => ranked, join_field = "resultid" => "resultid")` and `q.filter("ranked__rk" => 1)`.
+  Filter the CTE body to the rows you need, or it ranks the whole table.
 - SQLite needs library ≥ 3.25 for any window function.
 
 ## Multiple databases and tenants

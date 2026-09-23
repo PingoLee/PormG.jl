@@ -219,6 +219,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "AI Skill Installer (#206)" include("unit/test_install_ai_skills.jl")
     @testset "Claude Code Skill Stubs" include("unit/test_skill_stubs.jl")
     @testset "Driver-critical [compat] Ranges (#558)" include("unit/test_compat_guards.jl")
+    @testset "Precompile Hints and SQLite Workload" include("unit/test_precompile_hints.jl")
     # include("unit/test_migration_planner.jl")
 end
 

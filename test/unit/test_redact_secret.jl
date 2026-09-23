@@ -26,6 +26,9 @@ What this file pins, and all of it is behaviour that actually shipped broken:
    `Configuration.jl` and `ConnectionPool.jl`. That is not untidiness: it is the mechanism by which
    a widened rule applies at one set of call sites and silently not at the other. The structural
    testset at the foot of this file is what keeps a third copy from appearing.
+5. **An invalid UTF-8 byte stopped both rules** (#673). PCRE's MATCH_INVALID_UTF matches such a
+   byte with no class at all, so a URL password holding one came back whole. Each rule now also
+   runs in byte mode, libpq's own reading, and the union of both readings is masked.
 
 None of 2 or 3 was found by reading the pattern. They came from running candidate inputs through
 the real `PQconninfoParse` and comparing what libpq calls the credential against what survives
@@ -185,6 +188,36 @@ const REDACT_CASES = Pair{String, Tuple{String, String}}[
   "url query creds"     => ("postgres://localhost/f1?user=pingo&password=s3cret&sslmode=require",
                             "postgres://localhost/f1?user=****"),
 
+  # ── invalid UTF-8 (#673) ────────────────────────────────────────────────────
+  # Julia's default Regex runs PCRE with MATCH_INVALID_UTF, under which an invalid byte matches NO
+  # class, negated ones included. So a run stopped at it: the first row came back whole, and the
+  # second printed `\xfeEC673`. The byte reading of each rule treats the byte as libpq does, as one
+  # more credential byte. The issue's two strings come first, then one per value arm.
+  "url invalid byte"    => ("postgresql://u:p\xffSEC673@h/db", "postgresql://****:****@h/db"),
+  "dsn invalid byte"    => ("host=h password=S\xfeEC673 dbname=f1", "host=h password=**** dbname=f1"),
+  "url user only, bad"  => ("postgresql://u\xffSEC673@h/db", "postgresql://****@h/db"),
+  "dsn quoted, bad"     => ("host=h password=" * SQ * "a\xffSEC673 x" * SQ * " dbname=f1",
+                            "host=h password=**** dbname=f1"),
+  "dsn escaped bad byte"=> ("host=h password=a\\\xffSEC673 dbname=f1", "host=h password=**** dbname=f1"),
+  # A TRUNCATED multi-byte sequence (the lead byte of `é` with no continuation), then a bare space.
+  "dsn truncated seq"   => ("host=h password=é\xc3 SEC673 dbname=f1", "host=h password=**** dbname=f1"),
+  # Both readings match at the SAME `://`: the Unicode one stops at the first `@`, the byte one runs
+  # on past the invalid byte to the last. The longer span has to lead the merge (review, #673).
+  # Otherwise the shape comes from the first `@` alone, claiming "no password" in the second row,
+  # and a stray `****` lands in the host (`@****h/db`).
+  "url @ then bad byte" => ("postgresql://u@x\xffSEC673@h/db", "postgresql://****@h/db"),
+  "url @ then bad pw"   => ("postgresql://u@x:\xffSEC673@h/db", "postgresql://****:****@h/db"),
+  # The byte reading is not a replacement for the Unicode one, so both stay (#673). Only the
+  # Unicode reading masks these two: caseless `ſ` folds to `s`, and U+2003 is a Unicode space before
+  # the `=`. libpq rejects both strings, and a rejected string is the one the failure path prints.
+  # They fail if a later change keeps only the byte reading.
+  "dsn long-s keyword"  => ("host=h paſſword=SEC673 dbname=f1",
+                            "host=h paſſword=**** dbname=f1"),
+  "dsn unicode sp at =" => ("host=h password =SEC673 dbname=f1", "host=h password=**** dbname=f1"),
+  # …and the byte reading masks this one further than the Unicode one did. libpq's whitespace test is
+  # byte-wise ASCII, so to libpq the password is `SEC673<U+2003>dbname=f1`, all of it.
+  "dsn unicode sp value"=> ("host=h password=SEC673 dbname=f1", "host=h password=****"),
+
   # ── things that must NOT change ─────────────────────────────────────────────
   "sqlite path"         => ("/var/data/app.sqlite3", "/var/data/app.sqlite3"),
   "sqlite memory"       => (":memory:", ":memory:"),
@@ -207,7 +240,8 @@ const FAKE_SECRETS = ("s3cret", "s3cr3t", "topsecret", "pingo", "admin",
                       "PINGO", "S3CRET", "p@ss", "p&w", "s3 cret",
                       "cret", "RETpw", "SEC?RETpw", "SEC#RETpw",
                       "SECRETTAIL", "SECRET", "corr3ct", "horse", "battery", "hunter",
-                      "SEC658", "RET@", "ss/", "p%2Fw", "SEC662", "SEC1", "SEC2", "SEC3")
+                      "SEC658", "RET@", "ss/", "p%2Fw", "SEC662", "SEC1", "SEC2", "SEC3",
+                      "SEC673", "EC673", "\xffSEC673", "\xfeEC673")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The rule itself, as exact documents. Per-case `@testset` so a failure names the dialect that
@@ -310,6 +344,12 @@ end
     "unterminated quote"   => "password=" * SQ * "s3cret dbname=f1",
     "newlines"             => "host=a\npassword=s3cret\nuser=b",
     "unicode"              => "host=café password=ségret user=naïve",
+    # The byte reading (#673) is a second compilation of each rule, so it gets the adversarial cases
+    # too. Invalid bytes are what its runs cross and the Unicode reading's stop at.
+    "adversarial invalid userinfo" => "postgres://" * repeat("a\xff@", 250_000) * "host/db",
+    "adversarial invalid value"    => "password=" * repeat("\xff", 1_000_000) * " host=h",
+    "adversarial invalid quoted"   => "password=" * SQ * repeat("\xfe", 1_000_000),
+    "lone invalid bytes"           => "\xff\xfe\xc3 password=\xc3",
   ]
   for (label, input) in hostile
     @testset "$label" begin
@@ -320,6 +360,10 @@ end
         @test !occursin("s3cret", out)
       elseif label == "unicode"
         @test !occursin("ségret", out)
+      elseif label == "adversarial invalid value"
+        # Exact, so this row pins the byte reading (#673) and does not only guard against a throw.
+        # The Unicode reading alone stops at the first `\xff` and prints the rest.
+        @test out == "password=**** host=h"
       end
     end
   end
@@ -335,7 +379,10 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "the URL rule is linear on many `://` with no `@` on the same line (#658)" begin
   for (label, input) in ["prose with URLs" => repeat("see http://x ", 40_000) * "\nops@example.com",
-                         "bare schemes"    => repeat("://", 40_000) * "\n@"]
+                         "bare schemes"    => repeat("://", 40_000) * "\n@",
+                         # The byte reading's `(*SKIP)` must hold too, and only there does a run
+                         # cross the invalid byte (#673).
+                         "invalid bytes"   => repeat("see http://x\xff ", 40_000) * "\nops@example.com"]
     @testset "$label" begin
       R649(input)                     # compile outside the clock
       @test (@elapsed R649(input)) < 1.0

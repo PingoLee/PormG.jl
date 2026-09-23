@@ -33,6 +33,23 @@ public is_loaded, load_many, ping, status, get_tx_connection, redact_secret
 # A connection string arrives in one of two dialects, and PormG accepts BOTH — `connection.yml`'s
 # `url:` key is documented as "passed through verbatim", so a libpq DSN and a URI are equally likely
 # to be what a pool is holding.
+#
+# Each rule is compiled TWICE, and `_redact_once` masks the union of both readings' spans (#673):
+#
+#   Regex(src)       Julia's default: UTF + UCP + MATCH_INVALID_UTF. Under MATCH_INVALID_UTF an
+#                    invalid UTF-8 byte matches NO class, negated ones included, so a run stopped at
+#                    it: `postgresql://u:p\xffSEC@h/db` never reached its `@` and came back whole, and
+#                    `password=S\xfeEC` printed `\xfeEC`. That was a fail-open leak.
+#   Regex(src, "a")  byte mode, which is how libpq reads a conninfo. An invalid byte is one more
+#                    credential byte. Every delimiter the rules name (`@`, `'`, `\`, `=`, ASCII
+#                    whitespace, line breaks) is ASCII and never occurs inside a multi-byte sequence,
+#                    so a match still starts and ends on a character boundary.
+#
+# Byte mode alone would NARROW the rule, which is why both readings stay. Only the Unicode reading
+# masks `paſſword=…` (caseless `ſ` folds to `s`) and `password<U+2003>=…` (a Unicode space before
+# the `=`). libpq rejects both strings, and a rejected string is the one the failure path prints. The
+# byte reading in turn masks `password=SEC<U+2003>dbname=f1` whole, which is libpq's reading.
+_redact_readings(src::String) = (Regex(src), Regex(src, "a"))
 
 # Keyword/value DSN (libpq conninfo): `password=… user=…`.
 #
@@ -73,9 +90,9 @@ public is_loaded, load_many, ping, status, get_tx_connection, redact_secret
 # `(?is)` — the `s` is load-bearing and was a leak: `.` does not match a newline without it, so the
 # one escape `\\.` missed was `\` + LF, and `password=abc\<LF>tail` printed the tail. `.` occurs in
 # this pattern only inside the two `\\.` constructs, so DOTALL changes nothing else.
-const _REDACT_CONNECTION_STRING_RE =
-  Regex("(?is)(password|user)\\s*+=\\s*+('[^'\\\\]*+(?:\\\\.[^'\\\\]*+)*+'|" *
-        "(?:[^\\s\\\\]|\\\\.)++(?:\\s++(?![A-Za-z_][A-Za-z_0-9]*+\\s*+=)(?:[^\\s\\\\]|\\\\.)++)*+)")
+const _REDACT_CONNECTION_STRING_RE = _redact_readings(
+  "(?is)(password|user)\\s*+=\\s*+('[^'\\\\]*+(?:\\\\.[^'\\\\]*+)*+'|" *
+  "(?:[^\\s\\\\]|\\\\.)++(?:\\s++(?![A-Za-z_][A-Za-z_0-9]*+\\s*+=)(?:[^\\s\\\\]|\\\\.)++)*+)")
 
 # URL/URI DSN: `scheme://user:password@host:port/db?query`. Only the userinfo section is masked, so
 # scheme, host, port, database and query survive — "where was it pointing" is the whole reason to
@@ -131,7 +148,7 @@ const _REDACT_CONNECTION_STRING_RE =
 # discard the `@` runs already matched, so the remaining runs are a plain `*+`.
 #
 # No `(?i)`: the pattern holds no letter outside a negated class, so it is already case-neutral.
-const _REDACT_URL_USERINFO_RE = Regex("://[^@\\n\\r]*+(*SKIP)@(?:[^@\\n\\r]*+@)*+")
+const _REDACT_URL_USERINFO_RE = _redact_readings("://[^@\\n\\r]*+(*SKIP)@(?:[^@\\n\\r]*+@)*+")
 
 # Dynamic connection resolver hook
 const _CONNECTION_RESOLVER = Ref{Union{Nothing, Function}}(nothing)
@@ -200,6 +217,9 @@ parameters that follow them; an empty value (`password= dbname=f1`) swallows the
 line carrying both a `://` and a later `@` masks between them. Under-redaction is the bug class this
 rule exists to prevent, so over-redaction is the direction it fails in.
 
+A byte that is not valid UTF-8 is read as one more credential byte, which is how libpq reads it, so
+it never ends a masked value early.
+
 Redaction is **idempotent**: it repeats its own rule until the string stops changing, so applying
 it again changes nothing. The repetition is bounded; on an input that exhausts the bound, a second
 call can only mask more, never reveal more.
@@ -244,7 +264,7 @@ end
 # span, so neither rule can stop the other short. A lone span keeps its own replacement.
 function _redact_once(s::String)::String
   spans = Tuple{Int, Int, String}[]   # (first byte, last byte, replacement)
-  for m in eachmatch(_REDACT_URL_USERINFO_RE, s)
+  for re in _REDACT_URL_USERINFO_RE, m in eachmatch(re, s)
     # A computed replacement, to keep the SHAPE of the userinfo. "This URL carries no password" is
     # exactly the signal someone debugging an authentication failure needs, and collapsing both
     # forms to `****:****@` would invent a password that was never there.
@@ -252,11 +272,15 @@ function _redact_once(s::String)::String
     push!(spans, (m.offset, m.offset + ncodeunits(m.match) - 1,
                   occursin(':', userinfo) ? "://****:****@" : "://****@"))
   end
-  for m in eachmatch(_REDACT_CONNECTION_STRING_RE, s)
+  for re in _REDACT_CONNECTION_STRING_RE, m in eachmatch(re, s)
     push!(spans, (m.offset, m.offset + ncodeunits(m.match) - 1, m.captures[1] * "=****"))
   end
   isempty(spans) && return s
-  sort!(spans; by = first)
+  # Longest first among spans that share a start. The two readings (#673) can both match at one
+  # `://` and end at different `@`s. If the shorter led, its replacement would claim the userinfo's
+  # shape (`://****@` with no password) from only part of it, and the merge would print a stray
+  # `****` into the host.
+  sort!(spans; by = sp -> (sp[1], -sp[2]))
 
   io = IOBuffer()
   pos = 1

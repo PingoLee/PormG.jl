@@ -200,10 +200,9 @@ parameters that follow them; an empty value (`password= dbname=f1`) swallows the
 line carrying both a `://` and a later `@` masks between them. Under-redaction is the bug class this
 rule exists to prevent, so over-redaction is the direction it fails in.
 
-Redaction is **monotone**: applying it again never reveals more than the first pass did, and for
-every well-formed connection string it is a fixed point. (A malformed one — an unbalanced quote
-beside an escaped quote — can mask slightly further on a second pass. That direction is safe, which
-is why the weaker guarantee is the one stated.)
+Redaction is **idempotent**: it repeats its own rule until the string stops changing, so applying
+it again changes nothing. The repetition is bounded; on an input that exhausts the bound, a second
+call can only mask more, never reveal more.
 
 This is the **only** redaction rule in PormG. Every site that puts a connection string into a log,
 an exception, a `show`, or a JSON document routes through it, so a new dialect is taught here once
@@ -218,18 +217,66 @@ julia> PormG.Configuration.redact_secret("postgresql://pingo:s3cret@localhost:54
 ```
 """
 function redact_secret(conn_str::AbstractString)::String
-  # Keyword form first — the smaller change from the pre-#649 behaviour. The two passes are in fact
-  # order-independent: the only strings both can touch nest a URL inside a DSN value
-  # (`password=a://b@c`), and either order masks those completely.
-  masked = replace(conn_str, _REDACT_CONNECTION_STRING_RE => s"\1=****")
+  # Both rules match the SAME string, and the UNION of their spans is masked (#662). Running them one
+  # after the other leaks whichever way round, because each can consume the text the other needed:
+  #   keyword first — `postgresql://u:1234/x?service=SEC&user=me@h/db`: masking `user=me@h/db` took
+  #                   the only `@`, the URL rule then matched nothing, and `service=SEC` printed.
+  #   URL first     — `dbname=a://b password=SEC1@SEC2`: masking `://b password=SEC1@` took the
+  #                   `password=`, the keyword rule then matched nothing, and `SEC2` printed.
+  #
+  # Repeated to a fixed point, because a pass can also ENABLE a match: a keyword value may span a
+  # line break the URL rule stops at by design, so `postgresql://u:SEC password=p<LF>q host=x@h/db`
+  # needs one pass to mask `password=p<LF>q` — joining the line — and a second for the URL rule to
+  # reach the `@` (delta review, #662; keyword-first on `main` got this one right by accident). The
+  # loop also makes the result idempotent by construction. It is bounded, so termination never rests
+  # on an argument that every replacement shrinks; each pass only masks more, so stopping early
+  # still returns the most-masked string so far.
+  s = String(conn_str)
+  for _ in 1:8
+    next = _redact_once(s)
+    next == s && break
+    s = next
+  end
+  return s
+end
 
-  # A function rather than a constant replacement, to keep the SHAPE of the userinfo. "This URL
-  # carries no password" is exactly the signal someone debugging an authentication failure needs,
-  # and collapsing both forms to `****:****@` would invent a password that was never there.
-  return replace(masked, _REDACT_URL_USERINFO_RE => function (m)
-    userinfo = m[4:prevind(m, lastindex(m))]   # strip the leading "://" and the trailing "@"
-    return occursin(':', userinfo) ? "://****:****@" : "://****@"
-  end)
+# One union pass of `redact_secret`. Spans that overlap are merged and masked to the END of the merged
+# span, so neither rule can stop the other short. A lone span keeps its own replacement.
+function _redact_once(s::String)::String
+  spans = Tuple{Int, Int, String}[]   # (first byte, last byte, replacement)
+  for m in eachmatch(_REDACT_URL_USERINFO_RE, s)
+    # A computed replacement, to keep the SHAPE of the userinfo. "This URL carries no password" is
+    # exactly the signal someone debugging an authentication failure needs, and collapsing both
+    # forms to `****:****@` would invent a password that was never there.
+    userinfo = m.match[4:prevind(m.match, lastindex(m.match))]   # strip the "://" and the final "@"
+    push!(spans, (m.offset, m.offset + ncodeunits(m.match) - 1,
+                  occursin(':', userinfo) ? "://****:****@" : "://****@"))
+  end
+  for m in eachmatch(_REDACT_CONNECTION_STRING_RE, s)
+    push!(spans, (m.offset, m.offset + ncodeunits(m.match) - 1, m.captures[1] * "=****"))
+  end
+  isempty(spans) && return s
+  sort!(spans; by = first)
+
+  io = IOBuffer()
+  pos = 1
+  i = 1
+  while i <= length(spans)
+    lo, lead_hi, rep = spans[i]
+    hi = lead_hi
+    i += 1
+    while i <= length(spans) && spans[i][1] <= hi
+      hi = max(hi, spans[i][2])
+      i += 1
+    end
+    print(io, SubString(s, pos, prevind(s, lo)), rep)
+    # A URL span that another span ran past ends in its `@`; what follows is secret too, so mask it.
+    # A keyword span's replacement already ends in `****`.
+    hi > lead_hi && endswith(rep, '@') && print(io, "****")
+    pos = nextind(s, hi)
+  end
+  print(io, SubString(s, pos))
+  return String(take!(io))
 end
 
 # app environments

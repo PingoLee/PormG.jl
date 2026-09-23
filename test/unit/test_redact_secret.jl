@@ -74,8 +74,8 @@ const REDACT_CASES = Pair{String, Tuple{String, String}}[
   # The mask normalises the spacing, which is fine — this is a redaction, not a round trip.
   "dsn spaces around =" => ("host = h password = s3cret", "host = h password=****"),
   "dsn space after ="   => ("host=h password= s3cret", "host=h password=****"),
-  # A URL nested inside a DSN value. Pins that the two passes are order-independent: whichever runs
-  # first, nothing of `b@c` survives.
+  # A URL nested inside a DSN value: the URL span sits inside the keyword span, so the keyword's
+  # replacement covers both and nothing of `b@c` survives.
   "dsn value holds url" => ("password=a://b@c dbname=f1", "password=**** dbname=f1"),
   # The escape `\\.` missed, found by differential fuzzing against libpq: PCRE's `.` does not match
   # a newline without DOTALL, so `\` + LF ended the value and printed the tail. The quoted arm fell
@@ -158,6 +158,27 @@ const REDACT_CASES = Pair{String, Tuple{String, String}}[
   # The same, with a `?` after the `/`: libpq rejects this one at parse time, which is exactly when
   # the pool reports `connection=` — so the whole tail must go.
   "url / then ? in pw"  => ("postgres://u:pa/ss?SEC658@h/db", "postgres://****:****@h/db"),
+  # The two rules OVERLAP (#662), and run one after the other each could consume what the other
+  # needed, so both match the original string and their union is masked. Keyword-first lost this
+  # row: `user=me@h/db` took the only `@`, and `service=SEC662` printed.
+  "url ?kw= then user=…@" => ("postgresql://u:1234/x?service=SEC662&user=me@h/db",
+                              "postgresql://****:****@****"),
+  # …and URL-first lost these (delta review, #662): the URL span from an earlier value's `://`
+  # swallowed the `password=`/`user=`, so the keyword rule never saw it and the text after the
+  # value's `@` printed.
+  "dsn :// then pw @"   => ("dbname=a://b password=SEC1@SEC2 host=h", "dbname=a://****@**** host=h"),
+  "dsn http then pw @"  => ("application_name=http://etl host=h password=p@SEC2",
+                            "application_name=http://****@****"),
+  "dsn :// then quoted" => ("dbname=a://b password=" * SQ * "SEC1 @SEC2 SEC3" * SQ,
+                            "dbname=a://****@****"),
+  "dsn :// then user @" => ("options=x://y user=SEC1@SEC2", "options=x://****@****"),
+  # A pass can ENABLE a match, so the union repeats to a fixed point (second delta review, #662):
+  # the keyword value spans the line break the URL rule stops at, and only once it is masked does the
+  # URL rule reach the `@` — `SEC1` is libpq's password here. A single union pass printed it.
+  "url pw holds LF+kw"  => ("postgresql://u:SEC1 password=p\nq host=x@h/db", "postgresql://****:****@h/db"),
+  # A URL span starting inside a keyword value and ending past it: one pass left `password=****x`,
+  # which a second call masked further. The fixed point is what makes redacting twice a no-op.
+  "kw value holds url@" => ("password=ab://cd host=h@x", "password=****"),
   # Credentials as query parameters. The keyword rule catches them, and swallows the parameters
   # that follow on the same token — accepted over-redaction, recorded here as intended rather than
   # accidental. Scheme, host and database all sit before the `?` and survive.
@@ -186,7 +207,7 @@ const FAKE_SECRETS = ("s3cret", "s3cr3t", "topsecret", "pingo", "admin",
                       "PINGO", "S3CRET", "p@ss", "p&w", "s3 cret",
                       "cret", "RETpw", "SEC?RETpw", "SEC#RETpw",
                       "SECRETTAIL", "SECRET", "corr3ct", "horse", "battery", "hunter",
-                      "SEC658", "RET@", "ss/", "p%2Fw")
+                      "SEC658", "RET@", "ss/", "p%2Fw", "SEC662", "SEC1", "SEC2", "SEC3")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The rule itself, as exact documents. Per-case `@testset` so a failure names the dialect that
@@ -224,13 +245,13 @@ end
 # Idempotence. A redacted string is fed back through the pool's logging path on a retry, and a rule
 # that re-masked its own mask would corrupt the string a little more on every pass.
 #
-# The guarantee is stated as MONOTONE rather than "a fixed point", because the stronger claim is
-# false and was caught saying so: `password=''\''x' host=h` — an unbalanced quote beside an escaped
-# one — masks slightly further on a second pass. Every well-formed connection string IS a fixed
-# point, which is what the table below asserts; the property that holds for malformed input too is
-# that a second pass never reveals more, which is the half that actually matters.
+# Until #662 the guarantee was only MONOTONE: `password=''\''x' host=h` — an unbalanced quote beside
+# an escaped one — masked slightly further on a second pass, and this testset pinned that so the
+# docstring stayed honest. `redact_secret` now repeats its rule to a fixed point (a pass can enable a
+# match — see "url pw holds LF+kw"), which makes that string a fixed point as well, so the
+# counterexample is now asserted the other way.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "redaction is a fixed point for well-formed input" begin
+@testset "redaction is a fixed point" begin
   for (label, (input, _)) in REDACT_CASES
     @testset "$label" begin
       once = R649(input)
@@ -238,13 +259,10 @@ end
     end
   end
 
-  # The malformed counterexample, pinned so the docstring's wording stays honest: re-redacting
-  # changes the string, and every change is in the direction of MORE masking.
   malformed = "password=" * SQ * SQ * "\\" * SQ * SQ * "x" * SQ * " host=h"
-  once, twice = R649(malformed), R649(R649(malformed))
-  @test once != twice
-  @test length(twice) <= length(once)
-  @test !occursin("x" * SQ, twice)
+  once = R649(malformed)
+  @test R649(once) == once
+  @test !occursin("x" * SQ, once)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

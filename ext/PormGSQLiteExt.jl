@@ -257,7 +257,11 @@ PormG.backend_sqlite_version(pool::PormGSQLite) = Int(SQLite.C.sqlite3_libversio
 # Temp directory and pool are created and torn down INSIDE the workload: a module-body side effect
 # would run only in the precompile worker (#203), and the config key must not be serialized.
 
-using PrecompileTools: @setup_workload, @compile_workload
+# The module name is imported too, not just the macros: PrecompileTools 1.0.0 — the declared floor
+# — expands `@setup_workload` into code that names `PrecompileTools` in the CALLING module, so the
+# macros alone fail with `UndefVarError: PrecompileTools not defined in PormGSQLiteExt` there
+# (caught by CI's floor-resolve job, #574). Later versions resolve it hygienically.
+using PrecompileTools: PrecompileTools, @setup_workload, @compile_workload
 
 # Where the workload registers its models with `set_models`, which is what `@import_models` calls
 # and the only thing that wires REVERSE relations — without it `delete()` never reaches the

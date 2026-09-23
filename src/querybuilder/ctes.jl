@@ -1385,6 +1385,25 @@ function _set_field_from_sql_function(func::SQLTypeFunction, field::String, inst
   end
 
 end
+# #685 — a CTE body that projects a window function. More specific than the `::SQLTypeFunction` arm
+# above, whose name allow-list refused every window with "RANK is not a recognized function" — which
+# made the CTE route the #537 refusal recommends for filtering on a window unreachable. The column
+# type is not a guess: the ranking functions (`RANK`, `DENSE_RANK`, `ROW_NUMBER`) carry no column
+# and return an integer, typed as `COUNT` is; the value functions (`LAG`, `LEAD`, `FIRST_VALUE`,
+# `LAST_VALUE`, `NTH_VALUE`) return a value OF their column, so they type as that column.
+#
+# The column is passed as both arguments on purpose. The `::String` arm looks its SECOND argument up,
+# which for a plain projection is the path and the alias at once; here the second argument would be
+# the window's alias (`prev`), which names nothing on the model.
+function _set_field_from_sql_function(func::WindowFunction, field::String, instruct::SQLInstruction)
+  column = func.column
+  column === nothing && return IntegerField()
+  column isa String && return _set_field_from_sql_function(column, column, instruct)
+  column isa Union{JoinedReference,SQLTypeFunction} && return _set_field_from_sql_function(column, field, instruct)
+  throw(QueryBuildError(
+    "A CTE column cannot be typed from \e[4m\e[31m$(func.function_name)\e[0m over a " *
+    "$(nameof(typeof(column))) argument. Project the window over a field path instead (#685)."))
+end
 # #481 — a CTE body that projects a joined-copy column. The body is its own build with its own
 # `alias_join`, so the alias resolves against that inner query; without this method the projection
 # reaches the `::String` method below as a `JoinedReference` and dies with a MethodError.

@@ -299,6 +299,18 @@ const DOCERR_CASES = [
         () -> SQLOrder(CTE("season", "season_points"; desc = true)),
     ),
     (
+        # #685. *Filtering on a Window Result* says a filter on a window alias raises at build time
+        # rather than rendering `HAVING RANK() OVER (…)`, which both engines rejected at execution.
+        "read/window_functions.md — filter() on a window alias is refused",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.values("points", "r" => Rank(over = WindowOver(order_by = ["-points"])))
+            q.filter("r" => 1)
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
         # #481. A `Joined(...)` handle names a `cjoin_on` joined copy, so it cannot appear in
         # `on(...)` / `cjoin(...)` — those add predicates to a join derived from a relation, and
         # every reference in them targets that joined model. The mirror of #444's CTE refusal above,

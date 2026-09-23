@@ -417,3 +417,44 @@ end
     @test !isempty(driver_18_rows)
     @test issorted([row[:race_rank] for row in driver_18_rows])
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Window Functions (#685): filtering on a window result, end to end
+# `filter()` on a window alias used to render `HAVING RANK() OVER (…)` and fail at the driver on both
+# engines; it is now refused at build time, and the supported route — rank in a CTE, filter on its
+# column from the outer query — executes. The rows are checked against an independently computed
+# answer (every 1991 result, top points per race picked in Julia), not just for having run: this is
+# the docs' *Filtering on a Window Result* example.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Window results filter through a CTE; a window alias filter is refused (#685)" begin
+    # The refusal happens at build time, so the database never sees the broken HAVING.
+    refused = M.Result.objects
+    refused.filter("raceid" => 306)
+    refused.values("points", "r" => Rank(over=WindowOver(order_by=["-points"])))
+    refused.filter("r" => 1)
+    @test_throws PormG.QueryBuildError refused.list()
+
+    # The CTE route: rank inside the body, join back on the primary key, keep rank 1.
+    ranked = M.Result.objects.filter("raceid__year" => 1991).
+        values("resultid", "rk" => Rank(over=WindowOver(partition_by="raceid", order_by=["-points"])))
+    query = M.Result.objects
+    query.with("ranked" => ranked, join_field="resultid" => "resultid")
+    query.filter("raceid__year" => 1991, "ranked__rk" => 1)
+    query.values("raceid", "driverid__surname", "points")
+    rows = query.list()
+
+    # Independent answer: all 1991 results, grouped by race in Julia, every row at the race's maximum.
+    all_rows = M.Result.objects.filter("raceid__year" => 1991).
+        values("raceid", "driverid__surname", "points").list()
+    best = Dict{Any,Float64}()
+    for row in all_rows
+        best[row[:raceid]] = max(get(best, row[:raceid], -Inf), row[:points])
+    end
+    expected = Set((row[:raceid], row[:driverid__surname], row[:points])
+                   for row in all_rows if row[:points] == best[row[:raceid]])
+
+    @test !isempty(rows)
+    @test Set((row[:raceid], row[:driverid__surname], row[:points]) for row in rows) == expected
+    # 1991 had 16 races, each with a single winner.
+    @test length(rows) == 16
+end

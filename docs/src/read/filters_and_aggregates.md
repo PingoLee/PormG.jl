@@ -535,7 +535,7 @@ number takes the abstract type, not `Int64` — the spelling matters no more her
 `SubString` (#614):
 
 - **Numeric defaults** — `default =` on `IDField`, `ForeignKey`, `OneToOneField`, `IntegerField`, `PositiveSmallIntegerField`, `PositiveIntegerField` and `BigIntegerField` takes any `Integer`, or an `Integer` written as its decimal text, and stores an `Int64`: `IntegerField(default = Int32(5))` stores `5`. `FloatField` and `DecimalField` take any non-`Bool` `Real` — an `Integer`, a `Float32`, a `Rational`, a `Decimals.Decimal` — and store a `Float64`.
-- **Integer width keywords** — `max_length` on `CharField`, `URLField`, `SlugField`, `PasswordField` and `BinaryField`, and `max_digits` / `decimal_places` on `DecimalField`, follow the same rule.
+- **Integer width keywords** — `max_length` on `CharField`, `URLField`, `SlugField` and `BinaryField`, and `max_digits` / `decimal_places` on `DecimalField`, follow the same rule and store an `Int`: `DecimalField(max_digits = "12")` stores `12`, and text that is not a number (`"8 8"`, `"1x"`) is a `FieldValidationError`. `PasswordField`'s `max_length` takes an `Integer` only. `BinaryField` also accepts `max_length = nothing`, and reads a String with no digit in it the same way, as "no limit".
 
 `Bool` is refused throughout, exactly as it is for the plain-text fields: `IntegerField(default = true)` is a `FieldValidationError`, not a stored `1`, and so is `CharField(max_length = true)`. A value out of range is refused rather than silently coerced: `IntegerField(default = big(2)^70)` and `CharField(max_length = big(2)^70)` raise rather than wrapping, and `FloatField(default = big"1e400")` raises rather than storing `Inf`.
 

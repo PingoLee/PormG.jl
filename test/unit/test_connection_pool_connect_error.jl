@@ -196,6 +196,12 @@ end
     # …and one whose real URL had no host at all (`postgresql://u:PASS@`), so nothing follows the `@`.
     ("?keyword= tail, no host after @", "postgresql://u:1234/x?sslmode=SEC662&user=me@",
      ["SEC662"], "%3F"),
+    # libpq percent-decodes query KEYWORDS as well, and the tail may carry an encoded delimiter; the
+    # raw-segment test decodes both before comparing (fourth delta review, #662).
+    ("?keyword= tail, encoded keyword", "postgresql://u:1234/x?sslmode=SEC662&us%65r=me@h/f1",
+     ["SEC662"], "%3F"),
+    ("?keyword= tail, encoded / in tail", "postgresql://u:1234/x?sslmode=SEC662&user=me@h%2Ff1",
+     ["SEC662"], "%3F"),
     # No `/` at all: libpq ends the credentials at the first `@` (`pa`), the host at the `?`, and the
     # rest of the password is the query.
     ("unencoded @ then ?keyword= in URL password", "postgresql://u:pa@ss?sslmode=SEC662@h/f1",
@@ -280,6 +286,11 @@ end
   # then `/` must pass, in the userinfo and in the query alike — and so must the encoded spelling of
   # an allow-listed value that the test refuses raw, since that is the remedy the message gives.
   @test pre("postgresql://pingo:p%40ss%2Fx@localhost/f1") === nothing
+  # A password ENDING in an encoded `@`: the userinfo's own `@` separator must not stand in for a raw
+  # one in the value (security review, #662).
+  @test pre("postgresql://pingo:Secr3t%40@localhost/f1") === nothing
+  @test pre("postgresql://pingo:p%2F%3Fsslmode%3DSEC%40@localhost/f1") === nothing
+  @test pre("postgresql://localhost/f1?password=Secr3t%40") === nothing
   @test pre("postgresql://localhost/f1?password=p%40ss%2Fx") === nothing
   @test pre("postgresql://localhost/f1?application_name=etl%40nightly%3Av2") === nothing
 end

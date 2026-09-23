@@ -125,11 +125,15 @@ function _preflight_conninfo(conn_str::AbstractString)
   # looks like the one that ended a password: nothing before it, nothing after it (a URL with no host,
   # `postgresql://u:PASS@`), or a host tail after it — a `/`, `?`, `:` or `,` (path, query, port,
   # second host). `user=me@server`, `a@b.com` and `etl@nightly`
-  # carry none of those. The shape test only applies when the value's LAST `@` arrived raw — `@` plus
-  # the tail after it occurs verbatim in the string: a correctly percent-encoded password like
-  # `p%40ss%2Fx` decodes to `p@ss/x` and must not be refused, and percent-encoding is also the remedy
-  # for a legitimate value that trips the test. It is the last `@` and not the whole value, because a
-  # password that encoded its own `@` but not its `/` (`…&user=a%40b@h/db`) still ends in a raw one.
+  # carry none of those. The shape test reads the option's RAW query segment (`?kw=<raw>` up to the
+  # next `&`, the keyword decoded to match libpq), never the decoded value, and looks at its last raw
+  # `@`; only the tail after that `@` is decoded, so an encoded `/` or `:` there still counts. So a value that came from the
+  # userinfo is never tested, and a percent-encoded `@` never counts: `p%40ss%2Fx` and a password
+  # ending in `%40` stay accepted wherever they sit, and percent-encoding is the remedy for a
+  # legitimate value that trips the test. A password that encoded its own `@` but not its `/`
+  # (`…&user=a%40b@h/db`) still ends in a raw one, and is refused. (An earlier spelling asked whether
+  # the decoded tail occurred verbatim in the string; the userinfo's own `@` satisfied that, so every
+  # encoded password ending in `@` was refused — security review, #662.)
   #
   # Known residual: an allow-listed option that takes the `@` with a bare host and no port, path or
   # query after it — `u:1234/x?service=SEC&user=me@h`, from a password that literally ends in
@@ -146,13 +150,19 @@ function _preflight_conninfo(conn_str::AbstractString)
           "the PostgreSQL connection URL's `$(opt.keyword)` option contains an `@`. " * _URL_AT_REMEDY *
           " A `$(opt.keyword)` value that really contains an `@` must be given in the keyword form"))
       end
-      val = opt.val
-      tail = val[nextind(val, findlast('@', val)):end]
-      if occursin("@" * tail, conn_str) && (startswith(val, '@') || isempty(tail) || any(in("/?:,"), tail))
-        throw(PormG.InvalidConfigurationError(
-          "the PostgreSQL connection URL's `$(opt.keyword)` option ends in what looks like a host: an " *
-          "unencoded `@` followed by a host, port or path. " * _URL_AT_REMEDY *
-          " A `$(opt.keyword)` value that really looks like this must percent-encode its `@` as %40"))
+      for m in eachmatch(_URL_QUERY_PARAM_RE, conn_str)
+        # libpq percent-decodes the keyword too, so `us%65r=` is `user=` (delta review, #662).
+        _pct_decode(m.captures[1]) == opt.keyword || continue
+        raw = m.captures[2]
+        at = findlast('@', raw)   # RAW: an encoded `%40` never counts
+        at === nothing && continue
+        tail = _pct_decode(raw[nextind(raw, at):end])
+        if at == firstindex(raw) || isempty(tail) || any(in("/?:,"), tail)
+          throw(PormG.InvalidConfigurationError(
+            "the PostgreSQL connection URL's `$(opt.keyword)` option ends in what looks like a host: an " *
+            "unencoded `@` followed by a host, port or path. " * _URL_AT_REMEDY *
+            " A `$(opt.keyword)` value that really looks like this must percent-encode its `@` as %40"))
+        end
       end
     end
   end
@@ -168,6 +178,15 @@ const _URL_AT_OK_KEYWORDS = (
   "application_name",            # free text the server stores and never rejects
   "fallback_application_name",   # the same
 )
+
+# One raw URL query parameter: `?` or `&`, a keyword, `=`, and the value up to the next `&` — how
+# libpq itself splits the query. The raw text, before libpq's percent-decoding, is the point.
+const _URL_QUERY_PARAM_RE = r"[?&]([^=&]*)=([^&]*)"
+
+# Byte-wise `%XX` decoding, enough to compare against ASCII keywords and delimiters. A malformed
+# escape never reaches it: libpq refuses the string at parse time, on the masked path above.
+_pct_decode(s::AbstractString) =
+  replace(s, r"%[0-9A-Fa-f]{2}" => h -> string(Char(parse(UInt8, h[2:3]; base = 16))))
 
 # Both #662 refusals share it. libpq ends a URL's credentials at the first `/` OR the first `@`, and
 # either way a `?` later in the password carries the rest of it into the query.

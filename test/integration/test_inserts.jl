@@ -791,10 +791,11 @@ end
             @test length(res) == 2     # effective rows + 1 → two capped chunks
 
             # (2) End-to-end correctness: the auto-split writes the full set, not a subset.
-            bulk_insert(
+            split_insert = bulk_insert(
                 M.Bulk_update_payload_scratch.objects, insert_df,
                 columns = columns, chunk_size = nrows,
             )
+            @test split_insert.count == nrows   # both capped chunks counted (#670)
             @test M.Bulk_update_payload_scratch.objects.count() == nrows
 
             # Spot-check the first and last rows (they straddle the chunk boundary)
@@ -832,11 +833,13 @@ end
     q.exists() && q.delete()
 
     try
-        # Seed two of the four ids.
-        bulk_insert(M.Status.objects, DataFrame(
+        # Seed two of the four ids. Explicit pks, so the sequence sync runs after the INSERT; the
+        # count (#670) is taken before it, or SQLite's `changes()` would report the sync instead.
+        seeded = bulk_insert(M.Status.objects, DataFrame(
             statusid = status_ids[1:2],
             status   = ["Finished", "Collision"],
         ))
+        @test seeded == (count = 2, rows = nothing)
 
         # 1. Untargeted DO NOTHING: an overlapping re-insert must not throw, must
         # leave the existing row untouched, and must add only the new row.
@@ -844,28 +847,36 @@ end
             statusid = [status_ids[1], status_ids[3]],   # 330001 duplicates the seed
             status   = ["Overwritten?", "Engine"],
         )
-        bulk_insert(M.Status.objects, overlap_df, on_conflict = :nothing)
+        skipped = bulk_insert(M.Status.objects, overlap_df, on_conflict = :nothing)
 
+        # The skipped duplicate is not counted (#670), so the difference is the duplicate count.
+        @test skipped.count == 1
+        @test nrow(overlap_df) - skipped.count == 1
         @test M.Status.objects.filter("statusid__@in" => status_ids).count() == 3
         row1 = M.Status.objects.filter("statusid" => status_ids[1]).values("status").list() |> first
         @test row1[:status] == "Finished"    # DO NOTHING skipped the duplicate
         @test M.Status.objects.filter("statusid" => status_ids[3], "status" => "Engine").count() == 1
 
         # 2. Targeted DO NOTHING on the pk behaves identically (fully-overlapping batch).
-        bulk_insert(M.Status.objects, overlap_df,
+        all_skipped = bulk_insert(M.Status.objects, overlap_df,
             on_conflict = (action = :nothing, target = ["statusid"]))
+        @test all_skipped.count == 0   # every row was a duplicate: nothing inserted (#670)
         @test M.Status.objects.filter("statusid__@in" => status_ids).count() == 3
         row1 = M.Status.objects.filter("statusid" => status_ids[1]).values("status").list() |> first
         @test row1[:status] == "Finished"
 
         # 3. DO UPDATE (upsert): conflicting rows take the batch's values, the new row
         # inserts, and chunk_size=2 puts conflicts on both sides of a chunk boundary.
-        bulk_insert(M.Status.objects, DataFrame(
+        upserted = bulk_insert(M.Status.objects, DataFrame(
                 statusid = status_ids,
                 status   = ["+1 Lap", "Accident", "Gearbox", "Hydraulics"],
             ),
             chunk_size  = 2,
             on_conflict = (action = :update, target = ["statusid"], set = ["status"]))
+
+        # An upsert counts every row it wrote: three updated plus one inserted, summed over two
+        # chunks (#670). Either chunk alone would report 2.
+        @test upserted == (count = 4, rows = nothing)
 
         @test M.Status.objects.filter("statusid__@in" => status_ids).count() == 4
         by_id = Dict(r[:statusid] => r[:status] for r in

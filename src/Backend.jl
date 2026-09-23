@@ -38,7 +38,7 @@ const _SQLITE_DRIVER_HINT = "PormG: the SQLite backend requires SQLite. Run `usi
 #   backend_drain_connection!(pool, conn)              -> Bool: is `conn` back to a clean, reusable state (#315)
 #   backend_num_affected_rows(pool, result)            -> Int matched-row count (PG)
 #   backend_num_rows(pool, result)                     -> Int row count (PG)
-#   backend_copy_in!(pool, conn, sql, data_itr)        -> PostgreSQL COPY FROM STDIN
+#   backend_copy_in!(pool, conn, sql, data_itr)        -> Int rows copied: PostgreSQL COPY FROM STDIN (#670)
 #   backend_sqlite_version(pool)                        -> Int SQLite library version number
 #
 # `backend_cancel_query!` and `backend_drain_connection!` are the abandoned-await pair (#315) —

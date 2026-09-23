@@ -2407,7 +2407,8 @@ fetch(settings::Union{PormGPostgres, PormGSQLite}, sql::String, params::Union{Ab
 """
     fetch_copy(connection::PormGPostgres, sql::String, data_itr)
 
-Execute a PostgreSQL `COPY FROM STDIN` operation using an iterable of data chunks.
+Execute a PostgreSQL `COPY FROM STDIN` operation using an iterable of data chunks, and return the
+number of rows copied (the `COPY n` command tag, #670).
 The driver-specific streaming (`LibPQ.CopyIn` + result drain) lives in the PostgreSQL
 extension as `backend_copy_in!`.
 """
@@ -2422,7 +2423,7 @@ function fetch_copy(connection::PormGPostgres, sql::String, data_itr)
   if tx_conn !== nothing
     # Reuse the transaction connection — COPY is part of the open transaction.
     try
-      backend_copy_in!(connection, tx_conn, sql, data_itr)
+      return backend_copy_in!(connection, tx_conn, sql, data_itr)
     catch e
       throw(_as_database_error(connection, e))
     end
@@ -2431,7 +2432,7 @@ function fetch_copy(connection::PormGPostgres, sql::String, data_itr)
     # connection until the stream is fully consumed, so we hold it until done.
     conn = acquire_connection(connection)
     try
-      backend_copy_in!(connection, conn, sql, data_itr)
+      return backend_copy_in!(connection, conn, sql, data_itr)
     catch e
       throw(_as_database_error(connection, e))
     finally

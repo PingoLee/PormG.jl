@@ -992,13 +992,15 @@ end
                     is_active = [index % 2 == 0 for index in 1:5],
                 )
 
-                bulk_update(
+                chunked = bulk_update(
                     M.Bulk_update_payload_scratch.objects,
                     update_df,
                     columns = ["label", "required_parent_id", "optional_parent_id", "event_date", "is_active"],
                     match_on = ["id"],
                     chunk_size = 2,
                 )
+                # Matched rows summed over the three chunks (#670); the last chunk alone is 1.
+                @test chunked == (count = 5, rows = nothing)
 
                 persisted_rows = M.Bulk_update_payload_scratch.objects.order_by("id").list()
                 by_id = Dict(row[:id] => row for row in persisted_rows)
@@ -1580,8 +1582,8 @@ end
         match_on = ["id"],
     )
 
-    # Must return nothing — the empty path must not raise.
-    @test isnothing(result)
+    # The empty path must not raise, and reports zero rows in the executed shape (#670).
+    @test result == (count = 0, rows = nothing)
 
     # The sentinel row must be completely unaffected.
     sentinel = M.Just_a_test_deletion.objects.filter("name" => "no-op-sentinel").list() |> first
@@ -1760,16 +1762,19 @@ end
         # A predicate that matches nothing scopes the update to nothing.
         no_match = M.Just_a_test_deletion.objects
         no_match.filter("name" => "definitely-no-match")
-        bulk_update(no_match, df, columns = ["name"], match_on = ["id"],
+        none_matched = bulk_update(no_match, df, columns = ["name"], match_on = ["id"],
             filters = ["test_result__@in" => [2, 3]])
+        # The zero-match outcome #670 exists for: before it, this looked the same as success.
+        @test none_matched == (count = 0, rows = nothing)
         rows = M.Just_a_test_deletion.objects.order_by("test_result").list()
         @test [r[:name] for r in rows] == ["scope-a", "scope-b", "scope-c"]
 
         # Handler scope (rows 2 and 3) AND filters= (row 2): only row 2 satisfies both.
         scoped = M.Just_a_test_deletion.objects
         scoped.filter("test_result__@gte" => 2)
-        bulk_update(scoped, df, columns = ["name"], match_on = ["id"],
+        one_matched = bulk_update(scoped, df, columns = ["name"], match_on = ["id"],
             filters = ["test_result" => 2])
+        @test one_matched.count == 1   # three frame rows, one inside both scopes
         rows = M.Just_a_test_deletion.objects.order_by("test_result").list()
         @test [r[:name] for r in rows] == ["scope-a", "scope-b-updated", "scope-c"]
 

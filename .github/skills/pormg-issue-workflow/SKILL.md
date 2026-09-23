@@ -254,7 +254,8 @@ are `[weakdeps]`, so `Pkg.instantiate()` never installs them. It *looks* fine in
 a pre-#34 `Manifest.toml`, right up until a `Pkg.resolve()` silently drops them;
 `test/unit/test_documented_commands.jl` guards it. Rung 3 also runs Aqua dependably, which a bare
 `--project=.` run does only when Aqua happens to be in your default `@v#.#` environment. The
-exception is `test/integration/<file>.jl`, where `common_setup.jl` redirects the env for you.
+exception is `test/integration/<file>.jl`, where `common_setup.jl` redirects the env for you —
+that *runs*, but never write it down: the same guard flags it (#628).
 
 **Rung 2 is the one people skip.** This repo has meta-tests that fail on changes far from the code
 you touched. Before running the full suite, ask which of these your diff could reach:

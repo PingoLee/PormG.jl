@@ -35,4 +35,13 @@ using PormG.Models: Model, IDField
 
   # No connections configured → nothing (length != 1).
   @test PormG.Models._infer_self_heal_key(m, [m], Dict{String,PormG.PormGSettings}()) === nothing
+
+  # A lone `register_connection` entry → nothing (#683). The caller re-registers through the
+  # entry's `db_def_folder`, which for a dynamic entry is only the label "dynamic_connection";
+  # following it would load `./dynamic_connection/connection.yml` from the working directory.
+  dyn = Configuration.Settings(db_def_folder = "dynamic_connection", dynamic = true)
+  @test PormG.Models._infer_self_heal_key(m, [m], Dict("tenant7" => dyn)) === nothing
+  # The flag decides, not the label: a static folder of that name is still inferred (#623).
+  static = Configuration.Settings(db_def_folder = "dynamic_connection")
+  @test PormG.Models._infer_self_heal_key(m, [m], Dict("dynamic_connection" => static)) == "dynamic_connection"
 end

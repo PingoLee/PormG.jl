@@ -1399,6 +1399,30 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
 end
 
 """
+    _require_folder_backed(settings, action) -> Nothing
+
+Refuse `action` on a connection made by [`register_connection`](@ref). Migrations, planning and
+model import read and write files under `settings.db_def_folder`, and a dynamic entry has no
+folder there — only the label `"dynamic_connection"`, which `joinpath` resolves against the
+working directory. Before #683 `dry_run("tenant7")` therefore ran whatever
+`./dynamic_connection/migrations/pending_migrations.jl` held and reported it as the tenant's plan,
+`discard_pending_migration` moved that file, the importers wrote beside it — and once the entry's
+`change_db` was enabled, `makemigrations` overwrote it with the tenant's diff and `migrate` applied
+it to the tenant's database.
+
+Callers put this FIRST, ahead of any side effect: `migrate` bootstraps the history table and
+installs extensions before it reads the plan, so a check at the path read would come too late.
+"""
+function _require_folder_backed(settings::PormGSettings, action::AbstractString)::Nothing
+  settings.dynamic || return nothing
+  throw(InvalidConfigurationError(
+    "$(action) needs a folder-backed connection, but this one was created by `register_connection` " *
+    "and has no models folder — its `db_def_folder` (\"$(settings.db_def_folder)\") is only a label. " *
+    "Load a folder whose connection.yml points at the same database with `Configuration.load(folder)` " *
+    "and run this on that key instead."))
+end
+
+"""
     unregister_connection(key::String)
 
 Close the connection pool and remove the configuration for the specified key.

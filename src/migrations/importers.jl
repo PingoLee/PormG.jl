@@ -122,6 +122,8 @@ function import_models_from_sqlite(db::String = "db";
   # a missing/unregistered key throws a clear ArgumentError from get_settings, and the
   # output folder comes from the resolved connection's settings — never a hardcoded path.
   settings = Configuration.get_settings(db)
+  # #683: the output folder is `db_def_folder`, which a `register_connection` entry only labels.
+  Configuration._require_folder_backed(settings, "import_models_from_sqlite")
   conn = settings.connections
   conn isa PormGSQLite || throw(BackendCapabilityError(
     "Connection '$(db)' is not a SQLite connection (got $(typeof(conn))). Use import_models_from_postgres for PostgreSQL."))
@@ -203,6 +205,7 @@ function import_models_from_postgres(db::String;
   config::Dict{String,PormGSettings} = config)
   
   settings = Configuration.get_settings(db)
+  Configuration._require_folder_backed(settings, "import_models_from_postgres")
   conn = settings.connections
   model_path = settings.db_def_folder
   
@@ -247,7 +250,8 @@ function import_models_from_postgres(;db::PormGPostgres = connection(),
                                   ignore_table::Vector{String} = postgres_ignore_table,
                                   include_table::Union{Vector{String}, Nothing} = nothing,
                                   file::String="automatic_models.jl")
-  
+
+  Configuration._require_folder_backed(settings, "import_models_from_postgres")
   model_path = settings.db_def_folder
   
   # Check if the models file already exists
@@ -2298,6 +2302,11 @@ function _django_render_settings(db::String, output_path::Union{Nothing, String}
   # config — a throwaway render-only Settings (no DB connection) carries the overrides.
   # `django_prefix === missing` inherits the config's prefix; `nothing` emits unprefixed tables; a
   # String forces that prefix.
+  #
+  # #683: only the default output directory needs a folder-backed `db`. An explicit `output_path` is
+  # a real folder, so a dynamic `db` stays usable for its prefix. Checked before the throwaway
+  # Settings below, which would drop the `dynamic` flag while keeping the label as its folder.
+  output_path === nothing && Configuration._require_folder_backed(settings, "import_models_from_django")
   return output_path === nothing && django_prefix === missing ? settings :
     Configuration.Settings(
       db_def_folder = output_path === nothing ? settings.db_def_folder : output_path,

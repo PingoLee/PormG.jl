@@ -181,6 +181,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Key Type Round Trip (#408/#409/#417)" include("unit/test_key_type_round_trip.jl")
     @testset "OneToOneField Row Paths (#418)" include("unit/test_one_to_one_row_paths.jl")
     @testset "Self-Heal Key Inference" include("unit/test_self_heal_inference.jl")
+    @testset "Dynamic Connections Refuse Folder Work (#683)" include("unit/test_dynamic_folder_refusal.jl")
     @testset "Connect-key Resolution (#550)" include("unit/test_connect_key_resolution.jl")
     @testset "Ignore-Tables Registry" include("unit/test_ignore_tables_registry.jl")
     @testset "New Field Types (UUID, URL, Slug, JSON)" include("unit/test_new_field_types.jl")

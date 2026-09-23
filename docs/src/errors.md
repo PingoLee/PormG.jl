@@ -74,6 +74,7 @@ Catch the umbrella when you want a category, the concrete type when you want a r
 | `upgrade_guide(...)` | `InvalidConfigurationError` | The `upgrading/` log bundled with the install is missing or holds no entries — a broken install, reported so it cannot read as *"nothing to port"* |
 | model definition | `FieldValidationError` / `ModelDefinitionError` | Bad field argument / bad model shape. Catch `DefinitionError` for both |
 | `makemigrations` / `migrate` | `InvalidMigrationError` | The migration or the schema it describes is not valid |
+| `makemigrations` / `migrate` / `migrate_to` / `status` / `dry_run` / `discard_pending_migration` / `import_models_from_*` | `InvalidConfigurationError` | The key is a `register_connection` entry, which has no models folder — see [Dynamic Multi-Tenancy](configuration/dynamic.md) |
 | `migrate` on a destructive plan | `PormG.Migrations.DestructiveMigrationError` | Non-interactive run without `destructive = true`; carries `statements` |
 
 !!! note "Two types need a qualified name"

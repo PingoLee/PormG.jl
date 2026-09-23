@@ -1183,6 +1183,11 @@ refuse to guess — a wrong guess silently routes queries to the wrong database 
 `db`-models to `db_portalsus`). We infer a key only when there is exactly one connection AND
 `model` is actually one of the models defined in its module (`models_in_mod`).
 
+A lone `register_connection` entry is refused too (#683). The caller re-registers through
+`set_models(mod, config[key].db_def_folder)`, and a dynamic entry's folder is only the label
+`"dynamic_connection"`: the resolvers skip dynamic entries, so that call would fall through to
+loading `./dynamic_connection/connection.yml` from the working directory.
+
 Pure by construction (no globals, no `set_models` side effects), so the "≥2 connections ⇒
 refuse" invariant is unit-testable in isolation. Callers pass `get_all_models(mod)` as
 `models_in_mod` and the global `config`.
@@ -1190,7 +1195,9 @@ refuse" invariant is unit-testable in isolation. Callers pass `get_all_models(mo
 function _infer_self_heal_key(model::PormGModel, models_in_mod, config)
     length(config) == 1 || return nothing                     # >1 connection → never guess
     any(m === model for m in models_in_mod) || return nothing # model not defined in this module
-    return first(keys(config))
+    key = first(keys(config))
+    config[key].dynamic && return nothing                     # no folder to re-register from (#683)
+    return key
 end
 
 """

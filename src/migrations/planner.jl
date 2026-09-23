@@ -1479,6 +1479,8 @@ See also [`migrate`](@ref), [`get_migration_plan`](@ref), and the
 [Database Migrations in PormG](@ref) guide.
 """
 function makemigrations(connection::PormGPostgres, settings::PormGSettings; path::String = "db/models.jl", interactive::Bool = true)
+# #683: the plan is written under `db_def_folder`, which a `register_connection` entry only labels.
+Configuration._require_folder_backed(settings, "makemigrations")
 if !settings.change_db
   @warn("Schema changes are disabled (`change_db: false`). Set `change_db: true` in your db/connection.yml under the active environment to allow migrations.")
   return
@@ -1525,6 +1527,7 @@ end
 end
 
 function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::String = "db/models.jl", interactive::Bool = true)
+  Configuration._require_folder_backed(settings, "makemigrations")
   if !settings.change_db
     @warn("Schema changes are disabled (`change_db: false`). Set `change_db: true` in your db/connection.yml under the active environment to allow migrations.")
     return
@@ -1560,6 +1563,8 @@ end
 
 function makemigrations(db::String; config::Dict{String,PormGSettings} = config, interactive::Bool = true)
 settings = Configuration.get_settings(db)
+# Here as well as in the methods below: this one builds a path from the KEY before delegating.
+Configuration._require_folder_backed(settings, "makemigrations")
 path = joinpath(db, settings.model_file)
 isfile(path) || throw(MissingConfigurationError("The models file $(path) does not exist for connection '$(db)'."))
 makemigrations(settings.connections, settings, path=path, interactive=interactive)

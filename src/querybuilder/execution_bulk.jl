@@ -269,6 +269,14 @@ pre-allocation **and** insert together in `run_in_transaction` is still recommen
 rolled-back insert also releases the reserved ids, whereas a standalone allocation whose
 later insert fails durably burns its range (a harmless gap, exactly like PostgreSQL).
 
+That counter protects a reservation from SQLite's own auto-id inserts only on an
+`AUTOINCREMENT` table, which is what PormG's DDL creates. On a table declared `INTEGER PRIMARY KEY`
+without it (an imported or legacy schema), SQLite ignores `sqlite_sequence` and assigns
+`MAX(rowid) + 1`, so a later auto-id insert does not see the reservation. A database with no
+`AUTOINCREMENT` table at all has no `sqlite_sequence`: there the ids start at `MAX(pk) + 1` and the
+reservation lives only in the open transaction. On such a table, allocate and insert inside one
+`run_in_transaction`.
+
 # Arguments
 - `objct`: A `SQLObjectHandler` (typically `M.Model.objects`). Only the underlying model
   is consulted — any filters, ordering, or annotations attached to the handler are
@@ -471,8 +479,13 @@ end
 #   2. sqlite_sequence.seq, which may already reflect a previously reserved range
 #      that has not been inserted yet.
 # This prevents a second allocate_primary_keys() call from reusing ids that were
-# already handed out. INSERT OR REPLACE handles the case where the sqlite_sequence
-# row does not yet exist (empty AUTOINCREMENT table). This read-then-write must run
+# already handed out. The bump goes through `_sqlite_sequence_upsert!`, never
+# `INSERT OR REPLACE`, which appended a duplicate row per call (sqlite_sequence.name is not
+# UNIQUE). A database with no AUTOINCREMENT table has no sqlite_sequence at all (#674): the
+# read falls back to MAX(pk) and the bump is skipped, so the reservation then lasts only as
+# long as the transaction's in-memory overlay. (Where sqlite_sequence exists but this table is
+# not AUTOINCREMENT, the bump still protects later allocations, but SQLite's own auto-id inserts
+# ignore it.) This read-then-write must run
 # inside a transaction on this connection (BEGIN IMMEDIATE + with_sqlite_write_lock) to
 # avoid concurrent races — a future direct caller MUST preserve that invariant. Both
 # current callers do: allocate_primary_keys auto-wraps this in run_in_transaction whenever
@@ -484,12 +497,14 @@ function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_fie
   safe_table_name = safe_table_identifier(safe_table, connection)
   safe_table_literal = replace(safe_table, "'" => "''")
   safe_field = safe_column_identifier(Models.model_column(model, pk_field), connection)  # db_column (#50)
+  has_sequence = _sqlite_has_sequence_table(settings)
+  sequence_arm = has_sequence ?
+    "UNION ALL\n    SELECT COALESCE(seq, 0) AS candidate FROM sqlite_sequence WHERE name = '$(safe_table_literal)'" : ""
   sql = """
   SELECT MAX(candidate) AS max_id
   FROM (
     SELECT COALESCE(MAX($(safe_field)), 0) AS candidate FROM $(safe_table_name)
-    UNION ALL
-    SELECT COALESCE(seq, 0) AS candidate FROM sqlite_sequence WHERE name = '$(safe_table_literal)'
+    $(sequence_arm)
   ) AS allocation_state
   """
   result = fetch(settings, sql) |> DataFrames.DataFrame
@@ -499,8 +514,7 @@ function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_fie
   max_id = max(max_id, something(reserved_max, Int64(0)))
   new_max = max_id + n
 
-  bump_sql = "INSERT OR REPLACE INTO sqlite_sequence(name, seq) VALUES('$(safe_table_literal)', $(new_max));"
-  fetch(settings, bump_sql)
+  has_sequence && _sqlite_sequence_upsert!(settings, safe_table_literal, new_max)
   register_sqlite_reserved_primary_key_max!(model, pk_field, new_max)
 
   return collect((max_id + 1):new_max)

@@ -91,11 +91,10 @@ end
 # so an AUTOINCREMENT table can't distinguish "SQLite did it" from "_update_sequence did it". A
 # plain `INTEGER PRIMARY KEY` (no AUTOINCREMENT) is never touched by SQLite itself, and this
 # database has no AUTOINCREMENT table anywhere, so `sqlite_sequence` does not exist at all yet.
-# PormG's `_update_sequence` does not check for the keyword, or create the table, before writing
-# to it — pre-#358, the automatic call from this exact create() would have thrown
-# "no such table: sqlite_sequence" (it has no try/catch on the SQLite side), crashing an insert
-# that otherwise succeeded. Post-#358 `sqlite_sequence` simply never comes up, since row-level
-# writers no longer call it at all.
+# Pre-#358, the automatic `_update_sequence` call from this exact create() threw
+# "no such table: sqlite_sequence", crashing an insert that otherwise succeeded. Post-#358 row-level
+# writers no longer call it at all; since #674 `_update_sequence` also skips a database without the
+# table, which `test_sequence_sync.jl` covers for the bulk path.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "SQLite row-level writers no longer auto-resync (#358)" begin
   mktempdir() do dir

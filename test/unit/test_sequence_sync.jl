@@ -543,3 +543,116 @@ end
     end
   end
 end
+
+# Run `f(pool, model)` against a fresh temp SQLite database registered under its own config key.
+# `autoincrement = false` builds the #674 shape: a legacy `INTEGER PRIMARY KEY` table in a database
+# with no AUTOINCREMENT table anywhere, so SQLite never created `sqlite_sequence`.
+function seq674_with_sqlite(f; autoincrement::Bool)
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "seq674.sqlite"); pool_size = 1)
+    key = "seq674_sqlite"
+    PormG.config[key] = PormG.Configuration.Settings(
+      connections = pool, db_def_folder = dir, change_data = true)
+    try
+      pk_decl = autoincrement ? "INTEGER PRIMARY KEY AUTOINCREMENT" : "INTEGER PRIMARY KEY"
+      fetch(pool, "CREATE TABLE seq674_circuit (circuitid $(pk_decl), name TEXT NOT NULL);")
+      model = Model("seq674_circuit", circuitid = IDField(), name = CharField(max_length = 255))
+      model.connect_key = key
+      f(pool, model)
+    finally
+      delete!(PormG.config, key)
+      # Release the SQLite handle so mktempdir can delete the temp DB on Windows (WAL keeps it open).
+      PormG.ConnectionPool.close_pool!(pool)
+    end
+  end
+end
+
+seq674_has_sequence_table(pool) = nrow(fetch(pool,
+  "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence';") |> DataFrame) > 0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite Sequence Sync: bulk_insert with explicit ids when `sqlite_sequence` does not exist (#674)
+# `_update_sequence` wrote `sqlite_sequence` unconditionally, so on a database with no AUTOINCREMENT
+# table the resync raised "no such table: sqlite_sequence" and rolled the whole bulk insert back.
+# Without the table there is no counter to keep in step (SQLite picks MAX(rowid) + 1), so the resync
+# is skipped and the rows land.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite bulk_insert with explicit ids works without sqlite_sequence (#674)" begin
+  seq674_with_sqlite(autoincrement = false) do pool, model
+    @test !seq674_has_sequence_table(pool)   # precondition: the #674 shape, not an AUTOINCREMENT db
+
+    model.objects.create("circuitid" => 1, "name" => "Monza")
+    r = bulk_insert(model.objects, DataFrame(circuitid = [2, 3], name = ["Spa", "Suzuka"]))
+    @test r.count == 2
+    @test model.objects.count() == 3        # pre-fix: 1, the bulk rows were rolled back
+
+    # The skip did not work by creating the table.
+    @test !seq674_has_sequence_table(pool)
+
+    # A later auto-id insert still gets the next free id: SQLite's own MAX(rowid) + 1.
+    model.objects.create("name" => "Imola")
+    @test model.objects.filter("name" => "Imola").values("circuitid").list()[1][:circuitid] == 4
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite Sequence Sync: explicit resync_sequences when `sqlite_sequence` does not exist (#674)
+# The explicit repair calls the same `_update_sequence`, so it crashed the same way. It now returns
+# the pk fields it considered, like any other resync, and writes nothing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite resync_sequences is a no-op without sqlite_sequence (#674)" begin
+  seq674_with_sqlite(autoincrement = false) do pool, model
+    fetch(pool, "INSERT INTO seq674_circuit (circuitid, name) VALUES (7, 'Monaco');")
+    @test resync_sequences(model) == ["circuitid"]
+    @test !seq674_has_sequence_table(pool)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite Sequence Sync: allocate_primary_keys when `sqlite_sequence` does not exist (#674)
+# `_allocate_sqlite_ids` read and bumped `sqlite_sequence`, so it failed the same way. Without the
+# table it starts from MAX(pk) + 1 and keeps the reservation in the transaction's in-memory
+# overlay, so two allocations inside one transaction still hand out disjoint ranges.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite allocate_primary_keys works without sqlite_sequence (#674)" begin
+  seq674_with_sqlite(autoincrement = false) do pool, model
+    fetch(pool, "INSERT INTO seq674_circuit (circuitid, name) VALUES (10, 'Monza');")
+
+    # Standalone call: starts right after MAX(pk).
+    first_df = allocate_primary_keys(model.objects, DataFrame(name = ["Spa", "Suzuka"]))
+    @test first_df.circuitid == [11, 12]
+    bulk_insert(model.objects, first_df)
+    @test model.objects.count() == 3
+
+    # Inside one transaction, the second range starts after the first even though neither is
+    # inserted yet: the overlay, not sqlite_sequence, carries the reservation here.
+    run_in_transaction("seq674_sqlite") do
+      a = allocate_primary_keys(model.objects, DataFrame(name = ["Imola"]))
+      b = allocate_primary_keys(model.objects, DataFrame(name = ["Interlagos", "Hungaroring"]))
+      @test a.circuitid == [13]
+      @test b.circuitid == [14, 15]
+      bulk_insert(model.objects, vcat(a, b))
+    end
+    @test model.objects.count() == 6
+    @test !seq674_has_sequence_table(pool)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite Sequence Sync: allocate_primary_keys keeps one sqlite_sequence row per table (#674 sibling)
+# The reservation bump was `INSERT OR REPLACE INTO sqlite_sequence`, but sqlite_sequence.name has
+# no UNIQUE constraint, so every call after the first APPENDED a row instead of replacing it: two
+# rows, and SQLite's own AUTOINCREMENT bookkeeping could read the stale one. The bump now uses the
+# same UPDATE-then-INSERT upsert as `_update_sequence`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite allocate_primary_keys does not duplicate sqlite_sequence rows" begin
+  seq674_with_sqlite(autoincrement = true) do pool, model
+    allocate_primary_keys(model.objects, DataFrame(name = ["Monza", "Spa"]))                 # 1:2
+    ids = allocate_primary_keys(model.objects, DataFrame(name = ["Suzuka", "Imola", "Monaco"]))
+    @test ids.circuitid == [3, 4, 5]
+
+    rows = fetch(pool, "SELECT seq FROM sqlite_sequence WHERE name = 'seq674_circuit';") |> DataFrame
+    @test nrow(rows) == 1           # pre-fix: 2, one appended per call
+    @test rows[1, :seq] == 5        # the end of the second range
+  end
+end

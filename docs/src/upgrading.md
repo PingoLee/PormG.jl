@@ -116,8 +116,16 @@ PormG.install_ai_skills()      # writes .github/skills/pormg-usage/ into the cur
 ```
 
 This copies PormG's usage skill bundle into your app, so an agent working in that repo has accurate
-context on the query API, models, migrations, and the write path — rather than guessing from
-Django-shaped intuition.
+context on models, queries, writes, error handling and async — rather than guessing from
+Django-shaped intuition. It prints what it did and returns the same facts as a named tuple:
+
+- **the files it wrote.** Run it again after every PormG bump: overwriting the bundle is how it
+  gets refreshed.
+- **stale files** — files in that directory the installed PormG no longer ships, usually a topic
+  file an older version installed. They are left in place; delete them if they came from PormG.
+- **whether anything points at the bundle.** It checks `AGENTS.md`, `CLAUDE.md`,
+  `.github/copilot-instructions.md` and `.github/instructions/*.md`, and if none mentions
+  `pormg-usage` it prints a one-line pointer for you to add. It never edits those files itself.
 
 ### Make the rollout self-triggering
 

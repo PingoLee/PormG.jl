@@ -78,6 +78,38 @@ Api_token = Models.Model("api_tokens",
 
 Full parameter reference and validation rules: **[Fields → JSON](fields.md) / [UUID](fields.md#UUID-Fields)**.
 
+## PostgreSQL-only lookups and functions
+
+A few query features compile to PostgreSQL operators or functions that SQLite does not have. On
+SQLite each of them raises `BackendCapabilityError` when the query is built. It never quietly
+returns a different answer, so a test suite running on SQLite fails where production would diverge.
+
+- **JSONB containment and key existence** — `@jcontains` (`@>`), `@has_key` (`?`),
+  `@has_any_keys` (`?|`), `@has_keys` (`?&`) on a `JSONField` column. The `__` key-path extraction
+  (`"metadata__wins" => 121`) is **not** in this group: it works on both backends. See
+  [Filters and Aggregates → JSON](read/filters_and_aggregates.md#Containment-and-key-existence-operators-(PostgreSQL-only)).
+  ```julia
+  M.Constructor.objects.filter("metadata__@has_keys" => ["principal", "wins"])
+  ```
+- **Accent-insensitive matching** — `@iunaccent_contains`, `@iunaccent_exact` and their negated
+  twins `@niunaccent_contains`, `@niunaccent_exact`. They need the `unaccent` extension, declared
+  in `connection.yml` and installed by `migrate()`. See
+  [Accent-Insensitive lookups](read/filters_and_aggregates.md#Accent-Insensitive-(@iunaccent_contains,-@iunaccent_exact)).
+  ```julia
+  M.Driver.objects.filter("surname__@iunaccent_contains" => "raikkonen")   # finds "Räikkönen"
+  ```
+- **`ToChar` templates beyond the portable table.** The formats listed in
+  [Functions and Dates → ToChar](read/functions_and_dates.md#ToChar-—-Format-as-String) render the
+  same text on both engines. Any other template (`"HH12:MI AM"`) goes to PostgreSQL's `to_char`
+  as written.
+- **`Extract` parts beyond the portable eight.** SQLite supports `YEAR`, `MONTH`, `DAY`, `HOUR`,
+  `MINUTE`, `SECOND`, `DOW` and `DOY`, **spelled in capitals**. PostgreSQL accepts any
+  `EXTRACT` field in any case (`epoch`, `week`, `"year"`, …). Write the part in capitals and
+  code that uses those eight runs on both. The case sensitivity is tracked in
+  [#684](https://github.com/PingoLee/PormG.jl/issues/684).
+- **Explicit window frames** — `WindowOver(...; frame = "ROWS BETWEEN …")`. See
+  [Window Functions](read/window_functions.md).
+
 ## Advanced SQL (both backends, PostgreSQL-first)
 
 These run on SQLite too, but they are where PostgreSQL shines for analytical work. Reach for them before dropping to raw SQL:
@@ -102,11 +134,34 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **`JSONField` storage** | `JSONB` (binary, indexable) | `TEXT` (JSON string) |
 | **`UUIDField` storage** | native `UUID` | `TEXT` |
 | **Window frames** | explicit `frame=` clauses | default frame only |
+| **JSONB lookups** (`@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys`) | JSONB operators | `BackendCapabilityError` — `__` key paths still work |
+| **Accent-insensitive lookups** (`@iunaccent_*`, `@niunaccent_*`) | `unaccent` extension | `BackendCapabilityError` |
+| **`ToChar` formats** | any `to_char` template | the portable table only; others raise `BackendCapabilityError` |
+| **`Extract` parts** | any field, any case | `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY`, in capitals; others raise `BackendCapabilityError` |
+| **Row locks** (`select_for_update()`) | `SELECT … FOR UPDATE` | silent no-op — a SQLite write already locks the whole database |
+| **`without_foreign_keys`** | `SET CONSTRAINTS ALL DEFERRED`; may nest inside `atomic`; an orphan fails `COMMIT` with `IntegrityError` | `PRAGMA foreign_keys = OFF` plus a `foreign_key_check` before `COMMIT` (`UnsafeMutationError`); must be the outermost transaction (`TransactionError` otherwise) |
+| **Engine-pinned `db_default`** | `db_default = (postgres = "now()",)` renders | rendering it raises `BackendCapabilityError` — add `sqlite = "…"`, or `sqlite = nothing` for no default |
 
 Notes:
 
 - **Placeholders.** The generated SQL uses `$1`/`$2` on PostgreSQL and `?` on SQLite. Doc SQL blocks conventionally show the PostgreSQL form; the shape is otherwise identical. You never write placeholders yourself — parameters are always bound, never interpolated. The one exception is the raw-SQL manual-params escape hatch (`fetch`/`fetch_async` with a values array), where you write the backend-native placeholder yourself and PormG binds the values — see [Async & Concurrency](async.md).
 - **DateTime is canonicalized to UTC.** `DateTimeField` values are stored as a single UTC ISO-8601 string on both backends (see the `#79` entry in the change log); prefer `ZonedDateTime` when the source has a real civil timezone.
+- **Suspending foreign keys.** Inside a plain transaction PormG already defers foreign-key checks
+  to `COMMIT` on both backends, so `atomic` handles children written before their parents.
+  `without_foreign_keys` is still a single transaction. It is for repairing an already-inconsistent
+  database, or for planting a violation in a SQLite test. The two engines differ in three ways:
+  - **Mechanism:** see the table above.
+  - **Nesting:** SQLite refuses to run it inside another transaction, because `PRAGMA foreign_keys`
+    is ignored there. PostgreSQL runs it, and the deferral covers the enclosing transaction.
+  - **Orphans at the end:** SQLite rolls back with `UnsafeMutationError`. PostgreSQL refuses the
+    `COMMIT` with `IntegrityError`.
+
+  Write it as the outermost block; the nesting difference is tracked in
+  [#686](https://github.com/PingoLee/PormG.jl/issues/686).
+- **Engine-pinned database defaults.** A `db_default` is raw SQL, so PormG will not translate it:
+  a NamedTuple naming only `postgres` refuses to render for SQLite rather than emit DDL SQLite
+  rejects. Give each engine a spelling, or use a portable expression (`CURRENT_TIMESTAMP`,
+  `CURRENT_DATE`). See [Column defaults](schema_conventions.md#Column-defaults).
 - **Primary-key allocation** (`allocate_primary_keys`) presents one API over both backends; PostgreSQL reserves ids via the column sequence, SQLite emulates the same reservation. See [Bulk Insert, Copy, and Update](write/bulk.md).
 - **Sequence resync.** After inserting rows with *explicit* primary keys, PostgreSQL's sequence can fall behind, so a later auto-id insert collides — a class of "duplicate key" surprise that doesn't exist on SQLite's `AUTOINCREMENT`. `bulk_insert`/`bulk_copy` resynchronize automatically (and `bulk_insert` retries a duplicate-key error once by resyncing first); row-level writers (`create`/`insert`, `update_or_create`, `get_or_create`) do not — call `resync_sequences(model)` explicitly after one of them writes an explicit primary key. See [Sequence synchronisation](schema_conventions.md#Sequence-synchronisation).
 

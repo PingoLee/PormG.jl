@@ -21,9 +21,9 @@
 #
 # One REAL hazard the accident never covered is also pinned here — a PostgreSQL DROP CONSTRAINT
 # reached after a parent's DROP TABLE ... CASCADE had already taken the constraint. A second
-# candidate ("Rename table" sharing a bucket with "New foreign key: …") turned out to be
-# unreachable rather than live; the testset below pins that instead, so it fails the day the
-# producer is repaired.
+# candidate ("Rename table" sharing a bucket with "New foreign key: …") was unreachable when #89
+# looked at it; #615 repaired the producer and gave the key its own bucket, and the testset below
+# now pins that ordering. The rename's own coverage lives in `test_migration_rename_table.jl`.
 # =============================================================================
 
 using Test
@@ -139,7 +139,7 @@ end
 
     # ─────────────────────────────────────────────────────────────────────────
     # HAZARD 1 (live bug): a CASCADE drop makes the child's DROP CONSTRAINT a no-op target
-    # "Drop table" is bucket 2 and "Remove foreign key: …" is bucket 4, so dropping a parent table
+    # "Drop table" is bucket 2 and "Remove foreign key: …" is bucket 5, so dropping a parent table
     # and removing the child's FK field in ONE migration reached the DROP CONSTRAINT after the
     # parent's CASCADE had already removed it — and PostgreSQL aborts on a missing constraint. The
     # ordering is fine; the unguarded DROP was not.
@@ -162,57 +162,47 @@ end
     end
 
     # ─────────────────────────────────────────────────────────────────────────
-    # "Rename table" is UNREACHABLE, and that is why it is not bucketed
-    # An earlier pass at #89 gave this key its own ordering bucket, on the reasoning that it shares
-    # `last_execution` with "New foreign key: …" and so is ordered against a constraint naming the
-    # renamed table only by chance. The reasoning is sound and the premise is false: no plan can
-    # contain the key. `get_migration_plan`'s table-rename branch calls `_alter_table_fields` with
-    # the PRE-rename name, and that function's first act is a `current_schema[model_name]` lookup
-    # keyed by the DECLARED name — so it raises before the registration one line below it.
-    #
-    # This testset pins the reachability fact rather than an ordering, because the ordering is not
-    # this issue's to choose: that same branch plans the table's column work against the OLD name,
-    # so whoever repairs the producer decides whether RENAME TABLE goes before or after it. Filed
-    # as a follow-up; when it is fixed, this testset is the thing that should fail.
-    #
-    # It therefore names the EXACT mechanism. A bare `raised !== nothing` was written first and
-    # review falsified it by execution: repairing only the `current_schema` lookup advances the path
-    # one line to a second, independent defect (`rename_table` is passed a Symbol, and with the two
-    # names reversed), which raises `MethodError` and keeps a "did anything throw?" assertion green.
-    # Both known blockers are pinned below, so the file only goes quiet once BOTH are cleared.
+    # "Rename table" is reachable, and it runs before the table's column work (#615)
+    # #89 found this key unreachable — the rename branch raised `KeyError` on `current_schema[old]`,
+    # and one line later `MethodError` on `rename_table(conn, ::Symbol, …)` with the names swapped —
+    # and pinned that here so the repair would fail it. #615 repaired it and chose the ordering: the
+    # rename gets its own bucket right after DROP TABLE, and the column work names the NEW table. So
+    # this asserts both halves at once — the step exists, old ⇒ new, and it precedes an ADD COLUMN
+    # that targets the new name (which would fail if the order were the other way round).
     # ─────────────────────────────────────────────────────────────────────────
-    @testset "no plan can carry a \"Rename table\" step (the producer raises first)" begin
+    @testset "a \"Rename table\" step is planned and ordered ahead of the column work (#615)" begin
         settings = PormG.Configuration.Settings()
         settings.change_db = true
-        declared = Models.Model("new_t"; id = Models.IDField(), n = Models.IntegerField())
+        # The declared model gains a nullable column, so the renamed table has column work to order.
+        declared = Models.Model("new_t"; id = Models.IDField(), n = Models.IntegerField(),
+                                x = Models.IntegerField(null = true))
         livem    = Models.Model("old_t"; id = Models.IDField(), n = Models.IntegerField())
         current_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
             :new_t => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared, :exist => false))
 
-        # "no" to "is this a new table?", then "1" to pick `old_t` as its former name — the answers
-        # that reach the `"Rename table"` registration.
+        # "no" to "is this a new table?", then "1" to pick `old_t` as its former name.
         path, io2 = mktemp(); write(io2, "no\n1\n"); close(io2)
-        raised = open(path) do stdin_file
+        plan = open(path) do stdin_file
             redirect_stdin(stdin_file) do
                 redirect_stdout(devnull) do
-                    try
-                        Migrations.get_migration_plan(PormGModel[livem], current_schema, FKPG89,
-                                                      settings; interactive = true)
-                        nothing
-                    catch e
-                        e
-                    end
+                    Migrations.get_migration_plan(PormGModel[livem], current_schema, FKPG89,
+                                                  settings; interactive = true)
                 end
             end
         end
-        # Blocker 1: the `current_schema[old_model_name]` lookup, keyed by the declared name.
-        @test raised isa KeyError
-        @test raised.key === :old_t
 
-        # Blocker 2, one line further on and independent: `Dialect.rename_table` takes two Strings,
-        # the producer hands it a Symbol — and passes (new, old) where the method reads (old, new),
-        # so even fixing the type would render `ALTER TABLE "<new>" RENAME TO "<old>"`.
-        @test_throws MethodError Dialect.rename_table(FKPG89, :new_t, "old_t")
+        # Everything is registered under the NEW key, and nothing drops the old table.
+        @test collect(keys(plan)) == [:new_t]
+        @test plan[:new_t]["Rename table"] == "ALTER TABLE \"old_t\" RENAME TO \"new_t\";"
+        @test !haskey(plan[:new_t], "Drop table")
+        @test occursin("ALTER TABLE \"new_t\" ADD COLUMN \"x\"", plan[:new_t]["Add field: x"])
+
+        # The orderer puts the rename first, whatever the insertion order inside the table's dict.
+        ordered, _ = Migrations._order_statements([plan[k] for k in keys(plan)])
+        i_rename = findfirst(==(plan[:new_t]["Rename table"]), ordered)
+        i_add    = findfirst(==(plan[:new_t]["Add field: x"]), ordered)
+        @test i_rename !== nothing && i_add !== nothing
+        @test i_rename < i_add
     end
 
     # ─────────────────────────────────────────────────────────────────────────

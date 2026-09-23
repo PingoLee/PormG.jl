@@ -1315,7 +1315,8 @@ end
 # ADD CONSTRAINT off the same slot. An empty `delta` — or one carrying only `:reference` — therefore
 # returns `""`, which `_configure_order_dict_migration_plan` drops from the plan entirely. That is
 # what the `_FK_IDENTITY_ATTRS` filter used to arrange by hand, one call site at a time.
-function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, field_name::Union{Symbol,String}, new_field::PormGField, delta::ColumnDelta)::String
+function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, field_name::Union{Symbol,String}, new_field::PormGField, delta::ColumnDelta;
+                     catalog_table::Union{Symbol,String} = table_name)::String
   # Resolve to the physical column (db_column when set) so every ALTER targets the real
   # column even when called with the field-name key (e.g. the temporary-default cleanup in
   # _add_new_field). Idempotent when callers already pass the physical column (#50).
@@ -1328,8 +1329,14 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   # looked up as `Ev""il`, match nothing and return `nothing` — and the `DROP CONSTRAINT` that
   # depends on the answer would simply never be emitted. Dropping a `unique` or a `primary_key` would
   # silently do nothing, and `makemigrations` would re-propose the same no-op on every run.
-  raw_table_name = string(table_name)
-  table_name = _quote_table_ddl(raw_table_name)
+  #
+  # `catalog_table` is the same idea one level up, and the table's counterpart of the live column
+  # below (#615). On a table RENAME the DDL targets the NEW name — `_order_statements` runs the
+  # rename first — while the catalog still holds the table under its OLD name when the plan is built,
+  # so the lookups ask for `catalog_table` and the statements name `table_name`. The two are equal
+  # everywhere else, which is why it defaults to `table_name`.
+  raw_table_name = string(catalog_table)
+  table_name = _quote_table_ddl(string(table_name))
 
   # THE COLUMN THE CATALOG KNOWS, which is not always the column being altered.
   #
@@ -1704,8 +1711,9 @@ function drop_field(conn::PormGSQLite, table_name::Union{String,Symbol}, field_n
   return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP COLUMN "$(_quote_table_ddl(field_name))";"""
 end
 
-function alter_field(conn::PormGPostgres, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, delta::ColumnDelta)
-  return alter_field(conn, model_table_name(model), field_name, new_field, delta)
+function alter_field(conn::PormGPostgres, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, delta::ColumnDelta;
+                     catalog_table::Union{Symbol,String} = model_table_name(model))
+  return alter_field(conn, model_table_name(model), field_name, new_field, delta; catalog_table = catalog_table)
 end
 
 # SQLite alters a column by rebuilding the whole table from the DESIRED model, so it reads none of
@@ -1715,7 +1723,11 @@ end
 #
 # `rebuild_table` below is that body, reachable on its own — see the note there for why the planner
 # needs both spellings.
-function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, delta::ColumnDelta)
+#
+# `catalog_table` is accepted for the same reason and ignored: the rebuild asks the catalog nothing
+# (the index snapshot around it is `_sqlite_rebuild_preserving_indexes`' job, and that takes its own).
+function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, delta::ColumnDelta;
+                     catalog_table::Union{Symbol,String} = model_table_name(model))
   return rebuild_table(conn, model)
 end
 
@@ -1814,7 +1826,7 @@ end
 
 # `IF EXISTS`, and it is a fix rather than defensiveness (#89). `drop_table` on PostgreSQL is
 # `DROP TABLE ... CASCADE`, which also drops every FK constraint POINTING AT the dropped table --
-# and `_order_statements` runs "Drop table" (bucket 2) BEFORE "Remove foreign key: ..." (bucket 4).
+# and `_order_statements` runs "Drop table" (bucket 2) BEFORE "Remove foreign key: ..." (bucket 5).
 # So dropping a parent table and removing the child's FK field in one migration reached this
 # statement with the constraint already gone, and the whole migration aborted. The ordering is
 # fine; asking to drop a constraint that a CASCADE already took is what was not.

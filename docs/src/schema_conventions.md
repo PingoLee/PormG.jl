@@ -123,7 +123,9 @@ a physical name is escaped rather than validated.
 !!! note "Changing `db_table` on a migrated model is a table rename"
     The migration planner matches the live schema against your models by **physical** table name, so
     editing `db_table` on a model that is already migrated presents as "one table disappeared, another
-    appeared" — the same prompt you get for any table rename. Answer it as a rename to keep your data.
+    appeared" — the same prompt you get for any table rename. Answer it as a rename to keep your data;
+    the plan renames the table first and then applies any column changes to it under the new name (see
+    *Statement Ordering* in [Migrations](migrations/index.md)).
 
 !!! note "`ManyToManyField` takes its own `db_table`"
     That option names the auto-generated **through** table, not the model's own table, and follows the

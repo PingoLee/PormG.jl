@@ -2330,6 +2330,46 @@ function _sqlite_rewrite_index_columns(index_sql::AbstractString,
 end
 
 """
+    _sqlite_rewrite_index_table(index_sql, new_table) -> String
+
+`index_sql` with the table it is `ON` replaced by the QUOTED `new_table` (#615) — for a `CREATE
+INDEX` snapshotted from `sqlite_master` before a table rename that runs ahead of the rebuild which
+re-emits it.
+
+The table is the last identifier before [`_sqlite_index_argument_start`](@ref), and it must follow an
+unquoted `ON`: `CREATE [UNIQUE] INDEX [IF NOT EXISTS] name ON table (…)` puts nothing else there, and
+SQLite does not allow a schema qualifier on the table. Located by token SPAN, with the tokenizer
+[`_sqlite_rewrite_index_columns`](@ref) uses, so the index name, a column or a string literal that
+happens to equal the table's name is never touched, and any of SQLite's spellings (bare, `"…"`,
+`[…]`, `` `…` ``) is replaced. So is the legacy `'…'` one — SQLite accepts a string literal where a
+table name is expected and stores it verbatim — which the tokenizer skips as a literal, so it is
+found as the text between the `ON` and the column list instead. Anything that does not have that
+shape — a malformed or truncated `sql` — is returned unchanged rather than guessed at.
+"""
+function _sqlite_rewrite_index_table(index_sql::AbstractString, new_table::AbstractString)::String
+  out = String(index_sql)
+  region_start = _sqlite_index_argument_start(out)
+  region_start == 1 && return out                               # no column list: not an index DDL
+  head = [t for t in _sqlite_identifier_tokens(out) if t.start < region_start]
+  isempty(head) && return out
+  repl = string('"', replace(String(new_table), '"' => string('"', '"')), '"')
+  final = head[end]
+  if !final.quoted && uppercase(final.name) == "ON"
+    # `ON 'old_t' (…)`: the table is a string literal, invisible to the tokenizer.
+    gap = SubString(out, nextind(out, final.stop), prevind(out, region_start))
+    lit = strip(gap)
+    (length(lit) >= 2 && startswith(lit, '\'') && endswith(lit, '\'')) || return out
+    a = final.stop + findfirst('\'', gap)          # byte index of the opening quote
+    b = final.stop + findlast('\'', gap)           # …and of the closing one
+    return string(SubString(out, 1, prevind(out, a)), repl, SubString(out, nextind(out, b)))
+  end
+  length(head) >= 2 || return out
+  on, tbl = head[end - 1], head[end]
+  (!on.quoted && uppercase(on.name) == "ON") || return out
+  return string(SubString(out, 1, prevind(out, tbl.start)), repl, SubString(out, nextind(out, tbl.stop)))
+end
+
+"""
     _sqlite_indexes_referencing_column(conn, table_name, column_name) -> Vector{String}
 
 Names of every user-created index on `table_name` that references `column_name`, in name order —
@@ -2381,10 +2421,16 @@ name, so each renamed column is mapped through this dict both when testing `surv
 — by token span, so a column spelled bare, bracketed or backticked in a hand-written index follows the
 rename exactly like PormG's own quoted spelling (#532, [`_sqlite_rewrite_index_columns`](@ref)).
 Default empty ⇒ no rewriting, so every existing #82/#116 call site is unaffected.
+
+`rename_table_to` is the same idea for the TABLE (#615): `table_name` is what the catalog holds at
+planning time, and when the table is renamed in the same migration the rebuild runs against the new
+name, so each emitted statement is re-targeted with [`_sqlite_rewrite_index_table`](@ref). Default
+`nothing` ⇒ the table token is left as the catalog spelled it.
 """
 function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Symbol};
                                   surviving_columns::Union{Nothing,Set{String}} = nothing,
-                                  column_renames::Dict{String,String} = Dict{String,String}())::Vector{String}
+                                  column_renames::Dict{String,String} = Dict{String,String}(),
+                                  rename_table_to::Union{Nothing,String} = nothing)::Vector{String}
   # `name` is fetched alongside `sql` so we can probe each index's columns via pragma_index_info
   # when filtering (#116). Auto-created indexes (UNIQUE/PK) carry a NULL `sql` and are excluded here,
   # exactly as before — they belong to the CREATE TABLE the rebuild already re-emits.
@@ -2453,6 +2499,9 @@ function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Sy
     # blind to a column spelled bare inside an expression or a WHERE clause, which then came back under
     # the pre-rename name and failed the rebuild at the server. Empty dict ⇒ no-op for #82/#116.
     stmt = _sqlite_rewrite_index_columns(stmt, column_renames)
+    # #615: the table itself is being renamed in the same migration, ahead of the rebuild, so the
+    # snapshot's `ON "<old>"` must follow it. `nothing` (every non-rename caller) leaves it alone.
+    rename_table_to === nothing || (stmt = _sqlite_rewrite_index_table(stmt, rename_table_to))
     push!(ddls, endswith(stmt, ";") ? stmt : stmt * ";")
   end
   return ddls

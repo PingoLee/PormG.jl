@@ -8,6 +8,36 @@ Bulk operations are designed for high-performance data manipulation of large dat
 
 All three operations accept `show_query=:sql`, `show_query=:dict`, `show_query=:inspection`, `show_query=:params`, or `show_query=:none` to inspect the generated SQL without executing it. See [Query Inspection](../read/index.md#Query-Inspection) for a full description of each mode.
 
+### Return Value
+
+When a bulk operation executes, it returns a `NamedTuple` `(count, rows)`. `count` is the number of rows the operation affected, summed across every chunk:
+
+| Operation | `count` is |
+| :--- | :--- |
+| `bulk_insert()` | rows inserted — rows `on_conflict = :nothing` skipped are **not** counted; an `on_conflict = (action = :update, …)` upsert counts every row it inserted or updated |
+| `bulk_update()` | rows matched by `match_on=`, the handler's filters and `filters=` — matched, as `update()` counts them, whether or not a value changed |
+| `bulk_copy()` | rows copied, from PostgreSQL's `COPY n` command tag |
+
+`rows` is always `nothing` for now; it is reserved for returned values. An empty `DataFrame` returns `(count = 0, rows = nothing)`. The dry-run `show_query` modes are unchanged: they return the statement (or `nothing` for an empty `DataFrame`, which has none).
+
+Check the count when a short one matters. It is the only way to tell that a `bulk_update()` matched only part of the frame, or nothing at all — say, `resultid` keys from another season sent to a handler [scoped](#Scoping-an-update-with-the-handler) to this one:
+
+```julia
+season_2008 = M.Race.objects.filter("year" => 2008).values("raceid")
+df_rescored = DataFrame(resultid = [1, 2], points = [10.0, 8.0])
+
+r = bulk_update(M.Result.objects.filter("raceid__@in" => season_2008), df_rescored,
+    columns = ["points"], match_on = ["resultid"])
+r.count == nrow(df_rescored) || @warn "some results are outside the 2008 season" matched = r.count
+```
+
+For an insert that skips duplicates, `nrow(df) - count` is how many rows already existed:
+
+```julia
+r = bulk_insert(M.Status.objects, statuses_df, on_conflict = :nothing)
+@info "statuses seeded" inserted = r.count already_present = nrow(statuses_df) - r.count
+```
+
 ### The Mapping Adaptor Strategy ⭐
 
 All bulk operations in PormG use a **Mapping Adaptor** approach. This means:
@@ -141,6 +171,7 @@ ON CONFLICT ("statusid") DO UPDATE SET "status" = EXCLUDED."status"
 - **Dedupe the DataFrame on `target` first** when using `:update`. A batch that conflicts with *itself* diverges across engines: PostgreSQL raises *"cannot affect row a second time"*, while SQLite applies rows serially (last one wins). `unique(df, [:statusid])` before the call keeps behavior identical on both.
 - With `on_conflict` set, the duplicate-key → sequence-resync retry is **skipped**: a conflict is expected, not a symptom of a stale sequence. A duplicate-key error that still surfaces (a *different* constraint than your target) propagates immediately. The normal post-insert sequence synchronization for explicit primary keys still runs.
 - Under `DO NOTHING` with server-generated primary keys, PostgreSQL still consumes sequence values for skipped rows — the standard harmless gaps.
+- The returned `count` leaves out rows `DO NOTHING` skipped, on both engines, so `nrow(df) - count` is the number of duplicates. A `DO UPDATE` upsert counts each row it inserted or updated. See [Return Value](#Return-Value).
 - `bulk_copy()` cannot express `ON CONFLICT` (the COPY protocol has no such clause); use `bulk_insert(...; on_conflict=...)` when duplicates are possible.
 
 ### Auto-Generated Primary Keys
@@ -493,7 +524,7 @@ WHERE "Tb"."id" = source."id"::bigint
 - **The handler is never modified**: `bulk_update()` builds its statement from a private copy, so the handler you pass reads the same afterwards — `filters=` is applied to the statement only, never written back onto it.
 - **Unsupported handler state raises**: a handler carrying `limit()`, `offset()`, `order_by()`, `distinct()`, an aggregate annotation, a CTE (`.with`), or a `cjoin`/`on`/`cjoin_on` join raises `UnsafeMutationError` — an `UPDATE` cannot express any of them, and dropping one would widen the statement past what you scoped. A plain `values()` projection is ignored. A handler filter that traverses a relation (`"driverid__surname" => …`) raises `QueryBuildError`, as a joined column does.
 - **Dry-run support**: `show_query=:dict` and `show_query=:inspection` return metadata, `:sql` returns SQL text, `:params` returns the bound parameter list, and `:none` builds the statement and returns `nothing` without executing.
-- **Empty input is a no-op**: An empty `DataFrame` returns `nothing` after logging a warning. The handler checks above still run first, so an unsupported handler raises even with no rows.
+- **Empty input is a no-op**: An empty `DataFrame` returns `(count = 0, rows = nothing)` after logging a warning (`nothing` under a dry-run `show_query` mode). The handler checks above still run first, so an unsupported handler raises even with no rows.
 - **Nullable columns accept all-`missing` batches**: If a nullable update column is `missing` for every targeted row, PormG writes SQL `NULL` for every row in that column — **including a column that carries a static `default`**, which is not written back over your blanks (see [Defaults and Auto Values](#Defaults-and-Auto-Values)).
 
 ### Scoping an update with the handler
@@ -510,7 +541,8 @@ bulk_update(M.Result.objects.filter("raceid__@in" => season_1988), df_rescored,
 ```
 
 **Generated SQL (PostgreSQL):** the handler's filter is AND'd onto the per-row merge condition, so a
-`resultid` in `df_rescored` that belongs to another season updates nothing:
+`resultid` in `df_rescored` that belongs to another season updates nothing, and is left out of the
+returned `count` (see [Return Value](#Return-Value)):
 ```sql
 UPDATE "result" AS "Tb"
 SET "points" = source."points"::float

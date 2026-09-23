@@ -1186,6 +1186,11 @@ end
 _backend_label(::PormGPostgres) = "PostgreSQL"
 _backend_label(::PormGSQLite) = "SQLite"
 
+# What an executed bulk terminal returns (#670): the rows the statements affected, summed across
+# chunks, in Ecto's `{count, rows}` shape. `rows` is always `nothing` today; it is the slot #671's
+# `returning=` fills, so adding that option does not change the return type a second time.
+_bulk_result(count::Integer) = (count = Int(count), rows = nothing)
+
 
 """
 Inserts multiple rows into the database in bulk from a DataFrame.
@@ -1213,6 +1218,16 @@ Inserts multiple rows into the database in bulk from a DataFrame.
 
   The caller's DataFrame is never mutated (and never copied — the pipeline works on a
   zero-copy wrapper), so there is no `copy=` knob to think about.
+
+  #### Returns
+  Executed (`show_query = :execute`), a `NamedTuple` `(count, rows)` (#670):
+  - `count::Int` — rows inserted, summed across every chunk. Rows `on_conflict = :nothing` skipped
+    are **not** counted, so `nrow(df) - count` is how many were duplicates. An
+    `on_conflict = (action = :update, …)` upsert counts every row it inserted or updated.
+  - `rows` — always `nothing` for now; reserved for returned values.
+
+  An empty DataFrame returns `(count = 0, rows = nothing)` (`nothing` under a dry-run `show_query`,
+  since there is no statement). Otherwise a dry-run mode returns the statement, as described above.
 
   #### Examples
   ```julia
@@ -1252,7 +1267,8 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # If no rows then nothing to do
   if size(df_o, 1) == 0
     @warn("Warning in bulk_insert, the DataFrame is empty")
-    return nothing
+    # Executed: zero rows, in the executed shape (#670). A dry run has no statement to return, as before.
+    return show_query === :execute ? _bulk_result(0) : nothing
   end
 
   df = _bulk_working_frame(df_o)   # #132: zero-copy, never mutates df_o (see helper)
@@ -1328,8 +1344,9 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     return length(results) == 1 ? results[1] : results
   end
 
-  return nothing
-  
+  # Executed, each `_bulk_insert` returned its chunk's inserted-row count (#670).
+  return _bulk_result(sum(results; init = 0))
+
 end
 bulk_insert(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_insert(model |> object, df; kwargs...)
 bulk_insert(df::DataFrames.DataFrame; kwargs...) = (objct) -> bulk_insert(objct, df; kwargs...)
@@ -1392,10 +1409,15 @@ This is significantly faster than `bulk_insert` for large datasets.
 - `objct::SQLObjectHandler`: The database handler object (e.g., `M.Model`).
 - `df_o::DataFrames.DataFrame`: The DataFrame containing the data to be inserted.
 - `columns`: (Optional) Specifies which columns to insert. Can be a `String`, a `Pair{String, String}`, or a `Vector` of these.
-- `show_query::Bool = false`: If `true`, prints the `COPY` command (note: data stream is not printed).
+- `show_query::Symbol = :execute`: A dry-run mode (`:sql`, `:dict`, `:inspection`, `:params`, `:none`) returns the `COPY` command instead of running it (the data stream is not included; `:none` returns `nothing`).
 
 The caller's DataFrame is never mutated (and never copied — the pipeline works on a
 zero-copy wrapper).
+
+# Returns
+Executed, a `NamedTuple` `(count, rows)` (#670): `count::Int` is the rows copied, summed across
+chunks and read from each `COPY n` command tag; `rows` is always `nothing` for now. An empty
+DataFrame returns `(count = 0, rows = nothing)` (`nothing` under a dry-run `show_query`).
 
 The COPY protocol cannot express `ON CONFLICT` — rows that violate a unique constraint make
 the whole COPY fail. To skip or merge duplicates, use `bulk_insert(...; on_conflict = ...)` (#123).
@@ -1423,7 +1445,8 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # If no rows then nothing to do
   if size(df_o, 1) == 0
     @warn("Warning in bulk_copy, the DataFrame is empty")
-    return nothing
+    # Executed: zero rows, in the executed shape (#670). A dry run has no statement to return, as before.
+    return show_query === :execute ? _bulk_result(0) : nothing
   end
 
   df = _bulk_working_frame(df_o)   # #132: zero-copy, never mutates df_o (see helper)
@@ -1450,6 +1473,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   total_rows = size(df, 1)
 
   copy_loop = () -> begin
+    copied = 0
     for i in 1:chunk_size:total_rows
       end_idx = min(i + chunk_size - 1, total_rows)
 
@@ -1482,14 +1506,16 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
       CSV.write(io, formatted; header=false, quotestrings=true, missingstring=_BULK_COPY_NULL)
       csv_data = String(take!(io))
 
-      fetch_copy(settings, sql, [csv_data])
+      # The COPY command tag carries the chunk's row count (#670).
+      copied += fetch_copy(settings, sql, [csv_data])
     end
 
     # Update sequence if PK was provided
     pk_exist && _update_sequence(model, connection, pk_field, settings)
+    copied
   end
 
-  try
+  total_copied = try
     has_active_tx = transaction_connection_for(settings) !== nothing
     if has_active_tx
       copy_loop()
@@ -1501,8 +1527,8 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     rethrow(e)
   end
 
-  return nothing
-  
+  return _bulk_result(total_copied)
+
 end
 bulk_copy(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_copy(model |> object, df; kwargs...)
 
@@ -1646,7 +1672,8 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
       # This lets the sequence-sync retry stay on the same TX connection. With on_conflict
       # active there is no retry (see below), so the savepoint is skipped too.
       use_savepoint = !isempty(pk_field) && on_conflict_sql === nothing
-      try
+      # `result` is whichever INSERT actually landed: the first attempt, or the retry below.
+      result = try
         if use_savepoint
           with_savepoint(settings, "pormg_bulk_insert_retry") do
             fetch(settings, sql, parameters)
@@ -1690,12 +1717,17 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
     elseif connection isa PormGSQLite
       # Use fetch() to properly acquire/release a connection from the pool
       # and pass the parameterized query with correct bucket ordering
-      fetch(settings, sql, parameters)
+      result = fetch(settings, sql, parameters)
     else
       throw(_unsupported_conn("bulk_insert()", connection))
     end
 
+    # Count BEFORE the sequence sync (#670): on SQLite the count is `changes()`, which the sync's own
+    # statements would overwrite. Rows `ON CONFLICT DO NOTHING` skipped are not counted on either
+    # engine; a `DO UPDATE` upsert counts each row it inserted or updated.
+    inserted = _affected_row_count(connection, result, transaction_connection_for(settings))
     pk_exist && _update_sequence(model, connection, pk_field, settings)
+    return inserted
   end
 end
 
@@ -1749,6 +1781,16 @@ relation (`"driverid__surname" => …`) raises `QueryBuildError`, as the columns
 
 The caller's DataFrame is never mutated (and never copied — the pipeline works on a
 zero-copy wrapper), so the operation is safe in asynchronous contexts without a `copy=` knob.
+
+# Returns
+Executed, a `NamedTuple` `(count, rows)` (#670):
+- `count::Int` — rows matched, summed across every chunk: the rows that satisfied the `match_on=`
+  merge condition, the handler's filters and `filters=` together. It counts matched rows, as
+  `update()` does, not only the rows whose values changed. A `0` means nothing matched — say, a
+  frame whose keys belong to a season the handler is not scoped to.
+- `rows` — always `nothing` for now; reserved for returned values.
+
+An empty DataFrame returns `(count = 0, rows = nothing)` (`nothing` under a dry-run `show_query`).
 
 # Example
 ```julia
@@ -1813,7 +1855,8 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   # If no rows then nothing to do
   if size(df_o, 1) == 0
     @warn("Warning in bulk_update, the DataFrame is empty")
-    return nothing
+    # Executed: zero rows, in the executed shape (#670). A dry run has no statement to return, as before.
+    return show_query === :execute ? _bulk_result(0) : nothing
   end
 
   df = _bulk_working_frame(df_o)   # #132: zero-copy, never mutates df_o (see helper)
@@ -1938,8 +1981,9 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
     return length(results) == 1 ? results[1] : results
   end
 
-  return nothing
-  
+  # Executed, each chunk returned its matched-row count (#670).
+  return _bulk_result(sum(results; init = 0))
+
 end
 
 function _bulk_update(model::PormGModel,
@@ -2011,8 +2055,11 @@ function _bulk_update(model::PormGModel,
 
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model, :update, parameters=parameters)
-  else 
+  else
     # Execute the query for the given connection type.
-    fetch(connection, sql, parameters)
-  end  
+    result = fetch(connection, sql, parameters)
+    # Matched rows, as `update()` counts them (#670). A target row matches at most one source row:
+    # `_ensure_unique_bulk_update_keys!` rejected duplicate match keys before any chunk ran.
+    return _affected_row_count(connection, result, transaction_connection_for(settings))
+  end
 end

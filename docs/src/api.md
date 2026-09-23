@@ -410,7 +410,7 @@ own `how`, else `LEFT` for a nullable ForeignKey and `INNER` for a `NOT NULL` on
 
 ### `bulk_insert`
 
-Inserts multiple records in a single operation. Returns the inserted rows.
+Inserts multiple records in a single operation. Returns `(count, rows)`: `count` is the rows inserted, summed across chunks (rows skipped by `on_conflict = :nothing` are not counted), and `rows` is `nothing`. See [Return Value](write/bulk.md#Return-Value).
 
 ```julia
 df = DataFrame([
@@ -431,10 +431,11 @@ bulk_insert(M.Status, df,                                                       
 
 ### `bulk_update`
 
-Updates multiple records in a single operation.
+Updates multiple records in a single operation. Returns `(count, rows)`: `count` is the rows matched, summed across chunks, and `rows` is `nothing`.
 
 ```julia
-bulk_update(M.Result.objects, df_with_changes, columns=["points"], match_on=["resultid"])
+r = bulk_update(M.Result.objects, df_with_changes, columns=["points"], match_on=["resultid"])
+r.count   # rows matched; 0 when no key in the frame matched a row in scope
 ```
 
 Key contracts:
@@ -453,7 +454,7 @@ Key contracts:
 
 ### `bulk_copy`
 
-⭐ **PostgreSQL Only.** Uses PostgreSQL's native `COPY FROM STDIN` protocol for ultra-fast bulk loading.
+⭐ **PostgreSQL Only.** Uses PostgreSQL's native `COPY FROM STDIN` protocol for ultra-fast bulk loading. Returns `(count, rows)`: `count` is the rows copied, and `rows` is `nothing`.
 
 ```julia
 bulk_copy(M.Driver.objects, df)

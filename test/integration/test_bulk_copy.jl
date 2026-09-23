@@ -88,14 +88,15 @@ M.Result.objects.filter("resultid" => 1).count() == 1 || error(
                 name = String[],
                 test_result = Int64[]
             )
-            @test isnothing(bulk_insert(query, empty_insert))
+            # An empty frame reports zero rows in the executed shape, not `nothing` (#670).
+            @test bulk_insert(query, empty_insert) == (count = 0, rows = nothing)
             @test M.Just_a_test_deletion.objects.count() == initial_count
 
             empty_update = DataFrames.DataFrame(
                 id = Int64[],
                 name = String[]
             )
-            @test isnothing(bulk_update(query, empty_update, columns = ["name"], match_on = ["id"]))
+            @test bulk_update(query, empty_update, columns = ["name"], match_on = ["id"]) == (count = 0, rows = nothing)
 
             persisted = M.Just_a_test_deletion.objects.filter("name" => "empty-bulk-sentinel").list() |> first
             @test persisted[:name] == "empty-bulk-sentinel"
@@ -383,8 +384,9 @@ else
     ]
     df = DataFrames.DataFrame(data)
 
-    # 3. Execute bulk_copy
-    bulk_copy(query, df)
+    # 3. Execute bulk_copy. The count is PostgreSQL's own `COPY 5` command tag (#670), read by the
+    # LibPQ extension before the result is closed — the one count no unit test can reach.
+    @test bulk_copy(query, df) == (count = 5, rows = nothing)
 
     # 4. Verify results
     @test query.count() == 5
@@ -403,7 +405,7 @@ else
         raw_name = ["Mapped 1", "Mapped 2"],
         raw_val = [_bulk_copy_fk_ids[1], _bulk_copy_fk_ids[2]]
     )
-    bulk_copy(query, df_mapped, columns = ["raw_name" => "name", "raw_val" => "test_result"])
+    @test bulk_copy(query, df_mapped, columns = ["raw_name" => "name", "raw_val" => "test_result"]).count == 2
     @test M.Just_a_test_deletion.objects.count() == 2
     @test M.Just_a_test_deletion.objects.filter("name" => "Mapped 1").count() == 1
 
@@ -582,7 +584,7 @@ end
         test_result = Int64[]
     )
 
-    @test isnothing(bulk_copy(query, empty_copy))
+    @test bulk_copy(query, empty_copy) == (count = 0, rows = nothing)   # #670
     @test query.count() == initial_count
     @test query.filter("name" => "copy-empty-sentinel").count() == 1
 end

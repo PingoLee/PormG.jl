@@ -731,6 +731,10 @@ end
 # pinned connection. RETURNING is deliberately not used — `insert()` documents why SQLite RETURNING
 # is avoided (it can hang inside libsqlite3 for some table shapes).
 #
+# The bulk terminals count their chunks through this too (#670). They pass
+# `transaction_connection_for(settings)`: every bulk loop executes inside `run_in_transaction` or the
+# caller's transaction (#85), so that is the connection the chunk statement just ran on.
+#
 # Only ever called under `show_query === :execute`, which is also the only state in which `conn` is
 # non-nothing. The guard below keeps that structural rather than documentary: on SQLite, with
 # `conn = nothing`, `with_transaction` leases a connection with `release_conn = false` and this call
@@ -748,7 +752,7 @@ end
 #     want; but do not read it as guarding the write.
 # ─────────────────────────────────────────────────────────────────────────────
 function _affected_row_count(connection::Union{PormGPostgres, PormGSQLite}, result, conn)::Int
-  conn === nothing && error(_emsg("PormG internal error in delete(): _affected_row_count needs the statement's connection — this should not happen; please report it."))
+  conn === nothing && error(_emsg("PormG internal error: _affected_row_count needs the statement's connection — this should not happen; please report it."))
   connection isa PormGPostgres && return backend_num_affected_rows(connection, result)
   changes, _ = with_transaction(connection, "SELECT changes();", conn=conn)
   return Int((changes |> DataFrames.DataFrame)[1, 1])

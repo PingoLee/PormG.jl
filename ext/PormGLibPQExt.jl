@@ -501,12 +501,17 @@ end
 
 # PostgreSQL COPY FROM STDIN. `LibPQ.CopyIn` owns the connection until the stream is
 # fully consumed; the caller in core holds the pool lease for the whole call.
-function PormG.backend_copy_in!(pool::PormGPostgres, conn::LibPQ.Connection, sql::String, data_itr)
+#
+# Returns the rows copied (#670). `LibPQ.execute(::Connection, ::CopyIn)` hands back the result that
+# follows `PQputCopyEnd`, whose command tag is `COPY n` — so the count is read here, before `close`
+# frees it, rather than by any extra round trip.
+function PormG.backend_copy_in!(pool::PormGPostgres, conn::LibPQ.Connection, sql::String, data_itr)::Int
   try
     res = LibPQ.execute(conn, LibPQ.CopyIn(sql, data_itr))
     try
-      close(res)
+      return LibPQ.num_affected_rows(res)
     finally
+      close(res)
       _drain_postgres_connection!(conn)
     end
   catch e

@@ -12,6 +12,10 @@ SequenceDriver = Model("drivers",
 SequenceDriver.connect_key = "sequence_sync_default"
 
 struct MockSequencePostgres <: PormG.PormGPostgres end
+# A scripted driver result carrying an INSERT's affected-row count (#670).
+struct SequenceRetryResult
+  n::Int
+end
 
 const SEQUENCE_SYNC_SQL = String[]
 const INSERT_ATTEMPTS = Ref(0)
@@ -441,7 +445,7 @@ end
       if occursin("INSERT INTO", sql)
         INSERT_ATTEMPTS[] += 1
         INSERT_ATTEMPTS[] == 1 && throw(ErrorException("duplicate key value violates unique constraint"))
-        return DataFrame()
+        return SequenceRetryResult(7)   # the retry's own result: the only one there is to count (#670)
       elseif occursin("pg_get_serial_sequence", sql)
         return DataFrame(pg_get_serial_sequence=["public.legacy_driver_id_seq"])
       elseif occursin("setval", sql)
@@ -452,18 +456,31 @@ end
     end
   end
 
-  PormG.QueryBuilder._bulk_insert(
-    SequenceDriver,
-    settings.connections,
-    ["id", "forename"],
-    ["(\$1, \$2)"],
-    true,
-    ["id"],
-    settings,
-    :execute,
-    params,
-  )
+  # The INSERT's driver count (#670). `_bulk_insert` reads it from the result of the statement that
+  # landed, which here is the retry; the first attempt threw and has no result to count. Defined for
+  # the marker type ONLY, so counting anything else — `nothing`, a SAVEPOINT's DataFrame — is a
+  # MethodError rather than a pass.
+  @eval PormG.backend_num_affected_rows(::MockSequencePostgres, r::SequenceRetryResult) = r.n
 
+  # Inside a transaction on this pool, as `bulk_insert` always calls it (#85): the chunk count is
+  # `changes()`/the driver count on the transaction's pinned connection, and outside one there is no
+  # connection to take it from. This also puts the first attempt under its savepoint, the path
+  # `bulk_insert` really takes.
+  inserted = PormG.Configuration.with_tx_context(settings.connections, :mock_tx_conn) do
+    PormG.QueryBuilder._bulk_insert(
+      SequenceDriver,
+      settings.connections,
+      ["id", "forename"],
+      ["(\$1, \$2)"],
+      true,
+      ["id"],
+      settings,
+      :execute,
+      params,
+    )
+  end
+
+  @test inserted == 7
   @test INSERT_ATTEMPTS[] == 2
   @test count(sql -> occursin("INSERT INTO", sql), SEQUENCE_SYNC_SQL) == 2
   @test any(sql -> occursin("pg_get_serial_sequence", sql), SEQUENCE_SYNC_SQL)

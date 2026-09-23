@@ -445,7 +445,7 @@ bulk_update(query, df,
 **Generated SQL (PostgreSQL):**
 ```sql
 UPDATE "result" AS "Tb" 
-SET "points" = source."points"::double precision 
+SET "points" = source."points"::float 
 FROM (VALUES 
   (26.0::double precision, 1::bigint), 
   (19.0::double precision, 2::bigint),
@@ -489,10 +489,40 @@ WHERE "Tb"."id" = source."id"::bigint
 - **Mapping-first match keys**: A `match_on` field with a `columns=` mapping **you declared** always uses that mapping as its source. If the `DataFrame` *also* carries a column with the field's own name, the mapping still wins and the same-named column is ignored — with a warning, so the ambiguity is visible. "Declared" is the operative word: a value PormG *auto-populates* for a field `columns=` left out of scope is not a mapping you wrote, and it never outranks a same-named column you supplied. Your column wins, silently and by design.
 - **Primary key fallback**: If you omit `match_on=`, `bulk_update()` infers the model primary key column(s) and expects those columns to be present in the `DataFrame` (or mapped in `columns=`). The same source precedence applies.
 - **Missing column errors**: A `match_on` field with no source — no `columns=` mapping and no same-named `DataFrame` column — raises an `UnknownFieldError` rather than silently degrading to a constant filter. That includes a field PormG *would* auto-populate (`auto_now`, or a static `default` when `columns=` is omitted — an explicit `columns=` already suppresses static defaults on an update): an auto-populated value is minted once per call, so matching on it would match no rows, and the error says so instead of reporting a successful no-op. An explicit `columns=` mapping (`"df_col" => "field"`) whose source column is absent likewise raises — it is never silently bound to a non-existent column.
-- **Handler filters are rebuilt**: `bulk_update()` clears any filters already attached to the query handler and rebuilds the `WHERE` clause from `match_on=` and `filters=`. Pass every predicate you need through those arguments rather than relying on prior `query.filter(...)` state.
+- **Handler filters are kept**: filters already attached to the query handler are part of the update's scope — they are AND'd with the `match_on=` merge condition and the `filters=` predicates, exactly as `update()` and `delete()` honor them. A `DataFrame` row whose key falls outside that scope matches nothing. See [Scoping an update with the handler](#Scoping-an-update-with-the-handler).
+- **The handler is never modified**: `bulk_update()` builds its statement from a private copy, so the handler you pass reads the same afterwards — `filters=` is applied to the statement only, never written back onto it.
+- **Unsupported handler state raises**: a handler carrying `limit()`, `offset()`, `order_by()`, `distinct()`, an aggregate annotation, a CTE (`.with`), or a `cjoin`/`on`/`cjoin_on` join raises `UnsafeMutationError` — an `UPDATE` cannot express any of them, and dropping one would widen the statement past what you scoped. A plain `values()` projection is ignored. A handler filter that traverses a relation (`"driverid__surname" => …`) raises `QueryBuildError`, as a joined column does.
 - **Dry-run support**: `show_query=:dict` and `show_query=:inspection` return metadata, `:sql` returns SQL text, `:params` returns the bound parameter list, and `:none` builds the statement and returns `nothing` without executing.
-- **Empty input is a no-op**: An empty `DataFrame` returns `nothing` after logging a warning.
+- **Empty input is a no-op**: An empty `DataFrame` returns `nothing` after logging a warning. The handler checks above still run first, so an unsupported handler raises even with no rows.
 - **Nullable columns accept all-`missing` batches**: If a nullable update column is `missing` for every targeted row, PormG writes SQL `NULL` for every row in that column — **including a column that carries a static `default`**, which is not written back over your blanks (see [Defaults and Auto Values](#Defaults-and-Auto-Values)).
+
+### Scoping an update with the handler
+
+The handler you pass is the update's scope, as it is for `update()`. Scope a re-scoring run to one
+season by filtering the handler — the `DataFrame` still carries the per-row values:
+
+```julia
+season_1988 = M.Race.objects.filter("year" => 1988).values("raceid")
+
+bulk_update(M.Result.objects.filter("raceid__@in" => season_1988), df_rescored,
+    columns  = ["points"],
+    match_on = ["resultid"])
+```
+
+**Generated SQL (PostgreSQL):** the handler's filter is AND'd onto the per-row merge condition, so a
+`resultid` in `df_rescored` that belongs to another season updates nothing:
+```sql
+UPDATE "result" AS "Tb"
+SET "points" = source."points"::float
+FROM (VALUES ($2, $3), ($4, $5)) AS source ("points", "resultid")
+WHERE "Tb"."resultid" = source."resultid"::bigint AND
+   "Tb"."raceid" IN (SELECT "R1"."raceid" as "raceid" FROM "race" as "R1" WHERE "R1"."year" = $1)
+```
+
+Handler filters and `filters=` are combined, and both scope the `WHERE` clause. They differ in one
+way: a field named by an equality `filters=` entry is kept out of the `SET` clause, while a handler
+filter never removes a column from `SET`. Before this contract (#665), `bulk_update()` discarded the handler's
+filters and left `filters=` behind on the handler — see the upgrade guide if you relied on either.
 
 ### Migrating existing `bulk_update()` calls
 
@@ -593,13 +623,13 @@ WHERE "Tb"."id" = source."id"::bigint
   AND "Tb"."category_id" = 172100
 ```
 
-Together, `match_on=` and `filters=` are the whole contract for the bulk-update `WHERE` clause. If you already used `query.filter(...)` to prepare the `DataFrame`, switch back to a fresh handler for the write or repeat the predicate in `filters=`.
+The `WHERE` clause is the `match_on=` merge condition AND the `filters=` predicates AND any filters already on the handler (see [Scoping an update with the handler](#Scoping-an-update-with-the-handler)). If you used `query.filter(...)` to *read* the rows you are about to write, passing that same handler keeps its predicate in the update — which is what you want when the predicate is on the model's own columns, and a `QueryBuildError` when it traverses a relation (see below).
 
 ### Join Limits
 
 - **Base-table lookup operators are supported**: Static filters such as `"points__@in" => [18, 25]` or `"statusid__@isnull" => true` are valid as long as they only reference columns on the model being updated.
 - **Relation traversals that require JOINs are rejected**: Constant filters such as `"statusid__status" => "Finished"` or `"raceid__circuitid__country" => "Italy"` are not allowed on `bulk_update()` because the `VALUES`-driven mutation path cannot safely merge in joined query state.
-- **Workaround**: Read the target rows through a normal joined query, mutate the resulting `DataFrame`, then write back through a fresh handler matching on the primary key only.
+- **Workaround**: Read the target rows through a normal joined query, mutate the resulting `DataFrame`, then write back through a fresh handler matching on the primary key only. The handler must not carry the joined filter: its filters are part of the update's scope, and a joined one is rejected like a joined column.
   
 ```julia
 df = M.Result.objects.filter("statusid__status" => "Finished") |> DataFrame
@@ -609,8 +639,8 @@ for row in eachrow(df)
     row.points = row.points + 1
 end
 
-# Bulk update by primary key on a fresh handler.
-# Do not rely on the earlier .filter(...) state surviving into bulk_update.
+# Bulk update by primary key on a fresh handler: the joined "statusid__status"
+# predicate would be kept as the update's scope, and a joined filter is rejected.
 bulk_update(M.Result.objects, df, columns=["points"], match_on=["resultid"])
 ```
 

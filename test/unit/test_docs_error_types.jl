@@ -620,6 +620,32 @@ const DOCERR_CASES = [
                           columns = ["new_points" => "points"],
                           match_on = ["updated_at"], show_query = :dict),
     ),
+    # #665 — `write/bulk.md` → Matching and Execution Rules, `api.md` and `errors.md` promise that a
+    # handler carrying state an UPDATE cannot express raises `UnsafeMutationError` rather than being
+    # dropped, and that a handler filter traversing a relation raises `QueryBuildError`. One case per
+    # documented family: the `update()` guards bulk_update now shares, and the two it adds.
+    (
+        "write/bulk.md + errors.md — bulk_update on a handler with limit() raises (#665)",
+        UnsafeMutationError,
+        () -> bulk_update(DOCERR_RESULT_PG.objects.filter("points" => 0).limit(5),
+                          DataFrames.DataFrame(resultid = [1], points = [9]),
+                          columns = ["points"], match_on = ["resultid"], show_query = :dict),
+    ),
+    (
+        "write/bulk.md + errors.md — bulk_update on a handler with a CTE raises (#665)",
+        UnsafeMutationError,
+        () -> bulk_update(DOCERR_RESULT_PG.objects.with(
+                              "zero" => DOCERR_RESULT_PG.objects.filter("points" => 0).values("resultid")),
+                          DataFrames.DataFrame(resultid = [1], points = [9]),
+                          columns = ["points"], match_on = ["resultid"], show_query = :dict),
+    ),
+    (
+        "write/bulk.md — a bulk_update handler filter that traverses a relation raises (#665)",
+        QueryBuildError,
+        () -> bulk_update(DOCERR_RESULT_PG.objects.filter("driverid__surname" => "Senna"),
+                          DataFrames.DataFrame(resultid = [1], points = [9]),
+                          columns = ["points"], match_on = ["resultid"], show_query = :dict),
+    ),
     (
         "write/bulk.md — conflicting columns= target mappings raise QueryBuildError (#380)",
         QueryBuildError,

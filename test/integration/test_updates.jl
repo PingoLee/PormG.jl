@@ -39,11 +39,17 @@ end
   query.filter("name" => "test_bulk_update")
   @test query.count() == 1
 
-  # Removing the static filter restores the ability to update every row again
+  # #665: a filtered handler is the update's scope. `query` is filtered to the one row renamed
+  # above, so the rows outside that scope keep their old names. Before #665 its filter was
+  # discarded and all three rows were renamed; this assertion was changed deliberately.
+  df.name .= "test_bulk_update_scoped"
   bulk_update(query, df, columns=["name"], match_on=["id"], show_query=:execute)
-  query = M.Just_a_test_deletion.objects
-  query.filter("name" => "test_bulk_update")
-  @test query.count() == 3
+  @test M.Just_a_test_deletion.objects.filter("name" => "test_bulk_update_scoped").count() == 1
+  @test query.count() == 0   # the handler kept its own scope: no row is still named "test_bulk_update"
+
+  # A fresh handler carries no scope, so every row the DataFrame names is updated
+  bulk_update(M.Just_a_test_deletion.objects, df, columns=["name"], match_on=["id"], show_query=:execute)
+  @test M.Just_a_test_deletion.objects.filter("name" => "test_bulk_update_scoped").count() == 3
 end
 
 @testset "Single Update with joins" begin
@@ -771,7 +777,9 @@ end
             # Update points for specific IDs BUT only if category is Cat1.
             # #107: all df→field mappings live in columns=; match_on selects the
             # merge key by field name (a field in both is matched, never SET).
-            bulk_update(query, df,
+            # A fresh handler: `query` carries the order_by from the list() above, which an UPDATE
+            # cannot express and bulk_update refuses (#665).
+            bulk_update(M.Just_a_test_deletion.objects, df,
                 columns=["new_val" => "test_result", "df_id" => "id"],
                 match_on=["id"],              # Dynamic (merge key)
                 filters=["name" => "Cat1"]    # Static (Query criteria)
@@ -1730,42 +1738,44 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Bulk Update: pre-applied query filters are cleared before rebuilding WHERE
-#
-# bulk_update intentionally ignores any filters already attached to the query
-# object and rebuilds the WHERE clause from filters=. Use a query with a stale
-# no-match predicate so the only way rows 2 and 3 update is if the reset path
-# runs and the new static filter is the only predicate that survives.
+# Bulk Update: the handler's filters are kept, AND'd with filters= (#665)
+# A handler filter is the statement's scope, like update() and delete(). A handler whose predicate
+# matches nothing therefore updates nothing — before #665 it was cleared and rows 2 and 3 were
+# updated (this testset used to pin that, and was rewritten on purpose). A handler scoped to rows
+# 2 and 3, combined with a filters= predicate, updates only the rows satisfying both, and the
+# handler reads the same afterwards.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "Bulk Update rebuilds filters instead of inheriting stale query state" begin
+@testset "Bulk Update keeps the handler's filters and leaves the handler untouched" begin
     M.Just_a_test_deletion.objects.exists() &&
         M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
 
     try
-        M.Just_a_test_deletion.objects.create("name" => "reset-a", "test_result" => 1, "test_result_set_default" => nothing)
-        M.Just_a_test_deletion.objects.create("name" => "reset-b", "test_result" => 2, "test_result_set_default" => nothing)
-        M.Just_a_test_deletion.objects.create("name" => "reset-c", "test_result" => 3, "test_result_set_default" => nothing)
+        M.Just_a_test_deletion.objects.create("name" => "scope-a", "test_result" => 1, "test_result_set_default" => nothing)
+        M.Just_a_test_deletion.objects.create("name" => "scope-b", "test_result" => 2, "test_result_set_default" => nothing)
+        M.Just_a_test_deletion.objects.create("name" => "scope-c", "test_result" => 3, "test_result_set_default" => nothing)
 
         df = M.Just_a_test_deletion.objects.order_by("id") |> DataFrame
-        df[1, :name] = "reset-a-attempted"
-        df[2, :name] = "reset-b-updated"
-        df[3, :name] = "reset-c-updated"
+        df.name .= ["scope-a-updated", "scope-b-updated", "scope-c-updated"]
 
-        stale_query = M.Just_a_test_deletion.objects
-        stale_query.filter("name" => "definitely-no-match")
-
-        bulk_update(
-            stale_query,
-            df,
-            columns = ["name"],
-            match_on = ["id"],
-            filters = ["test_result__@in" => [2, 3]],
-        )
-
+        # A predicate that matches nothing scopes the update to nothing.
+        no_match = M.Just_a_test_deletion.objects
+        no_match.filter("name" => "definitely-no-match")
+        bulk_update(no_match, df, columns = ["name"], match_on = ["id"],
+            filters = ["test_result__@in" => [2, 3]])
         rows = M.Just_a_test_deletion.objects.order_by("test_result").list()
-        @test rows[1][:name] == "reset-a"
-        @test rows[2][:name] == "reset-b-updated"
-        @test rows[3][:name] == "reset-c-updated"
+        @test [r[:name] for r in rows] == ["scope-a", "scope-b", "scope-c"]
+
+        # Handler scope (rows 2 and 3) AND filters= (row 2): only row 2 satisfies both.
+        scoped = M.Just_a_test_deletion.objects
+        scoped.filter("test_result__@gte" => 2)
+        bulk_update(scoped, df, columns = ["name"], match_on = ["id"],
+            filters = ["test_result" => 2])
+        rows = M.Just_a_test_deletion.objects.order_by("test_result").list()
+        @test [r[:name] for r in rows] == ["scope-a", "scope-b-updated", "scope-c"]
+
+        # The handler kept its own scope (rows 2 and 3). Before #665 it came back carrying
+        # filters= instead (row 2 only), so this count is 1 on the old code.
+        @test scoped.count() == 2
     finally
         M.Just_a_test_deletion.objects.exists() &&
             M.Just_a_test_deletion.objects.delete(allow_delete_all=true)

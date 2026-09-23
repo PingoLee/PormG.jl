@@ -1953,6 +1953,40 @@ function _build_update_target_pk_subquery(instruction::SQLInstruction)::Union{St
   return String(take!(io))
 end
 
+# Shape guards shared by `update()` and `bulk_update()` (#665): the query state an `UPDATE`
+# statement cannot express. Each one is refused rather than dropped, because dropping it widens
+# the statement past what the caller built — `query.limit(5).update(...)` would mutate every
+# matching row, not five. `op` names the terminal in the message; `update()`'s wording is pinned.
+function _reject_unsafe_mutation_shape(q::SQLObject, op::String)
+  # limit(), offset(), and order_by(): standard SQL UPDATE does not support these clauses. To
+  # update a bounded set of rows, filter by primary key explicitly or compose a subquery.
+  if q.limit > 0 || q.offset > 0 || !isempty(q.order)
+    throw(UnsafeMutationError(
+      "Cannot call $op on a query that has limit(), offset(), or order_by() set. " *
+      "Standard SQL UPDATE does not support these clauses, and silently dropping them " *
+      "risks updating more rows than intended. " *
+      "Filter by primary key explicitly or compose a subquery to update a bounded set."
+    ))
+  end
+
+  if q.distinct
+    throw(UnsafeMutationError(
+      "Cannot call $op on a query with distinct(). " *
+      "DISTINCT collapses the result set, which would cause UPDATE to target " *
+      "different rows than intended. Remove distinct() or filter by primary key."
+    ))
+  end
+
+  if any(v -> isa(v, SQLTypeField) && isa(v.field, Union{SQLTypeFunction, SQLTypeF}) && v.field.aggregate, q.values)
+    throw(UnsafeMutationError(
+      "Cannot call $op on a query with group_by() / annotate aggregations. " *
+      "GROUP BY collapses rows, making the UPDATE target ambiguous. " *
+      "Remove the aggregation or filter by primary key."
+    ))
+  end
+  return nothing
+end
+
 function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Symbol = :execute)
   real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
@@ -1964,35 +1998,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   # Check if is allowed to update
   !settings.change_data && throw(_write_not_allowed("update", conn_key))
 
-  # Guard: limit(), offset(), and order_by() cannot be combined with update().
-  # Standard SQL UPDATE does not support these clauses. Silently dropping them
-  # risks updating far more rows than the user intended (e.g., query.limit(5).update(...)
-  # would mutate ALL matching rows, not just 5). To update a bounded set of rows,
-  # filter by primary key explicitly or compose a subquery.
-  if real_obj.limit > 0 || real_obj.offset > 0 || !isempty(real_obj.order)
-    throw(UnsafeMutationError(
-      "Cannot call update() on a query that has limit(), offset(), or order_by() set. " *
-      "Standard SQL UPDATE does not support these clauses, and silently dropping them " *
-      "risks updating more rows than intended. " *
-      "Filter by primary key explicitly or compose a subquery to update a bounded set."
-    ))
-  end
-
-  if real_obj.distinct
-    throw(UnsafeMutationError(
-      "Cannot call update() on a query with distinct(). " *
-      "DISTINCT collapses the result set, which would cause UPDATE to target " *
-      "different rows than intended. Remove distinct() or filter by primary key."
-    ))
-  end
-
-  if any(v -> isa(v, SQLTypeField) && isa(v.field, Union{SQLTypeFunction, SQLTypeF}) && v.field.aggregate, real_obj.values)
-    throw(UnsafeMutationError(
-      "Cannot call update() on a query with group_by() / annotate aggregations. " *
-      "GROUP BY collapses rows, making the UPDATE target ambiguous. " *
-      "Remove the aggregation or filter by primary key."
-    ))
-  end
+  _reject_unsafe_mutation_shape(real_obj, "update()")
 
   instruction = build(real_obj, table_alias=table_alias, connection=connection) 
 

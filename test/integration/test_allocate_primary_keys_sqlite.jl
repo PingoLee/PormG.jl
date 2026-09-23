@@ -1,6 +1,6 @@
 # Focused SQLite regression for allocate_primary_keys transaction-scoped reservations.
 # Run with:
-#   $env:PORMG_DB="db_sl"; julia -t 1 --project=. test/integration/test_allocate_primary_keys_sqlite.jl
+#   $env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/test_allocate_primary_keys_sqlite.jl
 
 if !isdefined(Main, :PormG)
     include("common_setup.jl")

@@ -1,5 +1,5 @@
 # 1. Load the common environment (env, config, pool, models, shared helpers)
-# julia -t auto  --project=. test/integration/runtests.jl
+# julia -t auto --project=test/integration test/integration/runtests.jl
 include("common_setup.jl")
 
 # 1b. Load delete scratch modules at top level (module expressions are forbidden

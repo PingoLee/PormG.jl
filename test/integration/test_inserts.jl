@@ -22,8 +22,8 @@ Scenarios covered:
       explicit PKs, chunking, and FK id 0 (parity with bulk_update in test_updates.jl)
 
 Run with:
-  julia -t auto --project=. test/integration/runtests.jl
-  \$env:PORMG_DB="db_sl"; julia -t 1 --project=. test/integration/runtests.jl
+  julia -t auto --project=test/integration test/integration/runtests.jl
+  \$env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl
 """
 
 if !isdefined(Main, :PormG)

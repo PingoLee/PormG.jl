@@ -26,8 +26,8 @@ Scenarios covered:
     — Pagination guard: limit, offset, and order_by are rejected for delete()
 
 Run with:
-  julia -t auto --project=. test/integration/runtests.jl
-    \$env:PORMG_DB="db_sl"; julia -t 1 --project=. test/integration/runtests.jl
+  julia -t auto --project=test/integration test/integration/runtests.jl
+    \$env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl
 """
 
 if !isdefined(Main, :PormG)

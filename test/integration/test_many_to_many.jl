@@ -18,8 +18,8 @@ Exercises ManyToManyField end-to-end against the selected integration database
     `manager.all()`, vector `remove`, default reverse accessor, short multi-hop reverse.
 
 Run with:
-  julia -t auto --project=. test/integration/runtests.jl
-  \$env:PORMG_DB="db_sl"; julia -t 1 --project=. test/integration/runtests.jl
+  julia -t auto --project=test/integration test/integration/runtests.jl
+  \$env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl
 
 When run standalone, pending scratch-model tables are migrated automatically
 (see `_ensure_m2m_scratch_schema!` below). A full `runtests.jl` bootstrap is still

@@ -42,7 +42,7 @@ _bulk_copy_fk_rows = _bulk_copy_fk_query.list()
 length(_bulk_copy_fk_rows) == 9 || error(
     "test_bulk_copy.jl needs at least 9 rows in `result` to use as foreign-key targets, " *
     "but found $(length(_bulk_copy_fk_rows)) in \"$(PORMG_DB_FOLDER)\". The F1 fixtures are " *
-    "not seeded. Run `julia -t auto --project=. test/integration/runtests.jl` first.")
+    "not seeded. Run `julia -t auto --project=test/integration test/integration/runtests.jl` first.")
 
 _bulk_copy_fk_ids = [row[:resultid] for row in _bulk_copy_fk_rows]
 
@@ -67,7 +67,7 @@ M.Result.objects.filter("resultid" => 1).count() == 1 || error(
     "test_bulk_copy.jl requires `result.resultid = 1` to exist in \"$(PORMG_DB_FOLDER)\": " *
     "`Just_a_test_deletion.test_result_set_default` defaults to 1, and PormG writes that " *
     "default on every insert, so every row inserted here references it. " *
-    "Run `julia -t auto --project=. test/integration/runtests.jl` to seed the F1 fixtures.")
+    "Run `julia -t auto --project=test/integration test/integration/runtests.jl` to seed the F1 fixtures.")
 
 @testset "Bulk Validation and Type Normalization" begin
     # These tests exercise the shared validation path used by bulk_insert and bulk_update.

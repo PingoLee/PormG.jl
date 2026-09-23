@@ -5,8 +5,9 @@
 # agent) a failed run and an improvised substitute, and it reads as authoritative the whole
 # time. This file guards the one spelling that has already done that (#624).
 #
-# THE CONTRACT — handing a `test/unit/…` (or any non-integration) script to `--project=.` is
-# never runnable.
+# THE CONTRACT — no documented command hands a test script to `--project=.`. For a
+# `test/unit/…` (or any non-integration) script it is never runnable; for a
+# `test/integration/…` script it is a rescue, not a spelling to teach (see below).
 #
 # Since #34 LibPQ and SQLite are `[weakdeps]`, so the package environment cannot `using` them,
 # and `Pkg.instantiate()` resolves `[deps]` alone — there is nothing for `test/load_drivers.jl`'s
@@ -28,13 +29,14 @@
 #   julia --project=. -e 'using Pkg; Pkg.test()'        full unit suite; what CI runs
 #   julia --project=test/integration <test_file.jl>     one file — unit OR integration
 #
-# WHAT IS DELIBERATELY NOT FLAGGED — `--project=. test/integration/<file>.jl`. There it
-# genuinely works, because `common_setup.jl` redirects the package env to the integration env
-# before anything loads. `general.instructions.md` → *Verification* calls that a rescue for a
-# wrong invocation rather than the spelling to teach, but it is not broken, so this guard does
-# not police it. Note this is decided by the SCRIPT PATH, not by which file the line sits in —
-# an earlier revision keyed it off the containing directory, which meant the header said one
-# thing and the code did another.
+# THE INTEGRATION RESCUE IS FLAGGED TOO (#628) — `--project=. test/integration/<file>.jl`.
+# That one RUNS, because `common_setup.jl` redirects the package env to the integration env
+# before anything loads, and the redirect stays (silently) on purpose. But it is not
+# DOCUMENTABLE: `general.instructions.md` → *Verification* calls it a rescue for a wrong
+# invocation rather than the spelling to teach, and "works because something else rescued it"
+# is exactly how #624's command stayed documented everywhere until its rescue stopped applying.
+# This guard exempted it until #628 swept the ~30 integration headers that still taught it.
+# The script path is what decides — not which file the line sits in.
 #
 # ESCAPE HATCH. Documentation sometimes has to quote the broken command exactly — to warn a
 # reader off the spelling they have seen elsewhere, which is most of the point of fixing #624.
@@ -74,9 +76,6 @@ using PormG
     formB = "JULIA_PROJECT=\\.\\s[^\\n]*julia\\b" * noe * "[^\\n]*?" * path
     broken = Regex("(?:$formA)|(?:$formB)")
 
-    # `--project=. test/integration/x.jl` is a rescue, not a defect — see the header.
-    integration_script = r"(?:\./)?test[/\\]integration[/\\]"
-
     # A line that quotes the broken command in order to warn against it (see ESCAPE HATCH).
     exempt = "624-counterexample"
 
@@ -85,10 +84,8 @@ using PormG
     EXPECTED_COUNTEREXAMPLES = [joinpath(".github", "instructions", "general.instructions.md")]
 
     function flagged(line)
-        occursin(broken, line)               || return false
-        occursin(exempt, line)               && return false
-        m = match(broken, line)
-        occursin(integration_script, m.match) && return false
+        occursin(broken, line) || return false
+        occursin(exempt, line) && return false
         return true
     end
 
@@ -151,7 +148,8 @@ using PormG
     @test isempty(hits) || begin
         @error """
         A prescribed command hands a test script to `--project=.`, which cannot load the SQL
-        driver extensions (#624). Use one of:
+        driver extensions (#624) — or, for a test/integration/ script, runs only because
+        common_setup.jl rescues it, which is not the spelling to teach (#628). Use one of:
           full unit suite   julia --project=. -e 'using Pkg; Pkg.test()'
           one test file     julia --project=test/integration <path/to/test_file.jl>
         Offending lines:
@@ -190,9 +188,10 @@ using PormG
         @test !flagged("julia --project=docs -e 'include(\"docs/make.jl\")'")
         # Correct command whose COMMENT names a test file — the `-e` lookahead case.
         @test !flagged("julia $P -e 'using Pkg; Pkg.test()'  # replaces test/runtests.jl")
-        # The integration rescue, decided by the script path and not by the containing file.
-        @test !flagged("julia -t auto $P test/integration/runtests.jl")
-        @test !flagged("julia -t auto $P ./test/integration/test_cte.jl")
+        # The integration rescue runs, but is not to be documented (#628).
+        @test flagged("julia -t auto $P test/integration/runtests.jl")
+        @test flagged("julia -t auto $P ./test/integration/test_cte.jl")
+        @test flagged(raw"$env:PORMG_DB=" * "\"db_sl\"; julia -t 1 $P test/integration/runtests.jl")
 
         # The escape hatch suppresses the report, and ONLY on the line carrying the marker.
         @test !flagged("julia $P test/runtests.jl  <!-- $exempt -->")

@@ -564,8 +564,8 @@ class, an enum, a field — stays verbatim: only the class a report is *about* i
     Advanced index shapes (GIN/GiST/BRIN, functional, partial, ordered) are tracked separately.
 
 !!! note "An index name reused across models loses the name, not the index"
-    An index name is unique per database, and PormG emits `CREATE INDEX IF NOT EXISTS` — so two
-    models declaring the same name would leave the *second* table quietly without its index. An
+    An index name is unique per database, so two models declaring the same name cannot both be
+    created — `makemigrations` refuses the plan outright. An
     abstract base makes that easy to write without noticing: Django installs the base's whole `Meta`
     on every child that declares none of its own, so one
     `indexes = [Index(fields=…, name="base_x")]` reaches every child. Django rejects it at

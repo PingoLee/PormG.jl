@@ -28,10 +28,12 @@ Now `makemigrations` diffs them like columns, on every table:
    `ALTER INDEX … RENAME TO` or `ALTER TABLE … RENAME CONSTRAINT`. SQLite drops and re-creates the
    index, which counts as destructive. A declaration with no `name` matches whatever the live index
    is called.
-4. **Composite creates no longer say `IF NOT EXISTS`.** A name some other object already holds
-   used to be a silent no-op, leaving the table without its index. Now it fails the migration.
-   `makemigrations` also refuses two declarations that share a name on *any* tables, not only on
-   one; and on SQLite an explicit name starting with `sqlite_`.
+4. **Composite creates no longer say `IF NOT EXISTS`**, the ManyToManyField join table's index
+   included. A name some other object already holds used to be a silent no-op, leaving the table
+   without its index. Now it fails the migration. `makemigrations` also refuses a plan that would
+   create (or rename to) one name twice on *any* tables, or a name another table's index still
+   holds — move a name between tables in two migrations; and on SQLite an explicit name starting
+   with `sqlite_`.
 5. **`inspectdb` / `convert_schema_to_models` now emit `constraints = [UniqueConstraint(…)]`** for
    the composite uniqueness they find. A regenerated models file therefore contains lines it did
    not contain before.

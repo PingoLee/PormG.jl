@@ -19,7 +19,7 @@ WHAT THIS FILE PROVES, AND WHAT IT DOES NOT. Every SQLite testset applies its pl
 database IN `migrate`'s ORDER (`_order_statements`) and then asks the database — a duplicate INSERT
 must raise, or must not — and re-plans against a fresh read to prove convergence. The PostgreSQL
 testsets are plan-shape only, over a hand-built live side: a mock has no catalog. The live
-PostgreSQL half is integration Phase 21.
+PostgreSQL half is integration Phase 22.
 
 `_cd`-prefixed throughout: `runtests.jl` includes every unit file into ONE module.
 """
@@ -338,9 +338,10 @@ end
         m
       end
       p = _cd_plan(pool, LiveTable[], join_model())
-      # Created exactly as it always was — label and statement both.
+      # Its historical step label, and — now that it is diffed on every run — no IF NOT EXISTS: a
+      # name something else holds would otherwise no-op and re-plan forever, like any composite.
       @test p[:car_driver]["Create many-to-many unique index"] ==
-            """CREATE UNIQUE INDEX IF NOT EXISTS "car_driver_car_id_driver_id_uniq" ON "car_driver" ("car_id", "driver_id");"""
+            """CREATE UNIQUE INDEX "car_driver_car_id_driver_id_uniq" ON "car_driver" ("car_id", "driver_id");"""
       _cd_apply!(pool, p)
       @test _cd_converged(pool, ("car_driver",), join_model())
 
@@ -369,7 +370,8 @@ end
 # Without IF NOT EXISTS a name another object holds fails the migration — here a partial index the
 # readers refuse (so the diff never sees it) already owns the derived name. Before, the CREATE was a
 # silent no-op and the next makemigrations planned it again, forever. Collisions the plan CAN see —
-# two tables declaring one name, SQLite's reserved `sqlite_` prefix — are refused before planning.
+# one name created twice on any tables, SQLite's reserved `sqlite_` prefix, a name that differs only
+# in case on SQLite (which folds identifiers) — are refused before anything runs.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "SQLite: a name collision fails loudly, and the registry spans the whole plan (#161)" begin
   mktempdir() do dir
@@ -379,14 +381,23 @@ end
       fetch(pool, """CREATE INDEX "result_raceid_driverid_uniq" ON "result" ("grid") WHERE "grid" > 0;""")
       p = _cd_plan(pool, _cd_live(pool, "result"),
                    _cd_result(constraints = [Models.UniqueConstraint(fields = ("raceid", "driverid"))]))
-      @test_throws Exception _cd_apply!(pool, p)
+      # The database's own refusal, naming the index — not some unrelated failure of the harness.
+      err = try
+        _cd_apply!(pool, p)
+        nothing
+      catch e
+        sprint(showerror, e)
+      end
+      @test err !== nothing && occursin("result_raceid_driverid_uniq", err) &&
+            occursin("already exists", lowercase(err))
     finally
       close_pool!(pool)
     end
   end
 
-  shared(table) = Models.Model(table; id = Models.IDField(), a = Models.IntegerField(), b = Models.IntegerField(),
-                               indexes = [Models.Index(fields = ("a", "b"), name = "shared_ix")])
+  shared(table, name = "shared_ix") = Models.Model(table; id = Models.IDField(), a = Models.IntegerField(),
+                                                   b = Models.IntegerField(),
+                                                   indexes = [Models.Index(fields = ("a", "b"), name = name)])
   @test_throws PormG.InvalidMigrationError _cd_plan(CD_PG, LiveTable[], shared("pit_stop"), shared("lap_time"))
   reserved = Models.Model("pit_stop"; id = Models.IDField(), a = Models.IntegerField(), b = Models.IntegerField(),
                           constraints = [Models.UniqueConstraint(fields = ("a", "b"), name = "sqlite_mine")])
@@ -394,11 +405,132 @@ end
     pool = SQLiteConnectionPool(joinpath(dir, "cd_reserved.sqlite"); pool_size = 1)
     try
       @test_throws PormG.InvalidMigrationError _cd_plan(pool, LiveTable[], reserved)
+      # SQLite folds identifier case, so `Pit_ix` and `pit_ix` are ONE name there…
+      @test_throws PormG.InvalidMigrationError _cd_plan(pool, LiveTable[], shared("pit_stop", "Pit_ix"),
+                                                        shared("lap_time", "pit_ix"))
     finally
       close_pool!(pool)
     end
   end
   @test _cd_plan(CD_PG, LiveTable[], reserved) isa AbstractDict   # PostgreSQL has no such reservation
+  # …and two names on PostgreSQL, where PormG quotes every identifier.
+  @test _cd_plan(CD_PG, LiveTable[], shared("pit_stop", "Pit_ix"), shared("lap_time", "pit_ix")) isa AbstractDict
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite: a name one declaration writes is never kept by another (#161)
+# The live table has `result_entry_uq` over (raceid, driverid) and `result_grid_uq` over
+# (raceid, grid). The models give `result_entry_uq` to (raceid, grid) and leave (raceid, driverid)
+# nameless. Matching by columns alone would let the nameless declaration keep `result_entry_uq`,
+# and the rename that needs the name would fail with "already exists" on every run. The claimed
+# name is dropped instead, so the rename finds it free; the nameless one gets its derived name.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: a name one declaration writes is never kept by another (#161)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "cd_claimed.sqlite"); pool_size = 1)
+    try
+      v1 = _cd_result(constraints = [Models.UniqueConstraint(fields = ("raceid", "driverid"), name = "result_entry_uq"),
+                                     Models.UniqueConstraint(fields = ("raceid", "grid"), name = "result_grid_uq")])
+      _cd_apply!(pool, _cd_plan(pool, LiveTable[], v1))
+      v2 = _cd_result(constraints = [Models.UniqueConstraint(fields = ("raceid", "driverid")),
+                                     Models.UniqueConstraint(fields = ("raceid", "grid"), name = "result_entry_uq")])
+      p = _cd_plan(pool, _cd_live(pool, "result"), v2)
+      _cd_apply!(pool, p)                                      # no "already exists"
+      names = _cd_index_names(pool, "result")
+      @test "result_entry_uq" in names && "result_raceid_driverid_uniq" in names && !("result_grid_uq" in names)
+      # Both rules still hold, each under its declared name.
+      @test !_cd_both_insert(pool, "result", (raceid = 1, driverid = 1, grid = 1), (raceid = 1, driverid = 1, grid = 2))
+      @test !_cd_both_insert(pool, "result", (raceid = 1, driverid = 1, grid = 1), (raceid = 1, driverid = 2, grid = 1))
+      @test _cd_converged(pool, ("result",), v2)
+    finally
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: a name another table's index holds is refused at plan time (#161)
+# Every composite DROP, RENAME and unique CREATE shares one execution bucket in TABLE order, so a
+# name moved from one table to another would fail mid-migration on some orders and not others. The
+# plan refuses it and says to take two migrations. A table the plan drops entirely is exempt — its
+# DROP TABLE runs first — and a name only DECLARED, never created, claims nothing: two long derived
+# names that collide as stored are fine while both already exist under other names.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: a name held on another table is refused; one never created claims nothing (#161)" begin
+  pit(; kw...) = Models.Model("pit_stop"; id = Models.IDField(), a = Models.IntegerField(), b = Models.IntegerField(), kw...)
+  lap(; kw...) = Models.Model("lap_time"; id = Models.IDField(), a = Models.IntegerField(), b = Models.IntegerField(), kw...)
+  live_with(model, composites...) = begin
+    t = live_table(model, CD_PG)
+    LiveTable(t.name, t.columns, t.indexes, collect(LiveComposite, composites))
+  end
+  held = LiveComposite("stint_uq", ["a", "b"], true, false)
+
+  # `lap_time` still holds `stint_uq` (undeclared, so dropped in this very plan); `pit_stop` creates it.
+  err = try
+    _cd_plan(CD_PG, LiveTable[live_with(lap(), held), live_with(pit())], lap(),
+             pit(constraints = [Models.UniqueConstraint(fields = ("a", "b"), name = "stint_uq")]))
+    nothing
+  catch e
+    e
+  end
+  @test err isa PormG.InvalidMigrationError && occursin("lap_time", err.msg) && occursin("stint_uq", err.msg)
+
+  # Exempt: `lap_time` is dropped as a table, and DROP TABLE runs before every index statement.
+  p = _cd_plan(CD_PG, LiveTable[live_with(lap(), held), live_with(pit())],
+               pit(constraints = [Models.UniqueConstraint(fields = ("a", "b"), name = "stint_uq")]))
+  @test haskey(p[:lap_time], "Drop table")
+  @test haskey(p[:pit_stop], "Create unique constraint: stint_uq")
+
+  # Never created, never claimed: both long derived names already exist under Django's own names.
+  wide = Models.Model("result_" * repeat("w", 50); id = Models.IDField(),
+                      a_column_with_a_long_name = Models.IntegerField(), b = Models.IntegerField(), c = Models.IntegerField(),
+                      indexes = [Models.Index(fields = ("a_column_with_a_long_name", "b")),
+                                 Models.Index(fields = ("a_column_with_a_long_name", "c"))])
+  adopted = live_with(wide, LiveComposite("django_idx_1", ["a_column_with_a_long_name", "b"], false, false),
+                            LiveComposite("django_idx_2", ["a_column_with_a_long_name", "c"], false, false))
+  @test all(isempty, values(_cd_plan(CD_PG, LiveTable[adopted], wide)))
+  # …while CREATING both still collides as stored.
+  @test_throws PormG.InvalidMigrationError Logging.with_logger(Logging.NullLogger()) do
+    _cd_plan(CD_PG, LiveTable[], wide)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: a name an index KEPT on the same table holds is refused at plan time (#161)
+# The cross-table check exempts a table's own indexes, trusting its pass to drop them first. An index
+# kept because it matched its own declaration by name is not dropped, so a second declaration
+# claiming that name would plan a CREATE that fails "already exists" on every run. Two shapes: an
+# explicit name reused by a new declaration, and an explicit name equal to a live sibling's derived
+# one. Found in the delta review — the registry that replaced the pre-plan check had lost them.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: a new declaration cannot take a name a kept index holds (#161)" begin
+  live_with(model, composites...) = begin
+    t = live_table(model, CD_PG)
+    LiveTable[LiveTable(t.name, t.columns, t.indexes, collect(LiveComposite, composites))]
+  end
+  refused(live, declared) = try
+    _cd_plan(CD_PG, live, declared)
+    nothing
+  catch e
+    e
+  end
+
+  # `result_entry_uq` over (raceid, grid) is declared and live; a new Index claims the same name.
+  reused = _cd_result(constraints = [Models.UniqueConstraint(fields = ("raceid", "grid"), name = "result_entry_uq")],
+                      indexes = [Models.Index(fields = ("driverid", "grid"), name = "result_entry_uq")])
+  err = refused(live_with(reused, LiveComposite("result_entry_uq", ["raceid", "grid"], true, false)), reused)
+  @test err isa PormG.InvalidMigrationError && occursin("result_entry_uq", err.msg) && occursin("raceid, grid", err.msg)
+
+  # A nameless sibling is live under its derived name, which a new declaration writes explicitly.
+  derived = _cd_result(constraints = [Models.UniqueConstraint(fields = ("raceid", "driverid"))],
+                       indexes = [Models.Index(fields = ("driverid", "grid"), name = "result_raceid_driverid_uniq")])
+  err = refused(live_with(derived, LiveComposite("result_raceid_driverid_uniq", ["raceid", "driverid"], true, false)), derived)
+  @test err isa PormG.InvalidMigrationError && occursin("result_raceid_driverid_uniq", err.msg)
+
+  # Control: the same live index DROPPED (undeclared) frees the name, so the create is planned.
+  freed = _cd_result(indexes = [Models.Index(fields = ("driverid", "grid"), name = "result_entry_uq")])
+  p = _cd_plan(CD_PG, live_with(freed, LiveComposite("result_entry_uq", ["raceid", "grid"], true, false)), freed)
+  @test _cd_keys(p, :result) == ["Remove composite index: result_entry_uq", "Create index: result_entry_uq"]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -442,18 +574,11 @@ end
   @test !any(k -> occursin("composite", k), _cd_keys(p, :result))
   @test any(startswith("Remove field"), _cd_keys(p, :result))
 
-  # 70 bytes declared, 63 stored: converged, with the truncation said out loud.
+  # 70 bytes declared, 63 stored: converged — compared as stored, so no rename is re-planned…
   long = "result_" * repeat("x", 63)
   declared = _cd_result(constraints = [Models.UniqueConstraint(fields = ("raceid", "driverid"), name = long)])
   live = with_live(declared, LiveComposite(first(long, 63), ["raceid", "driverid"], true, false))
-  p = @test_logs (:warn, r"63-byte") match_mode = :any _cd_plan(CD_PG, live, declared)
-  @test all(isempty, values(p))
-  # …and two long DERIVED names that share their first 63 bytes collide as stored.
-  wide = Models.Model("result_" * repeat("w", 50); id = Models.IDField(),
-                      a_column_with_a_long_name = Models.IntegerField(), b = Models.IntegerField(), c = Models.IntegerField(),
-                      indexes = [Models.Index(fields = ("a_column_with_a_long_name", "b")),
-                                 Models.Index(fields = ("a_column_with_a_long_name", "c"))])
-  @test_throws PormG.InvalidMigrationError Logging.with_logger(Logging.NullLogger()) do
-    _cd_plan(CD_PG, LiveTable[], wide)
-  end
+  @test all(isempty, values(_cd_plan(CD_PG, live, declared)))
+  # …and creating it says out loud that it will be stored truncated.
+  @test_logs (:warn, r"63-byte") match_mode = :any _cd_plan(CD_PG, LiveTable[], declared)
 end

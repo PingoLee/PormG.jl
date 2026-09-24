@@ -250,13 +250,14 @@ A composite over a column you are dropping goes with the column — nothing extr
 - An **explicit** `name` is intent: a live index over the same columns under another name is renamed
   to it.
 - Index names share one namespace per PostgreSQL schema (with tables and sequences) and per SQLite
-  database. `makemigrations` refuses to plan two declarations that share a name, on any tables, and
-  on SQLite an explicit name starting with the reserved `sqlite_`. PormG creates composites without
-  `IF NOT EXISTS`, so a name some other object already holds fails the migration instead of
-  silently leaving the table without its index.
-- PostgreSQL stores at most 63 bytes of a name and truncates the rest. `makemigrations` warns when
-  a name is that long and compares the truncated form, so a long name does not re-plan a rename on
-  every run — but two long names that share their first 63 bytes collide, so shorten one.
+  database. `makemigrations` refuses a plan that would create (or rename to) one name twice on any
+  tables, or a name an index on another table still holds — move a name between tables in two
+  migrations, freeing it first. On SQLite it also refuses an explicit name starting with the reserved
+  `sqlite_`. PormG creates composites without `IF NOT EXISTS`, so a name some object PormG cannot
+  see already holds fails the migration instead of silently leaving the table without its index.
+- PostgreSQL stores at most 63 bytes of a name and truncates the rest. `makemigrations` compares the
+  truncated form, so a long name does not re-plan a rename on every run, and warns when it creates
+  one — two long names that share their first 63 bytes collide, so shorten one.
 
 ## Naming Conventions and Considerations
 

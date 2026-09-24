@@ -1834,7 +1834,8 @@ declared case is preserved, so name each field exactly as it was declared.
 automatic many-to-many index convention, and accepts whatever an existing index over the same columns
 is called. Given, it is intent: an existing index under another name is renamed to it. Names are
 unique per PostgreSQL schema and per SQLite database, and PostgreSQL keeps only 63 bytes of one —
-`makemigrations` refuses two declarations that collide, as stored, on any tables.
+`makemigrations` refuses a plan that would create one name twice, as stored, or create one another
+table's index still holds.
 
 Invalid declarations raise `ModelDefinitionError` as early as they can be detected: no fields, a
 repeated field, or a blank `name` fails here in the constructor; a field that does not exist on the
@@ -1864,7 +1865,7 @@ Constructor_engine = Models.Model("constructor_engines",
 which migrates to:
 
 ```sql
-CREATE UNIQUE INDEX IF NOT EXISTS "uniq_constructor_year"
+CREATE UNIQUE INDEX "uniq_constructor_year"
   ON "constructor_engines" ("constructorid", "year");
 ```
 
@@ -2023,7 +2024,7 @@ Lap_times = Models.Model("lap_times",
 which migrates to:
 
 ```sql
-CREATE INDEX IF NOT EXISTS "lap_times_race_lap_idx"
+CREATE INDEX "lap_times_race_lap_idx"
   ON "lap_times" ("raceid", "lap");
 ```
 

@@ -1907,7 +1907,8 @@ function drop_unique_constraint(conn::PormGPostgres, table_name::String, constra
 end
 
 # A bare index renames in place. A constraint-backed one is renamed through its constraint, which
-# renames the index with it; `ALTER INDEX` on it would leave the constraint under the old name.
+# renames the backing index with it, so the statement names the `pg_constraint` row the reader keyed
+# it by.
 function rename_index(conn::PormGPostgres, old_name::String, new_name::String)
   return """ALTER INDEX "$(_quote_table_ddl(old_name))" RENAME TO "$(_quote_table_ddl(new_name))";"""
 end

@@ -1618,8 +1618,14 @@ function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
   # executed on SQLite. Same rule and same gate as `get_order_query` (#587); a WHERE predicate has
   # no alias to fall back on, so a binding expression renders afresh here on both backends (on
   # PostgreSQL that renumbers its `$N`s, which is harmless outside DISTINCT/ORDER BY).
+  #
+  # #701: that gate reads the KEY's kind, and a projection alias is a plain `String` key whose
+  # memoized text can still bind — `Q("next_race" => 73)` over `F("raceid") + 1` reprinted the `?`
+  # with its value in `:select`. `_alias_lhs` (build_query.jl) applies the same rule to the
+  # PROJECTION behind an alias key and renders it afresh when it binds; any other hit is returned
+  # as it was.
   if cached !== nothing && v.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject}
-    return cached.field
+    return _alias_lhs(key, cached, instruc)
   else
     v_copy = deepcopy(v)
     # `_as` travels with the render. This is now the ONLY render of a predicate's left-hand side —

@@ -942,6 +942,39 @@ HAVING COALESCE(SUM("Tb"."milliseconds"), $3::bigint) = $4
 Until [#702](https://github.com/PingoLee/PormG.jl/issues/702), most of these wrappers dropped the
 aggregate. The query printed no `GROUP BY`, and SQLite returned a single row for the whole table.
 
+### A Row-Level Alias Filters in `WHERE`
+
+Only an aggregate alias goes to `HAVING`. An alias over a row-level expression, such as arithmetic
+on columns or a bare `F("col")`, has one value per row, so a filter on it goes to `WHERE`, the same
+as a filter on a column:
+
+```julia
+# 2010 drives that gained 15 or more places from the grid
+query = M.Result.objects
+query.filter("raceid__year" => 2010)
+query.values("driverid__surname", "raceid__name", "places_gained" => F("grid") - F("positionorder"))
+query.filter("places_gained__@gte" => 15)
+```
+
+```sql
+SELECT "Tb_1"."surname" as "driverid__surname", "Tb_2"."name" as "raceid__name",
+  ("Tb"."grid" - "Tb"."positionorder") as "places_gained"
+FROM "result" as "Tb"
+ INNER JOIN "driver" AS "Tb_1" ON "Tb"."driverid" = "Tb_1"."driverid"
+ INNER JOIN "race" AS "Tb_2" ON "Tb"."raceid" = "Tb_2"."raceid"
+WHERE "Tb_2"."year" = $1 AND ("Tb"."grid" - "Tb"."positionorder") >= $2
+```
+
+When a query projects both kinds, one `filter(...)` call splits the same way: the row alias goes to
+`WHERE` and the aggregate alias to `HAVING`.
+
+!!! note "Text-valued aliases"
+    The value of a top-level alias filter is checked against the alias's type, and PormG does not
+    yet know the type of a text function such as `Lower`, `Upper` or `Concat`, so it expects a
+    number there ([#707](https://github.com/PingoLee/PormG.jl/issues/707)). Until that is fixed,
+    filter the underlying column instead, e.g.
+    `filter("driverid__surname__@istartswith" => "ham")`.
+
 ### `Q` and `Qor` on Aggregate Aliases
 
 An aggregate alias inside [`Q(...)` or `Qor(...)`](q_objects.md) goes to `HAVING` too. `Qor` is

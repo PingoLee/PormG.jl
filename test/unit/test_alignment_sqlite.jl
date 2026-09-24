@@ -3828,8 +3828,13 @@ end
     @test occursin("COUNT never returns NULL", cnt_err.value.msg)
     @test occursin("n", cnt_err.value.msg)
     # A bare column alias takes `ISNULL`'s own rule, exactly as in WHERE: no call, so it renders.
+    # #701: and it renders IN WHERE. A bare `F("name")` is a row value, and this query has no
+    # aggregate and so no GROUP BY; the `HAVING` this line used to expect is the statement both
+    # engines reject.
     f_q() = (q = M.Race.objects; q.values("year", "nm" => F("name")); q.filter("nm__@isnull" => false); q)
-    @test occursin("HAVING \"Tb\".\"name\" IS NOT NULL", inspect_query(f_q())[:sql_text])
+    f_sql = inspect_query(f_q())[:sql_text]
+    @test occursin("WHERE \"Tb\".\"name\" IS NOT NULL", f_sql)
+    @test !occursin("HAVING", f_sql)
 
     # ── The WHERE forms are unchanged by the move into the ladder ────────────────
     # Same lookups on real columns, asserted on SQL and bound vector — the refactor's regression test.

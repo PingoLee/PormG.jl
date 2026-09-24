@@ -67,6 +67,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Reverse-accessor Namespace (#396)" include("unit/test_reverse_accessor_namespace.jl")
     @testset "Composite Uniqueness (unique_together #19)" include("unit/test_unique_constraints.jl")
     @testset "Composite Indexes (Meta.indexes #347)" include("unit/test_indexes.jl")
+    @testset "Composite Index Diff (#161)" include("unit/test_composite_diff.jl")
     @testset "Shared-state Read/Copy Path (#43)" include("unit/test_shared_state_readpath.jl")
     @testset "custom_join Copy Isolation (#112)" include("unit/test_custom_join_copy.jl")
     @testset "Model_Type deepcopy Shares (#157)" include("unit/test_model_deepcopy.jl")

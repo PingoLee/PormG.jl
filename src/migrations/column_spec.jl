@@ -598,12 +598,16 @@ declaration's own `name=` when it has one (`explicit`), else [`composite_index_n
 name accepts whatever the live index is called — a table renamed under #615 keeps its
 `<old>_a_b_uniq`, and that must not read as a different index. Only a name the developer WROTE is a
 fact the planner has to make true.
+
+`auto` marks the synthesized `ManyToManyField` join table's own index, which keeps the statement and
+step label it has always been created with.
 """
 struct DeclaredComposite
   name::String
   columns::Vector{String}
   unique::Bool
   explicit::Bool
+  auto::Bool
 end
 
 """
@@ -633,14 +637,14 @@ function declared_composites(model::PormGModel)::Vector{DeclaredComposite}
   if auto !== nothing
     push!(out, DeclaredComposite(String(auto["unique_index"]),
                                  String[String(auto["owner_column"]), String(auto["related_column"])],
-                                 true, false))
+                                 true, false, true))
   end
   for (cache_key, list_key, unique) in (("unique_constraints", "constraints", true),
                                         ("composite_indexes", "indexes", false))
     for decl in get(get(model.cache, cache_key, Dict{String, Any}()), list_key, Any[])
       cols = String[Models.model_column(model, f) for f in decl.fields]
       name = decl.name === nothing ? composite_index_name(table, cols, unique) : String(decl.name)
-      push!(out, DeclaredComposite(name, cols, unique, decl.name !== nothing))
+      push!(out, DeclaredComposite(name, cols, unique, decl.name !== nothing, false))
     end
   end
   return out

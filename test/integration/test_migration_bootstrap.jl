@@ -3055,6 +3055,118 @@ end
       @test !isfile(pending_path_523)
     end
   end
+
+  # ── Phase 22: composites are diffed on an existing table (#161) ───────
+  # Phases 17 and 20 create a UniqueConstraint / Index WITH their table. Until #161 that was the only
+  # way either ever reached the database: adding, removing or re-columning one on an existing table
+  # planned nothing, and no reader returned composite uniqueness at all. This phase walks one table
+  # through every change on the live engine and asks the DATABASE, not the plan, what it enforces:
+  #
+  #   (a) v1 → v2: both kinds added to an existing table are created;
+  #   (b) v2 → v3: the uniqueness moves to other columns and the Index is removed — both drops are
+  #       destructive, so `dry_run()` must say so and `migrate()` needs `destructive=true`;
+  #   (c) v3 → v4: an explicit rename (PostgreSQL `ALTER INDEX`, SQLite drop and create);
+  #   (d) an ADOPTED table-level UNIQUE (…) — what Django's `unique_together` leaves behind — is
+  #       matched by its columns when declared (no second index), and removed when not
+  #       (PostgreSQL `DROP CONSTRAINT`, SQLite a rebuild: it cannot drop an autoindex).
+  #
+  # Every step ends on the churn gate: a fresh makemigrations against the same models plans nothing.
+  @testset "Phase 22: Composite Diff on an Existing Table (#161)" begin
+    edge_path = joinpath(@__DIR__, edge_db_name)
+    pending = joinpath(edge_path, "migrations", "pending_migrations.jl")
+    replan_is_empty() = (isfile(pending) && rm(pending); makemigrations(edge_path, interactive=false); !isfile(pending))
+    # Both rows go in, or not. Rows are complete, so only a uniqueness rule can refuse one, and they
+    # differ outside the columns under test so the table's other rules stay out of the answer.
+    both_insert(table, rows...) = begin
+      ok = try
+        for r in rows
+          cols = join(("\"$(k)\"" for k in keys(r)), ", ")
+          PormG.ConnectionPool.fetch(pool, "INSERT INTO \"$(table)\" ($(cols)) VALUES ($(join(values(r), ", ")));")
+        end
+        true
+      catch
+        false
+      end
+      PormG.ConnectionPool.fetch(pool, "DELETE FROM \"$(table)\";")
+      ok
+    end
+    div161(extra) = """
+    Div161 = Models.Model(
+        id = Models.IDField(),
+        raceid = Models.IntegerField(),
+        driverid = Models.IntegerField(),
+        grid = Models.IntegerField(null=true)$(extra)
+    )
+    """
+
+    # (a) An existing table gains both kinds.
+    write_edge_models(div161(""))
+    makemigrations(edge_path, interactive=false)
+    migrate(edge_path, interactive=false, destructive=true)
+    write_edge_models(div161(""",
+        constraints = [Models.UniqueConstraint(fields=("raceid", "driverid"))],
+        indexes = [Models.Index(fields=("driverid", "grid"))]"""))
+    makemigrations(edge_path, interactive=false)
+    @test isfile(pending)                       # used to plan nothing at all
+    migrate(edge_path, interactive=false, destructive=true)
+    @test "div161_raceid_driverid_uniq" in index_names(pool, "div161")
+    @test "div161_driverid_grid_idx" in index_names(pool, "div161")
+    @test !both_insert("div161", (raceid=1, driverid=1, grid=1), (raceid=1, driverid=1, grid=2))
+    @test replan_is_empty()
+
+    # (b) The uniqueness moves to (raceid, grid); the Index goes. Both drops are destructive.
+    write_edge_models(div161(""",
+        constraints = [Models.UniqueConstraint(fields=("raceid", "grid"), name="div161_entry_uq")]"""))
+    makemigrations(edge_path, interactive=false)
+    @test isfile(pending)
+    @test Migrations.is_destructive(Migrations.dry_run(edge_path))
+    migrate(edge_path, interactive=false, destructive=true)
+    names_b = index_names(pool, "div161")
+    @test !("div161_raceid_driverid_uniq" in names_b) && !("div161_driverid_grid_idx" in names_b)
+    @test "div161_entry_uq" in names_b
+    @test both_insert("div161", (raceid=1, driverid=1, grid=1), (raceid=1, driverid=1, grid=2))
+    @test !both_insert("div161", (raceid=1, driverid=1, grid=1), (raceid=1, driverid=2, grid=1))
+    @test replan_is_empty()
+
+    # (c) An explicit rename keeps the rule and moves the name.
+    write_edge_models(div161(""",
+        constraints = [Models.UniqueConstraint(fields=("raceid", "grid"), name="div161_grid_entry_uq")]"""))
+    makemigrations(edge_path, interactive=false)
+    @test isfile(pending)
+    migrate(edge_path, interactive=false, destructive=true)
+    names_c = index_names(pool, "div161")
+    @test "div161_grid_entry_uq" in names_c && !("div161_entry_uq" in names_c)
+    @test !both_insert("div161", (raceid=1, driverid=1, grid=1), (raceid=1, driverid=2, grid=1))
+    @test replan_is_empty()
+
+    # (d) An adopted table-level UNIQUE (…), built from PormG's own CREATE TABLE so its columns match
+    #     their declaration exactly and only the clause is foreign.
+    adopt = Models.Model("adopt161"; id = Models.IDField(), season = Models.IntegerField(),
+                         round = Models.IntegerField())
+    create_sql = PormG.Dialect.create_table(pool, adopt)
+    cut = findlast(')', create_sql)
+    PormG.ConnectionPool.fetch(pool, create_sql[1:prevind(create_sql, cut)] *
+      ",\n  CONSTRAINT \"adopt161_django_uq\" UNIQUE (\"season\", \"round\")\n" * create_sql[cut:end])
+    adopt_models(extra) = div161(""",
+        constraints = [Models.UniqueConstraint(fields=("raceid", "grid"), name="div161_grid_entry_uq")]""") * """
+    Adopt161 = Models.Model(
+        id = Models.IDField(),
+        season = Models.IntegerField(),
+        round = Models.IntegerField()$(extra)
+    )
+    """
+    write_edge_models(adopt_models(""",
+        constraints = [Models.UniqueConstraint(fields=("season", "round"))]"""))
+    @test replan_is_empty()                     # matched by its columns: no second index
+    @test !both_insert("adopt161", (season=2021, round=1), (season=2021, round=1))
+
+    write_edge_models(adopt_models(""))           # …and undeclared, it goes
+    makemigrations(edge_path, interactive=false)
+    @test isfile(pending)
+    migrate(edge_path, interactive=false, destructive=true)
+    @test both_insert("adopt161", (season=2021, round=1), (season=2021, round=1))
+    @test replan_is_empty()
+  end
   # ── Cleanup ─────────────────────────────────────────────────────────
   PormG.Configuration.close_pool!(joinpath(@__DIR__, edge_db_name))
   delete!(PormG.config, joinpath(@__DIR__, edge_db_name))

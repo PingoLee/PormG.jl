@@ -1255,20 +1255,26 @@ function create_table(conn::PormGSQLite, model::PormGModel)
   return create_table(conn, model_table_name(model), columns)
 end
 
-function create_index(conn::PormGPostgres, index_name::String, table_name::String, columns::Vector{String})
-  return """CREATE INDEX IF NOT EXISTS $(index_name) ON $(table_name) ($(join(columns, ", ")));"""
+# `if_not_exists = false` is the model-level composite path (#161). An index name is unique per
+# SCHEMA on PostgreSQL (shared with tables and sequences) and per DATABASE on SQLite, so a name some
+# other object already holds turns `IF NOT EXISTS` into a silent no-op — the table never gets its
+# index, the next `makemigrations` plans it again, and the plan converges never. Without the clause
+# the collision fails the migration loudly, inside its transaction. The single-column `db_index` path
+# keeps the clause: its names carry a random suffix and cannot collide that way.
+function create_index(conn::PormGPostgres, index_name::String, table_name::String, columns::Vector{String}; if_not_exists::Bool = true)
+  return """CREATE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) ($(join(columns, ", ")));"""
 end
 
-function create_index(conn::PormGSQLite, index_name::String, table_name::String, columns::Vector{String})
-  return """CREATE INDEX IF NOT EXISTS $(index_name) ON $(table_name) ($(join(columns, ", ")));"""
+function create_index(conn::PormGSQLite, index_name::String, table_name::String, columns::Vector{String}; if_not_exists::Bool = true)
+  return """CREATE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) ($(join(columns, ", ")));"""
 end
 
-function create_unique_index(conn::PormGPostgres, index_name::String, table_name::String, columns::Vector{String})
-  return """CREATE UNIQUE INDEX IF NOT EXISTS $(index_name) ON $(table_name) ($(join(columns, ", ")));"""
+function create_unique_index(conn::PormGPostgres, index_name::String, table_name::String, columns::Vector{String}; if_not_exists::Bool = true)
+  return """CREATE UNIQUE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) ($(join(columns, ", ")));"""
 end
 
-function create_unique_index(conn::PormGSQLite, index_name::String, table_name::String, columns::Vector{String})
-  return """CREATE UNIQUE INDEX IF NOT EXISTS $(index_name) ON $(table_name) ($(join(columns, ", ")));"""
+function create_unique_index(conn::PormGSQLite, index_name::String, table_name::String, columns::Vector{String}; if_not_exists::Bool = true)
+  return """CREATE UNIQUE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) ($(join(columns, ", ")));"""
 end
 
 """
@@ -1887,6 +1893,27 @@ function drop_index(conn::PormGPostgres, index_name::String)
 end
 function drop_index(conn::PormGSQLite, index_name::String)
   return """DROP INDEX IF EXISTS "$(_quote_table_ddl(index_name))";"""
+end
+
+# The model-level composite diff's other three statements (#161), PostgreSQL only. SQLite has none of
+# them: it cannot drop or rename a table constraint, and cannot rename an index — the planner drops
+# and re-creates a bare index there, and removes a `UNIQUE (a, b)` clause by rebuilding the table.
+#
+# `drop_unique_constraint` is the constraint-backed half of a composite DROP: `DROP INDEX` on an index
+# a constraint owns is refused ("constraint … requires it"), and the Django-adopted `unique_together`
+# is exactly that shape. `IF EXISTS` for the reason `drop_foreign_key` gives above.
+function drop_unique_constraint(conn::PormGPostgres, table_name::String, constraint_name::String)
+  return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP CONSTRAINT IF EXISTS "$(_quote_table_ddl(constraint_name))";"""
+end
+
+# A bare index renames in place. A constraint-backed one is renamed through its constraint, which
+# renames the index with it; `ALTER INDEX` on it would leave the constraint under the old name.
+function rename_index(conn::PormGPostgres, old_name::String, new_name::String)
+  return """ALTER INDEX "$(_quote_table_ddl(old_name))" RENAME TO "$(_quote_table_ddl(new_name))";"""
+end
+
+function rename_constraint(conn::PormGPostgres, table_name::String, old_name::String, new_name::String)
+  return """ALTER TABLE "$(_quote_table_ddl(table_name))" RENAME CONSTRAINT "$(_quote_table_ddl(old_name))" TO "$(_quote_table_ddl(new_name))";"""
 end
 
 function rename_table(conn::Union{PormGSQLite,PormGPostgres}, old_table_name::String, new_table_name::String)

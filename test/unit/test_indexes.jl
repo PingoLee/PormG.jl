@@ -6,8 +6,9 @@ Django's `Meta.indexes`, spelled as model-level `Models.Index` objects passed th
 
   1. Index construction, field normalization, and model-level validation — including the
      two-field minimum, which is a correctness rule and not a style choice.
-  2. The migration planner emits a plain CREATE INDEX at table creation (add-only, mirroring
-     UniqueConstraint), byte-identical on the PostgreSQL and SQLite mocks.
+  2. The migration planner emits a plain CREATE INDEX at table creation, byte-identical on
+     the PostgreSQL and SQLite mocks. (The diff on an EXISTING table — #161 — is
+     test_composite_diff.jl.)
   3. An Index and a UniqueConstraint cannot claim the same index name.
   4. Model_to_str round-trips the declaration through the `indexes=` kwarg, including the
      renamed-field and unrendered-field guards it shares with the constraints emitter.
@@ -244,14 +245,15 @@ end
 
   sql = join(values(plan[:lap_time]), "\n")
   @test occursin("CREATE TABLE", sql)
-  @test occursin("CREATE INDEX IF NOT EXISTS \"lap_times_raceid_lap_idx\"", sql)   # <table>_<cols>_idx
+  # No IF NOT EXISTS (#161): a name some other object holds must fail loudly, not no-op.
+  @test occursin("CREATE INDEX \"lap_times_raceid_lap_idx\"", sql)                 # <table>_<cols>_idx
   @test occursin("(\"raceid\", \"lap\")", sql)                                     # declared ORDER
   # It is an INDEX, not a constraint: nothing on this table may render as UNIQUE, or the
   # declaration would start rejecting rows the model never said were unique.
   @test !occursin("CREATE UNIQUE INDEX", sql)
 
   sql2 = join(values(plan[:grid_slot]), "\n")
-  @test occursin("CREATE INDEX IF NOT EXISTS \"grid_slot_lookup\"", sql2)          # explicit name
+  @test occursin("CREATE INDEX \"grid_slot_lookup\"", sql2)                        # explicit name
   @test occursin("(\"race_ref\", \"position\")", sql2)                             # physical column (#50)
   @test !occursin("\"race\",", sql2)                                               # never the field name
 end
@@ -264,7 +266,7 @@ end
 @testset "Planner emits CREATE INDEX at table creation (SQLite)" begin
   plan = _ix_plan(IXMockSQLite())
   sql = join(values(plan[:lap_time]), "\n")
-  @test occursin("CREATE INDEX IF NOT EXISTS \"lap_times_raceid_lap_idx\"", sql)
+  @test occursin("CREATE INDEX \"lap_times_raceid_lap_idx\"", sql)
   @test occursin("(\"raceid\", \"lap\")", sql)
   @test !occursin("CREATE UNIQUE INDEX", sql)
 
@@ -279,7 +281,7 @@ end
 # The plan's step labels differ ("Create index: x" vs "Create unique constraint: x"), so a
 # name shared by an Index and a UniqueConstraint would NOT collide in the plan OrderedDict —
 # it would reach the database as two CREATE statements for one identifier and fail there,
-# mid-migration. `_add_new_table` shares one name registry between the two emitters.
+# mid-migration. `_check_composite_names` keeps one registry for the whole plan (#161).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Planner rejects an Index and a UniqueConstraint sharing a name" begin
   clash = Models.Model("clash_tbl",

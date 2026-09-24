@@ -4,8 +4,9 @@
 # `unique_together`, spelled as Django-2.2+/SQLAlchemy-style named `UniqueConstraint`
 # objects on a model. Verifies, WITHOUT a live database:
 #   1. UniqueConstraint construction, field normalization, and model-level validation.
-#   2. The migration planner emits a CREATE UNIQUE INDEX at table creation (add-only,
-#      mirroring the ManyToManyField auto-index), on BOTH PostgreSQL and SQLite mocks.
+#   2. The migration planner emits a CREATE UNIQUE INDEX at table creation, on BOTH
+#      PostgreSQL and SQLite mocks. (Adding, dropping and renaming one on an EXISTING table —
+#      #161 — is test_composite_diff.jl.)
 #   3. Model_to_str round-trips the declaration through the `constraints=` kwarg.
 #   4. The Django importer maps `Meta.unique_together` to a UniqueConstraint.
 #

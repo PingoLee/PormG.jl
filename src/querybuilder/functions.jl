@@ -504,16 +504,26 @@ Concat(args...; kwargs...) = Concat(collect(args); kwargs...)
 """
     Extract(column, part)
 
-Extracts a component (YEAR, MONTH, DAY, etc.) from a date/time column.
+Extracts a component (`"year"`, `"month"`, `"dow"`, …) from a date/time column.
+
+`part` is case-insensitive and must be a PostgreSQL `EXTRACT` field: `CENTURY`, `DAY`, `DECADE`,
+`DOW`, `DOY`, `EPOCH`, `HOUR`, `ISODOW`, `ISOYEAR`, `JULIAN`, `MICROSECONDS`, `MILLENNIUM`,
+`MILLISECONDS`, `MINUTE`, `MONTH`, `QUARTER`, `SECOND`, `TIMEZONE`, `TIMEZONE_HOUR`,
+`TIMEZONE_MINUTE`, `WEEK`, `YEAR`. Anything else — PostgreSQL's synonyms such as `"years"` or
+`"hr"` included — raises `InvalidValueError` when the expression is built, on both engines.
+SQLite runs `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY` and raises
+`BackendCapabilityError` for the rest.
+
+To change the result type, wrap it in [`Cast`](@ref) — e.g. on PostgreSQL,
+`Cast(Extract("date", "epoch"), "bigint")`.
 """
 function Extract(x::Union{AbstractString, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined, Vector{<:AbstractString}}, part::AbstractString; formatter::Union{Nothing, Function, PormGField} = nothing)
   isa(formatter, PormGField) && (formatter = formatter.formatter)
+  # #691: refuse an unknown part at build time on both engines. The node keeps the caller's
+  # spelling — the dialect renders the canonical one — so the `"YEAR"` range rewrite in
+  # `build_helpers.jl` sees exactly what it saw before.
+  Dialect.extract_part(part)
   return FObject(function_name = "EXTRACT", column = _norm_fn_arg(x), formatter = formatter, kwargs = Dict{String, Any}("part" => String(part)))
-end
-
-function Extract(x::Union{AbstractString, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined, Vector{<:AbstractString}}, part::AbstractString, format::AbstractString; formatter::Union{Nothing, Function, PormGField} = nothing)
-  isa(formatter, PormGField) && (formatter = formatter.formatter)
-  return FObject(function_name = "EXTRACT", column = _norm_fn_arg(x), formatter = formatter, kwargs = Dict{String, Any}("part" => String(part), "format" => String(format)))
 end
 # Build a WHEN fragment. When `otherwise` is provided, wrap it in a CASE automatically so
 # When(..., otherwise=x) is a complete standalone expression. When used inside Case([...]),

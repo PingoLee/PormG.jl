@@ -201,7 +201,7 @@ end
 
       @test Extract(probe("date"), probe("year")).kwargs["part"] == "year"
       @test Extract(probe("date"), probe("year")).kwargs["part"] isa String
-      @test Extract(probe("date"), probe("year"), probe("YYYY")).kwargs["format"] == "YYYY"
+      # (The 3-arg `Extract(x, part, format)` arity was retired by #691.)
 
       @test ToChar(probe("date"), probe("YYYY")).kwargs["format"] == "YYYY"
       @test ToChar(probe("date"), probe("YYYY")).kwargs["format"] isa String

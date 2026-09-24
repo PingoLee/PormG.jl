@@ -288,6 +288,21 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        # #706. The same two meanings, met by a `When` inside another projection rather than by a
+        # filter. The page shows the condition declared BEFORE the colliding SUM, the order that
+        # used to drop the SUM silently; the other order compared the SUM, and both now raise.
+        "read/filters_and_aggregates.md — a condition inside a projection naming a field and an alias is ambiguous",
+        AmbiguousFieldError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.values("driverid",
+                     "podium_finish" => PormG.Functions.Case(
+                         [PormG.Functions.When("points__@gte" => 15, then = 1)], default = 0),
+                     "points" => PormG.Functions.Sum("points"))
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
         # #509. The window-function page states that the same ambiguity applies to an `SQLOrder`
         # entry inside a window's `order_by` — "exactly as it applies to values(), filter() and
         # order_by()". That sentence is the whole point of the fix: this was the one clause where a

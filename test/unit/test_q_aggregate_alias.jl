@@ -518,3 +518,87 @@ end
   sql = inspect_query(q)[:sql_text]
   @test occursin(r"WHERE \"Tb_1\"\.\"surname\" = ", sql)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #706: a condition inside a projection on a field-and-alias key raises AmbiguousFieldError
+# `values("f" => Case([When("points" => 4, then = 1)]), "points" => Sum("points"))` resolved the
+# condition by declaration order: `When` first rendered the column and then silently REPLACED the
+# SUM projection with it; SUM first made the condition compare the SUM. #703's refusal, for the
+# SELECT side: both orders raise, whether the condition is a `When` pair or a `Q` in a `Case`, and
+# whatever the colliding projection is. The message names the projection holding the condition.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#706: a SELECT-side condition naming a field and an alias raises" begin
+  conditions = (("a When pair", Case([When("points" => 4.0, then = 1)], default = 0)),
+                ("a Q in a Case", Case([When(Q("points" => 4.0), then = 1)], default = 0)),
+                ("a lookup suffix", Case([When("points__@gt" => 4.0, then = 1)], default = 0)),
+                ("a Qor in a Case", Case([When(Qor("raceid" => 1, "points" => 4.0), then = 1)], default = 0)),
+                # A window's PARTITION BY resolves through the same memo (found in review).
+                ("a Case in a window's partition_by",
+                 PormG.Functions.Rank(over = PormG.Functions.WindowOver(
+                     partition_by = [Case([When("points" => 4.0, then = 1)], default = 0)]))),
+                # An explicit `SQLField(…)` wrap, in a function operand and in a window's ORDER BY
+                # (found in the delta review).
+                ("an SQLField-wrapped Case in a function",
+                 PormG.Functions.Coalesce(PormG.QueryBuilder.SQLField(
+                     Case([When("points" => 4.0, then = 1)], default = 0), "k"), 0)),
+                ("an SQLField-wrapped Case in a window's order_by",
+                 PormG.Functions.Rank(over = PormG.Functions.WindowOver(
+                     order_by = [PormG.QueryBuilder.SQLOrder(PormG.QueryBuilder.SQLField(
+                         Case([When("points" => 4.0, then = 1)], default = 0), "k"))]))))
+  projections = (("an aggregate", Sum("points")), ("a row expression", F("points") * 2),
+                 ("another column", "raceid"))
+  for (backend, Model_) in _Q_AGG_MODELS
+    for (clabel, condition) in conditions, (plabel, projection) in projections
+      # Both declaration orders: the defect was that each order got a different answer.
+      for (olabel, pairs) in (("condition first", ("f" => condition, "points" => projection)),
+                              ("alias first", ("points" => projection, "f" => condition)))
+        @testset "$backend — $clabel, $plabel, $olabel" begin
+          q = Model_.objects
+          q.values("resultid", pairs...)
+          err = @test_throws AmbiguousFieldError inspect_query(q)
+          msg = err.value.msg
+          # The projection holding the condition, both readings, and the rename.
+          @test occursin("values(\"f\" => …)", msg)
+          @test occursin("projection alias", msg)
+          @test occursin("points_value", msg)
+          @test occursin("#706", msg)
+        end
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #706 controls: a condition with one meaning still renders
+# A projection that names ITSELF in its own condition (`"points" => Case([When("points" => …)])`)
+# means the column there — no SQL reads an alias inside the expression that defines it. A
+# projection that IS the column gives the key one meaning. A condition on a key that names no
+# field is a plain alias read, legal in a SELECT (the #685 note), and reads the projection.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#706 controls: an unambiguous condition still renders" begin
+  for (backend, Model_) in _Q_AGG_MODELS
+    @testset "$backend — a projection naming itself in its own condition" begin
+      q = Model_.objects
+      q.values("raceid", "points" => Case([When("points" => 4.0, then = 1)], default = 0))
+      insp = inspect_query(q)
+      @test occursin(r"CASE\s+WHEN \"Tb\"\.\"points\" = ", insp[:sql_text])
+      assert_marker_count(insp, backend)
+    end
+    @testset "$backend — the column projected under its own name" begin
+      for projection in ("points", "points" => "points", "points" => F("points"))
+        q = Model_.objects
+        q.values("raceid", "f" => Case([When("points" => 4.0, then = 1)], default = 0), projection)
+        sql = inspect_query(q)[:sql_text]
+        @test occursin(r"WHEN \"Tb\"\.\"points\" = ", sql)
+        @test occursin("\"Tb\".\"points\" as \"points\"", sql)
+      end
+    end
+    @testset "$backend — a condition on an alias-only key reads the projection" begin
+      q = Model_.objects
+      q.values("raceid", "doubled" => F("points") * 2, "f" => Case([When("doubled" => 4.0, then = 1)], default = 0))
+      insp = inspect_query(q)
+      @test occursin(r"WHEN \(\"Tb\"\.\"points\" \* [?$]", insp[:sql_text])
+      assert_marker_count(insp, backend)
+    end
+  end
+end

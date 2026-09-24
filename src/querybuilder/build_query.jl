@@ -56,6 +56,7 @@ end
   - `instruc::SQLInstruction`: The SQLInstruction object to which the SELECT query will be added.
 """
 function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instruc::SQLInstruction)
+  _guard_select_condition_collision(values, instruc)   # #706
   for i in eachindex(values) # linear indexing
     v_copy = deepcopy(values[i])
 
@@ -103,9 +104,22 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
     # of the memo is to avoid re-resolving one expression, not to make two projections one.
     # #474: the memo key, not the output name — see `memo_key`. The output-name equality test below
     # is unchanged and still decides REUSE; this only decides which entry is consulted.
+    #
+    # #706: and only a node the memo can STAND FOR may reuse it — a path, a CTE or joined-copy
+    # handle, an outer reference: the gate `_get_filter_query(::SQLTypeField)` applies (#586). A
+    # function or `F` projection is keyed by its own alias, so an entry already under that key was
+    # written by something else — a `When("points" => …)` condition that rendered the COLUMN — and
+    # reusing it replaced `"points" => Sum("points")` with that column, silently. Such a projection
+    # always renders its own expression, and then takes that entry over (below): the alias names
+    # it, so every later reader — ORDER BY, an alias filter — must find it, not the stray column.
+    # `_guard_select_condition_collision` refuses the shape that reached this; the gate is what
+    # keeps a projection its own even if a future path writes first.
     cache_key = memo_key(v_copy)
     cached = memo_projection(instruc, cache_key)
-    if cached !== nothing && _projection_output_name(cached) == _projection_output_name(v_copy)
+    same_name = cached !== nothing &&
+                _projection_output_name(cached) == _projection_output_name(v_copy)
+    memo_node = v_copy.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject}
+    if same_name && memo_node
       instruc.select[i] = cached
     else
       @pormg_debug false
@@ -139,8 +153,10 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
         throw(QueryBuildError("Field requires an alias: \e[4m\e[31m$(v_copy.field)\e[0m must have a name using the format \e[4m\e[32m\"field_name\" => $(v_copy.field)\e[0m or use \e[4m\e[32mSQLField($(v_copy.field), \"alias_name\")\e[0m"))
       end
       # `cache_key` is non-`nothing` here: it is `nothing` exactly when `_as` is, which the throw
-      # above has already ruled out.
-      cached === nothing && memo_projection!(instruc, cache_key, instruc.select[i])
+      # above has already ruled out. Otherwise the first entry stays (#441), with one exception:
+      # an entry under this projection's own output name that it was refused (#706). Only that one
+      # is taken over — an entry under another name may be `_cache_join`'s, which is not ours.
+      (cached === nothing || same_name) && memo_projection!(instruc, cache_key, instruc.select[i])
       # #564: keyed by the RESULT-ROW name, which is what the driver hands back. The reuse branch
       # above needs no equivalent — it is taken only when the output name is EQUAL, so the entry it
       # would write is the one already written under that key.
@@ -869,6 +885,81 @@ function _guard_field_alias_collision(filter, instruc::SQLInstruction, depth::In
   return nothing
 end
 
+# #706 — #703's question, asked of a condition INSIDE a projection. A `When("points" => 4, …)` or a
+# `Q(...)` in a `Case` resolves its key through `_get_filter_query(::SQLTypeField)`, which reads the
+# same projection memo a filter does, so the key met the same two meanings — and got whichever one
+# had claimed the memo first:
+#
+#   values("f" => Case([When("points" => 4, then = 1)]), "points" => Sum("points"))
+#
+# rendered the condition on the column and then, under #441's reuse rule, replaced the SUM
+# projection with that column entry: the aggregate the caller asked for vanished, silently. Declare
+# the SUM first and the condition compared the SUM instead. Declaration order is not a meaning.
+#
+# So the same refusal, as a pass over the whole projection list BEFORE anything renders — a static
+# scan, which is what takes the order out of it. Only a `SQLTypeOper` leaf reaches the memo this way;
+# arithmetic (`F("points") * 2`), `Coalesce("points", …)` and the other functions resolve a column
+# without consulting it, and were measured unaffected.
+#
+# Only OTHER projections count. `"status" => Case([When("status" => 1, then = "F")])` names itself
+# inside its own definition, where the name can only mean the column — no SQL reads an alias in the
+# expression that defines it. A key that names no model column (`When("dbl" => 4)` over
+# `"dbl" => F("points") * 2`) is a plain alias read with one meaning, and is not this guard's business.
+# (Over an AGGREGATE alias that read renders `CASE WHEN SUM(…)` into GROUP BY, which both engines
+# reject — a separate defect, #722.)
+function _guard_select_condition_collision(projections, instruc::SQLInstruction)
+  for (i, owner) in pairs(projections)
+    owner isa SQLTypeField || continue
+    owner_name = _projection_output_name(owner)
+    _each_condition_leaf(owner.field) do leaf
+      key = _model_filter_key(leaf.column, instruc)
+      key === nothing && return nothing
+      for (j, projection) in pairs(projections)
+        j == i && continue
+        _projection_output_name(projection) == key || continue
+        _projects_column(projection, key) && return nothing
+        _refuse_field_alias_collision(key, projection, instruc; condition_in = owner_name)
+      end
+      return nothing
+    end
+  end
+  return nothing
+end
+
+# Every `SQLTypeOper` leaf reachable from a projection's expression: a `When` condition, a `Q`/`Qor`
+# in a `Case`, and anything nested in a function's operands or keyword slots (`Case(default = Case(…))`),
+# in a window's `partition_by`/`order_by`, or inside an explicit `SQLField(…)` wrap.
+# A subquery or `Exists` is its own instruction with its own projection list, so it is not entered.
+# Depth cap as in `_guard_no_aggregate_predicate`.
+function _each_condition_leaf(f::Function, node, depth::Int = 0)
+  depth > 32 && return nothing
+  if node isa SQLTypeOper
+    f(node)
+  elseif node isa SQLTypeQ
+    foreach(x -> _each_condition_leaf(f, x, depth + 1), node.filters)
+  elseif node isa SQLTypeQor
+    foreach(x -> _each_condition_leaf(f, x, depth + 1), node.or)
+  elseif node isa AbstractVector
+    foreach(x -> _each_condition_leaf(f, x, depth + 1), node)
+  elseif node isa Union{FObject,WindowFunction}
+    _each_condition_leaf(f, node.column, depth + 1)
+    foreach(x -> _each_condition_leaf(f, x, depth + 1), values(node.kwargs))
+    # A window's PARTITION BY and ORDER BY can hold a `Case` too, and resolve through the same
+    # memo. ORDER BY refuses a bare function node, but not one wrapped in `SQLField(…)`.
+    if node isa WindowFunction
+      _each_condition_leaf(f, node.over.partition_by, depth + 1)
+      _each_condition_leaf(f, node.over.order_by, depth + 1)
+    end
+  elseif node isa Union{SQLField,SQLOrder}
+    # An explicit `SQLField(Case(…), "k")` wrap, or an ordering term around one.
+    _each_condition_leaf(f, node.field, depth + 1)
+  elseif node isa FExpression
+    _each_condition_leaf(f, node.field_name, depth + 1)
+    _each_condition_leaf(f, node.operand, depth + 1)
+  end
+  return nothing
+end
+
 # The filter key when it names something on the model — a field, or a `__` path whose first segment
 # is on the model — or `nothing`. Only a plain path: a transform (`__@year`) builds a function node,
 # and a CTE or joined-copy reference is a handle rather than a `String`.
@@ -888,7 +979,19 @@ _projects_column(p::SQLTypeField, key::String) =
    p.field.field_name isa String && p.field.field_name == key)
 _projects_column(::Any, ::String) = false
 
-function _refuse_field_alias_collision(key::String, projection, instruc::SQLInstruction)
+function _refuse_field_alias_collision(key::String, projection, instruc::SQLInstruction;
+                                       condition_in::OptionalString = nothing)
+  # #706: the same two meanings, met by a condition inside a projection rather than by a filter.
+  condition_in === nothing || throw(AmbiguousFieldError(
+    "The condition on \e[4m\e[31m\"$(key)\"\e[0m inside " *
+    "\e[4m\e[31mvalues(\"$(condition_in)\" => …)\e[0m is ambiguous: \e[4m\e[31m$(key)\e[0m names " *
+    "both a column of \e[4m\e[32m$(instruc.object.model.name)\e[0m (a field, or a path through " *
+    "one) and the projection alias " *
+    "\e[4m\e[31mvalues(\"$(key)\" => $(_describe_projection(projection)))\e[0m, so the condition " *
+    "has two meanings and PormG will not choose one.\n  " *
+    "Rename the alias — \e[4m\e[32mvalues(\"$(key)_value\" => …)\e[0m — then write " *
+    "\e[4m\e[32m\"$(key)_value\"\e[0m in the condition for the projection, or " *
+    "\e[4m\e[32m\"$(key)\"\e[0m for the column (#706)."))
   throw(AmbiguousFieldError(
     "\e[4m\e[31mfilter(\"$(key)\" => …)\e[0m is ambiguous: \e[4m\e[31m$(key)\e[0m names " *
     "both a column of \e[4m\e[32m$(instruc.object.model.name)\e[0m (a field, or a path through " *

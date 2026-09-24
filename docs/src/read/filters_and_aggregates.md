@@ -1009,6 +1009,22 @@ The same applies when the alias projects a different column under a field's name
 (`values("driverid__surname" => Upper("driverid__forename"))` followed by
 `filter("driverid__surname" => …)`).
 
+It also applies to a condition inside another projection, such as a `When` in a `Case` or a `Q`
+inside one. PormG raises `AmbiguousFieldError` there as well, whatever order the projections are
+declared in:
+
+```julia
+query = M.Result.objects
+query.values("raceid",
+             "podium_finish" => Case([When("points__@gte" => 15, then = 1)], default = 0),
+             "points" => Sum("points"))   # AmbiguousFieldError: the column, or the sum?
+```
+
+Rename the alias, as above, and the condition reads the column. A projection whose own condition
+names it, such as
+`"points" => Case([When("points__@gte" => 15, then = 1)], default = 0)`, is not ambiguous: inside the
+expression that defines it, the name can only mean the column.
+
 A projection that *is* the column is not ambiguous. `values("points")`,
 `values("points" => "points")` and `values("points" => F("points"))` filter the column as usual.
 

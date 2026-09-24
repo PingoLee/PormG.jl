@@ -911,6 +911,37 @@ Note the operands appear twice and bind twice — `$1`/`$2` for the projection, 
 
 For more complex expressions, see [Field Expressions](field_expressions.md).
 
+### A Function Over an Aggregate
+
+A function that wraps an aggregate is still an aggregate. `Coalesce`, `Cast`, `NullIf`, `Round`,
+`Case`/`When` and the rest group like the bare aggregate they contain, and a filter on their alias
+goes to `HAVING`. `Coalesce(Sum(...), Value(0))` is the usual way to report an empty sum as `0`
+rather than `NULL`:
+
+```julia
+using PormG.Functions: Coalesce, Sum, Value
+
+# 2009 drivers who never finished a race on the lead lap — `milliseconds` is NULL for everyone else
+query = M.Result.objects
+query.filter("raceid__year" => 2009)
+query.values("driverid__surname", "lead_lap_ms" => Coalesce(Sum("milliseconds"), Value(0)))
+query.filter("lead_lap_ms" => 0)
+```
+
+```sql
+SELECT "Tb_1"."surname" as "driverid__surname",
+  COALESCE(SUM("Tb"."milliseconds"), $1::bigint) as "lead_lap_ms"
+FROM "result" as "Tb"
+ INNER JOIN "driver" AS "Tb_1" ON "Tb"."driverid" = "Tb_1"."driverid"
+ INNER JOIN "race" AS "Tb_2" ON "Tb"."raceid" = "Tb_2"."raceid"
+WHERE "Tb_2"."year" = $2
+GROUP BY 1
+HAVING COALESCE(SUM("Tb"."milliseconds"), $3::bigint) = $4
+```
+
+Until [#702](https://github.com/PingoLee/PormG.jl/issues/702), most of these wrappers dropped the
+aggregate. The query printed no `GROUP BY`, and SQLite returned a single row for the whole table.
+
 ### `Q` and `Qor` on Aggregate Aliases
 
 An aggregate alias inside [`Q(...)` or `Qor(...)`](q_objects.md) goes to `HAVING` too. `Qor` is

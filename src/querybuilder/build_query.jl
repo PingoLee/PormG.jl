@@ -873,10 +873,9 @@ end
 # `(key, cached)` when `v` compares an alias whose projection is an aggregate, `nothing` otherwise.
 # The alias test is `_guard_window_alias_in_q`'s. Only an AGGREGATE alias is routed: a plain alias
 # (`values("yr" => "date__@year"); filter(Q("yr" => 2020))`) renders correctly in WHERE today, and
-# must stay there. `_is_agg` reads the node's own flag, which arithmetic (`Count(…) + 1`) and the
-# numeric wrappers (`Round`, `Abs`, `Floor`, … over an aggregate) propagate. `Coalesce`/`Cast`/`NullIf`
-# over an aggregate do not set it, so such an alias is not routed here — nor grouped anywhere else,
-# which is the older defect to fix; this gate reads the flag rather than second-guessing it.
+# must stay there. `_is_agg` reads the node's own flag, which arithmetic (`Count(…) + 1`) and, since
+# #702, every wrapping constructor propagate — `Coalesce(Sum(…), Value(0))` is an aggregate alias
+# (`_any_agg`, types.jl). This gate reads the flag rather than second-guessing it.
 function _aggregate_alias_leaf(v::SQLTypeOper, instruc::SQLInstruction)
   col = v.column
   (col isa SQLTypeField && col.field isa String && !contains(col.field, "__") &&

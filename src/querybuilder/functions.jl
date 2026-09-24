@@ -453,7 +453,7 @@ Value(x::JoinedReference) = throw(QueryBuildError(
 Casts a column or expression to a specific SQL type.
 """
 function Cast(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, type::AbstractString)
-  return FObject(function_name = "CAST", column = _norm_fn_arg(x), kwargs = Dict{String, Any}("type" => String(type)))
+  return FObject(function_name = "CAST", column = _norm_fn_arg(x), aggregate = _any_agg(x), kwargs = Dict{String, Any}("type" => String(type)))
 end
 function Cast(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, type::PormGField)
   return Cast(x, type.type)
@@ -496,7 +496,7 @@ function Concat(x::Vector; output_field::Union{N, AbstractString, Nothing} where
   # Concat's elements legitimately carry `__@` transform paths (`Concat("date__@year", ...)`), and
   # wrapping would strip the per-element resolution that makes those work.
   processed_cols = Any[v isa AbstractString ? String(v) : v for v in x]
-  return FObject(function_name = "CONCAT", column = processed_cols, kwargs = Dict{String, Any}("output_field" => output_field, "as" => String(_as)))
+  return FObject(function_name = "CONCAT", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field, "as" => String(_as)))
 end
 # Variadic convenience: Concat("forename", Value(" "), "surname") → same as vector form
 Concat(args...; kwargs...) = Concat(collect(args); kwargs...)
@@ -523,15 +523,15 @@ function Extract(x::Union{AbstractString, SQLTypeField, SQLTypeFunction, SQLType
   # spelling — the dialect renders the canonical one — so the `"YEAR"` range rewrite in
   # `build_helpers.jl` sees exactly what it saw before.
   Dialect.extract_part(part)
-  return FObject(function_name = "EXTRACT", column = _norm_fn_arg(x), formatter = formatter, kwargs = Dict{String, Any}("part" => String(part)))
+  return FObject(function_name = "EXTRACT", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = formatter, kwargs = Dict{String, Any}("part" => String(part)))
 end
 # Build a WHEN fragment. When `otherwise` is provided, wrap it in a CASE automatically so
 # When(..., otherwise=x) is a complete standalone expression. When used inside Case([...]),
 # `otherwise` is always missing (the default) so no wrapping occurs — Case owns the ELSE branch.
 function _make_when(column, then, otherwise)
-  fobj = FObject(function_name = "WHEN", column = column, kwargs = Dict{String, Any}("then" => then, "else" => missing))
+  fobj = FObject(function_name = "WHEN", column = column, aggregate = _any_agg(column, then), kwargs = Dict{String, Any}("then" => then, "else" => missing))
   ismissing(otherwise) && return fobj
-  return FObject(function_name = "CASE", column = fobj, kwargs = Dict{String, Any}("else" => otherwise, "output_field" => nothing))
+  return FObject(function_name = "CASE", column = fobj, aggregate = _any_agg(fobj, otherwise), kwargs = Dict{String, Any}("else" => otherwise, "output_field" => nothing))
 end
 
 """
@@ -619,14 +619,14 @@ function Case(conditions::Vector{N} where N <: SQLTypeFunction; default::Any = "
     output_field = output_field.type
   end
   output_field = _norm_fn_arg(output_field)   # #603
-  return FObject(function_name = "CASE", column = conditions, kwargs = Dict{String, Any}("else" => default, "output_field" => output_field))
+  return FObject(function_name = "CASE", column = conditions, aggregate = _any_agg(conditions, default), kwargs = Dict{String, Any}("else" => default, "output_field" => output_field))
 end
 function Case(conditions::SQLTypeFunction; default::Any = "NULL", output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   if isa(output_field, PormGField)
     output_field = output_field.type
   end
   output_field = _norm_fn_arg(output_field)   # #603
-  return FObject(function_name = "CASE", column = conditions, kwargs = Dict{String, Any}("else" => default, "output_field" => output_field)) 
+  return FObject(function_name = "CASE", column = conditions, aggregate = _any_agg(conditions, default), kwargs = Dict{String, Any}("else" => default, "output_field" => output_field))
 end
 """
     ToChar(x, format::AbstractString; formatter = nothing)
@@ -679,7 +679,7 @@ See also [Functions and Dates](@ref).
 """
 function ToChar(x::Union{AbstractString, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined, Vector{<:AbstractString}}, format::AbstractString; formatter::Union{Nothing, Function, PormGField} = nothing)
   isa(formatter, PormGField) && (formatter = formatter.formatter)
-  return FObject(function_name = "EXTRACT_DATE", column = _norm_fn_arg(x), formatter = formatter, kwargs = Dict{String, Any}("format" => String(format)))
+  return FObject(function_name = "EXTRACT_DATE", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = formatter, kwargs = Dict{String, Any}("format" => String(format)))
 end
 
 
@@ -694,7 +694,7 @@ function Coalesce(x...; output_field::Union{N, AbstractString, Nothing} where N 
   end
   output_field = _norm_fn_arg(output_field)   # #603
   processed_cols = [isa(v, AbstractString) ? SQLField(String(v)) : v for v in x]
-  return FObject(function_name = "COALESCE", column = processed_cols, kwargs = Dict{String, Any}("output_field" => output_field))
+  return FObject(function_name = "COALESCE", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field))
 end
 
 """
@@ -708,7 +708,7 @@ function Greatest(x...; output_field::Union{N, AbstractString, Nothing} where N 
   end
   output_field = _norm_fn_arg(output_field)   # #603
   processed_cols = [isa(v, AbstractString) ? SQLField(String(v)) : v for v in x]
-  return FObject(function_name = "GREATEST", column = processed_cols, kwargs = Dict{String, Any}("output_field" => output_field))
+  return FObject(function_name = "GREATEST", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field))
 end
 
 """
@@ -722,7 +722,7 @@ function Least(x...; output_field::Union{N, AbstractString, Nothing} where N <: 
   end
   output_field = _norm_fn_arg(output_field)   # #603
   processed_cols = [isa(v, AbstractString) ? SQLField(String(v)) : v for v in x]
-  return FObject(function_name = "LEAST", column = processed_cols, kwargs = Dict{String, Any}("output_field" => output_field))
+  return FObject(function_name = "LEAST", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field))
 end
 
 
@@ -733,7 +733,7 @@ end
 Converts a string to lowercase.
 """
 function Lower(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "LOWER", column = _norm_fn_arg(x))
+  return FObject(function_name = "LOWER", column = _norm_fn_arg(x), aggregate = _any_agg(x))
 end
 
 """
@@ -742,7 +742,7 @@ end
 Converts a string to uppercase.
 """
 function Upper(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "UPPER", column = _norm_fn_arg(x))
+  return FObject(function_name = "UPPER", column = _norm_fn_arg(x), aggregate = _any_agg(x))
 end
 
 """
@@ -751,7 +751,7 @@ end
 Returns the length of a string.
 """
 function Length(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "LENGTH", column = _norm_fn_arg(x), formatter = Models.format_number_sql)
+  return FObject(function_name = "LENGTH", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 
 """
@@ -760,7 +760,7 @@ end
 Returns the absolute value of a number.
 """
 function Abs(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "ABS", column = _norm_fn_arg(x), aggregate = _is_agg(x), formatter = Models.format_number_sql)
+  return FObject(function_name = "ABS", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 
 """
@@ -769,7 +769,7 @@ end
 Rounds a number to the specified precision.
 """
 function Round(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, precision::Integer = 0)
-  return FObject(function_name = "ROUND", column = _norm_fn_arg(x), aggregate = _is_agg(x), kwargs = Dict{String, Any}("precision" => precision), formatter = Models.format_number_sql)
+  return FObject(function_name = "ROUND", column = _norm_fn_arg(x), aggregate = _any_agg(x), kwargs = Dict{String, Any}("precision" => precision), formatter = Models.format_number_sql)
 end
 
 """
@@ -778,7 +778,7 @@ end
 Returns NULL if field1 equals field2, otherwise returns field1.
 """
 function NullIf(x, y)
-  return FObject(function_name = "NULLIF", column = [isa(x, AbstractString) ? SQLField(String(x)) : x, isa(y, AbstractString) ? SQLField(String(y)) : y])
+  return FObject(function_name = "NULLIF", column = [isa(x, AbstractString) ? SQLField(String(x)) : x, isa(y, AbstractString) ? SQLField(String(y)) : y], aggregate = _any_agg(x, y))
 end
 
 
@@ -792,7 +792,7 @@ function Replace(x, find, replace)
     isa(x, AbstractString) ? SQLField(String(x)) : x,
     isa(find, AbstractString) ? Value(String(find)) : find,
     isa(replace, AbstractString) ? Value(String(replace)) : replace
-  ])
+  ], aggregate = _any_agg(x, find, replace))
 end
 
 """
@@ -801,7 +801,7 @@ end
 Removes leading and trailing whitespace from a string.
 """
 function Trim(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "TRIM", column = _norm_fn_arg(x))
+  return FObject(function_name = "TRIM", column = _norm_fn_arg(x), aggregate = _any_agg(x))
 end
 
 """
@@ -810,7 +810,7 @@ end
 Removes leading whitespace from a string.
 """
 function LTrim(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "LTRIM", column = _norm_fn_arg(x))
+  return FObject(function_name = "LTRIM", column = _norm_fn_arg(x), aggregate = _any_agg(x))
 end
 
 """
@@ -819,7 +819,7 @@ end
 Removes trailing whitespace from a string.
 """
 function RTrim(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "RTRIM", column = _norm_fn_arg(x))
+  return FObject(function_name = "RTRIM", column = _norm_fn_arg(x), aggregate = _any_agg(x))
 end
 
 """
@@ -828,7 +828,7 @@ end
 Returns the largest integer less than or equal to a number.
 """
 function Floor(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "FLOOR", column = _norm_fn_arg(x), aggregate = _is_agg(x), formatter = Models.format_number_sql)
+  return FObject(function_name = "FLOOR", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 
 """
@@ -837,7 +837,7 @@ end
 Returns the smallest integer greater than or equal to a number.
 """
 function Ceil(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "CEIL", column = _norm_fn_arg(x), aggregate = _is_agg(x), formatter = Models.format_number_sql)
+  return FObject(function_name = "CEIL", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 
 
@@ -848,7 +848,7 @@ end
 Returns the square root of a number.
 """
 function Sqrt(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "SQRT", column = _norm_fn_arg(x), aggregate = _is_agg(x), formatter = Models.format_number_sql)
+  return FObject(function_name = "SQRT", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 
 """
@@ -857,7 +857,7 @@ end
 Returns the exponential value (e^x) of a number.
 """
 function Exp(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "EXP", column = _norm_fn_arg(x), aggregate = _is_agg(x), formatter = Models.format_number_sql)
+  return FObject(function_name = "EXP", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 
 """
@@ -866,7 +866,7 @@ end
 Returns the natural logarithm of a number.
 """
 function Ln(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
-  return FObject(function_name = "LN", column = _norm_fn_arg(x), aggregate = _is_agg(x), formatter = Models.format_number_sql)
+  return FObject(function_name = "LN", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 
 """
@@ -875,7 +875,7 @@ end
 Returns `base` raised to the power of `exponent`.
 """
 function Power(x, y)
-  return FObject(function_name = "POWER", column = [isa(x, AbstractString) ? SQLField(String(x)) : x, isa(y, AbstractString) ? SQLField(String(y)) : y], formatter = Models.format_number_sql)
+  return FObject(function_name = "POWER", column = [isa(x, AbstractString) ? SQLField(String(x)) : x, isa(y, AbstractString) ? SQLField(String(y)) : y], aggregate = _any_agg(x, y), formatter = Models.format_number_sql)
 end
 
 """
@@ -884,7 +884,7 @@ end
 Returns the remainder (modulo) of a division.
 """
 function Mod(x, y)
-  return FObject(function_name = "MOD", column = [isa(x, AbstractString) ? SQLField(String(x)) : x, isa(y, AbstractString) ? SQLField(String(y)) : y], formatter = Models.format_number_sql)
+  return FObject(function_name = "MOD", column = [isa(x, AbstractString) ? SQLField(String(x)) : x, isa(y, AbstractString) ? SQLField(String(y)) : y], aggregate = _any_agg(x, y), formatter = Models.format_number_sql)
 end
 
 
@@ -897,7 +897,7 @@ Y_M(x) = ToChar(x, "YYYY-MM", formatter = Models.format_yyyy_mm)
 # spelling differs (`(col)::date` on PostgreSQL, `strftime` on SQLite — see `Dialect.DATE`). Naming
 # the function lets the dialect decide, and it is what lets the `F` ladder delegate here instead of
 # resolving into `Dialect` on its own.
-DATE(x) = FObject(function_name = "DATE", column = x, formatter = Models.format_date_sql)
+DATE(x) = FObject(function_name = "DATE", column = x, aggregate = _any_agg(x), formatter = Models.format_date_sql)
 # Same that function CAST in django ORM
 # # relatorio = relatorio.annotate(quarter=functions.Concat(functions.Cast(f'{data}__year', CharField()), Value('-Q'), Case(
 # # 					When(**{ f'{data}__month__lte': 4 }, then=Value('1')),
@@ -958,8 +958,8 @@ end
 # both spellings on that one rendering. The formatter is what makes the right-hand side type-check:
 # the `Concat` node above carries none, which is the second half of #579 — `=> "abc"` bound the
 # string and matched nothing instead of raising.
-QUARTER(x) = FObject(function_name = "QUARTER", column = x, formatter = Models.format_quarter_sql)
-QUADRIMESTER(x) = FObject(function_name = "QUADRIMESTER", column = x, formatter = Models.format_quadrimester_sql)
+QUARTER(x) = FObject(function_name = "QUARTER", column = x, aggregate = _any_agg(x), formatter = Models.format_quarter_sql)
+QUADRIMESTER(x) = FObject(function_name = "QUADRIMESTER", column = x, aggregate = _any_agg(x), formatter = Models.format_quadrimester_sql)
 
 
 function ISNULL(v::AbstractString, value::Bool; aggregate::Bool = false)

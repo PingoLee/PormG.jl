@@ -56,8 +56,8 @@ value alongside `state` and `Status`. It costs nothing extra once the query is p
 ## C. `updateProjectV2Field` replaces the entire option list (SKILL.md §4)
 
 It does not append. Sending only the new option **deletes every existing one** and orphans every item
-grouped under them. Board 7 currently carries 28 Session options and 63 items; a careless mutation
-detaches all of them at once.
+grouped under them. Board 7 carried 17 Session options and 30 items grouped under them on
+2026-09-24; a careless mutation detaches all of them at once.
 
 `ProjectV2SingleSelectFieldOptionInput` accepts an optional `id`, and that is what saves you: resend
 every existing option with its `id`, `color`, and `description`, then append the new one without an

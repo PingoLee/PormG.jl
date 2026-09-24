@@ -170,8 +170,9 @@ update_q.update("nationality" => "English")
 An `UPDATE` has no projection, so `.update()` ignores any `values()` set on the handler. The
 statement binds only the `SET` values and the filter values, which means a handler you just read
 from can be updated as is. A filter on a `values()` **alias** is the exception. On a read, that
-filter resolves through the projection: as a `HAVING` predicate, or as the projected expression when
-the alias reuses a field's name or sits inside `Q`/`Qor`. An `UPDATE` carries no projection, so PormG
+filter resolves through the projection: an aggregate alias as a `HAVING` predicate, and any other
+alias as the projected expression in `WHERE`. (An alias that reuses a field's name makes the read's
+filter ambiguous, and it raises `AmbiguousFieldError`.) An `UPDATE` carries no projection, so PormG
 would have to drop the filter or apply it to a different expression. It raises
 `UnsafeMutationError` instead. Filter on the underlying field.
 

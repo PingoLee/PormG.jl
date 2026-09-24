@@ -442,15 +442,18 @@ end
       @test !occursin("WHERE", sql)
     end
 
-    @testset "$backend — a model field sharing a window alias's name filters the column" begin
-      # "points" names a model field AND the window's output alias. The filter key is the field, so
-      # it filters the column — unwrapped and inside Q alike — and is not refused.
+    @testset "$backend — a model field sharing a window alias's name is ambiguous (#703)" begin
+      # "points" names a model field AND the window's output alias. This used to assert that the
+      # key filters the column, and it did — but only because `"r" => "points"` claimed the memo
+      # entry for "points" first. With an aggregate under the same name the key printed `SUM(…)`
+      # into WHERE (#703), so "the field wins" was never a rule. The key has two meanings, and it is
+      # refused on both spellings, as #492 refuses a `__` path that names a CTE and a field.
       for wrap in (identity, Q)
         q = Model_.objects
         q.values("r" => "points", "points" => Rank(over = WindowOver(order_by = ["raceid"])))
         q.filter(wrap("points" => 5.0))
-        sql = inspect_query(q)[:sql_text]
-        @test occursin(r"WHERE \(?\"Tb\"\.\"points\" = ", sql)
+        err = @test_throws AmbiguousFieldError inspect_query(q)
+        @test occursin("#703", err.value.msg)
       end
     end
   end

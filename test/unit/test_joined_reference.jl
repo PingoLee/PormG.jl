@@ -571,3 +571,33 @@ end
   @test occursin("INNER JOIN \"ev\" AS \"R1_1\"", sql)
   @test occursin("INNER JOIN \"jn_driver\" AS \"ev\" ON (\"ev\".\"id\" = \"R1\".\"driver\")", sql)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A joined or CTE column never reads a base projection that shares its name (#701 review)
+# #701 made the WHERE path render a binding alias's projection afresh (`_alias_lhs`), keyed by the
+# memo entry's NAME. A `:joined`/`:cte` entry shares the name half with a base projection alias of
+# the same output name, so the SECOND `Qor` leaf on the joined column — the one that hits the memo —
+# rendered the projection (`LOWER(...)`, `(... * ?)`) instead of the column: aligned parameters,
+# wrong rows, on both engines. Every leaf must name the column.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a joined or CTE column is not read as a base alias of the same name (#701)" begin
+  for conn in (_JN_SL, _JN_PG)
+    q = _jn_query()
+    q.values("id", "d__surname" => Lower(Joined("d", "surname")))
+    q.filter(Qor(Joined("d", "surname") => "senna", Joined("d", "surname") => "prost"))
+    sql = _jn_sql(q; conn = conn)
+    # Both leaves compare the joined column; the projection's LOWER(...) appears only in SELECT.
+    @test length(collect(eachmatch(r"\"d\"\.\"family_name\" = ", sql))) == 2
+    @test count("LOWER(", sql) == 1
+
+    c = JN.Jn_result.objects
+    c.with("ev" => JN.Jn_result.objects.values("id", "points"), join_field = "id" => "id")
+    c.values("id", "ev__points" => F("points") * 2)
+    c.filter(Qor("ev__points" => 1, "ev__points" => 2))
+    csql = _jn_sql(c; conn = conn)
+    where_text = csql[findfirst("WHERE", csql).start:end]
+    # Both leaves compare the CTE's column; the `* ?` arithmetic stays in the SELECT list.
+    @test !occursin("*", where_text)
+    @test length(collect(eachmatch(r"\"points\" = ", where_text))) == 2
+  end
+end

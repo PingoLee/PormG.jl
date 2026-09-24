@@ -232,4 +232,75 @@ end
         end
     end
 
+    @testset "a function over an aggregate groups and filters in HAVING (#702)" begin
+        # `Coalesce(Sum(...), Value(0))` printed no GROUP BY, so SQLite answered with ONE row for the
+        # whole table. Lead-lap race time per 2009 driver: `milliseconds` is NULL for everyone not
+        # classified on the lead lap, so a driver with no such finish sums to NULL and reads 0.
+        rows = M.Result.objects.filter("raceid__year" => 2009).
+            values("driverid__surname", "milliseconds") |> DataFrame
+        # The expected total per driver, computed in Julia: a NULL adds nothing.
+        totals = Dict{String,Int}()
+        for r in eachrow(rows)
+            totals[r.driverid__surname] = get(totals, r.driverid__surname, 0) +
+                                          (ismissing(r.milliseconds) ? 0 : r.milliseconds)
+        end
+        q = M.Result.objects
+        q.filter("raceid__year" => 2009)
+        q.values("driverid__surname", "lead_lap_ms" => Coalesce(Sum("milliseconds"), Value(0)))
+        df = q |> DataFrame
+        # One row per driver, each with its own total — not one row for the table.
+        @test nrow(df) == length(totals)
+        @test Dict(String(r.driverid__surname) => Int(r.lead_lap_ms) for r in eachrow(df)) == totals
+
+        # Its alias filters groups, top-level and inside Q alike.
+        never = Set(k for (k, v) in totals if v == 0)
+        @test !isempty(never)
+        for pred in ("lead_lap_ms" => 0, Q("lead_lap_ms" => 0))
+            qf = M.Result.objects
+            qf.filter("raceid__year" => 2009)
+            qf.values("driverid__surname", "lead_lap_ms" => Coalesce(Sum("milliseconds"), Value(0)))
+            qf.filter(pred)
+            @test Set(String.((qf |> DataFrame).driverid__surname)) == never
+        end
+    end
+
+    @testset "a row-level alias filters rows in WHERE (#701)" begin
+        # A row alias has one value per row. Its top-level filter printed HAVING on a query with no
+        # GROUP BY, which both engines reject; it must return exactly the rows the same comparison
+        # selects in Julia — and so must the Q spelling, whose WHERE copy used to print one `?` more
+        # than it bound on SQLite.
+        rows = M.Result.objects.filter("raceid__year" => 2010).
+            values("resultid", "grid", "positionorder") |> DataFrame
+        expected = Set(r.resultid for r in eachrow(rows) if r.grid - r.positionorder >= 15)
+        @test !isempty(expected)
+        for pred in ("places_gained__@gte" => 15, Q("places_gained__@gte" => 15))
+            q = M.Result.objects
+            q.filter("raceid__year" => 2010)
+            q.values("resultid", "places_gained" => F("grid") - F("positionorder"))
+            q.filter(pred)
+            df = q |> DataFrame
+            @test Set(df.resultid) == expected
+            @test all(>=(15), df.places_gained)
+        end
+
+        # A BINDING row alias: its `1` binds once for SELECT and again for the WHERE copy. Executing
+        # it is the check — a misaligned vector either errors or compares against the wrong value.
+        race = first((M.Result.objects.values("raceid").order_by("raceid").page(1) |> DataFrame).raceid)
+        in_race = Set((M.Result.objects.filter("raceid" => race).values("resultid") |> DataFrame).resultid)
+        for pred in ("next_race" => race + 1, Q("next_race" => race + 1))
+            q = M.Result.objects
+            q.values("resultid", "next_race" => F("raceid") + 1)
+            q.filter(pred)
+            @test Set((q |> DataFrame).resultid) == in_race
+        end
+
+        # Beside an aggregate: the row alias filters rows, the aggregate alias filters the group.
+        q = M.Result.objects
+        q.values("raceid", "n" => Count("resultid"), "next_race" => F("raceid") + 1)
+        q.filter("next_race" => race + 1, "n__@gt" => 0)
+        df = q |> DataFrame
+        @test df.raceid == [race]
+        @test df.n == [length(in_race)]
+    end
+
 end

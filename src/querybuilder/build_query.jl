@@ -518,8 +518,30 @@ end
 # binds its own values in the clause it prints in. An aggregate legitimately appears twice in the
 # statement, so binding twice is the correct reading, not a duplicate.
 #
-# Callers must have switched to `:having` first — the fresh render binds, and it must bind there.
-function _having_alias_lhs(alias::MemoKey, cached, instruc::SQLInstruction)
+# #701: the WHERE path reads the memo through here too (`_get_filter_query(::SQLTypeField)`,
+# build_helpers.jl). It had the #586 gate on the wrong node — the filter KEY, a plain `String` alias,
+# rather than the projection behind it — so `Q("next_race" => 73)` over `F("raceid") + 1` reprinted
+# the projection's `?` in WHERE with its value still in `:select`: three markers, two values on
+# SQLite. Routing a row alias's top-level filter to WHERE (#701) would have inherited the same
+# misbind, so the one gate now serves both clauses.
+#
+# That reader is keyed by more than aliases, and `_projected_source` matches on output NAME only, so
+# two guards keep a key from finding a different projection that merely shares the name:
+#
+#   - the NAMESPACE. A projection alias lives in `:base`; a `:cte`/`:joined` key names a CTE or
+#     joined-copy column, which binds nothing. Without this, `values("ev__grid" => F("grid") * 2)`
+#     beside a CTE `ev` made the second `Qor("ev__grid" => 1, "ev__grid" => 2)` leaf render the
+#     projection instead of the CTE column — valid SQL, aligned parameters, wrong rows.
+#   - the OUTPUT NAME. A field-path projection is memoized under its PATH (`values("r" => "points")`
+#     under `"points"`); the entry is an alias only when it renders under the key.
+#
+# Any other hit is a column, and its memoized text is returned as it was.
+#
+# Callers must have switched to the clause the text prints in — the fresh render binds, and it must
+# bind there.
+function _alias_lhs(alias::MemoKey, cached, instruc::SQLInstruction)
+  alias[1] === :base || return cached.field
+  _projection_output_name(cached) == alias[2] || return cached.field
   source = _projected_source(alias, instruc)
   # No source (the memo was written by a non-projection path) or a kind that binds nothing: the
   # memoized text is safe, and reusing it keeps the common case byte-identical.
@@ -629,23 +651,24 @@ _alias_column_field(column::Union{CTEReference,JoinedReference}, instruc::SQLIns
   memo_field(instruc, memo_key(column))
 _alias_column_field(::Any, ::SQLInstruction) = nothing
 
-# One projection-alias predicate, rendered for HAVING: the guards, then the left-hand side, the bound
-# value and the operator ladder. #692 lifted it out of the top-level alias branch in
-# `get_filter_query` so that an aggregate alias inside `Q(...)`/`Qor(...)` renders through the same
-# code (`_get_having_query`) rather than a second copy of it.
+# One projection-alias predicate: the guards, then the left-hand side, the bound value and the
+# operator ladder. #692 lifted it out of the top-level alias branch in `get_filter_query` so that an
+# aggregate alias inside `Q(...)`/`Qor(...)` renders through the same code (`_get_having_query`)
+# rather than a second copy of it. #701 renders a top-level ROW alias through it too, in WHERE: the
+# predicate is the same in either clause, and this is where the alias's value gets its type (#576).
 #
-# The caller must have switched to `:having` — `_having_alias_lhs` and `_bind_predicate_value` both
-# bind — and must restore the context in a `finally`.
+# The caller must have switched to the clause the predicate prints in — `_alias_lhs` and
+# `_bind_predicate_value` both bind — and must restore the context in a `finally`.
 function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cached,
                                  instruc::SQLInstruction)::String
-  # #685: a window alias reaches this branch exactly as an aggregate one does, and HAVING is
-  # no home for it either — see `_guard_window_alias_predicate`. First of the guards, so it
-  # refuses before anything below resolves, renders or binds.
+  # #685: a window alias reaches this branch exactly as an aggregate one does, and neither clause
+  # is a home for it — see `_guard_window_alias_predicate`. First of the guards, so it refuses
+  # before anything below resolves, renders or binds.
   _guard_window_alias_predicate(_projected_source(having_key, instruc), having_key[2])
   # The guards run BEFORE the left-hand side is resolved. None depends on anything the render
-  # produces, and `_having_alias_lhs` can bind (#595) — so refusing afterwards would file a binding
-  # projection's operands into `:having` and then throw them away. Waste rather than a defect, since
-  # the instruction is discarded with the throw, but the ordering is free.
+  # produces, and `_alias_lhs` can bind (#595) — so refusing afterwards would file a binding
+  # projection's operands into the clause's bucket and then throw them away. Waste rather than a
+  # defect, since the instruction is discarded with the throw, but the ordering is free.
   #
   # #596: an alias is a bare path too, so `values("c" => Count("id")); filter("c" => bytes)`
   # reaches here. There is no `PormGField` to hand the guard — the alias's type comes from
@@ -660,7 +683,7 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   _guard_alias_clause_operator(v, having_key[2])
   # #654: `@isnull` on a COUNT alias refuses here, ahead of any render, for the reason above.
   isnull_aggregate = v.operator == "ISNULL" && _alias_isnull_aggregate(having_key, instruc)
-  field = _having_alias_lhs(having_key, having_cached, instruc)
+  field = _alias_lhs(having_key, having_cached, instruc)
   # #618: `contains=` / `operator=` are what run `_apply_like_wildcards` (and with it
   # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias
   # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the
@@ -677,6 +700,22 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   # unknown-operator refusal that was missing here entirely.
   return _render_predicate(string(field), v.operator, placeholder, instruc;
                            aggregate = isnull_aggregate)
+end
+
+# The plain filter key a predicate compares — a `String` path with no `__` — or `nothing`.
+#
+# One definition for the alias test, which was spelled out three times (the top-level branch below,
+# `_guard_window_alias_in_q`, `_aggregate_alias_leaf`), and for #703's collision guard, which asks the
+# complementary question of the same key.
+_plain_filter_key(col) =
+  (col isa SQLTypeField && col.field isa String && !contains(col.field, "__")) ? col.field : nothing
+
+# The alias test: a plain key that names no field of the model. It is a projection alias or a name
+# that does not exist; the callers tell those apart through the memo.
+function _alias_filter_key(col, instruc::SQLInstruction)
+  key = _plain_filter_key(col)
+  (key === nothing || key in instruc.object.model.field_names) && return nothing
+  return key
 end
 
 """
@@ -696,11 +735,12 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
   @pormg_debug false
   for v in object.filter
     _guard_no_aggregate_predicate(v)   # #537
+    _guard_field_alias_collision(v, instruc)   # #703
     if isa(v, ExistsObject)
       push!(instruc._where, _get_filter_query(v, instruc))
     elseif isa(v, SQLTypeOper)
       @pormg_debug false
-      if isa(v.column, SQLTypeField) && isa(v.column.field, String) && !contains(v.column.field, "__") && !(v.column.field in instruc.object.model.field_names)
+      if _alias_filter_key(v.column, instruc) !== nothing
         # #446. This branch is reached by a PLAIN filter key — no `__` — that is not a field on the
         # model, which means it is either a projection alias (the documented HAVING spelling) or a
         # name that does not exist. The `try`/`catch` here only rethrew: it was a debug hook, not a
@@ -723,20 +763,38 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
           # exactly that spelling, and never the internal namespace half.
           throw(_unknown_field(instruc.object.model, v.column.field;
                                aliases = memo_projection_names(instruc)))
-        # Switch to having context for positional parameters. #595 moved this ABOVE the left-hand
-        # side: resolving it can now RENDER, and a render binds — those values belong in `:having`
-        # with the comparison value, ahead of it, exactly as they print.
+        # #701: only an AGGREGATE alias filters groups. A row alias — `F("raceid") + 1`, a bare
+        # `F("code")` — has one value per row, so its predicate belongs in WHERE; sending every
+        # alias to HAVING printed `HAVING` on a query with no GROUP BY, which both engines reject.
+        # #692's `_aggregate_alias_leaf` draws the same line for `Q`, on the same flag, which #702
+        # made true for a wrapped aggregate. No projection source keeps the HAVING route it always
+        # had. The reachable case is a `Value(...)` alias: `_projected_source` returns only
+        # `SQLField` projections, so `values("v" => Value(5)); filter("v" => 5)` still prints
+        # `HAVING ? = ?`, as it did before #701 (#707).
+        #
+        # Only the CLAUSE moves. The predicate still renders through `_render_alias_predicate`, not
+        # through the WHERE path the `Q` spelling takes, because that is where the alias's value is
+        # typed from the projection (#576): a `Date` on a date alias formats as the column does, and
+        # `"not-a-date"` raises `FilterError` naming the alias. The untyped path binds the value as
+        # given — which went unnoticed while this statement could not execute, and would not once it
+        # can. `test_operators.jl` pins it.
+        source = _projected_source(having_key, instruc)
+        clause = (source === nothing || _is_agg(source.field)) ? :having : :where
+        # Switch to the clause's context for positional parameters. #595 moved this ABOVE the
+        # left-hand side: resolving it can now RENDER, and a render binds — those values belong in
+        # the clause's bucket with the comparison value, ahead of it, exactly as they print.
         # The restore is in a `finally` because the render can throw from several places — the
-        # guards, the fresh render in `_having_alias_lhs` (#595), `_render_predicate`'s
+        # guards, the fresh render in `_alias_lhs` (#595), `_render_predicate`'s
         # unknown-operator `FilterError` and the SQLite-refusing `Dialect` arms'
-        # `BackendCapabilityError` (#618). Leaving `:having` active would file a later clause's
-        # values in the wrong bucket. Harmless today — every such throw escapes `build()` and the
+        # `BackendCapabilityError` (#618). Leaving the clause's context active would file a later
+        # clause's values in the wrong bucket. Harmless today — every such throw escapes `build()` and the
         # instruction is discarded — but it matches what `_get_select_query(::ExistsObject)` already
         # does for `correlated_projection`, and it stops the next caller who catches one of these
         # from inheriting a wrong context.
-        set_context!(instruc, :having)
+        set_context!(instruc, clause)
         try
-          push!(instruc.having, _render_alias_predicate(v, having_key, having_cached, instruc))
+          push!(clause === :having ? instruc.having : instruc._where,
+                _render_alias_predicate(v, having_key, having_cached, instruc))
         finally
           set_context!(instruc, :where)
         end
@@ -763,6 +821,83 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
     end
   end
   return nothing
+end
+
+# #703 — a plain filter key that names a model field AND the output name of a projection that is
+# not that column. `values("raceid", "points" => Sum("points")); filter("points" => 1.0)` rendered
+# `WHERE SUM("Tb"."points") = ?`: the key names a field, so neither the top-level alias branch nor
+# #692's `Q` routing took it as an alias — but `_get_filter_query(::SQLTypeField)` looks the key up in
+# the projection memo before resolving it as a column, and the alias had claimed that entry. The
+# filter neither filtered the column nor the projection.
+#
+# There is no right guess. A caller who wrote `"points" => Sum("points")` and then filters "points"
+# most likely means the sum — HAVING — and routing it to the column would filter rows before
+# aggregation: silently wrong totals. Routing it to the alias would silently stop the key meaning
+# the field. So the key is refused, as #492 refuses a `__` path whose first segment names both a CTE
+# and a model field: loud, never guessed. The DECLARATION stays legal — `values("casos" =>
+# Sum("casos"))` is common in consuming apps and harmless until something filters on the name —
+# which is where this departs from Django, whose `annotate()` refuses the alias outright.
+#
+# A `__` path is a model name too. `values("driverid__surname" => Upper("driverid__forename"))`
+# followed by `filter("driverid__surname" => …)` read the alias through the same memo, silently; the
+# key names the related column as much as `"points"` names the local one. So a path whose first
+# segment is on the model (`_segment1_on_model`, the #492 test) counts; a key with no model reading
+# (an alias spelled with `__` that names no relation) is an alias and nothing else.
+#
+# Not ambiguous, and so not refused: a projection that IS the column — `values("points")`,
+# `values("points" => "points")`, `values("points" => F("points"))`. Recursive, with the depth cap of
+# `_guard_no_aggregate_predicate`, because `Q`/`Qor` admit the same leaf.
+function _guard_field_alias_collision(filter, instruc::SQLInstruction, depth::Int = 0)
+  depth > 32 && return nothing
+  if filter isa SQLTypeOper
+    key = _model_filter_key(filter.column, instruc)
+    key === nothing && return nothing
+    for projection in instruc.object.values
+      _projection_output_name(projection) == key || continue
+      _projects_column(projection, key) && return nothing
+      _refuse_field_alias_collision(key, projection, instruc)
+    end
+  elseif filter isa SQLTypeQ
+    for f in filter.filters
+      _guard_field_alias_collision(f, instruc, depth + 1)
+    end
+  elseif filter isa SQLTypeQor
+    for f in filter.or
+      _guard_field_alias_collision(f, instruc, depth + 1)
+    end
+  end
+  return nothing
+end
+
+# The filter key when it names something on the model — a field, or a `__` path whose first segment
+# is on the model — or `nothing`. Only a plain path: a transform (`__@year`) builds a function node,
+# and a CTE or joined-copy reference is a handle rather than a `String`.
+function _model_filter_key(col, instruc::SQLInstruction)
+  (col isa SQLTypeField && col.field isa String && !contains(col.field, "__@")) || return nothing
+  key = col.field
+  contains(key, "__") || return key in instruc.object.model.field_names ? key : nothing
+  return _segment1_on_model(instruc.object, first(split(key, "__"))) ? key : nothing
+end
+
+# Is this projection the column `key` itself, under its own name? `isa String` before each `==`:
+# `F` overloads `==` to BUILD a comparison node (#457), so comparing an `FExpression` to a string
+# answers an expression, not a `Bool`.
+_projects_column(p::SQLTypeField, key::String) =
+  (p.field isa String && p.field == key) ||
+  (p.field isa FExpression && p.field.operation === nothing &&
+   p.field.field_name isa String && p.field.field_name == key)
+_projects_column(::Any, ::String) = false
+
+function _refuse_field_alias_collision(key::String, projection, instruc::SQLInstruction)
+  throw(AmbiguousFieldError(
+    "\e[4m\e[31mfilter(\"$(key)\" => …)\e[0m is ambiguous: \e[4m\e[31m$(key)\e[0m names " *
+    "both a column of \e[4m\e[32m$(instruc.object.model.name)\e[0m (a field, or a path through " *
+    "one) and the projection alias " *
+    "\e[4m\e[31mvalues(\"$(key)\" => $(_describe_projection(projection)))\e[0m, so the filter " *
+    "has two meanings and PormG will not choose one.\n  " *
+    "Rename the alias — \e[4m\e[32mvalues(\"$(key)_value\" => …)\e[0m — then filter " *
+    "\e[4m\e[32m\"$(key)_value\"\e[0m for the projection, or \e[4m\e[32m\"$(key)\"\e[0m " *
+    "for the column (#703)."))
 end
 
 # #537 — an aggregate or window function cannot be a WHERE predicate, and `OP(::SQLTypeFunction, …)`
@@ -841,15 +976,17 @@ end
 # the text is reused: that function also renders a SELECT-side `When("r" => 1)`, and
 # `CASE WHEN RANK() OVER (…) = 1 …` in the select list is legal SQL. The clause cannot be told apart
 # there on PostgreSQL, whose parameter object keeps no context. The alias test is the top-level
-# branch's — a plain key naming no model field — so a model field that shares its name with a window
-# alias (`values("r" => "points", "points" => Rank(…)); filter(Q("points" => 5.0))`) still filters the
-# column, exactly as it does unwrapped. Recursive with `_guard_no_aggregate_predicate`'s depth cap.
+# branch's — a plain key naming no model field. A key that names a model field AND a window alias
+# (`values("r" => "points", "points" => Rank(…)); filter(Q("points" => 5.0))`) never reaches here:
+# #703's `_guard_field_alias_collision` refuses it first. This comment used to say such a key
+# "still filters the column" — true only because `"r" => "points"` had claimed the memo entry
+# first; with an aggregate alias the same key printed `SUM(…)` into WHERE. Recursive with
+# `_guard_no_aggregate_predicate`'s depth cap.
 function _guard_window_alias_in_q(filter, instruc::SQLInstruction, depth::Int = 0)
   depth > 32 && return nothing
   if filter isa SQLTypeOper
     col = filter.column
-    (col isa SQLTypeField && col.field isa String && !contains(col.field, "__") &&
-     !(col.field in instruc.object.model.field_names)) || return nothing
+    _alias_filter_key(col, instruc) === nothing && return nothing
     key = memo_key(col)
     memo_projection(instruc, key) === nothing && return nothing
     _guard_window_alias_predicate(_projected_source(key, instruc), col.field)
@@ -873,14 +1010,12 @@ end
 # `(key, cached)` when `v` compares an alias whose projection is an aggregate, `nothing` otherwise.
 # The alias test is `_guard_window_alias_in_q`'s. Only an AGGREGATE alias is routed: a plain alias
 # (`values("yr" => "date__@year"); filter(Q("yr" => 2020))`) renders correctly in WHERE today, and
-# must stay there. `_is_agg` reads the node's own flag, which arithmetic (`Count(…) + 1`) and the
-# numeric wrappers (`Round`, `Abs`, `Floor`, … over an aggregate) propagate. `Coalesce`/`Cast`/`NullIf`
-# over an aggregate do not set it, so such an alias is not routed here — nor grouped anywhere else,
-# which is the older defect to fix; this gate reads the flag rather than second-guessing it.
+# must stay there. `_is_agg` reads the node's own flag, which arithmetic (`Count(…) + 1`) and, since
+# #702, every wrapping constructor propagate — `Coalesce(Sum(…), Value(0))` is an aggregate alias
+# (`_any_agg`, types.jl). This gate reads the flag rather than second-guessing it.
 function _aggregate_alias_leaf(v::SQLTypeOper, instruc::SQLInstruction)
   col = v.column
-  (col isa SQLTypeField && col.field isa String && !contains(col.field, "__") &&
-   !(col.field in instruc.object.model.field_names)) || return nothing
+  _alias_filter_key(col, instruc) === nothing && return nothing
   key = memo_key(col)
   cached = memo_projection(instruc, key)
   cached === nothing && return nothing

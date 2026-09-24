@@ -1,8 +1,8 @@
 using Test
 using PormG
-using PormG.Models: Model, IDField, IntegerField, FloatField
+using PormG.Models: Model, IDField, IntegerField, FloatField, CharField, DateField
 using PormG.QueryBuilder: inspect_query, Count, Sum, Max
-using PormG.Functions: Case, When
+using PormG.Functions: Case, When, Value, Upper
 
 include("helper_marker_alignment.jl")
 
@@ -14,13 +14,17 @@ include("helper_marker_alignment.jl")
 # ─────────────────────────────────────────────────────────────────────────────
 struct QAggMockPostgres <: PormG.PormGPostgres end
 struct QAggMockSQLite <: PormG.PormGSQLite end
+# A window function (#701's guard case) asks the backend for its version; answer like the other mocks.
+PormG.backend_sqlite_version(::QAggMockSQLite) = 3045000
 
 PormG.config["q_agg_pg"] = PormG.Configuration.Settings(connections = QAggMockPostgres(), change_data = true)
 PormG.config["q_agg_sl"] = PormG.Configuration.Settings(connections = QAggMockSQLite(), change_data = true)
 
-QAggPgResult = Model("q_agg_results", resultid = IDField(), raceid = IntegerField(), points = FloatField())
+QAggPgResult = Model("q_agg_results", resultid = IDField(), raceid = IntegerField(), points = FloatField(),
+                     surname = CharField(), race_date = DateField())
 QAggPgResult.connect_key = "q_agg_pg"
-QAggSlResult = Model("q_agg_results", resultid = IDField(), raceid = IntegerField(), points = FloatField())
+QAggSlResult = Model("q_agg_results", resultid = IDField(), raceid = IntegerField(), points = FloatField(),
+                     surname = CharField(), race_date = DateField())
 QAggSlResult.connect_key = "q_agg_sl"
 
 const _Q_AGG_MODELS = ((:postgres, QAggPgResult), (:sqlite, QAggSlResult))
@@ -231,9 +235,286 @@ end
       q = Model_.objects
       q.values("resultid", "next_race" => F("raceid") + 1)
       q.filter(Q("next_race" => 73))
-      sql = inspect_query(q)[:sql_text]
+      insp = inspect_query(q)
+      sql = insp[:sql_text]
       @test occursin(r"WHERE \(\(\"Tb\"\.\"raceid\" \+ \S+\) = \S+\)", sql)
+      @test !occursin("HAVING", sql)
+      # #701: the WHERE copy reprinted the projection's `?` with its value still in `:select` —
+      # three markers, two values on SQLite, while the text assertion above passed regardless. The
+      # copy now binds its own `1`, in text order.
+      assert_marker_count(insp, backend)
+      backend === :sqlite && assert_bound_in_text_order(insp, Any[1, 1, 73])
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #701: a top-level filter on a row-level alias renders in WHERE
+# `values("resultid", "next_race" => F("raceid") + 1); filter("next_race" => 73)` printed
+# `HAVING ("Tb"."raceid" + ?) = ?` on a query with no GROUP BY — rejected by both engines. A row
+# alias belongs in WHERE, exactly as the `Q(...)` spelling already rendered it; the two spellings
+# must now print the same predicate and bind the same values. The projection's `1` binds again for
+# the WHERE copy, in text order.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#701: a row-level alias filters in WHERE, not HAVING" begin
+  for (backend, Model_) in _Q_AGG_MODELS
+    @testset "$backend" begin
+      q = Model_.objects
+      q.values("resultid", "next_race" => F("raceid") + 1)
+      q.filter("next_race" => 73)
+      insp = inspect_query(q)
+      sql = insp[:sql_text]
+      @test !occursin("HAVING", sql)
+      @test !occursin("GROUP BY", sql)
+      @test _clause(sql, "WHERE") !== nothing
+      @test occursin(r"^\(\"Tb\"\.\"raceid\" \+ \S+\) = \S+$", _clause(sql, "WHERE"))
+      assert_marker_count(insp, backend)
+      # SELECT's `1`, the WHERE copy's own `1`, then the comparison value.
+      backend === :sqlite && assert_bound_in_text_order(insp, Any[1, 1, 73])
+
+      # The `Q` spelling renders the same predicate, parenthesised, with the same values.
+      qq = Model_.objects
+      qq.values("resultid", "next_race" => F("raceid") + 1)
+      qq.filter(Q("next_race" => 73))
+      q_insp = inspect_query(qq)
+      @test _clause(q_insp[:sql_text], "WHERE") == "(" * _clause(sql, "WHERE") * ")"
+      @test q_insp[:parameters] == insp[:parameters]
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #701: a row alias on a grouped query still filters rows
+# Beside an aggregate the query has a GROUP BY, and a row alias over a grouped column rendered in
+# HAVING did execute. It now filters the rows in WHERE — the same groups survive, since the value
+# is constant within each group — while the aggregate alias in the same call stays in HAVING.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#701: a row alias beside an aggregate alias splits WHERE / HAVING" begin
+  for (backend, Model_) in _Q_AGG_MODELS
+    @testset "$backend" begin
+      q = Model_.objects
+      q.values("raceid", "n" => Count("resultid"), "next_race" => F("raceid") + 1)
+      q.filter("next_race" => 73, "n__@gt" => 5)
+      insp = inspect_query(q)
+      sql = insp[:sql_text]
+      @test occursin(r"^\(\"Tb\"\.\"raceid\" \+ \S+\) = \S+$", _clause(sql, "WHERE"))
+      @test occursin(r"^COUNT\(\"Tb\"\.\"resultid\"\) > \S+$", _clause(sql, "HAVING"))
+      assert_marker_count(insp, backend)
+      # SELECT's `1`, WHERE's own `1` and `73`, then HAVING's `5`.
+      backend === :sqlite && assert_bound_in_text_order(insp, Any[1, 1, 73, 5])
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #701: only the clause moves — the alias's value is still typed from its projection
+# A top-level alias filter renders through `_render_alias_predicate` in either clause, because that
+# is where the value is checked against the projection's type (#576). Rendering a row alias through
+# the untyped WHERE path instead would have bound a wrong-typed value as given, silently, in a
+# statement that — unlike the old HAVING one — now executes. So a float alias refuses text, naming
+# the alias, and still accepts a number, in WHERE.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#701: a row alias's value is still typed from its projection" begin
+  for (backend, Model_) in _Q_AGG_MODELS
+    @testset "$backend" begin
+      bad = Model_.objects
+      bad.values("resultid", "pts" => F("points"))
+      bad.filter("pts" => "not-a-number")
+      err = @test_throws PormG.FilterError inspect_query(bad)
+      @test occursin("projection alias", err.value.msg)
+
+      ok = Model_.objects
+      ok.values("resultid", "pts" => F("points"))
+      ok.filter("pts__@gte" => 10.5)
+      sql = inspect_query(ok)[:sql_text]
+      @test occursin(r"^\"Tb\"\.\"points\" >= \S+$", _clause(sql, "WHERE"))
       @test !occursin("HAVING", sql)
     end
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #701: the top-level alias guards still refuse in the WHERE route
+# The window refusal (#685) and the byte-payload refusal (#596) ran at the top of the old HAVING
+# branch. Routing a row alias to WHERE must not drop them: a window cannot be filtered in the query
+# that computes it, and a byte payload against a non-binary alias matches nothing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#701: the alias guards still apply to a row alias" begin
+  for (backend, Model_) in _Q_AGG_MODELS
+    @testset "$backend" begin
+      # #596: a byte payload against a non-binary alias — refused by the bytes guard itself, not by
+      # the value formatter (which would also raise a FilterError, with a different message).
+      q = Model_.objects
+      q.values("resultid", "next_race" => F("raceid") + 1)
+      q.filter("next_race" => UInt8[0x01, 0x02])
+      err = @test_throws PormG.FilterError inspect_query(q)
+      @test occursin("vector value but no operator", err.value.msg)
+      # #685: a window is a row value too (`_is_agg` is false for it), so it takes the new WHERE
+      # route — and is refused there exactly as it was in HAVING.
+      w = Model_.objects
+      w.values("resultid", "rk" => PormG.Functions.Rank())
+      w.filter("rk" => 1)
+      werr = @test_throws PormG.QueryBuildError inspect_query(w)
+      @test occursin("#685", werr.value.msg)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #701: the cross-backend differential agrees on every alias spelling
+# The oracle for parameter order (querybuilder skill → *Parameter routing*): PostgreSQL numbers `$N`
+# as it binds, so walking the markers left to right through its vector gives the true text order,
+# and SQLite's flattened vector must equal it. Covers the top-level row alias, its `Q` twin, the
+# grouped split, and a SELECT-side `When` on a binding alias — the other reader of the memo the
+# WHERE copy used to reprint, which bound one value short in the SELECT list the same way.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#701: PostgreSQL and SQLite bind every alias spelling in text order" begin
+  shapes = (
+    ("top-level", q -> (q.values("resultid", "next_race" => F("raceid") + 1); q.filter("next_race" => 73))),
+    ("Q",         q -> (q.values("resultid", "next_race" => F("raceid") + 1); q.filter(Q("next_race" => 73)))),
+    ("grouped",   q -> (q.values("raceid", "n" => Count("resultid"), "next_race" => F("raceid") + 1);
+                        q.filter("next_race" => 73, "n__@gt" => 5))),
+    ("SELECT-side When", q -> q.values("resultid", "x" => F("points") * 2,
+                                       "flag" => Case([When("x" => 4, then = 1)], default = 0))),
+  )
+  for (label, build!) in shapes
+    @testset "$label" begin
+      pg = (q = QAggPgResult.objects; build!(q); inspect_query(q))
+      sl = (q = QAggSlResult.objects; build!(q); inspect_query(q))
+      idx = [parse(Int, m.match[2:end]) for m in eachmatch(r"\$\d+", pg[:sql_text])]
+      @test sl[:parameters] == [pg[:parameters][i] for i in idx]
+      assert_marker_count(sl, :sqlite)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #703: a filter key naming a model field AND a projection alias is refused
+# `values("raceid", "points" => Sum("points")); filter("points" => 1.0)` rendered
+# `WHERE SUM("Tb"."points") = ?` — neither the column nor the projection. The key has two meanings, so
+# it raises `AmbiguousFieldError` (the #492 precedent), on every spelling that reaches the leaf:
+# top-level and inside `Q`/`Qor`, bare and with a lookup suffix, over an aggregate, a row
+# expression, a window and a literal alike. The message names both readings and the rename.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#703: a key naming a field and an alias raises AmbiguousFieldError" begin
+  projections = (("an aggregate", Sum("points")),
+                 ("a row expression", F("points") * 2),
+                 ("a literal", Value(0.0)),
+                 # A DIFFERENT column under the field's name. This one used to resolve to the field —
+                 # the path projection is memoized under its own path, so nothing shadowed the key —
+                 # but the key still has two meanings, and the upgrade entry records the change.
+                 ("another column", "raceid"))
+  predicates = (("top-level", "points" => 1.0),
+                ("a lookup suffix", "points__@gt" => 1.0),
+                ("Q", Q("points" => 1.0)),
+                ("Qor", Qor("raceid" => 1, "points" => 1.0)))
+  for (backend, Model_) in _Q_AGG_MODELS
+    for (plabel, projection) in projections, (flabel, pred) in predicates
+      @testset "$backend — $plabel, $flabel" begin
+        q = Model_.objects
+        q.values("raceid", "points" => projection)
+        q.filter(pred)
+        err = @test_throws AmbiguousFieldError inspect_query(q)
+        msg = err.value.msg
+        # Both readings are named, and the rename that resolves it.
+        @test occursin("points", msg)
+        @test occursin("projection alias", msg)
+        @test occursin("points_value", msg)
+        @test occursin("#703", msg)
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #703 controls: what is NOT ambiguous still renders
+# A projection that IS the column — `values("points")`, `values("points" => "points")`,
+# `values("points" => F("points"))` — gives the key one meaning, so the filter renders against the
+# column as it always did. A transform key names the field's transform, not the alias. The
+# declaration itself is never refused: `values("points" => Sum("points"))` with no filter on the
+# name renders unchanged — the shape consuming apps use.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#703 controls: an unambiguous key still renders" begin
+  for (backend, Model_) in _Q_AGG_MODELS
+    @testset "$backend — the column projected under its own name" begin
+      for projection in ("points", "points" => "points", "points" => F("points"))
+        q = Model_.objects
+        q.values("resultid", projection)
+        q.filter("points" => 1.0)
+        sql = inspect_query(q)[:sql_text]
+        @test occursin(r"WHERE \"Tb\"\.\"points\" = ", sql)
+      end
+    end
+    @testset "$backend — the colliding alias with no filter on its name" begin
+      q = Model_.objects
+      q.values("raceid", "points" => Sum("points"))
+      q.filter("raceid" => 1)
+      sql = inspect_query(q)[:sql_text]
+      @test occursin("SUM(\"Tb\".\"points\") as \"points\"", sql)
+      @test occursin(r"WHERE \"Tb\"\.\"raceid\" = ", sql)
+    end
+    @testset "$backend — a transform key names the field's transform, not the alias" begin
+      q = Model_.objects
+      q.values("raceid", "race_date" => Max("race_date"))
+      q.filter("race_date__@year" => 2009)
+      sql = inspect_query(q)[:sql_text]
+      # The year rewrite lands on the column in WHERE; the alias's MAX stays in SELECT.
+      @test occursin("\"Tb\".\"race_date\"", _clause(sql, "WHERE"))
+      @test !occursin("MAX", _clause(sql, "WHERE"))
+    end
+    @testset "$backend — a renamed alias filters in HAVING, the field in WHERE" begin
+      q = Model_.objects
+      q.values("raceid", "points_value" => Sum("points"))
+      q.filter("points_value__@gt" => 10.0, "points__@gt" => 0.0)
+      sql = inspect_query(q)[:sql_text]
+      @test occursin(r"WHERE \"Tb\"\.\"points\" > ", sql)
+      @test occursin(r"HAVING SUM\(\"Tb\"\.\"points\"\) > ", sql)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #703 fixtures for a `__` path: a registered driver/result pair, so `driverid__surname` resolves
+# through the foreign key the way a model path does.
+# ─────────────────────────────────────────────────────────────────────────────
+struct QAggPathMockSQLite <: PormG.PormGSQLite end
+PormG.backend_sqlite_version(::QAggPathMockSQLite) = 3045000
+PormG.config["q_agg_path_sl"] = PormG.Configuration.Settings(connections = QAggPathMockSQLite(),
+                                                             change_data = true,
+                                                             db_def_folder = "q_agg_path_sl")
+
+module QAggPath
+import PormG, PormG.Models
+Driver = Models.Model("q_agg_path_driver", driverid = Models.IDField(), forename = Models.CharField(),
+                      surname = Models.CharField())
+Result = Models.Model("q_agg_path_result", resultid = Models.IDField(), points = Models.FloatField(),
+                      driverid = Models.ForeignKey(Driver, pk_field = "driverid", on_delete = "CASCADE"))
+PormG.Models.set_models(@__MODULE__, "q_agg_path_sl")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #703: a `__` path naming a relation's column is a model name too
+# `values("driverid__surname" => Upper("driverid__forename")); filter("driverid__surname" => …)`
+# read the alias through the projection memo — silently, since the text binds nothing — although the
+# key names the related column exactly as `"points"` names a local one. It is refused like a field
+# key. A path projection of the SAME path is the column and is not refused; a `__` alias whose first
+# segment is on no relation is an alias only, and is not this guard's business.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#703: a `__` path naming a related column and an alias is ambiguous" begin
+  for pred in ("driverid__surname" => "SENNA", Q("driverid__surname" => "SENNA"),
+               "driverid__surname__@startswith" => "SEN")
+    q = QAggPath.Result.objects
+    q.values("resultid", "driverid__surname" => Upper("driverid__forename"))
+    q.filter(pred)
+    err = @test_throws AmbiguousFieldError inspect_query(q)
+    @test occursin("driverid__surname", err.value.msg)
+    @test occursin("#703", err.value.msg)
+  end
+
+  # The path projected under its own name is the column: the filter renders against it.
+  q = QAggPath.Result.objects
+  q.values("resultid", "driverid__surname")
+  q.filter("driverid__surname" => "Senna")
+  sql = inspect_query(q)[:sql_text]
+  @test occursin(r"WHERE \"Tb_1\"\.\"surname\" = ", sql)
 end

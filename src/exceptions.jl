@@ -62,14 +62,19 @@ end
 """
     AmbiguousFieldError(msg) <: FieldAccessError <: PormGError
 
-A `__` path's first segment names **two** things on this query at once — a declared CTE and a
-model field, reverse accessor, many-to-many field, JSONField or `cjoin`/`on()` join path — so it has
-no single meaning and PormG refuses to guess (#492).
+A name on this query means **two** things at once, so it has no single meaning and PormG refuses to
+guess. Two cases raise it:
+
+- a `__` path's first segment names both a declared CTE and a model field, reverse accessor,
+  many-to-many field, JSONField or `cjoin`/`on()` join path (#492). The message prints the
+  `CTE("<name>", "<path>")` spelling that selects the CTE side;
+- a `filter(...)` key names both a model field and a projection alias of the same name that
+  projects something other than that column, e.g. `values("points" => Sum("points"))` followed by
+  `filter("points" => …)` (#703). The message prints the rename that resolves it.
 
 Deliberately its own type rather than an [`UnknownFieldError`](@ref): the name is known *twice*, not
 unknown, and the remedy differs. A consuming app's typo handler should not also fire when a schema
-change makes an existing CTE name collide. The message names both readings and prints the
-`CTE("<name>", "<path>")` spelling that selects the CTE side.
+change makes an existing name collide.
 """
 struct AmbiguousFieldError <: FieldAccessError
   msg::String

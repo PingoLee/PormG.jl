@@ -1035,6 +1035,29 @@ _is_agg(f::FExpression) = f.aggregate
 _is_agg(f::SQLTypeFunction) = f.aggregate
 _is_agg(::Any) = false
 
+# #702 — the flag a WRAPPING constructor sets: does any argument hold an aggregate?
+#
+# `aggregate` is stored on the node, and three readers trust it without looking inside: the GROUP BY
+# decision in `get_select_query`, the HAVING routing (`_aggregate_alias_leaf`, #692) and the
+# `update()`/`delete()` refusals. So a wrapper that leaves it `false` over an aggregate argument
+# does not merely mislabel itself — `Coalesce(Sum("points"), Value(0))` projected with no GROUP BY,
+# and SQLite answered with ONE row for the whole table. Only the numeric wrappers and `F`
+# arithmetic propagated it; every constructor that wraps an argument now asks this instead.
+#
+# It looks through the containers an argument can arrive in: a `Vector` (the variadic wrappers), an
+# operator (a `When` condition), and `Q`/`Qor` (a `When` condition too). Concrete types on purpose —
+# each is the only subtype of its abstract parent. The depth cap is the one `_guard_no_handle`
+# (`ctes.jl`) keeps for the same reason: `push!(q, q)` on a `Q` is a user-buildable cycle.
+function _holds_agg(x, depth::Int = 0)::Bool
+  depth > 32 && return false
+  x isa AbstractVector && return any(v -> _holds_agg(v, depth + 1), x)
+  x isa OperObject && return _holds_agg(x.column, depth + 1) || _holds_agg(x.values, depth + 1)
+  x isa QObject && return _holds_agg(x.filters, depth + 1)
+  x isa QorObject && return _holds_agg(x.or, depth + 1)
+  return _is_agg(x)
+end
+_any_agg(args...)::Bool = any(_holds_agg, args)
+
 function Base.:+(f::FExpression, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
   return FExpression(
     field_name=f.operation === nothing ? f.field_name : f,

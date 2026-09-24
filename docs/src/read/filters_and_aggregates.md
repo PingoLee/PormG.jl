@@ -911,6 +911,107 @@ Note the operands appear twice and bind twice — `$1`/`$2` for the projection, 
 
 For more complex expressions, see [Field Expressions](field_expressions.md).
 
+### A Function Over an Aggregate
+
+A function that wraps an aggregate is still an aggregate. `Coalesce`, `Cast`, `NullIf`, `Round`,
+`Case`/`When` and the rest group like the bare aggregate they contain, and a filter on their alias
+goes to `HAVING`. `Coalesce(Sum(...), Value(0))` is the usual way to report an empty sum as `0`
+rather than `NULL`:
+
+```julia
+using PormG.Functions: Coalesce, Sum, Value
+
+# 2009 drivers who never finished a race on the lead lap — `milliseconds` is NULL for everyone else
+query = M.Result.objects
+query.filter("raceid__year" => 2009)
+query.values("driverid__surname", "lead_lap_ms" => Coalesce(Sum("milliseconds"), Value(0)))
+query.filter("lead_lap_ms" => 0)
+```
+
+```sql
+SELECT "Tb_1"."surname" as "driverid__surname",
+  COALESCE(SUM("Tb"."milliseconds"), $1::bigint) as "lead_lap_ms"
+FROM "result" as "Tb"
+ INNER JOIN "driver" AS "Tb_1" ON "Tb"."driverid" = "Tb_1"."driverid"
+ INNER JOIN "race" AS "Tb_2" ON "Tb"."raceid" = "Tb_2"."raceid"
+WHERE "Tb_2"."year" = $2
+GROUP BY 1
+HAVING COALESCE(SUM("Tb"."milliseconds"), $3::bigint) = $4
+```
+
+Until [#702](https://github.com/PingoLee/PormG.jl/issues/702), most of these wrappers dropped the
+aggregate. The query printed no `GROUP BY`, and SQLite returned a single row for the whole table.
+
+### A Row-Level Alias Filters in `WHERE`
+
+Only an aggregate alias goes to `HAVING`. An alias over a row-level expression, such as arithmetic
+on columns or a bare `F("col")`, has one value per row, so a filter on it goes to `WHERE`, the same
+as a filter on a column:
+
+```julia
+# 2010 drives that gained 15 or more places from the grid
+query = M.Result.objects
+query.filter("raceid__year" => 2010)
+query.values("driverid__surname", "raceid__name", "places_gained" => F("grid") - F("positionorder"))
+query.filter("places_gained__@gte" => 15)
+```
+
+```sql
+SELECT "Tb_1"."surname" as "driverid__surname", "Tb_2"."name" as "raceid__name",
+  ("Tb"."grid" - "Tb"."positionorder") as "places_gained"
+FROM "result" as "Tb"
+ INNER JOIN "driver" AS "Tb_1" ON "Tb"."driverid" = "Tb_1"."driverid"
+ INNER JOIN "race" AS "Tb_2" ON "Tb"."raceid" = "Tb_2"."raceid"
+WHERE "Tb_2"."year" = $1 AND ("Tb"."grid" - "Tb"."positionorder") >= $2
+```
+
+When a query projects both kinds, one `filter(...)` call splits the same way: the row alias goes to
+`WHERE` and the aggregate alias to `HAVING`.
+
+!!! note "Text-valued aliases"
+    The value of a top-level alias filter is checked against the alias's type, and PormG does not
+    yet know the type of a text function such as `Lower`, `Upper` or `Concat`, so it expects a
+    number there ([#707](https://github.com/PingoLee/PormG.jl/issues/707)). Until that is fixed,
+    filter the underlying column instead, e.g.
+    `filter("driverid__surname__@istartswith" => "ham")`.
+
+### An Alias Named After a Field
+
+An alias can repeat the name of a model field: `values("points" => Sum("points"))` is fine, and the
+result column is called `points`. A filter on that name, though, has two meanings: the `points`
+column in `WHERE`, or the projected sum in `HAVING`. PormG will not choose, and raises
+`AmbiguousFieldError` when the query is built. That applies top-level, inside `Q`/`Qor`, and with a
+lookup suffix:
+
+```julia
+query = M.Result.objects
+query.values("driverid__surname", "points" => Sum("points"))
+query.filter("points__@gt" => 100)   # AmbiguousFieldError
+```
+
+Rename the alias. The alias then filters the projection, and the field name filters the column:
+
+```julia
+# Drivers with more than 100 points from finishes worth 10 or more
+query = M.Result.objects
+query.values("driverid__surname", "total_points" => Sum("points"))
+query.filter("points__@gte" => 10, "total_points__@gt" => 100)
+```
+
+```sql
+WHERE "Tb"."points" >= $1
+GROUP BY 1
+HAVING SUM("Tb"."points") > $2
+```
+
+The same applies when the alias projects a different column under a field's name
+(`values("points" => "grid")`), and to a relation path used as an alias
+(`values("driverid__surname" => Upper("driverid__forename"))` followed by
+`filter("driverid__surname" => …)`).
+
+A projection that *is* the column is not ambiguous. `values("points")`,
+`values("points" => "points")` and `values("points" => F("points"))` filter the column as usual.
+
 ### `Q` and `Qor` on Aggregate Aliases
 
 An aggregate alias inside [`Q(...)` or `Qor(...)`](q_objects.md) goes to `HAVING` too. `Qor` is

@@ -1622,7 +1622,10 @@ The `OVER (...)` clause of a window function, in structured form.
 - `order_by::Vector` — the ordering inside each window, stored **as given**: a `"-points"`
   entry stays `"-points"`, and the `-` prefix is resolved to `DESC` at build time.
 - `frame::Union{String,Nothing}` — an explicit frame clause, or `nothing` for the SQL default
-  (`RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`). PostgreSQL only.
+  (`RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`). PostgreSQL only. Held in the grammar
+  [`WindowOver`](@ref) documents: `WindowOver` stores its own rebuilt spelling, and a frame
+  assigned here directly is parsed when the query is built, raising `InvalidValueError` if it is
+  outside that grammar.
 
 Build one with [`WindowOver`](@ref), which validates and coerces its arguments; the `@kwdef`
 constructor is exported for the rare case where you want to assemble or mutate a spec

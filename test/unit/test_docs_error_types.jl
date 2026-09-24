@@ -610,6 +610,14 @@ const DOCERR_CASES = [
         () -> DOCERR_RESULT_PG.objects.values("x" => Cast("resultid", "integer OR TRUE")).
             list(show_query = :dict),
     ),
+    # #713: a window frame outside the grammar is refused when `WindowOver` is called, on both
+    # engines — including one PostgreSQL would refuse itself, which is the example the page shows.
+    (
+        "read/window_functions.md + WindowOver docstring — a `frame=` outside the grammar raises on both engines",
+        InvalidValueError,
+        () -> DOCERR_RESULT_SL.objects.values("x" => Rank(over = WindowOver(order_by = ["resultid"],
+            frame = "ROWS BETWEEN 1 FOLLOWING AND CURRENT ROW"))).list(show_query = :dict),
+    ),
     # #696: array brackets pass the grammar but SQLite has no array type to cast to.
     (
         "read/functions_and_dates.md — a `Cast` to an array type raises on SQLite",

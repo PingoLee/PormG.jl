@@ -520,6 +520,24 @@ SQL defaults to `RANGE` when `ORDER BY` is present and no frame is specified. Th
 | `"ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING"` | **Centred window** — one row on each side of the current row. Useful for smoothing. |
 | `"ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING"` | **Remaining rows** — from here to the end of the partition. |
 
+**What `frame=` accepts**
+
+A frame is SQL grammar, not a value, so it cannot travel as a bind parameter the way a filter value does. PormG therefore parses the string and writes **its own spelling** of it into the `OVER (...)` clause, never your text. The accepted grammar is PostgreSQL's frame clause:
+
+- a unit — `ROWS`, `RANGE` or `GROUPS`;
+- then one bound (`"ROWS 2 PRECEDING"`, which ends at the current row) or `BETWEEN <bound> AND <bound>`;
+- optionally, `EXCLUDE CURRENT ROW`, `EXCLUDE GROUP`, `EXCLUDE TIES` or `EXCLUDE NO OTHERS`.
+
+A bound is `UNBOUNDED PRECEDING`, `<n> PRECEDING`, `CURRENT ROW`, `<n> FOLLOWING` or `UNBOUNDED FOLLOWING`. `<n>` is a non-negative integer; under `RANGE`, where the offset is measured in the `ORDER BY` column's own type, it can also be a decimal (`"RANGE BETWEEN 0.5 PRECEDING AND CURRENT ROW"`) or an interval with a plain unit (`"RANGE BETWEEN INTERVAL '7 days' PRECEDING AND CURRENT ROW"`). Keywords are case-insensitive and are written back in upper case.
+
+Anything else raises `InvalidValueError` as soon as `WindowOver` is called, on both backends. That includes a frame PostgreSQL would itself refuse — one that starts `UNBOUNDED FOLLOWING`, ends `UNBOUNDED PRECEDING`, or ends before it starts, such as `"ROWS 1 FOLLOWING"`:
+
+```julia
+WindowOver(order_by=["positionorder"], frame="ROWS BETWEEN 1 FOLLOWING AND CURRENT ROW")
+# InvalidValueError: frame: "ROWS BETWEEN 1 FOLLOWING AND CURRENT ROW" is not an accepted
+# window frame (the frame end comes before its start). Accepted: ROWS, RANGE or GROUPS, …
+```
+
 ---
 
 ## Ranking Functions

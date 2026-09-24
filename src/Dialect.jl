@@ -5,7 +5,9 @@ import Tables
 import PormG: PormGSettings, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, PormGModel, PormGField, PormGBackend, PormGPostgres, PormGSQLite, PormGAbstractType
 import PormG: backend_sqlite_version  # SQLite library-version probe (driver body in the weakdep extension)
 # Semantic error taxonomy (#239). Dialect raises three categories:
-#   InvalidValueError          — a rendered value has the wrong Julia type ("must be a String").
+#   InvalidValueError          — a rendered value has the wrong Julia type ("must be a String"),
+#                                or SQL grammar PormG writes itself is outside what it parses
+#                                (a `Cast` type name #696, a window frame #713).
 #   BackendCapabilityError — the active backend cannot do this (a PG-only JSONB/unaccent
 #                                lookup, an extract part SQLite lacks, too old a SQLite library).
 #   QueryBuildError            — the caller passed an impossible argument shape (on_conflict_clause).
@@ -274,24 +276,21 @@ end
 # with the quote escaped so the format can never close the SQL literal it is written into.
 function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   format_str = format["format"]
-  locale = get(format, "locale", "")
-  nlsparam = get(format, "nlsparam", "")
   entry = get(date_format_map, format_str, nothing)
   template = entry === nothing ? replace(format_str, "'" => "''") : entry.postgres
-  return "to_char($(column), '$(template)') $(locale) $(nlsparam)"
+  return "to_char($(column), '$(template)')"
 end
 # SQLite: only a key renders — `strftime` has no way to spell an arbitrary `to_char` template, so
 # an unknown format is a capability the backend lacks, named with the formats it does have. Before
 # #569 this was a bare `KeyError` from the map lookup, outside the #231 taxonomy.
 function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   format_str = format["format"]
-  locale = get(format, "locale", "")
   entry = get(date_format_map, format_str, nothing)
   if entry === nothing
     supported = join(sort(collect(keys(date_format_map))), ", ")
     throw(BackendCapabilityError("ToChar: format \"$(format_str)\" is not supported on SQLite. Supported formats: $(supported)"))
   end
-  return "strftime('$(entry.sqlite)', $(column)) $(locale)"
+  return "strftime('$(entry.sqlite)', $(column))"
 end
 
 function SUM(column::String, format::Dict{String,Any}, conn::PormGPostgres)
@@ -523,6 +522,132 @@ function cast_type_sql(type::AbstractString, conn::PormGSQLite; context::Abstrac
   name, suffix = _parse_cast_type(type, context)
   occursin('[', suffix) && throw(BackendCapabilityError("$(context): SQLite has no array types; $(repr(name * suffix)) is PostgreSQL-only."))
   return uppercase(_map_cast_name(sqlite_type_map_reverse, name, suffix) * suffix)
+end
+
+# A window frame clause (#713) is SQL grammar, not a value, so it cannot be a bind parameter — the
+# #691 / #696 defect class a third time. `WindowOver(frame=)` used to write the caller's string into
+# `OVER (...)` after nothing but a `strip`. The grammar is PostgreSQL's `frame_clause`, with the
+# offsets narrowed to literals PormG can re-spell: a non-negative integer, and — under RANGE only,
+# where the offset is measured in the ORDER BY column's own type — a decimal or `INTERVAL '<n> <unit>'`.
+#
+# Tokenized rather than one regex: each token class is a closed spelling, and any other character
+# becomes a token of its own that no rule accepts, so there is nothing to backtrack over (#696's
+# `match limit exceeded` lesson). Every repeat is possessive for the same reason.
+const _FRAME_TOKEN_RE = r"'[^']*+'|[A-Za-z]++|\d++(?:\.\d++)?+|\S"
+const _FRAME_INTERVAL_RE = r"^'\s*+(\d++)\s++([a-z]++)\s*+'$"
+const _FRAME_INTERVAL_UNITS = ("microsecond", "millisecond", "second", "minute", "hour", "day", "week", "month", "year")
+# The longest real spelling — two intervals and an EXCLUDE — is about 110 characters.
+const _FRAME_MAX_LENGTH = 200
+
+"""
+    window_frame_sql(frame; context = "frame") -> String
+
+The validated spelling of a window frame clause for `WindowOver(frame=)`, or `InvalidValueError`
+(#713). Accepts `ROWS`, `RANGE` or `GROUPS`, then one bound or `BETWEEN <bound> AND <bound>`, then
+optionally `EXCLUDE CURRENT ROW | GROUP | TIES | NO OTHERS`. A bound is `UNBOUNDED PRECEDING`,
+`<n> PRECEDING`, `CURRENT ROW`, `<n> FOLLOWING` or `UNBOUNDED FOLLOWING`, where `<n>` is a
+non-negative integer — under `RANGE` also a decimal or `INTERVAL '<n> <unit>'`. Keywords are
+case-insensitive; at most `_FRAME_MAX_LENGTH` ASCII characters.
+
+PostgreSQL's own ordering rules are applied too, so a frame the server would refuse is refused
+here, before any SQL exists: the start is never `UNBOUNDED FOLLOWING`, the end never
+`UNBOUNDED PRECEDING`, and the end never comes before the start (a one-bound frame ends at
+`CURRENT ROW`).
+
+The result is rebuilt from the parsed pieces — upper-case keywords, single spaces — never the
+caller's text. `context` names the argument in the error message.
+"""
+function window_frame_sql(frame::AbstractString; context::AbstractString = "frame")
+  # `String` first: `match` refuses any other `AbstractString` (a `LazyString`, #603's probes).
+  s = String(frame)
+  function fail(why::AbstractString)
+    # The caller's text may be request input: `repr` escapes it, and a long one is cut to its start.
+    shown = ncodeunits(s) <= 64 ? repr(s) : repr(first(s, 48)) * "… ($(length(s)) characters)"
+    throw(InvalidValueError("$(context): $(shown) is not an accepted window frame ($(why)). Accepted: " *
+                            "ROWS, RANGE or GROUPS, then one bound or BETWEEN <bound> AND <bound>, " *
+                            "optionally followed by EXCLUDE CURRENT ROW | GROUP | TIES | NO OTHERS. " *
+                            "A bound is UNBOUNDED PRECEDING, <n> PRECEDING, CURRENT ROW, <n> FOLLOWING " *
+                            "or UNBOUNDED FOLLOWING, where <n> is a non-negative integer " *
+                            "(under RANGE also a decimal, or INTERVAL '<n> <unit>')."))
+  end
+  isascii(s) || fail("only ASCII is accepted")
+  ncodeunits(s) <= _FRAME_MAX_LENGTH || fail("longer than $(_FRAME_MAX_LENGTH) characters")
+  toks = String[m.match for m in eachmatch(_FRAME_TOKEN_RE, s)]
+  isempty(toks) && fail("it is empty")
+  # Keywords compare upper-cased; a quoted literal is only ever read through `_FRAME_INTERVAL_RE`.
+  kw(k::Int) = k <= length(toks) ? uppercase(toks[k]) : ""
+  # A token echoed in a reason is `repr`-escaped and cut to 24 characters, like the input above.
+  near(k::Int) = k > length(toks) ? "the end of the frame" : repr(first(toks[k], 24))
+
+  mode = kw(1)
+  mode in ("ROWS", "RANGE", "GROUPS") || fail("it must start with ROWS, RANGE or GROUPS")
+
+  # One bound at `i`: `(rank, sql, next_i)`. The rank orders the bound kinds the way PostgreSQL does
+  # — every PRECEDING form 1, CURRENT ROW 2, every FOLLOWING form 3 — which is all the start/end
+  # check needs. `unbounded` marks the two forms the start and the end each forbid one of.
+  function bound(i::Int)
+    t = kw(i)
+    if t == "CURRENT"
+      kw(i + 1) == "ROW" || fail("CURRENT must be followed by ROW, found $(near(i + 1))")
+      return 2, "CURRENT ROW", i + 2, false
+    end
+    j = i + 1
+    if t == "UNBOUNDED"
+      offset = "UNBOUNDED"
+    elseif !isempty(t) && all(isdigit, t)
+      offset = t
+    elseif occursin(r"^\d++\.\d++$", t)
+      mode == "RANGE" || fail("a decimal offset is only accepted under RANGE")
+      offset = t
+    elseif t == "INTERVAL"
+      mode == "RANGE" || fail("an INTERVAL offset is only accepted under RANGE")
+      m = j <= length(toks) ? match(_FRAME_INTERVAL_RE, lowercase(toks[j])) : nothing
+      m === nothing && fail("INTERVAL must be followed by a quoted '<n> <unit>'")
+      unit = m.captures[2]
+      # `Base.` because `Dialect.endswith` is the SQL renderer.
+      (unit in _FRAME_INTERVAL_UNITS || (Base.endswith(unit, "s") && chop(unit) in _FRAME_INTERVAL_UNITS)) ||
+        fail("the INTERVAL unit must be one of $(join(_FRAME_INTERVAL_UNITS, ", ")), singular or plural")
+      offset = "INTERVAL '$(m.captures[1]) $(unit)'"
+      j += 1
+    else
+      fail("expected a frame bound, found $(near(i))")
+    end
+    dir = kw(j)
+    dir in ("PRECEDING", "FOLLOWING") || fail("expected PRECEDING or FOLLOWING, found $(near(j))")
+    return (dir == "PRECEDING" ? 1 : 3), "$(offset) $(dir)", j + 1, offset == "UNBOUNDED"
+  end
+
+  if kw(2) == "BETWEEN"
+    start_rank, start_sql, i, start_unbounded = bound(3)
+    kw(i) == "AND" || fail("expected AND, found $(near(i))")
+    end_rank, end_sql, i, end_unbounded = bound(i + 1)
+    body = "BETWEEN $(start_sql) AND $(end_sql)"
+  else
+    start_rank, start_sql, i, start_unbounded = bound(2)
+    # A one-bound frame ends at the current row.
+    end_rank, end_unbounded = 2, false
+    body = start_sql
+  end
+  start_rank == 3 && start_unbounded && fail("the frame start cannot be UNBOUNDED FOLLOWING")
+  end_rank == 1 && end_unbounded && fail("the frame end cannot be UNBOUNDED PRECEDING")
+  start_rank <= end_rank || fail(body == start_sql ? "a one-bound frame ends at CURRENT ROW, so it cannot start FOLLOWING" :
+                                                      "the frame end comes before its start")
+
+  exclusion = ""
+  if kw(i) == "EXCLUDE"
+    rest = kw(i + 1)
+    if rest == "CURRENT" && kw(i + 2) == "ROW"
+      exclusion, i = " EXCLUDE CURRENT ROW", i + 3
+    elseif rest == "NO" && kw(i + 2) == "OTHERS"
+      exclusion, i = " EXCLUDE NO OTHERS", i + 3
+    elseif rest in ("GROUP", "TIES")
+      exclusion, i = " EXCLUDE $(rest)", i + 2
+    else
+      fail("EXCLUDE must be followed by CURRENT ROW, GROUP, TIES or NO OTHERS")
+    end
+  end
+  i > length(toks) || fail("unexpected $(near(i)) after the frame")
+  return "$(mode) $(body)$(exclusion)"
 end
 
 function CAST(column::String, format::Dict{String,Any}, conn::PormGPostgres)

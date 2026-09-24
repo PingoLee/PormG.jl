@@ -83,6 +83,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Transform Ladder Parity (#562)" include("unit/test_transform_ladder_parity.jl")
     @testset "Deep FK Traversal (3 hops)" include("unit/test_deep_fk_traversal.jl")
     @testset "Window Function SQL Generation" include("unit/test_window_functions.jl")
+    @testset "Q/Qor on an Aggregate Alias (#692)" include("unit/test_q_aggregate_alias.jl")
     @testset "Dedicated Inspection API" include("unit/test_inspect_query.jl")
     @testset "Reserved-word Columns via db_column (#317)" include("unit/test_reserved_word_fields.jl")
     @testset "Model_to_str Identifier Sanitizing (#317)" include("unit/test_model_to_str_identifiers.jl")

@@ -133,6 +133,12 @@ query.filter(
 # WHERE positionorder = 1 AND (nationality = 'Brazilian' OR nationality = 'British')
 ```
 
+### Q/Qor on Aggregate Aliases
+
+A condition on an aggregate alias (`values("wins" => Count("resultid"))`) inside `Q`/`Qor` renders
+in `HAVING`, and a `Q` that mixes it with column conditions is split between `WHERE` and `HAVING`.
+See [Filters and Aggregates](filters_and_aggregates.md#Q-and-Qor-on-Aggregate-Aliases).
+
 ---
 
 ## Q with F Expressions

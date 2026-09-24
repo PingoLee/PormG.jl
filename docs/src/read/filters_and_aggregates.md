@@ -911,6 +911,62 @@ Note the operands appear twice and bind twice — `$1`/`$2` for the projection, 
 
 For more complex expressions, see [Field Expressions](field_expressions.md).
 
+### `Q` and `Qor` on Aggregate Aliases
+
+An aggregate alias inside [`Q(...)` or `Qor(...)`](q_objects.md) goes to `HAVING` too. `Qor` is
+the only way to write an OR across aggregates, because separate `filter(...)` keys always combine
+with AND:
+
+```julia
+# Seasons with at least 20 races, or fewer than 10
+query = M.Race.objects
+query.values("year", "n" => Count("raceid"))
+query.filter(Qor("n__@gte" => 20, "n__@lt" => 10))
+```
+
+```sql
+SELECT "Tb"."year" as "year", COUNT("Tb"."raceid") as "n"
+FROM "race" as "Tb"
+GROUP BY 1
+HAVING (COUNT("Tb"."raceid") >= $1 OR COUNT("Tb"."raceid") < $2)
+```
+
+A `Q` is an AND, so it can hold both kinds of condition. PormG splits it the same way it splits
+separate `filter(...)` keys: column conditions go to `WHERE` and filter rows before they are
+grouped, and aggregate conditions go to `HAVING` and filter the groups:
+
+```julia
+# Constructors with at least 100 wins
+query = M.Result.objects
+query.values("constructorid__name", "wins" => Count("resultid"))
+query.filter(Q("positionorder" => 1, "wins__@gte" => 100))
+```
+
+```sql
+WHERE "Tb"."positionorder" = $1
+GROUP BY 1
+HAVING COUNT("Tb"."resultid") >= $2
+```
+
+A `Qor` cannot be split this way, because `a OR b` does not mean "`a` in `WHERE`, `b` in `HAVING`".
+A `Qor` that mixes an aggregate alias with a column condition raises `QueryBuildError` when the query
+is built. If the column is one you group by, project it as an aggregate alias as well, so that
+every term in the `Qor` filters groups:
+
+```julia
+# Races with fewer than 20 results, plus race 1 whatever its count
+query = M.Result.objects
+query.values("raceid", "n" => Count("resultid"), "race" => Max("raceid"))
+query.filter(Qor("n__@lt" => 20, "race" => 1))
+```
+
+```sql
+HAVING (COUNT("Tb"."resultid") < $1 OR MAX("Tb"."raceid") = $2)
+```
+
+Grouping by `raceid` means `Max("raceid")` is the same value as the group's `raceid`. You only need
+it because an alias is how a value gets into `HAVING`.
+
 ### Which Lookups Work on an Aggregate Alias
 
 A filter on a projection alias renders through the same operator ladder as a filter on a column, so

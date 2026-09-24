@@ -502,6 +502,13 @@ const DOCERR_CASES = [
         () -> DOCERR_STINT_PG.objects.filter("id" => 1).update("driver" => ["Senna", "Prost"],
                                                               show_query = :dict),
     ),
+    # #716 — "whatever its elements": a collection `format_text_sql` cannot map crashed inside the
+    # formatter as a raw `MethodError` before the #712 check ran.
+    (
+        "write/create.md — a collection of non-text elements in a text-like field raises InvalidValueError",
+        InvalidValueError,
+        () -> DOCERR_STINT_PG.objects.create("driver" => [1.5, 2.5], show_query = :dict),
+    ),
     (
         "read/filters_and_aggregates.md — a JSON path key with spaces is not addressable",
         InvalidValueError,

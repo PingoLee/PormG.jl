@@ -134,7 +134,7 @@ All updates pass through a centralized validation engine that enforces:
 - **Max Length**: Strings are checked against the model's `max_length`.
 - **Numeric Precision**: `DecimalField` and `FloatField` are checked for `max_digits` and `decimal_places`.
 - **Nullability**: Attempts to set non-nullable fields to `nothing` or `missing` will throw an error.
-- **Single Values**: A `Vector` set on a text-like field (`CharField`, `TextField`, …) raises `InvalidValueError` naming the field, on both backends. `JSONField` and `BinaryField` values are unaffected: each is serialized to one value first.
+- **Single Values**: A `Vector` or a tuple set on a text-like field (`CharField`, `TextField`, …) raises `InvalidValueError` naming the field, whatever its elements, on both backends. `JSONField` and `BinaryField` values are unaffected: each is serialized to one value first.
 - **ForeignKey Scalars**: FK fields accept scalar primary-key values, including `0`; use `nothing` or `missing` only when you intend SQL `NULL` on a nullable relation field.
 
 ### Pagination Guard

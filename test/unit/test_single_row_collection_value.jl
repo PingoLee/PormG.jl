@@ -19,6 +19,10 @@
 #   `bulk_copy` (PostgreSQL only) had the same gap after #672 — CSV wrote the vector's `repr` as the
 #   column text — and is covered here too, beside the single-row writers.
 #
+#   #716: the collection is refused whatever its ELEMENTS. `format_text_sql` could not format a
+#   `Float64`, a `nothing` or a tuple, so those crashed inside the formatter before the #712 check
+#   ran. `_format_single` now also checks the raw value first, for every field but JSON and binary.
+#
 # Deterministic and DB-free: mock PostgreSQL and SQLite connections, `show_query = :dict`. The
 # executing calls (`get_or_create`, `bulk_copy`) are refused before they reach the (absent) driver.
 # ============================================================
@@ -26,7 +30,7 @@
 using Test
 using PormG
 using PormG.Models: Model, IDField, CharField, TextField, JSONField
-using PormG.QueryBuilder: bulk_copy
+using PormG.QueryBuilder: bulk_copy, bulk_insert, bulk_update
 import DataFrames
 
 # Dedicated mocks and config keys so this file cannot contaminate (or be contaminated by) other
@@ -138,6 +142,47 @@ end
             () -> bulk_copy(SRCOLL712_MODELS[1].objects, df),
             PormG.config["srcoll712_pg"].connections, :mock_tx_conn))
         srcoll712_check(err, "forename")
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # A collection is refused whatever its elements, on every writer (#716).
+    # The #712 check ran only AFTER the field formatter, and `format_text_sql` maps a collection
+    # element-wise — so any element it cannot format crashed there first: `[1.5, 2.5]` and a tuple
+    # as a raw `MethodError`, `["A", nothing]` as a `Missing`→`String` convert error. Neither is in
+    # the #231 taxonomy and neither names the field. Each shape is asserted on each writer, and on
+    # bulk_update also as a MATCH column, which skips validation but is still formatted.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "a collection of any elements is refused before the formatter (#716)" begin
+        shapes = ([1.5, 2.5], ["Ayrton", nothing], ("Ayrton", "Senna"))
+        for m in SRCOLL712_MODELS, v in shapes
+            err = srcoll712_refusal(() -> m.objects.create("driverref" => "senna", "forename" => v, show_query = :dict))
+            srcoll712_check(err, "forename")
+            err = srcoll712_refusal(() -> m.objects.filter("id" => 1).update("surname" => v, show_query = :dict))
+            srcoll712_check(err, "surname")
+            err = srcoll712_refusal(() -> m.objects.update_or_create("driverref" => "senna",
+                                                                     defaults = ["forename" => v], show_query = :dict))
+            srcoll712_check(err, "forename")
+            err = srcoll712_refusal(() -> m.objects.get_or_create("driverref" => v))
+            srcoll712_check(err, "driverref")
+
+            df = DataFrames.DataFrame(driverref = ["senna"], forename = [v])
+            err = srcoll712_refusal(() -> bulk_insert(m.objects, df, show_query = :dict))
+            srcoll712_check(err, "forename")
+            err = srcoll712_refusal(() -> bulk_update(m.objects, df, columns = ["forename"],
+                                                      match_on = ["driverref"], show_query = :dict))
+            srcoll712_check(err, "forename")
+            key_df = DataFrames.DataFrame(driverref = [v], forename = ["Ayrton"])
+            err = srcoll712_refusal(() -> bulk_update(m.objects, key_df, columns = ["forename"],
+                                                      match_on = ["driverref"], show_query = :dict))
+            srcoll712_check(err, "driverref")
+        end
+        for v in shapes
+            df = DataFrames.DataFrame(driverref = ["senna"], forename = [v])
+            err = srcoll712_refusal(() -> PormG.Configuration.with_tx_context(
+                () -> bulk_copy(SRCOLL712_MODELS[1].objects, df),
+                PormG.config["srcoll712_pg"].connections, :mock_tx_conn))
+            srcoll712_check(err, "forename")
+        end
     end
 
     # ─────────────────────────────────────────────────────────────────────────────

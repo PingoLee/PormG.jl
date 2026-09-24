@@ -618,7 +618,7 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
     push!(quoted_field_columns, safe_column_identifier(Models.field_db_column(model.fields[field], field), connection))
 
     # Format and add value to parameters — one value, never a collection (#712)
-    formatted = _single_value(model.fields[field].formatter(real_obj.insert[field]), field, "insert")
+    formatted = _format_single(model.fields[field], field, real_obj.insert[field], "insert")
     push!(param_values, add_parameter!(parameters, formatted))
 
   end
@@ -866,7 +866,7 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
     v = target_values[f]
     v isa _CollectionValue || continue
     validate_field_data(model, f, v, "get_or_create"; allow_primary_key = true)
-    _single_value(model.fields[f].formatter(v), f, "get_or_create")
+    _format_single(model.fields[f], f, v, "get_or_create")
   end
 
   # get() by the conflict target through the fluent builder — dialect-correct binding for free, and
@@ -2144,7 +2144,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       f_value = _set_update_query(objct.insert[field], instruction)
       push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else
-      formatted_value = _single_value(model.fields[field].formatter(objct.insert[field]), field, "update")
+      formatted_value = _format_single(model.fields[field], field, objct.insert[field], "update")
       placeholder = add_parameter!(parameters, formatted_value)
       push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
     end

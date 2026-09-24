@@ -408,19 +408,37 @@ end
 _binary_byte_length(value::AbstractVector{UInt8})::Int = length(value)
 _binary_byte_length(value::AbstractString)::Int = ncodeunits(value)
 
-# One FORMATTED write value, checked to be a single value before it binds — every writer, both
-# backends, so they all raise alike (#672 bulk_insert/bulk_update, #712 create/update/get_or_create/
+# One write value, checked to be a single value before it binds — every writer, both backends, so
+# they all raise alike (#672 bulk_insert/bulk_update, #712 create/update/get_or_create/
 # update_or_create and bulk_copy).
 # Only a text-like field lets a collection through validation (`format_text_sql` maps a `Vector`
 # element-wise, for `__in`), and no column stores one faithfully: PostgreSQL binds it as one array
 # parameter (stored as `{"a","b"}` text), and SQLite expands it into extra `?` placeholders.
-# It runs AFTER the formatter on purpose: a `JSONField` vector is serialized to one string first, so
-# it passes. (`PormGBytes` is not an `AbstractArray`, so a binary value is untouched.)
 const _CollectionValue = Union{AbstractArray, Tuple, AbstractDict, NamedTuple}
 _single_value(value, ::AbstractString, ::AbstractString) = value
 function _single_value(value::_CollectionValue, field::AbstractString, op::AbstractString)
   throw(InvalidValueError("Error in $op, field `$field` was given a $(typeof(value)): a column holds a single value, not a collection."))
 end
+
+# The fields whose formatter turns a collection into ONE value: a `JSONField` serializes it to one
+# JSON string, a `BinaryField` wraps a `Vector{UInt8}` as one blob. Keyed on the field struct, so
+# `ImageField`/`FileField` (`"BLOB"`, but they hold path text) are not among them.
+_takes_collection(f_meta) = _is_json_field(f_meta) || _is_binary_field(f_meta)
+
+# The write path's format step, used at every bind site. The raw value is checked BEFORE the
+# formatter for every other field (#716): `format_text_sql` maps a collection element-wise, so an
+# element it cannot format — `[1.5, 2.5]`, `["a", nothing]`, a tuple — crashed there first, as a raw
+# `MethodError` that named no field. The formatted value is checked AFTER it too (#712), which is what
+# lets a `JSONField` vector through: it is one string by then.
+function _format_single(f_meta, field::AbstractString, value, op::AbstractString)
+  _refuse_collection(f_meta, field, value, op)
+  return _single_value(f_meta.formatter(value), field, op)
+end
+
+# The raw-value half on its own, for a caller that runs the bare formatter to find the failing cell
+# (the bulk writers' `_depuration_values_bulk_insert`), so it raises this refusal rather than its own.
+_refuse_collection(f_meta, field::AbstractString, value, op::AbstractString) =
+  (value isa _CollectionValue && !_takes_collection(f_meta)) ? _single_value(value, field, op) : nothing
 
 function validate_field_data(model::PormGModel, field::String, value::Any, operation::String; allow_primary_key::Bool = true)
     if haskey(model.fields, field) && Models.is_many_to_many_field(model.fields[field])

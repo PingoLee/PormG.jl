@@ -7,7 +7,7 @@
 #   `bulk_update` runs one statement per chunk. Every chunk's statement carries the same fixed
 #   prefix — the static `filters=` values `build()` bound, which on PostgreSQL also fixes the
 #   `$1…$k` numbering already rendered into the WHERE clause — followed by THAT chunk's rows and
-#   nothing else. The loop used to bind rows into the built collector and rewind it with a
+#   nothing else (on PostgreSQL, as one array per column since #672). The loop used to bind rows into the built collector and rewind it with a
 #   `deepcopy` snapshot at each chunk boundary, a rewind a row that threw mid-chunk never reached.
 #   Each chunk now binds into its own fork of the built collector (`_fork_parameters`), which
 #   leaves the source untouched by construction.
@@ -58,7 +58,9 @@ bcp73_df() = DataFrames.DataFrame(id = BCP73_IDS, points = BCP73_POINTS)
 
 # The row values a chunk must bind, in the order `bulk_update` binds them: every SET column, then
 # every match key — `joined_columns = unique(vcat(fields_df, match_on))`, here `[points, id]`.
+# SQLite binds them cell by cell, row after row; PostgreSQL binds one array per column (#672).
 bcp73_rows(idx) = reduce(vcat, ([BCP73_POINTS[i], BCP73_IDS[i]] for i in idx); init = Any[])
+bcp73_columns(idx) = Any[BCP73_POINTS[idx], BCP73_IDS[idx]]
 
 bcp73_update(model, df) = bulk_update(model.objects, df,
     columns    = ["points"],
@@ -119,7 +121,7 @@ bcp73_update(model, df) = bulk_update(model.objects, df,
     # earlier chunk.
     # With chunk_size = 2 and five rows there are three statements. A collector reused across
     # chunks (the defect class a missed rewind produces) would show chunk 1's rows inside chunk 2,
-    # and on PostgreSQL would number chunk 2's placeholders from $6 instead of $2.
+    # and on PostgreSQL would number chunk 2's arrays from $4 instead of $2.
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "each chunk carries only the fixed prefix and its own rows" begin
         chunks = [[1, 2], [3, 4], [5]]
@@ -129,13 +131,13 @@ bcp73_update(model, df) = bulk_update(model.objects, df,
             @test res isa AbstractVector
             @test length(res) == 3
             for (r, idx) in zip(res, chunks)
-                # The static filter binds first (at build time), so it is $1 in every chunk.
-                @test r[:parameters] == vcat(Any[1988], bcp73_rows(idx))
+                # The static filter binds first (at build time), so it is $1 in every chunk; the
+                # chunk's rows follow as one array per column (#672), holding only its own rows.
+                @test r[:parameters] == vcat(Any[1988], bcp73_columns(idx))
                 @test occursin(r"\"year\"\s*=\s*\$1\b", r[:sql_text])
-                # Row placeholders restart at $2 each chunk and stop at this chunk's own count.
-                n = 1 + 2 * length(idx)
-                @test occursin("\$$n", r[:sql_text])
-                @test !occursin("\$$(n + 1)", r[:sql_text])
+                # The two arrays are $2 and $3 in every chunk, however many rows it holds.
+                @test occursin("\$3", r[:sql_text])
+                @test !occursin("\$4", r[:sql_text])
             end
         end
 
@@ -160,7 +162,7 @@ bcp73_update(model, df) = bulk_update(model.objects, df,
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "a mid-chunk failure raises cleanly and leaves nothing behind" begin
         # Each backend's first-chunk parameters in its own clause order (see the testset above).
-        first_chunk = Dict(Bcp73_pg => vcat(Any[1988], bcp73_rows([1, 2])),
+        first_chunk = Dict(Bcp73_pg => vcat(Any[1988], bcp73_columns([1, 2])),
                            Bcp73_sl => vcat(bcp73_rows([1, 2]), Any[1988]))
         for model in (Bcp73_pg, Bcp73_sl)
             bad = DataFrames.DataFrame(id = BCP73_IDS,

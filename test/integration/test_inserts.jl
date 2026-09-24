@@ -742,6 +742,12 @@ end
     #      show_query assertion is the SQLite gate).
     #
     # nrows tracks the live backend limit: 4096 rows on SQLite (32766), 8192 on PG.
+    #
+    # Since #672 PostgreSQL binds one ARRAY per column — 8 parameters whatever the row
+    # count — so there the cap never binds: chunk_size == nrows is honoured as ONE
+    # statement, and executing it is the proof that 65535 no longer limits the chunk
+    # (nrows × 8 per-cell parameters would overflow the wire protocol). SQLite still
+    # binds per cell and keeps the two-chunk split.
     # ─────────────────────────────────────────────────────────────────────────
     @testset "auto-chunks to respect the backend bind-parameter limit (#84)" begin
         _clear_bulk_update_scratch_rows!()
@@ -781,21 +787,28 @@ end
                 nullable_int       = collect(1:nrows),
             )
 
-            # (1) Driver-independent wiring gate: chunk_size == nrows must still split
-            # into exactly two statements because the cap trims it to fld(limit, 8).
+            # (1) Driver-independent wiring gate. SQLite: chunk_size == nrows must still
+            # split into exactly two statements because the cap trims it to fld(limit, 8).
+            # PostgreSQL (#672): one statement, since a chunk binds 8 arrays, not nrows × 8 cells.
             res = bulk_insert(
                 M.Bulk_update_payload_scratch.objects, insert_df,
                 columns = columns, chunk_size = nrows, show_query = :sql,
             )
-            @test res isa Vector       # pre-fix returns one un-split SQL String → gate
-            @test length(res) == 2     # effective rows + 1 → two capped chunks
+            if PORMG_DB_FOLDER == "db_sl"
+                @test res isa Vector       # pre-fix returns one un-split SQL String → gate
+                @test length(res) == 2     # effective rows + 1 → two capped chunks
+            else
+                @test res isa String       # uncapped: the whole frame in one statement
+                @test occursin("unnest(", res)
+            end
 
-            # (2) End-to-end correctness: the auto-split writes the full set, not a subset.
+            # (2) End-to-end correctness: the full set is written, not a subset — across the
+            # SQLite chunk boundary, or past the old parameter ceiling in one PostgreSQL statement.
             split_insert = bulk_insert(
                 M.Bulk_update_payload_scratch.objects, insert_df,
                 columns = columns, chunk_size = nrows,
             )
-            @test split_insert.count == nrows   # both capped chunks counted (#670)
+            @test split_insert.count == nrows   # every chunk counted (#670)
             @test M.Bulk_update_payload_scratch.objects.count() == nrows
 
             # Spot-check the first and last rows (they straddle the chunk boundary)

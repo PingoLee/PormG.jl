@@ -430,9 +430,10 @@ end
     change_data=true,
   )
 
+  # One row, bound as PostgreSQL binds a chunk: one array per column (#672).
   params = PormG.QueryBuilder.PgParameterizedQuery("", Any[], 0)
-  PormG.QueryBuilder.add_parameter!(params, 9)
-  PormG.QueryBuilder.add_parameter!(params, "Lewis")
+  PormG.QueryBuilder.add_parameter!(params, Any[9]; sql_type = "bigint[]")
+  PormG.QueryBuilder.add_parameter!(params, Any["Lewis"]; sql_type = "varchar[]")
 
   original_fetch = fetch
   @eval begin
@@ -471,7 +472,7 @@ end
       SequenceDriver,
       settings.connections,
       ["id", "forename"],
-      ["(\$1, \$2)"],
+      "SELECT * FROM unnest(\$1::bigint[], \$2::varchar[])",
       true,
       ["id"],
       settings,

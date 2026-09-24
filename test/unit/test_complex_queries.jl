@@ -431,7 +431,9 @@ ResultNoPrefixModel._module = Main
     @test haskey(res_insert, :sql_text)
     @test haskey(res_insert, :parameters)
     @test contains(res_insert[:sql_text], "INSERT")
-    @test length(res_insert[:parameters]) >= 9  # 3 rows × 3 fields
+    # PostgreSQL binds one array per column (#672): 3 fields, each carrying the 3 rows.
+    @test length(res_insert[:parameters]) == 3
+    @test all(p -> length(p) == 3, res_insert[:parameters])
 
     # Test: bulk_insert with :sql mode
     res_sql = DriverModel |> PormG.QueryBuilder.bulk_insert(df_insert, show_query=:sql)

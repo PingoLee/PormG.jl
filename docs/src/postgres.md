@@ -128,6 +128,7 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 |------|-----------|--------|
 | **Bind placeholders** | `$1`, `$2`, … | `?` |
 | **Bulk load** | `bulk_copy()` (COPY) | `bulk_insert()` (no COPY) |
+| **`bulk_insert` / `bulk_update` rows** | one array parameter per column, `unnest(...)`; no parameter cap on `chunk_size` | one `?` per cell in `VALUES`; `chunk_size` capped at SQLite's parameter limit — see [How rows reach the database](write/bulk.md#How-rows-reach-the-database) |
 | **Advisory locks** | real (`pg_advisory_lock`) | no-op (warns once per key; `on_missing_lock=:error` raises) |
 | **PK allocation** | real sequences (`nextval`) | emulated via `sqlite_sequence` high-water mark |
 | **Drop a constraint (migrations)** | `ALTER TABLE … DROP CONSTRAINT` | full table rebuild (SQLite has no `DROP CONSTRAINT`) |

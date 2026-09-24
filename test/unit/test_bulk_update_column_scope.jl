@@ -44,7 +44,9 @@ Metric = Model("metrics",
 Metric.connect_key = "default"
 
 # Mock PostgreSQL settings — no live DB needed; show_query=:dict
-# exits before any network call.
+# exits before any network call. PostgreSQL binds the rows as one array per source
+# column (#672), so each one-row frame below binds one-element arrays after any
+# static-filter values.
 struct MockPgScope <: PormG.PormGPostgres end
 PormG.config["default"] = PormG.Configuration.Settings(
     connections = MockPgScope(),
@@ -162,12 +164,13 @@ df_upd = DataFrames.DataFrame(
         #   1. static filter value for city_id
         #   2. weight
         #   3. score
-        #   4. id (dynamic filter column in the VALUES source)
+        #   4. id (dynamic filter column in the row source)
+        # On PostgreSQL 2–4 are one array per source column (#672) — here one row each.
         @test res[:parameter_count] == 4
 
         params = res[:parameters]
 
-        @test params == Any[141341324, 1, "0.75", 4606]
+        @test params == Any[141341324, [1], ["0.75"], [4606]]
     end
 
     # ------------------------------------------------------------------
@@ -208,7 +211,7 @@ df_upd = DataFrames.DataFrame(
         @test occursin("\"weight\"", source_cols_missing)
         @test !occursin("result_value", source_cols_missing)
         @test res_missing_requested[:parameter_count] == 3
-        @test res_missing_requested[:parameters] == Any[141341324, 1, 4606]
+        @test res_missing_requested[:parameters] == Any[141341324, [1], [4606]]
     end
 
 end
@@ -284,7 +287,7 @@ end
 
         # The parameter vector should follow the same order as the VALUES source.
         @test res_auto[:parameter_count] == 7
-        @test res_auto[:parameters] == Any[4606, 141341324, 1, "0.75", 570, 30675, "53.8"]
+        @test res_auto[:parameters] == Any[[4606], [141341324], [1], ["0.75"], [570], [30675], ["53.8"]]
     end
 
 end
@@ -314,7 +317,7 @@ end
     @test occursin("\"numerator\"", sql_insert)
     @test occursin("\"result_value\"", sql_insert)
     @test res_insert[:parameter_count] == 5
-    @test res_insert[:parameters] == Any[1, "0.75", 0, 0, "0"]
+    @test res_insert[:parameters] == Any[[1], ["0.75"], [0], [0], ["0"]]
 end
 
 # ------------------------------------------------------------------
@@ -381,7 +384,7 @@ end
         @test occursin("\"weight\"", set_text)
         @test !occursin("\"id\" =", set_text)   # match key is not SET
         # Source order: update column first, then the match key.
-        @test res[:parameters] == Any[9, 4606]
+        @test res[:parameters] == Any[[9], [4606]]
     end
 
     # The pre-#107 pair grammar must fail loudly with the rewrite, not silently
@@ -424,7 +427,7 @@ end
             show_query = :dict
         )
         # Params prove the mapping won: 4606 (df.record_id), not 999 (df.id).
-        @test res[:parameters] == Any[9, 4606]
+        @test res[:parameters] == Any[[9], [4606]]
     end
 
     # When match_on is given, filters are ALWAYS static — no content heuristic.
@@ -547,7 +550,7 @@ end
         @test occursin("\"id\"", source_cols)
         @test occursin("\"city_id\"", source_cols)
         # Params follow the source order: weight, id, city_id.
-        @test res[:parameters] == Any[1, 4606, 141341324]
+        @test res[:parameters] == Any[[1], [4606], [141341324]]
     end
 
     # Duplicate detection must consider the full composite key tuple, not just one.
@@ -688,7 +691,7 @@ end
             show_query = :dict
         )
         @test occursin("\"Tb\".\"id\" = source.\"id\"", res[:sql_text])
-        @test res[:parameters] == Any[9, 4606]
+        @test res[:parameters] == Any[[9], [4606]]
     end
 
     # ─────────────────────────────────────────────────────────────────────────────
@@ -750,7 +753,7 @@ end
         sql = res[:sql_text]
         @test occursin("\"Tb\".\"id\" = source.\"id\"", sql)            # PK merge
         @test occursin(r"AND\s+\"Tb\"\.\"city_id\"\s*=\s*\$1", sql)     # static guard
-        @test res[:parameters] == Any[141341324, 1, 4606]
+        @test res[:parameters] == Any[141341324, [1], [4606]]
     end
 
     # A model with no primary key and no match_on cannot identify rows: hard error.
@@ -849,8 +852,8 @@ end
             # that from emitting `SET "weight" = ..., "weight" = ...`, which PostgreSQL rejects
             # with "multiple assignments to same column". Pin the exact SET clause and the bound
             # values (10 from c1, then the match key) — an occursin alone passes either way.
-            @test occursin("SET \"weight\" = source.\"weight\"::integer\n", res[:sql_text])
-            @test res[:parameters] == Any[10, 4606]
+            @test occursin("SET \"weight\" = source.\"weight\"\n", res[:sql_text])
+            @test res[:parameters] == Any[[10], [4606]]
         end
 
         # 3. Bare string + Pair from different source column when field ∈ names(df): MUST raise
@@ -905,8 +908,8 @@ end
             )
             @test occursin("\"weight\"", res[:sql_text])
             # Same de-duplication contract as the Pair repeat above, via the bare-string branch.
-            @test occursin("SET \"weight\" = source.\"weight\"::integer\n", res[:sql_text])
-            @test res[:parameters] == Any[10, 4606]
+            @test occursin("SET \"weight\" = source.\"weight\"\n", res[:sql_text])
+            @test res[:parameters] == Any[[10], [4606]]
         end
 
         # 5. Bare string + Pair when bare string ∉ names(df): MUST succeed
@@ -932,7 +935,7 @@ end
                 show_query = :dict
             )
             @test occursin("\"laps\"", res1[:sql_text])
-            @test res1[:parameters] == Any[45]
+            @test res1[:parameters] == Any[[45]]
 
             # Order 2: ["c2" => "laps", "laps"]
             res2 = bulk_insert(
@@ -941,7 +944,7 @@ end
                 show_query = :dict
             )
             @test occursin("\"laps\"", res2[:sql_text])
-            @test res2[:parameters] == Any[45]
+            @test res2[:parameters] == Any[[45]]
         end
     end
 
@@ -985,7 +988,7 @@ end
             match_on   = ["updated_at"],               # ...and is also the merge key
             show_query = :dict
         )
-        @test res[:parameters] == Any[9, "1999-01-01T00:00:00.000+00:00"]
+        @test res[:parameters] == Any[[9], ["1999-01-01T00:00:00.000+00:00"]]
         # The merge key is matched, never SET — `deny_fields` keeps it out of the SET clause, so
         # the auto_now does NOT refresh on this call.
         #
@@ -995,7 +998,7 @@ end
         # so it is true whether or not the field leaked into SET. Narrowing to the clause is what
         # makes the negative assertion able to fail — the leak shape (same call with
         # `match_on = ["id"]`, where `updated_at` IS set) renders
-        # `SET "points" = ..., "updated_at" = source."updated_at"::timestamptz`.
+        # `SET "points" = ..., "updated_at" = source."updated_at"`.
         set_clause = match(r"SET (.*?)\nFROM"s, res[:sql_text]).captures[1]
         @test occursin("\"points\" = source.\"points\"", set_clause)
         @test !occursin("updated_at", set_clause)
@@ -1023,7 +1026,7 @@ end
                 show_query = :dict
             )
         end
-        @test res[:parameters] == Any[9, "1999-01-01T00:00:00.000+00:00"]
+        @test res[:parameters] == Any[[9], ["1999-01-01T00:00:00.000+00:00"]]
     end
 
     # No caller source at all: the fill is the ONLY value available, and binding it would mean
@@ -1101,7 +1104,7 @@ end
         # Control: the same model with the pk column PRESENT resolves normally and binds it.
         res = bulk_update(Scope_pk.objects,
             DataFrames.DataFrame(points = [9], code = ["Z"]), show_query = :dict)
-        @test res[:parameters] == Any[9, "Z"]
+        @test res[:parameters] == Any[[9], ["Z"]]
     end
 
     # A case-only near-miss stays the FIRST diagnosis, ahead of the new fill message. It is the
@@ -1141,7 +1144,7 @@ end
             match_on   = ["updated_at"],             # ...and the `updated_at` merge key
             show_query = :dict
         )
-        @test res[:parameters] == Any["1999-01-01T00:00:00", "1999-01-01T00:00:00.000+00:00"]
+        @test res[:parameters] == Any[["1999-01-01T00:00:00"], ["1999-01-01T00:00:00.000+00:00"]]
         @test occursin("SET \"note\" = source.\"note\"", res[:sql_text])
         @test occursin("WHERE \"Tb\".\"updated_at\" = source.\"updated_at\"", res[:sql_text])
         # No private fill name escapes into the rendered SQL.

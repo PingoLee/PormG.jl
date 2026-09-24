@@ -90,39 +90,43 @@ Bdfs_uuid_pk.connect_key = "bdfs_mock"
 # parameter index. Looking values up by name keeps these assertions readable and
 # immune to a future change in the order injected columns are appended — which is a
 # real risk here, since present columns come first and injected ones are appended.
+#
+# The mock is PostgreSQL, where a bulk statement binds one ARRAY per column (#672) —
+# `SELECT * FROM unnest($1::…[], …)` — while create() binds one scalar per column. The
+# helpers below read either shape, so the create()/bulk parity assertions compare values,
+# not the bulk path's transport.
 # ------------------------------------------------------------------
 function insert_columns(res)
-    m = match(r"INSERT INTO\s+\S+\s*\((.*?)\)\s*VALUES"s, res[:sql_text])
+    m = match(r"INSERT INTO\s+\S+\s*\((.*?)\)\s*(?:VALUES|SELECT)"s, res[:sql_text])
     m === nothing && error("could not parse an INSERT column list from: $(res[:sql_text])")
     return [strip(c, ['"', ' ', '\n', '\r', '\t']) for c in split(m.captures[1], ",")]
 end
 
+# A one-row statement's bound values, one per column: a bulk column array holds exactly one.
+row_values(res) = Any[v isa AbstractVector ? only(v) : v for v in res[:parameters]]
+
 function param_for(res, col)
     idx = findfirst(==(col), insert_columns(res))
     idx === nothing && error("column $(col) is not in the INSERT: $(res[:sql_text])")
-    return res[:parameters][idx]
+    return row_values(res)[idx]
 end
 
-# The bulk_update VALUES source list plays the same role for an UPDATE.
+# The bulk_update source column list plays the same role for an UPDATE.
 function source_param_for(res, col)
     m = match(r"AS\s+source\s*\((.*?)\)"s, res[:sql_text])
     m === nothing && error("could not parse a source column list from: $(res[:sql_text])")
     cols = [strip(c, ['"', ' ', '\n', '\r', '\t']) for c in split(m.captures[1], ",")]
     idx = findfirst(==(col), cols)
     idx === nothing && error("column $(col) is not in the source list: $(res[:sql_text])")
-    return res[:parameters][idx]
+    return row_values(res)[idx]
 end
 
 # Every bound value for `col`, across all rows — for asserting per-row DISTINCTNESS (#334) rather
-# than just presence. `parameters` is a flat, row-major vector: bulk_insert renders one
-# `VALUES (?,?),(?,?),...` clause per row in the same column order, so column `idx` out of `n`
-# total columns appears at flat positions `idx, idx+n, idx+2n, ...`.
+# than just presence. On PostgreSQL that is the column's own array (#672), in row order.
 function params_for(res, col)
-    cols = insert_columns(res)
-    idx = findfirst(==(col), cols)
+    idx = findfirst(==(col), insert_columns(res))
     idx === nothing && error("column $(col) is not in the INSERT: $(res[:sql_text])")
-    n = length(cols)
-    return res[:parameters][idx:n:end]
+    return res[:parameters][idx]
 end
 
 @testset "#331: PormG fills only absent columns" begin
@@ -144,7 +148,7 @@ end
 
         # Same columns, same bound values — the two paths are substitutable.
         @test insert_columns(c) == insert_columns(b)
-        @test isequal(c[:parameters], b[:parameters])
+        @test isequal(row_values(c), row_values(b))
 
         # …and independently, the value is actually NULL on each path (pre-fix the bulk
         # arm bound 0 here, which is the whole bug).

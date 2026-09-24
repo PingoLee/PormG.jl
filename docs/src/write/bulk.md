@@ -82,6 +82,34 @@ Qualifications:
 - **`match_on` key columns are not null-checked.** They identify rows rather than being written, so a blank cell in one does not raise — it simply matches nothing, since `column = NULL` is never true. Before this rule changed, such a blank was quietly back-filled with the field's `default` and matched the default-valued row instead. (`filters=` fields are exempt from the check too, but they carry constants rather than `DataFrame` columns, so no cell can be blank there.)
 - An auto-increment primary key column whose values are **all** blank counts as absent, so the database allocates the ids. A `UUIDField(auto_add = true)` primary key follows the same rule too — see [Auto-Generated Primary Keys](#Auto-Generated-Primary-Keys) for both.
 
+### How rows reach the database
+
+`bulk_insert()` and `bulk_update()` send each chunk as one statement, but the two backends carry the rows differently. SQLite has no array parameters, so this divergence is intentional:
+
+| | PostgreSQL | SQLite |
+| :--- | :--- | :--- |
+| Row source | one **array parameter per column**, expanded by `unnest(...)` | one `?` per cell in a `VALUES` list |
+| Parameters per statement | one per column, plus any `filters=` / handler values | rows × columns, plus any `filters=` / handler values |
+| Chunk size | `chunk_size` as given — no parameter cap applies (a non-positive `chunk_size` falls back to 65,535 ÷ columns rows) | `chunk_size`, lowered automatically so a statement stays under SQLite's limit of 32,766 parameters (999 on SQLite builds older than 3.32) |
+| Statement text | the same for every chunk | grows with the chunk's row count |
+
+For a table whose columns have the types their fields declare — every table PormG created or migrated — what you observe is the same on both: the rows written, the returned `count`, and the errors raised. Only the inspection output differs, because `show_query` shows what each backend actually runs. On PostgreSQL, `show_query = :params` returns one vector per column, after any filter values:
+
+```julia
+bulk_insert(M.Status.objects, statuses_df, show_query = :params)
+# PostgreSQL: Any[Any[1, 3, 4, 130], Any["Finished", "Accident", "Collision", "Withdrew"]]
+# SQLite:     Any[1, "Finished", 3, "Accident", 4, "Collision", 130, "Withdrew"]
+```
+
+Each cell must hold a single value on both backends. A `Vector` in a text-like column (`CharField`, `TextField`, …) raises `InvalidValueError` naming the field, since neither row source can store it. `JSONField` and `BinaryField` values are unaffected: each is serialized to one value first.
+
+!!! warning "PostgreSQL: the column must have its field's type"
+    Each array is typed with the column type its field renders, the same cast `bulk_update()` has always applied. So on PostgreSQL a bulk write fails when there is no *assignment cast* from the field's type to the column's real type. The typical case is an enum, `inet`, `xml`, `tsvector`, array, range or geometric column adopted from an existing database and declared as a `TextField`/`CharField`; the statement then fails with the database's `… is of type … but expression is of type text` error.
+
+    A difference that does have an assignment cast (`varchar` into `text`, `integer` into `bigint`) is written normally. A `json` (not `jsonb`) column under a `JSONField` is written, but normalized the way `jsonb` normalizes.
+
+    For a column that fails, use `bulk_copy()` for a plain insert, or `create()` / `update_or_create()` row by row, or retype the column to what the field declares.
+
 ---
 
 ## Performance Comparison
@@ -113,18 +141,17 @@ rename!(df, lowercase.(names(df)))
 query = M.Driver.objects
 bulk_insert(query, df)
 
-# Adjust chunk size for tables with many columns
+# Adjust the rows sent per statement
 bulk_insert(query, df, chunk_size=500)
 ```
 
-**Generated SQL (PostgreSQL):**
+**Generated SQL (PostgreSQL)**, for a frame carrying `driverref`, `forename`, `surname`, `dob` and `nationality` — one array per column, expanded by `unnest`, so every chunk sends the same statement:
 ```sql
-INSERT INTO "driver" ("forename", "surname", "nationality", "driverref", "dob") 
-VALUES 
-  ($1, $2, $3, $4, $5), 
-  ($6, $7, $8, $9, $10),
-  -- ... (batched up to chunk_size rows)
+INSERT INTO "driver" ("driverref", "forename", "surname", "dob", "nationality")
+SELECT * FROM unnest($1::varchar[], $2::varchar[], $3::varchar[], $4::date[], $5::varchar[])
 ```
+
+SQLite renders the same call as `VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), …` — see [How rows reach the database](#How-rows-reach-the-database).
 
 ### Conflict Handling (ON CONFLICT)
 
@@ -152,7 +179,7 @@ bulk_insert(M.Status.objects, statuses_df,
 **Generated SQL (PostgreSQL):**
 ```sql
 INSERT INTO "status" ("statusid", "status")
-VALUES ($1, $2), ($3, $4), ($5, $6), ($7, $8)
+SELECT * FROM unnest($1::bigint[], $2::varchar[])
 ON CONFLICT ("statusid") DO UPDATE SET "status" = EXCLUDED."status"
 ```
 
@@ -252,16 +279,17 @@ bulk_insert(query, df)
 
 ### Atomicity and Transactions
 
-By default, `bulk_insert()` chunks data and processes each chunk in its own transaction. If any chunk fails, **only that chunk is rolled back**, not the entire operation.
+One `bulk_insert()` call is all-or-nothing on its own: every chunk runs inside a single transaction, so if any chunk fails, the chunks already sent are rolled back with it. `bulk_update()` and `bulk_copy()` do the same. Inside an open transaction the call joins it instead of opening its own.
 
-To ensure all-or-nothing semantics (all rows inserted or none), wrap `bulk_insert()` in `run_in_transaction()`:
+To make **several** calls succeed or fail together, wrap them in `run_in_transaction()`:
 
 ```julia
 using PormG, LibPQ   # "db_2" is a PostgreSQL connection
 
-# All inserts succeed together, or all fail together
+# The drivers and their standings land together, or neither does
 PormG.run_in_transaction("db_2") do
-    bulk_insert(M.Driver.objects, df)
+    bulk_insert(M.Driver.objects, drivers_df)
+    bulk_insert(M.Driver_standings.objects, standings_df)
 end
 ```
 
@@ -446,7 +474,7 @@ bulk_copy(M.Result.objects, results_df)
 
 **One border crossing.** `columns=` is the only argument where DataFrame names appear; `match_on=` and `filters=` always speak the model's field language. That keeps every `=>` in the bulk API meaning the same thing — "df column *to* model field" — and it appears exactly once.
 
-PormG validates every row up front, then emits a multi-row `UPDATE` using a `VALUES` source (PostgreSQL) or `WITH source(...) AS (VALUES ...)` form (SQLite).
+PormG validates every row, then emits a multi-row `UPDATE … FROM` over a row source: one array per column expanded by `unnest(...)` on PostgreSQL, a `WITH source(...) AS (VALUES ...)` CTE on SQLite (see [How rows reach the database](#How-rows-reach-the-database)).
 
 !!! note "Migrated from a single `filters=` argument"
     Earlier versions packed both row-matching keys and constant predicates into `filters=`. Row matching now lives in `match_on=`. Passing a per-row match key in `filters=` (a bare string, or a `"df_col" => "model_field"` pair) raises an error telling you to move it to `match_on=` — there is no silent fallback.
@@ -475,19 +503,15 @@ bulk_update(query, df,
 )
 ```
 
-**Generated SQL (PostgreSQL):**
+**Generated SQL (PostgreSQL):** `$1` carries every row's `points` and `$2` every row's `resultid`, so the statement is the same whatever the chunk's row count:
 ```sql
-UPDATE "result" AS "Tb" 
-SET "points" = source."points"::float 
-FROM (VALUES 
-  (26.0::double precision, 1::bigint), 
-  (19.0::double precision, 2::bigint),
-  -- ... (chunked multi-row values)
-) AS source ("points", "resultid") 
-WHERE "Tb"."resultid" = source."resultid"::bigint
+UPDATE "result" AS "Tb"
+SET "points" = source."points"
+FROM unnest($1::float[], $2::bigint[]) AS source ("points","resultid")
+WHERE "Tb"."resultid" = source."resultid"
 ```
 
-The `VALUES` source columns are always the **model field names** (`points`, `resultid`), in SET-fields-then-match-keys order — never the DataFrame column names. The DataFrame mapping is applied when reading the values into the parameters, so the SQL you inspect is always expressed in model terms.
+The `source` columns are always the **model field names** (`points`, `resultid`), in SET-fields-then-match-keys order — never the DataFrame column names. The DataFrame mapping is applied when reading the values into the parameters, so the SQL you inspect is always expressed in model terms.
 
 ```julia
 # Using explicit mapping (Adaptor style)
@@ -499,21 +523,17 @@ custom_df = DataFrame(
 
 bulk_update(query, custom_df,
     columns=["new_score" => "points",       # SET: map 'new_score' to field 'points'
-             "record_id" => "id"],          # mapping for the match key (not SET)
-    match_on=["id"]                         # merge key, by model field name
+             "record_id" => "resultid"],    # mapping for the match key (not SET)
+    match_on=["resultid"]                   # merge key, by model field name
 )
 ```
 
-**Generated SQL (PostgreSQL):** the mapped DataFrame names (`new_score`, `record_id`) do **not** appear — the source is named with the model fields they map to (`points`, `id`):
+**Generated SQL (PostgreSQL):** the mapped DataFrame names (`new_score`, `record_id`) do **not** appear — the source is named with the model fields they map to (`points`, `resultid`):
 ```sql
-UPDATE "result" AS "Tb" 
-SET "points" = source."points"::integer 
-FROM (VALUES 
-  (25::integer, 1::bigint), 
-  (18::integer, 2::bigint), 
-  (15::integer, 3::bigint)
-) AS source ("points", "id") 
-WHERE "Tb"."id" = source."id"::bigint
+UPDATE "result" AS "Tb"
+SET "points" = source."points"
+FROM unnest($1::float[], $2::bigint[]) AS source ("points","resultid")
+WHERE "Tb"."resultid" = source."resultid"
 ```
 
 ### Matching and Execution Rules
@@ -547,9 +567,9 @@ bulk_update(M.Result.objects.filter("raceid__@in" => season_1988), df_rescored,
 returned `count` (see [Return Value](#Return-Value)):
 ```sql
 UPDATE "result" AS "Tb"
-SET "points" = source."points"::float
-FROM (VALUES ($2, $3), ($4, $5)) AS source ("points", "resultid")
-WHERE "Tb"."resultid" = source."resultid"::bigint AND
+SET "points" = source."points"
+FROM unnest($2::float[], $3::bigint[]) AS source ("points","resultid")
+WHERE "Tb"."resultid" = source."resultid" AND
    "Tb"."raceid" IN (SELECT "R1"."raceid" as "raceid" FROM "race" as "R1" WHERE "R1"."year" = $1)
 ```
 
@@ -639,22 +659,19 @@ end
 # Per-row match key + constant scope guard
 bulk_update(query, df,
     columns=["new_points" => "points",
-             "record_id" => "id"],    # mapping for the match key (not SET)
-    match_on=["id"],                  # match DB 'id' against DF 'record_id'
-    filters=["category_id" => 172100] # constant: only rows where category_id is 172100
+             "record_id" => "resultid"],  # mapping for the match key (not SET)
+    match_on=["resultid"],                # match DB 'resultid' against DF 'record_id'
+    filters=["raceid" => 1073]            # constant: only results of race 1073
 )
 ```
 
-**Generated SQL (PostgreSQL):** again the source columns are the model fields (`points`, `id`), not the DataFrame names (`new_points`, `record_id`):
+**Generated SQL (PostgreSQL):** again the source columns are the model fields (`points`, `resultid`), not the DataFrame names (`new_points`, `record_id`). The constant filter binds first, as `$1`, and the column arrays follow:
 ```sql
-UPDATE "result" AS "Tb" 
-SET "points" = source."points"::integer 
-FROM (VALUES 
-  (25::integer, 1::bigint), 
-  (18::integer, 2::bigint)
-) AS source ("points", "id") 
-WHERE "Tb"."id" = source."id"::bigint 
-  AND "Tb"."category_id" = 172100
+UPDATE "result" AS "Tb"
+SET "points" = source."points"
+FROM unnest($2::float[], $3::bigint[]) AS source ("points","resultid")
+WHERE "Tb"."resultid" = source."resultid" AND
+   "Tb"."raceid" = $1
 ```
 
 The `WHERE` clause is the `match_on=` merge condition AND the `filters=` predicates AND any filters already on the handler (see [Scoping an update with the handler](#Scoping-an-update-with-the-handler)). If you used `query.filter(...)` to *read* the rows you are about to write, passing that same handler keeps its predicate in the update — which is what you want when the predicate is on the model's own columns, and a `QueryBuildError` when it traverses a relation (see below).
@@ -662,7 +679,7 @@ The `WHERE` clause is the `match_on=` merge condition AND the `filters=` predica
 ### Join Limits
 
 - **Base-table lookup operators are supported**: Static filters such as `"points__@in" => [18, 25]` or `"statusid__@isnull" => true` are valid as long as they only reference columns on the model being updated.
-- **Relation traversals that require JOINs are rejected**: Constant filters such as `"statusid__status" => "Finished"` or `"raceid__circuitid__country" => "Italy"` are not allowed on `bulk_update()` because the `VALUES`-driven mutation path cannot safely merge in joined query state.
+- **Relation traversals that require JOINs are rejected**: Constant filters such as `"statusid__status" => "Finished"` or `"raceid__circuitid__country" => "Italy"` are not allowed on `bulk_update()` because the row-source mutation path (`unnest(...)` / `VALUES`) cannot safely merge in joined query state.
 - **Workaround**: Read the target rows through a normal joined query, mutate the resulting `DataFrame`, then write back through a fresh handler matching on the primary key only. The handler must not carry the joined filter: its filters are part of the update's scope, and a joined one is rejected like a joined column.
   
 ```julia

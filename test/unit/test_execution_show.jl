@@ -47,7 +47,8 @@ PormG.config["default"] = MockSettings
   res_bulk = TestDriver |> PormG.QueryBuilder.bulk_insert(df, show_query=:dict)
   @test res_bulk isa Dict
   @test haskey(res_bulk, :sql_text)
-  @test res_bulk[:parameters] == ["Max", "Verstappen", "Fernando", "Alonso"]
+  # PostgreSQL binds a bulk statement as one array per column (#672).
+  @test res_bulk[:parameters] == [["Max", "Fernando"], ["Verstappen", "Alonso"]]
 
   # bulk_update with :dict
   df_update = DataFrames.DataFrame(id=[1, 2], forename=["Max", "Fernando"], surname=["Verstappen", "Alonso"])

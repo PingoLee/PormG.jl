@@ -224,7 +224,16 @@ want; [`WindowSpec`](@ref) is the value it returns.
   a `Joined` column, which only a handle can name. An `SQLOrder`'s direction is its own
   `orientation`, so `desc = true` on a handle nested inside one is refused; pass
   `orientation = "DESC"` instead.
-- `frame`: a raw frame clause such as `"ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"`.
+- `frame`: a frame clause such as `"ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"`.
+  It is SQL grammar rather than a value, so it cannot be a bind parameter: PormG parses it and
+  writes its own spelling back. Accepted: `ROWS`, `RANGE` or `GROUPS`, then one bound or
+  `BETWEEN <bound> AND <bound>`, optionally followed by
+  `EXCLUDE CURRENT ROW | GROUP | TIES | NO OTHERS`. A bound is `UNBOUNDED PRECEDING`,
+  `<n> PRECEDING`, `CURRENT ROW`, `<n> FOLLOWING` or `UNBOUNDED FOLLOWING`, where `<n>` is a
+  non-negative integer (under `RANGE` also a decimal, or `INTERVAL '<n> <unit>'`). Keywords are
+  case-insensitive. Anything else — including a frame PostgreSQL itself would refuse, such as one
+  whose end comes before its start — raises `InvalidValueError` when `WindowOver` is called, on
+  both backends.
 
 Both list arguments accept a bare scalar, so `partition_by = "raceid"` and
 `partition_by = ["raceid"]` are equivalent. An entry of any other type raises
@@ -261,10 +270,14 @@ function WindowOver(partition_by, order_by=WindowOrderPart[]; frame::Union{Abstr
   # `test_docstring_coverage.jl` and then the docs build, unresolving the five `[`WindowOver`](@ref)`
   # links in `src/PormG.jl`, this file and `types.jl` (`api.md` renders them through `@autodocs`;
   # it contains no `@ref` of its own).
+  #
+  # #713: the frame is SQL grammar, not a value, so it is parsed here and stored as PormG's own
+  # rebuilt spelling — a hostile string never reaches the node. `_build_over_clause` parses again,
+  # because `WindowSpec` is exported and mutable and can be assembled without this constructor.
   return WindowSpec(
     partition_by=_window_part_vector(partition_by, "partition_by"),
     order_by=_window_order_vector(order_by),
-    frame=frame
+    frame=frame === nothing ? nothing : Dialect.window_frame_sql(frame)
   )
 end
 function WindowOver(; partition_by=WindowPartitionPart[], order_by=WindowOrderPart[], frame::Union{AbstractString,Nothing}=nothing)

@@ -1107,9 +1107,11 @@ function _build_over_clause(over::WindowSpec, instruc::SQLInstruction)::String
   end
 
   if over.frame !== nothing
-    instruc.connection isa PormGSQLite && throw(BackendCapabilityError("SQLite window functions in PormG do not support explicit frame specifications yet. Remove frame=$(repr(over.frame)) or use PostgreSQL."))
-    frame = strip(over.frame)
-    isempty(frame) && throw(QueryBuildError("Window frame cannot be empty"))
+    # #713: parsed again at the sink — `WindowOver` already did, but a `WindowSpec` built or mutated
+    # directly never passed through it. Parsed BEFORE the SQLite refusal, so that message echoes
+    # PormG's rebuilt spelling rather than the caller's text.
+    frame = Dialect.window_frame_sql(over.frame)
+    instruc.connection isa PormGSQLite && throw(BackendCapabilityError("SQLite window functions in PormG do not support explicit frame specifications yet. Remove frame=$(repr(frame)) or use PostgreSQL."))
     push!(parts, frame)
   end
 

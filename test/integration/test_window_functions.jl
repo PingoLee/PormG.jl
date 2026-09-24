@@ -351,6 +351,67 @@ else
         ]
         @test observed == expected
     end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Window Functions: every frame form the #713 grammar rebuilds executes on PostgreSQL
+    # `WindowOver(frame=)` no longer writes the caller's text — it parses it and writes PormG's own
+    # spelling — so each grammar branch is run here against the server, not only rendered: an
+    # EXCLUDE, a GROUPS offset, a RANGE decimal and a RANGE interval. Every expected value is
+    # computed in Julia from the plain columns of the same rows, independently of the window SQL.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "#713: rebuilt frame spellings execute with PostgreSQL's semantics" begin
+        # ROWS / EXCLUDE / GROUPS over one race's finishing order (positionorder is unique per race).
+        query = M.Result.objects
+        query.filter("raceid" => 841)
+        query.values(
+            "positionorder", "points",
+            # the caller's lower case is re-spelled; the frame reaches one row back
+            "prev_or_own" => FirstValue("points", over=WindowOver(order_by=["positionorder"],
+                frame="rows between 1 preceding and 1 following")),
+            # the current row excluded, so the first visible row is the next one (NULL on the last)
+            "next" => FirstValue("points", over=WindowOver(order_by=["positionorder"],
+                frame="ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING EXCLUDE CURRENT ROW")),
+            # one peer group back — each group is one row here, so this is the previous row
+            "prev_group" => LastValue("points", over=WindowOver(order_by=["positionorder"],
+                frame="GROUPS BETWEEN 1 PRECEDING AND 1 PRECEDING"))
+        )
+        query.order_by("positionorder")
+        rows = query.list()
+        pts = [row[:points] for row in rows]
+        @test length(rows) > 2
+        @test isequal([row[:prev_or_own] for row in rows], [i == 1 ? pts[1] : pts[i - 1] for i in eachindex(pts)])
+        @test isequal([row[:next] for row in rows], [i == length(pts) ? missing : pts[i + 1] for i in eachindex(pts)])
+        @test isequal([row[:prev_group] for row in rows], [i == 1 ? missing : pts[i - 1] for i in eachindex(pts)])
+
+        # RANGE with a decimal offset, measured in the ORDER BY column's own type (points is float).
+        query = M.Result.objects
+        query.filter("raceid" => 841)
+        query.values(
+            "resultid", "points",
+            "low" => FirstValue("points", over=WindowOver(order_by=["points"],
+                frame="RANGE BETWEEN 0.5 PRECEDING AND CURRENT ROW"))
+        )
+        rows = query.list()
+        pts = [row[:points] for row in rows]
+        # the first row in ascending order within [p - 0.5, p] holds the smallest such value
+        @test [row[:low] for row in rows] == [minimum(q for q in pts if p - 0.5 <= q <= p) for p in pts]
+
+        # RANGE with an interval offset over a date column: the last race within the next 7 days.
+        query = M.Race.objects
+        query.filter("year" => 2011)
+        query.values(
+            "raceid", "date",
+            "within_week" => LastValue("raceid", over=WindowOver(order_by=["date"],
+                frame="RANGE BETWEEN CURRENT ROW AND INTERVAL '7 days' FOLLOWING"))
+        )
+        query.order_by("date")
+        rows = query.list()
+        dates = [row[:date] for row in rows]
+        ids = [row[:raceid] for row in rows]
+        @test length(rows) > 2
+        @test [row[:within_week] for row in rows] ==
+              [ids[findlast(e -> d <= e <= d + Dates.Day(7), dates)] for d in dates]
+    end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

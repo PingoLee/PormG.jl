@@ -342,7 +342,7 @@ end
 
   # ───────────────────────────────────────────────────────────────────────────
   # bulk_update casts source columns by the field's rendered column type
-  # Its CTE renders `SET "col" = source."col"::<type>` from `Dialect._get_column_type`, the same
+  # Its column arrays render as `unnest($n::<type>[])` (#672) from `Dialect._get_column_type`, the same
   # function that renders the column's real DDL type — not from `field.type` (the SQLite-flavoured
   # spelling), so the cast can never drift out of sync with the actual column type again. `BLOB`
   # (BinaryField's, and ImageField/FileField's, `.type`) is not a PostgreSQL type at all: casting to

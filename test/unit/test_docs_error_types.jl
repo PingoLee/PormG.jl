@@ -451,6 +451,17 @@ const DOCERR_CASES = [
                           DataFrames.DataFrame(driver = ["Senna"], laps = [missing]),
                           show_query = :dict),
     ),
+    # #672 — `write/bulk.md` → How rows reach the database: a cell must hold a single value on
+    # both backends. A `Vector` in a text column passes validation (the text formatter maps it
+    # element-wise), and neither a PostgreSQL column array nor a SQLite VALUES row can store it.
+    # Build-time, like the case above: the refusal runs in the per-row sweep, before any SQL.
+    (
+        "write/bulk.md — a collection in a bulk cell raises InvalidValueError",
+        InvalidValueError,
+        () -> bulk_insert(DOCERR_STINT_PG.objects,
+                          DataFrames.DataFrame(driver = [["Senna", "Prost"]]),
+                          show_query = :dict),
+    ),
     # A control, not a regression: create() already behaved this way, and #331 aligned the bulk
     # paths onto it. It is here so the two halves of the documented equivalence are pinned
     # together — if create() ever drifts, the claim in write/bulk.md becomes false too.

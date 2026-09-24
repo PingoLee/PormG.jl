@@ -107,30 +107,32 @@ Bfcc_sheet.connect_key = "bfcc_mock"
 #
 # Prefixed `bfcc_` because test_bulk_default_fill_scope.jl defines the same three
 # helpers at top level and both files land in Main under runtests.jl.
+#
+# The mock is PostgreSQL, which binds a bulk statement as one ARRAY per column (#672) —
+# `SELECT * FROM unnest($1::…[], …)` — so a column's parameter is already that column's values,
+# in row order.
 # ------------------------------------------------------------------
 function bfcc_insert_columns(res)
-    m = match(r"INSERT INTO\s+\S+\s*\((.*?)\)\s*VALUES"s, res[:sql_text])
+    m = match(r"INSERT INTO\s+\S+\s*\((.*?)\)\s*(?:VALUES|SELECT)"s, res[:sql_text])
     m === nothing && error("could not parse an INSERT column list from: $(res[:sql_text])")
     return [strip(c, ['"', ' ', '\n', '\r', '\t']) for c in split(m.captures[1], ",")]
 end
 
-# Every bound value for `col`, across all rows. `parameters` is flat and row-major:
-# column `idx` out of `n` appears at positions `idx, idx+n, idx+2n, ...`.
+# Every bound value for `col`, across all rows: the column's own array.
 function bfcc_params_for(res, col)
-    cols = bfcc_insert_columns(res)
-    idx = findfirst(==(col), cols)
+    idx = findfirst(==(col), bfcc_insert_columns(res))
     idx === nothing && error("column $(col) is not in the INSERT: $(res[:sql_text])")
-    return res[:parameters][idx:length(cols):end]
+    return res[:parameters][idx]
 end
 
-# The bulk_update VALUES source list plays the same role for an UPDATE.
+# The bulk_update source column list plays the same role for an UPDATE.
 function bfcc_source_params_for(res, col)
     m = match(r"AS\s+source\s*\((.*?)\)"s, res[:sql_text])
     m === nothing && error("could not parse a source column list from: $(res[:sql_text])")
     cols = [strip(c, ['"', ' ', '\n', '\r', '\t']) for c in split(m.captures[1], ",")]
     idx = findfirst(==(col), cols)
     idx === nothing && error("column $(col) is not in the source list: $(res[:sql_text])")
-    return res[:parameters][idx:length(cols):end]
+    return res[:parameters][idx]
 end
 
 # Run `_prepare_bulk_df!` exactly as the three public entry points do — normalize `columns=`,
@@ -167,9 +169,11 @@ end
         # skipping it would have pushed the failure to the database.
         @test bfcc_params_for(res, "laps") == [0, 0]
         @test bfcc_params_for(res, "driver") == ["Senna", "Prost"]
-        # Whole-batch shape: three columns, two rows, nothing dropped or duplicated.
+        # Whole-batch shape: three columns, two rows, nothing dropped or duplicated — one
+        # two-row array per column on PostgreSQL (#672).
         @test sort(bfcc_insert_columns(res)) == ["driver", "laps", "pit_stops"]
-        @test res[:parameter_count] == 6
+        @test res[:parameter_count] == 3
+        @test all(p -> length(p) == 2, res[:parameters])
     end
 
     # ─────────────────────────────────────────────────────────────────────────────
@@ -337,7 +341,7 @@ end
         # this call. The 1999 date is what pins the source — `auto_now` can only mint `now()`.
         # (Full precedence coverage lives in test_bulk_update_column_scope.jl; this is the one
         # assertion that keeps THIS file honest about the value behind its silence.)
-        @test res_warn[:parameters] == Any[9, "1999-01-01T00:00:00.000+00:00"]
+        @test res_warn[:parameters] == Any[[9], ["1999-01-01T00:00:00.000+00:00"]]
 
         # The not-found message lists the frame's columns as a "here is what you have" hint. It
         # must list what the CALLER has: a `columns:` entry reading `__pormg:fill:updated_at`

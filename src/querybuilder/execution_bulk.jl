@@ -1152,13 +1152,16 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # Parameter-limit-aware chunking (#84)
 #
-# Each bulk row binds one parameter per mapped field, so a flushed statement carries
-# `chunk_rows × ncols` bind parameters. Backends cap that per statement, and the fixed
-# `chunk_size = 1000` default ignores column count — a wide table (PG) or the SQLite
-# 999-variable build silently overflows with only a raw driver error. We derive the
-# *effective* chunk from the column count and the backend's ceiling so the caller never
-# has to hand-tune `chunk_size` per table width. `bulk_copy` is exempt (it streams CSV
-# over COPY, not bind params).
+# On SQLite each bulk row binds one parameter per mapped field, so a flushed statement carries
+# `chunk_rows × ncols` bind parameters. The backend caps that per statement, and the fixed
+# `chunk_size = 1000` default ignores column count — a wide table or the SQLite 999-variable
+# build silently overflows with only a raw driver error. We derive the *effective* chunk from
+# the column count and the backend's ceiling so the caller never has to hand-tune `chunk_size`
+# per table width. `bulk_copy` is exempt (it streams CSV over COPY, not bind params).
+#
+# PostgreSQL binds one ARRAY per column instead (#672, see "PostgreSQL column arrays" below), so
+# its per-row cost is zero and a positive `chunk_size` is honoured as given — see `_bulk_chunk_rows`
+# for the one exception, a non-positive `chunk_size`.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # SQLITE_MAX_VARIABLE_NUMBER default: 999 before 3.32.0, 32766 from 3.32.0 on. Split out as a
@@ -1177,10 +1180,8 @@ _backend_parameter_limit(conn::PormGSQLite) = _sqlite_param_limit(backend_sqlite
 # (bulk_update WHERE filters; 0 for insert). If a single row already blows the budget, no
 # chunk_size can help, so we fail closed with an actionable error naming the counts and limit.
 #
-# Note: array-valued fields on SQLite expand to multiple positional params per value
-# (parameters.jl `add_parameter!(::PormGSQLiteParam, ::AbstractArray)`), so `per_row = ncols`
-# under-counts them. That is a rare edge case outside #84's "one parameter per field" framing
-# and is not handled here.
+# `per_row = ncols` is exact: a collection in a cell — which SQLite's `add_parameter!` would expand
+# into several `?` — is refused by `_bulk_cell` before anything binds (#672).
 function _effective_chunk_size(requested::Integer, per_row::Integer, fixed::Integer,
                                limit::Integer, op::Symbol, backend::AbstractString)
   per_row <= 0 && return requested            # nothing bound per row → no cap possible or needed
@@ -1200,6 +1201,17 @@ end
 _backend_label(::PormGPostgres) = "PostgreSQL"
 _backend_label(::PormGSQLite) = "SQLite"
 
+# Rows one bulk statement carries (#84, #672). SQLite binds one parameter per cell, so the chunk is
+# capped by its bind-parameter limit. PostgreSQL binds one array per column — `ncols` parameters
+# whatever the row count — so `chunk_size` is used as given, except a non-positive one: that keeps
+# the per-cell cap it always had, rather than collapsing the whole frame into one statement whose
+# arrays grow without bound. `fixed` is the per-statement filter prefix (bulk_update; 0 for insert).
+function _bulk_chunk_rows(conn::Union{PormGPostgres, PormGSQLite}, requested::Integer, ncols::Integer,
+                          fixed::Integer, op::Symbol)::Int
+  per_row = conn isa PormGPostgres && requested >= 1 ? 0 : ncols
+  return _effective_chunk_size(requested, per_row, fixed, _backend_parameter_limit(conn), op, _backend_label(conn))
+end
+
 # What an executed bulk terminal returns (#670): the rows the statements affected, summed across
 # chunks, in Ecto's `{count, rows}` shape. `rows` is always `nothing` today; it is the slot #671's
 # `returning=` fills, so adding that option does not change the return type a second time.
@@ -1214,6 +1226,9 @@ Inserts multiple rows into the database in bulk from a DataFrame.
   - `df_o::DataFrames.DataFrame`: The DataFrame containing the data to be inserted.
   - `columns`: Optional. Specifies the columns to insert and their mappings. Can be `nothing`, a `String`, a `Pair{String, String}`, or a `Vector` of these. If `nothing`, all columns from the DataFrame are used.
   - `chunk_size::Integer`: Optional. The number of rows to insert in each batch (default: 1000).
+    PostgreSQL binds one array per column, so a positive batch is used as given (a non-positive
+    one falls back to 65,535 ÷ columns rows); SQLite binds one parameter per cell and caps it
+    automatically to stay under its bind-parameter limit.
   - `show_query::Symbol`: Optional. Return the generated SQL instead of executing it — `:sql`,
     `:dict`, `:inspection`, or `:params` (see Query Inspection). Defaults to `:execute` (run it).
   - `on_conflict`: Optional (#123). Attaches an `ON CONFLICT` clause so duplicate rows are
@@ -1300,50 +1315,59 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     Dialect.on_conflict_clause(_on_conflict.action, _on_conflict.target, _on_conflict.set, connection)
 
   # Cap the chunk so `effective_chunk × ncols` stays under the backend's bind-parameter limit
-  # (#84). Each INSERT row binds one param per field and adds nothing else, so per_row = ncols
-  # and there is no fixed per-statement overhead.
-  effective_chunk = _effective_chunk_size(chunk_size, length(fields_df), 0,
-    _backend_parameter_limit(connection), :bulk_insert, _backend_label(connection))
+  # (#84). On SQLite each INSERT row binds one param per field and adds nothing else, so
+  # per_row = ncols and there is no fixed per-statement overhead; on PostgreSQL a chunk binds one
+  # array per field (#672), so a positive chunk_size is not capped (see `_bulk_chunk_rows`).
+  effective_chunk = _bulk_chunk_rows(connection, chunk_size, length(fields_df), 0, :bulk_insert)
   effective_chunk < chunk_size &&
     @debug "bulk_insert: capped chunk_size $chunk_size → $effective_chunk to respect the backend bind-parameter limit" model = model.name
 
-  # Build a list of row value strings by applying each model field formatter.
+  # PostgreSQL collects each chunk as one array per field and binds them at flush (#672); SQLite
+  # binds each cell as it goes and collects `(?, ?, …)` row tuples.
+  pg_arrays = connection isa PormGPostgres
+  casts = pg_arrays ? [_pg_bulk_cast_type(model.fields[field], connection) for field in fields_df] : String[]
+  new_columns() = [Any[] for _ in fields_df]
+
   results = []
   insert_loop = () -> begin
     rows = String[]
+    columns = new_columns()
     count::Integer = 0
     total::Integer = size(df, 1)
     # Security: Create parameterized query
     parameters = get_parameter(connection)
-    # For INSERT, all params go into :select bucket (VALUES clause)
+    # For INSERT, all params go into the :select bucket (the row source)
     set_context!(parameters, :select)
-    param_placeholders::Vector{String} = String[]
     for (index, row) in enumerate(eachrow(df))
-      values = String[]
       try
         # Validation checks consistent with single insert()
         for field in fields_df
           validate_field_data(model, field, row[mapping[field]], "bulk_insert"; allow_primary_key = true)
         end
 
-        param_placeholders = [add_parameter!(parameters, model.fields[field].formatter(row[mapping[field]])) for field in fields_df]
-        # param_placeholders = add_parameter!(parameters, values)
+        # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
+        cells = [_bulk_cell(model.fields[field].formatter(row[mapping[field]]), field) for field in fields_df]
+        if pg_arrays
+          foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
+        else
+          push!(rows, "($(join([add_parameter!(parameters, cell) for cell in cells], ", ")))")
+        end
       catch e
         _depuration_values_bulk_insert(fields_df, mapping, model, row, index)
         e isa PormGError && rethrow()   # keep the taxonomy type; the depuration log above carries the row context
         throw(InvalidValueError("Error in bulk_insert, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
       end
-      push!(rows, "($(join(param_placeholders, ", ")))")
       count += 1
       if count == effective_chunk || index == total
-        # @pormg_debug
-        res = _bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, show_query, parameters; on_conflict_sql = on_conflict_sql)
+        source_sql = pg_arrays ? "SELECT * FROM " * _pg_unnest_source!(parameters, columns, casts) :
+                                 "VALUES " * join(rows, ", ")
+        res = _bulk_insert(model, connection, fields_df, source_sql, pk_exist, pk_field, settings, show_query, parameters; on_conflict_sql = on_conflict_sql)
         push!(results, res)
         count = 0
         rows = String[]
+        columns = new_columns()
         parameters = get_parameter(connection)
         set_context!(parameters, :select)
-        param_placeholders = String[]
       end
     end
   end
@@ -1387,23 +1411,81 @@ _bulk_copy_cell(value) = value
 """
     _pg_bulk_cast_type(field, conn::PormGPostgres) -> String
 
-The PostgreSQL type name used to cast a `source.<col>` reference in `bulk_update`'s CTE.
+The PostgreSQL element type of a column's array parameter in `bulk_insert`/`bulk_update` —
+`\$n::<type>[]` inside `unnest(…)` (#672). The arrays are bound untyped (LibPQ sends every parameter
+as text), so this cast is what types the `source` columns; nothing downstream casts again.
 
 Delegates to `Dialect._get_column_type` — the same function that renders the column's actual DDL
 type — rather than re-deriving a cast from `field.type` (the SQLite-flavoured spelling). That
 independent re-derivation is what caused #296 (`BinaryField.type == "BLOB"` cast to the nonexistent
 `::blob`) and its untouched sibling #309 (`ImageField`/`FileField` share `.type == "BLOB"` but
 render as `TEXT`, and were still cast to `::blob`). Keying on the rendered type instead of `.type`
-means a field's type rendering can never drift out of sync with its `bulk_update` cast again — there
-is nothing left in this file to keep in step by hand.
+means a field's type rendering can never drift out of sync with its bulk cast again — there is
+nothing left in this file to keep in step by hand.
 
-A length/precision modifier (`VARCHAR(250)`, `DECIMAL(10,2)`) is stripped: the bare type is
-sufficient for a `source.<col>::<type>` cast and keeps prior behavior for `CharField`/`URLField`/
-`SlugField`/`DecimalField` unchanged.
+A length/precision modifier (`VARCHAR(250)`, `DECIMAL(10,2)`) is stripped: the bare type is enough
+for the array, and the column's own modifier is enforced on assignment exactly as it is for a
+per-cell parameter — an over-long string still raises, a decimal still rounds to the column scale.
 """
 function _pg_bulk_cast_type(field::PormGField, conn::PormGPostgres)::String
   rendered = Dialect._get_column_type(field, conn)
   return lowercase(replace(rendered, r"\(.*\)" => ""))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL column arrays (#672)
+#
+# On PostgreSQL both bulk writers bind ONE array parameter per column and expand the arrays with
+# `unnest`:
+#
+#   INSERT INTO "result" (…) SELECT * FROM unnest($1::bigint[], $2::float[])
+#   UPDATE "result" AS "Tb" SET … FROM unnest($2::float[], $3::bigint[]) AS source ("points", "resultid")
+#
+# A statement's parameter count is therefore its column count, whatever its row count: the #84 cap
+# stops binding, and the statement text is the same for every chunk. SQLite has no array
+# parameters, so it keeps one `?` per cell in a VALUES list. That is an INTENTIONAL backend
+# divergence (docs/src/write/bulk.md → "How rows reach the database"): the rows written, the errors
+# raised and the show_query modes stay aligned — only the rendered source differs. The one caveat is
+# the cast: each array is typed as its FIELD renders, so a column whose real type has no assignment
+# cast from that (an adopted enum declared as a TextField) cannot be bulk-written on PostgreSQL.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# One formatted bulk cell, checked to be a single value — on both backends, so they raise alike.
+# Only a text-like field lets a collection through validation (`format_text_sql` maps a `Vector`
+# element-wise), and no row source stores one faithfully: a PostgreSQL array renders it as a nested
+# array literal, and SQLite's VALUES expands it into extra `?` placeholders that shift the row.
+# (`PormGBytes` is not an `AbstractArray`, so a binary value is untouched.)
+_bulk_cell(value, ::AbstractString) = value
+function _bulk_cell(value::Union{AbstractArray, Tuple, AbstractDict, NamedTuple}, field::AbstractString)
+  throw(InvalidValueError("A bulk value for field `$field` is a $(typeof(value)): each cell must hold a single value, not a collection."))
+end
+
+"""
+    _pg_array_element(value) -> Union{Missing, Integer, String}
+
+One formatted bulk cell, as an element of the column array PostgreSQL binds (#672).
+
+LibPQ renders a `Vector` parameter as an array literal: `missing` becomes an unquoted `NULL`, an
+`AbstractString` is double-quoted with `\\` and `"` escaped, and anything else is written with a
+bare `string(el)` — **unquoted**, so a value whose text held a comma, a brace or a space would split
+or corrupt the literal. Every element is therefore reduced to `missing`, an `Integer` (digits, or
+`true`/`false`: nothing the array parser treats specially) or a `String`, which LibPQ always quotes.
+The element text is exactly what the per-cell parameter carried for the same cell — LibPQ renders a
+scalar parameter with the same `string` — so both shapes store the same value. A collection never
+gets here: `_bulk_cell` refuses it first.
+"""
+_pg_array_element(::Union{Missing, Nothing}) = missing
+_pg_array_element(value::Integer) = value
+_pg_array_element(value::AbstractString) = String(value)
+_pg_array_element(value::PormGBytes) = _pg_bytea_text(value)
+_pg_array_element(value) = string(value)
+
+# Bind one chunk's column arrays after whatever `params` already holds — the #665 WHERE prefix for
+# bulk_update, nothing for bulk_insert — and render the `unnest(…)` call that expands them. Each
+# array is typed by its `_pg_bulk_cast_type`, in `columns` order.
+function _pg_unnest_source!(params::PormGPostgresParam, columns::Vector{Vector{Any}}, casts::Vector{String})::String
+  placeholders = [add_parameter!(params, column; sql_type = "$(cast)[]") for (column, cast) in zip(columns, casts)]
+  return "unnest($(join(placeholders, ", ")))"
 end
 
 # bulk_copy NULL sentinel (#86) — PostgreSQL's conventional NULL marker. Safe because bulk_copy
@@ -1654,23 +1736,25 @@ function _on_conflict_column_list(on_conflict::NamedTuple, key::Symbol)
 end
 
 function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGSQLite},
-  fields::Vector{String}, rows::Vector{String},
+  fields::Vector{String}, source_sql::String,
   pk_exist::Bool, pk_field::Vector{String}, settings::PormGSettings,
   show_query::Symbol, parameters:: AbstractPormGParam;
   on_conflict_sql::Union{Nothing, String} = nothing)
 
   # Security: Quote table name and physical column names (db_column when set, #50).
-  # VALUES rows are positional and built in `fields` order, so they still align.
+  # The row source is positional and built in `fields` order — `VALUES` tuples on SQLite,
+  # `SELECT * FROM unnest(…)` column arrays on PostgreSQL (#672) — so they still align.
   safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
   quoted_fields = [safe_column_identifier(Models.model_column(model, string(field)), connection) for field in fields]
 
   # Construct the bulk insert SQL. The ON CONFLICT clause (#123) is rendered once by the caller
-  # and binds no parameters, so the chunk-size math and the VALUES placeholders are untouched;
-  # appending it before the show_query branch means every show mode carries the clause. A
-  # non-`nothing` clause also means "on_conflict active" and gates the sequence-resync retry below.
+  # and binds no parameters, so the chunk-size math and the row source's placeholders are
+  # untouched; appending it before the show_query branch means every show mode carries the
+  # clause. A non-`nothing` clause also means "on_conflict active" and gates the sequence-resync
+  # retry below.
   sql = """
   INSERT INTO $(safe_table_name) ($(join(quoted_fields, ", ")))
-  VALUES $(join(rows, ", "))
+  $(source_sql)
   """
   if on_conflict_sql !== nothing
     sql *= on_conflict_sql * "\n"
@@ -1783,6 +1867,9 @@ Performs a bulk update operation on a database table using the provided `DataFra
 - `filters`: (Optional) **Constant** predicates AND'd onto the `WHERE` clause, applied to every row. Each entry is a `Pair{String, T}` of `"model_field" => value` (e.g. `"category_id" => 172100`, `"points__@in" => [18, 25]`). When `match_on` is provided, every `filters` entry must be such a constant predicate. A per-row match key in `filters` is rejected with a migration error — move it to `match_on`.
 - `show_query::Symbol`: (Optional) `:execute` (the default) runs the update. The dry-run modes (`:sql`, `:dict`, `:inspection`, `:params`, `:none`) build the statement without executing it and return it in that form — one result per chunk, as a `Vector` when there is more than one chunk (`:none` returns `nothing` per chunk).
 - `chunk_size::Integer`: (Optional) Number of rows to process per chunk. Defaults to `1000`.
+  PostgreSQL binds one array per column, so a positive chunk is used as given (a non-positive
+  one falls back to 65,535 ÷ columns rows); SQLite binds one parameter per cell and caps it
+  automatically to stay under its bind-parameter limit.
 
 # Handler scope
 Filters already attached to `objct` are kept: they are AND'd with the `match_on=` merge condition
@@ -1910,14 +1997,11 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
       # name; the source.* reference and the VALUES/CTE source column list stay the FIELD name (#50)
       # and are therefore ALIASES — they name columns of a derived table PormG invents here, not
       # anything that exists in the schema — so they keep the fail-closed `quote_identifier` (#394).
+      # No cast here on either backend: on PostgreSQL the `source` columns are already typed by
+      # their `unnest($n::<type>[])` arrays (#672).
       quoted_field = safe_column_identifier(Models.field_db_column(model.fields[field], field), connection)
       quoted_source_field = quote_identifier(field, connection)
-      if connection isa PormGPostgres
-        field_type = _pg_bulk_cast_type(model.fields[field], connection)
-        push!(safe_set_parts, "$quoted_field = source.$quoted_source_field::$field_type")
-      else
-        push!(safe_set_parts, "$quoted_field = source.$quoted_source_field")
-      end
+      push!(safe_set_parts, "$quoted_field = source.$quoted_source_field")
     end
   end
   safe_set_clause = join(safe_set_parts, ", ")
@@ -1926,55 +2010,68 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   # `base_parameters` holds what `build()` bound — the static-filter WHERE values, and on PostgreSQL
   # the `$1…$k` numbering already rendered into `instruction._where`. It is the fixed prefix of
   # every chunk's statement and is never written after this point: each chunk binds its rows into
-  # its own fork (#73), so a row that throws mid-chunk discards only that local collector.
+  # its own fork (#73), so a row that throws mid-chunk discards only that local collector. On
+  # PostgreSQL a chunk's rows are its column arrays, bound after the prefix as `$k+1…` (#672).
   base_parameters = instruction.parameters
   joined_columns = unique(vcat(fields_df, dinanic_filters))
 
   # Cap the chunk so `fixed + effective_chunk × ncols` stays under the backend's bind-parameter
-  # limit (#84). Each row binds one param per set column *and* per match key (joined_columns);
-  # the static-filter WHERE params in `base_parameters` are re-included on every chunk, so
-  # they are the per-statement fixed overhead.
-  effective_chunk = _effective_chunk_size(chunk_size, length(joined_columns),
-    base_parameters.parameter_count, _backend_parameter_limit(connection), :bulk_update,
-    _backend_label(connection))
+  # limit (#84). On SQLite each row binds one param per set column *and* per match key
+  # (joined_columns); the static-filter WHERE params in `base_parameters` are re-included on every
+  # chunk, so they are the per-statement fixed overhead. On PostgreSQL a row binds nothing (#672).
+  effective_chunk = _bulk_chunk_rows(connection, chunk_size, length(joined_columns),
+    base_parameters.parameter_count, :bulk_update)
   effective_chunk < chunk_size &&
     @debug "bulk_update: capped chunk_size $chunk_size → $effective_chunk to respect the backend bind-parameter limit" model = model.name
 
+  # PostgreSQL collects each chunk as one array per joined column and binds them at flush (#672);
+  # SQLite binds each cell as it goes and collects `(?, ?, …)` row tuples for its VALUES CTE.
+  pg_arrays = connection isa PormGPostgres
+  casts = pg_arrays ? [_pg_bulk_cast_type(model.fields[field], connection) for field in joined_columns] : String[]
+  new_columns() = [Any[] for _ in joined_columns]
+
   results = []
-  # For bulk update VALUES, use :select context
+  # A chunk's rows bind into the :select context (the row source)
   new_chunk_parameters() = (p = _fork_parameters(base_parameters); set_context!(p, :select); p)
   update_loop = () -> begin
     count::Integer = 0
     total::Integer = size(df, 1)
     rows = String[]
+    columns = new_columns()
     chunk_parameters = new_chunk_parameters()
-    param_placeholders::Vector{String} = String[]
     for (index, row) in enumerate(eachrow(df))
       try
         # Validation checks consistent with single update()
         for field in fields_df
             # Skip fields used as filters or primary keys (they aren't being updated)
             field in deny_fields && continue
-            
+
             # Centralized validation using mapping
             validate_field_data(model, field, row[mapping[field]], "bulk_update"; allow_primary_key = false)
         end
 
-        param_placeholders = [add_parameter!(chunk_parameters, model.fields[field].formatter(row[mapping[field]])) for field in joined_columns]
+        # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
+        cells = [_bulk_cell(model.fields[field].formatter(row[mapping[field]]), field) for field in joined_columns]
+        if pg_arrays
+          foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
+        else
+          push!(rows, "($(join([add_parameter!(chunk_parameters, cell) for cell in cells], ", ")))")
+        end
       catch e
         _depuration_values_bulk_insert(fields_df, mapping, model, row, index)
         e isa PormGError && rethrow()   # keep the taxonomy type; the depuration log above carries the row context
         throw(InvalidValueError("Error in bulk_update, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
       end
-      push!(rows, "($(join(param_placeholders, ", ")))")
       count += 1
       if count == effective_chunk || index == total
-        res = _bulk_update(model, settings, connection, joined_columns, rows, safe_set_clause, dinanic_filters, show_query, instruction, chunk_parameters)
+        source_sql = pg_arrays ? _pg_unnest_source!(chunk_parameters, columns, casts) :
+                                 "VALUES " * join(rows, ", ")
+        res = _bulk_update(model, settings, connection, joined_columns, source_sql, safe_set_clause, dinanic_filters, show_query, instruction, chunk_parameters)
         push!(results, res)
         count = 0
         rows = String[]
+        columns = new_columns()
         chunk_parameters = new_chunk_parameters()
-        param_placeholders = String[]
       end
     end
   end
@@ -2004,9 +2101,9 @@ end
 function _bulk_update(model::PormGModel,
   settings::PormGSettings,
   connection::Union{PormGPostgres, PormGSQLite}, 
-  fields::Vector{String}, 
-  rows::Vector{String}, 
-  safe_set_clause::String, 
+  fields::Vector{String},
+  source_sql::String,
+  safe_set_clause::String,
   dinanic_filters::Vector{String}, 
   show_query::Symbol,
   instruction::Union{SQLInstruction, Nothing},
@@ -2028,14 +2125,10 @@ function _bulk_update(model::PormGModel,
     # WHERE target (Tb.) uses the physical column (db_column), escape-only; the source.* reference
     # and the source column list stay the field name (#50) and are ALIASES on a derived table, so
     # they stay fail-closed (#394). All three must agree byte-for-byte with the list emitted below.
+    # No cast: on PostgreSQL the `source` column is already typed by its array (#672).
     quoted_tb_field = safe_column_identifier(Models.field_db_column(model.fields[filter], filter), connection)
     quoted_source_field = quote_identifier(filter, connection)
-    if connection isa PormGPostgres
-      field_type = _pg_bulk_cast_type(model.fields[filter], connection)
-      push!(safe_where_conditions, "\"Tb\".$quoted_tb_field = source.$quoted_source_field::$field_type")
-    else
-      push!(safe_where_conditions, "\"Tb\".$quoted_tb_field = source.$quoted_source_field")
-    end
+    push!(safe_where_conditions, "\"Tb\".$quoted_tb_field = source.$quoted_source_field")
   end
   # # Construct the bulk update SQL.
   # _where::Vector{String} = []
@@ -2048,18 +2141,21 @@ function _bulk_update(model::PormGModel,
     end
   end
 
+  # `source_sql` is the chunk's row source: `unnest($k+1::<type>[], …)` over one array per column on
+  # PostgreSQL (#672), `VALUES (?, …), …` on SQLite — an intentional divergence, see "PostgreSQL
+  # column arrays" above.
   if connection isa PormGPostgres
     sql = """
     UPDATE $safe_table_name AS "Tb"
     SET $(safe_set_clause)
-    FROM (VALUES $(join([join(split(row, ", "), ", ") for row in rows], ","))) AS source ($(join(quoted_fields, ",")))
+    FROM $(source_sql) AS source ($(join(quoted_fields, ",")))
     WHERE $(join(safe_where_conditions, " AND \n   "))
     """
   else # SQLite
     # SQLite 3.33+ supports UPDATE FROM. We use a CTE to define the source clearly.
     sql = """
     WITH source($(join(quoted_fields, ", "))) AS (
-      VALUES $(join(rows, ", "))
+      $(source_sql)
     )
     UPDATE $safe_table_name
     SET $(safe_set_clause)

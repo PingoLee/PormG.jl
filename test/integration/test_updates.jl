@@ -1196,6 +1196,10 @@ end
         # String; post-fix the chunk auto-caps to fld(limit, 8) so nrows splits into
         # exactly two chunks → a 2-element Vector. Reverting the cap makes `res` a String
         # and fails the `isa Vector` assertion (mutation gate).
+        #
+        # That is the SQLite half. Since #672 PostgreSQL binds one ARRAY per column, so a
+        # chunk carries 8 parameters whatever its row count and the cap never binds there:
+        # the same call is ONE statement.
         # ─────────────────────────────────────────────────────────────────────────────
         @testset "Bulk Update auto-chunks to respect the bind-parameter limit (#84)" begin
             pool    = PormG.config[PORMG_DB_FOLDER].connections
@@ -1227,8 +1231,13 @@ end
                 show_query = :sql,
             )
 
-            @test res isa Vector       # pre-fix returns one un-split SQL String → gate
-            @test length(res) == 2     # effective rows + 1 → two capped chunks
+            if PORMG_DB_FOLDER == "db_sl"
+                @test res isa Vector       # pre-fix returns one un-split SQL String → gate
+                @test length(res) == 2     # effective rows + 1 → two capped chunks
+            else
+                @test res isa String       # PostgreSQL (#672): uncapped, one statement
+                @test occursin("unnest(", res)
+            end
         end
 
         # ─────────────────────────────────────────────────────────────────────────────
@@ -1935,8 +1944,15 @@ end
             show_query = :params,
         )
         @test params_result isa Vector
-        # Parameters must include at least the label values and the id values.
-        @test length(params_result) >= length(rows)
+        # Parameters must include the label values and the id values: one per cell on SQLite,
+        # one array per column on PostgreSQL (#672) — the labels, then the match-key ids.
+        if PORMG_DB_FOLDER == "db_sl"
+            @test length(params_result) >= length(rows)
+        else
+            @test length(params_result) == 2
+            @test params_result[1] == ["insp-$(i)-dry" for i in 1:3]
+            @test params_result[2] == [r[:id] for r in rows]
+        end
 
         # ── :none mode — build the statement, return nothing, execute nothing ─
         none_result = bulk_update(

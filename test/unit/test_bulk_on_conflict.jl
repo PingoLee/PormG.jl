@@ -200,16 +200,17 @@ end
     change_data = true,
   )
 
+  # One row, bound as PostgreSQL binds a chunk: one array per column (#672).
   params = PormG.QueryBuilder.PgParameterizedQuery("", Any[], 0)
-  PormG.QueryBuilder.add_parameter!(params, 1)
-  PormG.QueryBuilder.add_parameter!(params, "225125")
+  PormG.QueryBuilder.add_parameter!(params, Any[1]; sql_type = "bigint[]")
+  PormG.QueryBuilder.add_parameter!(params, Any["225125"]; sql_type = "varchar[]")
 
   err = try
     PormG.QueryBuilder._bulk_insert(
       ConflictCbo,
       settings.connections,
       ["id", "co_cbo"],
-      ["(\$1, \$2)"],
+      "SELECT * FROM unnest(\$1::bigint[], \$2::varchar[])",
       true,
       ["id"],
       settings,

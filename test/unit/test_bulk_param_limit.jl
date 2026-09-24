@@ -15,6 +15,12 @@
 # These are pure-function tests of the chunking math: they take the backend limit as
 # an argument, so they gate BOTH backends' ceilings without a live database and fail
 # the moment the cap is reverted.
+#
+# Since #672 the bulk writers only reach this cap on SQLite, plus a non-positive
+# chunk_size on PostgreSQL: PostgreSQL binds one array per column, so `_bulk_chunk_rows`
+# hands it a per-row count of 0 and `chunk_size` passes through. The PostgreSQL-flavoured
+# cases below still pin the arithmetic itself; test_bulk_pg_unnest.jl pins the per-backend
+# routing, including the degenerate chunk_size on both.
 # ============================================================
 
 using Test

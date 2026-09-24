@@ -71,8 +71,10 @@ const BH665_SL = BulkHandlerScopeSl.Bh665_result
 bh665_df() = DataFrames.DataFrame(id = [11, 12], points = [9, 6])
 
 # The row values each statement binds, in `bulk_update`'s order: every SET column, then every
-# match key — `[points, id]` per row.
+# match key — `[points, id]` per row on SQLite, and on PostgreSQL the same values as one array
+# per column (#672).
 const BH665_ROWS = Any[9, 11, 6, 12]
+const BH665_COLUMNS = Any[[9, 6], [11, 12]]
 
 # A handler on `model` scoped to the 1988 season: the scope the issue's repro drops.
 bh665_scoped(model) = (q = model.objects; q.filter("year" => 1988); q)
@@ -103,7 +105,7 @@ end
             # The handler filter binds first (at build time), so it is $1 ahead of the rows.
             @test occursin(r"\"Tb\"\.\"year\"\s*=\s*\$1\b", res[:sql_text])
             @test occursin(r"\"Tb\"\.\"id\"\s*=\s*source\.\"id\"", res[:sql_text])
-            @test res[:parameters] == vcat(Any[1988], BH665_ROWS)
+            @test res[:parameters] == vcat(Any[1988], BH665_COLUMNS)
         end
 
         @testset "SQLite" begin
@@ -125,7 +127,7 @@ end
         res = bh665_update(bh665_scoped(BH665_PG); filters = ["points__@gte" => 0])
         @test occursin(r"\"Tb\"\.\"year\"\s*=\s*\$1\b", res[:sql_text])
         @test occursin(r"\"Tb\"\.\"points\"\s*>=\s*\$2\b", res[:sql_text])
-        @test res[:parameters] == vcat(Any[1988, 0], BH665_ROWS)
+        @test res[:parameters] == vcat(Any[1988, 0], BH665_COLUMNS)
 
         res = bh665_update(bh665_scoped(BH665_SL); filters = ["points__@gte" => 0])
         @test occursin("\"bh665_result\".\"year\" = ?", res[:sql_text])
@@ -144,7 +146,7 @@ end
         q.filter(Qor("year" => 1988, "year" => 1989))
         res = bh665_update(q)
         @test occursin(r"\(\"Tb\"\.\"year\" = \$1 OR \"Tb\"\.\"year\" = \$2\)", res[:sql_text])
-        @test res[:parameters] == vcat(Any[1988, 1989], BH665_ROWS)
+        @test res[:parameters] == vcat(Any[1988, 1989], BH665_COLUMNS)
 
         sub = BH665_SL.objects
         sub.filter("points__@gte" => 10)
@@ -161,14 +163,14 @@ end
     # ─────────────────────────────────────────────────────────────────────────────
     # Handler scope: every chunk carries the handler's filter values.
     # They are bound once at build time and are the fixed prefix each chunk's collector forks from
-    # (#73), so with chunk_size = 1 both statements must carry 1988 — and on PostgreSQL number
-    # their own rows from $2.
+    # (#73), so with chunk_size = 1 both statements must carry 1988 — and on PostgreSQL bind their
+    # own rows as the arrays $2 and $3 (#672).
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "every chunk carries the handler's filter values" begin
         res = bh665_update(bh665_scoped(BH665_PG); chunk_size = 1)
         @test length(res) == 2
-        @test res[1][:parameters] == Any[1988, 9, 11]
-        @test res[2][:parameters] == Any[1988, 6, 12]
+        @test res[1][:parameters] == Any[1988, [9], [11]]
+        @test res[2][:parameters] == Any[1988, [6], [12]]
         for r in res
             @test occursin(r"\"Tb\"\.\"year\"\s*=\s*\$1\b", r[:sql_text])
             @test !occursin("\$4", r[:sql_text])
@@ -284,7 +286,8 @@ end
         q = bh665_scoped(BH665_PG)
         q.values("id", "bonus" => Value(5))
         res = bh665_update(q)
-        @test res[:parameters] == vcat(Any[1988], BH665_ROWS)
-        @test !occursin("\$6", res[:sql_text])
+        @test res[:parameters] == vcat(Any[1988], BH665_COLUMNS)
+        # The filter and the two column arrays are $1…$3; a bound Value(5) would push them to $4.
+        @test !occursin("\$4", res[:sql_text])
     end
 end

@@ -427,7 +427,9 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
         )
         res_bulk_dt = bulk_insert(DateTimeModel.objects, df_datetimes, show_query=:dict)
         @test res_bulk_dt[:operation] === :insert
-        @test res_bulk_dt[:parameter_count] == 9
+        # One array per column on PostgreSQL (#672): 3 columns, each carrying the 3 rows.
+        @test res_bulk_dt[:parameter_count] == 3
+        @test all(p -> length(p) == 3, res_bulk_dt[:parameters])
         
         # Test 17: Bulk update with datetime values
         df_datetime_updates = DataFrame(
@@ -534,7 +536,9 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
         )
         bulk_date = bulk_insert(DateModel.objects, df_dates, show_query=:dict)
         @test bulk_date[:operation] === :insert
-        @test bulk_date[:parameter_count] == 10
+        # One array per column on PostgreSQL (#672): 5 columns, each carrying the 2 rows.
+        @test bulk_date[:parameter_count] == 5
+        @test all(p -> length(p) == 2, bulk_date[:parameters])
 
         df_date_updates = DataFrame(
             id = [1, 2],
@@ -754,7 +758,9 @@ end
         )
         res_bulk_boundary = bulk_insert(BoundaryModel.objects, df_boundary, show_query=:dict)
         @test res_bulk_boundary[:operation] === :insert
-        @test res_bulk_boundary[:parameter_count] == 4
+        # One array per column on PostgreSQL (#672): 1 column carrying the 4 rows.
+        @test res_bulk_boundary[:parameter_count] == 1
+        @test length(only(res_bulk_boundary[:parameters])) == 4
         
         # Test 29: Bulk insert with values exceeding scale (should fail validation)
         df_bad_scale = DataFrame(
@@ -996,7 +1002,8 @@ end
         
         @test res_bulk[:operation] === :insert
         @test contains(res_bulk[:sql_text], "INSERT INTO") && contains(res_bulk[:sql_text], "bulk_test")
-        @test res_bulk[:parameter_count] == 10 # 2 rows * 5 columns
+        @test res_bulk[:parameter_count] == 5 # 5 columns, one 2-row array each on PostgreSQL (#672)
+        @test all(p -> length(p) == 2, res_bulk[:parameters])
         
         # Test Bulk Update inspection
         res_bulk_upd = bulk_update(BulkModel.objects, df, columns=["salary"], match_on=["name"], show_query=:dict)
@@ -1136,7 +1143,8 @@ end
         )
         res_bulk_time = bulk_insert(TimeModel.objects, df_times, show_query=:dict)
         @test res_bulk_time[:operation] === :insert
-        @test res_bulk_time[:parameter_count] == 6  # 2 rows * 3 fields (opening_hour, closing_hour, event_start)
+        @test res_bulk_time[:parameter_count] == 3  # 3 fields (opening_hour, closing_hour, event_start), one 2-row array each (#672)
+        @test all(p -> length(p) == 2, res_bulk_time[:parameters])
 
         # Test 13: Update with TimeField
         update_time_q = TimeModel.objects
@@ -1288,11 +1296,13 @@ end
             canon_utc(ZonedDateTime(DateTime(2024, 6, 16, 14, 30, 0), TimeZone("America/Toronto")))
         ]
         @test res_bulk_tz[:operation] === :insert
-        @test res_bulk_tz[:parameter_count] == 6  # 2 rows * 3 columns (naive_timestamp, aware_timestamp, scheduled_at)
-        @test count(param -> param isa AbstractString, res_bulk_tz[:parameters]) == 4
-        @test count(ismissing, res_bulk_tz[:parameters]) == 2
-        @test all(expected -> any(==(expected), res_bulk_tz[:parameters]), expected_bulk_naive)
-        @test all(expected -> any(==(expected), res_bulk_tz[:parameters]), expected_bulk_aware)
+        @test res_bulk_tz[:parameter_count] == 3  # 3 columns (naive_timestamp, aware_timestamp, scheduled_at), one 2-row array each (#672)
+        bulk_tz_cells = reduce(vcat, res_bulk_tz[:parameters])   # every row of every column
+        @test length(bulk_tz_cells) == 6
+        @test count(param -> param isa AbstractString, bulk_tz_cells) == 4
+        @test count(ismissing, bulk_tz_cells) == 2
+        @test all(expected -> any(==(expected), bulk_tz_cells), expected_bulk_naive)
+        @test all(expected -> any(==(expected), bulk_tz_cells), expected_bulk_aware)
 
         # Test 12: DST edge case - Spring forward (2024-03-10 in America/New_York)
         spring_forward_dt = DateTime(2024, 3, 10, 2, 30, 0)  # This time doesn't exist (clocks jump from 2:00 to 3:00)
@@ -1441,7 +1451,8 @@ end
         )
         res_bulk_date_str = bulk_insert(DateFormatModel.objects, df_mixed_dates, show_query=:dict)
         @test res_bulk_date_str[:operation] === :insert
-        @test res_bulk_date_str[:parameter_count] == 6 # 3 rows * 2 fields (event_date, optional_date)
+        @test res_bulk_date_str[:parameter_count] == 2 # 2 fields (event_date, optional_date), one 3-row array each (#672)
+        @test all(p -> length(p) == 3, res_bulk_date_str[:parameters])
 
         # Test 22: Bulk insert with invalid format (should fail validation)
         df_invalid_dates = DataFrame(

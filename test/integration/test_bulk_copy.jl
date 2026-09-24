@@ -307,10 +307,9 @@ end
 # BinaryField payloads through bulk_insert and bulk_update, on BOTH backends (#296)
 #
 # These sit ABOVE the PostgreSQL-only guard on purpose. The bulk paths reach the driver
-# differently per backend — PostgreSQL casts each source column as
-# `source."col"::<pg type>` inside an UPDATE … FROM (VALUES …) CTE, SQLite binds `?`
-# placeholders into the same CTE shape with no cast at all — so a fix verified on one
-# backend proves nothing about the other. bulk_copy's own binary coverage stays below the
+# differently per backend — PostgreSQL binds each column as one `$n::bytea[]` array expanded
+# by `unnest` (#672), SQLite binds one `?` per cell into a VALUES CTE with no cast at all —
+# so a fix verified on one backend proves nothing about the other. bulk_copy's own binary coverage stays below the
 # guard, because COPY genuinely is PostgreSQL-only.
 #
 # The payload carries high bytes and an embedded NUL: that is what separates a real

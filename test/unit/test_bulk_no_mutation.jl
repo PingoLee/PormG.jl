@@ -64,14 +64,17 @@ snapshot(df) = (names(df), Dict(c => df[!, c] for c in names(df)),
 # Read a bound value back by COLUMN NAME. An INSERT binds parameters in the order it renders
 # its column list, so a column's position there is its parameter index — but that order is
 # "present columns first, then injected ones", which a model change can silently reshuffle.
-# Indexing by name fails loudly instead of asserting the wrong slot.
+# Indexing by name fails loudly instead of asserting the wrong slot. PostgreSQL binds a bulk
+# statement as one array per column (#672); this reads the FIRST row's value from it, the slot a
+# row-major index used to land on.
 function param_for(res, col)
-    m = match(r"INSERT INTO\s+\S+\s*\((.*?)\)\s*VALUES"s, res[:sql_text])
+    m = match(r"INSERT INTO\s+\S+\s*\((.*?)\)\s*(?:VALUES|SELECT)"s, res[:sql_text])
     m === nothing && error("could not parse an INSERT column list from: $(res[:sql_text])")
     cols = [strip(c, ['"', ' ', '\n', '\r', '\t']) for c in split(m.captures[1], ",")]
     idx = findfirst(==(col), cols)
     idx === nothing && error("column $(col) is not in the INSERT: $(res[:sql_text])")
-    return res[:parameters][idx]
+    value = res[:parameters][idx]
+    return value isa AbstractVector ? first(value) : value
 end
 
 # Assert the caller's frame is untouched: same column set, same vector objects (===),

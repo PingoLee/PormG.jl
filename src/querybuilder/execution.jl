@@ -617,8 +617,9 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
      # Add safely quoted physical column (db_column when set) to columns list (#50)
     push!(quoted_field_columns, safe_column_identifier(Models.field_db_column(model.fields[field], field), connection))
 
-    # Format and add value to parameters
-    push!(param_values, add_parameter!(parameters, real_obj.insert[field] |> model.fields[field].formatter))
+    # Format and add value to parameters — one value, never a collection (#712)
+    formatted = _single_value(model.fields[field].formatter(real_obj.insert[field]), field, "insert")
+    push!(param_values, add_parameter!(parameters, formatted))
 
   end
 
@@ -855,6 +856,18 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
 
   # Capture the raw lookup values BEFORE any INSERT marshalling mutates real_obj.insert.
   target_values = Dict{String,Any}(f => real_obj.insert[f] for f in target_fields)
+
+  # A collection lookup value would be refused by the INSERT on a miss, but a hit never builds one:
+  # `fetch_by_target` hands it to `filter()`, which raises `FilterError` instead. Refuse it here, the
+  # same way on both paths (#712). A `JSONField` vector formats to one string, so this check lets it
+  # through — the hit read below still cannot take it as a lookup, which is a separate limitation of
+  # `filter()`. A non-collection value is left entirely to the paths below.
+  for f in target_fields
+    v = target_values[f]
+    v isa _CollectionValue || continue
+    validate_field_data(model, f, v, "get_or_create"; allow_primary_key = true)
+    _single_value(model.fields[f].formatter(v), f, "get_or_create")
+  end
 
   # get() by the conflict target through the fluent builder — dialect-correct binding for free, and
   # inside a transaction it uses the pinned connection (same pattern as save()).
@@ -2131,7 +2144,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       f_value = _set_update_query(objct.insert[field], instruction)
       push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else
-      formatted_value = objct.insert[field] |> model.fields[field].formatter
+      formatted_value = _single_value(model.fields[field].formatter(objct.insert[field]), field, "update")
       placeholder = add_parameter!(parameters, formatted_value)
       push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
     end

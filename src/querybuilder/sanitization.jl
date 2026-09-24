@@ -408,6 +408,20 @@ end
 _binary_byte_length(value::AbstractVector{UInt8})::Int = length(value)
 _binary_byte_length(value::AbstractString)::Int = ncodeunits(value)
 
+# One FORMATTED write value, checked to be a single value before it binds — every writer, both
+# backends, so they all raise alike (#672 bulk_insert/bulk_update, #712 create/update/get_or_create/
+# update_or_create and bulk_copy).
+# Only a text-like field lets a collection through validation (`format_text_sql` maps a `Vector`
+# element-wise, for `__in`), and no column stores one faithfully: PostgreSQL binds it as one array
+# parameter (stored as `{"a","b"}` text), and SQLite expands it into extra `?` placeholders.
+# It runs AFTER the formatter on purpose: a `JSONField` vector is serialized to one string first, so
+# it passes. (`PormGBytes` is not an `AbstractArray`, so a binary value is untouched.)
+const _CollectionValue = Union{AbstractArray, Tuple, AbstractDict, NamedTuple}
+_single_value(value, ::AbstractString, ::AbstractString) = value
+function _single_value(value::_CollectionValue, field::AbstractString, op::AbstractString)
+  throw(InvalidValueError("Error in $op, field `$field` was given a $(typeof(value)): a column holds a single value, not a collection."))
+end
+
 function validate_field_data(model::PormGModel, field::String, value::Any, operation::String; allow_primary_key::Bool = true)
     if haskey(model.fields, field) && Models.is_many_to_many_field(model.fields[field])
         _validation_error(operation, model, field, "many-to-many relations are not physical columns"; suggestion="use the many-to-many manager add, remove, clear, or set methods")

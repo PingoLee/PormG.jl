@@ -149,6 +149,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "bulk_insert ON CONFLICT (#123)" include("unit/test_bulk_on_conflict.jl")
     @testset "Bulk Row Counts (#670)" include("unit/test_bulk_row_counts.jl")
     @testset "PostgreSQL Bulk Column Arrays (#672)" include("unit/test_bulk_pg_unnest.jl")
+    @testset "Single-row Writers Refuse a Collection (#712)" include("unit/test_single_row_collection_value.jl")
     @testset "update_or_create (#30)" include("unit/test_update_or_create.jl")
     @testset "Fluent parity: get_or_create/last/aggregate/page (#208, #272)" include("unit/test_fluent_parity_208.jl")
     @testset "create() returns PormGRow (#166)" include("unit/test_create_returns_pormgrow.jl")

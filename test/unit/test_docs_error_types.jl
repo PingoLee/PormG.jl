@@ -488,6 +488,20 @@ const DOCERR_CASES = [
         () -> DOCERR_STINT_PG.objects.create("driver" => "Senna", "laps" => nothing,
                                              show_query = :dict),
     ),
+    # #712 — the single-row half of the #672 rule above. Before it, `create()` bound the `Vector`
+    # as one array parameter on PostgreSQL (stored as `{"Senna","Prost"}` text) and as extra `?`s
+    # on SQLite. Build-time: the refusal runs at the bind site, before any SQL executes.
+    (
+        "write/create.md — a Vector in a text-like field raises InvalidValueError",
+        InvalidValueError,
+        () -> DOCERR_STINT_PG.objects.create("driver" => ["Senna", "Prost"], show_query = :dict),
+    ),
+    (
+        "write/update.md — Automatic Validation: a Vector set on a text-like field raises InvalidValueError",
+        InvalidValueError,
+        () -> DOCERR_STINT_PG.objects.filter("id" => 1).update("driver" => ["Senna", "Prost"],
+                                                              show_query = :dict),
+    ),
     (
         "read/filters_and_aggregates.md — a JSON path key with spaces is not addressable",
         InvalidValueError,

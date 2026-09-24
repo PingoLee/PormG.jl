@@ -968,12 +968,41 @@ WHERE "Tb_2"."year" = $1 AND ("Tb"."grid" - "Tb"."positionorder") >= $2
 When a query projects both kinds, one `filter(...)` call splits the same way: the row alias goes to
 `WHERE` and the aggregate alias to `HAVING`.
 
-!!! note "Text-valued aliases"
-    The value of a top-level alias filter is checked against the alias's type, and PormG does not
-    yet know the type of a text function such as `Lower`, `Upper` or `Concat`, so it expects a
-    number there ([#707](https://github.com/PingoLee/PormG.jl/issues/707)). Until that is fixed,
-    filter the underlying column instead, e.g.
-    `filter("driverid__surname__@istartswith" => "ham")`.
+### How an Alias Filter's Value Is Typed
+
+A filter on an alias checks its value against the type of what the alias projects. The rule is the
+same whether the filter is written top-level or inside `Q(...)`/`Qor(...)`:
+
+- a column (`F("grid")`, `Max("grid")`, `Coalesce("code", Value("-"))`) has the column's type;
+- a text function (`Lower`, `Upper`, `Trim`, `Replace`, `Concat`) is text;
+- `Sum`, `Count`, `Avg` and arithmetic on numbers are numbers;
+- `Cast(...)`, or a function given `output_field = ...`, has the type it names.
+
+A value of the wrong type raises `FilterError`, which names the alias. When PormG cannot tell what
+type an expression returns, for example a `Case` with no `output_field`, it binds the value as
+given.
+
+```julia
+using PormG.Functions: Lower
+
+# 2010 results for the driver whose surname, lower-cased, is "button"
+query = M.Result.objects
+query.filter("raceid__year" => 2010)
+query.values("raceid__name", "surname_lc" => Lower("driverid__surname"), "points")
+query.filter(Q("surname_lc" => "button"))
+```
+
+```sql
+SELECT "Tb_1"."name" as "raceid__name", LOWER("Tb_2"."surname") as "surname_lc",
+  "Tb"."points" as "points"
+FROM "result" as "Tb"
+ INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
+ INNER JOIN "driver" AS "Tb_2" ON "Tb"."driverid" = "Tb_2"."driverid"
+WHERE "Tb_1"."year" = $1 AND (LOWER("Tb_2"."surname") = $2)
+```
+
+An alias over a literal, `values("v" => Value(5))`, is a row-level alias too: a filter on it compares
+two literals in `WHERE`, with both bound.
 
 ### An Alias Named After a Field
 

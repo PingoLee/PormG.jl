@@ -303,6 +303,19 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        # #707. The page states one typing rule for an alias filter, top-level or inside `Q`. The
+        # `Q` spelling is the half that used to bind a wrong-typed value unchecked, so it is the one
+        # pinned here: a number alias refuses a string, naming the alias.
+        "read/filters_and_aggregates.md — a wrong-typed alias filter value raises FilterError on every spelling",
+        FilterError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.values("driverid", "double_points" => F("points") * 2)
+            q.filter(Q("double_points__@gte" => "fifteen"))
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
         # #509. The window-function page states that the same ambiguity applies to an `SQLOrder`
         # entry inside a window's `order_by` — "exactly as it applies to values(), filter() and
         # order_by()". That sentence is the whole point of the fix: this was the one clause where a

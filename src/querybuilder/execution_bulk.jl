@@ -1181,7 +1181,7 @@ _backend_parameter_limit(conn::PormGSQLite) = _sqlite_param_limit(backend_sqlite
 # chunk_size can help, so we fail closed with an actionable error naming the counts and limit.
 #
 # `per_row = ncols` is exact: a collection in a cell — which SQLite's `add_parameter!` would expand
-# into several `?` — is refused by `_bulk_cell` before anything binds (#672).
+# into several `?` — is refused by `_single_value` before anything binds (#672).
 function _effective_chunk_size(requested::Integer, per_row::Integer, fixed::Integer,
                                limit::Integer, op::Symbol, backend::AbstractString)
   per_row <= 0 && return requested            # nothing bound per row → no cap possible or needed
@@ -1346,7 +1346,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
         end
 
         # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-        cells = [_bulk_cell(model.fields[field].formatter(row[mapping[field]]), field) for field in fields_df]
+        cells = [_single_value(model.fields[field].formatter(row[mapping[field]]), field, "bulk_insert") for field in fields_df]
         if pg_arrays
           foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
         else
@@ -1450,16 +1450,6 @@ end
 # cast from that (an adopted enum declared as a TextField) cannot be bulk-written on PostgreSQL.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# One formatted bulk cell, checked to be a single value — on both backends, so they raise alike.
-# Only a text-like field lets a collection through validation (`format_text_sql` maps a `Vector`
-# element-wise), and no row source stores one faithfully: a PostgreSQL array renders it as a nested
-# array literal, and SQLite's VALUES expands it into extra `?` placeholders that shift the row.
-# (`PormGBytes` is not an `AbstractArray`, so a binary value is untouched.)
-_bulk_cell(value, ::AbstractString) = value
-function _bulk_cell(value::Union{AbstractArray, Tuple, AbstractDict, NamedTuple}, field::AbstractString)
-  throw(InvalidValueError("A bulk value for field `$field` is a $(typeof(value)): each cell must hold a single value, not a collection."))
-end
-
 """
     _pg_array_element(value) -> Union{Missing, Integer, String}
 
@@ -1472,7 +1462,7 @@ or corrupt the literal. Every element is therefore reduced to `missing`, an `Int
 `true`/`false`: nothing the array parser treats specially) or a `String`, which LibPQ always quotes.
 The element text is exactly what the per-cell parameter carried for the same cell — LibPQ renders a
 scalar parameter with the same `string` — so both shapes store the same value. A collection never
-gets here: `_bulk_cell` refuses it first.
+gets here: `_single_value` refuses it first.
 """
 _pg_array_element(::Union{Missing, Nothing}) = missing
 _pg_array_element(value::Integer) = value
@@ -1587,8 +1577,9 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
           try
             validate_field_data(model, field, value, "bulk_copy"; allow_primary_key = true)
             # `_bulk_copy_cell` translates a binary payload into PostgreSQL's hex input syntax;
-            # every other value passes through unchanged (#296).
-            _bulk_copy_cell(model.fields[field].formatter(value))
+            # every other value passes through unchanged (#296). A collection is refused first, as
+            # in every other writer (#712): CSV would otherwise store its `repr` as the column text.
+            _bulk_copy_cell(_single_value(model.fields[field].formatter(value), field, "bulk_copy"))
           catch e
             e isa PormGError && rethrow()   # keep the taxonomy type (bulk_copy logs no per-row depuration; the message below carries the row index only for the wrapped case)
             throw(InvalidValueError("Error in bulk_copy, row $(row_index) for model $(model.name) failed validation or formatting: $(e)"))
@@ -2051,7 +2042,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
         end
 
         # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-        cells = [_bulk_cell(model.fields[field].formatter(row[mapping[field]]), field) for field in joined_columns]
+        cells = [_single_value(model.fields[field].formatter(row[mapping[field]]), field, "bulk_update") for field in joined_columns]
         if pg_arrays
           foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
         else

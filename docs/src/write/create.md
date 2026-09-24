@@ -183,6 +183,12 @@ ERROR: the column sirname not found in driver, that contains the fields: code, d
 Catch `PormGError` for either, or the specific type when you want to tell a typo apart from a value
 the column cannot store.
 
+A column holds a single value. A `Vector` given to a text-like field (`CharField`, `TextField`, …)
+raises `InvalidValueError` naming the field, on both backends — in `create`, `get_or_create` and
+`update_or_create` alike, and the same way the [bulk writers](bulk.md) refuse it. `JSONField` and
+`BinaryField` values are unaffected: each is serialized to one value first. To *match* several
+values, use a lookup such as `"surname__@in" => ["Senna", "Prost"]` in `filter(...)`.
+
 ### Default Values
 
 Fields with default values don't need to be specified:

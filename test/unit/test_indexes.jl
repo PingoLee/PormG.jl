@@ -6,8 +6,9 @@ Django's `Meta.indexes`, spelled as model-level `Models.Index` objects passed th
 
   1. Index construction, field normalization, and model-level validation — including the
      two-field minimum, which is a correctness rule and not a style choice.
-  2. The migration planner emits a plain CREATE INDEX at table creation (add-only, mirroring
-     UniqueConstraint), byte-identical on the PostgreSQL and SQLite mocks.
+  2. The migration planner emits a plain CREATE INDEX at table creation, byte-identical on
+     the PostgreSQL and SQLite mocks. (The diff on an EXISTING table — #161 — is
+     test_composite_diff.jl.)
   3. An Index and a UniqueConstraint cannot claim the same index name.
   4. Model_to_str round-trips the declaration through the `indexes=` kwarg, including the
      renamed-field and unrendered-field guards it shares with the constraints emitter.
@@ -27,7 +28,7 @@ using PormG.Models
 using PormG.Migrations
 
 import PormG: PormGModel
-import PormG.Migrations: _attach_composite_indexes!
+import PormG.Migrations: _attach_composite_indexes!, LiveComposite
 
 # ── DB-free mock backends ─────────────────────────────────────────────────────
 struct IXMockPostgres <: PormG.PormGPostgres end
@@ -244,14 +245,15 @@ end
 
   sql = join(values(plan[:lap_time]), "\n")
   @test occursin("CREATE TABLE", sql)
-  @test occursin("CREATE INDEX IF NOT EXISTS \"lap_times_raceid_lap_idx\"", sql)   # <table>_<cols>_idx
+  # No IF NOT EXISTS (#161): a name some other object holds must fail loudly, not no-op.
+  @test occursin("CREATE INDEX \"lap_times_raceid_lap_idx\"", sql)                 # <table>_<cols>_idx
   @test occursin("(\"raceid\", \"lap\")", sql)                                     # declared ORDER
   # It is an INDEX, not a constraint: nothing on this table may render as UNIQUE, or the
   # declaration would start rejecting rows the model never said were unique.
   @test !occursin("CREATE UNIQUE INDEX", sql)
 
   sql2 = join(values(plan[:grid_slot]), "\n")
-  @test occursin("CREATE INDEX IF NOT EXISTS \"grid_slot_lookup\"", sql2)          # explicit name
+  @test occursin("CREATE INDEX \"grid_slot_lookup\"", sql2)                        # explicit name
   @test occursin("(\"race_ref\", \"position\")", sql2)                             # physical column (#50)
   @test !occursin("\"race\",", sql2)                                               # never the field name
 end
@@ -264,7 +266,7 @@ end
 @testset "Planner emits CREATE INDEX at table creation (SQLite)" begin
   plan = _ix_plan(IXMockSQLite())
   sql = join(values(plan[:lap_time]), "\n")
-  @test occursin("CREATE INDEX IF NOT EXISTS \"lap_times_raceid_lap_idx\"", sql)
+  @test occursin("CREATE INDEX \"lap_times_raceid_lap_idx\"", sql)
   @test occursin("(\"raceid\", \"lap\")", sql)
   @test !occursin("CREATE UNIQUE INDEX", sql)
 
@@ -279,7 +281,7 @@ end
 # The plan's step labels differ ("Create index: x" vs "Create unique constraint: x"), so a
 # name shared by an Index and a UniqueConstraint would NOT collide in the plan OrderedDict —
 # it would reach the database as two CREATE statements for one identifier and fail there,
-# mid-migration. `_add_new_table` shares one name registry between the two emitters.
+# mid-migration. `_check_composite_names` keeps one registry for the whole plan (#161).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Planner rejects an Index and a UniqueConstraint sharing a name" begin
   clash = Models.Model("clash_tbl",
@@ -422,14 +424,17 @@ end
   base() = Models.Model("live_tbl", Dict{String, PormG.PormGField}(
     "id" => Models.IDField(), "a" => Models.IntegerField(), "b" => Models.IntegerField(),
   ))
+  # A plain (non-unique, bare) index as the readers report it.
+  plain(name, cols) = LiveComposite(name, cols, false, false)
 
   # Healthy: attached under the same cache key a declaration writes.
-  ok = _attach_composite_indexes!(base(), ["ix_ab" => ["a", "b"]])
+  ok = _attach_composite_indexes!(base(), [plain("ix_ab", ["a", "b"])])
   @test ok.cache["composite_indexes"]["indexes"][1].fields == ["a", "b"]
   @test ok.cache["composite_indexes"]["indexes"][1].name == "ix_ab"
+  @test !haskey(ok.cache, "unique_constraints")   # a plain index is not a constraint
 
   # A column the model does not carry → skipped, no cache entry, no exception.
-  missing_col = _attach_composite_indexes!(base(), ["ix_ax" => ["a", "gone"]])
+  missing_col = _attach_composite_indexes!(base(), [plain("ix_ax", ["a", "gone"])])
   @test !haskey(missing_col.cache, "composite_indexes")
 
   # An unrepresentable column NAME → skipped, and the healthy sibling still lands.
@@ -437,14 +442,42 @@ end
     "id" => Models.IDField(), "a" => Models.IntegerField(), "b" => Models.IntegerField(),
     "a__b" => Models.IntegerField(),
   ))
-  mixed = _attach_composite_indexes!(odd, ["ix_bad" => ["a__b", "a"], "ix_good" => ["a", "b"]])
+  mixed = _attach_composite_indexes!(odd, [plain("ix_bad", ["a__b", "a"]), plain("ix_good", ["a", "b"])])
   @test length(mixed.cache["composite_indexes"]["indexes"]) == 1
   @test mixed.cache["composite_indexes"]["indexes"][1].name == "ix_good"
 
   # Nothing to attach leaves the cache untouched — a table with no composite index must be
   # byte-identical to how it introspected before this existed.
-  none = _attach_composite_indexes!(base(), Pair{String, Vector{String}}[])
+  none = _attach_composite_indexes!(base(), LiveComposite[])
   @test !haskey(none.cache, "composite_indexes")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Introspection seam, unique half (#161): a unique composite comes back as a UniqueConstraint
+# Before #161 no reader produced one, so an inspectdb'd models file declared no composite
+# uniqueness at all — and once makemigrations drops undeclared composites, that file's first
+# migration would delete them. Both backings (a bare CREATE UNIQUE INDEX and a table-level
+# UNIQUE clause) land in the SAME cache key a declaration writes, and SQLite's reserved
+# `sqlite_autoindex_*` name is never written into a models file.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "_attach_composite_indexes! routes a unique composite to UniqueConstraint (#161)" begin
+  m = Models.Model("live_uq", Dict{String, PormG.PormGField}(
+    "id" => Models.IDField(), "a" => Models.IntegerField(), "b" => Models.IntegerField(),
+    "c" => Models.IntegerField(),
+  ))
+  _attach_composite_indexes!(m, [
+    LiveComposite("ux_ab", ["a", "b"], true, false),                  # bare CREATE UNIQUE INDEX
+    LiveComposite("sqlite_autoindex_live_uq_1", ["b", "c"], true, true),   # SQLite UNIQUE (b, c)
+    LiveComposite("pg_uq_c", ["c"], true, false),                     # a one-field UniqueConstraint
+    LiveComposite("ix_ca", ["c", "a"], false, false),                 # and a plain index beside them
+  ])
+  ucs = m.cache["unique_constraints"]["constraints"]
+  @test [uc.fields for uc in ucs] == [["a", "b"], ["b", "c"], ["c"]]   # reader order kept
+  @test ucs[1].name == "ux_ab"          # a real name is the live one, so re-migration reproduces it
+  @test ucs[2].name === nothing         # the reserved autoindex name is NOT carried
+  @test ucs[3].name == "pg_uq_c"
+  # The plain index still lands in its own key — one kind never swallows the other.
+  @test [ix.name for ix in m.cache["composite_indexes"]["indexes"]] == ["ix_ca"]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

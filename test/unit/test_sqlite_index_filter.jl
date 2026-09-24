@@ -26,7 +26,7 @@ using DataFrames
 import PormG.ConnectionPool: SQLiteConnectionPool, fetch, close_pool!
 import PormG.Migrations: get_secondary_index_ddls, _sqlite_column_is_unique,
                          _sqlite_single_column_unique_columns,
-                         _sqlite_single_column_indexed_columns, _sqlite_composite_indexes,
+                         _sqlite_single_column_indexed_columns, _sqlite_composite_indexes, LiveComposite,
                          convertSQLToModel, get_constraints_index,
                          _sqlite_identifier_tokens, _sqlite_index_argument_region,
                          _sqlite_index_argument_start, _sqlite_rewrite_index_columns,
@@ -437,52 +437,74 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #347: `_sqlite_composite_indexes` — the MULTI-column half of the same index set
+# #347 / #161: `_sqlite_composite_indexes` — the model-level half of the same index set
 #
 # `_sqlite_single_column_indexed_columns` above ends at `HAVING COUNT(*) = 1`, so every
 # multi-column index was invisible: `inspectdb` on a live database silently dropped them and PormG
 # had no primitive to express one anyway. This reader is that function with the arity inverted, and
 # the two must PARTITION the set — an index feeding both `db_index` and a `Models.Index` would be
-# created twice and diffed against itself.
+# created twice and diffed against itself. Since #161 it also reads composite UNIQUENESS, in both of
+# its backings, and partitions that against `_sqlite_single_column_unique_columns` the same way.
 #
 # The two things this reader needs that its single-column sibling does not are asserted explicitly:
 # column ORDER (an index over (b, a) is not the index over (a, b)) and dropping an expression index
 # whole rather than declaring its remaining columns as if they were the index.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "_sqlite_composite_indexes (#347)" begin
+@testset "_sqlite_composite_indexes (#347, #161)" begin
   mktempdir() do dir
     pool = SQLiteConnectionPool(joinpath(dir, "compositeidx.sqlite"); pool_size = 1)
     try
       # One of every shape again, but now judged from the other side of the arity split:
-      #   ix_ba   → composite CREATE INDEX     (origin 'c', unique 0, 2 cols)  ← the ONLY Index
-      #   ix_solo → single-column CREATE INDEX (origin 'c', unique 0, 1 col)   → db_index
-      #   ux_cd   → composite CREATE UNIQUE    (unique 1)                      → UniqueConstraint
-      #   ix_part → composite partial index    (partial 1)
-      #   ix_expr → composite expression index (a member has no attribute name)
-      #   ix_desc → composite DESC index       (a member has desc = 1)
-      #   ix_coll → composite COLLATE NOCASE   (a member has a non-BINARY collation)
+      #   ix_ba   → composite CREATE INDEX        (origin 'c', unique 0, 2 cols) → Index
+      #   ux_cd   → composite CREATE UNIQUE INDEX (origin 'c', unique 1, 2 cols) → UniqueConstraint
+      #   ux_solo → one-column CREATE UNIQUE INDEX (origin 'c', unique 1, 1 col) → UniqueConstraint
+      #   UNIQUE (e, f) in the table              (origin 'u', 2 cols)            → UniqueConstraint,
+      #                                                                             constraint-backed
+      #   ix_solo → single-column CREATE INDEX    (origin 'c', unique 0, 1 col)  → db_index
+      #   uc TEXT UNIQUE                           (origin 'u', 1 col)            → the field's unique
+      #   ix_part → composite partial index       (partial 1)
+      #   ix_expr → composite expression index    (a member has no attribute name)
+      #   ix_desc → composite DESC index          (a member has desc = 1)
+      #   ix_coll → composite COLLATE NOCASE      (a member has a non-BINARY collation)
       fetch(pool, """CREATE TABLE t347 (
-        id INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT, d TEXT, solo TEXT, uc TEXT UNIQUE);""")
+        id INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT, d TEXT, e TEXT, f TEXT, g TEXT,
+        solo TEXT, uc TEXT UNIQUE, UNIQUE (f, e));""")
       fetch(pool, "CREATE INDEX ix_ba ON t347(b, a);")
       fetch(pool, "CREATE INDEX ix_solo ON t347(solo);")
       fetch(pool, "CREATE UNIQUE INDEX ux_cd ON t347(c, d);")
+      fetch(pool, "CREATE UNIQUE INDEX ux_solo ON t347(g);")
       fetch(pool, "CREATE INDEX ix_part ON t347(c, d) WHERE c IS NOT NULL;")
       fetch(pool, "CREATE INDEX ix_expr ON t347(lower(c), d);")
       fetch(pool, "CREATE INDEX ix_desc ON t347(c DESC, d);")
       fetch(pool, "CREATE INDEX ix_coll ON t347(c COLLATE NOCASE, d);")
 
       idx = _sqlite_composite_indexes(pool, :t347)
-      names = [p.first for p in idx]
+      byname = Dict(lc.name => lc for lc in idx)
+      names = collect(keys(byname))
 
-      @test names == ["ix_ba"]                    # exactly one survives every filter
+      # Exactly four survive every filter. The table-level UNIQUE's name is SQLite's, not ours.
+      auto = only(filter(n -> startswith(n, "sqlite_autoindex_t347_"), names))
+      @test sort(names) == sort(["ix_ba", "ux_cd", "ux_solo", auto])
+
       # Column ORDER is the index's identity, and it is DECLARED order, not table order. `b` comes
-      # after `a` in the table, so a reader aggregating by attribute would return ["a","b"] here.
-      @test idx[1].second == ["b", "a"]
+      # after `a` in the table, so a reader aggregating by attribute would return ["a","b"] here —
+      # and the same holds for the constraint's `(f, e)`.
+      @test byname["ix_ba"].columns == ["b", "a"]
+      @test byname[auto].columns == ["f", "e"]
+
+      # The two facts the planner keys its DDL on: uniqueness, and whether a CONSTRAINT backs it
+      # (SQLite cannot `DROP INDEX` an autoindex; only a rebuild removes it).
+      @test (byname["ix_ba"].unique, byname["ix_ba"].constraint) == (false, false)
+      @test (byname["ux_cd"].unique, byname["ux_cd"].constraint) == (true, false)
+      @test (byname[auto].unique, byname[auto].constraint) == (true, true)
+      # A ONE-column bare unique index is read — it is what `UniqueConstraint(fields = ("g",))`
+      # creates, and nothing else reads that shape. Before #161 it vanished on both sides.
+      @test byname["ux_solo"].columns == ["g"] && byname["ux_solo"].unique
 
       # Spelled out individually so a failure names the filter that broke:
-      @test !("ix_solo" in names)   # arity 1 is db_index — read by the sibling above, not here
-      @test !("ux_cd" in names)     # drop `il."unique" = 0` and a composite UniqueConstraint (#19)
-                                    #   leaks in and would be re-declared as a plain index
+      @test !("ix_solo" in names)   # arity-1 non-unique is db_index — read by the sibling above
+      @test !any(lc -> lc.columns == ["uc"], idx)   # arity-1 UNIQUE clause is the field's `unique`
+                                                    #   — read by `_sqlite_single_column_unique_columns`
       @test !("ix_part" in names)   # drop `il.partial = 0` and a partial index leaks in; PormG
                                     #   cannot declare one, so reading it would be permanent churn
       @test !("ix_expr" in names)   # an expression member has a NULL name — emitting the remaining
@@ -492,11 +514,10 @@ end
       # reinterpretation the Django importer already refuses on `Index(fields=["-year"])`.
       @test !("ix_desc" in names)   # a DESC key: PormG indexes carry no per-column order
       @test !("ix_coll" in names)   # COLLATE NOCASE: a different comparison, so a different index
-      @test !any(startswith(n, "sqlite_autoindex") for n in names)  # the UNIQUE column's auto-index
 
       # An unknown table yields an empty vector rather than throwing — convert_schema_to_models calls
       # this per table and must survive a race with a concurrent DROP.
-      @test _sqlite_composite_indexes(pool, :nonexistent) == Pair{String, Vector{String}}[]
+      @test _sqlite_composite_indexes(pool, :nonexistent) == LiveComposite[]
 
       # END TO END: the vector is only useful if convertSQLToModel attaches it. Without this the
       # whole reader could be inert and every assertion above would still pass.
@@ -507,18 +528,35 @@ end
       @test ixs[1].fields == ["b", "a"]
       @test ixs[1].name == "ix_ba"                # the LIVE name, so a re-migration reproduces it
 
-      # The two readers partition: `solo` is db_index and is NOT also a composite index, while the
-      # composite members `a`/`b` are NOT marked db_index. Either overlap is a churn loop.
+      # #161: the three unique shapes come back as `UniqueConstraint`s. Without this an inspectdb'd
+      # models file would declare none of them, and the first `makemigrations` — which now drops an
+      # undeclared composite — would plan their removal.
+      ucs = Dict(uc.fields => uc for uc in m.cache["unique_constraints"]["constraints"])
+      @test sort(collect(keys(ucs))) == sort([["c", "d"], ["f", "e"], ["g"]])
+      @test ucs[["c", "d"]].name == "ux_cd"
+      @test ucs[["g"]].name == "ux_solo"
+      # SQLite reserves the `sqlite_` prefix, so the autoindex's name is NOT written into the models
+      # file — a later rebuild would re-create it under a name SQLite refuses. PormG derives one.
+      @test ucs[["f", "e"]].name === nothing
+
+      # The readers partition: `solo` is db_index and is NOT also a composite index, while the
+      # composite members `a`/`b` are NOT marked db_index. Either overlap is a churn loop. The same
+      # holds for uniqueness: `uc` is the field's own `unique`, and `g` — backed by a bare index —
+      # is not (its uniqueness lives on the model-level constraint above instead).
       @test m.fields["solo"].db_index
       @test !m.fields["a"].db_index
       @test !m.fields["b"].db_index
-      @test m.cache["index"]["solo"] == "ix_solo" # and both cache keys coexist — one must not
-                                                  #   overwrite the other on the way in
+      @test m.fields["uc"].unique
+      @test !m.fields["g"].unique
+      @test m.cache["index"]["solo"] == "ix_solo" # and every cache key coexists — one must not
+                                                  #   overwrite another on the way in
 
       # A table with no composite index carries no entry at all, so nothing changes for the
       # overwhelmingly common case.
       fetch(pool, "CREATE TABLE t347_plain (id INTEGER PRIMARY KEY, x TEXT);")
-      @test !haskey(convertSQLToModel(pool, "t347_plain").cache, "composite_indexes")
+      plain = convertSQLToModel(pool, "t347_plain")
+      @test !haskey(plain.cache, "composite_indexes")
+      @test !haskey(plain.cache, "unique_constraints")
     finally
       close_pool!(pool)
     end

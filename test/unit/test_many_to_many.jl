@@ -224,8 +224,8 @@ end
 # ManyToManyField owns no column and must never reach CREATE TABLE. So it owes two things: rebuild
 # `fields`/`field_names` filtered, and carry the untouched slots onto the clone the planner then
 # works from — `name`, `related_objects`, `_module`, `connect_key` and `cache`. The one carried
-# slot with a proven downstream reader is `cache`: `_add_unique_constraints`
-# (`src/migrations/planner.jl:206`) pulls `cache["unique_constraints"]` off this returned model, so
+# slot with a proven downstream reader is `cache`: `declared_composites`
+# (`src/migrations/column_spec.jl`) pulls `cache["unique_constraints"]` off this returned model, so
 # dropping the copy silently deletes every user-declared UniqueConstraint from the CREATE TABLE plan
 # — a regression `test_unique_constraints.jl` catches and this file's assertions below also trip.
 # It must also leave its input alone: that input is the user's live registered model, which the
@@ -272,7 +272,7 @@ end
   # relation still resolves off the stripped model even though the field that declared it is gone.
   # (The through table itself does NOT depend on this: the second loop of
   # `synthesize_many_to_many_through_models` rebuilds it from the ORIGINAL unstripped model and sets
-  # `cache["many_to_many_auto"]` on a freshly-built through model. Nor does `_add_unique_constraints`
+  # `cache["many_to_many_auto"]` on a freshly-built through model. Nor does `declared_composites`
   # depend on identity — it needs only that the outer Dict was copied at all. Inner-table identity is
   # what the next two assertions pin, and nothing else.)
   @test stripped.cache["many_to_many"] === source.cache["many_to_many"]

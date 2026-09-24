@@ -153,24 +153,19 @@ Each `UniqueConstraint` takes:
   referenced by the field name; PormG resolves each to its physical column (honoring
   `db_column`).
 - `name` — the index name (optional). When omitted, PormG derives `<table>_<cols>_uniq`,
-  matching the auto-generated many-to-many index convention. On tables/columns with long names
-  the derived name can exceed PostgreSQL's 63-byte identifier limit (which Postgres silently
-  truncates) — pass an explicit `name` in that case to keep it stable and unique.
+  matching the auto-generated many-to-many index convention. See
+  [Index names](#Index-names) for how a name is matched, renamed and length-checked.
 
 A model may carry several constraints (each its own tuple). At migration time each becomes a
 `CREATE UNIQUE INDEX` — identical on PostgreSQL and SQLite:
 
 ```sql
-CREATE UNIQUE INDEX IF NOT EXISTS "uniq_constructor_year"
+CREATE UNIQUE INDEX "uniq_constructor_year"
   ON "constructor_engines" ("constructorid", "year");
 ```
 
-!!! note "Materialized when the table is created"
-    In this release a `UniqueConstraint` is emitted when its table is first created (the same
-    lifecycle as the automatic many-to-many join-table index). Adding or removing a constraint
-    on a table that **already exists** is not yet detected by `makemigrations` — it requires
-    composite-index introspection that is tracked as a follow-up. Declare composite uniqueness
-    when you create the model, or add the index by hand on an existing table.
+Adding, removing or changing a constraint later is planned like any other schema change — see
+[Changing composites on an existing table](#Changing-composites-on-an-existing-table).
 
 ## Composite Indexes (`Meta.indexes`)
 
@@ -197,9 +192,7 @@ Each `Index` takes:
   `db_column`). **The order matters**: an index over `("raceid", "lap")` serves a lookup by
   `raceid`, or by `raceid` *and* `lap` together, but not one by `lap` alone.
 - `name` — the index name (optional). When omitted, PormG derives `<table>_<cols>_idx`, the plain
-  sibling of the composite-unique convention. On long table/column names the derived name can
-  exceed PostgreSQL's 63-byte identifier limit (which Postgres truncates, with only a `NOTICE`) — pass an
-  explicit `name` in that case.
+  sibling of the composite-unique convention. See [Index names](#Index-names).
 
 An `Index` speeds up reads and constrains nothing. For a composite *uniqueness guarantee*, use
 [Composite Uniqueness](#Composite-Uniqueness-(unique_together)) instead — that is a
@@ -207,7 +200,7 @@ An `Index` speeds up reads and constrains nothing. For a composite *uniqueness g
 identical on PostgreSQL and SQLite:
 
 ```sql
-CREATE INDEX IF NOT EXISTS "lap_times_race_lap_idx"
+CREATE INDEX "lap_times_race_lap_idx"
   ON "lap_times" ("raceid", "lap");
 ```
 
@@ -218,12 +211,53 @@ CREATE INDEX IF NOT EXISTS "lap_times_race_lap_idx"
     declaration, and make `makemigrations` propose **dropping** the index on every run. Declare
     `db_index=true` on the field instead.
 
-!!! note "Created with the table; read back, but not yet diffed"
-    An `Index` is emitted when its table is **first created**, the same lifecycle as
-    `UniqueConstraint`. Introspection *does* read composite indexes back on both backends, so
-    `inspectdb` on an existing database reproduces them and a re-run of `makemigrations` proposes
-    nothing. What is not yet detected is **adding or removing** an `Index` on a table that already
-    exists — declare it with the model, or add the index by hand.
+## Changing composites on an existing table
+
+`makemigrations` diffs `UniqueConstraint` and `Index` declarations against the live database the way
+it diffs columns — on a table that already exists, not only when the table is first created:
+
+| You change | `makemigrations` plans |
+|---|---|
+| add a `UniqueConstraint` / `Index` | `CREATE UNIQUE INDEX` / `CREATE INDEX` |
+| remove one | `DROP INDEX` — or, when a table constraint backs the index, `ALTER TABLE … DROP CONSTRAINT` on PostgreSQL and a table rebuild on SQLite |
+| change its `fields` | the drop, then the create |
+| change an explicit `name` | `ALTER INDEX … RENAME TO` on PostgreSQL (`ALTER TABLE … RENAME CONSTRAINT` for a constraint); a drop and a create on SQLite, which cannot rename an index |
+
+A declaration is matched to a live index by **what it is** — unique or not, and its columns in
+order — and never by its name. So an index some other tool created counts as the one you declared:
+a schema adopted from Django keeps its `unique_together` constraint instead of gaining a second index
+beside it, and `inspectdb` writes every composite it reads into the generated model, so adopting a
+database plans nothing.
+
+!!! warning "An undeclared composite is dropped"
+    The models file is the schema. A composite index or uniqueness constraint on a PormG-managed
+    table that no `UniqueConstraint` or `Index` declares — including one a DBA added by hand, and a
+    one-column `CREATE UNIQUE INDEX` — is planned for removal, exactly as an undeclared `db_index`
+    is. The removal is **destructive**: `dry_run()` lists it, and `migrate()` refuses it without
+    `destructive=true`. Declare the index to keep it.
+
+    Indexes PormG cannot reproduce are never read, so they are never dropped either: partial
+    (`WHERE …`), functional (`lower(name)`), non-b-tree, `DESC` / `NULLS FIRST`, an explicit
+    operator class or collation, `INCLUDE (…)`, `NULLS NOT DISTINCT`, a `DEFERRABLE` constraint,
+    and an invalid index. The [PostgreSQL guide](postgres.md#Production-notes) lists them.
+
+A composite over a column you are dropping goes with the column — nothing extra is planned for it.
+
+### Index names
+
+- A declaration **without** a `name` accepts whatever the live index is called. A table renamed by
+  `makemigrations` keeps its old `<table>_<cols>_uniq` index, and that is not a change.
+- An **explicit** `name` is intent: a live index over the same columns under another name is renamed
+  to it.
+- Index names share one namespace per PostgreSQL schema (with tables and sequences) and per SQLite
+  database. `makemigrations` refuses a plan that would create (or rename to) one name twice on any
+  tables, or a name an index on another table still holds — move a name between tables in two
+  migrations, freeing it first. On SQLite it also refuses an explicit name starting with the reserved
+  `sqlite_`. PormG creates composites without `IF NOT EXISTS`, so a name some object PormG cannot
+  see already holds fails the migration instead of silently leaving the table without its index.
+- PostgreSQL stores at most 63 bytes of a name and truncates the rest. `makemigrations` compares the
+  truncated form, so a long name does not re-plan a rename on every run, and warns when it creates
+  one — two long names that share their first 63 bytes collide, so shorten one.
 
 ## Naming Conventions and Considerations
 

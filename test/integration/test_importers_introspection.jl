@@ -541,6 +541,21 @@ end
     uniq_reloaded = Core.eval(uniq_mod, Meta.parse(uniq_src))
     @test uniq_reloaded.cache["composite_indexes"]["indexes"][1].fields == ["b", "a"]
 
+    # ── 3c'. …and the composite UNIQUE (a, b) comes back as a UniqueConstraint (#161) ──
+    # It used to vanish on both backends — the constraint-backed shape failed the arity-1 gates and
+    # the composite reader's `NOT indisunique` alike. Once makemigrations DROPS a composite no model
+    # declares, an inspectdb'd models file without it would delete the constraint on its first run.
+    # This is the only coverage that runs the widened PostgreSQL query (the `pg_constraint` join on
+    # `conrelid`) against a real catalog.
+    ucs = uniq.cache["unique_constraints"]["constraints"]
+    @test [uc.fields for uc in ucs] == [["a", "b"]]
+    # PostgreSQL names the constraint itself (`<table>_<cols>_key`) and that name is kept, so a
+    # re-migration reproduces it. SQLite's `sqlite_autoindex_*` is reserved and is NOT written into
+    # the models file: PormG derives a name instead, and a derived name matches any live one.
+    @test is_pg ? ucs[1].name == "pormg_it_uniq_a_b_key" : ucs[1].name === nothing
+    @test occursin("Models.UniqueConstraint(fields = (\"a\", \"b\",)", uniq_src)
+    @test [uc.fields for uc in uniq_reloaded.cache["unique_constraints"]["constraints"]] == [["a", "b"]]
+
     # ── 3d. Mixed-case FK/PK identifiers keep one spelling on every side (#389) ──────────
     # PostgreSQL used to aggregate `fk_cols`, `fk_tables` and `referenced_primary_keys` through
     # `quote_ident`, so a mixed-case name arrived with the `"` characters as part of the string.

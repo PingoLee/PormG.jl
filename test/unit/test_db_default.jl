@@ -562,8 +562,7 @@ end
         spec = ColumnSpec("k", ctype, false, true, true, NoDefault(), nothing,
                           Migrations.CheckKind[], nothing, "raw")
         tbl = Migrations.LiveTable("t", Migrations.OrderedDict("k" => spec),
-                                   Dict{String, Union{String, Nothing}}(),
-                                   Pair{String, Vector{String}}[])
+                                   Dict{String, Union{String, Nothing}}())
         f = Logging.with_logger(Logging.NullLogger()) do
             Migrations.field_from_spec(spec, tbl, conn)
         end

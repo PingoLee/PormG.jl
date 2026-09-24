@@ -921,15 +921,32 @@ convert_schema_to_models(db::PormGSQLite; kwargs...)::Vector{PormGModel} =
 # ---
 
 """
-    _pg_composite_indexes(db::PormGPostgres; schema = "public") -> Dict{String, Vector{Pair{String, Vector{String}}}}
+    _pg_composite_indexes(db::PormGPostgres; schema = "public") -> Dict{String, Vector{LiveComposite}}
 
-Every MULTI-column non-unique index in `schema`, as `table_name => [index_name => ordered columns]` —
-the PostgreSQL half of #347 and the exact mirror of [`_sqlite_composite_indexes`](@ref).
+Every model-level index in `schema` that PormG can re-emit, as `table_name => [LiveComposite, …]` —
+the PostgreSQL half of #347 / #161 and the exact mirror of [`_sqlite_composite_indexes`](@ref).
 
-The predicates are the `indexes` CTE's in `get_database_schema`, with the arity inverted
-(`indnkeyatts > 1` instead of `= 1`), so the two readers partition the same index set: nothing feeds
-both a per-field `db_index` and a model-level `Index`. `NOT indisunique` keeps a composite
-`UniqueConstraint` (a `CREATE UNIQUE INDEX`) out; `indpred IS NULL` keeps a partial index out.
+Three shapes, partitioned against the column readers of `get_database_schema` so no index has two
+owners:
+
+| shape | reads as | the other arity belongs to |
+|---|---|---|
+| non-unique, `indnkeyatts > 1` | `Index` | the `indexes` CTE (`= 1`) — `db_index` |
+| unique with no backing constraint, any arity | `UniqueConstraint` | nobody: a one-column bare unique index is what a one-field `UniqueConstraint` creates |
+| unique backing a `contype = 'u'` constraint, arity > 1 | `UniqueConstraint`, `constraint = true` | the `unique_constraints` CTE (`= 1`) — the field's `unique` |
+
+`indpred IS NULL` keeps a partial index out. Before #161 the reader carried `NOT indisunique`, so no
+composite uniqueness came back at all — neither PormG's own `CREATE UNIQUE INDEX` nor Django's
+`unique_together`, which PostgreSQL holds as a real constraint. Harmless while nothing diffed
+composites; with a diff it would have made every declared `UniqueConstraint` look missing on every
+run.
+
+**The backing constraint is joined on `conrelid = indrelid` and `contype IN ('u', 'p', 'x')`, never
+on `conindid` alone.** A foreign key ALSO records `conindid`: the referenced unique index, on the
+PARENT. A bare `conindid` test would read a unique index some child's key points at — or, for a
+self-reference, the table's own — as constraint-backed, and the planner would then emit a
+`DROP CONSTRAINT` for a constraint that does not exist. (`get_constraints_index` asks a broader
+question — "is any constraint using this index" — where that is exactly right.)
 
 Run **once for the whole schema**, not per table, and joined to the models by name in
 `convert_schema_to_models`. It is a separate query rather than another CTE on the schema dump because
@@ -966,6 +983,12 @@ importer applies to `Meta.indexes`. Beyond the shared predicates:
     both exist for — an explicit `COLLATE` in the index — and diverge only on a column *declared*
     with a non-default collation, which PostgreSQL keeps (re-emitting the index reproduces it
     exactly) and SQLite drops for want of the information to do better.
+  * Four whole-index refusals, each a shape PormG would re-emit as a DIFFERENT index (#161): an
+    `INCLUDE` clause (`indnatts <> indnkeyatts` — the payload columns vanish on re-emission); an
+    invalid index (`NOT indisvalid`, a failed `CREATE INDEX CONCURRENTLY`); a `DEFERRABLE` unique
+    constraint (a different enforcement point); and `NULLS NOT DISTINCT`. The last is read from
+    `pg_get_indexdef` rather than `pg_index.indnullsnotdistinct`, which only exists from PostgreSQL
+    15 — naming it would break every introspection on 11 through 14.
 
     Both are subscripted `[k.ord - 1]`, and the `- 1` is load-bearing. `indkey`/`indoption`/`indclass`
     are `int2vector`/`oidvector`, which PostgreSQL builds with **lower bound 0**; the `::int2[]` cast
@@ -994,7 +1017,7 @@ column: the older CTE still selects its column with `attnum = ANY(indkey)`, so a
 `CREATE INDEX ON t (a) INCLUDE (b, c)` marks `b`/`c` as `db_index` too. That is pre-existing and
 untouched here — no index reaches both readers.
 """
-function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing} = "public")::Dict{String, Vector{Pair{String, Vector{String}}}}
+function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing} = "public")::Dict{String, Vector{LiveComposite}}
   # Parameterized rather than interpolated: `schema` is a keyword argument, so it is caller-supplied
   # by contract even though every call site today passes the default.
   schema_clause = schema === nothing ? "" : "AND n.nspname = \$1"
@@ -1002,6 +1025,12 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
   query = """
     SELECT c.relname AS table_name,
            ic.relname AS index_name,
+           i.indisunique AS is_unique,
+           con.contype::text AS contype,
+           con.condeferrable AS is_deferrable,
+           i.indisvalid AS is_valid,
+           (i.indnatts <> i.indnkeyatts) AS has_include,
+           (i.indisunique AND pg_get_indexdef(i.indexrelid) LIKE '%NULLS NOT DISTINCT%') AS nulls_not_distinct,
            a.attname AS column_name,
            (i.indoption::int2[])[k.ord - 1] AS opt,
            (i.indcollation::oid[])[k.ord - 1] AS idx_coll,
@@ -1016,25 +1045,34 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
       ON k.ord <= i.indnkeyatts
     LEFT JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
     LEFT JOIN pg_opclass oc ON oc.oid = (i.indclass::oid[])[k.ord - 1]
+    LEFT JOIN pg_constraint con ON con.conindid = i.indexrelid AND con.conrelid = i.indrelid
+                               AND con.contype IN ('u', 'p', 'x')
     WHERE c.relkind = 'r'
       AND am.amname = 'btree'
       AND NOT i.indisprimary
-      AND NOT i.indisunique
       AND NOT i.indisexclusion
       AND i.indpred IS NULL
-      AND i.indnkeyatts > 1
+      AND (i.indisunique OR i.indnkeyatts > 1)
       $(schema_clause)
     ORDER BY c.relname, ic.relname, k.ord;
     """
   rows = DataFrame(fetch(db, query, params))
-  out = Dict{String, Vector{Pair{String, Vector{String}}}}()
+  out = Dict{String, Vector{LiveComposite}}()
   nrow(rows) == 0 && return out
   # index name ⇒ its column list, per table; `ORDER BY … k.ord` above means push order IS index order.
   # `nothing` marks a member PormG cannot express; the whole index is then skipped below.
   grouped = OrderedDict{Tuple{String, String}, Vector{Union{String, Nothing}}}()
+  kind = Dict{Tuple{String, String}, Tuple{Bool, Bool}}()      # ⇒ (unique, constraint-backed)
+  refused = Set{Tuple{String, String}}()
   for r in eachrow(rows)
     (r.table_name === missing || r.index_name === missing) && continue
     key = (string(r.table_name), string(r.index_name))
+    unique = r.is_unique === true
+    constraint = r.contype !== missing && string(r.contype) == "u"
+    kind[key] = (unique, constraint)
+    # Whole-index refusals (see the docstring). A NULL defaults to REFUSED, like every test below.
+    (r.is_valid !== true || r.has_include !== false || r.nulls_not_distinct !== false ||
+     (constraint && r.is_deferrable !== false)) && push!(refused, key)
     # Every test defaults to UNUSABLE on a NULL, which is the safe direction: after the `k.ord - 1`
     # fix the subscripts are always in range, so a NULL here means something unexpected, and this
     # reader's whole contract is that it never reads an index approximately.
@@ -1056,9 +1094,12 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
     push!(get!(grouped, key, Union{String, Nothing}[]), unusable ? nothing : string(r.column_name))
   end
   for ((tbl, idx), cols) in grouped
-    length(cols) > 1 || continue                 # arity 1 is `db_index`, read by the schema dump
+    (tbl, idx) in refused && continue
+    unique, constraint = kind[(tbl, idx)]
+    # Arity partition (see the table above): only a BARE unique index may have one column.
+    length(cols) > 1 || (unique && !constraint) || continue
     any(c -> c === nothing, cols) && continue    # a member PormG cannot re-emit ⇒ drop it whole
-    push!(get!(out, tbl, Pair{String, Vector{String}}[]), idx => String[String(c) for c in cols])
+    push!(get!(out, tbl, LiveComposite[]), LiveComposite(idx, String[String(c) for c in cols], unique, constraint))
   end
   return out
 end
@@ -1092,7 +1133,7 @@ function read_live_schema(db::PormGPostgres; ignore_table::Vector{String} = post
     _is_ignored_table(table_name, ignore_table) && continue
     table = _pg_live_table(schema)
     push!(out, LiveTable(table.name, table.columns, table.indexes,
-                         get(composite_by_table, table.name, Pair{String, Vector{String}}[])))
+                         get(composite_by_table, table.name, LiveComposite[])))
   end
   return out
 end
@@ -1604,9 +1645,10 @@ question `ALTER TABLE DROP COLUMN` asks. Two filters make the difference, and bo
 `CREATE INDEX … WHERE`, which is always `origin = 'c'` and therefore already excluded. Kept so the
 predicate stays correct if that ever changes.
 
-Known, accepted gap: a hand-written `CREATE UNIQUE INDEX` in a foreign schema introspects as
-`unique=false`. Reading it would restore inspectdb fidelity at the cost of permanent churn for
-single-field `UniqueConstraint` — the exact bug class #318 fixes.
+A bare `CREATE UNIQUE INDEX` stays `unique = false` HERE, on purpose: reading it as the field's
+`unique` would be permanent churn for a single-field `UniqueConstraint` — the exact bug class #318
+fixes. Since #161 it is not lost either: [`_sqlite_composite_indexes`](@ref) reads it, at any arity,
+as the model-level `UniqueConstraint` it is.
 
 ONE query per table (the table-valued-pragma idiom `get_secondary_index_ddls` also uses), not one probe
 per column: callers test membership. An unknown table yields an empty set rather than throwing.
@@ -1717,65 +1759,90 @@ function _sqlite_single_column_indexed_columns(conn::PormGSQLite, table_name)::D
 end
 
 """
-    _attach_composite_indexes!(model, idxs) -> model
+    _attach_composite_indexes!(model, composites::Vector{LiveComposite}) -> model
 
-Stash introspected composite indexes (#347) on `model` under the same cache key
-`Models._apply_indexes!` writes, so `Model_to_str` re-emits them as `indexes = [Models.Index(…)]` and
-an `inspectdb` of a live database no longer drops every multi-column index it finds.
+Stash introspected model-level indexes on `model` under the cache keys the declarations write —
+`Models._apply_unique_constraints!`'s `"unique_constraints"` for a unique one (#161) and
+`Models._apply_indexes!`'s `"composite_indexes"` for the rest (#347) — so `Model_to_str` re-emits
+them as `constraints = [Models.UniqueConstraint(…)]` / `indexes = [Models.Index(…)]`.
+
+Since #161 this is load-bearing, not cosmetic. `makemigrations` now DROPS a readable composite the
+models file does not declare, so an `inspectdb` that lost one would hand the developer a models file
+whose first migration deletes a live constraint. Reading composite uniqueness back is what makes
+adopting a schema a no-op.
 
 Shared by both backend readers, which is the whole point: the SQLite and PostgreSQL sides produce the
-same `index_name => ordered physical columns` shape and hand it here.
+same [`LiveComposite`](@ref) shape and hand it here.
 
-Deliberately NOT routed through `Models._apply_indexes!`. That function is the *declaration* guard and
-raises `ModelDefinitionError` on anything it cannot accept — which on this path would abort the
-introspection of an entire table over one odd index. Introspection is best-effort by convention
-(`convertSQLToModel` degrades a field it cannot read rather than throwing), so an index this model
-cannot express is skipped with a `@debug` and the rest of the table still comes back. Two ways that
-happens, both real:
+Deliberately NOT routed through `Models._apply_indexes!` / `_apply_unique_constraints!`. Those are
+the *declaration* guards and raise `ModelDefinitionError` on anything they cannot accept — which on
+this path would abort the introspection of an entire table over one odd index. Introspection is
+best-effort by convention (`convertSQLToModel` degrades a field it cannot read rather than
+throwing), so an index this model cannot express is skipped with a `@debug` and the rest of the
+table still comes back. Two ways that happens, both real:
 
   * a column the field reader did not produce (it degraded, or the index covers a dropped column);
   * a column name `format_fild_name` rejects — `a__b` (the lookup separator) or one containing `@`.
     A live PostgreSQL schema can legally have either.
 
-The cache is written only when at least one index survives, so a table with none is byte-identical to
-before this existed.
+One name is dropped rather than kept: SQLite calls a table-level `UNIQUE (a, b)`'s index
+`sqlite_autoindex_<table>_<n>` and reserves the `sqlite_` prefix, so written into a models file it
+would later be re-created as `CREATE UNIQUE INDEX "sqlite_autoindex_…"`, which SQLite refuses. The
+declaration gets `name = nothing` instead — PormG derives one, and a derived name accepts whatever
+the live index is called, so the adopted constraint still matches.
+
+A cache key is written only when at least one index of its kind survives, so a table with none is
+byte-identical to before this existed.
 """
-function _attach_composite_indexes!(model, idxs::Vector{Pair{String, Vector{String}}})
-  isempty(idxs) && return model
-  kept = Models.Index[]
-  for (idx_name, cols) in idxs
-    if !all(c -> haskey(model.fields, c), cols)
-      @debug "introspection: composite index skipped — column not on the introspected model" table=model.name index=idx_name columns=cols
+function _attach_composite_indexes!(model, composites::Vector{LiveComposite})
+  isempty(composites) && return model
+  kept_uc = Models.UniqueConstraint[]
+  kept_ix = Models.Index[]
+  for lc in composites
+    if !all(c -> haskey(model.fields, c), lc.columns)
+      @debug "introspection: composite index skipped — column not on the introspected model" table=model.name index=lc.name columns=lc.columns
       continue
     end
-    ix = try
-      Models.Index(fields = cols, name = idx_name)
+    name = startswith(lc.name, "sqlite_autoindex_") ? nothing : lc.name
+    decl = try
+      lc.unique ? Models.UniqueConstraint(fields = lc.columns, name = name) :
+                  Models.Index(fields = lc.columns, name = name)
     catch e
       e isa ModelDefinitionError || rethrow()
-      @debug "introspection: composite index skipped — PormG cannot name it" table=model.name index=idx_name columns=cols exception=e
+      @debug "introspection: composite index skipped — PormG cannot name it" table=model.name index=lc.name columns=lc.columns exception=e
       continue
     end
-    push!(kept, ix)
+    decl isa Models.Index ? push!(kept_ix, decl) : push!(kept_uc, decl)
   end
-  isempty(kept) || (model.cache["composite_indexes"] = Dict{String, Any}("indexes" => kept))
+  isempty(kept_uc) || (model.cache["unique_constraints"] = Dict{String, Any}("constraints" => kept_uc))
+  isempty(kept_ix) || (model.cache["composite_indexes"] = Dict{String, Any}("indexes" => kept_ix))
   return model
 end
 
 """
-    _sqlite_composite_indexes(conn::PormGSQLite, table_name) -> Vector{Pair{String, Vector{String}}}
+    _sqlite_composite_indexes(conn::PormGSQLite, table_name) -> Vector{LiveComposite}
 
-Every MULTI-column non-unique secondary index on `table_name`, as `index_name => ordered columns` —
-exactly what a model-level `Models.Index` (#347) materializes, and the mirror image of
-[`_sqlite_single_column_indexed_columns`](@ref) above.
+Every model-level index on `table_name` that PormG can re-emit, as [`LiveComposite`](@ref)s: what a
+`Models.Index` (#347) or a `Models.UniqueConstraint` (#19, #161) materializes, plus the table-level
+`UNIQUE (a, b)` a schema adopted from Django carries.
 
-The three `WHERE` filters are that function's, unchanged and load-bearing for the same reasons
-(`il."unique" = 0` keeps `field.unique` and a composite `UniqueConstraint` out; `il.origin = 'c'`
-keeps a `UNIQUE` clause's auto-index and the primary key out; `il.partial = 0` keeps a
-`CREATE INDEX … WHERE` out, which PormG cannot declare). Only the arity flips: `> 1` column here,
-`= 1` there — so the two readers partition the same index set and no index feeds both `db_index` and
-an `Index`.
+Three shapes, partitioned against the column readers so no index has two owners:
 
-Three things this reader needs that the single-column one does not:
+| `origin` | `unique` | arity | reads as | the other arity belongs to |
+|---|---|---|---|---|
+| `'c'` (`CREATE INDEX`) | 0 | > 1 | `Index` | [`_sqlite_single_column_indexed_columns`](@ref) — `db_index` |
+| `'c'` (`CREATE UNIQUE INDEX`) | 1 | ≥ 1 | `UniqueConstraint` | nobody: a one-column bare unique index is what a one-field `UniqueConstraint` creates |
+| `'u'` (a `UNIQUE` clause) | 1 | > 1 | `UniqueConstraint`, `constraint = true` | [`_sqlite_single_column_unique_columns`](@ref) — the field's `unique` |
+
+`origin = 'pk'` (the primary key's own index) is never read. `il.partial = 0` keeps a
+`CREATE INDEX … WHERE` out, which PormG cannot declare (#29).
+
+Before #161 the reader carried `il."unique" = 0` and `origin = 'c'` and nothing else, so no
+composite uniqueness came back at all — neither PormG's own `CREATE UNIQUE INDEX` nor Django's
+`unique_together`. Harmless while nothing diffed composites; with a diff it would have made every
+declared `UniqueConstraint` look missing on every run.
+
+Three things this reader needs that the single-column ones do not:
 
   * **Column ORDER is part of the index.** An index over `(raceid, lap)` is not the index over
     `(lap, raceid)`, so the columns come back ordered by `seqno` rather than aggregated.
@@ -1794,30 +1861,37 @@ Three things this reader needs that the single-column one does not:
 
 ONE query per table; an unknown table yields an empty vector rather than throwing.
 """
-function _sqlite_composite_indexes(conn::PormGSQLite, table_name)::Vector{Pair{String, Vector{String}}}
+function _sqlite_composite_indexes(conn::PormGSQLite, table_name)::Vector{LiveComposite}
   rows = fetch(conn, """
-    SELECT il.name AS idx, ii.name AS col, ii."desc" AS is_desc, ii.coll AS coll
+    SELECT il.name AS idx, il."unique" AS is_unique, il.origin AS origin,
+           ii.name AS col, ii."desc" AS is_desc, ii.coll AS coll
     FROM pragma_index_list(?) AS il
     JOIN pragma_index_xinfo(il.name) AS ii
-    WHERE il."unique" = 0 AND il.origin = 'c' AND il.partial = 0 AND ii."key" = 1
+    WHERE il.partial = 0 AND ii."key" = 1
+      AND (il.origin = 'c' OR (il.origin = 'u' AND il."unique" = 1))
     ORDER BY il.name, ii.seqno
     """, [string(table_name)]) |> DataFrame
   # An empty frame's columns are eltype Missing, so guard before touching them.
-  nrow(rows) == 0 && return Pair{String, Vector{String}}[]
+  nrow(rows) == 0 && return LiveComposite[]
   # `nothing` marks a member PormG cannot express; the whole index is then skipped below.
   grouped = OrderedDict{String, Vector{Union{String, Nothing}}}()
+  kind = Dict{String, Tuple{Bool, Bool}}()      # index ⇒ (unique, constraint-backed)
   for r in eachrow(rows)
     r.idx === missing && continue
+    idx = string(r.idx)
+    kind[idx] = (r.is_unique !== missing && r.is_unique != 0, r.origin !== missing && r.origin == "u")
     unusable = r.col === missing ||                                    # expression member
                (r.is_desc !== missing && r.is_desc != 0) ||            # DESC member
                (r.coll !== missing && uppercase(string(r.coll)) != "BINARY")   # non-default collation
-    push!(get!(grouped, string(r.idx), Union{String, Nothing}[]), unusable ? nothing : string(r.col))
+    push!(get!(grouped, idx, Union{String, Nothing}[]), unusable ? nothing : string(r.col))
   end
-  out = Pair{String, Vector{String}}[]
+  out = LiveComposite[]
   for (idx, cols) in grouped
-    length(cols) > 1 || continue                 # arity 1 is `db_index`, read by the sibling above
+    unique, constraint = kind[idx]
+    # Arity partition (see the table above): only a BARE unique index may have one column.
+    length(cols) > 1 || (unique && !constraint) || continue
     any(c -> c === nothing, cols) && continue    # a member PormG cannot re-emit ⇒ drop it whole
-    push!(out, idx => String[String(c) for c in cols])
+    push!(out, LiveComposite(idx, String[String(c) for c in cols], unique, constraint))
   end
   return out
 end
@@ -2829,7 +2903,7 @@ function _pg_live_table(row::DataFrameRow)::LiveTable
                        reference, _reader_checks(found, ctype), identity, raw_type)
     columns[col_name] = _finish_column_spec(table_name, probe, get(col, "default", nothing), engine)
   end
-  return LiveTable(table_name, columns, indexes, Pair{String, Vector{String}}[])
+  return LiveTable(table_name, columns, indexes)
 end
 
 """

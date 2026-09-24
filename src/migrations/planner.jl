@@ -368,100 +368,321 @@ function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan
   nothing
 end
 
-function _add_many_to_many_auto_constraints(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel)::Nothing
-  haskey(model.cache, "many_to_many_auto") || return nothing
-
-  metadata = model.cache["many_to_many_auto"]
-  owner_column = metadata["owner_column"]::String
-  related_column = metadata["related_column"]::String
-  unique_index = metadata["unique_index"]::String
-  _configure_order_dict_migration_plan(
-    migration_plan,
-    model_name,
-    "Create many-to-many unique index",
-    Dialect.create_unique_index(conn, "\"$(Dialect._quote_table_ddl(unique_index))\"", "\"$(Dialect._quote_table_ddl(model_table_name(model)))\"", ["\"$(Dialect._quote_table_ddl(owner_column))\"", "\"$(Dialect._quote_table_ddl(related_column))\""])
-  )
-  return nothing
-end
-
-# User-declared composite uniqueness (#19). Emits one `CREATE UNIQUE INDEX` per
-# `UniqueConstraint` in `model.cache["unique_constraints"]`, generalizing the add-only
-# ManyToManyField auto-index pipeline above. Called ONLY from `_add_new_table` (like the M2M
-# sibling), so the index is materialized when its table is first created and never re-emitted —
-# no false "pending" churn. Adding/removing a constraint on an already-migrated table (which
-# needs composite-unique introspection PormG does not have yet) is out of scope for this pass.
-function _add_unique_constraints(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel; seen::Set{String} = Set{String}())::Nothing
-  haskey(model.cache, "unique_constraints") || return nothing
-  constraints = get(model.cache["unique_constraints"], "constraints", nothing)
-  constraints === nothing && return nothing
-  table = model_table_name(model)
-  for c in constraints
-    # Resolve declared field names to physical columns (honors db_column #50; PormG adds no
-    # `_id` suffix for FKs — the field name IS the column).
-    cols = String[Models.model_column(model, f) for f in c.fields]
-    index_name = c.name === nothing ? "$(table)_$(join(cols, "_"))_uniq" : c.name
-    # The step label (and thus the plan slot) keys on index_name; a collision — same explicit
-    # name, or two constraints deriving the same name — would silently overwrite. Fail loudly.
-    # `seen` is OWNED BY `_add_new_table` and shared with `_add_indexes` (#347): an Index and a
-    # UniqueConstraint landing on the same name are two `CREATE … INDEX` statements the database
-    # rejects, and their step labels differ, so the plan would not catch it on its own.
-    index_name in seen && throw(InvalidMigrationError(
-      "Duplicate index name '$(index_name)' on table '$(table)'; " *
-      "give each UniqueConstraint and Index a distinct name"))
-    push!(seen, index_name)
-    _configure_order_dict_migration_plan(
-      migration_plan,
-      model_name,
-      "Create unique constraint: $(index_name)",
-      Dialect.create_unique_index(conn, "\"$(Dialect._quote_table_ddl(index_name))\"", "\"$(Dialect._quote_table_ddl(table))\"", ["\"$(Dialect._quote_table_ddl(col))\"" for col in cols])
-    )
-  end
-  return nothing
-end
-
-# User-declared composite indexes (#347). The plain sibling of `_add_unique_constraints` above: one
-# `CREATE INDEX` per `Index` in `model.cache["composite_indexes"]`, over the same
-# `Dialect.create_index` primitive the per-field `db_index` path uses — that one just never passes
-# more than one column. Called ONLY from `_add_new_table`, so like its unique sibling the index is
-# materialized when its table is first created and never re-emitted; adding or removing one on an
-# already-migrated table is out of scope for this pass (introspection reads composite indexes back,
-# but nothing diffs them yet).
+# ── Model-level composite indexes: one emitter for creation and the diff (#19, #347, #161) ─────────
 #
-# The step label starts with "Create index", which puts it in `runner._order_statements`' deferred
-# index bucket — correct, since a CREATE INDEX only needs its table to exist.
-function _add_indexes(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel; seen::Set{String} = Set{String}())::Nothing
-  haskey(model.cache, "composite_indexes") || return nothing
-  indexes = get(model.cache["composite_indexes"], "indexes", nothing)
-  indexes === nothing && return nothing
-  table = model_table_name(model)
-  for ix in indexes
-    cols = String[Models.model_column(model, f) for f in ix.fields]
-    index_name = ix.name === nothing ? "$(table)_$(join(cols, "_"))_idx" : ix.name
-    index_name in seen && throw(InvalidMigrationError(
-      "Duplicate index name '$(index_name)' on table '$(table)'; " *
-      "give each UniqueConstraint and Index a distinct name"))
-    push!(seen, index_name)
-    _configure_order_dict_migration_plan(
-      migration_plan,
-      model_name,
-      "Create index: $(index_name)",
-      Dialect.create_index(conn, "\"$(Dialect._quote_table_ddl(index_name))\"", "\"$(Dialect._quote_table_ddl(table))\"", ["\"$(Dialect._quote_table_ddl(col))\"" for col in cols])
-    )
+# `UniqueConstraint`, `Index` and the synthesized ManyToManyField join-table index used to be
+# materialized ONLY when their table was first created — three add-only emitters called from
+# `_add_new_table`, so adding, removing or changing one on an existing table planned nothing, and
+# nothing read composite uniqueness back to notice. `_plan_composite_actions!` replaced all three:
+# `_add_new_table` hands it an empty live side, `_alter_table_fields` hands it the table's
+# `LiveTable.composites`, and one body decides for both.
+
+"""
+    _catalog_index_name(conn, name) -> String
+
+`name` as the catalog will store it. PostgreSQL truncates an identifier to 63 bytes
+(`NAMEDATALEN - 1`) on a character boundary and says so only in a `NOTICE`; SQLite stores it as
+written. Every comparison between a declared name and a live one goes through here, or a long
+explicit name would read as renamed on every run and be re-planned forever.
+"""
+_catalog_index_name(::PormGSQLite, name::String)::String = name
+function _catalog_index_name(::PormGPostgres, name::String)::String
+  ncodeunits(name) <= 63 && return name
+  out = IOBuffer()
+  n = 0
+  for c in name
+    n + ncodeunits(c) > 63 && break
+    print(out, c)
+    n += ncodeunits(c)
+  end
+  return String(take!(out))
+end
+
+# The key a model-level index name is unique under, as the catalog will store it: PostgreSQL's
+# 63-byte truncation, and SQLite's case-insensitive identifiers (PormG quotes every name, so
+# PostgreSQL compares exactly). Every name comparison in the composite path goes through here.
+_composite_name_key(conn::Union{PormGPostgres, PormGSQLite}, name::String)::String =
+  conn isa PormGSQLite ? lowercase(_catalog_index_name(conn, name)) : _catalog_index_name(conn, name)
+
+"""
+    _claim_composite_target!(conn, targets, name, table; auto = false) -> Nothing
+
+The plan-level name registry for model-level indexes (#161): every name this plan will CREATE, or
+RENAME an index TO, on any table, keyed as the catalog stores it (`_composite_name_key`).
+
+Per PLAN, not per table, because that is the scope the database enforces: an index name is unique
+per schema on PostgreSQL (shared with tables and sequences) and per database on SQLite, and the
+per-table registry `_add_new_table` used to keep saw only one table. **Only a target is claimed.** A
+declaration the live schema already satisfies creates nothing and cannot collide with anything;
+checking every DECLARED name instead refused schemas that plan fine — two long derived names from a
+Django `unique_together` that share their first 63 bytes, both already present under Django's own
+names, made the whole app unplannable, with an error no `name=` could answer for a join table.
+
+Raises `InvalidMigrationError` on a second claim of one key, and on SQLite on a `sqlite_` name,
+which SQLite reserves and refuses to create. Warns on a PostgreSQL name longer than 63 bytes — it is
+stored truncated, and every comparison already accounts for that — except for the synthesized
+join-table index, which has no `name=` to shorten.
+"""
+function _claim_composite_target!(conn::Union{PormGPostgres, PormGSQLite},
+                                  targets::Dict{String, Tuple{String, String}},
+                                  name::String, table::String; auto::Bool = false)::Nothing
+  if conn isa PormGSQLite && startswith(lowercase(name), "sqlite_")
+    throw(InvalidMigrationError(
+      "Index name '$(name)' on table '$(table)' starts with 'sqlite_', which SQLite reserves for its " *
+      "own objects; give the UniqueConstraint or Index another name"))
+  end
+  stored = _catalog_index_name(conn, name)
+  stored == name || auto || @warn "makemigrations: an index name exceeds PostgreSQL's 63-byte identifier limit and is stored truncated; consider a shorter explicit `name=`" table = table name = name stored = stored
+  key = _composite_name_key(conn, name)
+  if haskey(targets, key)
+    throw(InvalidMigrationError(
+      "Duplicate index name '$(stored)' (tables '$(targets[key][2])' and '$(table)'); index names are " *
+      "unique per schema on PostgreSQL and per database on SQLite, so give each UniqueConstraint and " *
+      "Index a distinct name"))
+  end
+  targets[key] = (stored, table)
+  return nothing
+end
+
+"""
+    _check_composite_targets_free(conn, targets, live, gone, table_renames) -> Nothing
+
+The half of the name registry that needs the whole plan (#161): a name this plan creates, or renames
+an index to, must not be held by a live composite on ANOTHER table.
+
+Refused at plan time rather than left to the database because the order is not the plan's to
+promise: every composite DROP, RENAME and unique CREATE shares one `_order_statements` bucket in
+table order, so whether table B's `DROP INDEX "n"` runs before table A's `CREATE … "n"` depends on
+which table was diffed first. Moving a name between tables therefore takes two migrations — free it,
+then claim it — and this says so instead of failing mid-migration on some orders and not others.
+A table the plan drops entirely is exempt: `Drop table` runs before every index statement. The same
+table is exempt too: its own pass orders the drop before the create.
+"""
+function _check_composite_targets_free(conn::Union{PormGPostgres, PormGSQLite},
+                                       targets::Dict{String, Tuple{String, String}},
+                                       live::Vector{LiveTable}, gone::Set{String},
+                                       table_renames::Dict{String, String})::Nothing
+  isempty(targets) && return nothing
+  for t in live
+    t.name in gone && continue
+    table = get(table_renames, t.name, t.name)
+    for lc in t.composites
+      key = _composite_name_key(conn, lc.name)
+      haskey(targets, key) || continue
+      stored, target_table = targets[key]
+      target_table == table && continue
+      throw(InvalidMigrationError(
+        "Index name '$(stored)' for table '$(target_table)' is already held by an index on table " *
+        "'$(table)'. Index names are unique per schema on PostgreSQL and per database on SQLite: give " *
+        "the UniqueConstraint or Index another name, or free the name in a separate migration first"))
+    end
   end
   return nothing
 end
 
-function _add_new_table(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel)::Nothing
+"""
+    _plan_composite_actions!(conn, migration_plan, model_name, model, live; column_renames, catalog_table) -> Set{String}
+
+Plan every model-level index statement for one table: the declared composites of `model` against
+the `live` ones, as [`LiveComposite`](@ref)s. Returns the names of the live indexes it drops, which
+the `db_index` flush in `_alter_table_fields` needs (see there).
+
+**Identity is `(unique, ordered physical columns)`, never the name.** A declared composite matches a
+live one with the same kind and columns, whatever either is called and whichever backing the live one
+has — so a Django-adopted `UNIQUE (a, b)` satisfies a declared `UniqueConstraint` rather than being
+duplicated by a second index. Then, in this order:
+
+  * **Drop** every readable live composite nothing declares. State-based, like the single-column
+    `db_index` path: the models file is the schema. A bare index is `DROP INDEX`; a
+    constraint-backed one is `ALTER TABLE … DROP CONSTRAINT` on PostgreSQL (`DROP INDEX` on an index
+    a constraint owns is refused) and a table rebuild on SQLite (an autoindex cannot be dropped at
+    all). An index the readers refuse — partial, functional, `DESC`, `INCLUDE`, … — never reaches
+    `live`, so it is never dropped.
+  * **Rename** a match whose declaration spells a `name=` the live index does not carry: `ALTER INDEX`
+    / `RENAME CONSTRAINT` on PostgreSQL, drop-and-create for a bare SQLite index. A DERIVED name is
+    not intent — a table renamed under #615 keeps its `<old>_a_b_uniq` — and SQLite's
+    `sqlite_autoindex_*` has no name of its own to change, so neither renames.
+  * **Create** every declaration nothing matched, without `IF NOT EXISTS` (see
+    `Dialect.create_index`) — the join-table index included, now that it is diffed on every run.
+
+Every create and rename target is claimed in the plan-level registry (`_claim_composite_target!`).
+And a live index whose name some declaration EXPLICITLY writes is kept only by that declaration:
+otherwise a nameless declaration matching its columns would keep it, and the rename or create that
+needs the name would fail with "already exists" on every run.
+
+Drops are planned before creates because a changed column set under a REUSED explicit name is a drop
+and a create of one name; `_order_statements` keeps them in plan order (both in its fifth bucket), and
+a non-unique create lands in the last bucket regardless.
+
+**Live columns first go through `column_renames`** (live ⇒ declared; filled on both engines), so a
+composite over a renamed column matches its declaration — `RENAME COLUMN` carries the index. A live
+composite over a column the declared model no longer has is SKIPPED, not dropped: PostgreSQL's
+`DROP COLUMN` takes the index or constraint with it, and the SQLite rebuild's `surviving_columns`
+filters it, so a planned drop would name something that no longer exists by the time it ran.
+
+**The SQLite rebuild is decided before anything is emitted.** A rebuild re-creates every live bare
+index from its plan-time snapshot and none of the table-level `UNIQUE` clauses (`rebuild_table`
+renders none). So when one is registered for this table — by a column change earlier, or here, to
+remove an undeclared clause — every constraint-backed composite counts as gone: an undeclared one
+needs no statement, and a declared one is re-created as a `CREATE UNIQUE INDEX` after the rebuild.
+Deciding it first is what keeps a table with one undeclared and one declared `UNIQUE (…)` from
+losing the declared one. Registering it here makes this the FIFTH producer of the
+`"Alter table: <model>"` key, so it passes the shared `column_renames` (#556).
+"""
+function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
+                                  migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
+                                  model_name::Symbol, model::PormGModel,
+                                  live_composites::Vector{LiveComposite};
+                                  column_renames::Dict{String, String} = Dict{String, String}(),
+                                  catalog_table::Symbol = model_name,
+                                  targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}())::Set{String}
+  declared = declared_composites(model)
+  table = String(model_table_name(model))
+  declared_cols = _model_physical_columns(model)
+
+  # The live side in the declared model's terms: renamed columns mapped, composites over a column
+  # that is going away skipped (the docstring says why that is not a drop).
+  live = Tuple{LiveComposite, Vector{String}}[]
+  for lc in live_composites
+    cols = String[get(column_renames, c, c) for c in lc.columns]
+    all(c -> c in declared_cols, cols) && push!(live, (lc, cols))
+  end
+
+  # Match declared ⇒ live by kind and columns. Two passes, so that when the live side carries two
+  # identical indexes the one the declaration NAMES is the one kept, and the other is the drop. The
+  # second pass never hands a declaration a live index whose name another declaration WRITES — that
+  # index is dropped instead, so the name is free by the time its claimant renames or creates it.
+  samename(a, b) = _composite_name_key(conn, a) == _composite_name_key(conn, b)
+  claimed = Set{String}(_composite_name_key(conn, d.name) for d in declared if d.explicit)
+  matched = Vector{Union{Int, Nothing}}(nothing, length(declared))
+  taken = falses(length(live))
+  for by_name in (true, false), (i, d) in enumerate(declared)
+    matched[i] === nothing || continue
+    j = findfirst(eachindex(live)) do j
+      !taken[j] && live[j][1].unique == d.unique && live[j][2] == d.columns &&
+        (by_name ? samename(live[j][1].name, d.name) :
+                   !(_composite_name_key(conn, live[j][1].name) in claimed))
+    end
+    j === nothing && continue
+    matched[i] = j
+    taken[j] = true
+  end
+
+  # SQLite: the rebuild decision comes first (see the docstring).
+  rebuild_key = "Alter table: $model_name"
+  rebuilding = false
+  if conn isa PormGSQLite
+    if any(j -> !taken[j] && live[j][1].constraint, eachindex(live)) &&
+       !(haskey(migration_plan, model_name) && haskey(migration_plan[model_name], rebuild_key))
+      _configure_order_dict_migration_plan(migration_plan, model_name, rebuild_key,
+        _sqlite_rebuild_preserving_indexes(conn, table, Dialect.rebuild_table(conn, model);
+          surviving_columns = declared_cols,
+          column_renames = column_renames,
+          catalog_table = string(catalog_table)))
+    end
+    rebuilding = haskey(migration_plan, model_name) && haskey(migration_plan[model_name], rebuild_key)
+  end
+
+  drops = LiveComposite[]
+  renames = Tuple{LiveComposite, DeclaredComposite}[]
+  creates = DeclaredComposite[]
+  for (i, d) in enumerate(declared)
+    j = matched[i]
+    if j === nothing
+      push!(creates, d)
+      continue
+    end
+    lc = live[j][1]
+    if rebuilding && lc.constraint
+      push!(creates, d)                              # the rebuild takes it; put it back as an index
+    elseif d.explicit && !d.auto && !samename(lc.name, d.name) &&
+           !(conn isa PormGSQLite && lc.constraint)  # an autoindex has no name of its own to change
+      push!(renames, (lc, d))
+    end
+  end
+  for (j, (lc, _)) in enumerate(live)
+    taken[j] && continue
+    conn isa PormGSQLite && lc.constraint && continue   # removed by the rebuild registered above
+    push!(drops, lc)
+  end
+
+  # A name this pass creates, or renames an index TO, must not still be held on this table by an
+  # index the pass KEEPS. `_check_composite_targets_free` exempts this table on the promise that its
+  # own drop runs first — true for an index dropped, renamed away or lost to the rebuild, and false
+  # for one kept because it matched its own declaration by name. There the CREATE would fail with
+  # "already exists" on every run: two declarations on one table sharing a name, or an explicit
+  # `name=` equal to a sibling's derived one while the sibling is live under it.
+  renamed_away = Set{String}(lc.name for (lc, _) in renames)
+  kept = Dict{String, LiveComposite}()
+  for (j, (lc, _)) in enumerate(live)
+    taken[j] || continue
+    (rebuilding && lc.constraint) && continue
+    lc.name in renamed_away && continue
+    kept[_composite_name_key(conn, lc.name)] = lc
+  end
+  for d in Iterators.flatten((creates, (d for (_, d) in renames)))
+    holder = get(kept, _composite_name_key(conn, d.name), nothing)
+    holder === nothing && continue
+    throw(InvalidMigrationError(
+      "Index name '$(d.name)' on table '$(table)' is already the name of the index over " *
+      "($(join(holder.columns, ", "))), which this model also declares; give each UniqueConstraint " *
+      "and Index a distinct name"))
+  end
+
+  dropped = Set{String}()
+  drop!(lc::LiveComposite) = begin
+    sql = conn isa PormGPostgres && lc.constraint ? Dialect.drop_unique_constraint(conn, table, lc.name) :
+                                                    Dialect.drop_index(conn, lc.name)
+    _configure_order_dict_migration_plan(migration_plan, model_name, "Remove composite index: $(lc.name)", sql)
+    push!(dropped, lc.name)
+  end
+  foreach(drop!, drops)
+  for (lc, d) in renames
+    if conn isa PormGPostgres
+      _claim_composite_target!(conn, targets, d.name, table)
+      _configure_order_dict_migration_plan(migration_plan, model_name, "Rename composite index: $(lc.name)",
+        lc.constraint ? Dialect.rename_constraint(conn, table, lc.name, d.name) :
+                        Dialect.rename_index(conn, lc.name, d.name))
+    else
+      drop!(lc)                                      # SQLite cannot rename an index
+      push!(creates, d)
+    end
+  end
+
+  quoted(x) = "\"$(Dialect._quote_table_ddl(x))\""
+  for d in creates
+    _claim_composite_target!(conn, targets, d.name, table; auto = d.auto)
+    cols = String[quoted(c) for c in d.columns]
+    if d.auto
+      # The join table keeps its historical step label; since #161 it is diffed on every run, so it
+      # loses `IF NOT EXISTS` like every other composite create.
+      _configure_order_dict_migration_plan(migration_plan, model_name, "Create many-to-many unique index",
+        Dialect.create_unique_index(conn, quoted(d.name), quoted(table), cols; if_not_exists = false))
+    elseif d.unique
+      _configure_order_dict_migration_plan(migration_plan, model_name, "Create unique constraint: $(d.name)",
+        Dialect.create_unique_index(conn, quoted(d.name), quoted(table), cols; if_not_exists = false))
+    else
+      # "Create index…" puts it in `_order_statements`' last bucket, after every same-table rebuild
+      # (#152) — correct, since a CREATE INDEX only needs its table to exist.
+      _configure_order_dict_migration_plan(migration_plan, model_name, "Create index: $(d.name)",
+        Dialect.create_index(conn, quoted(d.name), quoted(table), cols; if_not_exists = false))
+    end
+  end
+  return dropped
+end
+
+function _add_new_table(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel;
+                        composite_targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}())::Nothing
   _configure_order_dict_migration_plan(migration_plan, model_name, "New model", Dialect.create_table(conn, model))
   for (field_name, field) in model.fields
     name = _hash_field_name(model_name, field_name)
     _add_constrains(conn, migration_plan, model_name, model, field_name, field, name)
   end
-  _add_many_to_many_auto_constraints(conn, migration_plan, model_name, model)
-  # ONE name registry across both model-level index emitters (#347) — see `_add_unique_constraints`.
-  declared_index_names = Set{String}()
-  _add_unique_constraints(conn, migration_plan, model_name, model; seen = declared_index_names)
-  _add_indexes(conn, migration_plan, model_name, model; seen = declared_index_names)
+  # A new table has no live side, so every declared composite is a create — the same emitter the
+  # diff uses, which is what keeps a table created here and one altered later converging on one
+  # set of statements.
+  _plan_composite_actions!(conn, migration_plan, model_name, model, LiveComposite[];
+                           targets = composite_targets)
   return nothing
 end
 
@@ -754,7 +975,8 @@ function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
   return nothing
 end
 
-function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, live::LiveTable, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::PormGSettings; interactive::Bool = true)::Nothing
+function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, live::LiveTable, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::PormGSettings; interactive::Bool = true,
+                             composite_targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}())::Nothing
   # @pormg_debug model_name == :new_join_position
   # #507 phase 2: NO whole-model early-out. `Models.are_model_fields_equal` used to short-circuit
   # this whole function when every field compared equal, and it was a second answer to a question
@@ -927,6 +1149,17 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
     end
   end
 
+  # #161: the model-level composites — UniqueConstraint, Index, the join-table index — diffed against
+  # `live.composites`. BEFORE the flush below, not after it: this may register the table's SQLite
+  # rebuild (to remove an undeclared `UNIQUE (a, b)` clause), and a rebuild re-creates every live
+  # index from its plan-time snapshot, so one registered after the flush's `DROP INDEX`es would put
+  # those indexes straight back (#325).
+  dropped_composites = _plan_composite_actions!(conn, migration_plan, model_name,
+                                                current_schema[model_name][:model], live.composites;
+                                                column_renames = sqlite_rename_map,
+                                                catalog_table = catalog_table,
+                                                targets = composite_targets)
+
   # Flush the deferred index actions — always after any "Alter table:"/"Alter field:" step the
   # loop above registered, whichever field produced it.
   for (kind, col, hashed, live_index_name) in index_actions
@@ -937,7 +1170,12 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
       # SQLite could not see the index — but the probe stays: the rebuild is emitted from the
       # DECLARED model, which can carry an index the live schema is only about to gain.
       # Genuinely-new indexes still get created.
-      if !(conn isa PormGSQLite && get_constraints_index(conn, catalog_table, col) !== nothing)
+      #
+      # The probe also answers for a composite MEMBER (it is pinned to, by
+      # `test_rename_unique_index.jl`), so an index the composite pass above is dropping in this same
+      # plan must not count: the column would end up with no index at all (#161).
+      probe = conn isa PormGSQLite ? get_constraints_index(conn, catalog_table, col) : nothing
+      if probe === nothing || probe in dropped_composites
         index_name = "$(hashed)_idx"
         # `model_name`, not `live.name`: this is DDL, and it runs after a table rename (#615).
         _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $col",
@@ -1318,7 +1556,7 @@ function _retarget_references(table::LiveTable, renames::Dict{String, String})::
     return ColumnSpec((f === :reference ? moved : getfield(spec, f) for f in fieldnames(ColumnSpec))...)
   end
   columns = OrderedDict{String, ColumnSpec}(name => retarget(spec) for (name, spec) in table.columns)
-  return LiveTable(table.name, columns, table.indexes, table.composite_indexes)
+  return LiveTable(table.name, columns, table.indexes, table.composites)
 end
 
 # ---
@@ -1376,11 +1614,14 @@ function get_migration_plan(live::Vector{LiveTable}, current_schema::Dict{Symbol
 migration_plan = OrderedDict{Symbol, OrderedDict{String, String}}()
 futher_processing = Dict{Symbol, OrderedDict{Symbol, Any}}()
 current_schema = Models.synthesize_many_to_many_through_models(current_schema, settings)
+# #161: every model-level index name the plan creates or renames to, across all tables — the scope
+# the database enforces. See `_claim_composite_target!`.
+composite_targets = Dict{String, Tuple{String, String}}()
 
 # an empty live side: every declared model is a new table
 if isempty(live)
   for (model_name, model) in current_schema
-    _add_new_table(conn, migration_plan, model_name, model[:model])
+    _add_new_table(conn, migration_plan, model_name, model[:model]; composite_targets = composite_targets)
   end
   return migration_plan  
 end
@@ -1486,12 +1727,13 @@ table_renames = Dict{String, String}(string(old) => string(new) for (new, old) i
 retarget(t::LiveTable) = _retarget_references(t, table_renames)
 
 for table in matched
-  _alter_table_fields(conn, migration_plan, Symbol(table.name), retarget(table), current_schema, settings, interactive=interactive)
+  _alter_table_fields(conn, migration_plan, Symbol(table.name), retarget(table), current_schema, settings, interactive=interactive,
+                      composite_targets = composite_targets)
 end
 
 for (model_name, old_model_name) in decisions
   if old_model_name === nothing
-    _add_new_table(conn, migration_plan, model_name, current_schema[model_name][:model])
+    _add_new_table(conn, migration_plan, model_name, current_schema[model_name][:model]; composite_targets = composite_targets)
   else
     # #615: the rename runs FIRST (its own bucket in `_order_statements`, whose docstring
     # records why), so the table's column work is planned against the NEW name — `model_name`,
@@ -1500,7 +1742,8 @@ for (model_name, old_model_name) in decisions
     # code passed the old name here, and `current_schema[old]` raised before anything was
     # planned; the call below also passed `(new::Symbol, old)` to a `(old::String, new::String)`
     # method. Registered under `model_name`, like the column work it precedes.
-    _alter_table_fields(conn, migration_plan, model_name, retarget(futher_processing[:drop_table][old_model_name]["model"]), current_schema, settings, interactive=interactive)
+    _alter_table_fields(conn, migration_plan, model_name, retarget(futher_processing[:drop_table][old_model_name]["model"]), current_schema, settings, interactive=interactive,
+                        composite_targets = composite_targets)
     _configure_order_dict_migration_plan(migration_plan, model_name, "Rename table", Dialect.rename_table(conn, string(old_model_name), string(model_name)))
   end
 end
@@ -1508,13 +1751,18 @@ end
 @pormg_debug false
 
 # at last check all models in futher_processing to drop
+dropped_tables = Set{String}()
 if haskey(futher_processing, :drop_table)
   for (model_name, model_info) in futher_processing[:drop_table]
     if model_info["exist"] == false
       _configure_order_dict_migration_plan(migration_plan, model_name, "Drop table", Dialect.drop_table(conn, model_name))
+      push!(dropped_tables, string(model_name))
     end
   end
 end
+
+# #161: a name this plan creates must not still be held by another table's index.
+_check_composite_targets_free(conn, composite_targets, live, dropped_tables, table_renames)
 
 # println(migration_plan)
 

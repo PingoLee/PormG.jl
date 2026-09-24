@@ -5506,10 +5506,11 @@ end
 Reserve an explicit index name for one generated file, returning it — or `nothing` when another
 model in the same import already claimed it, so PormG derives one per table instead (#347).
 
-An index name is **unique per database** on SQLite and per schema on PostgreSQL, and both DDL
-emitters render `CREATE [UNIQUE] INDEX IF NOT EXISTS`. So a name reused across two models does not
-fail: the second `CREATE` is a **silent no-op** and that table simply never gets its index. Since
-composite indexes are not diffed on an existing table, `makemigrations` never notices either.
+An index name is **unique per database** on SQLite and per schema on PostgreSQL. Until #161 both DDL
+emitters rendered `CREATE [UNIQUE] INDEX IF NOT EXISTS`, so a name reused across two models did not
+fail — the second `CREATE` was a **silent no-op** and that table simply never got its index. The
+planner now refuses the duplicate before planning anything (`_check_composite_names`), which makes
+this guard the difference between an imported models file that plans and one that does not.
 
 Django makes this easy to hit without writing it. An abstract base's *whole* `Meta` is installed on
 every child that declares none of its own (`_effective_meta`), so one

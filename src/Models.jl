@@ -1831,20 +1831,23 @@ referenced by their field name and resolved to the physical column (honoring `db
 declared case is preserved, so name each field exactly as it was declared.
 
 `name` is the index name. Omitted, the migration planner derives `<table>_<cols>_uniq`, matching the
-automatic many-to-many index convention. Pass an explicit one when the derived name would exceed
-PostgreSQL's 63-byte identifier limit, which Postgres silently truncates — truncation can collide two
-constraints into one index.
+automatic many-to-many index convention, and accepts whatever an existing index over the same columns
+is called. Given, it is intent: an existing index under another name is renamed to it. Names are
+unique per PostgreSQL schema and per SQLite database, and PostgreSQL keeps only 63 bytes of one —
+`makemigrations` refuses a plan that would create one name twice, as stored, or create one another
+table's index still holds.
 
 Invalid declarations raise `ModelDefinitionError` as early as they can be detected: no fields, a
 repeated field, or a blank `name` fails here in the constructor; a field that does not exist on the
 model, a `ManyToManyField` (it owns no column), or two constraints sharing a name fail when the
 model is built.
 
-!!! note "Materialized when the table is created"
-    Each constraint becomes a `CREATE UNIQUE INDEX` — identical on PostgreSQL and SQLite — emitted
-    when its table is **first created**. Adding or removing one on a table that already exists is
-    not yet detected by `makemigrations`; it needs composite-index introspection PormG does not have
-    (tracked as a follow-up). Declare composite uniqueness with the model, or add the index by hand.
+!!! note "Diffed like a column"
+    Each constraint becomes a `CREATE UNIQUE INDEX` — identical on PostgreSQL and SQLite. On a table
+    that already exists `makemigrations` plans adding, removing, re-columning and renaming one
+    (#161), and matches it to the live schema by its columns, so a `UNIQUE (…)` constraint adopted
+    from Django satisfies it. A composite the model does NOT declare is planned for removal, which
+    `migrate` treats as destructive.
 
 # Examples
 ```julia
@@ -1862,7 +1865,7 @@ Constructor_engine = Models.Model("constructor_engines",
 which migrates to:
 
 ```sql
-CREATE UNIQUE INDEX IF NOT EXISTS "uniq_constructor_year"
+CREATE UNIQUE INDEX "uniq_constructor_year"
   ON "constructor_engines" ("constructorid", "year");
 ```
 
@@ -1991,22 +1994,19 @@ declared.
     `db_index = true` on the field instead.
 
 `name` is the index name. Omitted, the migration planner derives `<table>_<cols>_idx`, the plain
-sibling of the composite-unique convention. Pass an explicit one when the derived name would exceed
-PostgreSQL's 63-byte identifier limit, which Postgres truncates with only a `NOTICE` — truncation can
-collide two indexes into one.
+sibling of the composite-unique convention; the naming rules are [`UniqueConstraint`](@ref)'s.
 
 Invalid declarations raise `ModelDefinitionError` as early as they can be detected: fewer than two
 fields, a repeated field, or a blank `name` fails here in the constructor; a field that does not
 exist on the model, a `ManyToManyField` (it owns no column), or two indexes sharing a name fail when
-the model is built. An index whose name collides with a `UniqueConstraint`'s on the same table fails
-at migration planning, where both names are known.
+the model is built. An index whose name collides with another index's — a `UniqueConstraint`'s, or
+one on another table — fails at migration planning, where every name is known.
 
-!!! note "Materialized when the table is created"
-    Each index becomes a `CREATE INDEX` — identical on PostgreSQL and SQLite — emitted when its
-    table is **first created**. Adding or removing one on a table that already exists is not yet
-    detected by `makemigrations`, the same limitation [`UniqueConstraint`](@ref) carries. Introspection
-    *does* read composite indexes back, so `inspectdb` on an existing database reproduces them.
-    Declare an index with the model, or add it by hand on an existing table.
+!!! note "Diffed like a column"
+    Each index becomes a `CREATE INDEX` — identical on PostgreSQL and SQLite. On a table that
+    already exists `makemigrations` plans adding, removing, re-columning and renaming one (#161),
+    exactly as for [`UniqueConstraint`](@ref); an undeclared composite index is planned for removal.
+    `inspectdb` reads them back, so a model generated from a live database declares every one.
 
 # Examples
 ```julia
@@ -2024,7 +2024,7 @@ Lap_times = Models.Model("lap_times",
 which migrates to:
 
 ```sql
-CREATE INDEX IF NOT EXISTS "lap_times_race_lap_idx"
+CREATE INDEX "lap_times_race_lap_idx"
   ON "lap_times" ("raceid", "lap");
 ```
 

@@ -735,6 +735,7 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
   @pormg_debug false
   for v in object.filter
     _guard_no_aggregate_predicate(v)   # #537
+    _guard_field_alias_collision(v, instruc)   # #703
     if isa(v, ExistsObject)
       push!(instruc._where, _get_filter_query(v, instruc))
     elseif isa(v, SQLTypeOper)
@@ -822,6 +823,83 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
   return nothing
 end
 
+# #703 — a plain filter key that names a model field AND the output name of a projection that is
+# not that column. `values("raceid", "points" => Sum("points")); filter("points" => 1.0)` rendered
+# `WHERE SUM("Tb"."points") = ?`: the key names a field, so neither the top-level alias branch nor
+# #692's `Q` routing took it as an alias — but `_get_filter_query(::SQLTypeField)` looks the key up in
+# the projection memo before resolving it as a column, and the alias had claimed that entry. The
+# filter neither filtered the column nor the projection.
+#
+# There is no right guess. A caller who wrote `"points" => Sum("points")` and then filters "points"
+# most likely means the sum — HAVING — and routing it to the column would filter rows before
+# aggregation: silently wrong totals. Routing it to the alias would silently stop the key meaning
+# the field. So the key is refused, as #492 refuses a `__` path whose first segment names both a CTE
+# and a model field: loud, never guessed. The DECLARATION stays legal — `values("casos" =>
+# Sum("casos"))` is common in consuming apps and harmless until something filters on the name —
+# which is where this departs from Django, whose `annotate()` refuses the alias outright.
+#
+# A `__` path is a model name too. `values("driverid__surname" => Upper("driverid__forename"))`
+# followed by `filter("driverid__surname" => …)` read the alias through the same memo, silently; the
+# key names the related column as much as `"points"` names the local one. So a path whose first
+# segment is on the model (`_segment1_on_model`, the #492 test) counts; a key with no model reading
+# (an alias spelled with `__` that names no relation) is an alias and nothing else.
+#
+# Not ambiguous, and so not refused: a projection that IS the column — `values("points")`,
+# `values("points" => "points")`, `values("points" => F("points"))`. Recursive, with the depth cap of
+# `_guard_no_aggregate_predicate`, because `Q`/`Qor` admit the same leaf.
+function _guard_field_alias_collision(filter, instruc::SQLInstruction, depth::Int = 0)
+  depth > 32 && return nothing
+  if filter isa SQLTypeOper
+    key = _model_filter_key(filter.column, instruc)
+    key === nothing && return nothing
+    for projection in instruc.object.values
+      _projection_output_name(projection) == key || continue
+      _projects_column(projection, key) && return nothing
+      _refuse_field_alias_collision(key, projection, instruc)
+    end
+  elseif filter isa SQLTypeQ
+    for f in filter.filters
+      _guard_field_alias_collision(f, instruc, depth + 1)
+    end
+  elseif filter isa SQLTypeQor
+    for f in filter.or
+      _guard_field_alias_collision(f, instruc, depth + 1)
+    end
+  end
+  return nothing
+end
+
+# The filter key when it names something on the model — a field, or a `__` path whose first segment
+# is on the model — or `nothing`. Only a plain path: a transform (`__@year`) builds a function node,
+# and a CTE or joined-copy reference is a handle rather than a `String`.
+function _model_filter_key(col, instruc::SQLInstruction)
+  (col isa SQLTypeField && col.field isa String && !contains(col.field, "__@")) || return nothing
+  key = col.field
+  contains(key, "__") || return key in instruc.object.model.field_names ? key : nothing
+  return _segment1_on_model(instruc.object, first(split(key, "__"))) ? key : nothing
+end
+
+# Is this projection the column `key` itself, under its own name? `isa String` before each `==`:
+# `F` overloads `==` to BUILD a comparison node (#457), so comparing an `FExpression` to a string
+# answers an expression, not a `Bool`.
+_projects_column(p::SQLTypeField, key::String) =
+  (p.field isa String && p.field == key) ||
+  (p.field isa FExpression && p.field.operation === nothing &&
+   p.field.field_name isa String && p.field.field_name == key)
+_projects_column(::Any, ::String) = false
+
+function _refuse_field_alias_collision(key::String, projection, instruc::SQLInstruction)
+  throw(AmbiguousFieldError(
+    "\e[4m\e[31mfilter(\"$(key)\" => …)\e[0m is ambiguous: \e[4m\e[31m$(key)\e[0m names " *
+    "both a column of \e[4m\e[32m$(instruc.object.model.name)\e[0m (a field, or a path through " *
+    "one) and the projection alias " *
+    "\e[4m\e[31mvalues(\"$(key)\" => $(_describe_projection(projection)))\e[0m, so the filter " *
+    "has two meanings and PormG will not choose one.\n  " *
+    "Rename the alias — \e[4m\e[32mvalues(\"$(key)_value\" => …)\e[0m — then filter " *
+    "\e[4m\e[32m\"$(key)_value\"\e[0m for the projection, or \e[4m\e[32m\"$(key)\"\e[0m " *
+    "for the column (#703)."))
+end
+
 # #537 — an aggregate or window function cannot be a WHERE predicate, and `OP(::SQLTypeFunction, …)`
 # lets one be written: `filter(OP(Count("id"), ">", 3))` rendered `WHERE COUNT(...)`, which both
 # backends reject at EXECUTION, and `OP(Sum(…), …)` died earlier still with a raw `FieldError`.
@@ -898,9 +976,12 @@ end
 # the text is reused: that function also renders a SELECT-side `When("r" => 1)`, and
 # `CASE WHEN RANK() OVER (…) = 1 …` in the select list is legal SQL. The clause cannot be told apart
 # there on PostgreSQL, whose parameter object keeps no context. The alias test is the top-level
-# branch's — a plain key naming no model field — so a model field that shares its name with a window
-# alias (`values("r" => "points", "points" => Rank(…)); filter(Q("points" => 5.0))`) still filters the
-# column, exactly as it does unwrapped. Recursive with `_guard_no_aggregate_predicate`'s depth cap.
+# branch's — a plain key naming no model field. A key that names a model field AND a window alias
+# (`values("r" => "points", "points" => Rank(…)); filter(Q("points" => 5.0))`) never reaches here:
+# #703's `_guard_field_alias_collision` refuses it first. This comment used to say such a key
+# "still filters the column" — true only because `"r" => "points"` had claimed the memo entry
+# first; with an aggregate alias the same key printed `SUM(…)` into WHERE. Recursive with
+# `_guard_no_aggregate_predicate`'s depth cap.
 function _guard_window_alias_in_q(filter, instruc::SQLInstruction, depth::Int = 0)
   depth > 32 && return nothing
   if filter isa SQLTypeOper

@@ -975,6 +975,43 @@ When a query projects both kinds, one `filter(...)` call splits the same way: th
     filter the underlying column instead, e.g.
     `filter("driverid__surname__@istartswith" => "ham")`.
 
+### An Alias Named After a Field
+
+An alias can repeat the name of a model field: `values("points" => Sum("points"))` is fine, and the
+result column is called `points`. A filter on that name, though, has two meanings: the `points`
+column in `WHERE`, or the projected sum in `HAVING`. PormG will not choose, and raises
+`AmbiguousFieldError` when the query is built. That applies top-level, inside `Q`/`Qor`, and with a
+lookup suffix:
+
+```julia
+query = M.Result.objects
+query.values("driverid__surname", "points" => Sum("points"))
+query.filter("points__@gt" => 100)   # AmbiguousFieldError
+```
+
+Rename the alias. The alias then filters the projection, and the field name filters the column:
+
+```julia
+# Drivers with more than 100 points from finishes worth 10 or more
+query = M.Result.objects
+query.values("driverid__surname", "total_points" => Sum("points"))
+query.filter("points__@gte" => 10, "total_points__@gt" => 100)
+```
+
+```sql
+WHERE "Tb"."points" >= $1
+GROUP BY 1
+HAVING SUM("Tb"."points") > $2
+```
+
+The same applies when the alias projects a different column under a field's name
+(`values("points" => "grid")`), and to a relation path used as an alias
+(`values("driverid__surname" => Upper("driverid__forename"))` followed by
+`filter("driverid__surname" => …)`).
+
+A projection that *is* the column is not ambiguous. `values("points")`,
+`values("points" => "points")` and `values("points" => F("points"))` filter the column as usual.
+
 ### `Q` and `Qor` on Aggregate Aliases
 
 An aggregate alias inside [`Q(...)` or `Qor(...)`](q_objects.md) goes to `HAVING` too. `Qor` is

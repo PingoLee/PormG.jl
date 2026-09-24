@@ -1,8 +1,8 @@
 using Test
 using PormG
-using PormG.Models: Model, IDField, IntegerField, FloatField, CharField
+using PormG.Models: Model, IDField, IntegerField, FloatField, CharField, DateField
 using PormG.QueryBuilder: inspect_query, Count, Sum, Max
-using PormG.Functions: Case, When
+using PormG.Functions: Case, When, Value, Upper
 
 include("helper_marker_alignment.jl")
 
@@ -21,10 +21,10 @@ PormG.config["q_agg_pg"] = PormG.Configuration.Settings(connections = QAggMockPo
 PormG.config["q_agg_sl"] = PormG.Configuration.Settings(connections = QAggMockSQLite(), change_data = true)
 
 QAggPgResult = Model("q_agg_results", resultid = IDField(), raceid = IntegerField(), points = FloatField(),
-                     surname = CharField())
+                     surname = CharField(), race_date = DateField())
 QAggPgResult.connect_key = "q_agg_pg"
 QAggSlResult = Model("q_agg_results", resultid = IDField(), raceid = IntegerField(), points = FloatField(),
-                     surname = CharField())
+                     surname = CharField(), race_date = DateField())
 QAggSlResult.connect_key = "q_agg_sl"
 
 const _Q_AGG_MODELS = ((:postgres, QAggPgResult), (:sqlite, QAggSlResult))
@@ -386,4 +386,135 @@ end
       assert_marker_count(sl, :sqlite)
     end
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #703: a filter key naming a model field AND a projection alias is refused
+# `values("raceid", "points" => Sum("points")); filter("points" => 1.0)` rendered
+# `WHERE SUM("Tb"."points") = ?` — neither the column nor the projection. The key has two meanings, so
+# it raises `AmbiguousFieldError` (the #492 precedent), on every spelling that reaches the leaf:
+# top-level and inside `Q`/`Qor`, bare and with a lookup suffix, over an aggregate, a row
+# expression, a window and a literal alike. The message names both readings and the rename.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#703: a key naming a field and an alias raises AmbiguousFieldError" begin
+  projections = (("an aggregate", Sum("points")),
+                 ("a row expression", F("points") * 2),
+                 ("a literal", Value(0.0)),
+                 # A DIFFERENT column under the field's name. This one used to resolve to the field —
+                 # the path projection is memoized under its own path, so nothing shadowed the key —
+                 # but the key still has two meanings, and the upgrade entry records the change.
+                 ("another column", "raceid"))
+  predicates = (("top-level", "points" => 1.0),
+                ("a lookup suffix", "points__@gt" => 1.0),
+                ("Q", Q("points" => 1.0)),
+                ("Qor", Qor("raceid" => 1, "points" => 1.0)))
+  for (backend, Model_) in _Q_AGG_MODELS
+    for (plabel, projection) in projections, (flabel, pred) in predicates
+      @testset "$backend — $plabel, $flabel" begin
+        q = Model_.objects
+        q.values("raceid", "points" => projection)
+        q.filter(pred)
+        err = @test_throws AmbiguousFieldError inspect_query(q)
+        msg = err.value.msg
+        # Both readings are named, and the rename that resolves it.
+        @test occursin("points", msg)
+        @test occursin("projection alias", msg)
+        @test occursin("points_value", msg)
+        @test occursin("#703", msg)
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #703 controls: what is NOT ambiguous still renders
+# A projection that IS the column — `values("points")`, `values("points" => "points")`,
+# `values("points" => F("points"))` — gives the key one meaning, so the filter renders against the
+# column as it always did. A transform key names the field's transform, not the alias. The
+# declaration itself is never refused: `values("points" => Sum("points"))` with no filter on the
+# name renders unchanged — the shape consuming apps use.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#703 controls: an unambiguous key still renders" begin
+  for (backend, Model_) in _Q_AGG_MODELS
+    @testset "$backend — the column projected under its own name" begin
+      for projection in ("points", "points" => "points", "points" => F("points"))
+        q = Model_.objects
+        q.values("resultid", projection)
+        q.filter("points" => 1.0)
+        sql = inspect_query(q)[:sql_text]
+        @test occursin(r"WHERE \"Tb\"\.\"points\" = ", sql)
+      end
+    end
+    @testset "$backend — the colliding alias with no filter on its name" begin
+      q = Model_.objects
+      q.values("raceid", "points" => Sum("points"))
+      q.filter("raceid" => 1)
+      sql = inspect_query(q)[:sql_text]
+      @test occursin("SUM(\"Tb\".\"points\") as \"points\"", sql)
+      @test occursin(r"WHERE \"Tb\"\.\"raceid\" = ", sql)
+    end
+    @testset "$backend — a transform key names the field's transform, not the alias" begin
+      q = Model_.objects
+      q.values("raceid", "race_date" => Max("race_date"))
+      q.filter("race_date__@year" => 2009)
+      sql = inspect_query(q)[:sql_text]
+      # The year rewrite lands on the column in WHERE; the alias's MAX stays in SELECT.
+      @test occursin("\"Tb\".\"race_date\"", _clause(sql, "WHERE"))
+      @test !occursin("MAX", _clause(sql, "WHERE"))
+    end
+    @testset "$backend — a renamed alias filters in HAVING, the field in WHERE" begin
+      q = Model_.objects
+      q.values("raceid", "points_value" => Sum("points"))
+      q.filter("points_value__@gt" => 10.0, "points__@gt" => 0.0)
+      sql = inspect_query(q)[:sql_text]
+      @test occursin(r"WHERE \"Tb\"\.\"points\" > ", sql)
+      @test occursin(r"HAVING SUM\(\"Tb\"\.\"points\"\) > ", sql)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #703 fixtures for a `__` path: a registered driver/result pair, so `driverid__surname` resolves
+# through the foreign key the way a model path does.
+# ─────────────────────────────────────────────────────────────────────────────
+struct QAggPathMockSQLite <: PormG.PormGSQLite end
+PormG.backend_sqlite_version(::QAggPathMockSQLite) = 3045000
+PormG.config["q_agg_path_sl"] = PormG.Configuration.Settings(connections = QAggPathMockSQLite(),
+                                                             change_data = true,
+                                                             db_def_folder = "q_agg_path_sl")
+
+module QAggPath
+import PormG, PormG.Models
+Driver = Models.Model("q_agg_path_driver", driverid = Models.IDField(), forename = Models.CharField(),
+                      surname = Models.CharField())
+Result = Models.Model("q_agg_path_result", resultid = Models.IDField(), points = Models.FloatField(),
+                      driverid = Models.ForeignKey(Driver, pk_field = "driverid", on_delete = "CASCADE"))
+PormG.Models.set_models(@__MODULE__, "q_agg_path_sl")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #703: a `__` path naming a relation's column is a model name too
+# `values("driverid__surname" => Upper("driverid__forename")); filter("driverid__surname" => …)`
+# read the alias through the projection memo — silently, since the text binds nothing — although the
+# key names the related column exactly as `"points"` names a local one. It is refused like a field
+# key. A path projection of the SAME path is the column and is not refused; a `__` alias whose first
+# segment is on no relation is an alias only, and is not this guard's business.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#703: a `__` path naming a related column and an alias is ambiguous" begin
+  for pred in ("driverid__surname" => "SENNA", Q("driverid__surname" => "SENNA"),
+               "driverid__surname__@startswith" => "SEN")
+    q = QAggPath.Result.objects
+    q.values("resultid", "driverid__surname" => Upper("driverid__forename"))
+    q.filter(pred)
+    err = @test_throws AmbiguousFieldError inspect_query(q)
+    @test occursin("driverid__surname", err.value.msg)
+    @test occursin("#703", err.value.msg)
+  end
+
+  # The path projected under its own name is the column: the filter renders against it.
+  q = QAggPath.Result.objects
+  q.values("resultid", "driverid__surname")
+  q.filter("driverid__surname" => "Senna")
+  sql = inspect_query(q)[:sql_text]
+  @test occursin(r"WHERE \"Tb_1\"\.\"surname\" = ", sql)
 end

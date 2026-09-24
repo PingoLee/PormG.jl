@@ -271,6 +271,21 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        # #703. A projection alias named after a model field makes a filter on that name two-valued —
+        # the column in WHERE or the projected sum in HAVING — and PormG refuses rather than choose.
+        # Choosing either way was silent: the aggregate printed into WHERE (a driver error), and
+        # "the field wins" would have filtered rows the caller meant to filter as groups. The
+        # declaration alone stays legal; only the filter on the shared name raises.
+        "read/filters_and_aggregates.md — a filter key naming a field and a projection alias is ambiguous",
+        AmbiguousFieldError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.values("driverid", "points" => PormG.Functions.Sum("points"))
+            q.filter("points__@gt" => 100)
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
         # #509. The window-function page states that the same ambiguity applies to an `SQLOrder`
         # entry inside a window's `order_by` — "exactly as it applies to values(), filter() and
         # order_by()". That sentence is the whole point of the fix: this was the one clause where a

@@ -148,17 +148,21 @@ const UV668_BINDING_PROJECTIONS = [
 
     # ─────────────────────────────────────────────────────────────────────────────
     # Alias guard: an alias that reuses a model field's name is refused too.
-    # A read resolves `filter("points__@gt" => 0)` through the projection memo, so with
-    # `values("points" => F("points") - 100)` it filters `("Tb"."points" - $N) > $M`. Built without
-    # the projection it would silently filter the raw column instead — a different set of rows with
-    # no error, found in review of the first #668 patch. No row filter may change meaning.
+    # A read used to resolve `filter("points__@gt" => 0)` through the projection memo, so with
+    # `values("points" => F("points") - 100)` it filtered `("Tb"."points" - $N) > $M`. Built without
+    # the projection the update would silently filter the raw column instead — a different set of
+    # rows with no error, found in review of the first #668 patch. No row filter may change meaning.
+    #
+    # #703 settled the read side: the key names the field AND the alias, so the read now raises
+    # `AmbiguousFieldError` instead of picking the alias. The update refusal below is unchanged — its
+    # own guard fires first and names the terminal — and it is what this testset pins.
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "an alias shadowing a model field raises UnsafeMutationError" begin
         for model in (UV668_PG, UV668_SL)
             q = uv668_scoped(model; projection = ["id", "points" => F("points") - 100])
             q.filter("points__@gt" => 0)
-            # The read this guards: the predicate is on the projected expression, not the column.
-            @test occursin(r"\(\"Tb\"\.\"points\" - (\?|\$\d+(::\w+)?)\) > ", q.list(show_query = :dict)[:sql_text])
+            # The read is refused as ambiguous (#703) rather than resolved to either meaning.
+            @test_throws PormG.AmbiguousFieldError q.list(show_query = :dict)
             err = uv668_error(() -> q.update("points" => 3, show_query = :dict))
             @test err isa PormG.UnsafeMutationError
             @test err !== nothing && occursin("values() alias \"points\"", sprint(showerror, err))

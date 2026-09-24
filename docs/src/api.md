@@ -772,7 +772,7 @@ field, and for the few with their own `showerror` it returns the richer renderin
 | :--- | :--- |
 | `FieldAccessError` *(abstract)* | Umbrella for field/accessor lookup failures — `catch` it to get all three cases below. |
 | `UnknownFieldError` | A field, alias, column, or `__` lookup path does not exist on the model or projected row. |
-| `AmbiguousFieldError` | A `__` path's first segment names both a declared CTE and something on the model, so it has no single meaning. Spell the CTE side `CTE("<name>", "<path>")`, or rename the CTE to reach the model side (#492). |
+| `AmbiguousFieldError` | A name has two meanings on this query. Either a `__` path's first segment names both a declared CTE and something on the model: spell the CTE side `CTE("<name>", "<path>")`, or rename the CTE to reach the model side (#492). Or a `filter(...)` key names both a model field and a projection alias that projects something else: rename the alias (#703). |
 | `LazyTraversalError` | An unprojected `ForeignKey` or `OneToOneField` was read off a fetched row — project it in `values(...)` first. |
 | `FilterError` | Invalid filter argument/shape, or an operator misused on a JSON/subquery column. |
 | `QueryBuildError` | Structural/API misuse while building a query (joins, CTEs, projection, ordering, window/bulk config). **The long-tail default** — it is the bucket for query-shape misuse that isn't one of the sharper categories, so `catch QueryBuildError` says little beyond "PormG rejected the query shape". Catch a sharper subtype when you need to branch on the cause. |

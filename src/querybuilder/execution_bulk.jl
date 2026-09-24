@@ -1626,12 +1626,14 @@ function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{St
     if !(col_name in names(row))
       continue
     end
-    # A collection gets the refusal every writer raises (#716), not the generic message below: the
-    # bare formatter can throw on its elements before the bind site's check ever ran.
-    _refuse_collection(model.fields[field], field, row[col_name], op)
     try
       model.fields[field].formatter(row[col_name])
     catch e
+      # A collection gets the refusal every writer raises (#716), not the generic message below: the
+      # bare formatter can throw on its elements before the bind site's check ever ran. Only here,
+      # in the catch: a collection the formatter maps fine (`["A", "B"]`) must not pre-empt an
+      # earlier field's real error, which the caller rethrows once this pass finds nothing.
+      _refuse_collection(model.fields[field], field, row[col_name], op)
       # #335: `col_name` is PormG's own private fill column whenever the value was auto-populated,
       # and printing that name would point the caller at a DataFrame column they never wrote. Name
       # the source of the value instead.

@@ -421,8 +421,8 @@ function _single_value(value::_CollectionValue, field::AbstractString, op::Abstr
 end
 
 # The fields whose formatter turns a collection into ONE value: a `JSONField` serializes it to one
-# JSON string, a `BinaryField` wraps a `Vector{UInt8}` as one blob. Keyed on the field struct, so
-# `ImageField`/`FileField` (`"BLOB"`, but they hold path text) are not among them.
+# JSON string, a `BinaryField` wraps a `Vector{UInt8}` as one blob. The binary half is keyed on the
+# field struct, so `ImageField`/`FileField` (`"BLOB"`, but they hold path text) are not among them.
 _takes_collection(f_meta) = _is_json_field(f_meta) || _is_binary_field(f_meta)
 
 # The write path's format step, used at every bind site. The raw value is checked BEFORE the
@@ -437,8 +437,10 @@ end
 
 # The raw-value half on its own, for a caller that runs the bare formatter to find the failing cell
 # (the bulk writers' `_depuration_values_bulk_insert`), so it raises this refusal rather than its own.
-_refuse_collection(f_meta, field::AbstractString, value, op::AbstractString) =
-  (value isa _CollectionValue && !_takes_collection(f_meta)) ? _single_value(value, field, op) : nothing
+function _refuse_collection(f_meta, field::AbstractString, value, op::AbstractString)
+  value isa _CollectionValue && !_takes_collection(f_meta) && _single_value(value, field, op)
+  return nothing
+end
 
 function validate_field_data(model::PormGModel, field::String, value::Any, operation::String; allow_primary_key::Bool = true)
     if haskey(model.fields, field) && Models.is_many_to_many_field(model.fields[field])

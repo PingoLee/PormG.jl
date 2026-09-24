@@ -187,9 +187,9 @@ end
 
     # ─────────────────────────────────────────────────────────────────────────────
     # Control: a JSONField vector is still ONE bound value, on every writer.
-    # The check runs after the formatter, which serializes the vector to a single JSON string. A
-    # raw-value check would have refused this — and broken a consuming app that stores a vector of
-    # regions into a JSONField through create().
+    # The formatter serializes the vector to a single JSON string, and the raw-value check (#716)
+    # exempts JSONField (`_takes_collection`). Refusing it would break a consuming app that stores a
+    # vector of regions into a JSONField through create().
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "a JSONField vector still binds as one JSON string" begin
         json = "[\"Magic\",\"Beco\"]"
@@ -236,6 +236,31 @@ end
             r = lookup(m, ["driverref"], Dict{String,Any}("driverref" => "senna")).list(show_query = :dict)
             @test r[:parameters] == Any["senna"]
             srcoll712_check(srcoll712_refusal(() -> m.objects.get_or_create("forename" => [1.5, 2.5])), "forename")
+            # The EXECUTING call goes through `_get_or_create_lookup` too. On a mock it cannot finish
+            # (there is no pool to acquire), but it must get past the hit read's `filter()`: before
+            # #717 it stopped there with `FilterError` ("... but no operator").
+            err = srcoll712_refusal(() -> m.objects.get_or_create("nicknames" => ["Magic", "Beco"],
+                                                                  defaults = ["driverref" => "senna"]))
+            @test !(err isa PormG.FilterError)
+            @test !occursin("no operator", err === nothing ? "" : sprint(showerror, err))
+        end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # The bulk writers' error-context pass keeps reporting the row's REAL error (#716 review).
+    # `_depuration_values_bulk_insert` walks every cell after any failure in the row and throws on
+    # the first it rejects. The collection check lives in its `catch`, so a collection the text
+    # formatter maps without throwing (`["A", "B"]`) cannot pre-empt a later field's genuine error —
+    # here an invalid JSON string, which `create` reports for the same row.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "bulk error context names the failing field, not a formattable collection" begin
+        df = DataFrames.DataFrame(driverref = ["senna"], forename = [["Ayrton", "Senna"]], nicknames = ["{not json"])
+        for m in SRCOLL712_MODELS
+            err = srcoll712_refusal(() -> bulk_insert(m.objects, df, show_query = :dict))
+            @test err isa PormG.InvalidValueError
+            msg = err === nothing ? "" : sprint(showerror, err)
+            @test occursin("nicknames", msg)
+            @test !occursin("single value", msg)
         end
     end
 

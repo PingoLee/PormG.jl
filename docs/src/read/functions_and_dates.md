@@ -287,8 +287,8 @@ PormG supports math through explicit function calls:
 | `Sqrt("field")` | Square root | `Sqrt("driverid")` |
 | `Exp("field")` | Exponential (e^x) | `Exp("points")` |
 | `Ln("field")` | Natural logarithm | `Ln("points")` |
-| `Power("field", n)` | Raise to power n | `Power("driverid", Value(2))` |
-| `Mod("field", n)` | Modulo (remainder) | `Mod("driverid", Value(3))` |
+| `Power("field", n)` | Raise to power n | `Power("driverid", 2)` |
+| `Mod("field", n)` | Modulo (remainder) | `Mod("driverid", 3)` |
 
 ```julia
 using PormG.Functions: Power, Round, Value, Abs
@@ -296,7 +296,7 @@ using PormG.Functions: Power, Round, Value, Abs
 query = M.Driver.objects
 query.values(
     "driverid",
-    "squared" => Power("driverid", Value(2)),
+    "squared" => Power("driverid", 2),
     "precise" => Round(Value(10.556), 2),
     "abs_val" => Abs("number")
 )
@@ -310,6 +310,12 @@ df = query |> DataFrame
 ---
 
 ## Conditional Functions
+
+The operands of `Coalesce`, `NullIf`, `Greatest` and `Least` (and of `Power` and `Mod` above) are
+read by their type. A string is a column path, and a number or a `Bool` is a literal that PormG binds
+as a parameter. A **string literal** needs `Value(...)`: `NullIf("code", "")` would read `""` as a
+column name. Any other value, including a date, raises `QueryBuildError` when the expression is
+built.
 
 ### `Coalesce` — First Non-Null Value
 
@@ -325,24 +331,24 @@ query.values(
 ### `NullIf` — Return NULL If Equal
 
 ```julia
-using PormG.Functions: NullIf
+using PormG.Functions: NullIf, Value
 
-# Return NULL if code is an empty string
+# Return NULL if code is an empty string. `Value` makes "" a literal, not a column.
 query = M.Driver.objects
 query.values(
-    "clean_code" => NullIf("code", "")
+    "clean_code" => NullIf("code", Value(""))
 )
 ```
 
 ### `Greatest` / `Least` — Max/Min of Values
 
 ```julia
-using PormG.Functions: Greatest, Least, Value
+using PormG.Functions: Greatest, Least
 
 query = M.Result.objects
 query.values(
-    "adjusted_points" => Greatest("points", Value(0)),
-    "capped_points"   => Least("points", Value(25))
+    "adjusted_points" => Greatest("points", 0),
+    "capped_points"   => Least("points", 25)
 )
 ```
 

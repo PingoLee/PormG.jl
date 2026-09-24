@@ -331,12 +331,14 @@ df = M.Result.objects.values(
 | :--- | :--- | :--- |
 | `Value(x)` | Literal value in SQL | `Value("hello")` |
 | `Coalesce(args...)` | First non-null value | `Coalesce("nickname", "forename")` |
-| `NullIf("field", value)` | Returns NULL if equal | `NullIf("code", "")` |
-| `Greatest(args...)` | Maximum of values | `Greatest("points", Value(0))` |
-| `Least(args...)` | Minimum of values | `Least("points", Value(100))` |
+| `NullIf("field", value)` | Returns NULL if equal | `NullIf("code", Value(""))` |
+| `Greatest(args...)` | Maximum of values | `Greatest("points", 0)` |
+| `Least(args...)` | Minimum of values | `Least("points", 100)` |
 | `Cast("field", type)` | Type casting — a field object or a [type string](read/functions_and_dates.md#Cast-—-Type-Conversion) | `Cast("points", IntegerField())`, `Cast("points", "numeric(10,2)")` |
 | `Extract("field", "part")` | Extract date/time part | `Extract("dob", "year")` |
 | `ToChar("field", fmt)` | Format to string | `ToChar("dob", "YYYY-MM")` |
+
+An operand of `Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`, `Mod` and `Concat` is read by its type. A string is a column path. A number or a `Bool` is a literal that is bound as a parameter, so `Coalesce("points", 0)` means `Coalesce("points", Value(0))`. Wrap a string literal in `Value`, as in `NullIf("code", Value(""))`. Any other value raises `QueryBuildError` when the expression is built.
 
 ### Case Expressions
 

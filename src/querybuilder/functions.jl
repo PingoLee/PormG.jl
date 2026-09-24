@@ -460,6 +460,50 @@ Value(x::JoinedReference) = throw(QueryBuildError(
   "\e[4m\e[32mValue\e[0m wraps a literal, not a column. Project the joined column directly — " *
   "\e[4m\e[32mvalues(\"x\" => Joined(\"$(x.alias)\", \"$(x.path)\"))\e[0m (#481)."))
 
+# #705 — one reading for a function OPERAND, shared by every constructor that takes its operands
+# untyped (`Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`, `Mod`, `Replace`, `Concat`).
+#
+# They turned a string into a column and stored anything else as is, and the build walk
+# (`_check_function`, build_helpers.jl) has no arm for a Julia number — so `Coalesce("points", 0)`,
+# the most natural way to write a default, died in `values()` with a raw `MethodError` naming an
+# internal function. Django's `Func` wraps a non-string argument in `Value` (`_parse_expressions`),
+# and so does this: a scalar literal becomes `Value(x)` and binds as a parameter, exactly as
+# `Coalesce("points", Value(0))` always did. A string is still a column path — a string LITERAL needs
+# `Value("…")`, as in Django.
+#
+# The literal set is the numbers that bind NATIVELY on both engines. `Value(x)` binds its literal
+# RAW, and SQLite.jl has `bind!` methods for `Int32`, `Int64`, `Bool` and `AbstractFloat` only;
+# anything else falls to `bind!(::Any)`, which Julia-serializes the value into a BLOB, so the
+# function would compare against garbage — silently (#721). Measured (`SELECT typeof(?)`): `Int8`,
+# `Int16`, every `UInt`, `Int128`, `BigInt`, `Date`, `DateTime` and `Time` all bind as `blob`. Those
+# are refused below with the spelling that works; `BigFloat`/`Decimal` stay out for
+# `_CompareLiteral`'s reason too (types.jl). A PormG node passes through untouched — the walk owns
+# those. Anything else is refused HERE, at the constructor, rather than as a `MethodError` from the
+# walk.
+const _FunctionLiteral = Union{Bool,Int32,Int64,Float16,Float32,Float64}
+_function_operand(x::AbstractString) = SQLField(String(x))
+_function_operand(x::_FunctionLiteral) = Value(x)
+_function_operand(x::Union{SQLType,SQLObject}) = x
+_function_operand(x::Integer) = throw(QueryBuildError(
+  "\e[4m\e[31m$(repr(x))\e[0m (::$(typeof(x))) is not a function operand: SQLite cannot bind that " *
+  "integer type as a number. Convert it: \e[4m\e[32mInt64($(x))\e[0m (#705)."))
+_function_operand(x::Dates.AbstractTime) = throw(QueryBuildError(
+  "\e[4m\e[31m$(repr(x))\e[0m (::$(typeof(x))) is not a function operand: a date or time literal " *
+  "cannot yet be bound inside a function on every engine. Use a date column (its field path) " *
+  "instead (#705)."))
+_function_operand(x) = throw(QueryBuildError(
+  "\e[4m\e[31m$(repr(x))\e[0m (::$(typeof(x))) is not a function operand. An operand is a column " *
+  "path (a string), a number, a `Bool`, or an expression; wrap any other literal as " *
+  "\e[4m\e[32mValue(x)\e[0m (#705)."))
+# `Replace`'s `find`/`replace`: TEXT slots, so a string there is a literal. A number is refused
+# rather than converted — PostgreSQL has no `replace(text, bigint, bigint)`, and turning `1` into
+# `"1"` would be a guess the caller can spell for themselves.
+_text_operand(x::AbstractString) = Value(String(x))
+_text_operand(x::Union{Integer,Float16,Float32,Float64}) = throw(QueryBuildError(
+  "\e[4m\e[31mReplace\e[0m searches and replaces TEXT, and $(repr(x)) (::$(typeof(x))) is a number. " *
+  "Write it as a string: \e[4m\e[32m\"$(x)\"\e[0m (#705)."))
+_text_operand(x) = _function_operand(x)
+
 # #696: every `output_field=` goes through here, so a type string is validated when the expression
 # is built rather than when it renders. A field object contributes its canonical `type`; the dialect
 # maps that to the engine's spelling (`BLOB` → `bytea`). `""` has always meant "no cast" to `CASE`.
@@ -532,7 +576,9 @@ function Concat(x::Vector; output_field::Union{N, AbstractString, Nothing} where
   # Not the `SQLField(String(v))` wrap that `Coalesce`/`Greatest`/`Least` use to dodge the same arm:
   # Concat's elements legitimately carry `__@` transform paths (`Concat("date__@year", ...)`), and
   # wrapping would strip the per-element resolution that makes those work.
-  processed_cols = Any[v isa AbstractString ? String(v) : v for v in x]
+  # #705: a number part is a literal (`Value`), as in the other operand-taking constructors; a string
+  # part stays a `String`, for the reason above.
+  processed_cols = Any[v isa AbstractString ? String(v) : _function_operand(v) for v in x]
   return FObject(function_name = "CONCAT", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field, "as" => String(_as)))
 end
 # Variadic convenience: Concat("forename", Value(" "), "surname") → same as vector form
@@ -718,10 +764,14 @@ end
     Coalesce(args...; output_field=nothing)
 
 Returns the first non-null value in the list of arguments.
+
+A string argument is a column path. A number or a `Bool` is a literal that is bound as a parameter
+(`Coalesce("points", 0)` means `Coalesce("points", Value(0))`). Wrap a string literal in `Value`. Any other value raises `QueryBuildError`
+when the expression is built (#705).
 """
 function Coalesce(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
-  processed_cols = [isa(v, AbstractString) ? SQLField(String(v)) : v for v in x]
+  processed_cols = Any[_function_operand(v) for v in x]   # #705
   return FObject(function_name = "COALESCE", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field))
 end
 
@@ -729,10 +779,14 @@ end
     Greatest(args...; output_field=nothing)
 
 Returns the greatest value in the list of arguments.
+
+A string argument is a column path. A number or a `Bool` is a literal that is bound as a parameter
+(`Greatest("points", 0)` means `Greatest("points", Value(0))`). Wrap a string literal in `Value`. Any other value raises `QueryBuildError`
+when the expression is built (#705).
 """
 function Greatest(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
-  processed_cols = [isa(v, AbstractString) ? SQLField(String(v)) : v for v in x]
+  processed_cols = Any[_function_operand(v) for v in x]   # #705
   return FObject(function_name = "GREATEST", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field))
 end
 
@@ -740,10 +794,14 @@ end
     Least(args...; output_field=nothing)
 
 Returns the least value in the list of arguments.
+
+A string argument is a column path. A number or a `Bool` is a literal that is bound as a parameter
+(`Least("points", 25)` means `Least("points", Value(25))`). Wrap a string literal in `Value`. Any other value raises `QueryBuildError`
+when the expression is built (#705).
 """
 function Least(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
-  processed_cols = [isa(v, AbstractString) ? SQLField(String(v)) : v for v in x]
+  processed_cols = Any[_function_operand(v) for v in x]   # #705
   return FObject(function_name = "LEAST", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field))
 end
 
@@ -798,9 +856,16 @@ end
     NullIf(field1, field2)
 
 Returns NULL if field1 equals field2, otherwise returns field1.
+
+A string argument is a column path. A number or a `Bool` is a literal that is bound as a parameter
+(`NullIf("points", 0)` means `NullIf("points", Value(0))`). Wrap a string literal in `Value`. Any other value raises `QueryBuildError`
+when the expression is built (#705).
+
+`NullIf("code", "")` compares two columns; write `NullIf("code", Value(""))` for the empty string.
 """
 function NullIf(x, y)
-  return FObject(function_name = "NULLIF", column = [isa(x, AbstractString) ? SQLField(String(x)) : x, isa(y, AbstractString) ? SQLField(String(y)) : y], aggregate = _any_agg(x, y))
+  column = Any[_function_operand(x), _function_operand(y)]   # #705
+  return FObject(function_name = "NULLIF", column = column, aggregate = _any_agg(column))
 end
 
 
@@ -808,13 +873,14 @@ end
     Replace(column, find, replace)
 
 Replaces all occurrences of `find` with `replace` in the string.
+
+`column` is a column path. `find` and `replace` are text: a string there is a literal, and a number
+raises `QueryBuildError` naming its string spelling (#705).
 """
 function Replace(x, find, replace)
-  return FObject(function_name = "REPLACE", column = [
-    isa(x, AbstractString) ? SQLField(String(x)) : x,
-    isa(find, AbstractString) ? Value(String(find)) : find,
-    isa(replace, AbstractString) ? Value(String(replace)) : replace
-  ], aggregate = _any_agg(x, find, replace))
+  # #705: `find`/`replace` are text, so a string there is a literal (`_text_operand`).
+  column = Any[_function_operand(x), _text_operand(find), _text_operand(replace)]
+  return FObject(function_name = "REPLACE", column = column, aggregate = _any_agg(column))
 end
 
 """
@@ -895,18 +961,28 @@ end
     Power(base, exponent)
 
 Returns `base` raised to the power of `exponent`.
+
+A string argument is a column path. A number or a `Bool` is a literal that is bound as a parameter
+(`Power("points", 2)` means `Power("points", Value(2))`). Wrap a string literal in `Value`. Any other value raises `QueryBuildError`
+when the expression is built (#705).
 """
 function Power(x, y)
-  return FObject(function_name = "POWER", column = [isa(x, AbstractString) ? SQLField(String(x)) : x, isa(y, AbstractString) ? SQLField(String(y)) : y], aggregate = _any_agg(x, y), formatter = Models.format_number_sql)
+  column = Any[_function_operand(x), _function_operand(y)]   # #705
+  return FObject(function_name = "POWER", column = column, aggregate = _any_agg(column), formatter = Models.format_number_sql)
 end
 
 """
     Mod(dividend, divisor)
 
 Returns the remainder (modulo) of a division.
+
+A string argument is a column path. A number or a `Bool` is a literal that is bound as a parameter
+(`Mod("points", 2)` means `Mod("points", Value(2))`). Wrap a string literal in `Value`. Any other value raises `QueryBuildError`
+when the expression is built (#705).
 """
 function Mod(x, y)
-  return FObject(function_name = "MOD", column = [isa(x, AbstractString) ? SQLField(String(x)) : x, isa(y, AbstractString) ? SQLField(String(y)) : y], aggregate = _any_agg(x, y), formatter = Models.format_number_sql)
+  column = Any[_function_operand(x), _function_operand(y)]   # #705
+  return FObject(function_name = "MOD", column = column, aggregate = _any_agg(column), formatter = Models.format_number_sql)
 end
 
 

@@ -915,16 +915,16 @@ For more complex expressions, see [Field Expressions](field_expressions.md).
 
 A function that wraps an aggregate is still an aggregate. `Coalesce`, `Cast`, `NullIf`, `Round`,
 `Case`/`When` and the rest group like the bare aggregate they contain, and a filter on their alias
-goes to `HAVING`. `Coalesce(Sum(...), Value(0))` is the usual way to report an empty sum as `0`
+goes to `HAVING`. `Coalesce(Sum(...), 0)` is the usual way to report an empty sum as `0`
 rather than `NULL`:
 
 ```julia
-using PormG.Functions: Coalesce, Sum, Value
+using PormG.Functions: Coalesce, Sum
 
 # 2009 drivers who never finished a race on the lead lap — `milliseconds` is NULL for everyone else
 query = M.Result.objects
 query.filter("raceid__year" => 2009)
-query.values("driverid__surname", "lead_lap_ms" => Coalesce(Sum("milliseconds"), Value(0)))
+query.values("driverid__surname", "lead_lap_ms" => Coalesce(Sum("milliseconds"), 0))
 query.filter("lead_lap_ms" => 0)
 ```
 

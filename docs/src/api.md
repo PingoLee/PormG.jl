@@ -334,7 +334,7 @@ df = M.Result.objects.values(
 | `NullIf("field", value)` | Returns NULL if equal | `NullIf("code", "")` |
 | `Greatest(args...)` | Maximum of values | `Greatest("points", Value(0))` |
 | `Least(args...)` | Minimum of values | `Least("points", Value(100))` |
-| `Cast("field", type)` | Type casting | `Cast("points", "INTEGER")` |
+| `Cast("field", type)` | Type casting — a field object or a [type string](read/functions_and_dates.md#Cast-—-Type-Conversion) | `Cast("points", IntegerField())`, `Cast("points", "numeric(10,2)")` |
 | `Extract("field", "part")` | Extract date/time part | `Extract("dob", "year")` |
 | `ToChar("field", fmt)` | Format to string | `ToChar("dob", "YYYY-MM")` |
 

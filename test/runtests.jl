@@ -81,6 +81,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Date Bucket Operator (yyyy_mm)" include("unit/test_date_bucket_operator.jl")
     @testset "Sargable Date Range Rewrite (#352)" include("unit/test_sargable_date_range.jl")
     @testset "Date/Time Function SQL Parity (#25)" include("unit/test_date_functions_sql.jl")
+    @testset "Cast / output_field Type Names (#696)" include("unit/test_cast_type_validation.jl")
     @testset "Transform Ladder Parity (#562)" include("unit/test_transform_ladder_parity.jl")
     @testset "Deep FK Traversal (3 hops)" include("unit/test_deep_fk_traversal.jl")
     @testset "Window Function SQL Generation" include("unit/test_window_functions.jl")

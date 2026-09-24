@@ -434,16 +434,102 @@ function NTH_VALUE(column::String, n::Integer, over_sql::String, conn::PormGSQLi
   return "NTH_VALUE($(column), $(n)) OVER ($(over_sql))"
 end
 
+# #696 — a SQL type name is a keyword position, like #691's `EXTRACT` field: it cannot be a bind
+# parameter, so `Cast(x, type)` and every `output_field=` string used to reach the SQL verbatim —
+# `Cast(x, "int); DROP TABLE race; --")` on both engines. The grammar below is deliberately narrow.
+# A name is ONE identifier, or one of the closed multi-word spellings here: "letters and spaces" is
+# not safe, because `integer OR TRUE` carries no `;` or `--` and still rewrites a `WHERE`.
+const _CAST_MULTIWORD_TYPES = (
+  "double precision", "character varying", "bit varying", "integer unsigned",
+  "timestamp with time zone", "timestamp without time zone",
+  "time with time zone", "time without time zone",
+)
+# name words · optional `(n)` / `(n, m)`, then trailing words only after it (`timestamp(3) with time
+# zone`) · `[]`s. Every repeat is possessive and the trailing words hang off the modifier, so no two
+# groups can share a word: a failing match is linear, not the O(n²) backtrack that PCRE aborts with
+# `match limit exceeded` — an `ErrorException`, outside the `PormGError` taxonomy (#239).
+const _CAST_TYPE_RE = r"^\s*+([A-Za-z_][A-Za-z0-9_]*+(?:\s++[A-Za-z_][A-Za-z0-9_]*+)*+)\s*+(?:\(\s*+(\d++)\s*+(?:,\s*+(\d++)\s*+)?\)((?:\s++[A-Za-z_][A-Za-z0-9_]*+)*+))?\s*+((?:\[\s*+\d*+\s*+\]\s*+)*+)$"
+# The longest real spelling (`timestamp without time zone(6)[]`) is about 35 characters.
+const _CAST_TYPE_MAX_LENGTH = 128
+
+# `(name, suffix)`: the validated name words (single-spaced, caller's case) and the rebuilt
+# modifier / trailing words / array suffix, or `InvalidValueError`. Split so each engine can map the
+# NAME through its reverse type map and keep the suffix — `BLOB[]` is `bytea[]` on PostgreSQL.
+function _parse_cast_type(type::AbstractString, context::AbstractString)
+  # `String` first: `match` refuses any other `AbstractString` (a `LazyString`, #603's probes).
+  s = String(type)
+  m = isascii(s) && ncodeunits(s) <= _CAST_TYPE_MAX_LENGTH ? match(_CAST_TYPE_RE, s) : nothing
+  if m !== nothing
+    head = join(split(m.captures[1]), " ")
+    tail = m.captures[4] === nothing || isempty(m.captures[4]) ? "" : " " * join(split(m.captures[4]), " ")
+    name = lowercase(head * tail)
+    # Words after a modifier are only the `with/without time zone` of `timestamp(3) with time zone`,
+    # after a one-word name. `Base.` because `Dialect.endswith` is the SQL renderer.
+    valid = isempty(tail) ? (!occursin(' ', head) || name in _CAST_MULTIWORD_TYPES) :
+                            (!occursin(' ', head) && name in _CAST_MULTIWORD_TYPES && Base.endswith(name, "time zone"))
+    if valid
+      mod = m.captures[2] === nothing ? "" :
+            m.captures[3] === nothing ? "($(m.captures[2]))" : "($(m.captures[2]),$(m.captures[3]))"
+      arr = join("[$(b.captures[1])]" for b in eachmatch(r"\[\s*(\d*)\s*\]", m.captures[5]))
+      return head, mod * tail * arr
+    end
+  end
+  # The caller's text may be request input: `repr` escapes it, and a long one is cut to its start.
+  shown = ncodeunits(s) <= 64 ? repr(s) : repr(first(s, 48)) * "… ($(length(s)) characters)"
+  throw(InvalidValueError("$(context): $(shown) is not an accepted SQL type name. Accepted: a single " *
+                          "identifier (integer, bigint, text, timestamptz, …) or one of " *
+                          join(_CAST_MULTIWORD_TYPES, ", ") *
+                          "; optionally followed by a size (n) or (n, m) and, on PostgreSQL, array brackets []. " *
+                          "A field object such as IntegerField() is accepted too."))
+end
+
+"""
+    cast_type_name(type; context = "Cast") -> String
+
+The validated spelling of a SQL type name for `Cast` and `output_field=`, or `InvalidValueError`
+(#696). Accepts one identifier (`integer`, `timestamptz`, `mood`) or one of
+`_CAST_MULTIWORD_TYPES`, an optional `(n)` / `(n, m)` modifier and optional `[]` array suffixes,
+at most `_CAST_TYPE_MAX_LENGTH` characters.
+
+The result is rebuilt from the parsed pieces, never the caller's text, and keeps the caller's case.
+ASCII-only for `extract_part`'s reason: a Unicode fold can turn a look-alike into a keyword.
+`context` names the argument in the error message.
+"""
+function cast_type_name(type::AbstractString; context::AbstractString = "Cast")
+  name, suffix = _parse_cast_type(type, context)
+  return name * suffix
+end
+
+# The map is consulted only for an UNSIZED name: a map value is an alias of its key, not of the key
+# with a size — PostgreSQL's `DOUBLE_PRECISION => float` becomes `float(3)`, which is `real`.
+# (`Base.` — `Dialect.startswith` is the SQL renderer. Typed, or the #604 reflection guard in
+# `test_operators.jl` reads an untyped 3-arg function as an undeclared text-lookup renderer.)
+_map_cast_name(map::AbstractDict, name::AbstractString, suffix::AbstractString) = Base.startswith(suffix, "(") ? name : get(map, uppercase(name), name)
+
+"""
+    cast_type_sql(type, conn) -> String
+
+`cast_type_name(type)` in the engine's spelling (#696): an unsized name the engine's reverse type map knows
+(a field struct's canonical `type`, e.g. `BLOB`) renders as that map's value, with an array suffix
+kept — on PostgreSQL that is what turns `Cast(x, BinaryField())` into `::bytea`
+instead of the nonexistent `::BLOB` — and any other validated name renders as validated. SQLite has
+no array types, so a `[]` suffix raises `BackendCapabilityError` there.
+"""
+function cast_type_sql(type::AbstractString, conn::PormGPostgres; context::AbstractString = "Cast")
+  name, suffix = _parse_cast_type(type, context)
+  return _map_cast_name(postgres_type_map_reverse, name, suffix) * suffix
+end
+function cast_type_sql(type::AbstractString, conn::PormGSQLite; context::AbstractString = "Cast")
+  name, suffix = _parse_cast_type(type, context)
+  occursin('[', suffix) && throw(BackendCapabilityError("$(context): SQLite has no array types; $(repr(name * suffix)) is PostgreSQL-only."))
+  return uppercase(_map_cast_name(sqlite_type_map_reverse, name, suffix) * suffix)
+end
+
 function CAST(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  return """($column)::$(format["type"])"""
+  return """($column)::$(cast_type_sql(format["type"], conn))"""
 end
 function CAST(column::String, format::Dict{String,Any}, conn::PormGSQLite)
-  target_type = uppercase(format["type"])
-  if haskey(sqlite_type_map_reverse, target_type)
-    return "CAST($column AS $(sqlite_type_map_reverse[target_type]))"
-  else
-    return "CAST($column AS $(target_type))"
-  end
+  return "CAST($column AS $(cast_type_sql(format["type"], conn)))"
 end
 function CONCAT(column::Array{Any,1}, format::Dict{String,Any}, conn::PormGPostgres)
   return "CONCAT($(join(column, ",\n")))"
@@ -529,7 +615,7 @@ function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres
     return """(CASE
     $(join(column, "\n"))
     ELSE $(format["else"])
-    END)::$(output_field)
+    END)::$(cast_type_sql(output_field, conn; context = "output_field"))
     """
   else
     return """CASE
@@ -553,7 +639,7 @@ function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
     """
   output_field = get(format, "output_field", nothing)
   if !isnothing(output_field) && output_field != ""
-    return CAST(resp, Dict{String,Any}("type" => output_field), conn)
+    return "CAST($resp AS $(cast_type_sql(output_field, conn; context = "output_field")))"
   else
     return resp
   end
@@ -565,8 +651,9 @@ end
 
 function COALESCE(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
   sql = "COALESCE($(join(columns, ", ")))"
-  if get(format, "output_field", nothing) !== nothing
-    return "($sql)::$(format["output_field"])"
+  output_field = get(format, "output_field", nothing)
+  if !isnothing(output_field) && output_field != ""
+    return "($sql)::$(cast_type_sql(output_field, conn; context = "output_field"))"
   end
   return sql
 end

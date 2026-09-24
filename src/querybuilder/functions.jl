@@ -447,13 +447,40 @@ Value(x::JoinedReference) = throw(QueryBuildError(
   "\e[4m\e[32mValue\e[0m wraps a literal, not a column. Project the joined column directly — " *
   "\e[4m\e[32mvalues(\"x\" => Joined(\"$(x.alias)\", \"$(x.path)\"))\e[0m (#481)."))
 
+# #696: every `output_field=` goes through here, so a type string is validated when the expression
+# is built rather than when it renders. A field object contributes its canonical `type`; the dialect
+# maps that to the engine's spelling (`BLOB` → `bytea`). `""` has always meant "no cast" to `CASE`.
+_output_field_type(::Nothing) = nothing
+_output_field_type(f::PormGField) = Dialect.cast_type_name(f.type; context = "output_field")
+_output_field_type(s::AbstractString) = isempty(s) ? nothing : Dialect.cast_type_name(s; context = "output_field")
+
 """
     Cast(expression, type)
 
-Casts a column or expression to a specific SQL type.
+Casts a column or expression to a SQL type — PostgreSQL `(x)::type`, SQLite `CAST(x AS type)`.
+
+`type` is preferably a field object (`Cast("points", IntegerField())`), which renders in each
+engine's own spelling. A string is accepted when it is a single type name (`"integer"`, `"bigint"`,
+`"text"`, `"timestamptz"`), one of the multi-word names `"double precision"`,
+`"character varying"`, `"bit varying"`, `"timestamp with time zone"` (and `without`, and the `time`
+forms), optionally followed by a size `(n)` or `(n, m)` — `"numeric(10,2)"`, `"varchar(20)"` — and,
+on PostgreSQL only, array brackets (`"integer[]"`). Anything else raises `InvalidValueError` when
+the expression is built, on both engines: a type name is a keyword in the SQL, so it cannot be a
+bind parameter, and PormG only writes a spelling it has parsed. The same rule applies to every
+`output_field=` string.
+
+```julia
+using PormG.Functions: Cast
+using PormG.Models: IntegerField
+
+M.Result.objects.values("resultid", "points_int" => Cast("points", IntegerField()))
+M.Result.objects.values("resultid", "points_2dp" => Cast("points", "numeric(10,2)"))
+```
+
+See also [Functions and Dates](@ref).
 """
 function Cast(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, type::AbstractString)
-  return FObject(function_name = "CAST", column = _norm_fn_arg(x), aggregate = _any_agg(x), kwargs = Dict{String, Any}("type" => String(type)))
+  return FObject(function_name = "CAST", column = _norm_fn_arg(x), aggregate = _any_agg(x), kwargs = Dict{String, Any}("type" => Dialect.cast_type_name(type)))
 end
 function Cast(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, type::PormGField)
   return Cast(x, type.type)
@@ -465,10 +492,7 @@ end
 Concatenates multiple strings or columns.
 """
 function Concat(x::Vector; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing, _as::AbstractString="")
-  if isa(output_field, PormGField)
-    output_field = output_field.type
-  end
-  output_field = _norm_fn_arg(output_field)   # #603
+  output_field = _output_field_type(output_field)   # #603, #696
   # #603: the string ELEMENTS too, so no view is ever stored on the node. The original reason was
   # that `_check_function`'s vector arm assigns its result back in place and a narrowly-typed vector
   # would fail that store; since #612 made the container `Any[]` the store cannot fail, so this is
@@ -615,17 +639,11 @@ using PormG.Models: CharField          # field types are not part of PormG.Funct
 See also [`When`](@ref), [Functions and Dates](@ref).
 """
 function Case(conditions::Vector{N} where N <: SQLTypeFunction; default::Any = "NULL", output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
-  if isa(output_field, PormGField)
-    output_field = output_field.type
-  end
-  output_field = _norm_fn_arg(output_field)   # #603
+  output_field = _output_field_type(output_field)   # #603, #696
   return FObject(function_name = "CASE", column = conditions, aggregate = _any_agg(conditions, default), kwargs = Dict{String, Any}("else" => default, "output_field" => output_field))
 end
 function Case(conditions::SQLTypeFunction; default::Any = "NULL", output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
-  if isa(output_field, PormGField)
-    output_field = output_field.type
-  end
-  output_field = _norm_fn_arg(output_field)   # #603
+  output_field = _output_field_type(output_field)   # #603, #696
   return FObject(function_name = "CASE", column = conditions, aggregate = _any_agg(conditions, default), kwargs = Dict{String, Any}("else" => default, "output_field" => output_field))
 end
 """
@@ -689,10 +707,7 @@ end
 Returns the first non-null value in the list of arguments.
 """
 function Coalesce(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
-  if isa(output_field, PormGField)
-    output_field = output_field.type
-  end
-  output_field = _norm_fn_arg(output_field)   # #603
+  output_field = _output_field_type(output_field)   # #603, #696
   processed_cols = [isa(v, AbstractString) ? SQLField(String(v)) : v for v in x]
   return FObject(function_name = "COALESCE", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field))
 end
@@ -703,10 +718,7 @@ end
 Returns the greatest value in the list of arguments.
 """
 function Greatest(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
-  if isa(output_field, PormGField)
-    output_field = output_field.type
-  end
-  output_field = _norm_fn_arg(output_field)   # #603
+  output_field = _output_field_type(output_field)   # #603, #696
   processed_cols = [isa(v, AbstractString) ? SQLField(String(v)) : v for v in x]
   return FObject(function_name = "GREATEST", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field))
 end
@@ -717,10 +729,7 @@ end
 Returns the least value in the list of arguments.
 """
 function Least(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
-  if isa(output_field, PormGField)
-    output_field = output_field.type
-  end
-  output_field = _norm_fn_arg(output_field)   # #603
+  output_field = _output_field_type(output_field)   # #603, #696
   processed_cols = [isa(v, AbstractString) ? SQLField(String(v)) : v for v in x]
   return FObject(function_name = "LEAST", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field))
 end

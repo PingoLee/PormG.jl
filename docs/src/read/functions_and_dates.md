@@ -350,12 +350,34 @@ query.values(
 
 ```julia
 using PormG.Functions: Cast
+using PormG.Models: IntegerField
 
 query = M.Result.objects
 query.values(
-    "points_int" => Cast("points", "INTEGER")
+    "points_int" => Cast("points", IntegerField()),   # a field object: each engine's own spelling
+    "points_2dp" => Cast("points", "numeric(10,2)")   # or a type string
 )
 ```
+
+A field object is the preferred target, as in Django: PormG renders it in each engine's spelling
+(`BinaryField()` is `bytea` on PostgreSQL and `BLOB` on SQLite). A type **string** is accepted
+when it has this shape:
+
+- a single type name — `"integer"`, `"bigint"`, `"text"`, `"timestamptz"`, or your own type such
+  as an enum — or one of `"double precision"`, `"character varying"`, `"bit varying"`,
+  `"timestamp with time zone"`, `"timestamp without time zone"`, `"time with time zone"`,
+  `"time without time zone"` (any case);
+- optionally followed by a size, `(n)` or `(n, m)`: `"varchar(20)"`, `"numeric(10,2)"`,
+  `"timestamp(3) with time zone"`;
+- on PostgreSQL only, optionally followed by array brackets: `"integer[]"`. SQLite has no array
+  types and raises `BackendCapabilityError`.
+
+Any other string raises `InvalidValueError` when the expression is built, on both engines. A type
+name is a keyword in the SQL and cannot be a bind parameter, so PormG only writes a spelling it has
+parsed, never the text it was given. That also refuses a few spellings PostgreSQL itself accepts: a
+schema-qualified or quoted name (`public.mood`, `"Mood"`), `interval year to month`, a negative
+scale, and a `COLLATE` clause. The same rules apply to the `output_field=` string of `Case`,
+`Coalesce`, `Concat`, `Greatest` and `Least`.
 
 ### `Extract` — Extract Date/Time Part
 

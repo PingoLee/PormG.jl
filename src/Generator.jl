@@ -107,32 +107,58 @@ function generate_models_from_db(file::String, Instructions::Vector{Any}, settin
   nothing
 end
 
+# #710: every string written into a plan file is a Julia LITERAL, and identifiers reach those
+# strings from the live catalog (an undeclared table or index name, an FK or composite-constraint
+# name). Written unescaped, `$(…)` in such a name was interpolated — executed — when the plan was
+# loaded, and a lone `$`, a `\` or a `"""` (a `default = "R$ 0,00"`) made the file unparseable.
+#
+# SQL keeps the readable `"""…"""` form, so a plan still reviews as SQL: `\` and `$` are escaped
+# everywhere, a `"` only where it could close the literal (followed by another `"`, or last), and a
+# control character other than newline/tab by its escape (a raw CR would be normalized away by the
+# parser). The triple-quoted form still has two rewrites of its own — dedent and a dropped leading
+# newline — so the literal is re-parsed and must reproduce `s` exactly, or `repr` is used instead.
+# The fallback is what makes the guarantee unconditional: every literal written round-trips.
+function _plan_str_literal(s::AbstractString)::String
+  str = String(s)
+  chars = collect(str)
+  io = IOBuffer()
+  write(io, "\"\"\"")
+  for (i, c) in enumerate(chars)
+    if c == '\\'
+      write(io, "\\\\")
+    elseif c == '$'
+      write(io, "\\\$")
+    elseif c == '"' && (i == length(chars) || chars[i + 1] == '"')
+      write(io, "\\\"")
+    elseif c == '\n' || c == '\t'
+      write(io, c)
+    elseif isvalid(c) && iscntrl(c)
+      write(io, escape_string(string(c)))
+    else
+      write(io, c)
+    end
+  end
+  write(io, "\"\"\"")
+  lit = String(take!(io))
+  return Meta.parse(lit; raise = false) == str ? lit : repr(str)
+end
+
 function dict_to_jl_str(d::OrderedDict{String, String})::String
   entries = String[]
   for (k, v) in d
-      # Escape any internal quotes in keys
-      key_str = replace(string(k), "\"" => "\\\"")
-
-      # If the value is a string, we might wrap it in triple quotes if it has newlines
-      if v isa String
-          val_str = string(v)
-          val_str = "\"\"\"$(val_str)\"\"\""          
-          push!(entries, "\n\"$key_str\" =>\n $val_str")
-      else
-          # For non-string values, just string-ify them
-          val_str = replace(string(v), "\"" => "\\\"")
-          push!(entries, "\"$key_str\" => $val_str")
-      end
+    # `repr` escapes `$`, `\`, `"` and control characters; a plain label is written unchanged (#710).
+    push!(entries, "\n$(repr(String(k))) =>\n $(_plan_str_literal(v))")
   end
-  
-  # Join the key-value pairs into a Dict( ... )
+
   return "OrderedDict{String, String}(" * join(entries, ",\n ") * ")"
 end
 
 # A migration-plan key rendered as a Julia binding (#394). Plain when the physical table name is
 # already a legal identifier — which keeps every existing plan file byte-identical — and Julia's
-# `var"..."` raw-identifier form otherwise. Both escapes are needed inside `var"..."`: it follows
-# normal string rules, so a backslash or a quote in the table name would terminate it early.
+# `var"..."` raw-identifier form otherwise. `var"..."` is a RAW string: a `$` in it is never
+# interpolated, and only a quote (or backslashes right before one) could end it early, which the
+# escapes below prevent. Doubling every backslash means the parsed symbol can differ from the table
+# name (`a\b` binds `a\\b`). That is harmless: the name is only used to order the entries.
 # Can this name be written as a BARE Julia binding? `Base.isidentifier` is necessary but not
 # sufficient: it accepts reserved words (`end`, `function`) that are a `ParseError` in assignment
 # position, and all-underscore names that parse and then discard. Parsing the assignment itself is
@@ -148,13 +174,29 @@ function _plan_binding(key)::String
   name = String(key)
   _plan_binds_bare(name) && return name
   # An ALL-UNDERSCORE name (`_`, `___`) is the one case `var"..."` cannot rescue: Julia treats it as
-  # a DISCARD at any spelling, so the entry would parse and then hold nothing, and `get_all_dicts`
-  # would silently skip that table's migration. Prefixing is safe because the binding NAME is never
-  # read back — `get_all_dicts` collects every `OrderedDict` in the module regardless of what it is
-  # called, and the `# table:` comment written above each entry is what carries the real name for a
-  # human reading the plan.
+  # a DISCARD at any spelling, so the entry would parse and then hold nothing: the plan reader
+  # rejects that binding (before #710 the table's migration was silently skipped). Prefixing is
+  # safe because the binding name is used only to ORDER the entries
+  # (`Migrations._read_migration_plan`, as the `include`-based reader before it did). The
+  # `# table:` comment above each entry carries the real name for a human reading the plan.
   stem = all(==('_'), name) ? "pormg_plan_" * name : name
   return "var\"" * replace(replace(stem, "\\" => "\\\\"), "\"" => "\\\"") * "\""
+end
+
+# #710: two DISTINCT table names can still parse to one binding. The parser normalizes the name
+# inside `var"..."`: a raw CR becomes LF, a decomposed `é` becomes the composed one, and `µ` (micro
+# sign) becomes `μ`. Separately, `_` is written as `pormg_plan__`. The plan reader refuses a name
+# bound twice, because under `include` the second silently replaced the first. So a colliding
+# plan could never be applied, and regenerating it would collide again. Suffix the later name
+# instead: the binding only orders the entries, and the `# table:` comment keeps the real name.
+function _plan_unique_binding(key, used::Set{Symbol})::String
+  n = 1
+  while true
+    binding = _plan_binding(n == 1 ? String(key) : string(key, "__pormg_", n))
+    bound = Meta.parse(string(binding, " = 1")).args[1]::Symbol
+    bound in used || (push!(used, bound); return binding)
+    n += 1
+  end
 end
 
 function generate_migration_plan(file::String, migration_plan::OrderedDict{Symbol,OrderedDict{String,String}}, path::String) :: Nothing
@@ -175,22 +217,18 @@ function generate_migration_plan(file::String, migration_plan::OrderedDict{Symbo
           import OrderedCollections: OrderedDict
 
           """)
+      used_bindings = Set{Symbol}()
       for (key, value) in migration_plan
-        write(f, "# table: $key\n")
-        if value isa OrderedDict{String, String}
-          # Convert this dictionary into parseable Julia code
-          jl_code_str = dict_to_jl_str(value)
-          # #394: `key` is a PHYSICAL table name and is written here as a Julia BINDING, so a name
-          # that is not a legal Julia identifier — a space, a leading digit, a quote: exactly the
-          # spellings `db_table` exists to carry — produced a plan file that could not be PARSED.
-          # `makemigrations` succeeded and `migrate` then died on its own output. `var"..."` is
-          # Julia's raw-identifier syntax and accepts any string; the reader walks `names(mod)`
-          # and `getfield` (`Migrations.get_all_dicts`), so it never sees which spelling was used.
-          write(f, "$(_plan_binding(key)) = $jl_code_str\n\n")
-        else
-          # If it's not a Dict, just write it plainly (or handle differently)
-          write(f, "# (Not a Dict) $value\n\n")
-        end
+        # #710: `escape_string`, so a newline in a table name cannot end the comment and start a
+        # line of code. A plain name is written unchanged.
+        write(f, "# table: $(escape_string(String(key)))\n")
+        # #394: `key` is a PHYSICAL table name and is written here as a Julia BINDING, so a name
+        # that is not a legal Julia identifier — a space, a leading digit, a quote: exactly the
+        # spellings `db_table` exists to carry — produced a plan file that could not be PARSED.
+        # `makemigrations` succeeded and `migrate` then died on its own output. `var"..."` is
+        # Julia's raw-identifier syntax and accepts any string — raw, so a `$` in it is never
+        # interpolated; `Migrations._read_migration_plan` reads the binding back only to order it.
+        write(f, "$(_plan_unique_binding(key, used_bindings)) = $(dict_to_jl_str(value))\n\n")
       end
 
       write(f, "end\n")

@@ -21,20 +21,84 @@ const _DESTRUCTIVE_PATTERNS = [
 ]
 
 # ==============================================================================
-# Helper: extract OrderedDicts from a loaded migration module
+# Reading a migration plan file as DATA (#710)
 # ==============================================================================
 
-function get_all_dicts(mod::Module)
-  ordered_dicts = []
-  for name in names(mod, all = true)
-    if isdefined(mod, name)
-      obj = getfield(mod, name)
-      if isa(obj, OrderedDict)
-        push!(ordered_dicts, obj)
-      end
-    end
+"""
+    _read_migration_plan(path) -> Vector{OrderedDict{String,String}}
+
+Read a migration plan file (`pending_migrations.jl`) **as data**: it is parsed, never evaluated.
+Before #710 it was `include`d. Its SQL, labels and table names carry live catalog identifiers,
+so an index named `x\$(run(…))` executed on the operator's machine at the next `dry_run()` or
+`migrate()`. The writer now escapes every string (`Generator._plan_str_literal`). This reader is the
+other half. It accepts only the shapes the generator writes, so a file poisoned by an older writer,
+or edited by hand, is refused instead of run:
+
+- one `module` holding `import`/`using` lines (never executed) and
+- one binding per table, `name = OrderedDict{String, String}(` + `"label" => "sql"` pairs + `)`
+  (the untyped constructor is accepted too), where every label and SQL is a plain string literal:
+  no `\$` interpolation, no call, no concatenation. A name bound twice is refused, because under
+  `include` the second silently replaced the first and that table's statements were lost.
+
+Anything else raises `InvalidMigrationError` naming the line. The entries come back ordered by
+binding name, the order the `include`-based reader got from `names(mod, all = true)`. That order
+reaches the statement order within each bucket, and therefore the checksum.
+"""
+function _read_migration_plan(path::AbstractString)::Vector{OrderedDict{String, String}}
+  file = basename(path)
+  line = 0
+  bad(what) = throw(InvalidMigrationError(
+    "Migration plan '$file' line $line: $what. A plan file is read as data and never executed: " *
+    "only `name = OrderedDict{String, String}(\"label\" => \"\"\"sql\"\"\", …)` entries with plain " *
+    "string literals are accepted. Regenerate it with makemigrations()."))
+  is_parse_error(x) = x isa Expr && x.head in (:error, :incomplete)
+
+  ast = Meta.parseall(read(path, String); filename = String(path))
+  modules = Expr[]
+  for node in ast.args
+    node isa LineNumberNode && (line = node.line; continue)
+    is_parse_error(node) && bad("the file does not parse as Julia")
+    (node isa Expr && node.head === :module) || bad("unexpected top-level statement")
+    push!(modules, node)
   end
-  return ordered_dicts
+  length(modules) == 1 || bad("expected exactly one `module`, found $(length(modules))")
+
+  entries = Dict{Symbol, OrderedDict{String, String}}()
+  for node in modules[1].args[3].args
+    node isa LineNumberNode && (line = node.line; continue)
+    is_parse_error(node) && bad("the file does not parse as Julia")
+    node isa Expr && node.head in (:import, :using) && continue
+    (node isa Expr && node.head === :(=) && node.args[1] isa Symbol) ||
+      bad("unexpected statement (only `name = OrderedDict(…)` is accepted)")
+    name = node.args[1]::Symbol
+    # `_` / `___` assign to nothing in Julia, so the `include`-based reader silently lost that
+    # table's statements. The generator never writes one (`Generator._plan_binding`).
+    all(==('_'), String(name)) && bad("an all-underscore binding holds no value")
+    # Under `include` a second binding silently replaced the first, and that table's statements
+    # were lost. The generator never writes one: it suffixes a name that would parse to a binding
+    # it has already used (`Generator._plan_unique_binding`). So this only fires on a hand edit.
+    haskey(entries, name) && bad("`$(name)` is bound twice, so one table's statements would be lost")
+    entries[name] = _read_plan_dict(node.args[2], bad)
+  end
+  return [entries[k] for k in sort!(collect(keys(entries)))]
+end
+
+function _read_plan_dict(ex, bad)::OrderedDict{String, String}
+  (ex isa Expr && ex.head === :call &&
+   (ex.args[1] === :OrderedDict || ex.args[1] == :(OrderedDict{String, String}))) ||
+    bad("the value must be an `OrderedDict{String, String}(…)` literal")
+  dict = OrderedDict{String, String}()
+  for pair in ex.args[2:end]
+    (pair isa Expr && pair.head === :call && length(pair.args) == 3 && pair.args[1] === :(=>)) ||
+      bad("every entry must be a `\"label\" => \"sql\"` pair")
+    label, sql = pair.args[2], pair.args[3]
+    for s in (label, sql)
+      s isa Expr && s.head === :string && bad("string interpolation (`\$`) is not allowed")
+      s isa String || bad("the label and the SQL must be plain string literals")
+    end
+    dict[label] = sql
+  end
+  return dict
 end
 
 # ==============================================================================
@@ -523,15 +587,15 @@ end
 """
     _load_migration_plan(settings) -> Vector{OrderedDict}
 
-Load and return all OrderedDicts from the pending_migrations.jl file.
+Load and return all OrderedDicts from the pending_migrations.jl file. The file is parsed, never
+executed (`_read_migration_plan`, #710).
 """
-function _load_migration_plan(settings::PormGSettings)
+function _load_migration_plan(settings::PormGSettings)::Vector{OrderedDict{String, String}}
   pending_path = joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")
   if !isfile(pending_path)
     throw(InvalidMigrationError("No pending migrations found at: $pending_path"))
   end
-  temp_migration_module = include(pending_path)
-  return Base.invokelatest(get_all_dicts, temp_migration_module)
+  return _read_migration_plan(pending_path)
 end
 
 """
@@ -565,7 +629,7 @@ test pins each (`test/unit/test_migration_fk_ordering.jl`):
   asserted via `_assert_foreign_keys_suspended`, #276), so its inline `REFERENCES` clauses constrain
   nothing during the migration.
 
-Note the layer this function sits at: it receives the plan *after* `get_all_dicts` has read it back
+Note the layer this function sits at: it receives the plan *after* `_read_migration_plan` has read it back
 from `pending_migrations.jl`, and that reader keeps only the `OrderedDict` values — **the table name
 is already gone**. A real dependency sort is therefore not expressible here at all; it would need
 the file format to carry the dependency, which is frozen at v1

@@ -254,7 +254,8 @@ end
 # name, which is why the DDL/query fix above is not the whole story.
 #
 # `var"..."` is Julia's raw-identifier syntax and accepts any string. The reader
-# (`Migrations.get_all_dicts`) walks `names(mod)` and `getfield`, so it never sees the spelling.
+# (`Migrations._read_migration_plan`, which parses the file and never runs it since #710) uses the
+# binding only to order the entries.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a migration plan file parses for any physical table name (#394)" begin
   bind = PormG.Generator._plan_binding
@@ -275,19 +276,20 @@ end
   # `Base.isidentifier` accepts reserved words, which are a ParseError in assignment position.
   @test bind("end") == "var\"end\""
 
-  # What actually has to hold for every one of them: the entry PARSES and the dict is reachable the
-  # way `_load_migration_plan` reaches it — by value, not by name.
+  # What actually has to hold for every one of them: the entry PARSES and the dict is read back the
+  # way `_load_migration_plan` reads it.
   for name in HOSTILE_NAMES
-    probe = Module(Symbol("PlanBindProbe"))
-    Core.eval(probe, Meta.parse(string("import OrderedCollections")))
-    Core.eval(probe, Meta.parse(string(
-      bind(name), " = OrderedCollections.OrderedDict{String,String}(\"New model\" => \"CREATE TABLE\")")))
-    found = Base.invokelatest(PormG.Migrations.get_all_dicts, probe)
-    @test length(found) == 1
+    mktempdir() do dir
+      plan = OrderedCollections.OrderedDict{Symbol, OrderedCollections.OrderedDict{String, String}}(
+        Symbol(name) => OrderedCollections.OrderedDict{String, String}("New model" => "CREATE TABLE"))
+      PormG.Generator.generate_migration_plan("pending_migrations.jl", plan, dir)
+      found = PormG.Migrations._read_migration_plan(joinpath(dir, "pending_migrations.jl"))
+      @test found == [plan[Symbol(name)]]
+    end
   end
 
-  # End to end: write a plan naming a spaced table, include it back, and read the dict out the way
-  # `_load_migration_plan` does. Before #394 the `include` raised a ParseError.
+  # End to end: write a plan naming a spaced table and read the dicts back the way
+  # `_load_migration_plan` does. Before #394 loading it raised a ParseError.
   mktempdir() do dir
     plan = OrderedCollections.OrderedDict{Symbol, OrderedCollections.OrderedDict{String, String}}(
       Symbol("Odd Identifier Scratch") => OrderedCollections.OrderedDict{String, String}(
@@ -300,8 +302,7 @@ end
     @test occursin("var\"Odd Identifier Scratch\" = ", written)
     @test occursin("\nplain_table = ", written)   # untouched, no var"..." wrapper
 
-    mod = include(joinpath(dir, "pending_migrations.jl"))
-    dicts = Base.invokelatest(PormG.Migrations.get_all_dicts, mod)
+    dicts = PormG.Migrations._read_migration_plan(joinpath(dir, "pending_migrations.jl"))
     @test length(dicts) == 2
     @test any(d -> occursin("Odd Identifier Scratch", d["New model"]), dicts)
   end

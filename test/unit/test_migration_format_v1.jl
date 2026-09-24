@@ -75,6 +75,11 @@ const _MANUAL_DIGEST    = "ee7ee5c8ede0b94b23ff384d1f9b2e2f9ac9d87c3be23647d032a
         # 3. Re-hashing the committed migration's SQL reproduces the pinned v1 checksum — the file
         #    content and the checksum algorithm are jointly stable.
         @test Migrations.compute_checksum(plan["New model"]) == _KNOWN_SQL_DIGEST
+
+        # 4. The engine reads the file as data since #710 (`_read_migration_plan`), not with the
+        #    `include` above. The committed v1 file must still be accepted by that reader and give the
+        #    same SQL, or the v1 promise that a committed file stays applicable is broken.
+        @test collect.(Migrations._read_migration_plan(fixture_file)) == [collect(plan)]
     end
 
     # The generator must EMIT the format marker into newly generated files. The fixture test above
@@ -96,10 +101,8 @@ const _MANUAL_DIGEST    = "ee7ee5c8ede0b94b23ff384d1f9b2e2f9ac9d87c3be23647d032a
             @test parse(Int, m.captures[1]) == Migrations.MIGRATION_FORMAT_VERSION
 
             # The marker sits inside the module, on the line right under `module …`, and the plan body
-            # was still written. (Parse/apply round-trip of a real v1 file is covered by the committed
-            # fixture above; we avoid include() here to dodge the world-age visibility of a freshly
-            # included module's bindings inside this closure — the same reason the loader uses
-            # Base.invokelatest.)
+            # was still written. (Round-trips of generated files are covered by
+            # test_migration_plan_file.jl.)
             @test occursin(r"(?m)^module .*\n# pormg-migration-format:", text)
             @test occursin("drivers = OrderedDict", text)
         end

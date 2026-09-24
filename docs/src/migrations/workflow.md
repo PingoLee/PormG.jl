@@ -59,6 +59,12 @@ println(result)
 ```
 This shows the SQL statements that will be executed and detects any destructive operations.
 
+`dry_run()` only **reads** the plan file: it parses it and never executes it, even though it is
+written in Julia syntax. A table or index name from the database that happens to contain `$(…)`
+therefore stays text. A hand-edited plan that contains anything other than plain string literals
+raises `InvalidMigrationError`. See
+[Format Stability → A plan file is read as data](stability.md).
+
 ### Checking What the Models Cannot Express
 
 `dry_run()` reports what PormG *will do*. `check()` reports what PormG *cannot describe* — facts

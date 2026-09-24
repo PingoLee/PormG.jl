@@ -1138,6 +1138,20 @@ const DOCERR_CASES = [
             end
         end,
     ),
+    # #710: a plan file is parsed, never run. The error fires while the plan loads, before the
+    # mock connection is touched; the `$` payload would throw an UndefVarError if it were evaluated.
+    (
+        "migrations/stability.md — a plan file with `\$` interpolation raises InvalidMigrationError (#710)",
+        InvalidMigrationError,
+        () -> mktempdir() do dir
+            mkpath(joinpath(dir, "migrations"))
+            write(joinpath(dir, "migrations", "pending_migrations.jl"),
+                  "module pending_migrations\nt = OrderedDict(\"Drop\" => \"DROP INDEX \\\"ix\$(docerr_undefined_710)\\\";\")\nend\n")
+            st = PormG.Configuration.Settings(change_data = true)
+            st.db_def_folder = dir
+            PormG.Migrations.dry_run(DocErrMockPostgres(), st)
+        end,
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

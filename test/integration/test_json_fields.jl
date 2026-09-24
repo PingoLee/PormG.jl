@@ -92,6 +92,18 @@ _json_backend_is_pg() = PormG.config[PORMG_DB_FOLDER].connections isa PormG.Porm
             @test string(ordered[1][:payload__driver]) == "hamilton"
         end
 
+        # ── get_or_create by a whole JSON document (both backends, #717) ─────
+        # The hit read binds the document as the one JSON string the INSERT bound. Only a live
+        # server proves PostgreSQL types that untyped parameter as jsonb for `payload = $1`, and
+        # that SQLite's text comparison finds the row written from the same value. `payload` has no
+        # UNIQUE constraint, so a hit that failed to match would fall through to an INSERT that
+        # raises the missing-constraint error: this assertion cannot pass by creating a row.
+        @testset "get_or_create matches a JSON document lookup (#717)" begin
+            row, created = M.Field_validation_scratch.objects.get_or_create("payload" => seeded)
+            @test created == false
+            @test row.slug == slug
+        end
+
         # ── JSON containment operators (PostgreSQL only) ─────────────────────
         if _json_backend_is_pg()
             @testset "containment operators (PostgreSQL)" begin

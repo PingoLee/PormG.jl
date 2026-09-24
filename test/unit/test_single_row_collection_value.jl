@@ -200,13 +200,42 @@ end
             @test json in r[:parameters]
             @test length(r[:parameters]) == 2          # the SET value and the id filter — nothing extra
             # A JSONField vector as a get_or_create LOOKUP passes the up-front check (this renders the
-            # miss INSERT). The hit read would still refuse it, in `filter()` — a separate limitation.
+            # miss INSERT). The hit read that runs first is covered by the #717 testset below.
             r = m.objects.get_or_create("nicknames" => ["Magic", "Beco"],
                                         defaults = ["driverref" => "senna"], show_query = :dict)
             @test r[:parameters] == Any[json, "senna"]
             r = m.objects.update_or_create("driverref" => "senna", defaults = ["nicknames" => ["Magic", "Beco"]],
                                            show_query = :dict)
             @test r[:parameters] == Any["senna", json]
+        end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # get_or_create matches a JSONField collection lookup by equality (#717).
+    # The hit read runs BEFORE the INSERT and went through `filter(f => vector)`, which refuses a
+    # bare vector at parse time ("a vector value but no operator") — so the call raised
+    # `FilterError` before any SQL, while `show_query = :dict`, which renders only the miss INSERT,
+    # looked fine. The read is rendered here directly: one `=` against the column, binding the SAME
+    # JSON string the INSERT binds, which is what makes it the ON CONFLICT target's equality.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "get_or_create's hit read matches a JSONField collection by its JSON text (#717)" begin
+        lookup = PormG.QueryBuilder._get_or_create_lookup
+        for m in SRCOLL712_MODELS
+            for (v, json) in ((["Magic", "Beco"], "[\"Magic\",\"Beco\"]"),
+                              (Dict("team" => "McLaren"), "{\"team\":\"McLaren\"}"))
+                r = lookup(m, ["nicknames"], Dict{String,Any}("nicknames" => v)).list(show_query = :dict)
+                @test r[:parameters] == Any[json]
+                @test occursin(r"\"nicknames\" = (\$1|\?)", r[:sql_text])
+                # The miss INSERT binds the identical text, so a row it wrote is the row the read finds.
+                r = m.objects.get_or_create("nicknames" => v, defaults = ["driverref" => "senna"],
+                                            show_query = :dict)
+                @test r[:parameters] == Any[json, "senna"]
+            end
+            # Only a JSONField is serialized: a scalar lookup binds as before, and a text-field
+            # collection is still refused up front (#712/#716), never matched.
+            r = lookup(m, ["driverref"], Dict{String,Any}("driverref" => "senna")).list(show_query = :dict)
+            @test r[:parameters] == Any["senna"]
+            srcoll712_check(srcoll712_refusal(() -> m.objects.get_or_create("forename" => [1.5, 2.5])), "forename")
         end
     end
 

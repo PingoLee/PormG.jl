@@ -838,6 +838,27 @@ function _rethrow_conflict_target_error(e, model::PormGModel, target_fields::Vec
   rethrow(e)
 end
 
+# get_or_create's get() by the conflict target, unexecuted: through the fluent builder for
+# dialect-correct binding, and inside a transaction on the pinned connection (same pattern as save()).
+#
+# A `JSONField` collection is handed to `filter()` already serialized (#717). `filter()` refuses a
+# bare vector with no operator at parse time, where it has no model to tell a JSON column from a
+# text one (#596's constraint), so `get_or_create("payload" => ["a", "b"])` failed before any SQL.
+# As a string it takes the scalar arm and binds the exact text the miss INSERT binds, so the hit read
+# matches by the same column equality as the ON CONFLICT target (and `update_or_create`): `jsonb`
+# equality on PostgreSQL, the serialized text on SQLite.
+function _get_or_create_lookup(model::PormGModel, target_fields::Vector{String}, target_values::AbstractDict)
+  q = object(model)
+  for f in target_fields
+    v = target_values[f]
+    if v isa _CollectionValue && _is_json_field(model.fields[f])
+      v = Models.format_json_sql(v)
+    end
+    q.filter(f => v)
+  end
+  return q
+end
+
 # Django-style get_or_create (#208): match-or-insert with NO update on a hit. This is Django's own
 # algorithm — get() FIRST, and only on a miss build+run the INSERT — so that columns beyond the
 # lookup (NOT NULL fields with no default) are required ONLY when a row is actually created, never
@@ -859,9 +880,9 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
 
   # A collection lookup value would be refused by the INSERT on a miss, but a hit never builds one:
   # `fetch_by_target` hands it to `filter()`, which raises `FilterError` instead. Refuse it here, the
-  # same way on both paths (#712). A `JSONField` vector formats to one string, so this check lets it
-  # through — the hit read below still cannot take it as a lookup, which is a separate limitation of
-  # `filter()`. A non-collection value is left entirely to the paths below.
+  # same way on both paths (#712). A `JSONField` collection formats to one string, so it passes, and
+  # `_get_or_create_lookup` matches it by that string (#717). A non-collection value is left entirely
+  # to the paths below.
   for f in target_fields
     v = target_values[f]
     v isa _CollectionValue || continue
@@ -869,15 +890,7 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
     _format_single(model.fields[f], f, v, "get_or_create")
   end
 
-  # get() by the conflict target through the fluent builder — dialect-correct binding for free, and
-  # inside a transaction it uses the pinned connection (same pattern as save()).
-  fetch_by_target = () -> begin
-    q = object(model)
-    for f in target_fields
-      q.filter(f => target_values[f])
-    end
-    q.first()
-  end
+  fetch_by_target = () -> _get_or_create_lookup(model, target_fields, target_values).first()
 
   # Build the `INSERT ... ON CONFLICT (target) DO NOTHING` a MISS would run. `_prepare_row_insert!`
   # validates/fills the row and requires every NOT NULL column — so this fires (create-time) only

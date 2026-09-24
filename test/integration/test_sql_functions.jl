@@ -1303,3 +1303,38 @@ end
     @test (qPlain |> DataFrame)[1, :n] == M.Result.objects.filter("raceid" => 1).count()
 end
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #696: Cast / output_field type names on a real engine
+# The type name is validated and rebuilt before it reaches the SQL, so every accepted spelling must
+# still execute and return the right values on both engines — a modifier (`numeric(10,2)`), a
+# multi-word name (`double precision`), a field object, and `Case`'s `default=` bind cast. A hostile
+# string is refused before any SQL is sent.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#696: Cast and output_field type names execute on both engines" begin
+    q = M.Result.objects
+    q.values(
+        "resultid",
+        "points",
+        "p_2dp" => Cast("points", "numeric(10,2)"),
+        "p_dbl" => Cast("points", "double precision"),
+        "p_int" => Cast("points", PormG.Models.IntegerField()),
+        "is_win" => Case([When("positionorder" => 1, then = 1)]; default = 0,
+                         output_field = PormG.Models.IntegerField()),
+    )
+    q.filter("raceid" => 1)
+    q.order_by("resultid")
+    df = q |> DataFrame
+    @test size(df, 1) == M.Result.objects.filter("raceid" => 1).count()
+    # The cast values agree with the stored float; the integer cast rounds on PostgreSQL and
+    # truncates on SQLite, so it is compared against both.
+    @test all(isapprox(Float64(r.p_2dp), round(r.points; digits = 2)) for r in eachrow(df))
+    @test all(isapprox(Float64(r.p_dbl), r.points) for r in eachrow(df))
+    @test all(Int(r.p_int) in (floor(Int, r.points), round(Int, r.points)) for r in eachrow(df))
+    # Exactly one winner in race 1: the CASE and its bind-cast default both executed.
+    @test sum(Int.(df.is_win)) == 1
+
+    # Refused while the expression is built — nothing reaches the database.
+    @test_throws PormG.InvalidValueError Cast("points", "int); DROP TABLE result; --")
+    @test_throws PormG.InvalidValueError Coalesce("points", Value(0); output_field = "integer OR TRUE")
+end

@@ -48,6 +48,8 @@ using PormG.Functions: Count
 using PormG.Functions: ToChar
 # #40 — the `Extract` part-spelling claim on the PostgreSQL guide.
 using PormG.Functions: Extract
+# #696 — the `Cast` type-string claims on the functions page.
+using PormG.Functions: Cast
 import DataFrames
 
 # Mock backends: dialect dispatch is by connection TYPE, so a bare subtype is enough to render
@@ -598,6 +600,21 @@ const DOCERR_CASES = [
         "postgres.md + read/functions_and_dates.md — an `Extract` part that is no field raises on both engines",
         InvalidValueError,
         () -> DOCERR_RESULT_PG.objects.values("x" => Extract("resultid", "fortnight")).
+            list(show_query = :dict),
+    ),
+    # #696: a `Cast` type string outside the grammar is refused when the expression is built, on
+    # both engines — the PostgreSQL arm used to write it verbatim after `::`.
+    (
+        "read/functions_and_dates.md — a `Cast` type string outside the grammar raises on both engines",
+        InvalidValueError,
+        () -> DOCERR_RESULT_PG.objects.values("x" => Cast("resultid", "integer OR TRUE")).
+            list(show_query = :dict),
+    ),
+    # #696: array brackets pass the grammar but SQLite has no array type to cast to.
+    (
+        "read/functions_and_dates.md — a `Cast` to an array type raises on SQLite",
+        BackendCapabilityError,
+        () -> DOCERR_RESULT_SL.objects.values("x" => Cast("resultid", "integer[]")).
             list(show_query = :dict),
     ),
     # The SQLite `without_foreign_keys` refuses to nest before touching the database, so a mock pool

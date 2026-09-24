@@ -970,7 +970,11 @@ function _deferred_kwarg_sql_type(v::SQLTypeFunction, key::String, resolved_kwar
 
   output_field = get(resolved_kwargs, "output_field", nothing)
   if output_field isa AbstractString && !isempty(output_field)
-    return _infer_parameter_sql_type(value, instruc; fallback=output_field)
+    # #696: `output_field` becomes the bind cast `$n::<type>` here — a fourth place the type string
+    # reaches the SQL text. The dialect helper validates it and gives the engine's spelling.
+    instruc.connection isa PormGPostgres || return nothing
+    return _infer_parameter_sql_type(value, instruc;
+      fallback=Dialect.cast_type_sql(output_field, instruc.connection; context="output_field"))
   end
 
   return _infer_parameter_sql_type(value, instruc)

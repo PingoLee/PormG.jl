@@ -583,16 +583,20 @@ half-attempted, and it cannot be made coherent:
 - **The declared model renders the new name whatever the caller passes.** The SQLite rebuild,
   PostgreSQL's model-based `alter_field`, `_add_constrains` and `_add_new_field`'s rebuild all name
   the table through `model_table_name(declared)`, so a rename-last plan would mix both names.
-- **Other tables re-point to the new name.** A child whose foreign key targets the renamed model
-  diffs as a `:repoint` (`REFERENCES "<new>"`), which lands in bucket 5 and can only execute once
-  the rename has run. On SQLite the child's rebuild also runs `PRAGMA foreign_key_check`, which
-  reports a violation for a parent table that does not exist yet — so rename-last aborts there.
+- **A child that also changes its key re-points to the new name.** A child whose foreign key targets
+  the renamed model and ALSO changes it (a different `on_delete`, say) diffs as a `:repoint`
+  (`REFERENCES "<new>"`), which lands in bucket 5 and can only execute once the rename has run. On
+  SQLite the child's rebuild also runs `PRAGMA foreign_key_check`, which reports a violation for a
+  parent table that does not exist yet — so rename-last aborts there.
 - **Buckets 4 and 6 straddle the "everything else" bucket.** A rename in bucket 5 would sit between
   a `RENAME COLUMN` and a `CREATE INDEX` for the same table, so one of them would always target a
   name that no longer (or not yet) exists.
 
-The child re-point is redundant — PostgreSQL's rename follows the table's OID and SQLite ≥ 3.26
-rewrites the child's `REFERENCES` clause itself — but correct once the rename runs first.
+A child whose key changes in nothing but its target's name plans no statement at all (#678).
+PostgreSQL's rename follows the table's OID and SQLite ≥ 3.26 rewrites the child's `REFERENCES`
+clause itself, so `get_migration_plan` retargets the live references to the new name before it diffs
+anything. Until then every such child re-pointed redundantly, and the re-point's `DROP CONSTRAINT`
+(or SQLite child rebuild) made a pure rename destructive.
 """
 function _order_statements(migration_plan)
   first_execution::Vector{String} = []

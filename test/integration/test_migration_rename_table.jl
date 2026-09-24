@@ -149,6 +149,9 @@ end
         new_key = Symbol(RT615.new)
         @test plan[new_key]["Rename table"] == "ALTER TABLE \"$(RT615.old)\" RENAME TO \"$(RT615.new)\";"
         @test !haskey(plan, Symbol(RT615.old))
+        # The child plans nothing (#678): both engines carry its constraint across the rename, which
+        # the dangling-insert check and the converged re-diff below then confirm on the real engine.
+        @test !haskey(plan, Symbol(RT615.child))
         if is_pg
             # The UNIQUE constraint's name exists only in the catalog, under the old table.
             @test occursin("DROP CONSTRAINT", plan[new_key]["Alter field: code"])

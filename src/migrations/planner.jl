@@ -1288,6 +1288,39 @@ function _get_temporary_default_value(field::PormGField, settings::PormGSettings
 end
 
 
+"""
+    _retarget_references(table::LiveTable, renames::Dict{String, String}) -> LiveTable
+
+`table` as the catalog will describe it once the table renames in `renames` (old ⇒ new) have run:
+every foreign key whose parent is an old name points at the new one (#678).
+
+Both engines carry a constraint across `RENAME TO` — PostgreSQL follows the table's OID, and SQLite
+(3.26 and later, with `legacy_alter_table` off, which PormG never sets) rewrites the child's
+`REFERENCES` clause itself. So the retargeted live side is what the next introspection reads, and a
+child whose only change is the rename diffs as converged instead of as a `:repoint`.
+
+The binding is re-derived from the new table exactly as both readers derive it, so the reference is
+the one a reader would build. The table is matched exactly, case included — the rule
+`_fk_targets_equal` compares by (#390). Only `reference` changes; every other slot is copied.
+
+A reference with no physical `table` is left alone: it compares by binding, and neither schema reader
+ever produces one — only the `live_table` adapter can, from an unresolved String target, which is why
+the planner's tests give their live keys a `to_table`.
+"""
+function _retarget_references(table::LiveTable, renames::Dict{String, String})::LiveTable
+  isempty(renames) && return table
+  retarget(spec::ColumnSpec) = begin
+    ref = spec.reference
+    (ref === nothing || ref.table === nothing || !haskey(renames, ref.table)) && return spec
+    parent = renames[ref.table]
+    moved = ForeignKeyRef(parent, format_model_name(Models._model_binding_name(parent)), ref.column, ref.on_delete)
+    # Slot-generic, so a slot added to `ColumnSpec` later is carried rather than silently dropped.
+    return ColumnSpec((f === :reference ? moved : getfield(spec, f) for f in fieldnames(ColumnSpec))...)
+  end
+  columns = OrderedDict{String, ColumnSpec}(name => retarget(spec) for (name, spec) in table.columns)
+  return LiveTable(table.name, columns, table.indexes, table.composite_indexes)
+end
+
 # ---
 # Public API (makemigrations)
 # ---
@@ -1323,9 +1356,13 @@ answers "new table" and "not a rename" for everything — a non-interactive run 
 A chosen rename plans `ALTER TABLE "<old>" RENAME TO "<new>"` under the new model's key, plus that
 table's column changes diffed against the old live table (#615). The rename executes before every
 column statement (see `_order_statements`), so those changes name the new table; only the plan-time
-catalog lookups ask for the old one. Tables whose foreign key points at the renamed model re-point
-it to the new name — redundant, since the rename carries the constraint along, but correct; the
-re-point's `DROP CONSTRAINT` (or SQLite child rebuild) also makes such a plan destructive.
+catalog lookups ask for the old one.
+
+Tables whose foreign key points at the renamed model plan nothing for it (#678): both engines carry
+the constraint across the rename, so the live references are retargeted to the new name before any
+table is diffed (see `_retarget_references`). That is why every table-rename question is asked
+before any field-rename question. A child that also changes its key — a different `on_delete`, say —
+still re-points, against the new name, after the rename has run.
 """
 function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn, settings::PormGSettings; interactive::Bool = true)
   # The adapter (#522): a `PormGModel` read as a live table — see `live_table` for what it keeps.
@@ -1350,6 +1387,13 @@ end
 
 @pormg_debug false
 
+# #678: the plan is built in three passes — classify the live tables, DECIDE every table rename, then
+# diff. The diff used to run inside this first loop, before any rename was known, so a table whose key
+# pointed at a renamed one compared live `REFERENCES "<old>"` against declared `REFERENCES "<new>"` and
+# re-pointed a constraint the rename carries along anyway — a `DROP CONSTRAINT` (or a SQLite child
+# rebuild) that made a pure rename destructive. Deciding first costs one thing: the table-rename
+# questions are now all asked before any field-rename question. The plan's insertion order is unchanged.
+matched = LiveTable[]
 for table in live
   # The live table's catalog name, symmetric with how `get_all_models` keys `current_schema` by the
   # resolved physical name (#59) — so the two sides of the diff are keyed the same way.
@@ -1357,7 +1401,7 @@ for table in live
   @pormg_debug false
   if haskey(current_schema, model_name)
     current_schema[model_name][:exist] = true
-    _alter_table_fields(conn, migration_plan, model_name, table, current_schema, settings, interactive=interactive)
+    push!(matched, table)
   else
     # Ordered (#615): the rename prompt numbers these candidates, so they enumerate in the live
     # catalog's order rather than in `Dict` hash order. The printed list and the number→table lookup
@@ -1373,7 +1417,11 @@ end
 
 @pormg_debug false
 
-# Check for models in the current schema that are not in the models
+# Check for models in the current schema that are not in the models. This pass only DECIDES (#678):
+# `decisions` holds `model => nothing` for a new table and `model => <old name>` for a rename, in the
+# order the questions were answered, and the plan is emitted from it below — after the diff, exactly
+# where it used to be written.
+decisions = Pair{Symbol, Union{Symbol, Nothing}}[]
 for (model_name, model) in current_schema
   if model[:exist] == false
     if haskey(futher_processing, :drop_table)
@@ -1386,14 +1434,14 @@ for (model_name, model) in current_schema
       end
 
       if response in ["yes", "y"]
-        _add_new_table(conn, migration_plan, model_name, model[:model])
+        push!(decisions, model_name => nothing)
       elseif response in ["no", "n"]
         dict_rename = Dict{Int64, Symbol}()
         for (index, (m_name, m_info)) in enumerate(futher_processing[:drop_table])
           !m_info["exist"] && (dict_rename[index] = m_name )           
         end         
         if isempty(dict_rename)
-          _add_new_table(conn, migration_plan, model_name, model[:model])
+          push!(decisions, model_name => nothing)
         else 
           list_to_question = join([string(index, " - ", dict_rename[index]) for index in sort(collect(keys(dict_rename)))], ", ")
           
@@ -1405,7 +1453,7 @@ for (model_name, model) in current_schema
           end
 
           if response in ["no", "n"]
-            _add_new_table(conn, migration_plan, model_name, model[:model])
+            push!(decisions, model_name => nothing)
           else
             # Only the input parse/lookup is guarded (mirrors the field-rename prompt above) — a
             # genuine planner failure below must propagate as itself, not as "invalid choice" (#197).
@@ -1416,24 +1464,45 @@ for (model_name, model) in current_schema
             catch
               throw(InvalidMigrationError("Invalid choice \"$(response)\" — enter one of the listed option numbers; please try makemigrations again"))
             end
-            # #615: the rename runs FIRST (its own bucket in `_order_statements`, whose docstring
-            # records why), so the table's column work is planned against the NEW name — `model_name`,
-            # which is also the key `current_schema` holds it under — and diffed against the OLD live
-            # table, whose `name` is what `_alter_table_fields` hands every catalog lookup. The old
-            # code passed the old name here, and `current_schema[old]` raised before anything was
-            # planned; the call below also passed `(new::Symbol, old)` to a `(old::String, new::String)`
-            # method. Registered under `model_name`, like the column work it precedes.
-            _alter_table_fields(conn, migration_plan, model_name, futher_processing[:drop_table][old_model_name]["model"], current_schema, settings, interactive=interactive)
-            _configure_order_dict_migration_plan(migration_plan, model_name, "Rename table", Dialect.rename_table(conn, string(old_model_name), string(model_name)))
+            push!(decisions, model_name => old_model_name)
+            # Marked now, not when the plan is emitted: the next model's candidate list must not
+            # offer a table this one has already claimed.
             futher_processing[:drop_table][old_model_name]["exist"] = true
           end
         end         
       end    
     else 
-      _add_new_table(conn, migration_plan, model_name, model[:model])    
+      push!(decisions, model_name => nothing)
     end
   end
  
+end
+
+# #678: every rename is known now, so retarget the live references before anything is diffed. A
+# child whose key points at a renamed table then compares converged — the rename carries its
+# constraint — and one that ALSO changed its key still differs, and re-points against the new name.
+# The rename sources are retargeted too: a table can reference itself, or another renamed table.
+table_renames = Dict{String, String}(string(old) => string(new) for (new, old) in decisions if old !== nothing)
+retarget(t::LiveTable) = _retarget_references(t, table_renames)
+
+for table in matched
+  _alter_table_fields(conn, migration_plan, Symbol(table.name), retarget(table), current_schema, settings, interactive=interactive)
+end
+
+for (model_name, old_model_name) in decisions
+  if old_model_name === nothing
+    _add_new_table(conn, migration_plan, model_name, current_schema[model_name][:model])
+  else
+    # #615: the rename runs FIRST (its own bucket in `_order_statements`, whose docstring
+    # records why), so the table's column work is planned against the NEW name — `model_name`,
+    # which is also the key `current_schema` holds it under — and diffed against the OLD live
+    # table, whose `name` is what `_alter_table_fields` hands every catalog lookup. The old
+    # code passed the old name here, and `current_schema[old]` raised before anything was
+    # planned; the call below also passed `(new::Symbol, old)` to a `(old::String, new::String)`
+    # method. Registered under `model_name`, like the column work it precedes.
+    _alter_table_fields(conn, migration_plan, model_name, retarget(futher_processing[:drop_table][old_model_name]["model"]), current_schema, settings, interactive=interactive)
+    _configure_order_dict_migration_plan(migration_plan, model_name, "Rename table", Dialect.rename_table(conn, string(old_model_name), string(model_name)))
+  end
 end
 
 @pormg_debug false

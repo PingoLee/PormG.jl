@@ -526,12 +526,45 @@ end
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 
 """
+    LiveComposite
+
+One model-level index as the catalog holds it (#161): the live `name`, the key `columns` in index
+order (physical names), whether it is `unique`, and whether a table `constraint` backs it rather
+than a bare `CREATE [UNIQUE] INDEX`.
+
+`constraint` is PostgreSQL `pg_constraint.contype = 'u'` or SQLite `pragma_index_list.origin = 'u'`
+— what Django's `unique_together` and a table-level `UNIQUE (a, b)` produce. It changes how the
+index is dropped (`ALTER TABLE … DROP CONSTRAINT` on PostgreSQL, a table rebuild on SQLite, whose
+`sqlite_autoindex_*` cannot be dropped at all) and whether it survives an SQLite rebuild (it does
+not: `rebuild_table` renders no table-level constraint). It does NOT change identity: a declared
+`UniqueConstraint` is satisfied by either backing, so an adopted Django constraint is never
+duplicated by a second index over the same columns.
+
+What reaches this struct is exactly what PormG can re-emit — a readers' contract, stated on
+[`_pg_composite_indexes`](@ref) and [`_sqlite_composite_indexes`](@ref). A partial, functional,
+non-b-tree, `DESC`, `INCLUDE` or explicitly-collated index is never read, so it is never matched,
+never dropped and never renamed.
+
+The arities partition with the column readers, so no index has two owners: a non-unique index here
+has more than one column (one column is `db_index`), a constraint-backed unique one has more than
+one column (one column is the field's `unique`), and a bare unique index may have one — nothing
+else reads that shape, and it is what a one-field `UniqueConstraint` materializes.
+"""
+struct LiveComposite
+  name::String
+  columns::Vector{String}
+  unique::Bool
+  constraint::Bool
+end
+
+"""
     LiveTable
 
 One table as the introspection readers describe it (#522): its catalog `name`, its `columns` as
 [`ColumnSpec`](@ref)s in physical order, the single-column non-unique `indexes` it carries
-(physical column ⇒ live index name, or `nothing` when only the fact of an index is known), and the
-raw `composite_indexes` (`index name => columns`) that `inspectdb` reproduces as `Models.Index`.
+(physical column ⇒ live index name, or `nothing` when only the fact of an index is known), and its
+model-level `composites` ([`LiveComposite`](@ref)), which `inspectdb` reproduces as `Models.Index` /
+`Models.UniqueConstraint` and the planner diffs against the declared ones (#161).
 
 This is the LIVE side of every migration diff: the readers compile the catalog straight into it and
 `get_migration_plan` diffs the declared `PormGField`s against its specs, so no `PormGField` is ever
@@ -547,7 +580,70 @@ struct LiveTable
   name::String
   columns::OrderedDict{String, ColumnSpec}
   indexes::Dict{String, Union{String, Nothing}}
-  composite_indexes::Vector{Pair{String, Vector{String}}}
+  composites::Vector{LiveComposite}
+end
+
+LiveTable(name::AbstractString, columns::OrderedDict{String, ColumnSpec},
+          indexes::Dict{String, Union{String, Nothing}}) =
+  LiveTable(String(name), columns, indexes, LiveComposite[])
+
+"""
+    DeclaredComposite
+
+One model-level index as the models file declares it, compiled to physical terms (#161) — the
+declared-side twin of [`LiveComposite`](@ref). `name` is the one PormG creates it under: the
+declaration's own `name=` when it has one (`explicit`), else [`composite_index_name`](@ref).
+
+`explicit` is what decides a rename. Identity is `(unique, columns)` and never the name, so a derived
+name accepts whatever the live index is called — a table renamed under #615 keeps its
+`<old>_a_b_uniq`, and that must not read as a different index. Only a name the developer WROTE is a
+fact the planner has to make true.
+"""
+struct DeclaredComposite
+  name::String
+  columns::Vector{String}
+  unique::Bool
+  explicit::Bool
+end
+
+"""
+    composite_index_name(table, columns, unique) -> String
+
+The name PormG derives for a model-level index that declares none: `<table>_<cols>_uniq` for a
+`UniqueConstraint`, `<table>_<cols>_idx` for an `Index` — physical table and column names, joined
+by `_`, case kept. One spelling for the create path and the diff alike.
+"""
+composite_index_name(table::AbstractString, columns::Vector{String}, unique::Bool)::String =
+  "$(table)_$(join(columns, "_"))_$(unique ? "uniq" : "idx")"
+
+"""
+    declared_composites(model::PormGModel) -> Vector{DeclaredComposite}
+
+Every model-level index `model` declares, in physical terms: the synthesized `ManyToManyField` join
+table's unique index first, then each `UniqueConstraint`, then each `Index`, in declaration order.
+
+The join-table index counts as DERIVED (`explicit = false`) although it carries a fixed name. PormG
+chose that name, not the developer, and a join table adopted from Django keeps Django's own
+`…_uniq` constraint — reading PormG's spelling as intent would plan a rename on every such table.
+"""
+function declared_composites(model::PormGModel)::Vector{DeclaredComposite}
+  out = DeclaredComposite[]
+  table = String(model_table_name(model))
+  auto = get(model.cache, "many_to_many_auto", nothing)
+  if auto !== nothing
+    push!(out, DeclaredComposite(String(auto["unique_index"]),
+                                 String[String(auto["owner_column"]), String(auto["related_column"])],
+                                 true, false))
+  end
+  for (cache_key, list_key, unique) in (("unique_constraints", "constraints", true),
+                                        ("composite_indexes", "indexes", false))
+    for decl in get(get(model.cache, cache_key, Dict{String, Any}()), list_key, Any[])
+      cols = String[Models.model_column(model, f) for f in decl.fields]
+      name = decl.name === nothing ? composite_index_name(table, cols, unique) : String(decl.name)
+      push!(out, DeclaredComposite(name, cols, unique, decl.name !== nothing))
+    end
+  end
+  return out
 end
 
 """
@@ -559,10 +655,16 @@ A `PormGModel` read as a description of a LIVE table — the adapter behind
 It is the declared-side compiler applied to a model: every physical column is compiled with
 `_spec_or_degraded` under the `<uncompilable:old>` marker (the #69 fail-safe keeps its asymmetry —
 a live column that cannot be compiled must still compare UNEQUAL to a declared one), `db_index`
-plus `cache["index"]` fill `indexes`, and `cache["composite_indexes"]` fills the rest. Not a second
+plus `cache["index"]` fill `indexes`, and [`declared_composites`](@ref) fills `composites` — as bare
+indexes, since that is what PormG itself creates. Not a second
 representation of the schema: the planner's unit tests and the golden plan corpus hand-build the
 live side as models, and this is what lets them keep doing so while `makemigrations` itself never
 builds one. A `ManyToManyField` is skipped, as it is a join table and not a column.
+
+The composites go through the planner's own compiler on purpose. This adapter used to hand-roll
+them from `cache["composite_indexes"]` alone — field keys where the catalog holds physical columns,
+no `UniqueConstraint`, and `String(ix.name)`, which throws on the `name = nothing` every derived
+declaration carries.
 """
 function live_table(model::PormGModel, conn::Union{PormGPostgres, PormGSQLite})::LiveTable
   columns = OrderedDict{String, ColumnSpec}()
@@ -581,11 +683,8 @@ function live_table(model::PormGModel, conn::Union{PormGPostgres, PormGSQLite}):
       indexes[col] = name === nothing ? nothing : string(name)
     end
   end
-  composite = Pair{String, Vector{String}}[]
-  for ix in get(get(model.cache, "composite_indexes", Dict{String, Any}()), "indexes", Any[])
-    push!(composite, String(ix.name) => String[String(c) for c in ix.fields])
-  end
-  return LiveTable(String(model_table_name(model)), columns, indexes, composite)
+  composites = LiveComposite[LiveComposite(d.name, d.columns, d.unique, false) for d in declared_composites(model)]
+  return LiveTable(String(model_table_name(model)), columns, indexes, composites)
 end
 
 """
@@ -926,6 +1025,6 @@ function model_from_live(table::LiveTable, conn::Union{PormGPostgres, PormGSQLit
   model = Models.Model(table.name, fields)
   named = Dict{String, Any}(col => name for (col, name) in table.indexes if name !== nothing)
   isempty(named) || (model.cache["index"] = named)
-  _attach_composite_indexes!(model, table.composite_indexes)
+  _attach_composite_indexes!(model, table.composites)
   return model
 end

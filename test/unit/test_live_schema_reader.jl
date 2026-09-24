@@ -508,6 +508,109 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# The adapter compiles DECLARED composites the way the planner will (#161)
+# `live_table(model)` is how the planner's tests hand-build a live side, so its composites must be
+# what a table created from `model` reads back as: physical columns (a `db_column` is the column,
+# not the field key), the derived name when the declaration gives none, every `UniqueConstraint`
+# beside every `Index`, and the synthesized join table's own unique index. Before #161 it read
+# `cache["composite_indexes"]` alone, by field key, and threw a MethodError on `name = nothing`.
+# Mutation gate: pass field keys instead of `Models.model_column` and `("race", "yr")` reads
+# `("race", "year")`; drop the `unique_constraints` loop and the first two entries vanish.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "live_table carries the declared composites in physical terms (#161)" begin
+  races = _races522()
+  m = Models.Model("lap";
+    id    = Models.IDField(),
+    race  = Models.ForeignKey(races, pk_field = "id"),
+    year  = Models.IntegerField(db_column = "yr"),
+    lap   = Models.IntegerField(),
+    constraints = [Models.UniqueConstraint(fields = ("race", "lap")),                 # derived name
+                   Models.UniqueConstraint(fields = ("lap",), name = "lap_only_uq")],  # explicit, one field
+    indexes = [Models.Index(fields = ("race", "year"))])                                # derived, db_column
+  t = live_table(m, PG522)
+  @test [(c.name, c.columns, c.unique, c.constraint) for c in t.composites] == [
+    ("lap_race_lap_uniq", ["race", "lap"], true,  false),
+    ("lap_only_uq",       ["lap"],         true,  false),
+    ("lap_race_yr_idx",   ["race", "yr"],  false, false)]
+  # The declared side's compiler agrees, and it records which names were WRITTEN — the only ones a
+  # live name mismatch may rename.
+  @test [(d.name, d.explicit) for d in Migrations.declared_composites(m)] ==
+        [("lap_race_lap_uniq", false), ("lap_only_uq", true), ("lap_race_yr_idx", false)]
+
+  # A synthesized ManyToManyField join table: its unique index is declared, and DERIVED — PormG
+  # chose that name, so a join table adopted from Django under Django's name must not be renamed.
+  through = Models.Model("car_driver"; id = Models.IDField(),
+                         car_id = Models.IntegerField(), driver_id = Models.IntegerField())
+  through.cache["many_to_many_auto"] = Dict{String, Any}(
+    "owner_column" => "car_id", "related_column" => "driver_id",
+    "unique_index" => "car_driver_car_id_driver_id_uniq")
+  @test [(d.name, d.columns, d.unique, d.explicit) for d in Migrations.declared_composites(through)] ==
+        [("car_driver_car_id_driver_id_uniq", ["car_id", "driver_id"], true, false)]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: `_pg_composite_indexes` classifies what the catalog returns (#161)
+# The live query runs only in the integration suite, so the Julia half — which shapes are read, as
+# what, and which are refused WHOLE — is pinned here over synthetic catalog rows, one per (index,
+# key column), exactly as the query returns them. Three unique shapes partition against the column
+# readers: a bare unique index is read at any arity, a constraint-backed one only above arity 1
+# (arity 1 is the field's `unique`), and a non-unique one only above arity 1 (that is `db_index`).
+# The query text is asserted for the two predicates no synthetic row can exercise: the backing
+# constraint must be joined on the index's OWN table and kind — a foreign key also records
+# `conindid`, the PARENT's unique index — and `indnullsnotdistinct` must not be named at all, as
+# it is PostgreSQL 15+ and the stated floor is 11.
+# Mutation gate: drop the `(unique && !constraint)` arm and `ux_g` vanishes; drop the refusal line
+# and all four refused indexes come back.
+# ─────────────────────────────────────────────────────────────────────────────
+struct CompositeMockPg161 <: PormG.PormGPostgres end
+const PG161_ROWS = Ref(DataFrame())
+const PG161_SQL = Ref("")
+fetch(::CompositeMockPg161, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
+  (PG161_SQL[] = sql; PG161_ROWS[])
+
+@testset "PostgreSQL: the composite reader reads three unique shapes and refuses four (#161)" begin
+  rows = NamedTuple[]
+  # One row per key column. Every flag defaults to the value a plain PormG-created index carries.
+  add(idx, cols; unique = false, contype = missing, deferrable = missing, valid = true,
+      include = false, nnd = false, opt = 0, tbl = "lap") =
+    for c in cols
+      push!(rows, (table_name = tbl, index_name = idx, is_unique = unique, contype = contype,
+                   is_deferrable = deferrable, is_valid = valid, has_include = include,
+                   nulls_not_distinct = nnd, column_name = c, opt = opt, idx_coll = 0,
+                   col_coll = 0, opc_default = true))
+    end
+  add("ix_ba",   ["b", "a"])                                            # Index, declared order
+  add("ix_solo", ["s"])                                                 # arity 1: db_index's
+  add("ux_cd",   ["c", "d"]; unique = true)                             # bare CREATE UNIQUE INDEX
+  add("ux_g",    ["g"];      unique = true)                             # one-field UniqueConstraint
+  add("uq_fe",   ["f", "e"]; unique = true, contype = "u", deferrable = false)   # Django's UNIQUE (f, e)
+  add("uq_h",    ["h"];      unique = true, contype = "u", deferrable = false)   # the field's `unique`
+  add("ux_incl", ["c", "d"]; unique = true, include = true)             # INCLUDE payload
+  add("ux_bad",  ["c", "d"]; unique = true, valid = false)              # failed CONCURRENTLY build
+  add("uq_def",  ["c", "d"]; unique = true, contype = "u", deferrable = true)    # DEFERRABLE
+  add("ux_nnd",  ["c", "d"]; unique = true, nnd = true)                 # NULLS NOT DISTINCT
+  add("ix_desc", ["c", "d"]; opt = 3)                                   # (pre-existing) DESC key
+  add("ux_other", ["x", "y"]; unique = true, tbl = "pit")               # keyed by its own table
+  PG161_ROWS[] = DataFrame(rows)
+
+  out = Migrations._pg_composite_indexes(CompositeMockPg161())
+  lap = Dict(lc.name => lc for lc in out["lap"])
+  @test sort(collect(keys(lap))) == ["ix_ba", "uq_fe", "ux_cd", "ux_g"]
+  @test (lap["ix_ba"].columns, lap["ix_ba"].unique, lap["ix_ba"].constraint) == (["b", "a"], false, false)
+  @test (lap["ux_cd"].unique, lap["ux_cd"].constraint) == (true, false)
+  @test (lap["ux_g"].columns, lap["ux_g"].unique) == (["g"], true)
+  @test (lap["uq_fe"].columns, lap["uq_fe"].unique, lap["uq_fe"].constraint) == (["f", "e"], true, true)
+  @test [lc.name for lc in out["pit"]] == ["ux_other"]
+
+  # The query shape no synthetic row can reach (see the header).
+  sql = PG161_SQL[]
+  @test occursin("con.conindid = i.indexrelid AND con.conrelid = i.indrelid", sql)
+  @test occursin("con.contype IN ('u', 'p', 'x')", sql)
+  @test !occursin("indnullsnotdistinct", sql)
+  @test occursin("pg_get_indexdef(i.indexrelid) LIKE '%NULLS NOT DISTINCT%'", sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # `convertSQLToModel(sql)` is the live reader over a scratch file
 # The regex reader it replaced never read `unique` and wrote a non-canonical `to_table`; running the
 # statement in a throwaway SQLite file and reading THAT closes both gaps by construction. The

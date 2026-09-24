@@ -1318,7 +1318,7 @@ function _retarget_references(table::LiveTable, renames::Dict{String, String})::
     return ColumnSpec((f === :reference ? moved : getfield(spec, f) for f in fieldnames(ColumnSpec))...)
   end
   columns = OrderedDict{String, ColumnSpec}(name => retarget(spec) for (name, spec) in table.columns)
-  return LiveTable(table.name, columns, table.indexes, table.composite_indexes)
+  return LiveTable(table.name, columns, table.indexes, table.composites)
 end
 
 # ---

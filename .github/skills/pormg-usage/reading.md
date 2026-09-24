@@ -227,8 +227,11 @@ M.Result.objects.
 - `ToChar` accepts any PostgreSQL format on PostgreSQL. On SQLite only a portable subset works, and
   anything else raises `BackendCapabilityError`.
 - **Portable `Extract` parts** are `"YEAR"`, `"MONTH"`, `"DAY"`, `"HOUR"`, `"MINUTE"`, `"SECOND"`,
-  `"DOW"` and `"DOY"`, in any case. PostgreSQL accepts any `EXTRACT` field, but SQLite raises
-  `BackendCapabilityError` for anything outside those eight. For plain date parts the
+  `"DOW"` and `"DOY"`, in any case. PostgreSQL also runs its other `EXTRACT` fields (`"EPOCH"`,
+  `"WEEK"`, `"ISOYEAR"`, …), and SQLite raises `BackendCapabilityError` for those. A string that is
+  no field at all, PostgreSQL synonyms such as `"years"` or `"hr"` included, raises
+  `InvalidValueError` from `Extract(...)` on both engines. To change the result type, wrap it:
+  `Cast(Extract(col, "EPOCH"), "bigint")`. There is no 3-arg `Extract`. For plain date parts the
   `__@year`-style transforms are simpler still.
 
 Full reference: [Functions and Dates](https://pingolee.github.io/PormG.jl/stable/read/functions_and_dates/).

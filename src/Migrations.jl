@@ -98,7 +98,7 @@ export get_migration_plan
 # public API and put them on the docstring-coverage guard for a surface nobody consumes. Reach
 # them qualified (`PormG.Migrations.get_database_schema(...)`) if you are extending PormG itself:
 #
-#   get_database_schema, get_all_models, get_all_dicts,
+#   get_database_schema, get_all_models,
 #   get_constraints_fk, get_constraints_index, get_sequence_name,
 #   read_live_schema, LiveTable, live_table, model_from_live, field_from_spec  (#522)
 #

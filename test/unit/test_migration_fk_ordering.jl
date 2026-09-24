@@ -12,7 +12,7 @@
 #   3. SQLite runs the whole migration with PRAGMA foreign_keys = OFF (#276), so its inline
 #      REFERENCES clauses constrain nothing while the migration runs.
 #
-# Why the invariant rather than the sort the issue asks for: `get_all_dicts` keeps only the
+# Why the invariant rather than the sort the issue asks for: `_read_migration_plan` keeps only the
 # OrderedDict VALUES when it reads `pending_migrations.jl` back, so the table name is gone before
 # `_order_statements` ever runs — there is nothing to sort on. And #89's own acceptance case is two
 # MUTUALLY-FK'd tables, i.e. a cycle, which no topological sort can order but which property 1

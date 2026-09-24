@@ -89,6 +89,39 @@ keyed by table name. Operation descriptions are stable strings such as `"New mod
 `"Add field: <name>"`, `"Rename field: <name>"`, `"Remove field: <name>"`,
 `"Create index on <name>"`, and `"Drop table"`.
 
+### A plan file is read as data, never executed
+
+The plan is written in Julia syntax, but PormG never runs it. `dry_run()`, `migrate()` and
+`discard_pending_migration()` **parse** `pending_migrations.jl` and accept only the shape shown
+above:
+
+- one `module` holding `import` or `using` lines;
+- `# table:` comments;
+- one `name = OrderedDict{String, String}("label" => """sql""", …)` entry per table (untyped
+  `OrderedDict(…)` is accepted too).
+
+Every label and every SQL must be a plain string literal. Anything else raises an
+`InvalidMigrationError` naming the line, and nothing in the file is evaluated. That includes `$`
+interpolation, a function call, string concatenation, a statement between entries and a name
+bound twice. If you see that error, regenerate the plan with `makemigrations()`.
+
+This matters because a plan carries identifiers from the **live database**: undeclared table and
+index names, foreign-key and composite-constraint names. Before this rule, the file was
+`include`d. An index named `x$(run(…))` then ran as code on your machine at the next `dry_run()`,
+the step meant for inspecting a plan safely. A plain default such as `"R$ 0,00"` also produced a
+file that could not be loaded.
+
+On the writing side, every string is escaped:
+
+- in the SQL, `\` and `$` always, and a `"` only where it could end the literal;
+- labels are written with Julia's `repr`;
+- the table name in each `# table:` comment is escaped, so a newline cannot end the comment.
+
+A plan without those characters is written exactly as before. The on-disk format is still
+version 1, and a plan file an earlier release wrote still loads with the same content. The
+exception is a file containing `$` interpolation: it was either unloadable or ran code, so
+regenerate it.
+
 !!! warning "Applied migrations are immutable"
     Files under `applied_migrations/` are a historical record. Do not hand-edit them — their SQL is
     already reflected in the database and in the checksum recorded in `pormg_migrations`.

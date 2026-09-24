@@ -12,7 +12,7 @@ unit-testable with a temp `db_def_folder` (no live database). This file pins the
   - the `db::String` overload resolves settings from `config`.
 
 The fixture mirrors the module/`OrderedDict` shape that `generate_migration_plan` writes and
-`_load_migration_plan` parses (`get_all_dicts` collects every `OrderedDict` in the module):
+`_load_migration_plan` parses (`_read_migration_plan` reads every `OrderedDict` binding as data):
 two tables carrying 1 + 2 = 3 statements total.
 """
 

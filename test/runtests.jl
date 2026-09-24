@@ -219,6 +219,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Migration Plan: a nullable temporal column is added as NULL, not backfilled (#607)" include("unit/test_temporal_temporary_default.jl")
     @testset "Model_to_str Render Failure (#70/#134)" include("unit/test_model_to_str_render_failure.jl")
     @testset "Migration Format Stability (v1)" include("unit/test_migration_format_v1.jl")
+    @testset "Migration Plan File: escaped on write, parsed not run (#710)" include("unit/test_migration_plan_file.jl")
     @testset "Schema Conventions Freeze (#33)" include("unit/test_schema_conventions.jl")
     @testset "REPL Display — Base.show (#534)" include("unit/test_repl_display.jl")
     @testset "JSON Serialization — PormGRow lower (#641)" include("unit/test_json_serialization.jl")

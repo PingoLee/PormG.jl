@@ -165,4 +165,71 @@ end
         @test any(name -> name in df.constructor, ["Ferrari", "McLaren"])
     end
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Q/Qor on an aggregate alias (#692): HAVING, not WHERE
+    # Before #692 every query here printed `WHERE (COUNT(…) …)` and both engines rejected it at
+    # execution. Each result is compared with a set computed in Julia from raw rows, not with a
+    # second ORM query of the same shape, so a wrong split (a term in the wrong clause, or a value
+    # bound to the wrong marker) shows up as different groups, not only as a driver error.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "Q/Qor on an aggregate alias (#692)" begin
+        # Races per season, counted in Julia from one row per race.
+        races = M.Race.objects.values("year", "raceid") |> DataFrame
+        per_year = Dict{Int,Int}()
+        for y in races.year
+            per_year[y] = get(per_year, y, 0) + 1
+        end
+
+        @testset "Qor across one aggregate alias" begin
+            # "at least 20 races, or fewer than 10": an OR over groups, which top-level keys cannot say.
+            q = M.Race.objects
+            q.values("year", "n" => Count("raceid"))
+            q.filter(Qor("n__@gte" => 20, "n__@lt" => 10))
+            df = q |> DataFrame
+            expected = Set(y for (y, n) in per_year if n >= 20 || n < 10)
+            @test !isempty(expected)
+            @test Set(df.year) == expected
+        end
+
+        @testset "mixed Q splits between WHERE and HAVING" begin
+            # Wins per constructor: `positionorder = 1` filters rows, `wins >= 100` filters groups.
+            q = M.Result.objects
+            q.values("constructorid__name", "wins" => Count("resultid"))
+            q.filter(Q("positionorder" => 1, "wins__@gte" => 100))
+            df = q |> DataFrame
+            winners = (M.Result.objects.filter("positionorder" => 1).
+                values("resultid", "constructorid__name") |> DataFrame).constructorid__name
+            wins = Dict{String,Int}()
+            for c in winners
+                wins[c] = get(wins, c, 0) + 1
+            end
+            expected = Set(c for (c, w) in wins if w >= 100)
+            @test "Ferrari" in expected
+            @test Set(df.constructorid__name) == expected
+        end
+
+        @testset "a grouped column as an aggregate alias in a Qor" begin
+            # The spelling the mixed-Qor refusal recommends: every term filters groups.
+            results = M.Result.objects.values("resultid", "raceid") |> DataFrame
+            per_race = Dict{Int,Int}()
+            for r in results.raceid
+                per_race[r] = get(per_race, r, 0) + 1
+            end
+            q = M.Result.objects
+            q.values("raceid", "n" => Count("resultid"), "race" => Max("raceid"))
+            q.filter(Qor("n__@lt" => 20, "race" => 1))
+            df = q |> DataFrame
+            expected = Set(r for (r, n) in per_race if n < 20 || r == 1)
+            @test 1 in expected
+            @test Set(df.raceid) == expected
+        end
+
+        @testset "a mixed Qor is refused before it reaches the driver" begin
+            q = M.Result.objects
+            q.values("raceid", "n" => Count("resultid"))
+            q.filter(Qor("n__@lt" => 20, "raceid" => 1))
+            @test_throws PormG.QueryBuildError (q |> DataFrame)
+        end
+    end
+
 end

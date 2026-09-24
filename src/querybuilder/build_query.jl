@@ -629,6 +629,56 @@ _alias_column_field(column::Union{CTEReference,JoinedReference}, instruc::SQLIns
   memo_field(instruc, memo_key(column))
 _alias_column_field(::Any, ::SQLInstruction) = nothing
 
+# One projection-alias predicate, rendered for HAVING: the guards, then the left-hand side, the bound
+# value and the operator ladder. #692 lifted it out of the top-level alias branch in
+# `get_filter_query` so that an aggregate alias inside `Q(...)`/`Qor(...)` renders through the same
+# code (`_get_having_query`) rather than a second copy of it.
+#
+# The caller must have switched to `:having` — `_having_alias_lhs` and `_bind_predicate_value` both
+# bind — and must restore the context in a `finally`.
+function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cached,
+                                 instruc::SQLInstruction)::String
+  # #685: a window alias reaches this branch exactly as an aggregate one does, and HAVING is
+  # no home for it either — see `_guard_window_alias_predicate`. First of the guards, so it
+  # refuses before anything below resolves, renders or binds.
+  _guard_window_alias_predicate(_projected_source(having_key, instruc), having_key[2])
+  # The guards run BEFORE the left-hand side is resolved. None depends on anything the render
+  # produces, and `_having_alias_lhs` can bind (#595) — so refusing afterwards would file a binding
+  # projection's operands into `:having` and then throw them away. Waste rather than a defect, since
+  # the instruction is discarded with the throw, but the ordering is free.
+  #
+  # #596: an alias is a bare path too, so `values("c" => Count("id")); filter("c" => bytes)`
+  # reaches here. There is no `PormGField` to hand the guard — the alias's type comes from
+  # `_having_alias_formatter` — so decide on that formatter: `format_binary_sql` is what a
+  # projection over a `BinaryField` resolves to, and only that one may carry a payload.
+  # (`ImageField`/`FileField` share `type == "BLOB"` but carry `format_text_sql`, so the
+  # formatter test is as tight as the WHERE side's `_is_binary_field` struct test.)
+  _guard_alias_scalar_bytes(v, _having_alias_formatter(having_key, instruc), having_key[2])
+  # #618: refuse, in this clause, the operators `_render_predicate` has no arm for — since #654
+  # only the JSON four. Naming the user's own spelling matters here: the internal token is
+  # `jcontains`, but nobody types that — they type `@jcontains`.
+  _guard_alias_clause_operator(v, having_key[2])
+  # #654: `@isnull` on a COUNT alias refuses here, ahead of any render, for the reason above.
+  isnull_aggregate = v.operator == "ISNULL" && _alias_isnull_aggregate(having_key, instruc)
+  field = _having_alias_lhs(having_key, having_cached, instruc)
+  # #618: `contains=` / `operator=` are what run `_apply_like_wildcards` (and with it
+  # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias
+  # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the
+  # term matched as a wildcard. `_bind_predicate_value` applies that gate — membership in
+  # `LIKE_WILDCARD_OPERATORS`, exactly as the WHERE binding arms in `build_helpers.jl` spell
+  # it; the `*_exact` pattern lookups compare with `=` and must NOT be decorated, which is why
+  # that tuple and `PATTERN_LOOKUP_OPERATORS` are deliberately different sets
+  # (`constants.jl`). #654: it also binds a range's two operands, and nothing for `@isnull`.
+  placeholder = _bind_predicate_value(instruc, v.operator,
+                  _resolve_having_filter_value(having_key, v.values, instruc, v.operator))
+  # #618: one ladder, shared with the WHERE path — see `_render_predicate`. It absorbs the #411
+  # `IN`/`NOT IN` membership case this branch used to special-case, adds the
+  # `PATTERN_LOOKUP_OPERATORS` → `Dialect` dispatch it never had, and brings the
+  # unknown-operator refusal that was missing here entirely.
+  return _render_predicate(string(field), v.operator, placeholder, instruc;
+                           aggregate = isnull_aggregate)
+end
+
 """
   get_filter_query(object::SQLObject, instruc::SQLInstruction)
 
@@ -673,58 +723,20 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
           # exactly that spelling, and never the internal namespace half.
           throw(_unknown_field(instruc.object.model, v.column.field;
                                aliases = memo_projection_names(instruc)))
-        # #685: a window alias reaches this branch exactly as an aggregate one does, and HAVING is
-        # no home for it either — see `_guard_window_alias_predicate`. First of the guards, so it
-        # refuses before anything below resolves, renders or binds.
-        _guard_window_alias_predicate(_projected_source(having_key, instruc), having_key[2])
         # Switch to having context for positional parameters. #595 moved this ABOVE the left-hand
         # side: resolving it can now RENDER, and a render binds — those values belong in `:having`
         # with the comparison value, ahead of it, exactly as they print.
-        # The restore is in a `finally` because this block can throw from four places now, and three
-        # of them are new: the fresh render in `_having_alias_lhs` (#595), `_render_predicate`'s
+        # The restore is in a `finally` because the render can throw from several places — the
+        # guards, the fresh render in `_having_alias_lhs` (#595), `_render_predicate`'s
         # unknown-operator `FilterError` and the SQLite-refusing `Dialect` arms'
-        # `BackendCapabilityError` (#618), plus the two #596 guards. Leaving `:having` active would
-        # file a later clause's values in the wrong bucket. Harmless today — every such throw escapes
-        # `build()` and the instruction is discarded — but it matches what
-        # `_get_select_query(::ExistsObject)` already does for `correlated_projection`, and it stops
-        # the next caller who catches one of these from inheriting a wrong context.
-        # Both guards run BEFORE the left-hand side is resolved. Neither depends on anything the
-        # render produces, and `_having_alias_lhs` can now bind (#595) — so refusing afterwards would
-        # file a binding projection's operands into `:having` and then throw them away. Waste rather
-        # than a defect, since the instruction is discarded with the throw, but the ordering is free.
-        #
-        # #596: an alias is a bare path too, so `values("c" => Count("id")); filter("c" => bytes)`
-        # reaches here. There is no `PormGField` to hand the guard — the alias's type comes from
-        # `_having_alias_formatter` — so decide on that formatter: `format_binary_sql` is what a
-        # projection over a `BinaryField` resolves to, and only that one may carry a payload.
-        # (`ImageField`/`FileField` share `type == "BLOB"` but carry `format_text_sql`, so the
-        # formatter test is as tight as the WHERE side's `_is_binary_field` struct test.)
-        _guard_alias_scalar_bytes(v, _having_alias_formatter(having_key, instruc), having_key[2])
-        # #618: refuse, in this clause, the operators `_render_predicate` has no arm for — since #654
-        # only the JSON four. Naming the user's own spelling matters here: the internal token is
-        # `jcontains`, but nobody types that — they type `@jcontains`.
-        _guard_alias_clause_operator(v, having_key[2])
-        # #654: `@isnull` on a COUNT alias refuses here, ahead of any render, for the reason above.
-        isnull_aggregate = v.operator == "ISNULL" && _alias_isnull_aggregate(having_key, instruc)
+        # `BackendCapabilityError` (#618). Leaving `:having` active would file a later clause's
+        # values in the wrong bucket. Harmless today — every such throw escapes `build()` and the
+        # instruction is discarded — but it matches what `_get_select_query(::ExistsObject)` already
+        # does for `correlated_projection`, and it stops the next caller who catches one of these
+        # from inheriting a wrong context.
         set_context!(instruc, :having)
         try
-          field = _having_alias_lhs(having_key, having_cached, instruc)
-          # #618: `contains=` / `operator=` are what run `_apply_like_wildcards` (and with it
-          # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias
-          # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the
-          # term matched as a wildcard. `_bind_predicate_value` applies that gate — membership in
-          # `LIKE_WILDCARD_OPERATORS`, exactly as the WHERE binding arms in `build_helpers.jl` spell
-          # it; the `*_exact` pattern lookups compare with `=` and must NOT be decorated, which is why
-          # that tuple and `PATTERN_LOOKUP_OPERATORS` are deliberately different sets
-          # (`constants.jl`). #654: it also binds a range's two operands, and nothing for `@isnull`.
-          placeholder = _bind_predicate_value(instruc, v.operator,
-                          _resolve_having_filter_value(having_key, v.values, instruc, v.operator))
-          # #618: one ladder, shared with the WHERE path — see `_render_predicate`. It absorbs the #411
-          # `IN`/`NOT IN` membership case this branch used to special-case, adds the
-          # `PATTERN_LOOKUP_OPERATORS` → `Dialect` dispatch it never had, and brings the
-          # unknown-operator refusal that was missing here entirely.
-          push!(instruc.having, _render_predicate(string(field), v.operator, placeholder, instruc;
-                                                  aggregate = isnull_aggregate))
+          push!(instruc.having, _render_alias_predicate(v, having_key, having_cached, instruc))
         finally
           set_context!(instruc, :where)
         end
@@ -733,7 +745,19 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
       push!(instruc._where, _get_filter_query(v, instruc))
     elseif isa(v, Union{SQLTypeQor,SQLTypeQ,SQLTypeF})
       _guard_window_alias_in_q(v, instruc)   # #685
-      push!(instruc._where, _get_filter_query(v, instruc))
+      # #692: an aggregate alias inside `Q`/`Qor` belongs in HAVING, as it does unwrapped. The split
+      # hands back the original object on whichever side takes all of it, so a filter with no
+      # aggregate-alias term renders exactly as it did before.
+      where_part, having_part = _split_having(v, instruc)
+      where_part === nothing || push!(instruc._where, _get_filter_query(where_part, instruc))
+      if having_part !== nothing
+        set_context!(instruc, :having)
+        try
+          push!(instruc.having, _get_having_query(having_part, instruc))
+        finally
+          set_context!(instruc, :where)
+        end
+      end
     else
       throw(FilterError("Invalid filter entry: $(v) (::$(typeof(v))) is not a Q, Qor, or operator expression."))
     end
@@ -840,6 +864,90 @@ function _guard_window_alias_in_q(filter, instruc::SQLInstruction, depth::Int = 
   end
   return nothing
 end
+
+# #692 — `values("c" => Count("id")); filter(Q("c" => 1))` printed `WHERE (COUNT(…) = ?)`, which both
+# engines reject at execution. Only a TOP-LEVEL alias key took the HAVING branch in
+# `get_filter_query`; inside a `Q` the key resolved through `_get_filter_query(::SQLTypeField)`, which
+# reuses the projection's memoized text — #685's window defect, with an aggregate in it.
+#
+# `(key, cached)` when `v` compares an alias whose projection is an aggregate, `nothing` otherwise.
+# The alias test is `_guard_window_alias_in_q`'s. Only an AGGREGATE alias is routed: a plain alias
+# (`values("yr" => "date__@year"); filter(Q("yr" => 2020))`) renders correctly in WHERE today, and
+# must stay there. `_is_agg` reads the node's own flag, which arithmetic (`Count(…) + 1`) and the
+# numeric wrappers (`Round`, `Abs`, `Floor`, … over an aggregate) propagate. `Coalesce`/`Cast`/`NullIf`
+# over an aggregate do not set it, so such an alias is not routed here — nor grouped anywhere else,
+# which is the older defect to fix; this gate reads the flag rather than second-guessing it.
+function _aggregate_alias_leaf(v::SQLTypeOper, instruc::SQLInstruction)
+  col = v.column
+  (col isa SQLTypeField && col.field isa String && !contains(col.field, "__") &&
+   !(col.field in instruc.object.model.field_names)) || return nothing
+  key = memo_key(col)
+  cached = memo_projection(instruc, key)
+  cached === nothing && return nothing
+  source = _projected_source(key, instruc)
+  (source !== nothing && _is_agg(source.field)) || return nothing
+  return (key, cached)
+end
+
+# Split one `Q`/`Qor`/`F` filter into `(where_part, having_part)`, either of which may be `nothing`.
+#
+# - A leaf goes to HAVING when it is an aggregate-alias comparison, and to WHERE otherwise. An
+#   `ExistsObject` or an `F` expression is a WHERE leaf.
+# - A `Q` is an AND, so it splits the way the top-level `filter("c" => 1, "raceid" => 5)` always has:
+#   the row terms filter rows before grouping, the aggregate terms filter groups. Django's
+#   `WhereNode.split_having_qualify` splits an AND node the same way.
+# - A `Qor` cannot be split — `a OR b` is not `WHERE a` plus `HAVING b` — so a mixed one is refused.
+#   Django moves the whole OR to HAVING instead, which only works when every row term names a
+#   grouped column and fails at the driver when one does not. The refusal names the explicit way to
+#   put a grouped column in the same OR.
+#
+# A node that goes wholly to one side is returned as it was, not rebuilt, so its render is
+# byte-identical to the one before #692. Depth cap as in `_guard_no_aggregate_predicate`; past it
+# a node stays in WHERE, which is where every node went before.
+function _split_having(filter, instruc::SQLInstruction, depth::Int = 0)
+  depth > 32 && return (filter, nothing)
+  if filter isa SQLTypeOper
+    return _aggregate_alias_leaf(filter, instruc) === nothing ? (filter, nothing) : (nothing, filter)
+  elseif filter isa Union{SQLTypeQ,SQLTypeQor}
+    parts = [_split_having(f, instruc, depth + 1) for f in (filter isa SQLTypeQ ? filter.filters : filter.or)]
+    all(p -> p[2] === nothing, parts) && return (filter, nothing)
+    all(p -> p[1] === nothing, parts) && return (nothing, filter)
+    if filter isa SQLTypeQor
+      label = _having_leaf_label(first(p[2] for p in parts if p[2] !== nothing))
+      throw(QueryBuildError(
+        "\e[4m\e[31mQor(…)\e[0m mixes the aggregate alias \e[31m\"$(label)\"\e[0m with a condition on " *
+        "rows. An aggregate alias filters groups (HAVING) and a column filters rows (WHERE), and an " *
+        "OR cannot be split between the two clauses. To test a grouped column in the same OR, " *
+        "project it as an aggregate alias as well, so every term filters groups — " *
+        "\e[4m\e[32mvalues(\"raceid\", \"n\" => Count(\"resultid\"), \"race\" => Max(\"raceid\")); " *
+        "filter(Qor(\"n\" => 20, \"race\" => 1))\e[0m (#692)."))
+    end
+    return (_and_of(FilterType[p[1] for p in parts if p[1] !== nothing]),
+            _and_of(FilterType[p[2] for p in parts if p[2] !== nothing]))
+  end
+  return (filter, nothing)
+end
+
+# One side of a split `Q`. A single term is returned bare, so `Q("c" => 1, "raceid" => 5)` renders
+# `HAVING COUNT(…) = ?` — the text the unwrapped `filter("c" => 1)` prints — not `HAVING (COUNT(…) = ?)`.
+_and_of(terms::Vector{FilterType}) = length(terms) == 1 ? only(terms) : QObject(filters = terms)
+
+# The alias the first HAVING leaf of a split part compares — for the mixed-`Qor` message.
+_having_leaf_label(v::SQLTypeOper) = v.column.field
+_having_leaf_label(q::SQLTypeQ) = _having_leaf_label(first(q.filters))
+_having_leaf_label(q::SQLTypeQor) = _having_leaf_label(first(q.or))
+
+# Render the HAVING half of a split. Every leaf in it passed `_aggregate_alias_leaf`, so it renders
+# through the top-level alias branch's own code, `_render_alias_predicate`. The parentheses match
+# `_get_filter_query(::SQLTypeQ/::SQLTypeQor)`. The caller holds the `:having` context.
+function _get_having_query(v::SQLTypeOper, instruc::SQLInstruction)::String
+  having_key, having_cached = _aggregate_alias_leaf(v, instruc)
+  return _render_alias_predicate(v, having_key, having_cached, instruc)
+end
+_get_having_query(q::SQLTypeQ, instruc::SQLInstruction)::String =
+  "(" * join([_get_having_query(v, instruc) for v in q.filters], " AND ") * ")"
+_get_having_query(q::SQLTypeQor, instruc::SQLInstruction)::String =
+  "(" * join([_get_having_query(v, instruc) for v in q.or], " OR ") * ")"
 
 # One resolved cjoin ON condition: the rendered SQL fragment and the positional parameter values it
 # bound. The two MUST travel together (#421). Phase 1b below can move a fragment onto a different

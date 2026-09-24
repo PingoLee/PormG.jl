@@ -497,6 +497,16 @@ const DOCERR_CASES = [
         () -> DOCERR_RACE_PG.objects.values("n" => Count("raceid")).
             filter("n__@has_key" => "a").list(show_query = :dict),
     ),
+    # #692 — *`Q` and `Qor` on Aggregate Aliases* says a `Qor` mixing an aggregate alias with a column
+    # condition raises when the query is built: an OR cannot be split between WHERE and HAVING. The
+    # rendering half (a `Q`/`Qor` of aggregate aliases goes to HAVING) is pinned in
+    # `test/unit/test_q_aggregate_alias.jl`.
+    (
+        "read/filters_and_aggregates.md — a Qor mixing an aggregate alias with a column is refused",
+        QueryBuildError,
+        () -> DOCERR_RACE_PG.objects.values("name", "n" => Count("raceid")).
+            filter(Qor("n__@lt" => 20, "name" => "Monaco Grand Prix")).list(show_query = :dict),
+    ),
     # Intentional PG/SQLite divergence: these pages tell the reader the lookup is PostgreSQL-only
     # and raises on SQLite. Asserting it on the SQLite mock keeps the documented divergence honest.
     (

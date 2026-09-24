@@ -1781,7 +1781,7 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
     # `DateField` the rewrite DROPS the transform entirely, so a stale marker here does not render
     # wrong SQL — it silently stops rewriting, the #376 failure mode.
     :date
-  elseif fobj.function_name == "EXTRACT" && get(fobj.kwargs, "part", nothing) == "YEAR" && !haskey(fobj.kwargs, "format")
+  elseif fobj.function_name == "EXTRACT" && get(fobj.kwargs, "part", nothing) == "YEAR"
     :year
   else
     return nothing

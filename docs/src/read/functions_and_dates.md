@@ -373,6 +373,24 @@ The part is case-insensitive (`"year"` and `"YEAR"` are the same). `YEAR`, `MONT
 `MINUTE`, `SECOND`, `DOW` and `DOY` run on both engines; any other PostgreSQL `EXTRACT` field raises
 `BackendCapabilityError` on SQLite — see [PostgreSQL](../postgres.md).
 
+A part that is not an `EXTRACT` field at all raises `InvalidValueError` when the expression is
+built, on both engines. The field is a keyword in the SQL and cannot be a bind parameter, so PormG
+only ever writes a spelling from its own list, never the text it was given. The accepted fields are
+`CENTURY`, `DAY`, `DECADE`, `DOW`, `DOY`, `EPOCH`, `HOUR`, `ISODOW`, `ISOYEAR`, `JULIAN`,
+`MICROSECONDS`, `MILLENNIUM`, `MILLISECONDS`, `MINUTE`, `MONTH`, `QUARTER`, `SECOND`, `TIMEZONE`,
+`TIMEZONE_HOUR`, `TIMEZONE_MINUTE`, `WEEK` and `YEAR`. PostgreSQL's plural and abbreviated
+synonyms (`years`, `mon`, `hr`, …) are not accepted — spell the field.
+
+To change the result type, wrap the extract in `Cast`. `EPOCH` is fractional, so PormG leaves it
+uncast by default:
+
+```julia
+using PormG.Functions: Cast, Extract
+
+# PostgreSQL: seconds since 1970 for each race date, as a bigint
+M.Race.objects.values("raceid", "start_epoch" => Cast(Extract("date", "epoch"), "bigint"))
+```
+
 ### `ToChar` — Format as String
 
 ```julia

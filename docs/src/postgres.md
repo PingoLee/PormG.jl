@@ -104,8 +104,10 @@ returns a different answer, so a test suite running on SQLite fails where produc
   as written.
 - **`Extract` parts beyond the portable eight.** SQLite supports `YEAR`, `MONTH`, `DAY`, `HOUR`,
   `MINUTE`, `SECOND`, `DOW` and `DOY`, in any case (`"year"` works as well as `"YEAR"`).
-  PostgreSQL accepts any `EXTRACT` field (`epoch`, `week`, `isoyear`, …). Code that uses
-  those eight runs on both.
+  PostgreSQL also accepts the rest of its `EXTRACT` fields (`epoch`, `week`, `isoyear`, `century`,
+  …). Code that uses those eight runs on both. A string outside that list — including
+  PostgreSQL's synonyms such as `years` or `hr` — raises `InvalidValueError` on both engines; see
+  [Functions and Dates → Extract](read/functions_and_dates.md#Extract-—-Extract-Date/Time-Part).
 - **Explicit window frames** — `WindowOver(...; frame = "ROWS BETWEEN …")`. See
   [Window Functions](read/window_functions.md).
 
@@ -136,7 +138,7 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **JSONB lookups** (`@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys`) | JSONB operators | `BackendCapabilityError` — `__` key paths still work |
 | **Accent-insensitive lookups** (`@iunaccent_*`, `@niunaccent_*`) | `unaccent` extension | `BackendCapabilityError` |
 | **`ToChar` formats** | any `to_char` template | the portable table only; others raise `BackendCapabilityError` |
-| **`Extract` parts** | any field, any case | `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY`, any case; others raise `BackendCapabilityError` |
+| **`Extract` parts** | every PostgreSQL `EXTRACT` field, any case; a non-field raises `InvalidValueError` | `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY`, any case; other PostgreSQL fields raise `BackendCapabilityError`, a non-field `InvalidValueError` |
 | **Row locks** (`select_for_update()`) | `SELECT … FOR UPDATE` | silent no-op — a SQLite write already locks the whole database |
 | **`without_foreign_keys`** | `SET CONSTRAINTS ALL DEFERRED`; may nest inside `atomic`; an orphan fails `COMMIT` with `IntegrityError` | `PRAGMA foreign_keys = OFF` plus a `foreign_key_check` before `COMMIT` (`UnsafeMutationError`); must be the outermost transaction (`TransactionError` otherwise) |
 | **Engine-pinned `db_default`** | `db_default = (postgres = "now()",)` renders | rendering it raises `BackendCapabilityError` — add `sqlite = "…"`, or `sqlite = nothing` for no default |

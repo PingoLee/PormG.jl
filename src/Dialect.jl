@@ -451,15 +451,44 @@ end
 function CONCAT(column::Array{Any,1}, format::Dict{String,Any}, conn::PormGSQLite)
   return "($(join(column, " ||\n")))"
 end
+# #691 — the `EXTRACT` field list, PostgreSQL's (the superset: SQLite's eight are all in it).
+# `EXTRACT(<field> FROM x)` takes a keyword, not a value, so it cannot be a bind parameter — the
+# only safe way to let a caller choose it is to render a spelling from THIS table, never theirs.
+# Until #691 the PostgreSQL arm wrote the caller's string verbatim, so `Extract(col, user_input)`
+# was an injection surface on one engine while SQLite's arm was already fail-closed.
+const PG_EXTRACT_FIELDS = (
+  "CENTURY", "DAY", "DECADE", "DOW", "DOY", "EPOCH", "HOUR", "ISODOW", "ISOYEAR", "JULIAN",
+  "MICROSECONDS", "MILLENNIUM", "MILLISECONDS", "MINUTE", "MONTH", "QUARTER", "SECOND",
+  "TIMEZONE", "TIMEZONE_HOUR", "TIMEZONE_MINUTE", "WEEK", "YEAR",
+)
+
+"""
+    extract_part(part) -> String
+
+The canonical (upper-case) spelling of an `EXTRACT` field, or `InvalidValueError` when `part` is
+not one of `PG_EXTRACT_FIELDS` (#691).
+
+Case-blind like PostgreSQL (#684), but the fold is ASCII-only: Julia's `uppercase("ſecond")` is
+`"SECOND"`, and PostgreSQL rejects that spelling. Both engine arms and the `Extract` constructor
+call this, so an unknown part is refused identically everywhere — only a real field that SQLite
+cannot spell reaches its `BackendCapabilityError`.
+"""
+function extract_part(part::AbstractString)
+  up = isascii(part) ? uppercase(part) : String(part)
+  up in PG_EXTRACT_FIELDS && return up
+  throw(InvalidValueError("Extract: $(repr(part)) is not a date/time field. Valid fields (any case, no plural or " *
+                          "abbreviated synonyms such as \"years\" or \"hr\"): " *
+                          join(PG_EXTRACT_FIELDS, ", ")))
+end
+
 # #571 — parts PostgreSQL defines as fractional stay bare: a cast would be lossy, and SQLite's
 # fail-closed whitelist below has no twin for any of them, so there is no parity to keep.
 const _PG_EXTRACT_FRACTIONAL = ("EPOCH", "JULIAN", "MILLISECONDS", "MICROSECONDS")
 function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  part = format["part"]
-  bare = "EXTRACT($(part) FROM $(column))"
-  # The 3-arg `Extract(x, part, format)` suffix is the caller's own cast: it replaces the default.
-  haskey(format, "format") && return bare * format["format"]
-  up = uppercase(part)
+  # #691 — the rendered field is the table's spelling, so no caller text reaches the SQL. The
+  # 3-arg `Extract(x, part, format)` raw cast suffix is gone too: `Cast(Extract(x, part), type)`.
+  up = extract_part(format["part"])
+  bare = "EXTRACT($(up) FROM $(column))"
   up in _PG_EXTRACT_FRACTIONAL && return bare
   # `numeric::integer` ROUNDS (45.6 → 46) where SQLite's `%S` truncates; `trunc` keeps parity.
   up == "SECOND" && return "trunc($(bare))::integer"
@@ -468,9 +497,10 @@ function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGPostgres)
 end
 function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   part = format["part"]
-  # #684 — PostgreSQL's EXTRACT takes the field in any case, so match case-blind here too. ASCII
-  # only: `uppercase` folds `ſ`/`ı` to `S`/`I`, which would admit spellings PostgreSQL rejects.
-  up = isascii(part) ? uppercase(part) : part
+  # #684 — case-blind like PostgreSQL, ASCII-only fold; #691 — through the shared table, so a part
+  # that is no field at all raises `InvalidValueError` here exactly as on PostgreSQL, and only a
+  # real field SQLite cannot spell reaches the capability error below.
+  up = extract_part(part)
   strftime_format = if up == "YEAR"
     "%Y"
   elseif up == "MONTH"

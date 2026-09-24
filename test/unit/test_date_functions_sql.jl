@@ -22,7 +22,7 @@ using Test
 using PormG
 import PormG.Dialect
 using PormG.QueryBuilder: inspect_query
-using PormG.Functions: Extract
+using PormG.Functions: Extract, Cast
 
 # Mock connections — only their type matters (dispatch selects the PG vs SQLite body).
 struct _PgDateFnConn <: PormG.PormGPostgres end
@@ -87,11 +87,9 @@ end
       @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => part), _PG) == "EXTRACT($part FROM $(_COL))"
     end
     @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "WEEK"), _PG) == "EXTRACT(WEEK FROM $(_COL))::integer"
-    # Lower-case is what the docs spell (`Extract("date", "year")`); the cast rule is case-blind.
-    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "year"), _PG) == "EXTRACT(year FROM $(_COL))::integer"
-    # The 3-arg `Extract(x, part, format)` suffix is the caller's own cast and REPLACES the default.
-    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "EPOCH", "format" => "::bigint"), _PG) ==
-          "EXTRACT(EPOCH FROM $(_COL))::bigint"
+    # Lower-case is what the docs spell (`Extract("date", "year")`); the cast rule is case-blind,
+    # and since #691 the rendered field is the table's canonical spelling, not the caller's.
+    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "year"), _PG) == "EXTRACT(YEAR FROM $(_COL))::integer"
   end
 
   # #684: PostgreSQL takes the part in any case, so SQLite must too — otherwise the docs' own
@@ -105,15 +103,57 @@ end
     @test err isa PormG.BackendCapabilityError
     @test occursin("week", PormG.error_message(err))   # the caller's own spelling, not ours
     # The fold is ASCII-only: Julia's `uppercase("ſecond") == "SECOND"`, and PostgreSQL rejects it.
-    @test_throws PormG.BackendCapabilityError Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "ſecond"), _SL)
+    # Since #691 that is `InvalidValueError` — it is no field at all, not a SQLite capability gap.
+    @test_throws PormG.InvalidValueError Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "ſecond"), _SL)
 
     q = DateFnModels.Datefn_race.objects
     q.values("y" => Extract("date", "year"), "w" => Extract("date", "dow"))
     slsql = inspect_query(q; connection = _SL)[:sql_text]
     @test occursin("CAST(strftime('%Y', ", slsql)
     @test occursin("CAST(strftime('%w', ", slsql)
-    # PostgreSQL renders the part as written — unchanged by #684.
-    @test occursin("EXTRACT(year FROM ", inspect_query(q; connection = _PG)[:sql_text])
+    # PostgreSQL renders the canonical spelling (#691) — the caller's `year` never reaches the SQL.
+    @test occursin("EXTRACT(YEAR FROM ", inspect_query(q; connection = _PG)[:sql_text])
+  end
+
+  # #691: `EXTRACT(<field> FROM x)` takes a keyword, which cannot be bound, and the PostgreSQL arm
+  # used to write the caller's string verbatim — `Extract(col, user_input)` was an injection
+  # surface on one engine only. The field now comes from `PG_EXTRACT_FIELDS`, and anything outside
+  # it is refused before any SQL exists, identically on both engines.
+  @testset "EXTRACT part is whitelisted on PostgreSQL too (#691)" begin
+    @test length(Dialect.PG_EXTRACT_FIELDS) == 22
+    for field in Dialect.PG_EXTRACT_FIELDS, spelling in (field, lowercase(field))
+      @test occursin("EXTRACT($(field) FROM $(_COL))",
+                     Dialect.EXTRACT(_COL, Dict{String, Any}("part" => spelling), _PG))
+      @test Extract("date", spelling) isa PormG.SQLTypeFunction
+    end
+
+    # PostgreSQL's own synonyms (`years`, `hr`) are refused too: the docs name the canonical list.
+    hostile = ["year FROM now()) --", "week; DROP TABLE race", "", "fortnight", "ſecond", "years", "hr"]
+    for part in hostile
+      fmt = Dict{String, Any}("part" => part)
+      @test_throws PormG.InvalidValueError Dialect.EXTRACT(_COL, fmt, _PG)
+      # Junk is not a capability gap: SQLite gives the same type, not `BackendCapabilityError`.
+      @test_throws PormG.InvalidValueError Dialect.EXTRACT(_COL, fmt, _SL)
+      @test_throws PormG.InvalidValueError Extract("date", part)
+    end
+    err = try Extract("date", "week; DROP TABLE race"); nothing catch e; e end
+    @test occursin("week; DROP TABLE race", PormG.error_message(err))   # the caller's own spelling
+    @test occursin("ISOYEAR", PormG.error_message(err))                 # and the fields to pick from
+    # The part may be request input: it is echoed escaped, so a terminal sequence or a newline in it
+    # cannot reach a TTY or split a log line.
+    err = try Extract("date", "a\e[31mb\nc"); nothing catch e; e end
+    @test err isa PormG.InvalidValueError
+    @test !occursin('\e', PormG.error_message(err)) && !occursin('\n', PormG.error_message(err))
+
+    # A real field SQLite cannot spell keeps the capability error.
+    @test_throws PormG.BackendCapabilityError Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "isoyear"), _SL)
+
+    # The 3-arg raw cast suffix is retired; `Cast` is the one way to retype the result.
+    @test_throws MethodError Extract("date", "epoch", "::bigint")
+    q = DateFnModels.Datefn_race.objects
+    q.values("e" => Cast(Extract("date", "epoch"), "bigint"))
+    @test occursin("(EXTRACT(EPOCH FROM ", inspect_query(q; connection = _PG)[:sql_text])
+    @test occursin("))::bigint", inspect_query(q; connection = _PG)[:sql_text])
   end
 
   # ===========================================================================

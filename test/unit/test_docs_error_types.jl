@@ -556,6 +556,14 @@ const DOCERR_CASES = [
         () -> DOCERR_RESULT_SL.objects.values("x" => Extract("resultid", "EPOCH")).
             list(show_query = :dict),
     ),
+    # #691: a string that is no `EXTRACT` field is refused when the expression is built, before any
+    # engine is consulted — so the PostgreSQL half of the claim is the one that used to be false.
+    (
+        "postgres.md + read/functions_and_dates.md — an `Extract` part that is no field raises on both engines",
+        InvalidValueError,
+        () -> DOCERR_RESULT_PG.objects.values("x" => Extract("resultid", "fortnight")).
+            list(show_query = :dict),
+    ),
     # The SQLite `without_foreign_keys` refuses to nest before touching the database, so a mock pool
     # bound as the ambient transaction connection is enough to reach the guard.
     (

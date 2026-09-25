@@ -29,7 +29,9 @@ isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 import PormG: Configuration, Migrations
 import OrderedCollections: OrderedDict
 import PormG.ConnectionPool: fetch, close_pool!, SQLiteConnectionPool
-import PormG.Migrations: _split_sqlite_statements, _sqlite_unmodellable_table_clauses
+import PormG.Migrations: _split_sqlite_statements, _sqlite_unmodellable_table_clauses,
+                         _sqlite_identifier_tokens, _sqlite_terminated, _sqlite_recreated_ddl,
+                         _SQLiteSchemaObject, _SQLiteRecreateContext
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Harness for the end-to-end testsets
@@ -237,6 +239,38 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Lexing the rare shapes a stored definition can carry
+# Three found in re-review, each silent before: a block comment left open at the end (SQLite stores
+# one as written, and a `;` after it is comment — so is everything after that), and a name holding a
+# character from U+0080 up, which SQLite reads as ONE identifier (`pts·total`) and the tokenizer split
+# in two, so the stale-object check looked for `total` and missed the real column.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "open block comments and non-ASCII names (#729)" begin
+    # A definition ending in an open comment gets it closed before its `;`; a line comment gets the
+    # `;` on its own line; a closed one needs nothing.
+    @test _sqlite_terminated("CREATE INDEX ix ON t (a) /* note") == "CREATE INDEX ix ON t (a) /* note */;"
+    @test _sqlite_terminated("CREATE INDEX ix ON t (a) -- note") == "CREATE INDEX ix ON t (a) -- note\n;"
+    @test _sqlite_terminated("CREATE INDEX ix ON t (a) /* note */") == "CREATE INDEX ix ON t (a) /* note */;"
+    @test _split_sqlite_statements(_sqlite_terminated("CREATE INDEX ix ON t (a) /* note") * "\nPRAGMA foreign_key_check(\"t\");") ==
+          ["CREATE INDEX ix ON t (a) /* note */", "PRAGMA foreign_key_check(\"t\")"]
+
+    # The splitter fails closed on an open comment that swallows a `;` — those are statements nothing
+    # would run — and lets a harmless trailing note through.
+    @test_throws PormG.InvalidMigrationError _split_sqlite_statements("CREATE INDEX ix ON t (a) /* note;\nPRAGMA foreign_key_check(\"t\");")
+    @test _split_sqlite_statements("SELECT 1; /* trailing note") == ["SELECT 1"]
+
+    # `pts·total` is one name, as SQLite reads it.
+    @test [t.name for t in _sqlite_identifier_tokens("SELECT id, pts·total FROM result")] ==
+          ["SELECT", "id", "pts·total", "FROM", "result"]
+    # So a view using that column, which a rebuild drops, is refused rather than re-created.
+    ctx = _SQLiteRecreateContext(Dict{String, String}(), Dict{String, Dict{String, String}}(),
+                                 Dict("result" => Set(["pts·total"])), Set{String}(), Set(["result"]),
+                                 Dict{String, Set{String}}())
+    view = _SQLiteSchemaObject("view", "result_v", "result_v", "CREATE VIEW result_v AS SELECT id, pts·total FROM result", 2)
+    @test_throws PormG.InvalidMigrationError _sqlite_recreated_ddl(view, ctx; rebuilt_table = "result")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Splitter: every piece runs, against a real SQLite file
 # The executor hands each piece to SQLite on its own. A statement after a trigger body that the
 # splitter failed to cut would be dropped without an error, so this runs the pieces and checks that
@@ -374,13 +408,23 @@ end
         _rd729_start!(pool, settings, models, _rd729_schema(result = indexed))
         fetch(pool, """CREATE VIEW "podium" AS SELECT "id" FROM "result" WHERE "points" > 15 -- podium only""")
         fetch(pool, """CREATE INDEX "result_grid_note_idx" ON "result" ("grid") -- grid lookups""")
+        # SQLite also stores a block comment left OPEN at the end. A `;` after it is comment, and so is
+        # everything after that — the trigger below and the foreign_key_check gate went unexecuted and
+        # unreported (found in re-review), so the comment is closed first.
+        fetch(pool, """CREATE INDEX "result_grid_open_idx" ON "result" ("grid") /* grid lookups""")
+        fetch(pool, """CREATE TRIGGER "result_audit" AFTER INSERT ON "result" BEGIN
+                         INSERT INTO "audit" ("n") VALUES (NEW."points");
+                       END;""")
         _rd729_models(models, _rd729_schema(result = replace(indexed, "points = Models.IntegerField()" => "points = Models.IntegerField(null = true)")))
         _rd729_plan!(pool, settings, models)
         _rd729_migrate!(pool, settings)
         @test _rd729_objects(pool, "view") == ["podium"]
         @test "result_grid_note_idx" in _rd729_objects(pool, "index")
+        @test "result_grid_open_idx" in _rd729_objects(pool, "index")
+        @test _rd729_objects(pool, "trigger") == ["result_audit"]
         fetch(pool, """INSERT INTO "result" ("id", "points") VALUES (1, 25);""")
         @test _rd729_count(pool, "podium") == 1
+        @test _rd729_count(pool, "audit") == 1
     end
 
     # A trigger on `driver`, which the migration drops, that writes the rebuilt `result`.
@@ -656,6 +700,17 @@ end
         ("alias sharing another live table's name", _rd729_schema(result = indexed_grid),
          """CREATE VIEW "va" AS SELECT "driver"."grid" FROM "result" AS "driver";""",
          _rd729_schema(result = no_grid), "", ["va", "\"grid\"", "removes"]),
+        # The same alias written without AS, on a subquery, and as a CTE that is not the first.
+        ("alias without AS sharing a live table's name", _rd729_schema(result = indexed_grid),
+         """CREATE VIEW "vb" AS SELECT "driver"."grid" FROM "result" "driver";""",
+         _rd729_schema(result = no_grid), "", ["vb", "\"grid\"", "removes"]),
+        ("subquery alias sharing a live table's name", _rd729_schema(result = indexed_grid),
+         """CREATE VIEW "vc" AS SELECT "driver"."grid" FROM (SELECT * FROM "result") "driver";""",
+         _rd729_schema(result = no_grid), "", ["vc", "\"grid\"", "removes"]),
+        ("second CTE sharing a live table's name", _rd729_schema(result = indexed_grid),
+         """CREATE VIEW "vd" AS WITH "a" AS (SELECT 1 AS "z"), "driver" AS (SELECT * FROM "result")
+            SELECT "driver"."grid" FROM "driver";""",
+         _rd729_schema(result = no_grid), "", ["vd", "\"grid\"", "removes"]),
         ("view on a generated column the rebuild drops", _rd729_schema(),
          """ALTER TABLE "result" ADD COLUMN "label" TEXT GENERATED ALWAYS AS ('P' || "points") VIRTUAL;""" *
          """CREATE VIEW "result_label" AS SELECT "id", "label" FROM "result";""",

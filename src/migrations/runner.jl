@@ -1176,6 +1176,11 @@ end
 _sqlite_opens_comment(cs::Vector{Char}, i::Int) =
   i < length(cs) && ((cs[i] == '-' && cs[i + 1] == '-') || (cs[i] == '/' && cs[i + 1] == '*'))
 
+# Whether the `/* … */` comment opening at `cs[i]` is never closed. SQLite accepts one at the end of
+# its input and stores it as written, so a definition read back from `sqlite_master` can carry one.
+_sqlite_block_comment_open(cs::Vector{Char}, i::Int)::Bool =
+  !any(k -> cs[k] == '*' && cs[k + 1] == '/', (i + 2):(length(cs) - 1))
+
 # The index of the next character at or after `i` that is neither whitespace nor inside a comment,
 # or `length(cs) + 1` when there is none.
 function _sqlite_next_significant(cs::Vector{Char}, i::Int)::Int
@@ -1223,7 +1228,9 @@ text that holds two statements runs the FIRST one and silently discards the rest
 end is never found would swallow every statement after it, including the rebuild's
 `PRAGMA foreign_key_check` gate. So a `CREATE TRIGGER` that reaches the end of the text still open
 raises `InvalidMigrationError`. The opposite mistake, an `END` read as the body's end too early, is
-loud already, because SQLite rejects the truncated trigger.
+loud already, because SQLite rejects the truncated trigger. For the same reason an unterminated
+`/* …` comment that contains a `;` raises too: everything after it is comment, so the statements it
+swallowed would never run and nothing would say so.
 
 There used to be a backslash escape here, and it is gone on purpose: SQLite has none, so
 `'C:\\'` is a complete literal and the old rule read everything after it as still quoted.
@@ -1246,6 +1253,12 @@ function _split_sqlite_statements(sql::AbstractString)::Vector{String}
     c = cs[i]
     j = _sqlite_lex_skip(cs, i)
     if j != i
+      if cs[i] == '/' && j > n && _sqlite_block_comment_open(cs, i) && ';' in cs[i:n]
+        throw(InvalidMigrationError(
+          "An unterminated /* comment in this migration swallows every statement after it, so none " *
+          "of them would run and nothing would say so; the migration stops here instead. Close the " *
+          "comment: $(strip(String(cs[i:min(n, i + 79)]))) …"))
+      end
       # A comment is not content. A literal or a quoted identifier is, and it is a token that is
       # not a keyword, which is all `lead` needs to know about it.
       if !_sqlite_opens_comment(cs, i)

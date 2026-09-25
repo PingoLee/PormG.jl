@@ -2102,9 +2102,9 @@ spellings are all recognised (`"…"` with `""` escapes, `[…]`, `` `…` `` wi
 column named `select` or `index` reads correctly, and bare identifiers use SQLite's own character
 class (a leading letter or `_`, then letters, digits, `_` or \$).
 
-Julia's `isletter` is Unicode-aware where SQLite's bare-identifier class is ASCII, so this accepts a
-few spellings SQLite would reject in unquoted form. That is the harmless direction: a name that cannot
-appear in real DDL simply never matches a real column.
+Every character from U+0080 up is an identifier character too, because SQLite reads every byte from
+0x80 up as one: `pts·total` is a single name to it (#729). Splitting it at the `·` invented a column
+`total` and hid the real one, which the stale-object check of a SQLite rebuild could then miss.
 
 The `(`-follows flag is what separates `lower` the function from `lower` the column in
 `lower("a")` — without it, an index expression's function names would be indistinguishable from
@@ -2208,10 +2208,10 @@ function _sqlite_identifier_tokens(sql::AbstractString)::Vector{_SQLiteIdentifie
                        (cs[i] in ('e', 'E')) || isletter(cs[i]))
         i += 1
       end
-    elseif isletter(c) || c == '_'
+    elseif isletter(c) || c == '_' || c > '\x7f'
       from = i
       buf = Char[]
-      while i <= n && (isletter(cs[i]) || isdigit(cs[i]) || cs[i] == '_' || cs[i] == '$')
+      while i <= n && (isletter(cs[i]) || isdigit(cs[i]) || cs[i] == '_' || cs[i] == '$' || cs[i] > '\x7f')
         push!(buf, cs[i])
         i += 1
       end
@@ -2731,29 +2731,34 @@ end
     _sqlite_terminated(stmt) -> String
 
 `stmt` ending in the `;` the statement splitter cuts on. A definition read back from `sqlite_master`
-is stored as it was written, trailing `-- comment` included (measured, for a view and an index), and a
-`;` appended to that line lies INSIDE the comment: the splitter, which honours comments since #729,
-then joins the next statement onto this one and SQLite rejects the pair. So when the text ends in a
-line comment the `;` goes on a line of its own.
+is stored as it was written, trailing comment included (measured, for a view and an index), and a `;`
+appended after one lies INSIDE it: the splitter, which honours comments since #729, then joins the
+next statement onto this one. For a `--` comment that is loud (SQLite rejects the pair); for a `/* …`
+comment SQLite accepts unterminated at the end of its input, it is silent — everything after it,
+the rebuild's `foreign_key_check` gate included, would be read as comment. So the `;` goes on a line
+of its own after a line comment, and an open block comment is closed first.
 """
 function _sqlite_terminated(stmt::AbstractString)::String
   s = String(rstrip(stmt))
   cs = collect(s)
   n = length(cs)
   i = 1
-  ends_in_line_comment = false
+  ending = :none                     # what the text ends inside: nothing, a line or an open block comment
   while i <= n
     j = _sqlite_lex_skip(cs, i)
     if j != i
-      # Only a `--` comment starts with '-' and skips; one that reaches the end ends the text.
-      ends_in_line_comment = cs[i] == '-' && j > n
+      # Only a comment starts with '-' or '/' and skips; one that reaches the end ends the text.
+      ending = j <= n                                               ? :none :
+               cs[i] == '-'                                         ? :line :
+               (cs[i] == '/' && _sqlite_block_comment_open(cs, i))  ? :open_block : :none
       i = j
     else
-      ends_in_line_comment = false
+      ending = :none
       i += 1
     end
   end
-  ends_in_line_comment && return s * "\n;"
+  ending === :line && return s * "\n;"
+  ending === :open_block && return s * " */;"
   return endswith(s, ";") ? s : s * ";"
 end
 
@@ -2997,24 +3002,49 @@ function _sqlite_view_tables(objects::Vector{_SQLiteSchemaObject}, live_tables::
   return closed
 end
 
-# The names `sql` uses as an ALIAS somewhere: a token right after `AS`, right after another
-# (non-reserved) name with nothing but whitespace between — `FROM result other` — or right after a
-# `)` — `(SELECT …) other`. A qualifier that is also an alias cannot be taken to mean the table of that
-# name: `SELECT other.grid FROM result AS other` reads `result`'s `grid`. Over-marking a name only
-# widens what its qualified columns are checked against. The non-reserved words in
+# The names `sql` binds as an ALIAS or a CTE somewhere, any of which shadows a table of that name:
+#   * a token right after `AS`, right after another (non-reserved) name with nothing but whitespace
+#     between — `FROM result other` — or right after a `)` or a string — `(SELECT …) other`,
+#     `FROM 'result' other` (SQLite takes a string where a table name goes);
+#   * a CTE's name: `other AS (…)`, `other(a, b) AS (…)`, `other AS [NOT] MATERIALIZED (…)` — every
+#     one of them, not just the first after `WITH` (found in review: `WITH a AS (…), other AS (SELECT *
+#     FROM result) SELECT other.grid FROM other` hid `result`'s dropped `grid` behind the table `other`).
+# A qualifier that is also an alias cannot be taken to mean the table of that name. Over-marking a name
+# only widens what its qualified columns are checked against. The non-reserved words in
 # `_SQLITE_EXPRESSION_WORDS` are followed by an expression, never an alias, so `a LIKE NEW.b` does
 # not mark `new`.
 const _SQLITE_EXPRESSION_WORDS = ("LIKE", "GLOB", "REGEXP", "MATCH", "BY")
 
 function _sqlite_alias_names(sql::AbstractString, toks::Vector{_SQLiteObjectToken})::Set{String}
   aliases = Set{String}()
-  for k in 2:length(toks)
+  n = length(toks)
+  gaps = String[_sqlite_gap_text(sql, toks[k].stop, toks[k + 1].start) for k in 1:(n - 1)]
+  for k in 2:n
     prev = toks[k - 1]
-    gap = _sqlite_gap_text(sql, prev.stop, toks[k].start)
+    gap = gaps[k - 1]
     introduces = _sqlite_is_word(prev, "AS") ||
                  (!_sqlite_is_reserved(prev) && !(!prev.quoted && uppercase(prev.name) in _SQLITE_EXPRESSION_WORDS))
-    if (isempty(gap) && introduces) || endswith(gap, ")")
+    if (isempty(gap) && introduces) || endswith(gap, ")") || endswith(gap, "'")
       push!(aliases, toks[k].key)
+    end
+  end
+  # CTE names: an `AS` whose body opens with `(`, past an optional `[NOT] MATERIALIZED`.
+  for m in 2:(n - 1)
+    _sqlite_is_word(toks[m], "AS") || continue
+    q = m
+    while q < n && isempty(gaps[q]) && (_sqlite_is_word(toks[q + 1], "NOT") || _sqlite_is_word(toks[q + 1], "MATERIALIZED"))
+      q += 1
+    end
+    (q < n && startswith(gaps[q], "(")) || continue
+    before = gaps[m - 1]
+    if isempty(before)
+      push!(aliases, toks[m - 1].key)                    # `other AS (`
+    elseif before == ")"
+      j = m - 1                                          # `other(a, b) AS (`: back over the list
+      while j > 1 && gaps[j - 1] == ","
+        j -= 1
+      end
+      (j > 1 && gaps[j - 1] == "(") && push!(aliases, toks[j - 1].key)
     end
   end
   return aliases

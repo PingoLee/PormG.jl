@@ -155,7 +155,22 @@ PormG.Migrations.migrate("db")
 Applied migrations are recorded in the history table and archived to `db/migrations/applied_migrations/`.
 
 ### Destructive Operations Safety
-PormG blocks destructive SQL (DROP TABLE, DROP COLUMN) by default. To apply them, you must explicitly opt in:
+PormG blocks destructive SQL by default. A statement is destructive when it is:
+
+- **any `DROP`**: a table, column, constraint or index, and also a view, schema, function, type,
+  sequence, trigger or extension. The exceptions are `ALTER COLUMN … DROP NOT NULL`, `DROP DEFAULT`,
+  `DROP IDENTITY` and `DROP EXPRESSION`, which remove a property of the column, not its data.
+- **a `TRUNCATE`**, with or without the `TABLE` keyword.
+- **a `DELETE` with no `WHERE`.** That empties the table the way `TRUNCATE` does, and on SQLite, which
+  has no `TRUNCATE`, it is the only way to write one. A `DELETE … WHERE` and any `UPDATE` are not
+  flagged, because a targeted data step or a backfill is not a table wipe.
+
+`makemigrations` writes only the first kind, but a [hand-edited plan](advanced.md#Manual-SQL-in-Pending-Migrations)
+can carry any of them. The guard reads the SQL text and does not parse it, so it errs toward flagging. A
+string literal that reads like one of these also flags the plan: `default = "Drop zone"` renders as
+`SET DEFAULT 'Drop zone'`. It can also miss a few hand-written spellings: any `WHERE` excuses a
+`DELETE`, even `WHERE true`, and a keyword glued to a quoted name or a comment (`DROP"col"`) is not
+seen. To apply a destructive plan you must explicitly opt in:
 ```julia
 PormG.Migrations.migrate("db", destructive=true)
 ```

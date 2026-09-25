@@ -1107,4 +1107,37 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
     @test occursin("SET DEFAULT 'now()'", lit_sql)
   end
 
+  # ───────────────────────────────────────────────────────────────────────────
+  # The destructive guard classifies generated SQL exactly as it did before #728
+  # #728 widened `is_destructive` to every DROP, TRUNCATE and an unqualified DELETE, for the
+  # statements a HAND-EDITED plan can carry. The generator writes none of those, so no statement in
+  # this corpus may change class — above all the `ALTER COLUMN … DROP NOT NULL / DEFAULT / IDENTITY`
+  # sub-clauses `alter_field` emits, which a bare "any DROP" rule would turn into refused plans.
+  # (A user LITERAL that reads like one, e.g. `default = "Drop zone"`, does flag a generated plan.
+  # That is a deliberate fail-closed choice, pinned in test_migrations_runner.jl; no corpus
+  # literal reads that way.)
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "the destructive guard classifies every golden statement as before #728" begin
+    # The pre-#728 patterns, frozen here as the reference: a copy, not an import, so a change to the
+    # live list cannot move the yardstick it is measured against.
+    legacy_patterns = [r"DROP\s+TABLE"i, r"DROP\s+COLUMN"i, r"DROP\s+INDEX"i,
+                       r"DROP\s+CONSTRAINT"i, r"TRUNCATE\s+TABLE"i]
+    legacy_is_destructive(sql) = any(p -> occursin(p, sql), legacy_patterns)
+
+    statements = [sql for steps in values(PLAN_GOLDEN) for (_, sql) in steps]
+    # Non-vacuity: the corpus must still hold property drops in statements the OLD patterns called
+    # safe, or this sweep would pass without ever exercising the exception. `DROP IDENTITY` is not
+    # in the loop: the corpus's only one shares a string with a `DROP CONSTRAINT`, so it is
+    # destructive either way. The runner tests pin `DROP IDENTITY` directly.
+    for clause in ("DROP NOT NULL", "DROP DEFAULT")
+      @test any(s -> occursin(clause, s) && !legacy_is_destructive(s), statements)
+    end
+    # And it must hold destructive statements too, so "nothing changed" is not "nothing flagged".
+    @test any(legacy_is_destructive, statements)
+
+    for sql in statements
+      @test Migrations.is_destructive(sql) == legacy_is_destructive(sql)
+    end
+  end
+
 end

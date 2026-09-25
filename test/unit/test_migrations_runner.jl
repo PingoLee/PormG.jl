@@ -63,7 +63,9 @@ using Dates
     #
     # The destructive guard is a safety mechanism that prevents accidental
     # data loss by requiring explicit opt-in for DROP operations.
-    # This covers: DROP TABLE, DROP COLUMN, DROP INDEX, TRUNCATE TABLE.
+    # This covers: any DROP (every object kind, and ALTER TABLE … DROP [COLUMN] /
+    # DROP CONSTRAINT) except the ALTER COLUMN property sub-clauses, TRUNCATE with or
+    # without TABLE, and DELETE with no WHERE (#728).
     # ==============================================================================
 
     @testset "Destructive Detection" begin
@@ -101,6 +103,128 @@ using Dates
         @test length(destructive) == 2
         @test any(s -> occursin("DROP TABLE", s), destructive)
         @test any(s -> occursin("DROP COLUMN", s), destructive)
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Destructive guard: statements a hand-edited plan can carry (#728)
+    # The generator never writes these; they reach a plan through the manual-SQL
+    # recipe in docs/src/migrations/advanced.md, where the guard is the only review.
+    # Each one ran without `destructive = true` before #728.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "Destructive Detection: every DROP, TRUNCATE, unqualified DELETE (#728)" begin
+        # Every DROP object kind the guard used to miss — one pattern covers them,
+        # so a kind no list would name (DROP POLICY, DROP RULE, …) is caught too.
+        for sql in ["DROP VIEW driver_standings_v;",
+                    "DROP MATERIALIZED VIEW season_points_mv;",
+                    "DROP SCHEMA archive CASCADE;",
+                    "DROP FUNCTION immutable_unaccent(text);",
+                    "DROP TYPE race_status;",
+                    "DROP SEQUENCE results_resultid_seq;",
+                    "DROP TRIGGER results_audit ON results;",
+                    "DROP EXTENSION unaccent;",
+                    "DROP POLICY driver_rows ON drivers;"]
+            @test Migrations.is_destructive(sql) == true
+        end
+
+        # ALTER TABLE … DROP without the COLUMN keyword: both engines accept it and it
+        # drops the column exactly like DROP COLUMN, but the old pattern needed the word.
+        @test Migrations.is_destructive("""ALTER TABLE "drivers" DROP "nationality";""") == true
+        @test Migrations.is_destructive("ALTER TABLE drivers DROP nationality;") == true
+
+        # TRUNCATE with or without TABLE — PostgreSQL does not require the keyword.
+        @test Migrations.is_destructive("TRUNCATE drivers;") == true
+        @test Migrations.is_destructive("truncate only results;") == true
+        @test Migrations.is_destructive("TRUNCATE results, lap_times RESTART IDENTITY;") == true
+
+        # DELETE with no WHERE: TRUNCATE by another name, and on SQLite (which has no
+        # TRUNCATE) the only way to write it — so the two engines are guarded alike.
+        @test Migrations.is_destructive("DELETE FROM results;") == true
+        @test Migrations.is_destructive("delete from \"results\"") == true        # no `;`
+        @test Migrations.is_destructive("DELETE FROM results RETURNING resultid;") == true
+
+        # A multi-statement string (what `mark_applied` classifies) is destructive when
+        # ANY statement is — including when the destructive one is not the first.
+        @test Migrations.is_destructive("""
+            CREATE TABLE "driver_notes" ("id" INTEGER);
+            DROP VIEW driver_standings_v;""") == true
+        # The WHERE on the first DELETE must not cover the second, unqualified one.
+        @test Migrations.is_destructive(
+            "DELETE FROM results WHERE raceid = 18; DELETE FROM lap_times;") == true
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Destructive guard: what it must NOT flag (#728)
+    # The widened DROP rule would otherwise catch the ALTER COLUMN sub-clauses the
+    # generator emits for ordinary nullability/default/identity changes — and a
+    # non-interactive `migrate` would then refuse routine plans.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "Destructive Detection: property drops, names, and qualified DML (#728)" begin
+        # `ALTER [COLUMN] <col> DROP NOT NULL | DEFAULT | IDENTITY | EXPRESSION` removes a
+        # property, not data. The first three are emitted by `Dialect.alter_field`.
+        for sql in ["""ALTER TABLE "drivers" ALTER COLUMN "code" DROP NOT NULL;""",
+                    """ALTER TABLE "drivers" ALTER COLUMN "code" DROP DEFAULT;""",
+                    """ALTER TABLE "drivers" ALTER COLUMN "driverid" DROP IDENTITY;""",
+                    """ALTER TABLE "drivers" ALTER COLUMN "driverid" DROP IDENTITY IF EXISTS;""",
+                    """ALTER TABLE drivers ALTER code DROP EXPRESSION;""",   # COLUMN is optional
+                    # A doubled quote inside the identifier (`_quote_table_ddl` emits one) is still
+                    # ONE identifier; a `"[^"]*"` anchor would stop at it and miss the exception.
+                    """ALTER TABLE "drivers" ALTER COLUMN "a""b" DROP NOT NULL;"""]
+            @test Migrations.is_destructive(sql) == false
+        end
+
+        # The exception is anchored on the ALTER COLUMN that owns it, not on the word
+        # after DROP: this drops a COLUMN named `identity`, so it is still a drop.
+        @test Migrations.is_destructive("ALTER TABLE drivers DROP identity;") == true
+        # And a property drop does not excuse a column drop in the same statement.
+        @test Migrations.is_destructive(
+            """ALTER TABLE "drivers" ALTER COLUMN "code" DROP DEFAULT, DROP COLUMN "url";""") == true
+
+        # Identifiers that merely CONTAIN a keyword are not the keyword.
+        @test Migrations.is_destructive("""ALTER TABLE "races" ADD COLUMN "drop_zone" TEXT;""") == false
+        @test Migrations.is_destructive(
+            """CREATE TABLE "truncate_log" ("x_drop" INTEGER, "deleted_at" TEXT);""") == false
+        # A foreign key's ON DELETE action is not a DELETE statement.
+        @test Migrations.is_destructive(
+            """CREATE TABLE "results" ("raceid" INTEGER REFERENCES "races"("raceid") ON DELETE CASCADE);""") == false
+
+        # A DELETE with a WHERE is a targeted data step, not a table wipe.
+        @test Migrations.is_destructive("DELETE FROM results WHERE statusid = 31;") == false
+
+        # Decision recorded (#728): UPDATE without WHERE is NOT flagged. It is the
+        # ordinary shape of a backfill, and whether it loses data depends on the SET
+        # expression — `upper(code)` below loses nothing — which no regex can judge.
+        @test Migrations.is_destructive("UPDATE drivers SET code = upper(code);") == false
+        # The planner's own backfill (`planner.jl`, SQLite db_default rebuild) stays clean.
+        @test Migrations.is_destructive(
+            """UPDATE "drivers" SET "code" = 'UNK' WHERE "code" IS NULL;""") == false
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Destructive guard: the limits of a text heuristic, pinned as decisions (#728)
+    # The guard reads SQL text and does not parse it. These assertions record which
+    # way it errs on purpose, so a later "fix" in either direction is a visible choice
+    # rather than a silent one.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "Destructive Detection: text-heuristic limits, both directions (#728)" begin
+        # Errs toward flagging: a literal that reads like a statement flags the plan. It
+        # reaches GENERATED plans too, through `default = "Drop zone"`, and costs an
+        # explicit `destructive = true`.
+        @test Migrations.is_destructive(
+            """ALTER TABLE "drivers" ALTER COLUMN "code" SET DEFAULT 'Drop zone';""") == true
+        # Why literals are NOT stripped first: conditional DDL runs its DROP from a string
+        # inside a DO block, and stripping would turn this into a silent miss.
+        @test Migrations.is_destructive(
+            "DO \$\$ BEGIN EXECUTE 'DROP TABLE ' || quote_ident('lap_times'); END \$\$;") == true
+
+        # Known misses in the other direction, for hand-written spellings. The old guard
+        # caught none of these either, and each is documented in `is_destructive`, in
+        # workflow.md and in the upgrade entry.
+        # Any WHERE excuses a DELETE, even one that filters nothing:
+        @test Migrations.is_destructive("DELETE FROM results WHERE true;") == false
+        # A keyword glued to a quoted name is not seen: every pattern needs whitespace
+        # after the keyword, the same as before #728. Catching it with `\bDROP\b` would
+        # newly flag generated plans with a quoted column named "drop".
+        @test Migrations.is_destructive("""ALTER TABLE drivers DROP"nationality";""") == false
     end
 
     # ==============================================================================
@@ -487,6 +611,30 @@ using Dates
 
         sl_exists = PormG.Dialect.migrations_table_exists_sql(sl)
         @test occursin("sqlite_master", sl_exists)
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Removed surface: `migrate_to` and `migrate`'s dead `path` keyword (#732)
+    # `migrate_to` could never succeed — the state-based engine has one pending plan, so there is
+    # no version to migrate "to" — and it wrote `pormg_migrations` even under `change_db: false`.
+    # `migrate(conn, settings; path=…)` accepted a keyword it never read. Both were removed rather
+    # than kept as stubs; the two upgrade entries promise `UndefVarError` / `MethodError`, and this
+    # pins that the names really are gone so a stub cannot quietly return.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "Removed: migrate_to and migrate's path keyword (#732)" begin
+        # Gone entirely — neither defined nor exported, so `migrate_to(...)` is an UndefVarError.
+        @test !isdefined(PormG.Migrations, :migrate_to)
+        @test :migrate_to ∉ names(PormG.Migrations)
+
+        # `migrate`'s connection-level method no longer declares `path`, so passing it is a
+        # MethodError. Reflection rather than a call: the call would need a real connection and
+        # settings, and a MethodError from WRONG positional types would pass without proving anything.
+        ms = methods(Migrations.migrate, (PormG.PormGBackend, PormG.PormGSettings))
+        @test length(ms) == 1
+        kws = Base.kwarg_decl(only(ms))
+        @test :path ∉ kws
+        # Non-vacuity: the keywords that remain are still read by name.
+        @test :destructive in kws && :interactive in kws
     end
 
 end

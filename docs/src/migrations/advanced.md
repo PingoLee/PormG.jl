@@ -19,6 +19,13 @@ custom_entries = OrderedDict{String, String}(
 
     Edit the file **after** your last `makemigrations`, just before `migrate`. `makemigrations` rewrites it whenever your models differ from the database, and moves it aside to `pending_migrations.jl.discarded` when they do not. Either way your hand-added entries are no longer pending.
 
+!!! warning "Hand-added SQL goes through the destructive guard"
+    The guard checks your entries the same way it checks generated ones. A hand-added `DROP VIEW`,
+    `DROP SCHEMA`, `TRUNCATE`, or `DELETE` with no `WHERE` makes the plan destructive: `dry_run()`
+    lists it, and `migrate()` refuses it until you pass `destructive = true`. The full list is under
+    [Destructive Operations Safety](workflow.md#Destructive-Operations-Safety). The `UPDATE … WHERE`
+    above is not destructive, and an `UPDATE` without `WHERE` is not flagged either.
+
 ---
 
 ## Repair Operations

@@ -70,7 +70,7 @@ Each migration record contains:
 - **sql_content**: The full SQL that was applied
 - **applied_at**: Timestamp of when the migration was applied
 - **status**: One of `applied`, `failed`
-- **is_destructive**: Whether the migration contained DROP operations
+- **is_destructive**: Whether the migration contained destructive operations: a `DROP`, a `TRUNCATE`, or a `DELETE` with no `WHERE` (see [Destructive Operations Safety](workflow.md#Destructive-Operations-Safety))
 - **format_version**: The frozen migration-format contract version (see [Migration Format Stability](stability.md))
 
 Filesystem archives (`applied_migrations/`) remain useful for version control and review, but the history table is authoritative.
@@ -97,7 +97,7 @@ The dropped constraint is named from the live catalog; the new one gets a fresh 
 On SQLite the same change goes through the [table rebuild](#SQLite:-Table-Recreation) described below, which re-renders the whole `FOREIGN KEY ... REFERENCES ... ON DELETE` clause from your model. The two backends therefore agree on the outcome; only the DDL differs.
 
 !!! warning "Re-pointing a foreign key needs `destructive = true`"
-    The PostgreSQL plan contains `DROP CONSTRAINT`, so `dry_run()` classifies the migration as destructive and `migrate()` refuses it until you opt in with `migrate(path, destructive = true)`. Nothing is dropped except the constraint itself — no column, no data.
+    The PostgreSQL plan contains `DROP CONSTRAINT`, so `dry_run()` classifies the migration as destructive and `migrate()` refuses it until you opt in with `migrate("db", destructive = true)`. Nothing is dropped except the constraint itself — no column, no data.
 
     The new constraint is `DEFERRABLE INITIALLY DEFERRED`, so it is validated when the migration **commits**. If any existing row holds a value that does not exist in the new parent, the commit fails and the whole migration rolls back. Re-point the data first, or make the column nullable and clear it, before changing the model.
 
@@ -156,7 +156,7 @@ Turning `db_index` on or off *in the same change as the rename* is planned in th
     Renaming a field is not destructive. But if the same change also removes a `UNIQUE` constraint or
     a `PRIMARY KEY`, the plan contains `DROP CONSTRAINT` (PostgreSQL) or a table rebuild whose
     `DROP TABLE` is part of the recreation (SQLite) — and `dry_run()` classifies either as
-    destructive, so `migrate()` refuses it until you opt in with `migrate(path, destructive = true)`.
+    destructive, so `migrate()` refuses it until you opt in with `migrate("db", destructive = true)`.
 
     On **SQLite** the opt-in is needed for *any* rename that also changes the column — a retype, a
     nullability change, a re-pointed key — because SQLite alters a column by recreating the table.

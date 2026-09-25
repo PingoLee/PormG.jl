@@ -183,8 +183,9 @@ ERROR: the column sirname not found in driver, that contains the fields: code, d
 Catch `PormGError` for either, or the specific type when you want to tell a typo apart from a value
 the column cannot store.
 
-A column holds a single value. A `Vector` given to a text-like field (`CharField`, `TextField`, …)
-raises `InvalidValueError` naming the field, on both backends — in `create`, `get_or_create` and
+A column holds a single value. A `Vector` or a tuple given to a text-like field (`CharField`,
+`TextField`, …) raises `InvalidValueError` naming the field, whatever its elements (`[1.5, 2.5]` and
+`["Ayrton", nothing]` too), on both backends — in `create`, `get_or_create` and
 `update_or_create` alike, and the same way the [bulk writers](bulk.md) refuse it. `JSONField` and
 `BinaryField` values are unaffected: each is serialized to one value first. To *match* several
 values, use a lookup such as `"surname__@in" => ["Senna", "Prost"]` in `filter(...)`.
@@ -312,6 +313,7 @@ row, created = M.Status.objects.get_or_create(
 - **`defaults` is optional** — a bare `get_or_create("statusid" => 200)` is a valid pure get-or-create. `defaults` supplies extra columns applied **only** when a row is inserted.
 - **Non-lookup `NOT NULL` columns are needed only on insert.** `get_or_create` runs the `SELECT` first; on a match it returns immediately, so a matching row is returned even if you didn't supply every required column. On a miss the insert must satisfy every `NOT NULL` column (via the lookup, `defaults`, or a model default), exactly like `create`.
 - **Race-safe.** The create path runs `INSERT ... ON CONFLICT (lookup) DO NOTHING`, so if a competing writer inserts the same key first, PormG re-reads the winner and returns `created = false` — no duplicate-key crash.
+- **A `JSONField` lookup matches the whole document by equality.** A `Vector` or `Dict` lookup value is serialized to one JSON string, and the `SELECT` compares the column with that string. The `INSERT` binds the same string, so the read and the `ON CONFLICT` target use one comparison, as `update_or_create` does. The comparison differs by backend: **PostgreSQL compares `jsonb`**, so key order and whitespace do not matter. **SQLite compares the serialized text**, so the lookup finds a row written from the same value, but not one whose keys were stored in a different order. On SQLite, build a document key with a stable key order (an `OrderedDict`, or the same `Dict`) when you match on it. The create path still needs a UNIQUE constraint on the JSON column, like any other lookup.
 
 ## Creating with Relationships
 

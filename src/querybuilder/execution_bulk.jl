@@ -1181,7 +1181,7 @@ _backend_parameter_limit(conn::PormGSQLite) = _sqlite_param_limit(backend_sqlite
 # chunk_size can help, so we fail closed with an actionable error naming the counts and limit.
 #
 # `per_row = ncols` is exact: a collection in a cell — which SQLite's `add_parameter!` would expand
-# into several `?` — is refused by `_single_value` before anything binds (#672).
+# into several `?` — is refused by `_format_single` before anything binds (#672).
 function _effective_chunk_size(requested::Integer, per_row::Integer, fixed::Integer,
                                limit::Integer, op::Symbol, backend::AbstractString)
   per_row <= 0 && return requested            # nothing bound per row → no cap possible or needed
@@ -1346,7 +1346,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
         end
 
         # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-        cells = [_single_value(model.fields[field].formatter(row[mapping[field]]), field, "bulk_insert") for field in fields_df]
+        cells = [_format_single(model.fields[field], field, row[mapping[field]], "bulk_insert") for field in fields_df]
         if pg_arrays
           foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
         else
@@ -1462,7 +1462,7 @@ or corrupt the literal. Every element is therefore reduced to `missing`, an `Int
 `true`/`false`: nothing the array parser treats specially) or a `String`, which LibPQ always quotes.
 The element text is exactly what the per-cell parameter carried for the same cell — LibPQ renders a
 scalar parameter with the same `string` — so both shapes store the same value. A collection never
-gets here: `_single_value` refuses it first.
+gets here: `_format_single` refuses it first.
 """
 _pg_array_element(::Union{Missing, Nothing}) = missing
 _pg_array_element(value::Integer) = value
@@ -1579,7 +1579,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
             # `_bulk_copy_cell` translates a binary payload into PostgreSQL's hex input syntax;
             # every other value passes through unchanged (#296). A collection is refused first, as
             # in every other writer (#712): CSV would otherwise store its `repr` as the column text.
-            _bulk_copy_cell(_single_value(model.fields[field].formatter(value), field, "bulk_copy"))
+            _bulk_copy_cell(_format_single(model.fields[field], field, value, "bulk_copy"))
           catch e
             e isa PormGError && rethrow()   # keep the taxonomy type (bulk_copy logs no per-row depuration; the message below carries the row index only for the wrapped case)
             throw(InvalidValueError("Error in bulk_copy, row $(row_index) for model $(model.name) failed validation or formatting: $(e)"))
@@ -1619,7 +1619,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
 end
 bulk_copy(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_copy(model |> object, df; kwargs...)
 
-function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{String, String}, model::PormGModel, row::DataFrames.DataFrameRow, index::Integer)
+function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{String, String}, model::PormGModel, row::DataFrames.DataFrameRow, index::Integer; op::AbstractString = "bulk_insert")
   for field in fields
     # Check if field exists in the mapping and row
     col_name = get(mapping, field, field)
@@ -1629,6 +1629,12 @@ function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{St
     try
       model.fields[field].formatter(row[col_name])
     catch e
+      # A collection gets the refusal every writer raises (#716), not the generic message below: the
+      # bare formatter can throw on its elements before the bind site's check ever ran. Only here,
+      # in the catch: a collection the formatter maps fine (`["A", "B"]`) must not pre-empt another
+      # field's real error — a later cell this pass rejects, or a validation error the caller
+      # rethrows once this pass finds nothing.
+      _refuse_collection(model.fields[field], field, row[col_name], op)
       # #335: `col_name` is PormG's own private fill column whenever the value was auto-populated,
       # and printing that name would point the caller at a DataFrame column they never wrote. Name
       # the source of the value instead.
@@ -2042,14 +2048,14 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
         end
 
         # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-        cells = [_single_value(model.fields[field].formatter(row[mapping[field]]), field, "bulk_update") for field in joined_columns]
+        cells = [_format_single(model.fields[field], field, row[mapping[field]], "bulk_update") for field in joined_columns]
         if pg_arrays
           foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
         else
           push!(rows, "($(join([add_parameter!(chunk_parameters, cell) for cell in cells], ", ")))")
         end
       catch e
-        _depuration_values_bulk_insert(fields_df, mapping, model, row, index)
+        _depuration_values_bulk_insert(fields_df, mapping, model, row, index; op = "bulk_update")
         e isa PormGError && rethrow()   # keep the taxonomy type; the depuration log above carries the row context
         throw(InvalidValueError("Error in bulk_update, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
       end

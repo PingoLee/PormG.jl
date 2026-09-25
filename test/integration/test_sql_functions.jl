@@ -102,6 +102,53 @@ end
     @test df[1, :min_val] == 1
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Literals that SQLite used to bind as a serialized BLOB (#721)
+# A date literal, a narrow integer and a projected `Value(Date)` must behave identically on both
+# engines. Before #721 a date literal was refused as a function operand (#705's stop-gap, since
+# `Value` bound it as a serialized BLOB on SQLite), and the `Int16` filter bound a BLOB that matched
+# no seeded (INTEGER) row. The projection
+# case is parity only: SQLite.jl deserialized the BLOB back into a `Date`, so it guards the typed
+# read-back, not the original bug. Expected values are computed in Julia from the plain column.
+# `Date(string(x)[1:10])` absorbs the one intended difference: a function result is a `Date` on
+# PostgreSQL and ISO text on SQLite.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Date and narrow-integer literals (#721)" begin
+    cutoff = Date(2020, 8, 1)
+    plain = M.Race.objects
+    plain.filter("year" => 2020)
+    plain.values("raceid", "date")
+    plain.order_by("raceid")
+    races = plain.list()
+    @test !isempty(races)
+
+    # Greatest over a date column and a date literal: the later of the two, per race.
+    q = M.Race.objects
+    q.filter("year" => 2020)
+    q.values("raceid", "later" => Greatest("date", cutoff))
+    q.order_by("raceid")
+    got = [Date(string(r[:later])[1:10]) for r in q.list()]
+    @test got == [max(Date(string(r[:date])[1:10]), cutoff) for r in races]
+    # Not a vacuous comparison: the season straddles the cutoff, so both arms are taken.
+    @test any(r -> Date(string(r[:date])[1:10]) < cutoff, races)
+    @test any(r -> Date(string(r[:date])[1:10]) > cutoff, races)
+
+    # A narrow-integer filter finds the same rows as the Int64 one.
+    q16 = M.Race.objects
+    q16.filter("year" => Int16(2020))
+    q16.values("raceid")
+    q16.order_by("raceid")
+    @test [r[:raceid] for r in q16.list()] == [r[:raceid] for r in races]
+
+    # A projected date literal reads back as a `Date` on both engines.
+    qv = M.Race.objects
+    qv.filter("raceid" => races[1][:raceid])
+    qv.values("raceid", "d" => Value(cutoff))
+    row = only(qv.list())
+    @test row[:d] == cutoff
+    @test row[:d] isa Date
+end
+
 @testset "Mathematical Functions" begin
     # Logic: Validates math operations like floor, ceil, power, and sqrt.
     # Why: For PostgreSQL, we must ensure inputs are cast to ::numeric to match function signatures.

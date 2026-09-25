@@ -40,6 +40,9 @@ import PormG: backend_sqlite_version  # SQLite library-version probe for the bin
 # #564 — the value-representation table (`src/value_repr.jl`). The read path asks it which parser
 # undoes a backend's stored text instead of naming one itself; `CDateTime` is the key it asks with.
 import PormG: value_parser, value_formatter, sql_canonicalize, field_canonical_kind
+# #721 — the SQLite collector binds through the same table, so a literal never reaches SQLite.jl's
+# serializing `bind!(::Any)` fallback; `literal_canonical_kind` types a projected `Value(x)`.
+import PormG: sqlite_bind_value, literal_canonical_kind
 import PormG: CanonicalType, CDate, CDateTime, CTime, CInterval
 import PormG: _emsg, _suggest_name  # shared helpers (Kernel)
 import PormG.ConnectionPool: fetch, fetch_copy, with_transaction, with_savepoint, with_sqlite_write_lock, current_task, finalize_transaction_connection!

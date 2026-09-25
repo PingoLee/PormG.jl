@@ -12,10 +12,10 @@ path. Three things are pinned:
 
   1. **The SQL.** Each constructor with a bare number renders a marker and binds the value, on both
      engines, with every marker bound in text order on SQLite.
-  2. **The refusals are at the constructor.** A value that is not an operand — `nothing`, a
-     `BigFloat`, a date or an `Int16` (both of which `Value` would bind as a serialized BLOB on
-     SQLite) — raises
-     `QueryBuildError` naming the spelling that works, as does a number in `Replace`'s text slots.
+  2. **The refusals are at the constructor.** A value that is not an operand — `nothing` or a
+     `BigFloat` — raises `QueryBuildError` naming the spelling that works, as does a number in
+     `Replace`'s text slots. A date and a narrow integer were refused here too until #721, because
+     `Value` bound them as a serialized BLOB on SQLite; they are operands now (see below).
   3. **Nothing else moved.** A string is a column, `Value(0)` renders as before, and a wrapped
      aggregate keeps the #702 flag.
 
@@ -104,18 +104,13 @@ end
 # What is not an operand is refused at the constructor
 # The failure used to surface in `values()`, as a `MethodError` naming an internal function. Each
 # case now raises `QueryBuildError` when the expression is BUILT, before any query exists, and the
-# message names what to write instead. A date is refused rather than wrapped: `Value` binds its
-# literal raw, and SQLite.jl serializes a `Date` into a BLOB, so the comparison would be silently
-# wrong on that engine.
+# message names what to write instead.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#705: a value that is not an operand is refused at construction" begin
   for (label, build, needle) in (("nothing", () -> Coalesce("points", nothing), "Value(x)"),
                                  ("a BigFloat", () -> Power("points", big(2.0)), "Value(x)"),
-                                 # Found in review: these bind as a BLOB on SQLite, like a Date.
-                                 ("an Int16", () -> Power("points", Int16(2)), "Int64(2)"),
-                                 ("a UInt8", () -> Mod("points", 0x02), "Int64(2)"),
-                                 ("a Date", () -> Least("race_date", Date(2020, 1, 1)), "date column"),
-                                 ("a DateTime", () -> Greatest("race_date", DateTime(2020)), "date column"),
+                                 # A bare duration has no single reading as an operand (#721).
+                                 ("a Period", () -> Coalesce("points", Day(1)), "Value(x)"),
                                  ("a number in Replace's find", () -> Replace("surname", 1, "x"), "\"1\""),
                                  ("a number in Replace's replacement", () -> Replace("surname", "a", 2), "\"2\""),
                                  # Every integer type gets the string hint there, not `Int64(x)`,
@@ -125,6 +120,35 @@ end
       err = @test_throws PormG.QueryBuildError build()
       @test occursin(needle, err.value.msg)
       @test occursin("#705", err.value.msg)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #721: a date and a narrow integer are operands now
+# These four were refused above until #721. `Value` bound them raw and SQLite.jl serialized each one
+# into a BLOB. The SQLite binder now converts them: a date to the text its column stores, an integer
+# to `Int64`. PostgreSQL binds the raw value with its cast, as it always did. This REVERSES the #705
+# refusal deliberately; the refusal was a stop-gap until the binder was fixed.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#721: a date or narrow-integer operand binds on both engines" begin
+  cases = (("an Int16", () -> Power("points", Int16(2)), Int16(2), 2),
+           ("a UInt8", () -> Mod("points", 0x02), 0x02, 2),
+           ("a Date", () -> Least("race_date", Date(2020, 1, 1)), Date(2020, 1, 1), "2020-01-01"),
+           ("a DateTime", () -> Greatest("race_date", DateTime(2020)), DateTime(2020),
+            "2020-01-01T00:00:00.000+00:00"))
+  for (backend, Model_) in _LIT_OP_MODELS, (label, build, pg_value, sl_value) in cases
+    @testset "$backend — $label" begin
+      q = Model_.objects
+      q.values("resultid", "x" => build())
+      insp = inspect_query(q)
+      assert_marker_count(insp, backend)
+      # The raw value on PostgreSQL, the converted one on SQLite — type included, since
+      # `Int16(2) == 2` would hide the conversion.
+      expected = backend == :postgres ? pg_value : sl_value
+      @test only(insp[:parameters]) == expected
+      @test typeof(only(insp[:parameters])) == (backend == :postgres ? typeof(pg_value) :
+                                                sl_value isa Integer ? Int64 : String)
     end
   end
 end

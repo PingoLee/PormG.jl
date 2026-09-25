@@ -347,10 +347,11 @@ function add_parameter!(sq::PormGSQLiteParam, value::AbstractArray; contains::Bo
   contains && (throw(FilterError("Contains option is not supported for array parameters")))
   # Expand array into multiple positional parameters for SQLite. #466: a `PormGBytes` element
   # is unwrapped to its bytes, exactly as the scalar arm below does — SQLite.jl's `bind!(::Any)`
-  # fallback would otherwise Julia-serialize the wrapper into a BLOB that matches nothing.
+  # fallback would otherwise Julia-serialize the wrapper into a BLOB that matches nothing. Every
+  # other element goes through `sqlite_bind_value` for the same reason (#721).
   placeholders = join(fill("?", length(value)), ", ")
   for v in value
-    push!(_current_bucket(sq), v isa PormGBytes ? v.bytes : v)
+    push!(_current_bucket(sq), v isa PormGBytes ? v.bytes : sqlite_bind_value(v))
   end
   return placeholders
 end
@@ -358,7 +359,11 @@ function add_parameter!(sq::PormGSQLiteParam, value; contains::Bool=false, opera
   if contains
     value = _apply_like_wildcards(value, operator)
   end
-  push!(_current_bucket(sq), value)
+  # #721: the one place a SQLite value is bound, so the one place it is made bindable. A value the
+  # column formatter already turned into text passes through; a raw literal (`Value(x)`, a function
+  # kwarg, an integer `format_number_sql` returns as is) is converted or refused here, never handed
+  # to SQLite.jl's serializing fallback. `value_repr.jl` owns the table.
+  push!(_current_bucket(sq), sqlite_bind_value(value))
   return "?"  # SQLite positional style
 end
 

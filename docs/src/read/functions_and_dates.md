@@ -312,10 +312,16 @@ df = query |> DataFrame
 ## Conditional Functions
 
 The operands of `Coalesce`, `NullIf`, `Greatest` and `Least` (and of `Power` and `Mod` above) are
-read by their type. A string is a column path, and a number or a `Bool` is a literal that PormG binds
-as a parameter. A **string literal** needs `Value(...)`: `NullIf("code", "")` would read `""` as a
-column name. Any other value, including a date, raises `QueryBuildError` when the expression is
-built.
+read by their type. A string is a column path. A number (of any integer width), a `Bool`, a `Date`,
+a `DateTime`, a `ZonedDateTime` or a `Time` is a literal that PormG binds as a parameter. A **string
+literal** needs `Value(...)`: `NullIf("code", "")` would read `""` as a column name. Any other value
+raises `QueryBuildError` when the expression is built.
+
+On SQLite a date or time literal binds as the same text its column stores (`Date(2021, 3, 28)` is
+`"2021-03-28"`), and an integer of any width binds as a 64-bit integer, so a comparison with a
+`DateField` column picks the same rows as on PostgreSQL. The *result* of a function over a date
+column is typed on PostgreSQL (a `Date`) but is that ISO text on SQLite (`"2021-04-01"`), as for any
+function over a date column there.
 
 ### `Coalesce` — First Non-Null Value
 
@@ -350,6 +356,12 @@ query.values(
     "adjusted_points" => Greatest("points", 0),
     "capped_points"   => Least("points", 25)
 )
+
+# A date literal works the same way: the later of the race date and 1 January 2021.
+using Dates
+query = M.Race.objects
+query.filter("year" => 2020)
+query.values("name", "not_before_2021" => Greatest("date", Date(2021, 1, 1)))
 ```
 
 ### `Cast` — Type Conversion

@@ -443,7 +443,24 @@ end
 """
     Value(x)
 
-Wraps a literal value (String, Number, or Nothing) for use in SQL queries.
+Wraps a literal value for use in SQL queries. It binds as a parameter, except `nothing`, which
+renders as `NULL`.
+
+A string, an integer of any width, a float, a `Bool`, a `Date`, `DateTime`, `ZonedDateTime` or
+`Time`, or a `UUID` binds on both engines. On SQLite each binds as what its column would store: a
+date or time as the text a `DateField`/`DateTimeField`/`TimeField` holds, and an integer as
+`Int64`. A projected `Date`, `DateTime` or `Time` reads back typed: `values("d" => Value(Date(2021, 3, 28)))`
+is a `Date`, and a `DateTime` comes back as a UTC `ZonedDateTime` on SQLite, as a SQLite
+`DateTimeField` column does. A float binds as a double on SQLite, so a `BigFloat` or `Decimal` is
+narrowed to `Float64` there. A value SQLite cannot store as itself (a `Symbol`, a `Rational`, an
+integer beyond `Int64`, an arbitrary struct) raises `InvalidValueError` there instead of being bound
+as a serialized Julia object.
+
+```julia
+using PormG.Functions: Value
+
+"season_label" => Value("2021 season")
+```
 """
 function Value(x::Any)
   return SQLText(x)
@@ -471,29 +488,24 @@ Value(x::JoinedReference) = throw(QueryBuildError(
 # `Coalesce("points", Value(0))` always did. A string is still a column path — a string LITERAL needs
 # `Value("…")`, as in Django.
 #
-# The literal set is the numbers that bind NATIVELY on both engines. `Value(x)` binds its literal
-# RAW, and SQLite.jl has `bind!` methods for `Int32`, `Int64`, `Bool` and `AbstractFloat` only;
-# anything else falls to `bind!(::Any)`, which Julia-serializes the value into a BLOB, so the
-# function would compare against garbage — silently (#721). Measured (`SELECT typeof(?)`): `Int8`,
-# `Int16`, every `UInt`, `Int128`, `BigInt`, `Date`, `DateTime` and `Time` all bind as `blob`. Those
-# are refused below with the spelling that works; `BigFloat`/`Decimal` stay out for
-# `_CompareLiteral`'s reason too (types.jl). A PormG node passes through untouched — the walk owns
-# those. Anything else is refused HERE, at the constructor, rather than as a `MethodError` from the
-# walk.
-const _FunctionLiteral = Union{Bool,Int32,Int64,Float16,Float32,Float64}
+# The literal set is every number and every date/time value. `Value(x)` binds its literal as a
+# parameter, and since #721 the SQLite binder (`sqlite_bind_value`, value_repr.jl) turns each of them
+# into what SQLite stores — an integer of any width into `Int64`, a `Date` into the text a date column
+# holds — so a function compares against the value, not a serialized Julia object. Before #721 these
+# bound as a BLOB and #705 refused them here; that refusal was a stop-gap and is gone.
+# `BigFloat`/`Decimal` stay out for `_CompareLiteral`'s reason (types.jl), and a `Period` because a
+# bare duration has no one reading as an operand (an interval on PostgreSQL, text on SQLite). A PormG
+# node passes through untouched — the walk owns those. Anything else is refused HERE, at the
+# constructor, rather than as a `MethodError` from the walk.
+const _FunctionLiteral = Union{Bool,Integer,Float16,Float32,Float64,
+                               Dates.Date,Dates.DateTime,Dates.Time,ZonedDateTime}
 _function_operand(x::AbstractString) = SQLField(String(x))
 _function_operand(x::_FunctionLiteral) = Value(x)
 _function_operand(x::Union{SQLType,SQLObject}) = x
-_function_operand(x::Integer) = throw(QueryBuildError(
-  "\e[4m\e[31m$(repr(x))\e[0m (::$(typeof(x))) is not a function operand: SQLite cannot bind that " *
-  "integer type as a number. Convert it: \e[4m\e[32mInt64($(x))\e[0m (#705)."))
-_function_operand(x::Dates.AbstractTime) = throw(QueryBuildError(
-  "\e[4m\e[31m$(repr(x))\e[0m (::$(typeof(x))) is not a function operand: a date or time literal " *
-  "cannot yet be bound inside a function on every engine. Use a date column (its field path) " *
-  "instead (#705)."))
 _function_operand(x) = throw(QueryBuildError(
   "\e[4m\e[31m$(repr(x))\e[0m (::$(typeof(x))) is not a function operand. An operand is a column " *
-  "path (a string), a number, a `Bool`, or an expression; wrap any other literal as " *
+  "path (a string), a number, a `Bool`, a `Date`/`DateTime`/`ZonedDateTime`/`Time`, or an expression " *
+  "(a duration is not one); wrap any other literal as " *
   "\e[4m\e[32mValue(x)\e[0m (#705)."))
 # `Replace`'s `find`/`replace`: TEXT slots, so a string there is a literal. A number is refused
 # rather than converted — PostgreSQL has no `replace(text, bigint, bigint)`, and turning `1` into
@@ -765,7 +777,8 @@ end
 
 Returns the first non-null value in the list of arguments.
 
-A string argument is a column path. A number or a `Bool` is a literal that is bound as a parameter
+A string argument is a column path. A number, a `Bool`, or a `Date`/`DateTime`/`ZonedDateTime`/`Time`
+is a literal that is bound as a parameter
 (`Coalesce("points", 0)` means `Coalesce("points", Value(0))`). Wrap a string literal in `Value`. Any other value raises `QueryBuildError`
 when the expression is built (#705).
 """
@@ -780,7 +793,8 @@ end
 
 Returns the greatest value in the list of arguments.
 
-A string argument is a column path. A number or a `Bool` is a literal that is bound as a parameter
+A string argument is a column path. A number, a `Bool`, or a `Date`/`DateTime`/`ZonedDateTime`/`Time`
+is a literal that is bound as a parameter
 (`Greatest("points", 0)` means `Greatest("points", Value(0))`). Wrap a string literal in `Value`. Any other value raises `QueryBuildError`
 when the expression is built (#705).
 """
@@ -795,7 +809,8 @@ end
 
 Returns the least value in the list of arguments.
 
-A string argument is a column path. A number or a `Bool` is a literal that is bound as a parameter
+A string argument is a column path. A number, a `Bool`, or a `Date`/`DateTime`/`ZonedDateTime`/`Time`
+is a literal that is bound as a parameter
 (`Least("points", 25)` means `Least("points", Value(25))`). Wrap a string literal in `Value`. Any other value raises `QueryBuildError`
 when the expression is built (#705).
 """
@@ -857,7 +872,8 @@ end
 
 Returns NULL if field1 equals field2, otherwise returns field1.
 
-A string argument is a column path. A number or a `Bool` is a literal that is bound as a parameter
+A string argument is a column path. A number, a `Bool`, or a `Date`/`DateTime`/`ZonedDateTime`/`Time`
+is a literal that is bound as a parameter
 (`NullIf("points", 0)` means `NullIf("points", Value(0))`). Wrap a string literal in `Value`. Any other value raises `QueryBuildError`
 when the expression is built (#705).
 
@@ -962,7 +978,8 @@ end
 
 Returns `base` raised to the power of `exponent`.
 
-A string argument is a column path. A number or a `Bool` is a literal that is bound as a parameter
+A string argument is a column path. A number, a `Bool`, or a `Date`/`DateTime`/`ZonedDateTime`/`Time`
+is a literal that is bound as a parameter
 (`Power("points", 2)` means `Power("points", Value(2))`). Wrap a string literal in `Value`. Any other value raises `QueryBuildError`
 when the expression is built (#705).
 """
@@ -976,7 +993,8 @@ end
 
 Returns the remainder (modulo) of a division.
 
-A string argument is a column path. A number or a `Bool` is a literal that is bound as a parameter
+A string argument is a column path. A number, a `Bool`, or a `Date`/`DateTime`/`ZonedDateTime`/`Time`
+is a literal that is bound as a parameter
 (`Mod("points", 2)` means `Mod("points", Value(2))`). Wrap a string literal in `Value`. Any other value raises `QueryBuildError`
 when the expression is built (#705).
 """

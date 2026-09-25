@@ -17,6 +17,8 @@ custom_entries = OrderedDict{String, String}(
 !!! warning "Manual Editing"
     Always keep the `OrderedDict` structure. PormG will compute checksums for your custom entries and record them in the history table.
 
+    Edit the file **after** your last `makemigrations`, just before `migrate`. `makemigrations` rewrites it whenever your models differ from the database, and moves it aside to `pending_migrations.jl.discarded` when they do not. Either way your hand-added entries are no longer pending.
+
 ---
 
 ## Repair Operations

@@ -123,6 +123,18 @@ It returns a summary of what was thrown away — `(discarded=true, path, backup,
 or `nothing` when there was no pending migration. A later `makemigrations` overwrites the pending
 file anyway, so regenerating the plan afterwards is unaffected.
 
+`makemigrations` does this discard itself when it finds **no changes**: if you revert the model change
+behind a pending plan and run it again, it logs that nothing is pending and moves the old plan to
+`pending_migrations.jl.discarded`, so a later `migrate()` cannot apply a change your models no longer
+declare. Either way the pending file describes the current diff and nothing else. The backup keeps
+only the most recent discard; an earlier `.discarded` file is overwritten.
+
+One pending plan is kept even then: a plan a previous `migrate()` applied but failed to move to
+`applied_migrations/`. Your models already match it, which is why nothing changed. `makemigrations`
+recognises it by checksum and warns instead of discarding it; run `migrate()` to archive it, which
+it does without applying the plan a second time. If that plan is destructive, pass
+`destructive=true`: the destructive guard runs before `migrate()` recognises the plan as applied.
+
 ---
 
 ## Step 4: Check Status

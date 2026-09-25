@@ -1818,8 +1818,12 @@ It does **not** touch the schema. The generated DDL lands in
   CI, not on real data.
 
 Returns `nothing`. Logs and returns early — writing no plan — when the connection has
-`change_db: false`. An up-to-date schema logs that no migrations are pending. A missing models
-file raises `MissingConfigurationError`.
+`change_db: false`. An up-to-date schema logs that no migrations are pending, and moves an earlier
+`pending_migrations.jl` aside to `pending_migrations.jl.discarded` (through
+[`discard_pending_migration`](@ref)), since that plan no longer describes any change (#727). The one
+exception is a plan a previous `migrate` already applied but failed to archive — its checksum
+matches the latest applied migration — which is kept, with a warning, for the next `migrate` to
+archive without re-applying. A missing models file raises `MissingConfigurationError`.
 
 See also [`migrate`](@ref), [`get_migration_plan`](@ref), and the
 [Database Migrations in PormG](@ref) guide.
@@ -1857,19 +1861,8 @@ migration_plan = get_migration_plan(live_schema, current_models, connection, set
 
 @pormg_debug false
 
-# store migration_plan as pending_migrations.jl file
-if migration_plan |> isempty
-  @info(_emsg("\e[32mYour database schema is already up-to-date. No migrations are pending.\e[0m"))    
-else     
-  path = joinpath(settings.db_def_folder, "migrations")
-  if !ispath(path)
-    mkdir(path)
-  end
-  generate_migration_plan("pending_migrations.jl", migration_plan, path)
-  @warn("The migration plan has been saved to '$(settings.db_def_folder)/migrations/pending_migrations.jl'. Review the plan before applying the migrations.")
-  @info(_emsg("\e[32mMigration plan generated successfully. Run 'PormG.Migrations.migrate($( settings.db_def_folder == "db" ? "" : string("\"", settings.db_def_folder, "\"")))' to apply the migrations.\e[0m"))
-end
-
+_write_pending_plan(connection, settings, migration_plan)
+return nothing
 end
 
 function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::String = "db/models.jl", interactive::Bool = true)
@@ -1893,18 +1886,61 @@ function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::
 
   migration_plan = get_migration_plan(live_schema, current_models, connection, settings, interactive=interactive)
 
-  # store migration_plan as pending_migrations.jl file
-  if migration_plan |> isempty
-    @info(_emsg("\e[32mYour database schema is already up-to-date. No migrations are pending.\e[0m"))    
-  else     
-    path = joinpath(settings.db_def_folder, "migrations")
-    if !ispath(path)
-      mkdir(path)
+  _write_pending_plan(connection, settings, migration_plan)
+  return nothing
+end
+
+# The tail both `makemigrations` methods end with (#727): afterwards the pending file describes the
+# current diff and nothing else. A non-empty plan overwrites it. An EMPTY plan used to only log "No
+# migrations are pending" and leave any earlier plan on disk, so `status().pending` stayed true and
+# a later `migrate()` applied changes the models no longer declare. It is now moved aside through the
+# same `discard_pending_migration` a user would call, so it stays recoverable as `.discarded`. One
+# helper for both engines: the tail used to be copied into each method, which is how one could be
+# fixed and the other not.
+#
+# One pending plan is NOT stale on an empty diff: the one a `migrate()` COMMITted and then failed to
+# archive (#81). The empty diff is that plan's own effect, and the next `migrate()` recognises it by
+# checksum and archives it without re-applying — under the advisory lock, which `makemigrations`
+# does not take. So it is left where it is, and the message says what to do; discarding it would
+# lose its `applied_migrations/` archive and models snapshot.
+function _write_pending_plan(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
+                             migration_plan::OrderedDict{Symbol, OrderedDict{String, String}})::Nothing
+  folder = joinpath(settings.db_def_folder, "migrations")
+  if isempty(migration_plan)
+    if isfile(joinpath(folder, "pending_migrations.jl"))
+      if _pending_plan_already_applied(connection, settings)
+        @warn("No changes detected. The pending plan was already applied by a previous migrate(), which failed to archive it (its checksum matches the latest applied migration), so it is kept: run migrate() to archive it — with destructive = true if the plan is destructive, since that guard runs first. It is archived, not applied again.")
+        return nothing
+      end
+      @warn("No changes detected, so the earlier pending plan no longer describes anything; moving it aside.")
+      discard_pending_migration(settings; backup = true)
     end
-    generate_migration_plan("pending_migrations.jl", migration_plan, path)
-    @warn("The migration plan has been saved to '$(settings.db_def_folder)/migrations/pending_migrations.jl'. Review the plan before applying the migrations.")
-    @info(_emsg("\e[32mMigration plan generated successfully. Run 'PormG.Migrations.migrate($( settings.db_def_folder == "db" ? "" : string("\"", settings.db_def_folder, "\"")))' to apply the migrations.\e[0m"))
+    @info(_emsg("\e[32mYour database schema is already up-to-date. No migrations are pending.\e[0m"))
+    return nothing
   end
+  ispath(folder) || mkdir(folder)
+  generate_migration_plan("pending_migrations.jl", migration_plan, folder)
+  @warn("The migration plan has been saved to '$(settings.db_def_folder)/migrations/pending_migrations.jl'. Review the plan before applying the migrations.")
+  @info(_emsg("\e[32mMigration plan generated successfully. Run 'PormG.Migrations.migrate($( settings.db_def_folder == "db" ? "" : string("\"", settings.db_def_folder, "\"")))' to apply the migrations.\e[0m"))
+  return nothing
+end
+
+# Whether the pending plan is the latest applied migration — the file a `migrate()` COMMITted and then
+# failed to archive (#81). Compared exactly the way `migrate` compares it: the checksum of the ordered
+# SQL against `_latest_applied_checksum`. A plan that does not parse (#710's `InvalidMigrationError`)
+# is not that file, so it answers `false` and is discarded with a backup; a database error propagates.
+function _pending_plan_already_applied(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings)::Bool
+  _migrations_table_exists(connection) || return false
+  latest = _latest_applied_checksum(connection)
+  latest === nothing && return false
+  plan = try
+    _load_migration_plan(settings)
+  catch e
+    e isa InvalidMigrationError || rethrow()
+    return false
+  end
+  _, all_sql = _order_statements(plan)
+  return compute_checksum(all_sql) == latest
 end
 
 function makemigrations(db::String; config::Dict{String,PormGSettings} = config, interactive::Bool = true)

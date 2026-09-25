@@ -3043,14 +3043,16 @@ end
     @test err_pair isa PormGError && occursin("Invalid values pair", err_pair.msg)
 
     # Silent-drop fix, function-pair branch: a function that constructs but fails
-    # _check_function validation (Concat accepts the Int; validation rejects it) used to be
-    # logged + silently dropped — values() returned normally minus the column. It must now
-    # propagate the original error. The @error context log still fires first — silence it.
+    # _check_function validation used to be logged + silently dropped — values() returned normally
+    # minus the column. It must now propagate the original error. The @error context log still
+    # fires first — silence it. The vehicle is an invalid transform on a `Concat` part, which the
+    # walk validates. It used to be `Concat("surname", 42)`, whose Int the walk had no arm for; #705
+    # made a number a valid operand, so that shape now builds, and this one keeps the property.
     q_fn = M.Driver.objects
     err_fn = Logging.with_logger(Logging.NullLogger()) do
-        try q_fn.values("driverid", "broken" => Concat("surname", 42)); nothing catch e; e end
+        try q_fn.values("driverid", "broken" => Concat("surname__@nonexistent", Value("x"))); nothing catch e; e end
     end
-    @test err_fn isa MethodError                 # propagated, not swallowed
+    @test err_fn isa PormG.FilterError           # propagated, not swallowed
     @test length(q_fn.object.values) == 1        # the failing column was never half-pushed
 end
 

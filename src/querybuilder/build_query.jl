@@ -56,6 +56,7 @@ end
   - `instruc::SQLInstruction`: The SQLInstruction object to which the SELECT query will be added.
 """
 function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instruc::SQLInstruction)
+  _guard_select_condition_collision(values, instruc)   # #706
   for i in eachindex(values) # linear indexing
     v_copy = deepcopy(values[i])
 
@@ -103,9 +104,22 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
     # of the memo is to avoid re-resolving one expression, not to make two projections one.
     # #474: the memo key, not the output name — see `memo_key`. The output-name equality test below
     # is unchanged and still decides REUSE; this only decides which entry is consulted.
+    #
+    # #706: and only a node the memo can STAND FOR may reuse it — a path, a CTE or joined-copy
+    # handle, an outer reference: the gate `_get_filter_query(::SQLTypeField)` applies (#586). A
+    # function or `F` projection is keyed by its own alias, so an entry already under that key was
+    # written by something else — a `When("points" => …)` condition that rendered the COLUMN — and
+    # reusing it replaced `"points" => Sum("points")` with that column, silently. Such a projection
+    # always renders its own expression, and then takes that entry over (below): the alias names
+    # it, so every later reader — ORDER BY, an alias filter — must find it, not the stray column.
+    # `_guard_select_condition_collision` refuses the shape that reached this; the gate is what
+    # keeps a projection its own even if a future path writes first.
     cache_key = memo_key(v_copy)
     cached = memo_projection(instruc, cache_key)
-    if cached !== nothing && _projection_output_name(cached) == _projection_output_name(v_copy)
+    same_name = cached !== nothing &&
+                _projection_output_name(cached) == _projection_output_name(v_copy)
+    memo_node = v_copy.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject}
+    if same_name && memo_node
       instruc.select[i] = cached
     else
       @pormg_debug false
@@ -139,8 +153,10 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
         throw(QueryBuildError("Field requires an alias: \e[4m\e[31m$(v_copy.field)\e[0m must have a name using the format \e[4m\e[32m\"field_name\" => $(v_copy.field)\e[0m or use \e[4m\e[32mSQLField($(v_copy.field), \"alias_name\")\e[0m"))
       end
       # `cache_key` is non-`nothing` here: it is `nothing` exactly when `_as` is, which the throw
-      # above has already ruled out.
-      cached === nothing && memo_projection!(instruc, cache_key, instruc.select[i])
+      # above has already ruled out. Otherwise the first entry stays (#441), with one exception:
+      # an entry under this projection's own output name that it was refused (#706). Only that one
+      # is taken over — an entry under another name may be `_cache_join`'s, which is not ours.
+      (cached === nothing || same_name) && memo_projection!(instruc, cache_key, instruc.select[i])
       # #564: keyed by the RESULT-ROW name, which is what the driver hands back. The reuse branch
       # above needs no equivalent — it is taken only when the output name is EQUAL, so the entry it
       # would write is the one already written under that key.
@@ -460,6 +476,9 @@ function _resolve_having_filter_value(alias::MemoKey, raw_value, instruc::SQLIns
   # not formatted — `format_number_sql(true)` would be a category error, not a check.
   operator == "ISNULL" && return raw_value
   formatter = _having_alias_formatter(alias, instruc)
+  # #707: a type the ladder cannot name is not checked — the value binds as given, as it does on
+  # the WHERE path for any column-less expression.
+  formatter === nothing && return raw_value
   formatted_value = _guarded_format(formatter, raw_value, operator, alias[2],
                                     _formatter_type_label(formatter);
                                     subject = "projection alias")
@@ -479,10 +498,9 @@ end
 # "not a valid number". That half is not an error-type problem and no handler could have papered
 # over it — it is simply wrong, which is why the bare-reference arm below exists.
 #
-# Deliberately narrow: only a projection naming ONE column is resolved — a field of the queried
-# model, or (#652) a joined / CTE path, through `_alias_column_field`. `F("a") + Day(1)` carries an
-# `operation` whose result type is not the column's, so arithmetic keeps the fallback rather than
-# get a guess.
+# #707 retired the fallback itself: a type the ladder cannot name now means no check, not a number
+# (see `_having_alias_formatter`). `F("a") + Day(1)` still gets no guess — its result type is not
+# the column's.
 # The projection an alias names, as the USER wrote it — the unrendered node.
 #
 # Three places hold a projection and only this one is the source: `instruc.select` holds rendered
@@ -492,11 +510,17 @@ end
 # #474: `alias` is a MemoKey; this matches on the OUTPUT name, which is its second half. Comparing
 # the whole key would never match — the review flagged the String-vs-key mismatch as latent, and
 # typing the key is what turns it into a compile-visible one.
+#
+# #707: a `Value(...)` projection (`SQLTypeText`) is a source too. Returning only `SQLField`
+# projections left a literal alias sourceless, so `values("v" => Value(5)); filter("v" => 5)` kept the
+# HAVING route and reprinted the SELECT's memoized `?` with no value behind it: `HAVING ? = ?`, three
+# markers for two values on SQLite. Every caller reads `.field` through `_is_agg`/`_is_window_expr`/
+# an `isa`, all of which answer the literal inside a `Value` correctly: not an aggregate, not a window.
 function _projected_source(alias::MemoKey, instruc::SQLInstruction)
   for selected_value in instruc.object.values
     selected_alias = selected_value.custom_as !== nothing ? selected_value.custom_as : selected_value._as
     selected_alias == alias[2] || continue
-    isa(selected_value, SQLTypeField) || continue
+    isa(selected_value, Union{SQLTypeField,SQLTypeText}) || continue
     return selected_value
   end
   return nothing
@@ -545,8 +569,11 @@ function _alias_lhs(alias::MemoKey, cached, instruc::SQLInstruction)
   source = _projected_source(alias, instruc)
   # No source (the memo was written by a non-projection path) or a kind that binds nothing: the
   # memoized text is safe, and reusing it keeps the common case byte-identical.
-  (source === nothing ||
-   source.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject}) && return cached.field
+  source === nothing && return cached.field
+  # #707: a `Value(...)` alias IS a binding — its memoized text is the SELECT's own `?`. Render the
+  # literal again, so it binds in the clause it prints in (`WHERE ? = ?`, two values for two markers).
+  source isa SQLTypeText && return _get_select_query(source, instruc)
+  source.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject} && return cached.field
   return _get_select_query(source.field, instruc, _as = source._as)
 end
 
@@ -606,31 +633,79 @@ function _alias_isnull_aggregate(alias::MemoKey, instruc::SQLInstruction)::Bool
   return projected.function_name in _ISNULL_AGGREGATES
 end
 
+# #707: the ladder now walks the projection's node (`_expression_formatter`) instead of recognising
+# a fixed list of shapes, and a type it cannot name answers `nothing` — NO check — where it used to
+# answer `IntegerField().formatter`. The fallback was a guess, and a wrong one for every text
+# function: `values("nm" => Lower("surname")); filter("nm" => "hamilton")` raised "the nm projection
+# alias is the type number", while the same filter inside `Q(...)` worked. An unknown type now binds
+# the value as given, which is what the WHERE path does for a column-less expression; a known one is
+# checked on every spelling, because both route here.
 function _having_alias_formatter(alias::MemoKey, instruc::SQLInstruction)
   memoized = memo_field(instruc, alias)
   memoized === nothing || return memoized.formatter
+  source = _projected_source(alias, instruc)
+  # A `Value(...)` alias is a literal compared with a literal: there is no column type to hold the
+  # value to. Its `.field` is the literal itself, so it must not reach `_expression_formatter`,
+  # whose `String` arm reads a string as a COLUMN PATH — `Value("points")` would be typed as the
+  # `points` column.
+  (source === nothing || source isa SQLTypeText) && return nothing
+  return _expression_formatter(source.field, instruc)
+end
 
-  selected_value = _projected_source(alias, instruc)
-  if selected_value !== nothing
-    projected = selected_value.field
+# Functions whose result is text whatever their operands are.
+const _TEXT_OUTPUT_FUNCTIONS = ("LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "REPLACE", "CONCAT")
+# Functions whose result has the type of their operands — the first one that names a type decides.
+const _OPERAND_TYPED_FUNCTIONS = ("MAX", "MIN", "COALESCE", "GREATEST", "LEAST", "NULLIF")
 
-    if isa(projected, SQLTypeFunction)
-      projected.formatter === nothing || return projected.formatter
-      projected.function_name == "AVG" && return Models.format_number_sql
-      haskey(PormGTypeField, projected.function_name) &&
-        return getfield(Models, PormGTypeField[projected.function_name])
-      projected.function_name in ("SUM", "COUNT") && return Models.format_number_sql
-      if projected.function_name in ("MAX", "MIN")
-        column_field = _alias_column_field(projected.column, instruc)
-        column_field === nothing || return column_field.formatter
-      end
-    elseif isa(projected, FExpression) && projected.operation === nothing
-      column_field = _alias_column_field(projected.column, instruc)   # #576: the bare `F("col")`
-      column_field === nothing || return column_field.formatter
+# The formatter a value compared with this expression must satisfy, or `nothing` when the
+# expression's type cannot be named. Only a type that is KNOWN is returned — see
+# `_having_alias_formatter`.
+function _expression_formatter(p::SQLTypeFunction, instruc::SQLInstruction)
+  p.formatter === nothing || return p.formatter
+  name = p.function_name
+  name == "AVG" && return Models.format_number_sql
+  haskey(PormGTypeField, name) && return getfield(Models, PormGTypeField[name])
+  name in ("SUM", "COUNT") && return Models.format_number_sql
+  name in _TEXT_OUTPUT_FUNCTIONS && return Models.format_text_sql
+  # `Cast` names its type; `Case`/`Coalesce`/`Concat`/`Greatest`/`Least` may (`output_field=`).
+  declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
+  if declared isa AbstractString
+    formatter = _sql_type_formatter(declared)
+    formatter === nothing || return formatter
+  end
+  if name in _OPERAND_TYPED_FUNCTIONS
+    for operand in (p.column isa AbstractVector ? p.column : (p.column,))
+      formatter = _expression_formatter(operand, instruc)
+      formatter === nothing || return formatter
     end
   end
+  return nothing
+end
+# #576: a bare `F("col")` is the column. #707: arithmetic on a NUMBER stays a number; any other
+# operation (`F("happened") + Day(1)`) keeps no type, rather than get the column's.
+function _expression_formatter(p::FExpression, instruc::SQLInstruction)
+  p.operation === nothing && return _expression_formatter(p.column, instruc)
+  left = _expression_formatter(p.field_name, instruc)
+  return left === Models.format_number_sql ? left : nothing
+end
+_expression_formatter(p::SQLField, instruc::SQLInstruction) = _expression_formatter(p.field, instruc)
+function _expression_formatter(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction)
+  column_field = _alias_column_field(p, instruc)
+  return column_field === nothing ? nothing : column_field.formatter
+end
+_expression_formatter(::Any, ::SQLInstruction) = nothing
 
-  return IntegerField().formatter
+# The formatter for a type name `output_field=` / `Cast` holds — already validated and spelled by
+# `Dialect.cast_type_name`, so only the canonical words need recognising. A name outside the four
+# families (a timestamp, which has two representations, an array, `bytea`) answers `nothing`.
+function _sql_type_formatter(type_name::AbstractString)
+  base = lowercase(strip(first(split(type_name, '('))))
+  base in ("text", "varchar", "character varying", "char", "character") && return Models.format_text_sql
+  base in ("smallint", "integer", "int", "bigint", "real", "double precision", "float", "numeric",
+           "decimal") && return Models.format_number_sql
+  base in ("boolean", "bool") && return Models.format_bool_sql
+  base == "date" && return Models.format_date_sql
+  return nothing
 end
 
 # The field a `Max`/`Min` or bare-`F` projection's column names, or `nothing` when it names none.
@@ -642,8 +717,7 @@ end
 # CTE/joined handle), and `build()` renders the SELECT before the filters, so it is there when this
 # runs — the same entry the WHERE path's joined-path arm reads. A `CTEReference`/`JoinedReference`
 # column is what `_retag_cte_field!`/`_retag_joined_field!` leave behind, and `memo_key(ref)` names
-# its namespace. Anything else — arithmetic, a nested function — names no single column and keeps
-# the fallback on purpose: its result type is not a column's.
+# its namespace. Anything else names no single column, and `_expression_formatter` decides it.
 _alias_column_field(column::String, instruc::SQLInstruction) =
   haskey(instruc.object.model.fields, column) ? instruc.object.model.fields[column] :
                                                 memo_field(instruc, memo_key(:base, column))
@@ -768,9 +842,8 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         # alias to HAVING printed `HAVING` on a query with no GROUP BY, which both engines reject.
         # #692's `_aggregate_alias_leaf` draws the same line for `Q`, on the same flag, which #702
         # made true for a wrapped aggregate. No projection source keeps the HAVING route it always
-        # had. The reachable case is a `Value(...)` alias: `_projected_source` returns only
-        # `SQLField` projections, so `values("v" => Value(5)); filter("v" => 5)` still prints
-        # `HAVING ? = ?`, as it did before #701 (#707).
+        # had; since #707 a `Value(...)` alias has one, so a literal filters in WHERE (`? = ?`, both
+        # values bound) instead of printing `HAVING ? = ?`.
         #
         # Only the CLAUSE moves. The predicate still renders through `_render_alias_predicate`, not
         # through the WHERE path the `Q` spelling takes, because that is where the alias's value is
@@ -780,6 +853,23 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         # can. `test_operators.jl` pins it.
         source = _projected_source(having_key, instruc)
         clause = (source === nothing || _is_agg(source.field)) ? :having : :where
+        # #707: an EXPRESSION on the right (`F("grid")`, `Lower("forename")`, `Max("grid")`) has no
+        # value to type — it is a comparison between two expressions, which the WHERE path renders:
+        # `_get_filter_query(::SQLTypeField)` resolves the alias through `_alias_lhs` (re-rendering
+        # a binding aggregate in the current clause) and the right-hand side renders as SQL. The
+        # typed renderer would hand the node to a value formatter and die with a `MethodError`, as
+        # this spelling always did, over a row alias (WHERE) and an aggregate one (HAVING) alike.
+        # Same rule as `_row_alias_leaf` and `_get_having_query`, so both spellings agree.
+        if _expression_operand(v.values)
+          _guard_window_alias_predicate(source, having_key[2])   # #685, as the typed path does
+          set_context!(instruc, clause)
+          try
+            push!(clause === :having ? instruc.having : instruc._where, _get_filter_query(v, instruc))
+          finally
+            set_context!(instruc, :where)
+          end
+          continue
+        end
         # Switch to the clause's context for positional parameters. #595 moved this ABOVE the
         # left-hand side: resolving it can now RENDER, and a render binds — those values belong in
         # the clause's bucket with the comparison value, ahead of it, exactly as they print.
@@ -807,7 +897,7 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
       # hands back the original object on whichever side takes all of it, so a filter with no
       # aggregate-alias term renders exactly as it did before.
       where_part, having_part = _split_having(v, instruc)
-      where_part === nothing || push!(instruc._where, _get_filter_query(where_part, instruc))
+      where_part === nothing || push!(instruc._where, _get_where_query(where_part, instruc))
       if having_part !== nothing
         set_context!(instruc, :having)
         try
@@ -869,6 +959,81 @@ function _guard_field_alias_collision(filter, instruc::SQLInstruction, depth::In
   return nothing
 end
 
+# #706 — #703's question, asked of a condition INSIDE a projection. A `When("points" => 4, …)` or a
+# `Q(...)` in a `Case` resolves its key through `_get_filter_query(::SQLTypeField)`, which reads the
+# same projection memo a filter does, so the key met the same two meanings — and got whichever one
+# had claimed the memo first:
+#
+#   values("f" => Case([When("points" => 4, then = 1)]), "points" => Sum("points"))
+#
+# rendered the condition on the column and then, under #441's reuse rule, replaced the SUM
+# projection with that column entry: the aggregate the caller asked for vanished, silently. Declare
+# the SUM first and the condition compared the SUM instead. Declaration order is not a meaning.
+#
+# So the same refusal, as a pass over the whole projection list BEFORE anything renders — a static
+# scan, which is what takes the order out of it. Only a `SQLTypeOper` leaf reaches the memo this way;
+# arithmetic (`F("points") * 2`), `Coalesce("points", …)` and the other functions resolve a column
+# without consulting it, and were measured unaffected.
+#
+# Only OTHER projections count. `"status" => Case([When("status" => 1, then = "F")])` names itself
+# inside its own definition, where the name can only mean the column — no SQL reads an alias in the
+# expression that defines it. A key that names no model column (`When("dbl" => 4)` over
+# `"dbl" => F("points") * 2`) is a plain alias read with one meaning, and is not this guard's business.
+# (Over an AGGREGATE alias that read renders `CASE WHEN SUM(…)` into GROUP BY, which both engines
+# reject — a separate defect, #722.)
+function _guard_select_condition_collision(projections, instruc::SQLInstruction)
+  for (i, owner) in pairs(projections)
+    owner isa SQLTypeField || continue
+    owner_name = _projection_output_name(owner)
+    _each_condition_leaf(owner.field) do leaf
+      key = _model_filter_key(leaf.column, instruc)
+      key === nothing && return nothing
+      for (j, projection) in pairs(projections)
+        j == i && continue
+        _projection_output_name(projection) == key || continue
+        _projects_column(projection, key) && return nothing
+        _refuse_field_alias_collision(key, projection, instruc; condition_in = owner_name)
+      end
+      return nothing
+    end
+  end
+  return nothing
+end
+
+# Every `SQLTypeOper` leaf reachable from a projection's expression: a `When` condition, a `Q`/`Qor`
+# in a `Case`, and anything nested in a function's operands or keyword slots (`Case(default = Case(…))`),
+# in a window's `partition_by`/`order_by`, or inside an explicit `SQLField(…)` wrap.
+# A subquery or `Exists` is its own instruction with its own projection list, so it is not entered.
+# Depth cap as in `_guard_no_aggregate_predicate`.
+function _each_condition_leaf(f::Function, node, depth::Int = 0)
+  depth > 32 && return nothing
+  if node isa SQLTypeOper
+    f(node)
+  elseif node isa SQLTypeQ
+    foreach(x -> _each_condition_leaf(f, x, depth + 1), node.filters)
+  elseif node isa SQLTypeQor
+    foreach(x -> _each_condition_leaf(f, x, depth + 1), node.or)
+  elseif node isa AbstractVector
+    foreach(x -> _each_condition_leaf(f, x, depth + 1), node)
+  elseif node isa Union{FObject,WindowFunction}
+    _each_condition_leaf(f, node.column, depth + 1)
+    foreach(x -> _each_condition_leaf(f, x, depth + 1), values(node.kwargs))
+    # A window's PARTITION BY and ORDER BY can hold a `Case` too, and resolve through the same
+    # memo. ORDER BY refuses a bare function node, but not one wrapped in `SQLField(…)`.
+    if node isa WindowFunction
+      _each_condition_leaf(f, node.over.partition_by, depth + 1)
+      _each_condition_leaf(f, node.over.order_by, depth + 1)
+    end
+  elseif node isa Union{SQLField,SQLOrder}
+    # An explicit `SQLField(Case(…), "k")` wrap, or an ordering term around one.
+    _each_condition_leaf(f, node.field, depth + 1)
+  elseif node isa FExpression
+    _each_condition_leaf(f, node.field_name, depth + 1)
+    _each_condition_leaf(f, node.operand, depth + 1)
+  end
+  return nothing
+end
+
 # The filter key when it names something on the model — a field, or a `__` path whose first segment
 # is on the model — or `nothing`. Only a plain path: a transform (`__@year`) builds a function node,
 # and a CTE or joined-copy reference is a handle rather than a `String`.
@@ -888,7 +1053,19 @@ _projects_column(p::SQLTypeField, key::String) =
    p.field.field_name isa String && p.field.field_name == key)
 _projects_column(::Any, ::String) = false
 
-function _refuse_field_alias_collision(key::String, projection, instruc::SQLInstruction)
+function _refuse_field_alias_collision(key::String, projection, instruc::SQLInstruction;
+                                       condition_in::OptionalString = nothing)
+  # #706: the same two meanings, met by a condition inside a projection rather than by a filter.
+  condition_in === nothing || throw(AmbiguousFieldError(
+    "The condition on \e[4m\e[31m\"$(key)\"\e[0m inside " *
+    "\e[4m\e[31mvalues(\"$(condition_in)\" => …)\e[0m is ambiguous: \e[4m\e[31m$(key)\e[0m names " *
+    "both a column of \e[4m\e[32m$(instruc.object.model.name)\e[0m (a field, or a path through " *
+    "one) and the projection alias " *
+    "\e[4m\e[31mvalues(\"$(key)\" => $(_describe_projection(projection)))\e[0m, so the condition " *
+    "has two meanings and PormG will not choose one.\n  " *
+    "Rename the alias — \e[4m\e[32mvalues(\"$(key)_value\" => …)\e[0m — then write " *
+    "\e[4m\e[32m\"$(key)_value\"\e[0m in the condition for the projection, or " *
+    "\e[4m\e[32m\"$(key)\"\e[0m for the column (#706)."))
   throw(AmbiguousFieldError(
     "\e[4m\e[31mfilter(\"$(key)\" => …)\e[0m is ambiguous: \e[4m\e[31m$(key)\e[0m names " *
     "both a column of \e[4m\e[32m$(instruc.object.model.name)\e[0m (a field, or a path through " *
@@ -1076,6 +1253,8 @@ _having_leaf_label(q::SQLTypeQor) = _having_leaf_label(first(q.or))
 # through the top-level alias branch's own code, `_render_alias_predicate`. The parentheses match
 # `_get_filter_query(::SQLTypeQ/::SQLTypeQor)`. The caller holds the `:having` context.
 function _get_having_query(v::SQLTypeOper, instruc::SQLInstruction)::String
+  # #707: an expression on the right is a comparison, not a value to type — see the top-level branch.
+  _expression_operand(v.values) && return _get_filter_query(v, instruc)
   having_key, having_cached = _aggregate_alias_leaf(v, instruc)
   return _render_alias_predicate(v, having_key, having_cached, instruc)
 end
@@ -1083,6 +1262,51 @@ _get_having_query(q::SQLTypeQ, instruc::SQLInstruction)::String =
   "(" * join([_get_having_query(v, instruc) for v in q.filters], " AND ") * ")"
 _get_having_query(q::SQLTypeQor, instruc::SQLInstruction)::String =
   "(" * join([_get_having_query(v, instruc) for v in q.or], " OR ") * ")"
+
+# #707 — the WHERE half of a split, rendered so a ROW-alias leaf takes the typed renderer the
+# top-level spelling takes. `Q("nm" => "hamilton")` over `Lower("surname")` rendered through
+# `_get_filter_query(::SQLTypeOper)`, which has no field to type the value against: the value bound
+# unchecked (`Q("pts" => "not-a-number")` over `F("points")` reached the driver), and neither the
+# #596 bytes guard nor the #618 JSON-operator refusal ran. The top-level `filter("pts" => …)` had all
+# three. Now both spellings reach `_render_alias_predicate`, so there is one typing rule.
+#
+# This lives on the FILTER walk, not in `_get_filter_query(::SQLTypeOper)`: that function also
+# renders a SELECT-side `When("r" => 1)`, where reading a window or aggregate alias is legal SQL
+# (`_guard_window_alias_in_q`'s note), and `_render_alias_predicate` would refuse it. Parentheses
+# match `_get_filter_query(::SQLTypeQ/::SQLTypeQor)`, so a `Q` with no alias leaf renders as before.
+# The caller holds the `:where` context.
+function _get_where_query(v::SQLTypeOper, instruc::SQLInstruction)::String
+  hit = _row_alias_leaf(v, instruc)
+  hit === nothing && return _get_filter_query(v, instruc)
+  return _render_alias_predicate(v, hit[1], hit[2], instruc)
+end
+_get_where_query(q::SQLTypeQ, instruc::SQLInstruction)::String =
+  "(" * join([_get_where_query(v, instruc) for v in q.filters], " AND ") * ")"
+_get_where_query(q::SQLTypeQor, instruc::SQLInstruction)::String =
+  "(" * join([_get_where_query(v, instruc) for v in q.or], " OR ") * ")"
+_get_where_query(v, instruc::SQLInstruction)::String = _get_filter_query(v, instruc)
+
+# Is a predicate's right-hand side an expression (rendered as SQL) rather than a value (bound)?
+# The node kinds `OperObject.values` admits besides literals, and a membership list holding one.
+_expression_operand(x) = x isa Union{SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,SQLObjectHandler}
+_expression_operand(x::AbstractVector) = any(_expression_operand, x)
+
+# `(key, cached)` when `v` compares a projection alias the WHERE half of a split holds — a plain key
+# naming no field, memoized under its own output name. `_split_having` has already moved every
+# aggregate-alias leaf out, so what remains here is a row alias. The output-name test is
+# `_alias_lhs`'s: a path projection is memoized under its PATH, and is a column, not an alias.
+function _row_alias_leaf(v::SQLTypeOper, instruc::SQLInstruction)
+  # An expression on the right is a column comparison, not a value to type: the WHERE path renders
+  # it (`WHERE ("Tb"."points" = "Tb"."grid")`), and did before #707. Routing it here handed the
+  # node to a value formatter — a `MethodError`, or worse, the node bound as a parameter.
+  _expression_operand(v.values) && return nothing
+  col = v.column
+  _alias_filter_key(col, instruc) === nothing && return nothing
+  key = memo_key(col)
+  cached = memo_projection(instruc, key)
+  (cached === nothing || _projection_output_name(cached) != key[2]) && return nothing
+  return (key, cached)
+end
 
 # One resolved cjoin ON condition: the rendered SQL fragment and the positional parameter values it
 # bound. The two MUST travel together (#421). Phase 1b below can move a fragment onto a different

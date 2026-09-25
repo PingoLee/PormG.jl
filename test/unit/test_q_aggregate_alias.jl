@@ -1,4 +1,5 @@
 using Test
+using Dates
 using PormG
 using PormG.Models: Model, IDField, IntegerField, FloatField, CharField, DateField
 using PormG.QueryBuilder: inspect_query, Count, Sum, Max
@@ -517,4 +518,324 @@ end
   q.filter("driverid__surname" => "Senna")
   sql = inspect_query(q)[:sql_text]
   @test occursin(r"WHERE \"Tb_1\"\.\"surname\" = ", sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #706: a condition inside a projection on a field-and-alias key raises AmbiguousFieldError
+# `values("f" => Case([When("points" => 4, then = 1)]), "points" => Sum("points"))` resolved the
+# condition by declaration order: `When` first rendered the column and then silently REPLACED the
+# SUM projection with it; SUM first made the condition compare the SUM. #703's refusal, for the
+# SELECT side: both orders raise, whether the condition is a `When` pair or a `Q` in a `Case`, and
+# whatever the colliding projection is. The message names the projection holding the condition.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#706: a SELECT-side condition naming a field and an alias raises" begin
+  conditions = (("a When pair", Case([When("points" => 4.0, then = 1)], default = 0)),
+                ("a Q in a Case", Case([When(Q("points" => 4.0), then = 1)], default = 0)),
+                ("a lookup suffix", Case([When("points__@gt" => 4.0, then = 1)], default = 0)),
+                ("a Qor in a Case", Case([When(Qor("raceid" => 1, "points" => 4.0), then = 1)], default = 0)),
+                # A window's PARTITION BY resolves through the same memo (found in review).
+                ("a Case in a window's partition_by",
+                 PormG.Functions.Rank(over = PormG.Functions.WindowOver(
+                     partition_by = [Case([When("points" => 4.0, then = 1)], default = 0)]))),
+                # An explicit `SQLField(…)` wrap, in a function operand and in a window's ORDER BY
+                # (found in the delta review).
+                ("an SQLField-wrapped Case in a function",
+                 PormG.Functions.Coalesce(PormG.QueryBuilder.SQLField(
+                     Case([When("points" => 4.0, then = 1)], default = 0), "k"), 0)),
+                ("an SQLField-wrapped Case in a window's order_by",
+                 PormG.Functions.Rank(over = PormG.Functions.WindowOver(
+                     order_by = [PormG.QueryBuilder.SQLOrder(PormG.QueryBuilder.SQLField(
+                         Case([When("points" => 4.0, then = 1)], default = 0), "k"))]))))
+  projections = (("an aggregate", Sum("points")), ("a row expression", F("points") * 2),
+                 ("another column", "raceid"))
+  for (backend, Model_) in _Q_AGG_MODELS
+    for (clabel, condition) in conditions, (plabel, projection) in projections
+      # Both declaration orders: the defect was that each order got a different answer.
+      for (olabel, pairs) in (("condition first", ("f" => condition, "points" => projection)),
+                              ("alias first", ("points" => projection, "f" => condition)))
+        @testset "$backend — $clabel, $plabel, $olabel" begin
+          q = Model_.objects
+          q.values("resultid", pairs...)
+          err = @test_throws AmbiguousFieldError inspect_query(q)
+          msg = err.value.msg
+          # The projection holding the condition, both readings, and the rename.
+          @test occursin("values(\"f\" => …)", msg)
+          @test occursin("projection alias", msg)
+          @test occursin("points_value", msg)
+          @test occursin("#706", msg)
+        end
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #706 controls: a condition with one meaning still renders
+# A projection that names ITSELF in its own condition (`"points" => Case([When("points" => …)])`)
+# means the column there — no SQL reads an alias inside the expression that defines it. A
+# projection that IS the column gives the key one meaning. A condition on a key that names no
+# field is a plain alias read, legal in a SELECT (the #685 note), and reads the projection.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#706 controls: an unambiguous condition still renders" begin
+  for (backend, Model_) in _Q_AGG_MODELS
+    @testset "$backend — a projection naming itself in its own condition" begin
+      q = Model_.objects
+      q.values("raceid", "points" => Case([When("points" => 4.0, then = 1)], default = 0))
+      insp = inspect_query(q)
+      @test occursin(r"CASE\s+WHEN \"Tb\"\.\"points\" = ", insp[:sql_text])
+      assert_marker_count(insp, backend)
+    end
+    @testset "$backend — the column projected under its own name" begin
+      for projection in ("points", "points" => "points", "points" => F("points"))
+        q = Model_.objects
+        q.values("raceid", "f" => Case([When("points" => 4.0, then = 1)], default = 0), projection)
+        sql = inspect_query(q)[:sql_text]
+        @test occursin(r"WHEN \"Tb\"\.\"points\" = ", sql)
+        @test occursin("\"Tb\".\"points\" as \"points\"", sql)
+      end
+    end
+    @testset "$backend — a condition on an alias-only key reads the projection" begin
+      q = Model_.objects
+      q.values("raceid", "doubled" => F("points") * 2, "f" => Case([When("doubled" => 4.0, then = 1)], default = 0))
+      insp = inspect_query(q)
+      @test occursin(r"WHEN \(\"Tb\"\.\"points\" \* [?$]", insp[:sql_text])
+      assert_marker_count(insp, backend)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #707: a text function alias types as text, on both spellings
+# `_having_alias_formatter` knew only aggregates, the `PormGTypeField` functions and a bare `F`, and
+# guessed "number" for everything else — so `filter("nm" => "hamilton")` over `Lower("surname")` was
+# refused, while `filter(Q("nm" => "hamilton"))` rendered. Both spellings now render the same WHERE
+# predicate and bind the same value, and a text alias refuses nothing a text column would accept.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#707: a text function alias types as text on both spellings" begin
+  text_projections = (("Lower", PormG.Functions.Lower("surname")),
+                      ("Upper", Upper("surname")),
+                      ("Trim", PormG.Functions.Trim("surname")),
+                      ("Replace", PormG.Functions.Replace("surname", "a", "b")),
+                      ("Concat", PormG.Functions.Concat(["surname", Value("-")])),
+                      ("Coalesce over a text column", PormG.Functions.Coalesce("surname", Value("?"))))
+  for (backend, Model_) in _Q_AGG_MODELS, (plabel, projection) in text_projections
+    @testset "$backend — $plabel" begin
+      rendered = map(("top-level" => "nm" => "hamilton", "Q" => Q("nm" => "hamilton"))) do (_, pred)
+        q = Model_.objects
+        q.values("resultid", "nm" => projection)
+        q.filter(pred)
+        insp = inspect_query(q)
+        assert_marker_count(insp, backend)
+        # A row alias: WHERE, never HAVING, with the term bound as given.
+        @test _clause(insp[:sql_text], "HAVING") === nothing
+        @test last(insp[:parameters]) == "hamilton"
+        insp
+      end
+      # One rule: the two spellings bind the same vector.
+      @test rendered[1][:parameters] == rendered[2][:parameters]
+      # Typed AS TEXT, not merely unrefused: a number compared with a text alias is formatted as
+      # text, which is what makes `LOWER(…) = $1` executable on PostgreSQL (it has no `text = integer`
+      # operator). SQLite keeps native numbers by design (`_sqlite_preserve_native_parameter`).
+      for pred in ("nm" => 5, Q("nm" => 5))
+        q = Model_.objects
+        q.values("resultid", "nm" => projection)
+        q.filter(pred)
+        @test last(inspect_query(q)[:parameters]) == (backend === :postgres ? "5" : 5)
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #707: a Q alias leaf is typed and guarded like the top-level spelling
+# A row-alias leaf inside `Q`/`Qor` rendered through the WHERE path, which has no field to type the
+# value against: `Q("pts" => "not-a-number")` over `F("points")` bound the string unchecked, and the
+# #596 bytes guard and #618 JSON-operator refusal never ran. It now renders through the same
+# `_render_alias_predicate` the top-level key does, so each case raises the SAME error either way.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#707: a Q alias leaf is typed and guarded like the top-level key" begin
+  cases = (("a wrong-typed value", "pts" => "not-a-number", PormG.FilterError, "projection alias"),
+           ("a byte payload (#596)", "pts" => UInt8[0x01, 0x02], PormG.FilterError, "vector value but no operator"),
+           ("a JSON operator (#618)", "pts__@has_key" => "a", PormG.FilterError, "@has_key"))
+  for (backend, Model_) in _Q_AGG_MODELS, (clabel, pair, errtype, needle) in cases
+    @testset "$backend — $clabel" begin
+      messages = map((pair, Q(pair), Qor("raceid" => 1, pair))) do pred
+        q = Model_.objects
+        q.values("resultid", "raceid", "pts" => F("points"))
+        q.filter(pred)
+        err = @test_throws errtype inspect_query(q)
+        @test occursin(needle, err.value.msg)
+        err.value.msg
+      end
+      @test allequal(messages)
+    end
+  end
+  # Control, not a regression: a well-typed date already bound the column's representation on
+  # both spellings, and must keep doing so now that `Q` takes the typed renderer.
+  for (backend, Model_) in _Q_AGG_MODELS
+    params = map(("d" => Date(2009, 3, 29), Q("d" => Date(2009, 3, 29)))) do pred
+      q = Model_.objects
+      q.values("resultid", "d" => F("race_date"))
+      q.filter(pred)
+      inspect_query(q)[:parameters]
+    end
+    @test params[1] == params[2] == Any["2009-03-29"]
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #707: a Value alias filters in WHERE, with its literal bound
+# A `Value(...)` projection had no `_projected_source`, so its filter kept the HAVING route and
+# reprinted the SELECT's memoized `?` with nothing behind it: `HAVING ? = ?`, three markers for two
+# values on SQLite (and `WHERE (? = ?)` inside `Q`). The literal is now re-bound in the clause it
+# prints in: `WHERE ? = ?`, three markers, three values, in text order on both engines.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#707: a Value alias filters in WHERE with its literal bound" begin
+  for (backend, Model_) in _Q_AGG_MODELS, pred in ("v" => 7, Q("v" => 7))
+    @testset "$backend — $(pred isa Pair ? "top-level" : "Q")" begin
+      q = Model_.objects
+      q.values("resultid", "v" => Value(5))
+      q.filter(pred)
+      insp = inspect_query(q)
+      @test _clause(insp[:sql_text], "HAVING") === nothing
+      @test _clause(insp[:sql_text], "WHERE") !== nothing
+      assert_marker_count(insp, backend)
+      # SELECT's literal, WHERE's re-bound literal, then the compared value.
+      assert_bound_in_text_order(insp, Any[5, 5, 7])
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #707: a declared type is used, and an unknown one is not guessed
+# `Cast` and `output_field=` name the result type, so the alias is typed from it. A projection whose
+# type cannot be named (a `Case` with no `output_field`) is no longer typed as a number by default:
+# the guess refused a text `Case` outright. It binds the value as given — what the WHERE path does
+# for any column-less expression.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#707: a declared alias type is used; an unknown one is not guessed" begin
+  for (backend, Model_) in _Q_AGG_MODELS
+    # A declared integer refuses a non-number, on both spellings — as the alias's type, not as
+    # some other failure that happens to share the exception type.
+    for pred in ("pi" => "abc", Q("pi" => "abc"))
+      q = Model_.objects
+      q.values("resultid", "pi" => PormG.Functions.Cast("points", IntegerField()))
+      q.filter(pred)
+      err = @test_throws PormG.FilterError inspect_query(q)
+      @test occursin("projection alias", err.value.msg)
+    end
+    # A `Value` alias holds a literal, never a column: `Value("points")` is the text "points", so
+    # it is not typed as the `points` column (a number) and a text value is not refused.
+    q = Model_.objects
+    q.values("resultid", "v" => Value("points"))
+    q.filter(Q("v" => "abc"))
+    insp = inspect_query(q)
+    assert_bound_in_text_order(insp, Any["points", "points", "abc"])
+    # A declared text type accepts text.
+    q = Model_.objects
+    q.values("resultid", "lbl" => Case([When("points__@gte" => 15.0, then = "podium")], default = "other",
+                                       output_field = CharField()))
+    q.filter("lbl" => "podium")
+    @test last(inspect_query(q)[:parameters]) == "podium"
+    # No declared type: a text value is not refused as "not a number".
+    q = Model_.objects
+    q.values("resultid", "lbl" => Case([When("points__@gte" => 15.0, then = "podium")], default = "other"))
+    q.filter(Q("lbl" => "podium"))
+    insp = inspect_query(q)
+    @test last(insp[:parameters]) == "podium"
+    assert_marker_count(insp, backend)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #707: an expression on the right of an alias filter is a column comparison, not a value
+# `Q("pts" => F("grid"))` over `F("points")` rendered `WHERE ("Tb"."points" = "Tb"."grid")` before
+# #707, through the WHERE path. Routing every row-alias leaf to the typed renderer handed the `F`
+# to a value formatter — a `MethodError`, or, over a `Case` alias, the node bound AS A PARAMETER.
+# An expression right-hand side keeps the WHERE path on both spellings (found in the security pass;
+# the top-level spelling had always died with the `MethodError`, and now agrees with `Q`).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#707: an expression on the right of an alias filter renders as a comparison" begin
+  cases = (("F alias = F column", "pts" => F("points"), "pts" => F("raceid"),
+            "\"Tb\".\"points\" = \"Tb\".\"raceid\""),
+           ("F alias > F column", "pts" => F("points"), "pts__@gt" => F("raceid"),
+            "\"Tb\".\"points\" > \"Tb\".\"raceid\""),
+           ("text alias = function", "nm" => PormG.Functions.Lower("surname"),
+            "nm" => PormG.Functions.Lower("surname"), "LOWER(\"Tb\".\"surname\") = LOWER(\"Tb\".\"surname\")"),
+           ("Case alias = F column", "c" => Case([When("raceid" => 1, then = 1)], default = 0),
+            "c" => F("raceid"), "END = \"Tb\".\"raceid\""))
+  for (backend, Model_) in _Q_AGG_MODELS, (label, projection, pair, needle) in cases
+    for pred in (pair, Q(pair))
+      @testset "$backend — $label, $(pred isa Pair ? "top-level" : "Q")" begin
+        q = Model_.objects
+        q.values("resultid", projection)
+        q.filter(pred)
+        insp = inspect_query(q)
+        @test occursin(needle, replace(insp[:sql_text], r"\s+" => " "))
+        # Nothing but real values is bound — never the expression node.
+        @test !any(p -> p isa PormG.SQLType, insp[:parameters])
+        assert_marker_count(insp, backend)
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #707: an expression on the right of an AGGREGATE alias filter is a HAVING comparison
+# `filter("total__@gt" => F("raceid"))` over `Sum("points")` handed the `F` to the number formatter
+# and died with `MethodError: format_number_sql(::FExpression)`, top-level and inside `Q` — on
+# `main` too. It renders `HAVING SUM(…) > "Tb"."raceid"`, an aggregate on the right included. An
+# aggregate alias that BINDS re-renders its values in HAVING, in text order after the SELECT's.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#707: an expression on the right of an aggregate alias filter renders in HAVING" begin
+  for (backend, Model_) in _Q_AGG_MODELS
+    for (label, pred, needle) in (("an F column", "total__@gt" => F("raceid"),
+                                   "HAVING SUM(\"Tb\".\"points\") > \"Tb\".\"raceid\""),
+                                  ("an aggregate", "total__@gt" => Max("raceid"),
+                                   "HAVING SUM(\"Tb\".\"points\") > MAX(\"Tb\".\"raceid\")"))
+      for spelled in (pred, Q(pred))
+        @testset "$backend — $label, $(spelled isa Pair ? "top-level" : "Q")" begin
+          q = Model_.objects
+          q.values("raceid", "total" => Sum("points"))
+          q.filter(spelled)
+          insp = inspect_query(q)
+          sql = replace(insp[:sql_text], r"\s+" => " ")
+          @test occursin(needle, replace(sql, r"HAVING \((.*)\)" => s"HAVING \1"))
+          @test _clause(insp[:sql_text], "WHERE") === nothing
+          @test isempty(insp[:parameters])
+          assert_marker_count(insp, backend)
+        end
+      end
+    end
+    @testset "$backend — a binding aggregate alias, split from a row filter" begin
+      q = Model_.objects
+      q.values("raceid", "wins" => Count(Case([When("points__@gte" => 25.0, then = 1)])))
+      q.filter(Q("wins__@gt" => F("raceid"), "raceid__@gte" => 3))
+      insp = inspect_query(q)
+      sql = replace(insp[:sql_text], r"\s+" => " ")
+      @test occursin(r"HAVING COUNT\(CASE WHEN .* END \) > \"Tb\"\.\"raceid\"", sql)
+      @test occursin(r"WHERE \"Tb\"\.\"raceid\" >= ", sql)
+      assert_marker_count(insp, backend)
+      # Text order: SELECT's two CASE operands, WHERE's 3, then HAVING's re-render binding the SAME
+      # two operands (as the column formatter shaped them) — never a reprinted marker with no value.
+      params = insp[:parameters]
+      @test length(params) == 5
+      @test params[3] == 3
+      @test params[4:5] == params[1:2]
+    end
+    @testset "$backend — a binding right-hand side after a binding alias" begin
+      # Both sides bind in HAVING: the alias's re-rendered operands, then the `+ 1` (review nit).
+      q = Model_.objects
+      q.values("raceid", "wins" => Count(Case([When("points__@gte" => 25.0, then = 1)])))
+      q.filter("wins__@gt" => F("raceid") + 1)
+      insp = inspect_query(q)
+      @test occursin(r"HAVING COUNT\(CASE WHEN .* END \) > \(\"Tb\"\.\"raceid\" \+ [?$]",
+                     replace(insp[:sql_text], r"\s+" => " "))
+      assert_marker_count(insp, backend)
+      params = insp[:parameters]
+      @test length(params) == 5
+      @test params[3:4] == params[1:2]
+      @test params[5] == 1
+    end
+  end
 end

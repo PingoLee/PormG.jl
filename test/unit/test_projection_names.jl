@@ -227,3 +227,31 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A function projection never adopts another expression's memo entry (#706)
+# The #441 reuse rule compared only OUTPUT NAMES, and a function projection is memoized under its
+# own alias — so an entry some other path had written under that alias (a `When("qty" => …)`
+# condition rendering the COLUMN) was taken as the projection itself, and `"qty" => Sum("qty")`
+# rendered `"Tb"."qty"`. #706's guard refuses the query shape that reached it; this pins the rule
+# underneath, by seeding the stray entry directly, so a future writer cannot bring it back: the
+# projection renders its own SUM and takes the entry over, so a later reader finds the SUM too.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a function projection renders its own expression over a stray memo entry (#706)" begin
+  QB = PormG.QueryBuilder
+  for (backend, conn, kind) in _PN_BACKENDS
+    q = PN.Pn_child.objects
+    q.values("qty" => Sum("qty"))
+    ta = QB.SQLTbAlias()
+    instruc = QB.InstructionObject(text = "", table_alias = ta, alias = QB.get_alias(ta),
+                                   object = q.object, connection = conn,
+                                   parameters = QB.get_parameter(conn))
+    # What a column-rendering condition leaves behind: the raw column, under the alias's key.
+    stray = QB.SQLField("\"Tb\".\"qty\"", "qty")
+    QB.memo_projection!(instruc, QB.memo_key(:base, "qty"), stray)
+    QB.get_select_query(q.object.values, instruc)
+    @test occursin("SUM(", string(instruc.select[1].field))
+    # The alias now names the projection for every later reader.
+    @test occursin("SUM(", string(QB.memo_projection(instruc, QB.memo_key(:base, "qty")).field))
+  end
+end

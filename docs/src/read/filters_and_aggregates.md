@@ -915,16 +915,16 @@ For more complex expressions, see [Field Expressions](field_expressions.md).
 
 A function that wraps an aggregate is still an aggregate. `Coalesce`, `Cast`, `NullIf`, `Round`,
 `Case`/`When` and the rest group like the bare aggregate they contain, and a filter on their alias
-goes to `HAVING`. `Coalesce(Sum(...), Value(0))` is the usual way to report an empty sum as `0`
+goes to `HAVING`. `Coalesce(Sum(...), 0)` is the usual way to report an empty sum as `0`
 rather than `NULL`:
 
 ```julia
-using PormG.Functions: Coalesce, Sum, Value
+using PormG.Functions: Coalesce, Sum
 
 # 2009 drivers who never finished a race on the lead lap — `milliseconds` is NULL for everyone else
 query = M.Result.objects
 query.filter("raceid__year" => 2009)
-query.values("driverid__surname", "lead_lap_ms" => Coalesce(Sum("milliseconds"), Value(0)))
+query.values("driverid__surname", "lead_lap_ms" => Coalesce(Sum("milliseconds"), 0))
 query.filter("lead_lap_ms" => 0)
 ```
 
@@ -968,12 +968,43 @@ WHERE "Tb_2"."year" = $1 AND ("Tb"."grid" - "Tb"."positionorder") >= $2
 When a query projects both kinds, one `filter(...)` call splits the same way: the row alias goes to
 `WHERE` and the aggregate alias to `HAVING`.
 
-!!! note "Text-valued aliases"
-    The value of a top-level alias filter is checked against the alias's type, and PormG does not
-    yet know the type of a text function such as `Lower`, `Upper` or `Concat`, so it expects a
-    number there ([#707](https://github.com/PingoLee/PormG.jl/issues/707)). Until that is fixed,
-    filter the underlying column instead, e.g.
-    `filter("driverid__surname__@istartswith" => "ham")`.
+### How an Alias Filter's Value Is Typed
+
+A filter on an alias checks its value against the type of what the alias projects. The rule is the
+same whether the filter is written top-level or inside `Q(...)`/`Qor(...)`:
+
+- a column (`F("grid")`, `Max("grid")`, `Coalesce("code", Value("-"))`) has the column's type;
+- a text function (`Lower`, `Upper`, `Trim`, `Replace`, `Concat`) is text;
+- `Sum`, `Count`, `Avg` and arithmetic on numbers are numbers;
+- `Cast(...)`, or a function given `output_field = ...`, has the type it names.
+
+A value of the wrong type raises `FilterError`, which names the alias. When PormG cannot tell what
+type an expression returns, for example a `Case` with no `output_field`, it binds the value as
+given. An expression on the right, such as `F("grid")` or `Max("grid")`, is not a value: it is
+compared as SQL, so `filter("total_points__@gt" => F("raceid"))` over
+`"total_points" => Sum("points")` renders `HAVING SUM("Tb"."points") > "Tb"."raceid"`.
+
+```julia
+using PormG.Functions: Lower
+
+# 2010 results for the driver whose surname, lower-cased, is "button"
+query = M.Result.objects
+query.filter("raceid__year" => 2010)
+query.values("raceid__name", "surname_lc" => Lower("driverid__surname"), "points")
+query.filter(Q("surname_lc" => "button"))
+```
+
+```sql
+SELECT "Tb_1"."name" as "raceid__name", LOWER("Tb_2"."surname") as "surname_lc",
+  "Tb"."points" as "points"
+FROM "result" as "Tb"
+ INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
+ INNER JOIN "driver" AS "Tb_2" ON "Tb"."driverid" = "Tb_2"."driverid"
+WHERE "Tb_1"."year" = $1 AND (LOWER("Tb_2"."surname") = $2)
+```
+
+An alias over a literal, `values("v" => Value(5))`, is a row-level alias too: a filter on it compares
+two literals in `WHERE`, with both bound.
 
 ### An Alias Named After a Field
 
@@ -1008,6 +1039,22 @@ The same applies when the alias projects a different column under a field's name
 (`values("points" => "grid")`), and to a relation path used as an alias
 (`values("driverid__surname" => Upper("driverid__forename"))` followed by
 `filter("driverid__surname" => …)`).
+
+It also applies to a condition inside another projection, such as a `When` in a `Case` or a `Q`
+inside one. PormG raises `AmbiguousFieldError` there as well, whatever order the projections are
+declared in:
+
+```julia
+query = M.Result.objects
+query.values("raceid",
+             "podium_finish" => Case([When("points__@gte" => 15, then = 1)], default = 0),
+             "points" => Sum("points"))   # AmbiguousFieldError: the column, or the sum?
+```
+
+Rename the alias, as above, and the condition reads the column. A projection whose own condition
+names it, such as
+`"points" => Case([When("points__@gte" => 15, then = 1)], default = 0)`, is not ambiguous: inside the
+expression that defines it, the name can only mean the column.
 
 A projection that *is* the column is not ambiguous. `values("points")`,
 `values("points" => "points")` and `values("points" => F("points"))` filter the column as usual.

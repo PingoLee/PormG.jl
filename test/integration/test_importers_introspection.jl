@@ -1133,3 +1133,93 @@ if adapter_name == "PostgreSQL"
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL non-negative CHECK: only PormG's exact clause reads as PormG's (#731)
+# The reader matched `pg_get_constraintdef … LIKE '%>= 0%'` and `get_constraints_check` matched
+# `ILIKE '%>= 0%'`, so a user's range check on an `IntegerField` column read as the CHECK a
+# `PositiveIntegerField` renders — and the planner, diffing it against the declared `IntegerField`,
+# proposed `DROP CONSTRAINT` on the user's constraint. Both now match the exact deparsed clause.
+# The table is created from PormG's own plan, so `pos` / `pos_small` / `Mixed` carry exactly the
+# CHECK PormG writes (the round trip must still hold, a mixed-case column included); the user's
+# CHECKs are then added to the plain integer columns by hand. Dropped in `finally`.
+# SQLite already matched exactly; its parity test is hermetic (test/unit/test_live_schema_reader.jl).
+# Mutation gate: put `LIKE '%>= 0%'` back in the CTE and `grid`/`price` read as PormG's and the plan
+# is no longer empty; put `ILIKE '%>= 0%'` back in `get_constraints_check` and it names the user's
+# constraint for `grid`/`price`.
+# ─────────────────────────────────────────────────────────────────────────────
+if adapter_name == "PostgreSQL"
+  @testset "Non-negative CHECK: a user range check is not PormG's, and PormG's still round-trips (#731)" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
+    tbl = "pormg_it_nonneg"
+    drop731!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
+    M731 = PormG.Models
+    model = M731.Model(tbl;
+      id        = M731.IDField(),
+      grid      = M731.IntegerField(),
+      price     = M731.IntegerField(),
+      lap       = M731.IntegerField(),
+      pos       = M731.PositiveIntegerField(),
+      pos_small = M731.PositiveSmallIntegerField(),
+      Mixed     = M731.PositiveIntegerField())
+    schema731 = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+      Symbol(tbl) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => model, :exist => false))
+    settings731 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
+
+    drop731!()
+    try
+      created = PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema731, pool, settings731;
+                                                     interactive = false)
+      for (_, sql) in created[Symbol(tbl)]
+        ddl(sql)
+      end
+      # The user's own CHECKs, on the columns declared as plain `IntegerField`.
+      ddl("ALTER TABLE \"$(tbl)\" ADD CONSTRAINT pormg_it_nonneg_grid_range CHECK (grid >= 0 AND grid <= 30)")
+      ddl("ALTER TABLE \"$(tbl)\" ADD CONSTRAINT pormg_it_nonneg_price_min CHECK (price >= 0.5)")
+      ddl("ALTER TABLE \"$(tbl)\" ADD CONSTRAINT pormg_it_nonneg_lap_min CHECK (lap >= 05)")
+
+      # Precondition — the text both matchers see, as PostgreSQL deparses it. PormG's clause comes
+      # back re-parenthesised with the column quoted only when it must be (the `quote_ident` rule the
+      # predicate relies on); the two user checks the old `LIKE` matched do contain `>= 0`; and
+      # `>= 05` deparses as `>= 5`, so that shape — listed in #731 — never matched on PostgreSQL.
+      defs = Set(String.(DataFrame(PormG.ConnectionPool.fetch(pool,
+        "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = \$1::regclass AND contype = 'c'",
+        [tbl])).def))
+      @test "CHECK ((pos >= 0))" in defs
+      @test "CHECK ((pos_small >= 0))" in defs
+      @test "CHECK ((\"Mixed\" >= 0))" in defs
+      @test "CHECK (((grid >= 0) AND (grid <= 30)))" in defs
+      @test any(d -> startswith(d, "CHECK (((price)::numeric >= 0.5)"), defs)
+      @test "CHECK ((lap >= 5))" in defs
+
+      # The reader: only PormG's own clause is PormG's check.
+      live = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
+      has_nn(col) = any(c -> c isa PormG.NonNegativeCheck, live.columns[col].checks)
+      @test (has_nn("grid"), has_nn("price"), has_nn("lap")) == (false, false, false)
+      @test (has_nn("pos"), has_nn("pos_small"), has_nn("Mixed")) == (true, true, true)
+
+      # The dropper agrees with the reader, column by column — and names PormG's constraint.
+      gcc(col) = PormG.get_constraints_check(pool, tbl, col)
+      @test (gcc("grid"), gcc("price"), gcc("lap")) === (nothing, nothing, nothing)
+      @test gcc("pos") == "pormg_it_nonneg_pos_check"
+      @test gcc("pos_small") == "pormg_it_nonneg_pos_small_check"
+      @test gcc("Mixed") == "pormg_it_nonneg_Mixed_check"
+
+      # The sibling lookups #731 moved to bound parameters, run against a real catalog — the unit
+      # suite only sees their SQL text. The key is an identity column, which
+      # `pg_get_serial_sequence` resolves as it does a serial one.
+      @test PormG.get_constraints_pk(pool, tbl, "id") == "pormg_it_nonneg_pkey"
+      @test PormG.get_constraints_pk(pool, tbl, "grid") === nothing
+      @test PormG.get_constraints_unique(pool, tbl, "grid") === nothing
+      @test PormG.Migrations.get_sequence_name(pool, tbl, "id") == "public.pormg_it_nonneg_id_seq"
+
+      # THE convergence assertion: the declared model against its live table plans nothing, so the
+      # user's three CHECKs are kept and PormG's three are recognised.
+      again = PormG.Migrations.get_migration_plan([live], schema731, pool, settings731; interactive = false)
+      @test all(isempty, values(again))
+    finally
+      drop731!()
+    end
+  end
+end

@@ -32,7 +32,7 @@ Because every plan is a fresh diff between your models and the **live database**
 !!! note "Adopting a schema PormG did not create"
     Because the live side is read as facts, a column that no declaration could produce shows up as a **one-time plan** rather than being silently equated with the nearest field type — after it is applied, the schema converges:
 
-    - a `SMALLINT` / `INTEGER UNSIGNED` column without its `>= 0` CHECK plans `ADD CHECK` once against a `PositiveSmallIntegerField` / `PositiveIntegerField`;
+    - a `SMALLINT` / `INTEGER UNSIGNED` column without its `>= 0` CHECK plans `ADD CHECK` once against a `PositiveSmallIntegerField` / `PositiveIntegerField`. Only a CHECK of exactly `col >= 0` (the one PormG writes) counts as that CHECK: a range such as `CHECK (grid >= 0 AND grid <= 30)` is read as your own constraint, is never planned away, and does not stand in for it;
     - a foreign-key column with no index plans `CREATE INDEX` once against a `ForeignKey` (which declares `db_index = true` by default) — declare `db_index = false` if you do not want one;
     - a lengthless `varchar` or an unparameterised `numeric` plans the declared width once;
     - a column type PormG has no field for (`inet`, `citext`, an array, `character(n)`) never matches a declared `TextField` or `CharField`: `generate_models_from_db` emits `TextField` for it **with a warning**, and `makemigrations` plans a retype unless you exclude the table or declare the column by hand.

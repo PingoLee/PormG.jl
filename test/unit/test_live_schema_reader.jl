@@ -35,7 +35,7 @@ import PormG.Migrations: LiveTable, read_live_schema, live_table, model_from_liv
                          convert_schema_to_models, get_migration_plan, _pg_live_table, _key_arm,
                          _integer_key_arm, _coerce_default, _PostgresEngine, _SQLiteEngine,
                          _sqlite_column_checks, check, _sqlite_user_table_names,
-                         _PG_OWNABLE_TABLE_FILTER, _get_live_table_names
+                         _PG_OWNABLE_TABLE_FILTER, _get_live_table_names, _PG_NON_NEGATIVE_CHECK_MATCH
 # The SQLite laws open a real (temporary) file. `runtests.jl` loads the weakdep extension for the
 # whole suite; this guard is what makes the file runnable on its own.
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
@@ -766,4 +766,127 @@ fetch(::OwnershipMockPg730, sql::String; conn = nothing, params = nothing, ignor
   @test occursin("NOT c.relispartition", _PG_OWNABLE_TABLE_FILTER)
   @test occursin(r"NOT EXISTS \(SELECT 1 FROM pg_depend dep\s+WHERE dep\.classid = 'pg_class'::regclass AND dep\.objid = c\.oid\s+AND dep\.deptype = 'e'\)",
                  _PG_OWNABLE_TABLE_FILTER)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: PormG's non-negative CHECK is recognised by its exact clause, reader and dropper alike (#731)
+# The `non_negative_checks` CTE matched `pg_get_constraintdef … LIKE '%>= 0%'` and
+# `get_constraints_check` matched `check_clause ILIKE '%>= 0%'`, so a user's
+# `CHECK (grid >= 0 AND grid <= 30)` — or `CHECK (price >= 0.5)` — read as the one a
+# `PositiveIntegerField` renders, and the planner could propose dropping it. Both now interpolate
+# ONE predicate, `_PG_NON_NEGATIVE_CHECK_MATCH`: the constraint text must equal what PostgreSQL
+# deparses `CHECK ("col" >= 0)` to, the same exactness the SQLite reader's anchored regex has.
+# The live half (a real range check read, a real PormG check still matched) is
+# `test/integration/test_importers_introspection.jl`.
+# Mutation gate: put `LIKE '%>= 0%'` back in either query and its assertion fails.
+# ─────────────────────────────────────────────────────────────────────────────
+struct NonNegSqlMockPg731 <: PormG.PormGPostgres end
+const PG731_CALLS = Tuple{String, Any}[]
+fetch(::NonNegSqlMockPg731, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
+  (push!(PG731_CALLS, (sql, params)); DataFrame())
+
+@testset "PostgreSQL: PormG's >= 0 CHECK is matched by its exact clause, in the reader and the dropper (#731)" begin
+  # The predicate is the deparsed form of `Dialect._non_negative_check_clause`: PostgreSQL
+  # re-parenthesises the expression and quotes the column only when it must — which is exactly
+  # what `quote_ident` does, since both call the same quoting routine.
+  @test _PG_NON_NEGATIVE_CHECK_MATCH ==
+        "pg_get_constraintdef(con.oid) = 'CHECK ((' || quote_ident(a.attname) || ' >= 0))'"
+  @test occursin("\"col\" >= 0", Dialect._non_negative_check_clause("col"))   # what PormG writes
+
+  empty!(PG731_CALLS)
+  with_logger(NullLogger()) do                 # an empty dump warns "No tables found"
+    Migrations.get_database_schema(NonNegSqlMockPg731())
+  end
+  @test Migrations.get_constraints_check(NonNegSqlMockPg731(), "lap_times", "grid") === nothing
+  (dump_sql, _), (drop_sql, _) = PG731_CALLS
+  for sql in (dump_sql, drop_sql)
+    @test occursin(_PG_NON_NEGATIVE_CHECK_MATCH, sql)
+    @test !occursin(">= 0%", sql)              # neither substring spelling survives
+  end
+  # The dropper is scoped the way the DDL it feeds is: one column, and the table an unqualified
+  # name resolves to — the first schema on the search path that holds it.
+  @test occursin("array_length(con.conkey, 1) = 1", drop_sql)
+  @test occursin("n.nspname = ANY(current_schemas(false))", drop_sql)
+  @test occursin("ORDER BY array_position(current_schemas(false), n.nspname)", drop_sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: the get_constraints_* lookups bind the names they are given (#731)
+# `get_constraints_check`, `get_constraints_pk` and `get_sequence_name` spliced the table and
+# column into single-quoted literals, so a quote in a name broke the query and the family broke
+# the parameterized-queries-only rule. Every one now sends `$1`/`$2`, and the names travel in
+# `params`. `get_constraints_unique` / `_byte_length_check` / `_fk` / `_index` already did.
+# Mutation gate: interpolate the name back into any one query and its `!occursin` fails; drop the
+# `kcu` table join or the search-path order from `pk` / `unique` and the last loop fails.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: the get_constraints_* lookups bind table and column, never splice them (#731)" begin
+  table, column = "o'connor_laps", "o'grid"   # a quote a spliced literal cannot survive
+  lookups = (Migrations.get_constraints_check, Migrations.get_constraints_pk, Migrations.get_sequence_name,
+             Migrations.get_constraints_unique, Migrations.get_constraints_byte_length_check)
+  for lookup in lookups
+    empty!(PG731_CALLS)
+    @test lookup(NonNegSqlMockPg731(), table, column) === nothing
+    sql, params = only(PG731_CALLS)
+    @test (nameof(lookup), occursin("\$1", sql) && occursin("\$2", sql)) == (nameof(lookup), true)
+    @test (nameof(lookup), occursin("o'", sql)) == (nameof(lookup), false)
+    @test (nameof(lookup), collect(params)) == (nameof(lookup), [table, column])
+  end
+  # The two `information_schema` lookups join `kcu` on the TABLE as well — a foreign key elsewhere
+  # may share the constraint's name (#498) — and, like `get_constraints_check`, put the first schema
+  # on the search path first, the one an unqualified `ALTER TABLE` binds to.
+  for lookup in (Migrations.get_constraints_pk, Migrations.get_constraints_unique)
+    empty!(PG731_CALLS)
+    lookup(NonNegSqlMockPg731(), table, column)
+    sql, _ = only(PG731_CALLS)
+    @test (nameof(lookup), occursin("AND tc.table_name = kcu.table_name", sql)) == (nameof(lookup), true)
+    @test (nameof(lookup), occursin("ORDER BY array_position(current_schemas(false), tc.table_schema::name)", sql)) ==
+          (nameof(lookup), true)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The planner acts on whatever the reader says about a CHECK — which is why the misread mattered (#731)
+# Hermetic, over the PostgreSQL row decoder. A declared `IntegerField` against a live column the
+# reader marks with PormG's `>= 0` check plans a `DROP CONSTRAINT` of the name `get_constraints_check`
+# returns — the user's range check, before the fix. Against the same column read correctly (no
+# PormG check) it plans nothing. This pins the planner's half of the contract; it passes before the
+# fix too, and the SQL assertions above are the ones that fail on the old reader.
+# ─────────────────────────────────────────────────────────────────────────────
+struct NonNegPlanMockPg731 <: PormG.PormGPostgres end
+PormG.get_constraints_check(::NonNegPlanMockPg731, t::String, f::String) = f == "grid" ? "lap_times_grid_range" : nothing
+fetch(::NonNegPlanMockPg731, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) = DataFrame()
+
+@testset "an IntegerField column converges unless the reader claims PormG's >= 0 check on it (#731)" begin
+  laps = Models.Model("lap_times"; id = Models.IDField(), grid = Models.IntegerField())
+  live(non_negative) = _pg_live_table(_row522(table_name = "lap_times",
+    columns = [_col522("id", "bigint"; notnull = true, identity = "d"),
+               _col522("grid", "integer"; notnull = true, non_negative_check = non_negative)],
+    primary_keys = ["id"]))
+  plan(non_negative) = get_migration_plan(LiveTable[live(non_negative)], _schema522(laps),
+                                          NonNegPlanMockPg731(), _settings522(); interactive = false)
+
+  # The fixed reader's view of a user range check: no PormG check, nothing to do.
+  @test all(isempty, values(plan(false)))
+  # The old reader's view: PormG's check "found", so the planner drops the constraint it names.
+  stmts = join(values(plan(true)[:lap_times]), "\n")
+  @test occursin("DROP CONSTRAINT \"lap_times_grid_range\"", stmts)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite parity: only PormG's exact `CHECK ("col" >= 0)` reads as the non-negative check (#731)
+# The SQLite reader already matched the rendered clause with an anchored regex; the PostgreSQL
+# reader did not, so the same schema read differently on each engine. Pinned here so the engines
+# stay aligned: a range check, a fractional bound and a zero-padded literal read as nothing, and
+# PormG's own clause — in any of the four identifier spellings an adopted schema might use — reads.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite parity: a user range check on an integer is not PormG's >= 0 check (#731)" begin
+  checks = _sqlite_column_checks("""CREATE TABLE "lap_times" (
+    "grid"  INTEGER CHECK (grid >= 0 AND grid <= 30),
+    "price" INTEGER CHECK (price >= 0.5),
+    "lap"   INTEGER CHECK (lap >= 05),
+    "pos"   INTEGER CHECK ("pos" >= 0),
+    "Mixed" INTEGER CHECK ([Mixed] >= 0))""")
+  @test !haskey(checks, "grid") && !haskey(checks, "price") && !haskey(checks, "lap")
+  @test checks["pos"] == CheckKind[NonNegativeCheck()]
+  @test checks["mixed"] == CheckKind[NonNegativeCheck()]    # keys are lower-cased (#531)
 end

@@ -151,7 +151,8 @@ function _finalize_sqlite_rebuilds!(conn, migration_plan::OrderedDict{Symbol, Or
   ctx = isempty(objects) ? nothing :
         _sqlite_recreate_context(conn, rebuilt, current_schema, rebuild_context;
                                  live = live, table_renames = table_renames, dropped_tables = dropped_tables)
-  recreated = Dict{String, String}()     # object name ⇒ its one re-create statement
+  # rowid ⇒ the object's one re-create statement. Not keyed by name: a trigger and a view may share one.
+  recreated = Dict{Int, String}()
   for t in rebuilt
     key = "Alter table: $t"
     catalog, renames = rebuild_context[t]
@@ -161,7 +162,7 @@ function _finalize_sqlite_rebuilds!(conn, migration_plan::OrderedDict{Symbol, Or
       on_table, dependents = _sqlite_rebuild_dependents(objects, string(catalog);
                                                         dropped_tables = ctx.dropped_tables)
       before = String[_sqlite_drop_object_sql(o) for o in Iterators.reverse(dependents)]
-      after = String[get!(() -> _sqlite_recreated_ddl(o, ctx; rebuilt_table = string(t)), recreated, o.name)
+      after = String[get!(() -> _sqlite_recreated_ddl(o, ctx; rebuilt_table = string(t)), recreated, o.rowid)
                      for o in sort!(vcat(on_table, dependents); by = o -> o.rowid)]
     end
     # What the rebuild re-renders away because no model declaration can hold it — a hand-written

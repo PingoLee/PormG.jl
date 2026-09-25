@@ -2876,22 +2876,26 @@ function _sqlite_rebuild_dependents(objects::Vector{_SQLiteSchemaObject}, table:
                                     dropped_tables::Set{String} = Set{String}())
   t = lowercase(String(table))
   on_table = _SQLiteSchemaObject[o for o in objects if o.type == "trigger" && lowercase(o.tbl_name) == t]
-  taken = Set{String}(lowercase(o.name) for o in on_table)
+  # Objects are identified by `rowid`, never by name: triggers have a namespace of their own, so a
+  # trigger and a view may both be called `result_v` — measured on SQLite. Keyed by name, the
+  # trigger being found would mark the view as found too, and the view would be left in place to
+  # fail the RENAME.
+  taken = Set{Int}(o.rowid for o in on_table)
   names = Set{String}([t])                # the table, and every view already found to depend on it
   dependents = _SQLiteSchemaObject[]
-  tokens = Dict{String, Vector{_SQLiteObjectToken}}()
+  tokens = Dict{Int, Vector{_SQLiteObjectToken}}()
   grew = true
   while grew
     grew = false
     for o in objects
-      lowercase(o.name) in taken && continue
+      o.rowid in taken && continue
       o.type == "trigger" && lowercase(o.tbl_name) in dropped_tables && continue
-      toks = get!(() -> _sqlite_object_tokens(o.sql), tokens, o.name)
+      toks = get!(() -> _sqlite_object_tokens(o.sql), tokens, o.rowid)
       hit = (o.type == "trigger" && lowercase(o.tbl_name) in names) ||
             any(tk -> !_sqlite_is_reserved(tk) && tk.key in names, toks)
       hit || continue
       push!(dependents, o)
-      push!(taken, lowercase(o.name))
+      push!(taken, o.rowid)
       o.type == "view" && push!(names, lowercase(o.name))
       grew = true
     end

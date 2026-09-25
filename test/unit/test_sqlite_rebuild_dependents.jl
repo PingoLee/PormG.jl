@@ -310,6 +310,38 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Rebuild: a trigger and a view with the same name
+# Triggers have a namespace of their own, so `result_v` can name both at once. Identified by name,
+# finding the trigger marked the view as found too: the view was left in place to fail the rebuild's
+# RENAME, and one re-create statement could be handed back for both. Objects are keyed by rowid.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a trigger and a view sharing a name are both carried (#729)" begin
+    _rd729_project() do pool, settings, models
+        _rd729_start!(pool, settings, models)
+        fetch(pool, """CREATE VIEW "result_v" AS SELECT "id", "points" FROM "result";""")
+        fetch(pool, """CREATE TRIGGER "result_v" AFTER INSERT ON "result" BEGIN
+                         INSERT INTO "audit" ("n") VALUES (NEW."points");
+                       END;""")
+
+        _rd729_models(models, _rd729_schema(result = RD729_NULLABLE))
+        _rd729_plan!(pool, settings, models)
+        _rd729_migrate!(pool, settings)
+
+        # Both are back, each as itself.
+        @test _rd729_objects(pool, "view") == ["result_v"]
+        @test _rd729_objects(pool, "trigger") == ["result_v"]
+        by_type = _rd729_rows(pool, "SELECT type, sql FROM sqlite_master WHERE name = 'result_v' ORDER BY type")
+        @test startswith(String(by_type.sql[by_type.type .== "trigger"][1]), "CREATE TRIGGER")
+        @test startswith(String(by_type.sql[by_type.type .== "view"][1]), "CREATE VIEW")
+        fetch(pool, """INSERT INTO "result" ("id", "points") VALUES (1, 4);""")
+        @test _rd729_count(pool, "audit") == 1
+        @test _rd729_count(pool, "result_v") == 1
+        _rd729_plan!(pool, settings, models)
+        @test !isfile(_rd729_pending(settings))
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Rebuild: a trigger that updates its own table
 # The commonest trigger there is (`updated_at`-style) names its own table in its body. It must survive
 # a plain rebuild, and one that renames an UNRELATED column, verbatim. A TABLE rename leaves the bare

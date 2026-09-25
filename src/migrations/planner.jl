@@ -153,7 +153,7 @@ function _finalize_sqlite_rebuilds!(conn, migration_plan::OrderedDict{Symbol, Or
   objects = _sqlite_schema_objects(conn)
   # No view or trigger anywhere: nothing to carry, so no further catalog reads.
   ctx = isempty(objects) ? nothing :
-        _sqlite_recreate_context(conn, rebuilt, current_schema, rebuild_context;
+        _sqlite_recreate_context(conn, rebuilt, current_schema, rebuild_context, objects;
                                  live = live, table_renames = table_renames, dropped_tables = dropped_tables)
   # rowid ⇒ the object's one re-create statement. Not keyed by name: a trigger and a view may share one.
   recreated = Dict{Int, String}()
@@ -195,7 +195,8 @@ end
 # change nothing a definition says.
 function _sqlite_recreate_context(conn::PormGSQLite, rebuilt::Vector{Symbol},
                                   current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
-                                  rebuild_context::Dict{Symbol, Tuple{Symbol, Dict{String, String}}};
+                                  rebuild_context::Dict{Symbol, Tuple{Symbol, Dict{String, String}}},
+                                  objects::Vector{_SQLiteSchemaObject};
                                   live::Vector{LiveTable}, table_renames::Dict{String, String},
                                   dropped_tables::Set{String})::_SQLiteRecreateContext
   table_moves = Dict{String, String}(lowercase(old) => new for (old, new) in table_renames
@@ -217,9 +218,10 @@ function _sqlite_recreate_context(conn::PormGSQLite, rebuilt::Vector{Symbol},
                        if !(lowercase(get(renamed_to, lowercase(c), c)) in declared))
     isempty(gone) || (dropped_columns[lowercase(string(catalog))] = gone)
   end
+  live_tables = Set{String}(lowercase(t.name) for t in live)
   return _SQLiteRecreateContext(table_moves, column_moves, dropped_columns,
                                 Set{String}(lowercase(t) for t in dropped_tables),
-                                Set{String}(lowercase(t.name) for t in live))
+                                live_tables, _sqlite_view_tables(objects, live_tables))
 end
 
 # Physical column names (db_column when set, else field name) of a model's rebuilt table — the exact set
@@ -949,8 +951,7 @@ end
 """
     _plan_column_change!(conn, migration_plan, model_name, declared_model, field_name,
                          new_field, delta, hashed_name;
-                         old_column = nothing, column_renames = Dict{String,String}(),
-                         catalog_table = model_name)
+                         old_column = nothing, catalog_table = model_name)
 
 Plan everything one existing column needs, in the one order that works, from the one delta.
 

@@ -178,6 +178,20 @@ end
     # Outside a trigger, BEGIN and END are ordinary statements and split normally.
     @test _split_sqlite_statements("BEGIN; INSERT INTO t VALUES (1); END; COMMIT") ==
           ["BEGIN", "INSERT INTO t VALUES (1)", "END", "COMMIT"]
+
+    # The body ends at an END that FOLLOWS a `;` — `sqlite3_complete`'s rule. A column called `end`
+    # just before a `;` is not it (this cut the body early while CASE was counted instead).
+    parts = _split_sqlite_statements("CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT a FROM t ORDER BY end; END; SELECT 6")
+    @test length(parts) == 2 && endswith(parts[1], "ORDER BY end; END")
+
+    # Found in review: `x·case` is ONE identifier to SQLite, which reads every byte from 0x80 up as part
+    # of a name. Read as `x` and `case`, it opened a CASE that never closed, so the first trigger's END
+    # was missed and both triggers came out as ONE statement — whose second half SQLite.jl skips silently.
+    two = "CREATE TRIGGER a AFTER INSERT ON t BEGIN UPDATE t SET x·case = 1; END; " *
+          "CREATE TRIGGER b AFTER INSERT ON t BEGIN SELECT 1; END"
+    parts = _split_sqlite_statements(two)
+    @test length(parts) == 2
+    @test all(p -> startswith(p, "CREATE TRIGGER"), parts)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -343,6 +357,64 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Rebuild: definitions ending in a line comment, a trigger on a dropped table, a table rename
+# Three paths review found unpinned:
+#   * `sqlite_master` keeps a definition's trailing `-- comment`, so a `;` appended on the same line
+#     is commented out and the next statement is joined on — for a view and for an index alike;
+#   * a trigger ON a table this migration drops names the rebuilt table, but goes with its own table
+#     and must not be re-created (it would fail with "no such table");
+#   * a table rename in a rebuild re-targets its own triggers' `ON`, which is safe when nothing else in
+#     the trigger names the old table.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "trailing comments, triggers on dropped tables, and ON after a table rename (#729)" begin
+    # Trailing comments. `grid` is indexed in the model, so a second, hand-made index on it with a
+    # comment is part of the declared state and the plan leaves it alone.
+    indexed = "points = Models.IntegerField(), grid = Models.IntegerField(null = true, db_index = true)"
+    _rd729_project() do pool, settings, models
+        _rd729_start!(pool, settings, models, _rd729_schema(result = indexed))
+        fetch(pool, """CREATE VIEW "podium" AS SELECT "id" FROM "result" WHERE "points" > 15 -- podium only""")
+        fetch(pool, """CREATE INDEX "result_grid_note_idx" ON "result" ("grid") -- grid lookups""")
+        _rd729_models(models, _rd729_schema(result = replace(indexed, "points = Models.IntegerField()" => "points = Models.IntegerField(null = true)")))
+        _rd729_plan!(pool, settings, models)
+        _rd729_migrate!(pool, settings)
+        @test _rd729_objects(pool, "view") == ["podium"]
+        @test "result_grid_note_idx" in _rd729_objects(pool, "index")
+        fetch(pool, """INSERT INTO "result" ("id", "points") VALUES (1, 25);""")
+        @test _rd729_count(pool, "podium") == 1
+    end
+
+    # A trigger on `driver`, which the migration drops, that writes the rebuilt `result`.
+    _rd729_project() do pool, settings, models
+        _rd729_start!(pool, settings, models)
+        fetch(pool, """CREATE TRIGGER "driver_touch" AFTER UPDATE ON "driver" BEGIN
+                         UPDATE "result" SET "grid" = "grid" WHERE "id" = NEW."id";
+                       END;""")
+        _rd729_models(models, _rd729_schema(result = RD729_NULLABLE, driver = nothing))
+        _rd729_plan!(pool, settings, models)
+        @test !occursin("driver_touch", _rd729_plan_sql(settings))
+        _rd729_migrate!(pool, settings)
+        @test isempty(_rd729_objects(pool, "trigger"))
+        @test !("driver" in _rd729_objects(pool, "table"))
+    end
+
+    # A table rename in a rebuild: the trigger's `ON "result"` follows it; its body names no table.
+    _rd729_project() do pool, settings, models
+        _rd729_start!(pool, settings, models)
+        fetch(pool, """CREATE TRIGGER "result_audit" AFTER INSERT ON "result" BEGIN
+                         INSERT INTO "audit" ("n") VALUES (NEW."points");
+                       END;""")
+        _rd729_models(models, replace(_rd729_schema(result = RD729_NULLABLE), "Result = Models.Model(" => "RaceResult = Models.Model("))
+        _rd729_plan!(pool, settings, models; answers = "1\n")
+        _rd729_migrate!(pool, settings)
+        @test occursin("ON \"raceresult\"", _rd729_definition(pool, "result_audit"))
+        fetch(pool, """INSERT INTO "raceresult" ("id", "points") VALUES (1, 12);""")
+        @test only(_rd729_rows(pool, """SELECT "n" FROM "audit" """).n) == 12
+        _rd729_plan!(pool, settings, models)
+        @test !isfile(_rd729_pending(settings))
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # The rebuild pass never leaves a step bare
 # Every producer of "Alter table:" registers the BARE rebuild, and the pass wraps it. A step with no
 # context entry — none exists today, since every producer runs inside `_alter_table_fields` — must
@@ -429,6 +501,12 @@ end
         fetch(pool, """CREATE TRIGGER "result_audit" AFTER UPDATE OF "points" ON "result" BEGIN
                          INSERT INTO "audit" ("n", "note") VALUES (NEW."points", 'points');
                        END;""")
+        # The other two provable spellings: OLD. (in the WHEN clause) and the table's own name.
+        fetch(pool, """CREATE TRIGGER "result_prev" AFTER UPDATE OF "points" ON "result"
+                       WHEN OLD."points" IS NOT NULL BEGIN
+                         UPDATE "result" SET "grid" = OLD."points"
+                         WHERE "result"."id" = NEW."id" AND "result"."points" = NEW."points";
+                       END;""")
 
         _rd729_models(models, _rd729_schema(result = renamed))
         _rd729_plan!(pool, settings, models; answers = "1\n")
@@ -439,9 +517,15 @@ end
         @test occursin("UPDATE OF \"race_points\"", definition)
         @test occursin("NEW.\"race_points\"", definition)
         @test occursin("'points'", definition)
+        previous = _rd729_definition(pool, "result_prev")
+        @test occursin("WHEN OLD.\"race_points\" IS NOT NULL", previous)
+        @test occursin("\"result\".\"race_points\" = NEW.\"race_points\"", previous)
+        @test !occursin("\"points\"", previous)
         fetch(pool, """INSERT INTO "result" ("id", "race_points") VALUES (1, 6);""")
         fetch(pool, """UPDATE "result" SET "race_points" = 8 WHERE "id" = 1;""")
         @test only(_rd729_rows(pool, """SELECT "n" FROM "audit" """).n) == 8
+        # `result_prev` fired too, and copied the OLD value.
+        @test only(_rd729_rows(pool, """SELECT "grid" FROM "result" WHERE "id" = 1""").grid) == 6
         _rd729_plan!(pool, settings, models)
         @test !isfile(_rd729_pending(settings))
     end
@@ -547,15 +631,35 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Refused: a dependent that would name what this migration takes away
-# A dropped indexed column (the rebuild is what removes it, #519), a dropped table, and another
-# table's renamed column. Each object would be re-created naming something gone, which SQLite accepts
-# and then fails every later RENAME on — so makemigrations refuses and writes no plan.
+# A dropped indexed column (the rebuild is what removes it, #519), a dropped table, another table's
+# renamed column, and a generated column (which only `table_xinfo` lists). Then the shapes review found
+# slipping through: a column reached through a `SELECT *` view — from a view on it, from an INSTEAD OF
+# trigger on it, from a trigger on another table — and through an alias that shares a live table's name.
+# Each object would be re-created naming something gone, which SQLite accepts and then fails every later
+# RENAME on (or, with a quoted name, silently reads as a string) — so makemigrations refuses.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a trigger or view on something the migration removes is refused (#729)" begin
     indexed_grid = "points = Models.IntegerField(), grid = Models.IntegerField(null = true, db_index = true)"
     no_grid = "points = Models.IntegerField()"
     joined = """CREATE VIEW "result_driver" AS SELECT r."id", d."surname" FROM "result" r JOIN "driver" d ON d."id" = r."id";"""
+    star = """CREATE VIEW "rv" AS SELECT * FROM "result";"""
     cases = [
+        ("view reading a dropped column through a SELECT * view", _rd729_schema(result = indexed_grid),
+         star * """CREATE VIEW "rv2" AS SELECT "grid" FROM "rv";""",
+         _rd729_schema(result = no_grid), "", ["rv2", "\"grid\"", "removes"]),
+        ("INSTEAD OF trigger on a SELECT * view using a dropped column", _rd729_schema(result = indexed_grid),
+         star * """CREATE TRIGGER "rv_del" INSTEAD OF DELETE ON "rv" BEGIN INSERT INTO "audit" ("n") VALUES (OLD."grid"); END;""",
+         _rd729_schema(result = no_grid), "", ["rv_del", "\"grid\"", "removes"]),
+        ("trigger on another table reading a dropped column through a view", _rd729_schema(result = indexed_grid),
+         star * """CREATE TRIGGER "audit_peek" AFTER INSERT ON "audit" BEGIN UPDATE "audit" SET "n" = (SELECT max("grid") FROM "rv"); END;""",
+         _rd729_schema(result = no_grid), "", ["audit_peek", "\"grid\"", "removes"]),
+        ("alias sharing another live table's name", _rd729_schema(result = indexed_grid),
+         """CREATE VIEW "va" AS SELECT "driver"."grid" FROM "result" AS "driver";""",
+         _rd729_schema(result = no_grid), "", ["va", "\"grid\"", "removes"]),
+        ("view on a generated column the rebuild drops", _rd729_schema(),
+         """ALTER TABLE "result" ADD COLUMN "label" TEXT GENERATED ALWAYS AS ('P' || "points") VIRTUAL;""" *
+         """CREATE VIEW "result_label" AS SELECT "id", "label" FROM "result";""",
+         _rd729_schema(result = RD729_NULLABLE), "", ["result_label", "\"label\"", "removes"]),
         # (what, v1 schema, hand-made object, v2 schema, prompt answers, words the message must carry)
         ("trigger on a dropped column", _rd729_schema(result = indexed_grid),
          """CREATE TRIGGER "result_grid" AFTER INSERT ON "result" BEGIN INSERT INTO "audit" ("n") VALUES (NEW."grid"); END;""",
@@ -573,7 +677,9 @@ end
         @testset "$what" begin
             _rd729_project() do pool, settings, models
                 _rd729_start!(pool, settings, models, v1)
-                fetch(pool, ddl)
+                for stmt in _split_sqlite_statements(ddl)
+                    fetch(pool, stmt)
+                end
                 _rd729_models(models, v2)
                 err = _rd729_error(() -> _rd729_plan!(pool, settings, models; answers = answers))
                 @test err isa PormG.InvalidMigrationError

@@ -1209,10 +1209,14 @@ statements, each ending in its own `;`, and it arrives here verbatim whenever a 
 re-creates the triggers the rebuild's `DROP TABLE` takes with it. Cutting it at the first `;` hands
 SQLite a fragment it rejects as incomplete input.
 
-The body's end is its first `END` that closes no `CASE` and is followed by the statement's `;` (or by
-the end of the text). The header's `BEGIN` is the first one after the `ON <table>` clause and outside
-parentheses. That keeps a column named `begin` in `UPDATE OF begin ON t` from opening the body. In
-either place, a word right after a `.` is a column (`NEW.end`), never a keyword.
+The body's end is an `END` that directly follows a `;` and is directly followed by the statement's
+`;` or by the end of the text — `sqlite3_complete`'s own rule. Every body statement ends in `;` and
+none can begin with `END`, so that pair is only ever the body's end: a `CASE … END` closes inside an
+expression, and a column called `end` (`ORDER BY end;`) is never preceded by `;`. The header's `BEGIN`
+is the first one after the `ON <table>` clause and outside parentheses, which keeps a column named
+`begin` in `UPDATE OF begin ON t` from opening the body. A word right after a `.` is a column
+(`NEW.end`), never a keyword, and a word runs over every character from U+0080 up as SQLite's does —
+so `x·case` is one identifier, not an `x` and a `CASE`.
 
 **It fails closed, and that is load-bearing.** SQLite.jl prepares a statement with a null tail, so
 text that holds two statements runs the FIRST one and silently discards the rest. A trigger whose
@@ -1235,8 +1239,8 @@ function _split_sqlite_statements(sql::AbstractString)::Vector{String}
   phase = :plain         # :plain, or a trigger's :header → :body → :done
   seen_on = false        # header: the `ON <table>` clause has been read
   depth = 0              # header: parenthesis depth
-  case_depth = 0         # body: open CASE expressions
-  prev = ' '             # the last significant character; '.' marks a qualified word
+  prev = ' '             # the last significant character; '.' marks a qualified word, ';' a body
+                         # statement's end
   i = 1
   while i <= n
     c = cs[i]
@@ -1261,11 +1265,11 @@ function _split_sqlite_statements(sql::AbstractString)::Vector{String}
       text = strip(String(cs[start:i - 1]))
       content && !isempty(text) && push!(statements, text)
       start, content, lead, phase = i + 1, false, String[], :plain
-      seen_on, depth, case_depth, prev = false, 0, 0, ' '
+      seen_on, depth, prev = false, 0, ' '
       i += 1
-    elseif isletter(c) || c == '_'
+    elseif isletter(c) || c == '_' || c > '\x7f'
       from = i
-      while i <= n && (isletter(cs[i]) || isdigit(cs[i]) || cs[i] == '_' || cs[i] == '$')
+      while i <= n && (isletter(cs[i]) || isdigit(cs[i]) || cs[i] == '_' || cs[i] == '$' || cs[i] > '\x7f')
         i += 1
       end
       word = uppercase(String(cs[from:i - 1]))
@@ -1281,15 +1285,9 @@ function _split_sqlite_statements(sql::AbstractString)::Vector{String}
           elseif word == "BEGIN" && seen_on
             phase = :body
           end
-        elseif phase === :body
-          if word == "CASE"
-            case_depth += 1
-          elseif word == "END" && case_depth > 0
-            case_depth -= 1
-          elseif word == "END"
-            k = _sqlite_next_significant(cs, i)
-            (k > n || cs[k] == ';') && (phase = :done)
-          end
+        elseif phase === :body && word == "END" && prev == ';'
+          k = _sqlite_next_significant(cs, i)
+          (k > n || cs[k] == ';') && (phase = :done)
         end
       end
       prev = 'a'

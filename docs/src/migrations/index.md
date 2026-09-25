@@ -257,7 +257,7 @@ To handle any of those changes, PormG automatically rebuilds the table from your
 - Drops the old table, renames the new one, and runs `PRAGMA foreign_key_check` to catch orphaned rows.
 - Keeps the table's triggers, and the views and other tables' triggers that name it: those that would block the rename are dropped first, and all of them are re-created afterwards (see the triggers-and-views note below).
 
-The rebuild is emitted as plain DDL that composes with the migration's transaction, so no data is lost and the remaining indexes, constraints, triggers and views are preserved. This is what makes **removing a foreign-key field or constraint, a `UNIQUE` column, a `PRIMARY KEY` column, or an indexed column** work on SQLite even though `DROP COLUMN`/`DROP CONSTRAINT` alone cannot express it. Changes SQLite *can* do in place — adding a column, or dropping an *ordinary* column (not part of a `FOREIGN KEY`, `UNIQUE`, or `PRIMARY KEY`, and not referenced by an index) — use `ALTER TABLE` directly, without a rebuild.
+The rebuild is emitted as plain DDL that composes with the migration's transaction, so no data is lost and the remaining indexes, the constraints your models declare, triggers and views are preserved. Clauses no model can declare are the exception — see the last note below. This is what makes **removing a foreign-key field or constraint, a `UNIQUE` column, a `PRIMARY KEY` column, or an indexed column** work on SQLite even though `DROP COLUMN`/`DROP CONSTRAINT` alone cannot express it. Changes SQLite *can* do in place — adding a column, or dropping an *ordinary* column (not part of a `FOREIGN KEY`, `UNIQUE`, or `PRIMARY KEY`, and not referenced by an index) — use `ALTER TABLE` directly, without a rebuild.
 
 This process is transparent to the user but may take longer on very large tables.
 
@@ -318,6 +318,8 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
 
     - a column the rebuild removes, or a table the migration drops;
     - a column or table the migration renames, anywhere but the references above — a view selecting the renamed column, say, or a bare `UPDATE result SET …` in a trigger on a table being renamed.
+
+    A column counts wherever it is reached from: through its table's name, through a view built on the table (`SELECT grid FROM result_v`, where `result_v` is `SELECT * FROM result`), or through `NEW`/`OLD` in an `INSTEAD OF` trigger on such a view.
 
     SQLite would accept such a definition without a word and then refuse every later `ALTER TABLE … RENAME` in the database, so putting it back would be worse than stopping. To get through, apply the rename as a migration of its own first — SQLite's `RENAME` then rewrites the definition itself, and the next `makemigrations` reads the rewritten one — or drop the view or trigger, migrate, and re-create it. A token scan cannot resolve scope, so when another table in the same definition has a column with the removed column's name, PormG refuses rather than guess which one is meant.
 

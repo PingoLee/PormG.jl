@@ -2699,9 +2699,9 @@ function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Sy
         # column index is `db_index` / `Models.Index`, which the declared model re-creates by itself, so
         # warning there would be noise on an ordinary field deletion. Structured kwargs and NO `maxlog`,
         # per the repo's warn-once policy in `src/AdvisoryLock.jl`: that policy exists for unbounded call
-        # sites, and this one is bounded by a single table's index count. A rebuild can be registered
-        # more than once for one table (the entry is relocated on each registration), so the same warning
-        # may appear twice in a `makemigrations` — repetition beats a silently lost index.
+        # sites, and this one is bounded by a single table's index count. Since #729 each rebuild is
+        # rendered once, after the whole plan (`_finalize_sqlite_rebuilds!`), so it warns once per table
+        # — it used to repeat for every registration of the same rebuild.
         if _sqlite_index_is_unmodellable(stmt, pragma_members, all_referenced)
           # The message names all four disqualifying shapes, because the `definition` printed beside it
           # tells the operator which one they have — and a message that said "expression or partial"
@@ -2722,9 +2722,39 @@ function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Sy
     # #615: the table itself is being renamed in the same migration, ahead of the rebuild, so the
     # snapshot's `ON "<old>"` must follow it. `nothing` (every non-rename caller) leaves it alone.
     rename_table_to === nothing || (stmt = _sqlite_rewrite_index_table(stmt, rename_table_to))
-    push!(ddls, endswith(stmt, ";") ? stmt : stmt * ";")
+    push!(ddls, _sqlite_terminated(stmt))
   end
   return ddls
+end
+
+"""
+    _sqlite_terminated(stmt) -> String
+
+`stmt` ending in the `;` the statement splitter cuts on. A definition read back from `sqlite_master`
+is stored as it was written, trailing `-- comment` included (measured, for a view and an index), and a
+`;` appended to that line lies INSIDE the comment: the splitter, which honours comments since #729,
+then joins the next statement onto this one and SQLite rejects the pair. So when the text ends in a
+line comment the `;` goes on a line of its own.
+"""
+function _sqlite_terminated(stmt::AbstractString)::String
+  s = String(rstrip(stmt))
+  cs = collect(s)
+  n = length(cs)
+  i = 1
+  ends_in_line_comment = false
+  while i <= n
+    j = _sqlite_lex_skip(cs, i)
+    if j != i
+      # Only a `--` comment starts with '-' and skips; one that reaches the end ends the text.
+      ends_in_line_comment = cs[i] == '-' && j > n
+      i = j
+    else
+      ends_in_line_comment = false
+      i += 1
+    end
+  end
+  ends_in_line_comment && return s * "\n;"
+  return endswith(s, ";") ? s : s * ";"
 end
 
 # ==============================================================================
@@ -2914,7 +2944,10 @@ the CATALOG holds them at plan time (which is what the snapshot says), all lower
   * `column_renames` — table ⇒ old column ⇒ new name, for every table the plan diffs;
   * `dropped_columns` — table ⇒ the columns a rebuild of it removes (generated ones included);
   * `dropped_tables` — the tables the plan drops;
-  * `live_tables` — every live table, so a qualifier can be recognised as one.
+  * `live_tables` — every live table, so a qualifier can be recognised as one;
+  * `view_tables` — every view ⇒ the live tables it reads, through other views too
+    ([`_sqlite_view_tables`](@ref)), so a column reached through a view is checked against the
+    tables it really comes from.
 
 Case-only renames are left out: SQLite resolves names case-insensitively, so a definition that says
 `points` is still right after `points` becomes `Points`.
@@ -2925,6 +2958,87 @@ struct _SQLiteRecreateContext
   dropped_columns::Dict{String, Set{String}}
   dropped_tables::Set{String}
   live_tables::Set{String}
+  view_tables::Dict{String, Set{String}}
+end
+
+"""
+    _sqlite_view_tables(objects, live_tables) -> Dict{String, Set{String}}
+
+Every view in `objects` ⇒ the live tables it reads, lowercased, following views it reads in turn.
+
+The stale-object check needs it because a column need not be reached through its table's name. In
+`CREATE VIEW rv2 AS SELECT grid FROM rv` over `CREATE VIEW rv AS SELECT * FROM result`, `grid` is
+`result`'s column although `rv2` never names `result`; so is `OLD.grid` in an `INSTEAD OF` trigger on
+`rv`. Found in review: without this map both were re-created stale after `grid` was dropped — and
+`rv2`, quoting `"grid"`, then silently read the STRING `'grid'` (SQLite.jl keeps double-quoted
+strings on). A token naming a live table counts as reading it; over-counting only refuses more.
+"""
+function _sqlite_view_tables(objects::Vector{_SQLiteSchemaObject}, live_tables::Set{String})::Dict{String, Set{String}}
+  views = Dict{String, _SQLiteSchemaObject}(lowercase(o.name) => o for o in objects if o.type == "view")
+  direct = Dict{String, Set{String}}()
+  reads = Dict{String, Set{String}}()
+  for (v, o) in views
+    keys_ = String[tk.key for tk in _sqlite_object_tokens(o.sql) if !_sqlite_is_reserved(tk)]
+    direct[v] = Set{String}(k for k in keys_ if k in live_tables)
+    reads[v] = Set{String}(k for k in keys_ if k != v && haskey(views, k))
+  end
+  closed = Dict{String, Set{String}}()
+  for v in keys(views)
+    acc, seen, todo = copy(direct[v]), Set{String}([v]), collect(reads[v])
+    while !isempty(todo)
+      w = pop!(todo)
+      w in seen && continue
+      push!(seen, w)
+      union!(acc, direct[w])
+      append!(todo, reads[w])
+    end
+    closed[v] = acc
+  end
+  return closed
+end
+
+# The names `sql` uses as an ALIAS somewhere: a token right after `AS`, right after another
+# (non-reserved) name with nothing but whitespace between — `FROM result other` — or right after a
+# `)` — `(SELECT …) other`. A qualifier that is also an alias cannot be taken to mean the table of that
+# name: `SELECT other.grid FROM result AS other` reads `result`'s `grid`. Over-marking a name only
+# widens what its qualified columns are checked against. The non-reserved words in
+# `_SQLITE_EXPRESSION_WORDS` are followed by an expression, never an alias, so `a LIKE NEW.b` does
+# not mark `new`.
+const _SQLITE_EXPRESSION_WORDS = ("LIKE", "GLOB", "REGEXP", "MATCH", "BY")
+
+function _sqlite_alias_names(sql::AbstractString, toks::Vector{_SQLiteObjectToken})::Set{String}
+  aliases = Set{String}()
+  for k in 2:length(toks)
+    prev = toks[k - 1]
+    gap = _sqlite_gap_text(sql, prev.stop, toks[k].start)
+    introduces = _sqlite_is_word(prev, "AS") ||
+                 (!_sqlite_is_reserved(prev) && !(!prev.quoted && uppercase(prev.name) in _SQLITE_EXPRESSION_WORDS))
+    if (isempty(gap) && introduces) || endswith(gap, ")")
+      push!(aliases, toks[k].key)
+    end
+  end
+  return aliases
+end
+
+# The significant characters strictly between byte `a` and byte `b` of `sql` — whitespace and
+# comments dropped, literals kept. Between two identifier tokens there is no other identifier.
+function _sqlite_gap_text(sql::AbstractString, a::Int, b::Int)::String
+  b <= nextind(sql, a) && return ""
+  cs = collect(SubString(sql, nextind(sql, a), prevind(sql, b)))
+  out = Char[]
+  i = _sqlite_next_significant(cs, 1)
+  while i <= length(cs)
+    j = _sqlite_lex_skip(cs, i)
+    if j != i
+      append!(out, cs[i:j - 1])
+      i = j
+    else
+      push!(out, cs[i])
+      i += 1
+    end
+    i = _sqlite_next_significant(cs, i)
+  end
+  return String(out)
 end
 
 function _sqlite_refuse_recreate(o::_SQLiteSchemaObject, rebuilt_table::AbstractString,
@@ -2953,16 +3067,20 @@ anything else in it would be stale. Deterministic in `(o, ctx)`, so every rebuil
 **Rewritten** — a trigger ON table `T`, when this migration renames `T` or its columns: the `ON T`
 target and a `T.` qualifier follow a table rename; a renamed column follows its rename where it is
 provably `T`'s — after `NEW.`, `OLD.` or `T.`, and in the `UPDATE OF` list. Spliced by token span,
-right to left, always writing the quoted new name.
+right to left, always writing the quoted new name. Not when the definition also uses `T`, `new` or
+`old` as an alias ([`_sqlite_alias_names`](@ref)): the qualifier is then not provably the table, the
+reference is left as written, and the check below refuses it.
 
 **Refused** — any other token that is:
 
   * a table this migration drops, or the OLD name of a table it renames (for a trigger's own table,
     one the rewrite above did not reach — e.g. a bare `UPDATE T SET …` in the body);
-  * a column this migration renames or a rebuild drops, of a table the definition names. An
-    unqualified column, or one behind an alias, is checked against every table the definition names,
-    because a token scan cannot resolve scope: `INSERT INTO audit(points)` beside a dropped
-    `result.points` refuses. That errs loud, never silent.
+  * a column this migration renames or a rebuild drops, of a table the definition reads — by name,
+    or through a view ([`_sqlite_view_tables`](@ref)). A column qualified by a table or view name is
+    checked against that relation's tables; `NEW.`/`OLD.` against the trigger's own table (a view's
+    tables, for an `INSTEAD OF` trigger); an unqualified one, or one behind an alias, against every
+    table the definition reads, because a token scan cannot resolve scope: `INSERT INTO audit(points)`
+    beside a dropped `result.points` refuses. That errs loud, never silent.
 
 Skipped: reserved words ([`_SQLITE_RESERVED_WORDS`](@ref)), a name followed by `(` (a function — a
 table there is still checked as a table), and the definition's own structure — a view's name and
@@ -3015,11 +3133,22 @@ function _sqlite_recreated_ddl(o::_SQLiteSchemaObject, ctx::_SQLiteRecreateConte
   own_new = own === nothing ? nothing : get(ctx.table_renames, own, nothing)
   own_cols = own === nothing ? Dict{String, String}() : get(ctx.column_renames, own, Dict{String, String}())
   quote_name(s) = string('"', replace(s, '"' => "\"\""), '"')
+  aliases = _sqlite_alias_names(sql, toks)
+  # A qualifier is provably its relation only when the definition never uses that name as an alias.
+  provable(q) = q !== nothing && !(q in aliases)
 
-  # Every live table the definition names, plus a trigger's own: an unqualified column may be any of
-  # theirs.
-  named = Set{String}(tk.key for tk in toks if !_sqlite_is_reserved(tk) && tk.key in ctx.live_tables)
-  own === nothing || push!(named, own)
+  # The tables a relation name stands for: itself for a table, what it reads for a view.
+  relation_tables(name) = name in ctx.live_tables ? Set{String}([name]) :
+                          get(ctx.view_tables, name, Set{String}([name]))
+  # Every table the definition reads — named, or behind a view it names — plus a trigger's own: an
+  # unqualified column may be any of theirs.
+  named = Set{String}()
+  for tk in toks
+    _sqlite_is_reserved(tk) && continue
+    tk.key in ctx.live_tables && push!(named, tk.key)
+    haskey(ctx.view_tables, tk.key) && union!(named, ctx.view_tables[tk.key])
+  end
+  own === nothing || union!(named, relation_tables(own))
 
   edits = Tuple{Int, Int, String}[]
   for (k, tk) in enumerate(toks)
@@ -3030,12 +3159,13 @@ function _sqlite_recreated_ddl(o::_SQLiteSchemaObject, ctx::_SQLiteRecreateConte
         own_new === nothing || push!(edits, (tk.start, tk.stop, quote_name(own_new)))
         continue
       end
-      if own_new !== nothing && tk.qualifies && tk.key == own && tk.qualifier in (nothing, "main")
+      if own_new !== nothing && tk.qualifies && tk.key == own && provable(own) &&
+         tk.qualifier in (nothing, "main")
         push!(edits, (tk.start, tk.stop, quote_name(own_new)))
         continue
       end
       if haskey(own_cols, tk.key) && !tk.qualifies &&
-         (k in of_list || tk.qualifier in ("new", "old", own))
+         (k in of_list || (tk.qualifier in ("new", "old", own) && provable(tk.qualifier)))
         push!(edits, (tk.start, tk.stop, quote_name(own_cols[tk.key])))
         continue
       end
@@ -3051,10 +3181,10 @@ function _sqlite_recreated_ddl(o::_SQLiteSchemaObject, ctx::_SQLiteRecreateConte
                               "\"$(ctx.table_renames[tk.key])\", where PormG cannot rewrite it safely",
                               remedy_rename)
     (tk.called || tk.qualifies) && continue     # a function, a table, an alias or NEW/OLD
-    owners = if own !== nothing && tk.qualifier in ("new", "old")
-      (own,)
-    elseif tk.qualifier !== nothing && tk.qualifier in ctx.live_tables
-      (tk.qualifier,)
+    owners = if own !== nothing && tk.qualifier in ("new", "old") && provable(tk.qualifier)
+      relation_tables(own)
+    elseif provable(tk.qualifier) && (tk.qualifier in ctx.live_tables || haskey(ctx.view_tables, tk.qualifier))
+      relation_tables(tk.qualifier)
     else
       named
     end
@@ -3083,8 +3213,7 @@ function _sqlite_recreated_ddl(o::_SQLiteSchemaObject, ctx::_SQLiteRecreateConte
   for (a, b, repl) in Iterators.reverse(sort!(edits; by = first))
     out = string(SubString(out, 1, prevind(out, a)), repl, SubString(out, nextind(out, b)))
   end
-  out = String(rstrip(out))
-  return endswith(out, ";") ? out : out * ";"
+  return _sqlite_terminated(out)
 end
 
 # `DROP VIEW` / `DROP TRIGGER` for a dependent that has to be out of the way of the rebuild's RENAME.

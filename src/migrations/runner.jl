@@ -1134,49 +1134,189 @@ function _execute_statements_pg(connection::PormGPostgres, statements::Vector{St
   end
 end
 
-function _split_sqlite_statements(sql::String)::Vector{String}
-  statements = String[]
-  buffer = IOBuffer()
-  in_single_quote = false
-  in_double_quote = false
-  escape_next = false
-
-  for char in sql
-    if escape_next
-      write(buffer, char)
-      escape_next = false
-      continue
+# The index just past the string literal, quoted identifier or comment that opens at `cs[i]`, or `i`
+# itself when none does. SQLite's lexical rules, the same ones `_sqlite_identifier_tokens` scans by:
+# `'…'` / `"…"` / `` `…` `` escape their own quote by doubling it, `[…]` has no escape, and there is
+# no backslash escape anywhere. An unterminated one runs to the end, as SQLite reads it.
+function _sqlite_lex_skip(cs::Vector{Char}, i::Int)::Int
+  n = length(cs)
+  c = cs[i]
+  if c == '-' && i < n && cs[i + 1] == '-'
+    while i <= n && cs[i] != '\n'
+      i += 1
     end
-
-    if char == '\\'
-      write(buffer, char)
-      escape_next = true
-      continue
+    return i
+  elseif c == '/' && i < n && cs[i + 1] == '*'
+    i += 2
+    while i < n && !(cs[i] == '*' && cs[i + 1] == '/')
+      i += 1
     end
-
-    if char == '\'' && !in_double_quote
-      in_single_quote = !in_single_quote
-      write(buffer, char)
-      continue
+    return min(i + 2, n + 1)
+  elseif c == '\'' || c == '"' || c == '`'
+    i += 1
+    while i <= n
+      if cs[i] == c && i < n && cs[i + 1] == c
+        i += 2
+      elseif cs[i] == c
+        return i + 1
+      else
+        i += 1
+      end
     end
-
-    if char == '"' && !in_single_quote
-      in_double_quote = !in_double_quote
-      write(buffer, char)
-      continue
+    return n + 1
+  elseif c == '['
+    while i <= n && cs[i] != ']'
+      i += 1
     end
-
-    if char == ';' && !in_single_quote && !in_double_quote
-      statement = strip(String(take!(buffer)))
-      isempty(statement) || push!(statements, statement)
-      continue
-    end
-
-    write(buffer, char)
+    return min(i + 1, n + 1)
   end
+  return i
+end
 
-  statement = strip(String(take!(buffer)))
-  isempty(statement) || push!(statements, statement)
+_sqlite_opens_comment(cs::Vector{Char}, i::Int) =
+  i < length(cs) && ((cs[i] == '-' && cs[i + 1] == '-') || (cs[i] == '/' && cs[i + 1] == '*'))
+
+# The index of the next character at or after `i` that is neither whitespace nor inside a comment,
+# or `length(cs) + 1` when there is none.
+function _sqlite_next_significant(cs::Vector{Char}, i::Int)::Int
+  n = length(cs)
+  while i <= n
+    if isspace(cs[i])
+      i += 1
+    elseif _sqlite_opens_comment(cs, i)
+      i = _sqlite_lex_skip(cs, i)
+    else
+      return i
+    end
+  end
+  return n + 1
+end
+
+# `CREATE TRIGGER` and `CREATE TEMP|TEMPORARY TRIGGER`, read off a statement's leading bare words.
+_sqlite_leads_create_trigger(lead::Vector{String}) =
+  length(lead) >= 2 && lead[1] == "CREATE" &&
+  (lead[2] == "TRIGGER" || (length(lead) >= 3 && lead[2] in ("TEMP", "TEMPORARY") && lead[3] == "TRIGGER"))
+
+"""
+    _split_sqlite_statements(sql) -> Vector{String}
+
+`sql` cut into the statements SQLite executes one at a time, each without its terminating `;`.
+Statements holding nothing but whitespace and comments are dropped.
+
+A `;` inside a string literal, a quoted identifier or a comment does not end a statement, and
+neither does one inside a `CREATE TRIGGER … BEGIN … END` body (#729). A trigger body is a list of
+statements, each ending in its own `;`, and it arrives here verbatim whenever a SQLite table rebuild
+re-creates the triggers the rebuild's `DROP TABLE` takes with it. Cutting it at the first `;` hands
+SQLite a fragment it rejects as incomplete input.
+
+The body's end is its first `END` that closes no `CASE` and is followed by the statement's `;` (or by
+the end of the text). The header's `BEGIN` is the first one after the `ON <table>` clause and outside
+parentheses. That keeps a column named `begin` in `UPDATE OF begin ON t` from opening the body. In
+either place, a word right after a `.` is a column (`NEW.end`), never a keyword.
+
+**It fails closed, and that is load-bearing.** SQLite.jl prepares a statement with a null tail, so
+text that holds two statements runs the FIRST one and silently discards the rest. A trigger whose
+end is never found would swallow every statement after it, including the rebuild's
+`PRAGMA foreign_key_check` gate. So a `CREATE TRIGGER` that reaches the end of the text still open
+raises `InvalidMigrationError`. The opposite mistake, an `END` read as the body's end too early, is
+loud already, because SQLite rejects the truncated trigger.
+
+There used to be a backslash escape here, and it is gone on purpose: SQLite has none, so
+`'C:\\'` is a complete literal and the old rule read everything after it as still quoted.
+"""
+function _split_sqlite_statements(sql::AbstractString)::Vector{String}
+  cs = collect(sql)
+  n = length(cs)
+  statements = String[]
+  # The state of the statement being read. All of it resets at every cut.
+  start = 1              # its first character
+  content = false        # has it held anything but whitespace and comments?
+  lead = String[]        # its first three tokens: bare words uppercased, anything else ""
+  phase = :plain         # :plain, or a trigger's :header → :body → :done
+  seen_on = false        # header: the `ON <table>` clause has been read
+  depth = 0              # header: parenthesis depth
+  case_depth = 0         # body: open CASE expressions
+  prev = ' '             # the last significant character; '.' marks a qualified word
+  i = 1
+  while i <= n
+    c = cs[i]
+    j = _sqlite_lex_skip(cs, i)
+    if j != i
+      # A comment is not content. A literal or a quoted identifier is, and it is a token that is
+      # not a keyword, which is all `lead` needs to know about it.
+      if !_sqlite_opens_comment(cs, i)
+        content = true
+        length(lead) < 3 && push!(lead, "")
+        prev = 'a'
+      end
+      i = j
+    elseif isspace(c)
+      i += 1
+    elseif c == ';'
+      if phase === :header || phase === :body
+        prev = ';'
+        i += 1
+        continue
+      end
+      text = strip(String(cs[start:i - 1]))
+      content && !isempty(text) && push!(statements, text)
+      start, content, lead, phase = i + 1, false, String[], :plain
+      seen_on, depth, case_depth, prev = false, 0, 0, ' '
+      i += 1
+    elseif isletter(c) || c == '_'
+      from = i
+      while i <= n && (isletter(cs[i]) || isdigit(cs[i]) || cs[i] == '_' || cs[i] == '$')
+        i += 1
+      end
+      word = uppercase(String(cs[from:i - 1]))
+      content = true
+      if length(lead) < 3
+        push!(lead, word)
+        phase === :plain && _sqlite_leads_create_trigger(lead) && (phase = :header)
+      end
+      if prev != '.'
+        if phase === :header && depth == 0
+          if word == "ON"
+            seen_on = true
+          elseif word == "BEGIN" && seen_on
+            phase = :body
+          end
+        elseif phase === :body
+          if word == "CASE"
+            case_depth += 1
+          elseif word == "END" && case_depth > 0
+            case_depth -= 1
+          elseif word == "END"
+            k = _sqlite_next_significant(cs, i)
+            (k > n || cs[k] == ';') && (phase = :done)
+          end
+        end
+      end
+      prev = 'a'
+    elseif isdigit(c)
+      # A numeric literal, consumed whole so `1e5` leaves no word behind.
+      while i <= n && (isletter(cs[i]) || isdigit(cs[i]) || cs[i] == '_' || cs[i] == '.')
+        i += 1
+      end
+      content = true
+      prev = '0'
+    else
+      c == '(' && (depth += 1)
+      c == ')' && (depth = max(depth - 1, 0))
+      content = true
+      prev = c
+      i += 1
+    end
+  end
+  if phase === :header || phase === :body
+    head = strip(String(cs[start:min(n, start + 79)]))
+    throw(InvalidMigrationError(
+      "A CREATE TRIGGER statement in this migration has no terminating END, so where it stops " *
+      "cannot be found. SQLite would run it and silently skip every statement after it, so the " *
+      "migration stops here instead. Check its BEGIN … END body: $(head) …"))
+  end
+  text = strip(String(cs[start:n]))
+  content && !isempty(text) && push!(statements, text)
   return statements
 end
 
@@ -1184,7 +1324,8 @@ end
     _execute_statements_sqlite(connection, statements; conn) -> Nothing
 
 Execute a list of SQL statements on a SQLite connection within a transaction.
-SQLite requires splitting multi-statement strings by `;`.
+SQLite executes one statement per call, so each plan entry is cut by
+[`_split_sqlite_statements`](@ref) first.
 """
 function _execute_statements_sqlite(connection::PormGSQLite, statements::Vector{String}; conn)
   for action in statements

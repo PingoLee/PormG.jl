@@ -26,7 +26,7 @@ This skill is for the migration subsystem itself, not for ordinary ORM query beh
 - Treat `Generator.create_db_folder_and_yml()` as the expected bootstrap path for creating `db/connection.yml` before migration workflows touch project config
 - PormG uses a state-based migration engine that reconciles current Julia model state against the live database schema via introspection
 - **State-based, not Django-graph — do not port Django assumptions.** `makemigrations` computes `diff(live-DB introspection, models file)` and **never reads previous migration files**; there is no dependency graph or replay. `pending_migrations.jl` and `applied_migrations/` are **inert audit artifacts**, not a source of truth — editing an applied file changes nothing downstream. "Drift" that matters is live-schema-vs-models (surfaced by the next `makemigrations` and `status()`), not migration-file checksum divergence. Concept doc: `docs/src/migrations/index.md` → *What this means in practice*.
-- Keep docs, tests, and CLI guidance explicit about unsupported or partial behavior (the rule and its `migrate_to` case live under *Unsupported behavior* below)
+- Keep docs, tests, and CLI guidance explicit about unsupported or partial behavior (the rule lives under *Unsupported behavior* below)
 
 ## Core Rules
 
@@ -55,7 +55,9 @@ Keep docs, tests, and implementation aligned with this sequence:
 
 ### Unsupported behavior
 
-- Do not document or test `migrate_to(version)` as supported unless implementation is completed
+- Do not ship a public verb that cannot succeed. `migrate_to(version)` was exported and documented
+  while it could only throw: the state-based engine has one pending plan, so there is no version to
+  migrate "to". It was removed rather than kept as a stub (#732). Leave a feature unexported until it works
 - If a feature is partial, keep the contract explicit instead of implying Django-like completeness
 
 ### CI and automation

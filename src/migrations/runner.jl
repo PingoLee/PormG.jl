@@ -11,14 +11,33 @@
 
 import SHA: sha256
 
-# Regex patterns for detecting destructive SQL operations
+# Regex patterns for detecting destructive SQL operations (#728). A heuristic over the SQL text, not
+# a parser, and it errs toward flagging: a false positive costs an explicit `destructive = true`, a
+# false negative runs a data-losing statement unasked. Hand-edited plans are where it matters most —
+# `docs/src/migrations/advanced.md` tells users to add SQL, and this guard is its only review.
 const _DESTRUCTIVE_PATTERNS = [
-  r"DROP\s+TABLE"i,
-  r"DROP\s+COLUMN"i,
-  r"DROP\s+INDEX"i,
-  r"DROP\s+CONSTRAINT"i,
-  r"TRUNCATE\s+TABLE"i,
+  # Any DROP: a DROP command of any object kind (TABLE, INDEX, VIEW, SCHEMA, FUNCTION, SEQUENCE, …,
+  # including kinds no list here would name), and the ALTER TABLE sub-clauses `DROP [COLUMN] x` —
+  # COLUMN is optional on both engines — and `DROP CONSTRAINT`. It used to list four object kinds,
+  # so `DROP VIEW` and `ALTER TABLE t DROP x` passed. The property sub-clauses that are not data
+  # loss are removed first, by `_PROPERTY_DROP_CLAUSE`.
+  r"\bDROP\s+"i,
+  # TRUNCATE with or without TABLE / ONLY; PostgreSQL does not require the keyword. SQLite has no
+  # TRUNCATE at all — its spelling is the unqualified DELETE below.
+  r"\bTRUNCATE\s+"i,
+  # DELETE with no WHERE before the statement ends: TRUNCATE by another name, and SQLite's only
+  # spelling of it, so the two engines are guarded alike. UPDATE without WHERE is deliberately NOT
+  # flagged — it is the ordinary shape of a backfill, and whether it loses data depends on the SET
+  # expression, which no regex can judge.
+  r"\bDELETE\s+FROM\b(?:(?!\bWHERE\b)[^;])*(?:;|\z)"i,
 ]
+
+# `ALTER [COLUMN] <col> DROP NOT NULL | DEFAULT | IDENTITY | EXPRESSION` removes a column PROPERTY,
+# not data, and `Dialect.alter_field` emits the first three for ordinary nullability, default and
+# identity changes. Anchored on the `ALTER [COLUMN] <col>` that owns the clause, so
+# `ALTER TABLE t DROP identity` — dropping a column NAMED identity — still reads as a drop.
+const _PROPERTY_DROP_CLAUSE =
+  r"\bALTER\s+(?:COLUMN\s+)?(?:\"(?:[^\"]|\"\")*\"|\w+)\s+DROP\s+(?:NOT\s+NULL|DEFAULT|IDENTITY|EXPRESSION)\b"i
 
 # ==============================================================================
 # Reading a migration plan file as DATA (#710)
@@ -141,9 +160,28 @@ end
 """
     is_destructive(sql::String) -> Bool
 
-Check if a SQL statement contains destructive operations (DROP TABLE, DROP COLUMN, etc.).
+Whether `sql` (one statement or several) holds a statement the guard treats as data-losing. That
+is what `migrate` refuses to apply non-interactively without `destructive = true`. It flags:
+
+- any `DROP`: a `DROP <object>` command of any kind (`TABLE`, `INDEX`, `VIEW`, `SCHEMA`, `FUNCTION`,
+  `SEQUENCE`, …), and `ALTER TABLE … DROP [COLUMN] x` / `DROP CONSTRAINT`. The exceptions are the
+  `ALTER [COLUMN] <col> DROP NOT NULL | DEFAULT | IDENTITY | EXPRESSION` sub-clauses, which remove a
+  property rather than data;
+- `TRUNCATE`, with or without `TABLE`;
+- `DELETE FROM` with no `WHERE`: `TRUNCATE` by another name, and SQLite's only spelling of it.
+
+`UPDATE` without `WHERE` is not flagged: that is the ordinary shape of a backfill.
+
+It reads the SQL text and does not parse it, so it errs toward flagging: a string literal or quoted
+identifier that reads `drop x` is reported too. A generated `SET DEFAULT 'Drop zone'` is one
+example. That costs an explicit `destructive = true`, whereas a missed statement would run unasked
+(#728). Literals are deliberately not stripped first, because that would hide the
+`EXECUTE 'DROP TABLE ' || t` inside a `DO` block. It also misses a few hand-written spellings:
+any `WHERE` excuses a `DELETE`, even `WHERE true`, and a keyword glued to a quoted name or a
+comment (`DROP"col"`, `DELETE/**/FROM`) is not seen.
 """
 function is_destructive(sql::String)::Bool
+  sql = replace(sql, _PROPERTY_DROP_CLAUSE => " ")
   for pattern in _DESTRUCTIVE_PATTERNS
     if occursin(pattern, sql)
       return true
@@ -223,7 +261,7 @@ function _confirm_migration(has_destructive::Bool, destructive::Bool,
   # Interactive confirmation — only when a human can actually answer (real TTY).
   if can_prompt
     if has_destructive
-      @info(_emsg("\e[31m⚠ This migration contains DESTRUCTIVE operations (DROP TABLE, DROP COLUMN, etc.).\e[0m"))
+      @info(_emsg("\e[31m⚠ This migration contains DESTRUCTIVE operations (a DROP, a TRUNCATE, or a DELETE with no WHERE).\e[0m"))
     end
     @info(_emsg("\e[33mBefore applying the migrations, make sure to back up your database.\e[0m"))
     print(_emsg("\e[31mAre you sure you want to apply the migrations? (yes/no): \e[0m"))
@@ -1217,13 +1255,13 @@ PostgreSQL, direct on SQLite).
 - `interactive::Bool=true`: prompt for confirmation before applying — **only when stdin is a real
   terminal**. In a non-interactive process (CI, `Pkg.test`, deploy script) no prompt is shown and
   `migrate()` never blocks on `readline()`.
-- `destructive::Bool=false`: must be `true` to allow DROP TABLE / DROP COLUMN operations. A destructive
+- `destructive::Bool=false`: must be `true` to apply a plan `is_destructive` flags — any `DROP` (table,
+  column, constraint, index, view, …), a `TRUNCATE`, or a `DELETE` with no `WHERE`. A destructive
   plan in a non-interactive context throws `DestructiveMigrationError` unless this is set.
 - `dry_run_only::Bool=false`: if `true`, only analyze without applying (returns DryRunResult)
 - `name::String="pending_migration"`: name for this migration in the history table
 """
 function migrate(connection::PormGBackend, settings::PormGSettings;
-                 path::String = "db/models/models.jl",
                  interactive::Bool = true,
                  destructive::Bool = false,
                  dry_run_only::Bool = false,
@@ -1520,39 +1558,6 @@ function migrate(db::String; config::Dict{String,PormGSettings} = config, intera
 end
 
 # ==============================================================================
-# Targeted Execution: migrate_to(version)
-# ==============================================================================
-
-"""
-    migrate_to(connection, settings, target_version; interactive, destructive)
-
-Apply pending migrations up to (and including) a specific version.
-Only meaningful when multiple migration files exist in the pending queue.
-For now, this validates the target version against the current history.
-"""
-function migrate_to(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings, 
-                    target_version::String; interactive::Bool = true, destructive::Bool = false)
-  Configuration._require_folder_backed(settings, "migrate_to")
-  init_migrations(connection)
-  
-  applied = _get_applied_migrations(connection)
-  for m in applied
-    if m[:version] == target_version
-      @info("Version $target_version is already applied.")
-      return nothing
-    end
-  end
-
-  throw(InvalidMigrationError("migrate_to(version) is not implemented for the current single pending_migrations.jl workflow. Generate and apply the pending plan with migrate(), or implement ordered multi-file migration queues first."))
-end
-
-function migrate_to(db::String, target_version::String; config::Dict{String,PormGSettings} = config, 
-                    interactive::Bool = true, destructive::Bool = false)
-  settings = config[db]
-  migrate_to(settings.connections, settings, target_version; interactive=interactive, destructive=destructive)
-end
-
-# ==============================================================================
 # Repair Operations
 # ==============================================================================
 
@@ -1659,7 +1664,7 @@ connection — e.g. a `makemigrations` plan you generated and then regretted.
 
 A pending migration is only a file with no database state behind it, so this is
 filesystem-only: it never touches the `pormg_migrations` history table or the schema (unlike
-`remove_migration_record` / `migrate_to`, which mutate applied state). That makes discarding
+`mark_applied` / `remove_migration_record`, which mutate applied state). That makes discarding
 a draft the one inherently safe, reversible migration op.
 
 When `backup=true` (default) the file is renamed to `pending_migrations.jl.discarded`

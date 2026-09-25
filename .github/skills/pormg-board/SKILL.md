@@ -87,8 +87,9 @@ after they were merged and closed. Both times the issues were right.
 Always reconcile before planning; a stale board schedules closed and superseded issues at full cost.
 
 ```bash
-gh api graphql -f query='{ user(login:"PingoLee"){ projectV2(number:7){
-  items(first:99){ nodes{ id content{ ... on Issue { number state } }
+gh api graphql --paginate -f query='query($endCursor: String) { user(login:"PingoLee"){ projectV2(number:7){
+  items(first:100, after:$endCursor){ pageInfo{ hasNextPage endCursor }
+    nodes{ id content{ ... on Issue { number state } }
     fieldValues(first:12){ nodes{ ... on ProjectV2ItemFieldSingleSelectValue {
       name field{ ... on ProjectV2SingleSelectField { name } } } } } } } } } }' \
   --jq '.data.user.projectV2.items.nodes[] | [
@@ -101,9 +102,28 @@ gh api graphql -f query='{ user(login:"PingoLee"){ projectV2(number:7){
 ```
 
 One line per item: `<item-id> <issue#> <state> <status> <session>`. **Never run this unprojected** —
-the raw response is ~63 items × 12 nested field values and it is the most expensive read in the
-skill, for information that fits in five columns. `NO-SESSION` is not padding; it is a count the
-sweep below actually cares about.
+the raw response is every item (180 on 2026-09-24) × its nested field values and it is the most
+expensive read in the skill, for information that fits in five columns. `NO-SESSION` is not padding;
+it is a count the sweep below actually cares about.
+
+**Never drop `--paginate` or shrink it back to one page (#625).** GitHub returns at most 100 items
+per page and says nothing when it truncates: 99 rows look exactly like "the first 99 of 180". Items
+come back in the board's position order, which on this board is insertion order, so a single page
+silently drops the **newest** items — the ones a planning pass is about. This recipe was
+`items(first:99)` until the board had grown to 180 and 81 items were invisible to both queries in
+this section. `--paginate` drives the `$endCursor` loop and runs `--jq` once per page, so the
+projection is unchanged. Every piece of the loop is load-bearing: gh follows the **first**
+`pageInfo` in the response, so it must be `items`' own, ahead of `nodes`, and carry `hasNextPage` —
+drop either, or use `last:`, and gh stops after the first page exactly as before (each measured at
+100 of 180 rows). `test/unit/test_skill_graphql_pagination.jl`
+fails on any `gh api graphql` recipe under `.github/` that asks for `items` (or `issues` /
+`pullRequests`) without the full cursor loop.
+
+The nested `fieldValues(first:12)` here and `fields(first:20)` in §4 stay single-page on purpose:
+they are bounded by the board's schema, not by how much work has been filed. On 2026-09-24 an item
+carried at most 5 field values (7 to spare). The project had 14 fields, with **Session 14th** in
+the `fields` order, so it drops off `fields(first:20)` only if seven or more fields come to be
+ordered ahead of it. Re-measure before adding fields.
 
 Then, for every item:
 
@@ -126,13 +146,20 @@ the board is complete:
 ```bash
 comm -23 \
   <(gh issue list --state open --limit 200 --json number -q '.[].number' | sort -u) \
-  <(gh api graphql -f query='{ user(login:"PingoLee"){ projectV2(number:7){ items(first:99){ nodes{ content{ ... on Issue { number } } } } } } }' \
+  <(gh api graphql --paginate -f query='query($endCursor: String) { user(login:"PingoLee"){ projectV2(number:7){
+        items(first:100, after:$endCursor){ pageInfo{ hasNextPage endCursor } nodes{ content{ ... on Issue { number } } } } } } }' \
       --jq '.data.user.projectV2.items.nodes[] | .content.number // empty' | sort -u) \
   | sort -n
 ```
 
 (Keep it in one shell invocation. Splitting it across a temp file works only if both halves run in
 the *same* shell — a path written from bash is not the path a Windows tool resolves.)
+
+Both halves must see **every** row, or `comm` turns the gap into invented work: an on-board issue past
+a truncated board page shows up here as "on no board item", and the `item-edit` that follows
+overwrites a Session and Status another session owns (#625). The board half paginates for that
+reason. The issue half's `--limit 200` is the same kind of cap — 30 open issues on 2026-09-24, so
+it holds, but raise it before the open count approaches it rather than after.
 
 **Every open issue belongs on the board.** An issue filed during a session — including follow-ups
 this session just filed — is invisible to the next planning pass until it is added.
@@ -230,8 +257,8 @@ You want the project `id`, the **Status** field (options `Todo` / `In Progress` 
 **Session** field with its full option list.
 
 **`updateProjectV2Field` replaces the entire option list — it does not append.** Sending only the new
-option deletes every existing one and orphans every item grouped under them — 28 options and 63 items
-on this board today. The rule: resend every existing option **with its `id`, `color`, and
+option deletes every existing one and orphans every item grouped under them — 17 options and 30 items
+on 2026-09-24. The rule: resend every existing option **with its `id`, `color`, and
 `description`**, then append the new one without an `id`. Full reasoning, including why a rename
 needs the id: [`reference.md`](reference.md) §C.
 

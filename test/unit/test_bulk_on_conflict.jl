@@ -211,7 +211,6 @@ end
       settings.connections,
       ["id", "co_cbo"],
       "SELECT * FROM unnest(\$1::bigint[], \$2::varchar[])",
-      true,
       ["id"],
       settings,
       :execute,

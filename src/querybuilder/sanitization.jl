@@ -443,6 +443,18 @@ function _refuse_collection(f_meta, field::AbstractString, value, op::AbstractSt
 end
 
 function validate_field_data(model::PormGModel, field::String, value::Any, operation::String; allow_primary_key::Bool = true)
+    f_meta = _validate_field_name(model, field, operation; allow_primary_key = allow_primary_key)
+    return _validate_field_value(model, field, f_meta, value, operation)
+end
+
+# `validate_field_data`, split at the seam between what depends on the field alone and what depends
+# on the value (#704). The bulk writers run the name half once per column and the value half once per
+# cell: repeating the name half per cell cost a linear `field_names` scan and two dict lookups for
+# every one of a 100k-row frame's 800k cells. Together the two halves are `validate_field_data`,
+# check for check and message for message, so every other caller is unchanged.
+
+# Steps 1–2: the checks that depend only on `field`. Returns the field struct the value half reads.
+function _validate_field_name(model::PormGModel, field::String, operation::String; allow_primary_key::Bool = true)
     if haskey(model.fields, field) && Models.is_many_to_many_field(model.fields[field])
         _validation_error(operation, model, field, "many-to-many relations are not physical columns"; suggestion="use the many-to-many manager add, remove, clear, or set methods")
     end
@@ -466,6 +478,11 @@ function validate_field_data(model::PormGModel, field::String, value::Any, opera
         _validation_error(operation, model, field, "primary keys cannot be modified in this operation")
     end
 
+    return f_meta
+end
+
+# Steps 3–8: the checks on one value, given the field struct `_validate_field_name` returned.
+function _validate_field_value(model::PormGModel, field::String, f_meta, value::Any, operation::String)
     # 3. Nullability check
     if !f_meta.null && (value === nothing || ismissing(value))
         _validation_error(operation, model, field, "null values are not allowed")

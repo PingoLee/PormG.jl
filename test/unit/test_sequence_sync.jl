@@ -473,7 +473,6 @@ end
       settings.connections,
       ["id", "forename"],
       "SELECT * FROM unnest(\$1::bigint[], \$2::varchar[])",
-      true,
       ["id"],
       settings,
       :execute,
@@ -655,5 +654,80 @@ end
     rows = fetch(pool, "SELECT seq FROM sqlite_sequence WHERE name = 'seq674_circuit';") |> DataFrame
     @test nrow(rows) == 1           # pre-fix: 2, one appended per call
     @test rows[1, :seq] == 5        # the end of the second range
+  end
+end
+
+# PostgreSQL mock that records every statement in order, so a test can see how many sequence
+# syncs a multi-chunk `bulk_insert` issued and where they fell relative to the INSERTs (#704).
+struct MockSyncPerCall <: PormG.PormGPostgres end
+struct SyncPerCallResult
+  n::Int
+end
+const SYNC_PER_CALL_SQL = String[]
+PormG.config["seq704_pg"] = PormG.Configuration.Settings(connections = MockSyncPerCall(), change_data = true)
+
+function fetch(connection::MockSyncPerCall, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false)
+  push!(SYNC_PER_CALL_SQL, sql)
+  occursin("INSERT INTO", sql) && return SyncPerCallResult(2)
+  occursin("pg_get_serial_sequence", sql) && return DataFrame(pg_get_serial_sequence = ["public.seq704_driver_id_seq"])
+  occursin("setval", sql) && return DataFrame(setval = [7])
+  return DataFrame()   # SAVEPOINT / RELEASE
+end
+PormG.backend_num_affected_rows(::MockSyncPerCall, r::SyncPerCallResult) = r.n
+
+const Seq704Driver = Model("seq704_driver", id = IDField(), forename = CharField())
+Seq704Driver.connect_key = "seq704_pg"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sequence Sync: bulk_insert resyncs once per call, after the last chunk (#704)
+# Six rows at chunk_size = 2 are three INSERTs. With explicit ids the sequence is synced ONCE,
+# after all three — it used to be synced after every chunk, two round trips each, which was ~1.9 s
+# of a 100k-row insert. Without an id column no row sets the pk, so nothing is synced at all.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "bulk_insert syncs the sequence once per call, not per chunk (#704)" begin
+  drivers = DataFrame(id = 1:6, forename = ["Ayrton", "Alain", "Nelson", "Nigel", "Michael", "Mika"])
+  # Run as `bulk_insert` really runs: inside a transaction on this pool.
+  in_tx(f) = PormG.Configuration.with_tx_context(f, PormG.config["seq704_pg"].connections, :mock_tx_conn)
+
+  empty!(SYNC_PER_CALL_SQL)
+  r = in_tx(() -> bulk_insert(Seq704Driver.objects, drivers; chunk_size = 2))
+  @test r.count == 6                                                          # 3 chunks × 2
+  inserts = findall(sql -> occursin("INSERT INTO", sql), SYNC_PER_CALL_SQL)
+  lookups = findall(sql -> occursin("pg_get_serial_sequence", sql), SYNC_PER_CALL_SQL)
+  setvals = findall(sql -> occursin("setval", sql), SYNC_PER_CALL_SQL)
+  @test length(inserts) == 3                                                  # precondition: three chunks ran
+  @test length(lookups) == 1 && length(setvals) == 1                          # pre-fix: 3 of each
+  @test only(lookups) > last(inserts) && only(setvals) > last(inserts)        # after the last chunk
+
+  # No id column: the database allocates every id, so there is nothing to resync.
+  empty!(SYNC_PER_CALL_SQL)
+  in_tx(() -> bulk_insert(Seq704Driver.objects, drivers[:, [:forename]]; chunk_size = 2))
+  @test count(sql -> occursin("INSERT INTO", sql), SYNC_PER_CALL_SQL) == 3
+  @test !any(sql -> occursin("pg_get_serial_sequence", sql) || occursin("setval", sql), SYNC_PER_CALL_SQL)
+
+  # A dry run executes nothing, so it syncs nothing either.
+  empty!(SYNC_PER_CALL_SQL)
+  bulk_insert(Seq704Driver.objects, drivers; chunk_size = 2, show_query = :sql)
+  @test isempty(SYNC_PER_CALL_SQL)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite Sequence Sync: a multi-chunk explicit-id insert still counts and continues right (#704)
+# The sync moved from every chunk to the end of the call, so the per-chunk `changes()` counts no
+# longer interleave with it. This pins the OUTCOME on a real database, with the ids spread over three
+# chunks: the summed count, and the next auto id continuing after the largest explicit one. It is not
+# a guard on the sync call itself — SQLite also advances an AUTOINCREMENT counter natively on an
+# explicit-id insert; the call count is pinned by the PostgreSQL testset above.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite multi-chunk explicit-id bulk_insert counts and continues right (#704)" begin
+  seq674_with_sqlite(autoincrement = true) do pool, model
+    circuits = DataFrame(circuitid = [10, 11, 12, 13, 14], name = ["Monza", "Spa", "Suzuka", "Interlagos", "Imola"])
+    @test bulk_insert(model.objects, circuits; chunk_size = 2).count == 5
+    seq = fetch(pool, "SELECT seq FROM sqlite_sequence WHERE name = 'seq674_circuit';") |> DataFrame
+    @test seq.seq == [14]
+
+    # The next auto-id insert continues after the largest explicit id.
+    model.objects.create("name" => "Silverstone")
+    @test model.objects.filter("name" => "Silverstone").values("circuitid").list()[1][:circuitid] == 15
   end
 end

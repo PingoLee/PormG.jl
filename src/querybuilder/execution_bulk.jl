@@ -1328,6 +1328,14 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   casts = pg_arrays ? [_pg_bulk_cast_type(model.fields[field], connection) for field in fields_df] : String[]
   new_columns() = [Any[] for _ in fields_df]
 
+  # Everything that depends on the field alone is resolved once per column, not once per cell
+  # (#704): the field-name half of `validate_field_data`, and the source column itself. Reading a
+  # cell as `row[mapping[field]]` looked the column up by NAME every time, which was over a third of
+  # a 100k-row insert's client-side time. `metas[j]` and `sources[j]` stay in `fields_df` order —
+  # the order the INSERT column list and the row source are built in.
+  metas = [_validate_field_name(model, field, "bulk_insert"; allow_primary_key = true) for field in fields_df]
+  sources = [df[!, mapping[field]] for field in fields_df]
+
   results = []
   insert_loop = () -> begin
     rows = String[]
@@ -1338,22 +1346,23 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     parameters = get_parameter(connection)
     # For INSERT, all params go into the :select bucket (the row source)
     set_context!(parameters, :select)
-    for (index, row) in enumerate(eachrow(df))
+    for index in 1:total
       try
-        # Validation checks consistent with single insert()
-        for field in fields_df
-          validate_field_data(model, field, row[mapping[field]], "bulk_insert"; allow_primary_key = true)
+        # Validation checks consistent with single insert(), row by row, so the first row that
+        # fails is the one reported.
+        for (j, field) in enumerate(fields_df)
+          _validate_field_value(model, field, metas[j], sources[j][index], "bulk_insert")
         end
 
         # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-        cells = [_format_single(model.fields[field], field, row[mapping[field]], "bulk_insert") for field in fields_df]
+        cells = [_format_single(metas[j], field, sources[j][index], "bulk_insert") for (j, field) in enumerate(fields_df)]
         if pg_arrays
           foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
         else
           push!(rows, "($(join([add_parameter!(parameters, cell) for cell in cells], ", ")))")
         end
       catch e
-        _depuration_values_bulk_insert(fields_df, mapping, model, row, index)
+        _depuration_values_bulk_insert(fields_df, mapping, model, df[index, :], index)
         e isa PormGError && rethrow()   # keep the taxonomy type; the depuration log above carries the row context
         throw(InvalidValueError("Error in bulk_insert, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
       end
@@ -1361,7 +1370,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
       if count == effective_chunk || index == total
         source_sql = pg_arrays ? "SELECT * FROM " * _pg_unnest_source!(parameters, columns, casts) :
                                  "VALUES " * join(rows, ", ")
-        res = _bulk_insert(model, connection, fields_df, source_sql, pk_exist, pk_field, settings, show_query, parameters; on_conflict_sql = on_conflict_sql)
+        res = _bulk_insert(model, connection, fields_df, source_sql, pk_field, settings, show_query, parameters; on_conflict_sql = on_conflict_sql)
         push!(results, res)
         count = 0
         rows = String[]
@@ -1370,6 +1379,19 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
         set_context!(parameters, :select)
       end
     end
+
+    # One sequence sync per call, after the last chunk, as `bulk_copy` does (#704) — not one per
+    # chunk, which cost two round trips each (100 chunks: ~1.9 s of a 5.4 s insert). Nothing between
+    # chunks needs it, because every chunk runs in this one transaction and no row in it depends on
+    # the sequence being current. When the pk column takes part, every row carries an explicit pk
+    # (a blank/explicit mix is refused in `_drop_blank_auto_primary_keys!`), so no chunk draws from
+    # the sequence. `pk_exist` can also be true with the pk NOT taking part: `columns = ["id", …]`
+    # naming a column the frame lacks. Then every row draws from the sequence, and the final
+    # resync to MAX(pk) is at most a correction of drift that predates the call. A chunk's
+    # duplicate-key retry still resyncs on its own. This does not make the call safe for concurrent
+    # writers, and never did: `setval` is not transactional, but the rows it accounts for stay
+    # invisible until commit.
+    show_query === :execute && pk_exist && _update_sequence(model, connection, pk_field, settings)
   end
 
   if show_query !== :execute || transaction_connection_for(settings) !== nothing
@@ -1554,6 +1576,9 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     return _show_query_result(show_query, sql, connection, model, Symbol("bulk_copy"))
   end
 
+  # The field-name half of `validate_field_data`, once per column rather than once per cell (#704).
+  metas = [_validate_field_name(model, field, "bulk_copy"; allow_primary_key = true) for field in fields_df]
+
   # Process in chunks
   chunk_size = 10000
   total_rows = size(df, 1)
@@ -1569,17 +1594,17 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
       # written as the NULL sentinel. Columns are built in fields_df order so they align
       # positionally with the COPY column list (HEADER FALSE). #86
       formatted = DataFrames.DataFrame()
-      for field in fields_df
+      for (field, f_meta) in zip(fields_df, metas)
         src = df[i:end_idx, mapping[field]]
         formatted[!, field] = map(eachindex(src)) do offset
           value = src[offset]
           row_index = i + offset - 1
           try
-            validate_field_data(model, field, value, "bulk_copy"; allow_primary_key = true)
+            _validate_field_value(model, field, f_meta, value, "bulk_copy")
             # `_bulk_copy_cell` translates a binary payload into PostgreSQL's hex input syntax;
             # every other value passes through unchanged (#296). A collection is refused first, as
             # in every other writer (#712): CSV would otherwise store its `repr` as the column text.
-            _bulk_copy_cell(_format_single(model.fields[field], field, value, "bulk_copy"))
+            _bulk_copy_cell(_format_single(f_meta, field, value, "bulk_copy"))
           catch e
             e isa PormGError && rethrow()   # keep the taxonomy type (bulk_copy logs no per-row depuration; the message below carries the row index only for the wrapped case)
             throw(InvalidValueError("Error in bulk_copy, row $(row_index) for model $(model.name) failed validation or formatting: $(e)"))
@@ -1734,7 +1759,7 @@ end
 
 function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGSQLite},
   fields::Vector{String}, source_sql::String,
-  pk_exist::Bool, pk_field::Vector{String}, settings::PormGSettings,
+  pk_field::Vector{String}, settings::PormGSettings,
   show_query::Symbol, parameters:: AbstractPormGParam;
   on_conflict_sql::Union{Nothing, String} = nothing)
 
@@ -1817,12 +1842,11 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
       throw(_unsupported_conn("bulk_insert()", connection))
     end
 
-    # Count BEFORE the sequence sync (#670): on SQLite the count is `changes()`, which the sync's own
-    # statements would overwrite. Rows `ON CONFLICT DO NOTHING` skipped are not counted on either
-    # engine; a `DO UPDATE` upsert counts each row it inserted or updated.
-    inserted = _affected_row_count(connection, result, transaction_connection_for(settings))
-    pk_exist && _update_sequence(model, connection, pk_field, settings)
-    return inserted
+    # Rows `ON CONFLICT DO NOTHING` skipped are not counted on either engine; a `DO UPDATE` upsert
+    # counts each row it inserted or updated. Counted here, per chunk, because on SQLite the count is
+    # `changes()`, which any later statement overwrites (#670) — the caller's once-per-call sequence
+    # sync (#704) among them.
+    return _affected_row_count(connection, result, transaction_connection_for(settings))
   end
 end
 
@@ -2027,6 +2051,16 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   casts = pg_arrays ? [_pg_bulk_cast_type(model.fields[field], connection) for field in joined_columns] : String[]
   new_columns() = [Any[] for _ in joined_columns]
 
+  # Resolved once per column, not once per cell (#704), as in `bulk_insert`: the field-name half of
+  # `validate_field_data` for the SET columns (the only ones validated — match keys and static
+  # filters are skipped, since they are not written), and every source column by position. The
+  # `joined_*` vectors stay in `joined_columns` order, which the row source and `casts` follow.
+  set_fields = [field for field in fields_df if !(field in deny_fields)]
+  set_metas = [_validate_field_name(model, field, "bulk_update"; allow_primary_key = false) for field in set_fields]
+  set_sources = [df[!, mapping[field]] for field in set_fields]
+  joined_metas = [model.fields[field] for field in joined_columns]
+  joined_sources = [df[!, mapping[field]] for field in joined_columns]
+
   results = []
   # A chunk's rows bind into the :select context (the row source)
   new_chunk_parameters() = (p = _fork_parameters(base_parameters); set_context!(p, :select); p)
@@ -2036,26 +2070,22 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
     rows = String[]
     columns = new_columns()
     chunk_parameters = new_chunk_parameters()
-    for (index, row) in enumerate(eachrow(df))
+    for index in 1:total
       try
-        # Validation checks consistent with single update()
-        for field in fields_df
-            # Skip fields used as filters or primary keys (they aren't being updated)
-            field in deny_fields && continue
-
-            # Centralized validation using mapping
-            validate_field_data(model, field, row[mapping[field]], "bulk_update"; allow_primary_key = false)
+        # Validation checks consistent with single update(), on the SET columns only
+        for (j, field) in enumerate(set_fields)
+          _validate_field_value(model, field, set_metas[j], set_sources[j][index], "bulk_update")
         end
 
         # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-        cells = [_format_single(model.fields[field], field, row[mapping[field]], "bulk_update") for field in joined_columns]
+        cells = [_format_single(joined_metas[j], field, joined_sources[j][index], "bulk_update") for (j, field) in enumerate(joined_columns)]
         if pg_arrays
           foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
         else
           push!(rows, "($(join([add_parameter!(chunk_parameters, cell) for cell in cells], ", ")))")
         end
       catch e
-        _depuration_values_bulk_insert(fields_df, mapping, model, row, index; op = "bulk_update")
+        _depuration_values_bulk_insert(fields_df, mapping, model, df[index, :], index; op = "bulk_update")
         e isa PormGError && rethrow()   # keep the taxonomy type; the depuration log above carries the row context
         throw(InvalidValueError("Error in bulk_update, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
       end

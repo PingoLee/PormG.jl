@@ -337,3 +337,97 @@ pgu672_stops() = DataFrames.DataFrame(
               "{\"O\\\"Brien, {Jr}\",\"back\\\\slash\",\"NULL\",\"\",NULL,42,true,\"\\\\x00ff\"}"
     end
 end
+
+# A results table with a defaulted `status`, so a write that leaves it out gets a column PormG
+# injects into the working frame itself — a source column the caller never wrote (#704).
+pgu704_result(key) = begin
+    m = Model("pgu704_result",
+        id     = IDField(),
+        raceid = IntegerField(),
+        points = FloatField(null = true),
+        status = CharField(default = "Finished"),
+    )
+    m.connect_key = key
+    m
+end
+Pgu704_result_pg = pgu704_result("pgu672_pg")
+Pgu704_result_sl = pgu704_result("pgu672_sl")
+
+@testset "Bulk writers read each cell by column position (#704)" begin
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Bulk writers: a renamed, reordered frame still binds each value to its own column.
+    # Since #704 the row loop resolves each field's source column once (`df[!, mapping[field]]`)
+    # and reads cells by position, instead of looking the column up by name per cell. A
+    # misalignment there is a silent misbind, so the frame here is in the REVERSE of the model's
+    # field order and renames two columns through `columns=`; the arrays must still come out in
+    # the INSERT column list's order (id, raceid, points), and SQLite's row-major `?`s must agree.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "renamed and reordered columns bind to their own fields" begin
+        frame = DataFrames.DataFrame(pts = [25.0, 18.0], race = [1073, 1074], id = [1, 2])
+        mapping = ["id", "race" => "raceid", "pts" => "points"]
+
+        pg = bulk_insert(Pgu672_result_pg.objects, frame, columns = mapping, show_query = :dict)
+        @test pg[:sql_text] == """
+            INSERT INTO "pgu672_result" ("id", "raceid", "points")
+            SELECT * FROM unnest(\$1::bigint[], \$2::integer[], \$3::float[])
+            """
+        # Distinct values per column (1073 vs 1074, 25 vs 18), so a swapped column cannot pass.
+        @test pg[:parameters] == Any[Any[1, 2], Any[1073, 1074], Any["25", "18"]]
+
+        # SQLite: one `?` per cell, row by row, in the same column order.
+        sl = bulk_insert(Pgu672_result_sl.objects, frame, columns = mapping, show_query = :dict)
+        @test sl[:parameters] == Any[1, 1073, "25", 2, 1074, "18"]
+
+        # bulk_update: the SET column, then the match key (the source-column order), both read
+        # from their renamed / reordered frame columns.
+        upd = bulk_update(Pgu672_result_pg.objects, frame, columns = ["pts" => "points", "id"],
+            match_on = ["id"], show_query = :dict)
+        @test upd[:parameters] == Any[Any["25", "18"], Any[1, 2]]
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Bulk writers: an injected default column lines up with the renamed ones.
+    # `status` is left out by `columns=`, so PormG fills its default into a private column of the
+    # working frame and appends the field to the INSERT list. The caller's own `status` column (a
+    # decoy, the #335 shape) is excluded and must not be read. The positional reads must pick the
+    # private fill column for `status`, the renamed frame columns for the rest.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "an injected default column binds beside renamed columns" begin
+        frame = DataFrames.DataFrame(status = ["DNF", "Retired"], pts = [25.0, 18.0], race = [1073, 1074], id = [1, 2])
+        mapping = ["id", "race" => "raceid", "pts" => "points"]
+
+        pg = bulk_insert(Pgu704_result_pg.objects, frame, columns = mapping, show_query = :dict)
+        @test occursin("(\"id\", \"raceid\", \"points\", \"status\")", pg[:sql_text])
+        @test pg[:parameters] == Any[Any[1, 2], Any[1073, 1074], Any["25", "18"], Any["Finished", "Finished"]]
+
+        sl = bulk_insert(Pgu704_result_sl.objects, frame, columns = mapping, show_query = :dict)
+        @test sl[:parameters] == Any[1, 1073, "25", "Finished", 2, 1074, "18", "Finished"]
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Bulk writers: validation stays row by row, so the first bad ROW is the one reported.
+    # Row 1 is bad only in its last column (points), row 2 only in an earlier one (raceid). Row by
+    # row, `points` is reached first; a column-by-column pass would report `raceid` instead. Hoisting
+    # the per-field work out of the loop (#704) must not have turned the loop inside out.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "the first failing row is reported, not the first failing column" begin
+        frame = DataFrames.DataFrame(id = [1, 2], raceid = Any[1073, "not a race"], points = Any["fast", 18.0])
+        # The message a writer raises for this frame. Row 1's cell cannot be formatted, so it comes
+        # from the per-row depuration pass, which colors the field name — hence the bare-name checks.
+        message(call) = try
+            call()
+            ""
+        catch e
+            @test e isa PormG.InvalidValueError
+            sprint(showerror, e)
+        end
+        names_points_not_raceid(msg) = occursin("points", msg) && !occursin("raceid", msg)
+        for model in (Pgu672_result_pg, Pgu672_result_sl)
+            @test names_points_not_raceid(message(() -> bulk_insert(model.objects, frame, show_query = :dict)))
+        end
+        # bulk_update validates its SET columns the same way.
+        @test names_points_not_raceid(message(() -> bulk_update(Pgu672_result_pg.objects, frame,
+            columns = ["id", "raceid", "points"], match_on = ["id"], show_query = :dict)))
+    end
+end

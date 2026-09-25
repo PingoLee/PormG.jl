@@ -389,6 +389,8 @@ COPY "driver" ("forename", "surname", "nationality") FROM STDIN WITH (FORMAT CSV
 
 After a `bulk_copy`, PormG automatically updates PostgreSQL `SERIAL`/`IDENTITY` sequences so that subsequent calls to `create()` do not result in primary key collisions.
 
+`bulk_insert` does the same whenever the `DataFrame` supplies the primary key. Both resync **once per call**, after the last chunk, not once per chunk. The whole call runs in one transaction, so nothing between chunks needs the sequence to be current.
+
 ```julia
 # Bulk insert 10,000 drivers
 bulk_copy(M.Driver.objects, df_large)

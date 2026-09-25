@@ -52,8 +52,8 @@ loaded as `load("dynamic_connection")`.
 
 !!! warning "Migrations and model import need a folder"
     A dynamic connection has no models folder, so the migration workflow and the model importers
-    refuse it with `InvalidConfigurationError`: `makemigrations`, `migrate`, `migrate_to`, `status`,
-    `dry_run` and `discard_pending_migration` from `PormG.Migrations`, and
+    refuse it with `InvalidConfigurationError`: `makemigrations`, `migrate`, `status`, `dry_run` and
+    `discard_pending_migration` from `PormG.Migrations`, and
     `import_models_from_sqlite` / `import_models_from_postgres`. Before this refusal they followed
     the `"dynamic_connection"` label as a path relative to the working directory, so a static folder
     of that name stood in for the tenant: `dry_run` reported *its* pending plan,

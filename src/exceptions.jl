@@ -487,10 +487,9 @@ abstract type MigrationError <: PormGError end
     InvalidMigrationError(msg) <: MigrationError <: PormGError
 
 The migration engine refused or could not complete an operation — a duplicate index name in a
-plan, an invalid answer to an interactive `makemigrations` prompt, an unimplemented
-`migrate_to(version)` path, or a migration-engine step that cannot proceed (no pending plan,
-an unparseable introspected DDL statement, a missing model file). The importer-pointed-at-the-
-wrong-backend case is [`BackendCapabilityError`](@ref).
+plan, an invalid answer to an interactive `makemigrations` prompt, or a migration-engine step that
+cannot proceed (no pending plan, an unparseable introspected DDL statement, a missing model file).
+The importer-pointed-at-the-wrong-backend case is [`BackendCapabilityError`](@ref).
 """
 struct InvalidMigrationError <: MigrationError
   msg::String

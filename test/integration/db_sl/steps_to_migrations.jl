@@ -118,9 +118,7 @@ println(PormG.Migrations.status(DB_KEY))
 # PormG.@import_models "test/integration/db_sl/models.jl" SL_Models
 # ...
 
-# Notes for future migration features:
-# - `migrate_to(version)` is not implemented for the current single
-#   pending_migrations.jl workflow, so this script intentionally does not call it.
+# Notes:
 # - For manual intervention workflows, also see:
 #   PormG.Migrations.mark_applied(...)
 #   PormG.Migrations.mark_failed(...)

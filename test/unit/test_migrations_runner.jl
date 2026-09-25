@@ -613,4 +613,28 @@ using Dates
         @test occursin("sqlite_master", sl_exists)
     end
 
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Removed surface: `migrate_to` and `migrate`'s dead `path` keyword (#732)
+    # `migrate_to` could never succeed — the state-based engine has one pending plan, so there is
+    # no version to migrate "to" — and it wrote `pormg_migrations` even under `change_db: false`.
+    # `migrate(conn, settings; path=…)` accepted a keyword it never read. Both were removed rather
+    # than kept as stubs; the two upgrade entries promise `UndefVarError` / `MethodError`, and this
+    # pins that the names really are gone so a stub cannot quietly return.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "Removed: migrate_to and migrate's path keyword (#732)" begin
+        # Gone entirely — neither defined nor exported, so `migrate_to(...)` is an UndefVarError.
+        @test !isdefined(PormG.Migrations, :migrate_to)
+        @test :migrate_to ∉ names(PormG.Migrations)
+
+        # `migrate`'s connection-level method no longer declares `path`, so passing it is a
+        # MethodError. Reflection rather than a call: the call would need a real connection and
+        # settings, and a MethodError from WRONG positional types would pass without proving anything.
+        ms = methods(Migrations.migrate, (PormG.PormGBackend, PormG.PormGSettings))
+        @test length(ms) == 1
+        kws = Base.kwarg_decl(only(ms))
+        @test :path ∉ kws
+        # Non-vacuity: the keywords that remain are still read by name.
+        @test :destructive in kws && :interactive in kws
+    end
+
 end

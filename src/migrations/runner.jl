@@ -1262,7 +1262,6 @@ PostgreSQL, direct on SQLite).
 - `name::String="pending_migration"`: name for this migration in the history table
 """
 function migrate(connection::PormGBackend, settings::PormGSettings;
-                 path::String = "db/models/models.jl",
                  interactive::Bool = true,
                  destructive::Bool = false,
                  dry_run_only::Bool = false,
@@ -1559,39 +1558,6 @@ function migrate(db::String; config::Dict{String,PormGSettings} = config, intera
 end
 
 # ==============================================================================
-# Targeted Execution: migrate_to(version)
-# ==============================================================================
-
-"""
-    migrate_to(connection, settings, target_version; interactive, destructive)
-
-Apply pending migrations up to (and including) a specific version.
-Only meaningful when multiple migration files exist in the pending queue.
-For now, this validates the target version against the current history.
-"""
-function migrate_to(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings, 
-                    target_version::String; interactive::Bool = true, destructive::Bool = false)
-  Configuration._require_folder_backed(settings, "migrate_to")
-  init_migrations(connection)
-  
-  applied = _get_applied_migrations(connection)
-  for m in applied
-    if m[:version] == target_version
-      @info("Version $target_version is already applied.")
-      return nothing
-    end
-  end
-
-  throw(InvalidMigrationError("migrate_to(version) is not implemented for the current single pending_migrations.jl workflow. Generate and apply the pending plan with migrate(), or implement ordered multi-file migration queues first."))
-end
-
-function migrate_to(db::String, target_version::String; config::Dict{String,PormGSettings} = config, 
-                    interactive::Bool = true, destructive::Bool = false)
-  settings = config[db]
-  migrate_to(settings.connections, settings, target_version; interactive=interactive, destructive=destructive)
-end
-
-# ==============================================================================
 # Repair Operations
 # ==============================================================================
 
@@ -1698,7 +1664,7 @@ connection — e.g. a `makemigrations` plan you generated and then regretted.
 
 A pending migration is only a file with no database state behind it, so this is
 filesystem-only: it never touches the `pormg_migrations` history table or the schema (unlike
-`remove_migration_record` / `migrate_to`, which mutate applied state). That makes discarding
+`mark_applied` / `remove_migration_record`, which mutate applied state). That makes discarding
 a draft the one inherently safe, reversible migration op.
 
 When `backup=true` (default) the file is renamed to `pending_migrations.jl.discarded`

@@ -96,7 +96,6 @@ class Circuit(models.Model):
         # Pre-fix this one warned about `change_db` and returned `nothing`: a dynamic entry's
         # defaults have `change_db = false`, so the refusal must come before that early return.
         ("migrate(key)",                    "migrate",                   () -> Migrations.migrate(key; interactive = false)),
-        ("migrate_to(key, version)",        "migrate_to",                () -> Migrations.migrate_to(key, "20260101000000"; interactive = false)),
         ("discard_pending_migration(key)",  "discard_pending_migration", () -> Migrations.discard_pending_migration(key)),
         # The String arity builds `joinpath(key, model_file)` from the KEY before delegating, so it
         # carries its own guard; the SQLite method below is reached only by a direct call.
@@ -140,8 +139,8 @@ class Circuit(models.Model):
       end
 
       # The refusal comes before any DATABASE side effect too, which the filesystem snapshot cannot
-      # see: `migrate` and `migrate_to` both bootstrap `pormg_migrations` via `init_migrations`, so
-      # a guard moved below that call would leave the table behind in the tenant's database.
+      # see: `migrate` bootstraps `pormg_migrations` via `init_migrations`, so a guard moved below
+      # that call would leave the table behind in the tenant's database.
       @test !Migrations._migrations_table_exists(sqlite_settings.connections)
     end
   finally

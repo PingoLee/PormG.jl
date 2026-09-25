@@ -1037,3 +1037,189 @@ end
     drop_fixtures()
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Introspection ownership on PostgreSQL: partitions, extension tables and views are not read (#730)
+# `relkind = 'r'` admitted every partition of a partitioned table and every table an extension
+# owns, so `makemigrations` planned a `DROP TABLE` for each — and for an extension member the DROP
+# fails outright ("extension … requires it"). Every enumeration now carries
+# `_PG_OWNABLE_TABLE_FILTER`. The live-table list IS the planner's whole input, so a relation absent
+# from it is one no plan can drop; the unit twin pins that each query carries the filter, this
+# pins that the filter means what it says against a real catalog.
+# Fixtures: a partitioned parent with one partition and a composite index (PostgreSQL clones the
+# index onto the partition, which is the composite reader's input), a view and a materialized view,
+# all dropped in `finally`. The extension member runs inside a transaction that is ROLLED BACK, so
+# no other session ever sees the extension or the table; it uses a trusted contrib extension that is
+# not already installed, never the shared `unaccent`.
+# SQLite's half (virtual and shadow tables) is hermetic: test/unit/test_live_schema_reader.jl.
+# Mutation gate: drop `NOT c.relispartition` and the partition and its index come back; drop the
+# `pg_depend` clause and the extension member does.
+# ─────────────────────────────────────────────────────────────────────────────
+if adapter_name == "PostgreSQL"
+  @testset "Introspection ownership: partitions, extension tables and views are not read (#730)" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
+    names_read() = Set(t.name for t in PormG.Migrations.read_live_schema(pool))
+    drop730!() = for s in ("DROP MATERIALIZED VIEW IF EXISTS pormg_it_own_matview",
+                           "DROP VIEW IF EXISTS pormg_it_own_view",
+                           "DROP TABLE IF EXISTS pormg_it_own_part CASCADE")   # takes the partition too
+      try; ddl(s); catch; end
+    end
+
+    drop730!()
+    try
+      ddl("CREATE TABLE pormg_it_own_part (id bigint NOT NULL, season integer NOT NULL, round integer NOT NULL) PARTITION BY RANGE (season)")
+      ddl("CREATE TABLE pormg_it_own_part_2026 PARTITION OF pormg_it_own_part FOR VALUES FROM (2026) TO (2027)")
+      ddl("CREATE INDEX pormg_it_own_part_season_round ON pormg_it_own_part (season, round)")
+      ddl("CREATE VIEW pormg_it_own_view AS SELECT 1 AS one")
+      ddl("CREATE MATERIALIZED VIEW pormg_it_own_matview AS SELECT 1 AS one")
+
+      # Precondition — to the catalog the partition is an ordinary table, the shape the old filter
+      # admitted; without this the absence assertions below could pass on a server that stores it
+      # some other way.
+      kinds = ddl("SELECT relkind::text AS relkind, relispartition FROM pg_class WHERE relname = 'pormg_it_own_part_2026'")
+      @test (kinds.relkind[1], kinds.relispartition[1]) == ("r", true)
+
+      unowned = Set(["pormg_it_own_part", "pormg_it_own_part_2026", "pormg_it_own_view", "pormg_it_own_matview"])
+      @test isempty(intersect(names_read(), unowned))
+      @test !haskey(PormG.Migrations._pg_composite_indexes(pool), "pormg_it_own_part_2026")
+      @test isempty(intersect(Set(PormG.Migrations._get_live_table_names(pool)), unowned))
+    finally
+      drop730!()
+    end
+
+    # ── The extension member, inside a rolled-back transaction ──
+    # A trusted extension can be created by a non-superuser with CREATE on the database, who then
+    # owns it — which is what `ALTER EXTENSION … ADD TABLE` requires. The candidates are constants.
+    avail = ddl("""
+      SELECT e.name FROM pg_available_extensions e
+      JOIN pg_available_extension_versions v ON v.name = e.name AND v.version = e.default_version
+      WHERE e.installed_version IS NULL AND v.trusted
+        AND e.name IN ('seg', 'isn', 'ltree', 'cube', 'tcn', 'hstore')
+      ORDER BY e.name""")
+    # Not a skip: without an extension to join, the pg_depend clause goes unverified against a live
+    # server, and that should be seen, not silently passed.
+    @test nrow(avail) > 0
+    if nrow(avail) > 0
+      ext = String(avail.name[1])
+      member_depends = Ref(-1)
+      read_in_tx = Ref(Set{String}())
+      sentinel = "pormg #730: roll the extension fixture back"
+      try
+        PormG.run_in_transaction(pool) do
+          ddl("CREATE EXTENSION \"$(ext)\"")
+          ddl("CREATE TABLE pormg_it_own_ext_member (id integer PRIMARY KEY)")
+          ddl("ALTER EXTENSION \"$(ext)\" ADD TABLE pormg_it_own_ext_member")
+          # The positive control: an ordinary table created in the SAME uncommitted transaction. It
+          # is visible only to a read that rides this transaction's connection, so seeing it is what
+          # proves the member's absence below is the filter's doing, not a read from outside.
+          ddl("CREATE TABLE pormg_it_own_ext_control (id integer PRIMARY KEY)")
+          # Precondition: membership is recorded exactly where the filter looks for it.
+          member_depends[] = ddl("""SELECT count(*)::int AS n FROM pg_depend
+                                    WHERE classid = 'pg_class'::regclass AND deptype = 'e'
+                                      AND objid = 'pormg_it_own_ext_member'::regclass""").n[1]
+          read_in_tx[] = names_read()     # plain fetches ride the transaction's connection
+          error(sentinel)
+        end
+      catch e
+        occursin(sentinel, sprint(showerror, e)) || rethrow()
+      end
+      @test member_depends[] == 1
+      @test "pormg_it_own_ext_control" in read_in_tx[]   # the read rode the transaction
+      @test !("pormg_it_own_ext_member" in read_in_tx[])
+      # The rollback left nothing behind, for this run or any other session.
+      @test nrow(ddl("SELECT 1 FROM pg_class WHERE relname IN ('pormg_it_own_ext_member', 'pormg_it_own_ext_control')")) == 0
+      @test nrow(DataFrame(PormG.ConnectionPool.fetch(pool, "SELECT 1 FROM pg_extension WHERE extname = \$1", [ext]))) == 0
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL non-negative CHECK: only PormG's exact clause reads as PormG's (#731)
+# The reader matched `pg_get_constraintdef … LIKE '%>= 0%'` and `get_constraints_check` matched
+# `ILIKE '%>= 0%'`, so a user's range check on an `IntegerField` column read as the CHECK a
+# `PositiveIntegerField` renders — and the planner, diffing it against the declared `IntegerField`,
+# proposed `DROP CONSTRAINT` on the user's constraint. Both now match the exact deparsed clause.
+# The table is created from PormG's own plan, so `pos` / `pos_small` / `Mixed` carry exactly the
+# CHECK PormG writes (the round trip must still hold, a mixed-case column included); the user's
+# CHECKs are then added to the plain integer columns by hand. Dropped in `finally`.
+# SQLite already matched exactly; its parity test is hermetic (test/unit/test_live_schema_reader.jl).
+# Mutation gate: put `LIKE '%>= 0%'` back in the CTE and `grid`/`price` read as PormG's and the plan
+# is no longer empty; put `ILIKE '%>= 0%'` back in `get_constraints_check` and it names the user's
+# constraint for `grid`/`price`.
+# ─────────────────────────────────────────────────────────────────────────────
+if adapter_name == "PostgreSQL"
+  @testset "Non-negative CHECK: a user range check is not PormG's, and PormG's still round-trips (#731)" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
+    tbl = "pormg_it_nonneg"
+    drop731!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
+    M731 = PormG.Models
+    model = M731.Model(tbl;
+      id        = M731.IDField(),
+      grid      = M731.IntegerField(),
+      price     = M731.IntegerField(),
+      lap       = M731.IntegerField(),
+      pos       = M731.PositiveIntegerField(),
+      pos_small = M731.PositiveSmallIntegerField(),
+      Mixed     = M731.PositiveIntegerField())
+    schema731 = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+      Symbol(tbl) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => model, :exist => false))
+    settings731 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
+
+    drop731!()
+    try
+      created = PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema731, pool, settings731;
+                                                     interactive = false)
+      for (_, sql) in created[Symbol(tbl)]
+        ddl(sql)
+      end
+      # The user's own CHECKs, on the columns declared as plain `IntegerField`.
+      ddl("ALTER TABLE \"$(tbl)\" ADD CONSTRAINT pormg_it_nonneg_grid_range CHECK (grid >= 0 AND grid <= 30)")
+      ddl("ALTER TABLE \"$(tbl)\" ADD CONSTRAINT pormg_it_nonneg_price_min CHECK (price >= 0.5)")
+      ddl("ALTER TABLE \"$(tbl)\" ADD CONSTRAINT pormg_it_nonneg_lap_min CHECK (lap >= 05)")
+
+      # Precondition — the text both matchers see, as PostgreSQL deparses it. PormG's clause comes
+      # back re-parenthesised with the column quoted only when it must be (the `quote_ident` rule the
+      # predicate relies on); the two user checks the old `LIKE` matched do contain `>= 0`; and
+      # `>= 05` deparses as `>= 5`, so that shape — listed in #731 — never matched on PostgreSQL.
+      defs = Set(String.(DataFrame(PormG.ConnectionPool.fetch(pool,
+        "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = \$1::regclass AND contype = 'c'",
+        [tbl])).def))
+      @test "CHECK ((pos >= 0))" in defs
+      @test "CHECK ((pos_small >= 0))" in defs
+      @test "CHECK ((\"Mixed\" >= 0))" in defs
+      @test "CHECK (((grid >= 0) AND (grid <= 30)))" in defs
+      @test any(d -> startswith(d, "CHECK (((price)::numeric >= 0.5)"), defs)
+      @test "CHECK ((lap >= 5))" in defs
+
+      # The reader: only PormG's own clause is PormG's check.
+      live = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
+      has_nn(col) = any(c -> c isa PormG.NonNegativeCheck, live.columns[col].checks)
+      @test (has_nn("grid"), has_nn("price"), has_nn("lap")) == (false, false, false)
+      @test (has_nn("pos"), has_nn("pos_small"), has_nn("Mixed")) == (true, true, true)
+
+      # The dropper agrees with the reader, column by column — and names PormG's constraint.
+      gcc(col) = PormG.get_constraints_check(pool, tbl, col)
+      @test (gcc("grid"), gcc("price"), gcc("lap")) === (nothing, nothing, nothing)
+      @test gcc("pos") == "pormg_it_nonneg_pos_check"
+      @test gcc("pos_small") == "pormg_it_nonneg_pos_small_check"
+      @test gcc("Mixed") == "pormg_it_nonneg_Mixed_check"
+
+      # The sibling lookups #731 moved to bound parameters, run against a real catalog — the unit
+      # suite only sees their SQL text. The key is an identity column, which
+      # `pg_get_serial_sequence` resolves as it does a serial one.
+      @test PormG.get_constraints_pk(pool, tbl, "id") == "pormg_it_nonneg_pkey"
+      @test PormG.get_constraints_pk(pool, tbl, "grid") === nothing
+      @test PormG.get_constraints_unique(pool, tbl, "grid") === nothing
+      @test PormG.Migrations.get_sequence_name(pool, tbl, "id") == "public.pormg_it_nonneg_id_seq"
+
+      # THE convergence assertion: the declared model against its live table plans nothing, so the
+      # user's three CHECKs are kept and PormG's three are recognised.
+      again = PormG.Migrations.get_migration_plan([live], schema731, pool, settings731; interactive = false)
+      @test all(isempty, values(again))
+    finally
+      drop731!()
+    end
+  end
+end

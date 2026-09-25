@@ -882,6 +882,92 @@ were wrong in different directions:
 _is_ignored_table(table_name, ignore_table)::Bool =
   any(ignored -> startswith(String(table_name), ignored), ignore_table)
 
+# `pragma_table_list`, the catalog that labels a table `virtual` / `shadow`, is SQLite 3.37.0+.
+const _SQLITE_TABLE_LIST_MIN_VERSION = 3_037_000
+
+"""
+    _sqlite_user_table_names(db::PormGSQLite; sqlite_version) -> Vector{String}
+
+The tables of the main schema that PormG could own, in `sqlite_master` order: ordinary tables
+only (#730). This is the one list the SQLite readers enumerate: `read_live_schema`, `check()`'s
+expression-default report and `status()`'s drift probe all use it, so they cannot disagree about
+which tables exist.
+
+`sqlite_master` alone cannot answer that. It lists a virtual table (`CREATE VIRTUAL TABLE … USING
+fts5(…)`, `rtree`) and each of the SHADOW tables its module keeps its data in (`<name>_data`,
+`<name>_idx`, `<name>_content`, `<name>_node`, …) as `type = 'table'`, like any other. No model
+declares them, so `makemigrations` planned a `DROP TABLE` for every one: the destructive guard
+stopped it, and no migration could run on that database without `destructive = true`, which would
+have destroyed the index. This is the ownership rule, not the ignore list: it applies whatever
+`ignore_table` a caller passes, as the PostgreSQL twin [`_PG_OWNABLE_TABLE_FILTER`](@ref) does.
+
+Two sources, in order of authority:
+
+  1. **`pragma_table_list`** (SQLite 3.37+) labels a virtual table `virtual` and a shadow table
+     `shadow`, and both are left out. It is exact, but only as far as SQLite can tell: a table is a
+     shadow table when its name is `<vtab>_<suffix>` AND the virtual table's MODULE, asked through
+     `xShadowName`, claims the suffix. A module that is not registered on this connection — an
+     extension such as sqlite-vec or SpatiaLite that the application loads on its own connection
+     only — is never asked, and its shadow tables come back as plain `table`.
+  2. **SQLite's own naming rule**, for exactly that gap. A virtual table none of whose shadow tables
+     was confirmed has its whole `<vtab>_` namespace (compared case-insensitively, as SQLite does)
+     treated as its module's, and a warning names every table skipped that way. A confirmed shadow
+     vouches only for the virtual table with the LONGEST name it extends, so a registered
+     `docs_title` cannot vouch for an unregistered `docs`. The same gap opens for a registered
+     module that does not report shadow tables (no `xShadowName`), and below 3.37, where there is no
+     `pragma_table_list` at all: there a virtual table is still recognised by the DDL SQLite stores
+     for it (always normalised to `CREATE VIRTUAL TABLE …`), and this rule covers its shadow tables.
+
+The fallback errs toward NOT reading a table, which is the safe direction here: an unread table is
+never dropped, while a misread shadow table is one `destructive = true` would destroy. Its cost is
+a user table named like a virtual table's shadows (`<vtab>_notes` beside `<vtab>`): it is skipped,
+the warning names it, and a model that declares it plans `CREATE TABLE`, which fails at `migrate`
+because the table exists — loud, but the fix is renaming the table. `sqlite_version` is the library
+version (`backend_sqlite_version`); it is a keyword so the pre-3.37 path can be exercised against a
+current SQLite.
+
+Views are not in the list either, and never were: they are `type = 'view'`.
+"""
+function _sqlite_user_table_names(db::PormGSQLite;
+                                  sqlite_version::Integer = backend_sqlite_version(db))::Vector{String}
+  # The query the readers always ran, so the scan order — and the order tables are read back in —
+  # is the catalog's. The names compare exactly because both catalogs hold the `CREATE` spelling.
+  catalog = fetch(db, "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';") |> DataFrame
+  names = String[String(r.name) for r in eachrow(catalog)]
+  kind = Dict{String, String}()          # name ⇒ "virtual" / "shadow" / "table"; absent ⇒ "table"
+  if sqlite_version >= _SQLITE_TABLE_LIST_MIN_VERSION
+    for r in eachrow(fetch(db, "SELECT name, type FROM pragma_table_list WHERE schema = 'main';") |> DataFrame)
+      kind[String(r.name)] = String(r.type)
+    end
+  else
+    for r in eachrow(catalog)
+      sql = r.sql
+      (sql === missing || sql === nothing) && continue
+      Base.startswith(uppercase(lstrip(String(sql))), "CREATE VIRTUAL TABLE") && (kind[String(r.name)] = "virtual")
+    end
+  end
+  kind_of(n) = get(kind, n, "table")
+  virtual = String[lowercase(n) for n in names if kind_of(n) == "virtual"]
+  # A confirmed shadow table vouches for ONE virtual table: the longest name it extends. Matching
+  # any prefix would let `docs_title`'s confirmed `docs_title_data` vouch for an unregistered `docs`
+  # too, and `docs`'s own shadows would then be read — and dropped (found in review).
+  vouched = Set{String}()
+  for n in names
+    kind_of(n) == "shadow" || continue
+    s = lowercase(n)
+    owners = String[v for v in virtual if Base.startswith(s, v * "_")]
+    isempty(owners) || push!(vouched, owners[argmax(length.(owners))])
+  end
+  # The `<vtab>_` namespaces no module vouched for.
+  unvouched = String[v * "_" for v in virtual if !(v in vouched)]
+  owned = String[n for n in names if kind_of(n) == "table"]
+  guessed = String[n for n in owned if any(p -> Base.startswith(lowercase(n), p), unvouched)]
+  if !isempty(guessed)
+    @warn "Introspection skips these tables: each is named like a shadow table of a virtual table whose shadow tables SQLite cannot confirm on this connection (its module is not loaded here, does not report shadow tables, or SQLite is older than 3.37), so they are neither read nor dropped. If one is your own table, rename it: a model declaring it would plan CREATE TABLE, which fails because the table exists." tables = guessed
+  end
+  return String[n for n in owned if !(n in guessed)]
+end
+
 """
     read_live_schema(db; ignore_table, include_table) -> Vector{LiveTable}
 
@@ -890,14 +976,18 @@ reads (#522). `convert_schema_to_models` is this plus `model_from_live` per tabl
 for `inspectdb`. Filtering is the same on both engines: `include_table` keeps only those names, and
 `ignore_table` plus the consumer-registered `_EXTRA_IGNORE_TABLES` skip framework tables by prefix
 (#325).
+
+Relations PormG cannot own are never read, whatever the filters say (#730): views and materialized
+views on both engines, SQLite virtual tables and their shadow tables
+([`_sqlite_user_table_names`](@ref)), PostgreSQL partitions and tables an extension owns
+([`_PG_OWNABLE_TABLE_FILTER`](@ref)). A relation the reader never sees is one `makemigrations` can
+never plan to drop.
 """
 function read_live_schema(db::PormGSQLite; ignore_table::Vector{String} = sqlite_ignore_schema,
                           include_table::Union{Vector{String}, Nothing} = nothing)::Vector{LiveTable}
   ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
-  tables = fetch(db, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';") |> DataFrame
   out = LiveTable[]
-  for row in eachrow(tables)
-    table_name = String(row.name)
+  for table_name in _sqlite_user_table_names(db)
     include_table !== nothing && !any(included -> table_name == included, include_table) && continue
     _is_ignored_table(table_name, ignore_table) && continue
     push!(out, _sqlite_live_table(db, table_name))
@@ -919,6 +1009,60 @@ convert_schema_to_models(db::PormGSQLite; kwargs...)::Vector{PormGModel} =
 # ---
 # PostgreSQL Introspection
 # ---
+
+"""
+    _PG_OWNABLE_TABLE_FILTER
+
+The `WHERE` fragment that keeps a `relkind = 'r'` table only when PormG could own it (#730), over
+a `pg_class` row aliased `c`. Every PostgreSQL query that enumerates live tables interpolates THIS
+constant — the schema dump (`get_database_schema`), the composite-index reader
+(`_pg_composite_indexes`) and `status()`'s drift probe — so they cannot disagree about which
+tables exist. It is the twin of [`_sqlite_user_table_names`](@ref).
+
+`relkind = 'r'` alone admitted two kinds of relation no model can declare, and `makemigrations`
+planned a `DROP TABLE` for each:
+
+  * **a partition** — the partitioned parent is `relkind = 'p'` and was already skipped, but every
+    partition is an ordinary `'r'` table. `relispartition` marks it.
+  * **a table an extension owns** — PostGIS's `spatial_ref_sys` is the common one, and dropping it
+    fails with "extension postgis requires it". Membership is recorded only in `pg_depend`, as a
+    dependency of `deptype = 'e'` on the extension.
+
+This is the filter Atlas's PostgreSQL inspector applies for the same reason, and Django's
+`inspectdb` leaves partitions out by default. Views and materialized views need nothing here: they
+are `relkind` `'v'` / `'m'`.
+"""
+const _PG_OWNABLE_TABLE_FILTER = """
+      AND NOT c.relispartition
+      AND NOT EXISTS (SELECT 1 FROM pg_depend dep
+                      WHERE dep.classid = 'pg_class'::regclass AND dep.objid = c.oid
+                        AND dep.deptype = 'e')"""
+
+"""
+    _PG_NON_NEGATIVE_CHECK_MATCH
+
+The predicate that recognises PormG's OWN non-negative CHECK on PostgreSQL (#731), over a
+`pg_constraint` row aliased `con` and the one `pg_attribute` row it constrains, aliased `a`. It is
+interpolated by BOTH the reader (the `non_negative_checks` CTE in `get_database_schema`) and the
+dropper (`get_constraints_check`), so what `makemigrations` reads as PormG's check and what
+`Dialect.alter_field` drops as PormG's check cannot differ.
+
+PormG writes `CHECK ("col" >= 0)` (`Dialect._non_negative_check_clause`), and
+`pg_get_constraintdef` hands it back re-parenthesised as `CHECK ((col >= 0))`, the column quoted
+only when it must be — exactly `quote_ident`'s rule, because both call the same quoting routine
+(`"Grid"` for a mixed-case name). The match is on that whole text. It used to be
+`LIKE '%>= 0%'` (and `ILIKE` in the dropper), which read a user's `CHECK (grid >= 0 AND grid <=
+30)` or `CHECK (price >= 0.5)` as PormG's, so the planner could propose dropping the user's
+constraint. This is the same exactness the SQLite reader has: `_sqlite_column_checks` matches the
+rendered clause with an anchored regex.
+
+A hand-written `CHECK (col >= 0)` is still indistinguishable from PormG's, on both engines — the
+same text is the same fact. The byte-length CHECK (`byte_length_checks` /
+`get_constraints_byte_length_check`) still matches any `octet_length … <= N` clause rather than one
+exact clause — this defect, on the other CHECK PormG writes; #747 tracks it.
+"""
+const _PG_NON_NEGATIVE_CHECK_MATCH =
+  "pg_get_constraintdef(con.oid) = 'CHECK ((' || quote_ident(a.attname) || ' >= 0))'"
 
 """
     _pg_composite_indexes(db::PormGPostgres; schema = "public") -> Dict{String, Vector{LiveComposite}}
@@ -1048,6 +1192,7 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
     LEFT JOIN pg_constraint con ON con.conindid = i.indexrelid AND con.conrelid = i.indrelid
                                AND con.contype IN ('u', 'p', 'x')
     WHERE c.relkind = 'r'
+      $(_PG_OWNABLE_TABLE_FILTER)
       AND am.amname = 'btree'
       AND NOT i.indisprimary
       AND NOT i.indisexclusion
@@ -1320,7 +1465,8 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
         JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
         WHERE con.contype = 'c'
           AND array_length(con.conkey, 1) = 1
-          AND pg_get_constraintdef(con.oid) LIKE '%>= 0%'
+          -- #731: PormG's own clause, exactly, not any CHECK containing `>= 0`.
+          AND $(_PG_NON_NEGATIVE_CHECK_MATCH)
         GROUP BY con.conrelid
     ),
     -- BinaryField byte bounds (#296). Unlike non_negative_checks this is per-COLUMN and carries a
@@ -1411,6 +1557,7 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
     LEFT JOIN non_negative_checks nn ON nn.table_oid = c.oid
     LEFT JOIN byte_length_checks bl ON bl.table_oid = c.oid AND bl.col_name = a.attname
     WHERE c.relkind = 'r'
+      $(_PG_OWNABLE_TABLE_FILTER)
       $(schema_clause)
       $(table_clause)
       AND a.attnum > 0
@@ -1448,9 +1595,8 @@ end
 #     certainly not to the database — two tables may each carry `orders_fk`, in the same schema — so
 #     joining on the name alone could return a name that belongs to a DIFFERENT table's constraint,
 #     which the caller then drops off this one. Fixed by joining on `table_schema` AND `table_name`.
-#     (The sibling `get_constraints_pk` / `get_constraints_unique` comments say "unique per SCHEMA";
-#     that is wrong, and they carry the same missing `table_name` predicate. Left alone here rather
-#     than edited blind — this function is the one #498 puts on a hot path.)
+#     (The sibling `get_constraints_pk` / `get_constraints_unique` said "unique per SCHEMA" and
+#     carried the same missing `table_name` predicate; #731's review gave both the join.)
 #   * No `search_path` restriction, unlike `get_constraints_unique`. `current_schemas(false)` rather
 #     than a literal `public` on purpose: the DDL this feeds (`ALTER TABLE "x" DROP CONSTRAINT`) is
 #     emitted UNQUALIFIED and so resolves through the search path, and the lookup has to agree with
@@ -2585,23 +2731,30 @@ end
 # helpers, and since `alter_field`'s model-based overload always resolves the table to
 # `model.name |> lowercase` (a String), a Symbol signature could never be dispatched to (#283).
 function get_constraints_pk(conn::PormGPostgres, table_name::String, field_name::String)
-  # Joins carry `table_schema` as well as `constraint_name`: constraint names are unique per
-  # SCHEMA, not per database, so joining on the name alone can splice rows from a same-named
-  # table in another schema and return a constraint that does not exist on the table the DDL
-  # targets. Same shape as get_constraints_check below, which is the exercised sibling. This
-  # query was unreachable until #283 (its only caller passed the wrong arity), so it had never
-  # run to expose the defect.
+  # The `kcu` join carries the TABLE as well as the name and schema. A constraint name is scoped to
+  # its table (#498, beside `get_constraints_fk`): a primary key's name is also its index's, unique
+  # per schema, but a foreign key on ANOTHER table may carry the same name, and a join on name and
+  # schema alone then splices that table's key columns in — `get_constraints_pk(conn, "driver",
+  # "driverid")` answering with `driver`'s key while it sits on `id`. This query was unreachable
+  # until #283 (its only caller passed the wrong arity), so it had never run to expose the defect.
   # Filters on `tc.table_name` rather than `ccu.table_name` — `tc` IS the constrained table.
+  #
+  # #731: parameterized, search-path-restricted, and ordered by search-path position like
+  # `get_constraints_check` — the unqualified DDL this arms binds to the first schema that holds the
+  # table. The names used to be spliced into single-quoted literals, where a quote broke the query.
   query = """
   SELECT tc.constraint_name
   FROM information_schema.table_constraints tc
   JOIN information_schema.key_column_usage kcu
     ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-  WHERE tc.table_name = '$table_name'
+   AND tc.table_name = kcu.table_name
+  WHERE tc.table_name = \$1
     AND tc.constraint_type = 'PRIMARY KEY'
-    AND kcu.column_name = '$field_name';
+    AND kcu.column_name = \$2
+    AND tc.table_schema = ANY(current_schemas(false))
+  ORDER BY array_position(current_schemas(false), tc.table_schema::name), tc.constraint_name;
   """
-  result = fetch(conn, query) |> DataFrame
+  result = fetch(conn, query, [table_name, field_name]) |> DataFrame
   if nrow(result) == 0
       return nothing
   end
@@ -2627,21 +2780,23 @@ end
 #   * `ORDER BY` — with the arity filter two matches are already pathological (two single-column
 #     UNIQUEs on the same column), but "whichever came first" is not an answer.
 #
-# Parameterized and search-path-restricted, like `get_constraints_byte_length_check` below; the
-# unparameterized siblings predate the rule and are left alone, but an edited query does not
-# inherit the exemption.
+# Parameterized and search-path-restricted, like every `get_constraints_*` lookup since #731, and
+# for the same two reasons as `get_constraints_pk` above (#731 review): the `kcu` join carries the
+# table — a foreign key elsewhere may share this constraint's name, and its columns would then
+# count toward `COUNT(*)` — and the order puts the first schema on the search path first.
 function get_constraints_unique(conn::PormGPostgres, table_name::String, field_name::String)::Union{String, Nothing}
   query = """
   SELECT tc.constraint_name
   FROM information_schema.table_constraints tc
   JOIN information_schema.key_column_usage kcu
     ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+   AND tc.table_name = kcu.table_name
   WHERE tc.table_name = \$1
     AND tc.constraint_type = 'UNIQUE'
     AND tc.table_schema = ANY(current_schemas(false))
   GROUP BY tc.constraint_name, tc.table_schema
   HAVING COUNT(*) = 1 AND bool_or(kcu.column_name = \$2)
-  ORDER BY tc.constraint_name, tc.table_schema;
+  ORDER BY array_position(current_schemas(false), tc.table_schema::name), tc.constraint_name;
   """
   result = fetch(conn, query, [table_name, field_name]) |> DataFrame
   if nrow(result) == 0
@@ -2654,23 +2809,33 @@ end
 # PostgreSQL has no unsigned integer type, so PormG enforces `col >= 0` with a
 # CHECK constraint; on a type transition away from a positive integer field the
 # migration engine needs the constraint's auto-generated name to drop it. We
-# match by column and the `>= 0` clause rather than assuming a name, so it works
-# even for constraints PormG created anonymously at CREATE TABLE time. Returns
-# `nothing` when no such constraint exists.
-function get_constraints_check(conn::PormGPostgres, table_name::String, field_name::String)
+# match by column and clause rather than assuming a name, so it works even for
+# constraints PormG created anonymously at CREATE TABLE time. Returns `nothing`
+# when no such constraint exists.
+#
+# #731: the clause is matched EXACTLY, by the predicate the reader uses
+# (`_PG_NON_NEGATIVE_CHECK_MATCH`). It was `ILIKE '%>= 0%'` over
+# `information_schema`, so a user's `CHECK (grid >= 0 AND grid <= 30)` on the column
+# was returned as PormG's and dropped. Read from `pg_catalog` because the predicate
+# needs `con.oid`, and scoped the way the DDL it feeds resolves: one column, a
+# schema on the search path, the first such schema winning — an unqualified
+# `ALTER TABLE` binds to that one.
+function get_constraints_check(conn::PormGPostgres, table_name::String, field_name::String)::Union{String, Nothing}
   query = """
-  SELECT tc.constraint_name
-  FROM information_schema.table_constraints tc
-  JOIN information_schema.constraint_column_usage ccu
-    ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
-  JOIN information_schema.check_constraints cc
-    ON cc.constraint_name = tc.constraint_name AND cc.constraint_schema = tc.constraint_schema
-  WHERE tc.table_name = '$table_name'
-    AND tc.constraint_type = 'CHECK'
-    AND ccu.column_name = '$field_name'
-    AND cc.check_clause ILIKE '%>= 0%';
+  SELECT con.conname AS constraint_name
+  FROM pg_constraint con
+  JOIN pg_class c ON c.oid = con.conrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
+  WHERE con.contype = 'c'
+    AND c.relname = \$1
+    AND a.attname = \$2
+    AND n.nspname = ANY(current_schemas(false))
+    AND array_length(con.conkey, 1) = 1
+    AND $(_PG_NON_NEGATIVE_CHECK_MATCH)
+  ORDER BY array_position(current_schemas(false), n.nspname), con.conname;
   """
-  result = fetch(conn, query) |> DataFrame
+  result = fetch(conn, query, [table_name, field_name]) |> DataFrame
   if nrow(result) == 0
       return nothing
   end
@@ -2685,10 +2850,8 @@ end
 # Deliberately a separate generic rather than a parameter on `get_constraints_check`: a table can
 # carry both kinds, and matching the wrong one would drop a live constraint.
 function get_constraints_byte_length_check(conn::PormGPostgres, table_name::String, field_name::String)::Union{String, Nothing}
-  # Parameterized, unlike the `get_constraints_*` siblings above, which interpolate. Those predate
-  # the parameterized-queries-only rule and are left alone here; a new query has no excuse to
-  # inherit the pattern, and both values land inside single-quoted literals where an embedded `'`
-  # would break out.
+  # Parameterized, like every sibling since #731: both values would otherwise land inside
+  # single-quoted literals, where an embedded `'` breaks out.
   #
   # `table_schema` is restricted to the search path: an unqualified table name in the DDL this
   # feeds resolves the same way, so without it a same-named table in another schema can hand back
@@ -2719,11 +2882,12 @@ function get_constraints_byte_length_check(conn::PormGPostgres, table_name::Stri
 end
 
 # Same empty-result contract as `get_constraints_unique` above (#284).
+# Parameterized (#731): the names are the function's text arguments, bound rather than spliced.
 function get_sequence_name(conn::PormGPostgres, table_name::String, field_name::String)::Union{String, Nothing}
   query = """
-  SELECT pg_get_serial_sequence('$table_name', '$field_name');
+  SELECT pg_get_serial_sequence(\$1, \$2);
   """
-  result = fetch(conn, query) |> DataFrame
+  result = fetch(conn, query, [table_name, field_name]) |> DataFrame
   if nrow(result) == 0
       return nothing
   end

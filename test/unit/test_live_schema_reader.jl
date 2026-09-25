@@ -34,7 +34,8 @@ import PormG.Migrations: LiveTable, read_live_schema, live_table, model_from_liv
                          column_spec, column_delta, parse_canonical_type, convertSQLToModel,
                          convert_schema_to_models, get_migration_plan, _pg_live_table, _key_arm,
                          _integer_key_arm, _coerce_default, _PostgresEngine, _SQLiteEngine,
-                         _sqlite_column_checks, check
+                         _sqlite_column_checks, check, _sqlite_user_table_names,
+                         _PG_OWNABLE_TABLE_FILTER, _get_live_table_names, _PG_NON_NEGATIVE_CHECK_MATCH
 # The SQLite laws open a real (temporary) file. `runtests.jl` loads the weakdep extension for the
 # whole suite; this guard is what makes the file runnable on its own.
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
@@ -623,4 +624,269 @@ end
   @test m.fields["code"].unique          # the regex reader never populated this; the live one does
   @test m.fields["n"].default == 3
   @test_throws PormG.InvalidMigrationError convertSQLToModel("CREATE TABLE kit (id INTEGER)")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite: relations PormG cannot own are never read, so never dropped (#730)
+# `sqlite_master` lists an FTS5 or R*Tree virtual table — and every SHADOW table its module keeps
+# its data in — as `type = 'table'`. No model declares them, so `makemigrations` planned a
+# `Drop table` for each (six for one FTS5 index), and the destructive guard then blocked every
+# migration on that database. The readers now enumerate `_sqlite_user_table_names`, which leaves
+# out what `pragma_table_list` labels `virtual` / `shadow`. A view was never read; it is pinned too.
+# Mutation gate: put the bare `sqlite_master` query back in `_sqlite_user_table_names` and every
+# assertion after the precondition fails — the two virtual tables and their eight shadows come
+# back, and the plan carries a `Drop table` for each.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: virtual tables, their shadow tables and views are not read, so not dropped (#730)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "own730.sqlite"); pool_size = 1)
+    try
+      driver = Models.Model("driver"; id = Models.IDField(), surname = Models.CharField(max_length = 50))
+      _create_from_plan!(pool, driver)
+      # What an app adds by hand beside its models: a full-text index over a model's column, a
+      # spatial index, and a view. None of them has, or could have, a model.
+      fetch(pool, "CREATE VIRTUAL TABLE driver_fts USING fts5(surname)")
+      fetch(pool, "CREATE VIRTUAL TABLE pit_box USING rtree(id, min_x, max_x)")
+      fetch(pool, "CREATE VIEW driver_names AS SELECT surname FROM driver")
+
+      # Precondition — the catalog the old reader scanned really lists them as tables. Without it a
+      # SQLite build lacking fts5 or rtree would make every assertion below pass vacuously.
+      raw = String.((fetch(pool, "SELECT name FROM sqlite_master WHERE type = 'table'") |> DataFrame).name)
+      @test "driver_fts" in raw && "driver_fts_data" in raw && "driver_fts_config" in raw
+      @test "pit_box" in raw && "pit_box_node" in raw && "pit_box_rowid" in raw
+
+      # The shared enumeration, then each reader built on it. `read_live_schema` is called with NO
+      # `include_table`: naming the tables to read is exactly the filter that would hide the bug.
+      @test _sqlite_user_table_names(pool) == ["driver"]
+      live = read_live_schema(pool)
+      @test [t.name for t in live] == ["driver"]
+      @test [m.name for m in convert_schema_to_models(pool)] == ["driver"]     # inspectdb
+      @test _get_live_table_names(pool) == ["driver"]                            # status()'s drift probe
+
+      # THE user-visible assertion: an up-to-date `driver` plus an FTS index plans nothing.
+      plan = get_migration_plan(live, _schema522(driver), pool, _settings522(); interactive = false)
+      @test all(isempty, values(plan))
+    finally
+      # Release the SQLite handle so mktempdir can delete the temp DB on Windows (WAL keeps it open).
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite: shadow tables SQLite cannot confirm are skipped by its own naming rule, loudly (#730)
+# `pragma_table_list` labels a table `shadow` only when the virtual table's MODULE is registered on
+# the connection and claims the suffix, so an extension an app loads on its own connection only
+# (sqlite-vec, SpatiaLite) leaves its shadow tables reading as plain tables — the #730 symptom
+# again. Simulated here by renaming the FTS5 module in the stored DDL and reopening. For such a
+# virtual table, and below 3.37 where `pragma_table_list` does not exist, the `<vtab>_` namespace is
+# skipped and a warning names every table skipped. With the module registered the rule never fires,
+# so a user table named `driver_fts_notes` beside a working FTS5 index is still read.
+# A registered `driver_fts_title` sits beside `driver_fts` on purpose: its confirmed shadows share
+# `driver_fts_`'s prefix and must vouch only for the longest name they extend.
+# Mutation gate: drop the `guessed` exclusion and the shadow tables come back in both unconfirmed
+# cases; stop vouching at all and `driver_fts_notes` vanishes, with a warning, while the module is
+# registered; let a shadow vouch for ANY prefix it extends and `driver_fts`'s shadows come back once
+# its module is gone.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: shadow tables SQLite cannot confirm are skipped by its naming rule, loudly (#730)" begin
+  mktempdir() do dir
+    path = joinpath(dir, "shadow730.sqlite")
+    skipped = (:warn, r"Introspection skips these tables")
+    pool = SQLiteConnectionPool(path; pool_size = 1)
+    try
+      fetch(pool, "CREATE TABLE driver (id INTEGER PRIMARY KEY, surname TEXT)")
+      fetch(pool, "CREATE VIRTUAL TABLE driver_fts USING fts5(surname)")
+      # A second FTS5 index whose NAME extends the first's. It stays registered throughout, and its
+      # confirmed shadows (`driver_fts_title_data`, …) sit inside `driver_fts_`'s namespace — they
+      # must not vouch for `driver_fts` once that one's module is gone.
+      fetch(pool, "CREATE VIRTUAL TABLE driver_fts_title USING fts5(surname)")
+      # A user table inside the virtual table's namespace — the one shape the naming rule costs.
+      fetch(pool, "CREATE TABLE driver_fts_notes (id INTEGER PRIMARY KEY, note TEXT)")
+
+      # Module registered: SQLite confirms the five shadows itself, nothing is guessed, no warning,
+      # and the user table is read.
+      @test (@test_logs min_level = Logging.Warn _sqlite_user_table_names(pool)) == ["driver", "driver_fts_notes"]
+
+      # Below 3.37 (no `pragma_table_list`): the virtual table is still known from its stored DDL, and
+      # the naming rule skips its whole namespace — the user table included, which the warning names.
+      @test (@test_logs skipped _sqlite_user_table_names(pool; sqlite_version = 3_036_000)) == ["driver"]
+
+      # Unregister the module: rename it in the stored DDL, then reopen so SQLite re-reads the schema.
+      fetch(pool, "PRAGMA writable_schema = ON")
+      fetch(pool, "UPDATE sqlite_master SET sql = replace(sql, 'fts5', 'pormg_absent_module') WHERE name = 'driver_fts'")
+      fetch(pool, "PRAGMA writable_schema = OFF")
+    finally
+      close_pool!(pool)
+    end
+    pool = SQLiteConnectionPool(path; pool_size = 1)
+    try
+      # Precondition — SQLite now reports the shadows as plain tables. Without this, a SQLite that
+      # still confirmed them would make the assertions below pass on the confirmed path.
+      labels = Dict(String(r.name) => String(r.type) for r in
+                    eachrow(fetch(pool, "SELECT name, type FROM pragma_table_list WHERE schema = 'main'") |> DataFrame))
+      @test (labels["driver_fts"], labels["driver_fts_data"], labels["driver_fts_config"]) == ("virtual", "table", "table")
+      @test labels["driver_fts_title_data"] == "shadow"    # the longer-named index is still confirmed
+
+      @test (@test_logs skipped _sqlite_user_table_names(pool)) == ["driver"]
+      @test [t.name for t in (@test_logs skipped read_live_schema(pool))] == ["driver"]
+    finally
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: every query that enumerates live tables carries the ownership filter (#730)
+# `relkind = 'r'` admitted a partition (the partitioned parent is `'p'`, but each partition is
+# `'r'`) and a table an extension owns (PostGIS's `spatial_ref_sys`), so `makemigrations` planned a
+# `DROP TABLE` for each. One constant, `_PG_OWNABLE_TABLE_FILTER`, now closes both, and this pins
+# that all three enumerations interpolate it — the schema dump, the composite-index reader, and
+# `status()`'s drift probe — since CI runs no PostgreSQL. The live half, a real partition and a real
+# extension member, is `test/integration/test_importers_introspection.jl`.
+# Mutation gate: drop the interpolation from any one of the three queries and the `all` fails; drop
+# either clause from the constant and its own assertion fails.
+# ─────────────────────────────────────────────────────────────────────────────
+struct OwnershipMockPg730 <: PormG.PormGPostgres end
+const PG730_SQL = String[]
+fetch(::OwnershipMockPg730, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
+  (push!(PG730_SQL, sql); DataFrame())
+
+@testset "PostgreSQL: every live-table enumeration carries the ownership filter (#730)" begin
+  empty!(PG730_SQL)
+  # An empty dump warns "No tables found in the database" — expected from a mock that returns nothing.
+  with_logger(NullLogger()) do
+    Migrations.get_database_schema(OwnershipMockPg730())
+  end
+  Migrations._pg_composite_indexes(OwnershipMockPg730())
+  _get_live_table_names(OwnershipMockPg730())
+  @test length(PG730_SQL) == 3
+  @test all(sql -> occursin(_PG_OWNABLE_TABLE_FILTER, sql), PG730_SQL)
+  # What the filter has to say, clause by clause.
+  @test occursin("NOT c.relispartition", _PG_OWNABLE_TABLE_FILTER)
+  @test occursin(r"NOT EXISTS \(SELECT 1 FROM pg_depend dep\s+WHERE dep\.classid = 'pg_class'::regclass AND dep\.objid = c\.oid\s+AND dep\.deptype = 'e'\)",
+                 _PG_OWNABLE_TABLE_FILTER)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: PormG's non-negative CHECK is recognised by its exact clause, reader and dropper alike (#731)
+# The `non_negative_checks` CTE matched `pg_get_constraintdef … LIKE '%>= 0%'` and
+# `get_constraints_check` matched `check_clause ILIKE '%>= 0%'`, so a user's
+# `CHECK (grid >= 0 AND grid <= 30)` — or `CHECK (price >= 0.5)` — read as the one a
+# `PositiveIntegerField` renders, and the planner could propose dropping it. Both now interpolate
+# ONE predicate, `_PG_NON_NEGATIVE_CHECK_MATCH`: the constraint text must equal what PostgreSQL
+# deparses `CHECK ("col" >= 0)` to, the same exactness the SQLite reader's anchored regex has.
+# The live half (a real range check read, a real PormG check still matched) is
+# `test/integration/test_importers_introspection.jl`.
+# Mutation gate: put `LIKE '%>= 0%'` back in either query and its assertion fails.
+# ─────────────────────────────────────────────────────────────────────────────
+struct NonNegSqlMockPg731 <: PormG.PormGPostgres end
+const PG731_CALLS = Tuple{String, Any}[]
+fetch(::NonNegSqlMockPg731, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
+  (push!(PG731_CALLS, (sql, params)); DataFrame())
+
+@testset "PostgreSQL: PormG's >= 0 CHECK is matched by its exact clause, in the reader and the dropper (#731)" begin
+  # The predicate is the deparsed form of `Dialect._non_negative_check_clause`: PostgreSQL
+  # re-parenthesises the expression and quotes the column only when it must — which is exactly
+  # what `quote_ident` does, since both call the same quoting routine.
+  @test _PG_NON_NEGATIVE_CHECK_MATCH ==
+        "pg_get_constraintdef(con.oid) = 'CHECK ((' || quote_ident(a.attname) || ' >= 0))'"
+  @test occursin("\"col\" >= 0", Dialect._non_negative_check_clause("col"))   # what PormG writes
+
+  empty!(PG731_CALLS)
+  with_logger(NullLogger()) do                 # an empty dump warns "No tables found"
+    Migrations.get_database_schema(NonNegSqlMockPg731())
+  end
+  @test Migrations.get_constraints_check(NonNegSqlMockPg731(), "lap_times", "grid") === nothing
+  (dump_sql, _), (drop_sql, _) = PG731_CALLS
+  for sql in (dump_sql, drop_sql)
+    @test occursin(_PG_NON_NEGATIVE_CHECK_MATCH, sql)
+    @test !occursin(">= 0%", sql)              # neither substring spelling survives
+  end
+  # The dropper is scoped the way the DDL it feeds is: one column, and the table an unqualified
+  # name resolves to — the first schema on the search path that holds it.
+  @test occursin("array_length(con.conkey, 1) = 1", drop_sql)
+  @test occursin("n.nspname = ANY(current_schemas(false))", drop_sql)
+  @test occursin("ORDER BY array_position(current_schemas(false), n.nspname)", drop_sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: the get_constraints_* lookups bind the names they are given (#731)
+# `get_constraints_check`, `get_constraints_pk` and `get_sequence_name` spliced the table and
+# column into single-quoted literals, so a quote in a name broke the query and the family broke
+# the parameterized-queries-only rule. Every one now sends `$1`/`$2`, and the names travel in
+# `params`. `get_constraints_unique` / `_byte_length_check` / `_fk` / `_index` already did.
+# Mutation gate: interpolate the name back into any one query and its `!occursin` fails; drop the
+# `kcu` table join or the search-path order from `pk` / `unique` and the last loop fails.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: the get_constraints_* lookups bind table and column, never splice them (#731)" begin
+  table, column = "o'connor_laps", "o'grid"   # a quote a spliced literal cannot survive
+  lookups = (Migrations.get_constraints_check, Migrations.get_constraints_pk, Migrations.get_sequence_name,
+             Migrations.get_constraints_unique, Migrations.get_constraints_byte_length_check)
+  for lookup in lookups
+    empty!(PG731_CALLS)
+    @test lookup(NonNegSqlMockPg731(), table, column) === nothing
+    sql, params = only(PG731_CALLS)
+    @test (nameof(lookup), occursin("\$1", sql) && occursin("\$2", sql)) == (nameof(lookup), true)
+    @test (nameof(lookup), occursin("o'", sql)) == (nameof(lookup), false)
+    @test (nameof(lookup), collect(params)) == (nameof(lookup), [table, column])
+  end
+  # The two `information_schema` lookups join `kcu` on the TABLE as well — a foreign key elsewhere
+  # may share the constraint's name (#498) — and, like `get_constraints_check`, put the first schema
+  # on the search path first, the one an unqualified `ALTER TABLE` binds to.
+  for lookup in (Migrations.get_constraints_pk, Migrations.get_constraints_unique)
+    empty!(PG731_CALLS)
+    lookup(NonNegSqlMockPg731(), table, column)
+    sql, _ = only(PG731_CALLS)
+    @test (nameof(lookup), occursin("AND tc.table_name = kcu.table_name", sql)) == (nameof(lookup), true)
+    @test (nameof(lookup), occursin("ORDER BY array_position(current_schemas(false), tc.table_schema::name)", sql)) ==
+          (nameof(lookup), true)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The planner acts on whatever the reader says about a CHECK — which is why the misread mattered (#731)
+# Hermetic, over the PostgreSQL row decoder. A declared `IntegerField` against a live column the
+# reader marks with PormG's `>= 0` check plans a `DROP CONSTRAINT` of the name `get_constraints_check`
+# returns — the user's range check, before the fix. Against the same column read correctly (no
+# PormG check) it plans nothing. This pins the planner's half of the contract; it passes before the
+# fix too, and the SQL assertions above are the ones that fail on the old reader.
+# ─────────────────────────────────────────────────────────────────────────────
+struct NonNegPlanMockPg731 <: PormG.PormGPostgres end
+PormG.get_constraints_check(::NonNegPlanMockPg731, t::String, f::String) = f == "grid" ? "lap_times_grid_range" : nothing
+fetch(::NonNegPlanMockPg731, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) = DataFrame()
+
+@testset "an IntegerField column converges unless the reader claims PormG's >= 0 check on it (#731)" begin
+  laps = Models.Model("lap_times"; id = Models.IDField(), grid = Models.IntegerField())
+  live(non_negative) = _pg_live_table(_row522(table_name = "lap_times",
+    columns = [_col522("id", "bigint"; notnull = true, identity = "d"),
+               _col522("grid", "integer"; notnull = true, non_negative_check = non_negative)],
+    primary_keys = ["id"]))
+  plan(non_negative) = get_migration_plan(LiveTable[live(non_negative)], _schema522(laps),
+                                          NonNegPlanMockPg731(), _settings522(); interactive = false)
+
+  # The fixed reader's view of a user range check: no PormG check, nothing to do.
+  @test all(isempty, values(plan(false)))
+  # The old reader's view: PormG's check "found", so the planner drops the constraint it names.
+  stmts = join(values(plan(true)[:lap_times]), "\n")
+  @test occursin("DROP CONSTRAINT \"lap_times_grid_range\"", stmts)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite parity: only PormG's exact `CHECK ("col" >= 0)` reads as the non-negative check (#731)
+# The SQLite reader already matched the rendered clause with an anchored regex; the PostgreSQL
+# reader did not, so the same schema read differently on each engine. Pinned here so the engines
+# stay aligned: a range check, a fractional bound and a zero-padded literal read as nothing, and
+# PormG's own clause — in any of the four identifier spellings an adopted schema might use — reads.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite parity: a user range check on an integer is not PormG's >= 0 check (#731)" begin
+  checks = _sqlite_column_checks("""CREATE TABLE "lap_times" (
+    "grid"  INTEGER CHECK (grid >= 0 AND grid <= 30),
+    "price" INTEGER CHECK (price >= 0.5),
+    "lap"   INTEGER CHECK (lap >= 05),
+    "pos"   INTEGER CHECK ("pos" >= 0),
+    "Mixed" INTEGER CHECK ([Mixed] >= 0))""")
+  @test !haskey(checks, "grid") && !haskey(checks, "price") && !haskey(checks, "lap")
+  @test checks["pos"] == CheckKind[NonNegativeCheck()]
+  @test checks["mixed"] == CheckKind[NonNegativeCheck()]    # keys are lower-cased (#531)
 end

@@ -433,18 +433,24 @@ end
 
 Retrieve the list of user table names from the live database schema.
 Used for drift detection.
+
+The same tables the live readers enumerate (#730): partitions, extension-owned tables and SQLite
+virtual/shadow tables are not user tables PormG could own, so they are not counted here either.
+(`information_schema.tables` reports a partition as a `BASE TABLE`.)
 """
 function _get_live_table_names(connection::PormGPostgres)::Vector{String}
-  sql = """SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE';"""
+  sql = """
+    SELECT c.relname AS table_name
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.relkind = 'r' AND n.nspname = 'public'
+      $(_PG_OWNABLE_TABLE_FILTER)
+    ORDER BY c.relname;"""
   df = DataFrame(fetch(connection, sql))
   return String[string(r[:table_name]) for r in eachrow(df)]
 end
 
-function _get_live_table_names(connection::PormGSQLite)::Vector{String}
-  sql = """SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"""
-  df = DataFrame(fetch(connection, sql))
-  return String[string(r[:name]) for r in eachrow(df)]
-end
+_get_live_table_names(connection::PormGSQLite)::Vector{String} = sort!(_sqlite_user_table_names(connection))
 
 """
     _record_migration(connection, version, name, checksum, sql_content, status, is_destructive; conn)
@@ -971,9 +977,9 @@ function _sqlite_expression_default_findings(db::PormGSQLite;
                                              ignore_table::Vector{String},
                                              include_table::Union{Vector{String}, Nothing} = nothing)::Vector{SchemaCheckFinding}
   findings = SchemaCheckFinding[]
-  tables = fetch(db, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';") |> DataFrame
-  for trow in eachrow(tables)
-    table_name = String(trow.name)
+  # The reader's own table list (#730), so a virtual or shadow table is no more reported here than
+  # it is read by `makemigrations`.
+  for table_name in _sqlite_user_table_names(db)
     if include_table !== nothing
       !any(included -> table_name == included, include_table) && continue
     end

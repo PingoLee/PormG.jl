@@ -41,6 +41,7 @@ import PormG.Configuration: MissingConfigurationError
 import PormG: Models, Migration, Dialect
 import PormG.Models: format_model_name, model_table_name, fk_target_table
 import PormG: connection, config, get_constraints_pk, get_constraints_unique, get_constraints_check, get_constraints_byte_length_check
+import PormG: backend_sqlite_version  # SQLite library-version probe (driver body in the weakdep extension)
 import PormG: PormGModel, PormGField, PormGSettings, PormGBackend, PormGPostgres, PormGSQLite
 # The canonical column IR (#507). The NOUNS live in `Kernel` (`src/column_ir.jl`) because `Dialect`
 # renders an ALTER from a `ColumnDelta` and is included before this module; the COMPILER that turns a

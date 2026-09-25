@@ -980,7 +980,9 @@ same whether the filter is written top-level or inside `Q(...)`/`Qor(...)`:
 
 A value of the wrong type raises `FilterError`, which names the alias. When PormG cannot tell what
 type an expression returns, for example a `Case` with no `output_field`, it binds the value as
-given.
+given. An expression on the right, such as `F("grid")` or `Max("grid")`, is not a value: it is
+compared as SQL, so `filter("total_points__@gt" => F("raceid"))` over
+`"total_points" => Sum("points")` renders `HAVING SUM("Tb"."points") > "Tb"."raceid"`.
 
 ```julia
 using PormG.Functions: Lower

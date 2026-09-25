@@ -853,13 +853,21 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         # can. `test_operators.jl` pins it.
         source = _projected_source(having_key, instruc)
         clause = (source === nothing || _is_agg(source.field)) ? :having : :where
-        # #707: an EXPRESSION on the right (`F("grid")`, `Lower("forename")`) has no value to type —
-        # it is a column-to-column comparison, which the WHERE path renders. The typed renderer
-        # would hand the node to a value formatter and die with a `MethodError`, as this spelling
-        # always did. Same rule as `_row_alias_leaf`, so both spellings agree.
-        if clause === :where && _expression_operand(v.values)
+        # #707: an EXPRESSION on the right (`F("grid")`, `Lower("forename")`, `Max("grid")`) has no
+        # value to type — it is a comparison between two expressions, which the WHERE path renders:
+        # `_get_filter_query(::SQLTypeField)` resolves the alias through `_alias_lhs` (re-rendering
+        # a binding aggregate in the current clause) and the right-hand side renders as SQL. The
+        # typed renderer would hand the node to a value formatter and die with a `MethodError`, as
+        # this spelling always did, over a row alias (WHERE) and an aggregate one (HAVING) alike.
+        # Same rule as `_row_alias_leaf` and `_get_having_query`, so both spellings agree.
+        if _expression_operand(v.values)
           _guard_window_alias_predicate(source, having_key[2])   # #685, as the typed path does
-          push!(instruc._where, _get_filter_query(v, instruc))
+          set_context!(instruc, clause)
+          try
+            push!(clause === :having ? instruc.having : instruc._where, _get_filter_query(v, instruc))
+          finally
+            set_context!(instruc, :where)
+          end
           continue
         end
         # Switch to the clause's context for positional parameters. #595 moved this ABOVE the
@@ -1245,6 +1253,8 @@ _having_leaf_label(q::SQLTypeQor) = _having_leaf_label(first(q.or))
 # through the top-level alias branch's own code, `_render_alias_predicate`. The parentheses match
 # `_get_filter_query(::SQLTypeQ/::SQLTypeQor)`. The caller holds the `:having` context.
 function _get_having_query(v::SQLTypeOper, instruc::SQLInstruction)::String
+  # #707: an expression on the right is a comparison, not a value to type — see the top-level branch.
+  _expression_operand(v.values) && return _get_filter_query(v, instruc)
   having_key, having_cached = _aggregate_alias_leaf(v, instruc)
   return _render_alias_predicate(v, having_key, having_cached, instruc)
 end

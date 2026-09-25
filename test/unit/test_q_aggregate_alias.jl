@@ -779,3 +779,63 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #707: an expression on the right of an AGGREGATE alias filter is a HAVING comparison
+# `filter("total__@gt" => F("raceid"))` over `Sum("points")` handed the `F` to the number formatter
+# and died with `MethodError: format_number_sql(::FExpression)`, top-level and inside `Q` — on
+# `main` too. It renders `HAVING SUM(…) > "Tb"."raceid"`, an aggregate on the right included. An
+# aggregate alias that BINDS re-renders its values in HAVING, in text order after the SELECT's.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#707: an expression on the right of an aggregate alias filter renders in HAVING" begin
+  for (backend, Model_) in _Q_AGG_MODELS
+    for (label, pred, needle) in (("an F column", "total__@gt" => F("raceid"),
+                                   "HAVING SUM(\"Tb\".\"points\") > \"Tb\".\"raceid\""),
+                                  ("an aggregate", "total__@gt" => Max("raceid"),
+                                   "HAVING SUM(\"Tb\".\"points\") > MAX(\"Tb\".\"raceid\")"))
+      for spelled in (pred, Q(pred))
+        @testset "$backend — $label, $(spelled isa Pair ? "top-level" : "Q")" begin
+          q = Model_.objects
+          q.values("raceid", "total" => Sum("points"))
+          q.filter(spelled)
+          insp = inspect_query(q)
+          sql = replace(insp[:sql_text], r"\s+" => " ")
+          @test occursin(needle, replace(sql, r"HAVING \((.*)\)" => s"HAVING \1"))
+          @test _clause(insp[:sql_text], "WHERE") === nothing
+          @test isempty(insp[:parameters])
+          assert_marker_count(insp, backend)
+        end
+      end
+    end
+    @testset "$backend — a binding aggregate alias, split from a row filter" begin
+      q = Model_.objects
+      q.values("raceid", "wins" => Count(Case([When("points__@gte" => 25.0, then = 1)])))
+      q.filter(Q("wins__@gt" => F("raceid"), "raceid__@gte" => 3))
+      insp = inspect_query(q)
+      sql = replace(insp[:sql_text], r"\s+" => " ")
+      @test occursin(r"HAVING COUNT\(CASE WHEN .* END \) > \"Tb\"\.\"raceid\"", sql)
+      @test occursin(r"WHERE \"Tb\"\.\"raceid\" >= ", sql)
+      assert_marker_count(insp, backend)
+      # Text order: SELECT's two CASE operands, WHERE's 3, then HAVING's re-render binding the SAME
+      # two operands (as the column formatter shaped them) — never a reprinted marker with no value.
+      params = insp[:parameters]
+      @test length(params) == 5
+      @test params[3] == 3
+      @test params[4:5] == params[1:2]
+    end
+    @testset "$backend — a binding right-hand side after a binding alias" begin
+      # Both sides bind in HAVING: the alias's re-rendered operands, then the `+ 1` (review nit).
+      q = Model_.objects
+      q.values("raceid", "wins" => Count(Case([When("points__@gte" => 25.0, then = 1)])))
+      q.filter("wins__@gt" => F("raceid") + 1)
+      insp = inspect_query(q)
+      @test occursin(r"HAVING COUNT\(CASE WHEN .* END \) > \(\"Tb\"\.\"raceid\" \+ [?$]",
+                     replace(insp[:sql_text], r"\s+" => " "))
+      assert_marker_count(insp, backend)
+      params = insp[:parameters]
+      @test length(params) == 5
+      @test params[3:4] == params[1:2]
+      @test params[5] == 1
+    end
+  end
+end

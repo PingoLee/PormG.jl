@@ -882,6 +882,92 @@ were wrong in different directions:
 _is_ignored_table(table_name, ignore_table)::Bool =
   any(ignored -> startswith(String(table_name), ignored), ignore_table)
 
+# `pragma_table_list`, the catalog that labels a table `virtual` / `shadow`, is SQLite 3.37.0+.
+const _SQLITE_TABLE_LIST_MIN_VERSION = 3_037_000
+
+"""
+    _sqlite_user_table_names(db::PormGSQLite; sqlite_version) -> Vector{String}
+
+The tables of the main schema that PormG could own, in `sqlite_master` order: ordinary tables
+only (#730). This is the one list the SQLite readers enumerate: `read_live_schema`, `check()`'s
+expression-default report and `status()`'s drift probe all use it, so they cannot disagree about
+which tables exist.
+
+`sqlite_master` alone cannot answer that. It lists a virtual table (`CREATE VIRTUAL TABLE … USING
+fts5(…)`, `rtree`) and each of the SHADOW tables its module keeps its data in (`<name>_data`,
+`<name>_idx`, `<name>_content`, `<name>_node`, …) as `type = 'table'`, like any other. No model
+declares them, so `makemigrations` planned a `DROP TABLE` for every one: the destructive guard
+stopped it, and no migration could run on that database without `destructive = true`, which would
+have destroyed the index. This is the ownership rule, not the ignore list: it applies whatever
+`ignore_table` a caller passes, as the PostgreSQL twin [`_PG_OWNABLE_TABLE_FILTER`](@ref) does.
+
+Two sources, in order of authority:
+
+  1. **`pragma_table_list`** (SQLite 3.37+) labels a virtual table `virtual` and a shadow table
+     `shadow`, and both are left out. It is exact, but only as far as SQLite can tell: a table is a
+     shadow table when its name is `<vtab>_<suffix>` AND the virtual table's MODULE, asked through
+     `xShadowName`, claims the suffix. A module that is not registered on this connection — an
+     extension such as sqlite-vec or SpatiaLite that the application loads on its own connection
+     only — is never asked, and its shadow tables come back as plain `table`.
+  2. **SQLite's own naming rule**, for exactly that gap. A virtual table none of whose shadow tables
+     was confirmed has its whole `<vtab>_` namespace (compared case-insensitively, as SQLite does)
+     treated as its module's, and a warning names every table skipped that way. A confirmed shadow
+     vouches only for the virtual table with the LONGEST name it extends, so a registered
+     `docs_title` cannot vouch for an unregistered `docs`. The same gap opens for a registered
+     module that does not report shadow tables (no `xShadowName`), and below 3.37, where there is no
+     `pragma_table_list` at all: there a virtual table is still recognised by the DDL SQLite stores
+     for it (always normalised to `CREATE VIRTUAL TABLE …`), and this rule covers its shadow tables.
+
+The fallback errs toward NOT reading a table, which is the safe direction here: an unread table is
+never dropped, while a misread shadow table is one `destructive = true` would destroy. Its cost is
+a user table named like a virtual table's shadows (`<vtab>_notes` beside `<vtab>`): it is skipped,
+the warning names it, and a model that declares it plans `CREATE TABLE`, which fails at `migrate`
+because the table exists — loud, but the fix is renaming the table. `sqlite_version` is the library
+version (`backend_sqlite_version`); it is a keyword so the pre-3.37 path can be exercised against a
+current SQLite.
+
+Views are not in the list either, and never were: they are `type = 'view'`.
+"""
+function _sqlite_user_table_names(db::PormGSQLite;
+                                  sqlite_version::Integer = backend_sqlite_version(db))::Vector{String}
+  # The query the readers always ran, so the scan order — and the order tables are read back in —
+  # is the catalog's. The names compare exactly because both catalogs hold the `CREATE` spelling.
+  catalog = fetch(db, "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';") |> DataFrame
+  names = String[String(r.name) for r in eachrow(catalog)]
+  kind = Dict{String, String}()          # name ⇒ "virtual" / "shadow" / "table"; absent ⇒ "table"
+  if sqlite_version >= _SQLITE_TABLE_LIST_MIN_VERSION
+    for r in eachrow(fetch(db, "SELECT name, type FROM pragma_table_list WHERE schema = 'main';") |> DataFrame)
+      kind[String(r.name)] = String(r.type)
+    end
+  else
+    for r in eachrow(catalog)
+      sql = r.sql
+      (sql === missing || sql === nothing) && continue
+      Base.startswith(uppercase(lstrip(String(sql))), "CREATE VIRTUAL TABLE") && (kind[String(r.name)] = "virtual")
+    end
+  end
+  kind_of(n) = get(kind, n, "table")
+  virtual = String[lowercase(n) for n in names if kind_of(n) == "virtual"]
+  # A confirmed shadow table vouches for ONE virtual table: the longest name it extends. Matching
+  # any prefix would let `docs_title`'s confirmed `docs_title_data` vouch for an unregistered `docs`
+  # too, and `docs`'s own shadows would then be read — and dropped (found in review).
+  vouched = Set{String}()
+  for n in names
+    kind_of(n) == "shadow" || continue
+    s = lowercase(n)
+    owners = String[v for v in virtual if Base.startswith(s, v * "_")]
+    isempty(owners) || push!(vouched, owners[argmax(length.(owners))])
+  end
+  # The `<vtab>_` namespaces no module vouched for.
+  unvouched = String[v * "_" for v in virtual if !(v in vouched)]
+  owned = String[n for n in names if kind_of(n) == "table"]
+  guessed = String[n for n in owned if any(p -> Base.startswith(lowercase(n), p), unvouched)]
+  if !isempty(guessed)
+    @warn "Introspection skips these tables: each is named like a shadow table of a virtual table whose shadow tables SQLite cannot confirm on this connection (its module is not loaded here, does not report shadow tables, or SQLite is older than 3.37), so they are neither read nor dropped. If one is your own table, rename it: a model declaring it would plan CREATE TABLE, which fails because the table exists." tables = guessed
+  end
+  return String[n for n in owned if !(n in guessed)]
+end
+
 """
     read_live_schema(db; ignore_table, include_table) -> Vector{LiveTable}
 
@@ -890,14 +976,18 @@ reads (#522). `convert_schema_to_models` is this plus `model_from_live` per tabl
 for `inspectdb`. Filtering is the same on both engines: `include_table` keeps only those names, and
 `ignore_table` plus the consumer-registered `_EXTRA_IGNORE_TABLES` skip framework tables by prefix
 (#325).
+
+Relations PormG cannot own are never read, whatever the filters say (#730): views and materialized
+views on both engines, SQLite virtual tables and their shadow tables
+([`_sqlite_user_table_names`](@ref)), PostgreSQL partitions and tables an extension owns
+([`_PG_OWNABLE_TABLE_FILTER`](@ref)). A relation the reader never sees is one `makemigrations` can
+never plan to drop.
 """
 function read_live_schema(db::PormGSQLite; ignore_table::Vector{String} = sqlite_ignore_schema,
                           include_table::Union{Vector{String}, Nothing} = nothing)::Vector{LiveTable}
   ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
-  tables = fetch(db, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';") |> DataFrame
   out = LiveTable[]
-  for row in eachrow(tables)
-    table_name = String(row.name)
+  for table_name in _sqlite_user_table_names(db)
     include_table !== nothing && !any(included -> table_name == included, include_table) && continue
     _is_ignored_table(table_name, ignore_table) && continue
     push!(out, _sqlite_live_table(db, table_name))
@@ -919,6 +1009,34 @@ convert_schema_to_models(db::PormGSQLite; kwargs...)::Vector{PormGModel} =
 # ---
 # PostgreSQL Introspection
 # ---
+
+"""
+    _PG_OWNABLE_TABLE_FILTER
+
+The `WHERE` fragment that keeps a `relkind = 'r'` table only when PormG could own it (#730), over
+a `pg_class` row aliased `c`. Every PostgreSQL query that enumerates live tables interpolates THIS
+constant — the schema dump (`get_database_schema`), the composite-index reader
+(`_pg_composite_indexes`) and `status()`'s drift probe — so they cannot disagree about which
+tables exist. It is the twin of [`_sqlite_user_table_names`](@ref).
+
+`relkind = 'r'` alone admitted two kinds of relation no model can declare, and `makemigrations`
+planned a `DROP TABLE` for each:
+
+  * **a partition** — the partitioned parent is `relkind = 'p'` and was already skipped, but every
+    partition is an ordinary `'r'` table. `relispartition` marks it.
+  * **a table an extension owns** — PostGIS's `spatial_ref_sys` is the common one, and dropping it
+    fails with "extension postgis requires it". Membership is recorded only in `pg_depend`, as a
+    dependency of `deptype = 'e'` on the extension.
+
+This is the filter Atlas's PostgreSQL inspector applies for the same reason, and Django's
+`inspectdb` leaves partitions out by default. Views and materialized views need nothing here: they
+are `relkind` `'v'` / `'m'`.
+"""
+const _PG_OWNABLE_TABLE_FILTER = """
+      AND NOT c.relispartition
+      AND NOT EXISTS (SELECT 1 FROM pg_depend dep
+                      WHERE dep.classid = 'pg_class'::regclass AND dep.objid = c.oid
+                        AND dep.deptype = 'e')"""
 
 """
     _pg_composite_indexes(db::PormGPostgres; schema = "public") -> Dict{String, Vector{LiveComposite}}
@@ -1048,6 +1166,7 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
     LEFT JOIN pg_constraint con ON con.conindid = i.indexrelid AND con.conrelid = i.indrelid
                                AND con.contype IN ('u', 'p', 'x')
     WHERE c.relkind = 'r'
+      $(_PG_OWNABLE_TABLE_FILTER)
       AND am.amname = 'btree'
       AND NOT i.indisprimary
       AND NOT i.indisexclusion
@@ -1411,6 +1530,7 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
     LEFT JOIN non_negative_checks nn ON nn.table_oid = c.oid
     LEFT JOIN byte_length_checks bl ON bl.table_oid = c.oid AND bl.col_name = a.attname
     WHERE c.relkind = 'r'
+      $(_PG_OWNABLE_TABLE_FILTER)
       $(schema_clause)
       $(table_clause)
       AND a.attnum > 0

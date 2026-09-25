@@ -38,6 +38,10 @@ Register table-name patterns that schema introspection (`convert_schema_to_model
 `import_models_from_postgres`, `import_models_from_sqlite`, `makemigrations`) should always
 skip. Additive and idempotent. Use it for your framework's own infrastructure tables.
 
+Relations no model can declare are skipped already, with no registration: views, SQLite virtual
+tables and their shadow tables, PostgreSQL partitions, and tables an extension owns (see
+[Relations PormG never reads](migrations/index.md#What-this-means-in-practice)).
+
 ```julia
 PormG.register_ignore_tables!(["myframework_jobs", "myframework_cache"])
 ```

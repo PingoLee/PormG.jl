@@ -1037,3 +1037,99 @@ end
     drop_fixtures()
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Introspection ownership on PostgreSQL: partitions, extension tables and views are not read (#730)
+# `relkind = 'r'` admitted every partition of a partitioned table and every table an extension
+# owns, so `makemigrations` planned a `DROP TABLE` for each — and for an extension member the DROP
+# fails outright ("extension … requires it"). Every enumeration now carries
+# `_PG_OWNABLE_TABLE_FILTER`. The live-table list IS the planner's whole input, so a relation absent
+# from it is one no plan can drop; the unit twin pins that each query carries the filter, this
+# pins that the filter means what it says against a real catalog.
+# Fixtures: a partitioned parent with one partition and a composite index (PostgreSQL clones the
+# index onto the partition, which is the composite reader's input), a view and a materialized view,
+# all dropped in `finally`. The extension member runs inside a transaction that is ROLLED BACK, so
+# no other session ever sees the extension or the table; it uses a trusted contrib extension that is
+# not already installed, never the shared `unaccent`.
+# SQLite's half (virtual and shadow tables) is hermetic: test/unit/test_live_schema_reader.jl.
+# Mutation gate: drop `NOT c.relispartition` and the partition and its index come back; drop the
+# `pg_depend` clause and the extension member does.
+# ─────────────────────────────────────────────────────────────────────────────
+if adapter_name == "PostgreSQL"
+  @testset "Introspection ownership: partitions, extension tables and views are not read (#730)" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
+    names_read() = Set(t.name for t in PormG.Migrations.read_live_schema(pool))
+    drop730!() = for s in ("DROP MATERIALIZED VIEW IF EXISTS pormg_it_own_matview",
+                           "DROP VIEW IF EXISTS pormg_it_own_view",
+                           "DROP TABLE IF EXISTS pormg_it_own_part CASCADE")   # takes the partition too
+      try; ddl(s); catch; end
+    end
+
+    drop730!()
+    try
+      ddl("CREATE TABLE pormg_it_own_part (id bigint NOT NULL, season integer NOT NULL, round integer NOT NULL) PARTITION BY RANGE (season)")
+      ddl("CREATE TABLE pormg_it_own_part_2026 PARTITION OF pormg_it_own_part FOR VALUES FROM (2026) TO (2027)")
+      ddl("CREATE INDEX pormg_it_own_part_season_round ON pormg_it_own_part (season, round)")
+      ddl("CREATE VIEW pormg_it_own_view AS SELECT 1 AS one")
+      ddl("CREATE MATERIALIZED VIEW pormg_it_own_matview AS SELECT 1 AS one")
+
+      # Precondition — to the catalog the partition is an ordinary table, the shape the old filter
+      # admitted; without this the absence assertions below could pass on a server that stores it
+      # some other way.
+      kinds = ddl("SELECT relkind::text AS relkind, relispartition FROM pg_class WHERE relname = 'pormg_it_own_part_2026'")
+      @test (kinds.relkind[1], kinds.relispartition[1]) == ("r", true)
+
+      unowned = Set(["pormg_it_own_part", "pormg_it_own_part_2026", "pormg_it_own_view", "pormg_it_own_matview"])
+      @test isempty(intersect(names_read(), unowned))
+      @test !haskey(PormG.Migrations._pg_composite_indexes(pool), "pormg_it_own_part_2026")
+      @test isempty(intersect(Set(PormG.Migrations._get_live_table_names(pool)), unowned))
+    finally
+      drop730!()
+    end
+
+    # ── The extension member, inside a rolled-back transaction ──
+    # A trusted extension can be created by a non-superuser with CREATE on the database, who then
+    # owns it — which is what `ALTER EXTENSION … ADD TABLE` requires. The candidates are constants.
+    avail = ddl("""
+      SELECT e.name FROM pg_available_extensions e
+      JOIN pg_available_extension_versions v ON v.name = e.name AND v.version = e.default_version
+      WHERE e.installed_version IS NULL AND v.trusted
+        AND e.name IN ('seg', 'isn', 'ltree', 'cube', 'tcn', 'hstore')
+      ORDER BY e.name""")
+    # Not a skip: without an extension to join, the pg_depend clause goes unverified against a live
+    # server, and that should be seen, not silently passed.
+    @test nrow(avail) > 0
+    if nrow(avail) > 0
+      ext = String(avail.name[1])
+      member_depends = Ref(-1)
+      read_in_tx = Ref(Set{String}())
+      sentinel = "pormg #730: roll the extension fixture back"
+      try
+        PormG.run_in_transaction(pool) do
+          ddl("CREATE EXTENSION \"$(ext)\"")
+          ddl("CREATE TABLE pormg_it_own_ext_member (id integer PRIMARY KEY)")
+          ddl("ALTER EXTENSION \"$(ext)\" ADD TABLE pormg_it_own_ext_member")
+          # The positive control: an ordinary table created in the SAME uncommitted transaction. It
+          # is visible only to a read that rides this transaction's connection, so seeing it is what
+          # proves the member's absence below is the filter's doing, not a read from outside.
+          ddl("CREATE TABLE pormg_it_own_ext_control (id integer PRIMARY KEY)")
+          # Precondition: membership is recorded exactly where the filter looks for it.
+          member_depends[] = ddl("""SELECT count(*)::int AS n FROM pg_depend
+                                    WHERE classid = 'pg_class'::regclass AND deptype = 'e'
+                                      AND objid = 'pormg_it_own_ext_member'::regclass""").n[1]
+          read_in_tx[] = names_read()     # plain fetches ride the transaction's connection
+          error(sentinel)
+        end
+      catch e
+        occursin(sentinel, sprint(showerror, e)) || rethrow()
+      end
+      @test member_depends[] == 1
+      @test "pormg_it_own_ext_control" in read_in_tx[]   # the read rode the transaction
+      @test !("pormg_it_own_ext_member" in read_in_tx[])
+      # The rollback left nothing behind, for this run or any other session.
+      @test nrow(ddl("SELECT 1 FROM pg_class WHERE relname IN ('pormg_it_own_ext_member', 'pormg_it_own_ext_control')")) == 0
+      @test nrow(DataFrame(PormG.ConnectionPool.fetch(pool, "SELECT 1 FROM pg_extension WHERE extname = \$1", [ext]))) == 0
+    end
+  end
+end

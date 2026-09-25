@@ -396,18 +396,19 @@ Follow the canonical [PormG Test Writing Standard](../../instructions/test-writi
 
 ## Verification Commands
 
-Narrowest first. The three integration files are **slices, and each needs the user's explicit
-permission** — `db_2` is one shared PostgreSQL server. Query-rendering diffs are covered by unit
+Narrowest first. The three integration files are **slices**, and a slice runs without asking — the
+suite lock in `common_setup.jl` queues it behind any other `db_2` run. Query-rendering diffs are covered by unit
 coverage plus the naming slice; do **not** escalate to `test/integration/runtests.jl` unless the
 diff is in the rung-5 table in [`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md) →
-*Verify*. The full suite on both engines is a release gate, not a per-issue step.
+*Verify*, which is also the run that needs the user's permission first. The full suite on both
+engines is a release gate, not a per-issue step.
 
 ```powershell
 julia --project=test/integration test/unit/test_alignment_sqlite.jl       # no permission needed
 julia --project=test/integration test/unit/test_inspect_query.jl          # no permission needed
-julia -t auto --project=test/integration test/integration/test_having.jl  # rung 4 slice — ask first
-julia -t auto --project=test/integration test/integration/test_cjoin.jl   # rung 4 slice — ask first
-julia -t auto --project=test/integration test/integration/test_cte.jl     # rung 4 slice — ask first
+julia -t auto --project=test/integration test/integration/test_having.jl  # rung 4 slice — no ask
+julia -t auto --project=test/integration test/integration/test_cjoin.jl   # rung 4 slice — no ask
+julia -t auto --project=test/integration test/integration/test_cte.jl     # rung 4 slice — no ask
 ```
 
 ## Anti-Patterns

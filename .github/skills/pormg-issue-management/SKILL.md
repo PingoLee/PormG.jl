@@ -121,8 +121,8 @@ wording is **"No live database needed (mock connections)"**, followed by an inli
 a hermetic constructor call such as `convertSQLToModel(_introspection_row(...))`.
 
 This is scheduling metadata, not a courtesy. A hermetic repro verifies at rung 1 in seconds and
-contends for nothing, so the issue can be worked alongside other sessions; one that needs `db_2` or
-`f1.sqlite` costs a fixture negotiation every time anyone touches it. In practice it has been the
+contends for nothing, so the issue can be worked alongside other sessions; one that needs `db_2`
+queues on the suite lock behind every other `db_2` session each time anyone verifies it. In practice it has been the
 single best predictor of whether an issue closes in one sitting. If you build a hermetic repro while
 investigating, put it **in the issue**, not only in the PR.
 

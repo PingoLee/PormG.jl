@@ -256,8 +256,8 @@ The efficiency win of clustering is paying the expensive rungs **once**. Split t
 | 1 — the new or changed test file alone | **Per issue** | Before that issue's commit |
 | 2 — guard tests the change could trip | **Per issue** | Before that issue's commit |
 | 3 — full unit suite | Per group | Once, after the last commit |
-| 4 — integration slice (**ask first**) | Per group | Once, over the union of files the group's diff reaches |
-| 5 — full integration suite | Per group | Once, if **any** member triggers it |
+| 4 — integration slice (no ask — the suite lock queues it) | Per group | Once, over the union of files the group's diff reaches |
+| 5 — full integration suite (**ask first**) | Per group | Once, if **any** member triggers it |
 
 Rungs 1 and 2 stay per issue on purpose. A member committed without its own narrow run is a member
 whose failure you will attribute to the next one.
@@ -291,8 +291,9 @@ Then land it without stopping: commit (one per member) → push → open the PR 
 authorized the cluster authorized all of it; the merge gate in
 [`general.instructions.md`](../../instructions/general.instructions.md) is the only stop, and it is
 the maintainer's. A cluster makes the no-stopping rule matter more, not less — asking per member
-would be four interruptions for one review. The integration-run ask is the exception that stays, and
-at group scope it is **one** ask covering the whole slice.
+would be four interruptions for one review. The integration runs that stay gated — a full suite, a
+lock bypass, a hostile repro ([`general.instructions.md`](../../instructions/general.instructions.md) → *Merge gate*) — are the exception, and at group scope
+each is **one** ask covering the whole group.
 
 **The PR body carries one `Closes #N` line per member**, plus the group's tier, the order you worked
 in, which rungs CI is covering, and any member dropped under §4.
@@ -340,7 +341,7 @@ three additions:
 - Do not add a fifth issue mid-session because it is adjacent
 - Do not squash the group into one commit, or merge two members into one upgrade-log entry
 - Do not skip a member's rung 1 and 2 because the group's full suite will run later
-- Do not run the integration slice per member — one ask, one invocation, the union of the files
+- Do not run the integration slice per member — one invocation over the union of the files
 - Do not implement a half-fix to avoid breaking up the group
 - Do not hold completed members back because a sibling stalled
 - Do not hand a reviewer the whole group diff as one undifferentiated blob

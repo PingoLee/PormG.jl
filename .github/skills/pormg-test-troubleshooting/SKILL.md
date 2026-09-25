@@ -63,11 +63,12 @@ Threading: PostgreSQL integration tests are meant to run under `julia -t auto`. 
 tolerate `-t auto` well** — run `db_sl` integration tests with `-t 1`
 (`test/integration/common_setup.jl` documents this directly above the connection setup).
 
-**Every integration command below needs the user's explicit permission, every time** — `db_2` is one
-shared PostgreSQL server and a full suite is minutes of load on it. Concurrent runs no longer
-*corrupt* each other (the suite lock queues them — see *False regression from two
-sessions/worktrees* below), but queuing behind someone else's run is still their time you are
-spending. Diagnosis starts at the narrowest failing file, not at these: reach for a full suite only once *Diagnostic workflow* step 1
+**Every full-suite command below needs the user's explicit permission, every time** — a full suite
+is minutes of load on the machine, and its truncate-and-reseed leaves the fixture half-seeded for
+every later slice if it is cut short. A single integration file does not: the suite lock queues it
+behind any other `db_2` run (see *False regression from two sessions/worktrees* below), and the
+remaining gated runs are listed in
+[`general.instructions.md`](../../instructions/general.instructions.md) → *Merge gate*. Diagnosis starts at the narrowest failing file, not at these: reach for a full suite only once *Diagnostic workflow* step 1
 has isolated the failure, or when the rung-5 table in
 [`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md) → *Verify* says the diff owes one.
 

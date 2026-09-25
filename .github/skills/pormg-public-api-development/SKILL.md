@@ -234,17 +234,19 @@ Follow the canonical [PormG Test Writing Standard](../../instructions/test-writi
 
 ## Verification Commands
 
-Narrowest first. **Every integration run needs the user's explicit permission, every time** — `db_2`
-is one shared PostgreSQL server. The **full** integration suite is a release gate
+Narrowest first. An integration **slice** runs without asking — the suite lock in `common_setup.jl`
+queues it behind any other `db_2` run. The **full** integration suite needs the user's explicit
+permission every time ([`general.instructions.md`](../../instructions/general.instructions.md) →
+*Merge gate* lists what stays gated), and it is a release gate
 ([`pormg-cut-release`](../pormg-cut-release/SKILL.md) → precondition 4), not a per-issue step: run a
 slice unless the diff is in the rung-5 table in
 [`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md) → *Verify*.
 
 ```powershell
 julia --project=. -e 'using Pkg; Pkg.test()'                                               # unit — no permission needed
-julia -t auto --project=test/integration test/integration/test_bulk_copy.jl                # rung 4 slice — ask first
+julia -t auto --project=test/integration test/integration/test_bulk_copy.jl                # rung 4 slice — no ask
 julia -t auto --project=test/integration test/integration/runtests.jl                      # rung 5 — ask; release gate
-$env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl  # rung 5, SQLite (-t 1 required)
+$env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl  # rung 5, SQLite — ask (-t 1 required)
 julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate(); include("docs/make.jl")'
 ```
 

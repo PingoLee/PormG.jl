@@ -316,13 +316,14 @@ const DOCERR_CASES = [
         end,
     ),
     (
-        # #705. The function pages say an operand that is not a column path, a number, a `Bool` or
-        # an expression raises `QueryBuildError` when the expression is built — at the constructor,
-        # not as a `MethodError` from the build walk. A date is the case worth pinning: it is refused
-        # on purpose (`Value` would bind it as a serialized BLOB on SQLite).
-        "read/functions_and_dates.md — a function operand that is not a column, number or expression raises QueryBuildError",
+        # #705. The function pages say an operand that is not a column path, a number, a `Bool`, a
+        # date or time, or an expression raises `QueryBuildError` when the expression is built — at
+        # the constructor, not as a `MethodError` from the build walk. This case pinned a `Date` until
+        # #721 made dates operands (the SQLite binder stores them as their column's text); a bare
+        # `Period` is the value the page still refuses, so it is the one pinned now.
+        "read/functions_and_dates.md — a function operand that is not a column, number, date or expression raises QueryBuildError",
         QueryBuildError,
-        () -> PormG.Functions.Least("dob", PormG.Dates.Date(1960, 3, 21)),
+        () -> PormG.Functions.Least("dob", PormG.Dates.Day(1)),
     ),
     (
         # #509. The window-function page states that the same ambiguity applies to an `SQLOrder`

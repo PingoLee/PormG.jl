@@ -89,6 +89,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Q/Qor on an Aggregate Alias (#692)" include("unit/test_q_aggregate_alias.jl")
     @testset "Aggregate Flag Through Wrappers (#702)" include("unit/test_aggregate_flag_propagation.jl")
     @testset "Bare Literal Function Operands (#705)" include("unit/test_function_literal_operands.jl")
+    @testset "SQLite Literal Binding, Never a BLOB (#721)" include("unit/test_sqlite_literal_binding.jl")
     @testset "Dedicated Inspection API" include("unit/test_inspect_query.jl")
     @testset "Reserved-word Columns via db_column (#317)" include("unit/test_reserved_word_fields.jl")
     @testset "Model_to_str Identifier Sanitizing (#317)" include("unit/test_model_to_str_identifiers.jl")

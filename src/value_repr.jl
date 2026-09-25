@@ -125,6 +125,89 @@ value_formatter(::CInterval, ::PormGBackend) = Models.format_duration_sql
 value_formatter(::CanonicalType, ::PormGBackend) = nothing
 
 
+# ── Slot 1 for a LITERAL: a Julia value with no column to take its representation from (#721) ──
+#
+# A filter value reaches the binder through its column's formatter, so it arrives as the stored text.
+# A `Value(x)` literal, a function kwarg, a window default and a raw-SQL parameter have no column —
+# and neither does a filter value its formatter passes through untouched (`format_number_sql`
+# returns any `Integer` as is). They reach SQLite.jl RAW, and SQLite.jl has `bind!` methods for
+# `Int32`, `Int64`, `Bool`, `AbstractFloat`, strings, `Vector{UInt8}`, `missing` and `nothing` only.
+# Everything else falls to `bind!(stmt, i, ::Any) = bind!(stmt, i, sqlserialize(val))`, which
+# JULIA-SERIALIZES the value into a BLOB and raises nothing: `Value(Date(2020, 1, 1))` compared
+# against a serialized Julia object, and `filter("points" => Int16(5))` matched no row, silently.
+# Measured with `SELECT typeof(?)`: `Date`, `DateTime`, `Time`, `Int8`, `Int16`, every `UInt`,
+# `Int128` and `BigInt` all bind as `blob`.
+#
+# The kind a literal evaluates to is this table's key, so a date literal gets the SAME formatter its
+# column's values get — `"2020-01-01"` for a `Date`, the canonical UTC text for a `DateTime`. There is
+# no second date formatter to drift from the first. `literal_canonical_kind` is also what the read
+# path records for a projected `Value(x)`, so the text parses back into a typed value — the type that
+# went in for a `Date`/`Time`, a UTC `ZonedDateTime` for a `DateTime` (as a SQLite `DateTimeField` reads).
+import TimeZones, UUIDs   # the literal types below; `Dates` is imported by `PormG.jl`
+
+"""
+    literal_canonical_kind(x) -> Union{CanonicalType, Nothing}
+
+The canonical type a Julia literal is stored as, or `nothing` when this table does not own its
+representation. Temporal values only, as [`field_canonical_kind`](@ref).
+"""
+literal_canonical_kind(::Dates.Date) = CDate()
+literal_canonical_kind(::Dates.DateTime) = CDateTime(false)
+literal_canonical_kind(::TimeZones.ZonedDateTime) = CDateTime(true)
+literal_canonical_kind(::Dates.Time) = CTime()
+literal_canonical_kind(::Union{Dates.Period, Dates.CompoundPeriod}) = CInterval()
+literal_canonical_kind(_) = nothing
+
+# Dispatch-only engine for the one binder with no connection in hand — the SQLite parameter
+# collector, which never held one. `value_formatter` keys on a backend VALUE, and every temporal cell
+# is backend-generic today, so a subtype with no fields is enough. `column_spec.jl`'s `_SQLiteEngine`
+# is the same shape for the same reason.
+struct _SQLiteBindEngine <: PormGSQLite end
+
+"""
+    sqlite_bind_value(x, backend = _SQLiteBindEngine()) -> value
+
+`x` as a value SQLite.jl binds as itself, or an `InvalidValueError` when there is none. Never a
+serialized BLOB (#721). The native types pass through; a narrower or wider integer becomes `Int64`
+(out of range → error); a date, time, datetime or duration becomes its column's stored text; a
+`UUID` becomes the text its field formatter binds; anything else is refused. A `Decimal` is an
+`AbstractFloat`, which SQLite.jl already binds as REAL, so it is native here.
+"""
+function sqlite_bind_value end
+# The native set. Each arm is its own method so the `Integer` arm below is strictly less specific
+# than `Int32`/`Int64`/`Bool` — one `Union` beside it would be an ambiguity, not a table.
+sqlite_bind_value(x::Union{Int32, Int64, Bool}, ::PormGSQLite = _SQLiteBindEngine()) = x
+sqlite_bind_value(x::AbstractFloat, ::PormGSQLite = _SQLiteBindEngine()) = x
+sqlite_bind_value(x::AbstractString, ::PormGSQLite = _SQLiteBindEngine()) = x
+sqlite_bind_value(x::Vector{UInt8}, ::PormGSQLite = _SQLiteBindEngine()) = x
+sqlite_bind_value(x::Union{Missing, Nothing}, ::PormGSQLite = _SQLiteBindEngine()) = x
+# `Vector{UInt8}` is the only byte container SQLite.jl binds as a blob; a view or `codeunits` of one
+# would be serialized instead, so it is copied into the concrete type.
+sqlite_bind_value(x::AbstractVector{UInt8}, ::PormGSQLite = _SQLiteBindEngine()) = Vector{UInt8}(x)
+function sqlite_bind_value(x::Integer, ::PormGSQLite = _SQLiteBindEngine())
+  typemin(Int64) <= x <= typemax(Int64) && return Int64(x)
+  throw(InvalidValueError("$(repr(x)) (::$(typeof(x))) does not fit a 64-bit integer, the widest " *
+                          "integer SQLite stores. Bind it as text instead: string($(repr(x))) (#721)."))
+end
+function sqlite_bind_value(x::Union{Dates.Date, Dates.DateTime, TimeZones.ZonedDateTime, Dates.Time,
+                                    Dates.Period, Dates.CompoundPeriod},
+                           backend::PormGSQLite = _SQLiteBindEngine())
+  try
+    return value_formatter(literal_canonical_kind(x), backend)(x)
+  catch e
+    # The formatter's own message names `DurationField` for a `Month`/`Year`, a field the caller of
+    # `Value(Month(1))` never used. Say which value was being bound, keep the formatter's reason.
+    e isa InvalidValueError || rethrow()
+    throw(InvalidValueError("$(repr(x)) (::$(typeof(x))) cannot be bound as a SQLite parameter: " *
+                            "$(rstrip(e.msg, '.')) (#721)."))
+  end
+end
+sqlite_bind_value(x::UUIDs.UUID, ::PormGSQLite = _SQLiteBindEngine()) = Models.format_uuid_sql(x)
+sqlite_bind_value(x, ::PormGSQLite = _SQLiteBindEngine()) = throw(InvalidValueError(
+  "$(repr(x)) (::$(typeof(x))) cannot be bound as a SQLite parameter: SQLite.jl would store it as a " *
+  "serialized Julia object. Convert it to a string, number, Bool, date or time first (#721)."))
+
+
 # ── Slot 2: a SQL expression -> the stored text ─────────────────────────────────────────────────
 #
 # `modifiers` are already-rendered SQLite modifier arguments (`"'+' || ? || ' days'"`); pass none to

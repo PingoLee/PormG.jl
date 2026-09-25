@@ -7,6 +7,9 @@ import Logging
 import Base: fetch
 import PormG: PormGSettings, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGSQLiteParam, AbstractPormGParam, config, PormGModel, DEFAULT_POOL_TIMEOUT
 import PormG: @pormg_debug
+# #721: `PormG.sqlite_bind_value` (`value_repr.jl`) is included AFTER this module, so it is named
+# qualified inside a function body and resolved at call time — `Generator.jl`'s spelling.
+import PormG
 # `PoolError` is the taxonomy's connection-pool umbrella; it lives in Kernel (layer 1) so that
 # modules included before this one can name it (#261). PormGError comes along for `catch` sites.
 import PormG: PormGError, PoolError
@@ -57,6 +60,14 @@ const ManualParams = Union{AbstractVector, Tuple}
 # backends; every non-null value is passed through byte-for-byte (this is a RAW hatch — no coercion).
 # Returns a fresh `Any[]` (never mutates the caller's array) and is idempotent under the fetch retry.
 _normalize_manual_params(params::ManualParams) = Any[v === nothing ? missing : v for v in params]
+# #721 — the ONE exception to "no coercion", and SQLite only. SQLite.jl binds anything outside its
+# native set (a `Date`, an `Int16`, a `UUID`, …) by Julia-serializing it into a BLOB, silently, so
+# passing it through byte-for-byte is not what "raw" promises: the database receives a serialized
+# Julia object. The ORM collector applies the same `sqlite_bind_value`, so a raw query and the ORM
+# bind a literal identically. PostgreSQL is untouched — LibPQ adapts every one of these itself.
+_normalize_manual_params(params::ManualParams, connection::PormGSQLite) =
+  Any[PormG.sqlite_bind_value(v, connection) for v in _normalize_manual_params(params)]
+_normalize_manual_params(params::ManualParams, ::PormGPostgres) = _normalize_manual_params(params)
 
 # A pool starts at `pool_size` connections and may grow lazily (on demand) up to
 # `pool_size * POOL_EXPANSION_FACTOR` before acquisition fails with a PoolTimeoutError (#37).
@@ -2265,7 +2276,7 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
   # NULLs once, here. Guarded to ManualParams: ORM collectors (AbstractPormGParam) and the
   # `nothing` sentinel are untouched (collectors already ran nothing→missing via format_*_sql).
   if params isa ManualParams
-    params = _normalize_manual_params(params)
+    params = _normalize_manual_params(params, connection)
   end
 
   # Check for transaction context first

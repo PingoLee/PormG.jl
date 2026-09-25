@@ -71,6 +71,14 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       if alias !== nothing
         # #474: a `Value(x)` literal is never CTE-rooted — `Value(CTE(...))` is refused (#444).
         memo_projection!(instruc, memo_key(:base, alias), instruc.select[i])
+        # #721: SQLite binds a date or time literal as its stored text, so it comes back as text;
+        # record the literal's kind and the #564 read path parses it back into a typed value. That
+        # is the type that went in for `Date`/`Time`; a naive `DateTime` comes back as a UTC
+        # `ZonedDateTime`, exactly as a SQLite `DateTimeField` column reads (the canonical text
+        # carries `+00:00`) — the column's behavior, not a new one. `nothing` for every non-temporal
+        # literal. On PostgreSQL the kind is inert: every `value_parser` there is `nothing`.
+        kind = literal_canonical_kind(v_copy.field)
+        kind === nothing || (instruc.projection_kinds[Symbol(alias)] = kind)
       end
       continue
     end

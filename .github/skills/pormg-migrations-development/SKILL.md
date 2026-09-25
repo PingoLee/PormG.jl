@@ -305,15 +305,15 @@ again. Convergence is the class described above, and since #507 it has a single 
 
 ## Verification Commands
 
-Narrowest first. **Every integration run needs the user's explicit permission, every time** — `db_2`
-is one shared PostgreSQL server. Migration diffs are one of the cases that genuinely owe the **full**
-suite rather than a slice (the DDL path only executes in `test_migration_bootstrap.jl`) — see the
-rung-5 table in [`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md) → *Verify*.
+Narrowest first. Migration diffs are one of the cases that genuinely owe the **full** suite rather
+than a slice (the DDL path only executes in `test_migration_bootstrap.jl`) — see the rung-5 table in
+[`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md) → *Verify* — and **the full suite needs
+the user's explicit permission, every time** ([`general.instructions.md`](../../instructions/general.instructions.md) → *Merge gate*).
 
 ```powershell
 julia --project=. -e 'using Pkg; Pkg.test()'                                               # unit — no permission needed
 julia -t auto --project=test/integration test/integration/runtests.jl                      # rung 5 — ask first
-$env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl  # rung 5, SQLite (-t 1 required)
+$env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl  # rung 5, SQLite — ask (-t 1 required)
 julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate(); include("docs/make.jl")'
 ```
 

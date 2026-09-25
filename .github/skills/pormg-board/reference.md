@@ -148,8 +148,8 @@ issue state whether it needs a live database: it is the single best predictor of
 can run alongside another, and it has to be recorded on the issue rather than re-derived at planning
 time.
 
-**A hostile repro is a different category from a hungry one.** "Which database is free" covers
-*using* `db_2`; it does not cover *destroying* it. `pg_terminate_backend`, a server restart, a schema
+**A hostile repro is a different category from a hungry one.** The suite lock arbitrates *using*
+`db_2`; it does not arbitrate *destroying* it. `pg_terminate_backend`, a server restart, a schema
 drop or a fixture wipe kills every other session's connections, and those sessions report failures
 that are not theirs. Such a session is `SOLO` — not schedulable in parallel with anything, including
 a `db_sl` session that happens to share the machine.

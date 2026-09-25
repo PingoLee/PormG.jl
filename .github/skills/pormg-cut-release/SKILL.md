@@ -45,9 +45,10 @@ PORMG_DB=db_sl julia -t 1 --project=test/integration test/integration/runtests.j
 omitting it passes right up until `JULIA_NUM_THREADS` is set in the shell — and the release gate is
 the single worst place to inherit a flake from an unstated default.
 
-- **Ask the maintainer before running** — `db_2` is one shared PostgreSQL server and other sessions
-  may be mid-issue on it. Ask which database is free. This is the standing rule; a cut does not
-  waive it.
+- **Ask the maintainer before running** — a full suite is one of the integration runs that stays
+  gated ([`general.instructions.md`](../../instructions/general.instructions.md) → *Merge gate*): minutes of load, and a
+  truncate-and-reseed that leaves the fixture half-seeded for every later slice if it is cut short.
+  This is the standing rule; a cut does not waive it.
 - **Both engines, not one.** *"Keep PostgreSQL and SQLite aligned"* is a non-negotiable, and the
   slice-per-issue model means engine divergence can accumulate for a whole train without anyone
   noticing. The cut is the only thing that catches it.

@@ -220,7 +220,7 @@ parallel-safe:
 | Constraint | What it means for scheduling |
 |---|---|
 | **`db_2` verification serializes** | `common_setup.jl` takes a PostgreSQL session-level advisory lock, so a second session against `db_2` *queues* rather than interleaving. That is correctness, not throughput: two `db_2`-needing sessions are sequential however disjoint their files |
-| **Hermetic beats labelled** | A session whose members all reproduce on mock connections contends for nothing and can run alongside anything. One that needs `db_2` or `f1.sqlite` costs a fixture negotiation every time — [`pormg-issue-management`](../pormg-issue-management/SKILL.md) → *Reproductions* is where each issue records it. `db_sl` is per-worktree and cheap |
+| **Hermetic beats labelled** | A session whose members all reproduce on mock connections contends for nothing and can run alongside anything. One that needs `db_2` queues behind every other `db_2` session each time it verifies — [`pormg-issue-management`](../pormg-issue-management/SKILL.md) → *Reproductions* is where each issue records it. `db_sl` is per-worktree and cheap |
 | **Uncommitted work is invisible** | `git log` and `git diff main...<branch>` do not show it — check what is in flight per [`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md) → *Isolate* |
 
 A repro that is *hostile* rather than merely hungry — `pg_terminate_backend`, a server restart, a

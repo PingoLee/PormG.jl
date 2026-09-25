@@ -85,8 +85,8 @@ _rt_schema(models...) = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
     for m in models)
 
 # Run the planner with scripted answers on stdin — the rename is only ever PROPOSED interactively.
-# EOF answers "no", which takes the drop-and-create path and fails the assertions loudly rather than
-# hanging.
+# Running out of answers raises `InvalidMigrationError` at the next question (#726), so a script that
+# is one answer short fails loudly rather than hanging or planning something else.
 function _rt_plan(live, current_schema, conn, answers::String)
     path, io = mktemp(); write(io, answers); close(io)
     return open(path) do stdin_file
@@ -254,6 +254,83 @@ end
         @test plan[:new_t]["Rename table"] == "ALTER TABLE \"gone_e_t\" RENAME TO \"new_t\";"
         @test !haskey(plan, :gone_e_t)
         @test count(k -> haskey(plan[k], "Drop table"), collect(keys(plan))) == 7
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # The table question takes a number, and raises on anything it does not recognise (#726)
+    # It was an `if yes / elseif no` with no `else`, so every other answer — EOF, an empty line, a typo,
+    # or the candidate's number typed straight away — recorded no decision at all. The plan kept the old
+    # table's DROP TABLE and lost the new model's CREATE TABLE. The number is now an answer in its own
+    # right; anything else raises, and at EOF the message names the non-interactive spelling.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "the table question accepts a number and raises on anything else (#726)" begin
+        declared = Models.Model("new_t"; id = Models.IDField(), n = Models.IntegerField())
+        livem    = Models.Model("old_t"; id = Models.IDField(), n = Models.IntegerField())
+        plan_for(answers) = _rt_plan(PormGModel[livem], _rt_schema(declared), RT_PG, answers)
+
+        # The number at the first question is a rename, the same plan as "no" then the number.
+        for answers in ("1\n", "no\n1\n")
+            plan = plan_for(answers)
+            @test plan[:new_t]["Rename table"] == "ALTER TABLE \"old_t\" RENAME TO \"new_t\";"
+            @test !haskey(plan, :old_t)
+        end
+
+        # EOF, at either question: there is nothing to read, and the message says how to run without one.
+        for answers in ("", "no\n")
+            err = try plan_for(answers); nothing catch e; e end
+            @test err isa PormG.InvalidMigrationError
+            @test err !== nothing && occursin("interactive = false", err.msg)
+        end
+
+        # Everything else raises instead of planning a DROP with no CREATE — out-of-range numbers too.
+        for answers in ("\n", "maybe\n", "2\n", "0\n", "no\n\n", "no\nmaybe\n", "no\n2\n")
+            @test_throws PormG.InvalidMigrationError plan_for(answers)
+        end
+        # An empty LINE is an answer, not end of input: it is rejected as an invalid choice, and the
+        # message does not send a user at a terminal off to `interactive = false`.
+        err = try plan_for("\n"); nothing catch e; e end
+        @test err isa PormG.InvalidMigrationError
+        @test err !== nothing && occursin("Invalid choice", err.msg) && !occursin("interactive = false", err.msg)
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # A model with no candidate left is a new table, and is not asked (#726)
+    # Two new models, one vanished table: once the first claims it, the second has nothing to be
+    # renamed from. It used to be asked anyway, and at EOF it fell through the same missing `else` and
+    # vanished from the plan. Which of the two is asked first follows `Dict` order, so the assertions
+    # hold either way: one rename, one CREATE, and no DROP.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "a model with every candidate claimed is not asked (#726)" begin
+        first_m  = Models.Model("new_a_t"; id = Models.IDField(), n = Models.IntegerField())
+        second_m = Models.Model("new_b_t"; id = Models.IDField(), n = Models.IntegerField())
+        livem    = Models.Model("old_t"; id = Models.IDField(), n = Models.IntegerField())
+        plan = _rt_plan(PormGModel[livem], _rt_schema(first_m, second_m), RT_PG, "1\n")
+        renamed = [k for k in (:new_a_t, :new_b_t) if haskey(plan, k) && haskey(plan[k], "Rename table")]
+        created = [k for k in (:new_a_t, :new_b_t) if haskey(plan, k) && haskey(plan[k], "New model")]
+        @test length(renamed) == 1
+        @test length(created) == 1
+        @test !haskey(plan, :old_t)
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # The field question at EOF names the non-interactive spelling too (#726)
+    # It already raised on EOF — as "Invalid choice """, which does not say what went wrong. Both
+    # questions now read through one helper, so they cannot diverge again.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "the field question at EOF names interactive = false (#726)" begin
+        declared = Models.Model("tbl_t"; id = Models.IDField(), m = Models.IntegerField())
+        livem    = Models.Model("tbl_t"; id = Models.IDField(), n = Models.IntegerField())
+        err = try
+            _rt_plan(PormGModel[livem], _rt_schema(declared), RT_PG, "")
+            nothing
+        catch e
+            e
+        end
+        @test err isa PormG.InvalidMigrationError
+        @test err !== nothing && occursin("interactive = false", err.msg)
+        # And a real answer still renames.
+        plan = _rt_plan(PormGModel[livem], _rt_schema(declared), RT_PG, "1\n")
+        @test plan[:tbl_t]["Rename field: m"] == "ALTER TABLE \"tbl_t\" RENAME COLUMN \"n\" TO \"m\";"
     end
 
     # ─────────────────────────────────────────────────────────────────────────

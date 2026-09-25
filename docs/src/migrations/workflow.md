@@ -46,6 +46,18 @@ PormG.Migrations.makemigrations("db")
 ```
 This connects to the physical database, compares the live table schema against the registered in-memory `PormGModel` subclasses, and generates the transition plan in `db/migrations/pending_migrations.jl`.
 
+### Answering the rename questions
+
+A model whose table does not exist, next to a table no model claims any more, may be the same table under a new name, and only you know which. `makemigrations` asks:
+
+```text
+The table race_result has no match in the database. Is it a new table? Answer yes, or no / the number of the table it was renamed from: 1 - result:
+```
+
+Answer `yes` to create `race_result` and drop `result`, or `1` to plan `ALTER TABLE "result" RENAME TO "race_result"` and keep every row. `no` asks for the number on its own. A field with no matching column is asked the same way: its old column's number, or `no` for a new column.
+
+Any other answer — an empty line, a typo, a number that is not listed — raises `InvalidMigrationError` and writes nothing, so run `makemigrations` again. So does running out of input: see [Automation & CI/CD](#Automation-and-CI/CD) for running without a terminal.
+
 ---
 
 ## Step 3: Review Pending Migrations
@@ -163,4 +175,15 @@ catch e
     e isa PormG.Migrations.DestructiveMigrationError || rethrow()
     @warn "Destructive migration skipped; apply manually with destructive=true" exception=e
 end
+```
+
+`makemigrations()` is different: it does **not** detect a missing terminal. Its
+[rename questions](#Answering-the-rename-questions) read stdin whenever `interactive=true` (the default),
+so answers can be piped in. A script or CI job with nothing on stdin runs normally until a question comes
+up, then reaches end of input and raises `InvalidMigrationError` rather than guessing. Pass
+`interactive=false` there. It plans
+every unmatched model and field as new, so it **never renames**: a renamed table is planned as a drop and a
+create, which the destructive guard above then stops.
+```julia
+PormG.Migrations.makemigrations("my_db", interactive=false)
 ```

@@ -44,8 +44,8 @@ fetch(::RenameIdxMockPg556, sql::String; conn = nothing, params = nothing, ignor
     DataFrame()
 
 # Same argument order as the planner: LIVE models first, DECLARED ones in `current_schema`.
-# `answers` is fed on stdin — one line per interactive rename prompt. EOF would answer "no" and take
-# the add-a-new-field path, which fails the assertions loudly rather than hanging.
+# `answers` is fed on stdin — one line per interactive rename prompt. Running out of answers raises
+# `InvalidMigrationError` at the next prompt (#726), so a short script fails loudly, never hangs.
 function _rit_plan(conn, livem::PormGModel, declared::PormGModel; answers::String = "1\n")
     settings = PormG.Configuration.Settings()
     settings.change_db = true

@@ -27,6 +27,7 @@ using PormG
 # `runtests.jl` loads it for the whole suite; this guard is what makes the file runnable alone.
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 import PormG: Configuration, Migrations
+import OrderedCollections: OrderedDict
 import PormG.ConnectionPool: fetch, close_pool!, SQLiteConnectionPool
 import PormG.Migrations: _split_sqlite_statements, _sqlite_unmodellable_table_clauses
 
@@ -338,6 +339,34 @@ end
         @test _rd729_count(pool, "result_v") == 1
         _rd729_plan!(pool, settings, models)
         @test !isfile(_rd729_pending(settings))
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The rebuild pass never leaves a step bare
+# Every producer of "Alter table:" registers the BARE rebuild, and the pass wraps it. A step with no
+# context entry — none exists today, since every producer runs inside `_alter_table_fields` — must
+# still be wrapped: a bare rebuild drops the table's indexes and skips the foreign-key gate silently.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a rebuild step with no recorded context is still wrapped (#729)" begin
+    mktempdir() do dir
+        pool = SQLiteConnectionPool(joinpath(dir, "bare729.sqlite"); pool_size = 1)
+        try
+            model = PormG.Models.Model("lap_time"; id = PormG.Models.IDField(),
+                                       ms = PormG.Models.IntegerField(null = true))
+            fetch(pool, """CREATE TABLE "lap_time" ("id" INTEGER PRIMARY KEY AUTOINCREMENT, "ms" INTEGER NOT NULL);""")
+            fetch(pool, """CREATE INDEX "lap_time_ms_idx" ON "lap_time" ("ms");""")
+            plan = OrderedDict{Symbol, OrderedDict{String, String}}(
+                :lap_time => OrderedDict("Alter table: lap_time" => PormG.Dialect.rebuild_table(pool, model)))
+            schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+                :lap_time => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => model, :exist => true))
+            Migrations._finalize_sqlite_rebuilds!(pool, plan, schema, Dict{Symbol, Tuple{Symbol, Dict{String, String}}}())
+            step = plan[:lap_time]["Alter table: lap_time"]
+            @test occursin("CREATE INDEX \"lap_time_ms_idx\"", step)
+            @test endswith(step, "PRAGMA foreign_key_check(\"lap_time\");")
+        finally
+            close_pool!(pool)
+        end
     end
 end
 

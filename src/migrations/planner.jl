@@ -128,8 +128,10 @@ got wrong:
     order they run in irrelevant.
 
 `rebuild_context` maps each table `_alter_table_fields` diffed to `(catalog name, rename map)`; the
-map is the same object the producers filled. A step that is present with no context entry is left
-as registered. PostgreSQL has no rebuild, so this returns at once.
+map is the same object the producers filled. Every producer runs inside `_alter_table_fields`, so
+every step has an entry; one that does not is still rendered — under its own name, with no renames —
+because a step left bare would drop the table's indexes and skip the foreign-key gate in silence.
+PostgreSQL has no rebuild, so this returns at once.
 
 Raises `InvalidMigrationError` — at plan time, so `makemigrations` writes no plan — when a trigger or
 view would be re-created stale; see `_sqlite_recreated_ddl` for exactly when. Logs one warning per
@@ -143,9 +145,11 @@ function _finalize_sqlite_rebuilds!(conn, migration_plan::OrderedDict{Symbol, Or
                                     table_renames::Dict{String, String} = Dict{String, String}(),
                                     dropped_tables::Set{String} = Set{String}())::Nothing
   conn isa PormGSQLite || return nothing
-  rebuilt = Symbol[t for (t, steps) in migration_plan
-                   if haskey(steps, "Alter table: $t") && haskey(rebuild_context, t)]
+  rebuilt = Symbol[t for (t, steps) in migration_plan if haskey(steps, "Alter table: $t")]
   isempty(rebuilt) && return nothing
+  for t in rebuilt
+    haskey(rebuild_context, t) || (rebuild_context[t] = (t, Dict{String, String}()))
+  end
   objects = _sqlite_schema_objects(conn)
   # No view or trigger anywhere: nothing to carry, so no further catalog reads.
   ctx = isempty(objects) ? nothing :

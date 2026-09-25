@@ -41,7 +41,8 @@ PormG.config["srcoll712_pg"] = PormG.Configuration.Settings(connections = SrColl
 PormG.config["srcoll712_sl"] = PormG.Configuration.Settings(connections = SrCollMockSl(), change_data = true)
 
 # A trimmed F1 drivers table: `driverref` is the unique lookup key, `forename`/`surname` are the
-# text-like columns under test, and `nicknames` is a JSONField that legitimately takes a vector.
+# text-like columns under test, `nicknames` is a JSONField that legitimately takes a vector, and
+# `code` (F1's three-letter driver code) carries a max_length for a validation-only failure.
 srcoll712_driver(key) = begin
     m = Model("srcoll712_driver",
         id        = IDField(),
@@ -49,6 +50,7 @@ srcoll712_driver(key) = begin
         forename  = CharField(null = true),
         surname   = TextField(null = true),
         nicknames = JSONField(null = true),
+        code      = CharField(max_length = 3, null = true),
     )
     m.connect_key = key
     m
@@ -236,30 +238,37 @@ end
             r = lookup(m, ["driverref"], Dict{String,Any}("driverref" => "senna")).list(show_query = :dict)
             @test r[:parameters] == Any["senna"]
             srcoll712_check(srcoll712_refusal(() -> m.objects.get_or_create("forename" => [1.5, 2.5])), "forename")
-            # The EXECUTING call goes through `_get_or_create_lookup` too. On a mock it cannot finish
-            # (there is no pool to acquire), but it must get past the hit read's `filter()`: before
-            # #717 it stopped there with `FilterError` ("... but no operator").
-            err = srcoll712_refusal(() -> m.objects.get_or_create("nicknames" => ["Magic", "Beco"],
-                                                                  defaults = ["driverref" => "senna"]))
-            @test !(err isa PormG.FilterError)
-            @test !occursin("no operator", err === nothing ? "" : sprint(showerror, err))
         end
+        # The EXECUTING call goes through `_get_or_create_lookup` too. On a mock it cannot finish
+        # (there is no pool to acquire), but it must get past the hit read's `filter()`: before #717
+        # it stopped there with `FilterError` ("... but no operator"). PostgreSQL mock only — the
+        # SQLite path takes its write lock BEFORE the read, so on a mock it dies there either way and
+        # the assertion could not fail. The wiring is backend-independent.
+        err = srcoll712_refusal(() -> SRCOLL712_MODELS[1].objects.get_or_create("nicknames" => ["Magic", "Beco"],
+                                                                                defaults = ["driverref" => "senna"]))
+        @test !(err isa PormG.FilterError)
+        @test !occursin("no operator", err === nothing ? "" : sprint(showerror, err))
     end
 
     # ─────────────────────────────────────────────────────────────────────────────
     # The bulk writers' error-context pass keeps reporting the row's REAL error (#716 review).
     # `_depuration_values_bulk_insert` walks every cell after any failure in the row and throws on
     # the first it rejects. The collection check lives in its `catch`, so a collection the text
-    # formatter maps without throwing (`["A", "B"]`) cannot pre-empt a later field's genuine error —
-    # here an invalid JSON string, which `create` reports for the same row.
+    # formatter maps without throwing (`["A", "B"]`) cannot pre-empt another field's genuine error.
+    # Both routes are pinned: a field whose FORMATTER throws (an invalid JSON string, found by the
+    # pass itself) and a field that fails VALIDATION (max_length, which the pass finds nothing for,
+    # so the caller rethrows it) — each the error `create` reports for the same row.
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "bulk error context names the failing field, not a formattable collection" begin
-        df = DataFrames.DataFrame(driverref = ["senna"], forename = [["Ayrton", "Senna"]], nicknames = ["{not json"])
-        for m in SRCOLL712_MODELS
+        formatter_df  = DataFrames.DataFrame(driverref = ["senna"], forename = [["Ayrton", "Senna"]],
+                                             nicknames = ["{not json"])
+        validation_df = DataFrames.DataFrame(driverref = ["senna"], forename = [["Ayrton", "Senna"]],
+                                             code = ["SENNA"])
+        for m in SRCOLL712_MODELS, (df, field) in ((formatter_df, "nicknames"), (validation_df, "code"))
             err = srcoll712_refusal(() -> bulk_insert(m.objects, df, show_query = :dict))
             @test err isa PormG.InvalidValueError
             msg = err === nothing ? "" : sprint(showerror, err)
-            @test occursin("nicknames", msg)
+            @test occursin(field, msg)
             @test !occursin("single value", msg)
         end
     end

@@ -70,7 +70,7 @@ Each migration record contains:
 - **sql_content**: The full SQL that was applied
 - **applied_at**: Timestamp of when the migration was applied
 - **status**: One of `applied`, `failed`
-- **is_destructive**: Whether the migration contained DROP operations
+- **is_destructive**: Whether the migration contained destructive operations: a `DROP`, a `TRUNCATE`, or a `DELETE` with no `WHERE` (see [Destructive Operations Safety](workflow.md#Destructive-Operations-Safety))
 - **format_version**: The frozen migration-format contract version (see [Migration Format Stability](stability.md))
 
 Filesystem archives (`applied_migrations/`) remain useful for version control and review, but the history table is authoritative.

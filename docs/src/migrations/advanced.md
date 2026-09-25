@@ -17,6 +17,13 @@ custom_entries = OrderedDict{String, String}(
 !!! warning "Manual Editing"
     Always keep the `OrderedDict` structure. PormG will compute checksums for your custom entries and record them in the history table.
 
+!!! warning "Hand-added SQL goes through the destructive guard"
+    The guard checks your entries the same way it checks generated ones. A hand-added `DROP VIEW`,
+    `DROP SCHEMA`, `TRUNCATE`, or `DELETE` with no `WHERE` makes the plan destructive: `dry_run()`
+    lists it, and `migrate()` refuses it until you pass `destructive = true`. The full list is under
+    [Destructive Operations Safety](workflow.md#Destructive-Operations-Safety). The `UPDATE … WHERE`
+    above is not destructive, and an `UPDATE` without `WHERE` is not flagged either.
+
 ---
 
 ## Repair Operations

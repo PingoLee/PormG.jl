@@ -1998,6 +1998,11 @@ than the old wart rather than better: since #507 phase 2 an empty delta means "t
 change, plan nothing", which is the opposite of what that call site is asking for.
 
 The emitted SQL is identical either way — this function IS the body `alter_field` used to hold.
+
+This is the BARE rebuild. What its `DROP TABLE` takes along and its `RENAME` trips over — the
+secondary indexes (#82), the triggers on the table, and the views and other tables' triggers that
+name it (#729) — is put back around it by the migration planner, which renders every rebuild once
+the whole plan is known (`Migrations._finalize_sqlite_rebuilds!`).
 """
 function rebuild_table(conn::PormGSQLite, model::PormGModel)
   # SQLite implementation using table recreation.

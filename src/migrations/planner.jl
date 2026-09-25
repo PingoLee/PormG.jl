@@ -132,7 +132,9 @@ map is the same object the producers filled. A step that is present with no cont
 as registered. PostgreSQL has no rebuild, so this returns at once.
 
 Raises `InvalidMigrationError` — at plan time, so `makemigrations` writes no plan — when a trigger or
-view would be re-created stale; see `_sqlite_recreated_ddl` for exactly when.
+view would be re-created stale; see `_sqlite_recreated_ddl` for exactly when. Logs one warning per
+rebuilt table that carries clauses the rebuild drops because no model can declare them
+(`_sqlite_unmodellable_table_clauses`).
 """
 function _finalize_sqlite_rebuilds!(conn, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
                                     current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
@@ -162,6 +164,15 @@ function _finalize_sqlite_rebuilds!(conn, migration_plan::OrderedDict{Symbol, Or
       after = String[get!(() -> _sqlite_recreated_ddl(o, ctx; rebuilt_table = string(t)), recreated, o.name)
                      for o in sort!(vcat(on_table, dependents); by = o -> o.rowid)]
     end
+    # What the rebuild re-renders away because no model declaration can hold it — a hand-written
+    # CHECK, a COLLATE, a composite or DEFERRABLE key, STRICT… Said once per table, since this pass
+    # renders each rebuild exactly once. Structured kwargs and no `maxlog`, like the #519 index
+    # warning: the call site is bounded by the number of rebuilt tables.
+    clauses = _sqlite_unmodellable_table_clauses(conn, string(catalog))
+    isempty(clauses) ||
+      @warn "SQLite table rebuild will DROP clauses no model declaration can express: the table is " *
+            "re-created from its model, which cannot hold them. Re-create them by hand after the " *
+            "migration if you still need them." table = string(t) clauses = clauses
     # In place: an existing key keeps its position, which the producers chose (after every ADD and
     # RENAME COLUMN on the table).
     migration_plan[t][key] = _sqlite_rebuild_preserving_indexes(conn, string(model_table_name(model)),

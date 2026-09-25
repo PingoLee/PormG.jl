@@ -323,6 +323,24 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
 
     A `pending_migrations.jl` written by an earlier `makemigrations` is left as it was when this one fails.
 
+!!! warning "Clauses no model can declare do not survive a rebuild"
+    The rebuilt table is rendered from your model, so whatever its `CREATE TABLE` carries that no field or model option expresses is gone afterwards:
+
+    - a hand-written `CHECK`, on a column or on the table — PormG's own `>= 0` and byte-length checks are modelled, and kept;
+    - a column `COLLATE`, a generated column, or an `ON CONFLICT` clause;
+    - a composite `FOREIGN KEY`, and a key's `ON UPDATE`, `DEFERRABLE` or `MATCH`. A SQLite database created by Django declares every key `DEFERRABLE INITIALLY DEFERRED`, so an imported schema reports it;
+    - the table options `STRICT` and `WITHOUT ROWID`.
+
+    `makemigrations` logs one warning per rebuilt table, quoting each such clause, so none is dropped silently. Re-apply by hand after the migration whatever you still need; a table option can only come back by rebuilding the table yourself.
+
+    ```
+    ┌ Warning: SQLite table rebuild will DROP clauses no model declaration can express: the table is
+    │ re-created from its model, which cannot hold them. Re-create them by hand after the migration if
+    │ you still need them.
+    │   table = "result"
+    │   clauses = 1-element Vector{String}: …
+    ```
+
 !!! warning "Dropping a primary key: PostgreSQL vs SQLite"
     Removing a column that is the table's **only** primary key diverges by backend. PostgreSQL's `DROP COLUMN` drops the column and its `PRIMARY KEY` constraint natively, leaving a table with no primary key. SQLite cannot express that without silently degrading the table to a rowid table, so PormG **fails `makemigrations` loudly** instead — declare a replacement primary key, or make the change manually. Dropping a primary-key column while the model still declares a primary key (the key moved to another column) rebuilds normally on both backends.
 

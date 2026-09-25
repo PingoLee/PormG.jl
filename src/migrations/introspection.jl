@@ -3088,6 +3088,185 @@ end
 _sqlite_drop_object_sql(o::_SQLiteSchemaObject)::String =
   "DROP $(uppercase(o.type)) IF EXISTS \"$(replace(o.name, '"' => "\"\""))\";"
 
+# ==============================================================================
+# Clauses a SQLite table rebuild re-renders away (#729)
+# ==============================================================================
+
+# `CREATE TABLE`'s column definitions and table constraints, split at its top-level commas, and the
+# text after the closing parenthesis (the table options). Literals, quoted identifiers and comments
+# are skipped with the statement splitter's lexical rules, so a `,` or `)` inside one splits nothing.
+# A definition with no parenthesised body — malformed, or `CREATE TABLE … AS SELECT` — yields none.
+function _sqlite_table_definition_parts(sql::AbstractString)::Tuple{Vector{String}, String}
+  cs = collect(sql)
+  n = length(cs)
+  i = 1
+  while i <= n
+    j = _sqlite_lex_skip(cs, i)
+    if j != i
+      i = j
+    elseif cs[i] == '('
+      break
+    else
+      i += 1
+    end
+  end
+  i > n && return String[], ""
+  parts = String[]
+  depth = 0
+  start = i + 1
+  i += 1
+  while i <= n
+    j = _sqlite_lex_skip(cs, i)
+    if j != i
+      i = j
+      continue
+    end
+    c = cs[i]
+    if c == '('
+      depth += 1
+    elseif c == ')' && depth > 0
+      depth -= 1
+    elseif c == ')'
+      push!(parts, strip(String(cs[start:i - 1])))
+      return filter!(!isempty, parts), String(cs[i + 1:n])
+    elseif c == ',' && depth == 0
+      push!(parts, strip(String(cs[start:i - 1])))
+      start = i + 1
+    end
+    i += 1
+  end
+  return String[], ""
+end
+
+# `s` with every parenthesised group blanked to spaces, so the tokens left are the ones at the top
+# level of a column definition or table constraint — `COLLATE` in `"a" TEXT COLLATE NOCASE`, but not
+# the one inside `CHECK (a COLLATE NOCASE = 'x')`.
+function _sqlite_blank_parens(s::AbstractString)::String
+  cs = collect(s)
+  out = copy(cs)
+  depth = 0
+  i = 1
+  while i <= length(cs)
+    j = _sqlite_lex_skip(cs, i)
+    if j != i
+      depth > 0 && (out[i:j - 1] .= ' ')
+      i = j
+      continue
+    end
+    c = cs[i]
+    if c == '('
+      depth += 1
+    elseif c == ')'
+      depth = max(depth - 1, 0)
+      out[i] = ' '
+    end
+    depth > 0 && (out[i] = ' ')
+    i += 1
+  end
+  return String(out)
+end
+
+# `s` from byte `from` through the parenthesised group that follows it — a whole `CHECK ( … )` as
+# written. The rest of `s` when the group never closes.
+function _sqlite_clause_through_parens(s::AbstractString, from::Int)::String
+  rest = collect(SubString(s, from))
+  depth = 0
+  i = 1
+  while i <= length(rest)
+    j = _sqlite_lex_skip(rest, i)
+    if j != i
+      i = j
+      continue
+    end
+    if rest[i] == '('
+      depth += 1
+    elseif rest[i] == ')'
+      depth -= 1
+      depth == 0 && return String(rest[1:i])
+    end
+    i += 1
+  end
+  return String(rest)
+end
+
+# The two CHECK clauses PormG writes — `Dialect._non_negative_check_clause` and the SQLite arm of the
+# byte-length bound — whole, in any of SQLite's identifier spellings (the same four
+# `_sqlite_column_checks` reads them back in). A CHECK of either shape is a fact the column IR carries
+# (`ColumnSpec.checks`), so a rebuild that drops it does so because the plan says so, visibly.
+const _SQLITE_PORMG_CHECK_SHAPES = let ident = "(?:\"[^\"]+\"|\\[[^\\]]+\\]|`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)"
+  (Regex("^CHECK\\s*\\(\\s*" * ident * "\\s*>=\\s*0\\s*\\)\$", "i"),
+   Regex("^CHECK\\s*\\(\\s*length\\s*\\(\\s*" * ident * "\\s*\\)\\s*<=\\s*\\d+\\s*\\)\$", "i"))
+end
+
+"""
+    _sqlite_unmodellable_table_clauses(conn, table) -> Vector{String}
+
+What a rebuild of `table` would silently drop because no model declaration can express it: the
+rebuild renders the table from the model, so any clause the live `CREATE TABLE` carries beyond what
+PormG writes is gone afterwards. One entry per clause, each saying what it is and quoting it:
+
+  * a `CHECK`, at column or table level, that is not one of PormG's two shapes
+    (`_SQLITE_PORMG_CHECK_SHAPES`);
+  * a column `COLLATE`, a generated column, an `ON CONFLICT` clause;
+  * a composite `FOREIGN KEY`, and any key's `ON UPDATE`, `DEFERRABLE` / `INITIALLY` or `MATCH` —
+    PormG's SQLite keys are `REFERENCES "t"("c") ON DELETE …` and nothing more (a Django-created
+    SQLite key is `DEFERRABLE INITIALLY DEFERRED`, so an imported schema reports it);
+  * the table options `STRICT` and `WITHOUT ROWID`.
+
+Not reported: a table-level `UNIQUE (…)`, which the planner models (#161), and what PormG writes
+itself. Empty when the table has no stored definition. Read from `sqlite_master` with the name
+compared case-insensitively, as SQLite resolves it (#57).
+"""
+function _sqlite_unmodellable_table_clauses(conn::PormGSQLite, table::AbstractString)::Vector{String}
+  rows = fetch(conn, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE",
+               [String(table)]) |> DataFrame
+  (isempty(rows) || rows.sql[1] === missing) && return String[]
+  parts, tail = _sqlite_table_definition_parts(string(rows.sql[1]))
+  found = String[]
+  for part in parts
+    toks = _sqlite_identifier_tokens(part)
+    isempty(toks) && continue
+    lead = toks[1].quoted ? "" : uppercase(toks[1].name)
+    is_column = !(lead in ("CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK", "FOREIGN"))
+    # The keywords outside any parentheses. A column definition's first token is its NAME, quoted or
+    # not, and a name may be spelled like any keyword below, so it is left out by position.
+    top = _sqlite_identifier_tokens(_sqlite_blank_parens(part))
+    words = String[uppercase(t.name) for t in top[(is_column ? 2 : 1):end] if !t.quoted]
+    # Every CHECK, wherever it sits; PormG's own two shapes are facts the plan already carries.
+    for t in toks
+      (!t.quoted && uppercase(t.name) == "CHECK") || continue
+      clause = _sqlite_clause_through_parens(part, t.start)
+      any(re -> occursin(re, clause), _SQLITE_PORMG_CHECK_SHAPES) ||
+        push!(found, (is_column ? "column CHECK on \"$(toks[1].name)\": " : "table CHECK: ") * clause)
+    end
+    if is_column
+      "COLLATE" in words && push!(found, "COLLATE: $part")
+      # A top-level AS in a column definition is only ever `[GENERATED ALWAYS] AS (…)`.
+      ("AS" in words || "GENERATED" in words) && push!(found, "generated column: $part")
+    else
+      if "FOREIGN" in words
+        key = findfirst(t -> !t.quoted && uppercase(t.name) == "KEY", toks)
+        if key !== nothing
+          local_cols = _sqlite_identifier_tokens(_sqlite_clause_through_parens(part, toks[key].stop + 1))
+          length(local_cols) > 1 && push!(found, "composite FOREIGN KEY: $part")
+        end
+      end
+    end
+    "CONFLICT" in words && push!(found, "ON CONFLICT: $part")
+    refs = findfirst(==("REFERENCES"), words)
+    if refs !== nothing
+      after = words[refs + 1:end]
+      update = any(k -> after[k] == "ON" && k < length(after) && after[k + 1] == "UPDATE", eachindex(after))
+      (update || any(in(("DEFERRABLE", "INITIALLY", "MATCH")), after)) &&
+        push!(found, "foreign-key ON UPDATE / DEFERRABLE / MATCH: $part")
+    end
+  end
+  options = [uppercase(t.name) for t in _sqlite_identifier_tokens(tail) if !t.quoted]
+  "STRICT" in options && push!(found, "table option: STRICT")
+  "WITHOUT" in options && push!(found, "table option: WITHOUT ROWID")
+  return found
+end
+
 # `table_name::String` — NOT Symbol. This was the odd one out of the four `get_constraints_*`
 # helpers, and since `alter_field`'s model-based overload always resolves the table to
 # `model.name |> lowercase` (a String), a Symbol signature could never be dispatched to (#283).

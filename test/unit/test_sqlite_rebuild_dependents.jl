@@ -28,7 +28,7 @@ using PormG
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 import PormG: Configuration, Migrations
 import PormG.ConnectionPool: fetch, close_pool!, SQLiteConnectionPool
-import PormG.Migrations: _split_sqlite_statements
+import PormG.Migrations: _split_sqlite_statements, _sqlite_unmodellable_table_clauses
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Harness for the end-to-end testsets
@@ -522,5 +522,100 @@ end
                 @test !isfile(_rd729_pending(settings))
             end
         end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Clauses the rebuild re-renders away: each shape is recognised
+# The rebuild renders the table from its model, so a clause the live CREATE TABLE carries beyond what
+# PormG writes is gone afterwards. One table carries every shape; PormG's own `>= 0` CHECK on `points`
+# sits among them and must NOT be reported, since the plan carries that one as a column fact.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "every clause shape a rebuild drops is reported, and PormG's own are not (#729)" begin
+    mktempdir() do dir
+        pool = SQLiteConnectionPool(joinpath(dir, "clauses729.sqlite"); pool_size = 1)
+        try
+            fetch(pool, """CREATE TABLE "result" (
+                "id" INTEGER PRIMARY KEY,
+                "grid" INTEGER CHECK ("grid" BETWEEN 0 AND 30),
+                "points" INTEGER NOT NULL CHECK ("points" >= 0),
+                "code" TEXT COLLATE NOCASE,
+                "label" TEXT GENERATED ALWAYS AS ('P' || "grid") VIRTUAL,
+                "driverid" INTEGER REFERENCES "driver"("id") ON UPDATE CASCADE,
+                "raceid" INTEGER REFERENCES "race"("id") DEFERRABLE INITIALLY DEFERRED,
+                "a" INTEGER, "b" INTEGER,
+                "note" TEXT NOT NULL ON CONFLICT REPLACE DEFAULT '',
+                CONSTRAINT "grid_vs_points" CHECK ("grid" <= "points" + 30),
+                FOREIGN KEY ("a", "b") REFERENCES "pair"("x", "y")
+            ) STRICT;""")
+            found = _sqlite_unmodellable_table_clauses(pool, "result")
+            @test found == [
+                "column CHECK on \"grid\": CHECK (\"grid\" BETWEEN 0 AND 30)",
+                "COLLATE: \"code\" TEXT COLLATE NOCASE",
+                "generated column: \"label\" TEXT GENERATED ALWAYS AS ('P' || \"grid\") VIRTUAL",
+                "foreign-key ON UPDATE / DEFERRABLE / MATCH: \"driverid\" INTEGER REFERENCES \"driver\"(\"id\") ON UPDATE CASCADE",
+                "foreign-key ON UPDATE / DEFERRABLE / MATCH: \"raceid\" INTEGER REFERENCES \"race\"(\"id\") DEFERRABLE INITIALLY DEFERRED",
+                "ON CONFLICT: \"note\" TEXT NOT NULL ON CONFLICT REPLACE DEFAULT ''",
+                "table CHECK: CHECK (\"grid\" <= \"points\" + 30)",
+                "composite FOREIGN KEY: FOREIGN KEY (\"a\", \"b\") REFERENCES \"pair\"(\"x\", \"y\")",
+                "table option: STRICT",
+            ]
+            # The table name is resolved as SQLite resolves it, case-insensitively (#57).
+            @test _sqlite_unmodellable_table_clauses(pool, "RESULT") == found
+
+            fetch(pool, """CREATE TABLE "lap" ("id" INTEGER PRIMARY KEY, "ms" INTEGER) WITHOUT ROWID;""")
+            @test _sqlite_unmodellable_table_clauses(pool, "lap") == ["table option: WITHOUT ROWID"]
+            # A keyword-named column is a name, not the keyword: `"collate"` reports nothing.
+            fetch(pool, """CREATE TABLE "odd" ("id" INTEGER PRIMARY KEY, "collate" TEXT, "as" INTEGER);""")
+            @test isempty(_sqlite_unmodellable_table_clauses(pool, "odd"))
+        finally
+            close_pool!(pool)
+        end
+    end
+
+    # A table PormG created — its own CHECKs (non-negative, byte length) and a foreign key — reports
+    # nothing, so an ordinary rebuild never warns.
+    _rd729_project() do pool, settings, models
+        _rd729_start!(pool, settings, models, _rd729_schema(
+            result = "points = Models.PositiveIntegerField(), grid = Models.IntegerField(null = true), " *
+                     "driverid = Models.ForeignKey(\"Driver\"), photo = Models.BinaryField(max_length = 16, null = true)"))
+        definition = String(only(_rd729_rows(pool, "SELECT sql FROM sqlite_master WHERE name = 'result'").sql))
+        # The shapes really are there, so "nothing reported" is not vacuous.
+        @test occursin(">= 0)", definition) && occursin("length(", definition) && occursin("REFERENCES", definition)
+        @test isempty(_sqlite_unmodellable_table_clauses(pool, "result"))
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Clauses the rebuild re-renders away: one warning, from makemigrations
+# A hand-added column CHECK the model cannot declare: the rebuild drops it, and makemigrations says so
+# ONCE, naming the table and quoting the clause — then the migration really does drop it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "makemigrations warns once about a clause the rebuild drops (#729)" begin
+    with_lap = "points = Models.IntegerField(), grid = Models.IntegerField(null = true), fastest_lap = Models.IntegerField(null = true)"
+    _rd729_project() do pool, settings, models
+        _rd729_start!(pool, settings, models, _rd729_schema(result = replace(with_lap, ", fastest_lap = Models.IntegerField(null = true)" => "")))
+        # Added by hand, with a CHECK no field declaration expresses; declared plainly in the model, so
+        # this column itself converges and only the nullability change below plans anything.
+        fetch(pool, """ALTER TABLE "result" ADD COLUMN "fastest_lap" INTEGER NULL CHECK ("fastest_lap" > 0);""")
+        _rd729_models(models, _rd729_schema(result = with_lap))
+        _rd729_plan!(pool, settings, models)
+        @test !isfile(_rd729_pending(settings))
+
+        _rd729_models(models, _rd729_schema(result = replace(with_lap, "points = Models.IntegerField()" => "points = Models.IntegerField(null = true)")))
+        records, _ = Test.collect_test_logs() do
+            redirect_stdout(devnull) do
+                Migrations.makemigrations(pool, settings; path = models, interactive = false)
+            end
+        end
+        warns = [r for r in records if r.level == Logging.Warn && haskey(r.kwargs, :clauses)]
+        @test length(warns) == 1
+        @test warns[1].kwargs[:table] == "result"
+        @test warns[1].kwargs[:clauses] == ["column CHECK on \"fastest_lap\": CHECK (\"fastest_lap\" > 0)"]
+
+        # The warning is true: after the rebuild the CHECK is gone and a value it refused goes in.
+        _rd729_migrate!(pool, settings)
+        fetch(pool, """INSERT INTO "result" ("id", "points", "fastest_lap") VALUES (1, 0, -1);""")
+        @test only(_rd729_rows(pool, """SELECT "fastest_lap" FROM "result" """).fastest_lap) == -1
     end
 end

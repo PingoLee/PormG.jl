@@ -1227,25 +1227,24 @@ function _resolve_table_fields(
       # `field_name` here is the physical column; pass the real field key so _add_new_field's
       # model.fields lookup resolves (the DDL re-derives the db_column from the field) (#50).
       _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings), column_renames = sqlite_rename_map, catalog_table = catalog_table)
-    else       
-      response = "no"
+    else
+      # Only the answer is parsed inside the reader; the rename work below propagates its own
+      # failures as themselves (#197).
+      old_field_sym::Union{Symbol, Nothing} = nothing
       if interactive
-        print(_emsg("Is the field \"\e[4m\e[31m$field_name\e[0m\" from table \"\e[4m\e[34m$model_name\e[0m\" the same as one of the following fields: \e[4m\e[33m$list_to_question\e[0m? If yes, please enter the corresponding number; otherwise, type 'no':"))
-        response = readline()
-        response = strip(lowercase(response))
+        old_field_sym = _read_rename_answer(
+            _emsg("Is the field \"\e[4m\e[31m$field_name\e[0m\" from table \"\e[4m\e[34m$model_name\e[0m\" the same as one of the following fields: \e[4m\e[33m$list_to_question\e[0m? If yes, please enter the corresponding number; otherwise, type 'no':"),
+            "one of the listed numbers, or 'no'") do response
+          response in ("no", "n") && return (:new, nothing)
+          old = _numbered_choice(response, colect_numbered)
+          return old === nothing ? nothing : (:rename, old)
+        end |> last
       end
-      
-      if response in ["no", "n"]
+
+      if old_field_sym === nothing
         # `field_name` is the physical column; pass the real field key (see above) (#50).
         _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings), column_renames = sqlite_rename_map, catalog_table = catalog_table)
       else
-        old_field_sym::Union{Symbol,Nothing} = nothing
-        try
-          response_idx = parse(Int, response)
-          old_field_sym = colect_numbered[response_idx]          
-        catch e
-          throw(InvalidMigrationError("Invalid choice \"$(response)\" — enter one of the listed option numbers; please try makemigrations again"))
-        end
         old_field_name = old_field_sym |> string
         new_field = current_model.fields[current_fields_map[field_name]]
         old_spec = live.columns[model_fields_map[old_field_name]]
@@ -1487,6 +1486,60 @@ function _colect_numbered_fields(colect::Vector{Symbol})
   end
   return colect_numbered, join([string(index, " - ", colect_numbered[index]) for index in sort(collect(keys(colect_numbered)))], ", ")
 end
+
+# The one reader for every rename question `makemigrations` asks (#726). `parse_answer` maps the
+# normalised answer to a decision, or to `nothing` when it does not recognise it — and an
+# unrecognised answer RAISES, so no question can fall through without recording a decision. The table
+# question used to be an `if yes / elseif no` with no `else`: every other answer, the candidate's
+# number included, recorded nothing, and the plan kept the old table's DROP TABLE while losing the
+# new model's CREATE TABLE.
+#
+# End of input is `readline(keep = true)` returning "" — an empty LINE comes back as "\n", so the two
+# stay distinct. It raises rather than guessing an answer. That is what a script or CI job without a
+# terminal hits, and there is no `stdin isa Base.TTY` gate the way `migrate` has one, because scripted
+# answers arrive through exactly that kind of stdin: a gate would refuse them too.
+function _read_rename_answer(parse_answer::Function, question::AbstractString, expected::AbstractString)
+  print(question)
+  line = readline(stdin; keep = true)
+  isempty(line) && throw(InvalidMigrationError(
+    "makemigrations reached the end of input at a rename question, so there is no answer to read. " *
+    "Run it at a terminal, or pass `interactive = false` to plan every unmatched model and field as " *
+    "new (nothing is renamed)."))
+  response = strip(lowercase(line))
+  answer = parse_answer(response)
+  answer === nothing && throw(InvalidMigrationError(
+    "Invalid choice \"$(response)\" — answer $(expected); please try makemigrations again"))
+  return answer
+end
+
+# The candidate a typed number names, or `nothing` — a non-number and an unlisted number alike.
+_numbered_choice(response::AbstractString, numbered::AbstractDict{Int64, Symbol}) =
+  (n = tryparse(Int64, response); n === nothing ? nothing : get(numbered, n, nothing))
+
+# The table-rename question (#726), asked only when `candidates` — the vanished tables no earlier
+# answer has claimed, numbered in live-catalog order (#615) — is not empty. `yes` is a new table and
+# the number of a candidate is a rename, directly. `no` asks for that number on its own: that is the
+# two-step answer (`no`, then `<n>`) which scripts and the tests already feed, and it keeps its
+# meaning. Returns the old table's name, or `nothing` for a new table.
+function _ask_table_rename(model_name::Symbol, candidates::AbstractDict{Int64, Symbol})::Union{Symbol, Nothing}
+  list_to_question = join([string(index, " - ", candidates[index]) for index in sort(collect(keys(candidates)))], ", ")
+  kind, old = _read_rename_answer(
+      "The table $model_name has no match in the database. Is it a new table? Answer yes, or no / the number of the table it was renamed from: $list_to_question: ",
+      "yes, no, or one of the listed numbers") do response
+    response in ("yes", "y") && return (:new, nothing)
+    response in ("no", "n") && return (:ask, nothing)
+    old = _numbered_choice(response, candidates)
+    return old === nothing ? nothing : (:rename, old)
+  end
+  kind === :ask || return old
+  return last(_read_rename_answer(
+      "Which table was $model_name renamed from? $list_to_question — enter its number, or 'no' for a new table: ",
+      "one of the listed numbers, or 'no'") do response
+    response in ("no", "n") && return (:new, nothing)
+    old = _numbered_choice(response, candidates)
+    return old === nothing ? nothing : (:rename, old)
+  end)
+end
 # The value `_add_new_field` writes into `ADD COLUMN … DEFAULT` for a new temporal column, and then
 # drops again. It exists for ONE reason: a NOT NULL column with no declared default cannot be added to
 # a populated table — SQLite refuses the statement outright, PostgreSQL refuses it once the table has
@@ -1586,10 +1639,18 @@ is not what `makemigrations` uses.
 An empty live side means an empty database, so every model becomes a `CREATE TABLE`.
 
 With `interactive = true` (the default) a model with no matching table prompts whether it is
-new or a rename of a table that disappeared, so a rename keeps its data. `interactive = false`
+new or a rename of a table that disappeared, so a rename keeps its data. Answer `yes` for a new
+table, or the number of the table it was renamed from; `no` asks for that number on its own. A model
+is not asked when every vanished table has already been claimed by an earlier answer. A field with no
+matching column is asked the same way, by number or `no`. `interactive = false`
 answers "new table" and "not a rename" for everything — a non-interactive run therefore
-**never renames**, it drops and creates. Choosing a nonexistent option at the prompt raises
-`InvalidMigrationError`.
+**never renames**, it drops and creates.
+
+Any answer the prompt does not recognise — an empty line, a typo, an unlisted number — raises
+`InvalidMigrationError`, and so does reaching the end of input (#726). The prompts read `stdin`
+whenever `interactive = true`; unlike [`migrate`](@ref), nothing checks for a terminal, because
+answers piped in through a non-terminal stdin are read like typed ones. A script or CI job that has
+no answers to give passes `interactive = false`.
 
 A chosen rename plans `ALTER TABLE "<old>" RENAME TO "<new>"` under the new model's key, plus that
 table's column changes diffed against the old live table (#615). The rename executes before every
@@ -1665,58 +1726,23 @@ end
 decisions = Pair{Symbol, Union{Symbol, Nothing}}[]
 for (model_name, model) in current_schema
   if model[:exist] == false
+    # The vanished tables no earlier answer has claimed, numbered by their position in the live
+    # catalog (#615) — so a claimed one leaves a gap rather than renumbering the rest. With none left
+    # there is nothing to rename FROM: the model is a new table, and nothing is asked (#726).
+    candidates = Dict{Int64, Symbol}()
     if haskey(futher_processing, :drop_table)
-      
-      response = "yes"
-      if interactive
-        print("The table $model_name is a new table? (yes/no): ")
-        response = readline()
-        response = strip(lowercase(response))
+      for (index, (m_name, m_info)) in enumerate(futher_processing[:drop_table])
+        !m_info["exist"] && (candidates[index] = m_name)
       end
-
-      if response in ["yes", "y"]
-        push!(decisions, model_name => nothing)
-      elseif response in ["no", "n"]
-        dict_rename = Dict{Int64, Symbol}()
-        for (index, (m_name, m_info)) in enumerate(futher_processing[:drop_table])
-          !m_info["exist"] && (dict_rename[index] = m_name )           
-        end         
-        if isempty(dict_rename)
-          push!(decisions, model_name => nothing)
-        else 
-          list_to_question = join([string(index, " - ", dict_rename[index]) for index in sort(collect(keys(dict_rename)))], ", ")
-          
-          response = "no"
-          if interactive
-            print("Please choice what is the older name from table $model_name: $list_to_question (choice a number) or type 'no': ")
-            response = readline()
-            response = strip(lowercase(response))
-          end
-
-          if response in ["no", "n"]
-            push!(decisions, model_name => nothing)
-          else
-            # Only the input parse/lookup is guarded (mirrors the field-rename prompt above) — a
-            # genuine planner failure below must propagate as itself, not as "invalid choice" (#197).
-            local old_model_name
-            try
-              res_idx = parse(Int, response)
-              old_model_name = dict_rename[res_idx]
-            catch
-              throw(InvalidMigrationError("Invalid choice \"$(response)\" — enter one of the listed option numbers; please try makemigrations again"))
-            end
-            push!(decisions, model_name => old_model_name)
-            # Marked now, not when the plan is emitted: the next model's candidate list must not
-            # offer a table this one has already claimed.
-            futher_processing[:drop_table][old_model_name]["exist"] = true
-          end
-        end         
-      end    
-    else 
-      push!(decisions, model_name => nothing)
     end
+    # Only the answer is parsed inside `_ask_table_rename`; a genuine planner failure later propagates
+    # as itself, not as "invalid choice" (#197).
+    old_model_name = (interactive && !isempty(candidates)) ? _ask_table_rename(model_name, candidates) : nothing
+    push!(decisions, model_name => old_model_name)
+    # Marked now, not when the plan is emitted: the next model's candidate list must not
+    # offer a table this one has already claimed.
+    old_model_name === nothing || (futher_processing[:drop_table][old_model_name]["exist"] = true)
   end
- 
 end
 
 # #678: every rename is known now, so retarget the live references before anything is diffed. A
@@ -1785,12 +1811,19 @@ It does **not** touch the schema. The generated DDL lands in
 # Keyword arguments
 - `path`: the models file. Defaults to `<db>/<settings.model_file>` in the `String` form.
 - `interactive`: when `true`, a model with no matching table prompts whether it is a new
-  table or a rename of one that disappeared — a rename preserves the data. `false` answers
-  "new table" for everything and so **never renames**; use it in CI, not on real data.
+  table or a rename of one that disappeared — a rename preserves the data. Answer `yes`, or the
+  number of the old table. An unrecognised answer, or the end of input, raises
+  `InvalidMigrationError`; no terminal is detected, so a script or CI job with no answers to give
+  must pass `false`. `false` answers "new table" for everything and so **never renames**; use it in
+  CI, not on real data.
 
 Returns `nothing`. Logs and returns early — writing no plan — when the connection has
-`change_db: false`. An up-to-date schema logs that no migrations are pending. A missing models
-file raises `MissingConfigurationError`.
+`change_db: false`. An up-to-date schema logs that no migrations are pending, and moves an earlier
+`pending_migrations.jl` aside to `pending_migrations.jl.discarded` (through
+[`discard_pending_migration`](@ref)), since that plan no longer describes any change (#727). The one
+exception is a plan a previous `migrate` already applied but failed to archive — its checksum
+matches the latest applied migration — which is kept, with a warning, for the next `migrate` to
+archive without re-applying. A missing models file raises `MissingConfigurationError`.
 
 See also [`migrate`](@ref), [`get_migration_plan`](@ref), and the
 [Database Migrations in PormG](@ref) guide.
@@ -1828,19 +1861,8 @@ migration_plan = get_migration_plan(live_schema, current_models, connection, set
 
 @pormg_debug false
 
-# store migration_plan as pending_migrations.jl file
-if migration_plan |> isempty
-  @info(_emsg("\e[32mYour database schema is already up-to-date. No migrations are pending.\e[0m"))    
-else     
-  path = joinpath(settings.db_def_folder, "migrations")
-  if !ispath(path)
-    mkdir(path)
-  end
-  generate_migration_plan("pending_migrations.jl", migration_plan, path)
-  @warn("The migration plan has been saved to '$(settings.db_def_folder)/migrations/pending_migrations.jl'. Review the plan before applying the migrations.")
-  @info(_emsg("\e[32mMigration plan generated successfully. Run 'PormG.Migrations.migrate($( settings.db_def_folder == "db" ? "" : string("\"", settings.db_def_folder, "\"")))' to apply the migrations.\e[0m"))
-end
-
+_write_pending_plan(connection, settings, migration_plan)
+return nothing
 end
 
 function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::String = "db/models.jl", interactive::Bool = true)
@@ -1864,18 +1886,61 @@ function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::
 
   migration_plan = get_migration_plan(live_schema, current_models, connection, settings, interactive=interactive)
 
-  # store migration_plan as pending_migrations.jl file
-  if migration_plan |> isempty
-    @info(_emsg("\e[32mYour database schema is already up-to-date. No migrations are pending.\e[0m"))    
-  else     
-    path = joinpath(settings.db_def_folder, "migrations")
-    if !ispath(path)
-      mkdir(path)
+  _write_pending_plan(connection, settings, migration_plan)
+  return nothing
+end
+
+# The tail both `makemigrations` methods end with (#727): afterwards the pending file describes the
+# current diff and nothing else. A non-empty plan overwrites it. An EMPTY plan used to only log "No
+# migrations are pending" and leave any earlier plan on disk, so `status().pending` stayed true and
+# a later `migrate()` applied changes the models no longer declare. It is now moved aside through the
+# same `discard_pending_migration` a user would call, so it stays recoverable as `.discarded`. One
+# helper for both engines: the tail used to be copied into each method, which is how one could be
+# fixed and the other not.
+#
+# One pending plan is NOT stale on an empty diff: the one a `migrate()` COMMITted and then failed to
+# archive (#81). The empty diff is that plan's own effect, and the next `migrate()` recognises it by
+# checksum and archives it without re-applying — under the advisory lock, which `makemigrations`
+# does not take. So it is left where it is, and the message says what to do; discarding it would
+# lose its `applied_migrations/` archive and models snapshot.
+function _write_pending_plan(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
+                             migration_plan::OrderedDict{Symbol, OrderedDict{String, String}})::Nothing
+  folder = joinpath(settings.db_def_folder, "migrations")
+  if isempty(migration_plan)
+    if isfile(joinpath(folder, "pending_migrations.jl"))
+      if _pending_plan_already_applied(connection, settings)
+        @warn("No changes detected. The pending plan was already applied by a previous migrate(), which failed to archive it (its checksum matches the latest applied migration), so it is kept: run migrate() to archive it — with destructive = true if the plan is destructive, since that guard runs first. It is archived, not applied again.")
+        return nothing
+      end
+      @warn("No changes detected, so the earlier pending plan no longer describes anything; moving it aside.")
+      discard_pending_migration(settings; backup = true)
     end
-    generate_migration_plan("pending_migrations.jl", migration_plan, path)
-    @warn("The migration plan has been saved to '$(settings.db_def_folder)/migrations/pending_migrations.jl'. Review the plan before applying the migrations.")
-    @info(_emsg("\e[32mMigration plan generated successfully. Run 'PormG.Migrations.migrate($( settings.db_def_folder == "db" ? "" : string("\"", settings.db_def_folder, "\"")))' to apply the migrations.\e[0m"))
+    @info(_emsg("\e[32mYour database schema is already up-to-date. No migrations are pending.\e[0m"))
+    return nothing
   end
+  ispath(folder) || mkdir(folder)
+  generate_migration_plan("pending_migrations.jl", migration_plan, folder)
+  @warn("The migration plan has been saved to '$(settings.db_def_folder)/migrations/pending_migrations.jl'. Review the plan before applying the migrations.")
+  @info(_emsg("\e[32mMigration plan generated successfully. Run 'PormG.Migrations.migrate($( settings.db_def_folder == "db" ? "" : string("\"", settings.db_def_folder, "\"")))' to apply the migrations.\e[0m"))
+  return nothing
+end
+
+# Whether the pending plan is the latest applied migration — the file a `migrate()` COMMITted and then
+# failed to archive (#81). Compared exactly the way `migrate` compares it: the checksum of the ordered
+# SQL against `_latest_applied_checksum`. A plan that does not parse (#710's `InvalidMigrationError`)
+# is not that file, so it answers `false` and is discarded with a backup; a database error propagates.
+function _pending_plan_already_applied(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings)::Bool
+  _migrations_table_exists(connection) || return false
+  latest = _latest_applied_checksum(connection)
+  latest === nothing && return false
+  plan = try
+    _load_migration_plan(settings)
+  catch e
+    e isa InvalidMigrationError || rethrow()
+    return false
+  end
+  _, all_sql = _order_statements(plan)
+  return compute_checksum(all_sql) == latest
 end
 
 function makemigrations(db::String; config::Dict{String,PormGSettings} = config, interactive::Bool = true)

@@ -62,7 +62,8 @@ function _cd_settings()
 end
 
 # Plan `declared` against `live`. With `answers`, the planner's rename prompts read them from stdin
-# (a table rename is "no\n<n>\n", a column rename "<n>\n"); EOF answers "no".
+# (a table rename is "<n>\n" or "no\n<n>\n", a column rename "<n>\n"); running out of answers raises
+# `InvalidMigrationError` at the next question (#726).
 function _cd_plan(conn, live, declared::PormGModel...; answers::Union{String, Nothing} = nothing)
   schema = _cd_schema(declared...)
   answers === nothing && return get_migration_plan(live, schema, conn, _cd_settings(); interactive = false)

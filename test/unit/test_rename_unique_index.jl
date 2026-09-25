@@ -134,8 +134,8 @@ function _ruq_plan(conn, livem::PormGModel, declared::PormGModel; interactive::B
     :child_t => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared, :exist => false))
   interactive || return Migrations.get_migration_plan(PormGModel[livem], current_schema, conn,
                                                       settings; interactive = false)
-  # A rename is only ever PROPOSED interactively. `answer` is the listed option number; EOF would
-  # answer "no" and take the add-a-new-field path instead, which fails the assertions loudly rather
+  # A rename is only ever PROPOSED interactively. `answer` is the listed option number; running out
+  # of answers raises `InvalidMigrationError` at the next prompt (#726), which fails loudly rather
   # than hanging. Same technique as integration Phase 4e/4i.
   path, io = mktemp(); write(io, answer * "\n"); close(io)
   return open(path) do stdin_file

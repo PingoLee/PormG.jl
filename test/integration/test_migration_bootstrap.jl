@@ -639,7 +639,7 @@ end
     """)
 
     # Field-rename detection is interactive: feed "1" (old_parent_id is the sole rename candidate) to the
-    # readline prompt via a redirected stdin. EOF would yield "no" ⇒ a loud failure below, never a hang.
+    # readline prompt via a redirected stdin. Running out of answers raises (#726) ⇒ loud, never a hang.
     mktemp() do _path, io
       write(io, "1\n"); flush(io); seekstart(io)
       redirect_stdin(io) do
@@ -1193,7 +1193,7 @@ end
     write_edge_models(dup_models("new_ref_id"))
 
     # Field-rename detection is interactive: feed "1" (old_ref_id is the sole rename candidate).
-    # EOF would yield "no" ⇒ an ADD + DROP instead of a rename ⇒ a loud failure below, never a hang.
+    # Running out of answers raises InvalidMigrationError (#726) ⇒ a loud failure, never a hang.
     mktemp() do _path, io
       write(io, "1\n"); flush(io); seekstart(io)
       redirect_stdin(io) do
@@ -1386,7 +1386,7 @@ end
     write_edge_models(uq_models("new_code"))
 
     # Field-rename detection is interactive: feed "1" (old_code is the sole rename candidate).
-    # EOF would yield "no" ⇒ an ADD + DROP instead of a rename ⇒ a loud failure below, never a hang.
+    # Running out of answers raises InvalidMigrationError (#726) ⇒ a loud failure, never a hang.
     mktemp() do _path, io
       write(io, "1\n"); flush(io); seekstart(io)
       redirect_stdin(io) do

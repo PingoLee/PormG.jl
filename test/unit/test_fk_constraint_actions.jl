@@ -124,7 +124,7 @@ function _fca_rename_plan(conn, declared_rel, live_rel)
   current_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
     :child_t => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared, :exist => false))
 
-  # "1" is the only rename candidate on offer (`old_ref_id`); EOF would answer "no" instead.
+  # "1" is the only rename candidate on offer (`old_ref_id`); running out of answers would raise.
   path, io = mktemp(); write(io, "1\n"); close(io)
   return open(path) do stdin_file
     redirect_stdin(stdin_file) do

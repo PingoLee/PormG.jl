@@ -46,6 +46,18 @@ PormG.Migrations.makemigrations("db")
 ```
 This connects to the physical database, compares the live table schema against the registered in-memory `PormGModel` subclasses, and generates the transition plan in `db/migrations/pending_migrations.jl`.
 
+### Answering the rename questions
+
+A model whose table does not exist, next to a table no model claims any more, may be the same table under a new name, and only you know which. `makemigrations` asks:
+
+```text
+The table race_result has no match in the database. Is it a new table? Answer yes, or no / the number of the table it was renamed from: 1 - result:
+```
+
+Answer `yes` to create `race_result` and drop `result`, or `1` to plan `ALTER TABLE "result" RENAME TO "race_result"` and keep every row. `no` asks for the number on its own. A field with no matching column is asked the same way: its old column's number, or `no` for a new column.
+
+Any other answer — an empty line, a typo, a number that is not listed — raises `InvalidMigrationError` and writes nothing, so run `makemigrations` again. So does running out of input: see [Automation & CI/CD](#Automation-and-CI/CD) for running without a terminal.
+
 ---
 
 ## Step 3: Review Pending Migrations
@@ -110,6 +122,18 @@ PormG.Migrations.discard_pending_migration("db", backup=false)
 It returns a summary of what was thrown away — `(discarded=true, path, backup, tables, statements)` —
 or `nothing` when there was no pending migration. A later `makemigrations` overwrites the pending
 file anyway, so regenerating the plan afterwards is unaffected.
+
+`makemigrations` does this discard itself when it finds **no changes**: if you revert the model change
+behind a pending plan and run it again, it logs that nothing is pending and moves the old plan to
+`pending_migrations.jl.discarded`, so a later `migrate()` cannot apply a change your models no longer
+declare. Either way the pending file describes the current diff and nothing else. The backup keeps
+only the most recent discard; an earlier `.discarded` file is overwritten.
+
+One pending plan is kept even then: a plan a previous `migrate()` applied but failed to move to
+`applied_migrations/`. Your models already match it, which is why nothing changed. `makemigrations`
+recognises it by checksum and warns instead of discarding it; run `migrate()` to archive it, which
+it does without applying the plan a second time. If that plan is destructive, pass
+`destructive=true`: the destructive guard runs before `migrate()` recognises the plan as applied.
 
 ---
 
@@ -178,4 +202,15 @@ catch e
     e isa PormG.Migrations.DestructiveMigrationError || rethrow()
     @warn "Destructive migration skipped; apply manually with destructive=true" exception=e
 end
+```
+
+`makemigrations()` is different: it does **not** detect a missing terminal. Its
+[rename questions](#Answering-the-rename-questions) read stdin whenever `interactive=true` (the default),
+so answers can be piped in. A script or CI job with nothing on stdin runs normally until a question comes
+up, then reaches end of input and raises `InvalidMigrationError` rather than guessing. Pass
+`interactive=false` there. It plans
+every unmatched model and field as new, so it **never renames**: a renamed table is planned as a drop and a
+create, which the destructive guard above then stops.
+```julia
+PormG.Migrations.makemigrations("my_db", interactive=false)
 ```

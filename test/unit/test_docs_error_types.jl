@@ -1197,6 +1197,25 @@ const DOCERR_CASES = [
             PormG.Migrations.dry_run(DocErrMockPostgres(), st)
         end,
     ),
+    # #726: a rename question with nothing left on stdin. `devnull` is end of input at once — the
+    # CI shape the page describes — and the error fires at the question, before any DDL is planned.
+    (
+        "migrations/workflow.md / src/migrations/planner.jl — makemigrations docstring: a rename question at end of input raises InvalidMigrationError (#726)",
+        InvalidMigrationError,
+        () -> begin
+            live = Model("docerr_result_726", resultid = IDField(), points = IntegerField())
+            declared = Model("docerr_race_result_726", resultid = IDField(), points = IntegerField())
+            schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+                Symbol(PormG.Models.model_table_name(declared)) =>
+                    Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => declared, :exist => false))
+            redirect_stdin(devnull) do
+                redirect_stdout(devnull) do
+                    PormG.Migrations.get_migration_plan(PormG.PormGModel[live], schema, DocErrMockPostgres(),
+                                                        PormG.Configuration.Settings(); interactive = true)
+                end
+            end
+        end,
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

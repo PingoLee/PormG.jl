@@ -865,8 +865,9 @@ end
     # actually calls. The unit coverage exercises the SQLite *string* parser
     # (`convertSQLToModel(::String)`), which the production SQLite flow never reaches — it goes
     # through the PRAGMA path instead. Only a live run covers the wiring on both backends: a
-    # `substring(… from '<= ([0-9]+)')` CTE on PostgreSQL, a regex over the stored CREATE TABLE
-    # text on SQLite. Two entirely separate implementations of one contract.
+    # CTE matching the exact deparsed clause on PostgreSQL (`_PG_BYTE_LENGTH_CHECK_MATCH`, #747), a
+    # regex over the stored CREATE TABLE text on SQLite. Two entirely separate implementations of one
+    # contract.
     bin_models = PormG.Migrations.convert_schema_to_models(pool;
         include_table = ["field_validation_scratch"])
     bin_by_name = Dict(lowercase(string(m.name)) => m for m in bin_models)
@@ -1220,6 +1221,129 @@ if adapter_name == "PostgreSQL"
       @test all(isempty, values(again))
     finally
       drop731!()
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL byte-length CHECK: only PormG's exact clause reads as PormG's (#747)
+# #731's twin. The reader matched `pg_get_constraintdef … LIKE '%octet_length%' AND ~ '<= [0-9]+'`
+# and `get_constraints_byte_length_check` the same through `ILIKE`, so a user's compound bound on a
+# `BinaryField()` column read as `BinaryField(max_length = n)`'s CHECK — and the planner, diffing it
+# against the unbounded declaration, proposed `DROP CONSTRAINT` on the user's constraint. Both now
+# match the exact deparsed clause. The table is created from PormG's own plan, so `thumb` / `Mixed`
+# / `doc` carry exactly the CHECK PormG writes (a mixed-case column included); the user's CHECKs are
+# then added by hand — `doc` carries both kinds. The last phase APPLIES a bound change: nothing else
+# in the integration suite drops a byte-length CHECK (`test_migration_bootstrap.jl` declares no
+# `BinaryField`), so this is the dropper's only live coverage. Dropped in `finally`.
+# SQLite already matched exactly; its parity test is hermetic (test/unit/test_live_schema_reader.jl).
+# Mutation gate, measured: the old CTE alone reads `photo`/`scan` as bounded (1048576, 512); the old
+# dropper alone names the user's constraint for both. The plan needs BOTH halves wrong to go wrong —
+# a misread bound with no name to drop plans nothing — and with both restored this testset is #747
+# end to end: the plan drops `photo_user` and `scan_user`, and after it runs only `doc_user` is left.
+# Read the bound from the front instead of the end and `size <= 9` is missed; drop `quote_ident` from
+# the rebuild and `Mixed` (and the quoted `size <= 9`) are missed.
+# ─────────────────────────────────────────────────────────────────────────────
+if adapter_name == "PostgreSQL"
+  @testset "Byte-length CHECK: a user bound is not PormG's, and PormG's still round-trips and is replaced (#747)" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
+    tbl = "pormg_it_bytelen"
+    drop747!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
+    M747 = PormG.Models
+    # `thumb` and `doc` take their bound as an argument: the last phase redeclares them.
+    model747(thumb, doc) = M747.Model(tbl;
+      id    = M747.IDField(),
+      photo = M747.BinaryField(),
+      scan  = M747.BinaryField(),
+      thumb = M747.BinaryField(max_length = thumb),
+      Mixed = M747.BinaryField(max_length = 16),
+      doc   = M747.BinaryField(max_length = doc))
+    schema747(model) = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+      Symbol(tbl) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => model, :exist => false))
+    settings747 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
+    plan747(live, thumb, doc) = PormG.Migrations.get_migration_plan(live, schema747(model747(thumb, doc)), pool,
+                                                                      settings747; interactive = false)
+    read747() = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
+    # The byte bound the reader recovered for a column, or `nothing`.
+    bound(live, col) = (checks = live.columns[col].checks;
+                        i = findfirst(c -> c isa PormG.ByteLengthCheck, checks);
+                        i === nothing ? nothing : checks[i].max_bytes)
+    user_checks() = Set(filter(n -> endswith(n, "_user"), String.(DataFrame(PormG.ConnectionPool.fetch(pool,
+      "SELECT conname FROM pg_constraint WHERE conrelid = \$1::regclass AND contype = 'c'", [tbl])).conname)))
+
+    drop747!()
+    try
+      for (_, sql) in plan747(PormG.Migrations.LiveTable[], 4, 8)[Symbol(tbl)]
+        ddl(sql)
+      end
+      # The user's own CHECKs: #747's compound bound, a `BETWEEN` range, and a range on a column that
+      # also carries PormG's bound.
+      ddl("ALTER TABLE \"$(tbl)\" ADD CONSTRAINT pormg_it_bytelen_photo_user CHECK (octet_length(photo) <= 1048576 AND octet_length(photo) > 0)")
+      ddl("ALTER TABLE \"$(tbl)\" ADD CONSTRAINT pormg_it_bytelen_scan_user CHECK (octet_length(scan) BETWEEN 1 AND 512)")
+      ddl("ALTER TABLE \"$(tbl)\" ADD CONSTRAINT pormg_it_bytelen_doc_user CHECK (octet_length(doc) BETWEEN 2 AND 1024)")
+
+      # Precondition — the text both matchers see, as PostgreSQL deparses it. PormG's clause comes
+      # back re-parenthesised with the column quoted only when it must be (the `quote_ident` rule the
+      # predicate relies on); the user's checks all mention `octet_length` and a `<= N`, which is
+      # what the old `LIKE` pair matched; `BETWEEN` is expanded into two comparisons.
+      defs747() = Set(String.(DataFrame(PormG.ConnectionPool.fetch(pool,
+        "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = \$1::regclass AND contype = 'c'",
+        [tbl])).def))
+      defs = defs747()
+      @test "CHECK ((octet_length(thumb) <= 4))" in defs
+      @test "CHECK ((octet_length(\"Mixed\") <= 16))" in defs
+      @test "CHECK ((octet_length(doc) <= 8))" in defs
+      @test "CHECK (((octet_length(photo) <= 1048576) AND (octet_length(photo) > 0)))" in defs
+      @test "CHECK (((octet_length(scan) >= 1) AND (octet_length(scan) <= 512)))" in defs
+      @test "CHECK (((octet_length(doc) >= 2) AND (octet_length(doc) <= 1024)))" in defs
+
+      # The reader: only PormG's own clause is a bound — `doc` reads PormG's 8, not the user's 1024.
+      live = read747()
+      @test (bound(live, "photo"), bound(live, "scan")) === (nothing, nothing)
+      @test (bound(live, "thumb"), bound(live, "Mixed"), bound(live, "doc")) == (4, 16, 8)
+
+      # The dropper agrees with the reader, column by column — and names PormG's constraint, never
+      # the user's range on the same column.
+      gbl(col) = PormG.get_constraints_byte_length_check(pool, tbl, col)
+      @test (gbl("photo"), gbl("scan")) === (nothing, nothing)
+      @test gbl("thumb") == "pormg_it_bytelen_thumb_check"
+      @test gbl("Mixed") == "pormg_it_bytelen_Mixed_check"
+      @test gbl("doc") == "pormg_it_bytelen_doc_check"
+
+      # THE convergence assertion: the declared model against its live table plans nothing, so the
+      # user's three CHECKs are kept and PormG's three are recognised.
+      @test all(isempty, values(plan747([live], 4, 8)))
+
+      # A bound change on each column that has one (4 → 8, 8 → 16) replaces PormG's CHECK and only
+      # PormG's: the plan drops the constraint the dropper named and adds the new bound, and after it
+      # runs, the new bounds read back, the user's checks are all still there, and the plan is empty.
+      changed = plan747([live], 8, 16)[Symbol(tbl)]
+      stmts = join(values(changed), "\n")
+      @test occursin("DROP CONSTRAINT \"pormg_it_bytelen_thumb_check\"", stmts)
+      @test occursin("DROP CONSTRAINT \"pormg_it_bytelen_doc_check\"", stmts)
+      @test occursin("ADD CHECK (octet_length(\"thumb\") <= 8)", stmts)
+      @test occursin("ADD CHECK (octet_length(\"doc\") <= 16)", stmts)
+      @test !occursin("_user", stmts)
+      for (_, sql) in changed
+        ddl(sql)
+      end
+      relived = read747()
+      @test (bound(relived, "thumb"), bound(relived, "doc")) == (8, 16)
+      @test user_checks() == Set(["pormg_it_bytelen_photo_user", "pormg_it_bytelen_scan_user", "pormg_it_bytelen_doc_user"])
+      @test all(isempty, values(plan747([relived], 8, 16)))
+
+      # Why the bound is read from the END of the text: a column whose NAME holds `<= 9`. PostgreSQL
+      # quotes it in the deparsed clause, so the first `<= digits` sits inside the identifier. Read
+      # from the front, the bound is 9, the rebuild no longer equals the text, and PormG's own clause
+      # is missed; read from the end, it is 4. Added by hand in PormG's exact form, after the plan
+      # phases, because the model does not declare the column — only the reader and dropper are asked.
+      ddl("ALTER TABLE \"$(tbl)\" ADD COLUMN \"size <= 9\" bytea CONSTRAINT pormg_it_bytelen_size_bound CHECK (octet_length(\"size <= 9\") <= 4)")
+      @test "CHECK ((octet_length(\"size <= 9\") <= 4))" in defs747()
+      @test bound(read747(), "size <= 9") == 4
+      @test gbl("size <= 9") == "pormg_it_bytelen_size_bound"
+    finally
+      drop747!()
     end
   end
 end

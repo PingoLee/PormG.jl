@@ -35,7 +35,8 @@ import PormG.Migrations: LiveTable, read_live_schema, live_table, model_from_liv
                          convert_schema_to_models, get_migration_plan, _pg_live_table, _key_arm,
                          _integer_key_arm, _coerce_default, _PostgresEngine, _SQLiteEngine,
                          _sqlite_column_checks, check, _sqlite_user_table_names,
-                         _PG_OWNABLE_TABLE_FILTER, _get_live_table_names, _PG_NON_NEGATIVE_CHECK_MATCH
+                         _PG_OWNABLE_TABLE_FILTER, _get_live_table_names, _PG_NON_NEGATIVE_CHECK_MATCH,
+                         _PG_BYTE_LENGTH_CHECK_MATCH, _PG_BYTE_LENGTH_CHECK_BOUND
 # The SQLite laws open a real (temporary) file. `runtests.jl` loads the weakdep extension for the
 # whole suite; this guard is what makes the file runnable on its own.
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
@@ -889,4 +890,102 @@ end
   @test !haskey(checks, "grid") && !haskey(checks, "price") && !haskey(checks, "lap")
   @test checks["pos"] == CheckKind[NonNegativeCheck()]
   @test checks["mixed"] == CheckKind[NonNegativeCheck()]    # keys are lower-cased (#531)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: PormG's byte-length CHECK is recognised by its exact clause, reader and dropper alike (#747)
+# #731's twin, on the other CHECK PormG writes. The `byte_length_checks` CTE matched
+# `LIKE '%octet_length%' AND ~ '<= [0-9]+'` and `get_constraints_byte_length_check` matched the
+# same through `ILIKE`, so a user's `CHECK (octet_length(photo) <= 1048576 AND octet_length(photo)
+# > 0)` on a `BinaryField()` read as `BinaryField(max_length = 1048576)`'s bound, and the planner
+# dropped it. Both now interpolate ONE predicate, `_PG_BYTE_LENGTH_CHECK_MATCH`: the constraint text
+# must equal PormG's deparsed clause rebuilt around its own trailing bound. The live half (the
+# deparsed texts, a user bound kept, PormG's still matched and replaced) is
+# `test/integration/test_importers_introspection.jl`.
+# Mutation gate: put the `LIKE` pair back in the CTE, or the old `information_schema` query back in
+# the dropper, and its assertions below fail.
+# ─────────────────────────────────────────────────────────────────────────────
+struct ByteLenSqlMockPg747 <: PormG.PormGPostgres end
+const PG747_CALLS = Tuple{String, Any}[]
+fetch(::ByteLenSqlMockPg747, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
+  (push!(PG747_CALLS, (sql, params)); DataFrame())
+
+@testset "PostgreSQL: PormG's octet_length CHECK is matched by its exact clause, in the reader and the dropper (#747)" begin
+  # What PormG writes, and the predicate that recognises its deparsed form: PostgreSQL hands
+  # `CHECK (octet_length("col") <= 4)` back as `CHECK ((octet_length(col) <= 4))`, the column quoted
+  # by `quote_ident`'s rule. The bound is the digits before the closing `))` — anchored at the end,
+  # because a quoted column name may itself contain `<=` — and the whole text must equal the rebuild.
+  @test Dialect._byte_length_check_clause("col", 4, PG522) == "CHECK (octet_length(\"col\") <= 4)"
+  @test _PG_BYTE_LENGTH_CHECK_BOUND == "substring(pg_get_constraintdef(con.oid) from '<= ([0-9]+)[)][)]\$')"
+  @test _PG_BYTE_LENGTH_CHECK_MATCH ==
+        "pg_get_constraintdef(con.oid) = 'CHECK ((octet_length(' || quote_ident(a.attname) || ') <= ' || " *
+        _PG_BYTE_LENGTH_CHECK_BOUND * " || '))'"
+
+  empty!(PG747_CALLS)
+  with_logger(NullLogger()) do                 # an empty dump warns "No tables found"
+    Migrations.get_database_schema(ByteLenSqlMockPg747())
+  end
+  @test Migrations.get_constraints_byte_length_check(ByteLenSqlMockPg747(), "drivers", "photo") === nothing
+  (dump_sql, _), (drop_sql, _) = PG747_CALLS
+  for sql in (dump_sql, drop_sql)
+    @test occursin(_PG_BYTE_LENGTH_CHECK_MATCH, sql)
+    @test !occursin("octet_length%", sql)      # neither the `LIKE` nor the `ILIKE` spelling survives
+  end
+  # The reader takes the bound it reports from the same anchored extraction the match rebuilds with.
+  @test occursin("min($(_PG_BYTE_LENGTH_CHECK_BOUND)::bigint) AS byte_limit", dump_sql)
+  # The dropper is scoped like `get_constraints_check`, from the same query: one column, and the
+  # table an unqualified name resolves to — the first schema on the search path that holds it.
+  @test occursin("FROM pg_constraint con", drop_sql)
+  @test occursin("array_length(con.conkey, 1) = 1", drop_sql)
+  @test occursin("n.nspname = ANY(current_schemas(false))", drop_sql)
+  @test occursin("ORDER BY array_position(current_schemas(false), n.nspname)", drop_sql)
+  # The two droppers are the same query but for the predicate — neither one matches the other's CHECK.
+  empty!(PG747_CALLS)
+  Migrations.get_constraints_check(ByteLenSqlMockPg747(), "drivers", "photo")
+  nn_sql, _ = only(PG747_CALLS)
+  @test replace(nn_sql, _PG_NON_NEGATIVE_CHECK_MATCH => _PG_BYTE_LENGTH_CHECK_MATCH) == drop_sql
+  @test !occursin(_PG_BYTE_LENGTH_CHECK_MATCH, nn_sql) && !occursin(_PG_NON_NEGATIVE_CHECK_MATCH, drop_sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The planner drops whatever byte bound the reader claims — which is why the misread mattered (#747)
+# Hermetic, over the PostgreSQL row decoder. A declared `BinaryField()` against a `bytea` column the
+# reader credits with a 1 MiB bound plans a `DROP CONSTRAINT` of the name
+# `get_constraints_byte_length_check` returns — the user's compound check, before the fix. Against
+# the same column read correctly (no PormG bound) it plans nothing. This pins the planner's half of
+# the contract; it passes before the fix too, and the SQL assertions above fail on the old reader.
+# ─────────────────────────────────────────────────────────────────────────────
+struct ByteLenPlanMockPg747 <: PormG.PormGPostgres end
+PormG.get_constraints_byte_length_check(::ByteLenPlanMockPg747, t::String, f::String) =
+  f == "photo" ? "drivers_photo_user_bound" : nothing
+fetch(::ByteLenPlanMockPg747, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) = DataFrame()
+
+@testset "an unbounded BinaryField column converges unless the reader claims a byte bound on it (#747)" begin
+  drivers = Models.Model("drivers"; id = Models.IDField(), photo = Models.BinaryField())
+  live(byte_limit) = _pg_live_table(_row522(table_name = "drivers",
+    columns = [_col522("id", "bigint"; notnull = true, identity = "d"),
+               _col522("photo", "bytea"; notnull = true, byte_limit = byte_limit)],
+    primary_keys = ["id"]))
+  plan(byte_limit) = get_migration_plan(LiveTable[live(byte_limit)], _schema522(drivers),
+                                        ByteLenPlanMockPg747(), _settings522(); interactive = false)
+
+  # The fixed reader's view of the user's compound check: no PormG bound, nothing to do.
+  @test all(isempty, values(plan(nothing)))
+  # The old reader's view: a 1 MiB bound "found", so the planner drops the constraint it names.
+  stmts = join(values(plan(1_048_576)[:drivers]), "\n")
+  @test occursin("DROP CONSTRAINT \"drivers_photo_user_bound\"", stmts)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite parity: only PormG's exact `CHECK (length("col") <= n)` reads as the byte bound (#747)
+# The SQLite reader already matched the rendered clause with an anchored regex; the PostgreSQL reader
+# did not, so the same schema read differently on each engine. Pinned here so the engines stay
+# aligned: the compound bound #747 names reads as nothing, and PormG's own clause reads its bound.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite parity: a user compound bound on a BLOB is not PormG's byte-length check (#747)" begin
+  checks = _sqlite_column_checks("""CREATE TABLE "drivers" (
+    "photo" BLOB CHECK (length(photo) <= 1048576 AND length(photo) > 0),
+    "thumb" BLOB CHECK (length("thumb") <= 4))""")
+  @test !haskey(checks, "photo")
+  @test checks["thumb"] == CheckKind[ByteLengthCheck(4)]
 end

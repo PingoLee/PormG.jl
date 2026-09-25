@@ -33,9 +33,12 @@ Because every plan is a fresh diff between your models and the **live database**
     Because the live side is read as facts, a column that no declaration could produce shows up as a **one-time plan** rather than being silently equated with the nearest field type — after it is applied, the schema converges:
 
     - a `SMALLINT` / `INTEGER UNSIGNED` column without its `>= 0` CHECK plans `ADD CHECK` once against a `PositiveSmallIntegerField` / `PositiveIntegerField`. Only a CHECK of exactly `col >= 0` (the one PormG writes) counts as that CHECK: a range such as `CHECK (grid >= 0 AND grid <= 30)` is read as your own constraint, is never planned away, and does not stand in for it;
+    - a `bytea` / `BLOB` column's byte bound is read the same way: only a CHECK of exactly `octet_length(col) <= n` (`length(col) <= n` on SQLite), the one `BinaryField(max_length = n)` writes, counts as that bound. A compound check such as `CHECK (octet_length(photo) <= 1048576 AND octet_length(photo) > 0)` on a `BinaryField()` is your own constraint and is never planned away. On a `BinaryField(max_length = n)` column it does not stand in for the bound, which plans `ADD CHECK` once;
     - a foreign-key column with no index plans `CREATE INDEX` once against a `ForeignKey` (which declares `db_index = true` by default) — declare `db_index = false` if you do not want one;
     - a lengthless `varchar` or an unparameterised `numeric` plans the declared width once;
     - a column type PormG has no field for (`inet`, `citext`, an array, `character(n)`) never matches a declared `TextField` or `CharField`: `generate_models_from_db` emits `TextField` for it **with a warning**, and `makemigrations` plans a retype unless you exclude the table or declare the column by hand.
+
+    "Never planned away" is about the reader: no plan targets your own CHECK. On SQLite, though, any plan that alters a column of that table (the `ADD CHECK` cases above included) is a [table rebuild](#SQLite:-Table-Recreation) that re-creates the table from your models, so a CHECK you wrote by hand is not carried across it.
 
     Tables PormG created itself always carry these facts, so nothing changes for them.
 
@@ -254,7 +257,7 @@ To handle any of those changes, PormG automatically rebuilds the table from your
 - Re-creates the surviving indexes and foreign keys — an index referencing a *dropped* column is **not** re-created (see the expression-index note below).
 - Drops the old table, renames the new one, and runs `PRAGMA foreign_key_check` to catch orphaned rows.
 
-The rebuild is emitted as plain DDL that composes with the migration's transaction, so no data is lost and the remaining indexes and constraints are preserved. This is what makes **removing a foreign-key field or constraint, a `UNIQUE` column, a `PRIMARY KEY` column, or an indexed column** work on SQLite even though `DROP COLUMN`/`DROP CONSTRAINT` alone cannot express it. Changes SQLite *can* do in place — adding a column, or dropping an *ordinary* column (not part of a `FOREIGN KEY`, `UNIQUE`, or `PRIMARY KEY`, and not referenced by an index) — use `ALTER TABLE` directly, without a rebuild.
+The rebuild is emitted as plain DDL that composes with the migration's transaction, so no data is lost and the remaining indexes and the constraints your models declare are preserved (a `CHECK` written by hand is not one of them). This is what makes **removing a foreign-key field or constraint, a `UNIQUE` column, a `PRIMARY KEY` column, or an indexed column** work on SQLite even though `DROP COLUMN`/`DROP CONSTRAINT` alone cannot express it. Changes SQLite *can* do in place — adding a column, or dropping an *ordinary* column (not part of a `FOREIGN KEY`, `UNIQUE`, or `PRIMARY KEY`, and not referenced by an index) — use `ALTER TABLE` directly, without a rebuild.
 
 This process is transparent to the user but may take longer on very large tables.
 

@@ -73,20 +73,26 @@ end
 # #82: wrap a SQLite table-rebuild block so it re-creates the table's existing secondary indexes (the
 # rebuild's DROP TABLE drops them) and gates on `PRAGMA foreign_key_check(<table>)`. The CREATE INDEX DDL
 # is taken verbatim from sqlite_master, so names / uniqueness / partial clauses are preserved exactly.
-# No-op for PostgreSQL (real ALTER COLUMN, no rebuild) or an empty block — callers invoke it
-# unconditionally so every rebuild path (field alteration AND add-NOT-NULL-with-default) is covered the
-# same way. The check is SCOPED to the rebuilt table (not the whole DB) so an unrelated pre-existing orphan
-# elsewhere can't fail this migration; the rename preserves the table name + PKs, so children of this table
-# stay valid and need no check.
+# No-op for PostgreSQL (real ALTER COLUMN, no rebuild) or an empty block. The check is SCOPED to the
+# rebuilt table (not the whole DB) so an unrelated pre-existing orphan elsewhere can't fail this
+# migration; the rename preserves the table name + PKs, so children of this table stay valid and need no
+# check.
 #
 # `catalog_table` (#615) is the name the index snapshot asks `sqlite_master` for, which differs from
 # `table_name` only for a table being RENAMED in the same migration: the rename runs first, so the
 # rebuild and its `foreign_key_check` name the new table, while at plan time the catalog still holds
 # the old one. The snapshotted DDL then says `ON "<old>"`, so it is re-targeted at `table_name`.
+#
+# `before` and `after` (#729) carry the rest of SQLite's twelve-step procedure: the views and foreign
+# triggers that would fail the rebuild's RENAME are dropped first, and they and the table's own
+# triggers are re-created after the indexes, before the foreign-key gate. Its only caller is
+# `_finalize_sqlite_rebuilds!`, which works both lists out once the whole plan is known.
 function _sqlite_rebuild_preserving_indexes(conn, table_name::String, rebuild_sql::AbstractString;
                                             surviving_columns::Union{Nothing,Set{String}} = nothing,
                                             column_renames::Dict{String,String} = Dict{String,String}(),
-                                            catalog_table::String = table_name)::String
+                                            catalog_table::String = table_name,
+                                            before::Vector{String} = String[],
+                                            after::Vector{String} = String[])::String
   (!(conn isa PormGSQLite) || isempty(rebuild_sql)) && return String(rebuild_sql)
   # #116: when the rebuild removes columns (FK-field deletion), pass the rebuilt table's columns so an
   # index on a just-dropped column isn't re-created ("no such column"). `nothing` (the default) preserves
@@ -96,7 +102,126 @@ function _sqlite_rebuild_preserving_indexes(conn, table_name::String, rebuild_sq
   idx_ddls = get_secondary_index_ddls(conn, catalog_table; surviving_columns = surviving_columns, column_renames = column_renames,
                                       rename_table_to = catalog_table == table_name ? nothing : table_name)
   safe_tbl = replace(table_name, "\"" => "\"\"")
-  return join(String[String(rebuild_sql); idx_ddls; "PRAGMA foreign_key_check(\"$(safe_tbl)\");"], "\n")
+  return join(String[before; String(rebuild_sql); idx_ddls; after; "PRAGMA foreign_key_check(\"$(safe_tbl)\");"], "\n")
+end
+
+"""
+    _finalize_sqlite_rebuilds!(conn, migration_plan, current_schema, rebuild_context;
+                               live, table_renames, dropped_tables) -> Nothing
+
+Render every SQLite table rebuild in the plan, ONCE, after the whole plan is known (#729).
+
+The producers of a table's `"Alter table: <model>"` step register the bare `Dialect.rebuild_table`
+SQL and nothing else. This pass wraps each one with what the rebuild would otherwise lose: the
+secondary indexes (#82), the triggers ON the table, and the views and foreign triggers that name it
+and would fail its RENAME. It runs last for three reasons, each of which a per-registration render
+got wrong:
+
+  * **The rename map is complete only now.** `_resolve_table_fields` fills it inside the new-column
+    loop, so a rebuild registered by `_add_new_field` for an earlier column rendered without a rename
+    answered later — and a pure rename registers no rebuild of its own to repair it (#556's gap).
+  * **Staleness is migration-wide.** `migrate` runs the rename buckets before any rebuild, and the
+    rebuilds of different tables in binding-name order, so whether a snapshotted view is still right
+    depends on every table's renames and drops, not only its own.
+  * **Each object is re-created from one text.** A view that names two rebuilt tables is dropped and
+    re-created by both blocks; computing its statement once (see `_sqlite_recreated_ddl`) makes the
+    order they run in irrelevant.
+
+`rebuild_context` maps each table `_alter_table_fields` diffed to `(catalog name, rename map)`; the
+map is the same object the producers filled. Every producer runs inside `_alter_table_fields`, so
+every step has an entry; one that does not is still rendered — under its own name, with no renames —
+because a step left bare would drop the table's indexes and skip the foreign-key gate in silence.
+PostgreSQL has no rebuild, so this returns at once.
+
+Raises `InvalidMigrationError` — at plan time, so `makemigrations` writes no plan — when a trigger or
+view would be re-created stale; see `_sqlite_recreated_ddl` for exactly when. Logs one warning per
+rebuilt table that carries clauses the rebuild drops because no model can declare them
+(`_sqlite_unmodellable_table_clauses`).
+"""
+function _finalize_sqlite_rebuilds!(conn, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
+                                    current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
+                                    rebuild_context::Dict{Symbol, Tuple{Symbol, Dict{String, String}}};
+                                    live::Vector{LiveTable} = LiveTable[],
+                                    table_renames::Dict{String, String} = Dict{String, String}(),
+                                    dropped_tables::Set{String} = Set{String}())::Nothing
+  conn isa PormGSQLite || return nothing
+  rebuilt = Symbol[t for (t, steps) in migration_plan if haskey(steps, "Alter table: $t")]
+  isempty(rebuilt) && return nothing
+  for t in rebuilt
+    haskey(rebuild_context, t) || (rebuild_context[t] = (t, Dict{String, String}()))
+  end
+  objects = _sqlite_schema_objects(conn)
+  # No view or trigger anywhere: nothing to carry, so no further catalog reads.
+  ctx = isempty(objects) ? nothing :
+        _sqlite_recreate_context(conn, rebuilt, current_schema, rebuild_context, objects;
+                                 live = live, table_renames = table_renames, dropped_tables = dropped_tables)
+  # rowid ⇒ the object's one re-create statement. Not keyed by name: a trigger and a view may share one.
+  recreated = Dict{Int, String}()
+  for t in rebuilt
+    key = "Alter table: $t"
+    catalog, renames = rebuild_context[t]
+    model = current_schema[t][:model]
+    before, after = String[], String[]
+    if ctx !== nothing
+      on_table, dependents = _sqlite_rebuild_dependents(objects, string(catalog);
+                                                        dropped_tables = ctx.dropped_tables)
+      before = String[_sqlite_drop_object_sql(o) for o in Iterators.reverse(dependents)]
+      after = String[get!(() -> _sqlite_recreated_ddl(o, ctx; rebuilt_table = string(t)), recreated, o.rowid)
+                     for o in sort!(vcat(on_table, dependents); by = o -> o.rowid)]
+    end
+    # What the rebuild re-renders away because no model declaration can hold it — a hand-written
+    # CHECK, a COLLATE, a composite or DEFERRABLE key, STRICT… Said once per table, since this pass
+    # renders each rebuild exactly once. Structured kwargs and no `maxlog`, like the #519 index
+    # warning: the call site is bounded by the number of rebuilt tables.
+    clauses = _sqlite_unmodellable_table_clauses(conn, string(catalog))
+    isempty(clauses) ||
+      @warn "SQLite table rebuild will DROP clauses no model declaration can express: the table is " *
+            "re-created from its model, which cannot hold them. Re-create them by hand after the " *
+            "migration if you still need them." table = string(t) clauses = clauses
+    # In place: an existing key keeps its position, which the producers chose (after every ADD and
+    # RENAME COLUMN on the table).
+    migration_plan[t][key] = _sqlite_rebuild_preserving_indexes(conn, string(model_table_name(model)),
+      migration_plan[t][key];
+      surviving_columns = _model_physical_columns(model),
+      column_renames = renames,
+      catalog_table = string(catalog),
+      before = before, after = after)
+  end
+  return nothing
+end
+
+# The `_SQLiteRecreateContext` for this plan: everything in it that can make a snapshotted view or
+# trigger stale. Case-only renames are dropped — SQLite resolves names case-insensitively, so they
+# change nothing a definition says.
+function _sqlite_recreate_context(conn::PormGSQLite, rebuilt::Vector{Symbol},
+                                  current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
+                                  rebuild_context::Dict{Symbol, Tuple{Symbol, Dict{String, String}}},
+                                  objects::Vector{_SQLiteSchemaObject};
+                                  live::Vector{LiveTable}, table_renames::Dict{String, String},
+                                  dropped_tables::Set{String})::_SQLiteRecreateContext
+  table_moves = Dict{String, String}(lowercase(old) => new for (old, new) in table_renames
+                                     if lowercase(old) != lowercase(new))
+  column_moves = Dict{String, Dict{String, String}}()
+  for (_, (catalog, renames)) in rebuild_context
+    moves = Dict{String, String}(lowercase(old) => new for (old, new) in renames
+                                 if lowercase(old) != lowercase(new))
+    isempty(moves) || (column_moves[lowercase(string(catalog))] = moves)
+  end
+  # What each rebuild removes: every live column (generated ones included — `table_xinfo`) whose
+  # post-rename name the declared model no longer has.
+  dropped_columns = Dict{String, Set{String}}()
+  for t in rebuilt
+    catalog, renames = rebuild_context[t]
+    declared = Set{String}(lowercase(c) for c in _model_physical_columns(current_schema[t][:model]))
+    renamed_to = Dict{String, String}(lowercase(old) => new for (old, new) in renames)
+    gone = Set{String}(lowercase(c) for c in _sqlite_table_xinfo_columns(conn, string(catalog))
+                       if !(lowercase(get(renamed_to, lowercase(c), c)) in declared))
+    isempty(gone) || (dropped_columns[lowercase(string(catalog))] = gone)
+  end
+  live_tables = Set{String}(lowercase(t.name) for t in live)
+  return _SQLiteRecreateContext(table_moves, column_moves, dropped_columns,
+                                Set{String}(lowercase(t) for t in dropped_tables),
+                                live_tables, _sqlite_view_tables(objects, live_tables))
 end
 
 # Physical column names (db_column when set, else field name) of a model's rebuilt table — the exact set
@@ -527,7 +652,8 @@ remove an undeclared clause — every constraint-backed composite counts as gone
 needs no statement, and a declared one is re-created as a `CREATE UNIQUE INDEX` after the rebuild.
 Deciding it first is what keeps a table with one undeclared and one declared `UNIQUE (…)` from
 losing the declared one. Registering it here makes this the FIFTH producer of the
-`"Alter table: <model>"` key, so it passes the shared `column_renames` (#556).
+`"Alter table: <model>"` key. Like the others it registers the bare rebuild, and
+[`_finalize_sqlite_rebuilds!`](@ref) renders the snapshot around it once the plan is complete (#729).
 """
 function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
                                   migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
@@ -575,10 +701,7 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
     if any(j -> !taken[j] && live[j][1].constraint, eachindex(live)) &&
        !(haskey(migration_plan, model_name) && haskey(migration_plan[model_name], rebuild_key))
       _configure_order_dict_migration_plan(migration_plan, model_name, rebuild_key,
-        _sqlite_rebuild_preserving_indexes(conn, table, Dialect.rebuild_table(conn, model);
-          surviving_columns = declared_cols,
-          column_renames = column_renames,
-          catalog_table = string(catalog_table)))
+                                           Dialect.rebuild_table(conn, model))
     end
     rebuilding = haskey(migration_plan, model_name) && haskey(migration_plan[model_name], rebuild_key)
   end
@@ -686,12 +809,10 @@ function _add_new_table(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
   return nothing
 end
 
-# `column_renames` (#556): one of four producers of the shared "Alter table: <model>" key, and the
-# surviving entry is whichever registration lands LAST. It used to render its rebuild with an empty
-# rename map, so a rename co-occurring with a new column on the same table lost the renamed column's
-# secondary index. `_alter_table_fields` now owns one accumulator per table and hands it to every
-# producer, so the rebuild that wins carries the union of the renames.
-function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::String; temporary_default_value::Any = nothing, column_renames::Dict{String, String} = Dict{String, String}(), catalog_table::Symbol = model_name)::Nothing
+# One of the four producers of the shared SQLite "Alter table: <model>" key. It registers the BARE
+# rebuild; the indexes, triggers and views around it are rendered once the whole plan is known, by
+# `_finalize_sqlite_rebuilds!` (#729). Until then the table's rename map is still growing (#556).
+function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::String; temporary_default_value::Any = nothing)::Nothing
   field = model.fields[field_name]
   Models.is_many_to_many_field(field) && return nothing
   name = _hash_field_name(model_name, field_name)
@@ -751,7 +872,8 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
       delete!(migration_plan[model_name], alter_key)
     end
     # #82: this add-NOT-NULL-with-default path also rebuilds the table on SQLite, so it must preserve the
-    # existing secondary indexes too (no-op on PostgreSQL).
+    # existing secondary indexes too. `_finalize_sqlite_rebuilds!` wraps the bare rebuild registered
+    # below once the plan is complete (#729); on PostgreSQL this is the column ALTER itself.
     #
     # THE ONE DECLARED DELTA in the planner, and the only place a `ColumnDelta` is constructed rather
     # than diffed. Everywhere else the delta answers "what differs between the models file and the
@@ -788,17 +910,13 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
     # it. Harmless by construction rather than by luck: the delta's only facet is `:default`, and
     # none of the four constraint-name lookups sits in that branch.
     _configure_order_dict_migration_plan(migration_plan, model_name, alter_key,
-      _sqlite_rebuild_preserving_indexes(conn, model_table_name(model),
-        Dialect.alter_field(conn, model, field_name, field,
-          ColumnDelta(temp_spec,
-                      ColumnSpec(temp_spec.name, temp_spec.type, temp_spec.nullable,
-                                 temp_spec.primary_key, temp_spec.unique,
-                                 live_default, temp_spec.reference,
-                                 temp_spec.checks, temp_spec.identity, temp_spec.raw),
-                      [:default]));
-        surviving_columns = _model_physical_columns(model),
-        column_renames = column_renames,
-        catalog_table = string(catalog_table)))
+      Dialect.alter_field(conn, model, field_name, field,
+        ColumnDelta(temp_spec,
+                    ColumnSpec(temp_spec.name, temp_spec.type, temp_spec.nullable,
+                               temp_spec.primary_key, temp_spec.unique,
+                               live_default, temp_spec.reference,
+                               temp_spec.checks, temp_spec.identity, temp_spec.raw),
+                    [:default])))
   elseif conn isa PormGSQLite
     # The other half of the same invariant, and the reason the block above was not enough. The
     # rebuild's `CREATE TABLE` is rendered from the DESIRED model, so it already declares every new
@@ -826,15 +944,14 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
   end
   return nothing
 end
-function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Symbol; temporary_default_value::Any = nothing, column_renames::Dict{String, String} = Dict{String, String}(), catalog_table::Symbol = model_name)::Nothing
-  _add_new_field(conn, migration_plan, model_name, model, field_name |> string, temporary_default_value=temporary_default_value, column_renames=column_renames, catalog_table=catalog_table)
+function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Symbol; temporary_default_value::Any = nothing)::Nothing
+  _add_new_field(conn, migration_plan, model_name, model, field_name |> string, temporary_default_value=temporary_default_value)
 end
 
 """
     _plan_column_change!(conn, migration_plan, model_name, declared_model, field_name,
                          new_field, delta, hashed_name;
-                         old_column = nothing, column_renames = Dict{String,String}(),
-                         catalog_table = model_name)
+                         old_column = nothing, catalog_table = model_name)
 
 Plan everything one existing column needs, in the one order that works, from the one delta.
 
@@ -876,17 +993,16 @@ is what puts it there.
 
 **`catalog_table` is the same rule for the table (#615).** On a table rename every statement here
 names `model_name`, the NEW table, because `_order_statements` runs the `RENAME TABLE` first — but the
-catalog still holds the old name when the plan is built, so every lookup (the FK drop's, the four in
-`Dialect.alter_field`, the SQLite index snapshot) asks for `catalog_table` instead. The caller passes
-`live.name`; everywhere but a table rename it equals `model_name`, which is its default.
+catalog still holds the old name when the plan is built, so every lookup (the FK drop's and the four
+in `Dialect.alter_field`) asks for `catalog_table` instead. The caller passes `live.name`; everywhere
+but a table rename it equals `model_name`, which is its default.
 
-`column_renames` is passed through to the SQLite rebuild so a renamed column's secondary indexes are
-re-created against the new name (#150). Since #556 the accumulator is owned by `_alter_table_fields`,
-one per table, and every producer of the shared `"Alter table: <model>"` key renders with it -- this
-function from both its call sites, and `_add_new_field` -- so whichever registration lands last
-carries the union of the renames rather than only its own. On SQLite the rebuild entry is also
-relocated to the end of the table's plan on every registration, because it copies by the DESIRED
-column names and so must follow every `RENAME COLUMN` and every `ADD COLUMN`.
+On SQLite this registers the BARE rebuild. The index snapshot, the table's triggers and the views
+that read it are rendered around it by [`_finalize_sqlite_rebuilds!`](@ref) once the whole plan is
+known (#729), because only then is the table's rename map complete: a rename answered after this
+registration still has to reach the snapshot (#150/#556). The rebuild entry is also relocated to the
+end of the table's plan on every registration, because it copies by the DESIRED column names and so
+must follow every `RENAME COLUMN` and every `ADD COLUMN`.
 
 `db_index` deliberately plays no part here — `index_actions` in `_alter_table_fields` owns it,
 because on SQLite a non-empty delta means a rebuild that re-emits every live index, and a
@@ -901,7 +1017,6 @@ function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
                               delta::ColumnDelta,
                               hashed_name::String;
                               old_column::Union{String, Nothing} = nothing,
-                              column_renames::Dict{String, String} = Dict{String, String}(),
                               catalog_table::Symbol = model_name)::Nothing
   isempty(delta) && old_column === nothing && return nothing
   # ONE source for "the column the live catalog knows", shared with the four constraint-name lookups
@@ -947,25 +1062,18 @@ function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
     # why two renames on one table could be documented as unsupported; any non-empty delta reaches
     # here now, so it is fixed instead.
     #
-    # The surviving rebuild is whichever registration lands LAST, so every producer of this key has
-    # to render with the SAME rename map or the winner drops the renamed column's indexes. Since
-    # #556 `_alter_table_fields` owns one map per table and hands it to all four: this function from
-    # both its call sites, `_add_new_field`, and the deletion rebuild in `_resolve_table_fields`.
-    # (This comment has now overstated the position twice — first claiming every renamed column kept
-    # its indexes, then naming three producers when there are four. Both were caught by executing a
-    # plan, not by reading one.)
+    # The surviving rebuild is whichever registration lands LAST. #556 made all four producers of
+    # this key render with one shared rename map, so the winner carried every rename registered
+    # BEFORE it — but not one answered after it (a pure rename registers nothing), and each
+    # registration also snapshotted the catalog for nothing. Since #729 the producers register the
+    # bare rebuild and `_finalize_sqlite_rebuilds!` renders the block once, with the complete map.
     if conn isa PormGSQLite && haskey(migration_plan, model_name) &&
        haskey(migration_plan[model_name], alter_key)
       delete!(migration_plan[model_name], alter_key)
     end
-    # #82: on SQLite this preserves the table's secondary indexes across the rebuild and gates on
-    # foreign_key_check (no-op on PostgreSQL). See _sqlite_rebuild_preserving_indexes.
-    alter_sql = _sqlite_rebuild_preserving_indexes(conn, model_table_name(declared_model),
-      Dialect.alter_field(conn, declared_model, field_name, new_field, delta;
-                          catalog_table = string(catalog_table));
-      surviving_columns = _model_physical_columns(declared_model),
-      column_renames = column_renames,
-      catalog_table = string(catalog_table))
+    # On PostgreSQL this is the per-slot ALTER; on SQLite the bare rebuild, wrapped later (#729).
+    alter_sql = Dialect.alter_field(conn, declared_model, field_name, new_field, delta;
+                                    catalog_table = string(catalog_table))
     _configure_order_dict_migration_plan(migration_plan, model_name, alter_key, alter_sql)
   end
 
@@ -976,7 +1084,9 @@ function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
 end
 
 function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, live::LiveTable, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::PormGSettings; interactive::Bool = true,
-                             composite_targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}())::Nothing
+                             composite_targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}(),
+                             sqlite_rebuild_context::Dict{Symbol, Tuple{Symbol, Dict{String, String}}} =
+                               Dict{Symbol, Tuple{Symbol, Dict{String, String}}}())::Nothing
   # @pormg_debug model_name == :new_join_position
   # #507 phase 2: NO whole-model early-out. `Models.are_model_fields_equal` used to short-circuit
   # this whole function when every field compared equal, and it was a second answer to a question
@@ -1043,12 +1153,11 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
   # mutable `Vector`, so a `push!` from in there lands in the list the flush loop below drains.
   index_actions = Tuple{Symbol, String, String, Union{String, Nothing}}[]
 
-  # One rename map per TABLE (#150/#556). The SQLite rebuild is registered under a single
-  # "Alter table: <model>" key and the surviving entry is whichever registration lands last, so the
-  # map has to be shared by all FOUR producers — the rename branch, the alteration loop below,
-  # `_add_new_field`, and the deletion rebuild — or the winner re-renders with renames it never saw
-  # and the renamed column's secondary index is dropped and not re-created. It lived inside
-  # `_resolve_table_fields` until #556, which is exactly why only the rename branch honoured it.
+  # One rename map per TABLE (#150/#556): old ⇒ new physical column, filled by the rename branch.
+  # The SQLite rebuild re-creates the table's indexes and triggers against the NEW names, so it must
+  # see every rename — including one answered after the rebuild was registered. Since #729 it is read
+  # once, by `_finalize_sqlite_rebuilds!`, after every table has been diffed; the producers of the
+  # "Alter table: <model>" step no longer render with it at all.
   sqlite_rename_map = Dict{String, String}()
 
   @pormg_debug false
@@ -1057,6 +1166,8 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
   # declared (new) name with the old `LiveTable` — so every lookup below asks for `catalog_table`, and
   # every statement names `model_name`.
   catalog_table = Symbol(live.name)
+  # For the rebuild pass at the end of the plan — the map object itself, which is still filling.
+  conn isa PormGSQLite && (sqlite_rebuild_context[model_name] = (catalog_table, sqlite_rename_map))
 
   # Pass maps to resolve fields so original keys can be used for accessing model.fields
   _resolve_table_fields(conn, model_name, live, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive, index_actions=index_actions, sqlite_rename_map=sqlite_rename_map)
@@ -1117,12 +1228,8 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
       # nothing. The IR carries the whole constraint as one `:reference` facet, `alter_field` has no
       # branch for that facet and needs none, and `_fk_constraint_action` reads it directly — so the
       # filter has nothing left to remove.
-      # `column_renames` (#556): this call re-registers the shared "Alter table: <model>" key on
-      # SQLite, so without the accumulated map it would clobber the rename branch's rebuild with one
-      # that has no renames — and the renamed column's index would not be re-created.
       _plan_column_change!(conn, migration_plan, model_name, current_schema[model_name][:model],
                            field_name_stripped, field, delta, name;
-                           column_renames = sqlite_rename_map,
                            catalog_table = catalog_table)
 
       # Index differences are RECORDED here and emitted after the loop — see `index_actions`.
@@ -1208,8 +1315,8 @@ function _resolve_table_fields(
                                 # function's rename branch records a `db_index` flip into; it is
                                 # flushed by the caller AFTER the whole field pass, so an index
                                 # action recorded here still lands after any table rebuild.
-                                # `sqlite_rename_map` is the per-table union of renames every
-                                # producer of the shared "Alter table:" key must render with.
+                                # `sqlite_rename_map` is the per-table rename map the rename
+                                # branch fills; the SQLite rebuild pass reads it at the end.
                                 # Defaulted so the function stays callable on its own.
                                 index_actions::Vector{Tuple{Symbol, String, String, Union{String, Nothing}}} =
                                   Tuple{Symbol, String, String, Union{String, Nothing}}[],
@@ -1226,7 +1333,7 @@ function _resolve_table_fields(
     if colect_deletion |> isempty
       # `field_name` here is the physical column; pass the real field key so _add_new_field's
       # model.fields lookup resolves (the DDL re-derives the db_column from the field) (#50).
-      _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings), column_renames = sqlite_rename_map, catalog_table = catalog_table)
+      _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings))
     else
       # Only the answer is parsed inside the reader; the rename work below propagates its own
       # failures as themselves (#197).
@@ -1243,7 +1350,7 @@ function _resolve_table_fields(
 
       if old_field_sym === nothing
         # `field_name` is the physical column; pass the real field key (see above) (#50).
-        _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings), column_renames = sqlite_rename_map, catalog_table = catalog_table)
+        _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings))
       else
         old_field_name = old_field_sym |> string
         new_field = current_model.fields[current_fields_map[field_name]]
@@ -1307,7 +1414,6 @@ function _resolve_table_fields(
                              new_field, delta,
                              hashed_new_name;
                              old_column = old_field_name,
-                             column_renames = sqlite_rename_map,
                              catalog_table = catalog_table)
 
         # #556: a rename that ALSO flips `db_index` now plans the index action in THIS migration.
@@ -1431,21 +1537,16 @@ function _resolve_table_fields(
       # not change, plan nothing", so fabricating one here would say the opposite of what is meant.
       # `rebuild_table` is the same body and emits identical SQL, minus the three fake arguments.
       #
-      # `surviving_columns` keeps the dropped columns' indexes off the preserved set (see
-      # _sqlite_rebuild_preserving_indexes). The stable "Alter table:" key means a co-occurring
-      # alteration/add-default collapses into this one idempotent recreation from the same desired model.
-      # `column_renames` (#556): the FOURTH producer of the shared key, and the one the first pass
-      # missed. It is reached when a rename co-occurs with a deletion that forces a rebuild AND the
-      # rename's own delta was empty (a pure rename registers no rebuild, so `sqlite_rename_rebuild`
-      # does not skip this branch). Without the map `get_secondary_index_ddls` filters the renamed
-      # column's index out as referencing a column that does not survive, and the index is silently
-      # lost until the next `makemigrations`.
+      # The stable "Alter table:" key means a co-occurring alteration/add-default collapses into this
+      # one idempotent recreation from the same desired model. It is the FOURTH producer of the key
+      # (#556), reached when a rename co-occurs with a deletion that forces a rebuild AND the rename's
+      # own delta was empty (a pure rename registers no rebuild, so `sqlite_rename_rebuild` does not
+      # skip this branch). Registered bare: `_finalize_sqlite_rebuilds!` renders the index snapshot
+      # and the triggers and views around it once the plan is complete (#729), with
+      # `surviving_columns` keeping the dropped columns' indexes off the preserved set and the
+      # table's full rename map keeping a renamed column's index on it.
       _configure_order_dict_migration_plan(migration_plan, model_name, "Alter table: $model_name",
-        _sqlite_rebuild_preserving_indexes(conn, model_table_name(current_model),
-          Dialect.rebuild_table(conn, current_model);
-          surviving_columns = _model_physical_columns(current_model),
-          column_renames = sqlite_rename_map,
-          catalog_table = string(catalog_table)))
+        Dialect.rebuild_table(conn, current_model))
     else
       # PostgreSQL, or SQLite with no blocking column: plain DROP COLUMN works (the FK drop runs first on
       # PostgreSQL). Since #519 a SQLite column reaching here is referenced by no index at all, so the
@@ -1752,9 +1853,12 @@ end
 table_renames = Dict{String, String}(string(old) => string(new) for (new, old) in decisions if old !== nothing)
 retarget(t::LiveTable) = _retarget_references(t, table_renames)
 
+# #729: each diffed table's catalog name and rename map, for the SQLite rebuild pass at the end.
+sqlite_rebuild_context = Dict{Symbol, Tuple{Symbol, Dict{String, String}}}()
+
 for table in matched
   _alter_table_fields(conn, migration_plan, Symbol(table.name), retarget(table), current_schema, settings, interactive=interactive,
-                      composite_targets = composite_targets)
+                      composite_targets = composite_targets, sqlite_rebuild_context = sqlite_rebuild_context)
 end
 
 for (model_name, old_model_name) in decisions
@@ -1769,7 +1873,7 @@ for (model_name, old_model_name) in decisions
     # planned; the call below also passed `(new::Symbol, old)` to a `(old::String, new::String)`
     # method. Registered under `model_name`, like the column work it precedes.
     _alter_table_fields(conn, migration_plan, model_name, retarget(futher_processing[:drop_table][old_model_name]["model"]), current_schema, settings, interactive=interactive,
-                        composite_targets = composite_targets)
+                        composite_targets = composite_targets, sqlite_rebuild_context = sqlite_rebuild_context)
     _configure_order_dict_migration_plan(migration_plan, model_name, "Rename table", Dialect.rename_table(conn, string(old_model_name), string(model_name)))
   end
 end
@@ -1789,6 +1893,11 @@ end
 
 # #161: a name this plan creates must not still be held by another table's index.
 _check_composite_targets_free(conn, composite_targets, live, dropped_tables, table_renames)
+
+# #729: every rename and drop is known now, so each SQLite rebuild can be rendered with its indexes,
+# triggers and views — and refused here, before a plan is written, where one of them would go stale.
+_finalize_sqlite_rebuilds!(conn, migration_plan, current_schema, sqlite_rebuild_context;
+                           live = live, table_renames = table_renames, dropped_tables = dropped_tables)
 
 # println(migration_plan)
 

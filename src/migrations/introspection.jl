@@ -2147,9 +2147,9 @@ spellings are all recognised (`"…"` with `""` escapes, `[…]`, `` `…` `` wi
 column named `select` or `index` reads correctly, and bare identifiers use SQLite's own character
 class (a leading letter or `_`, then letters, digits, `_` or \$).
 
-Julia's `isletter` is Unicode-aware where SQLite's bare-identifier class is ASCII, so this accepts a
-few spellings SQLite would reject in unquoted form. That is the harmless direction: a name that cannot
-appear in real DDL simply never matches a real column.
+Every character from U+0080 up is an identifier character too, because SQLite reads every byte from
+0x80 up as one: `pts·total` is a single name to it (#729). Splitting it at the `·` invented a column
+`total` and hid the real one, which the stale-object check of a SQLite rebuild could then miss.
 
 The `(`-follows flag is what separates `lower` the function from `lower` the column in
 `lower("a")` — without it, an index expression's function names would be indistinguishable from
@@ -2253,10 +2253,10 @@ function _sqlite_identifier_tokens(sql::AbstractString)::Vector{_SQLiteIdentifie
                        (cs[i] in ('e', 'E')) || isletter(cs[i]))
         i += 1
       end
-    elseif isletter(c) || c == '_'
+    elseif isletter(c) || c == '_' || c > '\x7f'
       from = i
       buf = Char[]
-      while i <= n && (isletter(cs[i]) || isdigit(cs[i]) || cs[i] == '_' || cs[i] == '$')
+      while i <= n && (isletter(cs[i]) || isdigit(cs[i]) || cs[i] == '_' || cs[i] == '$' || cs[i] > '\x7f')
         push!(buf, cs[i])
         i += 1
       end
@@ -2744,9 +2744,9 @@ function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Sy
         # column index is `db_index` / `Models.Index`, which the declared model re-creates by itself, so
         # warning there would be noise on an ordinary field deletion. Structured kwargs and NO `maxlog`,
         # per the repo's warn-once policy in `src/AdvisoryLock.jl`: that policy exists for unbounded call
-        # sites, and this one is bounded by a single table's index count. A rebuild can be registered
-        # more than once for one table (the entry is relocated on each registration), so the same warning
-        # may appear twice in a `makemigrations` — repetition beats a silently lost index.
+        # sites, and this one is bounded by a single table's index count. Since #729 each rebuild is
+        # rendered once, after the whole plan (`_finalize_sqlite_rebuilds!`), so it warns once per table
+        # — it used to repeat for every registration of the same rebuild.
         if _sqlite_index_is_unmodellable(stmt, pragma_members, all_referenced)
           # The message names all four disqualifying shapes, because the `definition` printed beside it
           # tells the operator which one they have — and a message that said "expression or partial"
@@ -2767,9 +2767,794 @@ function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Sy
     # #615: the table itself is being renamed in the same migration, ahead of the rebuild, so the
     # snapshot's `ON "<old>"` must follow it. `nothing` (every non-rename caller) leaves it alone.
     rename_table_to === nothing || (stmt = _sqlite_rewrite_index_table(stmt, rename_table_to))
-    push!(ddls, endswith(stmt, ";") ? stmt : stmt * ";")
+    push!(ddls, _sqlite_single_definition(_sqlite_terminated(stmt), "INDEX", string(r.name)))
   end
   return ddls
+end
+
+"""
+    _sqlite_terminated(stmt) -> String
+
+`stmt` ending in the `;` the statement splitter cuts on. A definition read back from `sqlite_master`
+is stored as it was written, trailing comment included (measured, for a view and an index), and a `;`
+appended after one lies INSIDE it: the splitter, which honours comments since #729, then joins the
+next statement onto this one. For a `--` comment that is loud (SQLite rejects the pair); for a `/* …`
+comment SQLite accepts unterminated at the end of its input, it is silent — everything after it,
+the rebuild's `foreign_key_check` gate included, would be read as comment. So the `;` goes on a line
+of its own after a line comment, and an open block comment is closed first.
+"""
+function _sqlite_terminated(stmt::AbstractString)::String
+  s = String(rstrip(stmt))
+  cs = collect(s)
+  n = length(cs)
+  i = 1
+  ending = :none                     # what the text ends inside: nothing, a line or an open block comment
+  while i <= n
+    j = _sqlite_lex_skip(cs, i)
+    if j != i
+      # Only a comment starts with '-' or '/' and skips; one that reaches the end ends the text.
+      ending = j <= n                                               ? :none :
+               cs[i] == '-'                                         ? :line :
+               (cs[i] == '/' && _sqlite_block_comment_open(cs, i))  ? :open_block : :none
+      i = j
+    else
+      ending = :none
+      i += 1
+    end
+  end
+  ending === :line && return s * "\n;"
+  ending === :open_block && return s * " */;"
+  return endswith(s, ";") ? s : s * ";"
+end
+
+"""
+    _sqlite_single_definition(text, kind, name) -> String
+
+`text` unchanged, once it is confirmed to be exactly ONE `CREATE [TEMP|UNIQUE] <kind>` statement as
+the migration runner will cut it; `InvalidMigrationError` otherwise.
+
+A SQLite table rebuild re-emits definitions read from `sqlite_master` — indexes since #82, triggers
+and views since #729 — and `migrate` runs whatever the splitter cuts them into. SQLite's parser only
+ever stores one statement there, but text written around it (`PRAGMA writable_schema`, an edited file)
+can carry more, and the schema loader ignores everything after the first — so `CREATE VIEW v AS …;
+COMMIT; ATTACH …` loads and works, and a rebuild would have run the rest. Found in the #729 security
+review, below its reporting bar (it needs raw control of the file); checked because failing closed is
+cheap and the rest of the rebuild already does.
+"""
+function _sqlite_single_definition(text::AbstractString, kind::AbstractString, name::AbstractString)::String
+  pieces = _split_sqlite_statements(text)
+  words = length(pieces) == 1 ?
+          String[uppercase(t.name) for t in Iterators.take(_sqlite_identifier_tokens(pieces[1]), 4) if !t.quoted] :
+          String[]
+  if !(length(words) >= 2 && words[1] == "CREATE" && kind in words[2:min(end, 3)])
+    throw(InvalidMigrationError(
+      "The stored definition of $(lowercase(kind)) \"$(name)\" in sqlite_master is not a single " *
+      "CREATE $(kind) statement, so a SQLite table rebuild will not re-run it. SQLite only ever stores " *
+      "one statement there; this text was written around its parser (PRAGMA writable_schema, or an " *
+      "edited database file). Inspect it, and drop or re-create the $(lowercase(kind)) by hand before " *
+      "migrating."))
+  end
+  return String(text)
+end
+
+# ==============================================================================
+# Triggers and views across a SQLite table rebuild (#729)
+# ==============================================================================
+#
+# A rebuild's `DROP TABLE` takes the table's triggers with it, and its final `ALTER TABLE … RENAME`
+# re-parses the whole schema, so a view — or a trigger on ANOTHER table — that names the table fails
+# the RENAME ("error in view v: no such table: main.t"). SQLite's documented twelve-step procedure
+# saves both and re-creates them (steps 3, 10 and 11); this is that procedure's half the rebuild had
+# never implemented. Indexes are the other half, and `get_secondary_index_ddls` above has done it
+# since #82.
+#
+# Everything here is decided at PLAN time from a snapshot, because the plan is opaque SQL by the time
+# it runs and SQLite has no statement that copies a definition. A snapshot is only as good as its
+# freshness, and two facts measured on SQLite make a stale one worse than a lost one:
+#
+#   * `CREATE VIEW` / `CREATE TRIGGER` never check the columns or tables they name, so a stale
+#     definition is accepted without a word;
+#   * and every later `ALTER TABLE … RENAME` in the database — any table — re-parses it and fails.
+#
+# So an object that would come back naming something this migration removes or renames is REFUSED
+# at plan time, and the only rewriting done is the one that is provably right: a trigger's references
+# to its own table's renamed columns through `NEW.` / `OLD.` / `<table>.` and the `UPDATE OF` list.
+# SQLite's own `RENAME COLUMN` resolves scope with its parser — it renames `NEW.points` and leaves
+# `audit(n, points)` alone — and a token rewrite cannot, so anything it cannot attribute is refused.
+
+"""
+    _SQLITE_RESERVED_WORDS
+
+The words SQLite reserves — none of them can be a bare identifier, so an unquoted one is always
+syntax — plus the four keyword LITERALS (`NULL` and the three `CURRENT_*`), which an unquoted
+occurrence in an expression always means. Measured: every word here is a syntax error as
+`SELECT <word> FROM t`, apart from the literals.
+
+Why it is ONLY the reserved words, when a trigger is full of other keywords (`BEGIN`, `END`, `FOR
+EACH ROW`, `AFTER`, `NEW`, …): those are non-reserved, SQLite accepts each of them as a column name,
+and a column named `end` referenced bare is exactly a reference the stale-object check must not
+miss. Skipping one of them could let a stale definition through silently; not skipping it can only
+refuse a migration loudly, when a column this migration drops or renames happens to share a keyword's
+name. That is the #519 asymmetry again — a missed reference is silent, an invented one is loud.
+"""
+const _SQLITE_RESERVED_WORDS = Set([
+  "ADD", "ALL", "ALTER", "AND", "AS", "AUTOINCREMENT", "BETWEEN", "CASE", "CAST", "CHECK", "COLLATE",
+  "COMMIT", "CONSTRAINT", "CREATE", "DEFAULT", "DEFERRABLE", "DELETE", "DISTINCT", "DROP", "ELSE",
+  "ESCAPE", "EXCEPT", "EXISTS", "FOREIGN", "FROM", "GROUP", "HAVING", "IN", "INDEX", "INSERT",
+  "INTERSECT", "INTO", "IS", "ISNULL", "JOIN", "LIMIT", "NOT", "NOTHING", "NOTNULL", "ON", "OR",
+  "ORDER", "PRIMARY", "RAISE", "REFERENCES", "RETURNING", "SELECT", "SET", "TABLE", "THEN", "TO",
+  "TRANSACTION", "UNION", "UNIQUE", "UPDATE", "USING", "VALUES", "WHEN", "WHERE",
+  # keyword literals
+  "NULL", "CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP",
+])
+
+"""
+    _SQLiteSchemaObject
+
+One view or trigger as `sqlite_master` holds it. `tbl_name` is the table a trigger is `ON` (a view,
+for an `INSTEAD OF` trigger) and a view's own name for a view; `rowid` is its creation order, which
+is an order it can be re-created in.
+"""
+struct _SQLiteSchemaObject
+  type::String
+  name::String
+  tbl_name::String
+  sql::String
+  rowid::Int
+end
+
+"""
+    _sqlite_schema_objects(conn) -> Vector{_SQLiteSchemaObject}
+
+Every view and trigger in the database, in creation (`rowid`) order. Objects with no `sql` are
+internal and skipped. One query for the whole plan: the rebuild pass reads this once and works out
+each table's dependents from it.
+"""
+function _sqlite_schema_objects(conn::PormGSQLite)::Vector{_SQLiteSchemaObject}
+  rows = fetch(conn, "SELECT type, name, tbl_name, sql, rowid AS object_rowid FROM sqlite_master " *
+                     "WHERE type IN ('view', 'trigger') AND sql IS NOT NULL ORDER BY rowid") |> DataFrame
+  isempty(rows) && return _SQLiteSchemaObject[]
+  return _SQLiteSchemaObject[_SQLiteSchemaObject(string(r.type), string(r.name), string(r.tbl_name),
+                                                 string(r.sql), Int(r.object_rowid)) for r in eachrow(rows)]
+end
+
+"""
+    _sqlite_table_xinfo_columns(conn, table) -> Vector{String}
+
+The table's columns as `PRAGMA table_xinfo` reports them — which, unlike `table_info`, includes
+generated columns. A rebuild renders the table from the model, which declares no generated column,
+so one is among the columns the rebuild drops.
+"""
+function _sqlite_table_xinfo_columns(conn::PormGSQLite, table::AbstractString)::Vector{String}
+  rows = fetch(conn, "SELECT name FROM pragma_table_xinfo(?)", [String(table)]) |> DataFrame
+  isempty(rows) && return String[]
+  return String[string(c) for c in rows.name if c !== missing]
+end
+
+# Whether the text strictly between byte `a` and byte `b` of `sql` is a single `.`, give or take
+# whitespace and comments — i.e. whether the tokens ending at `a` and starting at `b` are one
+# qualified name. The tokenizer does not report punctuation, so this reads the gap itself.
+function _sqlite_only_dot_between(sql::AbstractString, a::Int, b::Int)::Bool
+  b <= nextind(sql, a) && return false
+  cs = collect(SubString(sql, nextind(sql, a), prevind(sql, b)))
+  k = _sqlite_next_significant(cs, 1)
+  return k <= length(cs) && cs[k] == '.' && _sqlite_next_significant(cs, k + 1) > length(cs)
+end
+
+"""
+    _SQLiteObjectToken
+
+An identifier token of a view or trigger definition, with what the stale-object check needs on top
+of [`_SQLiteIdentifierToken`](@ref): `key` (the name lowercased, as SQLite compares it), the
+`qualifier` in front of it (`"new"` for `NEW.points`, lowercased; `nothing` when unqualified), and
+whether it `qualifies` the next token — i.e. is a table, an alias or `NEW`/`OLD` rather than a column.
+"""
+const _SQLiteObjectToken = @NamedTuple{name::String, key::String, quoted::Bool, called::Bool,
+                                       qualifier::Union{Nothing,String}, qualifies::Bool,
+                                       start::Int, stop::Int}
+
+function _sqlite_object_tokens(sql::AbstractString)::Vector{_SQLiteObjectToken}
+  toks = _sqlite_identifier_tokens(sql)
+  n = length(toks)
+  dot_after = Bool[k < n && _sqlite_only_dot_between(sql, toks[k].stop, toks[k + 1].start) for k in 1:n]
+  return _SQLiteObjectToken[(name = t.name, key = lowercase(t.name), quoted = t.quoted, called = t.called,
+                             qualifier = (k > 1 && dot_after[k - 1]) ? lowercase(toks[k - 1].name) : nothing,
+                             qualifies = dot_after[k], start = t.start, stop = t.stop)
+                            for (k, t) in enumerate(toks)]
+end
+
+_sqlite_is_reserved(t::_SQLiteObjectToken) = !t.quoted && uppercase(t.name) in _SQLITE_RESERVED_WORDS
+_sqlite_is_word(t::_SQLiteObjectToken, word::AbstractString) = !t.quoted && uppercase(t.name) == word
+
+"""
+    _sqlite_rebuild_dependents(objects, table; dropped_tables) -> (on_table, dependents)
+
+What a rebuild of `table` (its name in the catalog) has to carry across, from the snapshot `objects`:
+
+  * `on_table` — the triggers ON it, which the rebuild's `DROP TABLE` removes;
+  * `dependents` — the views and the triggers on other tables whose definition names it, and,
+    transitively, whatever names one of those views, plus the `INSTEAD OF` triggers on each such view
+    (`DROP VIEW` removes them). Each would fail the rebuild's `RENAME`, so it has to be dropped
+    before the rebuild and re-created after.
+
+Names are matched by identifier token, case-insensitively, so a string literal or a comment never
+matches. Over-matching — a column that happens to share the table's name — only drops and re-creates
+an object verbatim, which is harmless. A trigger on a table this migration DROPS is skipped: it goes
+with its table, which is what dropping the table means.
+"""
+function _sqlite_rebuild_dependents(objects::Vector{_SQLiteSchemaObject}, table::AbstractString;
+                                    dropped_tables::Set{String} = Set{String}())
+  t = lowercase(String(table))
+  on_table = _SQLiteSchemaObject[o for o in objects if o.type == "trigger" && lowercase(o.tbl_name) == t]
+  # Objects are identified by `rowid`, never by name: triggers have a namespace of their own, so a
+  # trigger and a view may both be called `result_v` — measured on SQLite. Keyed by name, the
+  # trigger being found would mark the view as found too, and the view would be left in place to
+  # fail the RENAME.
+  taken = Set{Int}(o.rowid for o in on_table)
+  names = Set{String}([t])                # the table, and every view already found to depend on it
+  dependents = _SQLiteSchemaObject[]
+  tokens = Dict{Int, Vector{_SQLiteObjectToken}}()
+  grew = true
+  while grew
+    grew = false
+    for o in objects
+      o.rowid in taken && continue
+      o.type == "trigger" && lowercase(o.tbl_name) in dropped_tables && continue
+      toks = get!(() -> _sqlite_object_tokens(o.sql), tokens, o.rowid)
+      hit = (o.type == "trigger" && lowercase(o.tbl_name) in names) ||
+            any(tk -> !_sqlite_is_reserved(tk) && tk.key in names, toks)
+      hit || continue
+      push!(dependents, o)
+      push!(taken, o.rowid)
+      o.type == "view" && push!(names, lowercase(o.name))
+      grew = true
+    end
+  end
+  sort!(dependents; by = o -> o.rowid)
+  return on_table, dependents
+end
+
+"""
+    _SQLiteRecreateContext
+
+Everything this migration does that can make a snapshotted view or trigger stale, keyed by names as
+the CATALOG holds them at plan time (which is what the snapshot says), all lowercased:
+
+  * `table_renames` — old table ⇒ new name;
+  * `column_renames` — table ⇒ old column ⇒ new name, for every table the plan diffs;
+  * `dropped_columns` — table ⇒ the columns a rebuild of it removes (generated ones included);
+  * `dropped_tables` — the tables the plan drops;
+  * `live_tables` — every live table, so a qualifier can be recognised as one;
+  * `view_tables` — every view ⇒ the live tables it reads, through other views too
+    ([`_sqlite_view_tables`](@ref)), so a column reached through a view is checked against the
+    tables it really comes from.
+
+Case-only renames are left out: SQLite resolves names case-insensitively, so a definition that says
+`points` is still right after `points` becomes `Points`.
+"""
+struct _SQLiteRecreateContext
+  table_renames::Dict{String, String}
+  column_renames::Dict{String, Dict{String, String}}
+  dropped_columns::Dict{String, Set{String}}
+  dropped_tables::Set{String}
+  live_tables::Set{String}
+  view_tables::Dict{String, Set{String}}
+end
+
+"""
+    _sqlite_view_tables(objects, live_tables) -> Dict{String, Set{String}}
+
+Every view in `objects` ⇒ the live tables it reads, lowercased, following views it reads in turn.
+
+The stale-object check needs it because a column need not be reached through its table's name. In
+`CREATE VIEW rv2 AS SELECT grid FROM rv` over `CREATE VIEW rv AS SELECT * FROM result`, `grid` is
+`result`'s column although `rv2` never names `result`; so is `OLD.grid` in an `INSTEAD OF` trigger on
+`rv`. Found in review: without this map both were re-created stale after `grid` was dropped — and
+`rv2`, quoting `"grid"`, then silently read the STRING `'grid'` (SQLite.jl keeps double-quoted
+strings on). A token naming a live table counts as reading it; over-counting only refuses more.
+"""
+function _sqlite_view_tables(objects::Vector{_SQLiteSchemaObject}, live_tables::Set{String})::Dict{String, Set{String}}
+  views = Dict{String, _SQLiteSchemaObject}(lowercase(o.name) => o for o in objects if o.type == "view")
+  direct = Dict{String, Set{String}}()
+  reads = Dict{String, Set{String}}()
+  for (v, o) in views
+    keys_ = String[tk.key for tk in _sqlite_object_tokens(o.sql) if !_sqlite_is_reserved(tk)]
+    direct[v] = Set{String}(k for k in keys_ if k in live_tables)
+    reads[v] = Set{String}(k for k in keys_ if k != v && haskey(views, k))
+  end
+  closed = Dict{String, Set{String}}()
+  for v in keys(views)
+    acc, seen, todo = copy(direct[v]), Set{String}([v]), collect(reads[v])
+    while !isempty(todo)
+      w = pop!(todo)
+      w in seen && continue
+      push!(seen, w)
+      union!(acc, direct[w])
+      append!(todo, reads[w])
+    end
+    closed[v] = acc
+  end
+  return closed
+end
+
+# The names `sql` binds as an ALIAS or a CTE somewhere, any of which shadows a table of that name:
+#   * a token right after `AS`, right after another (non-reserved) name with nothing but whitespace
+#     between — `FROM result other` — or right after a `)` or a string — `(SELECT …) other`,
+#     `FROM 'result' other` (SQLite takes a string where a table name goes);
+#   * a CTE's name: `other AS (…)`, `other(a, b) AS (…)`, `other AS [NOT] MATERIALIZED (…)` — every
+#     one of them, not just the first after `WITH` (found in review: `WITH a AS (…), other AS (SELECT *
+#     FROM result) SELECT other.grid FROM other` hid `result`'s dropped `grid` behind the table `other`).
+# A qualifier that is also an alias cannot be taken to mean the table of that name. Over-marking a name
+# only widens what its qualified columns are checked against. The non-reserved words in
+# `_SQLITE_EXPRESSION_WORDS` are followed by an expression, never an alias, so `a LIKE NEW.b` does
+# not mark `new`.
+const _SQLITE_EXPRESSION_WORDS = ("LIKE", "GLOB", "REGEXP", "MATCH", "BY")
+
+function _sqlite_alias_names(sql::AbstractString, toks::Vector{_SQLiteObjectToken})::Set{String}
+  aliases = Set{String}()
+  n = length(toks)
+  gaps = String[_sqlite_gap_text(sql, toks[k].stop, toks[k + 1].start) for k in 1:(n - 1)]
+  for k in 2:n
+    prev = toks[k - 1]
+    gap = gaps[k - 1]
+    introduces = _sqlite_is_word(prev, "AS") ||
+                 (!_sqlite_is_reserved(prev) && !(!prev.quoted && uppercase(prev.name) in _SQLITE_EXPRESSION_WORDS))
+    if (isempty(gap) && introduces) || endswith(gap, ")") || endswith(gap, "'")
+      push!(aliases, toks[k].key)
+    end
+  end
+  # CTE names: an `AS` whose body opens with `(`, past an optional `[NOT] MATERIALIZED`.
+  for m in 2:(n - 1)
+    _sqlite_is_word(toks[m], "AS") || continue
+    q = m
+    while q < n && isempty(gaps[q]) && (_sqlite_is_word(toks[q + 1], "NOT") || _sqlite_is_word(toks[q + 1], "MATERIALIZED"))
+      q += 1
+    end
+    (q < n && startswith(gaps[q], "(")) || continue
+    before = gaps[m - 1]
+    if isempty(before)
+      push!(aliases, toks[m - 1].key)                    # `other AS (`
+    elseif before == ")"
+      j = m - 1                                          # `other(a, b) AS (`: back over the list
+      while j > 1 && gaps[j - 1] == ","
+        j -= 1
+      end
+      (j > 1 && gaps[j - 1] == "(") && push!(aliases, toks[j - 1].key)
+    end
+  end
+  return aliases
+end
+
+# The significant characters strictly between byte `a` and byte `b` of `sql` — whitespace and
+# comments dropped, literals kept. Between two identifier tokens there is no other identifier.
+function _sqlite_gap_text(sql::AbstractString, a::Int, b::Int)::String
+  b <= nextind(sql, a) && return ""
+  cs = collect(SubString(sql, nextind(sql, a), prevind(sql, b)))
+  out = Char[]
+  i = _sqlite_next_significant(cs, 1)
+  while i <= length(cs)
+    j = _sqlite_lex_skip(cs, i)
+    if j != i
+      append!(out, cs[i:j - 1])
+      i = j
+    else
+      push!(out, cs[i])
+      i += 1
+    end
+    i = _sqlite_next_significant(cs, i)
+  end
+  return String(out)
+end
+
+# Whether `sql` projects every column of something through `*` — `SELECT *`, `SELECT t.*`,
+# `SELECT a, *` — as opposed to multiplying (`a * b`) or counting (`count(*)`). Read off the gaps
+# between names: a bare `*` is a projection only right after SELECT, DISTINCT or ALL. One projection
+# is exempt: `[NOT] EXISTS (SELECT * …)` only asks whether a row exists, whatever its width — and it
+# is the ordinary way a trigger de-duplicates (`INSERT … WHERE NOT EXISTS (SELECT * FROM audit …)`),
+# which review found refused on every column drop.
+function _sqlite_reads_star(sql::AbstractString, toks::Vector{_SQLiteObjectToken})::Bool
+  for k in 1:(length(toks) - 1)
+    gap = _sqlite_gap_text(sql, toks[k].stop, toks[k + 1].start)
+    occursin(r"(^|[,.])\*($|,)", gap) || continue
+    if startswith(gap, "*")
+      any(w -> _sqlite_is_word(toks[k], w), ("SELECT", "DISTINCT", "ALL")) || continue
+      in_exists = k > 1 && _sqlite_is_word(toks[k], "SELECT") && _sqlite_is_word(toks[k - 1], "EXISTS") &&
+                  _sqlite_gap_text(sql, toks[k - 1].stop, toks[k].start) == "("
+      in_exists && continue
+    end
+    return true
+  end
+  return false
+end
+
+# Whether the NUMBER of columns a `*` expands to matters somewhere in `sql`: a compound SELECT (UNION,
+# INTERSECT, EXCEPT) must match widths, an `INSERT … SELECT *` must match the target, and a column list
+# (`CREATE VIEW v(a, b) AS …`, `WITH x(a, b) AS (…)` — an `AS` right after `)`) must match its names.
+# A plain `SELECT * FROM t` view simply narrows with its table and stays valid.
+function _sqlite_star_width_matters(sql::AbstractString, toks::Vector{_SQLiteObjectToken})::Bool
+  any(t -> any(w -> _sqlite_is_word(t, w), ("UNION", "INTERSECT", "EXCEPT", "INSERT")), toks) && return true
+  for m in 2:length(toks)
+    _sqlite_is_word(toks[m], "AS") && _sqlite_gap_text(sql, toks[m - 1].stop, toks[m].start) == ")" && return true
+  end
+  return false
+end
+
+function _sqlite_refuse_recreate(o::_SQLiteSchemaObject, rebuilt_table::AbstractString,
+                                 problem::AbstractString, remedy::AbstractString)
+  throw(InvalidMigrationError(
+    "Cannot rebuild SQLite table \"$(rebuilt_table)\": the $(o.type) \"$(o.name)\" $(problem). A " *
+    "table rebuild drops the $(o.type) and re-creates it from its definition as it stands before " *
+    "this migration, which would still name something the migration takes away; SQLite accepts " *
+    "such a definition silently and then fails every later ALTER TABLE … RENAME in the database. " *
+    remedy))
+end
+
+_sqlite_rename_remedy(kind::AbstractString) =
+  "Apply the rename as a migration of its own first (SQLite's RENAME rewrites the definition " *
+  "itself, and the next makemigrations snapshots the rewritten one), or drop the $(kind) before " *
+  "migrating and re-create it afterwards."
+
+"""
+    _sqlite_recreated_ddl(o, ctx; rebuilt_table) -> String
+
+The statement that re-creates `o` after a rebuild of `rebuilt_table`: its snapshotted definition,
+with a trigger's references to its OWN table's renames rewritten, and `InvalidMigrationError` when
+anything else in it would be stale. Deterministic in `(o, ctx)`, so every rebuild block that carries
+`o` re-creates it the same way, whichever of those blocks the migration happens to run last.
+
+**Rewritten** — a trigger ON table `T`, when this migration renames `T` or its columns: the `ON T`
+target and a `T.` qualifier follow a table rename; a renamed column follows its rename where it is
+provably `T`'s — after `NEW.`, `OLD.` or `T.`, and in the `UPDATE OF` list. Spliced by token span,
+right to left, always writing the quoted new name. Not when the definition also uses `T`, `new` or
+`old` as an alias ([`_sqlite_alias_names`](@ref)): the qualifier is then not provably the table, the
+reference is left as written, and the check below refuses it.
+
+**Refused** — any other token that is:
+
+  * a table this migration drops, or the OLD name of a table it renames (for a trigger's own table,
+    one the rewrite above did not reach — e.g. a bare `UPDATE T SET …` in the body);
+  * a column this migration renames or a rebuild drops, of a table the definition reads — by name,
+    or through a view ([`_sqlite_view_tables`](@ref)). A column qualified by a table or view name is
+    checked against that relation's tables; `NEW.`/`OLD.` against the trigger's own table (a view's
+    tables, for an `INSTEAD OF` trigger); an unqualified one, or one behind an alias, against every
+    table the definition reads, because a token scan cannot resolve scope: `INSERT INTO audit(points)`
+    beside a dropped `result.points` refuses. That errs loud, never silent;
+  * a table losing columns, read through `*` where the number of columns matters
+    ([`_sqlite_star_width_matters`](@ref)) — the removed column is never written by name there.
+
+Skipped: reserved words ([`_SQLITE_RESERVED_WORDS`](@ref)), a name followed by `(` (a function — a
+table there is still checked as a table), and the definition's own structure — a view's name and
+column list before `AS`; a trigger's header up to its `ON` target (except the `UPDATE OF` list),
+`FOR EACH ROW`, the body's `BEGIN` and final `END`, and the action word inside `RAISE(…)`.
+"""
+function _sqlite_recreated_ddl(o::_SQLiteSchemaObject, ctx::_SQLiteRecreateContext;
+                               rebuilt_table::AbstractString)::String
+  sql = o.sql
+  toks = _sqlite_object_tokens(sql)
+  n = length(toks)
+  kind = o.type
+  remedy_rename = _sqlite_rename_remedy(kind)
+
+  # The definition's own structure, which names no column.
+  structural = falses(n)
+  own = nothing                            # a trigger's table, as the catalog knows it
+  of_list = 1:0                            # a trigger's `UPDATE OF` column list
+  target = 0                               # the token naming a trigger's table
+  if kind == "view"
+    as_idx = findfirst(tk -> _sqlite_is_word(tk, "AS"), toks)
+    as_idx === nothing || (structural[1:as_idx] .= true)
+  else
+    own = lowercase(o.tbl_name)
+    on_idx = findfirst(tk -> _sqlite_is_word(tk, "ON"), toks)
+    if on_idx !== nothing && on_idx < n
+      structural[1:on_idx] .= true
+      of_idx = findfirst(k -> _sqlite_is_word(toks[k], "OF") && k > 1 && _sqlite_is_word(toks[k - 1], "UPDATE"), 1:on_idx)
+      if of_idx !== nothing
+        of_list = (of_idx + 1):(on_idx - 1)
+        structural[of_list] .= false
+      end
+      target = on_idx + 1
+      (toks[target].qualifies && target < n) && (target += 1)        # `ON main.t`
+      k = target + 1
+      for word in ("FOR", "EACH", "ROW")
+        (k <= n && _sqlite_is_word(toks[k], word)) || break
+        structural[k] = true
+        k += 1
+      end
+      begin_idx = findfirst(j -> j > target && _sqlite_is_word(toks[j], "BEGIN") && toks[j].qualifier === nothing, 1:n)
+      begin_idx === nothing || (structural[begin_idx] = true)
+      _sqlite_is_word(toks[n], "END") && (structural[n] = true)
+    end
+    for k in 2:n
+      _sqlite_is_word(toks[k - 1], "RAISE") && (structural[k] = true)
+    end
+  end
+
+  own_new = own === nothing ? nothing : get(ctx.table_renames, own, nothing)
+  own_cols = own === nothing ? Dict{String, String}() : get(ctx.column_renames, own, Dict{String, String}())
+  quote_name(s) = string('"', replace(s, '"' => "\"\""), '"')
+  aliases = _sqlite_alias_names(sql, toks)
+  # A qualifier is provably its relation only when the definition never uses that name as an alias.
+  provable(q) = q !== nothing && !(q in aliases)
+
+  # The tables a relation name stands for: itself for a table, what it reads for a view.
+  relation_tables(name) = name in ctx.live_tables ? Set{String}([name]) :
+                          get(ctx.view_tables, name, Set{String}([name]))
+  # Every table the definition reads — named, or behind a view it names — plus a trigger's own: an
+  # unqualified column may be any of theirs.
+  named = Set{String}()
+  for tk in toks
+    _sqlite_is_reserved(tk) && continue
+    tk.key in ctx.live_tables && push!(named, tk.key)
+    haskey(ctx.view_tables, tk.key) && union!(named, ctx.view_tables[tk.key])
+  end
+  own === nothing || union!(named, relation_tables(own))
+
+  # A column the rebuild removes is not always written by name. Read through `*` where the number of
+  # columns matters, a narrower table breaks the definition all the same: `SELECT * FROM result UNION
+  # ALL SELECT id, points, 0 FROM result` stops lining up, and SQLite accepts the re-created view and
+  # fails every later RENAME over it. SQLite's own DROP COLUMN refuses these (found in review, measured);
+  # so does this. A plain `SELECT * FROM result` view is left alone — it narrows and stays valid.
+  shrinking = sort!(String[t for t in named if !isempty(get(ctx.dropped_columns, t, Set{String}()))])
+  if !isempty(shrinking) && _sqlite_reads_star(sql, toks) && _sqlite_star_width_matters(sql, toks)
+    tbl = first(shrinking)
+    _sqlite_refuse_recreate(o, rebuilt_table,
+                            "reads every column of \"$(tbl)\" through `*` where their number matters " *
+                            "(a UNION, INTERSECT or EXCEPT, an INSERT … SELECT *, or a column list), and " *
+                            "this migration removes $(join(sort!(collect(ctx.dropped_columns[tbl])), ", ")) " *
+                            "from it",
+                            "Name the columns instead of `*`, or drop the $kind before running " *
+                            "makemigrations and re-create it after migrating.")
+  end
+
+  edits = Tuple{Int, Int, String}[]
+  for (k, tk) in enumerate(toks)
+    _sqlite_is_reserved(tk) && continue
+    # ── the rewrite: a trigger's own table, where the reference is provably its ──
+    if own !== nothing
+      if k == target
+        own_new === nothing || push!(edits, (tk.start, tk.stop, quote_name(own_new)))
+        continue
+      end
+      if own_new !== nothing && tk.qualifies && tk.key == own && provable(own) &&
+         tk.qualifier in (nothing, "main")
+        push!(edits, (tk.start, tk.stop, quote_name(own_new)))
+        continue
+      end
+      if haskey(own_cols, tk.key) && !tk.qualifies &&
+         (k in of_list || (tk.qualifier in ("new", "old", own) && provable(tk.qualifier)))
+        push!(edits, (tk.start, tk.stop, quote_name(own_cols[tk.key])))
+        continue
+      end
+    end
+    structural[k] && continue
+    # ── the check: nothing else may name what this migration takes away ──
+    tk.key in ctx.dropped_tables &&
+      _sqlite_refuse_recreate(o, rebuilt_table, "names table \"$(tk.name)\", which this migration drops",
+                              "Drop the $kind, or keep the table, before running makemigrations.")
+    haskey(ctx.table_renames, tk.key) &&
+      _sqlite_refuse_recreate(o, rebuilt_table,
+                              "names table \"$(tk.name)\", which this migration renames to " *
+                              "\"$(ctx.table_renames[tk.key])\", where PormG cannot rewrite it safely",
+                              remedy_rename)
+    (tk.called || tk.qualifies) && continue     # a function, a table, an alias or NEW/OLD
+    owners = if own !== nothing && tk.qualifier in ("new", "old") && provable(tk.qualifier)
+      relation_tables(own)
+    elseif provable(tk.qualifier) && (tk.qualifier in ctx.live_tables || haskey(ctx.view_tables, tk.qualifier))
+      relation_tables(tk.qualifier)
+    else
+      named
+    end
+    for tbl in owners
+      renamed = get(ctx.column_renames, tbl, nothing)
+      if renamed !== nothing && haskey(renamed, tk.key)
+        _sqlite_refuse_recreate(o, rebuilt_table,
+                                "uses column \"$(tk.name)\" of \"$(tbl)\", which this migration renames to " *
+                                "\"$(renamed[tk.key])\", where PormG cannot rewrite it safely (only " *
+                                "NEW.<col>, OLD.<col>, <table>.<col> and the UPDATE OF list of a " *
+                                "trigger's own table are rewritten)",
+                                remedy_rename)
+      end
+      if tk.key in get(ctx.dropped_columns, tbl, Set{String}())
+        _sqlite_refuse_recreate(o, rebuilt_table,
+                                "uses column \"$(tk.name)\" of \"$(tbl)\", which this migration removes " *
+                                "(when a column of another table it names has the same name, PormG " *
+                                "cannot tell which one it means, and refuses rather than guess)",
+                                "Drop the $kind, or rewrite it without that column, before running " *
+                                "makemigrations, and re-create it after migrating.")
+      end
+    end
+  end
+
+  out = String(sql)
+  for (a, b, repl) in Iterators.reverse(sort!(edits; by = first))
+    out = string(SubString(out, 1, prevind(out, a)), repl, SubString(out, nextind(out, b)))
+  end
+  return _sqlite_single_definition(_sqlite_terminated(out), uppercase(kind), o.name)
+end
+
+# `DROP VIEW` / `DROP TRIGGER` for a dependent that has to be out of the way of the rebuild's RENAME.
+# `IF EXISTS`, because dropping a view also drops its INSTEAD OF triggers, which may come next.
+_sqlite_drop_object_sql(o::_SQLiteSchemaObject)::String =
+  "DROP $(uppercase(o.type)) IF EXISTS \"$(replace(o.name, '"' => "\"\""))\";"
+
+# ==============================================================================
+# Clauses a SQLite table rebuild re-renders away (#729)
+# ==============================================================================
+
+# `CREATE TABLE`'s column definitions and table constraints, split at its top-level commas, and the
+# text after the closing parenthesis (the table options). Literals, quoted identifiers and comments
+# are skipped with the statement splitter's lexical rules, so a `,` or `)` inside one splits nothing.
+# A definition with no parenthesised body — malformed, or `CREATE TABLE … AS SELECT` — yields none.
+function _sqlite_table_definition_parts(sql::AbstractString)::Tuple{Vector{String}, String}
+  cs = collect(sql)
+  n = length(cs)
+  i = 1
+  while i <= n
+    j = _sqlite_lex_skip(cs, i)
+    if j != i
+      i = j
+    elseif cs[i] == '('
+      break
+    else
+      i += 1
+    end
+  end
+  i > n && return String[], ""
+  parts = String[]
+  depth = 0
+  start = i + 1
+  i += 1
+  while i <= n
+    j = _sqlite_lex_skip(cs, i)
+    if j != i
+      i = j
+      continue
+    end
+    c = cs[i]
+    if c == '('
+      depth += 1
+    elseif c == ')' && depth > 0
+      depth -= 1
+    elseif c == ')'
+      push!(parts, strip(String(cs[start:i - 1])))
+      return filter!(!isempty, parts), String(cs[i + 1:n])
+    elseif c == ',' && depth == 0
+      push!(parts, strip(String(cs[start:i - 1])))
+      start = i + 1
+    end
+    i += 1
+  end
+  return String[], ""
+end
+
+# `s` with every parenthesised group blanked to spaces, so the tokens left are the ones at the top
+# level of a column definition or table constraint — `COLLATE` in `"a" TEXT COLLATE NOCASE`, but not
+# the one inside `CHECK (a COLLATE NOCASE = 'x')`.
+function _sqlite_blank_parens(s::AbstractString)::String
+  cs = collect(s)
+  out = copy(cs)
+  depth = 0
+  i = 1
+  while i <= length(cs)
+    j = _sqlite_lex_skip(cs, i)
+    if j != i
+      depth > 0 && (out[i:j - 1] .= ' ')
+      i = j
+      continue
+    end
+    c = cs[i]
+    if c == '('
+      depth += 1
+    elseif c == ')'
+      depth = max(depth - 1, 0)
+      out[i] = ' '
+    end
+    depth > 0 && (out[i] = ' ')
+    i += 1
+  end
+  return String(out)
+end
+
+# `s` from byte `from` through the parenthesised group that follows it — a whole `CHECK ( … )` as
+# written. The rest of `s` when the group never closes.
+function _sqlite_clause_through_parens(s::AbstractString, from::Int)::String
+  rest = collect(SubString(s, from))
+  depth = 0
+  i = 1
+  while i <= length(rest)
+    j = _sqlite_lex_skip(rest, i)
+    if j != i
+      i = j
+      continue
+    end
+    if rest[i] == '('
+      depth += 1
+    elseif rest[i] == ')'
+      depth -= 1
+      depth == 0 && return String(rest[1:i])
+    end
+    i += 1
+  end
+  return String(rest)
+end
+
+# The two CHECK clauses PormG writes — `Dialect._non_negative_check_clause` and the SQLite arm of the
+# byte-length bound — whole, in any of SQLite's identifier spellings (the same four
+# `_sqlite_column_checks` reads them back in). A CHECK of either shape is a fact the column IR carries
+# (`ColumnSpec.checks`), so a rebuild that drops it does so because the plan says so, visibly.
+const _SQLITE_PORMG_CHECK_SHAPES = let ident = "(?:\"[^\"]+\"|\\[[^\\]]+\\]|`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)"
+  (Regex("^CHECK\\s*\\(\\s*" * ident * "\\s*>=\\s*0\\s*\\)\$", "i"),
+   Regex("^CHECK\\s*\\(\\s*length\\s*\\(\\s*" * ident * "\\s*\\)\\s*<=\\s*\\d+\\s*\\)\$", "i"))
+end
+
+"""
+    _sqlite_unmodellable_table_clauses(conn, table) -> Vector{String}
+
+What a rebuild of `table` would silently drop because no model declaration can express it: the
+rebuild renders the table from the model, so any clause the live `CREATE TABLE` carries beyond what
+PormG writes is gone afterwards. One entry per clause, each saying what it is and quoting it:
+
+  * a `CHECK`, at column or table level, that is not one of PormG's two shapes
+    (`_SQLITE_PORMG_CHECK_SHAPES`);
+  * a column `COLLATE`, a generated column, an `ON CONFLICT` clause;
+  * a composite `FOREIGN KEY`, and any key's `ON UPDATE`, `DEFERRABLE` / `INITIALLY` or `MATCH` —
+    PormG's SQLite keys are `REFERENCES "t"("c") ON DELETE …` and nothing more (a Django-created
+    SQLite key is `DEFERRABLE INITIALLY DEFERRED`, so an imported schema reports it);
+  * the table options `STRICT` and `WITHOUT ROWID`.
+
+Not reported: a table-level `UNIQUE (…)`, which the planner models (#161), and what PormG writes
+itself. Empty when the table has no stored definition. Read from `sqlite_master` with the name
+compared case-insensitively, as SQLite resolves it (#57).
+"""
+function _sqlite_unmodellable_table_clauses(conn::PormGSQLite, table::AbstractString)::Vector{String}
+  rows = fetch(conn, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE",
+               [String(table)]) |> DataFrame
+  (isempty(rows) || rows.sql[1] === missing) && return String[]
+  parts, tail = _sqlite_table_definition_parts(string(rows.sql[1]))
+  found = String[]
+  for part in parts
+    toks = _sqlite_identifier_tokens(part)
+    isempty(toks) && continue
+    lead = toks[1].quoted ? "" : uppercase(toks[1].name)
+    is_column = !(lead in ("CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK", "FOREIGN"))
+    # The keywords outside any parentheses. A column definition's first token is its NAME, quoted or
+    # not, and a name may be spelled like any keyword below, so it is left out by position.
+    top = _sqlite_identifier_tokens(_sqlite_blank_parens(part))
+    words = String[uppercase(t.name) for t in top[(is_column ? 2 : 1):end] if !t.quoted]
+    # Every CHECK, wherever it sits; PormG's own two shapes are facts the plan already carries.
+    for t in toks
+      (!t.quoted && uppercase(t.name) == "CHECK") || continue
+      clause = _sqlite_clause_through_parens(part, t.start)
+      any(re -> occursin(re, clause), _SQLITE_PORMG_CHECK_SHAPES) ||
+        push!(found, (is_column ? "column CHECK on \"$(toks[1].name)\": " : "table CHECK: ") * clause)
+    end
+    if is_column
+      "COLLATE" in words && push!(found, "COLLATE: $part")
+      # A top-level AS in a column definition is only ever `[GENERATED ALWAYS] AS (…)`.
+      ("AS" in words || "GENERATED" in words) && push!(found, "generated column: $part")
+    else
+      if "FOREIGN" in words
+        key = findfirst(t -> !t.quoted && uppercase(t.name) == "KEY", toks)
+        if key !== nothing
+          local_cols = _sqlite_identifier_tokens(_sqlite_clause_through_parens(part, toks[key].stop + 1))
+          length(local_cols) > 1 && push!(found, "composite FOREIGN KEY: $part")
+        end
+      end
+    end
+    "CONFLICT" in words && push!(found, "ON CONFLICT: $part")
+    refs = findfirst(==("REFERENCES"), words)
+    if refs !== nothing
+      after = words[refs + 1:end]
+      update = any(k -> after[k] == "ON" && k < length(after) && after[k + 1] == "UPDATE", eachindex(after))
+      (update || any(in(("DEFERRABLE", "INITIALLY", "MATCH")), after)) &&
+        push!(found, "foreign-key ON UPDATE / DEFERRABLE / MATCH: $part")
+    end
+  end
+  options = [uppercase(t.name) for t in _sqlite_identifier_tokens(tail) if !t.quoted]
+  "STRICT" in options && push!(found, "table option: STRICT")
+  "WITHOUT" in options && push!(found, "table option: WITHOUT ROWID")
+  return found
 end
 
 # `table_name::String` — NOT Symbol. This was the odd one out of the four `get_constraints_*`

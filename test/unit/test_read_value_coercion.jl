@@ -70,6 +70,8 @@ Rvc_row = Models.Model("rvc_row",
   note  = Models.CharField(null = true),
   # #648: the one non-temporal kind the table owns, with a width the SQLite parser accepts.
   amount = Models.DecimalField(max_digits = 12, decimal_places = 2, null = true),
+  # …and one whose physical name differs, which is what lets an alias reuse its field NAME.
+  cost   = Models.DecimalField(max_digits = 10, decimal_places = 2, db_column = "cost_eur", null = true),
 )
 PormG.Models.set_models(@__MODULE__, "rvc_mock")
 end
@@ -403,6 +405,9 @@ end
     @test parts(p(-3)) == (1, 3, 0)
     @test emit(p(14)) == "{\"v\":14}"
     @test parts(p(10.0)) == (0, 10, 0)                         # a whole double, e.g. from `F * 2`
+    # A whole double Julia renders with a POSITIVE exponent (`1.5e7`): folded into the coefficient,
+    # never kept as `Decimal(0, 15, 6)`, which 0.5 would print `1.5E+7`.
+    @test parts(p(1.5e7)) == (0, 15000000, 0)
 
     # Zero has no sign in `numeric`; `-0.0` is the one double whose sign is not a digit.
     @test parts(p(0)) == (0, 0, 0)
@@ -510,13 +515,32 @@ end
   # nothing and stays as the driver delivered it: that value is computed through a double, so no
   # width describes it.
   @testset "a decimal column records its width; an expression over it records nothing (#648)" begin
-    kinds = _rvc_kinds(q -> q.values("m" => "amount", "s" => PormG.Functions.Sum("amount"),
+    kinds = _rvc_kinds(q -> q.values("m" => "amount", "b" => PormG.F("amount"),
+                                     "s" => PormG.Functions.Sum("amount"),
                                      "f" => PormG.F("amount") * 2))
     @test kinds[:m] == PormG.CDecimal(12, 2)
+    @test kinds[:b] == PormG.CDecimal(12, 2)   # a bare `F` is the column itself
     @test !haskey(kinds, :s)
     @test !haskey(kinds, :f)
     for build! in (q -> nothing, q -> q.values("*"))
       @test _rvc_kinds(build!)[:amount] == PormG.CDecimal(12, 2)
     end
+  end
+
+  # #648: the wildcard fills only names NO explicit projection claimed — typed or not. `cost` is a
+  # `DecimalField(db_column = "cost_eur")`, so the star returns `cost_eur` and the alias `cost` is
+  # legal. Each alias below records no kind of its own; before, the star then claimed `:cost` as
+  # `CDecimal`, and on SQLite the aliased value — a string, an integer count, a computed double — was
+  # run through the decimal parser, which (unlike the temporal ones) converts a number it is handed.
+  @testset "the wildcard never types an alias it did not project (#648)" begin
+    for alias in ("note", PormG.F("amount") * 2)
+      kinds = _rvc_kinds(q -> q.values("*", "cost" => alias))
+      @test !haskey(kinds, :cost)                        # the alias is left as the driver gave it
+      @test kinds[:cost_eur] == PormG.CDecimal(10, 2)    # the star's own column is still typed
+    end
+    # With no collision the star still claims both spellings of the renamed field.
+    kinds = _rvc_kinds(q -> q.values("*"))
+    @test kinds[:cost] == PormG.CDecimal(10, 2)
+    @test kinds[:cost_eur] == PormG.CDecimal(10, 2)
   end
 end

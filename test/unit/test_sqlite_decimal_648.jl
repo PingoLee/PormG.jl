@@ -273,11 +273,17 @@ PormG.@models_module Dec648 "pormg648_dec" begin
     Legacy = Models.Model("dec648_legacy",
         id = Models.IDField(),
         v  = Models.DecimalField(max_digits = 20, decimal_places = 2, null = true))
+    # A unique lookup column, which `get_or_create` needs for its conflict target.
+    Keyed = Models.Model("dec648_keyed",
+        id   = Models.IDField(),
+        code = Models.CharField(max_length = 20, unique = true),
+        v    = Models.DecimalField(max_digits = 15, decimal_places = 4, null = true))
 end
 import .Dec648 as D648
 
 # DDL through PormG's own renderer, so the column under test is the one a migration creates.
 fetch(_D648_POOL, Dialect.create_table(_D648_POOL, D648.Amount))
+fetch(_D648_POOL, Dialect.create_table(_D648_POOL, D648.Keyed))
 # The legacy table: today's DDL for the same shape at width 15, widened back to what `Legacy` declares.
 fetch(_D648_POOL, replace(Dialect.create_table(_D648_POOL,
         Models.Model("dec648_legacy", id = Models.IDField(),
@@ -360,4 +366,26 @@ end
     back = [r[:v] for r in D648.Legacy.objects.values("v").order_by("id").list()]
     @test !any(v -> v isa _D648_D.Decimal, back)
     @test back[2] === 14 && back[3] === 0.5
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Which write terminals return a parsed row (#648)
+# The docs name `create()` and `update_or_create` as the two write terminals whose returned row keeps
+# SQLite's raw number — they read it back without the query parsers, as they do for temporal columns —
+# and `get_or_create` as one that does not, because it reads its row through `first()`. Pinned, so the
+# day either path changes, the docs listing it fail here instead of drifting.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "create() returns the raw cell; get_or_create returns the Decimal (#648)" begin
+    row = D648.Amount.objects.create("label" => "raw-create", "v" => "12.5")
+    @test !(row[:v] isa _D648_D.Decimal)
+    @test row[:v] == 12.5
+
+    # The miss inserts, then reads the row back through `first()`…
+    kept, created = D648.Keyed.objects.get_or_create("code" => "k648"; defaults = ["v" => "12.5"])
+    @test created
+    @test kept[:v] isa _D648_D.Decimal && _d648_parts(kept[:v]) == (0, 125, -1)
+    # …and the hit is a plain `first()`.
+    again, created_again = D648.Keyed.objects.get_or_create("code" => "k648")
+    @test !created_again
+    @test again[:v] isa _D648_D.Decimal && again[:v] == kept[:v]
 end

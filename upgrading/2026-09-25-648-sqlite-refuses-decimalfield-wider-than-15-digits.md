@@ -25,7 +25,13 @@ An existing wide column that nothing rebuilds is left alone. It keeps SQLite's l
 reads back as before. PostgreSQL is unchanged at any width: its `numeric` is exact.
 
 A `pending_migrations.jl` written **before** upgrading is not re-checked, because `migrate` applies the
-stored SQL without re-rendering it. Re-run `makemigrations` before applying one.
+stored SQL without re-rendering it. And a refused `makemigrations` writes nothing, so it does **not**
+replace that file: a stale plan creating a `DECIMAL(20, 2)` column survives the refusal, and `migrate`
+would still apply it. Narrow the model and re-run `makemigrations`, or drop the old plan with
+`PormG.Migrations.discard_pending_migration("db")`, before the next `migrate`.
+
+Narrowing an existing column does not recover digits SQLite already dropped. A value stored as the
+integer `1` stays `1`.
 
 ### How to find the calls to migrate
 
@@ -35,11 +41,11 @@ contains `SQLite has no exact decimal type`. To find the declarations ahead of t
 
 ```bash
 grep -rnE 'max_digits *= *"?(1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})\b' --include=*.jl .
-grep -rnE 'DecimalField\( *(1[6-9]|[2-9][0-9]|[1-9][0-9]{2,}) *,' --include=*.jl .
 ```
 
-The first finds the keyword spelling, including a declaration split over several lines. The second
-finds the positional one.
+`DecimalField` takes keywords only, so this finds every declaration with a literal width, including
+one split over several lines. A width held in a variable or converted (`max_digits = Int32(20)`) needs
+reading by eye. `makemigrations` remains the authoritative check.
 
 ### Migrate your app
 

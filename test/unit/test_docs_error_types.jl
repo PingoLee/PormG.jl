@@ -366,6 +366,20 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        # #722. The same section says a projection whose condition READS a window alias is refused
+        # the same way: it renders the window, though its own node holds only the alias's name.
+        "read/window_functions.md — filter() on a projection reading a window alias is refused",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.values("points", "r" => Rank(over = WindowOver(order_by = ["-points"])),
+                     "top" => PormG.Functions.Case(
+                         [PormG.Functions.When("r" => 1, then = 1)], default = 0))
+            q.filter("top" => 1)
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
         # #481. A `Joined(...)` handle names a `cjoin_on` joined copy, so it cannot appear in
         # `on(...)` / `cjoin(...)` — those add predicates to a join derived from a relation, and
         # every reference in them targets that joined model. The mirror of #444's CTE refusal above,

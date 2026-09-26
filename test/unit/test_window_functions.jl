@@ -459,6 +459,43 @@ end
   end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# #722 window twin: a projection that reads a window alias is a window
+# `"top" => Case([When("rk" => 1, then = 1)])` renders `CASE WHEN RANK() OVER (…) = ?`, but its
+# condition holds only the name "rk", so nothing on the node says window. Beside an aggregate it was
+# grouped — `GROUP BY 1, 4`, and neither engine allows a window in GROUP BY — and a filter on its
+# alias printed the window into WHERE, past #685's refusal. It now stays out of GROUP BY like the
+# window alias it reads, and a filter on it is refused like one. The SELECT-side CASE itself is legal
+# SQL and still renders (the #685 control above).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#722: a projection reading a window alias is a window" begin
+  for (backend, Model_) in _WINDOW_685_MODELS
+    project! = q -> q.values("constructorid", "n" => Count("resultid"),
+                             "rk" => Rank(over = WindowOver(order_by = ["constructorid"])),
+                             "top" => Case([When("rk" => 1, then = 1)], default = 0))
+    @testset "$backend — not grouped beside an aggregate" begin
+      q = Model_.objects
+      project!(q)
+      sql = inspect_query(q)[:sql_text]
+      @test occursin(r"CASE\s+WHEN RANK\(\) OVER", sql)
+      # Grouped by the plain column alone: neither the window nor the CASE that reads it.
+      @test occursin(r"GROUP BY 1\s*$", sql)
+    end
+    for (label, pred) in (("top-level", "top" => 1), ("Q", Q("top" => 1)))
+      @testset "$backend — a $label filter on it is refused (#685)" begin
+        q = Model_.objects
+        project!(q)
+        q.filter(pred)
+        err = _window_err(() -> q)
+        @test err isa PormG.QueryBuildError
+        msg = _window_msg(err)
+        @test occursin("\"top\"", msg)
+        @test occursin("#685", msg)
+      end
+    end
+  end
+end
+
 # A CTE joins back through the model registry, which the standalone `Model(...)` fixtures above
 # never enter — so the CTE route gets its own `set_models` module, one config key per backend.
 PormG.config["window_685_pg"] = PormG.Configuration.Settings(connections = WindowMockPostgres(), change_data = true,

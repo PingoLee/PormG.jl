@@ -84,9 +84,11 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
     end
 
     if isa(v_copy.field, Union{SQLTypeFunction, SQLTypeF})
-      if _is_window_expr(v_copy.field)
+      # #722: resolved, not read off the node — a condition that names an aggregate (or window)
+      # alias makes the projection one too, and its own flag cannot see that. See `_reads_alias`.
+      if _resolved_window(v_copy.field, instruc)
         nothing
-      elseif v_copy.field.aggregate == false
+      elseif !_resolved_agg(v_copy.field, instruc)
         push!(instruc.group, i |> string)
       else
         instruc.aggregate = true
@@ -534,6 +536,49 @@ function _projected_source(alias::MemoKey, instruc::SQLInstruction)
   return nothing
 end
 
+# #722 — is a projection an aggregate, or a window, once the aliases it reads are resolved?
+#
+# `aggregate` is set when a node is CONSTRUCTED (`_any_agg`, #702), and a condition that names an
+# alias holds only the name: `Case([When("total__@gte" => 100, then = 1)])` over
+# `"total" => Sum("points")` carries the string `"total"`, so its flag is `false`. The render
+# resolves that key through the projection memo (`_get_filter_query(::SQLTypeField)` → `_alias_lhs`)
+# and prints `CASE WHEN SUM(…) >= ?`, so every reader that trusted the flag treated an aggregate as
+# a row expression: GROUP BY named it (both engines reject an aggregate there), and a filter on its
+# alias went to WHERE. The window twin is the same shape: a `When("r" => 1)` over a `Rank(…)` alias
+# was grouped beside an aggregate, and a filter on it escaped #685's refusal.
+#
+# So the build-time readers ask these instead of the node: the node's own answer, or the answer of
+# any projection its conditions read by alias — the question Django answers with
+# `contains_aggregate` on the RESOLVED expression. A static walk over the projection list, so it
+# does not depend on declaration order or on what the memo holds at the moment of asking.
+#
+# Only a condition leaf reads an alias — the walk is `_each_condition_leaf`, whose note says why:
+# the other spellings resolve a column without consulting the memo (measured for a String
+# projection `"t2" => "total"` and for `F("total") + 1`: each raises `UnknownFieldError`). The alias
+# test is the filter path's (`_alias_filter_key`): a plain key naming no model field. `seen` stops a
+# cycle — `"a"` reads `"b"` and `"b"` reads `"a"` — which only a statement that fails at render can
+# spell, but the walk must return before that render gets to say so.
+function _reads_alias(pred::Function, node, instruc::SQLInstruction,
+                      seen::Set{String} = Set{String}())::Bool
+  hit = false
+  _each_condition_leaf(node) do leaf
+    hit && return nothing
+    key = _alias_filter_key(leaf.column, instruc)
+    (key === nothing || key in seen) && return nothing
+    push!(seen, key)
+    source = _projected_source(memo_key(leaf.column), instruc)
+    # A `Value(...)` literal is neither kind, and no source means the name is not a projection.
+    source isa SQLTypeField || return nothing
+    hit = pred(source.field) || _reads_alias(pred, source.field, instruc, seen)
+    return nothing
+  end
+  return hit
+end
+_resolved_agg(node, instruc::SQLInstruction)::Bool =
+  _is_agg(node) || _reads_alias(_is_agg, node, instruc)
+_resolved_window(node, instruc::SQLInstruction)::Bool =
+  _is_window_expr(node) || _reads_alias(_is_window_expr, node, instruc)
+
 # The left-hand side a HAVING/alias predicate renders against (#595).
 #
 # The branch used to take `memo_projection(...).field` unconditionally — the projection's already
@@ -746,7 +791,7 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   # #685: a window alias reaches this branch exactly as an aggregate one does, and neither clause
   # is a home for it — see `_guard_window_alias_predicate`. First of the guards, so it refuses
   # before anything below resolves, renders or binds.
-  _guard_window_alias_predicate(_projected_source(having_key, instruc), having_key[2])
+  _guard_window_alias_predicate(_projected_source(having_key, instruc), having_key[2], instruc)
   # The guards run BEFORE the left-hand side is resolved. None depends on anything the render
   # produces, and `_alias_lhs` can bind (#595) — so refusing afterwards would file a binding
   # projection's operands into the clause's bucket and then throw them away. Waste rather than a
@@ -848,8 +893,10 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         # #701: only an AGGREGATE alias filters groups. A row alias — `F("raceid") + 1`, a bare
         # `F("code")` — has one value per row, so its predicate belongs in WHERE; sending every
         # alias to HAVING printed `HAVING` on a query with no GROUP BY, which both engines reject.
-        # #692's `_aggregate_alias_leaf` draws the same line for `Q`, on the same flag, which #702
-        # made true for a wrapped aggregate. No projection source keeps the HAVING route it always
+        # #692's `_aggregate_alias_leaf` draws the same line for `Q`, on the same test: #702 made the
+        # flag true for a wrapped aggregate, and #722 resolves it through an alias the projection's
+        # conditions read (`Case([When("total__@gte" => 100, …)])` over `"total" => Sum(…)`), which
+        # no flag set at construction can see. No projection source keeps the HAVING route it always
         # had; since #707 a `Value(...)` alias has one, so a literal filters in WHERE (`? = ?`, both
         # values bound) instead of printing `HAVING ? = ?`.
         #
@@ -860,7 +907,7 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         # given — which went unnoticed while this statement could not execute, and would not once it
         # can. `test_operators.jl` pins it.
         source = _projected_source(having_key, instruc)
-        clause = (source === nothing || _is_agg(source.field)) ? :having : :where
+        clause = (source === nothing || _resolved_agg(source.field, instruc)) ? :having : :where
         # #707: an EXPRESSION on the right (`F("grid")`, `Lower("forename")`, `Max("grid")`) has no
         # value to type — it is a comparison between two expressions, which the WHERE path renders:
         # `_get_filter_query(::SQLTypeField)` resolves the alias through `_alias_lhs` (re-rendering
@@ -869,7 +916,7 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         # this spelling always did, over a row alias (WHERE) and an aggregate one (HAVING) alike.
         # Same rule as `_row_alias_leaf` and `_get_having_query`, so both spellings agree.
         if _expression_operand(v.values)
-          _guard_window_alias_predicate(source, having_key[2])   # #685, as the typed path does
+          _guard_window_alias_predicate(source, having_key[2], instruc)   # #685, as the typed path does
           set_context!(instruc, clause)
           try
             push!(clause === :having ? instruc.having : instruc._where, _get_filter_query(v, instruc))
@@ -987,8 +1034,8 @@ end
 # inside its own definition, where the name can only mean the column — no SQL reads an alias in the
 # expression that defines it. A key that names no model column (`When("dbl" => 4)` over
 # `"dbl" => F("points") * 2`) is a plain alias read with one meaning, and is not this guard's business.
-# (Over an AGGREGATE alias that read renders `CASE WHEN SUM(…)` into GROUP BY, which both engines
-# reject — a separate defect, #722.)
+# Over an AGGREGATE alias that read makes the reading projection an aggregate, and `_reads_alias`
+# (#722) is what tells GROUP BY and the HAVING routing so.
 function _guard_select_condition_collision(projections, instruc::SQLInstruction)
   for (i, owner) in pairs(projections)
     owner isa SQLTypeField || continue
@@ -1142,10 +1189,13 @@ const _WINDOW_PREDICATE_ADVICE =
 # explicit route, per the less-magic half of the design stance.)
 #
 # `_is_window_expr` walks `FExpression`/`FObject`, so `Rank(…) + 1` refuses too — it rendered the
-# same HAVING. `source` is `nothing` when the memo was written by a non-projection path; that is not
-# a window, and the existing ladder handles it.
-function _guard_window_alias_predicate(source, label::AbstractString)
-  (source !== nothing && _is_window_expr(source.field)) || return nothing
+# same HAVING. #722: and the question is asked after aliases resolve, so a projection whose condition
+# reads a window alias — `"top" => Case([When("r" => 1, then = 1)])` over `"r" => Rank(…)`, which
+# renders `CASE WHEN RANK() OVER (…) = ?` — refuses as the window alias itself does. `source` is
+# `nothing` when the memo was written by a non-projection path; that is not a window, and the
+# existing ladder handles it.
+function _guard_window_alias_predicate(source, label::AbstractString, instruc::SQLInstruction)
+  (source !== nothing && _resolved_window(source.field, instruc)) || return nothing
   throw(QueryBuildError(
     "\e[4m\e[31mfilter(\"$(label)\" => …)\e[0m — \e[31m$(label)\e[0m projects a window function, " *
     "and a window cannot be filtered in the query that computes it: SQL evaluates windows after " *
@@ -1174,7 +1224,7 @@ function _guard_window_alias_in_q(filter, instruc::SQLInstruction, depth::Int = 
     _alias_filter_key(col, instruc) === nothing && return nothing
     key = memo_key(col)
     memo_projection(instruc, key) === nothing && return nothing
-    _guard_window_alias_predicate(_projected_source(key, instruc), col.field)
+    _guard_window_alias_predicate(_projected_source(key, instruc), col.field, instruc)
   elseif filter isa SQLTypeQ
     for f in filter.filters
       _guard_window_alias_in_q(f, instruc, depth + 1)
@@ -1195,9 +1245,11 @@ end
 # `(key, cached)` when `v` compares an alias whose projection is an aggregate, `nothing` otherwise.
 # The alias test is `_guard_window_alias_in_q`'s. Only an AGGREGATE alias is routed: a plain alias
 # (`values("yr" => "date__@year"); filter(Q("yr" => 2020))`) renders correctly in WHERE today, and
-# must stay there. `_is_agg` reads the node's own flag, which arithmetic (`Count(…) + 1`) and, since
-# #702, every wrapping constructor propagate — `Coalesce(Sum(…), Value(0))` is an aggregate alias
-# (`_any_agg`, types.jl). This gate reads the flag rather than second-guessing it.
+# must stay there. The node's own flag is set by arithmetic (`Count(…) + 1`) and, since #702, by every
+# wrapping constructor — `Coalesce(Sum(…), Value(0))` is an aggregate alias (`_any_agg`, types.jl).
+# #722: that flag is set at construction and cannot see an aggregate reached through an alias a
+# condition reads, so this gate asks `_resolved_agg` — the same test the top-level branch and the
+# GROUP BY decision ask, so the three cannot disagree about one projection.
 function _aggregate_alias_leaf(v::SQLTypeOper, instruc::SQLInstruction)
   col = v.column
   _alias_filter_key(col, instruc) === nothing && return nothing
@@ -1205,7 +1257,7 @@ function _aggregate_alias_leaf(v::SQLTypeOper, instruc::SQLInstruction)
   cached = memo_projection(instruc, key)
   cached === nothing && return nothing
   source = _projected_source(key, instruc)
-  (source !== nothing && _is_agg(source.field)) || return nothing
+  (source !== nothing && _resolved_agg(source.field, instruc)) || return nothing
   return (key, cached)
 end
 

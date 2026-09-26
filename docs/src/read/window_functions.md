@@ -871,6 +871,11 @@ HAVING COUNT("Tb"."resultid") > $3
 
 The second `.filter()` call after `.values()` targets a `Count` alias, so PormG promotes it to a `HAVING` clause rather than a `WHERE` clause.
 
+A projection whose condition reads the window alias stays out of `GROUP BY` too. Add
+`"top" => Case([When("pts_rank" => 1, then = 1)], default = 0)` to the query above: it renders
+`CASE WHEN RANK() OVER (…) = …`, so it is computed after grouping, exactly as `pts_rank` is, and the
+clause stays `GROUP BY 1, 2, 3`.
+
 !!! warning
     **Semantic trap:** if the window `PARTITION BY` key matches the `GROUP BY` key exactly, each partition holds exactly one row after grouping — making `RANK()` always return `1`. Choose a partition key that differs from the grouping key, or use a subquery / CTE to apply the window after aggregation.
 
@@ -953,7 +958,10 @@ query.filter("r" => 1)   # QueryBuildError — "r" projects a window function
 ```
 
 The same applies to a window inside arithmetic (`Rank(...) + 1`), to any lookup suffix
-(`"r__@lte" => 3`), and to the alias inside `Q(...)` or `Qor(...)`.
+(`"r__@lte" => 3`), and to the alias inside `Q(...)` or `Qor(...)`. It also applies to a projection
+whose condition reads a window alias, such as `"top" => Case([When("r" => 1, then = 1)], default = 0)`.
+That projection renders `CASE WHEN RANK() OVER (…) = …`, so `filter("top" => 1)` is refused like
+`filter("r" => 1)`.
 
 To filter on a window, compute it one level down in a [CTE](subqueries_and_ctes.md), join the CTE
 back on the primary key, and filter on its column. The outer query sees the CTE's `rk` as an ordinary

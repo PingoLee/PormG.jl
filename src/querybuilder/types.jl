@@ -1044,6 +1044,16 @@ _is_agg(::Any) = false
 # and SQLite answered with ONE row for the whole table. Only the numeric wrappers and `F`
 # arithmetic propagated it; every constructor that wraps an argument now asks this instead.
 #
+# The flag answers only what the node can see when it is BUILT. A condition that names an alias
+# (`When("total__@gte" => 100)` over `"total" => Sum(…)`) holds the name, not the aggregate, so the
+# build-time readers — GROUP BY and the two HAVING routings — ask `_resolved_agg` (build_query.jl,
+# #722), which adds the aliases a projection reads. The `update()`/`delete()` refusals still read the
+# node: an alias can only be read beside the projection that defines it, which they already refuse.
+# So does `.aggregate()` (execution.jl), which checks each pair before any projection exists to read:
+# `aggregate("t" => Sum(…), "big" => Case([When("t__@gte" => 1, …)]))` is refused with "must be an
+# aggregate function". That is a loud over-refusal, never wrong SQL — an aggregate over another
+# aggregate's alias is a feature of its own, not this flag's business.
+#
 # It looks through the containers an argument can arrive in: a `Vector` (the variadic wrappers), an
 # operator (a `When` condition), and `Q`/`Qor` (a `When` condition too). Concrete types on purpose —
 # each is the only subtype of its abstract parent. The depth cap is the one `_guard_no_handle`

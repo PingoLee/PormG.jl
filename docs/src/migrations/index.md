@@ -51,7 +51,7 @@ Because every plan is a fresh diff between your models and the **live database**
 
     Other tables you manage outside PormG belong in `register_ignore_tables!` (see [Extension points](../extending.md#Extension-points)).
 
-    Never read is not the same as never touched: when SQLite has to rebuild a table, the views that read it and the triggers on it are dropped and re-created around the rebuild, as described under *SQLite: Table Recreation* below.
+    Never read is not the same as never touched: when SQLite has to rebuild a table, the views that read it and the triggers on it are dropped and re-created around the rebuild, as described under *SQLite: Table Recreation* below. And a table one of them still reads is never dropped: see [Deleting a Model](#Deleting-a-Model).
 
 !!! tip "Coming from Django?"
     There is no migration graph, no `dependencies` list, and no per-file state replay. Read each `makemigrations` as `diff(your models, the live database)` — closer to Prisma / Atlas / Flyway's declarative diffing than to Django's ordered migration chain.
@@ -224,6 +224,31 @@ Turning `db_index` on or off *in the same change as the rename* is planned in th
 
     SQLite is unaffected — it has no `ALTER TABLE ADD CONSTRAINT`, so the duplicate was never possible there.
 
+## Deleting a Model
+
+Removing a model from `models.jl` plans a `DROP TABLE` for its table. That is destructive, so `migrate` asks first, or needs `destructive = true` when nothing can answer (see [Destructive Operations Safety](workflow.md#Destructive-Operations-Safety)).
+
+PormG manages tables, not the views, triggers and other objects built on them. It never drops one of those for you, and it does not drop a table while one of them still reads it. `makemigrations` fails instead with an `InvalidMigrationError` naming every object in the way, and writes no plan:
+
+```
+ERROR: Cannot drop table "driver": this migration drops it because no model declares it any more, but other objects still read it:
+  - view "result_driver" reads "driver"
+  - view "driver_standings" reads "driver"
+PormG manages tables, not the views, triggers and other objects built on them, so it will not drop them for you: …
+```
+
+What counts as reading the table depends on the engine, because each one would lose the object differently:
+
+- **PostgreSQL** drops a table with `CASCADE`, which PormG keeps for the foreign keys that point at it (see [Statement Ordering](#Statement-Ordering)). `CASCADE` would also remove everything else that depends on the table, without the plan saying so. PormG checks what PostgreSQL records as depending on the table: views and materialized views (and views built on those), rules on other tables, policies, functions with a SQL-standard body, a column of another table whose type is this table's row type (or an array of it), and another table's default that draws on this table's sequence. Two things are not seen. The first is a function whose body is a string, which covers PL/pgSQL (typically a trigger function) and `LANGUAGE sql AS '…'`. PostgreSQL records no dependency for such a body, so the function survives the drop and fails when it next runs. The second is an object created after `makemigrations` and before `migrate`: `CASCADE` still takes that one.
+- **SQLite** would keep the objects, naming a table that no longer exists. Every later `ALTER TABLE … RENAME` in the database would then fail on them, and every table rebuild ends in one. PormG checks views that read the table, views built on those, `INSTEAD OF` triggers on them, and triggers on other tables that name any of them. It reads names, as the rebuild check below does, so a view with a *column* that shares the dropped table's name is refused too.
+
+Triggers **on** the dropped table go with it, on both engines, and never block the drop.
+
+To get through, drop the listed views and triggers yourself and run `makemigrations` again. Re-create them against the new schema afterwards if you still need them. If you meant to rename the model rather than delete it, run `makemigrations` interactively and answer its rename question: a rename on its own keeps its views and triggers on both engines. On SQLite, a rename in the same migration as a table rebuild is refused when a view or trigger that rebuild carries names the renamed table (see the rebuild check below); apply the rename as a migration of its own first. `interactive = false` never renames, so it plans the drop.
+
+!!! tip "Coming from Django?"
+    Django's `DeleteModel` drops the table with `CASCADE` on PostgreSQL, so a view that reads it disappears along with it. PormG refuses instead, on both engines, so dropping an object it did not create is always your explicit step.
+
 ## Statement Ordering
 
 A migration's statements are applied in a fixed sequence of buckets, not in the order the plan file lists them:
@@ -240,7 +265,7 @@ Within a bucket the order is stable but arbitrary — effectively alphabetical b
 That is safe rather than lucky, and it rests on three properties the test suite pins:
 
 - **PostgreSQL never inlines a foreign key in `CREATE TABLE`.** Every key is a separate `ALTER TABLE … ADD CONSTRAINT` in bucket 5, so it runs after *every* `CREATE TABLE`. Two new tables that reference each other therefore apply in either order — which no dependency sort could achieve, because that is a cycle.
-- **`DROP TABLE` is `DROP TABLE … CASCADE` on PostgreSQL**, so a parent can be dropped before its children are cleaned up. Because `CASCADE` also removes the children's constraints, PormG emits `DROP CONSTRAINT IF EXISTS` — otherwise removing a child's foreign-key field in the same migration that drops its parent would abort on a constraint the `CASCADE` had already taken.
+- **`DROP TABLE` is `DROP TABLE … CASCADE` on PostgreSQL**, so a parent can be dropped before its children are cleaned up. Because `CASCADE` also removes the children's constraints, PormG emits `DROP CONSTRAINT IF EXISTS` — otherwise removing a child's foreign-key field in the same migration that drops its parent would abort on a constraint the `CASCADE` had already taken. Those foreign keys are all the `CASCADE` is left to take: `makemigrations` refuses to drop a table while anything else depends on it (see [Deleting a Model](#Deleting-a-Model)).
 - **SQLite suspends foreign-key enforcement for the whole migration** (`PRAGMA foreign_keys = OFF`, restored by renewing the connection afterwards). Its inline `REFERENCES` clauses therefore constrain nothing while DDL is running, and SQLite resolves an FK's parent table lazily in any case.
 
 **A renamed table is renamed before anything else touches it.** When `makemigrations` asks whether a model with no table is a rename and you pick its former name, the plan holds `ALTER TABLE "<old>" RENAME TO "<new>"` in bucket 3, and every column change for that table is written against the **new** name — PormG reads the old table's live constraints and indexes at planning time, when the database still has nothing else. Tables whose foreign key points at the renamed one — including the renamed table itself, if it references itself — get no statement at all: both engines carry the constraint across a rename (PostgreSQL follows the table, SQLite rewrites the `REFERENCES` clause), so a rename on its own is **not** destructive. Because of this, `makemigrations` asks every table-rename question before any field-rename question. The exception is a table that *also* changes its key in the same migration, such as a different `on_delete`: that key is re-pointed at the new name, after the rename, and like any re-point it is destructive (see [Changing a Foreign Key](#Changing-a-Foreign-Key) above).
@@ -319,7 +344,7 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
 
     Otherwise, a definition that still names something the migration takes away **fails `makemigrations` loudly**, naming the view or trigger, and no plan is written:
 
-    - a column the rebuild removes, or a table the migration drops — including a removed column read through `*` where the number of columns matters: a `UNION`, an `INSERT … SELECT *`, or a column list (a plain `SELECT * FROM result` view simply narrows, and comes back);
+    - a column the rebuild removes, or a table the migration drops (reported as the drop's own refusal, since that check runs first: see [Deleting a Model](#Deleting-a-Model)) — including a removed column read through `*` where the number of columns matters: a `UNION`, an `INSERT … SELECT *`, or a column list (a plain `SELECT * FROM result` view simply narrows, and comes back);
     - a column or table the migration renames, anywhere but the references above — a view selecting the renamed column, say, or a bare `UPDATE result SET …` in a trigger on a table being renamed.
 
     PormG follows a column through its table's name, through a view built on the table (`SELECT grid FROM result_v`, where `result_v` is `SELECT * FROM result`), through `NEW`/`OLD` in an `INSTEAD OF` trigger on such a view, and past an alias or a CTE that reuses a table's name. The check reads names, not SQL scope, so where it cannot tell which table a column belongs to it refuses rather than guesses.

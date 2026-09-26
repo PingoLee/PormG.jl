@@ -3014,6 +3014,135 @@ function _sqlite_rebuild_dependents(objects::Vector{_SQLiteSchemaObject}, table:
   return on_table, dependents
 end
 
+# ==============================================================================
+# Objects that still read a table the plan drops (#754)
+# ==============================================================================
+#
+# Dropping a model's table used to consider nothing else. On PostgreSQL `DROP TABLE … CASCADE` took
+# every view that read it, and the plan said only "Drop table"; on SQLite the views and the triggers
+# on other tables stayed, dangling, until the next `ALTER TABLE … RENAME` anywhere in the database —
+# every table rebuild ends in one — failed on the missing table. PormG manages neither views nor
+# triggers, so the planner refuses the drop and names them (`_refuse_dropped_table_dependents` in
+# planner.jl), exactly as #729 refuses a rebuild that would re-create one stale. The two finders
+# below answer "what still reads it", one per engine.
+
+"""
+    _sqlite_drop_table_dependents(objects, dropped_tables) -> Vector{Tuple{String, _SQLiteSchemaObject}}
+
+The views and triggers in `objects` that still read a table in `dropped_tables` once the plan has
+dropped it, each paired with the dropped table it was found through. It is the `dependents` half of
+[`_sqlite_rebuild_dependents`](@ref), so it is transitive the same way — a view on such a view, an
+`INSTEAD OF` trigger on one, a trigger on another table naming any of them — and it matches names
+the same way: a column that shares the table's name over-matches, which refuses loudly and never
+lets a dangling object through. The triggers ON any dropped table are not in it: they go with their
+table, including one that names another table the plan drops. An object reading two dropped tables
+comes back once per table; `_throw_dropped_table_dependents` groups them.
+"""
+function _sqlite_drop_table_dependents(objects::Vector{_SQLiteSchemaObject},
+                                       dropped_tables::Set{String})::Vector{Tuple{String, _SQLiteSchemaObject}}
+  dropped = Set{String}(lowercase(t) for t in dropped_tables)
+  found = Tuple{String, _SQLiteSchemaObject}[]
+  for t in sort!(collect(dropped_tables))
+    _, dependents = _sqlite_rebuild_dependents(objects, t; dropped_tables = dropped)
+    append!(found, ((t, o) for o in dependents))
+  end
+  return found
+end
+
+"""
+    _pg_drop_table_dependents(conn, tables) -> Vector{Tuple{String, String}}
+
+Every object `DROP TABLE … CASCADE` would remove along with `tables`, other than the tables' own
+objects and the foreign keys that point at them, as `(dropped table, description)` pairs. One
+catalog query for the whole plan; each name is a bound parameter, resolved by
+`to_regclass(quote_ident(…))` — the same search-path lookup the unqualified `DROP TABLE "<name>"`
+will make when it runs.
+
+What a table takes with it is the table, its row type and that type's array type, and the relations
+it owns (its indexes and owned sequences, `deptype` `a`/`i`). Whatever depends on one of those
+NORMALLY (`deptype = 'n'`) is what `CASCADE` removes: a view or materialized view (through its
+`_RETURN` rule), a rule on another relation, a policy, a function with a SQL-standard body, a column
+of the row type or of an array of it, a default that calls an owned sequence. It is followed through
+views — their `_RETURN` rule only, since dropping any other rule leaves its view standing — so a view
+built on such a view is named too.
+
+Left out on purpose:
+
+  * **foreign-key constraints** (`contype = 'f'`) — `CASCADE` is kept in `Dialect.drop_table` for
+    them, because the plan drops a parent before it removes a child's key (#89);
+  * **objects that belong to a dropped table** — its own column defaults, CHECK constraints (whose
+    expression depends on the table's columns normally), rules, triggers and policies — which go
+    with it.
+
+Not seen, and cannot be: a function whose body is a string — PL/pgSQL (a trigger function,
+typically), or `LANGUAGE sql AS '…'` — that names the table. PostgreSQL records no dependency for
+a string it has not parsed. Nor is an object two steps out through something other than a view: a
+view on a SQL-standard-body function that reads the table is not listed, though the function is.
+
+A view is described as `view <name>`, a materialized view as `materialized view <name>`, anything
+else by `pg_describe_object`. A table that does not resolve (already gone) contributes nothing. An
+object reading two dropped tables comes back once per table; `_throw_dropped_table_dependents`
+groups them.
+"""
+function _pg_drop_table_dependents(conn::PormGPostgres, tables::Vector{String})::Vector{Tuple{String, String}}
+  isempty(tables) && return Tuple{String, String}[]
+  # One placeholder per table; the names themselves are only ever bound.
+  targets = join(("to_regclass(quote_ident(\$$(i)))::oid" for i in eachindex(tables)), ", ")
+  query = """
+    WITH RECURSIVE
+    dropped AS (
+      SELECT c.oid FROM pg_class c WHERE c.oid IN ($(targets))
+    ),
+    gone AS (
+      SELECT 'pg_class'::regclass::oid AS classid, d.oid AS objid, d.oid AS root FROM dropped d
+      UNION ALL
+      SELECT 'pg_type'::regclass::oid, c.reltype, c.oid FROM pg_class c JOIN dropped d ON d.oid = c.oid
+      UNION ALL
+      SELECT 'pg_type'::regclass::oid, ty.typarray, c.oid
+      FROM pg_class c JOIN dropped d ON d.oid = c.oid JOIN pg_type ty ON ty.oid = c.reltype
+      WHERE ty.typarray <> 0
+      UNION ALL
+      SELECT 'pg_class'::regclass::oid, dep.objid, dep.refobjid
+      FROM pg_depend dep JOIN dropped d ON dep.refobjid = d.oid
+      WHERE dep.refclassid = 'pg_class'::regclass AND dep.classid = 'pg_class'::regclass
+        AND dep.deptype IN ('a', 'i')
+    ),
+    deps AS (
+      SELECT dep.classid, dep.objid, dep.objsubid, g.root
+      FROM pg_depend dep JOIN gone g ON dep.refclassid = g.classid AND dep.refobjid = g.objid
+      WHERE dep.deptype = 'n'
+      UNION
+      SELECT dep.classid, dep.objid, dep.objsubid, x.root
+      FROM deps x
+      JOIN pg_rewrite r ON x.classid = 'pg_rewrite'::regclass AND r.oid = x.objid AND r.rulename = '_RETURN'
+      JOIN pg_class v ON v.oid = r.ev_class AND v.relkind IN ('v', 'm')
+      JOIN pg_depend dep ON dep.refclassid = 'pg_class'::regclass AND dep.refobjid = v.oid
+                        AND dep.deptype = 'n'
+    )
+    SELECT DISTINCT
+      (SELECT t.relname FROM pg_class t WHERE t.oid = x.root)::text AS dropped_table,
+      CASE WHEN v.relkind = 'v' THEN 'view ' || v.oid::regclass::text
+           WHEN v.relkind = 'm' THEN 'materialized view ' || v.oid::regclass::text
+           ELSE pg_describe_object(x.classid, x.objid, x.objsubid) END AS dependent
+    FROM deps x
+    LEFT JOIN pg_rewrite r ON x.classid = 'pg_rewrite'::regclass AND r.oid = x.objid
+    LEFT JOIN pg_class v ON v.oid = r.ev_class AND r.rulename = '_RETURN'
+    WHERE NOT EXISTS (SELECT 1 FROM pg_constraint con
+                      WHERE x.classid = 'pg_constraint'::regclass AND con.oid = x.objid AND con.contype = 'f')
+      AND COALESCE(CASE
+            WHEN x.classid = 'pg_rewrite'::regclass THEN r.ev_class
+            WHEN x.classid = 'pg_attrdef'::regclass THEN (SELECT ad.adrelid FROM pg_attrdef ad WHERE ad.oid = x.objid)
+            WHEN x.classid = 'pg_policy'::regclass THEN (SELECT p.polrelid FROM pg_policy p WHERE p.oid = x.objid)
+            WHEN x.classid = 'pg_trigger'::regclass THEN (SELECT tg.tgrelid FROM pg_trigger tg WHERE tg.oid = x.objid)
+            WHEN x.classid = 'pg_constraint'::regclass THEN (SELECT con.conrelid FROM pg_constraint con WHERE con.oid = x.objid)
+            WHEN x.classid = 'pg_class'::regclass THEN x.objid
+          END, 0) NOT IN (SELECT oid FROM dropped)
+    ORDER BY 1, 2"""
+  rows = fetch(conn, query, tables) |> DataFrame
+  isempty(rows) && return Tuple{String, String}[]
+  return Tuple{String, String}[(string(r.dropped_table), string(r.dependent)) for r in eachrow(rows)]
+end
+
 """
     _SQLiteRecreateContext
 
@@ -3329,6 +3458,9 @@ function _sqlite_recreated_ddl(o::_SQLiteSchemaObject, ctx::_SQLiteRecreateConte
     end
     structural[k] && continue
     # ── the check: nothing else may name what this migration takes away ──
+    # A dropped table is a backstop since #754: `get_migration_plan` refuses any plan in which a view
+    # or foreign trigger still names a table it drops before this pass runs, so only a direct caller
+    # reaches it. Kept so this function stays correct on its own.
     tk.key in ctx.dropped_tables &&
       _sqlite_refuse_recreate(o, rebuilt_table, "names table \"$(tk.name)\", which this migration drops",
                               "Drop the $kind, or keep the table, before running makemigrations.")

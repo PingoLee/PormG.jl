@@ -21,7 +21,17 @@
 #   value_parser(kind, backend)               the stored text -> a Julia value    (slot 3)
 #
 # Slots 1 and 3 are inverses and both return a function or `nothing`, so `parser(formatter(x)) == x`
-# is a property a test can state (`test/unit/test_read_value_coercion.jl` does).
+# is a property a test can state (`test/unit/test_read_value_coercion.jl` does) — for the temporal
+# kinds.
+#
+# ── `CDecimal`, THE ONE NON-TEMPORAL KIND (#648) ─────────────────────────────────────────────────
+# A `DecimalField` joined the table for its READ half. SQLite's NUMERIC affinity turns the bound text
+# into an `Int64` or a `Float64` as it stores it, so its slot 3 inverts the ENGINE's storage, not slot
+# 1's text: `parser(formatter(x)) == x` does not hold for it, and the tests do not claim it. What it
+# inverts exactly is guaranteed from the other end — `Dialect.field_to_column` refuses a SQLite
+# decimal wider than `Dialect.SQLITE_EXACT_DECIMAL_DIGITS`, and the parser declines every wider kind,
+# so it never reconstructs a value SQLite could have rounded. It has no slot-2 method: a decimal
+# expression needs no canonical text, and the generic arms below return it unchanged.
 #
 # ── WHY MULTIPLE DISPATCH RATHER THAN A RECORD STRUCT ────────────────────────────────────────────
 # The #564 design review asked for the representation to hang OFF `CanonicalType`, not to sit beside
@@ -87,7 +97,8 @@
     field_canonical_kind(f::PormGField) -> Union{CanonicalType, Nothing}
 
 The canonical type a field's values are stored as, or `nothing` when the field is not one this
-table owns. Temporal kinds only today; every other field falls through.
+table owns. The temporal kinds, and `CDecimal` carrying the declared width (#648); every other field
+falls through.
 """
 function field_canonical_kind(f::PormGField)::Union{CanonicalType, Nothing}
   t = f.type
@@ -96,6 +107,10 @@ function field_canonical_kind(f::PormGField)::Union{CanonicalType, Nothing}
   t == "DATE"        && return CDate()
   t == "TIME"        && return CTime()
   t == "INTERVAL"    && return CInterval()
+  # The width travels on the kind because the SQLite parser needs it: it is exact only up to 15
+  # digits, and a value that does not fit `(max_digits, decimal_places)` is not the one written.
+  t == "DECIMAL" && hasfield(typeof(f), :max_digits) &&
+    return CDecimal(getfield(f, :max_digits), getfield(f, :decimal_places))
   return nothing
 end
 
@@ -120,8 +135,12 @@ value_formatter(::CDateTime, ::PormGBackend) = Models.format_timezone_sql
 value_formatter(::CDate,     ::PormGBackend) = Models.format_date_sql
 value_formatter(::CTime,     ::PormGBackend) = Models.format_text_sql
 value_formatter(::CInterval, ::PormGBackend) = Models.format_duration_sql
-# Every non-temporal canonical type. `nothing` means "this table does not own the representation",
-# which is the same answer it gave before this file existed.
+# #648: the field's own formatter, named here for the same reason as the four above. Nothing ASKS for
+# it yet — every consumer of slot 1 narrows to a date kind first — but a kind a field declares must
+# answer, which is what `test_value_repr_table.jl`'s totality testset holds the table to.
+value_formatter(::CDecimal,  ::PormGBackend) = Models.format_number_sql
+# Every other canonical type. `nothing` means "this table does not own the representation", which
+# is the same answer it gave before this file existed.
 value_formatter(::CanonicalType, ::PormGBackend) = nothing
 
 
@@ -282,4 +301,14 @@ value_parser(::CDateTime, ::PormGSQLite) = Dialect._parse_sqlite_timestamp
 value_parser(::CDate,     ::PormGSQLite) = Dialect._parse_sqlite_date
 value_parser(::CTime,     ::PormGSQLite) = Dialect._parse_sqlite_time
 value_parser(::CInterval, ::PormGSQLite) = Dialect._parse_sqlite_interval
+# #648: exact only for a column narrow enough that SQLite stored every accepted value exactly — the
+# width `Dialect.field_to_column` refuses to exceed. A wider or width-less kind (a column created
+# outside PormG, or before that refusal) gets NO parser, so its cells arrive raw, as they always have:
+# declining is the fail-open answer, where parsing would dress a rounded double up as an exact value.
+function value_parser(k::CDecimal, ::PormGSQLite)
+  (k.precision === nothing || k.scale === nothing) && return nothing
+  k.precision > Dialect.SQLITE_EXACT_DECIMAL_DIGITS && return nothing
+  p, s = k.precision, k.scale
+  return v -> Dialect._parse_sqlite_decimal(v, p, s)
+end
 value_parser(::CanonicalType, ::PormGBackend) = nothing

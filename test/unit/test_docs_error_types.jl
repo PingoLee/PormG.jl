@@ -33,6 +33,8 @@ using PormG.Models: Model, CharField, IDField, IntegerField, DateField, DateTime
 using PormG.Models: TextField, URLField, UUIDField
 # #614 — the numeric half of the same page bullet.
 using PormG.Models: FloatField
+# #648 — the SQLite width refusal `fields.md`, `postgres.md` and `errors.md` name.
+using PormG.Models: DecimalField
 # #632 — the same bullet's `Decimal` rule, which needs the type to state its refusing half.
 import Decimals
 using PormG.QueryBuilder: bulk_insert, bulk_update
@@ -911,6 +913,16 @@ const DOCERR_CASES = [
         "schema_conventions.md + postgres.md — rendering an engine-pinned db_default on the other engine raises (#496)",
         BackendCapabilityError,
         () -> PormG.Dialect.field_to_column("uid", UUIDField(db_default = (postgres = "gen_random_uuid()",)),
+                                            DocErrMockSQLite()),
+    ),
+    # #648. `fields.md`, `postgres.md` and `errors.md` all name the type a too-wide DecimalField
+    # raises on SQLite. Driven one layer down, at the SQLite renderer every DDL path shares, the way
+    # the #496 row above is; the `makemigrations` path it surfaces through is pinned end to end in
+    # `test_sqlite_decimal_648.jl`.
+    (
+        "fields.md + postgres.md + errors.md — a DecimalField wider than 15 digits raises on SQLite (#648)",
+        BackendCapabilityError,
+        () -> PormG.Dialect.field_to_column("amount", DecimalField(max_digits = 16, decimal_places = 2),
                                             DocErrMockSQLite()),
     ),
     # #446. `errors.md` has promised `UnknownFieldError` for "the field name does not exist on the

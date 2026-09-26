@@ -3103,13 +3103,19 @@ end
 
 # Whether `sql` projects every column of something through `*` — `SELECT *`, `SELECT t.*`,
 # `SELECT a, *` — as opposed to multiplying (`a * b`) or counting (`count(*)`). Read off the gaps
-# between names: a bare `*` is a projection only right after SELECT, DISTINCT or ALL.
+# between names: a bare `*` is a projection only right after SELECT, DISTINCT or ALL. One projection
+# is exempt: `[NOT] EXISTS (SELECT * …)` only asks whether a row exists, whatever its width — and it
+# is the ordinary way a trigger de-duplicates (`INSERT … WHERE NOT EXISTS (SELECT * FROM audit …)`),
+# which review found refused on every column drop.
 function _sqlite_reads_star(sql::AbstractString, toks::Vector{_SQLiteObjectToken})::Bool
   for k in 1:(length(toks) - 1)
     gap = _sqlite_gap_text(sql, toks[k].stop, toks[k + 1].start)
     occursin(r"(^|[,.])\*($|,)", gap) || continue
     if startswith(gap, "*")
       any(w -> _sqlite_is_word(toks[k], w), ("SELECT", "DISTINCT", "ALL")) || continue
+      in_exists = k > 1 && _sqlite_is_word(toks[k], "SELECT") && _sqlite_is_word(toks[k - 1], "EXISTS") &&
+                  _sqlite_gap_text(sql, toks[k - 1].stop, toks[k].start) == "("
+      in_exists && continue
     end
     return true
   end

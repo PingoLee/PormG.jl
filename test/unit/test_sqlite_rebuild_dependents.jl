@@ -804,6 +804,38 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# `EXISTS (SELECT * …)` is not a width dependency
+# The star rule above refuses a `*` read where the number of columns matters. `[NOT] EXISTS (SELECT *
+# …)` only asks whether a row exists — and it is how a trigger de-duplicates, beside an INSERT. Review
+# found such a trigger refused on every column drop of the table; it must come back, and still work.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an EXISTS (SELECT *) test survives a column drop (#729)" begin
+    indexed_grid = "points = Models.IntegerField(), grid = Models.IntegerField(null = true, db_index = true)"
+    _rd729_project() do pool, settings, models
+        _rd729_start!(pool, settings, models, _rd729_schema(result = indexed_grid))
+        fetch(pool, """CREATE TRIGGER "result_dedup" AFTER INSERT ON "result" BEGIN
+                         INSERT INTO "audit" ("n") SELECT NEW."points"
+                         WHERE NOT EXISTS (SELECT * FROM "result" WHERE "points" = NEW."points" AND "id" <> NEW."id");
+                       END;""")
+        _rd729_models(models, _rd729_schema(result = "points = Models.IntegerField()"))
+        _rd729_plan!(pool, settings, models)
+        _rd729_migrate!(pool, settings)
+        @test _rd729_objects(pool, "trigger") == ["result_dedup"]
+        # It still de-duplicates: the second 25 is not logged again.
+        fetch(pool, """INSERT INTO "result" ("id", "points") VALUES (1, 25), (2, 25), (3, 18);""")
+        @test sort(_rd729_rows(pool, """SELECT "n" FROM "audit" """).n) == [18, 25]
+    end
+    # The WHEN-clause form, at function level: a table losing a column, and nothing refused.
+    ctx = _SQLiteRecreateContext(Dict{String, String}(), Dict{String, Dict{String, String}}(),
+                                 Dict("result" => Set(["grid"])), Set{String}(), Set(["result", "driver", "audit"]),
+                                 Dict{String, Set{String}}())
+    trigger = _SQLiteSchemaObject("trigger", "t2", "result",
+        "CREATE TRIGGER t2 AFTER INSERT ON result WHEN EXISTS (SELECT * FROM driver WHERE driver.id = NEW.id) " *
+        "BEGIN INSERT INTO audit (n) VALUES (NEW.points); END", 3)
+    @test _sqlite_recreated_ddl(trigger, ctx; rebuilt_table = "result") isa String
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Clauses the rebuild re-renders away: each shape is recognised
 # The rebuild renders the table from its model, so a clause the live CREATE TABLE carries beyond what
 # PormG writes is gone afterwards. One table carries every shape; PormG's own `>= 0` CHECK on `points`

@@ -129,9 +129,10 @@ A whole value reads as `14`, not `14.0`, and a fractional one keeps its scale �
 nineteen digits, where routing it through a `Float64` would have rendered `1.2345678901234568e16`.
 LibPQ delivers a `NUMERIC` as a `Decimals.Decimal`, so nothing on the path narrows it.
 
-**On SQLite it is not, and the loss happens on the way IN.** SQLite has no exact decimal type. A column
-PormG declares as `DECIMAL(p, s)` gets SQLite's `NUMERIC` affinity, which converts the value as it is
-stored — preferring an integer conversion, and silently dropping what will not fit:
+**On SQLite it is exact up to fifteen digits, and PormG refuses anything wider.** SQLite has no exact
+decimal type. A `DECIMAL(p, s)` column gets SQLite's `NUMERIC` affinity, which converts the value as it
+is stored into an `Int64` or a `Float64` — preferring an integer conversion, and silently dropping what
+will not fit. Measured on a column declared wider than that:
 
 ```
 declared DECIMAL(24, 2), inserted   SQLite stores   read back
@@ -143,10 +144,12 @@ declared DECIMAL(24, 2), inserted   SQLite stores   read back
 ```
 
 Note the third row: the fractional part is not rounded, it is discarded, and the value becomes a plain
-`1`. Nothing on the read path can recover any of this, and `.list(:json)` faithfully reports what is
-actually stored. A `DecimalField` on SQLite is a precise column only within what an `Int64` or a
-`Float64` represents — roughly fifteen significant digits for a fractional value, wider for a whole
-one. Use PostgreSQL where the precision is the point.
+`1`. Nothing on the read path can recover that, which is why the fix is on the declaration: a `Float64`
+keeps fifteen significant digits exactly, so **`makemigrations` raises `BackendCapabilityError` for a
+`DecimalField` with `max_digits` above 15 on SQLite** rather than create a column like the one above.
+Every decimal column PormG creates on SQLite therefore holds the values it accepts exactly. A column
+created outside PormG, or before this refusal existed, still behaves as the table shows. Use
+PostgreSQL where more than fifteen digits is the point.
 
 !!! note "The two engines emit the same JSON *type*, not always the same text"
     Both emit a number, never a string. The **text** agrees while the value SQLite stored prints the

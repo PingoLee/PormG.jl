@@ -135,6 +135,7 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **`ON CONFLICT`** | supported | supported (SQLite ≥ 3.24) — same syntax |
 | **`JSONField` storage** | `JSONB` (binary, indexable) | `TEXT` (JSON string) |
 | **`UUIDField` storage** | native `UUID` | `TEXT` |
+| **`DecimalField` width** | `numeric`, exact at any `max_digits` | `NUMERIC` affinity, exact up to `max_digits = 15`; a wider declaration raises `BackendCapabilityError` at `makemigrations` |
 | **Window frames** | explicit `frame=` clauses | default frame only |
 | **JSONB lookups** (`@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys`) | JSONB operators | `BackendCapabilityError` — `__` key paths still work |
 | **Accent-insensitive lookups** (`@iunaccent_*`, `@niunaccent_*`) | `unaccent` extension | `BackendCapabilityError` |
@@ -164,6 +165,13 @@ Notes:
   a NamedTuple naming only `postgres` refuses to render for SQLite rather than emit DDL SQLite
   rejects. Give each engine a spelling, or use a portable expression (`CURRENT_TIMESTAMP`,
   `CURRENT_DATE`). See [Column defaults](schema_conventions.md#Column-defaults).
+- **Decimal width on SQLite.** SQLite has no exact decimal type: a `DECIMAL(p, s)` column stores each
+  value as an `Int64` or a `Float64`, and a `Float64` keeps fifteen significant digits exactly. So
+  PormG refuses to create a wider one rather than let it round values as they are written (#648).
+  The refusal fires whenever PormG would create or **re-create** the column — and a SQLite table
+  rebuild re-creates every column, so a change elsewhere in a table that already holds a wide column
+  (created before the refusal, or by another tool) is refused too. Narrow `max_digits` to 15 in that
+  same change; the rebuild carries it. An untouched existing column is left alone.
 - **Primary-key allocation** (`allocate_primary_keys`) presents one API over both backends; PostgreSQL reserves ids via the column sequence, SQLite emulates the same reservation. See [Bulk Insert, Copy, and Update](write/bulk.md).
 - **Sequence resync.** After inserting rows with *explicit* primary keys, PostgreSQL's sequence can fall behind, so a later auto-id insert collides — a class of "duplicate key" surprise that doesn't exist on SQLite's `AUTOINCREMENT`. `bulk_insert`/`bulk_copy` resynchronize automatically (and `bulk_insert` retries a duplicate-key error once by resyncing first); row-level writers (`create`/`insert`, `update_or_create`, `get_or_create`) do not — call `resync_sequences(model)` explicitly after one of them writes an explicit primary key. See [Sequence synchronisation](schema_conventions.md#Sequence-synchronisation).
 

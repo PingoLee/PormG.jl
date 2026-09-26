@@ -9,7 +9,8 @@ import PormG: backend_sqlite_version  # SQLite library-version probe (driver bod
 #                                or SQL grammar PormG writes itself is outside what it parses
 #                                (a `Cast` type name #696, a window frame #713).
 #   BackendCapabilityError — the active backend cannot do this (a PG-only JSONB/unaccent
-#                                lookup, an extract part SQLite lacks, too old a SQLite library).
+#                                lookup, an extract part SQLite lacks, too old a SQLite library,
+#                                a DecimalField wider than SQLite stores exactly #648).
 #   QueryBuildError            — the caller passed an impossible argument shape (on_conflict_clause).
 import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError
 # #496: the `db_default` vocabulary (Kernel, layer 1). `db_default_sql` below renders from it, and
@@ -1160,6 +1161,8 @@ function _get_column_type(field::PormGField, conn::PormGSQLite; type_map::Dict{S
   elseif field isa sFloatField
     return sql_type
   elseif field isa sDecimalField
+    # Renders ANY width, deliberately: the migration compiler calls this for the live side too, and
+    # an existing wide column must stay comparable. The #648 width refusal is in `field_to_column`.
     max_digits = hasproperty(field, :max_digits) ? field.max_digits : 10
     decimal_places = hasproperty(field, :decimal_places) ? field.decimal_places : 2
     return "$(sql_type)($max_digits, $decimal_places)"
@@ -1217,6 +1220,43 @@ _byte_length_check_clause(col_name, max_length::Int, ::PormGPostgres)::String =
   "CHECK (octet_length(\"$(_quote_table_ddl(col_name))\") <= $(max_length))"
 _byte_length_check_clause(col_name, max_length::Int, ::PormGSQLite)::String =
   "CHECK (length(\"$(_quote_table_ddl(col_name))\") <= $(max_length))"
+
+# ── #648: SQLite has no exact decimal type ────────────────────────────────────────────────────────
+#
+# `DECIMAL(p, s)` takes NUMERIC affinity on SQLite, which converts a value AS IT IS STORED into a
+# 64-bit INTEGER or a binary64 REAL. A double preserves 15 significant decimal digits (`DBL_DIG`), so
+# every value a `DECIMAL(p ≤ 15, s)` column accepts survives exactly, and nothing wider is guaranteed
+# to: `1.000000000000000000001` stores as the integer `1`, with no error. Write validation already
+# refuses a value wider than its declaration, so refusing the wide DECLARATION is what makes every
+# decimal column PormG creates on SQLite exact rather than approximately so — and it is what lets the
+# SQLite read parser (`value_repr.jl`) reconstruct a `Decimal` instead of guessing one.
+#
+# The refusal lives here, in the SQLite `field_to_column`, and nowhere else:
+#   * Every caller renders the DESIRED model — `create_table`, `add_field`, and `rebuild_table`
+#     (which is also `alter_field`). The migration compiler never calls it: `column_spec` renders
+#     through `_get_column_type` alone, on BOTH sides of the diff. So a live or introspected wide
+#     column never throws here, and the migration that narrows one from 20 to 15 still plans.
+#   * The planner renders DDL at plan time, so this fires at `makemigrations`, before any pending
+#     file is written — not at `migrate`, part-way through a plan.
+#   * NOT in `_get_column_type`: `Migrations._render_column_type` wraps that in a catch-all that
+#     degrades to the declared type string, which would launder this refusal into a warning.
+#
+# `BackendCapabilityError` for `db_default_sql`'s reason: the declaration is valid — PostgreSQL's
+# `numeric` is exact at any width — and it is the active backend that cannot honour it.
+const SQLITE_EXACT_DECIMAL_DIGITS = 15
+
+function _refuse_inexact_sqlite_decimal(col_name::AbstractString, field::PormGField)::Nothing
+  field isa sDecimalField || return nothing
+  field.max_digits <= SQLITE_EXACT_DECIMAL_DIGITS && return nothing
+  throw(BackendCapabilityError(
+    "DecimalField \"$(col_name)\" declares max_digits = $(field.max_digits), and SQLite has no exact " *
+    "decimal type: a DECIMAL column takes NUMERIC affinity, which stores each value as a 64-bit " *
+    "integer or a double and keeps only $(SQLITE_EXACT_DECIMAL_DIGITS) significant digits exactly — a " *
+    "wider value is rounded or truncated as it is written, with no error. Declare max_digits <= " *
+    "$(SQLITE_EXACT_DECIMAL_DIGITS), or use PostgreSQL, whose numeric type is exact at any width. " *
+    "PormG re-creates every column when it rebuilds a SQLite table, so this also refuses a change " *
+    "elsewhere in the same table; narrowing max_digits in that same change is enough."))
+end
 
 # ── Physical-column identity ── moved out (#507) ───────────────────────────────────────
 #
@@ -1306,11 +1346,18 @@ function with the flag OFF — so the finished table carries the real default an
 nullability. The rows are filled in between by the backfill `UPDATE` that `_add_new_field` emits,
 which is also what keeps SQLite's result equal to PostgreSQL's (there, `ADD COLUMN … DEFAULT expr`
 backfills by itself).
+
+Raises `BackendCapabilityError` for a `DecimalField` with `max_digits` above
+`SQLITE_EXACT_DECIMAL_DIGITS` (15): SQLite stores it through NUMERIC affinity and cannot keep the
+declared digits (#648). Every caller renders the desired model, so an existing wide column is
+never refused on its own — only when PormG would create or re-create it.
 """
 function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite;
                          temporary_default::Any=nothing, defer_db_default::Bool=false)::String
   # Resolve the physical column name (db_column when set, else the field name) — #50.
   col_name = field_db_column(field, col_name)
+  # #648: a DecimalField SQLite cannot store exactly is refused before any DDL exists.
+  _refuse_inexact_sqlite_decimal(col_name, field)
   # Determine the base SQL type
   base_type = _get_column_type(field, conn)
   # #496: is this the deferred ADD COLUMN rendering? Computed before the nullability block, which

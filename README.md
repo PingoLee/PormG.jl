@@ -230,7 +230,8 @@ M.Result.objects.filter("resultid" => 1).update("points" => F("points") + 10)
 
 PormG is wire-format compatible with tables managed by Django, with identical column
 serialization and mutation semantics across PostgreSQL and SQLite — `TIMESTAMPTZ` handling,
-`DateField` truncation, `DecimalField` precision (`NUMERIC`-backed), and `auto_now` /
+`DateField` truncation, `DecimalField` precision (`NUMERIC`-backed; at most 15 digits on SQLite,
+which has no exact decimal type), and `auto_now` /
 `auto_now_add` temporal fields. See
 [Import from Django](https://pingolee.github.io/PormG.jl/dev/import_django/) for details.
 

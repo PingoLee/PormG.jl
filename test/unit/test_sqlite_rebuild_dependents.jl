@@ -778,8 +778,11 @@ end
         ("view on a dropped column", _rd729_schema(result = indexed_grid),
          """CREATE VIEW "result_grid_v" AS SELECT "id", "grid" FROM "result";""",
          _rd729_schema(result = no_grid), "", ["result_grid_v", "\"grid\"", "removes"]),
+        # Since #754 the drop check refuses this before the rebuild pass runs, so the message is the
+        # drop's — "Cannot drop table" is only in that one. The rebuild pass's own dropped-table branch
+        # is now a backstop, pinned at function level in the #754 testset below.
         ("view on a dropped table", _rd729_schema(), joined,
-         _rd729_schema(result = RD729_NULLABLE, driver = nothing), "", ["result_driver", "\"driver\"", "drops"]),
+         _rd729_schema(result = RD729_NULLABLE, driver = nothing), "", ["result_driver", "\"driver\"", "Cannot drop table"]),
         ("view on another table's renamed column", _rd729_schema(), joined,
          _rd729_schema(result = RD729_NULLABLE, driver = "family_name = Models.CharField(max_length = 40, null = true)"),
          "1\n", ["result_driver", "\"surname\"", "family_name"]),
@@ -800,6 +803,134 @@ end
                 @test !isfile(_rd729_pending(settings))
             end
         end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dropping a model's table that a view or a trigger still reads is refused (#754)
+# The table-drop path, where no rebuild is involved: deleting the Driver model plans `DROP TABLE
+# "driver"`, which SQLite executes and leaves every view on it — and every trigger on another table
+# that names it — dangling, so the next ALTER TABLE … RENAME anywhere fails. PormG manages neither,
+# so makemigrations refuses, names each one (transitively, as the rebuild pass finds them), and
+# writes no plan. `result` is unchanged in every case, so nothing is rebuilt: before #754 the #729
+# checks never ran here. Then two tables dropped together, and the #729 backstop.
+# Mutation gate: drop the `_refuse_dropped_table_dependents` call and every case writes a plan.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a dropped table a view or a trigger still reads is refused, naming it (#754)" begin
+    joined = """CREATE VIEW "result_driver" AS SELECT r."id", d."surname" FROM "result" r JOIN "driver" d ON d."id" = r."id";"""
+    cases = [
+        # (what, hand-made objects, words the message must carry)
+        ("view on the dropped table", joined, ["result_driver", "\"driver\"", "drops"]),
+        ("view on a view on the dropped table",
+         joined * """CREATE VIEW "standings" AS SELECT "surname", count(*) AS "n" FROM "result_driver" GROUP BY "surname";""",
+         ["view \"result_driver\"", "view \"standings\""]),
+        ("trigger on another table naming the dropped table",
+         """CREATE TRIGGER "audit_driver" AFTER INSERT ON "audit" BEGIN
+              UPDATE "driver" SET "surname" = 'x' WHERE "id" = NEW."n";
+            END;""",
+         ["trigger \"audit_driver\" on \"audit\"", "\"driver\""]),
+        ("INSTEAD OF trigger on a view of the dropped table",
+         """CREATE VIEW "dv" AS SELECT "id" FROM "driver";
+            CREATE TRIGGER "dv_ins" INSTEAD OF INSERT ON "dv" BEGIN INSERT INTO "audit" ("n") VALUES (NEW."id"); END;""",
+         ["view \"dv\"", "trigger \"dv_ins\" on \"dv\""]),
+    ]
+    for (what, ddl, words) in cases
+        @testset "$what" begin
+            _rd729_project() do pool, settings, models
+                _rd729_start!(pool, settings, models)
+                for stmt in _split_sqlite_statements(ddl)
+                    fetch(pool, stmt)
+                end
+                # v2: the Driver model is deleted, nothing else changes.
+                _rd729_models(models, _rd729_schema(driver = nothing))
+                err = _rd729_error(() -> _rd729_plan!(pool, settings, models))
+                @test err isa PormG.InvalidMigrationError
+                msg = sprint(showerror, err)
+                @test all(w -> occursin(w, msg), words)
+                # No plan was written, so nothing can be applied by accident.
+                @test !isfile(_rd729_pending(settings))
+                @test "driver" in _rd729_objects(pool, "table")
+            end
+        end
+    end
+
+    # Two tables dropped together. A trigger ON one of them goes with it even when it names the other,
+    # so it is no obstacle; a view reading both is one obstacle, listed once, naming both tables.
+    # Mutation gate: pass no `dropped_tables` to `_sqlite_rebuild_dependents` and the trigger refuses.
+    audit_only = "Audit = Models.Model(id = Models.IDField(), n = Models.IntegerField(null = true), " *
+                 "note = Models.CharField(max_length = 40, null = true))"
+    _rd729_project() do pool, settings, models
+        _rd729_start!(pool, settings, models)
+        fetch(pool, """CREATE TRIGGER "result_touch" AFTER INSERT ON "result" BEGIN
+                         UPDATE "driver" SET "surname" = 'x' WHERE "id" = NEW."id";
+                       END;""")
+        _rd729_models(models, audit_only)
+        _rd729_plan!(pool, settings, models)
+        sql = _rd729_plan_sql(settings)
+        @test occursin("DROP TABLE IF EXISTS \"driver\"", sql) && occursin("DROP TABLE IF EXISTS \"result\"", sql)
+    end
+    _rd729_project() do pool, settings, models
+        _rd729_start!(pool, settings, models)
+        fetch(pool, joined)
+        _rd729_models(models, audit_only)
+        msg = sprint(showerror, _rd729_error(() -> _rd729_plan!(pool, settings, models)))
+        @test occursin("Cannot drop tables \"driver\", \"result\"", msg)
+        @test occursin("view \"result_driver\" reads \"driver\", \"result\"", msg)
+        @test count("result_driver", msg) == 1
+    end
+
+    # The rebuild pass keeps its own dropped-table refusal as a backstop (#729): `get_migration_plan`
+    # never reaches it any more, so it is pinned by calling it directly.
+    ctx = _SQLiteRecreateContext(Dict{String, String}(), Dict{String, Dict{String, String}}(),
+                                 Dict{String, Set{String}}(), Set(["driver"]), Set(["result", "driver", "audit"]),
+                                 Dict{String, Set{String}}())
+    # `sqlite_master` holds a definition without its closing `;`.
+    view = _SQLiteSchemaObject("view", "result_driver", "result_driver", rstrip(joined, ';'), 3)
+    err = _rd729_error(() -> _sqlite_recreated_ddl(view, ctx; rebuilt_table = "result"))
+    @test err isa PormG.InvalidMigrationError
+    @test occursin("which this migration drops", sprint(showerror, err))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# After the refusal: drop the view by hand, and every later migration still works (#754)
+# The issue's acceptance path. The refusal is only useful if acting on it gets the user through: once
+# the view is gone the drop is planned and applied, a trigger ON the dropped table goes with it (it
+# never blocked), and a later rebuild of an unrelated table — whose RENAME re-parses the whole schema
+# and failed with "error in view result_driver: no such table: main.driver" before #754 — migrates.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "after dropping the view by hand, the drop and a later rebuild migrate (#754)" begin
+    _rd729_project() do pool, settings, models
+        _rd729_start!(pool, settings, models)
+        fetch(pool, """CREATE VIEW "result_driver" AS SELECT r."id", d."surname" FROM "result" r JOIN "driver" d ON d."id" = r."id";""")
+        # A trigger ON `driver` goes with its table, so it is not an obstacle to dropping it.
+        fetch(pool, """CREATE TRIGGER "driver_touch" AFTER UPDATE ON "driver" BEGIN
+                         INSERT INTO "audit" ("n") VALUES (NEW."id");
+                       END;""")
+        _rd729_models(models, _rd729_schema(driver = nothing))
+        msg = sprint(showerror, _rd729_error(() -> _rd729_plan!(pool, settings, models)))
+        @test occursin("result_driver", msg)
+        @test !occursin("driver_touch", msg)
+
+        # The remedy the message gives: drop the view, run makemigrations again.
+        fetch(pool, """DROP VIEW "result_driver";""")
+        _rd729_plan!(pool, settings, models)
+        @test occursin("DROP TABLE IF EXISTS \"driver\"", _rd729_plan_sql(settings))
+        _rd729_migrate!(pool, settings)
+        @test !("driver" in _rd729_objects(pool, "table"))
+        @test isempty(_rd729_objects(pool, "trigger"))
+
+        # v3: `audit.n` becomes NOT NULL — a rebuild of a table the dropped view never named, which
+        # ends in `ALTER TABLE … RENAME` and so re-parses every view left in the database.
+        _rd729_models(models, replace(_rd729_schema(driver = nothing),
+                                      "n = Models.IntegerField(null = true)" => "n = Models.IntegerField()"))
+        _rd729_plan!(pool, settings, models)
+        @test occursin("RENAME TO \"audit\"", _rd729_plan_sql(settings))
+        _rd729_migrate!(pool, settings)
+        fetch(pool, """INSERT INTO "audit" ("n") VALUES (7);""")
+        @test _rd729_count(pool, "audit") == 1
+        # Converged: nothing further to plan.
+        _rd729_plan!(pool, settings, models)
+        @test !isfile(_rd729_pending(settings))
     end
 end
 

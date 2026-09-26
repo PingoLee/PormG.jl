@@ -1347,3 +1347,118 @@ if adapter_name == "PostgreSQL"
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dropped tables: what DROP TABLE … CASCADE would take besides foreign keys (#754)
+# `makemigrations` refuses to drop a table while a view (or anything else CASCADE would silently take
+# with it) still reads it. This pins the catalog query that decides that on real PostgreSQL. Reported:
+# the views on the table, a view on one of those views, a materialized view, another table's default
+# on the table's own sequence, and another table's column of the table's array type. Not reported:
+# the table's own index, trigger, sequence and CHECK, and a child's foreign key — which CASCADE is
+# kept for (#89). A rule on a view is reported by itself, without the views built on that view. The
+# SQLite half is hermetic, in test/unit/test_sqlite_rebuild_dependents.jl; the planner wiring is in
+# test_migration_fk_ordering.jl.
+# Mutation gate: resolve the name without `quote_ident` and the mixed-case view is missed; stop
+# following views and `standings` is; follow every rule and `v1` is listed; leave out the array
+# type and `holder` is missed; drop the `contype = 'f'` or the owner exclusion (or only its
+# `pg_constraint` arm) and the child's key, a table's own sequence default or its CHECK is reported.
+# ─────────────────────────────────────────────────────────────────────────────
+if adapter_name == "PostgreSQL"
+  @testset "Dropped tables: dependents CASCADE would take are found (#754)" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
+    found(tables...) = PormG.Migrations._pg_drop_table_dependents(pool, collect(String, tables))
+    # Dependents first: DROP TABLE without CASCADE refuses while one still reads it.
+    drop754!() = for s in ("DROP VIEW IF EXISTS pormg_it_754_standings",
+                           "DROP VIEW IF EXISTS pormg_it_754_result_driver",
+                           "DROP MATERIALIZED VIEW IF EXISTS pormg_it_754_driver_mv",
+                           "DROP VIEW IF EXISTS \"PormgIt754MixedView\"",
+                           "DROP VIEW IF EXISTS pormg_it_754_v1",
+                           "DROP VIEW IF EXISTS pormg_it_754_v0",          # takes its rule
+                           "DROP TABLE IF EXISTS pormg_it_754_holder",
+                           "DROP TABLE IF EXISTS pormg_it_754_other",
+                           "DROP TABLE IF EXISTS pormg_it_754_result",
+                           "DROP TABLE IF EXISTS pormg_it_754_driver",
+                           "DROP TABLE IF EXISTS pormg_it_754_lonely",
+                           "DROP TABLE IF EXISTS pormg_it_754_ruled",
+                           "DROP TABLE IF EXISTS \"PormgIt754Mixed\"",
+                           "DROP FUNCTION IF EXISTS pormg_it_754_touch()")
+      try; ddl(s); catch; end
+    end
+
+    drop754!()
+    try
+      # `driver` carries everything that goes WITH it: a serial's owned sequence, an index, a
+      # trigger, and a CHECK — whose expression depends on the table's own column like a view's does.
+      ddl("CREATE TABLE pormg_it_754_driver (id bigserial PRIMARY KEY, surname text, " *
+          "points integer CHECK (points >= 0))")
+      ddl("CREATE INDEX pormg_it_754_driver_surname ON pormg_it_754_driver (surname)")
+      ddl("CREATE FUNCTION pormg_it_754_touch() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END'")
+      ddl("CREATE TRIGGER pormg_it_754_driver_touch BEFORE UPDATE ON pormg_it_754_driver " *
+          "FOR EACH ROW EXECUTE FUNCTION pormg_it_754_touch()")
+      # A child whose only tie is a foreign key: CASCADE removes the constraint, and that is by design.
+      ddl("CREATE TABLE pormg_it_754_result (id bigserial PRIMARY KEY, " *
+          "driverid bigint REFERENCES pormg_it_754_driver (id), points integer)")
+      # What CASCADE would take silently: a view, a view on that view, a materialized view, another
+      # table's default drawing on the dropped table's sequence, and a column of its array type.
+      ddl("CREATE VIEW pormg_it_754_result_driver AS SELECT r.id, d.surname " *
+          "FROM pormg_it_754_result r JOIN pormg_it_754_driver d ON d.id = r.driverid")
+      ddl("CREATE VIEW pormg_it_754_standings AS SELECT surname, count(*) AS n " *
+          "FROM pormg_it_754_result_driver GROUP BY surname")
+      ddl("CREATE MATERIALIZED VIEW pormg_it_754_driver_mv AS SELECT id FROM pormg_it_754_driver")
+      ddl("CREATE TABLE pormg_it_754_other (id bigint DEFAULT nextval('pormg_it_754_driver_id_seq'))")
+      ddl("CREATE TABLE pormg_it_754_holder (xs pormg_it_754_driver[])")
+      # A table nothing reads, and a mixed-case one — `DROP TABLE "PormgIt754Mixed"` resolves the
+      # quoted name, so the lookup must too, or its view would be missed.
+      ddl("CREATE TABLE pormg_it_754_lonely (id bigserial PRIMARY KEY)")
+      ddl("CREATE TABLE \"PormgIt754Mixed\" (id bigserial PRIMARY KEY)")
+      ddl("CREATE VIEW \"PormgIt754MixedView\" AS SELECT id FROM \"PormgIt754Mixed\"")
+      # A table only a rule on a view writes to. CASCADE drops the rule; `v0` and the view built on
+      # it stay, because they read nothing of the table.
+      ddl("CREATE TABLE pormg_it_754_ruled (id integer)")
+      ddl("CREATE VIEW pormg_it_754_v0 AS SELECT 1 AS a")
+      ddl("CREATE VIEW pormg_it_754_v1 AS SELECT a FROM pormg_it_754_v0")
+      ddl("CREATE RULE pormg_it_754_r AS ON INSERT TO pormg_it_754_v0 " *
+          "DO INSTEAD INSERT INTO pormg_it_754_ruled (id) VALUES (NEW.a)")
+
+      deps = found("pormg_it_754_driver")
+      @test all(t == "pormg_it_754_driver" for (t, _) in deps)
+      described = Set(last.(deps))
+      @test "view pormg_it_754_result_driver" in described
+      @test "view pormg_it_754_standings" in described                  # through the first view
+      @test "materialized view pormg_it_754_driver_mv" in described
+      @test any(d -> occursin("pormg_it_754_other", d) && occursin("default", d), described)
+      @test "column xs of table pormg_it_754_holder" in described
+      # Exactly those five: nothing of the table's own (CHECK included), and not the child's key.
+      @test length(deps) == 5
+
+      # Dropping the default's table too: the default goes with it, the rest is still reported.
+      both = found("pormg_it_754_driver", "pormg_it_754_other")
+      @test !any(d -> occursin("pormg_it_754_other", d), last.(both))
+      @test length(both) == 4
+
+      @test isempty(found("pormg_it_754_lonely"))
+      # The child's own FK is its own object and goes with it; the views reading it do not.
+      @test Set(last.(found("pormg_it_754_result"))) ==
+            Set(["view pormg_it_754_result_driver", "view pormg_it_754_standings"])
+      @test found("PormgIt754Mixed") == [("PormgIt754Mixed", "view \"PormgIt754MixedView\"")]
+      @test found("pormg_it_754_ruled") == [("pormg_it_754_ruled", "rule pormg_it_754_r on view pormg_it_754_v0")]
+      @test isempty(found("pormg_it_754_no_such_table"))   # already gone: nothing, no error
+
+      # The planner turns the finding into one refusal naming every object.
+      err = try
+        PormG.Migrations._refuse_dropped_table_dependents(pool, Set(["pormg_it_754_driver", "pormg_it_754_lonely"]))
+        nothing
+      catch e
+        e
+      end
+      @test err isa PormG.InvalidMigrationError
+      msg = sprint(showerror, err)
+      @test all(w -> occursin(w, msg), ["pormg_it_754_result_driver", "pormg_it_754_standings",
+                                        "pormg_it_754_driver_mv", "pormg_it_754_holder", "CASCADE"])
+      @test PormG.Migrations._refuse_dropped_table_dependents(pool, Set(["pormg_it_754_lonely"])) === nothing
+    finally
+      drop754!()
+    end
+  end
+end

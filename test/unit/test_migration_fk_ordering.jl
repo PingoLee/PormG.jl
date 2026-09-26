@@ -8,7 +8,8 @@
 #
 #   1. PostgreSQL never inlines an FK in CREATE TABLE — every constraint is a separate, later
 #      ALTER TABLE ... ADD CONSTRAINT, so CREATE order among new tables cannot matter;
-#   2. PostgreSQL drops tables with CASCADE, so DROP order cannot matter;
+#   2. PostgreSQL drops tables with CASCADE, so DROP order cannot matter — and since #754 the
+#      planner refuses a drop that CASCADE would widen past foreign keys (a view still reading it);
 #   3. SQLite runs the whole migration with PRAGMA foreign_keys = OFF (#276), so its inline
 #      REFERENCES clauses constrain nothing while the migration runs.
 #
@@ -47,6 +48,22 @@ PormG.get_constraints_unique(::FkOrderMockPg89, t::String, f::String) = nothing
 PormG.get_constraints_check(::FkOrderMockPg89, t::String, f::String) = nothing
 PormG.get_constraints_byte_length_check(::FkOrderMockPg89, t::String, f::String) = nothing
 fetch(::FkOrderMockPg89, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) = DataFrame()
+
+# #754: the same stubs, plus a canned answer to the dropped-table dependents query (the only catalog
+# read that names `pg_depend` alongside `pg_rewrite`) and a record of every read, so a test can see
+# what was asked and with which bound parameters.
+struct DropDepsMockPg754 <: PormGPostgres end
+const DDPG754 = DropDepsMockPg754()
+const DDPG754_ROWS = Ref(DataFrame(dropped_table = String[], dependent = String[]))
+const DDPG754_READS = Tuple{String, Any}[]
+PormG.get_constraints_pk(::DropDepsMockPg754, t::String, f::String) = nothing
+PormG.get_constraints_unique(::DropDepsMockPg754, t::String, f::String) = nothing
+PormG.get_constraints_check(::DropDepsMockPg754, t::String, f::String) = nothing
+PormG.get_constraints_byte_length_check(::DropDepsMockPg754, t::String, f::String) = nothing
+function fetch(::DropDepsMockPg754, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false)
+    push!(DDPG754_READS, (sql, params))
+    return occursin("pg_depend", sql) && occursin("pg_rewrite", sql) ? copy(DDPG754_ROWS[]) : DataFrame()
+end
 
 # A genuine FK CYCLE. `a2` and `a` share the table name "a_t", so `b`'s key pointing at `a` and
 # `a2`'s key pointing at `b_t` reference each other at the SQL level — which is the only level the
@@ -159,6 +176,59 @@ end
         drop_tbl = findfirst(s -> occursin("DROP TABLE", uppercase(s)), ordered)
         drop_con = findfirst(s -> occursin("DROP CONSTRAINT", uppercase(s)), ordered)
         @test drop_tbl < drop_con
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # CASCADE takes foreign keys and nothing else: a dropped table something still reads is refused (#754)
+    # Property 2's CASCADE also took every view on the table, silently — the plan said only "Drop
+    # table". The planner now asks the catalog what a CASCADE would take besides foreign keys and
+    # refuses the drop, naming it; with nothing found the plan is exactly what property 2 needs. The
+    # query itself runs against real PostgreSQL in test/integration/test_importers_introspection.jl.
+    # Mutation gate: drop the `_refuse_dropped_table_dependents` call and the refusal is not raised,
+    # and no dependents query is recorded.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "a dropped table a view still reads is refused, naming it (#754)" begin
+        settings = PormG.Configuration.Settings()
+        settings.change_db = true
+        # `keep_t` stays declared; `gone_t` has no model any more, so the plan drops it.
+        keep = Models.Model("keep_t"; id = Models.IDField(), n = Models.IntegerField())
+        gone = Models.Model("gone_t"; id = Models.IDField(), n = Models.IntegerField())
+        current_schema() = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+            :keep_t => Dict{Symbol, Union{Bool, PormGModel}}(:model => keep, :exist => false))
+        plan_for(live) = redirect_stdout(devnull) do
+            Migrations.get_migration_plan(PormGModel[live...], current_schema(), DDPG754, settings;
+                                          interactive = false)
+        end
+        dependents_reads() = filter(r -> occursin("pg_depend", r[1]) && occursin("pg_rewrite", r[1]), DDPG754_READS)
+
+        # Nothing reads it: the drop is planned exactly as before, CASCADE included (property 2).
+        DDPG754_ROWS[] = DataFrame(dropped_table = String[], dependent = String[])
+        empty!(DDPG754_READS)
+        plan = plan_for([keep, gone])
+        @test plan[:gone_t]["Drop table"] == Dialect.drop_table(DDPG754, :gone_t)
+        # One query for the whole plan, the table name bound as a parameter and absent from the SQL.
+        reads = dependents_reads()
+        @test length(reads) == 1
+        @test reads[1][2] == ["gone_t"]
+        @test !occursin("gone_t", reads[1][1])
+
+        # A view and a materialized view read it: one refusal naming both, and no plan returned.
+        DDPG754_ROWS[] = DataFrame(dropped_table = ["gone_t", "gone_t"],
+                                   dependent = ["materialized view gone_mv", "view gone_v"])
+        err = try
+            plan_for([keep, gone])
+            nothing
+        catch e
+            e
+        end
+        @test err isa PormG.InvalidMigrationError
+        msg = sprint(showerror, err)
+        @test all(w -> occursin(w, msg), ["\"gone_t\"", "view gone_v", "materialized view gone_mv", "CASCADE"])
+
+        # Nothing dropped: the catalog is not asked at all.
+        empty!(DDPG754_READS)
+        plan_for([keep])
+        @test isempty(dependents_reads())
     end
 
     # ─────────────────────────────────────────────────────────────────────────

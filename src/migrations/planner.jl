@@ -606,6 +606,70 @@ function _check_composite_targets_free(conn::Union{PormGPostgres, PormGSQLite},
 end
 
 """
+    _refuse_dropped_table_dependents(conn, dropped_tables) -> Nothing
+
+Raise `InvalidMigrationError` — at plan time, so `makemigrations` writes no plan — when a view or a
+trigger still reads a table the plan drops (#754). Every offender across every dropped table goes
+into the one error, so a single pass of hand-written `DROP VIEW`s clears it.
+
+PormG manages neither views nor triggers, so it refuses rather than drop them, like #729's rebuild
+refusals. Without it each engine lost the object a different way:
+
+  * **PostgreSQL** — `Dialect.drop_table` is `DROP TABLE … CASCADE` and stays so for the foreign
+    keys (#89), which silently took every dependent view with the table. After this check `CASCADE`
+    removes only foreign keys, barring an object created between `makemigrations` and `migrate`.
+    What is found is [`_pg_drop_table_dependents`](@ref).
+  * **SQLite** — the objects stayed, dangling, and the next `ALTER TABLE … RENAME` anywhere in the
+    database failed on the missing table — the end of every later table rebuild.
+    What is found is [`_sqlite_drop_table_dependents`](@ref).
+"""
+function _refuse_dropped_table_dependents(conn::PormGPostgres, dropped_tables::Set{String})::Nothing
+  isempty(dropped_tables) && return nothing
+  found = _pg_drop_table_dependents(conn, sort!(collect(dropped_tables)))
+  isempty(found) && return nothing
+  _throw_dropped_table_dependents(found,
+    "PostgreSQL drops a table with CASCADE, which would remove them too without the plan saying so")
+end
+
+function _refuse_dropped_table_dependents(conn::PormGSQLite, dropped_tables::Set{String})::Nothing
+  isempty(dropped_tables) && return nothing
+  objects = _sqlite_schema_objects(conn)
+  isempty(objects) && return nothing
+  found = _sqlite_drop_table_dependents(objects, dropped_tables)
+  isempty(found) && return nothing
+  described = Tuple{String, String}[
+    (t, o.type == "trigger" ? "trigger \"$(o.name)\" on \"$(o.tbl_name)\"" : "$(o.type) \"$(o.name)\"")
+    for (t, o) in found]
+  _throw_dropped_table_dependents(described,
+    "SQLite would keep them naming a missing table, and every later ALTER TABLE … RENAME in the " *
+    "database — every table rebuild ends in one — would then fail")
+end
+
+# `found` holds one `(dropped table, object)` pair per table an object reads, so an object reading two
+# dropped tables arrives twice; it is listed once, naming both, and both head the message.
+function _throw_dropped_table_dependents(found::Vector{Tuple{String, String}}, consequence::AbstractString)
+  tables = unique(first.(found))
+  reads = OrderedDict{String, Vector{String}}()
+  for (t, dep) in found
+    t in get!(reads, dep, String[]) || push!(reads[dep], t)
+  end
+  one = length(tables) == 1
+  it = one ? "it" : "them"
+  quoted(ts) = join(("\"$t\"" for t in ts), ", ")
+  listed = join(("  - $(dep) reads $(quoted(ts))" for (dep, ts) in reads), "\n")
+  throw(InvalidMigrationError(
+    "Cannot drop $(one ? "table" : "tables") $(quoted(tables)): this migration drops $(it) because no " *
+    "model declares $(it) any more, but other objects still read $(it):\n$(listed)\n" *
+    "PormG manages tables, not the views, triggers and other objects built on them, so it will not " *
+    "drop them for you: $(consequence). Drop them yourself before running makemigrations (re-create " *
+    "them against the new schema afterwards if you still need them), or keep the $(one ? "model" : "models"). " *
+    "If a model was renamed rather than deleted, run makemigrations interactively and answer its " *
+    "rename question: a rename on its own keeps them. (On SQLite, a rename in the same migration as " *
+    "a table rebuild is refused when a view or trigger the rebuild carries names the renamed table; " *
+    "apply the rename as a migration of its own first.)"))
+end
+
+"""
     _plan_composite_actions!(conn, migration_plan, model_name, model, live; column_renames, catalog_table) -> Set{String}
 
 Plan every model-level index statement for one table: the declared composites of `model` against
@@ -1890,6 +1954,10 @@ if haskey(futher_processing, :drop_table)
     end
   end
 end
+
+# #754: a table the plan drops must not still be read by a view or a trigger. First of the whole-plan
+# refusals, so a rebuild whose carried view names the dropped table is reported by its cause.
+_refuse_dropped_table_dependents(conn, dropped_tables)
 
 # #161: a name this plan creates must not still be held by another table's index.
 _check_composite_targets_free(conn, composite_targets, live, dropped_tables, table_renames)

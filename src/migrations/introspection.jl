@@ -1057,12 +1057,55 @@ constraint. This is the same exactness the SQLite reader has: `_sqlite_column_ch
 rendered clause with an anchored regex.
 
 A hand-written `CHECK (col >= 0)` is still indistinguishable from PormG's, on both engines — the
-same text is the same fact. The byte-length CHECK (`byte_length_checks` /
-`get_constraints_byte_length_check`) still matches any `octet_length … <= N` clause rather than one
-exact clause — this defect, on the other CHECK PormG writes; #747 tracks it.
+same text is the same fact. The other CHECK PormG writes, the byte-length bound, is matched the same
+way by `_PG_BYTE_LENGTH_CHECK_MATCH` (#747).
 """
 const _PG_NON_NEGATIVE_CHECK_MATCH =
   "pg_get_constraintdef(con.oid) = 'CHECK ((' || quote_ident(a.attname) || ' >= 0))'"
+
+"""
+    _PG_BYTE_LENGTH_CHECK_BOUND
+
+The SQL expression that reads the bound out of PormG's byte-length CHECK — the digits after the
+final `<= `, just before the closing `))`; NULL when the text does not end in `<= digits))`. Defined
+first because
+`_PG_BYTE_LENGTH_CHECK_MATCH` is built on it; the rationale for both is that constant's docstring.
+"""
+const _PG_BYTE_LENGTH_CHECK_BOUND = "substring(pg_get_constraintdef(con.oid) from '<= ([0-9]+)[)][)]\$')"
+
+"""
+    _PG_BYTE_LENGTH_CHECK_MATCH
+
+The predicate that recognises PormG's OWN byte-length CHECK on PostgreSQL (#747), built on
+`_PG_BYTE_LENGTH_CHECK_BOUND`, the expression that reads its bound — `_PG_NON_NEGATIVE_CHECK_MATCH`'s
+twin, over the same `con` / `a` aliases, and interpolated the same way by BOTH the reader (the
+`byte_length_checks` CTE in `get_database_schema`) and the dropper
+(`get_constraints_byte_length_check`).
+
+`BinaryField(max_length = n)` writes `CHECK (octet_length("col") <= n)`
+(`Dialect._byte_length_check_clause`), and `pg_get_constraintdef` hands it back as
+`CHECK ((octet_length(col) <= n))`, the column quoted by `quote_ident`'s rule. The bound varies, so
+the match cannot be one literal: the BOUND expression takes the digits between the LAST `<= ` and
+the closing `))`, and the MATCH rebuilds PormG's clause around them and requires the whole text to
+equal it. Equality is what makes it exact: any other text — a second comparison, an `AND`, an
+arithmetic term — does not equal its rebuild. The extraction is anchored at the end because that is
+where PormG's bound sits; the first `<=` could be inside a quoted column name. A text that does not
+end in `<= digits))` extracts NULL, and the predicate is then NULL, which `WHERE` treats as false.
+`[)]` rather than `\\)` keeps backslash escapes out of both Julia and SQL quoting.
+
+It used to be `LIKE '%octet_length%' AND ~ '<= [0-9]+'` (and `ILIKE` in the dropper), which read a
+user's `CHECK (octet_length(photo) <= 1048576 AND octet_length(photo) > 0)` on an unbounded
+`BinaryField()` as PormG's bound — and the planner, diffing it against the declaration, dropped the
+user's constraint. The SQLite reader already matched the rendered clause exactly
+(`_sqlite_column_checks`). As with the non-negative CHECK, a hand-written copy of PormG's exact
+clause is still read as PormG's, on both engines.
+
+One shape of PormG's own clause is still not read: a bound above 2147483647 is a `bigint` literal,
+which `pg_get_constraintdef` deparses as `<= '3000000000'::bigint` (#751).
+"""
+const _PG_BYTE_LENGTH_CHECK_MATCH =
+  "pg_get_constraintdef(con.oid) = 'CHECK ((octet_length(' || quote_ident(a.attname) || ') <= ' || " *
+  "$(_PG_BYTE_LENGTH_CHECK_BOUND) || '))'"
 
 """
     _pg_composite_indexes(db::PormGPostgres; schema = "public") -> Dict{String, Vector{LiveComposite}}
@@ -1477,8 +1520,8 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
         SELECT
             con.conrelid AS table_oid,
             a.attname AS col_name,
-            -- pg_get_constraintdef renders it as `CHECK ((octet_length(col) <= 4))`. Matching on
-            -- digits after `<=` avoids backslash escapes surviving both Julia and SQL quoting.
+            -- pg_get_constraintdef renders it as `CHECK ((octet_length(col) <= 4))`; the bound is
+            -- the trailing digits, read by `_PG_BYTE_LENGTH_CHECK_BOUND`.
             --
             -- `substring(… from …)` rather than `regexp_match`, kept as the equivalent that carries
             -- no version question at all. The 9.x rationale this comment used to give was already
@@ -1494,17 +1537,19 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             --
             -- min() collapses to ONE row per (table, column). This CTE is joined per-column, not
             -- per-table like non_negative_checks above, so without the GROUP BY two matching CHECKs
-            -- on the same column (a hand-written extra bound, or a stale one) would fan the outer
-            -- row out and emit that column twice into the columns aggregate — after which the recovered
-            -- max_length would depend on row order, which is exactly the drift this CTE prevents.
-            -- min() also picks the tightest bound, which is the one actually enforced.
-            min(substring(pg_get_constraintdef(con.oid) from '<= ([0-9]+)')::bigint) AS byte_limit
+            -- on the same column (since #747 both in PormG's exact form: a hand-written copy with
+            -- another bound, or a stale one) would fan the outer row out and emit that column twice
+            -- into the columns aggregate — after which the recovered max_length would depend on row
+            -- order, which is exactly the drift this CTE prevents. min() also picks the tightest
+            -- bound, which is the one actually enforced. The dropper need not name that same
+            -- constraint, so such a column can fail to converge (#752).
+            min($(_PG_BYTE_LENGTH_CHECK_BOUND)::bigint) AS byte_limit
         FROM pg_constraint con
         JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
         WHERE con.contype = 'c'
           AND array_length(con.conkey, 1) = 1
-          AND pg_get_constraintdef(con.oid) LIKE '%octet_length%'
-          AND pg_get_constraintdef(con.oid) ~ '<= [0-9]+'
+          -- #747: PormG's own clause, exactly, not any CHECK mentioning `octet_length … <= N`.
+          AND $(_PG_BYTE_LENGTH_CHECK_MATCH)
         GROUP BY con.conrelid, a.attname
     )
     SELECT
@@ -2805,22 +2850,17 @@ function get_constraints_unique(conn::PormGPostgres, table_name::String, field_n
   return result[1, :constraint_name]
 end
 
-# Find the non-negative CHECK constraint backing a positive integer column.
-# PostgreSQL has no unsigned integer type, so PormG enforces `col >= 0` with a
-# CHECK constraint; on a type transition away from a positive integer field the
-# migration engine needs the constraint's auto-generated name to drop it. We
-# match by column and clause rather than assuming a name, so it works even for
-# constraints PormG created anonymously at CREATE TABLE time. Returns `nothing`
-# when no such constraint exists.
+# The one query behind both CHECK droppers below (#747). They differ only in which clause is PormG's,
+# so they share the scoping, and it cannot drift between them again: before #747 the byte-length
+# dropper read `information_schema` with no single-column rule and no order, while
+# `get_constraints_check` had had both since #731.
 #
-# #731: the clause is matched EXACTLY, by the predicate the reader uses
-# (`_PG_NON_NEGATIVE_CHECK_MATCH`). It was `ILIKE '%>= 0%'` over
-# `information_schema`, so a user's `CHECK (grid >= 0 AND grid <= 30)` on the column
-# was returned as PormG's and dropped. Read from `pg_catalog` because the predicate
-# needs `con.oid`, and scoped the way the DDL it feeds resolves: one column, a
-# schema on the search path, the first such schema winning — an unqualified
-# `ALTER TABLE` binds to that one.
-function get_constraints_check(conn::PormGPostgres, table_name::String, field_name::String)::Union{String, Nothing}
+# Scoped the way the DDL it feeds resolves: one column, a schema on the search path, the first such
+# schema winning — an unqualified `ALTER TABLE` binds to that one. Read from `pg_catalog` because the
+# predicate needs `con.oid`. `predicate` is one of the `_PG_*_CHECK_MATCH` constants, spliced as SQL,
+# so it must never carry a value; the table and column are bound as `$1`/`$2`.
+function _pg_single_column_check_name(conn::PormGPostgres, table_name::String, field_name::String,
+                                      predicate::String)::Union{String, Nothing}
   query = """
   SELECT con.conname AS constraint_name
   FROM pg_constraint con
@@ -2832,7 +2872,7 @@ function get_constraints_check(conn::PormGPostgres, table_name::String, field_na
     AND a.attname = \$2
     AND n.nspname = ANY(current_schemas(false))
     AND array_length(con.conkey, 1) = 1
-    AND $(_PG_NON_NEGATIVE_CHECK_MATCH)
+    AND $(predicate)
   ORDER BY array_position(current_schemas(false), n.nspname), con.conname;
   """
   result = fetch(conn, query, [table_name, field_name]) |> DataFrame
@@ -2842,44 +2882,38 @@ function get_constraints_check(conn::PormGPostgres, table_name::String, field_na
   return result[1, :constraint_name]
 end
 
+# Find the non-negative CHECK constraint backing a positive integer column.
+# PostgreSQL has no unsigned integer type, so PormG enforces `col >= 0` with a
+# CHECK constraint; on a type transition away from a positive integer field the
+# migration engine needs the constraint's auto-generated name to drop it. We
+# match by column and clause rather than assuming a name, so it works even for
+# constraints PormG created anonymously at CREATE TABLE time. Returns `nothing`
+# when no such constraint exists.
+#
+# #731: the clause is matched EXACTLY, by the predicate the reader uses
+# (`_PG_NON_NEGATIVE_CHECK_MATCH`). It was `ILIKE '%>= 0%'` over
+# `information_schema`, so a user's `CHECK (grid >= 0 AND grid <= 30)` on the column
+# was returned as PormG's and dropped.
+get_constraints_check(conn::PormGPostgres, table_name::String, field_name::String)::Union{String, Nothing} =
+  _pg_single_column_check_name(conn, table_name, field_name, _PG_NON_NEGATIVE_CHECK_MATCH)
+
 # Find the byte-length CHECK backing a bounded BinaryField (#296) — the `octet_length` sibling of
 # `get_constraints_check` above. `bytea` takes no length parameter, so `max_length` can only be a
-# CHECK, and on a transition away from a bounded BinaryField the migration engine needs the
-# auto-generated name to drop it. Matched on the clause rather than the name, for the same reason.
+# CHECK, and on a transition away from a bounded BinaryField — or to another bound — the migration
+# engine needs the auto-generated name to drop it. Matched on the clause rather than the name, for
+# the same reason.
 #
 # Deliberately a separate generic rather than a parameter on `get_constraints_check`: a table can
 # carry both kinds, and matching the wrong one would drop a live constraint.
-function get_constraints_byte_length_check(conn::PormGPostgres, table_name::String, field_name::String)::Union{String, Nothing}
-  # Parameterized, like every sibling since #731: both values would otherwise land inside
-  # single-quoted literals, where an embedded `'` breaks out.
-  #
-  # `table_schema` is restricted to the search path: an unqualified table name in the DDL this
-  # feeds resolves the same way, so without it a same-named table in another schema can hand back
-  # a constraint name that does not exist on the target table, and the ALTER then fails.
-  #
-  # Residual ambiguity, deliberately left: a *hand-written* CHECK using `octet_length` on the same
-  # column is indistinguishable from PormG's own by clause alone. Matching the auto-generated name
-  # instead would be worse — the name is not stable across the paths that create it.
-  query = """
-  SELECT tc.constraint_name
-  FROM information_schema.table_constraints tc
-  JOIN information_schema.constraint_column_usage ccu
-    ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
-  JOIN information_schema.check_constraints cc
-    ON cc.constraint_name = tc.constraint_name AND cc.constraint_schema = tc.constraint_schema
-  WHERE tc.table_name = \$1
-    AND tc.constraint_type = 'CHECK'
-    AND ccu.column_name = \$2
-    AND tc.table_schema = ANY(current_schemas(false))
-    AND cc.check_clause ILIKE '%octet_length%'
-    AND cc.check_clause ~ '<= [0-9]+';
-  """
-  result = fetch(conn, query, [table_name, field_name]) |> DataFrame
-  if nrow(result) == 0
-      return nothing
-  end
-  return result[1, :constraint_name]
-end
+#
+# #747: the clause is matched EXACTLY, by the predicate the reader uses
+# (`_PG_BYTE_LENGTH_CHECK_MATCH`). It was `ILIKE '%octet_length%' AND ~ '<= [0-9]+'`, so a user's
+# `CHECK (octet_length(photo) <= 1048576 AND octet_length(photo) > 0)` was returned as PormG's and
+# dropped — and on a column carrying both, whichever row came first. The residual ambiguity is only
+# a hand-written copy of PormG's exact clause, which is the same fact by the same text. Matching the
+# auto-generated name instead would be worse — the name is not stable across the paths that create it.
+get_constraints_byte_length_check(conn::PormGPostgres, table_name::String, field_name::String)::Union{String, Nothing} =
+  _pg_single_column_check_name(conn, table_name, field_name, _PG_BYTE_LENGTH_CHECK_MATCH)
 
 # Same empty-result contract as `get_constraints_unique` above (#284).
 # Parameterized (#731): the names are the function's text arguments, bound rather than spliced.

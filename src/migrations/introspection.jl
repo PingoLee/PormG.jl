@@ -2722,7 +2722,7 @@ function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Sy
     # #615: the table itself is being renamed in the same migration, ahead of the rebuild, so the
     # snapshot's `ON "<old>"` must follow it. `nothing` (every non-rename caller) leaves it alone.
     rename_table_to === nothing || (stmt = _sqlite_rewrite_index_table(stmt, rename_table_to))
-    push!(ddls, _sqlite_terminated(stmt))
+    push!(ddls, _sqlite_single_definition(_sqlite_terminated(stmt), "INDEX", string(r.name)))
   end
   return ddls
 end
@@ -2760,6 +2760,36 @@ function _sqlite_terminated(stmt::AbstractString)::String
   ending === :line && return s * "\n;"
   ending === :open_block && return s * " */;"
   return endswith(s, ";") ? s : s * ";"
+end
+
+"""
+    _sqlite_single_definition(text, kind, name) -> String
+
+`text` unchanged, once it is confirmed to be exactly ONE `CREATE [TEMP|UNIQUE] <kind>` statement as
+the migration runner will cut it; `InvalidMigrationError` otherwise.
+
+A SQLite table rebuild re-emits definitions read from `sqlite_master` — indexes since #82, triggers
+and views since #729 — and `migrate` runs whatever the splitter cuts them into. SQLite's parser only
+ever stores one statement there, but text written around it (`PRAGMA writable_schema`, an edited file)
+can carry more, and the schema loader ignores everything after the first — so `CREATE VIEW v AS …;
+COMMIT; ATTACH …` loads and works, and a rebuild would have run the rest. Found in the #729 security
+review, below its reporting bar (it needs raw control of the file); checked because failing closed is
+cheap and the rest of the rebuild already does.
+"""
+function _sqlite_single_definition(text::AbstractString, kind::AbstractString, name::AbstractString)::String
+  pieces = _split_sqlite_statements(text)
+  words = length(pieces) == 1 ?
+          String[uppercase(t.name) for t in Iterators.take(_sqlite_identifier_tokens(pieces[1]), 4) if !t.quoted] :
+          String[]
+  if !(length(words) >= 2 && words[1] == "CREATE" && kind in words[2:min(end, 3)])
+    throw(InvalidMigrationError(
+      "The stored definition of $(lowercase(kind)) \"$(name)\" in sqlite_master is not a single " *
+      "CREATE $(kind) statement, so a SQLite table rebuild will not re-run it. SQLite only ever stores " *
+      "one statement there; this text was written around its parser (PRAGMA writable_schema, or an " *
+      "edited database file). Inspect it, and drop or re-create the $(lowercase(kind)) by hand before " *
+      "migrating."))
+  end
+  return String(text)
 end
 
 # ==============================================================================
@@ -3071,6 +3101,33 @@ function _sqlite_gap_text(sql::AbstractString, a::Int, b::Int)::String
   return String(out)
 end
 
+# Whether `sql` projects every column of something through `*` — `SELECT *`, `SELECT t.*`,
+# `SELECT a, *` — as opposed to multiplying (`a * b`) or counting (`count(*)`). Read off the gaps
+# between names: a bare `*` is a projection only right after SELECT, DISTINCT or ALL.
+function _sqlite_reads_star(sql::AbstractString, toks::Vector{_SQLiteObjectToken})::Bool
+  for k in 1:(length(toks) - 1)
+    gap = _sqlite_gap_text(sql, toks[k].stop, toks[k + 1].start)
+    occursin(r"(^|[,.])\*($|,)", gap) || continue
+    if startswith(gap, "*")
+      any(w -> _sqlite_is_word(toks[k], w), ("SELECT", "DISTINCT", "ALL")) || continue
+    end
+    return true
+  end
+  return false
+end
+
+# Whether the NUMBER of columns a `*` expands to matters somewhere in `sql`: a compound SELECT (UNION,
+# INTERSECT, EXCEPT) must match widths, an `INSERT … SELECT *` must match the target, and a column list
+# (`CREATE VIEW v(a, b) AS …`, `WITH x(a, b) AS (…)` — an `AS` right after `)`) must match its names.
+# A plain `SELECT * FROM t` view simply narrows with its table and stays valid.
+function _sqlite_star_width_matters(sql::AbstractString, toks::Vector{_SQLiteObjectToken})::Bool
+  any(t -> any(w -> _sqlite_is_word(t, w), ("UNION", "INTERSECT", "EXCEPT", "INSERT")), toks) && return true
+  for m in 2:length(toks)
+    _sqlite_is_word(toks[m], "AS") && _sqlite_gap_text(sql, toks[m - 1].stop, toks[m].start) == ")" && return true
+  end
+  return false
+end
+
 function _sqlite_refuse_recreate(o::_SQLiteSchemaObject, rebuilt_table::AbstractString,
                                  problem::AbstractString, remedy::AbstractString)
   throw(InvalidMigrationError(
@@ -3110,7 +3167,9 @@ reference is left as written, and the check below refuses it.
     checked against that relation's tables; `NEW.`/`OLD.` against the trigger's own table (a view's
     tables, for an `INSTEAD OF` trigger); an unqualified one, or one behind an alias, against every
     table the definition reads, because a token scan cannot resolve scope: `INSERT INTO audit(points)`
-    beside a dropped `result.points` refuses. That errs loud, never silent.
+    beside a dropped `result.points` refuses. That errs loud, never silent;
+  * a table losing columns, read through `*` where the number of columns matters
+    ([`_sqlite_star_width_matters`](@ref)) — the removed column is never written by name there.
 
 Skipped: reserved words ([`_SQLITE_RESERVED_WORDS`](@ref)), a name followed by `(` (a function — a
 table there is still checked as a table), and the definition's own structure — a view's name and
@@ -3180,6 +3239,23 @@ function _sqlite_recreated_ddl(o::_SQLiteSchemaObject, ctx::_SQLiteRecreateConte
   end
   own === nothing || union!(named, relation_tables(own))
 
+  # A column the rebuild removes is not always written by name. Read through `*` where the number of
+  # columns matters, a narrower table breaks the definition all the same: `SELECT * FROM result UNION
+  # ALL SELECT id, points, 0 FROM result` stops lining up, and SQLite accepts the re-created view and
+  # fails every later RENAME over it. SQLite's own DROP COLUMN refuses these (found in review, measured);
+  # so does this. A plain `SELECT * FROM result` view is left alone — it narrows and stays valid.
+  shrinking = sort!(String[t for t in named if !isempty(get(ctx.dropped_columns, t, Set{String}()))])
+  if !isempty(shrinking) && _sqlite_reads_star(sql, toks) && _sqlite_star_width_matters(sql, toks)
+    tbl = first(shrinking)
+    _sqlite_refuse_recreate(o, rebuilt_table,
+                            "reads every column of \"$(tbl)\" through `*` where their number matters " *
+                            "(a UNION, INTERSECT or EXCEPT, an INSERT … SELECT *, or a column list), and " *
+                            "this migration removes $(join(sort!(collect(ctx.dropped_columns[tbl])), ", ")) " *
+                            "from it",
+                            "Name the columns instead of `*`, or drop the $kind before running " *
+                            "makemigrations and re-create it after migrating.")
+  end
+
   edits = Tuple{Int, Int, String}[]
   for (k, tk) in enumerate(toks)
     _sqlite_is_reserved(tk) && continue
@@ -3243,7 +3319,7 @@ function _sqlite_recreated_ddl(o::_SQLiteSchemaObject, ctx::_SQLiteRecreateConte
   for (a, b, repl) in Iterators.reverse(sort!(edits; by = first))
     out = string(SubString(out, 1, prevind(out, a)), repl, SubString(out, nextind(out, b)))
   end
-  return _sqlite_terminated(out)
+  return _sqlite_single_definition(_sqlite_terminated(out), uppercase(kind), o.name)
 end
 
 # `DROP VIEW` / `DROP TRIGGER` for a dependent that has to be out of the way of the rebuild's RENAME.

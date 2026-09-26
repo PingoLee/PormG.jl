@@ -316,7 +316,7 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
 
     Otherwise, a definition that still names something the migration takes away **fails `makemigrations` loudly**, naming the view or trigger, and no plan is written:
 
-    - a column the rebuild removes, or a table the migration drops;
+    - a column the rebuild removes, or a table the migration drops — including a removed column read through `*` where the number of columns matters: a `UNION`, an `INSERT … SELECT *`, or a column list (a plain `SELECT * FROM result` view simply narrows, and comes back);
     - a column or table the migration renames, anywhere but the references above — a view selecting the renamed column, say, or a bare `UPDATE result SET …` in a trigger on a table being renamed.
 
     PormG follows a column through its table's name, through a view built on the table (`SELECT grid FROM result_v`, where `result_v` is `SELECT * FROM result`), through `NEW`/`OLD` in an `INSTEAD OF` trigger on such a view, and past an alias or a CTE that reuses a table's name. The check reads names, not SQL scope, so where it cannot tell which table a column belongs to it refuses rather than guesses.

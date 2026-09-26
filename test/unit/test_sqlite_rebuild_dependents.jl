@@ -31,7 +31,7 @@ import OrderedCollections: OrderedDict
 import PormG.ConnectionPool: fetch, close_pool!, SQLiteConnectionPool
 import PormG.Migrations: _split_sqlite_statements, _sqlite_unmodellable_table_clauses,
                          _sqlite_identifier_tokens, _sqlite_terminated, _sqlite_recreated_ddl,
-                         _SQLiteSchemaObject, _SQLiteRecreateContext
+                         _SQLiteSchemaObject, _SQLiteRecreateContext, _sqlite_single_definition
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Harness for the end-to-end testsets
@@ -268,6 +268,51 @@ end
                                  Dict{String, Set{String}}())
     view = _SQLiteSchemaObject("view", "result_v", "result_v", "CREATE VIEW result_v AS SELECT id, pts·total FROM result", 2)
     @test_throws PormG.InvalidMigrationError _sqlite_recreated_ddl(view, ctx; rebuilt_table = "result")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A stored definition is re-run only when it is ONE CREATE statement
+# A rebuild re-emits index, trigger and view definitions read from `sqlite_master`, and `migrate`
+# runs every statement the splitter cuts them into. SQLite's parser stores exactly one statement, but
+# text written around it (`PRAGMA writable_schema`) can carry more, and the schema loader ignores the
+# tail — so `…; COMMIT; ATTACH …` would load fine and then run. Security review, below its bar;
+# refused because failing closed is cheap.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a stored definition that is not one CREATE statement is refused (#729)" begin
+    @test _sqlite_single_definition("CREATE VIEW v AS SELECT 1;", "VIEW", "v") == "CREATE VIEW v AS SELECT 1;"
+    @test _sqlite_single_definition("CREATE TEMP TRIGGER t AFTER INSERT ON r BEGIN SELECT 1; END;", "TRIGGER", "t") isa String
+    @test _sqlite_single_definition("CREATE UNIQUE INDEX \"ix\" ON r (a);", "INDEX", "ix") isa String
+    # Two statements, or the wrong kind, are refused — and the message names the object.
+    err = _rd729_error(() -> _sqlite_single_definition("CREATE VIEW v AS SELECT 1; ATTACH 'x.db' AS y;", "VIEW", "v"))
+    @test err isa PormG.InvalidMigrationError && occursin("view \"v\"", sprint(showerror, err))
+    @test_throws PormG.InvalidMigrationError _sqlite_single_definition("CREATE TABLE v (a INTEGER);", "VIEW", "v")
+
+    # End to end, with the tail written the way it would really get there.
+    _rd729_project() do pool, settings, models
+        _rd729_start!(pool, settings, models)
+        fetch(pool, """CREATE VIEW "result_v" AS SELECT "id", "points" FROM "result";""")
+        fetch(pool, "PRAGMA writable_schema = ON")
+        fetch(pool, """UPDATE sqlite_master SET sql = sql || '; DELETE FROM "audit"' WHERE name = 'result_v'""")
+        fetch(pool, "PRAGMA writable_schema = OFF")
+        _rd729_models(models, _rd729_schema(result = RD729_NULLABLE))
+        err = _rd729_error(() -> _rd729_plan!(pool, settings, models))
+        @test err isa PormG.InvalidMigrationError
+        @test occursin("result_v", sprint(showerror, err))
+        @test !isfile(_rd729_pending(settings))
+    end
+
+    # The index snapshot (#82) re-emits stored definitions too, and is held to the same rule.
+    _rd729_project() do pool, settings, models
+        _rd729_start!(pool, settings, models)
+        fetch(pool, """CREATE INDEX "result_points_hand_idx" ON "result" ("points");""")
+        fetch(pool, "PRAGMA writable_schema = ON")
+        fetch(pool, """UPDATE sqlite_master SET sql = sql || '; DELETE FROM "audit"' WHERE name = 'result_points_hand_idx'""")
+        fetch(pool, "PRAGMA writable_schema = OFF")
+        _rd729_models(models, _rd729_schema(result = RD729_NULLABLE))
+        err = _rd729_error(() -> _rd729_plan!(pool, settings, models))
+        @test err isa PormG.InvalidMigrationError
+        @test occursin("index \"result_points_hand_idx\"", sprint(showerror, err))
+    end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -711,6 +756,17 @@ end
          """CREATE VIEW "vd" AS WITH "a" AS (SELECT 1 AS "z"), "driver" AS (SELECT * FROM "result")
             SELECT "driver"."grid" FROM "driver";""",
          _rd729_schema(result = no_grid), "", ["vd", "\"grid\"", "removes"]),
+        # The dropped column never written by name: read through `*` where the NUMBER of columns
+        # matters. (A plain `SELECT *` view narrows and stays valid — `rv` above is re-created fine.)
+        ("UNION over a star read of a shrinking table", _rd729_schema(result = indexed_grid),
+         """CREATE VIEW "all_results" AS SELECT * FROM "result" UNION ALL SELECT "id", "points", 0 FROM "result";""",
+         _rd729_schema(result = no_grid), "", ["all_results", "`*`", "grid"]),
+        ("CTE column list over a star read", _rd729_schema(result = indexed_grid),
+         """CREATE VIEW "cte_v" AS WITH "x"("a", "b", "c") AS (SELECT * FROM "result") SELECT "a" FROM "x";""",
+         _rd729_schema(result = no_grid), "", ["cte_v", "`*`", "grid"]),
+        ("view column list over a star read", _rd729_schema(result = indexed_grid),
+         """CREATE VIEW "cols_v"("a", "b", "c") AS SELECT * FROM "result";""",
+         _rd729_schema(result = no_grid), "", ["cols_v", "`*`", "grid"]),
         ("view on a generated column the rebuild drops", _rd729_schema(),
          """ALTER TABLE "result" ADD COLUMN "label" TEXT GENERATED ALWAYS AS ('P' || "points") VIRTUAL;""" *
          """CREATE VIEW "result_label" AS SELECT "id", "label" FROM "result";""",

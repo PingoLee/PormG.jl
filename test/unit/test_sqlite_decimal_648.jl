@@ -6,12 +6,15 @@
 # with no error. A double keeps 15 significant digits exactly (`DBL_DIG`), so a `DECIMAL(p ≤ 15, s)`
 # column holds every value write validation lets into it, and nothing wider is guaranteed to.
 #
-# The decision #648 records: PormG refuses to CREATE a column SQLite cannot honour
-# (`BackendCapabilityError` from the SQLite `field_to_column`, which every DDL path shares). An
-# existing wide column is left alone, and the migration that narrows one still plans.
+# The decision #648 records, in two halves:
+#   * PormG refuses to CREATE a column SQLite cannot honour (`BackendCapabilityError` from the SQLite
+#     `field_to_column`, which every DDL path shares). An existing wide column is left alone, and the
+#     migration that narrows one still plans.
+#   * What it does create reads back as the exact `Decimals.Decimal` that was written — the type
+#     PostgreSQL already delivers — so `list(:json)` emits PostgreSQL's text, not `1.23456789e6`.
 #
-# Hermetic: mock connections for the renderers, temporary SQLite files for the end-to-end plans. No
-# live database.
+# Hermetic: mock connections for the renderers, temporary / in-memory SQLite for everything that
+# executes. No live database.
 # =============================================================================
 # julia --project=test/integration test/unit/test_sqlite_decimal_648.jl
 
@@ -250,4 +253,111 @@ end
         @test only(row.note) == "kept"
         @test only(row.amount) == 12345.67
     end
+end
+
+# ── The read half: what PormG creates reads back exact ───────────────────────────────────────────
+
+const _D648_D = PormG.QueryBuilder.Decimals   # through PormG: `Decimals` is not in `[targets].test`
+const _D648_KEY = normpath(joinpath(@__DIR__, "pormg648_dec"))
+const _D648_POOL = SQLiteConnectionPool(":memory:"; pool_size = 1)
+PormG.config[_D648_KEY] = Configuration.Settings(
+    connections = _D648_POOL, change_data = true, db_def_folder = _D648_KEY)
+
+# `v` is the widest column SQLite honours at scale 4. `Legacy` is declared at a width PormG now
+# refuses to CREATE — its table is built by hand below, the way an older PormG or another tool left it.
+PormG.@models_module Dec648 "pormg648_dec" begin
+    Amount = Models.Model("dec648_amount",
+        id    = Models.IDField(),
+        label = Models.CharField(max_length = 40),
+        v     = Models.DecimalField(max_digits = 15, decimal_places = 4, null = true))
+    Legacy = Models.Model("dec648_legacy",
+        id = Models.IDField(),
+        v  = Models.DecimalField(max_digits = 20, decimal_places = 2, null = true))
+end
+import .Dec648 as D648
+
+# DDL through PormG's own renderer, so the column under test is the one a migration creates.
+fetch(_D648_POOL, Dialect.create_table(_D648_POOL, D648.Amount))
+# The legacy table: today's DDL for the same shape at width 15, widened back to what `Legacy` declares.
+fetch(_D648_POOL, replace(Dialect.create_table(_D648_POOL,
+        Models.Model("dec648_legacy", id = Models.IDField(),
+                     v = Models.DecimalField(max_digits = 15, decimal_places = 2, null = true))),
+    "DECIMAL(15, 2)" => "DECIMAL(20, 2)"))
+
+_d648_parts(d) = (Int(d.s), d.c, Int(d.q))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Every read terminal hands back the written Decimal (#648)
+# One value per way a decimal reaches the column — a String, a `Decimal`, a `Float64`, an integer —
+# and one per shape SQLite stores it in (INTEGER for a whole value, REAL otherwise). Each read
+# terminal is asserted, because each consults the parsers through its own path: `list()` and
+# `list(:dict)` through `_list_raw`, `DataFrame` separately (#582), and the wildcard through the
+# `SELECT *` recorder rather than a named projection.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a SQLite DecimalField reads back as the Decimal that was written (#648)" begin
+    written = [
+        ("str15",   "12345678901.2345",              (0, 123456789012345, -4)),  # 15 digits, as text
+        ("dec15",   _D648_D.Decimal(1, 999999999999999, -4), (1, 999999999999999, -4)),
+        ("float",   1234567.89,                      (0, 123456789, -2)),        # was 1.23456789e6 in JSON
+        ("whole",   14,                              (0, 14, 0)),                # stored as INTEGER
+        ("tenth",   0.1,                             (0, 1, -1)),                # bound as "%.17g" text
+    ]
+    for (label, value, _) in written
+        D648.Amount.objects.create("label" => label, "v" => value)
+    end
+    expected = Dict(label => parts for (label, _, parts) in written)
+
+    q() = D648.Amount.objects.filter("label__@in" => first.(written)).order_by("id")
+
+    # list() — the row terminal, and the one `get()`/`first()` go through.
+    for r in q().values("label", "v").list()
+        @test r[:v] isa _D648_D.Decimal
+        @test _d648_parts(r[:v]) == expected[r[:label]]
+    end
+    # list(:dict), DataFrame, and the wildcard — three more routes to the same parser.
+    @test all(d -> d[:v] isa _D648_D.Decimal, q().values("label", "v").list(:dict))
+    df = DataFrame(q().values("label", "v"))
+    @test all(v -> v isa _D648_D.Decimal, df.v)
+    @test all(r -> r[:v] isa _D648_D.Decimal, q().list())
+    @test all(r -> r[:v] isa _D648_D.Decimal, q().values("*").list())
+
+    # list(:json) now emits PostgreSQL's text for the same values: exact digits, as numbers.
+    json = D648.Amount.objects.filter("label__@in" => ["float", "whole", "tenth"]).
+        values("v").order_by("id").list(:json)
+    @test json == "[{\"v\":1234567.89},{\"v\":14},{\"v\":0.1}]"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The premise, measured: 15 significant digits survive SQLite's storage (#648)
+# The parser is exact only if SQLite's text->double conversion keeps every 15-digit value distinct.
+# SQLite documents about 15.95 digits; this checks it on the linked library across 500 values
+# spread over the column's whole range, with the fractional digits populated. A failure here shows up
+# as a `Float64` coming back (the parser declines what it cannot prove), never as a wrong Decimal —
+# which is also what makes it the right thing to measure rather than assume.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "every 15-digit value round-trips through SQLite storage exactly (#648)" begin
+    # Deterministic spread, no RNG: a large odd multiplier mod 10^15 walks the coefficient range.
+    coeffs = [mod(BigInt(i) * 7_919_000_003_311 + 1_234_567_890_123, BigInt(10)^15) for i in 1:500]
+    values = [_D648_D.Decimal(isodd(i) ? 1 : 0, c, -4) for (i, c) in enumerate(coeffs)]
+    PormG.bulk_insert(D648.Amount.objects,
+        DataFrame(label = fill("sweep", length(values)), v = values))
+
+    rows = D648.Amount.objects.filter("label" => "sweep").values("v").order_by("id").list()
+    @test length(rows) == length(values)
+    back = [r[:v] for r in rows]
+    @test count(v -> !(v isa _D648_D.Decimal), back) == 0
+    @test count(i -> back[i] != values[i], eachindex(values)) == 0
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A column wider than 15 digits keeps its raw cells (#648)
+# PormG will not create one, but one can exist. SQLite may already have rounded what it holds, so
+# rebuilding a Decimal from it would present a guess as an exact value. No parser runs: the cell
+# arrives as SQLite stored it, exactly as before this change.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a wider-than-15-digit SQLite column reads raw, not as a guessed Decimal (#648)" begin
+    fetch(_D648_POOL, "INSERT INTO dec648_legacy (v) VALUES ('12345678901234567.89'), ('14'), ('0.5');")
+    back = [r[:v] for r in D648.Legacy.objects.values("v").order_by("id").list()]
+    @test !any(v -> v isa _D648_D.Decimal, back)
+    @test back[2] === 14 && back[3] === 0.5
 end

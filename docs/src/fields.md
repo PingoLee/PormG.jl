@@ -482,7 +482,9 @@ width); `DECIMAL(max_digits, decimal_places)` on SQLite.
     `Float64` as it is written, and a `Float64` keeps only fifteen significant digits exactly — so a
     wider column would round or truncate values with no error. `makemigrations` therefore raises
     `BackendCapabilityError` for a `DecimalField` with `max_digits` above 15 on a SQLite connection,
-    and every column it does create holds its values exactly. PostgreSQL accepts any width. See
+    and every column it does create holds its values exactly — and reads back as a
+    `Decimals.Decimal`, as on PostgreSQL, rather than the `Int64`/`Float64` SQLite stored. PostgreSQL
+    accepts any width. See
     [PostgreSQL ↔ SQLite divergences](postgres.md#PostgreSQL-SQLite-divergences).
 
 ```julia

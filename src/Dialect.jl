@@ -2,6 +2,8 @@ module Dialect
 using Dates, TimeZones
 using DataFrames
 import Tables
+# #648: `_parse_sqlite_decimal` builds a `Decimals.Decimal` through the three-argument constructor.
+import Decimals
 import PormG: PormGSettings, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, PormGModel, PormGField, PormGBackend, PormGPostgres, PormGSQLite, PormGAbstractType
 import PormG: backend_sqlite_version  # SQLite library-version probe (driver body in the weakdep extension)
 # Semantic error taxonomy (#239). Dialect raises three categories:
@@ -264,6 +266,74 @@ function _parse_sqlite_interval(v::Any)
       (e isa InterruptException || e isa StackOverflowError) && rethrow()
       return v
     end
+end
+
+# Julia's shortest round-trip rendering of a finite `Float64`: always a decimal point (`1.0`, never
+# `1`), an exponent only past Julia's thresholds (`1.23456789e6`, `1.0e-5`). Anything else — `Inf`,
+# `NaN`, a shape a future Julia prints — fails the match and the cell is handed back unchanged.
+const _FLOAT64_SHORTEST = r"^(-?)([0-9]+)\.([0-9]+)(?:e([-+]?[0-9]+))?$"
+
+"""
+    _parse_sqlite_decimal(v, precision, scale) -> Union{Decimals.Decimal, typeof(v)}
+
+The READ half of a `DecimalField` on SQLite (#648): the `Int64` or `Float64` SQLite's `NUMERIC`
+affinity stored, back to the exact `Decimals.Decimal` that was written — the type LibPQ already
+delivers for a PostgreSQL `numeric`.
+
+Unlike the temporal parsers above, this does not invert slot 1's TEXT. SQLite converted that text to
+a number as it stored it, so this inverts the ENGINE's storage — and it is exact only because the
+column is narrow enough: the caller hands it only a declaration of at most
+`SQLITE_EXACT_DECIMAL_DIGITS` (15) digits, which `field_to_column` enforces. Distinct decimals of 15
+significant digits map to distinct doubles, so the shortest decimal that round-trips to the stored
+double — Julia's `string(::Float64)` — IS the decimal that was written, never a rounding of it.
+
+- an `Integer` (NUMERIC stores a whole value as one) -> `Decimal`
+- a finite `Float64` whose shortest rendering fits `(precision, scale)` -> `Decimal`
+- everything else -> returned **unchanged**: a `String` (NUMERIC keeps text that is not a number),
+  `missing`, `Inf`/`NaN`, and a value that does NOT fit — more fractional digits than `scale` (an
+  off-grid arithmetic result such as `0.1 + 0.2`, i.e. `0.30000000000000004`), or more whole digits than
+  `precision - scale`. Rounding either to fit would be exactly the approximation a parser must never
+  produce, so the raw cell is the honest answer.
+
+**Not `parse(Decimal, …)` or `Decimal(::Float64)`.** `Decimals` 0.4.1 — the version every LibPQ
+environment resolves — throws on an exponent whose digits outnumber it (`"1.23456789e6"`, the
+first fractional value past a million), and 0.5's `Decimal(::Float64)` returns the double's full
+binary expansion (`0.1` as 55 digits). The three-argument constructor is the one spelling both
+majors share. The result always has `q ≤ 0` (`10` is `Decimal(0, 10, 0)`, not `Decimal(0, 1, 1)`),
+because 0.5 prints a positive exponent as `1E+1`; it is still `==` to LibPQ's normalized value, and
+it renders the same text, which is what `list(:json)` emits.
+"""
+function _parse_sqlite_decimal(v::Any, precision::Int, scale::Int)
+    v isa Bool && return v
+    if v isa Integer
+        neg = v < 0
+        c = abs(BigInt(v))
+        q = 0
+    elseif v isa Float64
+        isfinite(v) || return v
+        m = match(_FLOAT64_SHORTEST, string(v))
+        m === nothing && return v
+        neg = m[1] == "-"
+        c = parse(BigInt, m[2] * m[3])
+        q = -length(m[3]) + (m[4] === nothing ? 0 : parse(Int, m[4]))
+    else
+        return v
+    end
+    # Zero has no sign in `numeric`, and `-0.0` is the one double whose sign is not a digit.
+    iszero(c) && return Decimals.Decimal(0, BigInt(0), 0)
+    # Canonical form: no trailing zeros after the point, and never a positive exponent.
+    while q < 0 && iszero(c % 10)
+        c = div(c, 10)
+        q += 1
+    end
+    if q > 0
+        c *= BigInt(10)^q
+        q = 0
+    end
+    # Fits the declaration, or it is not the value that was written.
+    -q <= scale || return v
+    ndigits(c) + q <= precision - scale || return v
+    return Decimals.Decimal(neg ? 1 : 0, c, q)
 end
 
 

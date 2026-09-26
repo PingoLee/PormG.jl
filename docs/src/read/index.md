@@ -147,22 +147,23 @@ Note the third row: the fractional part is not rounded, it is discarded, and the
 `1`. Nothing on the read path can recover that, which is why the fix is on the declaration: a `Float64`
 keeps fifteen significant digits exactly, so **`makemigrations` raises `BackendCapabilityError` for a
 `DecimalField` with `max_digits` above 15 on SQLite** rather than create a column like the one above.
-Every decimal column PormG creates on SQLite therefore holds the values it accepts exactly. A column
-created outside PormG, or before this refusal existed, still behaves as the table shows. Use
-PostgreSQL where more than fifteen digits is the point.
+Every decimal column PormG creates on SQLite therefore holds the values it accepts exactly — and
+because it does, PormG reads each one back as the **`Decimals.Decimal` that was written**, the same
+type PostgreSQL returns, rather than the `Int64`/`Float64` SQLite stored it as. A column created
+outside PormG, or before this refusal existed, still behaves as the table shows and reads back raw:
+SQLite may already have rounded what it holds, and a `Decimal` rebuilt from that would only look
+exact. Use PostgreSQL where more than fifteen digits is the point.
 
-!!! note "The two engines emit the same JSON *type*, not always the same text"
-    Both emit a number, never a string. The **text** agrees while the value SQLite stored prints the
-    digits the decimal has: every whole value, and fractional values below about a million. Past that,
-    Julia renders a `Float64` in exponent form, so the same column reads:
+!!! note "Both engines emit the same JSON text"
+    For every column PormG creates, a `DecimalField` reaches `.list(:json)` as a `Decimal` on both
+    engines, so both emit the same digits: `{"amount":1234567.89}`. Before, SQLite handed back a
+    `Float64`, which Julia renders in exponent form from a million up (`{"amount":1.23456789e6}`).
 
-    ```
-    stored 1234567.89    PostgreSQL {"amount":1234567.89}    SQLite {"amount":1.23456789e6}
-    ```
-
-    Both parse to the same number, so a consumer that parses is unaffected; a consumer comparing
-    response text is not. This is the deliberate side of the trade — PostgreSQL delivers an exact
-    `Decimal` and PormG emits its digits rather than re-rounding them to match SQLite's rendering.
+    Three values still arrive on SQLite as the number it computed, not a `Decimal`, and render that
+    way: an **aggregate or arithmetic** result over the column (`Sum("amount")`, `F("amount") * 2`),
+    computed through a double; a row returned by **`create()`** (and `get_or_create` /
+    `update_or_create`), which is read back without the query parsers, like temporal columns are; and
+    a column **wider than fifteen digits** created outside PormG.
 
 This applies to a **column's own value**. A decimal nested inside a container — a PostgreSQL
 `numeric[]`, which LibPQ delivers as a `Vector{Decimal}` — is not reached, and still serializes through

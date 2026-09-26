@@ -68,6 +68,8 @@ Rvc_row = Models.Model("rvc_row",
   # the physical name, so a recorder keyed only on the field name never coerces this one.
   moved = Models.DateTimeField(db_column = "moved_at", null = true),
   note  = Models.CharField(null = true),
+  # #648: the one non-temporal kind the table owns, with a width the SQLite parser accepts.
+  amount = Models.DecimalField(max_digits = 12, decimal_places = 2, null = true),
 )
 PormG.Models.set_models(@__MODULE__, "rvc_mock")
 end
@@ -363,6 +365,72 @@ end
   end
 
   # ───────────────────────────────────────────────────────────────────────────
+  # SQLite decimal reads (#648): the stored number back to the exact Decimal that was written.
+  # NUMERIC affinity stores a decimal as an `Int64` or a `Float64`. For a column of at most 15 digits
+  # — the width `field_to_column` enforces — distinct written values are distinct doubles, so the
+  # shortest rendering of the stored double IS the written value, and the parser rebuilds it.
+  # Everything that is not provably that value comes back UNCHANGED, never rounded to fit.
+  #
+  # The first case is the one that picks the construction: `Decimals` 0.4.1 — what the test env
+  # resolves, because LibPQ pins it — throws `ArgumentError` from `parse(Decimal, "1.23456789e6")`,
+  # the shortest rendering of the first fractional value past a million. An implementation built on
+  # `parse` fails here, not somewhere quieter.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "a SQLite decimal parser rebuilds the written value, or declines (#648)" begin
+    D = PormG.QueryBuilder.Decimals
+    J = PormG.QueryBuilder.JSON
+    emit(v) = J.json(PormG.QueryBuilder._json_row(Dict{Symbol, Any}(:v => v)))
+    # `(s, c, q)` read field by field: `==` normalizes on both majors, so it cannot see whether the
+    # parser produced the canonical form the JSON text depends on.
+    parts(d) = (Int(d.s), d.c, Int(d.q))
+
+    p = PormG.value_parser(PormG.CDecimal(15, 4), _RVC_SL)
+
+    # A double past a million — exponent form in Julia's rendering, and the 0.4.1 `parse` trap.
+    @test parts(p(1234567.89)) == (0, 123456789, -2)
+    @test emit(p(1234567.89)) == "{\"v\":1234567.89}"          # PostgreSQL's text; was 1.23456789e6
+    # The widest value the column accepts: 15 significant digits, 11 whole and 4 fractional.
+    @test parts(p(99999999999.9999)) == (0, 999999999999999, -4)
+    @test parts(p(-1234.5)) == (1, 12345, -1)
+    @test parts(p(0.0001)) == (0, 1, -4)
+
+    # A whole value, which NUMERIC stores as an INTEGER. Always a non-positive exponent: 0.5 prints
+    # `Decimal(0, 1, 1)` as `1E+1`, which would stop `list(:json)` emitting `10`. Still `==` to that
+    # normalized form, which is what LibPQ hands back for PostgreSQL's `10.00`.
+    @test parts(p(14)) == (0, 14, 0)
+    @test parts(p(10)) == (0, 10, 0)
+    @test p(10) == D.Decimal(0, 1, 1)
+    @test parts(p(-3)) == (1, 3, 0)
+    @test emit(p(14)) == "{\"v\":14}"
+    @test parts(p(10.0)) == (0, 10, 0)                         # a whole double, e.g. from `F * 2`
+
+    # Zero has no sign in `numeric`; `-0.0` is the one double whose sign is not a digit.
+    @test parts(p(0)) == (0, 0, 0)
+    @test parts(p(-0.0)) == (0, 0, 0)
+
+    # FAIL-OPEN — each of these comes back as the very same value, never a nearby Decimal:
+    @test p(1.0e-5) === 1.0e-5                   # 5 fractional digits in a scale-4 column
+    # An off-grid arithmetic result. Built by arithmetic on purpose: a literal such as
+    # `11.550000000000001` parses to the SAME double as `11.55`, so it would test nothing.
+    offgrid = 0.1 + 0.2                          # 0.30000000000000004, not the double 0.3
+    @test offgrid !== 0.3
+    @test p(offgrid) === offgrid
+    @test p(123456789012.5) === 123456789012.5   # 12 whole digits where 11 fit
+    @test p(123456789012) === 123456789012       # the same, as an INTEGER
+    @test p(Inf) === Inf
+    @test p(NaN) === NaN
+    @test p("12.50") == "12.50"                  # NUMERIC keeps text only when it is not a number
+    @test p(missing) === missing
+    @test p(nothing) === nothing
+    @test p(true) === true                       # a Bool is an Integer in Julia, not a decimal
+
+    # The parser is only handed out where it is exact: a column wider than 15 digits keeps its raw
+    # cells, which is the one honest answer for a value SQLite may already have rounded.
+    @test PormG.value_parser(PormG.CDecimal(16, 2), _RVC_SL) === nothing
+    @test PormG.value_parser(PormG.CDecimal(15, 4), _RVC_PG) === nothing
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
   # THE RECORDER. A parser only runs if the build recorded a kind for that output name, so the map is
   # half the fix and the half a value-level test cannot reach. Asserted white-box on a mock
   # connection, because the failures below are invisible on any single-column result.
@@ -435,5 +503,20 @@ end
                                      "y" => PormG.Functions.ToChar("ts", "YYYY-MM")))
     @test !haskey(kinds, :x)
     @test !haskey(kinds, :y)
+  end
+
+  # #648: a DecimalField column records its kind, WITH its width, on every projection spelling that
+  # names the column itself — so the SQLite parser runs. An aggregate or arithmetic over it records
+  # nothing and stays as the driver delivered it: that value is computed through a double, so no
+  # width describes it.
+  @testset "a decimal column records its width; an expression over it records nothing (#648)" begin
+    kinds = _rvc_kinds(q -> q.values("m" => "amount", "s" => PormG.Functions.Sum("amount"),
+                                     "f" => PormG.F("amount") * 2))
+    @test kinds[:m] == PormG.CDecimal(12, 2)
+    @test !haskey(kinds, :s)
+    @test !haskey(kinds, :f)
+    for build! in (q -> nothing, q -> q.values("*"))
+      @test _rvc_kinds(build!)[:amount] == PormG.CDecimal(12, 2)
+    end
   end
 end

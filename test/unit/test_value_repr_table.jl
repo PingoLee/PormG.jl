@@ -43,14 +43,16 @@ struct VrtMockPostgres <: PormG.PormGPostgres end
 const _VRT_SL = VrtMockSQLite()
 const _VRT_PG = VrtMockPostgres()
 
-# The four temporal kinds the table owns, paired with a probe value and the field struct that
-# declares them. Written out rather than derived, so a row that disappears is visible in the diff.
+# The kinds the table owns — the four temporal ones and, since #648, `CDecimal` — paired with a probe
+# value and the field struct that declares them. Written out rather than derived, so a row that
+# disappears is visible in the diff. `CDecimal` carries the declared width, so its row pins one.
 const _VRT_KINDS = [
   (PormG.CDateTime(true),  Models.DateTimeField(),                   TimeZones.ZonedDateTime(2031, 7, 4, 12, 30, 45, 123, TimeZones.tz"UTC")),
   (PormG.CDateTime(false), Models.DateTimeField(type = "TIMESTAMP"), TimeZones.ZonedDateTime(2031, 7, 4, 12, 30, 45, 123, TimeZones.tz"UTC")),
   (PormG.CDate(),          Models.DateField(),                       Date(2031, 7, 4)),
   (PormG.CTime(),          Models.TimeField(),                       Time(12, 30, 45, 123)),
   (PormG.CInterval(),      Models.DurationField(),                   Minute(1) + Second(49) + Millisecond(88)),
+  (PormG.CDecimal(8, 3),   Models.DecimalField(max_digits = 8, decimal_places = 3), "12345.678"),
 ]
 
 @testset "Value representation table (#564)" begin
@@ -68,6 +70,11 @@ const _VRT_KINDS = [
     # The two DateTimeField flavours are DISTINCT keys, not one.
     @test PormG.field_canonical_kind(Models.DateTimeField()) !=
           PormG.field_canonical_kind(Models.DateTimeField(type = "TIMESTAMP"))
+    # #648: a DecimalField's kind carries ITS width — the SQLite parser is exact only up to 15
+    # digits, so the default and a wide declaration must resolve to different keys.
+    @test PormG.field_canonical_kind(Models.DecimalField()) == PormG.CDecimal(10, 2)
+    @test PormG.field_canonical_kind(Models.DecimalField(max_digits = 20, decimal_places = 6)) ==
+          PormG.CDecimal(20, 6)
     # Non-temporal fields are not this table's business.
     for f in (Models.CharField(), Models.IntegerField(), Models.FloatField(),
               Models.BooleanField(), Models.UUIDField(), Models.TextField())
@@ -158,6 +165,15 @@ const _VRT_KINDS = [
     @test parse_ts(2031) === 2031
     @test parse_ts(missing) === missing
     @test parse_ts("not a timestamp") == "not a timestamp"
+
+    # #648: a SQLite decimal gets a parser ONLY where SQLite stored every accepted value exactly —
+    # up to the 15 digits `field_to_column` enforces. Wider, or a kind with no width (a spelling PormG
+    # did not write), gets none, so its cells stay raw rather than being dressed up as exact.
+    @test PormG.value_parser(PormG.CDecimal(15, 4), _VRT_SL) !== nothing
+    @test PormG.value_parser(PormG.CDecimal(10, 2), _VRT_SL) !== nothing
+    @test PormG.value_parser(PormG.CDecimal(16, 2), _VRT_SL) === nothing
+    @test PormG.value_parser(PormG.CDecimal(nothing, nothing), _VRT_SL) === nothing
+    @test PormG.value_parser(PormG.CDecimal(15, 4), _VRT_PG) === nothing
   end
 
   # ───────────────────────────────────────────────────────────────────────────
@@ -230,7 +246,8 @@ const _VRT_KINDS = [
     # (`DateTimeField(type = "TIMESTAMP")`), not a struct of its own, so no subtype walk can produce
     # it — which is precisely why it is the flavour a table method forgets. It gets its own
     # assertion below rather than being quietly folded into this set.
-    @test seen == Set([PormG.CDateTime(true), PormG.CDate(), PormG.CTime(), PormG.CInterval()])
+    @test seen == Set([PormG.CDateTime(true), PormG.CDate(), PormG.CTime(), PormG.CInterval(),
+                       PormG.CDecimal(8, 3)])   # #648 — the `sDecimalField` instance above is (8, 3)
 
     # The flavour the walk cannot see. A method written for `CDateTime(true)` alone would let this
     # one fall through to a generic arm and lose its representation — on the render side that is the

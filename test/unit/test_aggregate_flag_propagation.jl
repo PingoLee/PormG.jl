@@ -21,6 +21,13 @@ Three things are pinned:
   3. **The other readers.** `update()`/`delete()` refuse a wrapped-aggregate projection as they
      refuse a bare one, and `.aggregate()` accepts one.
 
+**#722 — an aggregate reached through an alias.** A condition that names a projection alias holds the
+NAME: `Case([When("total__@gte" => 100, then = 1)])` over `"total" => Sum("points")` carries the string
+`"total"`, so no flag set at construction can see the `SUM` it renders as. It was grouped — `GROUP BY
+1, 3`, which both engines reject — and a filter on its alias went to WHERE. The build-time readers now
+ask `_resolved_agg`, which adds the aliases a projection's conditions read; the second half of this
+file pins the SQL for every spelling of that, and the row-alias control that must stay grouped.
+
 Everything renders through mock connections — no live database.
 
 julia --project=test/integration test/unit/test_aggregate_flag_propagation.jl
@@ -278,6 +285,197 @@ end
       sql = Model_.objects.aggregate("t" => Coalesce(Sum("points"), Value(0)); show_query = :sql)
       @test occursin(r"COALESCE\(SUM\(\"Tb\"\.\"points\"\), \S+\)", sql)
       @test !occursin("GROUP BY", sql)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #722 fixtures: a condition that reads an aggregate ALIAS
+# `_big()` is the issue's own projection — a `Case` whose `When` names the alias `total`, which the
+# render resolves to `SUM("Tb"."points")`. `_flat` puts the multi-line CASE the renderer prints on
+# one line, so a pattern can span it. `_pg_text_order` is the querybuilder skill's cross-backend
+# differential: PostgreSQL numbers `$N` as it binds, so its markers read left to right are the
+# authoritative text order, and SQLite's flattened vector must equal it.
+# ─────────────────────────────────────────────────────────────────────────────
+_big() = Case([When("total__@gte" => 100, then = 1)], default = 0)
+_flat(insp) = replace(insp[:sql_text], r"\s+" => " ")
+_pg_text_order(insp) = [insp[:parameters][parse(Int, m.match[2:end])] for m in eachmatch(r"\$\d+", insp[:sql_text])]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #722: a projection whose condition reads an aggregate alias is not grouped
+# The issue printed `GROUP BY 1, 3` — position 3 is `CASE WHEN SUM(…)`, and both engines reject an
+# aggregate in GROUP BY. Every spelling that reaches the alias must group by the plain column alone:
+# the condition bare or inside `Q`, a standalone `When(otherwise=)`, a wrapper around the `Case`, a
+# chain of two aliases, and — with no plain column at all — no GROUP BY, as for a bare aggregate.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#722: a projection reading an aggregate alias is not grouped" begin
+  shapes = (
+    ("Case over the alias", r"GROUP BY 1\s*$",
+     q -> q.values("raceid", "total" => Sum("points"), "big" => _big())),
+    ("standalone When(otherwise=)", r"GROUP BY 1\s*$",
+     q -> q.values("raceid", "total" => Sum("points"),
+                   "big" => When("total__@gte" => 100, then = 1, otherwise = 0))),
+    ("the condition inside Q", r"GROUP BY 1\s*$",
+     q -> q.values("raceid", "total" => Sum("points"),
+                   "big" => Case([When(Q("total__@gte" => 100), then = 1)], default = 0))),
+    ("a wrapper around the Case", r"GROUP BY 1\s*$",
+     q -> q.values("raceid", "total" => Sum("points"), "big" => Coalesce(_big(), Value(0)))),
+    # `flag` reads `big`, which reads `total`: the aggregate is two aliases away.
+    ("a chain of two aliases", r"GROUP BY 1\s*$",
+     q -> q.values("raceid", "total" => Sum("points"), "big" => _big(),
+                   "flag" => Case([When("big" => 1, then = 5)], default = 6))),
+  )
+  for (backend, Model_) in _AGG_FLAG_MODELS
+    for (label, grouped, build) in shapes
+      @testset "$backend — $label" begin
+        q = Model_.objects
+        build(q)
+        insp = inspect_query(q)
+        @test occursin(grouped, insp[:sql_text])
+        # The aggregate really is in the statement, read through the alias — not dropped. A `Q`
+        # condition prints parenthesized: `WHEN (SUM(…) >= ?)`.
+        @test occursin(r"CASE WHEN \(?SUM\(\"Tb\"\.\"points\"\) >= ", _flat(insp))
+        assert_marker_count(insp, backend)
+      end
+    end
+    @testset "$backend — no plain column: no GROUP BY at all" begin
+      # `GROUP BY 2` before: a statement of aggregates alone is one row for the whole table.
+      q = Model_.objects
+      q.values("total" => Sum("points"), "big" => _big())
+      insp = inspect_query(q)
+      @test !occursin("GROUP BY", insp[:sql_text])
+      assert_marker_count(insp, backend)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #722 control: a condition that reads a ROW alias stays grouped
+# The resolver must look at what the alias projects, not merely that an alias is read. `yr` is
+# `F("raceid") + 1`, one value per row, so a `Case` over it is a row expression and is grouped
+# exactly as before: `GROUP BY 1, 3, 4`. A resolver that treated every alias read as an aggregate
+# would drop 3 and 4 and pass every test above.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#722 control: a condition on a row alias stays grouped" begin
+  for (backend, Model_) in _AGG_FLAG_MODELS
+    @testset "$backend" begin
+      q = Model_.objects
+      q.values("raceid", "total" => Sum("points"), "yr" => F("raceid") + 1,
+               "c" => Case([When("yr" => 2, then = 1)], default = 0))
+      insp = inspect_query(q)
+      @test occursin(r"GROUP BY 1, 3, 4\s*$", insp[:sql_text])
+      assert_marker_count(insp, backend)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #722: a filter on that alias filters groups — top-level and inside Q
+# Before, both spellings printed the `CASE WHEN SUM(…)` into WHERE, which both engines reject. It is
+# an aggregate, so it goes to HAVING, where the projection renders afresh (#595) and binds its three
+# values again ahead of the comparison value: SELECT's 100/1/0, HAVING's 100/1/0, then 1. The
+# cross-backend differential checks that order independently of the literal list.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#722: a filter on an alias that reads an aggregate goes to HAVING" begin
+  for (label, pred) in (("top-level", "big" => 1), ("Q", Q("big" => 1)))
+    insp = Dict{Symbol,Any}()
+    for (backend, Model_) in _AGG_FLAG_MODELS
+      @testset "$backend — $label" begin
+        q = Model_.objects
+        q.values("raceid", "total" => Sum("points"), "big" => _big())
+        q.filter(pred)
+        insp[backend] = inspect_query(q)
+        sql = _flat(insp[backend])
+        @test !occursin("WHERE", sql)
+        @test occursin(r"GROUP BY 1 HAVING \(?CASE WHEN SUM\(\"Tb\"\.\"points\"\) >= \S+ THEN \S+ ELSE \S+ END = \S+\)?\s*$", sql)
+        assert_marker_count(insp[backend], backend)
+        backend === :sqlite && assert_bound_in_text_order(insp[backend], Any[100, 1, 0, 100, 1, 0, 1])
+      end
+    end
+    @testset "$label — SQLite binds in PostgreSQL's text order" begin
+      @test insp[:sqlite][:parameters] == _pg_text_order(insp[:postgres])
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #722: a mixed Q splits between WHERE and HAVING; a mixed Qor is refused
+# #692's split reads the same test as the top-level branch, so the row term filters rows and the
+# alias term filters groups — the `raceid` value binds in WHERE, between the SELECT and HAVING runs.
+# An OR cannot be split between the two clauses, so a mixed `Qor` is refused at build time with
+# #692's message rather than printed into WHERE.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#722: a mixed Q splits and a mixed Qor is refused" begin
+  insp = Dict{Symbol,Any}()
+  for (backend, Model_) in _AGG_FLAG_MODELS
+    @testset "$backend — Q" begin
+      q = Model_.objects
+      q.values("raceid", "total" => Sum("points"), "big" => _big())
+      q.filter(Q("big" => 1, "raceid" => 5))
+      insp[backend] = inspect_query(q)
+      sql = _flat(insp[backend])
+      @test occursin(r"WHERE \"Tb\"\.\"raceid\" = \S+ GROUP BY 1 HAVING CASE WHEN SUM\(", sql)
+      assert_marker_count(insp[backend], backend)
+      backend === :sqlite && assert_bound_in_text_order(insp[backend], Any[100, 1, 0, 5, 100, 1, 0, 1])
+    end
+    @testset "$backend — Qor" begin
+      q = Model_.objects
+      q.values("raceid", "total" => Sum("points"), "big" => _big())
+      q.filter(Qor("big" => 1, "raceid" => 5))
+      err = @test_throws QueryBuildError inspect_query(q)
+      @test occursin("#692", err.value.msg)
+    end
+  end
+  @testset "Q — SQLite binds in PostgreSQL's text order" begin
+    @test insp[:sqlite][:parameters] == _pg_text_order(insp[:postgres])
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #722: an alias cycle terminates before the render reports it
+# `a` reads `b` and `b` reads `a`. No statement can mean that — whichever renders first names an
+# alias not yet projected, and the render raises `UnknownFieldError` — but the resolver runs BEFORE
+# that render, at the GROUP BY decision, so it must return rather than recurse forever and turn the
+# real error into a `StackOverflowError`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#722: an alias cycle terminates" begin
+  for (backend, Model_) in _AGG_FLAG_MODELS
+    @testset "$backend" begin
+      q = Model_.objects
+      q.values("raceid", "a" => Case([When("b" => 1, then = 1)], default = 0),
+               "b" => Case([When("a" => 1, then = 1)], default = 0))
+      err = @test_throws UnknownFieldError inspect_query(q)
+      # The render's own report: `a` renders first and names `b`, not yet projected. The name is
+      # colorized in the message, so strip ANSI before matching — CI renders with color on.
+      @test occursin("the column b not found", replace(err.value.msg, r"\e\[[0-9;]*m" => ""))
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #722 side effect: a projected OuterRef reaches the renderer
+# The GROUP BY decision read `.aggregate` straight off the node, and `OuterRefObject` has no such
+# slot, so `values("x" => OuterRef(…))` died there with a raw `FieldError`. The resolver asks
+# `_is_agg`, which answers `false` for it, so the projection now reaches the renderer: outside a
+# subquery that is the typed `QueryBuildError` the renderer owns, and inside one the outer column.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#722: a projected OuterRef is refused or rendered, not a FieldError" begin
+  for (backend, Model_) in _AGG_FLAG_MODELS
+    @testset "$backend" begin
+      q = Model_.objects
+      q.values("raceid", "x" => OuterRef("raceid"))
+      err = @test_throws QueryBuildError inspect_query(q)
+      # The renderer's refusal, not some other `QueryBuildError` a projection can raise.
+      @test occursin("correlated subquery", err.value.msg)
+
+      # `limit(1)`, so the subquery is a scalar and does not warn that it may match several rows.
+      inner = Model_.objects
+      inner.filter("raceid" => OuterRef("raceid"))
+      inner.values("o" => OuterRef("points"))
+      inner.limit(1)
+      q = Model_.objects
+      q.values("raceid", "s" => Subquery(inner))
+      @test occursin(r"\(SELECT \"Tb\"\.\"points\" as \"o\" FROM", _flat(inspect_query(q)))
     end
   end
 end

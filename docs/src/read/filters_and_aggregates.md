@@ -942,6 +942,45 @@ HAVING COALESCE(SUM("Tb"."milliseconds"), $3::bigint) = $4
 Until [#702](https://github.com/PingoLee/PormG.jl/issues/702), most of these wrappers dropped the
 aggregate. The query printed no `GROUP BY`, and SQLite returned a single row for the whole table.
 
+### A Condition on an Aggregate Alias
+
+A condition can also reach an aggregate by its alias. A `When` that reads an aggregate alias compares
+the aggregate itself, so the projection that holds it is an aggregate too. It is left out of
+`GROUP BY`, and a filter on its alias goes to `HAVING`:
+
+```julia
+using PormG.Functions: Case, Count, When
+
+# Constructors with at least 100 wins
+query = M.Result.objects
+query.filter("positionorder" => 1)
+query.values("constructorid__name", "wins" => Count("resultid"),
+             "era" => Case([When("wins__@gte" => 100, then = "dominant")], default = "other"))
+query.filter("era" => "dominant")
+```
+
+```sql
+SELECT "Tb_1"."name" as "constructorid__name", COUNT("Tb"."resultid") as "wins",
+  CASE WHEN COUNT("Tb"."resultid") >= $1 THEN $2::text ELSE $3::text END as "era"
+FROM "result" as "Tb"
+ INNER JOIN "constructor" AS "Tb_1" ON "Tb"."constructorid" = "Tb_1"."constructorid"
+WHERE "Tb"."positionorder" = $4
+GROUP BY 1
+HAVING CASE WHEN COUNT("Tb"."resultid") >= $5 THEN $6::text ELSE $7::text END = $8
+```
+
+It returns Ferrari, McLaren, Mercedes, Red Bull and Williams. `era` is not in the `GROUP BY`, and the
+filter on it tests each constructor's count in `HAVING`.
+
+The same holds for a `Q(...)` condition, a standalone `When(…, otherwise = …)`, a wrapper around the
+`Case`, and a chain of aliases, where one projection reads an alias that itself reads the aggregate.
+An alias that projects a row expression, such as `F("grid") - F("positionorder")`, stays a row
+expression when a condition reads it, and is grouped. The alias must be declared earlier in
+`values(...)` than the condition that reads it.
+
+Until [#722](https://github.com/PingoLee/PormG.jl/issues/722), such a projection was put in
+`GROUP BY`, which both PostgreSQL and SQLite reject, and a filter on its alias went to `WHERE`.
+
 ### A Row-Level Alias Filters in `WHERE`
 
 Only an aggregate alias goes to `HAVING`. An alias over a row-level expression, such as arithmetic

@@ -303,4 +303,40 @@ end
         @test df.n == [length(in_race)]
     end
 
+    @testset "a Case over an aggregate alias groups and filters in HAVING (#722)" begin
+        # `era`'s condition reads the aggregate alias `wins`, so it renders `CASE WHEN COUNT(…) >= …`.
+        # It was put in GROUP BY — `GROUP BY 1, 3`, which both engines reject — and a filter on it
+        # printed the aggregate into WHERE. Expected answer computed in Julia from the winning rows
+        # themselves: wins per constructor name, and the era each count earns.
+        winners = M.Result.objects.filter("positionorder" => 1).
+            values("constructorid__name") |> DataFrame
+        wins = Dict{String,Int}()
+        for r in eachrow(winners)
+            wins[r.constructorid__name] = get(wins, r.constructorid__name, 0) + 1
+        end
+        dominant = Set(k for (k, v) in wins if v >= 100)
+        # Both CASE branches are exercised, or the comparison below proves nothing.
+        @test !isempty(dominant)
+        @test length(dominant) < length(wins)
+
+        era() = Case([When("wins__@gte" => 100, then = "dominant")], default = "other")
+        q = M.Result.objects
+        q.filter("positionorder" => 1)
+        q.values("constructorid__name", "wins" => Count("resultid"), "era" => era())
+        df = q |> DataFrame
+        # One row per constructor, each with its own count and era — grouped by the name alone.
+        @test nrow(df) == length(wins)
+        @test Dict(String(r.constructorid__name) => (Int(r.wins), String(r.era)) for r in eachrow(df)) ==
+              Dict(k => (v, v >= 100 ? "dominant" : "other") for (k, v) in wins)
+
+        # Its alias filters groups, top-level and inside Q alike.
+        for pred in ("era" => "dominant", Q("era" => "dominant"))
+            qf = M.Result.objects
+            qf.filter("positionorder" => 1)
+            qf.values("constructorid__name", "wins" => Count("resultid"), "era" => era())
+            qf.filter(pred)
+            @test Set(String.((qf |> DataFrame).constructorid__name)) == dominant
+        end
+    end
+
 end

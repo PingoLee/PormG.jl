@@ -212,6 +212,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Migration Diff: makemigrations renames a table (#615)" include("unit/test_migration_rename_table.jl")
     @testset "Rename Index Timing (#556)" include("unit/test_rename_index_timing.jl")
     @testset "Migration Schema Check (#475)" include("unit/test_migrations_check.jl")
+    @testset "Migration Schema Check: drift gate (#738)" include("unit/test_schema_drift_check.jl")
     @testset "SQLite Rebuild Index Filter (#116)" include("unit/test_sqlite_index_filter.jl")
     @testset "SQLite Rebuild Triggers & Views (#729)" include("unit/test_sqlite_rebuild_dependents.jl")
     @testset "SQLite DecimalField: exact or refused (#648)" include("unit/test_sqlite_decimal_648.jl")

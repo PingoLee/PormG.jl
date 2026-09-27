@@ -142,6 +142,25 @@ What that does not give you:
 - **Not over a network filesystem.** SQLite's locking is unreliable on NFS and similar, and the
   guarantee above depends on it.
 
+## Gating a release on drift
+
+Before an instance boots against a database, you may want to know whether that database matches
+the models the release declares: a read replica refreshed from production, or a schema another
+team migrates on its own schedule. `check` answers it read-only, under `change_db: false`, and exits
+non-zero on any difference:
+
+```julia
+using PormG
+
+PormG.Configuration.load("db"; env = "prod")
+r = PormG.Migrations.check("db"; kinds = [:schema_drift])
+isempty(r) || println(r)
+exit(isempty(r) ? 0 : 1)
+```
+
+Each finding is a step the next `makemigrations` would plan. Details:
+[Checking the Database Against the Models](workflow.md#Checking-the-Database-Against-the-Models).
+
 ## Shipping a plan with a release
 
 The pending plan is a diff: the SQL that takes the schema the plan was **generated against** to

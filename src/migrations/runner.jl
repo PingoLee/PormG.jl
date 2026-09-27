@@ -947,15 +947,15 @@ _migration_timeouts(lock_wait::Real = 30, lock_timeout = nothing, statement_time
 """
     SchemaCheckFinding
 
-One fact about the live database that PormG's models cannot faithfully express, as reported by
-[`check`](@ref).
+One fact about the live database, as reported by [`check`](@ref).
 
-  * `kind` — the finding class. `:expression_default` today.
-  * `table` — the live table name.
-  * `columns` — the live column name(s). One entry for a column finding; a vector because the
-    finding classes still to come are not all per-column (a composite foreign key names several).
-  * `detail` — the schema text the finding is about, verbatim: for `:expression_default`, the
-    `DEFAULT` expression as the database renders it.
+  * `kind` — the finding class: `:expression_default` or `:schema_drift`.
+  * `table` — the table name.
+  * `columns` — the column name(s) the finding is about. One entry for a column finding, none for a
+    table-level one (a `:schema_drift` "New model" or "Drop table").
+  * `detail` — the text the finding is about, verbatim: for `:expression_default`, the `DEFAULT`
+    expression as the database renders it; for `:schema_drift`, the label of the step
+    `makemigrations` would plan (`"Add field: country"`, `"Drop table"`, …).
   * `message` — a one-line explanation of the consequence.
 """
 struct SchemaCheckFinding
@@ -973,7 +973,13 @@ Structured result from [`check`](@ref): the backend that was read (`:postgres` o
 the [`SchemaCheckFinding`](@ref)s, ordered by kind, then table, then column so two runs against the
 same schema render identically.
 
-`isempty(result)` is true when the models can express everything the schema contains.
+`isempty(result)` is true when the requested finding classes found nothing — for
+`kinds = [:schema_drift]`, when the database matches the declared models. That is the CI gate:
+
+```julia
+r = PormG.Migrations.check("db"; kinds = [:schema_drift])
+exit(isempty(r) ? 0 : 1)
+```
 """
 struct SchemaCheckResult
   backend::Symbol
@@ -1001,7 +1007,7 @@ const _EXPRESSION_DEFAULT_MESSAGE =
 function Base.show(io::IO, r::SchemaCheckResult)
   println(io, "Schema Check (", r.backend, "):")
   if isempty(r.findings)
-    println(io, _emsg(io, "  \e[32m✓ no findings — the models can express this schema\e[0m"))
+    println(io, _emsg(io, "  \e[32m✓ no findings\e[0m"))
     return
   end
   println(io, "  ", length(r.findings), " finding(s)")
@@ -1009,9 +1015,17 @@ function Base.show(io::IO, r::SchemaCheckResult)
     group = filter(f -> f.kind === kind, r.findings)
     println(io, _emsg(io, "\n  \e[33m$(kind)\e[0m ($(length(group)))"))
     for f in group
-      println(io, "    ⚠ ", f.table, ".", join(f.columns, ","), "  DEFAULT ", f.detail)
+      where = isempty(f.columns) ? f.table : string(f.table, ".", join(f.columns, ","))
+      if kind === :expression_default
+        println(io, "    ⚠ ", where, "  DEFAULT ", f.detail)
+      else
+        # A drift finding's message differs per step (which side has it, a possible rename), so it
+        # goes on the finding's own line rather than once under the group.
+        println(io, "    ⚠ ", where, "  ", f.detail, " — ", f.message)
+      end
     end
-    println(io, "      ", first(group).message)
+    # Every `:expression_default` finding carries the same advice; print it once.
+    kind === :expression_default && println(io, "      ", first(group).message)
   end
 end
 
@@ -1128,44 +1142,219 @@ function _sqlite_expression_default_findings(db::PormGSQLite;
   return findings
 end
 
+# ---------------------------------------------------------------------------------------------
+# `:schema_drift` — the declared models against the live schema (#738)
+# ---------------------------------------------------------------------------------------------
+
+# The finding classes `check(...; kinds)` accepts.
+const _CHECK_KINDS = (:expression_default, :schema_drift)
+
+function _validate_check_kinds(kinds::AbstractVector{Symbol}, models_file)
+  isempty(kinds) && throw(InvalidValueError(
+    "check(...; kinds = []) would report nothing whatever the database holds, so a gate built on " *
+    "it could never fail. Name at least one of: $(join(repr.(_CHECK_KINDS), ", "))."))
+  for kind in kinds
+    kind in _CHECK_KINDS || throw(InvalidValueError(
+      "Unknown check() finding class $(repr(kind)). Expected one of: $(join(repr.(_CHECK_KINDS), ", "))."))
+  end
+  # Refused rather than ignored: a caller who passed a models file expects it to be read.
+  models_file === nothing || :schema_drift in kinds || throw(InvalidValueError(
+    "check(...; models_file = …) is read only by the :schema_drift class. Pass " *
+    "kinds = [:schema_drift], or drop models_file."))
+  return nothing
+end
+
+# The declared side: the models file loaded into a throwaway module — `makemigrations`' own loader,
+# so the two cannot disagree about what the models declare, and nothing global is touched
+# (`_load_current_models` never runs `set_models`). A path rather than an already-loaded module on
+# purpose: the planner writes resolved foreign-key targets back into the field objects it is given,
+# and those would be a running application's live models.
+function _drift_declared_models(settings::PormGSettings, models_file)
+  path = if models_file === nothing
+    # The folder is where the default models file lives (#683).
+    Configuration._require_folder_backed(settings, "check(kinds = [:schema_drift])")
+    joinpath(settings.db_def_folder, settings.model_file)
+  else
+    String(models_file)
+  end
+  isfile(path) || throw(MissingConfigurationError(
+    "check(kinds = [:schema_drift]) compares the database against a models file, and $(path) does " *
+    "not exist. Pass `models_file = \"…\"` to name it."))
+  # Absolute: `Base.include` resolves a relative path against the file being included, not the
+  # working directory.
+  return _load_current_models(abspath(path))
+end
+
+# `"Add field: country"` → `"country"`; `nothing` for a label that names no single column.
+function _drift_label_column(label::AbstractString)::Union{String, Nothing}
+  m = match(r"^(?:Add|Remove|Rename|Alter) field: (.+)$", label)
+  return m === nothing ? nothing : String(m.captures[1])
+end
+
+function _drift_message(label::AbstractString)::String
+  (label == "New model" || startswith(label, "Add field: ")) &&
+    return "declared in the models, missing from the database"
+  (label == "Drop table" || startswith(label, "Remove field: ")) &&
+    return "in the database, not declared in the models"
+  return "the database and the models differ here; makemigrations would plan this step"
+end
+
+const _DRIFT_RENAME_NOTE = "(makemigrations asks; a non-interactive plan never renames, it drops and creates)"
+
+# One finding per planned step. A plan built with `interactive = false` never renames, so a renamed
+# column is an add plus a remove and a renamed table a new model plus a drop. Both halves are drift —
+# the live and declared names differ — but each says what it might pair with, so the reader knows it
+# may be one change rather than two (#738).
+function _drift_findings(plan::OrderedDict{Symbol, OrderedDict{String, String}})::Vector{SchemaCheckFinding}
+  new_tables = [String(t) for (t, steps) in plan if haskey(steps, "New model")]
+  dropped_tables = [String(t) for (t, steps) in plan if haskey(steps, "Drop table")]
+  findings = SchemaCheckFinding[]
+  for (table, steps) in plan
+    added = String[c for c in (_drift_label_column(l) for l in keys(steps) if startswith(l, "Add field: ")) if c !== nothing]
+    removed = String[c for c in (_drift_label_column(l) for l in keys(steps) if startswith(l, "Remove field: ")) if c !== nothing]
+    for label in keys(steps)
+      message = _drift_message(label)
+      pair = if label == "New model" && !isempty(dropped_tables)
+        "of " * join(dropped_tables, " or ")
+      elseif label == "Drop table" && !isempty(new_tables)
+        "to " * join(new_tables, " or ")
+      elseif startswith(label, "Add field: ") && !isempty(removed)
+        "of " * join(removed, " or ")
+      elseif startswith(label, "Remove field: ") && !isempty(added)
+        "to " * join(added, " or ")
+      else
+        nothing
+      end
+      pair === nothing || (message *= "; it could be a rename $(pair) $(_DRIFT_RENAME_NOTE)")
+      column = _drift_label_column(label)
+      push!(findings, SchemaCheckFinding(:schema_drift, String(table),
+                                         column === nothing ? String[] : [column], label, message))
+    end
+  end
+  return findings
+end
+
+# The `:schema_drift` class: what the next `makemigrations` would plan, computed and not written.
+#
+# `makemigrations` itself could not serve as the gate, for three reasons it has good cause to keep:
+# it writes `pending_migrations.jl`, it refuses to run under `change_db: false` (what a production
+# connection usually carries), and it logs a failed live read and returns. Here the plan is built in
+# memory with `interactive = false` — no prompt, no file — `change_db` is not consulted, and the live
+# read has no `try` around it: a gate must never report clean because it could not look.
+function _schema_drift_findings(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings;
+                                ignore_table::Vector{String},
+                                include_table::Union{Vector{String}, Nothing},
+                                models_file)::Vector{SchemaCheckFinding}
+  declared = _drift_declared_models(settings, models_file)
+  live = read_live_schema(connection; ignore_table = ignore_table, include_table = include_table)
+  plan = get_migration_plan(live, declared, connection, settings; interactive = false)
+  # `include_table` is applied to the PLAN, not to the declared models. Narrowing the declared side
+  # before planning looked equivalent and was not: the planner synthesizes each ManyToManyField's
+  # through table from the declared models, so an included owner still produced a through table
+  # the (narrowed) live side lacked — a false "New model" — and a string M2M target outside the list
+  # could not be resolved at all. Planning with every declared model and reporting only the listed
+  # tables keeps the plan identical to the one `makemigrations` would build for them. The declared
+  # models outside the list plan as new tables (the live read skipped them) and are dropped here.
+  include_table === nothing || filter!(p -> String(first(p)) in include_table, plan)
+  return _drift_findings(plan)
+end
+
 _sort_findings(f::Vector{SchemaCheckFinding}) =
   sort(f; by = x -> (String(x.kind), x.table, isempty(x.columns) ? "" : first(x.columns)))
 
 """
-    check(connection, settings; ignore_table = nothing, include_table = nothing) -> SchemaCheckResult
+    check(connection, settings; kinds = [:expression_default], ignore_table = nothing, include_table = nothing, models_file = nothing) -> SchemaCheckResult
     check(settings; kwargs...) -> SchemaCheckResult
     check(db::String; config = config, kwargs...) -> SchemaCheckResult
 
-Report facts about the live database schema that PormG's models cannot faithfully express.
+Report facts about the live database schema, one [`SchemaCheckFinding`](@ref) each. Read-only on
+both backends: `check` never writes, never prompts, and does not consult `change_db`, so it runs
+against a production connection.
+
+`kinds` selects the finding classes:
+
+  * `:expression_default` (the default) — columns whose `DEFAULT` PormG's models express only as a
+    `db_default`. Needs no models file, no migration history and no `init_migrations()`.
+  * `:schema_drift` — every place the database differs from the **declared models**: one finding
+    per step the next [`makemigrations`](@ref) would plan. Empty means the database matches the
+    models, which makes it a CI or release gate:
+
+    ```julia
+    r = PormG.Migrations.check("db"; kinds = [:schema_drift])
+    exit(isempty(r) ? 0 : 1)
+    ```
 
 `ignore_table` replaces the backend's default skip list (`postgres_ignore_table` /
 `sqlite_ignore_schema`); tables registered through `register_ignore_tables!` are always skipped on
-top of it, so `check` reads exactly the tables the importer does. `include_table` restricts the read
-to the named tables. Both match the parameters of `convert_schema_to_models`.
+top of it, so `check` reads exactly the tables the importer and `makemigrations` do. `include_table`
+restricts the read to the named tables. Both match the parameters of `convert_schema_to_models`.
+For `:schema_drift` the two filter differently, on purpose:
 
-Read-only, on both backends, and independent of `makemigrations` — it needs no models file, no
-migration history and no `init_migrations()`. Run it alongside [`status`](@ref) and
-[`dry_run`](@ref) in the operator flow, and before upgrading PormG.
+  * `include_table` restricts what is **reported**. Every declared model is still planned, so the
+    findings for a listed table are exactly the steps `makemigrations` would plan for it. A
+    `ManyToManyField`'s through table is reported only when it is listed too.
+  * `ignore_table` skips **live** tables only, as the default skip list does for `makemigrations`.
+    A declared model on an ignored table therefore reads as missing from the database.
 
-Today it reports one class:
+`models_file` names the models file
+`:schema_drift` compares against; by default it is `settings.model_file` under the connection's
+folder, the file `makemigrations` reads. An empty `kinds`, an unknown class, or a `models_file`
+without `:schema_drift` raises `InvalidValueError`.
 
-  * `:expression_default` — a column whose `DEFAULT` is a SQL expression (`now()`,
-    `CURRENT_TIMESTAMP`, `gen_random_uuid()`, `concat(...)`) rather than a literal value. Since #496
-    PormG **can** express one: the column imports as `db_default=` carrying exactly the text shown,
-    so `detail` is the value to paste into your model. Two things are worth knowing about such a
-    column, and they are why the class still earns its place:
+Run it alongside [`status`](@ref) and [`dry_run`](@ref) in the operator flow, and before upgrading
+PormG.
 
-      * declaring it as `default=` instead is the one response that causes damage — that makes
-        `makemigrations` propose `SET DEFAULT '<the expression>'`, a quoted literal written over the
-        database's real expression default, after which every new row stores that text;
-      * unless the expression is one of the portable ones (`CURRENT_TIMESTAMP`, `CURRENT_DATE`) it
-        is **pinned to this engine**. A models file carrying it renders here and raises a
-        `BackendCapabilityError` on the other backend, which is deliberate — PormG will not guess a
-        translation — but it means a portable app needs `db_default = (postgres = …, sqlite = …)`
-        spelled out.
+# `:schema_drift`
 
-    **Re-scoped rather than retired (#496).** The detected set is unchanged; what changed is that
-    the finding now says how to describe the column rather than that it cannot be described.
+Each finding is one planned step: `table` is the table, `columns` the column a field step names,
+`detail` the step's label exactly as `makemigrations` writes it into a plan (`"New model"`,
+`"Drop table"`, `"Add field: country"`, `"Remove field: code"`, `"Alter field: points"`, …), and
+`message` which side has what the other lacks.
+
+  * **It reads what `makemigrations` reads, and plans the same way** — the same live reader, the same
+    models loader, the same planner, with `interactive = false`. So it cannot disagree with the next
+    `makemigrations` about whether there is a change.
+  * **A failed read raises.** Unlike `makemigrations`, which logs a failed live read and returns, a
+    gate must never report "clean" because it could not look.
+  * **An unhinted rename is drift.** With no one to ask, a renamed column plans as an add plus a
+    remove, and a renamed table as a new model plus a drop. Both findings are reported, and each
+    `message` names the other half it could pair with.
+  * **A changed column reads differently per engine.** PostgreSQL alters a column in place and
+    reports `"Alter field: <column>"`. SQLite rebuilds the table, so the finding is
+    `"Alter table: <table>"` and names no column. Added and removed columns keep their
+    `"Add field: …"` / `"Remove field: …"` labels on both engines.
+  * **The declared models are loaded the way `makemigrations` loads them** — the file is included
+    into a throwaway module and `set_models` never runs — so checking does not touch the models an
+    application has already loaded.
+
+```julia
+julia> PormG.Migrations.check("db"; kinds = [:schema_drift])
+Schema Check (postgres):
+  2 finding(s)
+
+  schema_drift (2)
+    ⚠ circuit.country  Add field: country — declared in the models, missing from the database
+    ⚠ season  New model — declared in the models, missing from the database
+```
+
+# `:expression_default`
+
+A column whose `DEFAULT` is a SQL expression (`now()`, `CURRENT_TIMESTAMP`, `gen_random_uuid()`,
+`concat(...)`) rather than a literal value. Since #496 PormG **can** express one: the column imports
+as `db_default=` carrying exactly the text shown, so `detail` is the value to paste into your model.
+Two things are worth knowing about such a column, and they are why the class still earns its place:
+
+  * declaring it as `default=` instead is the one response that causes damage — that makes
+    `makemigrations` propose `SET DEFAULT '<the expression>'`, a quoted literal written over the
+    database's real expression default, after which every new row stores that text;
+  * unless the expression is one of the portable ones (`CURRENT_TIMESTAMP`, `CURRENT_DATE`) it
+    is **pinned to this engine**. A models file carrying it renders here and raises a
+    `BackendCapabilityError` on the other backend, which is deliberate — PormG will not guess a
+    translation — but it means a portable app needs `db_default = (postgres = …, sqlite = …)`
+    spelled out.
+
+**Re-scoped rather than retired (#496).** The detected set is unchanged; what changed is that the
+finding now says how to describe the column rather than that it cannot be described.
 
 A **primary key that imports as an `IDField` is deliberately not reported** — a `serial`/`bigserial`
 `id` column, say. `sIDField` has neither a `default` that could hold an expression
@@ -1202,29 +1391,39 @@ Schema Check (postgres):
       the DEFAULT is a SQL expression; it imports as `db_default=` with exactly this text. Declare it that way and NOT as `default=`, which would render it as a quoted literal
 ```
 
-`settings` is unused by the checks that exist today and is taken for parity with [`status`](@ref)
-and [`dry_run`](@ref) — and because the finding classes still to come need it: comparing the live
-schema against the declared models requires `settings.db_def_folder`.
-
 See also [`SchemaCheckResult`](@ref), [`SchemaCheckFinding`](@ref).
 """
 function check(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings;
+               kinds::AbstractVector{Symbol} = [:expression_default],
                ignore_table::Union{Vector{String}, Nothing} = nothing,
-               include_table::Union{Vector{String}, Nothing} = nothing)::SchemaCheckResult
-  if connection isa PormGSQLite
-    ignore = unique(vcat(something(ignore_table, sqlite_ignore_schema), _EXTRA_IGNORE_TABLES[]))
-    findings = _sqlite_expression_default_findings(connection; ignore_table = ignore,
-                                                   include_table = include_table)
-    return SchemaCheckResult(:sqlite, _sort_findings(findings))
-  else
-    ignore = unique(vcat(something(ignore_table, postgres_ignore_table), _EXTRA_IGNORE_TABLES[]))
-    schemas = get_database_schema(connection)
-    if include_table !== nothing
-      schemas = filter(r -> any(included -> r.table_name == included, include_table), schemas)
+               include_table::Union{Vector{String}, Nothing} = nothing,
+               models_file::Union{AbstractString, Nothing} = nothing)::SchemaCheckResult
+  _validate_check_kinds(kinds, models_file)
+  default_ignore = connection isa PormGSQLite ? sqlite_ignore_schema : postgres_ignore_table
+  findings = SchemaCheckFinding[]
+
+  if :expression_default in kinds
+    ignore = unique(vcat(something(ignore_table, default_ignore), _EXTRA_IGNORE_TABLES[]))
+    if connection isa PormGSQLite
+      append!(findings, _sqlite_expression_default_findings(connection; ignore_table = ignore,
+                                                            include_table = include_table))
+    else
+      schemas = get_database_schema(connection)
+      if include_table !== nothing
+        schemas = filter(r -> any(included -> r.table_name == included, include_table), schemas)
+      end
+      append!(findings, _pg_expression_default_findings(schemas; ignore_table = ignore))
     end
-    findings = _pg_expression_default_findings(schemas; ignore_table = ignore)
-    return SchemaCheckResult(:postgres, _sort_findings(findings))
   end
+
+  if :schema_drift in kinds
+    # The reader adds `_EXTRA_IGNORE_TABLES` itself, exactly as it does for `makemigrations`.
+    append!(findings, _schema_drift_findings(connection, settings;
+                                             ignore_table = something(ignore_table, default_ignore),
+                                             include_table = include_table, models_file = models_file))
+  end
+
+  return SchemaCheckResult(connection isa PormGSQLite ? :sqlite : :postgres, _sort_findings(findings))
 end
 
 function check(settings::PormGSettings; kwargs...)::SchemaCheckResult

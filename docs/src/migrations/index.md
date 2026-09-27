@@ -69,6 +69,7 @@ If you are new to Django-style ORMs, the migration APIs map directly to standard
 | `init_migrations("db")` | — | **Bootstrap / Initialization** (registers/creates history tables on an existing database). |
 | `dry_run("db")` | — | **Dry Run / Plan Preview** (previews the DDL statements without executing them). |
 | `check("db")` | — | **Schema Compatibility Report** (read-only; lists live-schema facts the models cannot faithfully express). |
+| `check("db"; kinds = [:schema_drift])` | closest: `makemigrations --check` (which compares against migration files, not the live schema) | **Drift Detection** (read-only; lists every difference between the live schema and the declared models — a CI / release gate). |
 | `discard_pending_migration("db")` | — | **Discard Generated Script** (deletes the un-applied `pending_migrations.jl` draft; no DB state changes). |
 
 ---

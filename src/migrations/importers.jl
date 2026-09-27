@@ -1510,6 +1510,51 @@ function _pin_m2m_join_columns!(index::_DjangoClassIndex)
   return nothing
 end
 
+"""
+    _unconstrain_keys_into_unmanaged!(index) -> IdDict{Any, Vector{String}}
+
+Give every managed model's foreign key into an UNMANAGED model `db_constraint = false` (#741), and
+return one `# PormG:` marker per key changed, keyed by the owning model.
+
+Django lets a managed model hold an ordinary, constrained `ForeignKey` into a `managed = False` one —
+the common way to point at a legacy table or a view. PormG does not: an unmanaged model's table is
+never migrated and may be a view, which a foreign key cannot reference, so `set_models` and
+`makemigrations` both refuse the constrained key. Imported as written, such a project would produce a
+models file that fails to load. The column, its index and every query across the key are unchanged;
+only the database constraint is not declared, and the marker and a `@warn` say so.
+
+Runs after every model exists, like `_pin_m2m_join_columns!`, because a key's target may be built
+after its owner. A key from an unmanaged model is left alone: its table is never migrated.
+"""
+function _unconstrain_keys_into_unmanaged!(index::_DjangoClassIndex)
+  out = IdDict{Any, Vector{String}}()
+  by_binding = Dict{String, _DjangoClass}()
+  for e in index.entries
+    e.model === nothing || (by_binding[e.binding] = e)
+  end
+  for owner in index.entries
+    owner.model === nothing && continue
+    Models.model_is_managed(owner.model) || continue
+    for (field_name, field) in owner.model.fields
+      field isa Models.sRelationalColumn || continue
+      field.db_constraint || continue
+      target = field.to isa AbstractString ? get(by_binding, field.to, nothing) :
+               field.to isa PormGModel ? findfirst(e -> e.model === field.to, by_binding) : nothing
+      target isa AbstractString && (target = by_binding[target])
+      (target === nothing || target.model === nothing || Models.model_is_managed(target.model)) && continue
+      # What the field constructor does for `db_constraint = false`: such a key always carries an index.
+      field.db_constraint = false
+      field.db_index = true
+      owner_label, target_label = _django_ref_label(owner), _django_ref_label(target)
+      @warn "import: a key into an unmanaged model is imported without its database constraint" class=owner_label field=field_name target=target_label
+      push!(get!(out, owner.model, String[]),
+            "# PormG: '$(owner_label).$(field_name)' points at the unmanaged '$(target_label)', so it is " *
+            "imported with db_constraint = false — PormG does not migrate that table, which may be a view.")
+    end
+  end
+  return out
+end
+
 # One target reference → its class entry, or `nothing` after reporting the degrade.
 function _resolve_one_target(raw::AbstractString, owner::_DjangoClass, index::_DjangoClassIndex,
                              strict_relations::Bool, markers::Vector{String},
@@ -2093,6 +2138,22 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
         end
       end
 
+      # `Meta.managed = False` (#741) carries over as the same option: a model PormG queries but never
+      # migrates. Inherited from an abstract base, as in Django (`_META_KEYS_NOT_INHERITED` does not
+      # list it). Only the two literals are honoured — anything else (a setting, an expression) cannot
+      # be decided here, and guessing `False` would hide a table from the planner, so the model stays
+      # managed and the generated file says so.
+      if haskey(meta_options, "managed")
+        managed = parse_value(meta_options["managed"])
+        if managed isa Bool
+          Models._apply_managed!(model, managed)
+        else
+          @warn "import: Meta.managed is not True or False; ignored" class=class_label value=meta_options["managed"]
+          push!(markers, "# PormG: Meta.managed on '$(class_label)' is not True or False — ignored; " *
+                         "the model below is managed. Add `managed = false` by hand if it should not be.")
+        end
+      end
+
       # The physical table, resolved HERE and nowhere else (#346). `Model_to_str` renders whatever
       # `db_table` the model carries and derives nothing of its own, so this is the single place
       # an app label becomes a table name — and the M2M pin below reads the result rather than
@@ -2266,6 +2327,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
 
   # Every model exists now, so both ends of every ManyToManyField are readable.
   _pin_m2m_join_columns!(index)
+  # …and both ends of every key: a managed model's key into an unmanaged one loses its constraint (#741).
+  unconstrained = _unconstrain_keys_into_unmanaged!(index)
 
   # Rendered in the order the slots were claimed, which is the order the models were built — so the
   # shared `taken_bindings` / `taken_names` sets see the same sequence they would have seen inline.
@@ -2277,6 +2340,7 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
   # does fire and the winner depends on who is rendered first. Keeping build order costs nothing and
   # keeps that outcome matching the file the reader sees.
   for (slot, model, markers) in pending_renders
+    markers = vcat(markers, get(unconstrained, model, String[]))
     rendered = Models.Model_to_str(model; taken_bindings=taken_bindings, taken_names=taken_names)
     Instructions[slot] = isempty(markers) ? rendered : join(markers, "\n") * "\n" * rendered
   end
@@ -5434,7 +5498,6 @@ end
 # generated file's marker say the same thing.
 const _META_OPTION_REASONS = Dict{String, String}(
   "ordering"              => "PormG orders per query, not per model",
-  "managed"               => "PormG migrations have no per-model opt-out",
   "verbose_name"          => "PormG models carry no display metadata",
   "verbose_name_plural"   => "PormG models carry no display metadata",
   "permissions"           => "PormG has no permission framework",
@@ -5449,7 +5512,7 @@ const _META_OPTION_REASONS = Dict{String, String}(
 )
 
 # Options this importer consumes itself, so they are never reported as dropped.
-const _META_OPTIONS_CONSUMED = ("abstract", "proxy", "db_table", "constraints", "unique_together",
+const _META_OPTIONS_CONSUMED = ("abstract", "proxy", "db_table", "managed", "constraints", "unique_together",
                                 "indexes", "index_together")
 
 # Django's `UniqueConstraint` arguments that PormG can honour. `violation_error_message` /

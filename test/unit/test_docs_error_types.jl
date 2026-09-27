@@ -1242,6 +1242,43 @@ const DOCERR_CASES = [
             end
         end,
     ),
+    # #741: a managed model's constrained key into an unmanaged one. Two raise sites, because
+    # `makemigrations` loads models without registering them.
+    (
+        "models.md — Unmanaged models: a constrained key into an unmanaged model raises ModelDefinitionError at set_models (#741)",
+        ModelDefinitionError,
+        () -> begin
+            view = Model("docerr_points_v_741"; managed = false, id = IDField(), points = IntegerField())
+            award = Model("docerr_award_741"; id = IDField(), standing = ForeignKey(view, pk_field = "id"))
+            mod = Module(:DocErrManaged741)
+            Core.eval(mod, :(import PormG))
+            Core.eval(mod, :(Points = $view))
+            Core.eval(mod, :(Award = $award))
+            # `set_models` resolves its key through `db_def_folder`, which `docerr_pg` does not set.
+            # `invokelatest`: this closure runs in the world the case list was built in, where the two
+            # bindings `Core.eval` just made do not exist yet, and `set_models` would see no models.
+            PormG.config["docerr_managed_741"] = PormG.Configuration.Settings(
+                connections = DocErrMockPostgres(), change_data = true, db_def_folder = "docerr_managed_741")
+            try
+                Base.invokelatest(PormG.Models.set_models, mod, "docerr_managed_741")
+            finally
+                delete!(PormG.config, "docerr_managed_741")
+            end
+        end,
+    ),
+    (
+        "models.md — Unmanaged models: a constrained key into an unmanaged model raises InvalidMigrationError at makemigrations (#741)",
+        InvalidMigrationError,
+        () -> begin
+            view = Model("docerr_points_v_741"; managed = false, id = IDField(), points = IntegerField())
+            award = Model("docerr_award_741"; id = IDField(), standing = ForeignKey(view, pk_field = "id"))
+            schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+                Symbol(PormG.Models.model_table_name(m)) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => m, :exist => false)
+                for m in (view, award))
+            PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema, DocErrMockPostgres(),
+                                                PormG.Configuration.Settings(); interactive = false)
+        end,
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

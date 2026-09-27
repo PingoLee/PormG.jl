@@ -512,11 +512,12 @@ Django parameters are automatically converted to PormG equivalents:
 | `constraints = [CheckConstraint(…)]` | **rejected**, reported | No PormG equivalent. |
 | `abstract = True` | **no table** | The class becomes a base: its fields merge into every child. See [Model inheritance](#Model-inheritance). |
 | `proxy = True` | **no table** | A proxy shares its parent's table; emitting one would declare that table twice. |
+| `managed = False` | **imported** as `managed = false` | A model PormG queries but never migrates — see [Unmanaged models](@ref). Inherited from an abstract base, as in Django. A value other than `True`/`False` (a setting, an expression) is reported and the model stays managed. A managed model's `ForeignKey` into an unmanaged one is imported with `db_constraint = false`, and reported: PormG refuses a constrained key into a table it does not migrate, which may be a view. |
 | `indexes = [Index(fields=['a','b'])]` | **imported** as `indexes = [Models.Index(fields = ("a", "b"))]` | See the acceptance rule below — narrower than Django's. |
 | `indexes = [Index(fields=['a'])]` | **imported** as `a = …(db_index=true)` | A one-column index *is* `db_index`, and is the only spelling that round-trips, so nothing is reported. Two exceptions: on the **primary key** it is redundant (already indexed) and skipped, and on a field type with no `db_index` option (`PasswordField`) it is dropped **and** reported. |
 | `index_together = (('a','b'), …)` | **imported** as one `Models.Index` per group | The legacy spelling; the non-unique twin of `unique_together`. |
 | `ordering`, `get_latest_by` | **dropped**, reported | PormG orders per query, not per model. |
-| `managed`, `verbose_name*`, `permissions`, `default_related_name`, `app_label`, … | **dropped**, reported | No PormG equivalent. |
+| `verbose_name*`, `permissions`, `default_related_name`, `app_label`, … | **dropped**, reported | No PormG equivalent. |
 | anything unrecognised | **dropped**, reported | A typo or a Django option this importer has not met. Neither is safe to pass over quietly. |
 
 "Reported" means two things at once: a `@warn` at import time **and** a `# PormG:` comment on the

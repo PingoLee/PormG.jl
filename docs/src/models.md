@@ -259,6 +259,50 @@ A composite over a column you are dropping goes with the column — nothing extr
   truncated form, so a long name does not re-plan a rename on every run, and warns when it creates
   one — two long names that share their first 63 bytes collide, so shorten one.
 
+## Unmanaged models
+
+`managed = false` declares a model PormG **queries but never migrates** — Django's `Meta.managed =
+False`. Use it for a view, or for a table another system owns:
+
+```julia
+# A view the database already holds, e.g.
+#   CREATE VIEW driver_points_v AS
+#     SELECT driverid AS id, driverid, SUM(points) AS points FROM result GROUP BY driverid;
+Driver_points = Models.Model("driver_points_v"; managed = false,
+  id       = Models.IDField(),
+  driverid = Models.ForeignKey(Driver, pk_field = "driverid", db_constraint = false),
+  points   = Models.FloatField(),
+)
+
+M.Driver_points.objects.
+  filter("driverid__driverref" => "senna").
+  values("points", "driverid__surname").
+  list()
+```
+
+- **Migrations leave it alone.** `makemigrations` never creates, alters, renames or drops the table of
+  an unmanaged model, and never offers it as the old name of a renamed table. Without the option a
+  model over a view was planned as `CREATE TABLE` on every run (a view is not a table, so the table
+  never "exists"), and a table another system owns was either altered — rebuilt, on SQLite — or,
+  left undeclared, dropped.
+- **Queries do not change.** Filters, joins, `__` traversal, and writes where the table accepts them
+  work exactly as for any other model. The model declares only the columns it reads.
+- **A foreign key into an unmanaged model needs `db_constraint = false`.** The target may be a view,
+  which a foreign key cannot reference. A constrained key raises `ModelDefinitionError` at
+  `set_models`, and `InvalidMigrationError` at `makemigrations`, which loads models without
+  registering them. A key *from* an unmanaged model needs nothing: its table is never migrated.
+- **Many-to-many:** the automatic join table is unmanaged only when **both** ends are, as in Django.
+  With one managed end the join table is created, and its key into the unmanaged end carries no
+  constraint.
+- **Declared `indexes` and `constraints` are not migrated either.** They may still document the
+  table, but PormG does not create, compare or drop them.
+- **Nothing checks the declaration against the database yet.** A declared column the view lacks is
+  found by the first query that reads it; reporting it from `Migrations.check()` is tracked in #738.
+- `managed` is a model option, like `db_table`, so a *column* named `managed` is declared with
+  `db_column` — see the warning under [`Model`](@ref PormG.Models.Model).
+
+The view itself is yours to create and change, for example as manual SQL in a migration.
+
 ## Naming Conventions and Considerations
 
 ### Model Naming Rules

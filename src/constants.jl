@@ -53,8 +53,9 @@ const reserved_words = [
 # the peel keys on the kwarg NAME however it was spelled — so it needs `db_column` (#317).
 # `Model_to_str` treats them exactly like `reserved_words` when picking a generated identifier;
 # without that, an introspected `db_table` column emitted `db_table = Models.CharField()`, which the
-# peel then read as the option and rejected on reload.
-const MODEL_OPTION_KWARGS = ["constraints", "db_table", "indexes"]
+# peel then read as the option and rejected on reload. `managed` joined with #741, the same narrow
+# break `indexes` caused with #347.
+const MODEL_OPTION_KWARGS = ["constraints", "db_table", "indexes", "managed"]
 
 const PormGsuffix = Dict{String,Union{Int64, String}}(
   "gte" => ">=",

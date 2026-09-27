@@ -1777,6 +1777,57 @@ function _retarget_references(table::LiveTable, renames::Dict{String, String})::
   return LiveTable(table.name, columns, table.indexes, table.composites)
 end
 
+"""
+    _exclude_unmanaged_models!(current_schema) -> Set{String}
+
+Remove every `managed = false` model (#741) from `current_schema` and return their table names — the
+keys `current_schema` held them under, which are the physical names the live side is matched by.
+
+This is the whole of #741's planner half, because every decision `get_migration_plan` makes starts
+from one of two lists. An unmanaged model out of `current_schema` is never created, altered, given a
+composite, or named as a rename target; its table out of the live list the planner classifies is
+never dropped and never offered as a rename candidate. Called AFTER
+`synthesize_many_to_many_through_models`, which resolves many-to-many targets against the full
+schema and marks an auto join table unmanaged when both of its ends are. The dict is the one that
+function returned, never the caller's.
+"""
+function _exclude_unmanaged_models!(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}})::Set{String}
+  unmanaged = Set{String}(String(key) for (key, entry) in current_schema if !model_is_managed(entry[:model]))
+  for table in unmanaged
+    delete!(current_schema, Symbol(table))
+  end
+  return unmanaged
+end
+
+"""
+    _refuse_constrained_keys_into_unmanaged(current_schema)
+
+Raise `InvalidMigrationError` when a managed model's foreign key into an unmanaged model would render
+a database constraint (#741) — `Models.constrained_key_into_unmanaged`, the predicate `set_models`
+applies at registration. The planner needs its own copy of the check because `makemigrations` never
+calls `set_models` (`_load_current_models`), and without it the plan would carry a `REFERENCES` into
+a table PormG does not own, or into a view, which the database refuses at `migrate`. Every offending
+key is listed, so they can all be fixed in one pass.
+
+A target still held as an unresolved String is skipped: `_resolve_fk_targets_and_pk!` is best-effort,
+and such a key fails on its own terms where its parent is rendered.
+"""
+function _refuse_constrained_keys_into_unmanaged(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}})::Nothing
+  problems = String[]
+  for (_, entry) in current_schema
+    model = entry[:model]
+    for (field_name, field) in pairs(model.fields)
+      field isa Models.sRelationalColumn || continue
+      Models.constrained_key_into_unmanaged(model, field, field.to) || continue
+      push!(problems, "  - $(model.name).$(field_name) $(Models._unmanaged_key_problem(field.to))")
+    end
+  end
+  isempty(problems) && return nothing
+  throw(InvalidMigrationError(
+    "Cannot plan the migration: a managed model's foreign key would render a constraint into a table " *
+    "PormG does not migrate:\n$(join(sort!(problems), "\n"))\n" * _emsg(Models._UNMANAGED_KEY_FIX)))
+end
+
 # ---
 # Public API (makemigrations)
 # ---
@@ -1840,16 +1891,26 @@ function get_migration_plan(live::Vector{LiveTable}, current_schema::Dict{Symbol
 migration_plan = OrderedDict{Symbol, OrderedDict{String, String}}()
 futher_processing = Dict{Symbol, OrderedDict{Symbol, Any}}()
 current_schema = Models.synthesize_many_to_many_through_models(current_schema, settings)
+# #741: an unmanaged model leaves the plan here — out of `current_schema` and, below, its table out of
+# the live list the planner classifies. After the synthesis on purpose: it resolves many-to-many
+# targets against the whole schema and decides whether an auto join table is itself unmanaged.
+# `all_live` keeps the unfiltered side for the whole-plan checks at the end, which must still see an
+# unmanaged table's index names and a SQLite view that reads it.
+unmanaged_tables = _exclude_unmanaged_models!(current_schema)
+_refuse_constrained_keys_into_unmanaged(current_schema)
+all_live = live
+isempty(unmanaged_tables) || (live = LiveTable[t for t in all_live if !(t.name in unmanaged_tables)])
 # #161: every model-level index name the plan creates or renames to, across all tables — the scope
 # the database enforces. See `_claim_composite_target!`.
 composite_targets = Dict{String, Tuple{String, String}}()
 
-# an empty live side: every declared model is a new table
-if isempty(live)
+# an empty live side: every declared model is a new table. `all_live`, not `live`: a database holding
+# only unmanaged tables is not empty, and takes the full path below so the whole-plan checks run.
+if isempty(all_live)
   for (model_name, model) in current_schema
     _add_new_table(conn, migration_plan, model_name, model[:model]; composite_targets = composite_targets)
   end
-  return migration_plan  
+  return migration_plan
 end
 
 @pormg_debug false
@@ -1960,12 +2021,12 @@ end
 _refuse_dropped_table_dependents(conn, dropped_tables)
 
 # #161: a name this plan creates must not still be held by another table's index.
-_check_composite_targets_free(conn, composite_targets, live, dropped_tables, table_renames)
+_check_composite_targets_free(conn, composite_targets, all_live, dropped_tables, table_renames)
 
 # #729: every rename and drop is known now, so each SQLite rebuild can be rendered with its indexes,
 # triggers and views — and refused here, before a plan is written, where one of them would go stale.
 _finalize_sqlite_rebuilds!(conn, migration_plan, current_schema, sqlite_rebuild_context;
-                           live = live, table_renames = table_renames, dropped_tables = dropped_tables)
+                           live = all_live, table_renames = table_renames, dropped_tables = dropped_tables)
 
 # println(migration_plan)
 

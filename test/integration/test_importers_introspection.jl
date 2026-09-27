@@ -1462,3 +1462,77 @@ if adapter_name == "PostgreSQL"
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Unmanaged models over a real view and a real table: nothing planned, queried as usual (#741)
+# A view is not in the live table list on either engine, so a MANAGED model over it is planned as
+# `CREATE TABLE` on every run; declared `managed = false` it plans nothing. The same holds for a real
+# table PormG must not touch: `driver` is mapped here by a second, unmanaged model that declares only
+# two of its columns, and neither the missing columns nor the table itself are planned. The query side
+# is unchanged: a filter across the view's `db_constraint = false` key and a `__` traversal into the
+# unmanaged `driver` return what the fixture's own `Result` rows add up to. Both models live in their
+# own module, so the shared `M.Driver` gains no reverse accessor. The view is dropped in `finally`.
+# Mutation gate: make `_exclude_unmanaged_models!` a no-op and the plan creates the view's table and
+# drops `driver`'s undeclared columns.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Unmanaged models over a real view and table: nothing planned, queried as usual (#741)" begin
+  pool = PormG.config[PORMG_DB_FOLDER].connections
+  ddl(sql) = PormG.ConnectionPool.fetch(pool, sql)
+  view = "pormg_it_741_points_v"
+  drop741!() = try; ddl("DROP VIEW IF EXISTS \"$(view)\""); catch; end
+  M741 = PormG.Models
+
+  drop741!()
+  try
+    ddl("CREATE VIEW \"$(view)\" AS SELECT \"driverid\" AS \"id\", \"driverid\", SUM(\"points\") AS \"points\" " *
+        "FROM \"result\" GROUP BY \"driverid\"")
+
+    # Registered on the suite's own connection, in a module of its own. Built as locals first and only
+    # then bound into the module: reading `mod.Driver` right after `Core.eval` defined it trips 1.12's
+    # world-age rule for new bindings.
+    driver741 = M741.Model("driver"; managed = false,
+      driverid = M741.IDField(), driverref = M741.CharField(), surname = M741.CharField())
+    points741 = M741.Model(view; managed = false,
+      id = M741.IDField(),
+      driverid = M741.ForeignKey(driver741, pk_field = "driverid", db_constraint = false),
+      points = M741.FloatField())
+    mod = Module(:Unmanaged741)
+    Core.eval(mod, :(import PormG, PormG.Models))
+    Core.eval(mod, :(Driver = $driver741))
+    Core.eval(mod, :(Points = $points741))
+    PormG.Models.set_models(mod, PORMG_DB_FOLDER)
+
+    # Nothing to plan: not the view (absent from the live side), not `driver` (present, with columns
+    # the unmanaged model does not declare).
+    schema741 = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+      Symbol(PormG.model_table_name(m)) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => m, :exist => false)
+      for m in (driver741, points741))
+    settings741 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
+    live = PormG.Migrations.read_live_schema(pool; include_table = ["driver", view])
+    @test [t.name for t in live] == ["driver"]           # the view is not a table, on either engine
+    @test all(isempty, values(PormG.Migrations.get_migration_plan(live, schema741, pool, settings741; interactive = false)))
+
+    # Control: the same two declarations MANAGED are planned — the view as a table, `driver` altered.
+    managed741 = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+      :driver => Dict{Symbol, Union{Bool, PormG.PormGModel}}(
+        :model => M741.Model("driver"; driverid = M741.IDField(), surname = M741.CharField()), :exist => false),
+      Symbol(view) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(
+        :model => M741.Model(view; id = M741.IDField(), points = M741.FloatField()), :exist => false))
+    control = PormG.Migrations.get_migration_plan(live, managed741, pool, settings741; interactive = false)
+    @test occursin("CREATE TABLE", join(values(control[Symbol(view)]), "\n"))
+    @test !isempty(control[:driver])
+
+    # The query side: Ayrton Senna's total through the view equals the sum of his fixture results. By
+    # `driverref`, which is unique — the fixture holds two Sennas.
+    expected = sum(r[:points] for r in M.Result.objects.filter("driverid__driverref" => "senna").values("points").list())
+    rows = points741.objects.
+      filter("driverid__driverref" => "senna").
+      values("points", "driverid__surname").
+      list()
+    @test length(rows) == 1
+    @test rows[1][:points] ≈ expected
+    @test rows[1][:driverid__surname] == "Senna"
+  finally
+    drop741!()
+  end
+end

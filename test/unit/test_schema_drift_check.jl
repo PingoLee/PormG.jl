@@ -231,7 +231,12 @@ end
         end
     finally
         pool === nothing || try close_pool!(pool) catch end
-        rm(dir; recursive = true, force = true)
+        # The failed connect leaves its `SQLite.DB` handle to the finalizer (the connect path does
+        # not close it when the first PRAGMA throws), and Windows refuses to delete an open file —
+        # CI failed here on `unlink … resource busy or locked`. Collect it first, and never let
+        # removing a temp dir fail the test.
+        GC.gc()
+        try rm(dir; recursive = true, force = true) catch end
     end
 end
 

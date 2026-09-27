@@ -721,6 +721,12 @@ All four identifier spellings are accepted, because an adopted schema wrote the 
 function _sqlite_column_checks(create_sql::Union{AbstractString, Nothing})::Dict{String, Vector{CheckKind}}
   checks = Dict{String, Vector{CheckKind}}()
   create_sql === nothing && return checks
+  # #742: a declared `CheckConstraint` is not a column fact, even when its condition reads exactly like
+  # PormG's own (`grid >= 0`). Its marked table clause is taken out before the scan below, so it never
+  # becomes a `NonNegativeCheck`. Its marker already keeps the regex from matching — the comment sits
+  # before the closing parenthesis — but that is an accident of placement, and this is the rule.
+  parts, _ = _sqlite_table_definition_parts(create_sql)
+  isempty(parts) || (create_sql = join((p for p in parts if _sqlite_part_check_marker(p) === nothing), ",\n"))
   # `"c"`, `[c]`, a backticked `c`, or bare — one capture group per spelling.
   ident = "(?:\"([^\"]+)\"|\\[([^\\]]+)\\]|`([^`]+)`|([A-Za-z_][A-Za-z0-9_]*))"
   name(m) = lowercase(String(something(m.captures[1], m.captures[2], m.captures[3], m.captures[4])))
@@ -783,7 +789,9 @@ function _sqlite_live_table(db::PormGSQLite, table_name::AbstractString)::LiveTa
   # single-quoted literal, where an embedded `'` would break out. An exact `name = ?` is correct only
   # because the name was resolved to the catalog spelling above (#531).
   ddl_rows = fetch(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?", [table_name]) |> DataFrame
-  checks = _sqlite_column_checks(nrow(ddl_rows) == 0 || ismissing(ddl_rows[1, :sql]) ? nothing : ddl_rows[1, :sql])
+  create_sql = nrow(ddl_rows) == 0 || ismissing(ddl_rows[1, :sql]) ? nothing : ddl_rows[1, :sql]
+  checks = _sqlite_column_checks(create_sql)
+  table_checks = _sqlite_table_checks(create_sql)   # #742
   unique_cols = _sqlite_single_column_unique_columns(db, table_name)
   indexed_cols = _sqlite_single_column_indexed_columns(db, table_name)
   composite = _sqlite_composite_indexes(db, table_name)
@@ -847,7 +855,7 @@ function _sqlite_live_table(db::PormGSQLite, table_name::AbstractString)::LiveTa
     columns[col_name] = _finish_column_spec(table_name, probe, default_val, db)
   end
   indexes = Dict{String, Union{String, Nothing}}(k => v for (k, v) in indexed_cols)
-  return LiveTable(table_name, columns, indexes, composite)
+  return LiveTable(table_name, columns, indexes, composite, table_checks)
 end
 
 """
@@ -1108,6 +1116,27 @@ const _PG_BYTE_LENGTH_CHECK_MATCH =
   "$(_PG_BYTE_LENGTH_CHECK_BOUND) || '))'"
 
 """
+    _PG_UNMARKED_CHECK
+
+The predicate that keeps a DECLARED table CHECK (#742) out of the two exact-clause matchers above,
+over a `pg_constraint` row aliased `con`. Appended beside `_PG_NON_NEGATIVE_CHECK_MATCH` and
+`_PG_BYTE_LENGTH_CHECK_MATCH` wherever they are spliced — the reader CTEs and
+`_pg_single_column_check_name` — rather than folded into them, so the reader and the dropper still
+differ by the clause predicate alone.
+
+Needed because a `CheckConstraint(condition = "grid >= 0")` is stored by PostgreSQL as EXACTLY the
+clause a `PositiveIntegerField` renders, `CHECK ((grid >= 0))`: without this it would read as the
+column's `NonNegativeCheck`, and `get_constraints_check` would hand its name to a column ALTER to drop.
+What tells them apart is the ownership marker PormG writes as the declared CHECK's comment.
+
+`COALESCE`, and it is load-bearing: PormG's own column CHECKs carry NO comment, `obj_description`
+is NULL for them, and `NULL !~ …` is NULL — which `WHERE` treats as false, so a bare comparison
+would drop every one of PormG's own CHECKs from the reader and the dropper alike.
+"""
+const _PG_UNMARKED_CHECK =
+  "COALESCE(obj_description(con.oid, 'pg_constraint'), '') !~ '$(CHECK_MARKER_RE.pattern)'"
+
+"""
     _pg_composite_indexes(db::PormGPostgres; schema = "public") -> Dict{String, Vector{LiveComposite}}
 
 Every model-level index in `schema` that PormG can re-emit, as `table_name => [LiveComposite, …]` —
@@ -1293,6 +1322,75 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
 end
 
 """
+    _pg_table_checks(db::PormGPostgres; schema = "public") -> Dict{String, Vector{LiveCheck}}
+
+Every table's named CHECK constraints that are NOT one of PormG's own column CHECKs (#742), keyed by
+physical table name, as [`LiveCheck`](@ref)s: the name, the condition, and the ownership marker read
+from the constraint's comment (anywhere in it — a user may have added to the comment).
+
+A query of its own rather than a CTE in `get_database_schema`'s dump, for `_pg_composite_indexes`'s
+reason: the dump is one row per table with one aggregate per column, and a table's CHECK list is
+neither. The same table filter as that reader (`_PG_OWNABLE_TABLE_FILTER`), and the same `schema`.
+
+PormG's own CHECKs are the ones the column readers already claim — a single-column clause matching
+`_PG_NON_NEGATIVE_CHECK_MATCH` or `_PG_BYTE_LENGTH_CHECK_MATCH` with no marker — excluded by a
+`NOT EXISTS` rather than a join, which would duplicate a multi-column CHECK and lose a zero-column one.
+
+The condition is `pg_get_constraintdef` without its `CHECK (` … `)`, and without a trailing
+`NOT VALID` or `NO INHERIT` (PormG never writes either; a hand-written CHECK may carry them, and they
+are not part of the condition).
+"""
+function _pg_table_checks(db::PormGPostgres; schema::Union{String, Nothing} = "public")::Dict{String, Vector{LiveCheck}}
+  schema_clause = schema === nothing ? "" : "AND n.nspname = \$1"
+  params = schema === nothing ? String[] : String[schema]
+  query = """
+    SELECT c.relname AS table_name,
+           con.conname AS constraint_name,
+           pg_get_constraintdef(con.oid) AS def,
+           obj_description(con.oid, 'pg_constraint') AS comment
+    FROM pg_constraint con
+    JOIN pg_class c ON c.oid = con.conrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE con.contype = 'c'
+      AND c.relkind = 'r'
+      $(_PG_OWNABLE_TABLE_FILTER)
+      $(schema_clause)
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_attribute a
+        WHERE a.attrelid = con.conrelid
+          AND array_length(con.conkey, 1) = 1
+          AND a.attnum = con.conkey[1]
+          AND ($(_PG_NON_NEGATIVE_CHECK_MATCH) OR $(_PG_BYTE_LENGTH_CHECK_MATCH))
+          AND $(_PG_UNMARKED_CHECK))
+    ORDER BY c.relname, con.conname;
+    """
+  rows = DataFrame(fetch(db, query, params))
+  out = Dict{String, Vector{LiveCheck}}()
+  nrow(rows) == 0 && return out
+  for r in eachrow(rows)
+    (r.table_name === missing || r.constraint_name === missing || r.def === missing) && continue
+    comment = r.comment === missing ? nothing : string(r.comment)
+    marker = comment === nothing ? nothing : match(CHECK_MARKER_RE, comment)
+    push!(get!(out, string(r.table_name), LiveCheck[]),
+          LiveCheck(string(r.constraint_name), _pg_check_condition(string(r.def)),
+                    marker === nothing ? nothing : String(marker.match), comment))
+  end
+  return out
+end
+
+# `CHECK ((grid >= 0))` ⇒ `grid >= 0`: the text between `CHECK (` and its closing parenthesis, with
+# a trailing `NOT VALID` / `NO INHERIT` removed first, then canonicalised. A shape that does not start
+# with `CHECK` is returned as it came, so it compares unequal rather than being guessed at.
+function _pg_check_condition(def::AbstractString)::String
+  s = String(strip(def))
+  for suffix in (" NOT VALID", " NO INHERIT")
+    s = String(strip(chopsuffix(s, suffix)))
+  end
+  startswith(s, "CHECK") || return s
+  return canonical_check_condition(chopprefix(s, "CHECK"))
+end
+
+"""
   convert_schema_to_models(db::PormGPostgres; ignore_table::Vector{String} = postgres_ignore_table)
 
 Convert the database schema to models.
@@ -1314,6 +1412,8 @@ function read_live_schema(db::PormGPostgres; ignore_table::Vector{String} = post
   # #347: composite indexes come from their own schema-wide query — see `_pg_composite_indexes` for
   # why they cannot ride along on the dump above. Keyed by physical table name.
   composite_by_table = _pg_composite_indexes(db)
+  # #742: the table-level CHECKs, from their own query for the same reason.
+  checks_by_table = _pg_table_checks(db)
   out = LiveTable[]
   for schema in eachrow(schemas)
     table_name = String(schema.table_name)
@@ -1321,7 +1421,8 @@ function read_live_schema(db::PormGPostgres; ignore_table::Vector{String} = post
     _is_ignored_table(table_name, ignore_table) && continue
     table = _pg_live_table(schema)
     push!(out, LiveTable(table.name, table.columns, table.indexes,
-                         get(composite_by_table, table.name, LiveComposite[])))
+                         get(composite_by_table, table.name, LiveComposite[]),
+                         get(checks_by_table, table.name, LiveCheck[])))
   end
   return out
 end
@@ -1510,6 +1611,8 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
           AND array_length(con.conkey, 1) = 1
           -- #731: PormG's own clause, exactly, not any CHECK containing `>= 0`.
           AND $(_PG_NON_NEGATIVE_CHECK_MATCH)
+          -- #742: and not a declared CheckConstraint that happens to read the same.
+          AND $(_PG_UNMARKED_CHECK)
         GROUP BY con.conrelid
     ),
     -- BinaryField byte bounds (#296). Unlike non_negative_checks this is per-COLUMN and carries a
@@ -1550,6 +1653,8 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
           AND array_length(con.conkey, 1) = 1
           -- #747: PormG's own clause, exactly, not any CHECK mentioning `octet_length … <= N`.
           AND $(_PG_BYTE_LENGTH_CHECK_MATCH)
+          -- #742: and not a declared CheckConstraint that happens to read the same.
+          AND $(_PG_UNMARKED_CHECK)
         GROUP BY con.conrelid, a.attname
     )
     SELECT
@@ -2007,6 +2112,46 @@ function _attach_composite_indexes!(model, composites::Vector{LiveComposite})
   end
   isempty(kept_uc) || (model.cache["unique_constraints"] = Dict{String, Any}("constraints" => kept_uc))
   isempty(kept_ix) || (model.cache["composite_indexes"] = Dict{String, Any}("indexes" => kept_ix))
+  return model
+end
+
+"""
+    _attach_check_constraints!(model, checks::Vector{LiveCheck}) -> model
+
+Record an introspected table's named CHECKs on the model `inspectdb` builds (#742), as
+`Models.CheckConstraint`s under `Models._apply_check_constraints!`'s `"check_constraints"` — so
+`Model_to_str` writes them into `constraints = [...]`.
+
+Load-bearing for the reason `_attach_composite_indexes!` is: `makemigrations` drops a CHECK carrying
+PormG's marker that the models file does not declare, so an `inspectdb` that lost one would hand the
+developer a models file whose first migration deletes it. The condition written is the catalog's own
+text (`pg_get_constraintdef`'s rendering on PostgreSQL), which the planner accepts as equal to the
+live CHECK — no replace is planned for an adopted schema.
+
+Best-effort, like its sibling: a CHECK the constructor refuses (a condition with a comment in it, a
+name over 63 bytes) or whose name another constraint on the model already holds is skipped with a
+`@debug`, never thrown — one odd CHECK must not abort the introspection of a table.
+"""
+function _attach_check_constraints!(model, checks::Vector{LiveCheck})
+  isempty(checks) && return model
+  taken = Models._constraint_names(model, :unique)
+  kept = Models.CheckConstraint[]
+  for lc in checks
+    decl = try
+      Models.CheckConstraint(condition = lc.sql, name = lc.name)
+    catch e
+      e isa ModelDefinitionError || rethrow()
+      @debug "introspection: CHECK skipped — PormG cannot declare it" table=model.name check=lc.name exception=e
+      continue
+    end
+    if decl.name in taken
+      @debug "introspection: CHECK skipped — its name is already a constraint on the model" table=model.name check=lc.name
+      continue
+    end
+    push!(taken, decl.name)
+    push!(kept, decl)
+  end
+  isempty(kept) || (model.cache["check_constraints"] = Dict{String, Any}("constraints" => kept))
   return model
 end
 
@@ -3611,6 +3756,75 @@ function _sqlite_clause_through_parens(s::AbstractString, from::Int)::String
   return String(rest)
 end
 
+# #742: the ownership marker `Dialect._sqlite_check_constraint_clause` writes, as the LAST thing in a
+# `CHECK ( … )` clause: an SQL comment right before the closing parenthesis. Anchored there, not found
+# anywhere, because the condition may hold the same text inside a string literal.
+const _SQLITE_CHECK_MARKER_TAIL = Regex("/\\*\\s*(" * CHECK_MARKER_RE.pattern * ")\\s*\\*/\\s*\\)\\s*\$")
+# The same comment at the end of the condition, once the closing parenthesis is gone.
+const _SQLITE_CHECK_MARKER_COMMENT = Regex("/\\*\\s*" * CHECK_MARKER_RE.pattern * "\\s*\\*/\\s*\$")
+
+# The marker of one `CHECK ( … )` clause's text, or `nothing`.
+function _sqlite_check_clause_marker(clause::AbstractString)::Union{String, Nothing}
+  m = match(_SQLITE_CHECK_MARKER_TAIL, clause)
+  return m === nothing ? nothing : String(m.captures[1])
+end
+
+# Every NAMED CHECK in one `CREATE TABLE` part — `CONSTRAINT <name> CHECK ( … )`, whether the part is
+# that table-level clause (`table_level`) or a column definition carrying it — with its name, the
+# whole `CHECK ( … )` clause, the clause's marker, and the index of its `CHECK` token. An unnamed CHECK
+# is not listed: no declaration can claim it by name. A bare `CONSTRAINT` can only be the keyword — a
+# column of that name has to be quoted — so the token sequence settles it.
+function _sqlite_named_checks(part::AbstractString, toks = _sqlite_identifier_tokens(part))
+  out = NamedTuple{(:name, :clause, :marker, :table_level, :check_token),
+                   Tuple{String, String, Union{String, Nothing}, Bool, Int}}[]
+  for i in 1:(length(toks) - 2)
+    (!toks[i].quoted && uppercase(toks[i].name) == "CONSTRAINT") || continue
+    (!toks[i + 2].quoted && uppercase(toks[i + 2].name) == "CHECK") || continue
+    clause = _sqlite_clause_through_parens(part, toks[i + 2].start)
+    push!(out, (name = String(toks[i + 1].name), clause = clause,
+                marker = _sqlite_check_clause_marker(clause), table_level = i == 1, check_token = i + 2))
+  end
+  return out
+end
+
+# The marker of a part that IS a declared CHECK — a table-level `CONSTRAINT n CHECK` clause PormG
+# rendered — or `nothing`.
+function _sqlite_part_check_marker(part::AbstractString)::Union{String, Nothing}
+  named = _sqlite_named_checks(part)
+  return (!isempty(named) && first(named).table_level) ? first(named).marker : nothing
+end
+
+"""
+    _sqlite_table_checks(create_sql) -> Vector{LiveCheck}
+
+The NAMED CHECKs of a `CREATE TABLE` text (#742), as [`LiveCheck`](@ref)s: every
+`CONSTRAINT <name> CHECK ( … )`, table-level or inside a column definition, its condition as written
+with the marker comment removed, and the marker when the clause carries one. SQLite keeps the text
+verbatim, so a CHECK PormG created reads back exactly as its declaration renders. An unnamed CHECK is
+not read — no declaration can claim it by name. (PostgreSQL names every CHECK, so its reader has no
+such gap; that difference is the engines', and inspectdb inherits it.) Nor is an unmarked one of
+exactly PormG's own column shape, which is the column's fact — as on PostgreSQL.
+"""
+function _sqlite_table_checks(create_sql::Union{AbstractString, Nothing})::Vector{LiveCheck}
+  out = LiveCheck[]
+  create_sql === nothing && return out
+  parts, _ = _sqlite_table_definition_parts(create_sql)
+  for part in parts, named in _sqlite_named_checks(part)
+    clause = named.clause
+    # An unmarked CHECK of exactly PormG's own column shape (`col >= 0`, `length(col) <= n`) is the
+    # column's fact, already in `ColumnSpec.checks` — read twice it would become a `PositiveIntegerField`
+    # AND a CheckConstraint in inspectdb's output. The PostgreSQL reader leaves it out the same way.
+    named.marker === nothing && any(re -> occursin(re, clause), _SQLITE_PORMG_CHECK_SHAPES) && continue
+    open_paren = findfirst('(', clause)
+    open_paren === nothing && continue
+    inner = endswith(clause, ")") ? clause[nextind(clause, open_paren):prevind(clause, lastindex(clause))] :
+                                    clause[nextind(clause, open_paren):end]
+    named.marker === nothing || (inner = replace(inner, _SQLITE_CHECK_MARKER_COMMENT => ""))
+    push!(out, LiveCheck(named.name, canonical_check_condition(inner), named.marker))
+  end
+  return out
+end
+
 # The two CHECK clauses PormG writes — `Dialect._non_negative_check_clause` and the SQLite arm of the
 # byte-length bound — whole, in any of SQLite's identifier spellings (the same four
 # `_sqlite_column_checks` reads them back in). A CHECK of either shape is a fact the column IR carries
@@ -3639,7 +3853,8 @@ Not reported: a table-level `UNIQUE (…)`, which the planner models (#161), and
 itself. Empty when the table has no stored definition. Read from `sqlite_master` with the name
 compared case-insensitively, as SQLite resolves it (#57).
 """
-function _sqlite_unmodellable_table_clauses(conn::PormGSQLite, table::AbstractString)::Vector{String}
+function _sqlite_unmodellable_table_clauses(conn::PormGSQLite, table::AbstractString;
+                                            declared_checks::Set{String} = Set{String}())::Vector{String}
   rows = fetch(conn, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE",
                [String(table)]) |> DataFrame
   (isempty(rows) || rows.sql[1] === missing) && return String[]
@@ -3654,9 +3869,15 @@ function _sqlite_unmodellable_table_clauses(conn::PormGSQLite, table::AbstractSt
     # not, and a name may be spelled like any keyword below, so it is left out by position.
     top = _sqlite_identifier_tokens(_sqlite_blank_parens(part))
     words = String[uppercase(t.name) for t in top[(is_column ? 2 : 1):end] if !t.quoted]
-    # Every CHECK, wherever it sits; PormG's own two shapes are facts the plan already carries.
-    for t in toks
+    # Every CHECK, wherever it sits; PormG's own two shapes are facts the plan already carries. So is
+    # a declared CheckConstraint (#742): a named CHECK carrying PormG's marker is re-rendered by the
+    # rebuild if still declared and dropped by the plan if not, and an unmarked one a declaration
+    # names is being replaced by it — table-level or on a column. Neither is lost.
+    kept = Set{Int}(n.check_token for n in _sqlite_named_checks(part, toks)
+                    if n.marker !== nothing || n.name in declared_checks)
+    for (j, t) in enumerate(toks)
       (!t.quoted && uppercase(t.name) == "CHECK") || continue
+      j in kept && continue
       clause = _sqlite_clause_through_parens(part, t.start)
       any(re -> occursin(re, clause), _SQLITE_PORMG_CHECK_SHAPES) ||
         push!(found, (is_column ? "column CHECK on \"$(toks[1].name)\": " : "table CHECK: ") * clause)
@@ -3790,6 +4011,7 @@ function _pg_single_column_check_name(conn::PormGPostgres, table_name::String, f
     AND n.nspname = ANY(current_schemas(false))
     AND array_length(con.conkey, 1) = 1
     AND $(predicate)
+    AND $(_PG_UNMARKED_CHECK)
   ORDER BY array_position(current_schemas(false), n.nspname), con.conname;
   """
   result = fetch(conn, query, [table_name, field_name]) |> DataFrame

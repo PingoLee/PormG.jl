@@ -347,11 +347,12 @@ end
             PormG.QueryBuilder => [:DataFrame, :ObjectHandler, :delete, :earliest, :first,
                                    :inspect_query, :last, :latest, :list, :save, :show_query],
             # Models: the 27 field constructors #289 declared, plus the three entry points #295
-            # added (`Model`, `set_models`, `UniqueConstraint`) and `Index` (#347) = 31.
+            # added (`Model`, `set_models`, `UniqueConstraint`), `Index` (#347) and
+            # `CheckConstraint` (#742) = 32.
             # `Model_Type` is deliberately absent — it is documented but NOT public: users hold one
             # as `M.Driver`, never name it.
             PormG.Models       => [:AutoField, :BigIntegerField, :BinaryField, :BooleanField,
-                                   :CharField, :DateField, :DateTimeField, :DecimalField,
+                                   :CharField, :CheckConstraint, :DateField, :DateTimeField, :DecimalField,
                                    :DurationField, :EmailField, :FileField, :FloatField,
                                    :ForeignKey, :IDField, :ImageField, :Index, :IntegerField,
                                    :JSONField, :ManyToManyField, :Model, :OneToOneField,

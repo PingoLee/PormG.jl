@@ -558,6 +558,34 @@ struct LiveComposite
 end
 
 """
+    LiveCheck
+
+One named table-level CHECK as the catalog holds it (#742): its `name`, the bare condition `sql` —
+PostgreSQL's `pg_get_constraintdef` text without the `CHECK ( … )` around it, or SQLite's source
+text with the marker comment removed — and the ownership `marker` PormG stored beside it
+(`pormg:check:<hash>`), or `nothing` when a hand-written CHECK carries none.
+
+`marker` decides everything the planner does with it. A declared `CheckConstraint` of the same name
+is unchanged when the marker is the hash of its condition, or when the two canonical texts agree
+(the adoption case: `inspectdb` wrote the condition from this very text). A live CHECK with a marker
+that no declaration names is PormG's, and is dropped; one without a marker is never planned away.
+
+PormG's own column CHECKs — the `>= 0` of a positive-integer field, a `BinaryField`'s byte bound — are
+never a `LiveCheck`: they are column facts, carried in `ColumnSpec.checks`.
+
+`comment` is the constraint's whole PostgreSQL comment, marker included, or `nothing` (SQLite has no
+comments). Adopting a CHECK writes PormG's marker AFTER it, so a comment a DBA wrote is kept.
+"""
+struct LiveCheck
+  name::String
+  sql::String
+  marker::Union{String, Nothing}
+  comment::Union{String, Nothing}
+end
+LiveCheck(name::AbstractString, sql::AbstractString, marker::Union{AbstractString, Nothing}) =
+  LiveCheck(String(name), String(sql), marker === nothing ? nothing : String(marker), nothing)
+
+"""
     LiveTable
 
 One table as the introspection readers describe it (#522): its catalog `name`, its `columns` as
@@ -581,11 +609,16 @@ struct LiveTable
   columns::OrderedDict{String, ColumnSpec}
   indexes::Dict{String, Union{String, Nothing}}
   composites::Vector{LiveComposite}
+  # #742: the table's named CHECKs other than PormG's own column CHECKs — see [`LiveCheck`](@ref).
+  # Every rebuild of a `LiveTable` must carry it (`_retarget_references` does): one that dropped it
+  # would read every declared CHECK as missing. Hence no constructor that takes `composites` but
+  # defaults this — a copy has to name it.
+  checks::Vector{LiveCheck}
 end
 
 LiveTable(name::AbstractString, columns::OrderedDict{String, ColumnSpec},
           indexes::Dict{String, Union{String, Nothing}}) =
-  LiveTable(String(name), columns, indexes, LiveComposite[])
+  LiveTable(String(name), columns, indexes, LiveComposite[], LiveCheck[])
 
 """
     DeclaredComposite
@@ -688,7 +721,11 @@ function live_table(model::PormGModel, conn::Union{PormGPostgres, PormGSQLite}):
     end
   end
   composites = LiveComposite[LiveComposite(d.name, d.columns, d.unique, false) for d in declared_composites(model)]
-  return LiveTable(String(model_table_name(model)), columns, indexes, composites)
+  # #742: a model read as a live table holds its declared CHECKs as PormG created them — owned, with
+  # the marker of their own condition — so a model diffed against itself plans nothing.
+  checks = LiveCheck[LiveCheck(c.name, c.condition, check_marker(c.condition))
+                     for c in Models.declared_check_constraints(model)]
+  return LiveTable(String(model_table_name(model)), columns, indexes, composites, checks)
 end
 
 """
@@ -1030,5 +1067,6 @@ function model_from_live(table::LiveTable, conn::Union{PormGPostgres, PormGSQLit
   named = Dict{String, Any}(col => name for (col, name) in table.indexes if name !== nothing)
   isempty(named) || (model.cache["index"] = named)
   _attach_composite_indexes!(model, table.composites)
+  _attach_check_constraints!(model, table.checks)   # #742
   return model
 end

@@ -259,6 +259,89 @@ A composite over a column you are dropping goes with the column — nothing extr
   truncated form, so a long name does not re-plan a rename on every run, and warns when it creates
   one — two long names that share their first 63 bytes collide, so shorten one.
 
+## Check Constraints
+
+A table-level `CHECK` — Django's `CheckConstraint` — goes in the same `constraints=[...]` list as
+`UniqueConstraint`:
+
+```julia
+Result = Models.Model(
+  resultid = Models.IDField(),
+  raceid   = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  driverid = Models.ForeignKey(Driver, pk_field="driverid", on_delete="RESTRICT"),
+  grid     = Models.IntegerField(),
+  laps     = Models.IntegerField(),
+  points   = Models.FloatField(),
+  constraints = [
+    Models.UniqueConstraint(fields = ("raceid", "driverid")),
+    Models.CheckConstraint(condition = "grid >= 0 AND grid <= 40", name = "result_grid_range"),
+    Models.CheckConstraint(condition = "laps >= 0", name = "result_laps_non_negative"),
+  ],
+)
+```
+
+- **`condition` is SQL**, sent to both engines as written. It names the table's *physical* columns
+  (`db_column`, where a field sets one), unqualified: `grid >= 0`, never `result.grid >= 0`, which
+  does not survive a SQLite table rebuild. It is not a `Q(...)` — a CHECK is DDL, which takes no bind
+  parameters. Write SQL both engines accept, as you would for `db_default`. PormG checks it only for
+  the typos that would silently change the statement it lands in: a `--` or `/*` comment, an
+  unterminated quote, a `;` or a `,` outside parentheses.
+- **`name` is required** — it is the constraint's identity — and at most 63 bytes, PostgreSQL's limit.
+  Names are unique within a model across `UniqueConstraint` and `CheckConstraint`. On PostgreSQL a
+  constraint name is also unique per *table*, so `makemigrations` refuses one that another constraint
+  on the table already holds — its primary key, a foreign key, or the CHECK PostgreSQL names
+  `<table>_<column>_check` for a `PositiveIntegerField`.
+
+### How a CHECK migrates
+
+PostgreSQL rewrites a stored condition (`grid >= 0 AND grid <= 40` comes back as
+`((grid >= 0) AND (grid <= 40))`), so the text in the database cannot be compared with your
+declaration. Instead PormG stores a short hash of the declared condition beside every CHECK it
+creates — as the constraint's `COMMENT` on PostgreSQL, as an SQL comment inside the constraint on
+SQLite — and `makemigrations` reads it back:
+
+| Change | PostgreSQL | SQLite |
+|---|---|---|
+| add a `CheckConstraint` | `ALTER TABLE … ADD CONSTRAINT … CHECK (…)` + `COMMENT ON CONSTRAINT` | table rebuild |
+| change its `condition` | drop, then add | table rebuild |
+| change only its `name` | `ALTER TABLE … RENAME CONSTRAINT` | table rebuild |
+| remove it from the model | `ALTER TABLE … DROP CONSTRAINT` | table rebuild |
+| declare a hand-written CHECK under its own name and condition | `COMMENT ON CONSTRAINT` only (adopts it; an existing comment is kept, the marker appended) | nothing — the next rebuild of the table writes the marker |
+
+A new table gets its CHECKs with its `CREATE TABLE` on SQLite, and right after it on PostgreSQL.
+
+- **Removing or replacing a CHECK is destructive**, like any `DROP` — and on SQLite so is every
+  change, because it is a table rebuild. Pass `migrate(destructive = true)` after reviewing `dry_run()`.
+- **Rows that break a new condition fail the migration** on both engines, inside its transaction.
+- **A CHECK written by hand is never planned away.** It carries no marker, so `makemigrations` does
+  not treat it as PormG's. On SQLite, though, any table rebuild — including one for a declared CHECK —
+  re-creates the table from your model and drops it, with a warning that quotes it; see
+  [the migrations guide](migrations/index.md#SQLite:-Table-Recreation). To keep one, declare it: a
+  `CheckConstraint` under the CHECK's own name and with the same condition is adopted as it stands —
+  PormG writes its marker (on PostgreSQL at once, as a `COMMENT`, which changes nothing about the
+  constraint; on SQLite at the table's next rebuild), and from then on the CHECK is PormG's, re-created
+  by every rebuild and dropped when the declaration goes. `generate_models_from_db` writes those
+  declarations for you: on PostgreSQL every CHECK other than PormG's own column CHECKs (PostgreSQL
+  names each one), on SQLite every CHECK written with `CONSTRAINT <name>`, on the table or on a column.
+  An unnamed SQLite CHECK has no name to declare it under.
+
+  One shape is not adopted in place: a hand-written CHECK that reads exactly like PormG's own column
+  CHECK (`col >= 0` on an integer column, `octet_length(col) <= n` on a binary one) on a field that
+  does not declare that fact. The column diff removes it as a stray and the declaration adds it back,
+  marked — a drop and an add on PostgreSQL, a rebuild on SQLite, destructive either way. On a field that
+  *does* declare the fact (a `PositiveIntegerField`), the column already keeps that CHECK: declare
+  nothing more, or pick another name. PostgreSQL requires that (constraint names are unique per
+  table, and `makemigrations` refuses the clash); SQLite has no such rule and would simply keep both —
+  the column's own CHECK and the declared one.
+- **A renamed or removed column must leave the condition too.** `makemigrations` refuses a plan that
+  renames or removes a column a declared condition still names, with `InvalidMigrationError`. For a
+  rename, PostgreSQL would keep the old condition working, but the next time the declaration is
+  rendered it would name a column that no longer exists; for a removal, PostgreSQL drops the CHECK with
+  the column and SQLite refuses the `DROP COLUMN`.
+- A declared `condition = "grid >= 0"` is a table CHECK, not the column CHECK a
+  `PositiveIntegerField` renders, even where the two read the same — the stored marker is what tells
+  them apart.
+
 ## Unmanaged models
 
 `managed = false` declares a model PormG **queries but never migrates** — Django's `Meta.managed =

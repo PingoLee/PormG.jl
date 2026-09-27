@@ -69,7 +69,7 @@ public AutoField, BigIntegerField, BinaryField, BooleanField, CharField, DateFie
 # `Model_Type` is deliberately NOT here. It is documented (users hold one as `M.Driver`) but never
 # named: it appears zero times in `docs/src`, and the vocabulary users are given for "a model" is
 # the abstract `PormGModel`. Publishing the concrete name would invite code to depend on it.
-public Model, UniqueConstraint, Index, set_models
+public Model, UniqueConstraint, CheckConstraint, Index, set_models
 
 
 #═══════════════════════════════════════════════════════════════════════════════
@@ -1947,36 +1947,129 @@ function _normalize_constraint_fields(f, label::AbstractString = "UniqueConstrai
   return out
 end
 
-# Coerce the `constraints=` argument (a single UniqueConstraint, an iterable of them, or
-# nothing) into a concrete Vector. Anything that is not a UniqueConstraint is an error.
-_as_constraint_vector(::Nothing)::Vector{UniqueConstraint} = UniqueConstraint[]
-_as_constraint_vector(c::UniqueConstraint)::Vector{UniqueConstraint} = UniqueConstraint[c]
-function _as_constraint_vector(cs)::Vector{UniqueConstraint}
-  out = UniqueConstraint[]
+"""
+    CheckConstraint(; condition, name)
+
+A table-level `CHECK` — Django's `CheckConstraint`. Pass it to [`Model`](@ref) through
+`constraints =`, beside any [`UniqueConstraint`](@ref)s.
+
+`condition` is **SQL**, sent to both engines exactly as written, over the table's **physical**
+column names (`db_column`, where a field sets one) and unqualified — `grid >= 0`, never
+`result.grid >= 0`, which would not survive a SQLite table rebuild. It is not a `Q(...)` expression:
+a CHECK is DDL, which takes no bind parameters, so there is nothing to translate one into. Like
+`db_default`, it is author-written schema text; PormG checks it only for the typos that would
+silently change the statement it lands in — a `--` or `/*` comment, an unterminated quote, a
+top-level `;` or `,`.
+
+`name` is **required**: it is the constraint's identity. PostgreSQL rewrites a stored condition's
+text (`pg_get_constraintdef` re-parenthesises and re-casts it), so a condition is never matched by
+its text alone. At most 63 bytes, PostgreSQL's limit, on both engines.
+
+Invalid declarations raise `ModelDefinitionError`: a missing or blank `name`, a name longer than 63
+bytes, a missing or malformed `condition` here in the constructor; two constraints sharing a name
+when the model is built.
+
+!!! note "Diffed by name, changed through a stored marker"
+    PormG stores a hash of the declared condition beside every CHECK it creates — in
+    `COMMENT ON CONSTRAINT` on PostgreSQL, in an SQL comment inside the constraint on SQLite — and
+    that marker is how `makemigrations` sees a changed condition (it plans a replace) and knows the
+    constraint is PormG's: one the model no longer declares is dropped. A CHECK written by hand
+    carries no marker and is never planned away — but on SQLite any table rebuild drops it, as it
+    always has, with a warning. Adding, changing or removing a CHECK on SQLite is itself a table
+    rebuild, so it needs `migrate(destructive = true)`; on PostgreSQL a replace or a drop does too.
+    Rows that violate a new condition make the migration fail, on both engines.
+
+# Examples
+```julia
+Result = Models.Model("result";
+  resultid = Models.IDField(),
+  grid     = Models.IntegerField(),
+  laps     = Models.IntegerField(),
+  constraints = [
+    Models.CheckConstraint(condition = "grid >= 0 AND grid <= 40", name = "result_grid_range"),
+    Models.CheckConstraint(condition = "laps >= 0", name = "result_laps_non_negative"),
+  ],
+)
+```
+
+See also [`Model`](@ref), [`UniqueConstraint`](@ref).
+"""
+struct CheckConstraint
+  condition::String
+  name::String
+end
+function CheckConstraint(; condition::Union{AbstractString, Nothing} = nothing,
+                         name::Union{AbstractString, Nothing} = nothing)
+  (name === nothing || isempty(strip(name))) && throw(ModelDefinitionError(
+    "CheckConstraint requires a non-empty name — it is the constraint's identity, because " *
+    "PostgreSQL rewrites a stored condition's text"))
+  sizeof(name) <= 63 || throw(ModelDefinitionError(
+    "CheckConstraint name '$(name)' is $(sizeof(name)) bytes; PostgreSQL keeps at most 63, so a longer " *
+    "name would be stored truncated and never match its declaration again. Shorten it"))
+  (condition === nothing || isempty(strip(condition))) &&
+    throw(ModelDefinitionError("CheckConstraint '$(name)' requires a condition"))
+  is_valid_db_default_sql(condition) || throw(ModelDefinitionError(
+    "CheckConstraint '$(name)' condition is not well-formed SQL: $(repr(String(condition))). It must " *
+    "not contain a `--` or `/*` comment, an unterminated quote, or a `;` or `,` outside parentheses — " *
+    "each would silently change the statement the CHECK is rendered into"))
+  return CheckConstraint(String(condition), String(name))
+end
+
+# Everything `constraints =` accepts. Split by kind as soon as it is read: `_apply_unique_constraints!`
+# and `declared_composites` see only UniqueConstraints, `_apply_check_constraints!` only
+# CheckConstraints, each stored under its own cache key.
+const _ModelConstraint = Union{UniqueConstraint, CheckConstraint}
+
+# Coerce the `constraints=` argument (one constraint, an iterable of them, or nothing) into a
+# concrete Vector. Anything that is not a UniqueConstraint or a CheckConstraint is an error.
+_as_constraint_vector(::Nothing)::Vector{_ModelConstraint} = _ModelConstraint[]
+_as_constraint_vector(c::_ModelConstraint)::Vector{_ModelConstraint} = _ModelConstraint[c]
+function _as_constraint_vector(cs)::Vector{_ModelConstraint}
+  out = _ModelConstraint[]
   # A non-iterable value is `constraints = Models.CharField()` — a column named `constraints`, eaten
   # by the option peel. Name the option and the fix instead of raising a bare `MethodError:
   # no method matching iterate(::sCharField)` (#347; the `indexes` sibling below carries the same).
   applicable(iterate, cs) || throw(ModelDefinitionError(
-    "`constraints` must be a UniqueConstraint or a collection of them, got $(typeof(cs)). " *
+    "`constraints` must be a UniqueConstraint, a CheckConstraint or a collection of them, got $(typeof(cs)). " *
     "`constraints` is a model-level option, so a COLUMN of that name must be pinned with " *
     "db_column: other_name = Models.CharField(db_column = \"constraints\")"))
   for c in cs
-    c isa UniqueConstraint ||
-      throw(ModelDefinitionError("`constraints` must contain UniqueConstraint objects, got $(typeof(c))"))
+    c isa _ModelConstraint || throw(ModelDefinitionError(
+      "`constraints` must contain UniqueConstraint or CheckConstraint objects, got $(typeof(c))"))
     push!(out, c)
   end
   return out
 end
+
+# The names a model's constraints already hold, of either kind — one namespace per model, so a
+# UniqueConstraint and a CheckConstraint cannot share a name whichever is applied first.
+_declared_unique_constraints(model::PormGModel) =
+  get(get(model.cache, "unique_constraints", Dict{String, Any}()), "constraints", UniqueConstraint[])
+_constraint_names(model::PormGModel, kind::Symbol)::Set{String} = kind === :unique ?
+  Set{String}(String(c.name) for c in _declared_unique_constraints(model) if c.name !== nothing) :
+  Set{String}(c.name for c in declared_check_constraints(model))
+
+"""
+    declared_check_constraints(model) -> Vector{CheckConstraint}
+
+The [`CheckConstraint`](@ref)s `model` declares, in declaration order; empty when it declares none.
+"""
+declared_check_constraints(model::PormGModel)::Vector{CheckConstraint} =
+  get(get(model.cache, "check_constraints", Dict{String, Any}()), "constraints", CheckConstraint[])
 
 # Validate declared UniqueConstraints against the built model and stash them in the
 # general-purpose `cache` (the same mechanism the ManyToManyField auto-index uses, so
 # `deepcopy`/`strip_many_to_many_fields` carry them for free — no new struct field, no
 # `deepcopy` positional-enumeration edit). Each referenced field must exist on the model
 # and be a concrete column (not a ManyToManyField, which has no column of its own).
+#
+# Only the UniqueConstraints of the list (#742): a CheckConstraint is `_apply_check_constraints!`'s,
+# and a list holding only checks leaves the `"unique_constraints"` key unset, as no constraints did.
 function _apply_unique_constraints!(model::Model_Type, constraints)::Model_Type
-  list = _as_constraint_vector(constraints)
+  list = UniqueConstraint[c for c in _as_constraint_vector(constraints) if c isa UniqueConstraint]
   isempty(list) && return model
   seen_names = Set{String}()
+  check_names = _constraint_names(model, :check)
   for c in list
     for fname in c.fields
       haskey(model.fields, fname) || throw(ModelDefinitionError(
@@ -1989,13 +2082,32 @@ function _apply_unique_constraints!(model::Model_Type, constraints)::Model_Type
     # Two constraints sharing an explicit name collide into one index (the plan keys on the name);
     # reject it here for a clear, early error instead of a silent drop at planning time.
     if c.name !== nothing
-      c.name in seen_names && throw(ModelDefinitionError(
+      (c.name in seen_names || c.name in check_names) && throw(ModelDefinitionError(
         "Duplicate UniqueConstraint name '$(c.name)' on model '$(model.name)'; " *
         "constraint names must be unique within a model"))
       push!(seen_names, c.name)
     end
   end
   model.cache["unique_constraints"] = Dict{String, Any}("constraints" => list)
+  return model
+end
+
+# The CheckConstraints of `constraints =` (#742), stored in `cache` beside the UniqueConstraints and
+# carried the same way. The constructor has already checked each one alone; what needs the model is
+# the name, which must be unique among ALL the model's constraints. The condition's column names are
+# not checked: it is SQL, and the database reports an unknown column when the CHECK is created.
+function _apply_check_constraints!(model::Model_Type, constraints)::Model_Type
+  list = CheckConstraint[c for c in _as_constraint_vector(constraints) if c isa CheckConstraint]
+  isempty(list) && return model
+  taken = _constraint_names(model, :unique)
+  seen = Set{String}()
+  for c in list
+    (c.name in seen || c.name in taken) && throw(ModelDefinitionError(
+      "Duplicate constraint name '$(c.name)' on model '$(model.name)'; constraint names must be " *
+      "unique within a model"))
+    push!(seen, c.name)
+  end
+  model.cache["check_constraints"] = Dict{String, Any}("constraints" => list)
   return model
 end
 
@@ -2246,7 +2358,8 @@ A `ManyToManyField` is stored on the model but owns no column of its own, so it 
 `field_names` and from the created table.
 
 `constraints` takes [`UniqueConstraint`](@ref) objects — one, or a collection — for uniqueness
-spanning more than one column. `db_table` (#59) pins an explicit physical table name, **preserved
+spanning more than one column, and [`CheckConstraint`](@ref) objects for table-level `CHECK`s (#742),
+in one list. `db_table` (#59) pins an explicit physical table name, **preserved
 verbatim** — no case fold, no validation beyond "is it a non-empty String" — overriding the name
 otherwise derived from the positional argument or the binding. It is authoritative everywhere a table
 identifier is rendered: DDL, `SELECT`/`INSERT`/`UPDATE`/`DELETE`, `JOIN`, foreign-key `REFERENCES`
@@ -2373,6 +2486,7 @@ function Model(name::AbstractString; constraints = nothing, db_table = nothing, 
   model = _apply_db_table!(model, db_table)
   model = _apply_managed!(model, managed)
   model = _apply_unique_constraints!(model, constraints)
+  model = _apply_check_constraints!(model, constraints)
   return _apply_indexes!(model, indexes)
 end
 
@@ -2462,6 +2576,7 @@ function Model(; constraints = nothing, db_table = nothing, indexes = nothing, m
   model = _apply_db_table!(model, db_table)
   model = _apply_managed!(model, managed)
   model = _apply_unique_constraints!(model, constraints)
+  model = _apply_check_constraints!(model, constraints)
   return _apply_indexes!(model, indexes)
 end
 
@@ -2658,9 +2773,14 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
   # Composite uniqueness (#19): emit model-level UniqueConstraints so inspectdb/import output
   # round-trips through the `constraints=` kwarg on Model(...). Only when ≥1 field rendered —
   # an all-failed model (fields == "") stays commented-out below, constraints included.
-  if fields != "" && haskey(model.cache, "unique_constraints")
-    ucs = get(model.cache["unique_constraints"], "constraints", UniqueConstraint[])
-    if !isempty(ucs)
+  #
+  # #742: CheckConstraints go in the SAME list — a second `constraints =` keyword would not parse — and
+  # a model declaring only checks still gets one. A check's condition is SQL over physical columns, so
+  # the field-rename map below does not apply to it: it is emitted verbatim.
+  if fields != "" && (haskey(model.cache, "unique_constraints") || haskey(model.cache, "check_constraints"))
+    ucs = _declared_unique_constraints(model)
+    ccs = declared_check_constraints(model)
+    if !isempty(ucs) || !isempty(ccs)
       rendered_constraints = String[]
       for c in ucs
         cfields = String[String(f) for f in c.fields]
@@ -2682,6 +2802,10 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
         namepart = c.name === nothing ? "" : ", name = $(format_string(String(c.name)))"
         # Trailing comma keeps a single-field tuple valid Julia: ("a",)
         push!(rendered_constraints, "Models.UniqueConstraint(fields = ($(cols),)$(namepart))")
+      end
+      for c in ccs
+        push!(rendered_constraints,
+              "Models.CheckConstraint(condition = $(format_string(c.condition)), name = $(format_string(c.name)))")
       end
       isempty(rendered_constraints) ||
         (fields *= ",\n  constraints = [$(join(rendered_constraints, ", "))]")

@@ -371,6 +371,70 @@ function is_valid_db_default_sql(sql::AbstractString)::Bool
   return !in_single && !in_double && depth == 0
 end
 
+# ── Table-level CHECK constraints (#742) ─────────────────────────────────────────────────────────
+#
+# A declared `Models.CheckConstraint` is identified by its NAME, and whether the live constraint
+# still says what the declaration says is answered by a MARKER PormG stores beside every CHECK it
+# creates: `pormg:check:<hash>`, the hash of the declared condition. PostgreSQL cannot be asked
+# directly — `pg_get_constraintdef` re-parenthesises and re-casts the condition (`grid >= 0 AND grid
+# <= 40` comes back `((grid >= 0) AND (grid <= 40))`), so a text compare would plan a replace on
+# every run. The marker lives in `COMMENT ON CONSTRAINT` there and in an SQL comment inside the
+# CHECK's parentheses on SQLite, which keeps its `CREATE TABLE` text verbatim (comments included,
+# through `RENAME TO` and `RENAME COLUMN` alike). It is also the ownership record: a live CHECK that
+# carries one was created by PormG from a declaration, so one no declaration names any more is
+# PormG's to drop, while a hand-written CHECK — no marker — is never planned away.
+#
+# Nouns only, and here rather than beside the planner because `Dialect` (include step 10) renders
+# the marker and `Migrations` (step 11) compares it — the #239 shape.
+import SHA
+
+"""
+    CHECK_MARKER_PREFIX
+
+The text every ownership marker starts with: `pormg:check:` followed by 16 lower-case hex digits
+(see [`check_marker`](@ref)).
+"""
+const CHECK_MARKER_PREFIX = "pormg:check:"
+
+"""
+    canonical_check_condition(sql) -> String
+
+The comparison form of a CHECK condition: leading and trailing whitespace trimmed and balanced outer
+parentheses removed — nothing else. Interior whitespace is left alone because it may sit inside a
+string literal, and case because it may sit inside a quoted identifier. Idempotent, like
+[`canonical_db_default`](@ref), whose paren loop it shares.
+"""
+function canonical_check_condition(sql::AbstractString)::String
+  s = String(strip(sql))
+  while _wrapped_in_parens(s)
+    inner = String(strip(s[nextind(s, firstindex(s)):prevind(s, lastindex(s))]))
+    isempty(inner) && break
+    s = inner
+  end
+  return s
+end
+
+"""
+    check_condition_hash(sql) -> String
+
+The first 16 hex digits of the SHA-256 of [`canonical_check_condition`](@ref)`(sql)` — stable across
+Julia versions and processes, unlike `Base.hash`, because it is persisted in the database.
+"""
+check_condition_hash(sql::AbstractString)::String = bytes2hex(SHA.sha256(canonical_check_condition(sql)))[1:16]
+
+"""
+    check_marker(sql) -> String
+
+The ownership marker PormG stores beside a CHECK it creates from a declared condition:
+`pormg:check:<`[`check_condition_hash`](@ref)`>`.
+"""
+check_marker(sql::AbstractString)::String = CHECK_MARKER_PREFIX * check_condition_hash(sql)
+
+# The marker as it may be READ back: anywhere in a PostgreSQL comment (a user may append to it), and
+# the whole of the trailing SQL comment on SQLite. One pattern, so the two readers cannot disagree
+# about what a marker looks like.
+const CHECK_MARKER_RE = Regex(CHECK_MARKER_PREFIX * "[0-9a-f]{16}")
+
 # ── CHECK-expressed bounds ───────────────────────────────────────────────────────────────────────
 #
 # Two column facts neither backend can express in the type itself, so both are rendered as a CHECK

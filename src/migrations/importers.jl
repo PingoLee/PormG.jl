@@ -5639,6 +5639,18 @@ function _parse_meta_constraints(raw::AbstractString, fields_dict::Dict{Symbol, 
 
     m = match(_CONSTRAINT_CTOR_RE, el)
     ctor = m === nothing ? "" : String(m.captures[1])
+    if ctor == "CheckConstraint"
+      # #742: PormG has `Models.CheckConstraint`, but its condition is SQL and Django's is a `Q(...)`
+      # object — and a mistranslated condition is a schema that silently accepts or refuses the wrong
+      # rows. So the CHECK is reported, with its name carried into the marker, for the developer to
+      # write the one SQL condition by hand; the original `Q(...)` text follows it.
+      nm = match(r"\bname\s*=\s*['\"]([^'\"]+)['\"]", el)
+      name = nm === nothing ? "<name>" : String(nm.captures[1])
+      _drop_constraint!(markers, class_label, el,
+        "CheckConstraint takes its condition as SQL, not Q() — declare it as " *
+        "Models.CheckConstraint(condition = \"<SQL>\", name = \"$(name)\")")
+      continue
+    end
     if ctor != "UniqueConstraint"
       _drop_constraint!(markers, class_label, el,
         isempty(ctor) ? "it is not a constraint constructor" : "$(ctor) has no PormG equivalent")

@@ -173,7 +173,8 @@ function _finalize_sqlite_rebuilds!(conn, migration_plan::OrderedDict{Symbol, Or
     # CHECK, a COLLATE, a composite or DEFERRABLE key, STRICT… Said once per table, since this pass
     # renders each rebuild exactly once. Structured kwargs and no `maxlog`, like the #519 index
     # warning: the call site is bounded by the number of rebuilt tables.
-    clauses = _sqlite_unmodellable_table_clauses(conn, string(catalog))
+    clauses = _sqlite_unmodellable_table_clauses(conn, string(catalog);
+                declared_checks = Set{String}(c.name for c in Models.declared_check_constraints(model)))
     isempty(clauses) ||
       @warn "SQLite table rebuild will DROP clauses no model declaration can express: the table is " *
             "re-created from its model, which cannot hold them. Re-create them by hand after the " *
@@ -858,6 +859,234 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
   return dropped
 end
 
+# ── Table-level CHECK constraints (#742) ─────────────────────────────────────────────────────────
+#
+# A declared `Models.CheckConstraint` is diffed against the table's `LiveCheck`s by NAME, and whether
+# it changed is read off the ownership marker PormG stored beside it (see `LiveCheck`). The plan is
+# computed once per table, before the column pass, and emitted in two halves at two points of
+# `_alter_table_fields` — the timing is the whole difficulty, and it is engine-specific:
+#
+#   * SQLite has no `ALTER TABLE … ADD/DROP CONSTRAINT`: any change is the table rebuild, which renders
+#     the declared CHECKs. It is registered BEFORE `_resolve_table_fields`, so the deletion branch sees
+#     it and folds a `DROP COLUMN` into it (SQLite refuses to drop a column a table CHECK names) and the
+#     composite pass sees `rebuilding` and re-creates the table-level UNIQUEs the rebuild does not
+#     render. Registered early, it still RUNS after every `ADD COLUMN` — the rebuild copies each
+#     declared column out of the old table — because `_add_new_field` moves an already-queued rebuild
+#     behind the column it adds.
+#   * PostgreSQL drops (the drop half of a replace included) are planned BEFORE the column pass, so
+#     they run ahead of a `DROP COLUMN` — which would take a CHECK naming the column with it — and of
+#     an `ALTER COLUMN … TYPE`, which re-checks every constraint on the column against the new type.
+#     Adds and renames are planned after the composite pass, behind every `ADD COLUMN` they may name.
+#     All three are in `_order_statements`' general bucket, where plan order is execution order.
+
+# What one table's declared CHECKs need, against its live ones. `drops` are live names; `adds` are
+# declarations; `renames` pair a live name with the declaration now carrying its condition; `stamps`
+# are declarations ADOPTING an unmarked live CHECK of the same text, which PostgreSQL marks with a
+# `COMMENT ON CONSTRAINT` — non-destructive, and not a change on SQLite, which writes the marker the
+# next time it rebuilds the table anyway. So `stamps` never makes a plan non-empty for the rebuild.
+struct _CheckPlan
+  drops::Vector{String}
+  adds::Vector{Models.CheckConstraint}
+  renames::Vector{Tuple{String, Models.CheckConstraint}}
+  stamps::Vector{Tuple{Models.CheckConstraint, Union{String, Nothing}}}   # + the comment to keep
+end
+_check_plan_isempty(p::_CheckPlan)::Bool = isempty(p.drops) && isempty(p.adds) && isempty(p.renames)
+
+"""
+    _diff_checks(model, live_checks) -> _CheckPlan
+
+A declaration and the live CHECK of the same name are unchanged when the live marker is the hash of
+the declared condition, or when their canonical texts agree — the adoption case, where `inspectdb`
+wrote the declaration from the catalog's own text, which on PostgreSQL never hashes to a marker.
+Otherwise the live CHECK is replaced, whether PormG owns it or not: the declaration claims the name.
+An unchanged CHECK with NO marker is adopted: `stamps` gives it PormG's, so the engines agree about
+who owns it from then on — without that, removing or renaming the declaration would drop or rename
+it on SQLite (whose next rebuild writes the marker) and leave it behind on PostgreSQL.
+
+A live CHECK carrying PormG's marker that no declaration names is either renamed — a declaration
+under a new name carries its condition, by marker or by canonical text — or dropped. One without a
+marker is left alone.
+"""
+function _diff_checks(model::PormGModel, live_checks::Vector{LiveCheck})::_CheckPlan
+  declared = Models.declared_check_constraints(model)
+  plan = _CheckPlan(String[], Models.CheckConstraint[], Tuple{String, Models.CheckConstraint}[],
+                    Tuple{Models.CheckConstraint, Union{String, Nothing}}[])
+  isempty(declared) && all(lc -> lc.marker === nothing, live_checks) && return plan
+  declared_names = Set{String}(c.name for c in declared)
+  live_by_name = Dict{String, LiveCheck}(lc.name => lc for lc in live_checks)
+  unchanged(c, lc) = (lc.marker !== nothing && lc.marker == check_marker(c.condition)) ||
+                     canonical_check_condition(lc.sql) == canonical_check_condition(c.condition)
+  orphans = LiveCheck[lc for lc in live_checks if lc.marker !== nothing && !(lc.name in declared_names)]
+  for c in declared
+    lc = get(live_by_name, c.name, nothing)
+    if lc === nothing
+      k = findfirst(o -> o.marker == check_marker(c.condition) ||
+                         canonical_check_condition(o.sql) == canonical_check_condition(c.condition), orphans)
+      if k === nothing
+        push!(plan.adds, c)
+      else
+        push!(plan.renames, (orphans[k].name, c))
+        deleteat!(orphans, k)
+      end
+    elseif !unchanged(c, lc)
+      push!(plan.drops, lc.name)
+      push!(plan.adds, c)
+    elseif lc.marker === nothing
+      push!(plan.stamps, (c, lc.comment))
+    end
+  end
+  append!(plan.drops, (o.name for o in orphans))
+  return plan
+end
+
+# The step label of a CHECK statement. The constraint name is the developer's, and
+# `_order_statements` buckets any label CONTAINING "Rename field" ahead of the general bucket this step
+# belongs in, so that one phrase is defused in the label — never in the SQL.
+_check_step_label(verb::AbstractString, name::AbstractString)::String =
+  "$(verb) check constraint: $(replace(name, "Rename field" => "Rename_field"))"
+
+# First half — see the section note. SQLite: register the rebuild. PostgreSQL: the drops.
+function _plan_check_drops!(conn::Union{PormGPostgres, PormGSQLite},
+                            migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
+                            model_name::Symbol, model::PormGModel, plan::_CheckPlan)::Nothing
+  _check_plan_isempty(plan) && return nothing
+  if conn isa PormGSQLite
+    key = "Alter table: $model_name"
+    (haskey(migration_plan, model_name) && haskey(migration_plan[model_name], key)) ||
+      _configure_order_dict_migration_plan(migration_plan, model_name, key, Dialect.rebuild_table(conn, model))
+  else
+    for name in plan.drops
+      _configure_order_dict_migration_plan(migration_plan, model_name, _check_step_label("Remove", name),
+                                           Dialect.drop_check_constraint(conn, string(model_name), name))
+    end
+  end
+  return nothing
+end
+
+# Second half, PostgreSQL only — SQLite's rebuild already carries every declared CHECK. Renames, the
+# adoption stamps, then adds; a name the table already holds for another constraint is refused before
+# the plan is written.
+function _plan_check_adds!(conn::Union{PormGPostgres, PormGSQLite},
+                           migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
+                           model_name::Symbol, model::PormGModel, plan::_CheckPlan;
+                           catalog_table::Union{Symbol, Nothing} = model_name)::Nothing
+  conn isa PormGPostgres || return nothing
+  table = string(model_name)
+  for (old, c) in plan.renames
+    _refuse_check_name_clash(conn, model, table, catalog_table, c.name)
+    _configure_order_dict_migration_plan(migration_plan, model_name, _check_step_label("Rename", old),
+                                         Dialect.rename_constraint(conn, table, old, c.name))
+  end
+  for (c, existing) in plan.stamps
+    _configure_order_dict_migration_plan(migration_plan, model_name, _check_step_label("Adopt", c.name),
+                                         Dialect.comment_check_constraint(conn, table, c; keep = existing))
+  end
+  for c in plan.adds
+    c.name in plan.drops || _refuse_check_name_clash(conn, model, table, catalog_table, c.name)
+    _configure_order_dict_migration_plan(migration_plan, model_name, _check_step_label("Create", c.name),
+                                         Dialect.add_check_constraint(conn, table, c))
+  end
+  return nothing
+end
+
+# A PostgreSQL constraint name is unique per TABLE, across every kind — so a declared CHECK must not
+# take one another constraint holds, or the plan is written and `migrate` fails on "already exists".
+# Two sources. For a table this plan CREATES: the names PormG's own `CREATE TABLE` gives its primary
+# key and its column CHECKs (`<table>_<column>_check` for a `PositiveIntegerField` / bounded
+# `BinaryField`) — the only names knowable before the table exists. For a table that exists
+# (`catalog_table`): every constraint the catalog holds, except an unmarked CHECK of exactly PormG's own
+# column shape that the column pass will DROP — because the declared field for its column no longer
+# carries that fact (or the column goes) — before this CHECK is added. One the column pass keeps still
+# holds the name, whatever it is called. A name this cannot see (a UNIQUE the composite pass drops in
+# this plan, a name PostgreSQL truncated) fails the migration loudly, inside its transaction.
+function _refuse_check_name_clash(conn::PormGPostgres, model::PormGModel, table::AbstractString,
+                                  catalog_table::Union{Symbol, Nothing}, name::AbstractString)::Nothing
+  own = Set{String}(["$(table)_pkey"])
+  for (key, field) in model.fields
+    Models.is_many_to_many_field(field) && continue
+    (Dialect._requires_non_negative_check(field) || Dialect._requires_byte_length_check(field)) &&
+      push!(own, "$(table)_$(Models.field_db_column(field, string(key)))_check")
+  end
+  taken = name in own
+  if !taken && catalog_table !== nothing
+    # One row per constraint holding the name, with — for an unmarked single-column CHECK of PormG's
+    # own shape — its column and which shape it is. `own_shape` is spliced once per shape.
+    own_shape(match) = """(con.contype = 'c' AND array_length(con.conkey, 1) = 1 AND EXISTS (
+              SELECT 1 FROM pg_attribute a WHERE a.attrelid = con.conrelid AND a.attnum = con.conkey[1]
+                AND $(match) AND $(_PG_UNMARKED_CHECK)))"""
+    rows = DataFrame(fetch(conn, """
+      SELECT (SELECT a.attname FROM pg_attribute a
+              WHERE a.attrelid = con.conrelid AND a.attnum = con.conkey[1]
+                AND array_length(con.conkey, 1) = 1) AS col,
+             $(own_shape(_PG_NON_NEGATIVE_CHECK_MATCH)) AS nonneg,
+             $(own_shape(_PG_BYTE_LENGTH_CHECK_MATCH)) AS bytelen
+      FROM pg_constraint con
+      JOIN pg_class c ON c.oid = con.conrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relname = \$1 AND con.conname = \$2 AND n.nspname = ANY(current_schemas(false));""",
+      [string(catalog_table), String(name)]))
+    taken = any(r -> !_column_pass_frees(model, r), eachrow(rows))
+  end
+  taken && throw(InvalidMigrationError(
+    "CheckConstraint name '$(name)' on table '$(table)' is already the name of another constraint on " *
+    "that table — its primary key, the CHECK PostgreSQL names for a positive-integer or bounded binary " *
+    "column, or (on a table that exists) any other constraint it holds. Constraint names are unique " *
+    "per table on PostgreSQL; give the CheckConstraint another name."))
+  return nothing
+end
+
+# Will the column pass drop this constraint before the CHECK is added? Only for an unmarked CHECK of
+# PormG's own column shape (`nonneg` / `bytelen` from `_refuse_check_name_clash`'s query) on a column
+# the declared model drops, or declares WITHOUT that fact — the column diff then removes it as a
+# stray. A column still carrying the fact keeps its CHECK, and the name stays taken.
+function _column_pass_frees(model::PormGModel, r)::Bool
+  nonneg, bytelen = r.nonneg === true, r.bytelen === true
+  (nonneg || bytelen) && r.col !== missing && r.col !== nothing || return false
+  col = string(r.col)
+  for (key, field) in model.fields
+    Models.is_many_to_many_field(field) && continue
+    Models.field_db_column(field, string(key)) == col || continue
+    return nonneg ? !Dialect._requires_non_negative_check(field) : !Dialect._requires_byte_length_check(field)
+  end
+  return true   # the column goes, and PostgreSQL drops its CHECK with it
+end
+
+# A declared CHECK whose condition still names a live column this plan renames away or removes (#742).
+# Renamed: PostgreSQL rewrites the stored expression on `RENAME COLUMN`, so the hash still matches and
+# nothing would be planned — the stale text would surface only when something renders the declaration
+# again (the next SQLite rebuild, a replace). Removed: PostgreSQL drops the CHECK with the column and
+# the next plan fails to re-add it, and SQLite refuses the `DROP COLUMN`. Refused here, both.
+# `renames` maps old ⇒ new physical column; `live_columns` are the table's columns as the catalog has
+# them. A token followed by `(` is a function name, never a column; bare tokens compare
+# case-insensitively, as both engines resolve them. A column name used as a keyword (`EXTRACT(year
+# FROM …)` while a `year` column is removed) is refused too — the scan reads names, not SQL grammar.
+function _refuse_stale_check_conditions(model::PormGModel, renames::Dict{String, String},
+                                        live_columns)::Nothing
+  declared = Models.declared_check_constraints(model)
+  isempty(declared) && return nothing
+  declared_cols = Set{String}(lowercase(c) for c in _model_physical_columns(model))
+  # Each live column the declared model no longer has ⇒ what it was renamed to, or `nothing` if removed.
+  gone = Dict{String, Union{String, Nothing}}(String(col) => get(renames, String(col), nothing)
+                                              for col in live_columns if !(lowercase(String(col)) in declared_cols))
+  isempty(gone) && return nothing
+  for c in declared, t in _sqlite_identifier_tokens(c.condition)
+    t.called && continue
+    for (old, new) in gone
+      (t.quoted ? t.name == old : lowercase(t.name) == lowercase(old)) || continue
+      throw(InvalidMigrationError(new === nothing ?
+        "CheckConstraint '$(c.name)' on '$(model_table_name(model))' names column '$(old)', which this " *
+        "migration removes. Take it out of the condition, or remove the CheckConstraint — PostgreSQL " *
+        "would drop the CHECK together with the column and the next migration would fail to re-create " *
+        "it, and SQLite refuses to drop a column a CHECK names." :
+        "CheckConstraint '$(c.name)' on '$(model_table_name(model))' still names column '$(old)', which " *
+        "this migration renames to '$(new)'. Update its condition to the new name — PostgreSQL would " *
+        "keep the old condition working, but the next time the declaration is rendered (a SQLite " *
+        "table rebuild, a replaced CHECK) it would name a column that no longer exists."))
+    end
+  end
+  return nothing
+end
+
 function _add_new_table(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel;
                         composite_targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}())::Nothing
   _configure_order_dict_migration_plan(migration_plan, model_name, "New model", Dialect.create_table(conn, model))
@@ -870,6 +1099,11 @@ function _add_new_table(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
   # set of statements.
   _plan_composite_actions!(conn, migration_plan, model_name, model, LiveComposite[];
                            targets = composite_targets)
+  # #742: likewise every declared CHECK. PostgreSQL adds each after the CREATE TABLE; SQLite plans
+  # nothing, because `create_table` rendered them inline — a rebuild here would make a create-only
+  # migration destructive.
+  _plan_check_adds!(conn, migration_plan, model_name, model, _diff_checks(model, LiveCheck[]);
+                    catalog_table = nothing)
   return nothing
 end
 
@@ -1233,8 +1467,14 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
   # For the rebuild pass at the end of the plan — the map object itself, which is still filling.
   conn isa PormGSQLite && (sqlite_rebuild_context[model_name] = (catalog_table, sqlite_rename_map))
 
+  # #742: the table CHECKs, first half — BEFORE the column pass. See the note above `_CheckPlan`.
+  check_plan = _diff_checks(current_schema[model_name][:model], live.checks)
+  _plan_check_drops!(conn, migration_plan, model_name, current_schema[model_name][:model], check_plan)
+
   # Pass maps to resolve fields so original keys can be used for accessing model.fields
   _resolve_table_fields(conn, model_name, live, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive, index_actions=index_actions, sqlite_rename_map=sqlite_rename_map)
+  # #742: every rename is answered now — refuse a declared condition naming a column that goes away.
+  _refuse_stale_check_conditions(current_schema[model_name][:model], sqlite_rename_map, keys(live.columns))
 
   for field_name_stripped in stripped_current_fields
     original_code_key = current_fields_map[field_name_stripped]
@@ -1330,6 +1570,10 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
                                                 column_renames = sqlite_rename_map,
                                                 catalog_table = catalog_table,
                                                 targets = composite_targets)
+
+  # #742: the table CHECKs, second half — PostgreSQL's renames and adds, behind every column they name.
+  _plan_check_adds!(conn, migration_plan, model_name, current_schema[model_name][:model], check_plan;
+                    catalog_table = catalog_table)
 
   # Flush the deferred index actions — always after any "Alter table:"/"Alter field:" step the
   # loop above registered, whichever field produced it.
@@ -1774,7 +2018,9 @@ function _retarget_references(table::LiveTable, renames::Dict{String, String})::
     return ColumnSpec((f === :reference ? moved : getfield(spec, f) for f in fieldnames(ColumnSpec))...)
   end
   columns = OrderedDict{String, ColumnSpec}(name => retarget(spec) for (name, spec) in table.columns)
-  return LiveTable(table.name, columns, table.indexes, table.composites)
+  # Every slot but `columns` carried as it is — `checks` included (#742): dropping it would read every
+  # declared CHECK on every table of a plan with a table rename as missing.
+  return LiveTable(table.name, columns, table.indexes, table.composites, table.checks)
 end
 
 """

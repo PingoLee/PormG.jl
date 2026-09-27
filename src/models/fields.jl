@@ -2247,7 +2247,11 @@ A field for storing decimal numbers with fixed precision and scale.
 - `default::Union{Float64, Nothing}`: Default value for the field. Default: `nothing`
 - `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool`: If `true`, field can be edited in forms. Default: `false`
-- `max_digits::Int`: Maximum number of digits allowed (including decimal places). Default: `10`
+- `max_digits::Int`: Maximum number of digits allowed (including decimal places). Default: `10`.
+  **At most `15` on SQLite**, which has no exact decimal type: its NUMERIC affinity keeps only 15
+  significant digits, so `makemigrations` raises `BackendCapabilityError` for a wider declaration
+  rather than create a column that would round values as they are written (#648). PostgreSQL
+  accepts any width.
 - `decimal_places::Int`: Number of decimal places to store. Default: `2`
 
 # Examples

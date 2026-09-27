@@ -381,6 +381,39 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #648 — both engines read a DecimalField back as a Decimal, and emit the same JSON text
+# The testset above normalizes through `_normalize_decimal`, so it cannot see the TYPE a read
+# returns. Before #648 SQLite returned an `Int64`/`Float64`, and from a million up `list(:json)`
+# emitted `1.23456789e6` where PostgreSQL emitted `1234567.89`. The column is `DecimalField(10, 2)`,
+# inside the 15 digits SQLite stores exactly, so both halves must now agree byte for byte.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django Contract: DecimalField reads back as a Decimal with one JSON text (#648)" begin
+    label_m = "django-decimal-million"
+    label_w = "django-decimal-whole"
+    _cleanup_django_scratch!(label_m)
+    _cleanup_django_scratch!(label_w)
+
+    try
+        M.Django_contract_scratch.objects.create("label" => label_m, "price" => "1234567.89")
+        M.Django_contract_scratch.objects.create("label" => label_w, "price" => "14.00")
+
+        q() = M.Django_contract_scratch.objects.filter("label__@in" => [label_m, label_w]).
+            values("price").order_by("id")
+
+        # The TYPE, raw — no normalizer in between.
+        prices = [r[:price] for r in q().list()]
+        @test all(p -> p isa Decimal, prices)
+        @test prices == [parse(Decimal, "1234567.89"), parse(Decimal, "14")]
+
+        # The TEXT: exact digits, as JSON numbers, and a whole value without a `.0` or `.00`.
+        @test q().list(:json) == "[{\"price\":1234567.89},{\"price\":14}]"
+    finally
+        _cleanup_django_scratch!(label_m)
+        _cleanup_django_scratch!(label_w)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #79 — DateTimeField equality/range filters agree across formats & offsets
 #
 # SQLite stores DateTimeField values as TEXT and compares them lexicographically, so two

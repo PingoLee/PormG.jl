@@ -95,12 +95,12 @@ end
 # digits `sDecimalField`'s own formatter writes, spliced as a raw JSON number.
 #
 # What only a LIVE run can say, and the reason this testset exists next to the unit one: that the
-# value the DRIVER delivers reaches that arm. The engines do not agree on the Julia type at all —
-# PostgreSQL/LibPQ hands back a `Decimals.Decimal` for every value, while SQLite's NUMERIC affinity
-# hands back an `Int64` for an integral one and a `Float64` for a fractional one — so three distinct
-# types reach `_json_value` for one declared column, and the JSON has to come out the same anyway.
-# That equivalence is the assertion; it is also what the `JSONText` shape was chosen for, since a
-# string arm would have made PostgreSQL emit `"14"` where SQLite emitted `14`.
+# value the DRIVER delivers reaches that arm. When #644 landed the engines did not agree on the Julia
+# type at all — PostgreSQL/LibPQ handed back a `Decimals.Decimal`, while SQLite's NUMERIC affinity
+# handed back an `Int64` for an integral value and a `Float64` for a fractional one — and the JSON had
+# to come out the same anyway. That equivalence is the assertion; it is also what the `JSONText` shape
+# was chosen for, since a string arm would have made PostgreSQL emit `"14"` where SQLite emitted `14`.
+# Since #648 SQLite parses the column back to a `Decimal` as well, so both engines now reach the arm.
 #
 # The fixture cannot show the DRIFT half: `Constructor_results.points` is `DecimalField(10, 2)`, and
 # every width up to ~16 digits was already correct. `test/unit/test_read_value_coercion.jl` owns that
@@ -116,11 +116,11 @@ end
     rows = q.list()
     @test length(rows) == 5
 
-    # The engine-specific half, asserted rather than assumed — if a driver ever starts handing back
-    # something else, the JSON assertions below would still pass while testing nothing about Decimal.
-    if PORMG_DB_FOLDER == "db_2"
-        @test all(r -> r[:points] isa PormG.QueryBuilder.Decimals.Decimal, rows)
-    end
+    # Asserted rather than assumed — if a read ever starts handing back something else, the JSON
+    # assertions below would still pass while testing nothing about Decimal. PostgreSQL-only until
+    # #648: SQLite's NUMERIC affinity returned `Int64`/`Float64`, and a `DecimalField(10, 2)` — inside
+    # the 15 digits SQLite stores exactly — is now parsed back to a `Decimal` there too.
+    @test all(r -> r[:points] isa PormG.QueryBuilder.Decimals.Decimal, rows)
 
     parsed = JSON.parse(q.list(:json))
 

@@ -129,9 +129,10 @@ A whole value reads as `14`, not `14.0`, and a fractional one keeps its scale �
 nineteen digits, where routing it through a `Float64` would have rendered `1.2345678901234568e16`.
 LibPQ delivers a `NUMERIC` as a `Decimals.Decimal`, so nothing on the path narrows it.
 
-**On SQLite it is not, and the loss happens on the way IN.** SQLite has no exact decimal type. A column
-PormG declares as `DECIMAL(p, s)` gets SQLite's `NUMERIC` affinity, which converts the value as it is
-stored — preferring an integer conversion, and silently dropping what will not fit:
+**On SQLite it is exact up to fifteen digits, and PormG refuses anything wider.** SQLite has no exact
+decimal type. A `DECIMAL(p, s)` column gets SQLite's `NUMERIC` affinity, which converts the value as it
+is stored into an `Int64` or a `Float64` — preferring an integer conversion, and silently dropping what
+will not fit. Measured on a column declared wider than that:
 
 ```
 declared DECIMAL(24, 2), inserted   SQLite stores   read back
@@ -143,23 +144,34 @@ declared DECIMAL(24, 2), inserted   SQLite stores   read back
 ```
 
 Note the third row: the fractional part is not rounded, it is discarded, and the value becomes a plain
-`1`. Nothing on the read path can recover any of this, and `.list(:json)` faithfully reports what is
-actually stored. A `DecimalField` on SQLite is a precise column only within what an `Int64` or a
-`Float64` represents — roughly fifteen significant digits for a fractional value, wider for a whole
-one. Use PostgreSQL where the precision is the point.
+`1`. Nothing on the read path can recover that, which is why the fix is on the declaration: a `Float64`
+keeps fifteen significant digits exactly, so **`makemigrations` raises `BackendCapabilityError` for a
+`DecimalField` with `max_digits` above 15 on SQLite** rather than create a column like the one above.
+Every decimal column PormG creates on SQLite therefore holds the values it accepts exactly — and
+because it does, PormG reads a `DecimalField` declared with `max_digits` of 15 or fewer back as the
+**`Decimals.Decimal` that was written**, the same type PostgreSQL returns, rather than the
+`Int64`/`Float64` SQLite stored it as. The declaration decides it, not who created the column: a field
+declared wider than 15 digits — a table created outside PormG, or before this refusal — still behaves
+as the table shows and reads back raw, because SQLite may already have rounded what it holds and a
+`Decimal` rebuilt from that would only look exact. Narrowing such a field to 15 does not recover
+digits SQLite already dropped: the third row above would then read back as an exact-looking `1`. Use
+PostgreSQL where more than fifteen digits is the point.
 
-!!! note "The two engines emit the same JSON *type*, not always the same text"
-    Both emit a number, never a string. The **text** agrees while the value SQLite stored prints the
-    digits the decimal has: every whole value, and fractional values below about a million. Past that,
-    Julia renders a `Float64` in exponent form, so the same column reads:
+!!! note "Both engines emit the same JSON text"
+    Projected as the column itself — a field path, a bare `F("amount")`, or the model's `*` — a
+    `DecimalField` reaches `.list(:json)` as a `Decimal` on both engines, so both emit the same
+    digits: `{"amount":1234567.89}`. Before, SQLite handed back a `Float64`, which Julia renders in
+    exponent form from a million up (`{"amount":1.23456789e6}`).
 
-    ```
-    stored 1234567.89    PostgreSQL {"amount":1234567.89}    SQLite {"amount":1.23456789e6}
-    ```
-
-    Both parse to the same number, so a consumer that parses is unaffected; a consumer comparing
-    response text is not. This is the deliberate side of the trade — PostgreSQL delivers an exact
-    `Decimal` and PormG emits its digits rather than re-rounding them to match SQLite's rendering.
+    Everything else still arrives on SQLite as the number SQLite holds or computed, and renders that
+    way:
+    - an **expression** over the column — an aggregate, arithmetic or SQL function (`Sum("amount")`,
+      `F("amount") * 2`, `Round(...)`), a `Joined(...)` or `CTE(...)` reference, a subquery;
+    - a row returned by **`create()`** or **`update_or_create`**, which is read back without the query
+      parsers, as temporal columns are (`get_or_create` reads through `first()`, so it is parsed);
+    - a value that does **not fit the declaration**, such as the unrounded double an `F`-arithmetic
+      `update(...)` leaves behind on SQLite, where PostgreSQL rounds it to the column's scale;
+    - a field declared **wider than fifteen digits**.
 
 This applies to a **column's own value**. A decimal nested inside a container — a PostgreSQL
 `numeric[]`, which LibPQ delivers as a `Vector{Decimal}` — is not reached, and still serializes through

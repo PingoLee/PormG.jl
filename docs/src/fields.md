@@ -472,9 +472,20 @@ Car_performance = Models.Model(
 
 **Purpose**: Precise decimal numbers for financial and monetary data.
 
-**Database Type**: `NUMERIC(max_digits, decimal_places)`
+**Database Type**: `decimal(max_digits, decimal_places)` on PostgreSQL (`numeric`, exact at any
+width); `DECIMAL(max_digits, decimal_places)` on SQLite.
 
 **Use Cases**: Currency, financial calculations, precise measurements.
+
+!!! warning "SQLite: `max_digits` is at most 15"
+    SQLite has no exact decimal type. Its `NUMERIC` affinity stores a decimal as an `Int64` or a
+    `Float64` as it is written, and a `Float64` keeps only fifteen significant digits exactly — so a
+    wider column would round or truncate values with no error. `makemigrations` therefore raises
+    `BackendCapabilityError` for a `DecimalField` with `max_digits` above 15 on a SQLite connection,
+    and every column it does create holds its values exactly — and reads back as a
+    `Decimals.Decimal`, as on PostgreSQL, rather than the `Int64`/`Float64` SQLite stored. PostgreSQL
+    accepts any width. See
+    [PostgreSQL ↔ SQLite divergences](postgres.md#PostgreSQL-SQLite-divergences).
 
 ```julia
 # Financial data
@@ -497,7 +508,7 @@ Merchandise = Models.Model(
 ```
 
 **Key Parameters**:
-- `max_digits::Int`: Total number of digits
+- `max_digits::Int`: Total number of digits (at most 15 on SQLite — see above)
 - `decimal_places::Int`: Number of decimal places
 
 ---

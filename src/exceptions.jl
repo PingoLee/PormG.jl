@@ -159,7 +159,8 @@ end
 
 The active backend cannot do this — a PostgreSQL-only lookup on SQLite (JSONB containment,
 `iunaccent_*`), an explicit window `frame=` on SQLite, `bulk_copy` on SQLite,
-`with_advisory_lock(...; on_missing_lock = :error)` on SQLite, or a SQLite library older than a
+`with_advisory_lock(...; on_missing_lock = :error)` on SQLite, a `DecimalField` wider than the 15
+digits SQLite stores exactly (raised by `makemigrations`, #648), or a SQLite library older than a
 feature requires. The query is well-formed and the configuration is fine; the remedy is to change
 the request or the backend — each message names the specific way out. Split out of
 `UnsupportedConnectionError` in the pre-publish naming pass — capability limits are a user-facing

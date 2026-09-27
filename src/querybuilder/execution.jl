@@ -2490,13 +2490,14 @@ end
 # `DjangoJSONEncoder` and DRF's `COERCE_DECIMAL_TO_STRING` both choose a string, which is exact
 # end-to-end but obliges every consumer to parse; the maintainer chose the number on that trade (#644).
 #
-# Be precise about what that buys, because the first version of this comment over-claimed it: the two
-# engines agree on the JSON *type*, not on the TEXT. Julia prints a `Float64` at or above 1e6 in
-# exponent form, so from a million up SQLite emits `1.23456789e6` where PostgreSQL now emits
-# `1234567.89` — measured, and an ordinary money amount, not an edge case. Unpatched they agreed there,
-# on SQLite's lossy rendering; this arm deliberately prefers PostgreSQL's exact text over that
-# agreement, since a `Decimal` that reached us intact should not be re-rounded on the way out.
-# `docs/src/read/index.md` states the boundary user-facing.
+# Be precise about what that buys, because the first version of this comment over-claimed it: on its
+# own, this arm made the two engines agree on the JSON *type*, not on the TEXT. Julia prints a
+# `Float64` at or above 1e6 in exponent form, so from a million up SQLite emitted `1.23456789e6` where
+# PostgreSQL emitted `1234567.89`. #648 closed that for every column PormG creates: SQLite reads a
+# `DecimalField` of at most 15 digits back as a `Decimal` too (`Dialect._parse_sqlite_decimal`), so
+# both engines reach this arm and emit the same text. What still arrives as a `Float64` — a wider
+# column created outside PormG, an aggregate or arithmetic result, a `create()` row — keeps SQLite's
+# rendering. `docs/src/read/index.md` states the boundary user-facing.
 #
 # GUARDED, because `JSONText` is a raw splice with no escaping: text that is not a JSON number would
 # produce an INVALID DOCUMENT, strictly worse than the lossy value this fixes.
@@ -2512,7 +2513,8 @@ end
 # confined to extremes: `parse` normalises, so PostgreSQL's `"10.00"` from a `NUMERIC(10,2)` arrives as
 # `Decimal(0, 1, 1)` — exponent 1 — which 0.4.1 prints `10` and 0.5.x would print `1E+1`. Numerically
 # equal, valid JSON either way, and unreachable today because every LibPQ release pins `Decimals 0.4`
-# (see `test/unit/test_compat_guards.jl`) and SQLite never yields a `Decimal` at all. Worth knowing
+# (see `test/unit/test_compat_guards.jl`), and the `Decimal` SQLite yields since #648 is built with a
+# non-positive exponent on purpose (`Decimal(0, 10, 0)`, which prints `10` on both). Worth knowing
 # before anyone widens that pin: the engines would still agree with each other, but the emitted text
 # would change. `Project.toml` cannot carry this note — CompatHelper strips comments — so it is here.
 #

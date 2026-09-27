@@ -27,18 +27,31 @@ function _record_wildcard_projection_kinds!(instruc::SQLInstruction)
   # .values(\"*\", \"joined_model__field_name\")"). Recording only the empty case left that spelling
   # returning a MIX — the joined alias typed, the wildcard columns raw — in one row.
   isempty(instruc.object.values) || any(_is_wildcard_projection, instruc.object.values) || return nothing
+  # Every output name an EXPLICIT projection already owns — whether or not it recorded a kind. This
+  # runs AFTER `get_select_query`, and this loop claims both a field's name and its `db_column` while
+  # the duplicate-name guard only reserves the star's PHYSICAL columns, so an alias equal to a renamed
+  # field's NAME is legal: `values("*", "moved" => "d")`. The explicit projection is the more specific
+  # answer and wins; the model-derived kinds are only the fallback for names nothing else claimed.
+  #
+  # Kinded or not (#648). Guarding only against CLOBBERING a recorded kind (a `get!`) left an
+  # untyped alias exposed: `values("*", "price" => Count("id"))`, with `price` a
+  # `DecimalField(db_column = "price_eur")`, recorded nothing for `:price`, so the star claimed it as
+  # `CDecimal` and SQLite turned the count into a `Decimal`. The temporal parsers never showed this —
+  # they hand a number straight back — but the decimal parser converts one.
+  claimed = Set{Symbol}()
+  for i in eachindex(instruc.select)
+    isassigned(instruc.select, i) || continue   # a preallocated `undef` buffer, not a list
+    v = instruc.select[i]
+    _is_wildcard_projection(v) && continue
+    name = _projection_output_name(v)
+    name === nothing || push!(claimed, Symbol(name))
+  end
   for (fname, fmeta) in instruc.object.model.fields
     kind = field_canonical_kind(fmeta)
     kind === nothing && continue
-    # `get!`, NEVER `[]=`. This runs AFTER `get_select_query`, so a plain assignment would let the
-    # model-derived kind CLOBBER one an explicit projection already recorded under the same name —
-    # and `values("*", "moved" => "d")` is exactly that collision when a field's `db_column` differs
-    # from its name, since this loop claims both spellings while the duplicate-name guard only
-    # reserves the star's physical columns. The explicit projection is the more specific answer and
-    # wins; these are the fallback for names nothing else claimed.
-    get!(instruc.projection_kinds, Symbol(fname), kind)
-    physical = Models.field_db_column(fmeta, fname)
-    physical == fname || get!(instruc.projection_kinds, Symbol(physical), kind)
+    for key in unique((Symbol(fname), Symbol(Models.field_db_column(fmeta, fname))))
+      key in claimed || get!(instruc.projection_kinds, key, kind)
+    end
   end
   return nothing
 end

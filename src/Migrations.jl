@@ -34,6 +34,9 @@ import PormG: BackendCapabilityError
 # `catch` body is not a precompile error — it would surface as an `UndefVarError` raised INSTEAD
 # of the original, at the first bad default in a live import.
 import PormG: FieldValidationError
+# #737: `migrate`'s keyword validation and the `MigrationResult` constructor refuse a bad value with
+# the same type every other public entry point uses for one.
+import PormG: InvalidValueError
 # MissingConfigurationError lives in Configuration (its umbrella ConfigurationError is in Kernel);
 # it is NOT a PormG-level binding, so it must be imported from the owning module.
 import PormG.Configuration: MissingConfigurationError
@@ -110,7 +113,7 @@ export get_migration_plan
 # Exports — new migration lifecycle APIs (Phases 1–7)
 export init_migrations, status, dry_run, check
 export mark_applied, mark_failed, remove_migration_record, discard_pending_migration
-export MigrationStatus, DryRunResult, SchemaCheckResult, SchemaCheckFinding
+export MigrationStatus, DryRunResult, SchemaCheckResult, SchemaCheckFinding, MigrationResult
 
 # `public` (Julia 1.11+) — user-facing but not exported (#289). `docs/src/migrations/stability.md`
 # tells users to read `PormG.Migrations.MIGRATION_FORMAT_VERSION` to check plan compatibility.

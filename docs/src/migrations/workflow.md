@@ -150,9 +150,14 @@ This reports applied migrations, failed migrations, and any "drift" between file
 ## Step 5: Apply Migrations
 Apply the pending migrations to your database:
 ```julia
-PormG.Migrations.migrate("db")
+result = PormG.Migrations.migrate("db")
 ```
 Applied migrations are recorded in the history table and archived to `db/migrations/applied_migrations/`.
+
+`migrate()` returns a `MigrationResult` whose `outcome` is `:applied`, `:already_applied`,
+`:nothing_pending`, `:disabled` (the connection is `change_db: false`) or `:declined` (you answered
+"no" at the prompt, or a destructive plan was refused at the terminal for lack of `destructive=true`). Having nothing to apply is `:nothing_pending`, not an error. What each outcome
+means, and how to run `migrate()` at application boot: [Deploying](deploying.md).
 
 ### Destructive Operations Safety
 PormG blocks destructive SQL by default. A statement is destructive when it is:
@@ -188,11 +193,15 @@ confirmation prompt and never blocks on `readline()`. You do not need `interacti
 auto-detected), though passing it is still allowed and harmless.
 ```julia
 # Non-destructive plans apply directly — no prompt, no hang:
-PormG.Migrations.migrate("my_db")
+result = PormG.Migrations.migrate("my_db")
+result.outcome   # :applied, :already_applied or :nothing_pending — none of them an error
 
 # A destructive plan must opt in explicitly, or it throws DestructiveMigrationError:
 PormG.Migrations.migrate("my_db", destructive=true)
 ```
+
+Several instances calling `migrate()` at once queue on its lock; `lock_wait`, `lock_timeout` and
+`statement_timeout` bound how long they wait and what they block. See [Deploying](deploying.md).
 
 To tolerate "a destructive plan is present — skip it rather than fail", catch the error:
 ```julia

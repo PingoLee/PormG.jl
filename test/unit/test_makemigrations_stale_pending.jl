@@ -88,9 +88,10 @@ _sp727_quiet(f) = with_logger(f, NullLogger())
             @test isfile(pending * ".discarded") && read(pending * ".discarded", String) == stale
             @test Migrations.status(pool, settings).pending == false
 
-            # And `migrate` applies nothing: with no pending plan it refuses, where it used to apply the
-            # stale ADD COLUMN — so the column the models took back never appears.
-            @test_throws PormG.InvalidMigrationError _sp727_quiet(() -> Migrations.migrate(pool, settings; interactive = false))
+            # And `migrate` applies nothing: with no pending plan it reports `:nothing_pending`, where
+            # it used to apply the stale ADD COLUMN — so the column the models took back never
+            # appears. (Before #737 "nothing pending" was an `InvalidMigrationError`.)
+            @test _sp727_quiet(() -> Migrations.migrate(pool, settings; interactive = false)).outcome === :nothing_pending
             @test !("nickname" in _sp727_columns(pool))
         end
     finally
@@ -133,8 +134,8 @@ end
             @test isfile(pending) && read(pending, String) == applied_plan
             @test !isfile(pending * ".discarded")
 
-            # And the next `migrate` archives it without applying it again.
-            _sp727_quiet(() -> Migrations.migrate(pool, settings; interactive = false))
+            # And the next `migrate` archives it without applying it again — and says so (#737).
+            @test _sp727_quiet(() -> Migrations.migrate(pool, settings; interactive = false)).outcome === :already_applied
             @test !isfile(pending)
             @test length(archived()) == 1 && read(joinpath(applied_dir, only(archived())), String) == applied_plan
             @test "nickname" in _sp727_columns(pool)

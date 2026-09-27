@@ -374,12 +374,15 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
 !!! warning "Dropping a primary key: PostgreSQL vs SQLite"
     Removing a column that is the table's **only** primary key diverges by backend. PostgreSQL's `DROP COLUMN` drops the column and its `PRIMARY KEY` constraint natively, leaving a table with no primary key. SQLite cannot express that without silently degrading the table to a rowid table, so PormG **fails `makemigrations` loudly** instead — declare a replacement primary key, or make the change manually. Dropping a primary-key column while the model still declares a primary key (the key moved to another column) rebuilds normally on both backends.
 
-!!! note "SQLite Limitation"
-    Advisory locking is not available for SQLite. Migration safety is single-instance only.
-    Do not run concurrent migrations against the same SQLite database.
+!!! note "SQLite: serialized by the write lock, not an advisory lock"
+    SQLite has no advisory lock. `migrate()` applies the plan inside `BEGIN IMMEDIATE`, and checks
+    whether it is already applied inside that transaction, so two processes migrating one file apply
+    a plan at most once: the second waits for the first, then reports `:already_applied`. The wait is
+    SQLite's 30-second busy timeout rather than `lock_wait`, and none of it holds on a network
+    filesystem. Details: [Deploying → SQLite](deploying.md#SQLite).
 
 ### PostgreSQL: Advisory Locking
-`migrate()` acquires a PostgreSQL session-level advisory lock before it executes anything, so a second migrator against the same database **queues** instead of interleaving its DDL. It waits up to 30 seconds and then fails rather than proceeding unserialized.
+`migrate()` acquires a PostgreSQL session-level advisory lock before it writes anything — the history table and the configured extensions included — so a second migrator against the same database **queues** instead of interleaving its DDL. It waits up to `lock_wait` seconds (default `30`) and then fails with an `OperationalError` naming the process that holds the lock, rather than proceeding unserialized. Running `migrate()` from several instances at boot: [Deploying](deploying.md).
 
 The key is the constant `pormg::migrations`, with **no database or folder qualifier** — deliberately. A PostgreSQL advisory lock is tagged with the *database OID* alongside the key, so the database is already the lock's namespace:
 

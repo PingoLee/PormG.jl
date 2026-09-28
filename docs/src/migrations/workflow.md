@@ -88,11 +88,48 @@ println(result)
 ```
 
 It is read-only, works on both engines, and needs no migration history — so it is also useful before
-you have run `makemigrations` even once. Today it reports columns whose `DEFAULT` is a SQL
+you have run `makemigrations` even once. By default it reports columns whose `DEFAULT` is a SQL
 expression (`now()`, `CURRENT_TIMESTAMP`, `gen_random_uuid()`). Those columns import as
 `db_default=` carrying exactly the text it prints, so its output is what you paste into the model —
 and declaring one as `default=` instead would propose overwriting the database's expression with a
 quoted literal. Full rules: [Column defaults](../schema_conventions.md#Column-defaults).
+
+### Checking the Database Against the Models
+
+`check()` also answers "does this database match the declared models?", when asked for the
+`:schema_drift` class:
+
+```julia
+r = PormG.Migrations.check("db"; kinds = [:schema_drift])
+println(r)
+exit(isempty(r) ? 0 : 1)   # as a CI or release gate
+```
+
+It reports one finding per step the next `makemigrations` would plan. The finding's `detail` is the
+step's label (`"New model"`, `"Drop table"`, `"Add field: country"`, …), and its `message` says which
+side has what the other lacks. It uses the same live reader, the same models loader and the same
+planner as `makemigrations`, so the two cannot disagree about whether there is a change. Unlike
+`makemigrations`, it is a gate you can point at production:
+
+- **It writes nothing**: no `pending_migrations.jl`, no history row, no archive.
+- **It runs under `change_db: false`**, the setting a production connection usually carries, where
+  `makemigrations` refuses to run.
+- **A failed read raises.** `makemigrations` logs a failed live-schema read and stops; a gate must
+  never report "clean" because it could not look.
+- **It never prompts.** A renamed column is therefore reported as an add plus a remove, and a
+  renamed table as a new model plus a drop, because that is what a plan without answers does. Each
+  of the two findings names the other in its `message`, so you can tell a rename from two changes.
+
+The models file is the one `makemigrations` reads, `model_file` under the connection's folder;
+`models_file = "path/to/models.jl"` names another. `include_table = ["driver", "result"]` reports only
+those tables. Every declared model is still planned, so a `ManyToManyField`'s through table is
+reported only when you list it too. `ignore_table` skips live tables only, as the default skip list
+does for `makemigrations`.
+
+A column whose definition changes reads differently per engine. PostgreSQL reports
+`"Alter field: <column>"`. SQLite rebuilds the table, so its finding is `"Alter table: <table>"` and
+names no column. Added and removed columns keep their `"Add field: …"` and `"Remove field: …"`
+labels on both engines.
 
 
 ### Discarding a Pending Migration
@@ -150,9 +187,14 @@ This reports applied migrations, failed migrations, and any "drift" between file
 ## Step 5: Apply Migrations
 Apply the pending migrations to your database:
 ```julia
-PormG.Migrations.migrate("db")
+result = PormG.Migrations.migrate("db")
 ```
 Applied migrations are recorded in the history table and archived to `db/migrations/applied_migrations/`.
+
+`migrate()` returns a `MigrationResult` whose `outcome` is `:applied`, `:already_applied`,
+`:nothing_pending`, `:disabled` (the connection is `change_db: false`) or `:declined` (you answered
+"no" at the prompt, or a destructive plan was refused at the terminal for lack of `destructive=true`). Having nothing to apply is `:nothing_pending`, not an error. What each outcome
+means, and how to run `migrate()` at application boot: [Deploying](deploying.md).
 
 ### Destructive Operations Safety
 PormG blocks destructive SQL by default. A statement is destructive when it is:
@@ -188,11 +230,15 @@ confirmation prompt and never blocks on `readline()`. You do not need `interacti
 auto-detected), though passing it is still allowed and harmless.
 ```julia
 # Non-destructive plans apply directly — no prompt, no hang:
-PormG.Migrations.migrate("my_db")
+result = PormG.Migrations.migrate("my_db")
+result.outcome   # :applied, :already_applied or :nothing_pending — none of them an error
 
 # A destructive plan must opt in explicitly, or it throws DestructiveMigrationError:
 PormG.Migrations.migrate("my_db", destructive=true)
 ```
+
+Several instances calling `migrate()` at once queue on its lock; `lock_wait`, `lock_timeout` and
+`statement_timeout` bound how long they wait and what they block. See [Deploying](deploying.md).
 
 To tolerate "a destructive plan is present — skip it rather than fail", catch the error:
 ```julia

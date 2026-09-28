@@ -43,6 +43,7 @@ makedocs(
         "Migrations" => [
             "Overview" => "migrations/index.md",
             "Workflow" => "migrations/workflow.md",
+            "Deploying" => "migrations/deploying.md",
             "Format Stability" => "migrations/stability.md",
             "Advanced" => "migrations/advanced.md",
         ],

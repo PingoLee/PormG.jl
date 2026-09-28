@@ -637,4 +637,20 @@ using Dates
         @test :destructive in kws && :interactive in kws
     end
 
+    # ─────────────────────────────────────────────────────────────────────────────
+    # migrate's keyword surface after #737
+    # `dry_run_only = true` returned a `DryRunResult` from a function that otherwise returns a
+    # `MigrationResult`, and was not dry: it ran `init_migrations` and the extension DDL first. It
+    # is removed — `dry_run()` is the dry-run verb — and the upgrade entry promises a MethodError,
+    # so this pins it gone. The three wait bounds are the keywords that replaced the hard-coded 30 s.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "migrate: dry_run_only removed, wait bounds added (#737)" begin
+        kws = Base.kwarg_decl(only(methods(Migrations.migrate, (PormG.PormGBackend, PormG.PormGSettings))))
+        @test :dry_run_only ∉ kws
+        @test :lock_wait in kws && :lock_timeout in kws && :statement_timeout in kws
+        # The connection-level method declares its return type, so every path is a MigrationResult.
+        @test Base.return_types(Migrations.migrate, (PormG.PormGBackend, PormG.PormGSettings)) ==
+              [Migrations.MigrationResult]
+    end
+
 end

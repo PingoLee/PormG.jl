@@ -58,6 +58,8 @@ include("common_bulk_scratch_setup.jl")
     @testset "Connection Pool (#37)"        begin include("test_connection_pool.jl")    end
     @testset "Manual Params raw SQL (#218)" begin include("test_manual_params.jl")       end
     @testset "Advisory Locks"               begin include("test_advisorylock.jl")       end
+    @testset "migrate() at Boot (#737)"     begin include("test_migrate_boot.jl")       end
+    @testset "Schema Drift Gate (#738)"     begin include("test_schema_drift_check.jl") end
     @testset "Having (Aggregates)"          begin include("test_having.jl")             end
     @testset "Field Validation DB Tests"    begin include("test_field_validation_db_roundtrip.jl") end
     @testset "JSON/JSONB Lookups (#27)"      begin include("test_json_fields.jl")         end

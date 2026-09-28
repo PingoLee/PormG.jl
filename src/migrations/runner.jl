@@ -370,43 +370,52 @@ end
 # History table queries
 # ==============================================================================
 
-"""
-    _migrations_table_exists(connection) -> Bool
+# A history read, optionally on a connection the caller already holds — the migration transaction's
+# own, which is how the SQLite #81 guard reads inside `BEGIN IMMEDIATE` (#737). Through
+# `with_transaction(…; conn)`, the idiom `sqlite_foreign_keys_enabled` uses, and NOT `fetch(…; conn)`:
+# outside a `run_in_transaction` context `fetch` releases the connection it ran on when it finishes
+# (`await_result`'s `finally`), so it would hand the open transaction's handle back to the pool.
+function _history_rows(connection::Union{PormGPostgres, PormGSQLite}, sql::String; conn = nothing)::DataFrame
+  conn === nothing && return DataFrame(fetch(connection, sql))
+  rows, _ = with_transaction(connection, sql; conn = conn)
+  return DataFrame(rows)
+end
 
-Check whether the pormg_migrations table already exists in the database.
 """
-function _migrations_table_exists(connection::PormGPostgres)::Bool
-  sql = Dialect.migrations_table_exists_sql(connection)
-  df = DataFrame(fetch(connection, sql))
+    _migrations_table_exists(connection; conn = nothing) -> Bool
+
+Check whether the pormg_migrations table already exists in the database. With `conn`, the read runs
+on that already-leased connection (see `_history_rows`).
+"""
+function _migrations_table_exists(connection::PormGPostgres; conn = nothing)::Bool
+  df = _history_rows(connection, Dialect.migrations_table_exists_sql(connection); conn = conn)
   return nrow(df) > 0 && df[1, 1] == true
 end
 
-function _migrations_table_exists(connection::PormGSQLite)::Bool
-  sql = Dialect.migrations_table_exists_sql(connection)
-  df = DataFrame(fetch(connection, sql))
+function _migrations_table_exists(connection::PormGSQLite; conn = nothing)::Bool
+  df = _history_rows(connection, Dialect.migrations_table_exists_sql(connection); conn = conn)
   return nrow(df) > 0 && df[1, 1] > 0
 end
 
 """
-    _get_applied_migrations(connection) -> Vector{NamedTuple}
+    _get_applied_migrations(connection; conn = nothing) -> Vector{NamedTuple}
 
 Fetch all migration records from the history table, ordered by version.
 """
-function _get_applied_migrations(connection::Union{PormGPostgres, PormGSQLite})
-  if !_migrations_table_exists(connection)
+function _get_applied_migrations(connection::Union{PormGPostgres, PormGSQLite}; conn = nothing)
+  if !_migrations_table_exists(connection; conn = conn)
     return NamedTuple[]
   end
-  sql = Dialect.select_all_migrations_sql(connection)
-  df = DataFrame(fetch(connection, sql))
+  df = _history_rows(connection, Dialect.select_all_migrations_sql(connection); conn = conn)
   # Convert DataFrame rows to NamedTuples for uniform access
   return [NamedTuple(row) for row in eachrow(df)]
 end
 
 """
-    _latest_applied_checksum(connection) -> Union{String, Nothing}
+    _latest_applied(connection; conn = nothing) -> Union{NamedTuple, Nothing}
 
-Return the checksum of the most-recently-applied migration — the `status='applied'` record with
-the greatest `version` — or `nothing` when nothing has been applied yet.
+The most-recently-applied migration record — the `status='applied'` row with the greatest
+`version` — or `nothing` when nothing has been applied yet.
 
 Idempotency guard for `migrate()` (issue #81). `migrate()` mints a fresh timestamp `version` on
 every run, so re-apply detection must key on migration **content** (the checksum), never the
@@ -414,16 +423,28 @@ version. We deliberately compare against the *latest applied* record only, not t
 so a legitimate drop-then-re-add — whose regenerated SQL is byte-identical to the original add —
 is still applied, while a stale `pending_migrations.jl` left behind by a post-commit archive
 failure is recognised as already-applied and skipped instead of being destructively re-run.
+
+The whole record rather than its checksum because `migrate` reports the matched row's `version` in
+its [`MigrationResult`](@ref) (#737).
 """
-function _latest_applied_checksum(connection::Union{PormGPostgres, PormGSQLite})::Union{String, Nothing}
-  records = _get_applied_migrations(connection)
+function _latest_applied(connection::Union{PormGPostgres, PormGSQLite}; conn = nothing)
   latest = nothing
-  for r in records
+  for r in _get_applied_migrations(connection; conn = conn)
     # records come back ordered by version ASC, so the last applied row we see is the newest.
     if r[:status] == "applied"
       latest = r
     end
   end
+  return latest
+end
+
+"""
+    _latest_applied_checksum(connection; conn = nothing) -> Union{String, Nothing}
+
+The checksum of `_latest_applied`'s record, or `nothing` when nothing has been applied yet.
+"""
+function _latest_applied_checksum(connection::Union{PormGPostgres, PormGSQLite}; conn = nothing)::Union{String, Nothing}
+  latest = _latest_applied(connection; conn = conn)
   latest === nothing && return nothing
   return String(latest[:checksum])
 end
@@ -634,8 +655,11 @@ end
 Load and return all OrderedDicts from the pending_migrations.jl file. The file is parsed, never
 executed (`_read_migration_plan`, #710).
 """
+_pending_plan_path(settings::PormGSettings)::String =
+  joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")
+
 function _load_migration_plan(settings::PormGSettings)::Vector{OrderedDict{String, String}}
-  pending_path = joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")
+  pending_path = _pending_plan_path(settings)
   if !isfile(pending_path)
     throw(InvalidMigrationError("No pending migrations found at: $pending_path"))
   end
@@ -823,21 +847,115 @@ function dry_run(db::String; config::Dict{String,PormGSettings} = config)::DryRu
 end
 
 # ==============================================================================
+# migrate() outcome (#737)
+# ==============================================================================
+
+const _MIGRATION_OUTCOMES = (:applied, :already_applied, :nothing_pending, :disabled, :declined)
+
+"""
+    MigrationResult
+
+What one [`migrate`](@ref) call did. Every path through `migrate` that does not throw returns one,
+so a script that runs `migrate` at boot can branch on the outcome instead of parsing the log.
+
+  * `outcome` — one of:
+
+    | `outcome` | Meaning |
+    | :--- | :--- |
+    | `:applied` | The pending plan ran in one transaction and is recorded in `pormg_migrations`. |
+    | `:already_applied` | The pending plan is the latest applied migration (its checksum matches): another instance applied it first, or a previous `migrate` committed it and then failed to archive the file. Nothing ran; the file is archived — by this call, or already by an instance sharing the plan folder (#81). |
+    | `:nothing_pending` | There is no `pending_migrations.jl`, or it holds no statements. The history table and any configured extensions were still ensured. |
+    | `:disabled` | The connection is `change_db: false`. Nothing was read or written. |
+    | `:declined` | An interactive run was not confirmed at the prompt, or a destructive plan was refused there for lack of `destructive = true`. |
+
+  * `version` — the `pormg_migrations.version` of the row involved: the new row for `:applied`,
+    the matched row for `:already_applied`, `nothing` for every other outcome.
+  * `n_statements` — how many plan statements this call executed: the plan's size for `:applied`,
+    `0` for every other outcome.
+
+A **failure** is still an exception, not an outcome: a destructive plan without
+`destructive = true` in a non-interactive run (`DestructiveMigrationError`), a plan file that does
+not parse (`InvalidMigrationError`), a statement the database rejects (the plan is rolled back,
+recorded as `failed`, and the error rethrown), and a migration lock not acquired within `lock_wait`
+(`OperationalError`).
+
+```julia
+result = PormG.Migrations.migrate("db"; interactive = false)
+if result.outcome === :applied
+    @info "Schema migrated" result.version result.n_statements
+end
+```
+
+See the [Deploying](@ref deploying-migrations) guide for running `migrate` at application boot.
+"""
+struct MigrationResult
+  outcome::Symbol
+  version::Union{String, Nothing}
+  n_statements::Int
+
+  function MigrationResult(outcome::Symbol, version::Union{AbstractString, Nothing}, n_statements::Integer)
+    outcome in _MIGRATION_OUTCOMES || throw(InvalidValueError(
+      "Unknown migrate() outcome $(repr(outcome)). Expected one of: $(join(repr.(_MIGRATION_OUTCOMES), ", "))."))
+    n_statements >= 0 || throw(InvalidValueError(
+      "MigrationResult n_statements must not be negative, got $(n_statements)."))
+    return new(outcome, version === nothing ? nothing : String(version), Int(n_statements))
+  end
+end
+
+function Base.show(io::IO, ::MIME"text/plain", r::MigrationResult)
+  println(io, "Migration Result: ", r.outcome)
+  r.version === nothing || println(io, "  Version: ", r.version)
+  print(io, "  Statements executed: ", r.n_statements)
+end
+
+# The three wait bounds a `migrate` call takes (#737), validated once, in milliseconds.
+#
+#   lock_wait_ms          how long to wait for the migration advisory lock (PostgreSQL)
+#   lock_timeout_ms       `SET LOCAL lock_timeout` in the migration transaction, or `nothing`
+#   statement_timeout_ms  `SET LOCAL statement_timeout` in the migration transaction, or `nothing`
+struct _MigrationTimeouts
+  lock_wait_ms::Int
+  lock_timeout_ms::Union{Int, Nothing}
+  statement_timeout_ms::Union{Int, Nothing}
+end
+
+# PostgreSQL's `lock_timeout` and `statement_timeout` are `int` milliseconds, so this is the largest
+# value either accepts. The client-side lock wait is held to it too, so the three read alike.
+const _MAX_MIGRATION_TIMEOUT_MS = Int(typemax(Int32))
+
+# Seconds in, milliseconds out. The value reaches SQL only as this `Int`, formatted by Julia, so no
+# caller text is ever interpolated into the `SET LOCAL` statements.
+_migration_timeout_ms(::String, ::Nothing) = nothing
+function _migration_timeout_ms(name::String, seconds::Real)::Int
+  ms = seconds * 1000
+  (seconds isa Bool || !isfinite(ms) || ms <= 0 || ms > _MAX_MIGRATION_TIMEOUT_MS) &&
+    throw(InvalidValueError(
+      "migrate(...; $(name) = $(repr(seconds))): expected a positive number of seconds, at most " *
+      "$(_MAX_MIGRATION_TIMEOUT_MS ÷ 1000) (PostgreSQL's limit for a timeout)."))
+  return max(1, round(Int, ms))
+end
+
+_migration_timeouts(lock_wait::Real = 30, lock_timeout = nothing, statement_timeout = nothing) =
+  _MigrationTimeouts(_migration_timeout_ms("lock_wait", lock_wait),
+                     _migration_timeout_ms("lock_timeout", lock_timeout),
+                     _migration_timeout_ms("statement_timeout", statement_timeout))
+
+# ==============================================================================
 # Schema Check API (#475)
 # ==============================================================================
 
 """
     SchemaCheckFinding
 
-One fact about the live database that PormG's models cannot faithfully express, as reported by
-[`check`](@ref).
+One fact about the live database, as reported by [`check`](@ref).
 
-  * `kind` — the finding class. `:expression_default` today.
-  * `table` — the live table name.
-  * `columns` — the live column name(s). One entry for a column finding; a vector because the
-    finding classes still to come are not all per-column (a composite foreign key names several).
-  * `detail` — the schema text the finding is about, verbatim: for `:expression_default`, the
-    `DEFAULT` expression as the database renders it.
+  * `kind` — the finding class: `:expression_default` or `:schema_drift`.
+  * `table` — the table name.
+  * `columns` — the column name(s) the finding is about. One entry for a column finding, none for a
+    table-level one (a `:schema_drift` "New model" or "Drop table").
+  * `detail` — the text the finding is about, verbatim: for `:expression_default`, the `DEFAULT`
+    expression as the database renders it; for `:schema_drift`, the label of the step
+    `makemigrations` would plan (`"Add field: country"`, `"Drop table"`, …).
   * `message` — a one-line explanation of the consequence.
 """
 struct SchemaCheckFinding
@@ -855,7 +973,13 @@ Structured result from [`check`](@ref): the backend that was read (`:postgres` o
 the [`SchemaCheckFinding`](@ref)s, ordered by kind, then table, then column so two runs against the
 same schema render identically.
 
-`isempty(result)` is true when the models can express everything the schema contains.
+`isempty(result)` is true when the requested finding classes found nothing — for
+`kinds = [:schema_drift]`, when the database matches the declared models. That is the CI gate:
+
+```julia
+r = PormG.Migrations.check("db"; kinds = [:schema_drift])
+exit(isempty(r) ? 0 : 1)
+```
 """
 struct SchemaCheckResult
   backend::Symbol
@@ -883,7 +1007,7 @@ const _EXPRESSION_DEFAULT_MESSAGE =
 function Base.show(io::IO, r::SchemaCheckResult)
   println(io, "Schema Check (", r.backend, "):")
   if isempty(r.findings)
-    println(io, _emsg(io, "  \e[32m✓ no findings — the models can express this schema\e[0m"))
+    println(io, _emsg(io, "  \e[32m✓ no findings\e[0m"))
     return
   end
   println(io, "  ", length(r.findings), " finding(s)")
@@ -891,9 +1015,17 @@ function Base.show(io::IO, r::SchemaCheckResult)
     group = filter(f -> f.kind === kind, r.findings)
     println(io, _emsg(io, "\n  \e[33m$(kind)\e[0m ($(length(group)))"))
     for f in group
-      println(io, "    ⚠ ", f.table, ".", join(f.columns, ","), "  DEFAULT ", f.detail)
+      where = isempty(f.columns) ? f.table : string(f.table, ".", join(f.columns, ","))
+      if kind === :expression_default
+        println(io, "    ⚠ ", where, "  DEFAULT ", f.detail)
+      else
+        # A drift finding's message differs per step (which side has it, a possible rename), so it
+        # goes on the finding's own line rather than once under the group.
+        println(io, "    ⚠ ", where, "  ", f.detail, " — ", f.message)
+      end
     end
-    println(io, "      ", first(group).message)
+    # Every `:expression_default` finding carries the same advice; print it once.
+    kind === :expression_default && println(io, "      ", first(group).message)
   end
 end
 
@@ -1010,44 +1142,219 @@ function _sqlite_expression_default_findings(db::PormGSQLite;
   return findings
 end
 
+# ---------------------------------------------------------------------------------------------
+# `:schema_drift` — the declared models against the live schema (#738)
+# ---------------------------------------------------------------------------------------------
+
+# The finding classes `check(...; kinds)` accepts.
+const _CHECK_KINDS = (:expression_default, :schema_drift)
+
+function _validate_check_kinds(kinds::AbstractVector{Symbol}, models_file)
+  isempty(kinds) && throw(InvalidValueError(
+    "check(...; kinds = []) would report nothing whatever the database holds, so a gate built on " *
+    "it could never fail. Name at least one of: $(join(repr.(_CHECK_KINDS), ", "))."))
+  for kind in kinds
+    kind in _CHECK_KINDS || throw(InvalidValueError(
+      "Unknown check() finding class $(repr(kind)). Expected one of: $(join(repr.(_CHECK_KINDS), ", "))."))
+  end
+  # Refused rather than ignored: a caller who passed a models file expects it to be read.
+  models_file === nothing || :schema_drift in kinds || throw(InvalidValueError(
+    "check(...; models_file = …) is read only by the :schema_drift class. Pass " *
+    "kinds = [:schema_drift], or drop models_file."))
+  return nothing
+end
+
+# The declared side: the models file loaded into a throwaway module — `makemigrations`' own loader,
+# so the two cannot disagree about what the models declare, and nothing global is touched
+# (`_load_current_models` never runs `set_models`). A path rather than an already-loaded module on
+# purpose: the planner writes resolved foreign-key targets back into the field objects it is given,
+# and those would be a running application's live models.
+function _drift_declared_models(settings::PormGSettings, models_file)
+  path = if models_file === nothing
+    # The folder is where the default models file lives (#683).
+    Configuration._require_folder_backed(settings, "check(kinds = [:schema_drift])")
+    joinpath(settings.db_def_folder, settings.model_file)
+  else
+    String(models_file)
+  end
+  isfile(path) || throw(MissingConfigurationError(
+    "check(kinds = [:schema_drift]) compares the database against a models file, and $(path) does " *
+    "not exist. Pass `models_file = \"…\"` to name it."))
+  # Absolute: `Base.include` resolves a relative path against the file being included, not the
+  # working directory.
+  return _load_current_models(abspath(path))
+end
+
+# `"Add field: country"` → `"country"`; `nothing` for a label that names no single column.
+function _drift_label_column(label::AbstractString)::Union{String, Nothing}
+  m = match(r"^(?:Add|Remove|Rename|Alter) field: (.+)$", label)
+  return m === nothing ? nothing : String(m.captures[1])
+end
+
+function _drift_message(label::AbstractString)::String
+  (label == "New model" || startswith(label, "Add field: ")) &&
+    return "declared in the models, missing from the database"
+  (label == "Drop table" || startswith(label, "Remove field: ")) &&
+    return "in the database, not declared in the models"
+  return "the database and the models differ here; makemigrations would plan this step"
+end
+
+const _DRIFT_RENAME_NOTE = "(makemigrations asks; a non-interactive plan never renames, it drops and creates)"
+
+# One finding per planned step. A plan built with `interactive = false` never renames, so a renamed
+# column is an add plus a remove and a renamed table a new model plus a drop. Both halves are drift —
+# the live and declared names differ — but each says what it might pair with, so the reader knows it
+# may be one change rather than two (#738).
+function _drift_findings(plan::OrderedDict{Symbol, OrderedDict{String, String}})::Vector{SchemaCheckFinding}
+  new_tables = [String(t) for (t, steps) in plan if haskey(steps, "New model")]
+  dropped_tables = [String(t) for (t, steps) in plan if haskey(steps, "Drop table")]
+  findings = SchemaCheckFinding[]
+  for (table, steps) in plan
+    added = String[c for c in (_drift_label_column(l) for l in keys(steps) if startswith(l, "Add field: ")) if c !== nothing]
+    removed = String[c for c in (_drift_label_column(l) for l in keys(steps) if startswith(l, "Remove field: ")) if c !== nothing]
+    for label in keys(steps)
+      message = _drift_message(label)
+      pair = if label == "New model" && !isempty(dropped_tables)
+        "of " * join(dropped_tables, " or ")
+      elseif label == "Drop table" && !isempty(new_tables)
+        "to " * join(new_tables, " or ")
+      elseif startswith(label, "Add field: ") && !isempty(removed)
+        "of " * join(removed, " or ")
+      elseif startswith(label, "Remove field: ") && !isempty(added)
+        "to " * join(added, " or ")
+      else
+        nothing
+      end
+      pair === nothing || (message *= "; it could be a rename $(pair) $(_DRIFT_RENAME_NOTE)")
+      column = _drift_label_column(label)
+      push!(findings, SchemaCheckFinding(:schema_drift, String(table),
+                                         column === nothing ? String[] : [column], label, message))
+    end
+  end
+  return findings
+end
+
+# The `:schema_drift` class: what the next `makemigrations` would plan, computed and not written.
+#
+# `makemigrations` itself could not serve as the gate, for three reasons it has good cause to keep:
+# it writes `pending_migrations.jl`, it refuses to run under `change_db: false` (what a production
+# connection usually carries), and it logs a failed live read and returns. Here the plan is built in
+# memory with `interactive = false` — no prompt, no file — `change_db` is not consulted, and the live
+# read has no `try` around it: a gate must never report clean because it could not look.
+function _schema_drift_findings(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings;
+                                ignore_table::Vector{String},
+                                include_table::Union{Vector{String}, Nothing},
+                                models_file)::Vector{SchemaCheckFinding}
+  declared = _drift_declared_models(settings, models_file)
+  live = read_live_schema(connection; ignore_table = ignore_table, include_table = include_table)
+  plan = get_migration_plan(live, declared, connection, settings; interactive = false)
+  # `include_table` is applied to the PLAN, not to the declared models. Narrowing the declared side
+  # before planning looked equivalent and was not: the planner synthesizes each ManyToManyField's
+  # through table from the declared models, so an included owner still produced a through table
+  # the (narrowed) live side lacked — a false "New model" — and a string M2M target outside the list
+  # could not be resolved at all. Planning with every declared model and reporting only the listed
+  # tables keeps the plan identical to the one `makemigrations` would build for them. The declared
+  # models outside the list plan as new tables (the live read skipped them) and are dropped here.
+  include_table === nothing || filter!(p -> String(first(p)) in include_table, plan)
+  return _drift_findings(plan)
+end
+
 _sort_findings(f::Vector{SchemaCheckFinding}) =
   sort(f; by = x -> (String(x.kind), x.table, isempty(x.columns) ? "" : first(x.columns)))
 
 """
-    check(connection, settings; ignore_table = nothing, include_table = nothing) -> SchemaCheckResult
+    check(connection, settings; kinds = [:expression_default], ignore_table = nothing, include_table = nothing, models_file = nothing) -> SchemaCheckResult
     check(settings; kwargs...) -> SchemaCheckResult
     check(db::String; config = config, kwargs...) -> SchemaCheckResult
 
-Report facts about the live database schema that PormG's models cannot faithfully express.
+Report facts about the live database schema, one [`SchemaCheckFinding`](@ref) each. Read-only on
+both backends: `check` never writes, never prompts, and does not consult `change_db`, so it runs
+against a production connection.
+
+`kinds` selects the finding classes:
+
+  * `:expression_default` (the default) — columns whose `DEFAULT` PormG's models express only as a
+    `db_default`. Needs no models file, no migration history and no `init_migrations()`.
+  * `:schema_drift` — every place the database differs from the **declared models**: one finding
+    per step the next [`makemigrations`](@ref) would plan. Empty means the database matches the
+    models, which makes it a CI or release gate:
+
+    ```julia
+    r = PormG.Migrations.check("db"; kinds = [:schema_drift])
+    exit(isempty(r) ? 0 : 1)
+    ```
 
 `ignore_table` replaces the backend's default skip list (`postgres_ignore_table` /
 `sqlite_ignore_schema`); tables registered through `register_ignore_tables!` are always skipped on
-top of it, so `check` reads exactly the tables the importer does. `include_table` restricts the read
-to the named tables. Both match the parameters of `convert_schema_to_models`.
+top of it, so `check` reads exactly the tables the importer and `makemigrations` do. `include_table`
+restricts the read to the named tables. Both match the parameters of `convert_schema_to_models`.
+For `:schema_drift` the two filter differently, on purpose:
 
-Read-only, on both backends, and independent of `makemigrations` — it needs no models file, no
-migration history and no `init_migrations()`. Run it alongside [`status`](@ref) and
-[`dry_run`](@ref) in the operator flow, and before upgrading PormG.
+  * `include_table` restricts what is **reported**. Every declared model is still planned, so the
+    findings for a listed table are exactly the steps `makemigrations` would plan for it. A
+    `ManyToManyField`'s through table is reported only when it is listed too.
+  * `ignore_table` skips **live** tables only, as the default skip list does for `makemigrations`.
+    A declared model on an ignored table therefore reads as missing from the database.
 
-Today it reports one class:
+`models_file` names the models file
+`:schema_drift` compares against; by default it is `settings.model_file` under the connection's
+folder, the file `makemigrations` reads. An empty `kinds`, an unknown class, or a `models_file`
+without `:schema_drift` raises `InvalidValueError`.
 
-  * `:expression_default` — a column whose `DEFAULT` is a SQL expression (`now()`,
-    `CURRENT_TIMESTAMP`, `gen_random_uuid()`, `concat(...)`) rather than a literal value. Since #496
-    PormG **can** express one: the column imports as `db_default=` carrying exactly the text shown,
-    so `detail` is the value to paste into your model. Two things are worth knowing about such a
-    column, and they are why the class still earns its place:
+Run it alongside [`status`](@ref) and [`dry_run`](@ref) in the operator flow, and before upgrading
+PormG.
 
-      * declaring it as `default=` instead is the one response that causes damage — that makes
-        `makemigrations` propose `SET DEFAULT '<the expression>'`, a quoted literal written over the
-        database's real expression default, after which every new row stores that text;
-      * unless the expression is one of the portable ones (`CURRENT_TIMESTAMP`, `CURRENT_DATE`) it
-        is **pinned to this engine**. A models file carrying it renders here and raises a
-        `BackendCapabilityError` on the other backend, which is deliberate — PormG will not guess a
-        translation — but it means a portable app needs `db_default = (postgres = …, sqlite = …)`
-        spelled out.
+# `:schema_drift`
 
-    **Re-scoped rather than retired (#496).** The detected set is unchanged; what changed is that
-    the finding now says how to describe the column rather than that it cannot be described.
+Each finding is one planned step: `table` is the table, `columns` the column a field step names,
+`detail` the step's label exactly as `makemigrations` writes it into a plan (`"New model"`,
+`"Drop table"`, `"Add field: country"`, `"Remove field: code"`, `"Alter field: points"`, …), and
+`message` which side has what the other lacks.
+
+  * **It reads what `makemigrations` reads, and plans the same way** — the same live reader, the same
+    models loader, the same planner, with `interactive = false`. So it cannot disagree with the next
+    `makemigrations` about whether there is a change.
+  * **A failed read raises.** Unlike `makemigrations`, which logs a failed live read and returns, a
+    gate must never report "clean" because it could not look.
+  * **An unhinted rename is drift.** With no one to ask, a renamed column plans as an add plus a
+    remove, and a renamed table as a new model plus a drop. Both findings are reported, and each
+    `message` names the other half it could pair with.
+  * **A changed column reads differently per engine.** PostgreSQL alters a column in place and
+    reports `"Alter field: <column>"`. SQLite rebuilds the table, so the finding is
+    `"Alter table: <table>"` and names no column. Added and removed columns keep their
+    `"Add field: …"` / `"Remove field: …"` labels on both engines.
+  * **The declared models are loaded the way `makemigrations` loads them** — the file is included
+    into a throwaway module and `set_models` never runs — so checking does not touch the models an
+    application has already loaded.
+
+```julia
+julia> PormG.Migrations.check("db"; kinds = [:schema_drift])
+Schema Check (postgres):
+  2 finding(s)
+
+  schema_drift (2)
+    ⚠ circuit.country  Add field: country — declared in the models, missing from the database
+    ⚠ season  New model — declared in the models, missing from the database
+```
+
+# `:expression_default`
+
+A column whose `DEFAULT` is a SQL expression (`now()`, `CURRENT_TIMESTAMP`, `gen_random_uuid()`,
+`concat(...)`) rather than a literal value. Since #496 PormG **can** express one: the column imports
+as `db_default=` carrying exactly the text shown, so `detail` is the value to paste into your model.
+Two things are worth knowing about such a column, and they are why the class still earns its place:
+
+  * declaring it as `default=` instead is the one response that causes damage — that makes
+    `makemigrations` propose `SET DEFAULT '<the expression>'`, a quoted literal written over the
+    database's real expression default, after which every new row stores that text;
+  * unless the expression is one of the portable ones (`CURRENT_TIMESTAMP`, `CURRENT_DATE`) it
+    is **pinned to this engine**. A models file carrying it renders here and raises a
+    `BackendCapabilityError` on the other backend, which is deliberate — PormG will not guess a
+    translation — but it means a portable app needs `db_default = (postgres = …, sqlite = …)`
+    spelled out.
+
+**Re-scoped rather than retired (#496).** The detected set is unchanged; what changed is that the
+finding now says how to describe the column rather than that it cannot be described.
 
 A **primary key that imports as an `IDField` is deliberately not reported** — a `serial`/`bigserial`
 `id` column, say. `sIDField` has neither a `default` that could hold an expression
@@ -1084,29 +1391,39 @@ Schema Check (postgres):
       the DEFAULT is a SQL expression; it imports as `db_default=` with exactly this text. Declare it that way and NOT as `default=`, which would render it as a quoted literal
 ```
 
-`settings` is unused by the checks that exist today and is taken for parity with [`status`](@ref)
-and [`dry_run`](@ref) — and because the finding classes still to come need it: comparing the live
-schema against the declared models requires `settings.db_def_folder`.
-
 See also [`SchemaCheckResult`](@ref), [`SchemaCheckFinding`](@ref).
 """
 function check(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings;
+               kinds::AbstractVector{Symbol} = [:expression_default],
                ignore_table::Union{Vector{String}, Nothing} = nothing,
-               include_table::Union{Vector{String}, Nothing} = nothing)::SchemaCheckResult
-  if connection isa PormGSQLite
-    ignore = unique(vcat(something(ignore_table, sqlite_ignore_schema), _EXTRA_IGNORE_TABLES[]))
-    findings = _sqlite_expression_default_findings(connection; ignore_table = ignore,
-                                                   include_table = include_table)
-    return SchemaCheckResult(:sqlite, _sort_findings(findings))
-  else
-    ignore = unique(vcat(something(ignore_table, postgres_ignore_table), _EXTRA_IGNORE_TABLES[]))
-    schemas = get_database_schema(connection)
-    if include_table !== nothing
-      schemas = filter(r -> any(included -> r.table_name == included, include_table), schemas)
+               include_table::Union{Vector{String}, Nothing} = nothing,
+               models_file::Union{AbstractString, Nothing} = nothing)::SchemaCheckResult
+  _validate_check_kinds(kinds, models_file)
+  default_ignore = connection isa PormGSQLite ? sqlite_ignore_schema : postgres_ignore_table
+  findings = SchemaCheckFinding[]
+
+  if :expression_default in kinds
+    ignore = unique(vcat(something(ignore_table, default_ignore), _EXTRA_IGNORE_TABLES[]))
+    if connection isa PormGSQLite
+      append!(findings, _sqlite_expression_default_findings(connection; ignore_table = ignore,
+                                                            include_table = include_table))
+    else
+      schemas = get_database_schema(connection)
+      if include_table !== nothing
+        schemas = filter(r -> any(included -> r.table_name == included, include_table), schemas)
+      end
+      append!(findings, _pg_expression_default_findings(schemas; ignore_table = ignore))
     end
-    findings = _pg_expression_default_findings(schemas; ignore_table = ignore)
-    return SchemaCheckResult(:postgres, _sort_findings(findings))
   end
+
+  if :schema_drift in kinds
+    # The reader adds `_EXTRA_IGNORE_TABLES` itself, exactly as it does for `makemigrations`.
+    append!(findings, _schema_drift_findings(connection, settings;
+                                             ignore_table = something(ignore_table, default_ignore),
+                                             include_table = include_table, models_file = models_file))
+  end
+
+  return SchemaCheckResult(connection isa PormGSQLite ? :sqlite : :postgres, _sort_findings(findings))
 end
 
 function check(settings::PormGSettings; kwargs...)::SchemaCheckResult
@@ -1368,6 +1685,12 @@ end
 Move pending_migrations.jl to applied_migrations/ and snapshot the models file.
 """
 function _archive_migration_files(settings::PormGSettings, date_str::String)
+  # Nothing to archive when the plan is already gone (#737): several instances booting from one
+  # shared folder all read the same `pending_migrations.jl`, and the first to finish moves it. The
+  # others then report `:already_applied`, and must not leave an orphan `_old_models.jl` snapshot
+  # beside an archive they did not write.
+  isfile(_pending_plan_path(settings)) || return nothing
+
   path_applied = joinpath(settings.db_def_folder, "migrations", "applied_migrations")
   if !ispath(path_applied)
     mkpath(path_applied)
@@ -1379,10 +1702,7 @@ function _archive_migration_files(settings::PormGSettings, date_str::String)
     target_migration = joinpath(path_applied, "$(date_str)_$(suffix)_migration.jl")
   end
   
-  pending_path = joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")
-  if isfile(pending_path)
-    mv(pending_path, target_migration)
-  end
+  mv(_pending_plan_path(settings), target_migration)
   
   final_date_str = replace(basename(target_migration), "_migration.jl" => "")
   models_path = joinpath(settings.db_def_folder, settings.model_file)
@@ -1396,18 +1716,29 @@ end
 # ==============================================================================
 
 """
-    migrate(connection::PormGBackend, settings; interactive, destructive, dry_run_only, name)
+    migrate(connection::PormGBackend, settings; interactive, destructive, name, lock_wait, lock_timeout, statement_timeout) -> MigrationResult
+    migrate(db::String; config, kwargs...) -> MigrationResult
 
-Apply pending migrations to a database (PostgreSQL or SQLite). This is the shared pre-flight for every
-backend; the backend-specific execution step is dispatched to `_run_locked_lifecycle` (advisory lock on
-PostgreSQL, direct on SQLite).
+Apply the pending migration plan (`pending_migrations.jl`) to a database, PostgreSQL or SQLite, and
+return a [`MigrationResult`](@ref) saying what happened. Safe to call at application boot by
+several instances at once — see the [Deploying](@ref deploying-migrations) guide.
 
 # Lifecycle
-1. Validate: check change_db, install configured extensions, load plan, detect destructive ops
-2. Confirm: destructive guard + interactive confirmation (TTY-aware — see `_confirm_migration`)
-3. Execute: run SQL in a transaction (under an advisory lock on PostgreSQL)
-4. Record: insert history into pormg_migrations
-5. Archive: move files to applied_migrations/
+1. Validate: `change_db`, then read and order the plan from disk and detect destructive statements.
+   **Nothing is written to the database before step 3.**
+2. Confirm: destructive guard + interactive confirmation (TTY-aware — see `_confirm_migration`).
+   Before the lock, so a prompt waiting on a human never holds it.
+3. Lock (PostgreSQL): the advisory lock `MIGRATION_LOCK_KEY`, waited on for up to `lock_wait`.
+   Everything below runs while it is held (#737).
+4. Bootstrap: create `pormg_migrations` if needed and install configured extensions — also when
+   nothing is pending.
+5. Execute: skip a plan whose checksum is the latest applied migration (#81); otherwise run the
+   plan and record it in `pormg_migrations`, in one transaction.
+6. Archive: move the plan to `applied_migrations/`.
+
+SQLite has no advisory lock, so steps 4–6 run unlocked there; its #81 check runs inside the
+`BEGIN IMMEDIATE` write transaction instead, so two processes that race on one file cannot both
+apply the same plan.
 
 # Keywords
 - `interactive::Bool=true`: prompt for confirmation before applying — **only when stdin is a real
@@ -1416,58 +1747,64 @@ PostgreSQL, direct on SQLite).
 - `destructive::Bool=false`: must be `true` to apply a plan `is_destructive` flags — any `DROP` (table,
   column, constraint, index, view, …), a `TRUNCATE`, or a `DELETE` with no `WHERE`. A destructive
   plan in a non-interactive context throws `DestructiveMigrationError` unless this is set.
-- `dry_run_only::Bool=false`: if `true`, only analyze without applying (returns DryRunResult)
-- `name::String="pending_migration"`: name for this migration in the history table
+- `name::String="pending_migration"`: name for this migration in the history table.
+- `lock_wait::Real=30`: seconds to wait for another instance's migration to finish (PostgreSQL). On
+  timeout `migrate` throws `OperationalError`, naming the process that holds the lock.
+- `lock_timeout::Union{Real,Nothing}=nothing`: seconds a plan statement may wait for a table lock
+  before the migration fails and rolls back (PostgreSQL `SET LOCAL lock_timeout`). Without it, an
+  `ALTER` queued behind a long-running query waits — and blocks every query on that table — for as
+  long as that query runs.
+- `statement_timeout::Union{Real,Nothing}=nothing`: seconds any one plan statement may run before
+  the migration fails and rolls back (PostgreSQL `SET LOCAL statement_timeout`).
+
+The three timeouts are PostgreSQL-only, and SQLite accepts and ignores them, so one deploy script
+can run on either engine. Each must be a positive number of seconds.
+
+Use [`dry_run`](@ref) to inspect a plan without applying it.
 """
 function migrate(connection::PormGBackend, settings::PormGSettings;
                  interactive::Bool = true,
                  destructive::Bool = false,
-                 dry_run_only::Bool = false,
-                 name::String = "pending_migration")
-  # --- Phase 1: Validate ---
-  # Before `init_migrations` and the extension install below: both write to the database (#683).
+                 name::String = "pending_migration",
+                 lock_wait::Real = 30,
+                 lock_timeout::Union{Real, Nothing} = nothing,
+                 statement_timeout::Union{Real, Nothing} = nothing)::MigrationResult
+  # --- Phase 1: Validate. Nothing here writes to the database. ---
+  # First of all, because the folder is where the plan is read from (#683).
   Configuration._require_folder_backed(settings, "migrate")
+  # Before the change_db return, so a bad value fails on every connection, not only on the ones
+  # that happen to migrate.
+  timeouts = _migration_timeouts(lock_wait, lock_timeout, statement_timeout)
   if !settings.change_db
     @warn("The database is not set to change_db, so the migration plan will not be applied.")
-    return nothing
+    return MigrationResult(:disabled, nothing, 0)
   end
 
-  # Bootstrap history table
-  init_migrations(connection)
+  # Read the plan BEFORE any database write (#737). It used to be read after `init_migrations` and
+  # the extension install, so a plan that did not parse — or was not there at all — failed only
+  # after both had already written. "Not there" is now an empty plan, answered `:nothing_pending`
+  # once the history table and the extensions are ensured, instead of the same
+  # `InvalidMigrationError` a corrupt plan raises: a boot script has to be able to tell them apart.
+  ordered_statements, all_sql = isfile(_pending_plan_path(settings)) ?
+    _order_statements(_load_migration_plan(settings)) : (String[], "")
 
-  # Install any configured PostgreSQL extensions (e.g. unaccent + the immutable_unaccent
-  # helper). This is the deliberate, change_db-gated home for that DDL — never on app boot.
-  # Runs before the empty-plan early return so `migrate()` provisions extensions even when
-  # there is no schema diff. CREATE ... IF NOT EXISTS keeps it idempotent across runs.
-  Configuration._install_configured_extensions!(settings)
-
-  # Load and order the plan
-  migration_plan = _load_migration_plan(settings)
-  ordered_statements, all_sql = _order_statements(migration_plan)
-  
-  if isempty(ordered_statements)
-    @info(_emsg("\e[32mNo SQL statements to execute.\e[0m"))
-    return nothing
-  end
-  
   version = generate_version()
   checksum = compute_checksum(all_sql)
   destructive_stmts = detect_destructive_actions(ordered_statements)
   has_destructive = !isempty(destructive_stmts)
-  
-  # Dry run mode
-  if dry_run_only
-    return DryRunResult(checksum, ordered_statements, destructive_stmts)
-  end
-  
-  # Destructive guard + interactive confirmation.
-  # TTY-aware: never blocks on readline() without a terminal, and throws in the non-interactive
-  # destructive case so automation fails loudly (see `_confirm_migration`).
-  _confirm_migration(has_destructive, destructive, destructive_stmts; interactive=interactive) || return nothing
 
-  # --- Phase 2: Execute (backend-specific: advisory lock on PostgreSQL, direct on SQLite) ---
-  _run_locked_lifecycle(connection, settings, ordered_statements, all_sql,
-                        version, name, checksum, has_destructive)
+  # --- Phase 2: Confirm, BEFORE the lock (#737). A prompt waits on a human; holding the migration
+  # lock meanwhile would stall every other instance booting against this database. TTY-aware:
+  # never blocks on readline() without a terminal, and throws in the non-interactive destructive
+  # case so automation fails loudly (see `_confirm_migration`).
+  if !isempty(ordered_statements)
+    _confirm_migration(has_destructive, destructive, destructive_stmts; interactive=interactive) ||
+      return MigrationResult(:declined, nothing, 0)
+  end
+
+  # --- Phase 3: Lock, bootstrap, execute (advisory lock on PostgreSQL, direct on SQLite) ---
+  return _run_locked_lifecycle(connection, settings, ordered_statements, all_sql,
+                               version, name, checksum, has_destructive; timeouts = timeouts)
 end
 
 # ==============================================================================
@@ -1504,18 +1841,57 @@ const MIGRATION_LOCK_KEY = "pormg::migrations"
 _migration_lock_key(::PormGSettings)::String = MIGRATION_LOCK_KEY
 
 function _run_locked_lifecycle(connection::PormGPostgres, settings::PormGSettings,
-                               ordered_statements, all_sql, version, name, checksum, has_destructive)
+                               ordered_statements, all_sql, version, name, checksum, has_destructive;
+                               timeouts::_MigrationTimeouts = _migration_timeouts())
   lock_key = _migration_lock_key(settings)
-  AdvisoryLock.with_advisory_lock(connection, lock_key; wait=true, timeout_ms=30_000) do
-    _execute_migration_lifecycle(connection, settings, ordered_statements, all_sql,
-                                 version, name, checksum, has_destructive)
+  AdvisoryLock.with_advisory_lock(connection, lock_key; wait=true, timeout_ms=timeouts.lock_wait_ms) do
+    _locked_migration(connection, settings, ordered_statements, all_sql,
+                      version, name, checksum, has_destructive, timeouts)
   end
 end
 
 function _run_locked_lifecycle(connection::PormGSQLite, settings::PormGSettings,
-                               ordered_statements, all_sql, version, name, checksum, has_destructive)
-  _execute_migration_lifecycle(connection, settings, ordered_statements, all_sql,
-                               version, name, checksum, has_destructive)
+                               ordered_statements, all_sql, version, name, checksum, has_destructive;
+                               timeouts::_MigrationTimeouts = _migration_timeouts())
+  _locked_migration(connection, settings, ordered_statements, all_sql,
+                    version, name, checksum, has_destructive, timeouts)
+end
+
+# Everything `migrate` writes, in the order it writes it — on PostgreSQL all of it inside the
+# advisory lock (#737). The history-table DDL and the extension install used to run BEFORE the lock,
+# on every call: N instances booting together each issued `CREATE TABLE IF NOT EXISTS` and, with
+# unaccent configured, `CREATE OR REPLACE FUNCTION public.immutable_unaccent` concurrently. The
+# latter can fail with PostgreSQL's "tuple concurrently updated", which surfaced as a misleading
+# "Run this once as the database owner". Serialized here, the second instance finds the work done.
+#
+# The extension install stays ahead of the empty-plan return on purpose: `migrate` is the one
+# change_db-gated home for that DDL, so it provisions extensions even when there is no schema diff
+# (`docs/src/configuration/connection_yml.md`).
+function _locked_migration(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
+                           ordered_statements::Vector{String}, all_sql::String, version::String,
+                           name::String, checksum::String, has_destructive::Bool,
+                           timeouts::_MigrationTimeouts)::MigrationResult
+  init_migrations(connection)
+  Configuration._install_configured_extensions!(settings)
+
+  if isempty(ordered_statements)
+    @info(_emsg("\e[32mNo pending migrations — nothing to apply.\e[0m"))
+    return MigrationResult(:nothing_pending, nothing, 0)
+  end
+
+  return _execute_migration_lifecycle(connection, settings, ordered_statements, all_sql,
+                                      version, name, checksum, has_destructive, timeouts)
+end
+
+# `SET LOCAL` the opt-in timeouts on the migration transaction's connection (#737). LOCAL, so they
+# end with the transaction and the connection goes back to the pool with its own settings. Each
+# value is an `Int` PormG formatted (`_migration_timeout_ms`), never caller text.
+function _set_local_timeouts!(connection::PormGPostgres, conn, timeouts::_MigrationTimeouts)
+  timeouts.lock_timeout_ms === nothing ||
+    with_transaction(connection, "SET LOCAL lock_timeout = '$(timeouts.lock_timeout_ms)ms';", conn=conn)
+  timeouts.statement_timeout_ms === nothing ||
+    with_transaction(connection, "SET LOCAL statement_timeout = '$(timeouts.statement_timeout_ms)ms';", conn=conn)
+  return nothing
 end
 
 # ==============================================================================
@@ -1525,7 +1901,8 @@ end
 function _execute_migration_lifecycle(connection::PormGPostgres, settings::PormGSettings,
                                       ordered_statements::Vector{String}, all_sql::String,
                                       version::String, name::String, checksum::String,
-                                      has_destructive::Bool)
+                                      has_destructive::Bool,
+                                      timeouts::_MigrationTimeouts = _migration_timeouts())::MigrationResult
   date_str = Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")
 
   # Idempotency guard (issue #81). Runs inside the advisory lock, so the check-and-skip is
@@ -1534,14 +1911,15 @@ function _execute_migration_lifecycle(connection::PormGPostgres, settings::PormG
   # COMMITted but then failed to archive — re-executing non-idempotent DDL (a plain ADD COLUMN /
   # ADD CONSTRAINT / CREATE INDEX) would error and leave a spurious `failed` row. Skip the DDL and
   # retry the archive so the stale pending file finally clears.
-  if _latest_applied_checksum(connection) == checksum
+  latest = _latest_applied(connection)
+  if latest !== nothing && String(latest[:checksum]) == checksum
     @info(_emsg("\e[32mMigration already applied (checksum match) — skipping re-apply.\e[0m"))
     try
       _archive_migration_files(settings, date_str)
     catch e
       @error "Error archiving already-applied migration files" exception=e
     end
-    return nothing
+    return MigrationResult(:already_applied, string(latest[:version]), 0)
   end
 
   # Begin transaction
@@ -1551,6 +1929,9 @@ function _execute_migration_lifecycle(connection::PormGPostgres, settings::PormG
   local rollback_error = nothing
 
   try
+    # Opt-in timeouts first, inside the transaction, so they bound every plan statement (#737).
+    _set_local_timeouts!(connection, conn, timeouts)
+
     # Execute all SQL statements
     _execute_statements_pg(connection, ordered_statements; conn=conn)
 
@@ -1595,34 +1976,25 @@ function _execute_migration_lifecycle(connection::PormGPostgres, settings::PormG
   catch e
     @error "Error archiving migration files (migration was applied successfully)" exception=e
   end
+  return MigrationResult(:applied, version, length(ordered_statements))
 end
 
 function _execute_migration_lifecycle(connection::PormGSQLite, settings::PormGSettings,
                                       ordered_statements::Vector{String}, all_sql::String,
                                       version::String, name::String, checksum::String,
-                                      has_destructive::Bool)
+                                      has_destructive::Bool,
+                                      ::_MigrationTimeouts = _migration_timeouts())::MigrationResult
   date_str = Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")
-
-  # Idempotency guard (issue #81) — see the PostgreSQL lifecycle for the full rationale. If the
-  # pending plan's checksum matches the latest applied migration, this is a re-run over a
-  # `pending_migrations.jl` a previous apply COMMITted but failed to archive; re-executing
-  # non-idempotent DDL would error. Skip and retry the archive so the stale pending file clears.
-  if _latest_applied_checksum(connection) == checksum
-    @info(_emsg("\e[32mMigration already applied (checksum match) — skipping re-apply.\e[0m"))
-    try
-      _archive_migration_files(settings, date_str)
-    catch e
-      @error "Error archiving already-applied migration files" exception=e
-    end
-    return nothing
-  end
 
   # Serialize the whole BEGIN..COMMIT against any concurrent SQLite writer, like
   # run_in_transaction/delete(). Migrations normally run sequentially at startup,
   # but if one is applied while app writes are in flight, two un-serialized
   # `BEGIN IMMEDIATE`s would race and deadlock the single async worker. No-op on
   # PostgreSQL. See ConnectionPool.with_sqlite_write_lock.
-  with_sqlite_write_lock(connection) do
+  #
+  # The body returns the #81 guard's verdict: the matched history row when the plan was already
+  # applied, `nothing` when this call applied it.
+  already = with_sqlite_write_lock(connection) do
     # #276: acquire EXPLICITLY rather than letting `with_transaction` acquire at BEGIN. SQLite
     # ignores `PRAGMA foreign_keys` inside a transaction — silently, returning success — so
     # enforcement has to be suspended on this exact handle BEFORE the BEGIN. Acquired inside the
@@ -1649,7 +2021,29 @@ function _execute_migration_lifecycle(connection::PormGSQLite, settings::PormGSe
       # Inner try scoped to "a transaction is actually open" (#276). Kept separate from the outer
       # one on purpose: folding them together would make a failed PRAGMA or BEGIN run the ROLLBACK
       # and write a spurious `failed` history row for a transaction that never started.
+      #
+      # `attempted` narrows that once more: the #81 guard below also runs inside the transaction,
+      # and a failure there is not a failed migration either — no plan statement has run.
+      attempted = false
       try
+        # Idempotency guard (issue #81) — see the PostgreSQL lifecycle for the full rationale. If
+        # the pending plan's checksum matches the latest applied migration, this is a re-run over a
+        # `pending_migrations.jl` a previous apply COMMITted but failed to archive; re-executing
+        # non-idempotent DDL would error. Skip and retry the archive so the stale pending file clears.
+        #
+        # HERE, after `BEGIN IMMEDIATE`, and read on this transaction's own connection (#737). It
+        # used to run before the write lock, which on SQLite is the only mutual exclusion there is:
+        # two processes migrating one file could both pass it, and the second then re-ran the
+        # first's DDL and recorded a `failed` row — or a duplicate `applied` row, when every
+        # statement happened to be idempotent. Holding the write transaction, no other process can
+        # commit between this read and our COMMIT.
+        latest = _latest_applied(connection; conn = conn)
+        if latest !== nothing && String(latest[:checksum]) == checksum
+          with_transaction(connection, "ROLLBACK;", conn=conn, release_conn=false)
+          return latest
+        end
+
+        attempted = true
         # Execute all SQL statements
         _execute_statements_sqlite(connection, ordered_statements; conn=conn)
 
@@ -1659,6 +2053,7 @@ function _execute_migration_lifecycle(connection::PormGSQLite, settings::PormGSe
         # Commit — release_conn=false: the finally owns the single release.
         with_transaction(connection, "COMMIT;", conn=conn, release_conn=false)
         @info(_emsg("\e[32mMigrations applied successfully. Version: $version\e[0m"))
+        return nothing
       catch e
         # Roll back on the still-leased connection; capture a rollback failure so the finally
         # renews/discards the dirty connection instead of releasing it (#71), then rethrow.
@@ -1674,13 +2069,14 @@ function _execute_migration_lifecycle(connection::PormGSQLite, settings::PormGSe
         # writer would deadlock on SQLite's single writer slot. Trade-off: if the ROLLBACK above also
         # failed, `conn` is dirty and this INSERT fails too (logged and skipped, then the finally
         # renews it) — so the `failed` row is not recorded in that rare double-failure.
-        try
-          _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive; conn=conn)
-        catch record_err
-          @error "Failed to record migration failure in history table" exception=record_err
+        if attempted
+          try
+            _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive; conn=conn)
+          catch record_err
+            @error "Failed to record migration failure in history table" exception=record_err
+          end
+          @error "Error applying migrations" exception=e
         end
-
-        @error "Error applying migrations" exception=e
         rethrow(e)
       end
     finally
@@ -1695,24 +2091,33 @@ function _execute_migration_lifecycle(connection::PormGSQLite, settings::PormGSe
       finalize_transaction_connection!(connection, conn; rollback_error=rollback_error, renew=true)
     end
   end
-  
+
+  if already !== nothing
+    @info(_emsg("\e[32mMigration already applied (checksum match) — skipping re-apply.\e[0m"))
+    try
+      _archive_migration_files(settings, date_str)
+    catch e
+      @error "Error archiving already-applied migration files" exception=e
+    end
+    return MigrationResult(:already_applied, string(already[:version]), 0)
+  end
+
   # Archive files (post-commit, best-effort)
   try
     _archive_migration_files(settings, date_str)
   catch e
     @error "Error archiving migration files (migration was applied successfully)" exception=e
   end
+  return MigrationResult(:applied, version, length(ordered_statements))
 end
 
 # ==============================================================================
 # String-based entry point
 # ==============================================================================
 
-function migrate(db::String; config::Dict{String,PormGSettings} = config, interactive::Bool = true,
-                 destructive::Bool = false, dry_run_only::Bool = false, name::String = "pending_migration")
+function migrate(db::String; config::Dict{String,PormGSettings} = config, kwargs...)::MigrationResult
   settings = config[db]
-  migrate(settings.connections, settings, interactive=interactive, destructive=destructive, 
-          dry_run_only=dry_run_only, name=name)
+  migrate(settings.connections, settings; kwargs...)
 end
 
 # ==============================================================================

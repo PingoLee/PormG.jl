@@ -27,6 +27,23 @@ const TRY_SQL = "SELECT pg_try_advisory_lock($(ADVISORY_KEY_EXPR)) AS ok"
 const BLOCK_SQL = "SELECT true AS ok FROM (SELECT pg_advisory_lock($(ADVISORY_KEY_EXPR))) AS _"
 const UNLOCK_SQL = "SELECT pg_advisory_unlock($(ADVISORY_KEY_EXPR)) AS ok"
 
+# Who holds the lock on `$1`, for the error raised when it cannot be acquired (#737). `pg_locks` shows
+# a `bigint` advisory key split in two — the high 32 bits in `classid`, the low 32 in `objid`, with
+# `objsubid = 1` — so the key is hashed by the SAME expression the lock queries use and split the
+# same way. Scoped to the current database, as the lock itself is (see `MIGRATION_LOCK_KEY`).
+# `LEFT JOIN`: `pg_stat_activity` may hide another role's row detail, and the pid alone still names
+# the process.
+const HOLDER_SQL = """
+  SELECT l.pid, a.application_name
+  FROM pg_locks l
+  LEFT JOIN pg_stat_activity a ON a.pid = l.pid
+  CROSS JOIN (SELECT $(ADVISORY_KEY_EXPR) AS k) lk
+  WHERE l.locktype = 'advisory' AND l.granted AND l.objsubid = 1
+    AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+    AND l.classid::bigint = ((lk.k >> 32) & 4294967295)
+    AND l.objid::bigint = (lk.k & 4294967295)
+  ORDER BY l.pid"""
+
 # Ceiling on how many distinct lock keys the SQLite no-op warning tracks (#277). Declared up here,
 # ahead of the docstring below that interpolates it — a docstring is a plain string literal
 # evaluated in file order, so a const defined further down would be an UndefVarError at load.
@@ -62,6 +79,27 @@ function _await_lock_handle(pool::PormGPostgres, state::_LockAwaitState, handle)
     _await_abandoned(e) && (state.abandoned = true)
     throw(_as_database_error(pool, e))
   end
+end
+
+# " — held by pid 4711 (app-worker-1)", or "" when the holder cannot be read (#737). Best-effort: the
+# caller is already raising, and a failed diagnostic must not replace the real error. The one
+# failure that is NOT swallowed is a cancellation — an abandoned await leaves the driver on `conn`,
+# and the `finally` in `with_advisory_lock` has to see that to renew it (#322).
+function _lock_holder_text(pool::PormGPostgres, conn, key::AbstractString, state::_LockAwaitState)::String
+  rows = try
+    collect(_await_lock_handle(pool, state, backend_execute_async(pool, conn, HOLDER_SQL, Any[key])))
+  catch
+    state.abandoned && rethrow()
+    return ""
+  end
+  isempty(rows) && return ""
+  holders = String[]
+  for r in rows
+    app = r[2]
+    push!(holders, (app === nothing || ismissing(app) || isempty(String(app))) ?
+                     "pid $(r[1])" : "pid $(r[1]) ($(app))")
+  end
+  return " — held by " * join(holders, ", ")
 end
 
 """
@@ -225,7 +263,12 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
       # and it must be reachable via `catch PormGError` like every other runtime failure. The
       # `cause` is a plain String because no driver raised anything: the lock query succeeded and
       # answered "no". `PoolConnectError` sets the precedent for a non-Exception cause.
-      throw(OperationalError("PostgreSQL", "Failed to acquire advisory lock for '$key'"))
+      #
+      # The message names who holds the lock (#737): "instance 2 could not migrate" is not
+      # actionable, "it waited 30 s on pid 4711 (app-worker-1)" is.
+      waited = wait ? " within $(timeout_ms) ms" : ""
+      throw(OperationalError("PostgreSQL",
+        "Failed to acquire advisory lock for '$key'$(waited)$(_lock_holder_text(pool, conn, key, await_state))"))
     end
     
     # Execute user function while holding lock

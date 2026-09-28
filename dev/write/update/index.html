@@ -78,23 +78,30 @@ query.update(&quot;forename&quot; =&gt; &quot;Blocked&quot;)
 # ERROR: Not allowed to update ...</code></pre><p>See <a href="../../configuration/connection_yml/">Connection YML</a> for the <code>change_data</code> configuration option.</p><hr/><h2 id="Updates-with-Relationships"><a class="docs-heading-anchor" href="#Updates-with-Relationships">Updates with Relationships</a><a id="Updates-with-Relationships-1"></a><a class="docs-heading-anchor-permalink" href="#Updates-with-Relationships" title="Permalink"></a></h2><p>PormG supports updating records based on filter criteria spanning related tables.</p><pre><code class="language-julia hljs"># Update records matching a joined condition
 query = M.Result.objects;
 query.filter(&quot;driverid__nationality&quot; =&gt; &quot;British&quot;, &quot;resultid&quot; =&gt; 1);
-query.update(&quot;points&quot; =&gt; F(&quot;points&quot;) + 10)</code></pre><p><strong>Generated SQL (PostgreSQL):</strong></p><pre><code class="language-sql hljs">UPDATE &quot;result&quot; AS &quot;Tb&quot; 
-SET &quot;points&quot; = &quot;Tb&quot;.&quot;points&quot; + 10 
-FROM &quot;driver&quot; AS &quot;Tb_1&quot; 
-WHERE &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_1&quot;.&quot;driverid&quot; 
-  AND &quot;Tb_1&quot;.&quot;nationality&quot; = $1 
-  AND &quot;Tb&quot;.&quot;resultid&quot; = $2
--- Parameters: [&quot;British&quot;, 1]</code></pre><pre><code class="language-julia hljs"># Update with complex relationship traversal
+query.update(&quot;points&quot; =&gt; F(&quot;points&quot;) + 10)</code></pre><p><strong>Generated SQL (PostgreSQL):</strong></p><pre><code class="language-sql hljs">UPDATE &quot;result&quot; AS &quot;Tb&quot;
+SET &quot;points&quot; = (&quot;Tb&quot;.&quot;points&quot; + $3::bigint)
+WHERE &quot;Tb&quot;.&quot;resultid&quot; IN (SELECT DISTINCT &quot;Tb&quot;.&quot;resultid&quot;
+  FROM &quot;result&quot; as &quot;Tb&quot;
+  INNER JOIN &quot;driver&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_1&quot;.&quot;driverid&quot;
+  WHERE &quot;Tb_1&quot;.&quot;nationality&quot; = $1 AND &quot;Tb&quot;.&quot;resultid&quot; = $2)
+  AND EXISTS (SELECT 1 FROM (SELECT 1) AS &quot;__pormg_anchor&quot;
+  INNER JOIN &quot;driver&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_1&quot;.&quot;driverid&quot;
+  WHERE &quot;Tb_1&quot;.&quot;nationality&quot; = $4 AND &quot;Tb&quot;.&quot;resultid&quot; = $5)
+-- Parameters: [&quot;British&quot;, 1, 10, &quot;British&quot;, 1]</code></pre><p>A filter that crosses a relation renders twice. The <code>IN (…)</code> selects rows through the primary key, so the planner can use its index. The correlated <code>EXISTS</code> puts the same filters on the row being updated, so they are re-checked if the row changes while the <code>UPDATE</code> waits on its lock — see <a href="../delete/#Filters-are-a-fence-on-PostgreSQL">Filters are a fence on PostgreSQL</a>, which applies to <code>update()</code> the same way. The joins are the ones a read of the filter renders (a nullable foreign key stays a <code>LEFT JOIN</code>). A model without a primary key gets the <code>EXISTS</code> alone.</p><pre><code class="language-julia hljs"># Update with complex relationship traversal
 query = M.Result.objects;
 query.filter(&quot;raceid__circuitid__name__@icontains&quot; =&gt; &quot;Monaco&quot;, &quot;resultid&quot; =&gt; 7654);
-query.update(&quot;points&quot; =&gt; 11)</code></pre><p><strong>Generated SQL (PostgreSQL):</strong></p><pre><code class="language-sql hljs">UPDATE &quot;result&quot; AS &quot;Tb&quot; 
-SET &quot;points&quot; = 11 
-FROM &quot;race&quot; AS &quot;Tb_1&quot;, &quot;circuit&quot; AS &quot;Tb_2&quot; 
-WHERE &quot;Tb&quot;.&quot;raceid&quot; = &quot;Tb_1&quot;.&quot;raceid&quot; 
-  AND &quot;Tb_1&quot;.&quot;circuitid&quot; = &quot;Tb_2&quot;.&quot;circuitid&quot; 
-  AND &quot;Tb_2&quot;.&quot;name&quot; ILIKE $1 
-  AND &quot;Tb&quot;.&quot;resultid&quot; = $2
--- Parameters: [&quot;Monaco&quot;, 7654]</code></pre><hr/><h2 id="F-Expressions"><a class="docs-heading-anchor" href="#F-Expressions">F Expressions</a><a id="F-Expressions-1"></a><a class="docs-heading-anchor-permalink" href="#F-Expressions" title="Permalink"></a></h2><p><code>F</code> expressions allow database-level operations without loading data into Julia, similar to Django&#39;s F objects. This is highly efficient for increments, decrements, and copying values between columns.</p><h3 id="Basic-F-Expression-Usage"><a class="docs-heading-anchor" href="#Basic-F-Expression-Usage">Basic F Expression Usage</a><a id="Basic-F-Expression-Usage-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-F-Expression-Usage" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Increment a counter field directly in the database
+query.update(&quot;points&quot; =&gt; 11)</code></pre><p><strong>Generated SQL (PostgreSQL):</strong></p><pre><code class="language-sql hljs">UPDATE &quot;result&quot; AS &quot;Tb&quot;
+SET &quot;points&quot; = $3
+WHERE &quot;Tb&quot;.&quot;resultid&quot; IN (SELECT DISTINCT &quot;Tb&quot;.&quot;resultid&quot;
+  FROM &quot;result&quot; as &quot;Tb&quot;
+  INNER JOIN &quot;race&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;raceid&quot; = &quot;Tb_1&quot;.&quot;raceid&quot;
+  INNER JOIN &quot;circuit&quot; AS &quot;Tb_2&quot; ON &quot;Tb_1&quot;.&quot;circuitid&quot; = &quot;Tb_2&quot;.&quot;circuitid&quot;
+  WHERE &quot;Tb_2&quot;.&quot;name&quot; ILIKE $1 ESCAPE &#39;\&#39; AND &quot;Tb&quot;.&quot;resultid&quot; = $2)
+  AND EXISTS (SELECT 1 FROM (SELECT 1) AS &quot;__pormg_anchor&quot;
+  INNER JOIN &quot;race&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;raceid&quot; = &quot;Tb_1&quot;.&quot;raceid&quot;
+  INNER JOIN &quot;circuit&quot; AS &quot;Tb_2&quot; ON &quot;Tb_1&quot;.&quot;circuitid&quot; = &quot;Tb_2&quot;.&quot;circuitid&quot;
+  WHERE &quot;Tb_2&quot;.&quot;name&quot; ILIKE $4 ESCAPE &#39;\&#39; AND &quot;Tb&quot;.&quot;resultid&quot; = $5)
+-- Parameters: [&quot;%Monaco%&quot;, 7654, 11, &quot;%Monaco%&quot;, 7654]</code></pre><hr/><h2 id="F-Expressions"><a class="docs-heading-anchor" href="#F-Expressions">F Expressions</a><a id="F-Expressions-1"></a><a class="docs-heading-anchor-permalink" href="#F-Expressions" title="Permalink"></a></h2><p><code>F</code> expressions allow database-level operations without loading data into Julia, similar to Django&#39;s F objects. This is highly efficient for increments, decrements, and copying values between columns.</p><h3 id="Basic-F-Expression-Usage"><a class="docs-heading-anchor" href="#Basic-F-Expression-Usage">Basic F Expression Usage</a><a id="Basic-F-Expression-Usage-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-F-Expression-Usage" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Increment a counter field directly in the database
 query = M.Driver.objects;
 query.filter(&quot;driverid&quot; =&gt; 1);
 query.update(&quot;number&quot; =&gt; F(&quot;number&quot;) + 1)</code></pre><p><strong>Generated SQL (PostgreSQL):</strong></p><pre><code class="language-sql hljs">UPDATE &quot;driver&quot; AS &quot;Tb&quot; 
@@ -136,4 +143,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../create/">« Creating Records</a><a class="docs-footer-nextpage" href="../delete/">Deleting Records »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Monday 28 September 2026 12:25">Monday 28 September 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../create/">« Creating Records</a><a class="docs-footer-nextpage" href="../delete/">Deleting Records »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Monday 28 September 2026 19:33">Monday 28 September 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

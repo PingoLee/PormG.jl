@@ -87,9 +87,12 @@ function _mf_steps(q, conn)
   return res isa Vector ? res : [res]
 end
 
-"""The step whose `:model` is `name`. Fails loudly rather than returning `nothing`."""
+"""
+The WRITE step (`DELETE` / `UPDATE`) whose `:model` is `name`, skipping a #770 `:lock` step for the
+same model. Fails loudly rather than returning `nothing`.
+"""
 function _mf_step(steps, name::String)
-  idx = findfirst(s -> s[:model] == name, steps)
+  idx = findfirst(s -> s[:model] == name && s[:operation] != :lock, steps)
   @assert idx !== nothing "no step for $(name); got $([s[:model] for s in steps])"
   return steps[idx]
 end
@@ -166,6 +169,88 @@ end
         assert_marker_count(s, kind)
       end
     end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #770: the parents are locked, top-down, before any statement touches their children
+# Children go before their parent, and a child's statement reads its parents when IT runs. A parent
+# that stopped matching after its children were gone kept its own row (the #765 fence skipped it) but
+# lost them. So on PostgreSQL every collected model that is a parent of an emitted statement is locked
+# `FOR UPDATE` first, root first, through the very predicate its DELETE renders. The race itself is
+# staged on db_2 in test_mutation_fence_concurrency.jl; this pins the sequence and the shape.
+# ─────────────────────────────────────────────────────────────────────────────
+"""The predicate a write step renders after `WHERE`, i.e. what its lock must carry verbatim."""
+function _mf_predicate(step, table::String)
+  prefix = "DELETE FROM \"$(table)\" AS \"Tb\" WHERE "
+  @assert startswith(step[:sql_text], prefix) "unexpected write shape: $(step[:sql_text])"
+  return step[:sql_text][ncodeunits(prefix)+1:end]
+end
+
+_mf_lock_sql(table::String, predicate::String) =
+  "SELECT count(*) FROM (SELECT 1 FROM \"$(table)\" AS \"Tb\"" *
+  (isempty(predicate) ? "" : " WHERE $(predicate)") * " FOR UPDATE) AS \"__pormg_lock\""
+
+_mf_ops(steps) = [(s[:operation], s[:model]) for s in steps]
+
+@testset "a cascade locks its parents top-down before any write (#770)" begin
+  @testset "PostgreSQL: every parent, root first, each on its DELETE's own predicate" begin
+    q = MF.Mf_run.objects
+    q.filter("status" => "GONE")
+    steps = _mf_steps(q, _MF_PG)
+
+    # mf_run and mf_task are parents of a statement; mf_note is a leaf (SET_NULL) and mf_tag emits
+    # nothing (DO_NOTHING), so neither is locked. The locks come before every write.
+    @test _mf_ops(steps)[1:2] == [(:lock, "mf_run"), (:lock, "mf_task")]
+    @test count(s -> s[:operation] == :lock, steps) == 2
+    @test last(_mf_ops(steps)) == (:delete, "mf_run")
+
+    for table in ("mf_run", "mf_task")
+      lock = steps[findfirst(s -> s[:operation] == :lock && s[:model] == table, steps)]
+      write = _mf_step(steps, table)
+      @test lock[:sql_text] == _mf_lock_sql(table, _mf_predicate(write, table))
+      @test lock[:parameters] == write[:parameters] == ["GONE"]
+      assert_marker_count(lock, :postgres)
+    end
+  end
+
+  @testset "PostgreSQL: a SET_NULL target's parent is locked before it is nulled" begin
+    q = MF.Mf_task.objects
+    q.filter("status" => "DONE")
+    @test _mf_ops(_mf_steps(q, _MF_PG)) == [(:lock, "mf_task"), (:update, "mf_note"), (:delete, "mf_task")]
+  end
+
+  @testset "PostgreSQL: a joined root locks through the same IN + EXISTS, FOR UPDATE once, outermost" begin
+    q = MF.Mf_task.objects
+    q.filter("id" => 7, "run__status" => "OPEN")
+    steps = _mf_steps(q, _MF_PG)
+    lock = steps[1]
+    @test lock[:operation] == :lock
+    @test lock[:sql_text] == _mf_lock_sql("mf_task", _mf_predicate(_mf_step(steps, "mf_task"), "mf_task"))
+    @test occursin("AS \"__pormg_anchor\"", lock[:sql_text])
+    @test count("FOR UPDATE", lock[:sql_text]) == 1
+    @test lock[:parameters] == [7, "OPEN", 7, "OPEN"]
+    assert_marker_count(lock, :postgres)
+  end
+
+  @testset "PostgreSQL: an unfiltered root (allow_delete_all) locks the whole table" begin
+    res = MF.Mf_run.objects.delete(show_query = :dict, connection = _MF_PG, allow_delete_all = true)
+    steps = res isa Vector ? res : [res]
+    @test steps[1][:operation] == :lock
+    @test steps[1][:sql_text] == _mf_lock_sql("mf_run", "")
+    @test isempty(steps[1][:parameters])
+  end
+
+  @testset "PostgreSQL: a delete with nothing to cascade takes no lock" begin
+    q = MF.Mf_note.objects
+    q.filter("id" => 3)
+    @test _mf_ops(_mf_steps(q, _MF_PG)) == [(:delete, "mf_note")]
+  end
+
+  @testset "SQLite: no lock at all — writers are already serialized" begin
+    q = MF.Mf_run.objects
+    q.filter("status" => "GONE")
+    @test !any(s -> s[:operation] == :lock, _mf_steps(q, _MF_SL))
   end
 end
 

@@ -155,7 +155,11 @@ const ALLOWED_UNTYPED_BARE_ERROR = Dict(
     # a SET_NULL/SET_DEFAULT UPDATE would rewrite the whole table — unreachable, every such entry is
     # `child.filter("<fk>__@in" => parent)`. A path that rendered no predicate would drop the WHERE —
     # unreachable unless it is the lone, genuinely unfiltered root (`allow_delete_all`).
-    "src/querybuilder/deletion.jl"      => 5,  # no keys (x2) / no conn to count on / empty SET_NULL predicate / path without a predicate — internal invariants
+    #
+    # #770 added the third "no keys": `lock_objects` with an empty key vector would render a lock with
+    # no WHERE, i.e. lock the whole table. Unreachable — `_models_to_lock` only returns models that
+    # have a `collector.objects` entry, and every entry is created by a push.
+    "src/querybuilder/deletion.jl"      => 6,  # no keys (x3) / no conn to count on / empty SET_NULL predicate / path without a predicate — internal invariants
     # #765: `_target_predicate` refuses GROUP BY / HAVING in a mutation's row predicate. Unreachable:
     # both terminals refuse aggregate projections, `_values!` REPLACES a delete's projection with its
     # key before the build (so no alias filter can route to HAVING), and `update()` refuses alias

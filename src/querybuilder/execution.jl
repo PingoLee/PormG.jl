@@ -81,7 +81,9 @@ and generated SQL without ambiguity.
   - `:parameters` (Vector): The parameterized values in bucket order
   - `:dialect` (Symbol): The database dialect (`:postgresql` or `:sqlite`)
   - `:model` (String): The model/table name
-  - `:operation` (Symbol): The query operation type (`:select`, `:insert`, `:update`, `:delete`)
+  - `:operation` (Symbol): The query operation type (`:select`, `:insert`, `:update`, `:delete`).
+    A cascading `:delete` returns a Vector of steps; on PostgreSQL that Vector starts with one
+    `:lock` step (`SELECT … FOR UPDATE`) per parent model (#770)
   - `:bucketing` (Symbol): The parameter bucketing strategy (`:numbered` for PostgreSQL, `:positional` for SQLite)
   - `:parameter_count` (Int): Number of parameters
   - `:parameter_buckets` (Dict): Breakdown of parameters by bucket (for positional strategies)

@@ -150,7 +150,17 @@ const ALLOWED_UNTYPED_BARE_ERROR = Dict(
     # would emit `WHERE` with nothing after it exactly as `delete_objects` would. Internal for the
     # same reason — the only writer of those vectors, `_push_field_update!`, creates each one and
     # pushes into it in the same expression, so an empty one cannot reach `run_deletions`.
-    "src/querybuilder/deletion.jl"      => 3,  # no keys (x2) / no conn to count on — internal invariants
+    #
+    # #765 added two, both guarding a WHERE the collector must never drop. An empty row predicate on
+    # a SET_NULL/SET_DEFAULT UPDATE would rewrite the whole table — unreachable, every such entry is
+    # `child.filter("<fk>__@in" => parent)`. A path that rendered no predicate would drop the WHERE —
+    # unreachable unless it is the lone, genuinely unfiltered root (`allow_delete_all`).
+    "src/querybuilder/deletion.jl"      => 5,  # no keys (x2) / no conn to count on / empty SET_NULL predicate / path without a predicate — internal invariants
+    # #765: `_target_predicate` refuses GROUP BY / HAVING in a mutation's row predicate. Unreachable:
+    # both terminals refuse aggregate projections, `_values!` REPLACES a delete's projection with its
+    # key before the build (so no alias filter can route to HAVING), and `update()` refuses alias
+    # filters outright (#668). Raised rather than dropped, because dropping HAVING widens the write.
+    "src/querybuilder/execution.jl"     => 1,  # GROUP BY / HAVING reaching a mutation predicate — internal invariant
     # #433 shrank this from 2 to 1. The "unmaterialized CTE" site was NOT an internal invariant:
     # `cte_dict["model"]` is written only by `build_cte_clause`, so its absence means the statement
     # emits no WITH clause — reachable from `update()` on a query that references a CTE. It is now a

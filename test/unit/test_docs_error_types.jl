@@ -493,8 +493,8 @@ const DOCERR_CASES = [
         end,
     ),
     (
-        # #433. delete() re-uses the queryset being deleted as a scoping subquery
-        # (`DELETE ... WHERE pk IN (<query>)`), which puts a declared CTE in exactly the nested
+        # #433. delete() re-uses the queryset being deleted as a scoping subquery (each cascade
+        # statement's `"<fk>" IN (<query>)`), which puts a declared CTE in exactly the nested
         # position that misbinds on SQLite. Refused on the cascade and leaf paths alike.
         # UnsafeMutationError, not QueryBuildError: the same query is legal on a read path, so the
         # discriminator is that it is a mutation — matching delete()'s four other shape guards.

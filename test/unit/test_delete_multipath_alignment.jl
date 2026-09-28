@@ -29,25 +29,27 @@ column's values. Measured on this file's own `Dmp_k`: `"owner" IN (SELECT … "b
 the two keys wins is `related_objects` Dict order, so the direction flips between model sets — an
 earlier fixture produced the mirror image. That arbitrariness is the point, and it is why the
 assertion below is structural rather than a literal-string match. That one WAS a silent wrong
-delete, and it is now unrepresentable: each fragment carries its own key.
+delete, and it is now unrepresentable: since #765 each arm is a predicate on the target's own foreign
+key (`"Tb"."owner" IN (SELECT "R1"."id" …)`), so there is no key left to share.
 
 **What the `cjoin` shape does and does NOT cover.** It gives the plan two DISTINCT sentinels, one
 rendered in a JOIN `ON` and one in a `WHERE`, so the assertions here are about text order rather
 than about a single repeated string — the plain-root reproduction binds `"DELME"` four times, where
 any permutation reads as correct. Keep it for that.
 
-It does **not** discriminate #432's mark/detach wrap in `delete_objects`, and this file must not
-imply otherwise. Measured: strip the wrap and every plan below renders identical SQL and an
-identical flattened value vector. The only difference is in `:parameter_buckets` on the `dmp_a`
-statement, where the root's `ON` value sits in `:join` unwrapped and in `:where` wrapped.
-
-The reason is NOT that nothing binds at a fragment's own top-level `:join` — `dmp_a` does, and an
-earlier draft of this paragraph claimed otherwise. It is that no statement ever gets TWO
+Until #765 it did **not** discriminate #432's mark/detach wrap: no statement ever got TWO
 join-binding fragments. Cascade fragments are built as
-`child.objects.filter("<fk>__@in" => parent).values(<key>)` and carry no join; the root queryset
-can carry one but is always alone in its statement, and a lone fragment's `:join`-before-`:where`
-flatten already matches its text order. The wrap is insurance against a future fragment shape, not
-something these testsets prove.
+`child.objects.filter("<fk>__@in" => parent).values(<key>)` and carry no join, and the root queryset
+was always alone in its statement, where a lone fragment's `:join`-before-`:where` flatten already
+matches its text order.
+
+Since #765 the `dmp_a` root statement IS the discriminating case. A joined root renders as
+`"Tb"."id" IN (<selection>) AND EXISTS (<fence>)` — two builds of the same query, each binding its
+`ON` value then its `WHERE` value. Unwrapped, `:join` flattens both `ON` values first
+(`ONVAL, ONVAL, WHEREVAL, WHEREVAL` against a text order of `ONVAL, WHEREVAL, ONVAL, WHEREVAL`), so
+the `dmp_a` text-order assertion below must fail without it (measured on the same shape in
+`test_mutation_fence_shape.jl`, by stripping the wrap from `_mutation_predicate`). The cascade
+statements still cannot tell.
 
 Both backends run. PostgreSQL's `\$N` travels with the text by construction, which is why every bug
 in this family has been SQLite-only — but the COUNT half fails on both, and did here.
@@ -202,9 +204,12 @@ end
   # The single-key root statement is the control: its ON value used to sit in `:join` and its WHERE
   # value in `:where`, which flattened to the same vector. Pin the FLATTENED vector, not the bucket —
   # the wrap moves the value between buckets on purpose and that is not a behaviour change.
+  #
+  # Since #765 the joined root is `"Tb"."id" IN (<selection>) AND EXISTS (<fence>)`: two builds, each
+  # binding its ON then its WHERE value. Unwrapped, `:join` would flatten both ON values first.
   root_step = _dmp_step(steps, "dmp_a")
   assert_marker_count(root_step, :sqlite)
-  assert_bound_in_text_order(root_step, ["ONVAL", "WHEREVAL"])
+  assert_bound_in_text_order(root_step, ["ONVAL", "WHEREVAL", "ONVAL", "WHEREVAL"])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -221,52 +226,49 @@ end
     step = _dmp_step(_dmp_steps(_dmp_plain_root, conn), "dmp_k")
     sql = step[:sql_text]
 
-    # For every top-level `<col> IN (SELECT <alias>.<col2>`, the outer column and the projected
-    # column must be the same. This is what fails on the old code: measured, it produced exactly ONE
-    # top-level arm — `"owner" IN (SELECT "Tb"."owner" …)` — wrapping a nested OR whose second arm
-    # was `"Tb"."owner" IN (SELECT "R3"."backup" …)`. The mismatch lives at that INNER level; what
-    # this assertion detects is the arm COUNT collapsing from two to one, which is the same defect
-    # seen from outside.
+    # Each top-level arm is `("Tb"."<fk>" IN (SELECT "R1"."id" …))`: the target's OWN foreign key
+    # compared against the parent's primary key. Since #765 an arm no longer goes through the entry's
+    # resolved key at all — it reads its column straight off the target — which is what makes the
+    # wrong-key shape unrepresentable rather than merely avoided. What this still detects is the arm
+    # COUNT collapsing from two to one (the pre-#452 render produced exactly ONE top-level arm
+    # wrapping a nested OR), and an arm reading the wrong side of the relation.
     #
-    # Anchored on `WHERE`/`OR` so it matches only the TOP-LEVEL fragments. Each fragment nests its
-    # own `"Tb"."<fk>" IN (SELECT "R1"."id" …)`, where the columns differ legitimately — that is the
-    # cascade FK pointing at the parent's primary key, not the arm's addressing column. A pattern
-    # without the anchor matches those too and reads their correct asymmetry as the bug.
+    # Anchored on `WHERE`/`OR` plus the target alias so it matches only the TOP-LEVEL arms; the
+    # nested subqueries are aliased `R1`, `R2`, ….
     pairs = [(m.captures[1], m.captures[2]) for m in
-             eachmatch(r"(?:WHERE|OR) \"(\w+)\" IN \(SELECT\s+\"\w+\"\.\"(\w+)\"", sql)]
+             eachmatch(r"(?:WHERE|OR) \(\"Tb\"\.\"(\w+)\" IN \(SELECT\s+\"\w+\"\.\"(\w+)\"", sql)]
 
-    # Two arms, one per foreign key, each addressed by ITS OWN key.
+    # Two arms, one per foreign key.
     #
-    # Both assertions are anchored deliberately. A bare `occursin("\"owner\" IN (", sql)` passes
-    # against the OLD code — the wrong-keyed statement still contains `"Tb"."owner" IN (` in its
-    # inner nesting — so it would have looked like coverage while asserting nothing. Measured: the
-    # unfixed render satisfies it.
+    # Both assertions are anchored deliberately. A bare `occursin("\"owner\" IN (", sql)` passed
+    # against the pre-#452 code — the wrong-keyed statement still contained `"Tb"."owner" IN (` in
+    # its inner nesting — so it would look like coverage while asserting nothing.
     @test length(pairs) == 2
     @test Set(first.(pairs)) == Set(["owner", "backup"])
-    for (outer_col, projected_col) in pairs
-      @test outer_col == projected_col
+    for (fk_col, projected_col) in pairs
+      @test projected_col == "id"   # the FK is compared against the PARENT's key, never the other FK
     end
   end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Multi-path cascade: the OR form, not an extra subquery level
-# The removed branch wrapped the same OR inside another `pk IN (SELECT pk FROM t WHERE …)`. The
-# fragments express it directly, so the statement is one level SHALLOWER. Pinned because the OR form
-# is what makes each arm carry its own key, and a future "tidy-up" that reinstates the wrapper would
-# reintroduce the shared-key assumption with it.
+# The #452-removed branch wrapped the same OR inside another `pk IN (SELECT pk FROM t WHERE …)`, and
+# until #765 each arm was itself such a wrapper. Pinned because the flat OR of target predicates is
+# what makes each arm read its own column AND what PostgreSQL re-checks under a row lock; a future
+# "tidy-up" that reinstates a `pk IN (SELECT …)` wrapper reintroduces both defects at once.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "a multi-path delete ORs its fragments rather than nesting them (#452)" begin
+@testset "a multi-path delete ORs its fragments rather than nesting them (#452 / #765)" begin
   step = _dmp_step(_dmp_steps(_dmp_plain_root, _DMP_SL), "dmp_b")
   sql = step[:sql_text]
 
-  # Top-level shape: DELETE FROM <t> WHERE <col> IN (…) OR <col> IN (…)
-  @test occursin(r"^DELETE FROM \"dmp_b\" WHERE \"id\" IN \(SELECT"s, sql)
-  @test occursin(r"\)\s*OR \"id\" IN \(SELECT"s, sql)
+  # Top-level shape: DELETE FROM <t> AS "Tb" WHERE ("Tb".<fk> IN (…)) OR ("Tb".<fk> IN (…))
+  @test occursin(r"^DELETE FROM \"dmp_b\" AS \"Tb\" WHERE \(\"Tb\"\.\"\w+\" IN \(SELECT"s, sql)
+  @test occursin(r"\)\s*OR \(\"Tb\"\.\"\w+\" IN \(SELECT"s, sql)
 
-  # Depth: two fragments, each `SELECT id FROM dmp_b WHERE fk IN (SELECT id FROM dmp_a …)` — two
-  # SELECTs per arm, four in total. The wrapper the old branch added made it five.
-  @test count("SELECT", sql) == 4
+  # Depth: two arms, each `"Tb"."<fk>" IN (SELECT id FROM dmp_a …)` — ONE SELECT per arm, two in
+  # total. The pre-#765 per-arm self-subquery made it four; the #452-removed wrapper, five.
+  @test count("SELECT", sql) == 2
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -292,7 +294,8 @@ end
 
     root_step = _dmp_step(steps, "dmp_b")
     @test root_step[:parameters] == [7]
-    @test occursin("DELETE FROM \"dmp_b\" WHERE \"id\" IN (SELECT", root_step[:sql_text])
+    # The user's own filter, on the target row (#765) — not `"id" IN (SELECT "Tb"."id" …)`.
+    @test startswith(root_step[:sql_text], "DELETE FROM \"dmp_b\" AS \"Tb\" WHERE \"Tb\".\"id\" = ")
     # One fragment means no OR — the join is over a single element, as it always was.
     @test !occursin(" OR ", root_step[:sql_text])
   end

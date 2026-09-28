@@ -702,17 +702,20 @@ end
             # unfixed code and asserts nothing — and `occursin("test_result", sql)` is worse still,
             # since "test_result" is a substring of "test_result2" and the check can never fail.
             # What distinguishes fixed from unfixed is the COUNT of top-level fragments: two ORed
-            # `"id" IN (SELECT …)`, rather than one wrapping a nested OR. The unqualified column is
-            # what anchors it — every nested arm is written `"Tb"."id"`, so only the top-level
-            # fragments match. Naming the FK columns cannot do this job: both appear in either
-            # render, and "test_result" is a substring of "test_result2" besides.
+            # arms rather than one wrapping a nested OR. Since #765 each arm is a parenthesized
+            # predicate on the target row's OWN foreign key — `("Tb"."test_result" IN (SELECT …))
+            # OR ("Tb"."test_result2" IN (SELECT …))` — so the anchor is `WHERE`/`OR` followed by
+            # `("Tb".`: nested subqueries are aliased `R1`, `R2`, …, and so never match. Capturing
+            # the column EXACTLY is what lets the two FK names be asserted now; an `occursin` could
+            # not, since "test_result" is a substring of "test_result2".
             #
-            # `\w+` assumes the key column is a word — a `db_column` like "race-id" would miss and
+            # `\w+` assumes the FK column is a word — a `db_column` like "race-id" would miss and
             # drop the count. That fails loudly here rather than passing wrongly, which is the right
             # direction for a brittle anchor, but it is an assumption about the F1 naming.
-            _mp_fragments = collect(eachmatch(r"(?:WHERE|OR)\s+\"\w+\" IN \(SELECT",
-                                              deletion_step[:sql_text]))
+            _mp_fragments = [m.captures[1] for m in eachmatch(r"(?:WHERE|OR)\s+\(\"Tb\"\.\"(\w+)\" IN \(SELECT",
+                                                               deletion_step[:sql_text])]
             @test length(_mp_fragments) == 2
+            @test Set(_mp_fragments) == Set(["test_result", "test_result2"])
             # #452's invariant, on the statement that used to violate it. Asserted here rather than
             # only in unit coverage because this is the plan a live database is asked to execute.
             # Per-backend marker syntax, as helper_marker_alignment.jl does it: a repeated `$1` is
@@ -859,12 +862,14 @@ end
                                 inspection)
             @assert _sn_idx !== nothing "no mp_leaf_scratch update step; got $([s[:model] for s in inspection])"
             update_step = inspection[_sn_idx]
-            # Two ORed TOP-LEVEL fragments, one per path to `mp_mid_scratch`. Anchored on WHERE/OR
-            # for the reason spelled out in the #452 testset above: every nested arm is written
-            # `"Tb"."id"`, so only the top-level fragments match the unqualified column.
-            _sn_fragments = collect(eachmatch(r"(?:WHERE|OR)\s+\"\w+\" IN \(SELECT",
-                                              update_step[:sql_text]))
+            # Two ORed TOP-LEVEL fragments, one per path to `mp_mid_scratch`. Anchored on WHERE/OR plus
+            # `("Tb".` for the reason spelled out in the #452 testset above: since #765 each arm is a
+            # parenthesized predicate on the leaf's OWN foreign key, and nested subqueries are
+            # aliased `R1`, `R2`, …, so only the top-level fragments match.
+            _sn_fragments = [m.captures[1] for m in eachmatch(r"(?:WHERE|OR)\s+\(\"Tb\"\.\"(\w+)\" IN \(SELECT",
+                                                              update_step[:sql_text])]
             @test length(_sn_fragments) == 2
+            @test all(==("mid"), _sn_fragments)
             # Both paths are present, not the same path twice.
             @test occursin("\"owner\" IN", update_step[:sql_text])
             @test occursin("\"backup\" IN", update_step[:sql_text])
@@ -1363,13 +1368,14 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # Delete with JOIN filter (double-underscore traversal)
 #
-# PormG translates `delete()` to `DELETE FROM … WHERE pk IN (SELECT pk FROM …)`.
-# The inner SELECT is constructed by the standard query builder and therefore
-# supports the same __ join notation as `filter()` on read queries.
+# A join-crossing filter renders as `DELETE FROM … AS "Tb" WHERE EXISTS (SELECT 1
+# FROM (SELECT 1) AS "__pormg_anchor" <joins> WHERE …)` — correlated to the target
+# row since #765 (it was `WHERE pk IN (SELECT pk FROM …)` before). The joins are
+# the ones the standard query builder renders for the same `filter()` on a read.
 #
-# This testset proves that join-based predicates survive the translation into
-# a delete-path subquery on both PostgreSQL and SQLite — a regression surface
-# that is invisible to pure SQL inspection tests.
+# This testset proves that join-based predicates survive that translation on both
+# PostgreSQL and SQLite — a regression surface that is invisible to pure SQL
+# inspection tests.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "DELETE: Filter via JOIN notation (__ traversal)" begin
     # Ensure a clean slate.

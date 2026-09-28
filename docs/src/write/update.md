@@ -215,14 +215,24 @@ query.update("points" => F("points") + 10)
 
 **Generated SQL (PostgreSQL):**
 ```sql
-UPDATE "result" AS "Tb" 
-SET "points" = "Tb"."points" + 10 
-FROM "driver" AS "Tb_1" 
-WHERE "Tb"."driverid" = "Tb_1"."driverid" 
-  AND "Tb_1"."nationality" = $1 
-  AND "Tb"."resultid" = $2
--- Parameters: ["British", 1]
+UPDATE "result" AS "Tb"
+SET "points" = ("Tb"."points" + $3::bigint)
+WHERE "Tb"."resultid" IN (SELECT DISTINCT "Tb"."resultid"
+  FROM "result" as "Tb"
+  INNER JOIN "driver" AS "Tb_1" ON "Tb"."driverid" = "Tb_1"."driverid"
+  WHERE "Tb_1"."nationality" = $1 AND "Tb"."resultid" = $2)
+  AND EXISTS (SELECT 1 FROM (SELECT 1) AS "__pormg_anchor"
+  INNER JOIN "driver" AS "Tb_1" ON "Tb"."driverid" = "Tb_1"."driverid"
+  WHERE "Tb_1"."nationality" = $4 AND "Tb"."resultid" = $5)
+-- Parameters: ["British", 1, 10, "British", 1]
 ```
+
+A filter that crosses a relation renders twice. The `IN (…)` selects rows through the primary key,
+so the planner can use its index. The correlated `EXISTS` puts the same filters on the row being
+updated, so they are re-checked if the row changes while the `UPDATE` waits on its lock — see
+[Filters are a fence on PostgreSQL](delete.md#Filters-are-a-fence-on-PostgreSQL), which applies to
+`update()` the same way. The joins are the ones a read of the filter renders (a nullable foreign key
+stays a `LEFT JOIN`). A model without a primary key gets the `EXISTS` alone.
 
 ```julia
 # Update with complex relationship traversal
@@ -233,14 +243,18 @@ query.update("points" => 11)
 
 **Generated SQL (PostgreSQL):**
 ```sql
-UPDATE "result" AS "Tb" 
-SET "points" = 11 
-FROM "race" AS "Tb_1", "circuit" AS "Tb_2" 
-WHERE "Tb"."raceid" = "Tb_1"."raceid" 
-  AND "Tb_1"."circuitid" = "Tb_2"."circuitid" 
-  AND "Tb_2"."name" ILIKE $1 
-  AND "Tb"."resultid" = $2
--- Parameters: ["Monaco", 7654]
+UPDATE "result" AS "Tb"
+SET "points" = $3
+WHERE "Tb"."resultid" IN (SELECT DISTINCT "Tb"."resultid"
+  FROM "result" as "Tb"
+  INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
+  INNER JOIN "circuit" AS "Tb_2" ON "Tb_1"."circuitid" = "Tb_2"."circuitid"
+  WHERE "Tb_2"."name" ILIKE $1 ESCAPE '\' AND "Tb"."resultid" = $2)
+  AND EXISTS (SELECT 1 FROM (SELECT 1) AS "__pormg_anchor"
+  INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
+  INNER JOIN "circuit" AS "Tb_2" ON "Tb_1"."circuitid" = "Tb_2"."circuitid"
+  WHERE "Tb_2"."name" ILIKE $4 ESCAPE '\' AND "Tb"."resultid" = $5)
+-- Parameters: ["%Monaco%", 7654, 11, "%Monaco%", 7654]
 ```
 
 ---

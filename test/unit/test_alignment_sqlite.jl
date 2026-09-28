@@ -641,8 +641,10 @@ end
     @test 25 in insp[:parameter_buckets][:update]
     @test 1990 in insp[:parameter_buckets][:where]
 
-    # Post-assignment parameters order for SQL (SET before WHERE)
-    @test insp[:parameters] == [25, 1990]
+    # Post-assignment parameters order for SQL (SET before WHERE). The filter crosses a join, so since
+    # #765 it binds twice: once in the `pk IN (…)` selection, once in the EXISTS fence — text order.
+    @test insp[:parameters] == [25, 1990, 1990]
+    @test count(==('?'), insp[:sql_text]) == length(insp[:parameters])
 
     # Also verify a SELECT query never touches :update bucket
     q_select = M.Result.objects.filter("raceid__year" => 1990)
@@ -1493,9 +1495,11 @@ end
     @test "Brazilian" in buckets[:join]
     @test 1990 in buckets[:where]
 
-    # Verify concatenation order for positional params: Update, then Join, then Where
-    # This is critical for SQLite UPDATE FROM syntax
-    @test insp[:parameters] == [25, "Brazilian", 1990]
+    # Verify concatenation order for positional params: Update, then Join, then Where — and since
+    # #765 that Join/Where pair twice, as the text prints it: the `pk IN (…)` selection, then the
+    # EXISTS fence (a second build, lifted as one clause-ordered run).
+    @test insp[:parameters] == [25, "Brazilian", 1990, "Brazilian", 1990]
+    @test count(==('?'), insp[:sql_text]) == length(insp[:parameters])
 end
 
 @testset "Alignment Verification - Saturation Test (All Query Buckets)" begin
@@ -1936,8 +1940,10 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # UPDATE anti-join alignment: reverse LEFT JOIN + IS NULL must not collapse into
 # an impossible implicit-inner-join WHERE clause during UPDATE rendering.
-# The SQL should target base-table primary keys through a subquery so the same
-# anti-join semantics seen by count()/list() are preserved for updates.
+# The SQL targets base-table primary keys through a subquery so the same anti-join semantics seen by
+# count()/list() are preserved for updates. Since #765 that selection is ANDed with a correlated
+# EXISTS fence on the target alias (PostgreSQL does not re-check the subquery under a row lock), and
+# the fence keeps the LEFT JOIN too — so both halves must, or the conjunction narrows the row set.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Alignment Verification - UPDATE reverse anti-join uses PK subquery" begin
     q = M.Result.objects
@@ -1948,15 +1954,19 @@ end
 
     @test contains(sql, "UPDATE \"result\" AS \"Tb\"")
     @test contains(sql, "SET \"points\" = ?")
-    @test contains(sql, "WHERE \"Tb\".\"resultid\" IN (")
-    @test contains(sql, "SELECT DISTINCT \"Tb\".\"resultid\"")
-    @test contains(sql, "LEFT JOIN \"just_a_test_deletion\" AS \"Tb_1\"")
+    @test contains(sql, "WHERE \"Tb\".\"resultid\" IN (SELECT DISTINCT \"Tb\".\"resultid\"")
+    @test contains(sql, ")\n  AND EXISTS (SELECT 1 FROM (SELECT 1) AS \"__pormg_anchor\"")
+    # Both halves keep the LEFT JOIN; in the fence it hangs off the OUTER target row — the
+    # correlation that makes it re-checkable.
+    @test count("LEFT JOIN \"just_a_test_deletion\" AS \"Tb_1\" ON \"Tb\".\"resultid\" = \"Tb_1\".\"test_result\"", sql) == 2
     @test contains(sql, "\"Tb_1\".\"id\" IS NULL")
     @test !contains(sql, "FROM \"just_a_test_deletion\" AS \"Tb_1\"\n      WHERE \"Tb\".\"resultid\" = \"Tb_1\".\"test_result\"")
 
     @test insp[:parameter_buckets][:update] == [25]
-    @test insp[:parameter_buckets][:where] == [1, 2, 3]
-    @test insp[:parameters] == [25, 1, 2, 3]
+    # Selection then fence: the filter binds once per half, in text order (#765).
+    @test insp[:parameter_buckets][:where] == [1, 2, 3, 1, 2, 3]
+    @test insp[:parameters] == [25, 1, 2, 3, 1, 2, 3]
+    @test count(==('?'), sql) == length(insp[:parameters])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1977,9 +1987,9 @@ end
 
     @test contains(sql, "UPDATE \"just_a_test_deletion\" AS \"Tb\"")
     @test contains(sql, "SET \"test_result\" = ?")
-    @test contains(sql, "WHERE \"Tb\".\"id\" IN (")
-    @test contains(sql, "SELECT DISTINCT \"Tb\".\"id\"")
-    @test contains(sql, "LEFT JOIN \"result\" AS \"Tb_1\"")
+    @test contains(sql, "WHERE \"Tb\".\"id\" IN (SELECT DISTINCT \"Tb\".\"id\"")
+    @test contains(sql, ")\n  AND EXISTS (SELECT 1 FROM (SELECT 1) AS \"__pormg_anchor\"")
+    @test count("LEFT JOIN \"result\" AS \"Tb_1\"", sql) == 2
     @test contains(sql, "\"Tb\".\"test_result\" = \"Tb_1\".\"resultid\"")
     @test contains(sql, "\"Tb\".\"test_result\" IS NOT NULL")
     @test contains(sql, "\"Tb_1\".\"resultid\" IS NULL")
@@ -1987,10 +1997,11 @@ end
 
     @test length(insp[:parameter_buckets][:update]) == 1
     @test ismissing(insp[:parameter_buckets][:update][1])
-    @test insp[:parameter_buckets][:where] == [1, 2, 3]
-    @test length(insp[:parameters]) == 4
+    @test insp[:parameter_buckets][:where] == [1, 2, 3, 1, 2, 3]   # selection, then fence (#765)
+    @test length(insp[:parameters]) == 7
     @test ismissing(insp[:parameters][1])
-    @test insp[:parameters][2:4] == [1, 2, 3]
+    @test insp[:parameters][2:7] == [1, 2, 3, 1, 2, 3]
+    @test count(==('?'), sql) == length(insp[:parameters])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

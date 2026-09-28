@@ -170,19 +170,23 @@ function _dct_step(steps, name::String)
 end
 
 """
-Top-level `col IN (SELECT …)` fragments in `sql`, as the columns they address.
+Top-level arms of `sql`'s WHERE — one per cascade path — as the target columns they open with.
 
-Anchored on `WHERE`/`OR` so nested subqueries do not count — the same structural form
-`test_delete_multipath_alignment.jl` uses, because a bare `occursin` cannot tell one fragment from
-fourteen.
+Since #765 every arm is a predicate on the target alias (`WHERE "Tb"."code" = ?`,
+`WHERE ("Tb"."owner" IN (SELECT …)) OR ("Tb"."backup" IN (SELECT …))`) rather than a
+`"<key>" IN (SELECT …)` wrapper, so an arm is recognised by `"Tb".` right after `WHERE`/`OR`.
+Anchored on those keywords so nested subqueries (aliased `R1`, `R2`, …) do not count — the same
+structural form `test_delete_multipath_alignment.jl` uses, because a bare `occursin` cannot tell one
+fragment from fourteen. It would over-count an arm holding a `Qor` over target columns; no fixture
+here has one.
 """
 _dct_fragments(sql::AbstractString) =
-  [m.captures[1] for m in eachmatch(r"(?:WHERE|OR)\s+\"(\w+)\" IN \(SELECT", sql)]
+  [m.captures[1] for m in eachmatch(r"(?:WHERE|OR)\s+\(?\"Tb\"\.\"(\w+)\"", sql)]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Deletion collector traversal: a long cascade chain collects each model exactly once
 # One CASCADE foreign key per link means one cascade path per model, so every statement must carry
-# exactly one `IN (SELECT …)` fragment and bind exactly one value. Before #459 the outer loop in
+# exactly one WHERE arm and bind exactly one value. Before #459 the outer loop in
 # `process_collector!` re-walked models the recursion had already descended into, and the chain's
 # last statement rendered 14 fragments against 67 bound values.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -237,9 +241,10 @@ end
         @test step[:operation] == :update
         # Two paths to `dct_mid` => two ORed fragments. Pre-fix: one.
         @test length(_dct_fragments(step[:sql_text])) == 2
-        # Both fragments address the child's own primary key; what differs is which `dct_mid` column
-        # each one traverses. Naming both is what makes a DROPPED path visible — a fragment count on
-        # its own would pass if the same path were emitted twice.
+        # Both fragments address the child's own `mid` column (since #765; its primary key before);
+        # what differs is which `dct_mid` column each one traverses. Naming both is what makes a
+        # DROPPED path visible — a fragment count on its own would pass if the same path were
+        # emitted twice.
         @test occursin("\"R1\".\"owner\" IN", step[:sql_text])
         @test occursin("\"R1\".\"backup\" IN", step[:sql_text])
         @test length(step[:parameters]) == 2

@@ -78,8 +78,15 @@ leaving the reference entirely to the database's own constraint. It renders `ON 
 DDL, so a dependent row is *not* cascaded by PormG unless its field says so explicitly.
 
 A model reachable by several cascade paths is scoped by all of them: its statement carries one
-`IN (…)` fragment per path, `OR`ed together, and that holds for the `UPDATE` a `SET_NULL` /
+predicate per path, `OR`ed together, and that holds for the `UPDATE` a `SET_NULL` /
 `SET_DEFAULT` emits just as it does for a `DELETE`.
+
+Every statement puts the filters on the row being deleted or updated — `DELETE FROM "t" AS "Tb"
+WHERE "Tb"."status" = \$1` — rather than only in a `pk IN (SELECT …)` subquery. A filter that
+crosses a relation keeps that `pk IN (…)` as its index-driven selection and adds the same filter as a
+correlated `EXISTS` on the row. That makes a filter a **fence** on PostgreSQL: if a concurrent
+transaction changes a row so it no longer matches while the delete waits on its lock, the row is left
+alone (#765). See *Filters are a fence on PostgreSQL* in [Deleting Records](write/delete.md).
 
 The cascade descends at most 50 levels. Beyond that it raises `QueryBuildError` naming the models it
 walked. Usually that means a foreign-key cycle — two models declaring `on_delete = CASCADE` at each
@@ -159,12 +166,13 @@ function delete(objct::SQLObjectHandler;
 
   # #433: a CTE-scoped delete is refused here, at the entry, rather than at either render site.
   #
-  # The deletion collector re-uses THIS queryset as a scoping subquery: for a model with dependents
-  # it synthesizes `"<fk>__@in" => objct` (`find_related_objects!`), and for a leaf it renders
-  # `DELETE ... WHERE pk IN (<objct>)` directly (`delete_objects`). Those two paths reach different
-  # amounts of the query builder, so guarding downstream made the SAME user code succeed or fail
-  # depending on whether the target model happened to have a reverse relation — an invisible,
-  # schema-dependent split.
+  # The deletion collector re-uses THIS queryset in two ways: for a model with dependents it
+  # synthesizes `"<fk>__@in" => objct` (`find_related_objects!`), a nested subquery; and every model,
+  # leaf or not, renders its own statement from it (`_collector_predicate` — since #765 its filters
+  # on the target row, before that `WHERE pk IN (<objct>)`). Those paths reach different amounts of
+  # the query builder, so guarding downstream made the SAME user code succeed or fail depending on
+  # whether the target model happened to have a reverse relation — an invisible, schema-dependent
+  # split. (The root statement emits no `WITH` either, so a CTE has nowhere to live there.)
   #
   # Refusing rather than exempting is deliberate. An exemption scoped to "anything rendered under a
   # delete" was measured to re-open the very misbind #433 exists to prevent: with a filter bound
@@ -758,6 +766,70 @@ function _affected_row_count(connection::Union{PormGPostgres, PormGSQLite}, resu
   return Int((changes |> DataFrames.DataFrame)[1, 1])
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# One row predicate per cascade path, ORed (#452, #765)
+#
+# The WHERE of every statement the collector emits — `delete_objects` and `update_field` both — and
+# the ONLY thing that renders into that statement's `parameters`. Returns `(where_sql, parameters,
+# alias)`; `where_sql` is empty when an arm has no predicate at all (a root delete under
+# `allow_delete_all`), because an empty arm in an OR matches every row.
+#
+# #765: each arm is the entry's OWN predicates on the target alias (`_mutation_predicate`), never
+# only `"<key>" IN (SELECT "Tb"."<key>" FROM <t> AS "Tb" WHERE …)`. A join-free arm is its conjuncts;
+# a joined one (only the root can be) is `"Tb"."pk" IN (<selection>) AND EXISTS (<fence>)` — the IN
+# for the index, the EXISTS for the re-check (`_target_pk_selection`). PostgreSQL does not re-check a
+# self-subquery when the statement waits on a row lock, so every filter — the user's fence on the
+# root, and the `"<fk>" IN (<parent>)` scope on a cascaded child — was selection only: a row a
+# concurrent transaction had just changed to stop matching was deleted (or nulled) anyway. The
+# nested `"<fk>__@in" => parent` subquery INSIDE an arm is still a subquery; what matters is that the
+# child's own `fk` is compared on the target row, so a re-parented child no longer matches.
+#
+# A side effect: `:key` no longer renders. Each arm now reads its own column straight off the target,
+# which makes #452's wrong-key misbind (`"owner" IN (SELECT … "backup" …)`, one arm addressed through
+# another arm's key) unrepresentable here rather than merely avoided. The key still matters — it is
+# the entry's PROJECTION, which a child's `"<fk>__@in" => parent` reads — so the projection is
+# stripped only from this private copy (the #668 move `update()` makes).
+#
+# #452 still binds: one renderer and one collector. The multi-path case once built these arms, threw
+# the text away and re-rendered the subqueries through a `Qor` into the same collector — twice the
+# values its markers asked for.
+#
+# The #432 mark/detach wrap lifts each build's values into ONE clause-ordered run under `:where`, at
+# its text position. Since #765 it is LOAD-BEARING, where before it was insurance: a joined root arm
+# is built twice (the IN's build, then the EXISTS's), and both bind their ON values in `:join`.
+# Unwrapped, `:join` would flatten BOTH builds' ON values ahead of the first build's WHERE values — a
+# positional misbind on SQLite (text order is ON₁ WHERE₁ ON₂ WHERE₂). Only the root arm can bind in
+# `:join` at all (every cascade arm is a join-free `"<fk>__@in"` filter). It does move
+# `:parameter_buckets` (a root's ON value reports under `:where`), which is public `:dict` output.
+# ─────────────────────────────────────────────────────────────────────────────
+function _collector_predicate(connection::Union{PormGPostgres, PormGSQLite},
+    keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}})
+  parameters = get_parameter(connection)
+  set_context!(parameters, :where)
+  arms = String[]
+  alias = ""
+  for key in keys
+    build_one = () -> begin
+      work = deepcopy(key[:objct].object)
+      empty!(work.values)
+      instruction = build(work, connection=connection, parameters=parameters)
+      alias = quote_identifier(instruction.alias, connection)
+      instruction
+    end
+    push!(arms, _mutation_predicate(build_one, parameters))
+  end
+
+  if any(isempty, arms)
+    # Only a lone, genuinely UNFILTERED root arm may be empty (`allow_delete_all`). An empty arm beside
+    # others would drop a WHERE whose other arms had already bound values — markers and values out of
+    # step — and a filtered root that rendered no predicate would delete every row. Refuse both.
+    (length(arms) == 1 && isempty(keys[1][:objct].object.filter)) || error(_emsg("PormG internal error in delete(): a path rendered no row predicate (one of $(length(arms)) collected) — this should not happen; please report it."))
+    return "", parameters, alias
+  end
+  where_sql = length(arms) == 1 ? arms[1] : join(("($(arm))" for arm in arms), " OR ")
+  return where_sql, parameters, alias
+end
+
 function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
    show_query::Symbol, deleted_counter::Dict{String, Integer}, conn)
   @pormg_debug false
@@ -785,58 +857,9 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
   any(k -> k[:key] == DIRECT_DELETE_KEY_SENTINEL, keys) &&
     throw(QueryBuildError("Multi-path delete on keyless model $(model.name) is not supported; define a primary key"))
 
-  # One WHERE fragment per cascade path, ORed together — and the ONLY thing that renders into
-  # `parameters`.
-  #
-  # #452: the multi-path case used to build these fragments, throw the text away, and re-render the
-  # same subqueries through a `Qor` into this SAME collector. The statement then carried twice as
-  # many bound values as it had markers — SQLite refuses the surplus outright
-  # ("values should be provided for all query placeholders"), PostgreSQL orphans the leading run.
-  # That branch also addressed every arm with `keys[1][:key]`, which is a silent WRONG DELETE the
-  # moment two entries resolve different keys. A keyless child reached by two FKs compared ONE
-  # column against the OTHER column's values — measured, `"owner" IN (SELECT … "backup" …)`. Which
-  # of the two wins is `related_objects` Dict order, so the direction flips between model sets; that
-  # it is arbitrary is the point. Both defects are gone with the branch rather than guarded — each
-  # fragment carries its own key, and there is exactly one renderer and one collector here.
-  _where = String[]
-  parameters = get_parameter(connection)
-  for key in keys
-    pk_field = key[:key]
-    # #432's nested-run machinery, the same wrap the read builder's four splice sites use: mark every
-    # bucket, let the inner build file its values under its OWN clauses (`own_contexts`), then lift
-    # the run and re-emit it as one contiguous, clause-ordered block at this fragment's marker
-    # position.
-    #
-    # NOT load-bearing today, and the honest note is worth more than the flattering one. Measured on
-    # a two-path cascade whose ROOT carries a parameterized `cjoin` — the shape that should
-    # interleave — removing this wrap leaves every statement's SQL text and flattened value vector
-    # identical. (It does move one thing: the ROOT statement's `ON` value sits in `:join` unwrapped
-    # and in `:where` wrapped. Same flatten, but `:parameter_buckets` is public `:dict` output, so
-    # that difference is visible — it is not "no change at all".)
-    #
-    # Why it cannot interleave, stated precisely — the tempting short version ("no delete fragment
-    # binds at its own `:join`") is FALSE, so do not simplify back to it. A fragment can: the user's
-    # root queryset does. What it cannot do is share a statement with a second fragment.
-    # Every OTHER fragment is built by `find_related_objects!` as
-    # `child.objects.filter("<fk>__@in" => parent).values(<key>)`, which carries no join of its own;
-    # and a second entry for the ROOT model needs an FK cycle, which `topological_sort` refuses
-    # (measured: a self-loop and a two-model cycle both raise "Circular dependency detected in
-    # model relationships"). So the interleave needs two join-binding fragments in one statement,
-    # and the graph cannot produce them.
-    #
-    # Kept as insurance, not decoration: it is what makes the alignment a property of the code
-    # rather than of that reachability argument, which nothing enforces and which a future fragment
-    # shape (a join, a HAVING) would quietly invalidate. `docs/src/architecture.md` states the same
-    # thing rather than claiming a fix that is not one.
-    nested_mark = nested_parameter_mark(parameters)
-    subquery = query(key[:objct], parameters=parameters, own_contexts=true)
-    reattach_parameters!(parameters, detach_nested_run!(parameters, nested_mark))
-    # Outer WHERE targets the physical column (db_column when set); the subquery already
-    # projects/aliases the key, so only this identifier needs resolving (#50).
-    push!(_where, """$(safe_column_identifier(Models.model_column(model, pk_field), connection)) IN ($(subquery))""")
-  end
-
-  sql::String = "DELETE FROM $(safe_table_identifier(Models.model_table_name(model), connection)) WHERE $(join(_where, " OR "))"
+  where_sql, parameters, alias = _collector_predicate(connection, keys)
+  sql::String = "DELETE FROM $(safe_table_identifier(Models.model_table_name(model), connection)) AS $(alias)" *
+    (isempty(where_sql) ? "" : " WHERE $(where_sql)")
 
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model, :delete, parameters=parameters)
@@ -861,27 +884,22 @@ function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::Porm
   any(k -> k[:key] == DIRECT_DELETE_KEY_SENTINEL, keys) &&
     throw(QueryBuildError("Cannot update field on keyless model $(model.name); define a primary key"))
 
-  parameters = get_parameter(connection)
   value_sql = value === nothing ? "NULL" : model.fields[field].formatter(value)
 
-  # One WHERE fragment per cascade path, ORed together — the same shape, and the same single
-  # renderer/single collector discipline, as `delete_objects` (#452). Before #459 (a) this function
-  # took ONE entry because the collector could only hold one: a SET_NULL child of a multi-path
-  # parent had its first path overwritten by its second.
-  _where = String[]
-  for key in keys
-    pk_field = key[:key]
-    # Same #432 mark/detach wrap as delete_objects: let the inner build file its values under its own
-    # clauses, then lift the run and re-emit it contiguously at this fragment's marker position.
-    nested_mark = nested_parameter_mark(parameters)
-    subquery = query(key[:objct], parameters=parameters, own_contexts=true)
-    reattach_parameters!(parameters, detach_nested_run!(parameters, nested_mark))
-    # Outer WHERE key targets the physical column (db_column) — #50.
-    push!(_where, """$(safe_column_identifier(Models.model_column(model, pk_field), connection)) IN ($(subquery))""")
-  end
+  # One predicate per cascade path, ORed together — the same renderer, and the same single-collector
+  # discipline, as `delete_objects` (#452). Before #459 (a) this function took ONE entry because the
+  # collector could only hold one: a SET_NULL child of a multi-path parent had its first path
+  # overwritten by its second. #765 is why it is a predicate on the target rather than `pk IN (…)`:
+  # a child re-parented by a concurrent UPDATE must not be nulled on the old parent's account.
+  where_sql, parameters, alias = _collector_predicate(connection, keys)
+  # Every entry here is `child.filter("<fk>__@in" => parent)`, so an empty predicate cannot arise —
+  # and if it ever did, dropping the WHERE would rewrite the whole table. Refuse instead; only the
+  # root DELETE (`allow_delete_all`) legitimately has no predicate.
+  isempty(where_sql) && error(_emsg("PormG internal error in delete(): the $(field) update for $(model.name) has no row predicate — this should not happen; please report it."))
 
-  # SET column is physical too (db_column) — #50.
-  sql = "UPDATE $(safe_table_identifier(Models.model_table_name(model), connection)) SET $(safe_column_identifier(Models.model_column(model, field), connection)) = $(value_sql) WHERE $(join(_where, " OR "))"
+  # SET column is physical (db_column) — #50. Unqualified: SET names a column of the target, and
+  # PostgreSQL rejects an alias-qualified SET column outright.
+  sql = "UPDATE $(safe_table_identifier(Models.model_table_name(model), connection)) AS $(alias) SET $(safe_column_identifier(Models.model_column(model, field), connection)) = $(value_sql) WHERE $(where_sql)"
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model, :update, parameters=parameters)
   end

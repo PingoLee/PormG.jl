@@ -132,7 +132,7 @@ WHERE "Tb"."raceid" = $1
 All updates pass through a centralized validation engine that enforces:
 - **Primary Key Protection**: You cannot update a Primary Key field.
 - **Max Length**: Strings are checked against the model's `max_length`.
-- **Numeric Precision**: `DecimalField` and `FloatField` are checked for `max_digits` and `decimal_places`.
+- **Numeric Precision**: `DecimalField` values are checked for `max_digits`, `decimal_places`, and the `max_digits - decimal_places` digits allowed before the point (see [`DecimalField`](../fields.md#DecimalField(max_digits,-decimal_places))).
 - **Nullability**: Attempts to set non-nullable fields to `nothing` or `missing` will throw an error.
 - **Single Values**: A `Vector` or a tuple set on a text-like field (`CharField`, `TextField`, …) raises `InvalidValueError` naming the field, whatever its elements, on both backends. `JSONField` and `BinaryField` values are unaffected: each is serialized to one value first.
 - **ForeignKey Scalars**: FK fields accept scalar primary-key values, including `0`; use `nothing` or `missing` only when you intend SQL `NULL` on a nullable relation field.

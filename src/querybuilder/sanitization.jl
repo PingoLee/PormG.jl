@@ -97,8 +97,10 @@ Validates that a value is compatible with the model field definition before SQL 
 Checks:
 1. Field existence in model.
 2. Primary key modification protection (disabled if allow_primary_key is false).
-3. Max length for CharFields.
-4. Max digits for Decimal/Numeric fields.
+3. Nullability, and the value's type for its field.
+4. Max length for CharFields (characters) and BinaryFields (bytes).
+5. DecimalField width: total digits (`max_digits`), fractional digits (`decimal_places`) and whole
+   digits (`max_digits - decimal_places`), as Django's `DecimalValidator` checks (#761).
 
 Returns `true` if valid. An unknown field **name** throws an `UnknownFieldError` (#462); every
 other rejection — a bad **value**, a protected primary key, a many-to-many relation — throws an
@@ -168,16 +170,38 @@ function _string_uses_scientific_notation(value::AbstractString)::Bool
     return occursin(r"^[+-]?(?:\d+\.?\d*|\.\d+)[eE][+-]?\d+$", strip(value))
 end
 
+const _MAX_EXPANDED_EXPONENT = 10_000
+
 function _expand_scientific_notation(value::AbstractString)::String
-    match_result = match(r"^([+-]?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$", value)
+    # Either side of the point may be empty — `"5.e3"` and `".5e3"` are numbers `format_number_sql`
+    # accepts, and `_string_uses_scientific_notation` above already matches both. Requiring a digit on
+    # each side left them unexpanded, so `"5.e3"` counted as 1 whole digit and the whole-digit bound
+    # let 5000 into a `DecimalField(5, 2)` (#761).
+    match_result = match(r"^([+-]?)(\d*)(?:\.(\d*))?[eE]([+-]?\d+)$", value)
     match_result === nothing && return value
 
     sign, integer_part, fractional_part, exponent_str = match_result.captures
     fractional_part = fractional_part === nothing ? "" : fractional_part
-    exponent = parse(Int, exponent_str)
+    isempty(integer_part) && isempty(fractional_part) && return value
     digits = integer_part * fractional_part
+    # The exponent is caller-sized text, and expanding it literally is unbounded work. A zero mantissa
+    # passes `format_number_sql` at any exponent (0.0 is finite) — `"0e9000000000000000000"` asked
+    # `repeat` for 9e18 zeros, and one past Int64 raised `OverflowError` — and a zero-PADDED mantissa
+    # lets a huge exponent through too, because the padding cancels it: `"0.000…0001e10004"` is 1000.
+    # So zero is zero at any exponent, and what is clamped is where the point LANDS, never the
+    # exponent alone (which would move the point short of the padding and miscount the value). No
+    # `NUMERIC` holds more than 1000 digits (PostgreSQL's cap on a declared precision; SQLite's is 15,
+    # #648), so a point that lands past the cap marks a value too wide either way, and every value
+    # that could fit is expanded exactly — `_decimal_digit_counts` drops the padding as leading zeros.
+    all(==('0'), digits) && return "0"
     decimal_index = length(integer_part)
-    target_index = decimal_index + exponent
+    # Bound the exponent by a magnitude no input's padding reaches (an input string is far shorter
+    # than 2^40), so the sum cannot overflow; an exponent past Int64 takes that bound's sign.
+    parsed_exponent = tryparse(Int, exponent_str)
+    exponent = parsed_exponent === nothing ?
+        (startswith(exponent_str, '-') ? -(1 << 40) : 1 << 40) :
+        clamp(parsed_exponent, -(1 << 40), 1 << 40)
+    target_index = clamp(decimal_index + exponent, -_MAX_EXPANDED_EXPONENT, length(digits) + _MAX_EXPANDED_EXPONENT)
 
     if target_index <= 0
         return string(sign, "0.", repeat("0", -target_index), digits)
@@ -212,18 +236,17 @@ function _normalized_numeric_string(value)::String
     return _trim_fixed_point(_expand_scientific_notation(base))
 end
 
-function _count_numeric_digits(value)::Int
-    value_str = _normalized_numeric_string(value)
-    digits_only = replace(value_str, r"^[+-]" => "")
-    digits_only = replace(digits_only, "." => "")
-    return isempty(digits_only) ? 0 : length(digits_only)
-end
-
-function _count_decimal_places(value)::Int
-    value_str = _normalized_numeric_string(value)
+# The digits a value occupies in a `NUMERIC(p, s)` column, split at the point (#761): `whole` is
+# checked against `p - s`, `frac` against `s`, and their sum against `p`. Leading zeros of the
+# integer part are not digits — PostgreSQL stores `0.55` in `NUMERIC(2, 2)` — which is the fit rule
+# the SQLite read parser applies (`Dialect._parse_sqlite_decimal`) and Django's `DecimalValidator`
+# checks. Counting them used to refuse `0.55` there while accepting `1.5`, which does not fit.
+function _decimal_digit_counts(value)::Tuple{Int, Int}
+    value_str = replace(_normalized_numeric_string(value), r"^[+-]" => "")
     point_index = findfirst(==('.'), value_str)
-    point_index === nothing && return 0
-    return length(value_str) - point_index
+    int_part = point_index === nothing ? value_str : value_str[1:point_index - 1]
+    frac_part = point_index === nothing ? "" : value_str[point_index + 1:end]
+    return (length(lstrip(==('0'), int_part)), length(frac_part))
 end
 
 function _validate_integer_value(model::PormGModel, field::String, value::Any, operation::String)
@@ -481,7 +504,7 @@ function _validate_field_name(model::PormGModel, field::String, operation::Strin
     return f_meta
 end
 
-# Steps 3–8: the checks on one value, given the field struct `_validate_field_name` returned.
+# Steps 3–9: the checks on one value, given the field struct `_validate_field_name` returned.
 function _validate_field_value(model::PormGModel, field::String, f_meta, value::Any, operation::String)
     # 3. Nullability check
     if !f_meta.null && (value === nothing || ismissing(value))
@@ -538,21 +561,29 @@ function _validate_field_value(model::PormGModel, field::String, f_meta, value::
         end
     end
     
-    # 7. Max digits validation (Decimals/Floats)
-    if hasfield(typeof(f_meta), :max_digits)
-        digit_count = _count_numeric_digits(value)
+    # 7–9. DecimalField width — Django's three `DecimalValidator` bounds, in its order (#761).
+    if _is_decimal_field(f_meta) && hasfield(typeof(f_meta), :max_digits) && hasfield(typeof(f_meta), :decimal_places)
+        whole_digits, decimal_places = _decimal_digit_counts(value)
+
+        # 7. Total digits.
+        digit_count = whole_digits + decimal_places
         if digit_count > f_meta.max_digits
             _validation_error(operation, model, field, "max_digits is $(f_meta.max_digits), but the normalized numeric value uses $digit_count digits")
         end
-    end
 
-    # 8. Decimal scale validation (DecimalField)
-    if _is_decimal_field(f_meta) && hasfield(typeof(f_meta), :decimal_places)
-        decimal_places = _count_decimal_places(value)
+        # 8. Fractional digits.
         if decimal_places > f_meta.decimal_places
             _validation_error(operation, model, field, "decimal_places is $(f_meta.decimal_places), but the normalized numeric value uses $decimal_places fractional digits")
         end
+
+        # 9. Whole digits. Without it `DecimalField(5, 2)` let `1234.5` through: 5 digits in total and
+        #    1 fractional both fit, 4 whole ones do not. PostgreSQL then refused it as a driver
+        #    `numeric field overflow`, and SQLite stored it — a cell #648's read parser cannot rebuild.
+        max_whole = f_meta.max_digits - f_meta.decimal_places
+        if whole_digits > max_whole
+            _validation_error(operation, model, field, "max_digits - decimal_places is $max_whole, so at most $max_whole digits fit before the decimal point, but the normalized numeric value uses $whole_digits")
+        end
     end
-    
+
     return true
 end

@@ -618,9 +618,9 @@ end
         @test validate_field_data(BoundaryModel, "price", 9999999999.99, "insert") === true
         @test validate_field_data(BoundaryModel, "price", "9999999999.99", "insert") === true
         
-        # Test 2: Max value with fewer decimal places
-        @test validate_field_data(BoundaryModel, "price", 99999999999.0, "insert") === true
-        @test validate_field_data(BoundaryModel, "price", "99999999999", "insert") === true
+        # Test 2: Max value with fewer decimal places — 10 whole digits, the most NUMERIC(12,2) holds
+        @test validate_field_data(BoundaryModel, "price", 9999999999.0, "insert") === true
+        @test validate_field_data(BoundaryModel, "price", "9999999999", "insert") === true
         
         # Test 3: Max value with single decimal place
         @test validate_field_data(BoundaryModel, "price", 999999999.9, "insert") === true
@@ -637,9 +637,9 @@ end
         @test validate_field_data(BoundaryModel, "price", 0.01, "insert") === true
         @test validate_field_data(BoundaryModel, "price", "0.01", "insert") === true
         
-        # Test 7: Scientific notation within bounds
-        @test validate_field_data(BoundaryModel, "price", 1e10, "insert") === true
-        @test validate_field_data(BoundaryModel, "price", "1e10", "insert") === true
+        # Test 7: Scientific notation within bounds (1e9 = 10 whole digits)
+        @test validate_field_data(BoundaryModel, "price", 1e9, "insert") === true
+        @test validate_field_data(BoundaryModel, "price", "1e9", "insert") === true
         
         # Test 8: Scientific notation with smaller exponent
         @test validate_field_data(BoundaryModel, "price", 1.23e9, "insert") === true
@@ -673,6 +673,16 @@ end
         
         # Test 15: Multiple violations (too many decimals AND too many digits)
         @test_throws PormGError validate_field_data(BoundaryModel, "price", 99999999999.999, "insert")
+
+        # --- EXCEED WHOLE DIGITS (Should Fail) — #761 ---
+        # 11 whole digits fit max_digits (12) and decimal_places (2), but NUMERIC(12,2) holds at most
+        # 12 - 2 = 10 before the point. These three spellings used to be asserted VALID here (Tests 2
+        # and 7 above), contradicting this testset's own header; PostgreSQL refuses each one with
+        # `numeric field overflow`. They now fail in PormG, before SQL, on both engines.
+        @test_throws InvalidValueError validate_field_data(BoundaryModel, "price", 99999999999.0, "insert")
+        @test_throws InvalidValueError validate_field_data(BoundaryModel, "price", "99999999999", "insert")
+        @test_throws InvalidValueError validate_field_data(BoundaryModel, "price", 1e10, "insert")
+        @test_throws InvalidValueError validate_field_data(BoundaryModel, "price", "1e10", "insert")
         
         # --- EDGE CASES ---
         
@@ -698,12 +708,17 @@ end
         @test create_max[:operation] === :insert
         @test contains(create_max[:sql_text], "INSERT INTO") && contains(create_max[:sql_text], "boundary_test")
         
-        # Test 21: Create with scientific notation within boundary
+        # Test 21: Create with scientific notation within boundary (1e9 = 10 whole digits)
         create_scientific = BoundaryModel.objects.create(
-            "price" => "1e10",
+            "price" => "1e9",
             show_query=:inspection
         )
         @test create_scientific[:operation] === :insert
+        # ...and one past it (1e10 = 11 whole digits) is refused before SQL (#761)
+        @test_throws InvalidValueError BoundaryModel.objects.create(
+            "price" => "1e10",
+            show_query=:inspection
+        )
         
         # Test 22: Create with invalid scale (should fail before SQL)
         @test_throws PormGError BoundaryModel.objects.create(

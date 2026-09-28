@@ -511,6 +511,19 @@ Merchandise = Models.Model(
 - `max_digits::Int`: Total number of digits (at most 15 on SQLite — see above)
 - `decimal_places::Int`: Number of decimal places
 
+**Write validation**: every write (`create`, `update`, `get_or_create`, `update_or_create`,
+`bulk_insert`, `bulk_update`, `bulk_copy`)
+checks a value against the three widths the column has, the way Django's `DecimalValidator` does.
+A value that exceeds one raises `InvalidValueError` naming the field, before any SQL, on both engines:
+
+- at most `max_digits` digits in total;
+- at most `decimal_places` digits after the point (a value is never rounded to fit);
+- at most `max_digits - decimal_places` digits **before** the point. `DecimalField(max_digits=5,
+  decimal_places=2)` holds `999.99` and refuses `1000`.
+
+Leading zeros are not digits: `DecimalField(max_digits=2, decimal_places=2)` accepts `0.55`, as
+PostgreSQL's `numeric(2, 2)` does.
+
 ---
 
 ## Date and Time Fields

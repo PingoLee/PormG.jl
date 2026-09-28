@@ -99,13 +99,14 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
     if isa(v_copy.field, Union{SQLTypeFunction, SQLTypeF})
       # #722: resolved, not read off the node — a condition that names an aggregate (or window)
       # alias makes the projection one too, and its own flag cannot see that. See `_reads_alias`.
-      if _resolved_window(v_copy.field, instruc)
-        nothing
-      elseif !_resolved_agg(v_copy.field, instruc)
-        push!(instruc.group, i |> string)
-      else
-        instruc.aggregate = true
-      end
+      #
+      # #756 review: the two questions are independent. A projection can be BOTH — `Rank(…) +
+      # Sum(…)`, or a `Case` with an aggregate in one branch and a window in another — and it is
+      # still an aggregate, so the statement needs GROUP BY for its plain columns. Answering "window"
+      # first used to skip the flag and drop the GROUP BY altogether.
+      is_agg = _resolved_agg(v_copy.field, instruc)
+      is_agg && (instruc.aggregate = true)
+      (is_agg || _resolved_window(v_copy.field, instruc)) || push!(instruc.group, i |> string)
     elseif isa(v_copy.field, Union{SubqueryObject, ExistsObject})
       # #92: a projected scalar subquery / EXISTS is a per-row expression — neither a groupable
       # column nor an outer aggregate. It must NOT be pushed into GROUP BY (in a mixed projection

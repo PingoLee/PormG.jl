@@ -476,6 +476,34 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Window Functions (#756): a window written directly in a CASE branch stays out of GROUP BY
+# #722's direct twin — the window sits in the branch's `then` rather than behind an alias. It was
+# grouped beside the aggregate, which neither engine allows. It must execute, and each branch must
+# agree with the same window projected on its own.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "A window inside a CASE branch stays out of GROUP BY beside Count (#756)" begin
+    rank() = Rank(over=WindowOver(partition_by=["constructorid"], order_by=["-points"]))
+    query = M.Result.objects
+    query.filter("driverid__@in" => [1, 20], "points__@gt" => 0)
+    query.values(
+        "constructorid",
+        "driverid__surname",
+        "points",
+        "total_results" => Count("resultid"),
+        "pts_rank" => rank(),
+        "big_rank" => Case([When("points__@gte" => 10, then = rank())], default = 0)
+    )
+
+    rows = query.list()
+
+    @test !isempty(rows)
+    @test all(row -> row[:big_rank] == (row[:points] >= 10 ? row[:pts_rank] : 0), rows)
+    # Both branches occur, so the agreement above is not vacuous.
+    @test any(row -> row[:points] >= 10, rows)
+    @test any(row -> row[:points] < 10, rows)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Window Functions: ORDER BY accepts a window alias on a plain standings query
 # This mirrors the docs example and checks the user-visible effect directly:
 # rows are ordered first by driver and then by the computed per-race rank.

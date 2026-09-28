@@ -236,13 +236,85 @@ for `update()`, joined filters included.
     was deleted anyway. The joined path of `update()` had the same shape. SQLite was never affected —
     its writers are serialized, so no statement waits on another writer's uncommitted row.
 
-One limit remains, and it concerns the *order* of a cascade rather than any single statement.
-Children are deleted before their parent, and a child's statement decides which parents it belongs
-to at the moment it runs. If a concurrent transaction changes the **parent** so that it stops
-matching after its children are gone, the parent's own `DELETE` correctly skips it — but the children
-have already been removed. Where a parent's eligibility can change under you, lock it first (for
-example with [`select_for_update`](transaction.md#Row-Level-Locking) inside a transaction) or
-serialize the two writers with an [advisory lock](../advisory_lock.md).
+### A cascade locks its parents first on PostgreSQL
+
+A cascade has one more ordering problem on top of its per-statement filters. Children are deleted
+before their parent, and a child's statement decides which parents it belongs to when it runs. Say
+another session renames a race while its delete is in progress:
+
+1. The delete removes the race's results.
+2. The other session renames the race.
+3. The race's own `DELETE` now correctly skips it, because it no longer matches the filter.
+
+The race survives, but its results are already gone.
+
+To prevent this, `delete()` on PostgreSQL first **locks every parent in the cascade**, from the root
+down, with `SELECT … FOR UPDATE`. Each lock uses the same predicate as that model's `DELETE`. A
+locked parent row cannot change until the delete commits, so children are selected from parents
+whose own columns stay fixed. If another session already changed a parent while the lock was
+waiting, PostgreSQL re-checks the new version: the parent is not locked, and none of its children
+are deleted. (One limit, covered at the end of this section: a filter that reads a *related* table
+is not pinned.)
+
+This applies at every depth. Deleting a circuit locks the circuit and then its races. A race moved
+to another circuit mid-delete is therefore neither deleted nor stripped of its results.
+
+The locks are part of what runs, so the inspection shows them as `:lock` steps ahead of the writes:
+
+```julia
+steps = M.Race.objects.filter("name" => "Monaco Grand Prix", "year" => 2009).delete(show_query = :dict)
+[(s[:operation], s[:model]) for s in steps]
+# (:lock, "race")
+# (:delete, "driver_standings")
+# (:delete, "constructor_results")
+# (:delete, "qualifying")
+# (:delete, "constructor_standings")
+# (:delete, "result")
+# (:delete, "lap_times")
+# (:delete, "race")
+
+steps[1][:sql_text]
+# SELECT count(*) FROM (SELECT 1 FROM "race" AS "Tb"
+#   WHERE "Tb"."name" = $1 AND "Tb"."year" = $2 FOR UPDATE) AS "__pormg_lock"
+```
+
+`result` has no lock here because none of its dependent rows exist, so no statement reads it as a
+parent. The child tables' order follows the collector and may vary between runs; the locks always
+come first, root first.
+
+What this costs and what it doesn't:
+
+- **Leaves are never locked**, so a delete with nothing to cascade emits exactly one statement, as
+  before.
+- **The same rows are locked, but for longer.** `FOR UPDATE` is the lock each parent's own
+  `DELETE` takes anyway. It is now held from the first statement of the cascade instead of only
+  near the end. While a large cascade runs, a concurrent insert of a child row, an update of a
+  parent, or a `select_for_update` on it waits for the whole cascade.
+- **It adds some work.** Each parent level costs one extra statement, and each parent row gets a
+  row-lock write before its `DELETE` writes the row again.
+- **Locks are acquired in a different order**: parents first, where the deletes alone went children
+  first. A writer that locks a child and then its parent can now deadlock with a delete. PostgreSQL
+  detects the deadlock and aborts one transaction with an error; it does not hang.
+- **SQLite takes no locks.** Its writers are serialized for the whole delete transaction, so no
+  parent can change under a cascade there.
+
+The lock pins the parent's **own row**. It cannot pin a root filter that reads another table, such
+as a filter across a relation:
+
+```julia
+M.Race.objects.filter("year" => 2009, "circuitid__name" => "Circuit de Monaco").delete()
+```
+
+Every statement in the cascade re-reads `circuit`. If another session renames that circuit while
+the delete is running, the results can already be gone when the race's own `DELETE` re-checks the
+new name and skips the race. The lock also doesn't stop the parent set from *growing*: a row that
+starts matching mid-cascade can be deleted without the children an earlier statement already
+passed over. The database's foreign keys catch that case wherever one exists (see *Concurrency*
+below).
+
+Where a filter on a related table decides which parents go, pin that table yourself, for example
+with [`select_for_update`](transaction.md#Row-Level-Locking) inside a transaction. Or serialize the
+two writers with an [advisory lock](../advisory_lock.md).
 
 ### Concurrency: a cascade path can be pruned out from under you on PostgreSQL
 
@@ -292,10 +364,15 @@ In both, a row inserted on a pruned path simply survives with a dangling referen
 situation, serialize the delete against the writer yourself — an
 [advisory lock](../advisory_lock.md) around both is the usual answer.
 
-PormG deliberately does **not** raise the isolation level or lock the probed rows on your behalf:
-either would change the failure modes of *every* delete — serialization failures the caller must
-retry, or blocking on rows another transaction holds — to close a window that the database already
-covers wherever the constraint is real.
+PormG deliberately does **not** raise the isolation level or lock the probed *child* rows on your
+behalf. Either would change the failure modes of *every* delete, to close a window that the database
+already covers wherever the constraint is real. A higher isolation level brings serialization
+failures the caller must retry; locking the probed rows means blocking on rows another transaction
+holds. The parent locks described in
+[A cascade locks its parents first](#A-cascade-locks-its-parents-first-on-PostgreSQL) are a
+different matter. They cover a parent that *changes*, not a child that is *inserted*, and they take
+only locks the cascade's own `DELETE`s would take anyway (just earlier), so they leave this window
+as it is.
 
 !!! warning "`PROTECT` and `RESTRICT` refuse the delete with `ProtectedError`"
     A `ForeignKey` declared `on_delete = PROTECT` (or `RESTRICT`) makes the referenced row

@@ -88,6 +88,14 @@ correlated `EXISTS` on the row. That makes a filter a **fence** on PostgreSQL: i
 transaction changes a row so it no longer matches while the delete waits on its lock, the row is left
 alone (#765). See *Filters are a fence on PostgreSQL* in [Deleting Records](write/delete.md).
 
+On PostgreSQL, before any child statement runs, every collected model that is the parent of an
+emitted `DELETE` or `UPDATE` is locked top-down with `SELECT … FOR UPDATE` over the same predicate
+its `DELETE` uses, so a parent's own columns cannot change after its children are gone (#770). A
+root filter that reads another table (`"circuitid__name" => …`) is not pinned and can still change
+mid-cascade. Those lock statements appear in `show_query` and
+[`inspect_query`](@ref) output as `:operation => :lock` steps. A delete with nothing to cascade
+emits no lock, and SQLite emits none at all.
+
 The cascade descends at most 50 levels. Beyond that it raises `QueryBuildError` naming the models it
 walked. Usually that means a foreign-key cycle — two models declaring `on_delete = CASCADE` at each
 other, or self-referencing rows that form a loop — which would otherwise make the collector descend
@@ -278,12 +286,26 @@ function delete(objct::SQLObjectHandler;
     # contract; parent-row FOR UPDATE closes it at the cost of a lock per collected level. Each was
     # weighed there and rejected for this pre-publish stage.
     #
+    # #770 has since adopted the parent-row lock, but for a DIFFERENT gap — a parent that stops
+    # matching after its children are gone (`lock_objects`) — and it runs AFTER this planning. It does
+    # not un-prune a path: a row inserted on a path the probe dropped is still #460's residue, as above.
+    #
     # Two costs, both accepted deliberately: SQLite now holds the write lock across the probe
     # SELECTs, and a `ProtectedError` / `ModelDefinitionError` raised while planning now costs a
     # BEGIN + ROLLBACK instead of throwing before any transaction existed.
     collector = DeletionCollector(model, settings, show_query)
     add_objects_to_collector!(collector, objct |> deepcopy, model)
     process_collector!(collector)
+
+    # #770: lock every parent, top-down, BEFORE any statement below reads it. See `lock_objects`.
+    # PostgreSQL only: SQLite's writers are already serialized for the whole transaction (the
+    # `BEGIN IMMEDIATE` + write-lock comment above), so no parent can change under the cascade there.
+    if connection isa PormGPostgres
+      for lock_model in _models_to_lock(collector)
+        res = lock_objects(connection, lock_model, collector.objects[lock_model], show_query, conn)
+        push!(results, res)
+      end
+    end
 
     # Process fast deletes first (objects that can be deleted directly).
     # Named `fast_model` rather than `model`: the enclosing `model` is now read inside this closure
@@ -828,6 +850,83 @@ function _collector_predicate(connection::Union{PormGPostgres, PormGSQLite},
   end
   where_sql = length(arms) == 1 ? arms[1] : join(("($(arm))" for arm in arms), " OR ")
   return where_sql, parameters, alias
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lock the parents before touching their children (#770)
+#
+# The collector deletes children BEFORE their parent, and a child's statement picks its parents
+# through `"Tb"."<fk>" IN (<parent query>)` — read when THAT statement runs. #765 fences each
+# statement on its own row, which is exactly why this gap is left: if a concurrent transaction changes
+# a parent so it stops matching after its children have gone, the parent's own DELETE re-checks,
+# correctly skips it, and the children are already deleted (or nulled). Measured on db_2 before this
+# lock existed, at both depths `test_mutation_fence_concurrency.jl` stages: a race renamed out of the
+# root filter, and a race moved to another circuit under a circuit delete — the race survived both
+# times and its result did not.
+#
+# So every model that is a PARENT of an emitted statement is locked first, `FOR UPDATE`, top-down, in
+# one statement per model, through the same `_collector_predicate` its DELETE renders. Top-down is
+# what makes it hold at every depth: level L+1 is selected from level-L rows that are already locked
+# and can no longer change until COMMIT. A lock that waits re-checks its row's new version the same way
+# the #765 DELETE does, so a parent that changed meanwhile is simply not locked, and the child
+# statements that follow read it as not matching either.
+#
+# What it costs. The ROW SET is unchanged — `FOR UPDATE` is the lock each parent's own DELETE takes
+# anyway — but not the rest:
+#   - DURATION: parent rows are held from the first statement instead of only for the tail of the
+#     cascade, so a concurrent child INSERT (its FK check takes `FOR KEY SHARE`), a parent UPDATE or a
+#     `select_for_update` waits for the whole cascade rather than its last statements.
+#   - I/O: one statement per parent level, and a row-lock write (xmax + WAL record) per parent row
+#     that the DELETE then writes again.
+#   - ORDER: parents first, where the DELETEs alone went children first. A writer that locks
+#     child-then-parent can now deadlock against a delete, which PostgreSQL detects and raises rather
+#     than hangs on.
+#
+# What it does NOT cover (staged on db_2 in the #770 review): the lock pins the parent's OWN row. A
+# root filter that reads another table — a joined `"circuitid__name" => …`, or an `"x__@in" =>
+# subquery` — is re-read by every later statement on a fresh snapshot, so if that other table changes
+# mid-cascade the root's fenced DELETE skips the parent after its children have gone, exactly as
+# before. Nor does it stop the parent set GROWING (a row that starts matching mid-cascade). Both are
+# documented in delete.md; closing the first needs its own design (#771).
+#
+# Leaves are never locked, so a delete with nothing to cascade emits exactly the statements it did
+# before. The `count(*)` wrapper keeps a large cascade from shipping one row per locked parent back to
+# the client; the inner SELECT is what carries `FOR UPDATE`, and only its `"Tb"` rows are locked,
+# because a joined root keeps its joins inside the predicate's IN/EXISTS subqueries.
+#
+# PostgreSQL only — the caller skips it on SQLite, whose writers are serialized for the whole
+# transaction. Visible in `show_query` / `inspect_query` as `:operation => :lock` steps, because a
+# statement that runs belongs in the inspection of what runs.
+# ─────────────────────────────────────────────────────────────────────────────
+"""
+The collected models that are a parent of an emitted statement — a CASCADE child in
+`collector.objects` or a SET_NULL / SET_DEFAULT target in `collector.field_updates` — parent first.
+"""
+function _models_to_lock(collector::DeletionCollector)::Vector{PormGModel}
+  emitters = Set{PormGModel}(keys(collector.objects))
+  for affected in values(collector.field_updates)
+    union!(emitters, keys(affected))
+  end
+  parents = Set{PormGModel}()
+  for child in emitters
+    union!(parents, get(collector.dependencies, child, Set{PormGModel}()))
+  end
+  # `sorted_models` is children-first (`topological_sort`), so its reverse is the top-down order.
+  return [m for m in reverse(collector.sorted_models) if m in parents && haskey(collector.objects, m)]
+end
+
+function lock_objects(connection::PormGPostgres, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
+    show_query::Symbol, conn)
+  isempty(keys) && error(_emsg("PormG internal error in delete(): lock_objects was called with no keys for $(model.name) — this should not happen; please report it."))
+  where_sql, parameters, alias = _collector_predicate(connection, keys)
+  sql = "SELECT count(*) FROM (SELECT 1 FROM $(safe_table_identifier(Models.model_table_name(model), connection)) AS $(alias)" *
+    (isempty(where_sql) ? "" : " WHERE $(where_sql)") *
+    " FOR UPDATE) AS $(quote_identifier("__pormg_lock", connection))"
+  if show_query !== :execute
+    return _show_query_result(show_query, sql, connection, model, :lock, parameters=parameters)
+  end
+  with_transaction(connection, sql, conn=conn, params=parameters)
+  return nothing
 end
 
 function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},

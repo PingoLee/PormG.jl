@@ -127,7 +127,8 @@ end
 
 """The step whose `:model` is `name`. Fails loudly rather than returning `nothing`."""
 function _dmp_step(steps, name::String)
-  idx = findfirst(s -> s[:model] == name, steps)
+  # The WRITE step: a #770 `:lock` step for the same model (PostgreSQL) is skipped.
+  idx = findfirst(s -> s[:model] == name && s[:operation] != :lock, steps)
   @assert idx !== nothing "no step for $(name); got $([s[:model] for s in steps])"
   return steps[idx]
 end
@@ -162,7 +163,10 @@ end
         steps = _dmp_steps(build_q, conn)
         # dmp_b and dmp_k are multi-path (two CASCADE FKs each); dmp_c is multi-path through the
         # recursion; dmp_a is the single-key root. All four must hold.
-        @test length(steps) == 4
+        @test count(s -> s[:operation] != :lock, steps) == 4
+        # #770: on PostgreSQL the two parents (dmp_a, then dmp_b) are locked first, through the same
+        # multi-arm predicates — so the marker loop below covers the lock statements too.
+        @test [s[:model] for s in steps if s[:operation] == :lock] == (kind === :postgres ? ["dmp_a", "dmp_b"] : String[])
         for step in steps
           assert_marker_count(step, kind)
         end
@@ -287,7 +291,9 @@ end
 
   for (backend, conn, kind) in _DMP_BACKENDS
     steps = _dmp_steps(build_q, conn)
-    @test length(steps) == 2                      # dmp_c, then the dmp_b root
+    # dmp_c, then the dmp_b root — after, on PostgreSQL, the #770 lock on dmp_b.
+    @test [(s[:operation], s[:model]) for s in steps] ==
+      vcat(kind === :postgres ? [(:lock, "dmp_b")] : Tuple{Symbol, String}[], [(:delete, "dmp_c"), (:delete, "dmp_b")])
     for step in steps
       assert_marker_count(step, kind)
     end

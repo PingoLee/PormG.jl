@@ -58,14 +58,26 @@ const _MF_RESULT_A = 990901   # the fence's original target / the delete target
 const _MF_RESULT_B = 990902   # where T1 moves the row to
 const _MF_ROW      = 990951   # the Just_a_test_deletion row under contention
 
-"""Clone Result 1 under `result_id`, labelled so a join filter can tell A from B."""
-function _mf_seed_result!(result_id::Int, label::String)
+# #770's cascade-order cases: a Circuit → Race → Result chain of its own, so deleting it cannot touch
+# the fixture. The race is the parent that changes mid-delete; the result is the child that must
+# survive it.
+const _MF_CIRCUIT_A = 990961   # the circuit the race starts on (and the one #770 (b) deletes)
+const _MF_CIRCUIT_B = 990962   # where T1 moves the race to
+const _MF_RACE      = 990971
+const _MF_RACE_NAME = "Fence Cancelled Grand Prix"
+const _MF_RACE_KID  = 990981   # the race's only Result
+
+"""
+Clone Result 1 under `result_id`, labelled so a join filter can tell A from B. `raceid` hangs it off
+another race (the #770 chain) instead of the template's.
+"""
+function _mf_seed_result!(result_id::Int, label::String; raceid::Union{Nothing, Int} = nothing)
     template = M.Result.objects.filter("resultid" => 1).list() |> first
     stale = M.Result.objects.filter("resultid" => result_id)
     stale.exists() && stale.delete()
     M.Result.objects.create(
         "resultid"        => result_id,
-        "raceid"          => template[:raceid],
+        "raceid"          => something(raceid, template[:raceid]),
         "driverid"        => template[:driverid],
         "constructorid"   => template[:constructorid],
         "number"          => template[:number],
@@ -92,6 +104,34 @@ function _mf_cleanup!()
         r = M.Result.objects.filter("resultid" => id)
         r.exists() && r.delete()
     end
+    _mf_cleanup_chain!()
+    return nothing
+end
+
+"""Remove the #770 chain, root first: each delete cascades to whatever of the chain is left below it."""
+function _mf_cleanup_chain!()
+    for id in (_MF_CIRCUIT_A, _MF_CIRCUIT_B)
+        c = M.Circuit.objects.filter("circuitid" => id)
+        c.exists() && c.delete()
+    end
+    return nothing
+end
+
+"""
+Seed the #770 chain: circuits A and B, the race on A, and one result on the race. Clears any chain a
+previous testset left behind first — an ERROR inside one (a rethrow from `_mf_race`) skips its own
+trailing cleanup, and the next seed would otherwise die on a duplicate key.
+"""
+function _mf_seed_chain!()
+    _mf_cleanup_chain!()
+    for (id, ref) in ((_MF_CIRCUIT_A, "fence_a"), (_MF_CIRCUIT_B, "fence_b"))
+        M.Circuit.objects.create("circuitid" => id, "circuitref" => ref, "name" => "Fence Circuit $(ref)",
+            "location" => "Nowhere", "country" => "Nowhere", "lat" => 0.0, "lng" => 0.0, "alt" => 0,
+            "url" => "https://example.invalid/$(ref)")
+    end
+    M.Race.objects.create("raceid" => _MF_RACE, "year" => 1901, "round" => 1, "circuitid" => _MF_CIRCUIT_A,
+        "name" => _MF_RACE_NAME, "date" => Date(1901, 1, 1), "url" => "https://example.invalid/race")
+    _mf_seed_result!(_MF_RACE_KID, "fence-kid"; raceid = _MF_RACE)
     return nothing
 end
 
@@ -222,6 +262,69 @@ _MF_RUNS && @testset "Mutation fence under concurrent UPDATE (#765)" begin
             @test blocked
             @test M.Just_a_test_deletion.objects.filter("id" => _MF_ROW, "test_result_set_null" => _MF_RESULT_B).count() == 1
             M.Just_a_test_deletion.objects.filter("id" => _MF_ROW).delete()
+        end
+
+        # ── #770: the cascade's ORDER. Children go before their parent, so a parent that stops ──
+        # matching mid-delete must be locked before any child statement reads it — or its children
+        # are already gone by the time its own (fenced) DELETE correctly skips it.
+        #
+        # Both needles match the lock statement (`FROM "race" AS "Tb" … FOR UPDATE`) and, on the
+        # unfixed code, the race DELETE — whichever of the two is the one left waiting on T1.
+        @testset "cascade order: a root that stops matching keeps its children (#770)" begin
+            _mf_seed_chain!()
+
+            blocked, (total, _) = _mf_race(
+                () -> M.Race.objects.filter("raceid" => _MF_RACE).update("name" => "Fence Rescheduled Grand Prix"),
+                () -> _mf_quiet(() -> M.Race.objects.filter("raceid" => _MF_RACE, "name" => _MF_RACE_NAME).delete()),
+                "FROM \"race\" AS \"Tb\"")
+
+            @test blocked
+            @test total == 0
+            @test M.Race.objects.filter("raceid" => _MF_RACE, "name" => "Fence Rescheduled Grand Prix").count() == 1
+            @test M.Result.objects.filter("resultid" => _MF_RACE_KID).count() == 1
+            _mf_cleanup_chain!()
+        end
+
+        @testset "cascade order: a mid-level parent moved away keeps its children (#770)" begin
+            _mf_seed_chain!()
+
+            blocked, (_, per_table) = _mf_race(
+                () -> M.Race.objects.filter("raceid" => _MF_RACE).update("circuitid" => _MF_CIRCUIT_B),
+                () -> _mf_quiet(() -> M.Circuit.objects.filter("circuitid" => _MF_CIRCUIT_A).delete()),
+                "FROM \"race\" AS \"Tb\"")
+
+            @test blocked
+            @test get(per_table, "circuit", 0) == 1
+            @test get(per_table, "result", 0) == 0
+            @test M.Race.objects.filter("raceid" => _MF_RACE, "circuitid" => _MF_CIRCUIT_B).count() == 1
+            @test M.Result.objects.filter("resultid" => _MF_RACE_KID).count() == 1
+            _mf_cleanup_chain!()
+        end
+
+        # ── #770's documented LIMIT: the lock pins the parent's OWN row, not a table its filter reads ──
+        # The root filter crosses into `circuit`. T1 renames the circuit and also holds the race's
+        # result row, so T2's lock on the race succeeds (T1 holds no race lock) and T2 then waits on the
+        # result. After T1 commits, the result's re-check reuses the joined race row and deletes it;
+        # the race's own fenced DELETE re-reads `circuit`, no longer matches, and the race survives
+        # without its result. Measured on db_2 while #770 was reviewed. `@test_broken` so that closing
+        # the gap (#771) surfaces here as an unexpected pass instead of passing silently.
+        @testset "cascade order: a joined root filter is not pinned (#770 limit)" begin
+            _mf_seed_chain!()
+
+            blocked, (_, per_table) = _mf_race(
+                () -> begin
+                    M.Circuit.objects.filter("circuitid" => _MF_CIRCUIT_A).update("name" => "Fence Circuit renamed")
+                    M.Result.objects.filter("resultid" => _MF_RACE_KID).update("positiontext" => "held")
+                end,
+                () -> _mf_quiet(() -> M.Race.objects.
+                    filter("raceid" => _MF_RACE, "circuitid__name" => "Fence Circuit fence_a").delete()),
+                "DELETE FROM \"result\"")
+
+            @test blocked
+            @test get(per_table, "race", 0) == 0
+            @test M.Race.objects.filter("raceid" => _MF_RACE).count() == 1
+            @test_broken M.Result.objects.filter("resultid" => _MF_RACE_KID).count() == 1
+            _mf_cleanup_chain!()
         end
     finally
         _mf_cleanup!()

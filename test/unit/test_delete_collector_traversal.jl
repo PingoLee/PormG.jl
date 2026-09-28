@@ -164,7 +164,8 @@ end
 
 """The step whose `:model` is `name`. Fails loudly rather than returning `nothing`."""
 function _dct_step(steps, name::String)
-  idx = findfirst(s -> s[:model] == name, steps)
+  # The WRITE step: a #770 `:lock` step for the same model (PostgreSQL) is skipped.
+  idx = findfirst(s -> s[:model] == name && s[:operation] != :lock, steps)
   @assert idx !== nothing "no step for $(name); got $([s[:model] for s in steps])"
   return steps[idx]
 end
@@ -195,7 +196,19 @@ _dct_fragments(sql::AbstractString) =
     @testset "$(label)" begin
       q = DctChain.Dct_c01.objects
       q.filter("code" => "DELME")
-      steps = _dct_steps(q, conn)
+      all_steps = _dct_steps(q, conn)
+
+      # #770: on PostgreSQL every link but the last is a parent, locked root-first before any write.
+      # Each lock scopes through the same single arm as its DELETE, so it binds the one root value too.
+      locks = filter(s -> s[:operation] == :lock, all_steps)
+      @test [s[:model] for s in locks] ==
+            (backend === :postgres ? ["dct_c" * lpad(i, 2, '0') for i in 1:DctChain.CHAIN_N-1] : String[])
+      @test all_steps[1:length(locks)] == locks
+      for s in locks
+        @test s[:parameters] == ["DELME"]
+        assert_marker_count(s, backend)
+      end
+      steps = filter(s -> s[:operation] != :lock, all_steps)
 
       # One statement per link, no more and no fewer.
       @test length(steps) == DctChain.CHAIN_N
@@ -233,8 +246,11 @@ end
       steps = _dct_steps(q, conn)
 
       # Statement count is unchanged by the fix: one UPDATE per (field, value, model), plus the two
-      # DELETEs. Fragments moved, statements did not.
-      @test length(steps) == 4
+      # DELETEs. Fragments moved, statements did not. #770 adds the two parents' locks on PostgreSQL,
+      # root first, ahead of every write.
+      @test count(s -> s[:operation] != :lock, steps) == 4
+      @test [(s[:operation], s[:model]) for s in steps if s[:operation] == :lock] ==
+            (backend === :postgres ? [(:lock, "dct_root"), (:lock, "dct_mid")] : Tuple{Symbol, String}[])
 
       for name in ("dct_leaf", "dct_dleaf")
         step = _dct_step(steps, name)

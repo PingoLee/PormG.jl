@@ -930,6 +930,18 @@ const DOCERR_CASES = [
         () -> PormG.Dialect.field_to_column("amount", DecimalField(max_digits = 16, decimal_places = 2),
                                             DocErrMockSQLite()),
     ),
+    # #761. `fields.md` → DecimalField *Write validation* names the type a value with too many digits
+    # before the point raises. Driven through `create`, the public writer; the other writers are
+    # pinned in `test_decimal_whole_digits_761.jl`.
+    (
+        "fields.md — a DecimalField value with more whole digits than max_digits - decimal_places raises (#761)",
+        InvalidValueError,
+        () -> let m = Model("docerr_invoice_761", id = IDField(),
+                            amount = DecimalField(max_digits = 5, decimal_places = 2))
+            m.connect_key = "docerr_pg"; m._module = Main
+            m.objects.create("amount" => "1000", show_query = :dict)
+        end,
+    ),
     # #446. `errors.md` has promised `UnknownFieldError` for "the field name does not exist on the
     # model" since the taxonomy landed, and until now the code raised a bare `KeyError` for every one
     # of these shapes — an untyped error naming an internal dict lookup, for the single most common

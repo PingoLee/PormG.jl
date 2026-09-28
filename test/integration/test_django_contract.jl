@@ -414,6 +414,35 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #761 — a value with too many whole digits is refused by PormG, the same on both engines
+# `price` is NUMERIC(10, 2): at most 8 digits before the point. `123456789` has 9, yet fits the
+# total (9 ≤ 10) and the scale (0 ≤ 2), the only two widths write validation used to check. So the
+# engines split: PostgreSQL ran the INSERT and failed it (`StatementError`, `numeric field overflow`),
+# SQLite stored the row. Both now raise `InvalidValueError` before any SQL, and no row is written.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django Contract: DecimalField refuses too many whole digits on both engines (#761)" begin
+    label_over = "django-decimal-overflow"
+    label_edge = "django-decimal-widest"
+    _cleanup_django_scratch!(label_over)
+    _cleanup_django_scratch!(label_edge)
+
+    try
+        @test_throws InvalidValueError M.Django_contract_scratch.objects.create(
+            "label" => label_over, "price" => "123456789")
+        @test !M.Django_contract_scratch.objects.filter("label" => label_over).exists()
+
+        # The widest value the column holds is still written and read back exactly, so the refusal
+        # above is the whole-digit bound and not a blanket one.
+        M.Django_contract_scratch.objects.create("label" => label_edge, "price" => "99999999.99")
+        row = M.Django_contract_scratch.objects.filter("label" => label_edge).values("price").list() |> first
+        @test _normalize_decimal(row[:price]) == parse(Decimal, "99999999.99")
+    finally
+        _cleanup_django_scratch!(label_over)
+        _cleanup_django_scratch!(label_edge)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #79 — DateTimeField equality/range filters agree across formats & offsets
 #
 # SQLite stores DateTimeField values as TEXT and compares them lexicographically, so two

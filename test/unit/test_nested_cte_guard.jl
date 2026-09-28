@@ -343,7 +343,8 @@ end
 # delete() refuses a CTE-scoped queryset, on BOTH cascade and leaf paths (#433)
 # The deletion collector re-uses the queryset being deleted as a scoping subquery, two different
 # ways: for a model WITH dependents it synthesizes `"<fk>__@in" => objct`, and for a LEAF it renders
-# `DELETE ... WHERE pk IN (<objct>)` directly. Those paths reach different amounts of the builder,
+# the query into its own statement (`DELETE ... WHERE pk IN (<objct>)` until #765; now its filters on
+# the target row, plus a pk-IN selection when joined). Those paths reach different amounts of the builder,
 # so a downstream guard made the same user code succeed or fail depending on whether the target
 # model happened to have a reverse relation. Both are pinned here — Ncg_parent has dependents
 # (Ncg_child), Ncg_child has none — so a future guard that only covers one path fails.

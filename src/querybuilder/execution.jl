@@ -1947,50 +1947,149 @@ function _set_clause_uses_join_aliases(set_clause::String,
   return false
 end
 
-function _build_update_target_pk_subquery(instruction::SQLInstruction)::Union{String, Nothing}
-  pk_field_sym = get_model_pk_field(instruction.object.model)
-  pk_field_sym === nothing && return nothing
+# ─────────────────────────────────────────────────────────────────────────────
+# The mutation fence (#765)
+#
+# Every UPDATE/DELETE that scopes rows through a query renders that query's predicates HERE, against
+# the statement's own target alias — `UPDATE "t" AS "Tb" … WHERE <this>`, `DELETE FROM "t" AS "Tb"
+# WHERE <this>` — never ONLY as `"pk" IN (SELECT "Tb"."pk" FROM "t" AS "Tb" WHERE …)`. (A joined
+# statement keeps that IN as its index-driven selection, ANDed with this — `_target_pk_selection`.)
+#
+# The distinction is invisible in a quiet database and decisive in a busy one. Under PostgreSQL READ
+# COMMITTED a statement that waits on a row lock re-checks the row's NEW version against its quals
+# (EvalPlanQual) — but a self-subquery over the target is an independent scan of that table, read on
+# the statement's snapshot, so its predicates are never re-evaluated. A filter written as a fence
+# (`.filter("id" => k, "status__@in" => terminal).delete()`, a compare-and-delete) was therefore
+# ignored whenever a concurrent UPDATE committed while the DELETE waited: the row went even though
+# its new version matched nothing. Reproduced through Nitro.jl#379, on PostgreSQL 16.
+#
+# Two shapes, one rule — every predicate reaches the target through the OUTER alias:
+#
+#   - no joins → the WHERE conjuncts, verbatim. They are already written against "Tb".
+#   - joins    → `EXISTS (SELECT 1 FROM (SELECT 1) AS "__pormg_anchor" <joins> WHERE <conjuncts>)`.
+#     The joins' ON clauses reference the outer "Tb", which makes the subplan CORRELATED — PostgreSQL
+#     re-evaluates it against the new row version, where it never re-runs an uncorrelated one.
+#
+# Why the one-row anchor rather than `FROM <first joined table>` with its ON moved into WHERE (the
+# flattening `UPDATE … FROM` does): the joins are LEFT JOINs, and flattening turns them inner. A row
+# with no parent must still produce its null-extended row, or `"parent__col__@isnull" => true` stops
+# matching exactly the rows it exists for. With the anchor the join tree is the text the read builder
+# rendered, so the row set is the one `pk IN (…)` selected, and both engines run it as is.
+#
+# One rewrite keeps that equivalence exact: RIGHT → INNER and FULL → LEFT. The chain is left-deep and
+# rooted at the target, so a RIGHT/FULL hop null-extends the TARGET side — rows `pk IN (SELECT
+# "Tb"."pk" …)` always dropped (a NULL pk is in no set), which is precisely INNER/LEFT. Verbatim, the
+# anchor stands where the target stood and a RIGHT JOIN keeps every right-side row, so the EXISTS is
+# true for every target row once one match exists anywhere — a silent widening of the write; and a
+# FULL JOIN whose ON names only the outer row is not hash/merge-joinable, which PostgreSQL refuses.
+#
+# A joined fence is NOT used alone where it can be avoided — see `_target_pk_selection`.
+#
+# SQLite is not exposed to the race (writers are serialized), but runs the identical text: the fix is
+# a shape, not a PostgreSQL branch, so there is no divergence to document.
+#
+# Parameters: the text order is JOIN-ON then WHERE, which is `_BUCKET_ORDER`'s order, so a statement
+# built by `build()` flattens in text order with no extra step. A caller splicing several of these
+# into one statement (the deletion collector) wraps each in the #432 nested-run mark/detach.
+#
+# GROUP BY / HAVING have no place in a row predicate. Both terminals refuse the shapes that produce
+# them before building (`_reject_unsafe_mutation_shape`, `delete()`'s guards), so reaching one here is
+# an internal error — raised rather than dropped, because dropping HAVING widens the statement.
+#
+# An empty result means "no predicate": the caller must omit the WHERE, not print `WHERE ` or
+# `WHERE ()`.
+# ─────────────────────────────────────────────────────────────────────────────
+const _TARGET_ANCHOR_ALIAS = "__pormg_anchor"
 
-  safe_table_name = safe_table_identifier(Models.model_table_name(instruction.object.model), instruction.connection)
-  safe_alias = quote_identifier(instruction.alias, instruction.connection)
-  quoted_pk = safe_column_identifier(Models.model_column(instruction.object.model, String(pk_field_sym)), instruction.connection)  # db_column (#50)
+function _target_predicate(instruction::SQLInstruction)::String
+  # `group` alone is not the signal: every projection is pushed into it, and it only PRINTS under
+  # `aggregate` (the read renderer's own condition).
+  (isempty(instruction.having) && !(instruction.aggregate && !isempty(instruction.group))) || error(_emsg(
+    "PormG internal error: a mutation's row predicate carries GROUP BY / HAVING, which the " *
+    "UPDATE/DELETE guards should have refused — this should not happen; please report it."))
+
+  conjuncts = join(instruction._where, " AND ")
+  isempty(instruction.row_join) && return conjuncts
 
   io = IOBuffer()
-  print(io, "SELECT DISTINCT ", safe_alias, ".", quoted_pk)
-  print(io, "\nFROM ", safe_table_name, " as ", safe_alias, "\n")
-
+  print(io, "EXISTS (SELECT 1 FROM (SELECT 1) AS ", quote_identifier(_TARGET_ANCHOR_ALIAS, instruction.connection))
   for j in instruction.join
-    print(io, j, "\n")
+    # Every rendered join opens with ` <how> JOIN ` (build_row_join_sql_text); see the header.
+    print(io, "\n  ", replace(j, r"^ RIGHT JOIN " => " INNER JOIN ", r"^ FULL JOIN " => " LEFT JOIN "))
   end
-
-  if !isempty(instruction._where)
-    print(io, "WHERE ")
-    for (i, w) in enumerate(instruction._where)
-      i > 1 && print(io, " AND \n   ")
-      print(io, w)
-    end
-    print(io, "\n")
-  end
-
-  if instruction.aggregate && !isempty(instruction.group)
-    print(io, "GROUP BY ")
-    for (i, g) in enumerate(instruction.group)
-      i > 1 && print(io, ", ")
-      print(io, g)
-    end
-    print(io, " \n")
-  end
-
-  if !isempty(instruction.having)
-    print(io, "HAVING ")
-    for (i, h) in enumerate(instruction.having)
-      i > 1 && print(io, " AND \n   ")
-      print(io, h)
-    end
-    print(io, "\n")
-  end
-
+  isempty(conjuncts) || print(io, "\n  WHERE ", conjuncts)
+  print(io, ")")
   return String(take!(io))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The selection half of a JOINED mutation (#765)
+#
+# A joined fence alone costs a full scan. PostgreSQL cannot flatten an EXISTS whose correlation sits
+# in a JOIN's ON (only a top-level-WHERE correlation is pulled up into a semi-join), so it stays a
+# per-row SubPlan — and with every conjunct inside it, the outer statement has nothing indexable:
+# `M.Result.objects.filter("resultid" => 1, "driverid__nationality" => "British").update(…)` scanned
+# the whole table where the pre-#765 `pk IN (SELECT …)` semi-joined through the primary-key index.
+#
+# So a joined statement carries BOTH: `"Tb"."pk" IN (<this>) AND EXISTS (<the fence>)`. The IN is the
+# pre-#765 selection, planned exactly as before; the EXISTS is what PostgreSQL re-checks on the new
+# row version, and it only runs for rows the IN let through. On the snapshot the two agree, so the
+# conjunction selects what either did; after a concurrent change, the EXISTS decides.
+#
+# The two halves come from TWO builds of the same query into one parameter collector — each value is
+# bound twice, once per half, in text order — never from one build printed twice: a second print of
+# one build's text would reuse its markers, and on SQLite a positional marker is consumed once.
+#
+# `nothing` for a keyless model: there is no pk to select through, so it takes the fence alone.
+# ─────────────────────────────────────────────────────────────────────────────
+function _target_pk_selection(instruction::SQLInstruction)::Union{Nothing,String}
+  model = instruction.object.model
+  pk_field_sym = get_model_pk_field(model)
+  pk_field_sym === nothing && return nothing
+
+  connection = instruction.connection
+  safe_alias = quote_identifier(instruction.alias, connection)
+  quoted_pk = safe_column_identifier(Models.model_column(model, String(pk_field_sym)), connection)  # db_column (#50)
+
+  io = IOBuffer()
+  print(io, safe_alias, ".", quoted_pk, " IN (SELECT DISTINCT ", safe_alias, ".", quoted_pk)
+  print(io, "\n  FROM ", safe_table_identifier(Models.model_table_name(model), connection), " as ", safe_alias)
+  for j in instruction.join
+    print(io, "\n  ", j)
+  end
+  isempty(instruction._where) || print(io, "\n  WHERE ", join(instruction._where, " AND "))
+  print(io, ")")
+  return String(take!(io))
+end
+
+# The row predicate of one arm the deletion collector splices into a shared statement: the fence
+# alone when the query has no joins (or no primary key), `<pk selection> AND <fence>` otherwise.
+# `build_one()` builds a FRESH copy of the query into `parameters`; it is called once, or twice for a
+# joined arm. Each build is wrapped in the #432 mark/detach and re-emitted under `:where` in text
+# order, so several arms can share one collector.
+#
+# `update()` does not come through here: its statement is built once at top level before the guards
+# run, so it reuses THAT build as the selection half and builds only the fence a second time —
+# the top-level buckets (`:join`, `:where`) already flatten in the IN's text order.
+function _mutation_predicate(build_one::Function, parameters)::String
+  mark = nested_parameter_mark(parameters)
+  first_build = build_one()
+  first_run = detach_nested_run!(parameters, mark)
+  selection = isempty(first_build.row_join) ? nothing : _target_pk_selection(first_build)
+
+  if selection === nothing
+    set_context!(parameters, :where)
+    reattach_parameters!(parameters, first_run)
+    return _target_predicate(first_build)
+  end
+
+  mark = nested_parameter_mark(parameters)
+  fence_build = build_one()
+  fence_run = detach_nested_run!(parameters, mark)
+  set_context!(parameters, :where)
+  reattach_parameters!(parameters, first_run)   # the IN, first in the text
+  reattach_parameters!(parameters, fence_run)   # then the EXISTS
+  return selection * "\n  AND " * _target_predicate(fence_build)
 end
 
 # Shape guards shared by `update()` and `bulk_update()` (#665): the query state an `UPDATE`
@@ -2105,6 +2204,10 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   # `$N` on PostgreSQL. Aggregates and alias filters were refused above, so emptying drops nothing.
   work = deepcopy(real_obj)
   empty!(work.values)
+  # `get_alias` is a counter: a second build on the SAME alias object would name its target "R1",
+  # not "Tb". A joined update builds twice (#765 — selection, then fence), so the fence gets an
+  # untouched copy of whatever the caller passed; `nothing` makes a fresh one either way.
+  fence_alias = deepcopy(table_alias)
   instruction = build(work, table_alias=table_alias, connection=connection)
 
   # Don't allow to update a field without filter
@@ -2168,8 +2271,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   # Build secure UPDATE SQL with JOIN support
   safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
   safe_alias = quote_identifier(instruction.alias, connection)
-  pk_field_sym = get_model_pk_field(model)
-  
+
   has_joins = !isempty(instruction.row_join)
   sql = ""
   
@@ -2178,23 +2280,40 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       # The SET-clause loop above can reach _build_row_join (e.g. update("x" => F("fk__col"))), so
       # row_join may have grown AFTER build() rendered instruction.join — the same late-discovery
       # hazard #404 fixed in build(). Exactly one UPDATE branch reads the stale instruction.join:
-      # _build_update_target_pk_subquery, which prints it at :1492. This check is what excludes it —
-      # a SET-discovered join necessarily puts its alias in set_clause, so the check returns true,
-      # pk_subquery stays nothing, and the UPDATE … FROM branch below rebuilds FROM/ON from
-      # instruction.row_join instead. Do NOT drop this guard on the theory that the UPDATE path
-      # ignores instruction.join — it does not. (#404's own trigger cannot reach here regardless:
-      # update() refuses a query carrying order_by() at :1542.)
+      # `_target_predicate`, which prints it into the EXISTS. This check is what excludes it — a
+      # SET-discovered join necessarily puts its alias in set_clause, so the check returns true and
+      # the UPDATE … FROM branch below rebuilds FROM/ON from instruction.row_join instead. Do NOT
+      # drop this guard on the theory that the UPDATE path ignores instruction.join — it does not.
+      # (#404's own trigger cannot reach here regardless: update() refuses a query carrying
+      # order_by() in `_reject_unsafe_mutation_shape`.)
       set_uses_join_aliases = _set_clause_uses_join_aliases(set_clause, instruction.row_join, connection)
-      pk_subquery = (!set_uses_join_aliases && isempty(real_obj.ctes)) ? _build_update_target_pk_subquery(instruction) : nothing
 
-      if pk_subquery !== nothing && pk_field_sym !== nothing
-        quoted_pk = safe_column_identifier(Models.model_column(model, String(pk_field_sym)), connection)  # db_column (#50)
+      if !set_uses_join_aliases && isempty(real_obj.ctes)
+        # #765: `"Tb"."pk" IN (SELECT DISTINCT …) AND EXISTS (<fence>)`. The IN alone was the
+        # pre-#765 shape, and PostgreSQL never re-checks it when the UPDATE waits on a row lock, so a
+        # filter used as a fence was ignored; the correlated EXISTS is what it re-checks. The IN stays
+        # as the index-driven selection (`_target_pk_selection`). The top-level build above is its
+        # half — its `:join`/`:where` values flatten in the IN's text order — and the fence is a SECOND
+        # build, lifted as one run behind them. A keyless model has no pk to select through and takes
+        # the fence alone, bound through the top-level buckets directly (it used to take UPDATE …
+        # FROM, which flattened its LEFT JOINs to inner and dropped `.on()` conditions).
+        selection = _target_pk_selection(instruction)
+        predicate = if selection === nothing
+          _target_predicate(instruction)
+        else
+          fence_work = deepcopy(real_obj)
+          empty!(fence_work.values)
+          mark = nested_parameter_mark(parameters)
+          fence = build(fence_work, table_alias=fence_alias, connection=connection, parameters=parameters)
+          fence_run = detach_nested_run!(parameters, mark)
+          set_context!(parameters, :where)
+          reattach_parameters!(parameters, fence_run)
+          selection * "\n  AND " * _target_predicate(fence)
+        end
         sql = """
         UPDATE $(safe_table_name) AS $(safe_alias)
         SET $(set_clause)
-        WHERE $(safe_alias).$(quoted_pk) IN (
-        $(pk_subquery)
-        )
+        WHERE $(predicate)
         """
       else
         # PostgreSQL & SQLite 3.33+ support UPDATE FROM syntax

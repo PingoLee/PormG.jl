@@ -197,17 +197,18 @@ characterizations worth stating plainly.
   position (`nested_parameter_mark` / `detach_nested_run!`). All four such sites in the **read**
   builder go through it — `Exists`, a projected `Subquery`, an `__@in` subquery, and a CTE body.
 
-  `deletion.jl` splices subqueries into hand-built `DELETE`/`UPDATE` clauses, and both splice sites
-  now go through the same machinery — so the claim is "contained" there too. The narrowing was
-  about *why* it held: a **lone** subquery's own text order **is** `_BUCKET_ORDER`, so the flatten
-  happened to agree. #452 removed the lone-subquery premise — a cascade reaching one model by two
-  paths splices **two** subqueries into one collector — without, as it turns out, breaking the
-  result. Measured: a fragment that binds at its own top-level `:join` **does** exist (the user's
-  root queryset), but it is never accompanied by a second fragment in the same statement, and every
-  other fragment is a bare `filter("<fk>__@in" => parent)` with no join to contribute. An interleave
-  needs two join-binding fragments in one statement, which the cascade graph cannot produce. So the
-  wrap there is **insurance, not a live fix** — it lets this paragraph claim containment instead of
-  re-deriving that reachability argument every time a fragment's shape changes.
+  `deletion.jl` splices one row predicate per cascade path into a hand-built `DELETE`/`UPDATE`
+  (`_collector_predicate`). Since #765 each is the path's filters on the target row — and, when they
+  cross a join, `"Tb"."pk" IN (<selection>) AND EXISTS (<fence>)`, two builds of the same query: the
+  IN for the index-driven plan, the correlated EXISTS because PostgreSQL does not re-check a
+  `pk IN (SELECT …)` self-subquery under a row lock. Every build goes through the same machinery, so
+  the claim is "contained" there too — and there the wrap is **load-bearing**: a joined root's two
+  builds both bind their `ON` values in `:join`, which unwrapped would flatten both ahead of the first
+  build's `WHERE` values (text order is ON₁ WHERE₁ ON₂ WHERE₂). Before #765 it was insurance only — no
+  statement ever held two join-binding fragments, since every cascade arm is a bare
+  `filter("<fk>__@in" => parent)` with no join of its own, and that is still true of cascade arms.
+  `update()`'s joined branch does the same with its top-level build as the selection and one lifted
+  fence build behind it.
 
 !!! note "\"Async-first\" is backend-specific"
     For **PostgreSQL** the async path is genuine: the pool lock is released before the round-trip and

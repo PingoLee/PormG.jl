@@ -49,18 +49,22 @@ delete(query)
 
 **Generated SQL (PostgreSQL):**
 ```sql
-DELETE FROM "just_a_test_deletion" AS "Tb" 
-WHERE "Tb"."test_result" IN ($1, $2) AND "Tb"."test_result2" IS NULL
--- Parameters: [11, 12]
+DELETE FROM "just_a_test_deletion" AS "Tb"
+WHERE "Tb"."test_result" = ANY($1) AND "Tb"."test_result2" IS NULL
+-- Parameters: [[11, 12]]   (SQLite renders IN (?, ?) with two values)
 ```
 
-Using `show_query=:sql` reveals the underlying deletion logic without executing it (returns a String or Vector of Strings):
+Using `show_query=:sql` reveals the statements without executing them — a `String` for a single
+statement, a `Vector{String}` when the delete cascades:
 ```julia
 sql = delete(query, show_query=:sql)
-# Returns: "DELETE FROM just_a_test_deletion WHERE \"id\" IN (
-#    SELECT \"Tb\".\"id\" FROM \"just_a_test_deletion\" as \"Tb\" ...
-# )"
+# "DELETE FROM \"just_a_test_deletion\" AS \"Tb\" WHERE \"Tb\".\"test_result\" = ANY(\$1) AND \"Tb\".\"test_result2\" IS NULL"
 ```
+
+The filters always land on the row being deleted, as above — never only in a `pk IN (SELECT …)`
+subquery (a filter that crosses a relation adds one for the index, beside the fence; see below).
+That is what makes a filter a guard you can rely on under concurrency; see
+[Filters are a fence](#Filters-are-a-fence-on-PostgreSQL).
 
 ### `change_data` Guard
 
@@ -125,14 +129,24 @@ delete(query)
 
 **Generated SQL (PostgreSQL):**
 ```sql
-DELETE FROM "result" AS "Tb" 
-WHERE "Tb"."raceid" IN (
-  SELECT "Tb_1"."raceid" 
-  FROM "race" AS "Tb_1" 
-  WHERE "Tb_1"."year" < $1
-)
--- Parameters: [1960]
+DELETE FROM "result" AS "Tb"
+WHERE "Tb"."resultid" IN (SELECT DISTINCT "Tb"."resultid"
+  FROM "result" as "Tb"
+  INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
+  WHERE "Tb_1"."year" < $1)
+  AND EXISTS (SELECT 1 FROM (SELECT 1) AS "__pormg_anchor"
+  INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
+  WHERE "Tb_1"."year" < $2)
+-- Parameters: [1960, 1960]
 ```
+
+A filter that crosses a relation renders twice, and both halves matter. The `IN (…)` selects the rows
+through the primary key, which is what the planner uses an index for. The correlated `EXISTS` puts
+the same filter on the row being deleted, which is what PostgreSQL re-checks if that row changes
+while the delete waits on its lock (see
+[Filters are a fence](#Filters-are-a-fence-on-PostgreSQL)). Each value is therefore bound twice. The
+joins are the ones a read of the same filter renders — a nullable foreign key stays a `LEFT JOIN`, so
+an `__@isnull` filter through it still matches rows with no related row at all.
 
 ## Cascade Deletion
 
@@ -187,6 +201,48 @@ WHERE "Tb"."name" = $1
 
     A genuinely acyclic hierarchy more than 50 levels deep hits the same ceiling; there is no way to
     raise it, so delete such a graph in stages, from the far end inward.
+
+### Filters are a fence on PostgreSQL
+
+A filtered `delete()` is safe to use as a **compare-and-delete** — "remove this result only if it is
+still classified Finished" — even while other sessions write to the same rows:
+
+```julia
+# Remove the result only if it is still classified "Finished" (statusid 1)
+M.Result.objects.filter("resultid" => 7654, "statusid" => 1).delete()
+```
+
+Under PostgreSQL's default `READ COMMITTED` isolation, a `DELETE` that finds its row locked by
+another transaction waits, and when that transaction commits it **re-checks the row's new version**
+against the statement's own `WHERE`. Because PormG puts every filter on the row being deleted —
+directly, or through a correlated `EXISTS` when the filter crosses a relation — that re-check sees
+all of them. If the other transaction changed `statusid`, the row no longer matches and is left
+alone; the delete reports 0 rows.
+
+The fence covers the filters themselves, not the contents of a subquery you pass *into* one. In
+`filter("resultid__@in" => M.Result.objects.filter("points" => 0).values("resultid"))` the outer
+`"Tb"."resultid" IN (…)` is re-checked, but the inner query is an independent read of `result` taken
+before the wait, so a row whose `points` changed meanwhile still matches. Put a condition you rely on
+as a guard directly in the filter (`"points" => 0`), not inside a subquery.
+
+The same holds for every statement a cascade emits (each child is matched on its **own** foreign
+key, so a child re-parented mid-delete is neither deleted nor nulled on the old parent's account) and
+for `update()`, joined filters included.
+
+!!! note "Before #765 this was not true"
+    `delete()` used to scope rows as `WHERE "pk" IN (SELECT "pk" FROM <table> WHERE <filters>)`.
+    PostgreSQL does not re-check a subquery over the table being deleted from, so the filters were a
+    selection made on the old snapshot: a row another transaction had just changed to stop matching
+    was deleted anyway. The joined path of `update()` had the same shape. SQLite was never affected —
+    its writers are serialized, so no statement waits on another writer's uncommitted row.
+
+One limit remains, and it concerns the *order* of a cascade rather than any single statement.
+Children are deleted before their parent, and a child's statement decides which parents it belongs
+to at the moment it runs. If a concurrent transaction changes the **parent** so that it stops
+matching after its children are gone, the parent's own `DELETE` correctly skips it — but the children
+have already been removed. Where a parent's eligibility can change under you, lock it first (for
+example with [`select_for_update`](transaction.md#Row-Level-Locking) inside a transaction) or
+serialize the two writers with an [advisory lock](../advisory_lock.md).
 
 ### Concurrency: a cascade path can be pruned out from under you on PostgreSQL
 

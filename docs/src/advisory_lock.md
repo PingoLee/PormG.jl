@@ -67,9 +67,10 @@ The `timeout_ms` parameter ensures your application doesn't hang indefinitely.
     SQLite's own writer serialization (`BEGIN IMMEDIATE`) is per-database-file and per-process; it
     is not a substitute for a named application lock, and it protects nothing for the non-SQL
     critical sections this page recommends locks for — report generation, external API calls,
-    scheduled jobs. Treat SQLite as single-instance, exactly as
-    [migrations do](migrations/index.md), and rely on advisory locks only where PostgreSQL is the
-    production backend.
+    scheduled jobs. Treat SQLite as single-instance for these, and rely on advisory locks only where
+    PostgreSQL is the production backend. (`migrate()` needs no named lock on SQLite: a plan is one
+    SQL transaction, which the write lock already serializes — see
+    [Deploying → SQLite](migrations/deploying.md#SQLite).)
 
 ### Choosing what SQLite does: `on_missing_lock`
 

@@ -133,6 +133,12 @@ function _values!(q::SQLObject, values)
   for v in values
     isa(v, Symbol) && (v = String(v))
     if isa(v, SQLTypeText) || isa(v, SQLTypeField)
+      # An explicit `SQLField(…, "alias")` wrap names its alias as a pair does. Only a name that IS
+      # the wrapped path's own output spelling is exempt: `SQLField("driverid__surname",
+      # "driverid__surname")` is the column, but `SQLField("raceid", "ev__points")` is an alias,
+      # and the #723 pairing again (#757 review).
+      isa(v, SQLField) && v._as !== nothing && v._as != _path_output_name(v.field) &&
+        _refuse_path_alias(v._as)
       push!(q.values, _check_function(v))
     elseif isa(v, SQLTypeFunction)
       push!(q.values, SQLField(_check_function(v), v._as))
@@ -143,6 +149,7 @@ function _values!(q::SQLObject, values)
         throw(QueryBuildError("Invalid values() pair key: $(v.first) (::$(typeof(v.first))) — use a String alias as the key in \"alias\" => expr."))
       end
       isa(v.first, String) || (v = String(v.first) => v.second)
+      _refuse_path_alias(v.first)   # #757
       if isa(v.second, Union{SQLTypeFunction,SQLTypeF})
         try
           push!(q.values, SQLField(_check_function(v.second), v.first))
@@ -198,6 +205,37 @@ function _values!(q::SQLObject, values)
 
   _reject_duplicate_projection_names(q)
   return q
+end
+
+# The output name a path projects under when nothing renames it, as `_values_field` spells it: the
+# path itself, a transform suffix folded to `__<part>`, and a CTE or joined handle prefixed with its
+# relation. `nothing` for an expression, which has no name of its own.
+_path_output_name(f::String) = replace(f, "__@" => "__")
+_path_output_name(r::CTEReference) = r.name * "__" * replace(r.path, "__@" => "__")
+_path_output_name(r::JoinedReference) = r.alias * "__" * replace(r.path, "__@" => "__")
+_path_output_name(::Any) = nothing
+
+# #757: a projection alias may not contain `__`.
+#
+# `__` is the path separator, so a key spelled with it is read as a relation path or a CTE column
+# (`"<cte>__<col>"`, #492) wherever the alias is used again. Every alias router asks one test,
+# `_alias_filter_key`, and that test rejects any `__` key, while the render still resolves the key
+# through the projection memo. So `values("win__total" => Sum("points"))` followed by
+# `filter("win__total__@gt" => 5)` printed `WHERE SUM(…) > ?`. A `When` that read the alias was
+# grouped, and a window alias escaped #685's refusal. The alias also shared a name with a CTE column
+# (#723, which resolved silently to the CTE) and with a relation path (#703).
+#
+# Refused at declaration rather than routed. Admitting the key would mean teaching five routers to
+# tell an alias from a path by what the model and the CTEs happen to declare, which is the
+# first-match precedence #492 removed. `aggregate()` projects through here, so its aliases follow the
+# same rule.
+function _refuse_path_alias(alias::AbstractString)
+  contains(alias, "__") || return nothing
+  throw(QueryBuildError(
+    "Invalid projection alias \e[4m\e[31m\"$(alias)\"\e[0m: an alias cannot contain " *
+    "\e[4m\e[31m__\e[0m, because PormG reads `__` as a relation path or a CTE column " *
+    "(`\"<cte>__<col>\"`) wherever the alias is filtered or ordered on. Rename it, e.g. " *
+    "\e[4m\e[32m\"$(replace(alias, r"_{2,}" => "_"))\"\e[0m (#757)."))
 end
 
 # #441: two projections may not render under the same output column name.

@@ -1668,7 +1668,11 @@ end
 _is_agg(::WindowFunction) = false
 _is_window_expr(::WindowFunction) = true
 _is_window_expr(f::FExpression) = _is_window_expr(f.field_name) || _is_window_expr(f.operand)
-_is_window_expr(f::FObject) = _is_window_expr(f.column)
+# #756: the keyword slots too, because that is where `When`'s `then` and `Case`'s `else` live. A
+# window written directly in a branch — `Case([When(…, then = Rank(…))])` — was missed, so it was
+# grouped beside an aggregate and a filter on its alias escaped #685. `_any_agg` had the same gap
+# before #702. The other slots (`output_field`, a `CAST` type, an `EXTRACT` part) answer `false`.
+_is_window_expr(f::FObject) = _is_window_expr(f.column) || any(_is_window_expr, values(f.kwargs))
 _is_window_expr(values::Vector) = any(_is_window_expr, values)
 _is_window_expr(::Any) = false
 
@@ -2009,7 +2013,8 @@ Each mutates the handler and returns it, so calls can be chained or accumulated 
   operator expression, an `F` expression, or an `Exists(subquery)`. Repeated calls **accumulate**
   (ANDed), unlike `.values`/`.order_by`, which replace their previous call (#199)
 - `.values(fields...)` — choose/annotate the selected columns; `"*"` selects the main table.
-  **Replaces** its previous call, last-call-wins (#199)
+  **Replaces** its previous call, last-call-wins (#199). An alias (`"alias" => expr`) cannot contain
+  `__`, the path separator, and raises `QueryBuildError` (#757)
 - `.order_by(fields...)` — sort; prefix `-` for descending. Accepts a field path or an alias
   declared by `.values()` (#423). **Replaces** its previous call, matching Django's *each
   `order_by()` clears previous ordering* (#199)

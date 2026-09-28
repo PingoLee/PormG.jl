@@ -1075,9 +1075,20 @@ HAVING SUM("Tb"."points") > $2
 ```
 
 The same applies when the alias projects a different column under a field's name
-(`values("points" => "grid")`), and to a relation path used as an alias
-(`values("driverid__surname" => Upper("driverid__forename"))` followed by
-`filter("driverid__surname" => …)`).
+(`values("points" => "grid")`).
+
+An alias cannot contain `__` at all. PormG reads `__` as a relation path (`"driverid__surname"`) or
+a CTE column (`"ev__points"`), so an alias spelled that way would be read as one of those wherever
+it is filtered on. `values(...)` refuses it when it is declared, with `QueryBuildError`:
+
+```julia
+query = M.Result.objects
+query.values("driverid", "season__points" => Sum("points"))   # QueryBuildError
+```
+
+Use a single underscore, such as `"season_points"`. A path is still fine where it names a column:
+`values("driverid__surname")` and `values("surname" => "driverid__surname")` project the related
+column, and only the alias is checked. The same rule applies to the aliases passed to `aggregate(...)`.
 
 It also applies to a condition inside another projection, such as a `When` in a `Case` or a `Q`
 inside one. PormG raises `AmbiguousFieldError` there as well, whatever order the projections are

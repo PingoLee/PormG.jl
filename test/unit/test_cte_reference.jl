@@ -1203,11 +1203,6 @@ end
                                         q.values("note", "x" => Concat("note", Value("-"), "ev__sku")); q),
                              h = () -> (q = _base();
                                         q.values("note", "x" => Concat("note", Value("-"), CTE("ev", "sku"))); q)),
-      # A user ALIAS that merely looks like a CTE path. `:base` on both sides — the trap for any rule
-      # that reads `_as`'s first segment alone.
-      "alias resembling a cte path" =>
-                            (s = () -> (q = _base(); q.values("note", "ev__sku" => Sum("ev__id")); q),
-                             h = () -> (q = _base(); q.values("note", "ev__sku" => Sum(CTE("ev", "id"))); q)),
     )
     for (label, pair) in shapes
       @testset "$label" begin
@@ -1219,7 +1214,12 @@ end
     # pass the whole table above.
     @test :cte in _roots(() -> (q = _base(); q.values("note", "ev__sku"); q))
     @test :cte in _roots(() -> (q = _base(); q.values("note", "y" => "ev__seen__@year"); q))
-    @test _roots(() -> (q = _base(); q.values("note", "ev__sku" => Sum("ev__id")); q)) == [:base, :base]
+    # A user ALIAS that merely looks like a CTE path was the trap for any rule reading `_as`'s first
+    # segment alone. #757 refuses it at declaration, on both spellings.
+    for rhs in (Sum("ev__id"), Sum(CTE("ev", "id")))
+      err = @test_throws PormG.QueryBuildError (q = _base(); q.values("note", "ev__sku" => rhs))
+      @test occursin("#757", err.value.msg)
+    end
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -1516,12 +1516,21 @@ end
   # neither backend accepts. After: the CTE column, which is what `SQLOrder(CTE(...))` has always
   # rendered. The change is an improvement, but it IS a change, and the first draft of the comment
   # in `ctes.jl` claimed it did not happen.
+  #
+  # #757 refuses the `"ev__seen"` alias at `values()`, so the collision above cannot be declared any
+  # more. The projection is aliased `"rk"` here: the filter key still names the CTE column, and the
+  # two ORDER BY spellings must still agree.
   # ───────────────────────────────────────────────────────────────────────────
-  @testset "a window SQLOrder over a CTE path resolves the column, not the projection" begin
+  @testset "a window SQLOrder over a CTE path: the String and handle spellings agree" begin
+    q = CR.Cj_child.objects
+    q.with("ev" => _full_cte(), join_field = "id" => "id")
+    err = @test_throws PormG.QueryBuildError q.values("note", "ev__seen" => Rank(over = WindowOver(order_by = [SQLOrder("ev__seen")])))
+    @test occursin("#757", err.value.msg)
+
     _build(order_entry) = begin
       q = CR.Cj_child.objects
       q.with("ev" => _full_cte(), join_field = "id" => "id")
-      q.values("note", "ev__seen" => Rank(over = WindowOver(order_by = [order_entry])))
+      q.values("note", "rk" => Rank(over = WindowOver(order_by = [order_entry])))
       q.filter("ev__seen" => "2020-01-01")
       _sql(q)
     end

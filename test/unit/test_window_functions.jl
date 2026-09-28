@@ -496,6 +496,64 @@ end
   end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# #756: a window written directly in a Case branch is a window
+# #722's direct twin. The window is not reached through an alias but written inside the branch, so it
+# sits in a keyword slot — `When`'s `then`, `Case`'s `else` — which `_is_window_expr` did not walk.
+# Beside an aggregate the CASE was grouped (`GROUP BY 1, 3`: a window in GROUP BY, rejected by both
+# engines), and a filter on its alias printed `RANK() OVER` into WHERE, past #685's refusal.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#756: a window inside a Case branch is a window" begin
+  rank = () -> Rank(over = WindowOver(order_by = ["raceid"]))
+  for (backend, Model_) in _WINDOW_685_MODELS
+    for (slot, top) in (("then", () -> Case([When("raceid" => 1, then = rank())], default = 0)),
+                        ("default", () -> Case([When("raceid" => 1, then = 0)], default = rank())))
+      @testset "$backend — window in `$slot`: not grouped beside an aggregate" begin
+        q = Model_.objects
+        q.values("raceid", "n" => Count("resultid"), "top" => top())
+        sql = inspect_query(q)[:sql_text]
+        @test occursin("RANK() OVER", sql)
+        @test occursin(r"GROUP BY 1\s*$", sql)
+      end
+      for (label, pred) in (("top-level", "top" => 1), ("Q", Q("top" => 1)))
+        @testset "$backend — window in `$slot`: a $label filter on it is refused (#685)" begin
+          q = Model_.objects
+          q.values("raceid", "top" => top())
+          q.filter(pred)
+          err = _window_err(() -> q)
+          @test err isa PormG.QueryBuildError
+          msg = _window_msg(err)
+          @test occursin("\"top\"", msg)
+          @test occursin("#685", msg)
+        end
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #756 review: a projection that is both an aggregate and a window keeps GROUP BY
+# Answering "window" first skipped the aggregate flag, so the plain column's GROUP BY vanished and
+# PostgreSQL would reject the statement. #756 widened that to a `Case` with a window in one branch;
+# the arithmetic shape predates it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#756 review: a projection that is both an aggregate and a window keeps GROUP BY" begin
+  rank = () -> Rank(over = WindowOver(order_by = ["raceid"]))
+  for (backend, Model_) in _WINDOW_685_MODELS
+    for (label, mixed) in (
+        ("Case: aggregate branch, window default", () -> Case([When("raceid" => 1, then = Sum("points"))], default = rank())),
+        ("arithmetic", () -> rank() + Sum("points")),
+      )
+      @testset "$backend — $label" begin
+        q = Model_.objects
+        q.values("raceid", "x" => mixed())
+        sql = inspect_query(q)[:sql_text]
+        @test occursin(r"GROUP BY 1\s*$", sql)
+      end
+    end
+  end
+end
+
 # A CTE joins back through the model registry, which the standalone `Model(...)` fixtures above
 # never enter — so the CTE route gets its own `set_models` module, one config key per backend.
 PormG.config["window_685_pg"] = PormG.Configuration.Settings(connections = WindowMockPostgres(), change_data = true,

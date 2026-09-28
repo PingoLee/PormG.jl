@@ -7,7 +7,7 @@ import JSON
 import OrderedCollections
 import PormG: PormGField, PormGModel, reserved_words, MODEL_OPTION_KWARGS, Migration
 # Physical-table-name resolution (#59) — defined in Kernel so layer-2 Configuration can reach it too.
-import PormG: model_table_name, model_has_db_table
+import PormG: model_table_name, model_has_db_table, model_is_managed
 import PormG: DATETIME_FORMAT
 import PormG: PormGBytes  # binary-payload wrapper the parameter collectors bind as one blob (#296)
 import PormG: _emsg  # shared TTY-aware error-message strip helper (Kernel)
@@ -69,7 +69,7 @@ public AutoField, BigIntegerField, BinaryField, BooleanField, CharField, DateFie
 # `Model_Type` is deliberately NOT here. It is documented (users hold one as `M.Driver`) but never
 # named: it appears zero times in `docs/src`, and the vocabulary users are given for "a model" is
 # the abstract `PormGModel`. Publishing the concrete name would invite code to depend on it.
-public Model, UniqueConstraint, Index, set_models
+public Model, UniqueConstraint, CheckConstraint, Index, set_models
 
 
 #═══════════════════════════════════════════════════════════════════════════════
@@ -89,6 +89,7 @@ registration has `connect_key === nothing` and no reverse relations.
 | Slot | Filled by | Holds |
 |---|---|---|
 | `name` | `Model(...)`, or `set_models` from the Julia binding | The table name. For a model you *declare* it is always lowercase — a positional name is rejected unless already lowercase (#300), a binding-derived one is lowercased as it is filled in. A model built by `inspectdb` introspection or the Django importer instead keeps the name read from its source, mixed case and all |
+| `managed` | `Model(managed = false)` | `false` when PormG queries the table but never migrates it (#741). Default `true` |
 | `fields` | `Model(...)` | Declared field name → `PormGField`, including many-to-many fields |
 | `field_names` | `Model(...)` | The subset that owns a real column — many-to-many fields are excluded |
 | `related_objects` | `set_models` | Reverse accessors installed by relations pointing *at* this model: accessor name → a `ReverseRelation` (a foreign key on another model) or a `ManyToManyRelation` (a many-to-many, reversed). Each carries the resolved child model, so a reverse join never re-derives a Julia binding from a name (#343) |
@@ -105,6 +106,10 @@ See also [`Model`](@ref), [`set_models`](@ref), [`UniqueConstraint`](@ref), [`In
 @kwdef mutable struct Model_Type <: PormGModel
   name::AbstractString
   db_table::Union{String, Nothing} = nothing # explicit physical table name override (#59)
+  # `false`: PormG queries the table but never migrates it — a view, or a table another system owns
+  # (#741, Django's `Meta.managed`). Read through `model_is_managed`, never directly: the accessor
+  # answers `true` for any `PormGModel` that does not carry the slot.
+  managed::Bool = true
   # Ordered, not a `Dict`: this container decides the PHYSICAL COLUMN ORDER of every table PormG
   # creates — `create_table` and the SQLite table rebuild both iterate it. Under a plain `Dict` that
   # order came from hashing the FIELD NAMES, so a model rendered its columns in an order nobody
@@ -786,6 +791,41 @@ function _collect_field_contradictions!(out::Vector{ModelContradiction},
 end
 
 """
+    constrained_key_into_unmanaged(model, field, target) -> Bool
+
+True when `field` — a foreign key or one-to-one on `model`, resolved to `target` — would render a
+database constraint into an unmanaged model (#741). A managed model's key into an unmanaged one must
+say `db_constraint = false`: the target may be a view, which a foreign key cannot reference, and even
+a real table owned by another system can be dropped or rebuilt under PormG's constraint.
+
+The ONE predicate behind both raise sites — `set_models` (as a collected `ModelContradiction`) and
+the migration planner (as `InvalidMigrationError`, because `makemigrations` never calls
+`set_models`). A key FROM an unmanaged model is never checked: its table is never migrated, so its
+constraints are never rendered.
+"""
+function constrained_key_into_unmanaged(model::PormGModel, field, target)::Bool
+  target isa PormGModel || return false
+  return model_is_managed(model) && !model_is_managed(target) && field.db_constraint
+end
+
+# Message pieces shared by both raise sites of `constrained_key_into_unmanaged`, so the two stay
+# worded alike.
+_unmanaged_key_problem(target::PormGModel) =
+  "is a constrained foreign key into the unmanaged model '$(target.name)'"
+const _UNMANAGED_KEY_FIX =
+  "Declare it with \e[1mdb_constraint = false\e[0m — an unmanaged model's table is never migrated " *
+  "and may be a view, which a foreign key cannot reference."
+
+# #741's `set_models` half. Separate from `_collect_field_contradictions!` because it needs the
+# RESOLVED target, which that collector's signature does not carry.
+function _collect_unmanaged_target_contradiction!(out::Vector{ModelContradiction}, model::PormGModel,
+                                                  field_name::AbstractString, field, target::PormGModel)
+  constrained_key_into_unmanaged(model, field, target) || return out
+  push!(out, ModelContradiction(model.name, field_name, _unmanaged_key_problem(target), _UNMANAGED_KEY_FIX))
+  return out
+end
+
+"""
     _render_contradictions(cs::Vector{ModelContradiction}, mod::Module) -> String
 
 Compose every collected contradiction into ONE error message (#303). Returns the `String`; the
@@ -795,10 +835,10 @@ not an abstraction).
 
 **Ordering is fixed here, not by the caller.** `set_models` walks `pairs(model.fields)`, which is
 `Dict` hash order and carries no meaning, so entries are sorted by `(model, field, problem)`
-before rendering. The third key is forward-looking rather than load-bearing today: `(model, field)`
-is already unique, because the two current rules are mutually exclusive on one field — but it keeps
-the order *total*, so a future rule family that can fire alongside them stays byte-stable without
-revisiting this. `model.field_names` is deliberately NOT the order — it defaults to empty on a
+before rendering. The third key is load-bearing since #741: the two `on_delete` rules are mutually
+exclusive on one field, but the unmanaged-target rule (`_collect_unmanaged_target_contradiction!`)
+can fire alongside either, so `(model, field)` alone no longer orders two entries for the same
+field. The key keeps the order *total* and the message byte-stable. `model.field_names` is deliberately NOT the order — it defaults to empty on a
 hand-built `Model_Type` and is itself hash-ordered from the `Model(name, ::Dict)` constructors, so
 it is a meaningful order only sometimes. `sort` (not `sort!`) because this runs on the error path and must not reorder a vector
 the caller — or a debugger stopped at the throw — still holds.
@@ -1139,6 +1179,7 @@ function set_models(_module::Module, path::String)::Nothing
         # already done — so a field that fails here still leaves the model graph in exactly the
         # state a clean run would produce.
         _collect_field_contradictions!(contradictions, model, field_name, field)
+        _collect_unmanaged_target_contradiction!(contradictions, model, field_name, field, field_to)
 
       elseif is_many_to_many_field(field)
         # #396: the accessor is computed HERE, from the group, and threaded in — never re-derived
@@ -1906,36 +1947,129 @@ function _normalize_constraint_fields(f, label::AbstractString = "UniqueConstrai
   return out
 end
 
-# Coerce the `constraints=` argument (a single UniqueConstraint, an iterable of them, or
-# nothing) into a concrete Vector. Anything that is not a UniqueConstraint is an error.
-_as_constraint_vector(::Nothing)::Vector{UniqueConstraint} = UniqueConstraint[]
-_as_constraint_vector(c::UniqueConstraint)::Vector{UniqueConstraint} = UniqueConstraint[c]
-function _as_constraint_vector(cs)::Vector{UniqueConstraint}
-  out = UniqueConstraint[]
+"""
+    CheckConstraint(; condition, name)
+
+A table-level `CHECK` — Django's `CheckConstraint`. Pass it to [`Model`](@ref) through
+`constraints =`, beside any [`UniqueConstraint`](@ref)s.
+
+`condition` is **SQL**, sent to both engines exactly as written, over the table's **physical**
+column names (`db_column`, where a field sets one) and unqualified — `grid >= 0`, never
+`result.grid >= 0`, which would not survive a SQLite table rebuild. It is not a `Q(...)` expression:
+a CHECK is DDL, which takes no bind parameters, so there is nothing to translate one into. Like
+`db_default`, it is author-written schema text; PormG checks it only for the typos that would
+silently change the statement it lands in — a `--` or `/*` comment, an unterminated quote, a
+top-level `;` or `,`.
+
+`name` is **required**: it is the constraint's identity. PostgreSQL rewrites a stored condition's
+text (`pg_get_constraintdef` re-parenthesises and re-casts it), so a condition is never matched by
+its text alone. At most 63 bytes, PostgreSQL's limit, on both engines.
+
+Invalid declarations raise `ModelDefinitionError`: a missing or blank `name`, a name longer than 63
+bytes, a missing or malformed `condition` here in the constructor; two constraints sharing a name
+when the model is built.
+
+!!! note "Diffed by name, changed through a stored marker"
+    PormG stores a hash of the declared condition beside every CHECK it creates — in
+    `COMMENT ON CONSTRAINT` on PostgreSQL, in an SQL comment inside the constraint on SQLite — and
+    that marker is how `makemigrations` sees a changed condition (it plans a replace) and knows the
+    constraint is PormG's: one the model no longer declares is dropped. A CHECK written by hand
+    carries no marker and is never planned away — but on SQLite any table rebuild drops it, as it
+    always has, with a warning. Adding, changing or removing a CHECK on SQLite is itself a table
+    rebuild, so it needs `migrate(destructive = true)`; on PostgreSQL a replace or a drop does too.
+    Rows that violate a new condition make the migration fail, on both engines.
+
+# Examples
+```julia
+Result = Models.Model("result";
+  resultid = Models.IDField(),
+  grid     = Models.IntegerField(),
+  laps     = Models.IntegerField(),
+  constraints = [
+    Models.CheckConstraint(condition = "grid >= 0 AND grid <= 40", name = "result_grid_range"),
+    Models.CheckConstraint(condition = "laps >= 0", name = "result_laps_non_negative"),
+  ],
+)
+```
+
+See also [`Model`](@ref), [`UniqueConstraint`](@ref).
+"""
+struct CheckConstraint
+  condition::String
+  name::String
+end
+function CheckConstraint(; condition::Union{AbstractString, Nothing} = nothing,
+                         name::Union{AbstractString, Nothing} = nothing)
+  (name === nothing || isempty(strip(name))) && throw(ModelDefinitionError(
+    "CheckConstraint requires a non-empty name — it is the constraint's identity, because " *
+    "PostgreSQL rewrites a stored condition's text"))
+  sizeof(name) <= 63 || throw(ModelDefinitionError(
+    "CheckConstraint name '$(name)' is $(sizeof(name)) bytes; PostgreSQL keeps at most 63, so a longer " *
+    "name would be stored truncated and never match its declaration again. Shorten it"))
+  (condition === nothing || isempty(strip(condition))) &&
+    throw(ModelDefinitionError("CheckConstraint '$(name)' requires a condition"))
+  is_valid_db_default_sql(condition) || throw(ModelDefinitionError(
+    "CheckConstraint '$(name)' condition is not well-formed SQL: $(repr(String(condition))). It must " *
+    "not contain a `--` or `/*` comment, an unterminated quote, or a `;` or `,` outside parentheses — " *
+    "each would silently change the statement the CHECK is rendered into"))
+  return CheckConstraint(String(condition), String(name))
+end
+
+# Everything `constraints =` accepts. Split by kind as soon as it is read: `_apply_unique_constraints!`
+# and `declared_composites` see only UniqueConstraints, `_apply_check_constraints!` only
+# CheckConstraints, each stored under its own cache key.
+const _ModelConstraint = Union{UniqueConstraint, CheckConstraint}
+
+# Coerce the `constraints=` argument (one constraint, an iterable of them, or nothing) into a
+# concrete Vector. Anything that is not a UniqueConstraint or a CheckConstraint is an error.
+_as_constraint_vector(::Nothing)::Vector{_ModelConstraint} = _ModelConstraint[]
+_as_constraint_vector(c::_ModelConstraint)::Vector{_ModelConstraint} = _ModelConstraint[c]
+function _as_constraint_vector(cs)::Vector{_ModelConstraint}
+  out = _ModelConstraint[]
   # A non-iterable value is `constraints = Models.CharField()` — a column named `constraints`, eaten
   # by the option peel. Name the option and the fix instead of raising a bare `MethodError:
   # no method matching iterate(::sCharField)` (#347; the `indexes` sibling below carries the same).
   applicable(iterate, cs) || throw(ModelDefinitionError(
-    "`constraints` must be a UniqueConstraint or a collection of them, got $(typeof(cs)). " *
+    "`constraints` must be a UniqueConstraint, a CheckConstraint or a collection of them, got $(typeof(cs)). " *
     "`constraints` is a model-level option, so a COLUMN of that name must be pinned with " *
     "db_column: other_name = Models.CharField(db_column = \"constraints\")"))
   for c in cs
-    c isa UniqueConstraint ||
-      throw(ModelDefinitionError("`constraints` must contain UniqueConstraint objects, got $(typeof(c))"))
+    c isa _ModelConstraint || throw(ModelDefinitionError(
+      "`constraints` must contain UniqueConstraint or CheckConstraint objects, got $(typeof(c))"))
     push!(out, c)
   end
   return out
 end
+
+# The names a model's constraints already hold, of either kind — one namespace per model, so a
+# UniqueConstraint and a CheckConstraint cannot share a name whichever is applied first.
+_declared_unique_constraints(model::PormGModel) =
+  get(get(model.cache, "unique_constraints", Dict{String, Any}()), "constraints", UniqueConstraint[])
+_constraint_names(model::PormGModel, kind::Symbol)::Set{String} = kind === :unique ?
+  Set{String}(String(c.name) for c in _declared_unique_constraints(model) if c.name !== nothing) :
+  Set{String}(c.name for c in declared_check_constraints(model))
+
+"""
+    declared_check_constraints(model) -> Vector{CheckConstraint}
+
+The [`CheckConstraint`](@ref)s `model` declares, in declaration order; empty when it declares none.
+"""
+declared_check_constraints(model::PormGModel)::Vector{CheckConstraint} =
+  get(get(model.cache, "check_constraints", Dict{String, Any}()), "constraints", CheckConstraint[])
 
 # Validate declared UniqueConstraints against the built model and stash them in the
 # general-purpose `cache` (the same mechanism the ManyToManyField auto-index uses, so
 # `deepcopy`/`strip_many_to_many_fields` carry them for free — no new struct field, no
 # `deepcopy` positional-enumeration edit). Each referenced field must exist on the model
 # and be a concrete column (not a ManyToManyField, which has no column of its own).
+#
+# Only the UniqueConstraints of the list (#742): a CheckConstraint is `_apply_check_constraints!`'s,
+# and a list holding only checks leaves the `"unique_constraints"` key unset, as no constraints did.
 function _apply_unique_constraints!(model::Model_Type, constraints)::Model_Type
-  list = _as_constraint_vector(constraints)
+  list = UniqueConstraint[c for c in _as_constraint_vector(constraints) if c isa UniqueConstraint]
   isempty(list) && return model
   seen_names = Set{String}()
+  check_names = _constraint_names(model, :check)
   for c in list
     for fname in c.fields
       haskey(model.fields, fname) || throw(ModelDefinitionError(
@@ -1948,13 +2082,32 @@ function _apply_unique_constraints!(model::Model_Type, constraints)::Model_Type
     # Two constraints sharing an explicit name collide into one index (the plan keys on the name);
     # reject it here for a clear, early error instead of a silent drop at planning time.
     if c.name !== nothing
-      c.name in seen_names && throw(ModelDefinitionError(
+      (c.name in seen_names || c.name in check_names) && throw(ModelDefinitionError(
         "Duplicate UniqueConstraint name '$(c.name)' on model '$(model.name)'; " *
         "constraint names must be unique within a model"))
       push!(seen_names, c.name)
     end
   end
   model.cache["unique_constraints"] = Dict{String, Any}("constraints" => list)
+  return model
+end
+
+# The CheckConstraints of `constraints =` (#742), stored in `cache` beside the UniqueConstraints and
+# carried the same way. The constructor has already checked each one alone; what needs the model is
+# the name, which must be unique among ALL the model's constraints. The condition's column names are
+# not checked: it is SQL, and the database reports an unknown column when the CHECK is created.
+function _apply_check_constraints!(model::Model_Type, constraints)::Model_Type
+  list = CheckConstraint[c for c in _as_constraint_vector(constraints) if c isa CheckConstraint]
+  isempty(list) && return model
+  taken = _constraint_names(model, :unique)
+  seen = Set{String}()
+  for c in list
+    (c.name in seen || c.name in taken) && throw(ModelDefinitionError(
+      "Duplicate constraint name '$(c.name)' on model '$(model.name)'; constraint names must be " *
+      "unique within a model"))
+    push!(seen, c.name)
+  end
+  model.cache["check_constraints"] = Dict{String, Any}("constraints" => list)
   return model
 end
 
@@ -2123,12 +2276,26 @@ function _apply_db_table!(model::Model_Type, db_table)::Model_Type
   return model
 end
 
+# Store the `managed` option (#741). Only a `Bool` is accepted — a truthy stand-in such as `0` or
+# `"false"` would read as the opposite of what was meant, and the cost of that mistake is the
+# migration planner dropping or rebuilding a table another system owns. `nothing` (the default) is a
+# no-op, so a model that never sets it stays managed.
+function _apply_managed!(model::Model_Type, managed)::Model_Type
+  managed === nothing && return model
+  managed isa Bool || throw(ModelDefinitionError(
+    "The 'managed' option on model '$(model.name)' must be true or false, got $(typeof(managed)). " *
+    "A column named `managed` is declared with db_column: " *
+    "`is_managed = Models.BooleanField(db_column = \"managed\")`."))
+  model.managed = managed
+  return model
+end
+
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Model Constructors
 #═══════════════════════════════════════════════════════════════════════════════
 """
-    Model(; constraints = nothing, db_table = nothing, indexes = nothing, fields...)
-    Model(name; constraints = nothing, db_table = nothing, indexes = nothing, fields...)
+    Model(; constraints = nothing, db_table = nothing, indexes = nothing, managed = nothing, fields...)
+    Model(name; constraints = nothing, db_table = nothing, indexes = nothing, managed = nothing, fields...)
 
 Define a model — one database table, described by its fields. Returns a `Model_Type`: the object the
 query builder starts from, as in `M.Driver.objects`.
@@ -2191,7 +2358,8 @@ A `ManyToManyField` is stored on the model but owns no column of its own, so it 
 `field_names` and from the created table.
 
 `constraints` takes [`UniqueConstraint`](@ref) objects — one, or a collection — for uniqueness
-spanning more than one column. `db_table` (#59) pins an explicit physical table name, **preserved
+spanning more than one column, and [`CheckConstraint`](@ref) objects for table-level `CHECK`s (#742),
+in one list. `db_table` (#59) pins an explicit physical table name, **preserved
 verbatim** — no case fold, no validation beyond "is it a non-empty String" — overriding the name
 otherwise derived from the positional argument or the binding. It is authoritative everywhere a table
 identifier is rendered: DDL, `SELECT`/`INSERT`/`UPDATE`/`DELETE`, `JOIN`, foreign-key `REFERENCES`
@@ -2209,10 +2377,24 @@ DriverRaces = Models.Model("driver_races", db_table = "Driver_Races_Legacy",
 spanning more than one column, Django's `Meta.indexes`. A single-column index stays the field option
 `db_index = true`.
 
-`constraints`, `db_table` and `indexes` are the **only** model-level options.
+`managed = false` (#741) marks a model PormG **queries but never migrates** — a view, or a table
+another system owns — Django's `Meta.managed`. The migration planner never creates, alters, renames
+or drops its table, and never offers it as a rename candidate; queries, joins and `__` traversal work
+exactly as for any other model. A foreign key from a managed model to an unmanaged one must say
+`db_constraint = false`, because the target may be a view and a view cannot be referenced:
 
-!!! warning "`constraints`, `db_table` and `indexes` are not field names"
-    All three are peeled off before the field keywords, so `db_table = CharField()` declares the
+```julia
+DriverStandingsV = Models.Model("driver_standings_v"; managed = false,
+  driverstandingsid = Models.IDField(),
+  driverid = Models.ForeignKey(Driver, pk_field = "driverid", db_constraint = false),
+  points   = Models.FloatField(),
+)
+```
+
+`constraints`, `db_table`, `indexes` and `managed` are the **only** model-level options.
+
+!!! warning "`constraints`, `db_table`, `indexes` and `managed` are not field names"
+    All four are peeled off before the field keywords, so `db_table = CharField()` declares the
     *option* (and raises, since a field is not a String) rather than a column called `db_table`. To
     declare a column with one of those names, pin it with `db_column`:
 
@@ -2276,7 +2458,7 @@ ConstructorStandings = Models.Model("constructor_standings",
 
 See also [`set_models`](@ref), [`UniqueConstraint`](@ref), [`Index`](@ref), [`ForeignKey`](@ref).
 """
-function Model(name::AbstractString; constraints = nothing, db_table = nothing, indexes = nothing, fields...)
+function Model(name::AbstractString; constraints = nothing, db_table = nothing, indexes = nothing, managed = nothing, fields...)
   # #612: the no-fields guard lives HERE, not on its own method. It used to be
   # `Model(name::String)`, which meant a `SubString` or `LazyString` name — the spelling a web layer
   # or a `split` hands you — missed it entirely, fell through to this method with an empty keyword
@@ -2295,14 +2477,16 @@ function Model(name::AbstractString; constraints = nothing, db_table = nothing, 
     example_usage = "\e[32musers = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())\e[0m"
     throw(ModelDefinitionError("You need to add fields to the model, example: $example_usage"))
   end
-  # Peel `constraints`/`db_table`/`indexes` off BEFORE the `fields...` slurp — otherwise any of them
-  # would flow into the `NTuple{Pair{Symbol}}` method below and trip its `isa PormGField` check (#19,
-  # #347).
+  # Peel `constraints`/`db_table`/`indexes`/`managed` off BEFORE the `fields...` slurp — otherwise any
+  # of them would flow into the `NTuple{Pair{Symbol}}` method below and trip its `isa PormGField`
+  # check (#19, #347, #741).
   # Generated model files (Model_to_str) reload through this kwargs form, so this is the
   # round-trip seam.
   model = Model(name, Tuple(pairs(fields)))
   model = _apply_db_table!(model, db_table)
+  model = _apply_managed!(model, managed)
   model = _apply_unique_constraints!(model, constraints)
+  model = _apply_check_constraints!(model, constraints)
   return _apply_indexes!(model, indexes)
 end
 
@@ -2384,13 +2568,15 @@ function Model(name::AbstractString, fields::Dict{Symbol, Any})
   end
   return Model_Type(name=name, fields=fields_dict, field_names=field_names)
 end
-function Model(; constraints = nothing, db_table = nothing, indexes = nothing, fields...)
+function Model(; constraints = nothing, db_table = nothing, indexes = nothing, managed = nothing, fields...)
   # No-positional-name form (the idiomatic style — the table name is inferred from the binding
-  # via set_models). `constraints=`/`db_table=`/`indexes=` must work here too, so peel them before
-  # the `fields...` slurp exactly like the named form above.
+  # via set_models). `constraints=`/`db_table=`/`indexes=`/`managed=` must work here too, so peel them
+  # before the `fields...` slurp exactly like the named form above.
   model = Model("", Tuple(pairs(fields)))
   model = _apply_db_table!(model, db_table)
+  model = _apply_managed!(model, managed)
   model = _apply_unique_constraints!(model, constraints)
+  model = _apply_check_constraints!(model, constraints)
   return _apply_indexes!(model, indexes)
 end
 
@@ -2587,9 +2773,14 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
   # Composite uniqueness (#19): emit model-level UniqueConstraints so inspectdb/import output
   # round-trips through the `constraints=` kwarg on Model(...). Only when ≥1 field rendered —
   # an all-failed model (fields == "") stays commented-out below, constraints included.
-  if fields != "" && haskey(model.cache, "unique_constraints")
-    ucs = get(model.cache["unique_constraints"], "constraints", UniqueConstraint[])
-    if !isempty(ucs)
+  #
+  # #742: CheckConstraints go in the SAME list — a second `constraints =` keyword would not parse — and
+  # a model declaring only checks still gets one. A check's condition is SQL over physical columns, so
+  # the field-rename map below does not apply to it: it is emitted verbatim.
+  if fields != "" && (haskey(model.cache, "unique_constraints") || haskey(model.cache, "check_constraints"))
+    ucs = _declared_unique_constraints(model)
+    ccs = declared_check_constraints(model)
+    if !isempty(ucs) || !isempty(ccs)
       rendered_constraints = String[]
       for c in ucs
         cfields = String[String(f) for f in c.fields]
@@ -2611,6 +2802,10 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
         namepart = c.name === nothing ? "" : ", name = $(format_string(String(c.name)))"
         # Trailing comma keeps a single-field tuple valid Julia: ("a",)
         push!(rendered_constraints, "Models.UniqueConstraint(fields = ($(cols),)$(namepart))")
+      end
+      for c in ccs
+        push!(rendered_constraints,
+              "Models.CheckConstraint(condition = $(format_string(c.condition)), name = $(format_string(c.name)))")
       end
       isempty(rendered_constraints) ||
         (fields *= ",\n  constraints = [$(join(rendered_constraints, ", "))]")
@@ -2755,6 +2950,9 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
     db_table_abs = _pre_dedupe_name_abs
     db_table_part = ", db_table = $(format_string(db_table_abs))"
   end
+  # #741: emitted only when false, beside `db_table` — the other table-level option that changes what
+  # the migration planner does with the model. A managed model's line is byte-identical to before.
+  managed_part = model_is_managed(model) ? "" : ", managed = false"
   # Marker comments sit directly above the model definition in the generated file (#70).
   marker = isempty(render_failures) ? "" : join(render_failures, "\n") * "\n"
   if fields == ""
@@ -2768,9 +2966,9 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
     # would throw for the same reason if it were ever uncommented as-is. That is the intended
     # reading: it is a stub to fix by hand, not a definition to restore.
     note = "# PormG: model '$(model_name_abs)' had no renderable fields — definition commented out."
-    result = """$(marker)$(note)\n# $(model_var_name) = Models.Model($(format_string(model_name_abs))$db_table_part)"""
+    result = """$(marker)$(note)\n# $(model_var_name) = Models.Model($(format_string(model_name_abs))$db_table_part$managed_part)"""
   else
-    result = """$(marker)$(model_var_name) = Models.Model($(format_string(model_name_abs))$db_table_part$fields)"""
+    result = """$(marker)$(model_var_name) = Models.Model($(format_string(model_name_abs))$db_table_part$managed_part$fields)"""
   end
   @info(result)
 
@@ -3873,6 +4071,10 @@ function strip_many_to_many_fields(model::PormGModel)::PormGModel
     # `PormGModel`, and a bare `model_table_name` would wrongly PIN the logical name onto every model
     # that declares no override.
     db_table=(model_has_db_table(model) ? model_table_name(model) : nothing),
+    # Carried for the same reason as `db_table` (#741): an omitted slot @kwdef-defaults to `true`, so
+    # every unmanaged model would reach the planner managed again and have its view planned as a
+    # `CREATE TABLE` — or the table another system owns altered and rebuilt.
+    managed=model_is_managed(model),
     fields=physical_fields,
     field_names=physical_field_names,
     related_objects=copy(model.related_objects),
@@ -3918,15 +4120,23 @@ function synthesize_many_to_many_through_models(current_schema::Dict{Symbol, Dic
       target_model = _resolve_model_reference(current_schema, field.to)
       related_binding = uppercasefirst(format_model_name(target_model.name))
       relation = _relation_from_many_to_many(source_model, owner_binding, field_name, field, target_model, related_binding, settings, model_map=current_schema)
+      # A key into an UNMANAGED end carries no database constraint (#741): that end may be a view, which
+      # cannot be referenced, and the planner refuses a constrained key into an unmanaged model — so
+      # without this a join table between a managed and an unmanaged model could never be planned.
       through_fields = Dict{Symbol, Any}(
         :id => IDField(),
-        Symbol(relation.owner_column) => ForeignKey(source_model, pk_field=relation.owner_pk, on_delete=CASCADE),
-        Symbol(relation.related_column) => ForeignKey(target_model, pk_field=relation.related_pk, on_delete=CASCADE),
+        Symbol(relation.owner_column) => ForeignKey(source_model, pk_field=relation.owner_pk, on_delete=CASCADE,
+                                                    db_constraint=model_is_managed(source_model)),
+        Symbol(relation.related_column) => ForeignKey(target_model, pk_field=relation.related_pk, on_delete=CASCADE,
+                                                      db_constraint=model_is_managed(target_model)),
       )
       # `through_table` is the physical name on both branches of `_relation_from_many_to_many`, but
       # this loop only ever reaches the AUTO one (`field.through === nothing || continue` above), so
       # the synthesized model's own name IS its table and the planner's physical keying holds (#363).
       through_model = Model(relation.through_table, through_fields)
+      # Django's rule (#741): the auto join table is unmanaged only when BOTH ends are. A managed end
+      # still owns its half of the relation, so the table it needs is created.
+      through_model.managed = model_is_managed(source_model) || model_is_managed(target_model)
       through_model.cache["many_to_many_auto"] = Dict{String, Any}(
         "owner_column" => relation.owner_column,
         "related_column" => relation.related_column,

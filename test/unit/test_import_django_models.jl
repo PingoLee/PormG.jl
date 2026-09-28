@@ -1343,7 +1343,10 @@ end
         # ...and each rejection says which argument it could not express.
         @test occursin("`condition=` changes what the index means", generated)
         @test occursin("it takes a positional expression", generated)
-        @test occursin("CheckConstraint has no PormG equivalent", generated)
+        # #742: a CheckConstraint is still not imported — Django's condition is a `Q(...)`, PormG's is
+        # SQL — but the marker now names the PormG type and carries the constraint's name over.
+        @test occursin("CheckConstraint takes its condition as SQL, not Q() — declare it as " *
+                       "Models.CheckConstraint(condition = \"<SQL>\", name = \"chk_cpf_digitos\")", generated)
 
         # Rejection is PER CONSTRAINT. Three dropped and the fourth kept, on one model — the
         # assertion above proves the survivor, this one proves the other three did not take it with

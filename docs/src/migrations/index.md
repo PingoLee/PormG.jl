@@ -38,7 +38,7 @@ Because every plan is a fresh diff between your models and the **live database**
     - a lengthless `varchar` or an unparameterised `numeric` plans the declared width once;
     - a column type PormG has no field for (`inet`, `citext`, an array, `character(n)`) never matches a declared `TextField` or `CharField`: `generate_models_from_db` emits `TextField` for it **with a warning**, and `makemigrations` plans a retype unless you exclude the table or declare the column by hand.
 
-    "Never planned away" is about the reader: no plan targets your own CHECK. On SQLite, though, any plan that alters a column of that table (the `ADD CHECK` cases above included) is a [table rebuild](#SQLite:-Table-Recreation) that re-creates the table from your models, so a CHECK you wrote by hand is not carried across it — `makemigrations` warns, quoting it, when that happens.
+    "Never planned away" is about the reader: no plan targets your own CHECK. On SQLite, though, any plan that alters a column of that table (the `ADD CHECK` cases above included) is a [table rebuild](#SQLite:-Table-Recreation) that re-creates the table from your models, so a CHECK you wrote by hand is not carried across it — `makemigrations` warns, quoting it, when that happens. To keep one, declare it as a [`CheckConstraint`](../models.md#Check-Constraints) under its own name with the same condition: it is adopted as it stands and re-created by every rebuild after that. A declared CHECK that the model no longer declares *is* planned away — PormG stores a marker beside each CHECK it creates, and that marker is what makes it PormG's to drop.
 
     Tables PormG created itself always carry these facts, so nothing changes for them.
 
@@ -357,7 +357,7 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
 !!! warning "Clauses no model can declare do not survive a rebuild"
     The rebuilt table is rendered from your model, so whatever its `CREATE TABLE` carries that no field or model option expresses is gone afterwards:
 
-    - a hand-written `CHECK`, on a column or on the table — PormG's own `>= 0` and byte-length checks are modelled, and kept;
+    - a hand-written `CHECK`, on a column or on the table — PormG's own `>= 0` and byte-length checks are modelled, and kept, and so is every [`CheckConstraint`](../models.md#Check-Constraints) the model declares. Declare a hand-written CHECK under its own name to keep it;
     - a column `COLLATE`, a generated column, or an `ON CONFLICT` clause;
     - a composite `FOREIGN KEY`, and a key's `ON UPDATE`, `DEFERRABLE` or `MATCH`. A SQLite database created by Django declares every key `DEFERRABLE INITIALLY DEFERRED`, so an imported schema reports it;
     - the table options `STRICT` and `WITHOUT ROWID`.

@@ -1462,3 +1462,206 @@ if adapter_name == "PostgreSQL"
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Unmanaged models over a real view and a real table: nothing planned, queried as usual (#741)
+# A view is not in the live table list on either engine, so a MANAGED model over it is planned as
+# `CREATE TABLE` on every run; declared `managed = false` it plans nothing. The same holds for a real
+# table PormG must not touch: `driver` is mapped here by a second, unmanaged model that declares only
+# two of its columns, and neither the missing columns nor the table itself are planned. The query side
+# is unchanged: a filter across the view's `db_constraint = false` key and a `__` traversal into the
+# unmanaged `driver` return what the fixture's own `Result` rows add up to. Both models live in their
+# own module, so the shared `M.Driver` gains no reverse accessor. The view is dropped in `finally`.
+# Mutation gate: make `_exclude_unmanaged_models!` a no-op and the plan creates the view's table and
+# drops `driver`'s undeclared columns.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Unmanaged models over a real view and table: nothing planned, queried as usual (#741)" begin
+  pool = PormG.config[PORMG_DB_FOLDER].connections
+  ddl(sql) = PormG.ConnectionPool.fetch(pool, sql)
+  view = "pormg_it_741_points_v"
+  drop741!() = try; ddl("DROP VIEW IF EXISTS \"$(view)\""); catch; end
+  M741 = PormG.Models
+
+  drop741!()
+  try
+    ddl("CREATE VIEW \"$(view)\" AS SELECT \"driverid\" AS \"id\", \"driverid\", SUM(\"points\") AS \"points\" " *
+        "FROM \"result\" GROUP BY \"driverid\"")
+
+    # Registered on the suite's own connection, in a module of its own. Built as locals first and only
+    # then bound into the module: reading `mod.Driver` right after `Core.eval` defined it trips 1.12's
+    # world-age rule for new bindings.
+    driver741 = M741.Model("driver"; managed = false,
+      driverid = M741.IDField(), driverref = M741.CharField(), surname = M741.CharField())
+    points741 = M741.Model(view; managed = false,
+      id = M741.IDField(),
+      driverid = M741.ForeignKey(driver741, pk_field = "driverid", db_constraint = false),
+      points = M741.FloatField())
+    mod = Module(:Unmanaged741)
+    Core.eval(mod, :(import PormG, PormG.Models))
+    Core.eval(mod, :(Driver = $driver741))
+    Core.eval(mod, :(Points = $points741))
+    PormG.Models.set_models(mod, PORMG_DB_FOLDER)
+
+    # Nothing to plan: not the view (absent from the live side), not `driver` (present, with columns
+    # the unmanaged model does not declare).
+    schema741 = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+      Symbol(PormG.model_table_name(m)) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => m, :exist => false)
+      for m in (driver741, points741))
+    settings741 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
+    live = PormG.Migrations.read_live_schema(pool; include_table = ["driver", view])
+    @test [t.name for t in live] == ["driver"]           # the view is not a table, on either engine
+    @test all(isempty, values(PormG.Migrations.get_migration_plan(live, schema741, pool, settings741; interactive = false)))
+
+    # Control: the same two declarations MANAGED are planned — the view as a table, `driver` altered.
+    managed741 = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+      :driver => Dict{Symbol, Union{Bool, PormG.PormGModel}}(
+        :model => M741.Model("driver"; driverid = M741.IDField(), surname = M741.CharField()), :exist => false),
+      Symbol(view) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(
+        :model => M741.Model(view; id = M741.IDField(), points = M741.FloatField()), :exist => false))
+    control = PormG.Migrations.get_migration_plan(live, managed741, pool, settings741; interactive = false)
+    @test occursin("CREATE TABLE", join(values(control[Symbol(view)]), "\n"))
+    @test !isempty(control[:driver])
+
+    # The query side: Ayrton Senna's total through the view equals the sum of his fixture results. By
+    # `driverref`, which is unique — the fixture holds two Sennas.
+    expected = sum(r[:points] for r in M.Result.objects.filter("driverid__driverref" => "senna").values("points").list())
+    rows = points741.objects.
+      filter("driverid__driverref" => "senna").
+      values("points", "driverid__surname").
+      list()
+    @test length(rows) == 1
+    @test rows[1][:points] ≈ expected
+    @test rows[1][:driverid__surname] == "Senna"
+  finally
+    drop741!()
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL CheckConstraint: declared, marked, read back, replaced, renamed and adopted (#742)
+# The live half of test/unit/test_check_constraints.jl, where the stand-in has no catalog. A declared
+# CHECK is added as `ADD CONSTRAINT` plus a `COMMENT ON CONSTRAINT` holding PormG's marker, and that
+# marker is what the readers see: `grid >= 0`, which PostgreSQL stores exactly as a
+# `PositiveIntegerField`'s own CHECK, must NOT read as the column's `NonNegativeCheck`, nor be handed
+# to a column ALTER by `get_constraints_check`. A changed condition is replaced, a new name for the
+# same condition is a RENAME, and the marker survives both a rename and an `ALTER COLUMN … TYPE` of
+# the column it names. A hand-written CHECK is left alone until declared, and then adopted with a
+# COMMENT. Rows that break a new condition fail the statement. And `inspectdb` writes the CHECKs back
+# so that its own output plans only that adoption. Dropped in `finally`.
+# Mutation gate, measured: drop `_PG_UNMARKED_CHECK` from the non-negative reader CTE alone and `grid`
+# reads as positive (the plan stays empty only because the dropper still finds nothing to drop); drop it
+# from the dropper alone and `get_constraints_check` names the declared CHECK. Each fails one assertion.
+# ─────────────────────────────────────────────────────────────────────────────
+if adapter_name == "PostgreSQL"
+  @testset "CheckConstraint: declared, marked, read back, replaced, renamed and adopted (#742)" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
+    tbl = "pormg_it_742_result"
+    drop742!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
+    M742 = PormG.Models
+    CC = M742.CheckConstraint
+    model742(checks...; laps = M742.IntegerField(), grid = M742.IntegerField()) = M742.Model(tbl;
+      id = M742.IDField(), grid = grid, laps = laps, constraints = collect(checks))
+    schema742(m) = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+      Symbol(tbl) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => m, :exist => false))
+    settings742 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
+    live742() = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
+    plan742(m) = PormG.Migrations.get_migration_plan([live742()], schema742(m), pool, settings742; interactive = false)
+    apply742!(plan) = for sql in first(PormG.Migrations._order_statements(collect(values(plan))))
+      ddl(sql)
+    end
+    comments742() = Dict(String(r.conname) => (r.comment === missing ? nothing : String(r.comment))
+      for r in eachrow(ddl("SELECT conname, obj_description(oid, 'pg_constraint') AS comment " *
+                           "FROM pg_constraint WHERE conrelid = '$(tbl)'::regclass AND contype = 'c'")))
+    range = CC(condition = "grid >= 0 AND grid <= 40", name = "pormg_it_742_grid_range")
+    nonneg = CC(condition = "grid >= 0", name = "pormg_it_742_grid_nonneg")
+
+    drop742!()
+    try
+      apply742!(PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema742(model742()), pool,
+                                                     settings742; interactive = false))
+      # Added: the constraint and its marker, both.
+      p = plan742(model742(range, nonneg))
+      @test collect(keys(p[Symbol(tbl)])) == ["Create check constraint: pormg_it_742_grid_range",
+                                              "Create check constraint: pormg_it_742_grid_nonneg"]
+      apply742!(p)
+      @test comments742() == Dict("pormg_it_742_grid_range" => PormG.check_marker(range.condition),
+                                  "pormg_it_742_grid_nonneg" => PormG.check_marker(nonneg.condition))
+
+      # Read back as table CHECKs — and `grid >= 0`, which PostgreSQL stores as exactly PormG's own
+      # `CHECK ((grid >= 0))`, is neither the column's fact nor the dropper's answer.
+      live = live742()
+      @test Set((c.name, c.marker !== nothing) for c in live.checks) ==
+            Set([("pormg_it_742_grid_range", true), ("pormg_it_742_grid_nonneg", true)])
+      @test isempty(live.columns["grid"].checks)
+      @test PormG.get_constraints_check(pool, tbl, "grid") === nothing
+      @test all(isempty, values(plan742(model742(range, nonneg))))
+
+      # A hand-written CHECK: never planned away.
+      ddl("ALTER TABLE \"$(tbl)\" ADD CONSTRAINT pormg_it_742_laps_hand CHECK (laps < 1000)")
+      @test all(isempty, values(plan742(model742(range, nonneg))))
+
+      # Rows that break a new condition fail the statement that adds it — a plain add, so the failed
+      # statement leaves the table exactly as it was.
+      ddl("INSERT INTO \"$(tbl)\" (grid, laps) VALUES (35, 10)")
+      small = CC(condition = "laps <= 5", name = "pormg_it_742_laps_small")
+      p = plan742(model742(range, nonneg, small))
+      @test collect(keys(p[Symbol(tbl)])) == ["Create check constraint: pormg_it_742_laps_small"]
+      err = try apply742!(p); nothing catch e; e end
+      @test err !== nothing && occursin("pormg_it_742_laps_small", sprint(showerror, err))
+      @test !haskey(comments742(), "pormg_it_742_laps_small")
+      ddl("DELETE FROM \"$(tbl)\"")
+      tight = CC(condition = "grid >= 0 AND grid <= 30", name = "pormg_it_742_grid_range")
+
+      # Replaced under the same name: drop, then add, and the new marker is stored.
+      p = plan742(model742(tight, nonneg))
+      @test collect(keys(p[Symbol(tbl)])) == ["Remove check constraint: pormg_it_742_grid_range",
+                                              "Create check constraint: pormg_it_742_grid_range"]
+      apply742!(p)
+      @test comments742()["pormg_it_742_grid_range"] == PormG.check_marker(tight.condition)
+      @test all(isempty, values(plan742(model742(tight, nonneg))))
+
+      # Renamed: the same condition under a new name is a RENAME, and the comment goes with it.
+      moved = CC(condition = "grid >= 0", name = "pormg_it_742_grid_ok")
+      p = plan742(model742(tight, moved))
+      @test collect(keys(p[Symbol(tbl)])) == ["Rename check constraint: pormg_it_742_grid_nonneg"]
+      apply742!(p)
+      @test comments742()["pormg_it_742_grid_ok"] == PormG.check_marker(moved.condition)
+
+      # A retype of the column both declared CHECKs name: PostgreSQL rebuilds them inside
+      # `ALTER COLUMN … TYPE`, and their markers must survive that, or the next plan would replace them.
+      p = plan742(model742(tight, moved; grid = M742.BigIntegerField()))
+      @test occursin("TYPE", join(values(p[Symbol(tbl)]), "\n"))
+      apply742!(p)
+      @test comments742()["pormg_it_742_grid_range"] == PormG.check_marker(tight.condition)
+      @test comments742()["pormg_it_742_grid_ok"] == PormG.check_marker(moved.condition)
+      @test all(isempty, values(plan742(model742(tight, moved; grid = M742.BigIntegerField()))))
+
+      # A hand-written CHECK that reads exactly like PormG's own `laps >= 0`, declared under its own
+      # name on the plain `IntegerField`: the column pass drops it as the column's stray fact, then the
+      # declaration adds it back, marked. The name-clash guard must not stop that.
+      ddl("ALTER TABLE \"$(tbl)\" ADD CONSTRAINT pormg_it_742_laps_nn CHECK (laps >= 0)")
+      nn = CC(condition = "laps >= 0", name = "pormg_it_742_laps_nn")
+      final742 = model742(tight, moved, nn; grid = M742.BigIntegerField())
+      apply742!(plan742(final742))
+      @test comments742()["pormg_it_742_laps_nn"] == PormG.check_marker(nn.condition)
+      @test all(isempty, values(plan742(final742)))
+
+      # inspectdb writes all four back — the hand-written one with the catalog's own text. Against its
+      # own output the plan only ADOPTS the hand-written one (a COMMENT, not destructive), after which
+      # it is PormG's and the plan is empty. A DBA's note on it survives the adoption.
+      ddl("COMMENT ON CONSTRAINT pormg_it_742_laps_hand ON \"$(tbl)\" IS 'FIA''s lap limit'")
+      adopted = only(PormG.Migrations.convert_schema_to_models(pool; include_table = [tbl]))
+      @test Set(c.name for c in M742.declared_check_constraints(adopted)) ==
+            Set(["pormg_it_742_grid_range", "pormg_it_742_grid_ok", "pormg_it_742_laps_nn", "pormg_it_742_laps_hand"])
+      p = plan742(adopted)
+      @test collect(keys(p[Symbol(tbl)])) == ["Adopt check constraint: pormg_it_742_laps_hand"]
+      @test !PormG.Migrations.is_destructive(join(values(p[Symbol(tbl)]), "\n"))
+      apply742!(p)
+      @test comments742()["pormg_it_742_laps_hand"] == "FIA's lap limit " * PormG.check_marker("laps < 1000")
+      @test all(isempty, values(plan742(adopted)))
+    finally
+      drop742!()
+    end
+  end
+end

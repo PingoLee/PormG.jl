@@ -37,6 +37,9 @@ import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_
 # mask it inverts. `normalize_sqlite_datetime_string` stays in `Models` because it is also on the
 # WRITE path (`validate_timezone`) — this module only consumes it.
 import PormG.Models: normalize_sqlite_datetime_string
+# #742: declared table CHECKs, and the ownership marker rendered beside each one.
+import PormG.Models: declared_check_constraints, CheckConstraint
+import PormG: check_marker
 # `_foreign_key_on_delete_sql` lives in `Models` since #498 — see the note where it used to be defined.
 import PormG.Models: _foreign_key_on_delete_sql
 
@@ -1580,9 +1583,31 @@ function create_table(conn::PormGSQLite, model::PormGModel)
                      _foreign_key_references_sql(field; column = field_name, model = model))
     end
   end
+  # #742: SQLite has no `ALTER TABLE … ADD CONSTRAINT`, so a declared CHECK exists only inside a
+  # `CREATE TABLE` — this one, or the rebuild's.
+  for c in declared_check_constraints(model)
+    push!(columns, _sqlite_check_constraint_clause(c))
+  end
 
   return create_table(conn, model_table_name(model), columns)
 end
+
+"""
+    _sqlite_check_constraint_clause(c) -> String
+
+A declared `CheckConstraint` as SQLite's table-level clause:
+`CONSTRAINT "<name>" CHECK (<condition> /* pormg:check:<hash> */)` (#742).
+
+The marker is an SQL comment INSIDE the parentheses, as the last thing before the closing one.
+SQLite keeps the `CREATE TABLE` text verbatim in `sqlite_master` — comments included, through
+`ALTER TABLE … RENAME TO` (every rebuild ends in one) and `RENAME COLUMN` — so the reader finds it
+there, anchored to the end of the clause. Inside rather than after the parentheses so that no
+reader of the bare `CHECK (…)` text — `_sqlite_column_checks`, the rebuild's clause report — ever
+sees a declared check as a clause of its own shape. The condition cannot contain a comment of its
+own: the `CheckConstraint` constructor refuses one.
+"""
+_sqlite_check_constraint_clause(c)::String =
+  "CONSTRAINT \"$(_quote_table_ddl(c.name))\" CHECK ($(c.condition) /* $(check_marker(c.condition)) */)"
 
 # `if_not_exists = false` is the model-level composite path (#161). An index name is unique per
 # SCHEMA on PostgreSQL (shared with tables and sequences) and per DATABASE on SQLite, so a name some
@@ -2144,6 +2169,11 @@ function rebuild_table(conn::PormGSQLite, model::PormGModel)
                           _foreign_key_references_sql(f; column = f_name, model = model))
     end
   end
+  # #742: the declared CHECKs, exactly as `create_table` renders them. A rebuild is how SQLite adds,
+  # changes and drops one, and every rebuild — whatever triggered it — re-creates the ones declared.
+  for c in declared_check_constraints(model)
+    push!(columns_defs, _sqlite_check_constraint_clause(c))
+  end
 
   create_sql = """CREATE TABLE "$new_table_name" (
   $(join(columns_defs, ",\n  "))
@@ -2237,6 +2267,36 @@ end
 # a constraint owns is refused ("constraint … requires it"), and the Django-adopted `unique_together`
 # is exactly that shape. `IF EXISTS` for the reason `drop_foreign_key` gives above.
 function drop_unique_constraint(conn::PormGPostgres, table_name::String, constraint_name::String)
+  return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP CONSTRAINT IF EXISTS "$(_quote_table_ddl(constraint_name))";"""
+end
+
+# A declared `CheckConstraint` on PostgreSQL (#742): the constraint, then the ownership marker as its
+# comment — one step, so a constraint PormG created never exists without the marker that says so. The
+# marker is `pormg:check:` and hex digits only, so the literal needs no escaping. SQLite has neither
+# statement: its CHECKs are rendered inside `create_table` / `rebuild_table`.
+function add_check_constraint(conn::PormGPostgres, table_name::String, c::CheckConstraint)::String
+  t, n = _quote_table_ddl(table_name), _quote_table_ddl(c.name)
+  return """ALTER TABLE "$(t)" ADD CONSTRAINT "$(n)" CHECK ($(c.condition));\n""" *
+         comment_check_constraint(conn, table_name, c)
+end
+
+# The marker as the constraint's comment — also how a declaration ADOPTS a hand-written CHECK of the
+# same condition: nothing about the constraint changes, it only becomes PormG's. `keep` is the comment
+# already there: `COMMENT ON` replaces the whole comment, so the marker is APPENDED to it rather than
+# written over a note a DBA left (the readers find the marker anywhere in a comment). The kept text is
+# live catalog content, so its quotes are doubled — the only escape a standard SQL literal has.
+function comment_check_constraint(conn::PormGPostgres, table_name::String, c::CheckConstraint;
+                                  keep::Union{String, Nothing} = nothing)::String
+  marker = check_marker(c.condition)
+  text = (keep === nothing || isempty(strip(keep))) ? marker : string(rstrip(keep), " ", marker)
+  return """COMMENT ON CONSTRAINT "$(_quote_table_ddl(c.name))" ON "$(_quote_table_ddl(table_name))" IS '$(replace(text, "'" => "''"))';"""
+end
+
+# `IF EXISTS`, and not for tidiness: PostgreSQL drops a CHECK together with a column it names, so a
+# plan that removes both would otherwise fail on the constraint the column already took with it.
+# Typed `::String` like the other DDL helpers — an `(AbstractString, AbstractString)` signature is the
+# pattern-lookup family's, which `test_operators.jl`'s #604 reflection guard reads out of Dialect.
+function drop_check_constraint(conn::PormGPostgres, table_name::String, constraint_name::String)::String
   return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP CONSTRAINT IF EXISTS "$(_quote_table_ddl(constraint_name))";"""
 end
 

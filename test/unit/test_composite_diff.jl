@@ -462,7 +462,7 @@ end
   lap(; kw...) = Models.Model("lap_time"; id = Models.IDField(), a = Models.IntegerField(), b = Models.IntegerField(), kw...)
   live_with(model, composites...) = begin
     t = live_table(model, CD_PG)
-    LiveTable(t.name, t.columns, t.indexes, collect(LiveComposite, composites))
+    LiveTable(t.name, t.columns, t.indexes, collect(LiveComposite, composites), t.checks)
   end
   held = LiveComposite("stint_uq", ["a", "b"], true, false)
 
@@ -507,7 +507,7 @@ end
 @testset "PostgreSQL: a new declaration cannot take a name a kept index holds (#161)" begin
   live_with(model, composites...) = begin
     t = live_table(model, CD_PG)
-    LiveTable[LiveTable(t.name, t.columns, t.indexes, collect(LiveComposite, composites))]
+    LiveTable[LiveTable(t.name, t.columns, t.indexes, collect(LiveComposite, composites), t.checks)]
   end
   refused(live, declared) = try
     _cd_plan(CD_PG, live, declared)
@@ -546,7 +546,7 @@ end
 @testset "PostgreSQL: drop, rename, dropped-column and truncation shapes (#161)" begin
   with_live(model, composites...) = begin
     t = live_table(model, CD_PG)
-    LiveTable[LiveTable(t.name, t.columns, t.indexes, collect(LiveComposite, composites))]
+    LiveTable[LiveTable(t.name, t.columns, t.indexes, collect(LiveComposite, composites), t.checks)]
   end
   base = _cd_result()
 

@@ -42,7 +42,7 @@ import PormG: InvalidValueError
 import PormG.Configuration: MissingConfigurationError
 
 import PormG: Models, Migration, Dialect
-import PormG.Models: format_model_name, model_table_name, fk_target_table
+import PormG.Models: format_model_name, model_table_name, model_is_managed, fk_target_table
 import PormG: connection, config, get_constraints_pk, get_constraints_unique, get_constraints_check, get_constraints_byte_length_check
 import PormG: backend_sqlite_version  # SQLite library-version probe (driver body in the weakdep extension)
 import PormG: PormGModel, PormGField, PormGSettings, PormGBackend, PormGPostgres, PormGSQLite
@@ -64,6 +64,8 @@ import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CBool, CText, CDa
 # named here.
 import PormG: PORTABLE_DB_DEFAULTS, canonical_db_default, db_default_is_portable,
               is_valid_db_default_sql, _wrapped_in_parens
+# #742: the table-CHECK ownership marker — rendered by `Dialect`, read back and compared here.
+import PormG: CHECK_MARKER_PREFIX, CHECK_MARKER_RE, canonical_check_condition, check_marker
 # The two forward type maps (`sqlite_type_map` / `postgres_type_map`) were imported here until #522
 # retired them: the readers compile a catalog type through `parse_canonical_type` now, and nothing
 # maps a rendered type back to a field struct any more.

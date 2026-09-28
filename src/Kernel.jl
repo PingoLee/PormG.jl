@@ -204,6 +204,16 @@ function model_has_db_table(model::PormGModel)::Bool
   return dbt isa AbstractString && !isempty(dbt)
 end
 
+# False when `model` was declared `managed = false` (#741): PormG queries its table but the migration
+# planner never creates, alters, renames or drops it. Beside `model_table_name` because it is the
+# same kind of question — what the schema layer may do with this model's table — and it has the same
+# `hasproperty` fallback, so a `PormGModel` that does not carry the slot is managed, as every model
+# was before the option existed.
+function model_is_managed(model::PormGModel)::Bool
+  hasproperty(model, :managed) || return true
+  return getproperty(model, :managed) !== false
+end
+
 """
     PormGError <: Exception
 

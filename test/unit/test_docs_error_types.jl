@@ -58,6 +58,11 @@ import DataFrames
 # SQL and to fire the backend-capability guards. No DB, no pool.
 struct DocErrMockPostgres <: PormG.PormGPostgres end
 struct DocErrMockSQLite <: PormG.PormGSQLite end
+# #742 — a PostgreSQL stand-in whose catalog is empty, for the one claim whose plan asks it
+# something (a column rename looks up the old column's constraints) before the error fires.
+struct DocErrCatalogFreePg742 <: PormG.PormGPostgres end
+PormG.ConnectionPool.fetch(::DocErrCatalogFreePg742, sql::String; conn = nothing, params = nothing,
+                           ignore_tx::Bool = false) = DataFrames.DataFrame()
 
 PormG.config["docerr_pg"] = PormG.Configuration.Settings(
     connections = DocErrMockPostgres(), change_data = true)
@@ -1238,6 +1243,99 @@ const DOCERR_CASES = [
                 redirect_stdout(devnull) do
                     PormG.Migrations.get_migration_plan(PormG.PormGModel[live], schema, DocErrMockPostgres(),
                                                         PormG.Configuration.Settings(); interactive = true)
+                end
+            end
+        end,
+    ),
+    # #741: a managed model's constrained key into an unmanaged one. Two raise sites, because
+    # `makemigrations` loads models without registering them.
+    (
+        "models.md — Unmanaged models: a constrained key into an unmanaged model raises ModelDefinitionError at set_models (#741)",
+        ModelDefinitionError,
+        () -> begin
+            view = Model("docerr_points_v_741"; managed = false, id = IDField(), points = IntegerField())
+            award = Model("docerr_award_741"; id = IDField(), standing = ForeignKey(view, pk_field = "id"))
+            mod = Module(:DocErrManaged741)
+            Core.eval(mod, :(import PormG))
+            Core.eval(mod, :(Points = $view))
+            Core.eval(mod, :(Award = $award))
+            # `set_models` resolves its key through `db_def_folder`, which `docerr_pg` does not set.
+            # `invokelatest`: this closure runs in the world the case list was built in, where the two
+            # bindings `Core.eval` just made do not exist yet, and `set_models` would see no models.
+            PormG.config["docerr_managed_741"] = PormG.Configuration.Settings(
+                connections = DocErrMockPostgres(), change_data = true, db_def_folder = "docerr_managed_741")
+            try
+                Base.invokelatest(PormG.Models.set_models, mod, "docerr_managed_741")
+            finally
+                delete!(PormG.config, "docerr_managed_741")
+            end
+        end,
+    ),
+    (
+        "models.md — Unmanaged models: a constrained key into an unmanaged model raises InvalidMigrationError at makemigrations (#741)",
+        InvalidMigrationError,
+        () -> begin
+            view = Model("docerr_points_v_741"; managed = false, id = IDField(), points = IntegerField())
+            award = Model("docerr_award_741"; id = IDField(), standing = ForeignKey(view, pk_field = "id"))
+            schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+                Symbol(PormG.Models.model_table_name(m)) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => m, :exist => false)
+                for m in (view, award))
+            PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema, DocErrMockPostgres(),
+                                                PormG.Configuration.Settings(); interactive = false)
+        end,
+    ),
+    # #742: the CheckConstraint docstring's constructor and model-time rejections.
+    (
+        "src/Models.jl — CheckConstraint docstring: a missing name is rejected in the constructor (#742)",
+        ModelDefinitionError,
+        () -> PormG.Models.CheckConstraint(condition = "grid >= 0"),
+    ),
+    (
+        "src/Models.jl — CheckConstraint docstring: a name over 63 bytes is rejected (#742)",
+        ModelDefinitionError,
+        () -> PormG.Models.CheckConstraint(condition = "grid >= 0", name = "x"^64),
+    ),
+    (
+        "src/Models.jl + models.md — CheckConstraint: a condition with a comment or a top-level `;` is rejected (#742)",
+        ModelDefinitionError,
+        () -> PormG.Models.CheckConstraint(condition = "grid >= 0; DROP TABLE result", name = "result_grid"),
+    ),
+    (
+        "src/Models.jl + models.md — CheckConstraint: two constraints sharing a name on one model are rejected (#742)",
+        ModelDefinitionError,
+        () -> Model("docerr_check_dup_742"; id = IDField(), grid = IntegerField(),
+                    constraints = [UniqueConstraint(fields = ("grid",), name = "grid_rule"),
+                                   PormG.Models.CheckConstraint(condition = "grid >= 0", name = "grid_rule")]),
+    ),
+    (
+        "models.md — Check Constraints: a name another constraint on the table holds is refused by makemigrations (#742)",
+        InvalidMigrationError,
+        () -> begin
+            m = Model("docerr_check_clash_742"; id = IDField(), grid = PormG.Models.PositiveIntegerField(),
+                      constraints = [PormG.Models.CheckConstraint(condition = "grid <= 40",
+                                                                  name = "docerr_check_clash_742_grid_check")])
+            schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+                :docerr_check_clash_742 => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => m, :exist => false))
+            PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema, DocErrMockPostgres(),
+                                                PormG.Configuration.Settings(); interactive = false)
+        end,
+    ),
+    (
+        "models.md — Check Constraints: renaming a column a declared condition still names raises InvalidMigrationError (#742)",
+        InvalidMigrationError,
+        () -> begin
+            check = PormG.Models.CheckConstraint(condition = "laps >= 0", name = "docerr_laps_742")
+            live = Model("docerr_stale_742"; id = IDField(), laps = IntegerField(), constraints = [check])
+            declared = Model("docerr_stale_742"; id = IDField(), laps_done = IntegerField(), constraints = [check])
+            schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+                :docerr_stale_742 => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => declared, :exist => false))
+            path, io = mktemp(); write(io, "1\n"); close(io)
+            open(path) do f
+                redirect_stdin(f) do
+                    redirect_stdout(devnull) do
+                        PormG.Migrations.get_migration_plan(PormG.PormGModel[live], schema, DocErrCatalogFreePg742(),
+                                                            PormG.Configuration.Settings(); interactive = true)
+                    end
                 end
             end
         end,

@@ -578,6 +578,10 @@ function _retag_cte_string_window_order(x::SQLTypeOrder, q::SQLObject, rewrote::
   #
   # Pinned by "a window SQLOrder over a CTE path resolves the column, not the projection" in
   # `test_cte_reference.jl`.
+  #
+  # #757 refuses that alias at `values()` (an alias cannot contain `__`), so the aliased shape above
+  # can no longer be written. The note stays because the rule it records still holds for the
+  # unaliased spellings.
   if x.field isa SQLField
     # `_bind_cte_string!` is the same per-field entry the top-level `q.order` loop uses, so the
     # window and the fluent `order_by` agree on what a CTE-rooted path means.
@@ -636,6 +640,9 @@ _retag_cte_string(x, ::SQLObject, ::Set{String}) = x
 #
 # `values("x" => Concat("note", CTE("ev","sku")))` stays `:base` on both sides for free — `_as` is
 # `"x"`, which matches nothing.
+#
+# #757 refuses a `__` alias at `values()`, so the first bullet's `"ev__sku"` alias can no longer be
+# written. The `_as` test stays: it is still what separates a transform suffix from a CTE column.
 function _bind_cte_string!(field::SQLField, q::SQLObject)
   rewrote = Set{String}()
   field.field = _retag_cte_string(field.field, q, rewrote)

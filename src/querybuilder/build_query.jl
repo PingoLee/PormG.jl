@@ -569,7 +569,8 @@ end
 # Only a condition leaf reads an alias — the walk is `_each_condition_leaf`, whose note says why:
 # the other spellings resolve a column without consulting the memo (measured for a String
 # projection `"t2" => "total"` and for `F("total") + 1`: each raises `UnknownFieldError`). The alias
-# test is the filter path's (`_alias_filter_key`): a plain key naming no model field. `seen` stops a
+# test is the filter path's (`_alias_filter_key`): a plain key naming no model field. That covers
+# every alias, because `values()` refuses one spelled with `__` (#757). `seen` stops a
 # cycle — `"a"` reads `"b"` and `"b"` reads `"a"` — which only a statement that fails at render can
 # spell, but the walk must return before that render gets to say so.
 function _reads_alias(pred::Function, node, instruc::SQLInstruction,
@@ -622,7 +623,9 @@ _resolved_window(node, instruc::SQLInstruction)::Bool =
 #   - the NAMESPACE. A projection alias lives in `:base`; a `:cte`/`:joined` key names a CTE or
 #     joined-copy column, which binds nothing. Without this, `values("ev__grid" => F("grid") * 2)`
 #     beside a CTE `ev` made the second `Qor("ev__grid" => 1, "ev__grid" => 2)` leaf render the
-#     projection instead of the CTE column — valid SQL, aligned parameters, wrong rows.
+#     projection instead of the CTE column — valid SQL, aligned parameters, wrong rows. #757 now
+#     refuses a `__` alias at `values()`, so that shape cannot be written (and #723's silent
+#     CTE-wins pairing with it). The check stays as a backstop.
 #   - the OUTPUT NAME. A field-path projection is memoized under its PATH (`values("r" => "points")`
 #     under `"points"`); the entry is an alias only when it renders under the key.
 #
@@ -1000,8 +1003,9 @@ end
 # A `__` path is a model name too. `values("driverid__surname" => Upper("driverid__forename"))`
 # followed by `filter("driverid__surname" => …)` read the alias through the same memo, silently; the
 # key names the related column as much as `"points"` names the local one. So a path whose first
-# segment is on the model (`_segment1_on_model`, the #492 test) counts; a key with no model reading
-# (an alias spelled with `__` that names no relation) is an alias and nothing else.
+# segment is on the model (`_segment1_on_model`, the #492 test) counts. #757 later refused a `__`
+# alias at `values()` altogether, because no router could see one, so the aliased half of this
+# shape can no longer be written. The path half of the guard stays as a backstop.
 #
 # Not ambiguous, and so not refused: a projection that IS the column — `values("points")`,
 # `values("points" => "points")`, `values("points" => F("points"))`. Recursive, with the depth cap of

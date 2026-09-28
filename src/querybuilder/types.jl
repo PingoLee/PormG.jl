@@ -2013,7 +2013,8 @@ Each mutates the handler and returns it, so calls can be chained or accumulated 
   operator expression, an `F` expression, or an `Exists(subquery)`. Repeated calls **accumulate**
   (ANDed), unlike `.values`/`.order_by`, which replace their previous call (#199)
 - `.values(fields...)` — choose/annotate the selected columns; `"*"` selects the main table.
-  **Replaces** its previous call, last-call-wins (#199)
+  **Replaces** its previous call, last-call-wins (#199). An alias (`"alias" => expr`) cannot contain
+  `__`, the path separator, and raises `QueryBuildError` (#757)
 - `.order_by(fields...)` — sort; prefix `-` for descending. Accepts a field path or an alias
   declared by `.values()` (#423). **Replaces** its previous call, matching Django's *each
   `order_by()` clears previous ordering* (#199)

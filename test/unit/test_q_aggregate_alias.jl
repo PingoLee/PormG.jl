@@ -498,19 +498,15 @@ end
 # `values("driverid__surname" => Upper("driverid__forename")); filter("driverid__surname" => …)`
 # read the alias through the projection memo — silently, since the text binds nothing — although the
 # key names the related column exactly as `"points"` names a local one. It is refused like a field
-# key. A path projection of the SAME path is the column and is not refused; a `__` alias whose first
-# segment is on no relation is an alias only, and is not this guard's business.
+# key. A path projection of the SAME path is the column and is not refused.
+#
+# #757 then refused `__` in any alias at `values()`, so the aliased half now fails at declaration,
+# before a filter can meet it. It used to assert #703's `AmbiguousFieldError` at build time.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#703: a `__` path naming a related column and an alias is ambiguous" begin
-  for pred in ("driverid__surname" => "SENNA", Q("driverid__surname" => "SENNA"),
-               "driverid__surname__@startswith" => "SEN")
-    q = QAggPath.Result.objects
-    q.values("resultid", "driverid__surname" => Upper("driverid__forename"))
-    q.filter(pred)
-    err = @test_throws AmbiguousFieldError inspect_query(q)
-    @test occursin("driverid__surname", err.value.msg)
-    @test occursin("#703", err.value.msg)
-  end
+  q = QAggPath.Result.objects
+  err = @test_throws QueryBuildError q.values("resultid", "driverid__surname" => Upper("driverid__forename"))
+  @test occursin("#757", err.value.msg)
 
   # The path projected under its own name is the column: the filter renders against it.
   q = QAggPath.Result.objects
@@ -518,6 +514,71 @@ end
   q.filter("driverid__surname" => "Senna")
   sql = inspect_query(q)[:sql_text]
   @test occursin(r"WHERE \"Tb_1\"\.\"surname\" = ", sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #757: a projection alias cannot contain `__`
+# Every alias router asks `_alias_filter_key`, which rejects a `__` key, while the render resolves it
+# through the projection memo anyway. So `values("win__total" => Sum("points"))` then
+# `filter("win__total__@gt" => 5)` printed `WHERE SUM(…) > ?`, a `When` reading it was grouped, and
+# a window alias `"r__k"` escaped #685. The alias is refused where it is declared, whatever its right
+# side. The same check runs for `aggregate()`, which projects through `values()`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#757: a projection alias spelled with `__` is refused at values()" begin
+  QB = PormG.QueryBuilder
+  rank = () -> QB.Rank(over = QB.WindowOver(order_by = ["resultid"]))
+  for (label, entry) in (
+      ("aggregate", "win__total" => Sum("points")),
+      ("F expression", "win__total" => QB.F("points") * 2),
+      ("Value", "win__total" => Value(5)),
+      ("field path", "win__total" => "points"),
+      ("relation path", "win__total" => "driverid__surname"),
+      ("function over a path", "win__total" => Upper("driverid__forename")),
+      ("window", "r__k" => rank()),
+      ("Case reading a condition", "win__big" => Case([When("points__@gte" => 10, then = 1)], default = 0)),
+      ("explicit SQLField wrap", QB.SQLField(Sum("points"), "win__total")),
+      # A path field is exempt only under its own name; any other `__` name is an alias.
+      ("SQLField renaming a column", QB.SQLField("points", "win__total")),
+      ("SQLField renaming a relation path", QB.SQLField("driverid__forename", "driverid__surname")),
+    )
+    @testset "$label" begin
+      q = QAggPath.Result.objects
+      err = @test_throws QueryBuildError q.values("resultid", entry)
+      msg = err.value.msg
+      @test occursin("#757", msg)
+      # Names the caller's alias and a spelling that works.
+      alias = entry isa Pair ? entry.first : entry._as
+      @test occursin("\"$(alias)\"", msg)
+      @test occursin("\"$(replace(alias, "__" => "_"))\"", msg)
+    end
+  end
+
+  @testset "aggregate()" begin
+    err = @test_throws QueryBuildError QAggPath.Result.objects.aggregate("win__total" => Sum("points"))
+    @test occursin("#757", err.value.msg)
+  end
+
+  # Not aliases: a bare path projects under PormG's own spelling, a path may sit on the right, and
+  # an explicit SQLField over a path carries that path as its name.
+  @testset "paths are not aliases" begin
+    q = QAggPath.Result.objects
+    q.values("resultid", "driverid__surname", "who" => "driverid__forename",
+             QB.SQLField("driverid__forename", "driverid__forename"))
+    sql = inspect_query(q)[:sql_text]
+    @test occursin("as \"driverid__surname\"", sql)
+    @test occursin("as \"who\"", sql)
+    @test occursin("as \"driverid__forename\"", sql)
+  end
+
+  # The rename the refusal suggests is the documented route: the alias filters groups in HAVING.
+  @testset "the renamed alias routes to HAVING" begin
+    q = QAggPath.Result.objects
+    q.values("driverid", "win_total" => Sum("points"))
+    q.filter("win_total__@gt" => 5)
+    sql = inspect_query(q)[:sql_text]
+    @test occursin(r"HAVING SUM\(", sql)
+    @test !occursin("WHERE", sql)
+  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

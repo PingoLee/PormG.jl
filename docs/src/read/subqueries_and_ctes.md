@@ -505,6 +505,12 @@ Notes:
   `AmbiguousFieldError`; `CTE(name, col)` selects the CTE side
   ([#492](https://github.com/PingoLee/PormG.jl/issues/492)). A CTE name that collides with
   nothing changes no field path at all.
+- **A projection alias never shares a CTE column's name.** A CTE column is spelled
+  `"<cte>__<col>"`, and `values(...)` refuses an alias containing `__` with `QueryBuildError`
+  ([#757](https://github.com/PingoLee/PormG.jl/issues/757)). So `filter("ev__points" => 1)` always
+  names the CTE column. Alias the projection with a single underscore instead, such as
+  `"ev_points" => F("points") * 2`
+  ([#723](https://github.com/PingoLee/PormG.jl/issues/723)).
 - **A CTE may not be named after a physical table.** `.with("driver" => ...)` raises
   `QueryBuildError` at the call when `driver` is the `db_table` of any registered model, or a
   many-to-many join table ([#479](https://github.com/PingoLee/PormG.jl/issues/479)). This one is

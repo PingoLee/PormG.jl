@@ -295,6 +295,19 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        # #757. `__` is the path separator, so an alias spelled with it was invisible to every alias
+        # router while the render still resolved it: an aggregate printed into WHERE, a window
+        # escaped #685. It is refused where it is declared.
+        "read/filters_and_aggregates.md — a projection alias cannot contain `__`",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("driverid", "season__points" => PormG.Functions.Sum("points")),
+    ),
+    (
+        "src/querybuilder/types.jl — object docstring: a `.values()` alias cannot contain `__`",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("driverid", "win__total" => PormG.Functions.Sum("points")),
+    ),
+    (
         # #706. The same two meanings, met by a `When` inside another projection rather than by a
         # filter. The page shows the condition declared BEFORE the colliding SUM, the order that
         # used to drop the SUM silently; the other order compared the SUM, and both now raise.

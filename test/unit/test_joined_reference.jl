@@ -202,10 +202,12 @@ for (backend, conn) in (("PostgreSQL", _JN_PG), ("SQLite", _JN_SL))
 
     @testset "two projections may not share an output name (#441 still applies)" begin
       # The #441 duplicate-projection guard keys on the OUTPUT name, and a bare handle's is
-      # `alias__path` — so it composes with the guard rather than sidestepping it.
+      # `alias__path` — so it composes with the guard rather than sidestepping it. This used a
+      # `"d__surname" => "note"` alias for the second name until #757 refused `__` in an alias; the
+      # handle twice is the spelling that still reaches #441.
       q = _jn_query()
       err = _jn_catch() do
-        q.values("d__surname" => "note", Joined("d", "surname"))
+        q.values(Joined("d", "surname"), Joined("d", "surname"))
       end
       @test err isa PormG.QueryBuildError
       # Names the colliding output name, not merely "something is wrong".
@@ -573,30 +575,49 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A joined or CTE column never reads a base projection that shares its name (#701 review)
-# #701 made the WHERE path render a binding alias's projection afresh (`_alias_lhs`), keyed by the
-# memo entry's NAME. A `:joined`/`:cte` entry shares the name half with a base projection alias of
-# the same output name, so the SECOND `Qor` leaf on the joined column — the one that hits the memo —
-# rendered the projection (`LOWER(...)`, `(... * ?)`) instead of the column: aligned parameters,
-# wrong rows, on both engines. Every leaf must name the column.
+# A base alias cannot share a joined or CTE column's name (#701 → #723 → #757)
+# #701 made the WHERE path render a binding alias's projection afresh, keyed by the memo entry's
+# NAME, and a `:joined`/`:cte` entry shared that half with a base alias of the same output name: the
+# second `Qor` leaf rendered the projection instead of the column. This testset then pinned "the
+# column wins", and #723 asked whether that precedence should be refused instead. Both names are
+# spelled `<alias>__<column>`, so #757's refusal of `__` in an alias makes the pairing impossible to
+# write: the declaration raises, and a `__` key names the joined or CTE column only.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "a joined or CTE column is not read as a base alias of the same name (#701)" begin
-  for conn in (_JN_SL, _JN_PG)
-    q = _jn_query()
-    q.values("id", "d__surname" => Lower(Joined("d", "surname")))
-    q.filter(Qor(Joined("d", "surname") => "senna", Joined("d", "surname") => "prost"))
-    sql = _jn_sql(q; conn = conn)
-    # Both leaves compare the joined column; the projection's LOWER(...) appears only in SELECT.
-    @test length(collect(eachmatch(r"\"d\"\.\"family_name\" = ", sql))) == 2
-    @test count("LOWER(", sql) == 1
+@testset "a base alias cannot take a joined or CTE column's name (#723, #757)" begin
+  q = _jn_query()
+  err = _jn_catch(() -> q.values("id", "d__surname" => Lower(Joined("d", "surname"))))
+  @test err isa PormG.QueryBuildError
+  @test occursin("\"d__surname\"", _jn_no_ansi(sprint(showerror, err)))
+  # An explicit `SQLField` over the joined handle keeps its own output name, and only that one.
+  @test _jn_catch(() -> _jn_query().values("id", PormG.QueryBuilder.SQLField(Joined("d", "surname"), "d__surname"))) === nothing
+  err = _jn_catch(() -> _jn_query().values("id", PormG.QueryBuilder.SQLField(Joined("d", "surname"), "d__forename")))
+  @test err isa PormG.QueryBuildError
+  @test occursin("#757", _jn_no_ansi(sprint(showerror, err)))
 
+  c = JN.Jn_result.objects
+  c.with("ev" => JN.Jn_result.objects.values("id", "points"), join_field = "id" => "id")
+  err = _jn_catch(() -> c.values("id", "ev__points" => F("points") * 2))
+  @test err isa PormG.QueryBuildError
+  @test occursin("#757", _jn_no_ansi(sprint(showerror, err)))
+
+  # The explicit `SQLField` spelling of the same pairing, over a column or over the CTE handle under
+  # another name. Only the handle's own output name is exempt.
+  for wrap in (PormG.QueryBuilder.SQLField("points", "ev__points"),
+               PormG.QueryBuilder.SQLField(CTE("ev", "points"), "zz__yy"))
+    err = _jn_catch(() -> c.values("id", wrap))
+    @test err isa PormG.QueryBuildError
+    @test occursin("#757", _jn_no_ansi(sprint(showerror, err)))
+  end
+  @test _jn_catch(() -> c.values("id", PormG.QueryBuilder.SQLField(CTE("ev", "points"), "ev__points"))) === nothing
+
+  # The CTE column itself still filters, and every `Qor` leaf compares it.
+  for conn in (_JN_SL, _JN_PG)
     c = JN.Jn_result.objects
     c.with("ev" => JN.Jn_result.objects.values("id", "points"), join_field = "id" => "id")
-    c.values("id", "ev__points" => F("points") * 2)
+    c.values("id", "doubled" => F("points") * 2)
     c.filter(Qor("ev__points" => 1, "ev__points" => 2))
     csql = _jn_sql(c; conn = conn)
     where_text = csql[findfirst("WHERE", csql).start:end]
-    # Both leaves compare the CTE's column; the `* ?` arithmetic stays in the SELECT list.
     @test !occursin("*", where_text)
     @test length(collect(eachmatch(r"\"points\" = ", where_text))) == 2
   end

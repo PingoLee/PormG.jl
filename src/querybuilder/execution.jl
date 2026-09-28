@@ -377,7 +377,8 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
     cq.object.distinct = false      # DISTINCT belongs to COUNT(col), not the row set
     cq.object.limit = 0
     cq.object.offset = 0
-    _values!(cq.object, Any["__pormg_count" => Count(String(column); distinct = distinct)])
+    # No `__` in the alias: `_values!` refuses one (#757). The result is read positionally below.
+    _values!(cq.object, Any["pormg_count" => Count(String(column); distinct = distinct)])
     show_query !== :execute && return query(cq; table_alias = table_alias, show_query = show_query)
     rows = list(cq, Val(:dict))
     return isempty(rows) ? 0 : Base.first(values(Base.first(rows)))

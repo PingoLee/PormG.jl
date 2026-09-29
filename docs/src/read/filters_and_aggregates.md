@@ -37,11 +37,13 @@ These work in both `filter()` and `values()`.
 | `@iendswith` | `ILIKE '%val'` | Case-insensitive suffix | `"surname__@iendswith" => "SEN"` |
 | `@iunaccent_contains` | `immutable_unaccent(col) ILIKE immutable_unaccent('%val%')` | Accent- & case-insensitive substring (PostgreSQL only) | `"surname__@iunaccent_contains" => "raikkonen"` |
 | `@iunaccent_exact` | `LOWER(immutable_unaccent(col)) = LOWER(immutable_unaccent(val))` | Accent- & case-insensitive equality (PostgreSQL only) | `"surname__@iunaccent_exact" => "raikkonen"` |
+| `@regex` | `~ pattern` | POSIX regular expression, case-sensitive (PostgreSQL only) | `"surname__@regex" => "^Ver"` |
+| `@iregex` | `~* pattern` | POSIX regular expression, case-insensitive (PostgreSQL only) | `"surname__@iregex" => "^ver"` |
 
 ### Negating Pattern and Range Lookups
 
 The pattern and range lookups each have a **negated twin** — same value handling, the SQL operator
-flipped to `NOT LIKE` / `NOT ILIKE` / `<>` / `NOT BETWEEN`. Use these to express "does **not** match"
+flipped to `NOT LIKE` / `NOT ILIKE` / `<>` / `!~` / `!~*` / `NOT BETWEEN`. Use these to express "does **not** match"
 without inverting the logic by hand.
 
 | Operator | SQL | Description | Example |
@@ -55,6 +57,8 @@ without inverting the logic by hand.
 | `@nrange` | `NOT BETWEEN a AND b` | Outside two bounds | `"laps__@nrange" => [1, 10]` |
 | `@niunaccent_contains` | `immutable_unaccent(col) NOT ILIKE immutable_unaccent('%val%')` | Accent- & case-insensitive substring absent (PostgreSQL only) | `"surname__@niunaccent_contains" => "raikkonen"` |
 | `@niunaccent_exact` | `LOWER(immutable_unaccent(col)) <> LOWER(immutable_unaccent(val))` | Accent- & case-insensitive inequality (PostgreSQL only) | `"surname__@niunaccent_exact" => "raikkonen"` |
+| `@nregex` | `!~ pattern` | Does not match the regular expression (PostgreSQL only) | `"surname__@nregex" => "^Ver"` |
+| `@niregex` | `!~* pattern` | Does not match, case-insensitive (PostgreSQL only) | `"surname__@niregex" => "^ver"` |
 
 !!! note "An empty `@in` list"
     `"field__@in" => []` is defined, not an error: nothing is a member of the empty set, so the
@@ -66,7 +70,7 @@ without inverting the logic by hand.
     predicate rather than an empty `IN ()`, which is a syntax error in SQLite.
 
 !!! note "NULL semantics"
-    `NOT LIKE`, `<>`, and `NOT BETWEEN` follow SQL three-valued logic: when the column is `NULL` the
+    `NOT LIKE`, `<>`, `!~` / `!~*`, and `NOT BETWEEN` follow SQL three-valued logic: when the column is `NULL` the
     predicate is UNKNOWN, so the **row is excluded** — exactly like `@ne` and `@nin`. If you also want
     the `NULL` rows, add an explicit `Qor(..., "field__@isnull" => true)`. PormG deliberately keeps
     negation per-field (there is no `.exclude()` / `~Q` group-negation) so the emitted SQL stays
@@ -230,6 +234,47 @@ M.Driver.objects.filter(Qor(
 
 !!! note
     `immutable_unaccent(col)` is not sargable without a matching index. For large tables add a `pg_trgm` GIN index (for `@iunaccent_contains`) or a btree on `lower(immutable_unaccent(col))` (for `@iunaccent_exact`) — see [PostgreSQL Extensions](../configuration/connection_yml.md#PostgreSQL-Extensions).
+
+### Regular Expressions (`@regex`, `@iregex`)
+
+**PostgreSQL only.** These lookups match a column against a POSIX regular expression, using
+PostgreSQL's `~` (case-sensitive) and `~*` (case-insensitive) operators. `@nregex` and `@niregex`
+are their negated twins (`!~` / `!~*`).
+
+```julia
+# Surnames starting with "Ver" — the same rows as "surname__@startswith" => "Ver"
+M.Driver.objects.filter("surname__@regex" => "^Ver")
+
+# Case-insensitive, with alternation: surnames containing a doubled "s" or "t"
+M.Driver.objects.filter("surname__@iregex" => "(ss|tt)")
+
+# Every driver whose surname does NOT end in "nen"
+M.Driver.objects.filter("surname__@nregex" => "nen\$")
+```
+
+- **The pattern is a `String` in PostgreSQL's POSIX syntax**, and it is bound as a query
+  parameter like any other value. It can also be another column, for example
+  `"surname__@iregex" => F("forename")`. It is passed through untouched: no `%` is added, and `%` / `_`
+  have no special meaning. A Julia `Regex` (`r"^Ver"`) is refused with a `FilterError`. Julia
+  regexes are PCRE, which is a different dialect.
+- **An invalid pattern is reported by PostgreSQL when the query runs**, as a
+  [`StatementError`](../errors.md) carrying the server's `invalid regular expression` message.
+  PormG does not parse the pattern itself.
+- **On SQLite these lookups raise a [`BackendCapabilityError`](../errors.md)** when the query is
+  built. SQLite has no built-in regular expressions. PormG does not emulate them, because an
+  emulation would evaluate the pattern in a different regex dialect than PostgreSQL does. The
+  same filter would then silently return different rows on the two engines, and an error is
+  safer than that. If an app must run on both engines, use `@contains` / `@startswith` /
+  `@endswith`: they behave the same everywhere.
+
+!!! note "Indexing a regex filter"
+    A case-sensitive `@regex` anchored at the start (`"^Ver"`) can use the same btree index as
+    `@startswith` (see *Indexing an anchored match* above): one built with `text_pattern_ops` /
+    `varchar_pattern_ops`, or any btree in a C-locale database. An
+    unanchored pattern, and every `@iregex`, is evaluated row by row. For those, a `pg_trgm` GIN
+    index is what can help on a large table. If a pattern comes from an end user, treat it as a
+    query-cost input: PormG always binds it, but you should still bound its length or offer a
+    narrower lookup.
 
 ---
 
@@ -1237,7 +1282,7 @@ Three further consequences worth knowing:
 - **The JSONB lookups are `WHERE`-only.** On an alias they raise `FilterError` when the query is
   built, naming the lookup and the alias. Filter the underlying field instead.
 - An operator that is PostgreSQL-only on a column is PostgreSQL-only on an alias too.
-  `@iunaccent_contains` and `@iunaccent_exact` raise
+  `@iunaccent_contains`, `@iunaccent_exact` and the `@regex` family raise
   [`BackendCapabilityError`](../errors.md) on SQLite from `HAVING` exactly as they do from `WHERE`.
 - An operator PormG does not implement is refused when the query is built, naming the operator —
   it is never passed through to the database as a bare token.

@@ -187,8 +187,10 @@ PormG uses `__@` suffixes for lookup operators and field transforms:
 | `field__@endswith` | `LIKE '%val'` | `"surname__@endswith" => "sen"` |
 | `field__@iendswith` | `ILIKE '%val'` | `"surname__@iendswith" => "SEN"` |
 
-Every pattern lookup above has a negated twin (`@ncontains`, `@nistartswith`, …) and the
-PostgreSQL-only accent-insensitive pair `@iunaccent_contains` / `@iunaccent_exact`. The full table,
+Every pattern lookup above has a negated twin (`@ncontains`, `@nistartswith`, …). There are also
+two PostgreSQL-only pairs: the accent-insensitive `@iunaccent_contains` / `@iunaccent_exact`, and
+the POSIX regular-expression `@regex` / `@iregex`. Each has a negated twin as well
+(`@niunaccent_*`, `@nregex` / `@niregex`). The full table,
 with NULL semantics and indexing notes, is in
 [Filters and Aggregates](read/filters_and_aggregates.md#Comparison-Operators).
 
@@ -782,7 +784,7 @@ field, and for the few with their own `showerror` it returns the richer renderin
 | `QueryBuildError` | Structural/API misuse while building a query (joins, CTEs, projection, ordering, window/bulk config). **The long-tail default** — it is the bucket for query-shape misuse that isn't one of the sharper categories, so `catch QueryBuildError` says little beyond "PormG rejected the query shape". Catch a sharper subtype when you need to branch on the cause. |
 | `UnsafeMutationError` | An `update()`/`delete()` was requested without a filter, or an `update()`/`delete()`/`bulk_update()` on another unsafe shape. |
 | `ProtectedError` | A `delete()` was refused because rows reference the target through a `ForeignKey` with `on_delete = PROTECT`/`RESTRICT` — the data forbids it; delete or reassign the referencing rows first. |
-| `BackendCapabilityError` | The active backend cannot do this: PG-only lookups on SQLite (JSONB, `iunaccent_*`), explicit window `frame=` on SQLite, `bulk_copy` on SQLite, `with_advisory_lock(...; on_missing_lock = :error)` on SQLite, a `ToChar` format outside the portable table on SQLite, a `DecimalField` wider than the 15 digits SQLite stores exactly (at `makemigrations`), or a too-old SQLite library. Change the query or the backend. |
+| `BackendCapabilityError` | The active backend cannot do this: PG-only lookups on SQLite (JSONB, `iunaccent_*`, the `regex` family), explicit window `frame=` on SQLite, `bulk_copy` on SQLite, `with_advisory_lock(...; on_missing_lock = :error)` on SQLite, a `ToChar` format outside the portable table on SQLite, a `DecimalField` wider than the 15 digits SQLite stores exactly (at `makemigrations`), or a too-old SQLite library. Change the query or the backend. |
 | `InvalidValueError` | A **value** failed coercion/type validation on insert/update, an identifier failed the safety check, an interval/duration could not be parsed, or a piece of SQL grammar PormG must write itself — a `Cast` type name, an `Extract` part, a window `frame=` — is outside the grammar it accepts. |
 | `WritesDisabledError` | The connection is not permitted to insert/update/delete — `change_data: false` in `connection.yml`, which is why it lives under `ConfigurationError`. (Renamed from `PermissionError` in the pre-publish naming pass.) |
 | `UnsupportedConnectionError` | A connection object that is neither PostgreSQL nor SQLite reached an execution path — an internal PormG dispatch bug; please report it. (Capability limits are `BackendCapabilityError`; an unbound model is `InvalidConfigurationError`.) |

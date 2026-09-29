@@ -366,6 +366,28 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:Union{AbstractStr
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__"))) # TODO, maybe I need to check if the column is valid and process the function before store
   end
 end
+# #635: a Julia `Regex` is PCRE, while the `@regex` family is evaluated by PostgreSQL as POSIX ARE.
+# Accepting the object would reinterpret its pattern in the other dialect — the divergence #635
+# refused to ship — so it is refused with the spelling that works. It used to fall off this ladder
+# as a bare `MethodError` naming an internal function.
+function _get_pair_to_oper(x::Pair{Vector{String},Regex})
+  key = join(x.first, "__@")
+  op = x.first[end]
+  # Suggest the pattern spelling only where it is the pattern lookup the user already chose; on any
+  # other lookup a `@regex` suggestion would be a detour into a PostgreSQL-only feature.
+  if op in ("regex", "iregex", "nregex", "niregex")
+    # A string carries no flags, so `r"^sen"i` must be suggested as the case-insensitive twin —
+    # echoing `@regex` would silently turn it case-sensitive.
+    caseless = (x.second.compile_options & Base.PCRE.CASELESS) != 0
+    suggested = caseless && op in ("regex", "nregex") ?
+      join([x.first[1:end-1]..., op == "regex" ? "iregex" : "niregex"], "__@") : key
+    hint = "Pass the pattern as a String, e.g. \"$(suggested)\" => $(repr(x.second.pattern)); " *
+           "PostgreSQL evaluates it as a POSIX regular expression"
+  else
+    hint = "Pass the value as a String"
+  end
+  throw(FilterError("Error in filter '$(key)': a Julia Regex is not a filter value. $(hint)"))
+end
 function _get_pair_to_oper(x::Pair{String,T}) where T<:Union{AbstractString,Number,Bool,Dates.Date,Dates.DateTime,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
@@ -755,8 +777,6 @@ const UNIMPLEMENTED_LOOKUP_HINTS = Dict{String,String}(
   "hour"         => "there is no time-part transform either; `__@date` truncates a timestamp to its day",
   "minute"       => "there is no time-part transform either",
   "second"       => "there is no time-part transform either",
-  "regex"        => "the nearest are `__@contains`, `__@startswith` and `__@endswith`",
-  "iregex"       => "the nearest is `__@icontains`",
 )
 
 function _check_if_field_is_a_operator(field::String)
@@ -765,15 +785,17 @@ function _check_if_field_is_a_operator(field::String)
   # and the `@` spelling then raised a FilterError of its own. The rest stays literal on purpose:
   # this is the "you forgot the `@`" hint, not the lookup registry, so it also spans transforms.
   #
-  # #619: it also names 11 Django lookups PormG implements nowhere — keys of neither `PormGsuffix`
+  # #619: it also names Django lookups PormG implements nowhere — keys of neither `PormGsuffix`
   # nor `PormGtransform` — and for those it used to instruct a spelling that then failed, which is
   # #604's own two-step dead end surviving 11 more times. The MEMBERSHIP is deliberate and stays:
-  # this is a near-miss hint, and a reader who typed `surname__regex` is better served by being told
-  # PormG has no regex lookup than by the generic "no such field". Only the WORDING was wrong.
+  # this is a near-miss hint, and a reader who typed `surname__week_day` is better served by being
+  # told PormG has no such lookup than by the generic "no such field". Only the WORDING was wrong.
+  # (`regex`/`iregex` were two of the 11 until #635 wired them; they now arrive through
+  # PATTERN_LOOKUP_OPERATORS, and the reachability check below flips their message by itself.)
   common_operators = [PATTERN_LOOKUP_OPERATORS...,
     "exact", "iexact", "in", "gt", "gte", "lt", "lte", "range", "nrange", "date", "isnull",
     "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",
-    "hour", "minute", "second", "regex", "iregex"]
+    "hour", "minute", "second"]
   field in common_operators || return nothing
 
   # Reachability is COMPUTED from the registries, never listed a third time. That is the whole
@@ -2274,12 +2296,26 @@ function _render_predicate(column::AbstractString, operator::AbstractString, pla
     @pormg_debug false
     # The `ESCAPE` clause an escaped pattern needs comes from these arms and the `%` from the
     # caller's `contains=`; the two halves are useless apart. The SQLite-refusing arms
-    # (`iunaccent_exact` / `niunaccent_exact`) raise `BackendCapabilityError` from here, so an alias
-    # filter reports the same capability error a WHERE filter does.
+    # (`*unaccent*`, and the regex four since #635) raise `BackendCapabilityError` from here, so an
+    # alias filter reports the same capability error a WHERE filter does.
     return getfield(Dialect, Symbol(operator))(instruc.connection, column, placeholders)
   else
     throw(FilterError("Invalid filter operator: $(operator) is not a supported operator."))
   end
+end
+
+# #635: a filter whose RHS is a column or expression (`F`, a CTE column, `Joined`, `Case`/`When`)
+# is not a bound value, so it used to skip `_render_predicate` and concatenate the operator as-is.
+# For a comparison that is right, but a pattern lookup's operator is a `Dialect` name, not SQL:
+# `"surname__@regex" => F("forename")` rendered `surname regex forename` on both engines — a server
+# syntax error on PostgreSQL, and no `BackendCapabilityError` on SQLite. The verbatim-bound pattern
+# lookups take their RHS as-is, so they dispatch through Dialect exactly as a bound value does.
+# The LIKE family is NOT routed here: it would need `'%' || rhs || '%'`, which is its own design.
+function _render_column_rhs(column::AbstractString, operator::AbstractString, rhs,
+                            instruc::SQLInstruction)::String
+  operator in VERBATIM_PATTERN_OPERATORS &&
+    return _render_predicate(column, operator, rhs, instruc)
+  return string(column, " ", operator, " ", rhs)
 end
 
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
@@ -2310,11 +2346,11 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # thing scoped to a CTE — `filter("raceid" => CTE("r91", "raceid"))` is a column comparison,
     # never a bound value.
     placeholders = _get_filter_query(v.values, instruc)
-    return string(column, " ", v.operator, " ", placeholders)
+    return _render_column_rhs(column, v.operator, placeholders, instruc)
   elseif isa(v.values, SQLTypeFunction)
     # Case/When and other SQL function expressions as filter RHS
     placeholders = _get_filter_query(v.values, instruc)
-    return string(column, " ", v.operator, " ", placeholders)
+    return _render_column_rhs(column, v.operator, placeholders, instruc)
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formatter !== nothing
     @pormg_debug false
     # #576: this is the arm `filter("happened__@month" => "abc")` lands in once the sargable rewrite

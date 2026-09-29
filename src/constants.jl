@@ -77,6 +77,11 @@ const PormGsuffix = Dict{String,Union{Int64, String}}(
   "istartswith" => "istartswith",
   "endswith" => "endswith",
   "iendswith" => "iendswith",
+  # #635: POSIX regular expressions — PostgreSQL only (`~` / `~*`). SQLite raises
+  # BackendCapabilityError instead of registering a PCRE UDF, because the two engines would then
+  # read the same pattern in two different regex dialects and return different rows silently.
+  "regex" => "regex",
+  "iregex" => "iregex",
   "range" => "BETWEEN",
   # #207: negated twins of the pattern/range lookups above. Each LIKE-family value is the operator
   # name itself — it doubles as the `Dialect.<name>` dispatch symbol in _get_filter_query(::SQLTypeOper)
@@ -90,6 +95,8 @@ const PormGsuffix = Dict{String,Union{Int64, String}}(
   "nistartswith" => "nistartswith",   # #604
   "nendswith" => "nendswith",
   "niendswith" => "niendswith",       # #604
+  "nregex" => "nregex",               # #635 (`!~`)
+  "niregex" => "niregex",             # #635 (`!~*`)
   "nrange" => "NOT BETWEEN",
   # #27: PostgreSQL JSONB containment/overlap operators. Each maps to a Dialect renderer of the
   # same name (PG emits the operator; SQLite/abstract throw a friendly PG-only error). Distinct
@@ -126,19 +133,24 @@ const LIKE_SUFFIX_OPERATORS   = ("endswith", "iendswith", "nendswith", "niendswi
 
 # Everything that takes `%` decoration (and, with it, `escape_like_pattern`). Deliberately NOT the
 # same set as PATTERN_LOOKUP_OPERATORS below: `iunaccent_exact` / `niunaccent_exact` render through
-# Dialect but compare with `=` / `<>`, so a wildcard on their value would be wrong.
+# Dialect but compare with `=` / `<>`, and the regex four (#635) hand the value to `~` as a pattern,
+# so a wildcard — or LIKE escaping — on their value would change what they match.
 #
 # Defined as the union rather than spelled out, so the gate and the shapes cannot drift apart: the
 # builder gates the wildcard call on membership HERE, `_apply_like_wildcards` picks the shape from
 # the three sets above, and the only way to add a wildcard operator is to put it in one of them.
 # `test/unit/test_operators.jl` pins the rest: the difference between this tuple and
-# PATTERN_LOOKUP_OPERATORS is exactly the two `*_exact` names.
+# PATTERN_LOOKUP_OPERATORS is exactly VERBATIM_PATTERN_OPERATORS.
 const LIKE_WILDCARD_OPERATORS = (LIKE_CONTAINS_OPERATORS..., LIKE_PREFIX_OPERATORS...,
                                  LIKE_SUFFIX_OPERATORS...)
 
+# The pattern lookups whose value binds verbatim — no `%`, no `escape_like_pattern`, no `ESCAPE`.
+const VERBATIM_PATTERN_OPERATORS = ("iunaccent_exact", "niunaccent_exact",
+                                    "regex", "iregex", "nregex", "niregex")
+
 # Every operator whose SQL comes from `getfield(Dialect, Symbol(op))` in the pattern branch of
 # `_get_filter_query(::SQLTypeOper, …)`.
-const PATTERN_LOOKUP_OPERATORS = (LIKE_WILDCARD_OPERATORS..., "iunaccent_exact", "niunaccent_exact")
+const PATTERN_LOOKUP_OPERATORS = (LIKE_WILDCARD_OPERATORS..., VERBATIM_PATTERN_OPERATORS...)
 
 const PormGtransform = Dict{String,Union{Int64, String}}(
   "date" => "DATE",

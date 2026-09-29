@@ -158,7 +158,7 @@ end
     BackendCapabilityError(msg) <: PormGError
 
 The active backend cannot do this — a PostgreSQL-only lookup on SQLite (JSONB containment,
-`iunaccent_*`), an explicit window `frame=` on SQLite, `bulk_copy` on SQLite,
+`iunaccent_*`, the `regex` family), an explicit window `frame=` on SQLite, `bulk_copy` on SQLite,
 `with_advisory_lock(...; on_missing_lock = :error)` on SQLite, a `DecimalField` wider than the 15
 digits SQLite stores exactly (raised by `makemigrations`, #648), or a SQLite library older than a
 feature requires. The query is well-formed and the configuration is fine; the remedy is to change

@@ -526,6 +526,78 @@ end
     @test ver == iver
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# POSIX regex lookups — PostgreSQL only (#635)
+# PostgreSQL runs `~` / `~*` / `!~` / `!~*` natively; SQLite has no regex engine and PormG will not
+# emulate one with a PCRE UDF, since the two dialects would read the same pattern differently. The
+# oracle is independent of the new code: the anchored patterns are compared against the LIKE lookups
+# that already pass above, and the class pattern against a Julia-side scan of the same surnames.
+# 861 = drivers with a non-NULL surname; each negated twin is the exact complement.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Regex lookups (#635)" begin
+    surnames(q) = Set(String.((q.values("surname") |> DataFrame).surname))
+    if PORMG_DB_FOLDER == "db_sl"
+        for op in ("regex", "iregex", "nregex", "niregex")
+            @test_throws PormG.BackendCapabilityError M.Driver.objects.filter("surname__@$(op)" => "^Ver").count()
+        end
+    else
+        # Anchored patterns select exactly the rows the equivalent LIKE lookups do.
+        @test surnames(M.Driver.objects.filter("surname__@regex"  => "^Ver")) ==
+              surnames(M.Driver.objects.filter("surname__@startswith"  => "Ver"))
+        @test surnames(M.Driver.objects.filter("surname__@iregex" => "^ver")) ==
+              surnames(M.Driver.objects.filter("surname__@istartswith" => "ver"))
+        @test surnames(M.Driver.objects.filter("surname__@regex"  => "nen\$")) ==
+              surnames(M.Driver.objects.filter("surname__@endswith"    => "nen"))
+        # Case: `~` is sensitive, `~*` folds.
+        @test M.Driver.objects.filter("surname__@regex"  => "^VER").count() == 0
+        @test M.Driver.objects.filter("surname__@iregex" => "^VER").count() ==
+              M.Driver.objects.filter("surname__@istartswith" => "ver").count()
+
+        # The value binds verbatim. An unanchored regex is a substring match, so it must find the
+        # rows `@contains` finds; had it been LIKE-decorated to `%en%`, the regex would look for a
+        # literal "%en%" and find nothing.
+        @test M.Driver.objects.filter("surname__@regex" => "en").count() ==
+              M.Driver.objects.filter("surname__@contains" => "en").count() > 0
+
+        # A POSIX bracket class, against a Julia-side scan of the same column. `[[:digit:]]` is
+        # spelled identically in both dialects, so the scan is a fair oracle for it.
+        all_surnames = String.((M.Driver.objects.filter("surname__@isnull" => false).values("surname") |> DataFrame).surname)
+        @test length(all_surnames) == 861
+        @test M.Driver.objects.filter("surname__@regex" => "[[:digit:]]").count() ==
+              count(s -> occursin(r"[[:digit:]]", s), all_surnames)
+        @test M.Driver.objects.filter("surname__@regex" => "(ss|tt)").count() ==
+              count(s -> occursin(r"(ss|tt)", s), all_surnames)
+
+        # A column as the pattern — the documented `F` spelling — against a Julia-side scan. The
+        # fixture's forenames hold no character the two regex dialects read differently.
+        # The fixture holds exactly one such driver; `> 0` keeps a wrong-but-valid render (operands
+        # swapped, say) from passing on an empty result.
+        name_pairs = M.Driver.objects.filter("surname__@isnull" => false, "forename__@isnull" => false).
+            values("forename", "surname") |> DataFrame
+        @test M.Driver.objects.filter("surname__@iregex" => F("forename")).count() ==
+              count(r -> occursin(Regex(String(r.forename), "i"), String(r.surname)), eachrow(name_pairs)) > 0
+
+        # Negated twins are the exact complement over the non-NULL surnames.
+        @test M.Driver.objects.filter("surname__@regex"   => "^Ver").count() +
+              M.Driver.objects.filter("surname__@nregex"  => "^Ver").count() == 861
+        @test M.Driver.objects.filter("surname__@iregex"  => "^ver").count() +
+              M.Driver.objects.filter("surname__@niregex" => "^ver").count() == 861
+
+        # An invalid pattern is the SERVER's to reject — PormG binds it and does not parse it.
+        err = try
+            Logging.with_logger(Logging.NullLogger()) do
+                M.Driver.objects.filter("surname__@regex" => "(").count()
+            end
+            nothing
+        catch e
+            e
+        end
+        # StatementError, carrying the server's `invalid regular expression` text.
+        @test err isa PormG.StatementError
+        @test occursin("invalid regular expression", PormG.error_message(err))
+    end
+end
+
 
 @testset "Date Operations" begin
     query = M.Race.objects;

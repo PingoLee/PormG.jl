@@ -98,6 +98,14 @@ returns a different answer, so a test suite running on SQLite fails where produc
   ```julia
   M.Driver.objects.filter("surname__@iunaccent_contains" => "raikkonen")   # finds "Räikkönen"
   ```
+- **Regular expressions** — `@regex` (`~`), `@iregex` (`~*`) and their negated twins `@nregex`,
+  `@niregex`. The pattern is PostgreSQL's POSIX syntax. SQLite has no regex engine, and PormG does
+  not emulate one: an emulation would read the pattern in a different dialect and return
+  different rows. See
+  [Regular Expressions](read/filters_and_aggregates.md#Regular-Expressions-(@regex,-@iregex)).
+  ```julia
+  M.Driver.objects.filter("surname__@regex" => "^Ver")   # surnames starting with "Ver"
+  ```
 - **`ToChar` templates beyond the portable table.** The formats listed in
   [Functions and Dates → ToChar](read/functions_and_dates.md#ToChar-—-Format-as-String) render the
   same text on both engines. Any other template (`"HH12:MI AM"`) goes to PostgreSQL's `to_char`
@@ -139,6 +147,7 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **Window frames** | explicit `frame=` clauses | default frame only |
 | **JSONB lookups** (`@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys`) | JSONB operators | `BackendCapabilityError` — `__` key paths still work |
 | **Accent-insensitive lookups** (`@iunaccent_*`, `@niunaccent_*`) | `unaccent` extension | `BackendCapabilityError` |
+| **Regex lookups** (`@regex`, `@iregex`, `@nregex`, `@niregex`) | POSIX `~` / `~*` | `BackendCapabilityError` |
 | **`ToChar` formats** | any `to_char` template | the portable table only; others raise `BackendCapabilityError` |
 | **`Extract` parts** | every PostgreSQL `EXTRACT` field, any case; a non-field raises `InvalidValueError` | `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY`, any case; other PostgreSQL fields raise `BackendCapabilityError`, a non-field `InvalidValueError` |
 | **Row locks** (`select_for_update()`) | `SELECT … FOR UPDATE` | silent no-op — a SQLite write already locks the whole database |

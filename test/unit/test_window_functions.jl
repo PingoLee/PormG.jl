@@ -2,7 +2,7 @@ using Test
 using PormG
 using PormG.Models: Model, IDField, IntegerField, FloatField, DateField
 using PormG.QueryBuilder: WindowOver, Rank, DenseRank, RowNumber, Lag, NthValue, inspect_query, Count, Sum, Q,
-                            WindowSpec, SQLOrder, SQLField
+                            WindowSpec, SQLOrder, SQLField, F
 using PormG.Functions: Case, When, Coalesce, Value
 
 struct WindowMockPostgres <: PormG.PormGPostgres end
@@ -774,6 +774,77 @@ end
     partition = match(r"PARTITION BY (.*) ORDER BY \"Tb\"\.\"raceid\" ASC\)"s, sql).captures[1]
     # The partition term verbatim, then the window's own ORDER BY column.
     @test grouped(q) == strip(partition) * ", \"Tb\".\"raceid\""
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #798: a window term mixing a column and an aggregate needs that column grouped
+# #789 groups a plain OVER term and leaves an aggregate one out; a MIXED term — `raceid + SUM(points)`
+# — was left out whole, so `raceid` inside it was never grouped: PostgreSQL raised `GroupingError`
+# and SQLite ranked by an arbitrary row's `raceid`. It is now refused at build time naming the column
+# and where it sits, and still builds whenever the statement groups that column by any route.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#798: a mixed window term reads a column that must be grouped" begin
+  mixed = () -> F("raceid") + Sum("points")
+  rank_partition = () -> Rank(over = WindowOver(partition_by = [mixed()], order_by = ["constructorid"]))
+  # `WindowOver` refuses a function in `order_by`; the exported `WindowSpec` spelling reaches it.
+  rank_order = (; partition_by = String[]) ->
+    Rank(over = WindowSpec(partition_by = partition_by,
+                           order_by = [SQLOrder(SQLField(mixed(), "s"); orientation = "DESC")]))
+  grouped(q) = (m = match(r"GROUP BY (.*?)\s*$"s, inspect_query(q)[:sql_text]); m === nothing ? nothing : strip(m.captures[1]))
+  for (backend, Model_) in _WINDOW_685_MODELS
+    for (label, clause, window) in (
+        # The issue's shape.
+        ("a mixed PARTITION BY term", "PARTITION BY", rank_partition),
+        ("a mixed ORDER BY term", "ORDER BY", rank_order),
+        # The window's own argument is the same kind of read, one slot over.
+        ("a mixed window argument", "argument", () -> Lag(mixed(), over = WindowOver(order_by = ["constructorid"]))),
+      )
+      @testset "$backend — refused: $label" begin
+        q = Model_.objects
+        q.values("constructorid", "rk" => window())
+        err = _window_err(() -> q)
+        @test err isa PormG.QueryBuildError
+        # Colour is on under CI and stripped off a TTY, so match the plain text either way.
+        msg = replace(_window_msg(err), r"\e\[[0-9;]*m" => "")
+        @test occursin("#798", msg)
+        @test occursin("projection rk reads the column \"raceid\"", msg)
+        @test occursin(clause, msg)
+        # The fix line names the paste-able column and the clause to put it in.
+        @test occursin("add \"raceid\" to values(...)", msg)
+      end
+    end
+
+    @testset "$backend — refused: a column added to a window beside an aggregate" begin
+      # The window itself is plain, but `raceid +` sits outside every aggregate call.
+      q = Model_.objects
+      q.values("constructorid", "t" => Sum("points"), "x" => F("raceid") + Rank(over = WindowOver(order_by = ["constructorid"])))
+      err = _window_err(() -> q)
+      @test err isa PormG.QueryBuildError
+      @test occursin("in its expression", _window_msg(err))
+    end
+
+    @testset "$backend — builds: the column is projected" begin
+      q = Model_.objects
+      q.values("raceid", "rk" => rank_partition())
+      sql = inspect_query(q)[:sql_text]
+      @test occursin("PARTITION BY (\"Tb\".\"raceid\" + SUM(\"Tb\".\"points\"))", sql)
+      # The projected `raceid` by position, and #789's plain ORDER BY column by expression.
+      @test grouped(q) == "1, \"Tb\".\"constructorid\""
+    end
+
+    @testset "$backend — builds: the column is grouped by a plain #789 term" begin
+      # Only `_group_window_terms!` groups `raceid` here, so this pins the check AFTER it.
+      q = Model_.objects
+      q.values("constructorid", "rk" => rank_order(partition_by = ["raceid"]))
+      @test grouped(q) == "1, \"Tb\".\"raceid\""
+    end
+
+    @testset "$backend — builds: a statement that does not aggregate" begin
+      q = Model_.objects
+      q.values("constructorid", "x" => F("raceid") + Rank(over = WindowOver(order_by = ["constructorid"])))
+      @test !occursin("GROUP BY", inspect_query(q)[:sql_text])
+    end
   end
 end
 

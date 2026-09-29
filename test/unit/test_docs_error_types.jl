@@ -1125,6 +1125,29 @@ const DOCERR_CASES = [
             q.list(show_query = :dict)
         end,
     ),
+    # #798. Three pages say an expression mixing a plain column with an aggregate raises unless the
+    # query groups that column — the shape PostgreSQL rejected with `GroupingError` and SQLite
+    # answered from an arbitrary row of each group. The window page states it for an OVER term, the
+    # aggregates and field-expressions pages for a projection.
+    (
+        "read/window_functions.md — a window term mixing a column and an aggregate is refused (#798)",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.values("driverid", "rk" => Rank(over = WindowOver(
+                partition_by = [F("resultid") + PormG.Functions.Sum("points")], order_by = ["driverid"])))
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "read/filters_and_aggregates.md + read/field_expressions.md — a projection mixing a column and an aggregate is refused (#798)",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.values("driverid", "x" => F("resultid") - PormG.Functions.Avg("points"))
+            q.list(show_query = :dict)
+        end,
+    ),
     # #566. The page states that a subquery cannot see a CTE its enclosing query declares (#444:
     # one CTE namespace per query), and names both spellings — so both are pinned. The page used to
     # call this "not blocked, but not validated"; every spelling was already refused.

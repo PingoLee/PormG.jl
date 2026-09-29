@@ -1951,6 +1951,7 @@ function build(object::SQLObject;
 
   _check_aggregate_fanout(instruct)      # #74: refuse silently-inflated aggregates over to-many joins
   _check_grouped_correlation(instruct)   # #194: refuse a correlated projection on an ungrouped column
+  _check_mixed_grouping(instruct)        # #798: refuse a mixed column+aggregate term on an ungrouped column
 
   return instruct
 end
@@ -2092,4 +2093,292 @@ function _ungrouped_correlation_error_msg(c::CorrelatedRef, grouped::Vector{Stri
     c.ref, "\")\e[0m to name one of them.\n",
     "    \e[32m3.\e[0m Drop the outer aggregate: a scalar \e[32mSubquery(...)\e[0m already returns one ",
     "value per outer row and needs no outer GROUP BY — that is the fan-out-safe #92 shape.\n")
+end
+
+# #798 mixed-grouping guard -----------------------------------------------------------------------
+# A MIXED term is a column expression with an aggregate inside it: `F("raceid") + Sum("points")`,
+# `Coalesce("raceid", Sum(…))`, a `Case` whose condition reads a column and whose branch aggregates,
+# or a window term of that shape (`partition_by = [F("raceid") + Sum("points")]`). It is computed once
+# per group, so every column it reads OUTSIDE its aggregate calls must have one value per group.
+# Nothing grouped them: the projection loop leaves an aggregate-bearing projection out of GROUP BY
+# whole, and `_build_over_clause` leaves a mixed OVER term out whole (#789 — grouping `SUM(…)` is an
+# error on both engines). PostgreSQL then refused the statement (`GroupingError`); SQLite ran it and
+# answered with an ARBITRARY row's value per group — the #776/#789 silent failure mode again.
+#
+# Refused rather than grouped (maintainer's call on #798, the "less magic" side of the design stance):
+# Django walks into the term and groups what it finds, which picks the grouping granularity for the
+# user. Refusing names the column and the two fixes, and a term whose columns ARE grouped still builds.
+#
+# It runs beside #194, at the end of `build()`, for #194's reason: `get_order_query` and
+# `_group_window_terms!` extend GROUP BY after the projection loop, so only the end sees the final set.
+# The one render it performs — a leaf's BASE column, to compare against that set — binds nothing and
+# re-resolves a path the mixed term's own render already resolved, so the join memo adds no join.
+# A transformed leaf is never rendered whole — `date__@yyyy_q` binds nine values, and PostgreSQL's
+# `$N` counter cannot be rewound — and that holds for a `Joined("d", "seen__@year")` handle too, whose
+# base is peeled to `Joined("d", "seen")`. A transform is matched structurally instead: by its path
+# key (rule 2 in `_mixed_leaf_grouped`), or, where the transform already arrives built inside a
+# function argument (`Concat("born__@year", …)` holds `EXTRACT(born)`), by `_mixed_node_signature`
+# against the grouped projections' nodes. A transform that BINDS (`@yyyy_q`) and is matched this way
+# still fails on PostgreSQL, whose two copies carry different `$N` — loudly, at execution, as it did
+# before; SQLite reads it correctly. Refusing it would break a correct SQLite query to make the
+# engines agree on an error, so it is left as it was.
+#
+# Like #194, PormG does not infer functional dependency on a grouped primary key: PostgreSQL accepts
+# `values("resultid", "x" => F("raceid") + Sum(…))`, PormG refuses it on both backends rather than let
+# the rule differ per engine. Relaxing that later would only widen what is accepted.
+function _check_mixed_grouping(instruct::SQLInstruction)
+  instruct.aggregate || return nothing
+  projections = instruct.object.values
+  grouped_positions = Set{Int}()
+  for g in instruct.group
+    (!isempty(g) && all(isdigit, g)) && push!(grouped_positions, parse(Int, g))
+  end
+  grouped_keys = Set{String}()
+  grouped_nodes = Set{Any}()
+  for i in grouped_positions
+    1 <= i <= length(projections) || continue
+    key = _grouped_projection_key(projections[i])
+    key === nothing || push!(grouped_keys, key)
+    sig = projections[i] isa SQLTypeField ? _mixed_node_signature(projections[i].field) : nothing
+    sig === nothing || push!(grouped_nodes, sig)
+  end
+  covered = node -> !isempty(grouped_nodes) && _mixed_node_signature(node) in grouped_nodes
+  grouped_text = nothing   # rendered lazily: most mixed terms read a column that is projected as-is
+  for (i, v) in enumerate(projections)
+    i in grouped_positions && continue
+    v isa SQLTypeField || continue
+    v.field isa Union{SQLTypeFunction,SQLTypeF} || continue
+    _each_bare_column(v.field, instruct, ""; covered) do clause, leaf
+      grouped_text === nothing && (grouped_text = Set(_grouped_expressions(instruct)))
+      _mixed_leaf_grouped(leaf, grouped_keys, grouped_text, instruct) && return nothing
+      throw(QueryBuildError(_ungrouped_mixed_error_msg(_projection_output_name(v), clause, leaf,
+                                                       _grouped_expressions(instruct))))
+    end
+  end
+  return nothing
+end
+
+# The path key a transform is matched on: `"born__@year"` and the `_as` a `values("born__@year")`
+# projection carries (`"born__year"`) are one key.
+_mixed_path_key(path::AbstractString)::String = replace(String(path), "__@" => "__")
+
+# The keys of the three namespaces a leaf can live in, kept apart so a `Joined("d", "seen")` and a
+# ForeignKey path `"d__seen"` can never match each other.
+_joined_path_key(alias::AbstractString, path::AbstractString)::String =
+  string("joined:", alias, "__", _mixed_path_key(path))
+_cte_path_key(name::AbstractString, path::AbstractString)::String =
+  string("cte:", name, "__", _mixed_path_key(path))
+
+# The path a GROUPED projection groups, when it is a column or a transform of one — what rule 2 and
+# the render-free half of rule 1 match against. `nothing` for anything else (a grouped `F` arithmetic
+# projection is still compared by rendered text).
+function _grouped_projection_key(v)::Union{Nothing,String}
+  v isa SQLTypeField || return nothing
+  f = v.field
+  f isa AbstractString && return _mixed_path_key(f)
+  f isa JoinedReference && return _joined_path_key(f.alias, f.path)
+  f isa CTEReference && return _cte_path_key(f.name, f.path)
+  f isa FExpression && f.operation === nothing && f.field_name isa AbstractString &&
+    return _mixed_path_key(f.field_name)
+  # `values("born__@year")` arrives as `SQLField(EXTRACT(born), _as = "born__year")`, and
+  # `values(Joined("d", "seen__@year"))` as `SQLField(EXTRACT(Joined("d", "seen")), _as =
+  # "d__seen__year")`. An alias cannot carry `__` (#757), so a `__` in `_as` is always the path.
+  if f isa FObject && !f.aggregate && v._as isa AbstractString && occursin("__", v._as)
+    return _reads_joined(f) ? string("joined:", v._as) : String(v._as)
+  end
+  return nothing
+end
+
+# Does a built transform read a joined-copy column? A composite label (`@yyyy_q`) nests it several
+# calls deep, so the whole node is searched, not only its `column`.
+function _reads_joined(x, depth::Int = 0)::Bool
+  depth > 32 && return false
+  x isa JoinedReference && return true
+  x isa AbstractVector && return any(v -> _reads_joined(v, depth + 1), x)
+  x isa SQLTypeField && return _reads_joined(x.field, depth + 1)
+  x isa FObject && return _reads_joined(x.column, depth + 1) ||
+                          any(v -> _reads_joined(v, depth + 1), values(x.kwargs))
+  return false
+end
+
+# A structural fingerprint of a node, so a grouped projection reused inside a mixed term is
+# recognised: `values("rp" => F("raceid") * F("points"), "x" => Coalesce(F("raceid") * F("points"),
+# Sum(…)))` groups the first and reads it whole in the second. It is also how a transform that
+# arrives already BUILT is matched: a `"born__@year"` argument inside `Concat`/`Lower`/… is
+# `EXTRACT(born)` by the time the projection list holds it, exactly the node a grouped
+# `values("born__@year")` holds. A fingerprint, never `==`: on `F` and condition nodes `==` BUILDS a
+# predicate (#541). Both sides are read against the same model, so an `F` operand `String` has the
+# same path-or-literal reading in each. `nothing` for anything else — aggregates, windows,
+# subqueries, handles it cannot describe — and such a node is simply not matched (over-refusal, never
+# a wrong accept): a covered node therefore reads exactly the columns of the grouped one.
+function _mixed_node_signature(x, depth::Int = 0)
+  depth > 32 && return nothing
+  _is_aggregate_call(x) && return nothing   # a grouped projection never holds one
+  x isa AbstractString && return (:path, String(x))
+  x isa JoinedReference && return (:joined_ref, x.alias, x.path)
+  x isa CTEReference && return (:cte_ref, x.name, x.path)
+  x isa SQLTypeText && return (:value, repr(x.field))
+  x isa SQLTypeField && return _mixed_node_signature(x.field, depth + 1)
+  x isa Union{Number,Symbol,Nothing,Missing} && return (:literal, repr(x))
+  if x isa AbstractVector
+    parts = Any[_mixed_node_signature(v, depth + 1) for v in x]
+    return any(isnothing, parts) ? nothing : (:list, parts...)
+  end
+  if x isa FObject
+    col = _mixed_node_signature(x.column, depth + 1)
+    col === nothing && return nothing
+    kws = Any[]
+    for k in sort!(collect(keys(x.kwargs)))
+      s = _mixed_node_signature(x.kwargs[k], depth + 1)
+      s === nothing && return nothing
+      push!(kws, (k, s))
+    end
+    return (:fn, x.function_name, col, kws...)
+  end
+  if x isa FExpression
+    parts = Any[_mixed_node_signature(x.field_name, depth + 1), _mixed_node_signature(x.operand, depth + 1)]
+    any(isnothing, parts) && return nothing
+    return (:f, x.operation === nothing ? "" : x.operation, parts...)
+  end
+  if x isa OperObject
+    parts = Any[_mixed_node_signature(x.column, depth + 1), _mixed_node_signature(x.values, depth + 1)]
+    any(isnothing, parts) && return nothing
+    return (:op, x.operator, parts...)
+  end
+  if x isa Union{QObject,QorObject}
+    inner = _mixed_node_signature(x isa QObject ? x.filters : x.or, depth + 1)
+    return inner === nothing ? nothing : (x isa QObject ? :q : :qor, inner)
+  end
+  return nothing
+end
+
+# One column a mixed term reads outside its aggregate calls:
+#   - `base`: what grouping it would group — a path with any `__@` transform peeled, or a CTE /
+#     joined-copy handle, peeled the same way. Rule 1 RENDERS it, so it must never carry a transform.
+#   - `base_key` / `key`: the path keys of the base and of the transform (`nothing` without one).
+#   - `spelled`: what the user wrote, as Julia source — the message's fix lines paste it back.
+function _mixed_leaf(path::AbstractString)
+  base = String(first(split(path, "__@")))
+  (base = base, base_key = base, spelled = repr(String(path)),
+   key = occursin("__@", path) ? _mixed_path_key(path) : nothing)
+end
+function _mixed_leaf(ref::JoinedReference)
+  base = String(first(split(ref.path, "__@")))
+  (base = JoinedReference(ref.alias, base, false), base_key = _joined_path_key(ref.alias, base),
+   spelled = string("Joined(\"", ref.alias, "\", \"", ref.path, "\")"),
+   key = occursin("__@", ref.path) ? _joined_path_key(ref.alias, ref.path) : nothing)
+end
+# A CTE handle cannot carry `__@` here: `_cte_join_path` refuses it in the projection's own render.
+_mixed_leaf(ref::CTEReference) =
+  (base = ref, base_key = _cte_path_key(ref.name, ref.path),
+   spelled = string("CTE(\"", ref.name, "\", \"", ref.path, "\")"), key = nothing)
+
+# A leaf is grouped when (1) its base column is — then any expression over it has one value per
+# group — or (2) the transform it applies is itself a grouped projection. Rule 1 compares path keys
+# first and falls back to the rendered text, which covers grouping reached through `order_by` or a
+# #789 window term.
+function _mixed_leaf_grouped(leaf, grouped_keys::Set{String}, grouped_text::Set{String},
+                             instruct::SQLInstruction)::Bool
+  leaf.key !== nothing && leaf.key in grouped_keys && return true
+  leaf.base_key in grouped_keys && return true
+  return string(_get_filter_query(leaf.base, instruct)) in grouped_text
+end
+
+# Call `f(clause, leaf)` for each column `node` reads OUTSIDE an aggregate call. The arms mirror how
+# each node RENDERS, because the question is which text ends up bare in the statement:
+#   - a `String` is a path wherever a function or `F` argument holds one; a `String` in a keyword slot
+#     is not (a `When`'s `then`/`else` binds it as a value), so only `SQLType` kwargs are entered;
+#   - an `F` operand `String` is a path only by the renderer's own test (`_set_update_query_operand`);
+#   - a condition's column naming a projection ALIAS (#722) is not a column — that projection is
+#     grouped, aggregated, a window, or checked on its own turn;
+#   - a window is entered only for its terms that hold an aggregate: a plain PARTITION BY/ORDER BY
+#     term is grouped by #789, and a plain window argument is out of #798's scope;
+#   - `OuterRef` is constant per inner row (#194 owns the outer side), a subquery aggregates in its
+#     own statement, and `Value`/literals read no column.
+# `clause` names where the leaf sits, for the message. `covered(node)` answers whether a function or `F` node
+# is itself a grouped projection (see `_mixed_node_signature`); nothing inside it is then visited.
+# Depth cap as in `_contains_agg`.
+function _each_bare_column(f::Function, node, instruc::SQLInstruction, clause::String, depth::Int = 0;
+                           covered::Function = _ -> false)
+  depth > 32 && return nothing
+  walk(x, c = clause; cover = covered) = _each_bare_column(f, x, instruc, c, depth + 1; covered = cover)
+  if node isa Union{AbstractString,CTEReference,JoinedReference}
+    f(clause, _mixed_leaf(node))
+  elseif node isa AbstractVector
+    foreach(walk, node)
+  elseif _is_aggregate_call(node)
+    return nothing
+  elseif node isa WindowFunction
+    # Only the slots that hold an aggregate: a plain one is #789's business (an OVER term) or out of
+    # #798's scope (a plain argument). Resolved, so an aggregate reached through an alias (#722) counts.
+    for term in node.over.partition_by
+      _resolved_contains_agg(term, instruc) && walk(term, "PARTITION BY")
+    end
+    for term in node.over.order_by
+      t = term isa SQLTypeOrder ? term.field : term
+      _resolved_contains_agg(t, instruc) && walk(t, "ORDER BY")
+    end
+    node.column !== nothing && _resolved_contains_agg(node.column, instruc) && walk(node.column, "argument")
+    for v in values(node.kwargs)   # `Lag`/`Lead`'s `default`, which renders beside the argument
+      v isa SQLType && _resolved_contains_agg(v, instruc) && walk(v, "argument")
+    end
+  elseif node isa FObject
+    covered(node) && return nothing
+    walk(node.column)
+    for v in values(node.kwargs)
+      v isa SQLType && walk(v)
+    end
+  elseif node isa FExpression
+    covered(node) && return nothing
+    node.field_name isa Integer || walk(node.field_name)
+    op = node.operand
+    if op isa AbstractString
+      (occursin("__", op) || op in instruc.object.model.field_names) && f(clause, _mixed_leaf(op))
+    elseif op isa Union{FExpression,SQLTypeFunction,CTEReference,JoinedReference}
+      walk(op)
+    end
+  elseif node isa SQLTypeField
+    walk(node.field)
+  elseif node isa SQLTypeOrder
+    walk(node.field)
+  elseif node isa OperObject
+    # A condition's column is never matched structurally: a transformed one
+    # (`When("born__@year__@gt" => …)`) arrives as `SQLField(EXTRACT(born), …)`, but the #352 sargable
+    # rewrite renders it as `"Tb"."born" >= ?`, so a grouped `born__@year` does not cover it. Its base
+    # column is yielded with no path key, and only a grouped `born` does.
+    _alias_filter_key(node.column, instruc) === nothing && walk(node.column; cover = _ -> false)
+    node.values isa Union{FExpression,SQLTypeFunction,CTEReference,JoinedReference} && walk(node.values)
+  elseif node isa QObject
+    walk(node.filters)
+  elseif node isa QorObject
+    walk(node.or)
+  end
+  return nothing
+end
+
+# Same shape and rules as `_ungrouped_correlation_error_msg`: the fix lines name what the user
+# wrote (`leaf.spelled`), never rendered SQL; the `Grouped by:` line is diagnosis and may carry it.
+function _ungrouped_mixed_error_msg(label, clause::String, leaf, grouped::Vector{String})
+  where_ = clause == "" ? "in its expression" :
+           clause == "argument" ? "in its window function's argument" :
+           string("in its window's ", clause, " term")
+  groups = isempty(grouped) ?
+    "(none — this query aggregates the whole table into a single row)" :
+    join(grouped, ", ")
+  string(
+    "PormG mixed-grouping guard (#798): the projection \e[4m\e[31m", label, "\e[0m reads the column ",
+    "\e[4m\e[31m", leaf.spelled, "\e[0m outside an aggregate (", where_, "), and this query does not ",
+    "GROUP BY it.\n",
+    "  This query aggregates, so the projection is computed once per group — beside an aggregate, ",
+    "or over one inside a window — and ", leaf.spelled, " has no single value in a group. ",
+    "PostgreSQL refuses this (\"must appear in the ",
+    "GROUP BY clause or be used in an aggregate function\"); SQLite answers with an ARBITRARY row's ",
+    "value, so PormG refuses it on both backends rather than group a column you did not ask to group.\n",
+    "  Grouped by: \e[33m", groups, "\e[0m.\n",
+    "  Fix one of:\n",
+    "    \e[32m1.\e[0m Project the column so it joins the group set — add \e[32m", leaf.spelled,
+    "\e[0m to \e[32mvalues(...)\e[0m. PormG does not infer functional dependency on a grouped ",
+    "primary key, so this is needed even then.\n",
+    "    \e[32m2.\e[0m Aggregate it inside the expression — e.g. \e[32mMax(", leaf.spelled,
+    ")\e[0m where the column stands, if one value per group is what you mean.\n")
 end

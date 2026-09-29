@@ -1725,6 +1725,15 @@ function _contains_agg(x, depth::Int = 0)::Bool
   return false
 end
 
+# #798 — is this node an aggregate CALL, the point below which a column is aggregated rather than
+# read per group? Not `_is_agg`: that is the flag a node STORES, and every wrapper sets it from its
+# arguments (`_any_agg`), so `F("raceid") + Sum("points")` answers `true` while `raceid` inside it is
+# still a bare column. Only the five constructors in `functions.jl` build an aggregate call; an
+# aggregate added there and not here makes the #798 guard over-refuse, loudly — never wrong SQL.
+# `test_aggregate_flag_propagation.jl` ties this list to `_AGG_AGGREGATES`.
+const _AGGREGATE_CALLS = ("SUM", "AVG", "COUNT", "MAX", "MIN")
+_is_aggregate_call(x)::Bool = x isa FObject && x.aggregate && x.function_name in _AGGREGATE_CALLS
+
 function Base.:+(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
   return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", aggregate=_is_agg(operand))
 end

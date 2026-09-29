@@ -72,7 +72,9 @@ const VR_JULIA_TYPE = Dict{Symbol,Type}(
   :timestamp => Union{DateTime, TimeZones.ZonedDateTime},
   :date      => Date,
   :time      => Time,
-  :interval  => Dates.AbstractTime,        # `Period` and `CompoundPeriod` both subtype it
+  # #581: the CONCRETE type, pinned on every engine and driver. `Dates.AbstractTime` was the old
+  # answer, and it let Postgres.jl's bare `Minute(5)` and LibPQ's `CompoundPeriod` both pass.
+  :interval  => Dates.CompoundPeriod,
   :text      => AbstractString,
   :integer   => Integer,
 )
@@ -324,8 +326,9 @@ contract, and #582 closed that divergence — `DataFrame(query)` now applies the
 `list()`, so it would have gone hollow with no mark to force the visit. `query_list` is the raw
 read BY CONTRACT (its own comment in `execution.jl` says so), which is why this seam survives.
 
-On PostgreSQL this is a provable no-op — `value_parser` answers `nothing` for every kind there, so
-the coerced and raw paths return the same object.
+On PostgreSQL this is a no-op for every kind but INTERVAL — `value_parser` answers `nothing` there
+for the rest, so the coerced and raw paths return the same object. INTERVAL's PostgreSQL cell (#581)
+only re-wraps a bare `Period` in a `CompoundPeriod`, so the two paths still hold equal (`==`) values.
 """
 function vr_raw_value(q, key::Symbol)
   rows = QueryBuilder.Tables.rowtable(QueryBuilder.query_list(q)) |> collect

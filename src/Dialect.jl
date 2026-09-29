@@ -253,8 +253,8 @@ two are literal inverses. NOT `Dates.canonicalize`, which would roll hours up in
 while the writer caps at hours: the round trip would not close, and `format_duration_sql` would then
 write something different from what it read.
 
-`CompoundPeriod <: Dates.AbstractTime`, which is the type parity PostgreSQL's driver already
-delivers for an INTERVAL column.
+`Dates.CompoundPeriod` is the concrete type PormG pins for an INTERVAL on every engine (#581);
+`_parse_postgres_interval` below is the PostgreSQL half of that pin.
 """
 function _parse_sqlite_interval(v::Any)
     v isa AbstractString || return v
@@ -270,6 +270,29 @@ function _parse_sqlite_interval(v::Any)
       return v
     end
 end
+
+"""
+    _parse_postgres_interval(v) -> Union{Dates.CompoundPeriod, typeof(v)}
+
+The PostgreSQL half of the INTERVAL read-back pin (#581): a PostgreSQL driver's value, normalized to
+`Dates.CompoundPeriod`.
+
+LibPQ already delivers a `CompoundPeriod` for every interval. Postgres.jl (#788) delivers a bare
+`Period` when the interval has one component (`Minute(5)`, and `Millisecond(0)` for a zero interval)
+and a `CompoundPeriod` otherwise. Wrapping the bare `Period` is what makes the concrete type the same
+on every driver and on SQLite, so an app can dispatch on it.
+
+Only the TYPE is pinned, not the decomposition: the components are kept exactly as the driver gave
+them, never `Dates.canonicalize`d. Engines already split the same duration differently
+(`Minute(1), Second(49), Millisecond(88)` from LibPQ against SQLite's hours-to-nanoseconds form), and
+`==` compares across every such split, so `==` is the portable comparison. `===` never was: a
+`CompoundPeriod` holds a `Vector`, so two equal reads are `!==` even on one engine. A month or year
+component, reachable from a column PormG did not write, passes through untouched.
+
+Fail-open, like every parser in the table: anything that is not a bare `Period` (a `CompoundPeriod`,
+`missing`, a driver's text) is returned unchanged.
+"""
+_parse_postgres_interval(v::Any) = v isa Dates.Period ? Dates.CompoundPeriod(v) : v
 
 # Julia's shortest round-trip rendering of a finite `Float64`: always a decimal point (`1.0`, never
 # `1`), an exponent only past Julia's thresholds (`1.23456789e6`, `1.0e-5`). Anything else — `Inf`,

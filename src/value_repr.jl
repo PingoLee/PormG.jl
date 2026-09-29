@@ -303,8 +303,10 @@ end
 # `DateField`, a `TimeField` and a `DurationField` all read back as `String` while PostgreSQL
 # delivered `Date`, `Time` and a `Period`. The bodies live in `Dialect` beside the masks they invert.
 #
-# PostgreSQL needs none: LibPQ delivers typed values, which is what the `p3 = (:sqlite,)` marks in
-# `test/unit/helper_value_repr_cases.jl` measure.
+# PostgreSQL needs none but one: the drivers deliver typed values, which is what the
+# `p3 = (:sqlite,)` marks in `test/unit/helper_value_repr_cases.jl` measure. The exception is
+# INTERVAL (#581), where the value is typed but not the SAME type on every driver — Postgres.jl hands
+# back a bare `Period` for a one-component interval — so its cell normalizes the concrete type.
 """
     value_parser(kind, backend) -> Union{Function, Nothing}
 
@@ -316,6 +318,8 @@ lossy approximation. So a wrong `kind` degrades to the raw value — exactly wha
 before this table existed — and can never produce a wrong typed value.
 """
 value_parser(::CanonicalType, ::PormGPostgres) = nothing
+# #581: `Dates.CompoundPeriod` on every engine and driver — a type pin, not a re-decomposition.
+value_parser(::CInterval,     ::PormGPostgres) = Dialect._parse_postgres_interval
 value_parser(::CDateTime, ::PormGSQLite) = Dialect._parse_sqlite_timestamp
 value_parser(::CDate,     ::PormGSQLite) = Dialect._parse_sqlite_date
 value_parser(::CTime,     ::PormGSQLite) = Dialect._parse_sqlite_time

@@ -82,6 +82,44 @@ _vri_lap()  = M.Lap_times.objects.filter("raceid" => 1, "driverid" => 1, "lap" =
   end
 
   # ───────────────────────────────────────────────────────────────────────────
+  # #581: a SINGLE-component interval is the case the concrete-type pin exists for. The lap-time
+  # probe above has three components (`1:49.088`), which every driver already returned as a
+  # `CompoundPeriod`, so it passes with or without the pin. Postgres.jl returns a bare `Period` for
+  # a one-component interval — this pit stop is exactly `23 seconds` — and the pin re-wraps it.
+  # Both read terminals are asserted, because `list()` and `DataFrame` select their parsers from the
+  # same table but apply them separately (row-wise vs column-wise, #582).
+  #
+  # Run it through Postgres.jl for the case to bite:
+  #   PORMG_POSTGRES_DRIVER=Postgres julia -t auto --project=test/integration test/integration/test_value_repr_property.jl
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "INTERVAL — a single-component value reads back as a CompoundPeriod (#581)" begin
+    pit() = M.Pit_stops.objects.filter("raceid" => 879, "driverid" => 4, "stop" => 2)
+
+    # The fixture row is what the case needs: a whole-second stop, 23 000 ms.
+    @test pit().values("milliseconds").list(:dict)[1][:milliseconds] == 23_000
+
+    # The raw driver value proves the row exercises the pin on Postgres.jl: there it is a bare
+    # `Second(23)`, which the coerced paths below must not return. (LibPQ already delivers a
+    # `CompoundPeriod`, and SQLite text, so the raw shape is only pinned for Postgres.jl.)
+    # The driver is read off the pool's type rather than `PORMG_POSTGRES_DRIVER`, because a
+    # `postgres_driver:` key in `connection.yml` takes precedence over the environment variable.
+    raw = vr_raw_value(pit().values("duration"), :duration)
+    if PormG.config[PORMG_DB_FOLDER].connections isa PormG.ConnectionPool.PostgresConnectionPool{:postgres}
+      @test raw isa Dates.Second
+    end
+
+    # `list()` — the row terminal.
+    got = pit().values("duration").list(:dict)[1][:duration]
+    @test got isa Dates.CompoundPeriod
+    @test got == Dates.Second(23)
+
+    # `DataFrame` — the column terminal, with its own application of the same parser.
+    df = pit().values("duration") |> DataFrame
+    @test eltype(df.duration) <: Union{Missing, Dates.CompoundPeriod}
+    @test df.duration[1] == Dates.Second(23)
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
   # Milliseconds: the seeded race start is a whole second, so the `.sss` half of the canonical
   # mask is exercised on a scratch row instead. Its own row, created and deleted here, for the
   # reason `test_field_expressions.jl` states — the scratch tables are truncated by other tests.

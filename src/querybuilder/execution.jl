@@ -2505,7 +2505,7 @@ function DataFrames.DataFrame(objct::SQLObjectHandler)
   result, built, connection = _execute_select(objct)
   df = DataFrames.DataFrame(result)
   parsers = _projection_parsers(built, connection)
-  parsers === nothing && return df          # PostgreSQL: byte-identical to the pre-#582 path
+  parsers === nothing && return df          # nothing to coerce — PostgreSQL unless an INTERVAL is projected (#581)
   for (name, parser) in parsers
     # The wildcard recorder registers both a field's name and its `db_column`, and only one of them
     # is in any given result — same guard as `_list_raw`'s `haskey`. `map` widens the column from
@@ -2524,8 +2524,8 @@ end
 # resolves its own read coercion the same way — off `expression.output_field`, never off the
 # alias's spelling. There is no `connection isa PormGSQLite` test here: the backend dimension
 # belongs to the table, so a third backend becomes table entries rather than a branch. On
-# PostgreSQL every `value_parser` answers `nothing`, so this returns `nothing` after one dispatch
-# per projection.
+# PostgreSQL every `value_parser` but INTERVAL's answers `nothing` (#581 pins that one type across
+# drivers), so a query projecting no INTERVAL returns `nothing` after one dispatch per projection.
 function _projection_parsers(built::SQLObjectHandler, connection)::Union{Nothing,Dict{Symbol,Function}}
   parsers = nothing
   for (name, kind) in built.object.projection_kinds

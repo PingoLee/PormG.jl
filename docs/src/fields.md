@@ -711,6 +711,28 @@ Onboard_video = Models.Model(
 )
 ```
 
+**Reads back as**: a `Dates.CompoundPeriod` — on PostgreSQL (either driver) and on SQLite alike, so
+code can dispatch on it. That holds for the column read through a query: `list()`, `DataFrame`, and
+the column in `values(...)`, including a whole-second value like a `23 seconds` pit stop, which one
+PostgreSQL driver would otherwise hand back as a bare `Second(23)`.
+
+```julia
+lap = M.Lap_times.objects.filter("raceid" => 1, "driverid" => 1, "lap" => 1).values("time").list(:dict)[1]
+lap[:time] isa Dates.CompoundPeriod                            # true on every engine
+lap[:time] == Dates.Minute(1) + Dates.Second(49) + Dates.Millisecond(88)   # 1:49.088
+```
+
+Two places still return the driver's own value, as they do for every temporal column: the row a
+write hands back (`create()`, `update_or_create`, `get_or_create`), and an aggregate or function over
+the column (`Max("time")`). There the type is whatever the engine delivered — text on SQLite, and a
+bare `Period` or a `CompoundPeriod` on PostgreSQL. Re-read the row through a query when the type
+matters.
+
+The **components** inside it are the engine's own, though: the same lap time can arrive as minutes,
+seconds and milliseconds from one engine and as hours through nanoseconds from another. Compare
+durations with `==`, which compares the total length, and never with `===` — a `CompoundPeriod`
+holds a vector, so two equal reads are not `===` even from the same engine.
+
 ---
 
 ## Boolean Fields

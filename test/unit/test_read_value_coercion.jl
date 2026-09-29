@@ -165,8 +165,8 @@ end
     @test Models.format_duration_sql(round_trip) == "26:05:00"
     # A negative duration keeps its sign on every component.
     @test p("-01:30:00") == Dates.CompoundPeriod(Hour(-1), Minute(-30), Second(0), Nanosecond(0))
-    # `CompoundPeriod <: Dates.AbstractTime` is the parity PostgreSQL's driver already delivers.
-    @test p("00:01:49.088") isa Dates.AbstractTime
+    # #581: `Dates.CompoundPeriod` is the concrete type pinned on every engine and driver.
+    @test p("00:01:49.088") isa Dates.CompoundPeriod
   end
 
   @testset "the timestamp parser matches a shape before parsing it" begin
@@ -186,15 +186,18 @@ end
   end
 
   # ───────────────────────────────────────────────────────────────────────────
-  # PostgreSQL asks for no parser at all — LibPQ delivers typed values, and re-parsing one would be
-  # both wasted work and a chance to get it wrong. Asserted for EVERY canonical type, not only the
-  # temporal ones, because the read path asks the table before it knows what it is holding.
+  # PostgreSQL asks for no parser but INTERVAL's — the drivers deliver typed values, and re-parsing
+  # one would be both wasted work and a chance to get it wrong. Asserted for every other canonical
+  # type, not only the temporal ones, because the read path asks the table before it knows what it is
+  # holding. INTERVAL is the exception by decision (#581): the value is typed, but not the same type
+  # on every driver, so its cell pins `Dates.CompoundPeriod` (`test_value_repr_table.jl` covers it).
   # ───────────────────────────────────────────────────────────────────────────
-  @testset "PostgreSQL needs no parser, for any kind" begin
+  @testset "PostgreSQL needs no parser, for any kind but INTERVAL" begin
     for kind in (PormG.CDateTime(true), PormG.CDateTime(false), PormG.CDate(), PormG.CTime(),
-                 PormG.CInterval(), PormG.CText(), PormG.CInt64(), PormG.CBool())
+                 PormG.CText(), PormG.CInt64(), PormG.CBool())
       @test PormG.value_parser(kind, _RVC_PG) === nothing
     end
+    @test PormG.value_parser(PormG.CInterval(), _RVC_PG) === PormG.Dialect._parse_postgres_interval
   end
 
   # ───────────────────────────────────────────────────────────────────────────

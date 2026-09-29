@@ -150,11 +150,35 @@ const _VRT_KINDS = [
   # three SQLite parsers arrive with the read-path commit.
   # ───────────────────────────────────────────────────────────────────────────
   @testset "value_parser answers per backend, and never lossily" begin
-    # PostgreSQL delivers typed values — asking for a parser there must yield none, for EVERY kind,
-    # or the read path would re-parse a value the driver already typed.
+    # PostgreSQL delivers typed values — asking for a parser there must yield none for every kind
+    # but INTERVAL, or the read path would re-parse a value the driver already typed.
     for (kind, _, _) in _VRT_KINDS
+      kind isa PormG.CInterval && continue
       @test PormG.value_parser(kind, _VRT_PG) === nothing
     end
+
+    # #581: INTERVAL is the one PostgreSQL cell, because it pins a TYPE the drivers disagree on.
+    # Postgres.jl returns a bare `Period` for a one-component interval (and `Millisecond(0)` for a
+    # zero one); LibPQ returns a `CompoundPeriod` always. The cell wraps the first and leaves the
+    # second alone, so every driver reads back a `Dates.CompoundPeriod`.
+    parse_iv = PormG.value_parser(PormG.CInterval(), _VRT_PG)
+    @test parse_iv !== nothing
+    for p in (Dates.Minute(5), Dates.Millisecond(0), Dates.Day(-3))
+      got = parse_iv(p)
+      @test got isa Dates.CompoundPeriod
+      @test got == p                                  # same duration, only the container changed
+    end
+    # The decomposition is kept as the driver gave it, never canonicalized: 90 minutes stays
+    # 90 minutes rather than becoming 1 hour 30 minutes.
+    @test Dates.periods(parse_iv(Dates.Minute(90))) == [Dates.Minute(90)]
+    # A `CompoundPeriod` is handed back as the SAME object — including a month component PormG
+    # would never write (`format_duration_sql` refuses one), but a foreign column can hold.
+    cp = Dates.CompoundPeriod(Dates.Month(1), Dates.Day(2))
+    @test parse_iv(cp) === cp
+    # Fail-open for everything else.
+    @test parse_iv(missing) === missing
+    @test parse_iv("1 mon") == "1 mon"
+    @test parse_iv(42) === 42
 
     parse_ts = PormG.value_parser(PormG.CDateTime(true), _VRT_SL)
     @test parse_ts !== nothing

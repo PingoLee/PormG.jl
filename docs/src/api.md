@@ -827,7 +827,7 @@ report what the **database** refused once it got there. Each carries `adapter` (
 | `IntegrityError` | A constraint said no — `UNIQUE`, `FOREIGN KEY`, `NOT NULL`, `CHECK`, or an exclusion constraint. The one database failure applications routinely *handle* rather than propagate. |
 | `OperationalError` | Transient, and retrying may succeed — the connection dropped mid-query, a deadlock, a serialization failure, or a lock that could not be acquired (including a `with_advisory_lock` timeout). |
 | `StatementError` | The statement could not be executed — invalid SQL, unknown table/column, a rejected type, or insufficient privileges. Also the landing type for anything the backend could not classify, so the umbrella has no holes. |
-| `TransactionError` | Not a database error: the *transaction API* was used in a way that cannot work — `atomic(durable=true)` nested inside an open transaction, or touching a model bound to one connection while a transaction is open on another. Nothing was sent. |
+| `TransactionError` | Not a database error: the *transaction API* was used in a way that cannot work — `atomic(durable=true)` or `without_foreign_keys` nested inside an open transaction on the same database, or touching a model bound to one connection while a transaction is open on another. Nothing was sent. |
 
 ```julia
 try

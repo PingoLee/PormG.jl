@@ -151,7 +151,7 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **`ToChar` formats** | any `to_char` template | the portable table only; others raise `BackendCapabilityError` |
 | **`Extract` parts** | every PostgreSQL `EXTRACT` field, any case; a non-field raises `InvalidValueError` | `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY`, any case; other PostgreSQL fields raise `BackendCapabilityError`, a non-field `InvalidValueError` |
 | **Row locks** (`select_for_update()`) | `SELECT … FOR UPDATE` | silent no-op — a SQLite write already locks the whole database |
-| **`without_foreign_keys`** | `SET CONSTRAINTS ALL DEFERRED`; may nest inside `atomic`; an orphan fails `COMMIT` with `IntegrityError` | `PRAGMA foreign_keys = OFF` plus a `foreign_key_check` before `COMMIT` (`UnsafeMutationError`); must be the outermost transaction (`TransactionError` otherwise) |
+| **`without_foreign_keys`** | `SET CONSTRAINTS ALL DEFERRED`; an orphan fails `COMMIT` with `IntegrityError` | `PRAGMA foreign_keys = OFF` plus a `foreign_key_check` before `COMMIT` (`UnsafeMutationError`) |
 | **Engine-pinned `db_default`** | `db_default = (postgres = "now()",)` renders | rendering it raises `BackendCapabilityError` — add `sqlite = "…"`, or `sqlite = nothing` for no default |
 
 Notes:
@@ -161,15 +161,12 @@ Notes:
 - **Suspending foreign keys.** Inside a plain transaction PormG already defers foreign-key checks
   to `COMMIT` on both backends, so `atomic` handles children written before their parents.
   `without_foreign_keys` is still a single transaction. It is for repairing an already-inconsistent
-  database, or for planting a violation in a SQLite test. The two engines differ in three ways:
+  database, or for planting a violation in a SQLite test. On both engines it must be the outermost
+  transaction: nested inside `atomic`, it raises `TransactionError` before touching the database.
+  The two engines differ in two ways:
   - **Mechanism:** see the table above.
-  - **Nesting:** SQLite refuses to run it inside another transaction, because `PRAGMA foreign_keys`
-    is ignored there. PostgreSQL runs it, and the deferral covers the enclosing transaction.
-  - **Orphans at the end:** SQLite rolls back with `UnsafeMutationError`. PostgreSQL refuses the
-    `COMMIT` with `IntegrityError`.
-
-  Write it as the outermost block; the nesting difference is tracked in
-  [#686](https://github.com/PingoLee/PormG.jl/issues/686).
+  - **Orphans at the end:** SQLite rolls back with `UnsafeMutationError` when `check_on_exit = true`.
+    PostgreSQL ignores `check_on_exit` and refuses the `COMMIT` with `IntegrityError`.
 - **Engine-pinned database defaults.** A `db_default` is raw SQL, so PormG will not translate it:
   a NamedTuple naming only `postgres` refuses to render for SQLite rather than emit DDL SQLite
   rejects. Give each engine a spelling, or use a portable expression (`CURRENT_TIMESTAMP`,

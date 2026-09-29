@@ -171,9 +171,10 @@ end
 already wait until `COMMIT` on both backends, so a plain `atomic` handles writing children before
 parents. `without_foreign_keys` is still **one** transaction; it does not commit in chunks. It exists
 for repairing a database that is already inconsistent, or for deliberately planting a violation in
-a SQLite test. Write it as the outermost block: `without_foreign_keys("db") do … end`.
+a SQLite test. Write it as the outermost block: `without_foreign_keys("db") do … end`. Nested inside
+`atomic`, it raises `TransactionError` on both engines.
 
-The two engines differ. On SQLite it sets `PRAGMA foreign_keys = OFF`, refuses to nest inside
-another transaction (`TransactionError`), and with `check_on_exit = true` rolls back with
-`UnsafeMutationError` if orphans remain. On PostgreSQL it defers the constraints: it nests without
-complaint, and an orphan is refused at `COMMIT` as an `IntegrityError` (PingoLee/PormG.jl#686).
+The two engines differ. On SQLite it sets `PRAGMA foreign_keys = OFF`, and with
+`check_on_exit = true` rolls back with `UnsafeMutationError` if orphans remain. On PostgreSQL it
+defers the constraints, ignores `check_on_exit`, and an orphan is refused at `COMMIT` as an
+`IntegrityError`.

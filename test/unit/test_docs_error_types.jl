@@ -740,13 +740,22 @@ const DOCERR_CASES = [
         () -> DOCERR_RESULT_SL.objects.values("x" => Cast("resultid", "integer[]")).
             list(show_query = :dict),
     ),
-    # The SQLite `without_foreign_keys` refuses to nest before touching the database, so a mock pool
-    # bound as the ambient transaction connection is enough to reach the guard.
+    # `without_foreign_keys` refuses to nest before touching the database, so a mock pool bound as
+    # the ambient transaction connection is enough to reach the guard. One case per engine: the
+    # PostgreSQL method used to nest silently as a SAVEPOINT (#686), and the docs now promise the
+    # refusal on both.
     (
         "postgres.md + without_foreign_keys docstring — nesting it inside a transaction raises on SQLite",
         TransactionError,
         () -> with_tx_context(DocErrMockSQLite(), nothing) do
             without_foreign_keys(() -> nothing, DocErrMockSQLite())
+        end,
+    ),
+    (
+        "postgres.md + without_foreign_keys docstring — nesting it inside a transaction raises on PostgreSQL (#686)",
+        TransactionError,
+        () -> with_tx_context(DocErrMockPostgres(), nothing) do
+            without_foreign_keys(() -> nothing, DocErrMockPostgres())
         end,
     ),
     # #213 — the delete guards. `write/delete.md` and `errors.md` both promise UnsafeMutationError

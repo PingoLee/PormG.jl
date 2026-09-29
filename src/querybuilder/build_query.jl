@@ -104,8 +104,16 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       # Sum(…)`, or a `Case` with an aggregate in one branch and a window in another — and it is
       # still an aggregate, so the statement needs GROUP BY for its plain columns. Answering "window"
       # first used to skip the flag and drop the GROUP BY altogether.
+      #
+      # #776: and "is an aggregate" is not the question the STATEMENT asks. A window over one —
+      # `Lag(Sum(…))`, `PARTITION BY Sum(…)` — is a window, so it stays out of GROUP BY, yet it makes
+      # the statement aggregate. Keyed on `_is_agg` alone the flag stayed unset, the plain columns
+      # beside it were never grouped, and SQLite returned one arbitrary row. See `_contains_agg`.
+      # Unlike the two questions around it, this one needs no `_reads_alias`: it is asked of the
+      # STATEMENT, and an alias a condition reads is itself a projection in this same loop, which
+      # sets the flag on its own turn.
       is_agg = _resolved_agg(v_copy.field, instruc)
-      is_agg && (instruc.aggregate = true)
+      (is_agg || _contains_agg(v_copy.field)) && (instruc.aggregate = true)
       (is_agg || _resolved_window(v_copy.field, instruc)) || push!(instruc.group, i |> string)
     elseif isa(v_copy.field, Union{SubqueryObject, ExistsObject})
       # #92: a projected scalar subquery / EXISTS is a per-row expression — neither a groupable
@@ -1160,7 +1168,8 @@ end
 # Recursive, in the shape of `_guard_no_handle` (ctes.jl) and with its depth cap, because `Q(...)`
 # and `Qor(...)` admit an `OperObject` directly (functions.jl): a flat check on the top-level entry
 # would let `Q(OP(Count("id"), ">", 3))` through. `_is_agg(::WindowFunction)` is `false` by design —
-# a window is not an aggregate — hence the explicit `isa` beside it. A SELECT-side CASE
+# a window is not an aggregate, even over one (#776 asks `_contains_agg` for GROUP BY instead) — hence
+# the explicit `isa` beside it. A SELECT-side CASE
 # (`When(OP(...))`) never enters this walk; it renders through `_get_select_query(::SQLTypeOper)`.
 function _guard_no_aggregate_predicate(filter, depth::Int = 0)
   depth > 32 && return nothing

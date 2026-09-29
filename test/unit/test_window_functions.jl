@@ -1,8 +1,9 @@
 using Test
 using PormG
-using PormG.Models: Model, IDField, IntegerField, FloatField
-using PormG.QueryBuilder: WindowOver, Rank, DenseRank, RowNumber, Lag, NthValue, inspect_query, Count, Sum
-using PormG.Functions: Case, When
+using PormG.Models: Model, IDField, IntegerField, FloatField, DateField
+using PormG.QueryBuilder: WindowOver, Rank, DenseRank, RowNumber, Lag, NthValue, inspect_query, Count, Sum, Q,
+                            WindowSpec, SQLOrder, SQLField
+using PormG.Functions: Case, When, Coalesce, Value
 
 struct WindowMockPostgres <: PormG.PormGPostgres end
 struct WindowMockSQLite <: PormG.PormGSQLite end
@@ -41,6 +42,10 @@ WindowSlResult = Model("window_results",
   milliseconds=IntegerField(),
 )
 WindowSlResult.connect_key = "window_sl"
+
+# #776's binding ORDER BY term needs a date column, which the result fixtures do not carry.
+Window776SlRace = Model("window_races", raceid = IDField(), points = FloatField(), date = DateField())
+Window776SlRace.connect_key = "window_sl"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Window Functions: RANK renders a partitioned OVER clause without GROUP BY
@@ -551,6 +556,77 @@ end
         @test occursin(r"GROUP BY 1\s*$", sql)
       end
     end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #776: a window over an aggregate makes the statement aggregate
+# `_is_agg(::WindowFunction)` is `false`, and the GROUP BY decision asked only that, so `Lag(Sum(…))`
+# or `PARTITION BY Sum(…)` beside a plain column printed no GROUP BY at all: SQLite collapsed the
+# filter into one row with an arbitrary `raceid`. The window itself stays out of GROUP BY, and a
+# filter on its alias is still refused as a window (#685), not routed to HAVING as an aggregate.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#776: a window over an aggregate keeps GROUP BY for the plain columns" begin
+  lag_sum = () -> Lag(Sum("points"), over = WindowOver(order_by = ["raceid"]))
+  for (backend, Model_) in _WINDOW_685_MODELS
+    for (label, window) in (
+        ("aggregate argument", lag_sum),
+        ("aggregate in PARTITION BY", () -> Rank(over = WindowOver(partition_by = [Sum("points")], order_by = ["raceid"]))),
+        ("wrapped in a function", () -> Coalesce(lag_sum(), Value(0))),
+        ("wrapped in arithmetic", () -> lag_sum() + 1),
+        # A `When` branch sits in a keyword slot, the one `_contains_agg` reads besides `column`.
+        ("in a Case branch", () -> Case([When("raceid__@gt" => 0, then = lag_sum())], default = 0)),
+        # `WindowOver` refuses a function in `order_by`; an exported `WindowSpec` does not check.
+        ("aggregate in a WindowSpec's ORDER BY",
+         () -> Rank(over = WindowSpec(order_by = [SQLOrder(SQLField(Sum("points"), "s"); orientation = "DESC")]))),
+      )
+      @testset "$backend — $label" begin
+        q = Model_.objects
+        q.filter("raceid__@lte" => 5)
+        q.values("raceid", "prev" => window())
+        sql = inspect_query(q)[:sql_text]
+        @test occursin(" OVER (", sql)
+        @test occursin(r"GROUP BY 1\s*$", sql)
+      end
+    end
+
+    @testset "$backend — a condition reading the window's alias" begin
+      q = Model_.objects
+      q.values("raceid", "prev" => lag_sum(), "up" => Case([When("prev__@gt" => 0, then = 1)], default = 0))
+      @test occursin(r"GROUP BY 1\s*$", inspect_query(q)[:sql_text])
+    end
+
+    @testset "$backend — a window over a plain column still has no GROUP BY" begin
+      q = Model_.objects
+      q.values("raceid", "prev" => Lag("points", over = WindowOver(order_by = ["raceid"])))
+      @test !occursin("GROUP BY", inspect_query(q)[:sql_text])
+    end
+
+    for (label, pred) in (("top-level", "prev" => 1), ("Q", Q("prev" => 1)))
+      @testset "$backend — a $label filter on the alias is still refused as a window (#685)" begin
+        q = Model_.objects
+        q.values("raceid", "prev" => lag_sum())
+        q.filter(pred)
+        err = _window_err(() -> q)
+        @test err isa PormG.QueryBuildError
+        msg = _window_msg(err)
+        @test occursin("\"prev\"", msg)
+        @test occursin("#685", msg)
+      end
+    end
+  end
+
+  # #587: GROUP BY now prints, so an ORDER BY term that binds is printed — and bound — twice. On
+  # SQLite every `?` needs its own value; the label below binds nine.
+  @testset "SQLite — a binding ORDER BY term is bound under GROUP BY too" begin
+    q = Window776SlRace.objects
+    q.values("raceid", "prev" => lag_sum())
+    q.order_by("date__@yyyy_q")
+    inspection = inspect_query(q)
+    label_ops = Any["-Q", 3, 1, 6, 2, 9, 3, 12, 4]
+    @test count("?", inspection[:sql_text]) == length(inspection[:parameters])
+    @test inspection[:parameter_buckets][:group] == label_ops
+    @test inspection[:parameters] == vcat(Any[1], label_ops, label_ops)
   end
 end
 

@@ -881,6 +881,61 @@ clause stays `GROUP BY 1, 2, 3`. The same holds for a window written directly in
 !!! warning
     **Semantic trap:** if the window `PARTITION BY` key matches the `GROUP BY` key exactly, each partition holds exactly one row after grouping — making `RANK()` always return `1`. Choose a partition key that differs from the grouping key, or use a subquery / CTE to apply the window after aggregation.
 
+### A Window Over an Aggregate
+
+A window function can take an aggregate as its argument, or partition by one. SQL computes the
+aggregate per group first and then runs the window over the grouped rows, so the query is grouped
+by its plain columns. Here, each of Ayrton Senna's seasons is shown with the points he scored the
+season before:
+
+```julia
+using PormG.Functions: Lag, Sum, WindowOver
+
+query = M.Result.objects.filter("driverid__forename" => "Ayrton", "driverid__surname" => "Senna").values(
+    "raceid__year",
+    "season_pts"  => Sum("points"),                                                   # aggregate
+    "prev_season" => Lag(Sum("points"), over=WindowOver(order_by=["raceid__year"]))   # window over it
+).order_by("raceid__year")
+df = query |> DataFrame
+```
+
+Result (first six of eleven seasons):
+
+```
+11×3 DataFrame
+ Row │ raceid__year  season_pts  prev_season
+     │ Int64         Float64     Float64?
+─────┼───────────────────────────────────────
+   1 │         1984        13.0    missing   ← no earlier season
+   2 │         1985        38.0         13.0
+   3 │         1986        55.0         38.0
+   4 │         1987        57.0         55.0
+   5 │         1988        94.0         57.0
+   6 │         1989        60.0         94.0
+```
+
+Generated SQL (PostgreSQL):
+
+```sql
+SELECT
+    "Tb_1"."year" as "raceid__year",
+    SUM("Tb"."points") as "season_pts",
+    LAG(SUM("Tb"."points"), $1::integer) OVER (ORDER BY "Tb_1"."year" ASC) as "prev_season"
+FROM "result" as "Tb"
+  INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
+  INNER JOIN "driver" AS "Tb_2" ON "Tb"."driverid" = "Tb_2"."driverid"
+WHERE "Tb_2"."forename" = $2
+  AND "Tb_2"."surname" = $3
+GROUP BY 1
+ORDER BY "raceid__year" ASC NULLS LAST
+```
+
+The `GROUP BY` does not depend on `season_pts`. Drop it and keep only `prev_season`, and the query
+is still grouped by `raceid__year`, one row per season. The same applies to an aggregate in
+`partition_by`, as in `Rank(over=WindowOver(partition_by=[Sum("points")], …))`. Filtering on
+`prev_season` is refused like any other window alias; see
+[Filtering on a Window Result](#Filtering-on-a-Window-Result).
+
 ---
 
 ## Ordering Results by a Window Alias
@@ -1077,7 +1132,7 @@ The only SQLite limitation is **explicit frame specifications** (`frame=` argume
 
 ### Current Limitations
 
-- **Aggregate-over-window** (`SUM(...) OVER (...)`) is not yet implemented. Use a CTE to aggregate first, then apply the window in the outer query.
+- **Aggregate-over-window** (`SUM(...) OVER (...)`, an aggregate used *as* the window function) is not yet implemented. Use a CTE to aggregate first, then apply the window in the outer query. A window *over* an aggregate, such as `Lag(Sum(…))`, is supported; see [A Window Over an Aggregate](#A-Window-Over-an-Aggregate).
 - **Filtering on a window alias** in the query that computes it raises a `QueryBuildError`. Filter on the column of a CTE instead — see [Filtering on a Window Result](#Filtering-on-a-Window-Result).
 - **Named `WINDOW` clauses** (`WINDOW w AS (...)`) are not supported. Each function carries its own inline `OVER`.
 - **SQLite explicit frame specs** throw a `BackendCapabilityError`. Use PostgreSQL for frame-bound queries.

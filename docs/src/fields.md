@@ -375,6 +375,13 @@ If migrating from Django, password hashes are **fully compatible**. Users can co
 
 ## Numeric Fields
 
+**Numeric strings are base 10.** Every numeric field also takes its value as a string, such as
+`"44"` for `laps` or `"12.5"` for `points` read from a CSV. The string must be written in base 10:
+an optional sign, digits, at most one `.`, and an optional exponent (`"1.2e3"`). A `0x`, `0b` or `0o`
+prefix (`"0x10"`) raises `InvalidValueError` on a write and `FilterError` in a filter, as Django's
+`int(str)` / `Decimal(str)` refuse it. PormG never converts these strings: pass the number, or its
+base-10 text.
+
 ### IntegerField()
 
 **Purpose**: 32-bit signed integers for counts, quantities, and ratings.

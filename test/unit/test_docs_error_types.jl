@@ -955,6 +955,24 @@ const DOCERR_CASES = [
             m.objects.create("amount" => "1000", show_query = :dict)
         end,
     ),
+    # #773. `fields.md` → *Numeric Fields* names the type a `0x`/`0b`/`0o` numeric string raises on a
+    # write and in a filter. The other writers and field kinds are pinned in `test_numeric_prefix_773.jl`.
+    (
+        "fields.md — a numeric string with a 0x/0b/0o prefix raises on a write (#773)",
+        InvalidValueError,
+        () -> let m = Model("docerr_laps_773", id = IDField(), laps = IntegerField())
+            m.connect_key = "docerr_pg"; m._module = Main
+            m.objects.create("laps" => "0x10", show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — a numeric string with a 0x/0b/0o prefix raises in a filter (#773)",
+        FilterError,
+        () -> let m = Model("docerr_laps_773f", id = IDField(), laps = IntegerField())
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("laps" => "0x10"); q.list(show_query = :dict)
+        end,
+    ),
     # #446. `errors.md` has promised `UnknownFieldError` for "the field name does not exist on the
     # model" since the taxonomy landed, and until now the code raised a bare `KeyError` for every one
     # of these shapes — an untyped error naming an internal dict lookup, for the single most common

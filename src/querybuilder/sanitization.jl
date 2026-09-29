@@ -266,7 +266,12 @@ function _validate_integer_value(model::PormGModel, field::String, value::Any, o
         if _string_uses_scientific_notation(stripped)
             _type_mismatch_error(operation, model, field, value, "Int64 or an integer string"; suggestion="replace scientific notation with a literal integer string like \"123\"")
         end
-        if tryparse(Int64, stripped) === nothing
+        # The formatter binds the TEXT, so the check is its grammar (#773): the bare parser also reads
+        # `0x`/`0b`/`0o`, and even with `base = 10` it takes a space after the sign (`"+ 1"`).
+        if Models.has_non_decimal_prefix(stripped)
+            _type_mismatch_error(operation, model, field, value, "Int64 or an integer string"; suggestion="write the integer in base 10 — the 0x, 0b and 0o prefixes are not accepted")
+        end
+        if !Models.is_base10_number(stripped) || tryparse(Int64, stripped; base = 10) === nothing
             _type_mismatch_error(operation, model, field, value, "Int64 or an integer string"; suggestion="convert the value to Int64 before calling $operation")
         end
         return true
@@ -311,7 +316,11 @@ function _validate_float_value(model::PormGModel, field::String, value::Any, ope
         if occursin(r"^[+-]?\d+,\d+$", stripped)
             _validation_error(operation, model, field, "comma decimal separators are not supported"; suggestion="use '.' as the decimal separator")
         end
-        parsed = tryparse(Float64, stripped)
+        # `tryparse(Float64, …)` takes hex (`"0x10"`, `"0x1p4"`), and the formatter binds the text (#773).
+        if Models.has_non_decimal_prefix(stripped)
+            _type_mismatch_error(operation, model, field, value, "a finite numeric value or numeric string"; suggestion="write the number in base 10 — the 0x, 0b and 0o prefixes are not accepted")
+        end
+        parsed = Models.is_base10_number(stripped) ? tryparse(Float64, stripped) : nothing
         parsed === nothing && _type_mismatch_error(operation, model, field, value, "a finite numeric value or numeric string"; suggestion="pass a parseable numeric string like \"123.45\" or \"1.23e4\"")
         isfinite(parsed) || _validation_error(operation, model, field, "non-finite numeric values are not allowed"; suggestion="pass a finite Float64 value")
         return true

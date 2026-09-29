@@ -3302,6 +3302,17 @@ function format_json_sql(value)
   throw(InvalidValueError("JSONField value must be a valid JSON string, Dict, Vector, NamedTuple, or scalar. Got: $(typeof(value))"))
 end
 
+# The spellings a numeric String may take (#773): an optional sign, base-10 digits with at most one
+# point, an optional exponent. `[0-9]`, not `\d`, which matches every Unicode digit. Against what
+# `format_number_sql` accepted before, it drops the `0x`/`0b`/`0o` prefixes and `Float64`'s hex floats
+# (`"0x1p4"`), which `_NON_DECIMAL_PREFIX` names in the refusal, and a space between the sign and the
+# digits (`"+ 1"`), which Julia's integer parser allows and no engine's numeric input does.
+const _BASE10_NUMBER = r"^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$"
+const _NON_DECIMAL_PREFIX = r"^[+-]?0[xXbBoO]"
+
+is_base10_number(value::AbstractString)::Bool = occursin(_BASE10_NUMBER, strip(value))
+has_non_decimal_prefix(value::AbstractString)::Bool = occursin(_NON_DECIMAL_PREFIX, strip(value))
+
 function format_number_sql(value::Bool)
   # Bool <: Integer in Julia, so without this overload `true` would be returned as-is
   # and LibPQ would serialize it as 'true', which PostgreSQL rejects for integer columns.
@@ -3327,6 +3338,13 @@ function format_number_sql(value::AbstractString)
   if occursin(r"^[+-]?\d+,\d+$", value)
     throw(InvalidValueError("Does you want to use ',' as decimal separator? Please use '.' instead."))
   end
+  # Base 10 only (#773). The parsers below take `0x`/`0b`/`0o` (and `Float64` hex floats), and this
+  # formatter returns the TEXT, not the parsed value — so `"0x10"` was validated as 16 and bound as
+  # the string '0x10'. Django's `int(str)` / `Decimal(str)` refuse the prefixes; so does PormG.
+  if has_non_decimal_prefix(value)
+    throw(InvalidValueError("The value '$value' uses a non-decimal prefix (0x, 0b or 0o). Write the number in base 10."))
+  end
+  is_base10_number(value) || throw(InvalidValueError("The value '$value' is not a valid number"))
 
   # try integer first
   if (i = tryparse(Int64, value)) !== nothing

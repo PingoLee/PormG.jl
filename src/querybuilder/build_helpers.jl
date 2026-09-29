@@ -1656,6 +1656,8 @@ function _json_numeric_rhs(value)
   value isa Integer && return value
   value isa AbstractFloat && return value
   s = strip(string(value))
+  # Base 10 only, as on every other numeric path (#773): the bare parsers read `"0x10"` as 16.
+  Models.is_base10_number(s) || throw(FilterError("A numeric JSON comparison requires a base-10 number; got \e[31m$(value)\e[0m."))
   n = tryparse(Int, s); n !== nothing && return n
   f = tryparse(Float64, s); (f !== nothing && isfinite(f)) && return f
   throw(FilterError("A numeric JSON comparison requires a number; got \e[31m$(value)\e[0m."))

@@ -41,6 +41,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "Fluent parity (#208)"         begin include("test_fluent_parity_208.jl")  end
     @testset "Bulk copy"                    begin include("test_bulk_copy.jl")          end
     @testset "Bulk column arrays (#672)"    begin include("test_bulk_column_arrays.jl") end
+    @testset "bulk_insert returning= (#671)" begin include("test_bulk_returning.jl")     end
     @testset "SQL Functions"                begin include("test_sql_functions.jl")      end
     @testset "Window Functions"             begin include("test_window_functions.jl")   end
     @testset "Unaccent Extension"           begin include("test_unaccent_extension.jl") end

@@ -29,6 +29,8 @@ import PormG: backend_connect, backend_renew_connection, backend_is_alive, backe
               backend_execute_async, backend_is_connection_error, backend_is_permanent_connect_error,
               backend_cancel_query!, backend_drain_connection!,
               backend_copy_in!, backend_classify_error
+# Which PostgreSQL driver a pool uses (#785).
+import PormG: postgres_driver, _PG_DRIVER_PACKAGES
 
 export fetch, fetch_async, await_result, FetchTask, fetch_copy
 export with_transaction, with_transaction_async, run_in_transaction, atomic, with_savepoint
@@ -268,7 +270,13 @@ end
 # handle produced by `backend_connect`; all driver work dispatches through the backend
 # generics keyed on the pool marker type.
 
-mutable struct PostgresConnectionPool <: PormGPostgres
+# `D` is the PostgreSQL driver (#785): a key of `_PG_DRIVER_PACKAGES` (Backend.jl), `:libpq` unless
+# asked otherwise. A type parameter rather than a field, so a driver extension can dispatch on it —
+# see the note above `_PG_DRIVER_PACKAGES`. Defining the inner constructor below suppresses Julia's
+# default ones, so it is the only way in and every pool's driver is checked. (`D` appears in no
+# field, so it can never be inferred from the arguments either — callers name it or use the outer
+# constructors.)
+mutable struct PostgresConnectionPool{D} <: PormGPostgres
   connections::Vector{Any}
   available::Vector{Bool}
   connection_string::String
@@ -276,7 +284,24 @@ mutable struct PostgresConnectionPool <: PormGPostgres
   pool_timeout::Float64   # default acquire_connection timeout, seconds (#126; connection.yml `pool_timeout`)
   fail_fast_on_connect::Bool  # fast-fail permanent connect errors instead of waiting pool_timeout (#72)
   lock::ReentrantLock  # For thread safety
+
+  function PostgresConnectionPool{D}(connections, available, connection_string, pool_size, pool_timeout,
+                                     fail_fast_on_connect, lock) where {D}
+    (D isa Symbol && haskey(_PG_DRIVER_PACKAGES, D)) || throw(InvalidConfigurationError(
+      "unknown PostgreSQL driver $(repr(D)); expected one of " *
+      join((repr(k) for k in keys(_PG_DRIVER_PACKAGES)), ", ")))
+    return new{D}(connections, available, connection_string, pool_size, pool_timeout,
+                  fail_fast_on_connect, lock)
+  end
 end
+
+# The positional form (src/precompile.jl) builds a LibPQ pool, as it did before #785.
+PostgresConnectionPool(connections, available, connection_string, pool_size, pool_timeout,
+                       fail_fast_on_connect, lock) =
+  PostgresConnectionPool{:libpq}(connections, available, connection_string, pool_size, pool_timeout,
+                                 fail_fast_on_connect, lock)
+
+postgres_driver(::PostgresConnectionPool{D}) where {D} = D
 
 mutable struct SQLiteConnectionPool <: PormGSQLite
   connections::Vector{Any}
@@ -298,11 +323,11 @@ mutable struct SQLiteConnectionPool <: PormGSQLite
   write_lock::ReentrantLock
 end
 
-function PostgresConnectionPool(connection_string::String; pool_size::Int = 3, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, fail_fast_on_connect::Bool = true)
+function PostgresConnectionPool(connection_string::String; pool_size::Int = 3, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, fail_fast_on_connect::Bool = true, driver::Symbol = :libpq)
   connections = Vector{Any}(nothing, pool_size)
   available = fill(true, pool_size)
   lock = ReentrantLock()
-  PostgresConnectionPool(connections, available, connection_string, pool_size, Float64(pool_timeout), fail_fast_on_connect, lock)
+  PostgresConnectionPool{driver}(connections, available, connection_string, pool_size, Float64(pool_timeout), fail_fast_on_connect, lock)
 end
 
 function SQLiteConnectionPool(connection_string::String; pool_size::Int = 3, split_read_write::Bool = false, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, fail_fast_on_connect::Bool = true)

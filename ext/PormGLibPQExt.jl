@@ -210,6 +210,13 @@ function _mask_libpq_quoted(msg::AbstractString)::String
 end
 
 function _open_connection(pool::PormGPostgres)
+  # A pool configured for another PostgreSQL driver (#785) is refused BEFORE libpq sees anything —
+  # the methods here are typed on the `PormGPostgres` marker, so without this check such a pool
+  # would silently get a LibPQ connection whenever its own extension was not loaded. Every other
+  # method in this file needs a `LibPQ.Connection`, or a result or error one produced, and only this
+  # function hands those connections out.
+  PormG.postgres_driver(pool) === :libpq ||
+    throw(PormG.InvalidConfigurationError(PormG._pg_driver_hint(pool)))
   _preflight_conninfo(pool.connection_string)
   return LibPQ.Connection(pool.connection_string)
 end

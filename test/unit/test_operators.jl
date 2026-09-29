@@ -1049,11 +1049,14 @@ end
     # `F + Month(1) + Day(15)` parses left-to-right as `(F + Month(1)) + Day(15)`, so it renders
     # as two chained make_interval() calls (correct result; parenthesise to `+ (Month(1)+Day(15))`
     # for a single interval). This locks that the nested form still renders and binds correctly.
+    # #572: `happened` is a DATE, so each whole-day link is cast back to `date` — PostgreSQL's own
+    # `date + interval` is a timestamp, and the cast is what makes it project a date as SQLite does.
     q = _E.objects
     q.values("shifted" => F("happened") + Month(1) + Day(15))
     res = q.list(show_query=:dict)
     @test contains(res[:sql_text],
-      "((\"Tb\".\"happened\" + make_interval(months => \$1::integer)) + make_interval(days => \$2::integer))")
+      "((((\"Tb\".\"happened\" + make_interval(months => \$1::integer)))::date + " *
+      "make_interval(days => \$2::integer)))::date")
     @test res[:parameters] == [1, 15]
   end
 
@@ -1062,7 +1065,9 @@ end
     # the interval magnitude second ($2), matching the bitwise-update convention above.
     q = _E.objects.filter("id" => 1)
     res = q.update("happened" => F("happened") + Day(7), show_query=:inspection)
-    @test contains(res[:sql_text], "SET \"happened\" = (\"Tb\".\"happened\" + make_interval(days => \$2::integer))")
+    # #572: a whole-day shift on a DATE is cast back to `date` — harmless on a write into a DATE
+    # column, and the same rendering the read path uses.
+    @test contains(res[:sql_text], "SET \"happened\" = ((\"Tb\".\"happened\" + make_interval(days => \$2::integer)))::date")
     @test contains(res[:sql_text], "WHERE \"Tb\".\"id\" = \$1")
     @test res[:parameters] == [1, 7]
   end

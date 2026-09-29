@@ -172,7 +172,7 @@ df = query |> DataFrame
 
 Generated SQL (PostgreSQL):
 ```sql
-WHERE (("Tb"."dob" + make_interval(years => $1::integer)) <= $2)
+WHERE ((("Tb"."dob" + make_interval(years => $1::integer)))::date <= $2)
 ```
 
 On SQLite the same expression renders through `date(...)` modifiers instead —
@@ -217,7 +217,7 @@ ten days, exactly as `F("date") + Day(7) + Day(3)` does.
 Generated SQL (PostgreSQL) — both operands are joined columns, so both carry a join alias:
 ```sql
 WHERE ("Tb_1"."date" > "Tb_2"."dob")
-  AND ("Tb_1"."date" <= ("Tb_2"."dob" + make_interval(days => $1::integer)))
+  AND ("Tb_1"."date" <= (("Tb_2"."dob" + make_interval(days => $1::integer)))::date)
 -- parameters: [30]
 ```
 
@@ -249,9 +249,9 @@ M.Race.objects.filter("raceid" => 1).update("date" => F("date") + (Month(1) + Da
 M.Race.objects.update("date" => F("date") - Year(1))
 ```
 
-Generated SQL (PostgreSQL) — a single, strongly-typed `make_interval(...)`:
+Generated SQL (PostgreSQL) — a single, strongly-typed `make_interval(...)`, cast back to `date` because the column is a `DateField` (see the note on the promotion rule below):
 ```sql
-("Tb"."date" + make_interval(months => $1::integer, days => $2::integer))
+(("Tb"."date" + make_interval(months => $1::integer, days => $2::integer)))::date
 -- parameters: [1, 15]
 ```
 
@@ -286,10 +286,17 @@ That mask is the exact format a `DateTimeField` stores, which is the point of it
     expression *evaluates to* once, and the wrapper, the bound literal and the projection all read
     that one answer.
 
-    One consequence is visible and is **not** settled: because whole-day arithmetic stays a date in
-    PormG while PostgreSQL's own `date + interval` yields a `timestamp`, a projected
-    `F("date") + Day(1)` reads back as a `DateTime` on PostgreSQL and as a date on SQLite. Tracked
-    as issue #572.
+    **Both engines project the type this rule names.** PostgreSQL's own `date + interval` is a
+    `timestamp` even for whole days, so PormG casts a whole-day shift on a `DateField` back to
+    `date` there — which is the `::date` in the PostgreSQL SQL above. A projected expression
+    therefore reads back the same way on either engine:
+
+    | Expression on a `DateField` | Reads back as (both engines) |
+    |---|---|
+    | `F("date") + Day(1)`, `F("date") + 7`, `F("date") - Month(1)` | a `Date` |
+    | `F("date") + Hour(6)`, anything with a sub-day component | a timestamp |
+
+    Before #572 the first row read back as a `DateTime` on PostgreSQL and a `Date` on SQLite.
 
 #### The `Interval` helper
 

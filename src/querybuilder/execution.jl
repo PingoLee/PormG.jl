@@ -1501,8 +1501,13 @@ end
 # whole days. PormG has a pinned, deliberate contract that a `DateTime` literal against a DATE column
 # truncates to its calendar date exactly as the `filter("dob__@gte" => …)` pair spelling does, and
 # promoting on `Day(1)` would overturn it. Promoting only when the expression itself produced a
-# time-of-day changes nothing that already has a correct answer. (The resulting cross-engine type
-# split on whole-day arithmetic is measured and tracked as #572.)
+# time-of-day changes nothing that already has a correct answer.
+#
+# #572 settled the one consequence this left open. PostgreSQL's own `date + interval` is a timestamp
+# even for whole days, so the PROJECTED type split by engine until the PostgreSQL render was cast
+# back to `date` — `sql_canonicalize(::CDate, ::PormGPostgres)`, which `_render_temporal_shift`
+# consults with the kind this function returns. The rule here is therefore the rule both engines
+# project, not only the one PormG binds by.
 _shift_result_kind(::Nothing, comps) = nothing
 _shift_result_kind(kind::CDate, comps) =
   any(c -> c[1] in (:hour, :minute, :second), comps) ? CDateTime(false) : kind
@@ -1545,7 +1550,14 @@ function _render_temporal_shift(left_side::AbstractString, kind::TemporalKind, o
       end
     end
     isempty(parts) && return left_side  # zero-length interval → identity
-    return "($(left_side) $(operation) make_interval($(join(parts, ", "))))"
+    # #572 — rendered into the representation the RESULT kind is stored in, exactly as the SQLite
+    # branch below is. For a whole-day shift on a DATE that is a `::date` cast (PostgreSQL's own
+    # `date + interval` is a timestamp); for everything else the table's PostgreSQL arm is the
+    # identity. `kind` is the result kind, so a sub-day shift on a DATE is never cast. An untyped
+    # left (`nothing`) renders as it always did — no cast chosen on a guess.
+    shifted = "($(left_side) $(operation) make_interval($(join(parts, ", "))))"
+    kind === nothing && return shifted
+    return sql_canonicalize(kind, instruc.connection, shifted)
 
   elseif instruc.connection isa PormGSQLite
     op_factor = operation == "-" ? -1 : 1
@@ -2493,7 +2505,7 @@ function DataFrames.DataFrame(objct::SQLObjectHandler)
   result, built, connection = _execute_select(objct)
   df = DataFrames.DataFrame(result)
   parsers = _projection_parsers(built, connection)
-  parsers === nothing && return df          # PostgreSQL: byte-identical to the pre-#582 path
+  parsers === nothing && return df          # nothing to coerce — PostgreSQL unless an INTERVAL is projected (#581)
   for (name, parser) in parsers
     # The wildcard recorder registers both a field's name and its `db_column`, and only one of them
     # is in any given result — same guard as `_list_raw`'s `haskey`. `map` widens the column from
@@ -2512,8 +2524,8 @@ end
 # resolves its own read coercion the same way — off `expression.output_field`, never off the
 # alias's spelling. There is no `connection isa PormGSQLite` test here: the backend dimension
 # belongs to the table, so a third backend becomes table entries rather than a branch. On
-# PostgreSQL every `value_parser` answers `nothing`, so this returns `nothing` after one dispatch
-# per projection.
+# PostgreSQL every `value_parser` but INTERVAL's answers `nothing` (#581 pins that one type across
+# drivers), so a query projecting no INTERVAL returns `nothing` after one dispatch per projection.
 function _projection_parsers(built::SQLObjectHandler, connection)::Union{Nothing,Dict{Symbol,Function}}
   parsers = nothing
   for (name, kind) in built.object.projection_kinds

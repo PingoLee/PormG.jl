@@ -72,7 +72,9 @@ const VR_JULIA_TYPE = Dict{Symbol,Type}(
   :timestamp => Union{DateTime, TimeZones.ZonedDateTime},
   :date      => Date,
   :time      => Time,
-  :interval  => Dates.AbstractTime,        # `Period` and `CompoundPeriod` both subtype it
+  # #581: the CONCRETE type, pinned on every engine and driver. `Dates.AbstractTime` was the old
+  # answer, and it let Postgres.jl's bare `Minute(5)` and LibPQ's `CompoundPeriod` both pass.
+  :interval  => Dates.CompoundPeriod,
   :text      => AbstractString,
   :integer   => Integer,
 )
@@ -241,20 +243,17 @@ const VR_CASES = VRCase[
   # `date(...)` == `format_date_sql` is asserted only in a comment today (`Dialect.jl:83`); this
   # is that claim as a measurement.
   vrcase("identity", :date, c -> F(c), v -> v),
-  # P3 on PostgreSQL: `date + interval` is a `timestamp` in SQL, so a whole-day shift reads back
-  # as a `DateTime` there and as `YYYY-MM-DD` text (a date) on SQLite. P1 and P2 hold on both —
-  # PormG binds the calendar date and PostgreSQL coerces — so this is the "sub-day-only
-  # promotion is discontinuous" item from the #564 design review, measured: the two engines
-  # give the expression different TYPES for the same whole-day arithmetic.
-  vrcase("plus_day", :date, c -> F(c) + Day(1), v -> v + Day(1), p3 = (:postgres,)),
-  vrcase("plus_int_days", :date, c -> F(c) + 7, v -> v + Day(7), p3 = (:postgres,)),
-  # Sibling 1's DATE branch, fixed by #568 alongside the timestamp one. Marks match `plus_int_days`
-  # above: SQLite reads the alias back as text (sibling 4), and PostgreSQL returns a `DateTime`
-  # because `date + interval` is a `timestamp` in SQL — the promotion split tracked as #572, which
-  # this change deliberately does not touch.
+  # #572 FIXED: `date + interval` is a `timestamp` in SQL for ANY interval, so a whole-day shift
+  # used to read back as a `DateTime` on PostgreSQL and as a `Date` on SQLite — the "sub-day-only
+  # promotion is discontinuous" item from the #564 design review. The PostgreSQL render is now cast
+  # back to `date` (`sql_canonicalize(::CDate, ::PormGPostgres)`), so both engines project the kind
+  # PormG's rule names: whole days stay a date, only a sub-day component promotes.
+  vrcase("plus_day", :date, c -> F(c) + Day(1), v -> v + Day(1)),
+  vrcase("plus_int_days", :date, c -> F(c) + 7, v -> v + Day(7)),
+  # Sibling 1's DATE branch, fixed by #568 alongside the timestamp one. The cast lands on every
+  # link, so the nested spelling reads back as a `Date` exactly like `plus_int_days` above.
   vrcase("nested_int_days", :date, c -> (F(c) + 7) + 3, v -> v + Day(10),
-         sibling = "1 — fixed by #568; nested integer days compose (date branch)",
-         p3 = (:postgres,)),
+         sibling = "1 — fixed by #568; nested integer days compose (date branch)"),
   # #527 control: a sub-day duration on a DATE column promotes to a timestamp on both engines.
   vrcase("plus_hour6", :date, c -> F(c) + Hour(6), v -> DateTime(v) + Hour(6),
          result_kind = :timestamp),
@@ -327,8 +326,9 @@ contract, and #582 closed that divergence — `DataFrame(query)` now applies the
 `list()`, so it would have gone hollow with no mark to force the visit. `query_list` is the raw
 read BY CONTRACT (its own comment in `execution.jl` says so), which is why this seam survives.
 
-On PostgreSQL this is a provable no-op — `value_parser` answers `nothing` for every kind there, so
-the coerced and raw paths return the same object.
+On PostgreSQL this is a no-op for every kind but INTERVAL — `value_parser` answers `nothing` there
+for the rest, so the coerced and raw paths return the same object. INTERVAL's PostgreSQL cell (#581)
+only re-wraps a bare `Period` in a `CompoundPeriod`, so the two paths still hold equal (`==`) values.
 """
 function vr_raw_value(q, key::Symbol)
   rows = QueryBuilder.Tables.rowtable(QueryBuilder.query_list(q)) |> collect

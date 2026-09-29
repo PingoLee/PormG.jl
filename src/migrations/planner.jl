@@ -2468,7 +2468,8 @@ end
 # string-declared FK, or any FK with an omitted `pk_field`, would not honor a referenced
 # parent's `db_column` in the generated DDL. #65: that resolution is now single-sourced —
 # both this prelude and `set_models` call `Models.resolve_fk_target!`, so the two load
-# lifecycles can no longer drift. Both backends call this.
+# lifecycles can no longer drift. Both backends call this, and so does `check(kinds = [:schema_drift])`.
+# #762: many-to-many targets are resolved here as well — see `_resolve_fk_targets_and_pk!`.
 function _load_current_models(path::String)::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}
   temp_module = Module(:TemporaryModels)
   Base.include(temp_module, path)
@@ -2480,6 +2481,7 @@ end
 
 # Resolve each code model's FK/O2O targets against `models_module` (write-back) and default a
 # missing `pk_field`, by delegating each field to the shared `Models.resolve_fk_target!` (#65).
+# Many-to-many targets are resolved here too, by binding only (#762, below).
 # Best-effort (strict=false): an unresolvable string target is left as-is with a `@debug` rather
 # than aborting the whole load, so a diff can still be computed for every OTHER model in the file.
 # The runtime path's strict throw lives in `set_models`, so typos surface loudly there first.
@@ -2496,11 +2498,25 @@ end
 # so the throw aborts the whole run exactly as a `strict=true` throw here would. The reason to defer
 # is the one above: most models never reach a `REFERENCES` clause at all, so an unresolved target on a
 # model with no pending DDL costs nothing, and the diff for every other model still gets computed.
+#
+# #762: many-to-many targets are resolved here too, and for the same reason. `.to` names a BINDING,
+# but `synthesize_many_to_many_through_models` can only look a String up in the schema dict, whose
+# keys are physical tables (#59) and whose models' `name` is the table for `Binding = Model("table", …)`.
+# The binding appears in neither, so every app-prefixed M2M target was "not defined" on this path
+# alone. Binding lookup only, through the same `_resolve_target_model` the FK arm uses: a name that
+# is not a model binding (unbound, or bound to something else, like `Base.position`) returns `nothing`
+# and stays a String, which leaves it to the join-table builder's own name lookup, as before.
 function _resolve_fk_targets_and_pk!(current_models::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, models_module::Module)::Nothing
   for (_, entry) in current_models
     model = entry[:model]
     model isa PormGModel || continue
     for (field_name, field) in pairs(model.fields)
+      if Models.is_many_to_many_field(field)
+        field.to isa AbstractString || continue
+        target = Models._resolve_target_model(field.to, models_module)
+        target === nothing || (field.to = target)
+        continue
+      end
       field isa Models.sRelationalColumn || continue
       # #65: delegate to the single shared resolver. Best-effort (strict=false): an unresolvable
       # string target is left as-is with a @debug (its verbatim db-column fallback stays correct),

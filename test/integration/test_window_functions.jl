@@ -4,7 +4,7 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
-import PormG.QueryBuilder: WindowOver, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue, Count, F
+import PormG.QueryBuilder: WindowOver, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue, Count, Sum, F
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Window Functions: row numbers over standings partitions
@@ -501,6 +501,31 @@ end
     # Both branches occur, so the agreement above is not vacuous.
     @test any(row -> row[:points] >= 10, rows)
     @test any(row -> row[:points] < 10, rows)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A window over an aggregate groups the plain columns beside it (#776)
+# `Lag(Sum(…))` makes the statement aggregate, but the flag used to ask only whether a projection IS
+# an aggregate, so no GROUP BY printed: SQLite collapsed the five races into one row with an arbitrary
+# `raceid`, and PostgreSQL rejects the ungrouped column. One row per race, each `prev` the previous
+# race's total — checked against the totals queried on their own.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "A window over an aggregate groups the plain columns beside it (#776)" begin
+    totals_q = M.Result.objects
+    totals_q.filter("raceid__@lte" => 5)
+    totals_q.values("raceid", "total" => Sum("points"))
+    totals = Dict(row[:raceid] => row[:total] for row in totals_q.list())
+    @test length(totals) == 5
+
+    q = M.Result.objects
+    q.filter("raceid__@lte" => 5)
+    q.values("raceid", "prev" => Lag(Sum("points"), over=WindowOver(order_by=["raceid"])))
+    q.order_by("raceid")
+    rows = q.list()
+
+    @test [row[:raceid] for row in rows] == sort(collect(keys(totals)))
+    @test ismissing(rows[1][:prev])
+    @test all(i -> rows[i][:prev] == totals[rows[i - 1][:raceid]], 2:length(rows))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

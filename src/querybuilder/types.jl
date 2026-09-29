@@ -1681,6 +1681,40 @@ _is_window_expr(f::FObject) = _is_window_expr(f.column) || any(_is_window_expr, 
 _is_window_expr(values::Vector) = any(_is_window_expr, values)
 _is_window_expr(::Any) = false
 
+# #776 — does the statement AGGREGATE because of this node? Django's `contains_aggregate`.
+#
+# Not `_is_agg`, which answers whether the node IS an aggregate and is `false` for a window by design:
+# the HAVING routing (#692, #701) and #685's window-alias refusal read it, and a filter on
+# `"prev" => Lag(Sum(…))` must still be refused as a window, never routed to HAVING. `_holds_agg` is
+# not it either — it sets the flag a wrapper STORES, so looking through a window there would make
+# `Coalesce(Lag(Sum(…)), Value(0))` an aggregate alias by the same route.
+#
+# But a window over an aggregate — `LAG(SUM(…)) OVER (…)`, `RANK() OVER (PARTITION BY SUM(…) …)` —
+# makes the statement aggregate all the same, so the plain columns beside it need GROUP BY. Asking
+# only `_is_agg` left the flag unset, no GROUP BY printed, and SQLite collapsed the whole filter into
+# one row with an arbitrary bare column. So the GROUP BY decision in `get_select_query` asks this: the
+# node's own flag, or an aggregate anywhere inside a window's argument or spec, through the wrappers a
+# window can sit in (`F` arithmetic, a function's argument, a `Case` branch). `order_by` is walked
+# although `WindowOver` refuses a function there, because an exported `WindowSpec` is assembled
+# without that check. A subquery is never entered: its aggregates belong to the inner statement.
+# Depth cap as in `_holds_agg`.
+function _contains_agg(x, depth::Int = 0)::Bool
+  depth > 32 && return false
+  _is_agg(x) && return true
+  x isa AbstractVector && return any(v -> _contains_agg(v, depth + 1), x)
+  x isa WindowFunction && return _contains_agg(x.column, depth + 1) ||
+                                 _contains_agg(x.over.partition_by, depth + 1) ||
+                                 _contains_agg(x.over.order_by, depth + 1)
+  x isa FObject && return _contains_agg(x.column, depth + 1) ||
+                          any(v -> _contains_agg(v, depth + 1), values(x.kwargs))
+  x isa FExpression && return _contains_agg(x.field_name, depth + 1) || _contains_agg(x.operand, depth + 1)
+  x isa Union{SQLField,SQLOrder} && return _contains_agg(x.field, depth + 1)
+  x isa OperObject && return _contains_agg(x.column, depth + 1) || _contains_agg(x.values, depth + 1)
+  x isa QObject && return _contains_agg(x.filters, depth + 1)
+  x isa QorObject && return _contains_agg(x.or, depth + 1)
+  return false
+end
+
 function Base.:+(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
   return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", aggregate=_is_agg(operand))
 end

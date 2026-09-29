@@ -479,6 +479,44 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
   return nothing
 end
 
+# #789 — the columns a window READS join GROUP BY. Django's `Window.get_group_by_cols`.
+#
+# An aggregating statement must group every column it reads outside an aggregate, and a window's
+# `PARTITION BY` / `ORDER BY` reads columns without projecting them. #776 made `Lag(Sum(…))` set the
+# aggregate flag, so its projected neighbours were grouped, but a column named only inside `OVER (…)`
+# was not: PostgreSQL raised `GroupingError`, and SQLite collapsed the statement onto one arbitrary
+# row per group, silently. The same held for a plain `Rank()` beside a `Sum(…)`. This is the implicit
+# grouping `get_order_query` already applies to a query-level ORDER BY term outside the projection
+# (the `push!(instruc.group, …)` above), extended to the window's own ORDER BY and PARTITION BY.
+#
+# Runs after `get_order_query`, so the group set it deduplicates against is complete, and before
+# `_check_grouped_correlation`, which reads the final set. `instruc.aggregate` is final by then (its
+# only writer is `get_select_query`). The terms were recorded by `_build_over_clause` as they
+# rendered, so each keeps that render's text and values: on a positional backend the values are
+# needed a second time under `:group`, exactly as #587's are, and a second render would bind them twice.
+#
+# A term is left out when grouping it again would change nothing, and only when that is provable:
+#   - placeholder-free text already grouped — a projected column (`GROUP BY 1`), or an ORDER BY term.
+#     Text alone cannot decide it for a binding term: `F("points") + 1` and `+ 2` render the same `?`.
+#   - an exact repeat, text and values, of a term this pass already grouped.
+# A missed duplicate is legal and merely noisy; a wrong one would drop a grouping.
+function _group_window_terms!(instruc::SQLInstruction)
+  instruc.aggregate || return nothing
+  isempty(instruc.window_group_terms) && return nothing
+  grouped_text = Set(_grouped_expressions(instruc))
+  seen = Set{Tuple{String,Vector{Any}}}()
+  for term in instruc.window_group_terms
+    sql, params = term
+    term in seen && continue
+    push!(seen, term)
+    binds = occursin('?', sql) || occursin(r"\$\d", sql)
+    (!binds && sql in grouped_text) && continue
+    push!(instruc.group, sql)
+    copy_parameters_to!(instruc, :group, params)
+  end
+  return nothing
+end
+
 function _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc::SQLInstruction)
   if instruc.connection isa PormGSQLite && raw_value isa Union{Number,Bool}
     return raw_value
@@ -601,6 +639,11 @@ _resolved_agg(node, instruc::SQLInstruction)::Bool =
   _is_agg(node) || _reads_alias(_is_agg, node, instruc)
 _resolved_window(node, instruc::SQLInstruction)::Bool =
   _is_window_expr(node) || _reads_alias(_is_window_expr, node, instruc)
+# #789: the same question for a window's OVER term, which `_build_over_clause` asks before grouping
+# it. `partition_by = [Case([When("total__@gte" => 100, …)])]` over `"total" => Sum(…)` renders
+# `CASE WHEN SUM(…)`, and an aggregate in GROUP BY is an error on both engines.
+_resolved_contains_agg(node, instruc::SQLInstruction)::Bool =
+  _contains_agg(node) || _reads_alias(_contains_agg, node, instruc)
 
 # The left-hand side a HAVING/alias predicate renders against (#595).
 #
@@ -1874,6 +1917,7 @@ function build(object::SQLObject;
   set_contexts && set_context!(instruct, :order)
   get_order_query(object, instruct)
   set_contexts && set_context!(instruct, :where)
+  _group_window_terms!(instruct)   # #789: after ORDER BY, which also extends GROUP BY
 
   # PATH loop — materialize `cjoin` joins that traversal did not already discover. This ensures
   # cjoin filters are applied even in UPDATE/DELETE without explicit field paths. `row_path` is the

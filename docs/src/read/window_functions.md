@@ -814,7 +814,7 @@ Supported operators: `+`, `-`, `*`, `/`
 
 ## Mixing with Aggregates
 
-Window functions and aggregate functions can coexist in the same `values()` call. PormG correctly includes plain fields in `GROUP BY` while keeping window function aliases out of it.
+Window functions and aggregate functions can coexist in the same `values()` call. PormG includes plain fields in `GROUP BY` while keeping window function aliases out of it. It also groups the columns a window's `partition_by` and `order_by` read; here both are already projected, so the clause stays `GROUP BY 1, 2, 3`.
 
 ```julia
 using PormG.Functions: Count, Rank, WindowOver
@@ -935,6 +935,26 @@ is still grouped by `raceid__year`, one row per season. The same applies to an a
 `partition_by`, as in `Rank(over=WindowOver(partition_by=[Sum("points")], …))`. Filtering on
 `prev_season` is refused like any other window alias; see
 [Filtering on a Window Result](#Filtering-on-a-Window-Result).
+
+A column the window reads is grouped even when it is not projected. Drop `raceid__year` from
+`values(...)` and the `.order_by(...)`, and the `OVER (ORDER BY …)` column still joins `GROUP BY`,
+the same way an `order_by` term outside the projection does. The query returns the same eleven
+seasons:
+
+```julia
+query = M.Result.objects.filter("driverid__forename" => "Ayrton", "driverid__surname" => "Senna").values(
+    "season_pts"  => Sum("points"),
+    "prev_season" => Lag(Sum("points"), over=WindowOver(order_by=["raceid__year"]))
+)
+```
+
+```sql
+GROUP BY "Tb_1"."year"
+```
+
+The rows no longer say which season each one is, so project the column when you need to tell them
+apart. A `partition_by` column is grouped the same way. An aggregate in `partition_by` is not
+grouped, because it is computed per group.
 
 ---
 

@@ -529,6 +529,80 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# A column a window reads only inside OVER (…) is grouped too (#789)
+# #776 grouped the projected columns; a column named only in the window's ORDER BY / PARTITION BY was
+# not, so PostgreSQL raised `GroupingError` and SQLite returned one arbitrary row per group. No
+# query-level `order_by` here on purpose: an ORDER BY term is grouped anyway, and would hide the bug.
+# `raceid` is not projected, so each result is compared as a multiset against independent totals.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "A column read only inside OVER (…) is grouped (#789)" begin
+    totals_q = M.Result.objects
+    totals_q.filter("raceid__@lte" => 5)
+    totals_q.values("driverid", "raceid", "total" => Sum("points"))
+    per_pair = totals_q.list()
+    race_totals = Dict{Any,Float64}()
+    for row in per_pair
+        race_totals[row[:raceid]] = get(race_totals, row[:raceid], 0.0) + row[:total]
+    end
+    @test length(race_totals) == 5
+
+    # Each race's total, beside the one before it: one row per race, the first with no predecessor.
+    q = M.Result.objects
+    q.filter("raceid__@lte" => 5)
+    q.values("prev" => Lag(Sum("points"), over=WindowOver(order_by=["raceid"])))
+    rows = q.list()
+    @test length(rows) == 5
+    @test count(row -> ismissing(row[:prev]), rows) == 1
+    ordered = [race_totals[r] for r in sort(collect(keys(race_totals)))]
+    @test sort([row[:prev] for row in rows if !ismissing(row[:prev])]) ≈ sort(ordered[1:end-1])
+
+    # Per driver, each race's total beside that driver's previous race: one row per (driver, race).
+    q = M.Result.objects
+    q.filter("raceid__@lte" => 5)
+    q.values("driverid", "prev" => Lag(Sum("points"), over=WindowOver(partition_by=["driverid"], order_by=["raceid"])))
+    rows = q.list()
+    @test length(rows) == length(per_pair)
+    by_driver = Dict{Any,Vector{Tuple{Any,Float64}}}()
+    for row in per_pair
+        push!(get!(by_driver, row[:driverid], Tuple{Any,Float64}[]), (row[:raceid], row[:total]))
+    end
+    for (driver, races) in by_driver
+        expected = [total for (_, total) in sort(races)][1:end-1]
+        got = [row[:prev] for row in rows if row[:driverid] == driver]
+        @test count(ismissing, got) == 1
+        @test sort(collect(skipmissing(got))) ≈ sort(expected)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LAG binds its offset before a binding OVER term (found beside #789)
+# `LAG(col, ?) OVER (PARTITION BY <quarter label>)` prints the offset first, but it used to bind
+# last, so SQLite read the label's first operand as the offset. Each race's round is checked against
+# the previous race's round in the same quarter, computed here from the dates.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "LAG over a binding PARTITION BY term binds in text order" begin
+    races_q = M.Race.objects
+    races_q.filter("year" => 1991)
+    races_q.values("raceid", "round", "date")
+    races = sort(races_q.list(), by = row -> row[:raceid])
+    quarter(d) = (Dates.year(d), cld(Dates.month(d), 3))
+    expected = Dict{Any,Any}()
+    last_round = Dict{Any,Any}()
+    for row in races
+        key = quarter(row[:date])
+        expected[row[:raceid]] = get(last_round, key, missing)
+        last_round[key] = row[:round]
+    end
+
+    q = M.Race.objects
+    q.filter("year" => 1991)
+    q.values("raceid", "prev" => Lag("round", over=WindowOver(partition_by=["date__@yyyy_q"], order_by=["raceid"])))
+    rows = q.list()
+    @test length(rows) == length(races)
+    @test all(row -> isequal(row[:prev], expected[row[:raceid]]), rows)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Window Functions: ORDER BY accepts a window alias on a plain standings query
 # This mirrors the docs example and checks the user-visible effect directly:
 # rows are ordered first by driver and then by the computed per-race rank.

@@ -367,6 +367,10 @@ const CorrelatedRef = NamedTuple{(:label, :ref, :column, :expr),NTuple{4,String}
   _where::Vector{String} = []  # values to be used in where query
   aggregate::Bool = false
   group::Vector{String} = []  # values to be used in group query
+  # #789: every non-aggregate `PARTITION BY` / `ORDER BY` term a window's OVER clause rendered, with
+  # the values it bound, in render order. `_group_window_terms!` adds them to `group` once the
+  # statement is known to aggregate; rendering them a second time there would bind them twice.
+  window_group_terms::Vector{Tuple{String,Vector{Any}}} = Tuple{String,Vector{Any}}[]
   having::Vector{String} = [] # values to be used in having query
   order::Vector{String} = [] # values to be used in order query  
   # df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query

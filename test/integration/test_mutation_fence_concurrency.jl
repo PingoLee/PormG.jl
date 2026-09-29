@@ -301,30 +301,84 @@ _MF_RUNS && @testset "Mutation fence under concurrent UPDATE (#765)" begin
             _mf_cleanup_chain!()
         end
 
-        # ── #770's documented LIMIT: the lock pins the parent's OWN row, not a table its filter reads ──
+        # ── #771: a root filter across a relation — the table it reads is locked too ──────────────
         # The root filter crosses into `circuit`. T1 renames the circuit and also holds the race's
-        # result row, so T2's lock on the race succeeds (T1 holds no race lock) and T2 then waits on the
-        # result. After T1 commits, the result's re-check reuses the joined race row and deletes it;
-        # the race's own fenced DELETE re-reads `circuit`, no longer matches, and the race survives
-        # without its result. Measured on db_2 while #770 was reviewed. `@test_broken` so that closing
-        # the gap (#771) surfaces here as an unexpected pass instead of passing silently.
-        @testset "cascade order: a joined root filter is not pinned (#770 limit)" begin
+        # result row. T2's lock on the race succeeds (T1 holds no race lock). Before #771, T2 then
+        # waited on the result: after T1 committed, the result's re-check reused the joined race row
+        # and deleted it, and the race's own fenced DELETE re-read `circuit`, no longer matched, and
+        # survived without its result (measured on db_2 while #770 was reviewed). Now T2 waits on its
+        # `FOR SHARE` lock of the circuit instead, and every statement after it reads the renamed
+        # circuit: nothing matches, nothing is deleted.
+        #
+        # The needle matches both waits — the #771 lock's inner join and the pre-#771 result DELETE's
+        # nested one — so the unfixed code fails on the row counts below, not on `blocked`.
+        @testset "cascade order: a joined root filter is pinned (#771)" begin
             _mf_seed_chain!()
 
-            blocked, (_, per_table) = _mf_race(
+            blocked, (total, per_table) = _mf_race(
                 () -> begin
                     M.Circuit.objects.filter("circuitid" => _MF_CIRCUIT_A).update("name" => "Fence Circuit renamed")
                     M.Result.objects.filter("resultid" => _MF_RACE_KID).update("positiontext" => "held")
                 end,
                 () -> _mf_quiet(() -> M.Race.objects.
                     filter("raceid" => _MF_RACE, "circuitid__name" => "Fence Circuit fence_a").delete()),
-                "DELETE FROM \"result\"")
+                "JOIN \"circuit\"")
 
             @test blocked
+            @test total == 0
             @test get(per_table, "race", 0) == 0
+            @test get(per_table, "result", 0) == 0
             @test M.Race.objects.filter("raceid" => _MF_RACE).count() == 1
-            @test_broken M.Result.objects.filter("resultid" => _MF_RACE_KID).count() == 1
+            @test M.Result.objects.filter("resultid" => _MF_RACE_KID).count() == 1
             _mf_cleanup_chain!()
+        end
+    finally
+        _mf_cleanup!()
+    end
+end
+
+# ── #771 without a race: the related-row locks are valid PostgreSQL and change no outcome ──────────
+# The race above proves the hop locks pin; this proves they RUN, on the two shapes a mock connection
+# cannot vouch for: a two-hop root (result → race → circuit) that cascades, and a null test across a
+# LEFT JOIN. The rows written must be exactly the ones a lock-free delete writes. PostgreSQL only
+# (SQLite takes no lock), but no second thread is needed, so it is gated apart from the race.
+const _MF_IS_PG = PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
+
+_MF_IS_PG && @testset "joined-root locks execute on PostgreSQL (#771)" begin
+    try
+        _mf_cleanup!()
+        _mf_seed_chain!()
+        M.Just_a_test_deletion.objects.create("id" => _MF_ROW, "name" => "fence-lock-probe", "test_result" => _MF_RACE_KID)
+        two_hops() = M.Result.objects.filter("resultid" => _MF_RACE_KID, "raceid__circuitid__name" => "Fence Circuit fence_a")
+
+        @testset "two hops: the root's own lock, then one FOR SHARE per hop, in chain order" begin
+            steps = two_hops().delete(show_query = :dict)
+            locks = [s for s in steps if s[:operation] == :lock]
+            @test [s[:model] for s in locks] == ["result", "race", "circuit"]
+            @test all(occursin("FOR SHARE", s[:sql_text]) for s in locks[2:3])
+
+            total, per_table = two_hops().delete()
+            @test total == 2
+            @test per_table == Dict("result" => 1, "just_a_test_deletion" => 1)
+            @test M.Race.objects.filter("raceid" => _MF_RACE).count() == 1
+            @test M.Circuit.objects.filter("circuitid" => _MF_CIRCUIT_A).count() == 1
+        end
+
+        # `test_result` is a NULLABLE key, so this hop is a LEFT JOIN — the side PostgreSQL refuses to
+        # lock directly — and the row has no result at all, so the lock's IN set is the null-extended
+        # {NULL}: it must run, lock nothing, and leave the anti-join matching the row.
+        @testset "a null test across a LEFT JOIN" begin
+            M.Just_a_test_deletion.objects.create("id" => _MF_ROW, "name" => "fence-left-join")
+            M.Just_a_nested_roll_back.objects.create("test" => _MF_ROW, "description" => "fence-left-join-child")
+            left_join() = M.Just_a_test_deletion.objects.
+                filter("id" => _MF_ROW, "test_result__positiontext__@isnull" => true)
+
+            locks = [s for s in left_join().delete(show_query = :dict) if s[:operation] == :lock]
+            @test [s[:model] for s in locks] == ["just_a_test_deletion", "result"]
+            @test occursin("LEFT JOIN \"result\"", locks[2][:sql_text])
+
+            total, per_table = left_join().delete()
+            @test per_table == Dict("just_a_test_deletion" => 1, "just_a_nested_roll_back" => 1)
         end
     finally
         _mf_cleanup!()

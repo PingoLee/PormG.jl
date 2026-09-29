@@ -2053,16 +2053,36 @@ function _target_pk_selection(instruction::SQLInstruction)::Union{Nothing,String
   connection = instruction.connection
   safe_alias = quote_identifier(instruction.alias, connection)
   quoted_pk = safe_column_identifier(Models.model_column(model, String(pk_field_sym)), connection)  # db_column (#50)
+  return _key_selection(instruction, safe_alias, safe_alias, quoted_pk)
+end
 
+# `<outer_alias>.<column> IN (SELECT DISTINCT <source_alias>.<column> FROM <target> as <alias> <joins>
+# WHERE <conjuncts>)`: the query's row set, projected onto one column of one of its aliases. Every
+# argument arrives quoted. The joins print verbatim, so the row set is exactly the one the read builder
+# rendered, LEFT JOINs included.
+function _key_selection(instruction::SQLInstruction, outer_alias::String, source_alias::String, column::String)::String
+  connection = instruction.connection
   io = IOBuffer()
-  print(io, safe_alias, ".", quoted_pk, " IN (SELECT DISTINCT ", safe_alias, ".", quoted_pk)
-  print(io, "\n  FROM ", safe_table_identifier(Models.model_table_name(model), connection), " as ", safe_alias)
+  print(io, outer_alias, ".", column, " IN (SELECT DISTINCT ", source_alias, ".", column)
+  print(io, "\n  FROM ", safe_table_identifier(Models.model_table_name(instruction.object.model), connection),
+    " as ", quote_identifier(instruction.alias, connection))
   for j in instruction.join
     print(io, "\n  ", j)
   end
   isempty(instruction._where) || print(io, "\n  WHERE ", join(instruction._where, " AND "))
   print(io, ")")
   return String(take!(io))
+end
+
+# The rows of one joined table that a joined query reads, as a predicate on `outer_alias`, an alias
+# of that same table: `<outer_alias>.<key_b> IN (SELECT DISTINCT <alias_b>.<key_b> …)`. It is keyed on
+# the hop's own join column, so it names every row the join can pair with, whichever side is the
+# "one": the referenced pk on a forward hop, and every child on a reverse or many-to-many hop. The
+# deletion collector locks these rows so a joined root filter cannot change mid-cascade (#771).
+function _joined_key_selection(instruction::SQLInstruction, row::ModelJoin, outer_alias::String)::String
+  connection = instruction.connection
+  return _key_selection(instruction, outer_alias, quote_identifier(row.alias_b, connection),
+    safe_column_identifier(row.key_b, connection))   # key_b is physical on a ModelJoin (#394)
 end
 
 # The row predicate of one arm the deletion collector splices into a shared statement: the fence

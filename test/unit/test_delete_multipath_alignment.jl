@@ -165,8 +165,11 @@ end
         # recursion; dmp_a is the single-key root. All four must hold.
         @test count(s -> s[:operation] != :lock, steps) == 4
         # #770: on PostgreSQL the two parents (dmp_a, then dmp_b) are locked first, through the same
-        # multi-arm predicates — so the marker loop below covers the lock statements too.
-        @test [s[:model] for s in steps if s[:operation] == :lock] == (kind === :postgres ? ["dmp_a", "dmp_b"] : String[])
+        # multi-arm predicates — so the marker loop below covers the lock statements too. #771: the
+        # joined root also locks the table its cjoin reads (dmp_root) right after its own lock, and
+        # that statement binds the ON and the WHERE sentinel, so the loop covers it as well.
+        pg_locks = label == "plain root filter" ? ["dmp_a", "dmp_b"] : ["dmp_a", "dmp_root", "dmp_b"]
+        @test [s[:model] for s in steps if s[:operation] == :lock] == (kind === :postgres ? pg_locks : String[])
         for step in steps
           assert_marker_count(step, kind)
         end

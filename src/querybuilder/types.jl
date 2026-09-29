@@ -232,6 +232,10 @@ Base.@kwdef struct ModelJoin <: JoinRow
   how::String                    # "INNER" / "LEFT" — interpolated raw into ` <how> JOIN `
   to_many::Bool = false
   on_conditions::Vector{FilterType} = FilterType[]
+  # False when `b` belongs to an UNMANAGED model (`managed = false`): a view, or a table another system
+  # owns. The deletion collector's #771 hop lock skips such a row, because `FOR SHARE` fails on an
+  # aggregating or materialized view and needs UPDATE privilege a read-only role may lack.
+  target_managed::Bool = true
 end
 
 # A keyed `.with(name => sub, join_field = main => cte)` hop. `key_b` is the CTE's PROJECTION
@@ -318,7 +322,8 @@ function _with_config(row::ModelJoin, join_type_override::Union{String,Nothing},
   on_conditions = (join_filters === nothing || isempty(join_filters)) ? row.on_conditions : join_filters
   return ModelJoin(a = row.a, alias_a = row.alias_a, key_a = row.key_a,
                    b = row.b, alias_b = row.alias_b, key_b = row.key_b,
-                   how = how, to_many = row.to_many, on_conditions = on_conditions)
+                   how = how, to_many = row.to_many, on_conditions = on_conditions,
+                   target_managed = row.target_managed)
 end
 _with_config(row::Union{CteJoin,CrossJoin}, ::Nothing, ::Nothing) = row
 

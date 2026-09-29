@@ -13,7 +13,7 @@ import PormG.ConnectionPool: fetch
 # recording mock `fetch` like test_sequence_sync.jl.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Mirrors esus_back's dash_dim_cbo — the concrete use case from issue #123 —
+# Mirrors a consuming app's dash_dim_cbo — the concrete use case from issue #123 —
 # with a db_column-mapped field to prove the clause renders physical names.
 ConflictCbo = Model("dash_dim_cbo",
   id = IDField(),

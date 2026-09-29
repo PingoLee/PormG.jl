@@ -10,8 +10,8 @@
   `0.5.x` pre-publish wave.
 
 **Measured before adopting these**: `cjoin_on`, `.cjoin(`, `.on(` and `CTE(` have **zero** call
-sites across `esus_back`, `PortalsusBack`, `LinkS`, `LinkSUS` and `work_server` (re-measured on
-the current remotes). The one `.with(` in `esus_back` names its CTE `tab_ind`, which is not a table.
+sites across the five consuming-app checkouts (re-measured on the current remotes). The one
+`.with(` among them names its CTE `tab_ind`, which is not a table.
 
 ### What changed
 

@@ -11,7 +11,7 @@
   silently wrong rows. Part of the `0.5.x` pre-publish wave.
 
 **Measured before adopting these**: `cjoin_on`, `.cjoin(`, `.on(` and `.with(` have **zero** call
-sites across `esus_back`, `PortalsusBack`, `LinkS`, `LinkSUS` and `work_server`.
+sites across the five consuming-app checkouts.
 
 ### What changed
 

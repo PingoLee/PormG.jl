@@ -279,11 +279,11 @@ using PormG
 
 PormG.Configuration.set_before_connect_hook() do key, settings
     folder = basename(settings.db_def_folder)
-    folder == "db_esus" && return ensure_vpn_connection()
+    folder == "db_legacy" && return ensure_vpn_connection()
     return true
 end
 
-PormG.Configuration.load_many(["db", "db_esus"]; env="dev")
+PormG.Configuration.load_many(["db", "db_legacy"]; env="dev")
 ```
 
 The callback receives `(key::String, settings::Settings)` and must return `true` to allow the physical connection or `false` to abort.

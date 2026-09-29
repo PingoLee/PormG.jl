@@ -664,6 +664,119 @@ end
   end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# #789: an aggregating statement groups the columns a window's OVER (…) reads
+# #776 grouped the projected columns beside `Lag(Sum(…))`, but a column named only inside `OVER (…)`
+# stayed ungrouped: PostgreSQL raised `GroupingError`, SQLite returned one arbitrary row per group.
+# Every non-aggregate PARTITION BY / ORDER BY term now joins GROUP BY (Django's
+# `Window.get_group_by_cols`), once, and never when it is already grouped.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#789: the columns a window reads join GROUP BY" begin
+  lag_sum = (; partition_by = String[]) ->
+    Lag(Sum("points"), over = WindowOver(partition_by = partition_by, order_by = ["raceid"]))
+  group_clause(q) = match(r"GROUP BY (.*?)\s*(ORDER BY.*)?$"s, inspect_query(q)[:sql_text])
+  grouped(q) = (m = group_clause(q); m === nothing ? nothing : strip(m.captures[1]))
+  for (backend, Model_) in _WINDOW_685_MODELS
+    @testset "$backend — the OVER column is the only column read" begin
+      # The issue's shape 1: nothing projected but the window, so GROUP BY is the OVER column alone.
+      q = Model_.objects
+      q.filter("raceid__@lte" => 5)
+      q.values("prev" => lag_sum())
+      @test grouped(q) == "\"Tb\".\"raceid\""
+    end
+
+    @testset "$backend — a projected column that is not the OVER column" begin
+      # Shape 2: the projection is grouped by position, the OVER column beside it by expression.
+      q = Model_.objects
+      q.values("constructorid", "prev" => lag_sum())
+      @test grouped(q) == "1, \"Tb\".\"raceid\""
+    end
+
+    @testset "$backend — a PARTITION BY column" begin
+      q = Model_.objects
+      q.values("raceid", "prev" => lag_sum(partition_by = ["constructorid"]))
+      @test grouped(q) == "1, \"Tb\".\"constructorid\""
+    end
+
+    @testset "$backend — a plain window beside an aggregate" begin
+      # Not a window over an aggregate at all: `Sum` makes the statement aggregate, and `Rank`'s
+      # ORDER BY column was ungrouped for the same reason.
+      q = Model_.objects
+      q.values("constructorid", "total" => Sum("points"), "rk" => Rank(over = WindowOver(order_by = ["raceid"])))
+      @test grouped(q) == "1, \"Tb\".\"raceid\""
+    end
+
+    @testset "$backend — an aggregate PARTITION BY term is not grouped" begin
+      q = Model_.objects
+      q.values("rk" => Rank(over = WindowOver(partition_by = [Sum("points")], order_by = ["raceid"])))
+      @test grouped(q) == "\"Tb\".\"raceid\""
+    end
+
+    @testset "$backend — a PARTITION BY term that reads an aggregate alias is not grouped" begin
+      # The condition holds only the name "total", but renders `SUM(…)`: it must be resolved (#722)
+      # before it is grouped, since an aggregate in GROUP BY is an error on both engines.
+      q = Model_.objects
+      q.values("constructorid", "total" => Sum("points"),
+               "rk" => Rank(over = WindowOver(partition_by = [Case([When("total__@gte" => 100, then = 1)], default = 0)],
+                                               order_by = ["constructorid"])))
+      @test grouped(q) == "1"
+    end
+
+    @testset "$backend — a term already grouped is not repeated" begin
+      # Projected OVER columns: the *Mixing with Aggregates* docs shape keeps its clause.
+      q = Model_.objects
+      q.values("constructorid", "points", "c" => Count("resultid"),
+               "rk" => Rank(over = WindowOver(partition_by = ["constructorid"], order_by = ["-points"])))
+      @test grouped(q) == "1, 2"
+      # Two windows that read the same column group it once.
+      q = Model_.objects
+      q.values("prev" => lag_sum(), "rk" => Rank(over = WindowOver(order_by = ["-raceid"])))
+      @test grouped(q) == "\"Tb\".\"raceid\""
+      # A query-level ORDER BY term, which `get_order_query` groups first, is not grouped twice.
+      q = Model_.objects
+      q.values("prev" => lag_sum())
+      q.order_by("raceid")
+      @test grouped(q) == "\"Tb\".\"raceid\""
+    end
+
+  end
+
+  # A binding OVER term is printed a second time under GROUP BY, so on SQLite its nine label values
+  # are bound a second time too — under `:group`, after WHERE's, where the clause prints (#587).
+  @testset "SQLite — a binding PARTITION BY term is bound under GROUP BY too" begin
+    q = Window776SlRace.objects
+    q.filter("raceid__@lte" => 5)
+    q.values("prev" => lag_sum(partition_by = ["date__@yyyy_q"]))
+    inspection = inspect_query(q)
+    label_ops = Any["-Q", 3, 1, 6, 2, 9, 3, 12, 4]
+    @test count("?", inspection[:sql_text]) == length(inspection[:parameters])
+    @test inspection[:parameter_buckets][:group] == label_ops
+    # LAG's offset, the label inside OVER, WHERE's bound, then the label again under GROUP BY.
+    @test inspection[:parameters] == vcat(Any[1], label_ops, Any[5], label_ops)
+  end
+
+  # Without an aggregate no GROUP BY prints, so nothing may be bound for one: a copy under `:group`
+  # would leave SQLite with more values than markers.
+  @testset "SQLite — a statement that does not aggregate binds the OVER term once" begin
+    q = Window776SlRace.objects
+    q.values("raceid", "prev" => Lag("points", over = WindowOver(partition_by = ["date__@yyyy_q"], order_by = ["raceid"])))
+    inspection = inspect_query(q)
+    @test isempty(inspection[:parameter_buckets][:group])
+    @test count("?", inspection[:sql_text]) == length(inspection[:parameters])
+  end
+
+  # PostgreSQL binds once and prints the same `$N` twice, so GROUP BY carries the OVER term verbatim.
+  @testset "PostgreSQL — a binding PARTITION BY term reuses its own numbering" begin
+    q = Window789PgRace.objects
+    q.values("prev" => lag_sum(partition_by = ["date__@yyyy_q"]))
+    inspection = inspect_query(q)
+    sql = inspection[:sql_text]
+    partition = match(r"PARTITION BY (.*) ORDER BY \"Tb\"\.\"raceid\" ASC\)"s, sql).captures[1]
+    # The partition term verbatim, then the window's own ORDER BY column.
+    @test grouped(q) == strip(partition) * ", \"Tb\".\"raceid\""
+  end
+end
+
 # A CTE joins back through the model registry, which the standalone `Model(...)` fixtures above
 # never enter — so the CTE route gets its own `set_models` module, one config key per backend.
 PormG.config["window_685_pg"] = PormG.Configuration.Settings(connections = WindowMockPostgres(), change_data = true,

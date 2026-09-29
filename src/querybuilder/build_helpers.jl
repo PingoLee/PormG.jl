@@ -1072,12 +1072,16 @@ end
 _normalize_window_orientation(orientation::AbstractString)::String =
   _normalize_order_orientation(orientation; context="Window ORDER BY")
 
-function _resolve_window_order(v::String, instruc::SQLInstruction)::String
+# Each `_resolve_window_order` method answers `(expression, term)`: the term is what OVER prints, and
+# the bare expression — no direction, no NULLS placement — is what `_build_over_clause` records for
+# GROUP BY (#789), where a direction is a syntax error.
+function _resolve_window_order(v::String, instruc::SQLInstruction)::Tuple{String,String}
   isempty(v) && throw(QueryBuildError("Window ORDER BY fields cannot be empty"))
   orientation = startswith(v, "-") ? "DESC" : "ASC"
   field = startswith(v, "-") ? v[2:end] : v
   isempty(field) && throw(QueryBuildError("Window ORDER BY fields cannot be empty"))
-  return string(_resolve_window_expression(field, instruc), " ", orientation)
+  expr = string(_resolve_window_expression(field, instruc))
+  return (expr, string(expr, " ", orientation))
 end
 
 # #509 — an EXPLICIT `nulls` placement is honoured here; before this the window path read
@@ -1095,36 +1099,59 @@ end
 # `_order_term_sql` is the same renderer the top-level clause uses, so the SQLite < 3.30 emulation
 # (`(expr IS NULL) DESC, expr ASC`, legal inside `OVER (...)` too) and its placeholder guard come
 # along for free instead of being restated.
-function _resolve_window_order(v::SQLTypeOrder, instruc::SQLInstruction)::String
-  expr = _resolve_window_expression(v.field, instruc)
+function _resolve_window_order(v::SQLTypeOrder, instruc::SQLInstruction)::Tuple{String,String}
+  expr = string(_resolve_window_expression(v.field, instruc))
   orientation = _normalize_window_orientation(v.orientation)
-  v.nulls === nothing && return string(expr, " ", orientation)
-  return _order_term_sql(expr, orientation, _nulls_placement(orientation, v.nulls), instruc.connection)
+  v.nulls === nothing && return (expr, string(expr, " ", orientation))
+  return (expr, _order_term_sql(expr, orientation, _nulls_placement(orientation, v.nulls), instruc.connection))
 end
 # #444 — a window's ORDER BY is the SECOND place where `desc = true` is meaningful (the fluent
 # `order_by(...)` is the first), so it consumes the flag here instead of letting `_cte_join_path`
 # refuse it. Rendering goes through the same `_get_select_query` every other CTE reference uses,
 # which is what keeps the emitted OVER (...) clause identical to the pre-#444 `"-<cte>__col"` string.
-function _resolve_window_order(v::CTEReference, instruc::SQLInstruction)::String
+function _resolve_window_order(v::CTEReference, instruc::SQLInstruction)::Tuple{String,String}
   orientation = v.desc ? "DESC" : "ASC"
-  return string(_get_select_query(CTEReference(name=v.name, path=v.path), instruc), " ", orientation)
+  expr = string(_get_select_query(CTEReference(name=v.name, path=v.path), instruc))
+  return (expr, string(expr, " ", orientation))
 end
 # #481 — the joined-copy twin: consume `desc` here, then render through the same resolver.
-function _resolve_window_order(v::JoinedReference, instruc::SQLInstruction)::String
+function _resolve_window_order(v::JoinedReference, instruc::SQLInstruction)::Tuple{String,String}
   orientation = v.desc ? "DESC" : "ASC"
-  return string(_get_select_query(JoinedReference(v.alias, v.path, false), instruc), " ", orientation)
+  expr = string(_get_select_query(JoinedReference(v.alias, v.path, false), instruc))
+  return (expr, string(expr, " ", orientation))
 end
 
 function _build_over_clause(over::WindowSpec, instruc::SQLInstruction)::String
   parts = String[]
 
+  # #789: each term is also recorded, with the values it bound, for `_group_window_terms!` — an
+  # aggregating statement must group every column a window reads, and the OVER clause is the one
+  # place that reads a column without projecting it. Recorded here, where the term renders, so the
+  # GROUP BY copy reuses this render's SQL and values rather than resolving the path a second time.
+  # A term that holds an aggregate is not recorded: it is computed per group, never grouped by
+  # (Django's `Aggregate.get_group_by_cols` is empty for the same reason). Asked of the RESOLVED
+  # term (`_resolved_contains_agg`), because a condition reading an aggregate alias renders the
+  # aggregate while its own node carries only the name (#722).
   if !isempty(over.partition_by)
-    partition_sql = [_resolve_window_expression(field, instruc) for field in over.partition_by]
+    partition_sql = String[]
+    for field in over.partition_by
+      mark = parameter_mark(instruc)
+      expr = string(_resolve_window_expression(field, instruc))
+      _resolved_contains_agg(field, instruc) || push!(instruc.window_group_terms, (expr, bound_since(mark)))
+      push!(partition_sql, expr)
+    end
     push!(parts, "PARTITION BY " * join(partition_sql, ", "))
   end
 
   if !isempty(over.order_by)
-    order_sql = [_resolve_window_order(order_field, instruc) for order_field in over.order_by]
+    order_sql = String[]
+    for order_field in over.order_by
+      mark = parameter_mark(instruc)
+      expr, term = _resolve_window_order(order_field, instruc)
+      order_node = order_field isa SQLTypeOrder ? order_field.field : order_field
+      _resolved_contains_agg(order_node, instruc) || push!(instruc.window_group_terms, (expr, bound_since(mark)))
+      push!(order_sql, term)
+    end
     push!(parts, "ORDER BY " * join(order_sql, ", "))
   end
 

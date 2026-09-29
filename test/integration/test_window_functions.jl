@@ -529,6 +529,34 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# LAG binds its offset before a binding OVER term (found beside #789)
+# `LAG(col, ?) OVER (PARTITION BY <quarter label>)` prints the offset first, but it used to bind
+# last, so SQLite read the label's first operand as the offset. Each race's round is checked against
+# the previous race's round in the same quarter, computed here from the dates.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "LAG over a binding PARTITION BY term binds in text order" begin
+    races_q = M.Race.objects
+    races_q.filter("year" => 1991)
+    races_q.values("raceid", "round", "date")
+    races = sort(races_q.list(), by = row -> row[:raceid])
+    quarter(d) = (Dates.year(d), cld(Dates.month(d), 3))
+    expected = Dict{Any,Any}()
+    last_round = Dict{Any,Any}()
+    for row in races
+        key = quarter(row[:date])
+        expected[row[:raceid]] = get(last_round, key, missing)
+        last_round[key] = row[:round]
+    end
+
+    q = M.Race.objects
+    q.filter("year" => 1991)
+    q.values("raceid", "prev" => Lag("round", over=WindowOver(partition_by=["date__@yyyy_q"], order_by=["raceid"])))
+    rows = q.list()
+    @test length(rows) == length(races)
+    @test all(row -> isequal(row[:prev], expected[row[:raceid]]), rows)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Window Functions: ORDER BY accepts a window alias on a plain standings query
 # This mirrors the docs example and checks the user-visible effect directly:
 # rows are ordered first by driver and then by the computed per-race rank.

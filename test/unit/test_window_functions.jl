@@ -46,6 +46,8 @@ WindowSlResult.connect_key = "window_sl"
 # #776's binding ORDER BY term needs a date column, which the result fixtures do not carry.
 Window776SlRace = Model("window_races", raceid = IDField(), points = FloatField(), date = DateField())
 Window776SlRace.connect_key = "window_sl"
+Window789PgRace = Model("window_races", raceid = IDField(), points = FloatField(), date = DateField())
+Window789PgRace.connect_key = "window_pg"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Window Functions: RANK renders a partitioned OVER clause without GROUP BY
@@ -282,6 +284,38 @@ end
   @test contains(sql, "LEAD(\"Tb\".\"milliseconds\",")
   @test contains(sql, "OVER (ORDER BY \"Tb\".\"resultid\" ASC)")
   @test !contains(sql, "GROUP BY")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Window Functions: a window binds its own arguments before a binding OVER term
+# `LAG(col, ?, ?) OVER (PARTITION BY <label>)` prints the offset and default first, but the OVER
+# clause used to render (and so bind) first. A `date__@yyyy_q` partition binds nine values, so on
+# SQLite every value shifted by one and the offset read the label's "-Q". A binding column
+# (`FirstValue(F("points") * 3)`) was shifted the same way. Found beside #789.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "A window binds its own arguments before a binding OVER term" begin
+  label_ops = Any["-Q", 3, 1, 6, 2, 9, 3, 12, 4]
+  by_quarter = () -> WindowOver(partition_by = ["date__@yyyy_q"], order_by = ["raceid"])
+  for (label, window, own) in (
+      ("Lag, default offset", () -> Lag("points", over = by_quarter()), Any[1]),
+      ("Lead, offset and default", () -> PormG.QueryBuilder.Lead("points", offset = 2, default = 0, over = by_quarter()), Any[2, 0]),
+      ("FirstValue, binding column", () -> PormG.QueryBuilder.FirstValue(PormG.QueryBuilder.F("points") * 3, over = by_quarter()), Any[3]),
+    )
+    @testset "SQLite — $label" begin
+      q = Window776SlRace.objects
+      q.values("raceid", "prev" => window())
+      inspection = inspect_query(q)
+      # Text order is: the function's own arguments, then the nine label operands inside OVER.
+      @test inspection[:parameters] == vcat(own, label_ops)
+    end
+    @testset "PostgreSQL — $label" begin
+      q = Window789PgRace.objects
+      q.values("raceid", "prev" => window())
+      sql = inspect_query(q)[:sql_text]
+      # `$N` numbers in render order, so the label's first operand comes right after the function's own.
+      @test occursin(r"PARTITION BY CONCAT\([^$]*\$" * string(length(own) + 1) * r"::text", sql)
+    end
+  end
 end
 
 @testset "FirstValue renders FIRST_VALUE(col) OVER" begin

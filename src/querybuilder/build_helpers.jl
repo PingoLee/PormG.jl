@@ -1150,14 +1150,20 @@ function _resolve_window_kwarg(value, instruc::SQLInstruction; sql_type::Union{N
   end
 end
 
+# The OVER clause renders LAST, after the column and the keyword arguments: that is where it prints
+# (`LAG(col, ?, ?) OVER (…)`), and a positional backend binds in render order. Rendering it first
+# filed a binding OVER term's values (a `date__@yyyy_q` partition binds nine) ahead of the
+# function's own: `Lag`/`Lead`'s offset, which every one binds, and any binding column
+# (`FirstValue(F("points") * 3)`). SQLite shifted each value by one position and read the label's
+# `"-Q"` as the offset. Found beside #789, whose GROUP BY copy of that term exposed it.
+# A no-op on PostgreSQL apart from the `$N` numbering, which travels with the text.
 function _get_select_query(v::WindowFunction, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
-  over_sql = _build_over_clause(v.over, instruc)
   func_name = Symbol(v.function_name)
 
   if v.column === nothing
     v.function_name in ["LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE"] &&
       throw(QueryBuildError("$(v.function_name) requires a column argument; got nothing"))
-    return getfield(Dialect, func_name)(over_sql, instruc.connection)
+    return getfield(Dialect, func_name)(_build_over_clause(v.over, instruc), instruc.connection)
   end
 
   resolved_column = _resolve_window_expression(v.column, instruc)
@@ -1170,14 +1176,15 @@ function _get_select_query(v::WindowFunction, instruc::SQLInstruction; _as::Unio
     if haskey(v.kwargs, "default")
       resolved_kwargs["default"] = _resolve_window_kwarg(v.kwargs["default"], instruc)
     end
+    over_sql = _build_over_clause(v.over, instruc)
     return getfield(Dialect, func_name)(resolved_column, over_sql, resolved_kwargs, instruc.connection)
   elseif v.function_name == "NTH_VALUE"
     n = get(v.kwargs, "n", nothing)
     n isa Integer || throw(QueryBuildError("NthValue requires a positive integer n"))
     n <= 0 && throw(QueryBuildError("NthValue n must be a positive integer"))
-    return getfield(Dialect, func_name)(resolved_column, n, over_sql, instruc.connection)
+    return getfield(Dialect, func_name)(resolved_column, n, _build_over_clause(v.over, instruc), instruc.connection)
   else
-    return getfield(Dialect, func_name)(resolved_column, over_sql, instruc.connection)
+    return getfield(Dialect, func_name)(resolved_column, _build_over_clause(v.over, instruc), instruc.connection)
   end
 end
 # #74: extract the single source table alias from a fully-resolved bare column reference like

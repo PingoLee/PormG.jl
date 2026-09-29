@@ -23,11 +23,13 @@ YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 
 [weakdeps]
 LibPQ = "194296ae-ab2e-5f79-8cd4-7183a0a5a0d1"
+Postgres = "8f23287e-300e-4f50-bc2b-9f1dfe95da84"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
 SQLite = "0aa819cd-b072-5ff4-a722-6bc24af294d9"
 
 [extensions]
 PormGLibPQExt = "LibPQ"
+PormGPostgresExt = "Postgres"
 PormGReviseExt = "Revise"
 PormGSQLiteExt = "SQLite"
 
@@ -46,7 +48,8 @@ JSON = "1"
 LibPQ = "1"
 Logging = "1"
 OrderedCollections = "1, 2"
-PrecompileTools = "1"
+Postgres = "2.2.2"
+PrecompileTools = "1.2"
 Printf = "1"
 ProfileView = "1.10.3"
 Random = "1"
@@ -70,6 +73,7 @@ FlameGraphs = "08572546-2f56-4bcf-ba4e-bab62c3a3f89"
 Infiltrator = "5903a43b-9cc3-4c30-8d17-598619ec4e9b"
 InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 LibPQ = "194296ae-ab2e-5f79-8cd4-7183a0a5a0d1"
+Postgres = "8f23287e-300e-4f50-bc2b-9f1dfe95da84"
 ProfileView = "c46f51b8-102a-5cf2-8d2c-8597cb0e0da7"
 SQLite = "0aa819cd-b072-5ff4-a722-6bc24af294d9"
 SafeTestsets = "1bc83da4-3b8d-516f-aca4-4fe02f6d838f"
@@ -78,4 +82,4 @@ SnoopCompileCore = "e2b509da-e806-4183-be48-004708413034"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Aqua", "BenchmarkTools", "Infiltrator", "InteractiveUtils", "LibPQ", "SQLite", "SafeTestsets", "Test"]
+test = ["Aqua", "BenchmarkTools", "Infiltrator", "InteractiveUtils", "LibPQ", "Postgres", "SQLite", "SafeTestsets", "Test"]

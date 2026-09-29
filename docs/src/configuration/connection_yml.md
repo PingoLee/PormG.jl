@@ -112,6 +112,7 @@ These are the keys PormG reads **directly under an environment block** — the p
 | `passfile`, `connect_timeout`, `client_encoding` | PostgreSQL | Forwarded into the libpq DSN. |
 | `sslmode`, `sslrootcert`, `sslcert`, `sslkey` | PostgreSQL | TLS settings, forwarded into the libpq DSN. |
 | `extensions` | PostgreSQL | List of extensions to require — see [PostgreSQL Extensions](#PostgreSQL-Extensions). Ignored with a warning on SQLite. |
+| `postgres_driver` | PostgreSQL | The driver that opens the connections: `LibPQ` (the default) or `Postgres` (**experimental**). Case-insensitive. Unset, the `PORMG_POSTGRES_DRIVER` environment variable decides, then LibPQ. See [Choosing the PostgreSQL driver](#Choosing-the-PostgreSQL-driver). Ignored with a warning on SQLite. |
 | `sqlite_split_read_write` | SQLite | Split the pool into read and write connections. |
 | `pool_size`, `pool_timeout`, `idle_timeout`, `max_lifetime`, `leak_detection_threshold`, `fail_fast_on_connect` | both | Connection-pool tuning — documented in [Advanced Configuration](advanced.md). |
 | `options` | both | Legacy nesting for `sqlite_split_read_write` only. Prefer setting that key directly on the block. |
@@ -120,6 +121,29 @@ These are the keys PormG reads **directly under an environment block** — the p
 The PostgreSQL-only keys are inert under `adapter: SQLite`, so a block may carry both sets without harm. `hostaddr`, `port`, `password`, `passfile`, `connect_timeout`, `client_encoding` and the four `ssl*` keys reach libpq under exactly the names written here; `username` and `database` are translated to libpq's `user=` and `dbname=` for you.
 
 Every forwarded value is single-quoted and escaped for libpq, so write it exactly as it is: a password such as `corr3ct horse 'battery'`, or a certificate path such as `C:\certs\root ca.crt`, needs no quoting of its own beyond what YAML requires. YAML's own typing still applies first, so quote any value YAML would read as a number or a boolean — `password: 007` reaches libpq as `7`, and `password: '007'` as `007`. A value containing a NUL character cannot be sent to PostgreSQL at all and is rejected when the connection is built. (Only `url:` is passed through untouched, so a value inside it follows libpq's own quoting rules.)
+
+## Choosing the PostgreSQL driver
+
+PostgreSQL pools use [LibPQ.jl](https://github.com/iamed2/LibPQ.jl) unless told otherwise. [Postgres.jl](https://github.com/JuliaDatabases/Postgres.jl), a pure-Julia driver with no libpq underneath, is available as an **experimental** alternative:
+
+```yaml
+dev:
+  adapter: PostgreSQL
+  database: f1
+  host: 127.0.0.1
+  username: my_user
+  password: my_password
+  postgres_driver: Postgres
+```
+
+Load the driver package as you would LibPQ — `using PormG, Postgres` — so its extension loads. `register_connection(...; postgres_driver = "Postgres")` does the same for a dynamic connection, and `PORMG_POSTGRES_DRIVER=Postgres` switches every PostgreSQL pool that does not name a driver, which is how the test suite runs through it.
+
+PormG opens Postgres.jl sessions the way LibPQ.jl opens its own — `DateStyle=ISO,YMD` and `TimeZone=UTC` — and decodes results to the same types (`Decimals.Decimal`, `ZonedDateTime` in UTC, `DateTime`). Server notices go to `@debug` rather than the log. Known gaps while it is experimental:
+
+- **Migrations that send several statements in one string fail**, for example an `alter_field` that changes a column's type and nullability together. Postgres.jl runs every statement over the extended protocol; see [JuliaDatabases/Postgres.jl#23](https://github.com/JuliaDatabases/Postgres.jl/issues/23).
+- `passfile`, `hostaddr`, `service`, multiple hosts and Unix-socket hosts are not supported, nor is a `client_encoding` other than UTF-8 or a `target_session_attrs` other than `any`; `reconnect=true` in a connection string is refused (the pool renews connections itself).
+- `fetch_copy` reports the number of CSV records it sent rather than the server's `COPY n` count. That is exact for PormG's own `bulk_copy`, but can differ for a hand-written `COPY` with `HEADER true`, `FORMAT text` or `binary`, or a custom `QUOTE`.
+- `interval` values cast to text render in PostgreSQL's default style rather than ISO 8601.
 
 ## Configuration Settings (`config:`)
 

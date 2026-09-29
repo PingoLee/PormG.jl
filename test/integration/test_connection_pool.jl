@@ -56,7 +56,8 @@ end
 @testset "direct-handoff wait under contention (#124)" begin
     cfg = PormG.config[PORMG_DB_FOLDER].connections
     pool = cfg isa PormG.PormGPostgres ?
-        PormG.ConnectionPool.PostgresConnectionPool(cfg.connection_string; pool_size = 2) :
+        # the fixture pool's driver too (#788), or a run through Postgres.jl would test LibPQ here
+        PormG.ConnectionPool.PostgresConnectionPool(cfg.connection_string; pool_size = 2, driver = PormG.postgres_driver(cfg)) :
         PormG.ConnectionPool.SQLiteConnectionPool(cfg.connection_string; pool_size = 2)
     try
         N = 40                                  # ≫ ceiling (20) → guaranteed parking + handoff
@@ -103,7 +104,7 @@ end
 if PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
     @testset "pool detects a backend the server killed (#442)" begin
         cfg = PormG.config[PORMG_DB_FOLDER].connections
-        pool = PormG.ConnectionPool.PostgresConnectionPool(cfg.connection_string; pool_size = 1)
+        pool = PormG.ConnectionPool.PostgresConnectionPool(cfg.connection_string; pool_size = 1, driver = PormG.postgres_driver(cfg))
         try
             # pool_size 1 → every fetch uses slot 1, so no pinning is needed to know which
             # connection answered (a pinned `conn` is released by await_result's finally, which
@@ -194,7 +195,17 @@ if PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
                 pool = _settings_650(Dict{String,Any}("passfile" => passfile))
                 try
                     @test occursin("passfile='$passfile'", pool.connection_string)
-                    @test _select_one(pool) == 1
+                    if PormG.postgres_driver(pool) === :postgres
+                        # Postgres.jl does not support `passfile` — a documented gap of the
+                        # experimental driver (#788). The pool refuses it at once and names the
+                        # parameter, never the password.
+                        err = try; _select_one(pool); nothing; catch e; e; end
+                        @test err isa PormG.ConnectionPool.PoolConnectError
+                        @test occursin("`passfile`", sprint(showerror, err))
+                        @test !occursin(string(src["password"]), sprint(showerror, err))
+                    else
+                        @test _select_one(pool) == 1
+                    end
                 finally
                     try; PormG.ConnectionPool.close_pool!(pool); catch; end
                 end

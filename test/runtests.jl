@@ -18,6 +18,9 @@ end
 if !haskey(ENV, "PORMG_ENV")
     ENV["PORMG_ENV"] = "test"
 end
+# The unit suite pins its own PostgreSQL driver. A `PORMG_POSTGRES_DRIVER` exported in the shell to run
+# the integration suite through Postgres.jl (#788) would otherwise change every pool built here.
+delete!(ENV, "PORMG_POSTGRES_DRIVER")
 
 # Set only by CI's `floor-resolve` job (#574), which runs this suite against a machine-rewritten
 # Project.toml. It gates exactly one Aqua check — see the comment at the Aqua testset below.
@@ -33,13 +36,13 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
             # ...with ONE environment excepted (#574). CI's `floor-resolve` job runs against a
             # `Project.toml` that `julia-downgrade-compat` has REWRITTEN: to let `Pkg.test` run
             # from a locked manifest it promotes the `[targets].test` names into `[deps]` and
-            # deletes them from `[weakdeps]` — LibPQ, SQLite, Aqua, BenchmarkTools, Infiltrator
-            # and SafeTestsets. `[extensions]` still names LibPQ and SQLite as extension triggers,
+            # deletes them from `[weakdeps]` — LibPQ, Postgres, SQLite, Aqua, BenchmarkTools, Infiltrator
+            # and SafeTestsets. `[extensions]` still names LibPQ, Postgres and SQLite as extension triggers,
             # so the file that job tests against is a shape that exists nowhere else.
             #
             # Exactly TWO of Aqua's eight checks read that file, and both therefore judge the
             # rewrite rather than PormG. They are the two disabled here, for the one shared reason:
-            #   * stale_deps       — six `[deps]` entries `src/` never imports, and LibPQ/SQLite
+            #   * stale_deps       — seven `[deps]` entries `src/` never imports, and the drivers
             #                        are no longer in `[weakdeps]` for Aqua to subtract.
             #   * persistent_tasks — it builds a wrapper package that must resolve from
             #                        `Project.toml` ALONE (its own docstring says this cannot work
@@ -167,6 +170,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Pool Exhaustion Typed Error (#37)" include("unit/test_connection_pool_timeout.jl")
     @testset "Connect-Failure Fast-Fail Typed Error (#72)" include("unit/test_connection_pool_connect_error.jl")
     @testset "PostgreSQL Driver Is a Property of the Pool (#785)" include("unit/test_postgres_driver_seam.jl")
+    @testset "Postgres.jl Driver Extension (#788)" include("unit/test_postgres_ext.jl")
     @testset "close_pool! Skips Non-pool Mocks (#147)" include("unit/test_close_pool_mock_skip.jl")
     @testset "close_pool! Drains Leases, Closes Outside the Lock (#47)" include("unit/test_close_pool_drain.jl")
     @testset "Discard Never Double-Closes a Taken-Out Handle (#585)" include("unit/test_discard_not_found_close.jl")

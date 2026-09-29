@@ -56,6 +56,10 @@ Pkg.add("LibPQ")     # PostgreSQL backend
 Pkg.add("SQLite")    # SQLite backend
 ```
 
+PostgreSQL can also run on the pure-Julia [Postgres.jl](https://github.com/JuliaDatabases/Postgres.jl) driver, as an
+**experimental** opt-in: install `Postgres`, load it with `using PormG, Postgres`, and set
+`postgres_driver: Postgres` — see [Choosing the PostgreSQL driver](configuration/connection_yml.md#Choosing-the-PostgreSQL-driver).
+
 Load the driver alongside PormG (`using PormG, LibPQ` or `using PormG, SQLite`). A bare
 `using PormG` loads the ORM but no backend, so the first query raises a clear error telling you
 which driver to load:

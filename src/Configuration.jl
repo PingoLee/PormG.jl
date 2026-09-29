@@ -12,6 +12,7 @@ import PormG: Generator
 import PormG: @pormg_debug
 # Backend generics — driver bodies live in the weakdep extensions (no direct LibPQ/SQLite here).
 import PormG: backend_num_rows, backend_is_alive
+import PormG: _PG_DRIVER_PACKAGES  # the PostgreSQL drivers a pool can be built for (#785, #788)
 
 using Base.ScopedValues: ScopedValue, with
 
@@ -577,6 +578,30 @@ function _config_bool(settings::PormGSettings, key::String, default::Bool)::Bool
   return lowercase(strip(string(v))) in ("1", "true", "yes", "on")
 end
 
+# The environment variable that picks the PostgreSQL driver when no configuration names one (#788).
+# It is what runs the integration suite through a second driver without editing connection.yml, and it
+# lets a deployment switch drivers the same way `PORMG_ENV` switches environments.
+const POSTGRES_DRIVER_ENV = "PORMG_POSTGRES_DRIVER"
+
+# The PostgreSQL driver to build a pool for (#788): `raw` — the `postgres_driver:` key or the
+# `register_connection` kwarg — when set, else `ENV[POSTGRES_DRIVER_ENV]`, else LibPQ. A value is the
+# package's name, matched case-insensitively against `_PG_DRIVER_PACKAGES`, so the accepted spellings
+# and the drivers a pool can hold are one list. `source` names where a bad value came from.
+function _resolve_postgres_driver(raw; source::AbstractString)::Symbol
+  if _is_unset(raw)
+    raw = get(ENV, POSTGRES_DRIVER_ENV, nothing)
+    _is_unset(raw) && return :libpq
+    source = "environment variable $(POSTGRES_DRIVER_ENV)"
+  end
+  wanted = lowercase(strip(string(raw)))
+  for (driver, package) in pairs(_PG_DRIVER_PACKAGES)
+    lowercase(package) == wanted && return driver
+  end
+  throw(InvalidConfigurationError(
+    "$(source): `postgres_driver` must be one of $(join(values(_PG_DRIVER_PACKAGES), " or ")) " *
+    "(case-insensitive); got $(repr(string(raw)))"))
+end
+
 # Enforce the pool_timeout policy: `<= 0` ("never wait") is a cross-framework footgun, so fall back to
 # DEFAULT_POOL_TIMEOUT and warn once. Shared by both entry points — `_build_connection_pool!` (YAML) and
 # `register_connection` (kwarg) — so the guard and its message live in one place (#126, #179).
@@ -698,9 +723,12 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
       dns_str = join(dns, " ")
     end
 
+    driver = _resolve_postgres_driver(get(settings.db_config_settings, "postgres_driver", nothing);
+                                      source = "connection.yml")
+
     # Use parent module reference to avoid circular dependency during module loading
     CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-    settings.connections = CP.PostgresConnectionPool(dns_str; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
+    settings.connections = CP.PostgresConnectionPool(dns_str; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver)
 
   else
     adapter = settings.db_config_settings["adapter"]
@@ -881,7 +909,7 @@ const VALID_CONNECTION_KEYS = (
   "pool_size", "pool_timeout", "idle_timeout", "max_lifetime",
   "leak_detection_threshold", "fail_fast_on_connect",
   # Backend behaviour
-  "sqlite_split_read_write", "extensions",
+  "sqlite_split_read_write", "extensions", "postgres_driver",
   # Nested blocks
   "options", "config",
 )
@@ -1078,6 +1106,10 @@ function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{
     # (#348), and the existing `extensions`-on-SQLite warning sets the precedent.
     if adapter == "SQLite" && !_is_unset(get(env_block, "url", nothing))
       @warn "connection.yml: `url:` is ignored on SQLite; set the file path in `database:` instead" key="url" env=settings.app_env
+    end
+    # Same class of silent loss (#788): only a PostgreSQL pool has a driver to choose.
+    if adapter == "SQLite" && !_is_unset(get(env_block, "postgres_driver", nothing))
+      @warn "connection.yml: `postgres_driver:` is ignored on SQLite; it picks the driver of a PostgreSQL pool" key="postgres_driver" env=settings.app_env
     end
 
     cfg = get(env_block, "config", nothing)
@@ -1320,7 +1352,9 @@ function get_settings(key::String)
           url = get(res, "url", nothing)
           adapter = get(res, "adapter", "PostgreSQL")
           pool_size = get(res, "pool_size", 3)
-          url !== nothing && register_connection(key, url; adapter=adapter, pool_size=pool_size)
+          postgres_driver = get(res, "postgres_driver", nothing)
+          url !== nothing && register_connection(key, url; adapter=adapter, pool_size=pool_size,
+                                                 postgres_driver=postgres_driver)
         end
       end
     catch e
@@ -1337,8 +1371,12 @@ end
 
 Register a new database connection pool dynamically using a connection URL.
 Useful for multi-tenant applications or connecting to dynamic data sources.
+
+`postgres_driver` picks the driver of a PostgreSQL pool, as the `postgres_driver:` key does in
+`connection.yml`: `"LibPQ"` or `"Postgres"` (experimental). Unset, it falls back to the
+`PORMG_POSTGRES_DRIVER` environment variable, then LibPQ.
 """
-function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, leak_detection_threshold::Real = 0, fail_fast_on_connect::Bool = true)
+function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, leak_detection_threshold::Real = 0, fail_fast_on_connect::Bool = true, postgres_driver::Union{Nothing, AbstractString, Symbol} = nothing)
   # SAFETY: Deny using folder paths as dynamic keys to avoid hijacking static configs
   if isdir(key)
     throw(InvalidConfigurationError("Cannot register dynamic connection using key '$(key)'. Folder paths are reserved for static configurations loaded via 'load()'."))
@@ -1377,12 +1415,16 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
     "leak_detection_threshold" => leak_detection_threshold,
     "fail_fast_on_connect" => fail_fast_on_connect
   )
+  postgres_driver === nothing || (settings.db_config_settings["postgres_driver"] = postgres_driver)
 
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
 
   if adapter == "PostgreSQL"
-    settings.connections = CP.PostgresConnectionPool(url; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
+    driver = _resolve_postgres_driver(postgres_driver; source = "register_connection")
+    settings.connections = CP.PostgresConnectionPool(url; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver)
   elseif adapter == "SQLite"
+    _is_unset(postgres_driver) ||
+      @warn "register_connection: `postgres_driver` is ignored on SQLite; it picks the driver of a PostgreSQL pool" key=key
     settings.connections = CP.SQLiteConnectionPool(url; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
   else
     throw(InvalidConfigurationError("Unsupported adapter: $adapter"))

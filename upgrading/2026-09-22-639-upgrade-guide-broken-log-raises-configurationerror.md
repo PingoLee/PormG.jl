@@ -1,6 +1,6 @@
 ## `upgrade_guide` reports a broken change log as `InvalidConfigurationError`, not `ArgumentError` (#639)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-22
 - **PormG ref**: #639; `src/tools.jl` (`_upgrading_dir`, `_upgrading_files`)
 - **Severity**: behavior change — the same failure now raises a different type

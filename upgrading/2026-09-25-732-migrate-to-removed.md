@@ -1,6 +1,6 @@
 ## `Migrations.migrate_to` removed: it always threw, and wrote to the database first (#732)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-25
 - **PormG ref**: #732; `src/migrations/runner.jl`, `src/Migrations.jl` (export)
 - **Severity**: breaking (exported function removed)

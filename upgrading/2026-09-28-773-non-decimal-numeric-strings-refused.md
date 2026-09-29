@@ -1,6 +1,6 @@
 ## Numeric strings — a `0x` / `0b` / `0o` prefix raises instead of being bound as text (#773)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-28
 - **PormG ref**: #773; `src/Models.jl` (`format_number_sql`, `is_base10_number`), `src/querybuilder/sanitization.jl` (`_validate_integer_value`, `_validate_float_value`), `src/querybuilder/build_helpers.jl` (`_json_numeric_rhs`), `src/querybuilder/execution_bulk.jl` (the bulk refusal now carries the reason)
 - **Severity**: behavior change — a string that was accepted and bound as raw text now raises before any SQL

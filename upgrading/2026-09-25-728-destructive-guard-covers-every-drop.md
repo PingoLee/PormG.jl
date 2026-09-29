@@ -1,6 +1,6 @@
 ## `migrate` — the destructive guard covers every `DROP`, a `TRUNCATE`, and a `DELETE` with no `WHERE` (#728)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-25
 - **PormG ref**: #728; `src/migrations/runner.jl` (`_DESTRUCTIVE_PATTERNS`, `_PROPERTY_DROP_CLAUSE`, `is_destructive`)
 - **Severity**: behavior change — a hand-edited plan that used to apply without `destructive = true` can now be refused

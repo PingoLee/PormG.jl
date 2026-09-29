@@ -1,6 +1,6 @@
 ## `delete` — a cascade locks its parents before touching their children on PostgreSQL (#770)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-28
 - **PormG ref**: #770, #771; `src/querybuilder/deletion.jl` (`lock_objects`, `lock_related_objects`, `_models_to_lock`, `run_deletions`)
 - **Severity**: behavior change — on PostgreSQL a cascading `delete()` emits `SELECT … FOR UPDATE` statements before its writes (plus `SELECT … FOR SHARE` on each table a filter across a relation reads), and its `show_query` / `inspect_query` step list gains `:lock` steps; single-table deletes and SQLite are unchanged

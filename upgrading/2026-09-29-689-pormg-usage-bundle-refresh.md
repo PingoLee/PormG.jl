@@ -1,6 +1,6 @@
 ## AI skill bundle restructured — re-run `install_ai_skills()` after bumping, delete the stale files (#253, #689)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-29
 - **PormG ref**: #253 (PR #690), #689; `.github/skills/pormg-usage/`, `src/tools.jl` (`install_ai_skills`)
 - **Severity**: behavior change (tooling only) — no runtime API changed. The file layout of the

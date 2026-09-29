@@ -1,6 +1,6 @@
 ## `values` — a condition naming both a model field and another projection's alias raises `AmbiguousFieldError` (#706)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-24
 - **PormG ref**: #706; `src/querybuilder/build_query.jl` (`_guard_select_condition_collision`)
 - **Severity**: behavior change. A projection list that used to render, with a meaning that

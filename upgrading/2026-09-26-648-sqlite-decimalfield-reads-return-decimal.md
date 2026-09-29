@@ -1,6 +1,6 @@
 ## `list` / `DataFrame` — SQLite reads a `DecimalField` back as a `Decimals.Decimal`, like PostgreSQL (#648)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-26
 - **PormG ref**: #648; `src/value_repr.jl` (`field_canonical_kind`, `value_parser(::CDecimal, ::PormGSQLite)`), `src/Dialect.jl` (`_parse_sqlite_decimal`)
 - **Severity**: behavior change — SQLite only; a column's Julia type changes

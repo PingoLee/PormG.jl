@@ -1,6 +1,6 @@
 ## `makemigrations` — refuses a `DecimalField` wider than 15 digits on SQLite (#648)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-25
 - **PormG ref**: #648; `src/Dialect.jl` (`_refuse_inexact_sqlite_decimal`, `field_to_column(::PormGSQLite)`, `SQLITE_EXACT_DECIMAL_DIGITS`)
 - **Severity**: breaking — SQLite only; a models file that used to plan now raises `BackendCapabilityError`

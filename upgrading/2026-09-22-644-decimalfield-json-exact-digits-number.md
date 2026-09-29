@@ -1,6 +1,6 @@
 ## `list(:json)` emits a `DecimalField` as an exact JSON number (#644)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-22
 - **PormG ref**: #644; `src/querybuilder/execution.jl` (`_json_value`)
 - **Severity**: behavior change — the JSON text for a `DecimalField` column changes

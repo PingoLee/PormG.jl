@@ -85,7 +85,8 @@ PormG at HEAD is running them, and `upgrade_guide` surfaces them by default.
 
 | Train | Cut |
 |---|---|
-| Unreleased — next `0.7.0` | — |
+| Unreleased — next `0.8.0` | — |
+| `0.7.0` | 2026-09-29 |
 | `0.6.0` | 2026-09-18 |
 | `0.5.0` | 2026-09-04 |
 | `0.4.0` | 2026-08-10 |

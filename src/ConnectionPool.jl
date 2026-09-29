@@ -2702,6 +2702,19 @@ function _assert_foreign_keys_suspended(pool::PormGSQLite, conn)
   return nothing
 end
 
+# `without_foreign_keys` must open the outermost transaction on its pool, on both backends — each
+# method says why its own engine needs it. Raised before any connection is touched (#686).
+function _refuse_nested_without_foreign_keys(pool)
+  if in_transaction_context() && get_tx_pool() === pool
+    throw(TransactionError(
+      "without_foreign_keys must be the outermost transaction on this pool — it cannot nest inside \
+       run_in_transaction/atomic. Inside a transaction the foreign keys PormG creates are already \
+       checked at COMMIT, which is usually all the block needs. Otherwise move it outside, or drop \
+       the surrounding transaction."))
+  end
+  return nothing
+end
+
 """
     without_foreign_keys(f::Function, db; check_on_exit::Bool = true) -> result
 
@@ -2710,20 +2723,25 @@ Run `f()` in a transaction with foreign-key enforcement **suspended**, on a sing
 **Try a plain [`atomic`](@ref) first.** Inside a transaction PormG already defers foreign-key checks
 to `COMMIT` on both backends, so a block that is *transiently* inconsistent — writing children before
 their parents — commits without any special handling. Reach for this only when that is not enough:
-a load too large for one transaction, a repair that must leave a violation in place, or a test that
-plants one deliberately.
+a repair that must leave a violation in place, or a test that plants one deliberately.
+
+It is still **one** transaction on both backends: nothing inside `f()` commits until the whole block
+does, so it is no way to split a load too large for a single transaction.
 
 `db` may be a pool, a `PormGSettings`, or a db-key `String`, like [`atomic`](@ref). Every query
 inside `f()` reuses the pinned connection, and a nested [`atomic`](@ref) becomes a `SAVEPOINT`.
 
-**This block must be the outermost transaction on its pool.** It cannot nest inside
-`run_in_transaction`/`atomic` and raises `TransactionError` if you try: suspension works by setting
-`PRAGMA foreign_keys = OFF`, which SQLite silently ignores while a transaction is open, so a nested
-call could not suspend anything.
+**This block must be the outermost transaction on its pool**, on both backends. It cannot nest
+inside `run_in_transaction`/`atomic` and raises `TransactionError` before touching the database if
+you try. On SQLite a nested call could not suspend anything — `PRAGMA foreign_keys = OFF` is
+silently ignored while a transaction is open. On PostgreSQL it would add nothing for the foreign
+keys PormG creates — they are already deferred to `COMMIT` inside a transaction — and its
+`SET CONSTRAINTS ALL DEFERRED` would outlive the block: it persists after the savepoint is released,
+into the rest of the enclosing transaction.
 
-With `check_on_exit = true` (the default) a `PRAGMA foreign_key_check` runs before `COMMIT` and
-rolls the block back if it finds an orphaned row, raising `UnsafeMutationError` — so the escape hatch
-cannot quietly commit a corrupt database.
+With `check_on_exit = true` (the default) SQLite runs a `PRAGMA foreign_key_check` before `COMMIT`
+and rolls the block back if it finds an orphaned row, raising `UnsafeMutationError` — so the escape
+hatch cannot quietly commit a corrupt database.
 
 Note the check is **whole-database, not scoped to what `f()` touched**: on a database that already
 contains orphans, it will abort a block that did nothing wrong. That is deliberate (it is the same
@@ -2736,13 +2754,15 @@ caller (#276).
 
 # Example
 ```julia
-# A load too large to hold in one transaction: commit each chunk, tolerating the inconsistency
-# between them, and let the exit check prove the finished result is sound.
-without_foreign_keys(pool) do
-    for chunk in Iterators.partition(eachrow(results_df), 50_000)
-        bulk_insert(M.Result, DataFrame(chunk))
-    end
-    bulk_insert(M.Race, races_df)
+# Plant an orphan in a SQLite test database, to prove a consistency report finds it.
+# check_on_exit = false because the orphan is the point of the block.
+without_foreign_keys("db"; check_on_exit = false) do
+    M.Result.objects.filter("resultid" => 1).update("raceid" => 999_999)
+end
+
+# Write it as the outermost block — nested, it raises TransactionError on both backends:
+atomic("db") do
+    without_foreign_keys(() -> nothing, "db")   # TransactionError
 end
 
 # For a merely transient inconsistency, a plain transaction is enough — and cheaper, since it does
@@ -2756,7 +2776,10 @@ end
 !!! note "Backend divergence"
     SQLite genuinely suspends enforcement for the block. On PostgreSQL there is no equivalent — this
     issues `SET CONSTRAINTS ALL DEFERRED`, which *defers* checks to `COMMIT` rather than skipping
-    them, so a violation still surfaces, just later. `check_on_exit` is SQLite-only.
+    them. So an orphan left at the end is refused differently: SQLite rolls back with
+    `UnsafeMutationError` when `check_on_exit = true` (and commits it when `false`), while
+    PostgreSQL's `COMMIT` fails with `IntegrityError` whatever `check_on_exit` says — a violation
+    cannot be committed there at all.
 
 See also [`atomic`](@ref), [`run_in_transaction`](@ref).
 """
@@ -2768,12 +2791,7 @@ function without_foreign_keys(f::Function, pool::PormGSQLite; check_on_exit::Boo
   # whose `BEGIN IMMEDIATE` contends with the outer transaction's, and sits there until the busy
   # timeout × retry budget expires (measured: ~11 minutes to `database is locked`, or a
   # `PoolTimeoutError` on a split pool). Refuse immediately instead.
-  if in_transaction_context() && get_tx_pool() === pool
-    throw(TransactionError(
-      "without_foreign_keys must be the outermost transaction on this pool — it cannot nest inside \
-       run_in_transaction/atomic, because PRAGMA foreign_keys is silently ignored while a \
-       transaction is open. Move the block outside, or drop the surrounding transaction."))
-  end
+  _refuse_nested_without_foreign_keys(pool)
   # Lock BEFORE acquiring, matching run_in_transaction (write lock → writer slot). The reverse order
   # deadlocks against it under split_read_write, where there is exactly one writer slot.
   with_sqlite_write_lock(pool) do
@@ -2819,10 +2837,17 @@ function without_foreign_keys(f::Function, pool::PormGSQLite; check_on_exit::Boo
 end
 
 function without_foreign_keys(f::Function, pool::PormGPostgres; check_on_exit::Bool = true)
+  # Outermost-only here too (#686). Nesting used to degrade to a SAVEPOINT and "work", so code green
+  # on PostgreSQL threw on SQLite. For the foreign keys PormG creates it bought nothing: they are
+  # already deferred to COMMIT. Only a DEFERRABLE INITIALLY IMMEDIATE constraint PormG did not create
+  # (an introspected schema) was affected, and the top-level call still covers that. And
+  # SET CONSTRAINTS persists after RELEASE SAVEPOINT (only ROLLBACK TO undoes it), so it changed the
+  # rest of the caller's enclosing transaction, not just this block.
+  _refuse_nested_without_foreign_keys(pool)
   # PostgreSQL has no per-session "skip FK checks". PormG creates its foreign keys
   # DEFERRABLE INITIALLY DEFERRED (Dialect.add_foreign_key), so deferring to COMMIT is the closest
-  # equivalent and is what the docstring promises. `check_on_exit` is meaningless here: COMMIT is
-  # itself the check.
+  # equivalent and is what the docstring promises. `check_on_exit` is accepted so a call stays
+  # portable, but it has no effect: COMMIT is itself the check, and it cannot be skipped.
   run_in_transaction(pool) do
     fetch(pool, "SET CONSTRAINTS ALL DEFERRED;")
     f()

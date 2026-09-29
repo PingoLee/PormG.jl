@@ -443,9 +443,12 @@ the null-field example above).
     normally — the inconsistency only has to be gone by the end. The example above is autocommit, so
     it raises immediately.
 
-    For the rarer case where a violation must actually persist — a repair, or a load too large for
-    one transaction — [`without_foreign_keys`](@ref) suspends enforcement for a block on a single
-    pinned connection and verifies the result with `PRAGMA foreign_key_check` before committing.
+    For the rarer case where a violation must actually persist — a repair, or one planted in a
+    SQLite test — [`without_foreign_keys`](@ref) suspends enforcement for a block on a single pinned
+    connection. It is still one transaction, and it must be the outermost one (`TransactionError`
+    otherwise). On SQLite it checks the result with `PRAGMA foreign_key_check` before committing
+    when `check_on_exit = true`; PostgreSQL only defers the check, so its `COMMIT` still refuses an
+    orphan.
 
 **Generated SQL (PostgreSQL):**
 ```sql

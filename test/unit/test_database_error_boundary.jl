@@ -227,6 +227,26 @@ _raised(f) = try (f(); nothing) catch e; e end
     @test CPB.atomic(pool; durable = true) do; 42; end == 42
   end
 
+  # #686: `without_foreign_keys` must be the outermost transaction on ITS pool — not on every pool.
+  # The same-pool half is the refusal; the other-pool half is what keeps the guard from widening
+  # into "no transaction may be open anywhere", which the upgrade entry promises it does not.
+  @testset "without_foreign_keys is outermost on its own pool only (#686)" begin
+    pool  = _boundary_pool()
+    other = CPB.SQLiteConnectionPool(joinpath(mktempdir(), "other.sqlite"))
+
+    inner_ran = Ref(false)
+    err = _raised(() -> CPB.atomic(pool) do
+      CPB.without_foreign_keys(() -> (inner_ran[] = true), pool)
+    end)
+    @test err isa PormG.TransactionError
+    @test occursin("without_foreign_keys must be the outermost", PormG.error_message(err))
+    @test !inner_ran[]
+
+    @test CPB.atomic(pool) do
+      CPB.without_foreign_keys(() -> 42, other)
+    end == 42
+  end
+
   # ─────────────────────────────────────────────────────────────────────────
   # Rendering.
   # ─────────────────────────────────────────────────────────────────────────

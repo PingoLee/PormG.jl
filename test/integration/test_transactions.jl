@@ -676,3 +676,92 @@ end
     cleanup()
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #686 — `without_foreign_keys` must be the outermost transaction, on BOTH engines. The PostgreSQL
+# method used to nest silently as a SAVEPOINT, so code green on db_2 threw on db_sl. The orphan
+# half pins the divergence that remains, and that the docs describe: SQLite's own exit check raises
+# UnsafeMutationError, PostgreSQL's COMMIT raises IntegrityError. Either way nothing is committed.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "without_foreign_keys must be the outermost transaction (#686)" begin
+  parent_id  = 940_011
+  child_id   = 940_012
+  orphan_id  = 940_013
+  outer_id   = 940_014
+
+  cleanup() = begin
+    for i in (child_id, orphan_id)
+      try; M.Just_a_nested_roll_back.objects.filter("id" => i).delete(); catch; end
+    end
+    for i in (parent_id, outer_id)
+      try; M.Just_a_test_deletion.objects.filter("id" => i).delete(); catch; end
+    end
+  end
+  cleanup()
+
+  try
+    # Nested: refused before the inner block runs, and the error aborts the outer transaction too.
+    inner_ran = Ref(false)
+    err = try
+      PormG.atomic(PORMG_DB_FOLDER) do
+        M.Just_a_test_deletion.objects.create("id" => outer_id, "name" => "outer #686")
+        PormG.without_foreign_keys(PORMG_DB_FOLDER) do
+          inner_ran[] = true
+        end
+      end
+      nothing
+    catch e
+      e
+    end
+    @test err isa PormG.TransactionError
+    @test !inner_ran[]
+    @test !M.Just_a_test_deletion.objects.filter("id" => outer_id).exists()   # outer rolled back
+
+    # Top-level still works: child before parent commits once both exist.
+    PormG.without_foreign_keys(PORMG_DB_FOLDER) do
+      M.Just_a_nested_roll_back.objects.create(
+        "id" => child_id, "test" => parent_id, "description" => "without_foreign_keys #686")
+      M.Just_a_test_deletion.objects.create("id" => parent_id, "name" => "without_foreign_keys #686")
+    end
+    @test M.Just_a_nested_roll_back.objects.filter("id" => child_id).exists()
+    @test M.Just_a_test_deletion.objects.filter("id" => parent_id).exists()
+
+    # An orphan left at the end is refused — by a different error on each engine.
+    err = try
+      PormG.without_foreign_keys(PORMG_DB_FOLDER) do
+        M.Just_a_nested_roll_back.objects.create(
+          "id" => orphan_id, "test" => 949_999, "description" => "orphan #686")
+      end
+      nothing
+    catch e
+      e
+    end
+    if PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGSQLite
+      @test err isa PormG.UnsafeMutationError
+      # The exit check is whole-database: pin the count, so an orphan some other test left behind
+      # cannot pass this assertion in place of ours.
+      @test occursin("left 1 orphaned", PormG.error_message(err))
+    else
+      @test err isa PormG.IntegrityError
+    end
+    @test !M.Just_a_nested_roll_back.objects.filter("id" => orphan_id).exists()   # rolled back
+
+    # PostgreSQL has no way to skip the check: `check_on_exit = false` is accepted and changes
+    # nothing, because COMMIT is the check. (On SQLite it would commit the orphan — not run here.)
+    if !(PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGSQLite)
+      err = try
+        PormG.without_foreign_keys(PORMG_DB_FOLDER; check_on_exit = false) do
+          M.Just_a_nested_roll_back.objects.create(
+            "id" => orphan_id, "test" => 949_999, "description" => "orphan #686")
+        end
+        nothing
+      catch e
+        e
+      end
+      @test err isa PormG.IntegrityError
+      @test !M.Just_a_nested_roll_back.objects.filter("id" => orphan_id).exists()
+    end
+  finally
+    cleanup()
+  end
+end

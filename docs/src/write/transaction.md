@@ -444,10 +444,12 @@ renewed and the statement retried once.
 
 ### Misusing the transaction API
 
-[`TransactionError`](../errors.md) is raised *before* anything is sent, for two call patterns that
+[`TransactionError`](../errors.md) is raised *before* anything is sent, for three call patterns that
 cannot work:
 
 - `atomic(durable = true)` nested inside an already-open transaction — it must be outermost.
+- [`without_foreign_keys`](@ref) nested inside an already-open transaction on the same database —
+  it must be outermost too, on both engines.
 - Touching a model bound to one connection while a transaction is open on another. Open the
   transaction on that model's own connection instead: `run_in_transaction("<its connect_key>")`.
 

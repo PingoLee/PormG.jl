@@ -379,10 +379,11 @@ function _apply_many_to_many_branch(
   return (tb_alias, row_join, foreign_model, last_field)
 end
 
-# #27: validate JSON path key segments fail-closed. A segment is either a non-negative integer
-# (JSON array index) or a safe key (`SAFE_JSON_KEY_PATTERN`). Anything else (spaces, dots, quotes,
-# braces, empty) is rejected, so the validated segments are safe to interpolate into the path
-# literal. Returns the segments unchanged.
+# #27: validate JSON path key segments fail-closed. A segment is either ASCII digits (a JSON array
+# index, by `Dialect._is_json_array_index` — the same test the renderers use, #779) or a safe key
+# (`SAFE_JSON_KEY_PATTERN`). Anything else (spaces, dots, quotes, braces, empty, non-ASCII digits) is
+# rejected, so the validated segments are safe to interpolate into the path literal. Returns the
+# segments unchanged.
 #
 # #394: this checks `SAFE_JSON_KEY_PATTERN`, NOT `SAFE_IDENTIFIER_PATTERN`, even though the two
 # bodies match today. A segment is interpolated UNQUOTED into a path literal inside a single-quoted
@@ -391,10 +392,10 @@ end
 # stops a future relaxation of the SQL-identifier rules from silently widening this one.
 function _validate_json_key_segments(segments::Vector{String})::Vector{String}
   for seg in segments
-    if occursin(r"^\d+$", seg) || occursin(SAFE_JSON_KEY_PATTERN, seg)
+    if Dialect._is_json_array_index(seg) || occursin(SAFE_JSON_KEY_PATTERN, seg)
       continue
     end
-    throw(InvalidValueError("Invalid JSON key segment \e[31m$(seg)\e[0m in a JSON path lookup. Segments must be a non-negative integer (array index) or a simple key (letters, digits, underscore). Keys with spaces, dots, or quotes are not addressable via the `__` path syntax."))
+    throw(InvalidValueError("Invalid JSON key segment \e[31m$(seg)\e[0m in a JSON path lookup. Segments must be ASCII digits (an array index) or a simple key (a letter or underscore, then letters, digits or underscores). Keys with spaces, dots, or quotes are not addressable via the `__` path syntax."))
   end
   return segments
 end

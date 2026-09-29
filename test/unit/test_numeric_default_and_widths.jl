@@ -297,12 +297,14 @@ _raised646(thunk) = try thunk(); nothing catch e; e end
 @testset "width keywords route through _int_kwarg on every String site (#646)" begin
   for (name, kw, slot, ctor) in _STRING_WIDTH_SITES646
     @testset "$name / $kw" begin
-      # Every site keeps the String spellings it took before — still `parse(Int, …)` underneath, so
-      # surrounding whitespace, a sign and a `0x` prefix are accepted exactly as they were.
+      # Every site keeps the base-10 String spellings it took before — surrounding whitespace and a
+      # sign are accepted exactly as they were. A `0x` prefix was accepted here too (pinned as
+      # `=== 8`) until #780 made a width base 10, like #773 made a value; its refusal is pinned in
+      # `test_numeric_prefix_773.jl` with the other declaration sites.
       @test _stored614(ctor, "8", slot) === 8
       @test _stored614(ctor, " 8 ", slot) === 8
       @test _stored614(ctor, "+8", slot) === 8
-      @test _stored614(ctor, "0x8", slot) === 8
+      @test _raised646(() -> ctor("0x8")) isa PormG.FieldValidationError
       @test _stored614(ctor, Int32(8), slot) === 8
 
       # Out of range, on the changed path: a refusal inside the taxonomy on either word size. The

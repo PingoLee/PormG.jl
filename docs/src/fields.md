@@ -382,6 +382,12 @@ prefix (`"0x10"`) raises `InvalidValueError` on a write and `FilterError` in a f
 `int(str)` / `Decimal(str)` refuse it. PormG never converts these strings: pass the number, or its
 base-10 text.
 
+The same rule applies when you declare a field. A string `default=` on a numeric field, such as
+`IntegerField(default = "0")`, and a string width, such as `CharField(max_length = "100")`, must
+also be base 10. `IntegerField(default = "0x10")` and `CharField(max_length = "0x10")` raise
+`FieldValidationError`. A string float default must also be finite, so `FloatField(default = "Inf")`
+raises, just as `FloatField(default = Inf)` does.
+
 ### IntegerField()
 
 **Purpose**: 32-bit signed integers for counts, quantities, and ratings.

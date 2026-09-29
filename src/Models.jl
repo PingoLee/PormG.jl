@@ -3672,14 +3672,22 @@ end
 
 _resolve_model_reference(_module::Module, model_ref::PormGModel)::PormGModel = model_ref
 
+# #782: the binding lookup is only a first guess. A binding that exists but holds no model — inside a
+# models module `position` is `Base.position` — used to be returned unchecked, so the `::PormGModel`
+# return conversion raised a raw `MethodError` outside the `try` and the logical-name match below never
+# ran. The `isa` check makes such a binding fall through exactly like an unbound name, the same guard
+# `_resolve_target_model` applies to an FK target. The catch is narrowed to `UndefVarError` for the
+# same reason as there: a genuine bug surfaces instead of turning into "not defined".
 function _resolve_model_reference(_module::Module, model_ref::String)::PormGModel
-  try
-    return Base.invokelatest(getfield, _module, Symbol(model_ref))
-  catch
-    target_name = format_model_name(model_ref)
-    for model in get_all_models(_module)
-      format_model_name(model.name) == target_name && return model
-    end
+  bound = try
+    Base.invokelatest(getfield, _module, Symbol(model_ref))
+  catch e
+    e isa UndefVarError ? nothing : rethrow()
+  end
+  bound isa PormGModel && return bound
+  target_name = format_model_name(model_ref)
+  for model in get_all_models(_module)
+    format_model_name(model.name) == target_name && return model
   end
   throw(ModelDefinitionError("The model $(model_ref) referenced by a ManyToManyField is not defined"))
 end
@@ -4292,8 +4300,29 @@ end
 # out-of-range `IntegerField(default = big(2)^70)` still reports a type mismatch rather than a
 # magnitude one (#614 kept `validate_default` untouched). The `Migrations` callers above invoke
 # these directly and DO see the message.
+#
+# #780: the two `AbstractString` arms are base 10, on #773's grammar. Julia's `parse` reads `0x`/`0b`/
+# `0o` prefixes and hex floats (`"0x1p4"`), a space after the sign (`"+ 1"`) and, for floats,
+# `"Inf"`/`"NaN"`, so `IntegerField(default = "0x10")` stored 16 while the same string was refused as
+# a VALUE (`format_number_sql`, `sanitization.jl`). A declaration now takes exactly the spellings a
+# value does. The float arm is also where the `isfinite` check in the `Real` arm below was missing:
+# `FloatField(default = Inf)` was refused and `FloatField(default = "Inf")` stored `Inf`.
+# `_base10_or_refuse` names the prefix, matching #773's refusal text — for the callers that see it,
+# the migration readers. On the constructor path `validate_default` relabels it like every other
+# converter throw (the imprecision described above).
+function _base10_or_refuse(x::AbstractString, what::AbstractString)::String
+  s = String(strip(x))
+  has_non_decimal_prefix(s) &&
+    throw(FieldValidationError("the value '$x' uses a non-decimal prefix (0x, 0b or 0o). Write the number in base 10."))
+  is_base10_number(s) || throw(FieldValidationError("the value '$x' is not a base-10 $what"))
+  return s
+end
 function format2int64(x::AbstractString)::Int64
-  return parse(Int64, x |> string)
+  v = tryparse(Int64, _base10_or_refuse(x, "integer"); base = 10)
+  # `nothing` here is a well-formed number that is not an integer (`"12.5"`, `"1e3"`) or one wider
+  # than `Int64`; both were an `ArgumentError`/`OverflowError` from `parse` before, now in the taxonomy.
+  v === nothing && throw(FieldValidationError("the value '$x' is not an integer that fits in Int64"))
+  return v
 end
 # (#632) There is no `format2int64(::Decimals.Decimal)`. Its absence is the fix, so it is named
 # here rather than left as a silence: a `Decimal` now misses both methods, raises a `MethodError`,
@@ -4310,7 +4339,15 @@ end
 
 # convert string to Float64
 function format2float64(x::AbstractString)::Float64
-  return parse(Float64, x |> string)
+  # `tryparse`, not `parse`: an exponent outside `Float64`'s range (`"1e400"`, `"1e-400"`) passes the
+  # grammar and makes `parse` raise a raw `ArgumentError` — it does not return `Inf`. So `nothing`
+  # is the out-of-range case, refused inside the taxonomy like the integer arm (#780). The
+  # `isfinite` check is the `Real` arm's rule, kept so the arm cannot store a non-finite value
+  # whatever the parser does.
+  v = tryparse(Float64, _base10_or_refuse(x, "number"))
+  (v === nothing || !isfinite(v)) &&
+    throw(FieldValidationError("the value '$x' is not a finite number that fits in Float64"))
+  return v
 end
 function format2float64(x::Real)::Float64
   # #614: was the single method `format2float64(x::Union{Int, AbstractString})`. `Int` there was

@@ -636,6 +636,28 @@ const DOCERR_CASES = [
         () -> DOCERR_DRIVER_SL.objects.filter("surname__@iunaccent_contains" => "sena").
             list(show_query = :dict),
     ),
+    # #635 — the regex family refuses on SQLite (the filters page, `postgres.md`'s list and
+    # divergence row, and `errors.md`). One positive and one negated spelling: both arms are
+    # separate Dialect methods, so pinning one would not hold the other.
+    (
+        "read/filters_and_aggregates.md + postgres.md + errors.md — `@regex` / `@iregex` require PostgreSQL",
+        BackendCapabilityError,
+        () -> DOCERR_DRIVER_SL.objects.filter("surname__@iregex" => "^ver").
+            list(show_query = :dict),
+    ),
+    (
+        "postgres.md — `@nregex` / `@niregex` raise on SQLite",
+        BackendCapabilityError,
+        () -> DOCERR_DRIVER_SL.objects.filter("surname__@nregex" => "nen\$").
+            list(show_query = :dict),
+    ),
+    # #635 — the filters page says a Julia `Regex` value is refused with `FilterError`.
+    (
+        "read/filters_and_aggregates.md — a Julia `Regex` value is refused",
+        FilterError,
+        () -> DOCERR_DRIVER_SL.objects.filter("surname__@regex" => r"^Ver").
+            list(show_query = :dict),
+    ),
     (
         "read/filters_and_aggregates.md — JSONB key-existence operators require PostgreSQL",
         BackendCapabilityError,

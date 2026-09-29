@@ -77,11 +77,11 @@ struct _MockSl602 <: PormG.PormGSQLite end
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Dialect text-lookup family: direct dispatch on every renderer
-  # Each of the 20 operators has a PostgreSQL arm, a SQLite arm and an untyped generic sibling. On
-  # PostgreSQL every operator EMITS; on SQLite the four JSONB and the four unaccent operators throw
-  # `BackendCapabilityError` and the other twelve emit. The assertion is exact on both counts: the
-  # `SubString`/`LazyString` spelling must produce the SAME text, or the SAME exception type, as
-  # the `String` spelling — never the generic sibling's wrong-reason refusal.
+  # Each of the 24 operators has a PostgreSQL arm, a SQLite arm and an untyped generic sibling. On
+  # PostgreSQL every operator EMITS; on SQLite the four JSONB, the four unaccent and the four regex
+  # operators throw `BackendCapabilityError` and the other twelve emit. The assertion is exact on
+  # both counts: the `SubString`/`LazyString` spelling must produce the SAME text, or the SAME
+  # exception type, as the `String` spelling — never the generic sibling's wrong-reason refusal.
   # Mutation gate: re-narrow any specialised arm to `::String` and its `SubString` row on
   # PostgreSQL throws `InvalidValueError` (LIKE family) or `BackendCapabilityError` (JSON family)
   # instead of returning text; the SQLite emit rows fail the same way.
@@ -93,11 +93,14 @@ struct _MockSl602 <: PormG.PormGSQLite end
            :ncontains, :nicontains, :niunaccent_contains, :niunaccent_exact,
            # #604 added the negated case-insensitive prefix/suffix twins. They are NOT PG-only: like
            # `nicontains`, they emit on SQLite through the pormg_lower UDF (#78).
-           :nstartswith, :nistartswith, :nendswith, :niendswith]
+           :nstartswith, :nistartswith, :nendswith, :niendswith,
+           # #635: the POSIX regex four — PostgreSQL-only, refused on SQLite like the unaccent four.
+           :regex, :iregex, :nregex, :niregex]
     json_ops = Set([:jcontains, :has_key, :has_any_keys, :has_keys])
     sqlite_pg_only = union(json_ops, Set([:iunaccent_contains, :iunaccent_exact,
-                                          :niunaccent_contains, :niunaccent_exact]))
-    @test length(ops) == 20
+                                          :niunaccent_contains, :niunaccent_exact,
+                                          :regex, :iregex, :nregex, :niregex]))
+    @test length(ops) == 24
 
     col = "\"drivers\".\"surname\""
     for op in ops
@@ -113,7 +116,7 @@ struct _MockSl602 <: PormG.PormGSQLite end
       @test f(_MockPg602(), _sub602(col), "\$1") == pg_base
       @test f(_MockPg602(), col, _sub602("\$1")) == pg_base
 
-      # SQLite: the PG-only eight throw the SAME capability error on every spelling; the rest emit.
+      # SQLite: the PG-only twelve throw the SAME capability error on every spelling; the rest emit.
       if op in sqlite_pg_only
         @test_throws PormG.BackendCapabilityError f(_MockSl602(), col, "?")
         @test_throws PormG.BackendCapabilityError f(_MockSl602(), _sub602(col), _sub602("?"))
@@ -129,7 +132,7 @@ struct _MockSl602 <: PormG.PormGSQLite end
       # The generic sibling is still the guard for a non-string placeholder — on BOTH backends,
       # which is the shape the fix must not lose: a `PormGPostgres` mock is a `PormGAbstractType`.
       # Exact type per family: the four JSONB generics refuse with `BackendCapabilityError`, every
-      # other generic (the unaccent four included) with `InvalidValueError`.
+      # other generic (the unaccent and regex fours included) with `InvalidValueError`.
       generic_err = op in json_ops ? PormG.BackendCapabilityError : PormG.InvalidValueError
       @test_throws generic_err f(_MockPg602(), col, 42)
       @test_throws generic_err f(_MockSl602(), col, 42)

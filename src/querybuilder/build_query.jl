@@ -833,9 +833,9 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the
   # term matched as a wildcard. `_bind_predicate_value` applies that gate — membership in
   # `LIKE_WILDCARD_OPERATORS`, exactly as the WHERE binding arms in `build_helpers.jl` spell
-  # it; the `*_exact` pattern lookups compare with `=` and must NOT be decorated, which is why
-  # that tuple and `PATTERN_LOOKUP_OPERATORS` are deliberately different sets
-  # (`constants.jl`). #654: it also binds a range's two operands, and nothing for `@isnull`.
+  # it; the `*_exact` and regex (#635) pattern lookups take the value verbatim and must NOT be
+  # decorated, which is why that tuple and `PATTERN_LOOKUP_OPERATORS` are deliberately
+  # different sets (`constants.jl`). #654: it also binds a range's two operands, and nothing for `@isnull`.
   placeholder = _bind_predicate_value(instruc, v.operator,
                   _resolve_having_filter_value(having_key, v.values, instruc, v.operator))
   # #618: one ladder, shared with the WHERE path — see `_render_predicate`. It absorbs the #411

@@ -118,9 +118,9 @@ sets in `src/constants.jl` names (#604 — the membership lists used to be spell
 
 That last branch is unreachable on the live path and is a fallback, not a supported case: the only
 caller passes `contains = v.operator in LIKE_WILDCARD_OPERATORS`, and those three sets partition
-`LIKE_WILDCARD_OPERATORS` exactly. So `iunaccent_exact` / `niunaccent_exact` never arrive here at
-all — they are excluded one level up, which is what keeps their `=` / `<>` comparison matching the
-value verbatim.
+`LIKE_WILDCARD_OPERATORS` exactly. So `VERBATIM_PATTERN_OPERATORS` — `iunaccent_exact` /
+`niunaccent_exact` and the regex four (#635) — never arrive here at all: they are excluded one level
+up, which is what keeps their `=` / `<>` / `~` comparison using the value verbatim.
 
 The negated pattern operators (#207) decorate the value identically to their positive twin — only
 the Dialect renderer differs (NOT LIKE vs LIKE), so the wildcard placement is the same. Same for the

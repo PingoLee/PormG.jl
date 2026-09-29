@@ -477,7 +477,7 @@ export PormGsuffix, PormGtransform, PormGTypeField, JSON_CONTAINMENT_OPERATORS
 # by name (`src/QueryBuilder.jl`); `using .Kernel` in `src/PormG.jl` only BINDS them in `PormG`, so
 # they stay off the public `names(PormG)` surface exactly as JSON_CONTAINMENT_OPERATORS does.
 export LIKE_CONTAINS_OPERATORS, LIKE_PREFIX_OPERATORS, LIKE_SUFFIX_OPERATORS,
-       LIKE_WILDCARD_OPERATORS, PATTERN_LOOKUP_OPERATORS
+       LIKE_WILDCARD_OPERATORS, PATTERN_LOOKUP_OPERATORS, VERBATIM_PATTERN_OPERATORS
 
 # Type maps and introspection ignore lists
 export sqlite_type_map_reverse, postgres_type_map_reverse,

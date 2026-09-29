@@ -2490,6 +2490,44 @@ function iunaccent_exact(conn::PormGAbstractType, column::AbstractString, value)
   return nothing
 end
 
+# #635: POSIX regular-expression lookups — PostgreSQL only. `~` is case-sensitive, `~*` folds case;
+# the pattern is the bound placeholder like every renderer here, and it is never LIKE-escaped or
+# `%`-decorated (they are not LIKE_WILDCARD_OPERATORS members), because both would change the
+# pattern. Why SQLite refuses rather than registering a UDF the way `pormg_lower` is (#78): a
+# Julia-side function would evaluate the pattern as PCRE while PostgreSQL evaluates POSIX ARE, and
+# the two dialects disagree on backreferences, lazy quantifiers, lookaround and some classes — so
+# one filter would silently return different rows per engine. A capability error cannot.
+# Indexing: an anchored, case-sensitive `~ '^…'` can use a `text_pattern_ops` / C-locale btree just
+# as `LIKE 'x%'` can; unanchored patterns and `~*` are evaluated row by row (`pg_trgm` GIN helps).
+_regex_capability_error(op::AbstractString) =
+  BackendCapabilityError("The $(op) lookup requires PostgreSQL: SQLite has no built-in regular " *
+                         "expressions, and PormG does not emulate them because the pattern " *
+                         "dialect would differ from PostgreSQL's POSIX syntax")
+
+function regex(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "$(column) ~ $(value)"
+end
+function regex(conn::PormGSQLite, column::AbstractString, value::AbstractString)
+  throw(_regex_capability_error("regex"))
+  return nothing
+end
+function regex(conn::PormGAbstractType, column::AbstractString, value)
+  throw(InvalidValueError("The value must be a String"))
+  return nothing
+end
+
+function iregex(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "$(column) ~* $(value)"
+end
+function iregex(conn::PormGSQLite, column::AbstractString, value::AbstractString)
+  throw(_regex_capability_error("iregex"))
+  return nothing
+end
+function iregex(conn::PormGAbstractType, column::AbstractString, value)
+  throw(InvalidValueError("The value must be a String"))
+  return nothing
+end
+
 function startswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
@@ -2587,6 +2625,32 @@ function niunaccent_exact(conn::PormGSQLite, column::AbstractString, value::Abst
   return nothing
 end
 function niunaccent_exact(conn::PormGAbstractType, column::AbstractString, value)
+  throw(InvalidValueError("The value must be a String"))
+  return nothing
+end
+
+# #635: the negated regex twins — PostgreSQL only, like their positive forms above. A NULL column
+# yields UNKNOWN (row excluded), consistent with every other negated lookup.
+function nregex(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "$(column) !~ $(value)"
+end
+function nregex(conn::PormGSQLite, column::AbstractString, value::AbstractString)
+  throw(_regex_capability_error("nregex"))
+  return nothing
+end
+function nregex(conn::PormGAbstractType, column::AbstractString, value)
+  throw(InvalidValueError("The value must be a String"))
+  return nothing
+end
+
+function niregex(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "$(column) !~* $(value)"
+end
+function niregex(conn::PormGSQLite, column::AbstractString, value::AbstractString)
+  throw(_regex_capability_error("niregex"))
+  return nothing
+end
+function niregex(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end

@@ -306,6 +306,23 @@ const _E = _OperTestEvent
   end
 
   # =========================================================================
+  # 4c'. POSIX regex operators (#635) — PostgreSQL only: ~ / ~* / !~ / !~*
+  # =========================================================================
+  @testset "Regex operators (regex, iregex, nregex, niregex) — #635" begin
+    # The pattern holds `%` and `_` on purpose: they are LIKE metacharacters, so a value that went
+    # through `_apply_like_wildcards` would come back decorated (`%…%`) and escaped (`\%`, `\_`).
+    # A regex binds VERBATIM — anything else changes the pattern — and carries no ESCAPE clause.
+    pattern = "^S(e|a)n.%_"
+    for (op, sqlop) in (("regex", "~"), ("iregex", "~*"), ("nregex", "!~"), ("niregex", "!~*"))
+      r = _D.objects.filter("surname__@$(op)" => pattern).list(show_query=:dict)
+      @test contains(r[:sql_text], "WHERE \"Tb\".\"surname\" $(sqlop) \$1\n")
+      @test !contains(r[:sql_text], "ESCAPE")
+      @test !contains(r[:sql_text], op)            # the lookup name never reaches the SQL
+      @test r[:parameters] == [pattern]
+    end
+  end
+
+  # =========================================================================
   # 4d. Negated range operator (#207): nrange → NOT BETWEEN
   # =========================================================================
   @testset "Negated range operator (nrange → NOT BETWEEN) — #207" begin
@@ -728,12 +745,15 @@ end
     end
   end
 
-  # The two *_exact lookups are in the render list but NOT in the wildcard list, and that asymmetry
-  # is load-bearing: they compare with = / <>, so decorating or escaping their value would change
-  # what they match. Pin the gap so a future "simplification" cannot collapse the two lists.
-  @testset "The *_exact lookups render but take no wildcards" begin
+  # The two *_exact lookups and the four regex lookups (#635) are in the render list but NOT in the
+  # wildcard list, and that asymmetry is load-bearing: the first pair compares with = / <>, the regex
+  # four hand the value to ~ as a pattern, so decorating or escaping it would change what they match.
+  # Pin the gap as a literal — comparing against VERBATIM_PATTERN_OPERATORS would be the constant
+  # agreeing with itself — so a future "simplification" cannot collapse the two lists.
+  @testset "The verbatim pattern lookups render but take no wildcards" begin
     exact_only = setdiff(Set(PormG.PATTERN_LOOKUP_OPERATORS), Set(PormG.LIKE_WILDCARD_OPERATORS))
-    @test exact_only == Set(["iunaccent_exact", "niunaccent_exact"])
+    @test exact_only == Set(["iunaccent_exact", "niunaccent_exact",
+                             "regex", "iregex", "nregex", "niregex"])
     for op in exact_only
       r = _D.objects.filter("forename__@$(op)" => "a%b").list(show_query=:dict)
       @test r[:parameters] == ["a%b"]              # verbatim: no escape, no wildcard
@@ -783,7 +803,7 @@ end
     hint_names = [PormG.PATTERN_LOOKUP_OPERATORS...,
       "exact", "iexact", "in", "gt", "gte", "lt", "lte", "range", "nrange", "date", "isnull",
       "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",
-      "hour", "minute", "second", "regex", "iregex"]
+      "hour", "minute", "second"]
 
     for name in hint_names
       e = try
@@ -810,12 +830,14 @@ end
       end
     end
 
-    # The 11 are named here so the count is visible rather than implied: if one gets wired, this
+    # The 9 are named here so the count is visible rather than implied: if one gets wired, this
     # list is where the change is declared, and the loop above proves the message moved with it.
+    # (#635 wired `regex`/`iregex` — they were 2 of the original 11. They still reach the loop
+    # through PATTERN_LOOKUP_OPERATORS, now on the "requires '@' prefix" arm.)
     unreachable = [n for n in hint_names
                    if !haskey(PormG.PormGsuffix, n) && !haskey(PormG.PormGtransform, n)]
     @test sort(unreachable) == sort(["exact", "iexact", "iso_year", "week", "week_day",
-                                     "iso_week_day", "hour", "minute", "second", "regex", "iregex"])
+                                     "iso_week_day", "hour", "minute", "second"])
 
     # The alternatives table is a message table, not a registry: every key must be one of the
     # unreachable names. An entry for a name that later gets wired would advertise a detour around
@@ -863,6 +885,78 @@ end
     # filed as a follow-up; pinning the OFFENDING NAME is the minimum this test can demand without
     # freezing the bad wording, and it fails the day the message stops naming what the user typed.
     @test occursin("notalookup", msg) broken = true
+  end
+end
+
+# =============================================================================
+# #635: the regex lookups are PostgreSQL-only. PostgreSQL evaluates the pattern as POSIX ARE; a
+# SQLite UDF would evaluate it as PCRE, and the two dialects disagree silently. So SQLite refuses
+# at build time with the capability error — through the public surface, not only the Dialect arm.
+# =============================================================================
+struct _MockSQLiteRegex635 <: PormG.PormGSQLite end
+
+@testset "regex lookups refuse on SQLite and take no Julia Regex (#635)" begin
+  @testset "SQLite raises BackendCapabilityError naming the lookup" begin
+    for op in ("regex", "iregex", "nregex", "niregex")
+      q = _D.objects.filter("surname__@$(op)" => "^Sen")
+      e = try
+        PormG.QueryBuilder.inspect_query(q; connection = _MockSQLiteRegex635())
+        nothing
+      catch err
+        err
+      end
+      @test e isa PormG.BackendCapabilityError
+      @test occursin("The $(op) lookup requires PostgreSQL", PormG.error_message(e))
+    end
+  end
+
+  # A Julia `Regex` is PCRE — accepting it would smuggle in the very dialect the design refuses, and
+  # `string(r"^Sen")` is `r"^Sen"`, which as a POSIX pattern matches almost nothing. It must fail
+  # loudly as a wrong-typed filter value, never bind as its `repr`. Before #635 it fell off the
+  # `_get_pair_to_oper` ladder as a bare `MethodError` — loud, but naming an internal function.
+  @testset "a Julia Regex value is refused, not stringified" begin
+    e = try
+      Logging.with_logger(Logging.NullLogger()) do
+        _D.objects.filter("surname__@regex" => r"^Sen").list(show_query=:dict)
+      end
+      nothing
+    catch err
+      err
+    end
+    @test e isa PormG.FilterError
+    msg = PormG.error_message(e)
+    @test occursin("surname__@regex", msg)
+    @test occursin("\"surname__@regex\" => \"^Sen\"", msg)    # the user's own path and pattern
+
+    # On a non-regex lookup the same refusal must not steer toward `@regex` — on SQLite that
+    # suggestion would be a second dead end (the #604 shape).
+    e2 = try
+      Logging.with_logger(Logging.NullLogger()) do
+        _D.objects.filter("surname__@contains" => r"Sen").list(show_query=:dict)
+      end
+      nothing
+    catch err
+      err
+    end
+    @test e2 isa PormG.FilterError
+    @test occursin("Pass the value as a String", PormG.error_message(e2))
+    @test !occursin("@regex", PormG.error_message(e2))
+  end
+
+  # A column-reference RHS used to skip Dialect and concatenate the lookup NAME into the SQL —
+  # `"Tb"."surname" regex "Tb"."forename"` on both engines: a server syntax error on PostgreSQL and
+  # no capability error on SQLite. The verbatim pattern lookups now dispatch like a bound value.
+  @testset "a column-reference pattern renders through Dialect" begin
+    for (op, sqlop) in (("regex", "~"), ("iregex", "~*"), ("nregex", "!~"), ("niregex", "!~*"))
+      sql = _D.objects.filter("surname__@$(op)" => F("forename")).list(show_query=:dict)[:sql_text]
+      @test contains(sql, "WHERE \"Tb\".\"surname\" $(sqlop) \"Tb\".\"forename\"\n")
+      @test_throws PormG.BackendCapabilityError PormG.QueryBuilder.inspect_query(
+        _D.objects.filter("surname__@$(op)" => F("forename")); connection = _MockSQLiteRegex635())
+    end
+    # The sibling the same arm broke: `iunaccent_exact` against a column.
+    sql = _D.objects.filter("surname__@iunaccent_exact" => F("forename")).list(show_query=:dict)[:sql_text]
+    @test contains(sql, "LOWER(public.immutable_unaccent(\"Tb\".\"surname\")) = " *
+                        "LOWER(public.immutable_unaccent(\"Tb\".\"forename\"))")
   end
 end
 

@@ -34,7 +34,8 @@ import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, run_in_tr
 # import is what binds them inside `QueryBuilder`, where `_apply_like_wildcards` (parameters.jl) and
 # the render dispatch (build_helpers.jl) read them.
 import PormG: LIKE_CONTAINS_OPERATORS, LIKE_PREFIX_OPERATORS, LIKE_SUFFIX_OPERATORS,
-              LIKE_WILDCARD_OPERATORS, PATTERN_LOOKUP_OPERATORS
+              LIKE_WILDCARD_OPERATORS, PATTERN_LOOKUP_OPERATORS,
+              VERBATIM_PATTERN_OPERATORS
 import PormG: backend_num_affected_rows  # PG matched-row count (driver body in the weakdep extension)
 import PormG: backend_sqlite_version  # SQLite library-version probe for the bind-parameter limit (#84)
 # #564 — the value-representation table (`src/value_repr.jl`). The read path asks it which parser

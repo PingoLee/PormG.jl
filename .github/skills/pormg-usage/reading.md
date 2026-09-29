@@ -90,8 +90,9 @@ M.Result.objects.
 | `__@ncontains`, `__@nistartswith`, … | negated twins of every pattern lookup | |
 
 `__@in` also accepts a one-column query instead of a vector. That is a subquery; see
-[`advanced.md`](advanced.md). PostgreSQL-only lookups — `@iunaccent_contains`/`@iunaccent_exact` and
-the JSONB `@jcontains`/`@has_key` family — raise `BackendCapabilityError` on SQLite.
+[`advanced.md`](advanced.md). PostgreSQL-only lookups — `@iunaccent_contains`/`@iunaccent_exact`,
+the POSIX regex `@regex`/`@iregex` (+ `@nregex`/`@niregex`; the pattern is a `String`, never a Julia
+`Regex`) and the JSONB `@jcontains`/`@has_key` family — raise `BackendCapabilityError` on SQLite.
 
 ### Date transforms
 

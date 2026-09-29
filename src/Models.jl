@@ -3672,14 +3672,22 @@ end
 
 _resolve_model_reference(_module::Module, model_ref::PormGModel)::PormGModel = model_ref
 
+# #782: the binding lookup is only a first guess. A binding that exists but holds no model — inside a
+# models module `position` is `Base.position` — used to be returned unchecked, so the `::PormGModel`
+# return conversion raised a raw `MethodError` outside the `try` and the logical-name match below never
+# ran. The `isa` check makes such a binding fall through exactly like an unbound name, the same guard
+# `_resolve_target_model` applies to an FK target. The catch is narrowed to `UndefVarError` for the
+# same reason as there: a genuine bug surfaces instead of turning into "not defined".
 function _resolve_model_reference(_module::Module, model_ref::String)::PormGModel
-  try
-    return Base.invokelatest(getfield, _module, Symbol(model_ref))
-  catch
-    target_name = format_model_name(model_ref)
-    for model in get_all_models(_module)
-      format_model_name(model.name) == target_name && return model
-    end
+  bound = try
+    Base.invokelatest(getfield, _module, Symbol(model_ref))
+  catch e
+    e isa UndefVarError ? nothing : rethrow()
+  end
+  bound isa PormGModel && return bound
+  target_name = format_model_name(model_ref)
+  for model in get_all_models(_module)
+    format_model_name(model.name) == target_name && return model
   end
   throw(ModelDefinitionError("The model $(model_ref) referenced by a ManyToManyField is not defined"))
 end

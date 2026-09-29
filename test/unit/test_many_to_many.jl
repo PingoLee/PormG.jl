@@ -1529,3 +1529,49 @@ end
   @test resolved.related_column == "defender"
   @test resolved.through_table == "rivalry"
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M2M target resolution: a binding that holds no model falls through to the logical name (#782)
+# Inside a models module `position` is `Base.position`, so the binding lookup in
+# `_resolve_model_reference` finds a FUNCTION. It used to return it unchecked and the `::PormGModel`
+# return conversion escaped as a raw `MethodError` — on the strict path (`set_models`) and the lenient
+# one alike, because `_try_resolve_model_reference` only swallows `ModelDefinitionError`. The planner
+# already resolved this input through `_resolve_target_model`, so the two paths disagreed (#762).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an M2M target named like a Base binding resolves by logical name (#782)" begin
+  # Precondition: the name really is bound to something that is not a model, which is the shape.
+  probe = Module(:M2MBaseNameProbe)
+  @test isdefined(probe, :position)
+  @test !(getfield(probe, :position) isa PormGModel)
+
+  # The issue's own repro: a lone model whose logical name collides with `Base.position`.
+  m = Module(:M2MBaseNameResolve)
+  Core.eval(m, :(import PormG; import PormG.Models))
+  Core.eval(m, :(Pos = Models.Model("position", id = Models.IDField())))
+  pos = Core.eval(m, :(Pos))
+  @test Models._resolve_model_reference(m, "position") === pos
+  @test Models._try_resolve_model_reference(m, "position") === pos
+
+  # The acceptance criterion: a `ManyToManyField("position")` registers through `set_models`, and the
+  # relation points at the model rather than failing on the function the binding holds.
+  app = Module(:M2MBaseNameApp)
+  Core.eval(app, :(import PormG; import PormG.Models))
+  Core.eval(app, :(Pos = Models.Model("position", id = Models.IDField(), label = Models.CharField())))
+  Core.eval(app, :(Grid = Models.Model("grid_slot",
+    id = Models.IDField(),
+    positions = Models.ManyToManyField("position", related_name = "grid_slots"),
+  )))
+  Models.set_models(app, "m2m_mock")
+  grid = Core.eval(app, :(Grid))
+  rel = Models.get_many_to_many_relation(grid, "positions")
+  @test rel.related_model_resolved === Core.eval(app, :(Pos))
+  @test rel.related_model == "position"
+
+  # When nothing matches either, the refusal is the taxonomy's `ModelDefinitionError` — and the lenient
+  # twin turns exactly that into `nothing` — never the `MethodError` a non-model binding produced.
+  lone = Module(:M2MBaseNameMissing)
+  Core.eval(lone, :(import PormG; import PormG.Models))
+  err = @test_throws PormG.ModelDefinitionError Models._resolve_model_reference(lone, "position")
+  @test occursin("position", err.value.msg)
+  @test Models._try_resolve_model_reference(lone, "position") === nothing
+end

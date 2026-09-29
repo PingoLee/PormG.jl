@@ -1665,7 +1665,11 @@ function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{St
       # the source of the value instead.
       source = _is_injected_fill_column(col_name) ?
         "PormG-supplied default/auto value" : "col: $(col_name)"
-      throw(InvalidValueError("Error in bulk processing, the field \e[4m\e[31m$(field)\e[0m ($(source)) in row \e[4m\e[31m$(index)\e[0m has a value that can't be formatted: \e[4m\e[31m$(row[col_name])\e[0m"))
+      # This pass runs before the caller's field validation reports, so its message is the one a bulk
+      # caller sees: carry the formatter's own reason when it gave one (#773 — "0x10" is refused for
+      # its prefix, and "can't be formatted" alone did not say so).
+      reason = e isa InvalidValueError ? " ($(e.msg))" : ""
+      throw(InvalidValueError("Error in bulk processing, the field \e[4m\e[31m$(field)\e[0m ($(source)) in row \e[4m\e[31m$(index)\e[0m has a value that can't be formatted: \e[4m\e[31m$(row[col_name])\e[0m$(reason)"))
     end
   end  
 end

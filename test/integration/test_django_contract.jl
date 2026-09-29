@@ -443,6 +443,37 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #773 — a numeric String is base 10; `0x`/`0b`/`0o` are refused the same on both engines
+# Julia's parsers read `"0x10"` as 16, so write validation passed it, while the formatter bound the
+# TEXT '0x10': SQLite stored a TEXT cell in a NUMERIC column, and PostgreSQL's answer depended on its
+# version. Django's `Decimal(str)` accepts no prefix. Now `InvalidValueError`, before any SQL.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django Contract: a 0x/0b/0o numeric string is refused on both engines (#773)" begin
+    label_hex = "django-decimal-hex"
+    label_dec = "django-decimal-base10"
+    _cleanup_django_scratch!(label_hex)
+    _cleanup_django_scratch!(label_dec)
+
+    try
+        for v in ("0x10", "0b101", "0o17")
+            @test_throws InvalidValueError M.Django_contract_scratch.objects.create(
+                "label" => label_hex, "price" => v)
+        end
+        @test_throws InvalidValueError bulk_insert(M.Django_contract_scratch.objects,
+            DataFrame(label = [label_hex], price = ["0x10"]))
+        @test !M.Django_contract_scratch.objects.filter("label" => label_hex).exists()
+
+        # The base-10 spelling of the same value is written and read back as a number.
+        M.Django_contract_scratch.objects.create("label" => label_dec, "price" => "16")
+        row = M.Django_contract_scratch.objects.filter("label" => label_dec).values("price").list() |> first
+        @test _normalize_decimal(row[:price]) == parse(Decimal, "16")
+    finally
+        _cleanup_django_scratch!(label_hex)
+        _cleanup_django_scratch!(label_dec)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #79 — DateTimeField equality/range filters agree across formats & offsets
 #
 # SQLite stores DateTimeField values as TEXT and compares them lexicographically, so two

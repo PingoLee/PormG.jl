@@ -128,12 +128,13 @@ end
 # `strings = true` is how a site keeps the numeric-String spelling it already took — `CharField`,
 # `URLField`, `SlugField`, `BinaryField` and `DecimalField` opt in, `PasswordField` (integer only)
 # does not. It replaced a bare `parse(Int, …)` pre-step at three sites, which let a non-numeric
-# String escape as a raw `ArgumentError`. It is still `parse(Int, …)` — the parser every site used —
-# with its two failures told apart by exception type: `OverflowError` gets the range message (on
-# either word size), anything else "not a number". NOT `tryparse(BigInt, …)`, which looks
-# equivalent and is not: GMP skips interior whitespace, so `"8 8"` parsed as a width of 88 (caught
-# in review). Nothing here makes a new spelling legal at a site that did not already take it;
-# `BinaryField` still maps a digit-free String to `nothing` before calling in.
+# String escape as a raw `ArgumentError`. It is `parse(Int, …; base = 10)` behind #773's grammar
+# (#780 — a `0x`/`0b`/`0o` prefix and `"+ 8"` are refused, where the bare parser read them), with its
+# two failures told apart by exception type: `OverflowError` gets the range message (on either word
+# size), anything else "not a number". NOT `tryparse(BigInt, …)`, which looks equivalent and is not:
+# GMP skips interior whitespace, so `"8 8"` parsed as a width of 88 (caught in review). Nothing here
+# makes a new spelling legal at a site that did not already take it; `BinaryField` still maps a
+# digit-free String to `nothing` before calling in.
 #
 # `Bool` is excluded exactly as `_default_string` excludes it: `Bool <: Integer`, so without the
 # carve-out `max_length = true` would silently become a one-character column.
@@ -147,8 +148,15 @@ function _int_kwarg(field_type::AbstractString, name::AbstractString, value; str
   throw_out_of_range() = throw(_fielderr("$(field_type): '$(name)' is out of range, got $(value) " *
                                          "(it must fit in an Int, $(typemin(Int)) to $(typemax(Int)))."))
   if strings && value isa AbstractString
+    # Base 10 only (#780), on #773's grammar: a `0x`/`0b`/`0o` prefix is refused by name, and a
+    # spelling outside `is_base10_number` (`"+ 8"`, which `parse(Int, …; base = 10)` still reads) is
+    # "not a number". A width declared as `"0x10"` was a 16-character column before.
+    has_non_decimal_prefix(value) &&
+      throw(_fielderr("$(field_type): '$(name)' must be written in base 10, got $(repr(value)) (a 0x, 0b or 0o prefix is not accepted)."))
+    is_base10_number(value) ||
+      throw(_fielderr("$(field_type): '$(name)' must be an Integer or a numeric String, got $(repr(value))."))
     value = try
-      parse(Int, value)
+      parse(Int, value; base = 10)
     catch e
       (e isa InterruptException || e isa StackOverflowError) && rethrow()   # #472
       # `OverflowError` is a well-formed number too wide for `Int`; anything else is not a number.

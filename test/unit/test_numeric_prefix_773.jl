@@ -157,3 +157,131 @@ end
         @test occursin("base-10 number", err.msg)
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Declarations are base 10 too: a field `default=` and an integer width keyword (#780)
+# #773 fixed every VALUE path; the declaration-time converters — `format2int64` / `format2float64`
+# (`src/Models.jl`) and `_int_kwarg` (`src/models/fields.jl`) — still used the bare `parse`, so
+# `IntegerField(default = "0x10")` stored 16 and `CharField(max_length = "0x10")` made a 16-character
+# column while the same string was refused as a value. Now a declaration takes exactly the spellings a
+# value does. The constructors surface `FieldValidationError` (`validate_default` relabels the
+# converter's refusal); the width keywords keep their own message, which names the keyword.
+# ─────────────────────────────────────────────────────────────────────────────
+const _INT_DEFAULTS780 = (
+    ("IDField",                   d -> Models.IDField(default = d)),
+    ("ForeignKey",                d -> Models.ForeignKey("drivers", default = d)),
+    ("OneToOneField",             d -> Models.OneToOneField("drivers", default = d)),
+    ("IntegerField",              d -> Models.IntegerField(default = d)),
+    ("PositiveSmallIntegerField", d -> Models.PositiveSmallIntegerField(default = d)),
+    ("PositiveIntegerField",      d -> Models.PositiveIntegerField(default = d)),
+    ("BigIntegerField",           d -> Models.BigIntegerField(default = d)),
+)
+const _FLOAT_DEFAULTS780 = (
+    ("FloatField",   d -> Models.FloatField(default = d)),
+    ("DecimalField", d -> Models.DecimalField(default = d)),
+)
+# Every String-taking width site, with the keyword its message must name.
+const _WIDTHS780 = (
+    ("CharField",    "max_length",     w -> Models.CharField(max_length = w)),
+    ("URLField",     "max_length",     w -> Models.URLField(max_length = w)),
+    ("SlugField",    "max_length",     w -> Models.SlugField(max_length = w)),
+    ("BinaryField",  "max_length",     w -> Models.BinaryField(max_length = w)),
+    ("DecimalField", "max_digits",     w -> Models.DecimalField(max_digits = w, decimal_places = 2)),
+    ("DecimalField", "decimal_places", w -> Models.DecimalField(max_digits = 10, decimal_places = w)),
+)
+_raised780(thunk) = try thunk(); nothing catch e; e end
+
+@testset "a field default= refuses 0x/0b/0o and non-base-10 spellings (#780)" begin
+    for (_, ctor) in (_INT_DEFAULTS780..., _FLOAT_DEFAULTS780...), v in (PREFIXED..., "+ 1")
+        @test _raised780(() -> ctor(v)) isa PormG.FieldValidationError
+    end
+    # A float default had one more gap: the String arm read "Inf"/"NaN" (and an exponent that
+    # overflows) although the `Real` arm refuses `Inf`. Same grammar as a value now.
+    for (_, ctor) in _FLOAT_DEFAULTS780, v in ("Inf", "-inf", "NaN", "Infinity", "1e400")
+        @test _raised780(() -> ctor(v)) isa PormG.FieldValidationError
+    end
+
+    # The constructor rows above are type-only, and `validate_default` relabels ANY converter throw
+    # into `FieldValidationError` — so on their own they cannot tell the grammar's refusal from the
+    # old parser's (several of those spellings were already refused by `parse`). The converters are
+    # asked directly, where the message survives: every prefixed spelling is refused BY NAME.
+    for conv in (Models.format2int64, Models.format2float64), v in PREFIXED
+        err = _raised780(() -> conv(v))
+        @test err isa PormG.FieldValidationError
+        @test err isa Exception && occursin("non-decimal prefix", sprint(showerror, err))
+    end
+    # Integral-looking but not an Int64: a refusal inside the taxonomy, not a raw parse error.
+    for v in ("12.5", "1e3", "99999999999999999999")
+        @test _raised780(() -> Models.format2int64(v)) isa PormG.FieldValidationError
+    end
+    # The float twin: an exponent outside Float64's range passes the grammar, and `parse` raises a raw
+    # `ArgumentError` on it (it does not return `Inf`), so the arm must refuse it itself.
+    for v in ("1e400", "-1e400", "1e-400")
+        err = _raised780(() -> Models.format2float64(v))
+        @test err isa PormG.FieldValidationError
+        @test err isa Exception && occursin("finite number", sprint(showerror, err))
+    end
+    # Introspection coerces a live default through the same converters, so a live reader agrees
+    # with the declared side (`_default_or_drop` turns this refusal into its warn-and-drop).
+    @test _raised780(() -> PormG.Migrations._coerce_default("0x10", PormG.CInt64())) isa PormG.FieldValidationError
+    @test _raised780(() -> PormG.Migrations._coerce_default("Infinity", PormG.CFloat64())) isa PormG.FieldValidationError
+end
+
+@testset "an integer width keyword refuses 0x/0b/0o, naming the keyword (#780)" begin
+    for (name, kw, ctor) in _WIDTHS780, v in PREFIXED
+        err = _raised780(() -> ctor(v))
+        @test err isa PormG.FieldValidationError
+        msg = err isa Exception ? sprint(showerror, err) : ""
+        @test occursin("'$kw'", msg)
+        @test occursin("base 10", msg)
+    end
+    # `parse(Int, …; base = 10)` still reads a space after the sign; the grammar does not.
+    for (_, kw, ctor) in _WIDTHS780
+        err = _raised780(() -> ctor("+ 8"))
+        @test err isa PormG.FieldValidationError && occursin("'$kw'", sprint(showerror, err))
+    end
+end
+
+@testset "base-10 declarations are unchanged (#780)" begin
+    for (_, ctor) in _INT_DEFAULTS780, v in ("16", " 16 ", "+16", "00016")
+        @test ctor(v).default === Int64(16)
+    end
+    @test Models.IntegerField(default = "-16").default === Int64(-16)
+    for (_, ctor) in _FLOAT_DEFAULTS780
+        @test ctor("12.5").default === 12.5
+        @test ctor(" .5e2 ").default === 50.0
+        @test ctor("16").default === 16.0
+    end
+    for (_, kw, ctor) in _WIDTHS780
+        field = ctor(" 8 ")
+        slot = kw == "max_length" ? :max_length : Symbol(kw)
+        @test getproperty(field, slot) === 8
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A refused live default is warned and dropped (#780)
+# The live side of the one-converter seam. The rows above only prove `_coerce_default` refuses; the
+# contract is what the schema reader DOES with that refusal: warn and import the column with no
+# default (#292/#472), never abort `convert_schema_to_models`. Only a QUOTED literal reaches the
+# converter — an unquoted SQLite `DEFAULT 0x10` is an expression token and is carried as a
+# `db_default`, exactly as before #780.
+# ─────────────────────────────────────────────────────────────────────────────
+struct _Mock780SL <: PormG.PormGSQLite end
+struct _Mock780PG <: PormG.PormGPostgres end
+_spec780(t) = PormG.ColumnSpec("laps", t, true, false, false, PormG.NoDefault(), nothing,
+                               PormG.CheckKind[], nothing, "")
+
+@testset "a refused live default is warned and dropped, not raised (#780)" begin
+    for (conn, raw, t) in ((_Mock780SL(), "'0x10'", PormG.CInt64()),
+                           (_Mock780SL(), "'Inf'", PormG.CFloat64()),
+                           (_Mock780PG(), "'Infinity'::double precision", PormG.CFloat64()))
+        @test (@test_logs (:warn, r"could not be represented") PormG.Migrations._default_or_drop(
+            "results", _spec780(t), raw, conn)) === PormG.NoDefault()
+    end
+    @test PormG.Migrations._default_or_drop("results", _spec780(PormG.CInt64()), "0x10", _Mock780SL()) ==
+          PormG.ExpressionDefault("0x10")
+    # And a base-10 live default still reads, so the drop is the refusal, not the reader.
+    @test PormG.Migrations._default_or_drop("results", _spec780(PormG.CInt64()), "16", _Mock780SL()) ==
+          PormG.LiteralDefault(16)
+end

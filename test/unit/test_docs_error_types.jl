@@ -995,6 +995,24 @@ const DOCERR_CASES = [
             q = m.objects; q.filter("laps" => "0x10"); q.list(show_query = :dict)
         end,
     ),
+    # #780. The same *Numeric Fields* paragraph names the type a declaration raises: a prefixed string
+    # `default=`, a prefixed string width, and a non-finite string float default. Every constructor
+    # and width keyword is pinned in `test_numeric_prefix_773.jl`.
+    (
+        "fields.md — a numeric field default= with a 0x/0b/0o prefix raises (#780)",
+        FieldValidationError,
+        () -> IntegerField(default = "0x10"),
+    ),
+    (
+        "fields.md — a string width with a 0x/0b/0o prefix raises (#780)",
+        FieldValidationError,
+        () -> CharField(max_length = "0x10"),
+    ),
+    (
+        "fields.md — a non-finite string FloatField default raises (#780)",
+        FieldValidationError,
+        () -> FloatField(default = "Inf"),
+    ),
     # #446. `errors.md` has promised `UnknownFieldError` for "the field name does not exist on the
     # model" since the taxonomy landed, and until now the code raised a bare `KeyError` for every one
     # of these shapes — an untyped error naming an internal dict lookup, for the single most common

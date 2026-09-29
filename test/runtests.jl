@@ -166,6 +166,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "PG Migration Fixture Isolated + Credential-free (#36)" include("unit/test_migration_pg_fixture.jl")
     @testset "Pool Exhaustion Typed Error (#37)" include("unit/test_connection_pool_timeout.jl")
     @testset "Connect-Failure Fast-Fail Typed Error (#72)" include("unit/test_connection_pool_connect_error.jl")
+    @testset "PostgreSQL Driver Is a Property of the Pool (#785)" include("unit/test_postgres_driver_seam.jl")
     @testset "close_pool! Skips Non-pool Mocks (#147)" include("unit/test_close_pool_mock_skip.jl")
     @testset "close_pool! Drains Leases, Closes Outside the Lock (#47)" include("unit/test_close_pool_drain.jl")
     @testset "Discard Never Double-Closes a Taken-Out Handle (#585)" include("unit/test_discard_not_found_close.jl")

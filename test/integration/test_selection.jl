@@ -570,10 +570,12 @@ end
 
         # A column as the pattern — the documented `F` spelling — against a Julia-side scan. The
         # fixture's forenames hold no character the two regex dialects read differently.
-        pairs = M.Driver.objects.filter("surname__@isnull" => false, "forename__@isnull" => false).
+        # The fixture holds exactly one such driver; `> 0` keeps a wrong-but-valid render (operands
+        # swapped, say) from passing on an empty result.
+        name_pairs = M.Driver.objects.filter("surname__@isnull" => false, "forename__@isnull" => false).
             values("forename", "surname") |> DataFrame
         @test M.Driver.objects.filter("surname__@iregex" => F("forename")).count() ==
-              count(r -> occursin(Regex(String(r.forename), "i"), String(r.surname)), eachrow(pairs))
+              count(r -> occursin(Regex(String(r.forename), "i"), String(r.surname)), eachrow(name_pairs)) > 0
 
         # Negated twins are the exact complement over the non-NULL surnames.
         @test M.Driver.objects.filter("surname__@regex"   => "^Ver").count() +

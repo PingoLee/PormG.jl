@@ -928,6 +928,21 @@ struct _MockSQLiteRegex635 <: PormG.PormGSQLite end
     @test occursin("surname__@regex", msg)
     @test occursin("\"surname__@regex\" => \"^Sen\"", msg)    # the user's own path and pattern
 
+    # A string carries no flags: `r"…"i` must be pointed at the case-insensitive twin, or following
+    # the hint would silently turn the filter case-sensitive.
+    for (op, twin) in (("regex", "iregex"), ("nregex", "niregex"), ("iregex", "iregex"))
+      ei = try
+        Logging.with_logger(Logging.NullLogger()) do
+          _D.objects.filter("surname__@$(op)" => r"^sen"i).list(show_query=:dict)
+        end
+        nothing
+      catch err
+        err
+      end
+      @test ei isa PormG.FilterError
+      @test occursin("\"surname__@$(twin)\" => \"^sen\"", PormG.error_message(ei))
+    end
+
     # On a non-regex lookup the same refusal must not steer toward `@regex` — on SQLite that
     # suggestion would be a second dead end (the #604 shape).
     e2 = try

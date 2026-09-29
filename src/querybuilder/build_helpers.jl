@@ -372,12 +372,20 @@ end
 # as a bare `MethodError` naming an internal function.
 function _get_pair_to_oper(x::Pair{Vector{String},Regex})
   key = join(x.first, "__@")
+  op = x.first[end]
   # Suggest the pattern spelling only where it is the pattern lookup the user already chose; on any
   # other lookup a `@regex` suggestion would be a detour into a PostgreSQL-only feature.
-  hint = x.first[end] in ("regex", "iregex", "nregex", "niregex") ?
-    "Pass the pattern as a String, e.g. \"$(key)\" => $(repr(x.second.pattern)); PostgreSQL " *
-    "evaluates it as a POSIX regular expression" :
-    "Pass the value as a String"
+  if op in ("regex", "iregex", "nregex", "niregex")
+    # A string carries no flags, so `r"^sen"i` must be suggested as the case-insensitive twin —
+    # echoing `@regex` would silently turn it case-sensitive.
+    caseless = (x.second.compile_options & Base.PCRE.CASELESS) != 0
+    suggested = caseless && op in ("regex", "nregex") ?
+      join([x.first[1:end-1]..., op == "regex" ? "iregex" : "niregex"], "__@") : key
+    hint = "Pass the pattern as a String, e.g. \"$(suggested)\" => $(repr(x.second.pattern)); " *
+           "PostgreSQL evaluates it as a POSIX regular expression"
+  else
+    hint = "Pass the value as a String"
+  end
   throw(FilterError("Error in filter '$(key)': a Julia Regex is not a filter value. $(hint)"))
 end
 function _get_pair_to_oper(x::Pair{String,T}) where T<:Union{AbstractString,Number,Bool,Dates.Date,Dates.DateTime,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}

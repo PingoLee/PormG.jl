@@ -1285,8 +1285,9 @@ against a production connection.
     ```
 
 `ignore_table` replaces the backend's default skip list (`postgres_ignore_table` /
-`sqlite_ignore_schema`); tables registered through `register_ignore_tables!` are always skipped on
-top of it, so `check` reads exactly the tables the importer and `makemigrations` do. `include_table`
+`sqlite_ignore_schema`); tables registered through `register_ignore_tables!` and the connection's
+own `ignore_tables:` in `connection.yml` (#749) are always skipped on top of it, so `check` reads
+exactly the tables the importer and `makemigrations` do. `include_table`
 restricts the read to the named tables. Both match the parameters of `convert_schema_to_models`.
 For `:schema_drift` the two filter differently, on purpose:
 
@@ -1294,7 +1295,9 @@ For `:schema_drift` the two filter differently, on purpose:
     findings for a listed table are exactly the steps `makemigrations` would plan for it. A
     `ManyToManyField`'s through table is reported only when it is listed too.
   * `ignore_table` skips **live** tables only, as the default skip list does for `makemigrations`.
-    A declared model on an ignored table therefore reads as missing from the database.
+    A declared model on an ignored table therefore reads as missing from the database — except
+    under the connection's `ignore_tables:`, where a managed model on a listed table raises
+    `InvalidConfigurationError`, as it does in `makemigrations`.
 
 `models_file` names the models file
 `:schema_drift` compares against; by default it is `settings.model_file` under the connection's
@@ -1400,10 +1403,13 @@ function check(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSet
                models_file::Union{AbstractString, Nothing} = nothing)::SchemaCheckResult
   _validate_check_kinds(kinds, models_file)
   default_ignore = connection isa PormGSQLite ? sqlite_ignore_schema : postgres_ignore_table
+  # #749: a caller's `ignore_table` replaces the backend default only; the connection's own
+  # `ignore_tables:` is always added on top, like the registry.
+  base_ignore = _with_connection_ignores(something(ignore_table, default_ignore), settings)
   findings = SchemaCheckFinding[]
 
   if :expression_default in kinds
-    ignore = unique(vcat(something(ignore_table, default_ignore), _EXTRA_IGNORE_TABLES[]))
+    ignore = unique(vcat(base_ignore, _EXTRA_IGNORE_TABLES[]))
     if connection isa PormGSQLite
       append!(findings, _sqlite_expression_default_findings(connection; ignore_table = ignore,
                                                             include_table = include_table))
@@ -1419,7 +1425,7 @@ function check(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSet
   if :schema_drift in kinds
     # The reader adds `_EXTRA_IGNORE_TABLES` itself, exactly as it does for `makemigrations`.
     append!(findings, _schema_drift_findings(connection, settings;
-                                             ignore_table = something(ignore_table, default_ignore),
+                                             ignore_table = base_ignore,
                                              include_table = include_table, models_file = models_file))
   end
 

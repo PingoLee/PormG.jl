@@ -1432,6 +1432,26 @@ const DOCERR_CASES = [
             end
         end,
     ),
+    # #749: the per-connection `ignore_tables:` list. A blank entry is refused as it is read, and a
+    # managed model on a listed table is refused as the plan is built — before any live read.
+    (
+        "configuration/connection_yml.md — Tables PormG leaves alone: a blank ignore_tables entry raises InvalidConfigurationError (#749)",
+        InvalidConfigurationError,
+        () -> PormG.Configuration._configured_ignore_tables(
+            PormG.Configuration.Settings(db_config_settings = Dict{String,Any}("ignore_tables" => ["legacy_timing_", ""]))),
+    ),
+    (
+        "configuration/connection_yml.md — Tables PormG leaves alone: a managed model on an ignored table raises InvalidConfigurationError (#749)",
+        InvalidConfigurationError,
+        () -> begin
+            m = Model("legacy_timing_laps"; id = IDField(), lap = IntegerField())
+            schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+                :legacy_timing_laps => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => m, :exist => false))
+            st = PormG.Configuration.Settings(db_config_settings = Dict{String,Any}("ignore_tables" => ["legacy_timing_"]))
+            PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema, DocErrMockPostgres(), st;
+                                                interactive = false)
+        end,
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

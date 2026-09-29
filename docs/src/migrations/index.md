@@ -49,7 +49,7 @@ Because every plan is a fresh diff between your models and the **live database**
     - SQLite virtual tables (`CREATE VIRTUAL TABLE … USING fts5(…)`, `rtree`) and the shadow tables their module stores data in (`<name>_data`, `<name>_idx`, `<name>_node`, …). When SQLite cannot confirm which tables are a virtual table's shadows on PormG's connection (its module is an extension your app loads elsewhere, such as sqlite-vec; the module does not report shadow tables; or SQLite is older than 3.37), every table named `<name>_…` is skipped and a warning lists them. Do not give your own tables that prefix: a model declaring one would plan `CREATE TABLE` and fail at `migrate`, because the table exists;
     - PostgreSQL partitions of a partitioned table, and tables an extension owns (PostGIS's `spatial_ref_sys`).
 
-    Other tables you manage outside PormG belong in `register_ignore_tables!` (see [Extension points](../extending.md#Extension-points)).
+    Other tables you manage outside PormG belong in a connection's `ignore_tables:` (see [Tables PormG leaves alone](../configuration/connection_yml.md#Tables-PormG-leaves-alone)), or in `register_ignore_tables!` when every connection should skip them (see [Extension points](../extending.md#Extension-points)).
 
     Never read is not the same as never touched: when SQLite has to rebuild a table, the views that read it and the triggers on it are dropped and re-created around the rebuild, as described under *SQLite: Table Recreation* below. And a table one of them still reads is never dropped: see [Deleting a Model](#Deleting-a-Model).
 

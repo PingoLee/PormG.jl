@@ -124,7 +124,9 @@ The models file is the one `makemigrations` reads, `model_file` under the connec
 `models_file = "path/to/models.jl"` names another. `include_table = ["driver", "result"]` reports only
 those tables. Every declared model is still planned, so a `ManyToManyField`'s through table is
 reported only when you list it too. `ignore_table` skips live tables only, as the default skip list
-does for `makemigrations`.
+does for `makemigrations`. It replaces that default list, but the connection's own
+[`ignore_tables:`](../configuration/connection_yml.md#Tables-PormG-leaves-alone) still applies on top
+of it, and so does `register_ignore_tables!`.
 
 A column whose definition changes reads differently per engine. PostgreSQL reports
 `"Alter field: <column>"`. SQLite rebuilds the table, so its finding is `"Alter table: <table>"` and

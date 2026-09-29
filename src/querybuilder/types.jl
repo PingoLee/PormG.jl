@@ -1237,8 +1237,8 @@ Base.:<=(f::FExpression, operand::_CompareOperand)   = _compare(f, "<=", operand
 #
 # Only the expression-on-the-LEFT forms are covered. `1.5 == F("a")` still reaches Base's fallback
 # and answers `false`: a `(::Any, ::FExpression)` method would collide with every left-typed `==`
-# in Base, and the issue's table is the left-hand form. Out of scope here; #541 owns the
-# node-as-container question (`isequal`/`in`) these methods sit beside and do not change.
+# in Base, and the issue's table is the left-hand form. Out of scope here; the node-as-container
+# question (`isequal`/`in`) these methods sit beside is settled by #541 — see the `isequal` block below.
 #
 # The `::Missing` / `::WeakRef` arms are NOT redundant. Measured on 1.12: Base defines
 # `==(::Any, ::Missing)` and `<(::Any, ::Missing)` (missing.jl) and `==(::Any, ::WeakRef)`
@@ -1273,8 +1273,14 @@ Base.:<(::FExpression, operand::Missing)    = throw(_unsupported_compare_operand
 # `isequal` is the total hashing-equality contract `Dict`/`Set`/`unique`/`findfirst(isequal(x), …)`
 # rely on; it must never throw. Identity for two nodes, `false` against anything else; the `::Missing`
 # arm disambiguates against Base's `isequal(::Any, ::Missing)` exactly as the Joined block does.
-# This is the `isequal` half of #541's option 1, applied here only for consistency with
-# `JoinedReference`; `in` / `findfirst(==(x), …)` still reach `==` and remain #541's open question.
+#
+# #541 settled what this guard does NOT cover, and settled it as "leave it": `x in v` and
+# `findfirst(==(x), v)` reach `==`, not `isequal`, so on a node they still build a predicate and the
+# caller's boolean context throws a `TypeError`. A node is a predicate, not a container value — ask
+# `isequal`, `===` or a `Set` instead. The alternatives were weighed and rejected: a `Bool`-returning
+# `==(::FExpression, ::FExpression)` would break `F("grid") == F("positionorder")`, the column-to-column
+# predicate this operator exists for; a `Base.in` override would give `in` a meaning `==` does not
+# have, for one type, and still leave `"a" in [f]` broken. `test_f_date_operands.jl` pins it.
 Base.isequal(a::FExpression, b::FExpression) = a === b
 Base.isequal(::FExpression, ::Any) = false
 Base.isequal(::FExpression, ::Missing) = false
@@ -1517,11 +1523,11 @@ function Joined(alias::AbstractString, path::AbstractString; desc::Bool=false)
 end
 Base.show(io::IO, x::JoinedReference) = print(io, "Joined(\"", x.alias, "\", \"", x.path, "\")")
 # `Base.:(==)` on this type builds a PREDICATE (see the comparison methods below), so the generic
-# `isequal` fallback — which calls `==` and expects a Bool — would throw a TypeError on any value
-# comparison: `isequal(a, b)`, `a in [b]`, `findfirst(==(a), v)`. The struct is immutable and every
-# field is compared by value in `hash`, so identity is the right answer here and it keeps
-# `Dict`/`Set`/`unique` behaving. `FExpression` carries the same hazard without this guard; adding
-# it there is a separate change with its own blast radius.
+# `isequal` fallback — which calls `==` and expects a Bool — would throw a TypeError. The struct is
+# immutable and every field is compared by value in `hash`, so identity is the right answer here and
+# it keeps `Dict`/`Set`/`unique`/`findfirst(isequal(a), v)` behaving. `FExpression` carries the same
+# guard since #536. It covers `isequal` ONLY: `a in [b]` and `findfirst(==(a), v)` reach `==` and
+# still throw, deliberately — #541's contract, reasoned at the `FExpression` block above.
 Base.isequal(a::JoinedReference, b::JoinedReference) = a === b
 # ...and against anything else. The comparison methods below accept several operand types, so
 # without this a HETEROGENEOUS container (`isequal(handle, "d__x")`, `isequal(handle, CTE(...))`)
@@ -1591,7 +1597,7 @@ end
 # raises the same `QueryBuildError` the `F` twin does instead of answering `false` from `Base.==`.
 # The `::Missing` / `::WeakRef` arms mirror the `FExpression` set above, for the same three
 # ambiguities with Base. `isequal(::JoinedReference, ::Any)` above is untouched: it never reaches
-# `==`, so containers keep behaving.
+# `==`, so hashed containers (`Set`/`Dict`/`unique`) keep behaving.
 for (op, sym) in ((:(==), "="), (:(!=), "!="), (:(>), ">"), (:(<), "<"), (:(>=), ">="), (:(<=), "<="))
   @eval function Base.$op(j::JoinedReference, operand::_CompareOperand)
     _reject_joined_desc(j, "a comparison")

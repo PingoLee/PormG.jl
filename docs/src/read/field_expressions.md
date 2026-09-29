@@ -82,6 +82,20 @@ WHERE ("Tb"."points" > $2::bigint) AND ("Tb"."points" < $3::bigint)
 
 Each use of `pts` renders as the bare column it names — three independent references, not one nested inside another. This is the same contract as Django's `F()` and SQLAlchemy's column expressions.
 
+!!! note "`==` on an expression builds a predicate, not a `Bool`"
+    `F("grid") == F("positionorder")` is a filter condition, so `==` cannot also answer *"are these two handles the same object?"* — and neither can anything built on it, such as `in` over a `Vector` or `findfirst(==(pts), v)`. To keep handles in a collection, compare them by identity: `isequal` and `===` do, and so do `Set`, `Dict` and `unique`. The same holds for `Joined(...)` handles.
+
+    ```julia
+    pts, grid = F("points"), F("grid")
+
+    isequal(pts, pts)                     # true
+    isequal(pts, F("points"))             # false — a distinct handle, even for the same column
+    pts in Set([pts, grid])               # true
+    length(unique([pts, pts, grid]))      # 2
+    findfirst(isequal(grid), [pts, grid]) # 2
+    pts == grid                           # an expression, ready for filter(...)
+    ```
+
 ---
 
 ## F Expressions in Filters

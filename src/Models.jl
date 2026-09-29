@@ -1221,7 +1221,7 @@ end
 Decide which connection key to self-heal `model` to by inference, or `nothing` when the
 choice would be ambiguous. SAFE-BY-DEFAULT: with more than one connection configured we
 refuse to guess — a wrong guess silently routes queries to the wrong database (e.g. binding
-`db`-models to `db_portalsus`). We infer a key only when there is exactly one connection AND
+`db`-models to `db_reporting`). We infer a key only when there is exactly one connection AND
 `model` is actually one of the models defined in its module (`models_in_mod`).
 
 A lone `register_connection` entry is refused too (#683). The caller re-registers through
@@ -1295,7 +1295,7 @@ function ensure_model_initialized(model::PormGModel)
     #     @import_models/@models_module). That path is authoritative — it binds the module
     #     to the connection it was actually defined for. We must NOT guess by scanning
     #     `config`: in a multi-connection setup the first entry iterated could be the wrong
-    #     database, silently routing queries there (e.g. binding `db`-models to `db_portalsus`).
+    #     database, silently routing queries there (e.g. binding `db`-models to `db_reporting`).
     if !isnothing(model._module)
         mod = model._module
         if isdefined(mod, :__pormg_init_path__)

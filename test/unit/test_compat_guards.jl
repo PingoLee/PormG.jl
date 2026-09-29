@@ -19,8 +19,8 @@
 #   1 costs nothing — but dropping it costs the apps. Measured by resolving a scratch environment
 #   carrying each internal app's dependency set plus PormG: under `OrderedCollections = "2"`,
 #   2 of the 5 apps are unresolvable, and the resolver names PormG as the cause —
-#     * `bi_server_nitro` pins `XLSX = "0.11.3"`, and XLSX accepts OC 2 only from `0.12`
-#     * `bi_server` pins `Genie = "5.35.5"`, and Genie accepts OC 2 only from `6`
+#     * one app pins `XLSX = "0.11.3"`, and XLSX accepts OC 2 only from `0.12`
+#     * another pins `Genie = "5.35.5"`, and Genie accepts OC 2 only from `6`
 #   — while `"1, 2"` resolves all 5 (those two land on OC 1.8.2). #549 kept `"1, 2"` on purpose
 #   after fixing 53 fixture sites to construct `OrderedDict` explicitly; the narrowing came from
 #   the same blanket chore commit that broke `Decimals`, not from any need of PormG's.

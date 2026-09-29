@@ -55,14 +55,14 @@ parent out of the import — not a typo.
 ```julia
 # before — the parent was filtered out of the import, and the key still "worked" by coincidence
 #          (lowercase("Tb_dia_semana") happens to be the real table `tb_dia_semana`)
-PormG.Migrations.import_models_from_postgres("db_esus",
+PormG.Migrations.import_models_from_postgres("db_legacy",
   include_table = ["tb_agendado", "tb_cfg_agenda"])      # tb_dia_semana omitted
 # -> Tb_agendado = Models.Model("tb_agendado",
 #      co_dia_semana = Models.ForeignKey("Tb_dia_semana", pk_field="co_dia_semana"))
 #    makemigrations emitted REFERENCES "tb_dia_semana"
 
 # after — add the parent's table to the filter so the key has a model to point at
-PormG.Migrations.import_models_from_postgres("db_esus",
+PormG.Migrations.import_models_from_postgres("db_legacy",
   include_table = ["tb_agendado", "tb_cfg_agenda", "tb_dia_semana"])
 ```
 

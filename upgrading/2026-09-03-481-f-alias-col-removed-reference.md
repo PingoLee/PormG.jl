@@ -10,8 +10,7 @@
 - **Severity**: **breaking** - a spelling that built now raises. Part of the `0.5.x` pre-publish wave.
 
 **Measured before adopting this**: `cjoin_on`, `.cjoin(`, `.on(` and `F("<alias>.` have **zero**
-call sites across `esus_back`, `PortalsusBack`, `LinkS`, `LinkSUS` and `work_server` (re-measured on
-the current remotes).
+call sites across the five consuming-app checkouts (re-measured on the current remotes).
 
 ### What changed
 

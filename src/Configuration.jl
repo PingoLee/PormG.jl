@@ -165,7 +165,7 @@ to proceed or `false` to abort the connection attempt.
 
 It runs only when a new connection must be opened (not on connection reuse) and
 is invoked outside the pool lock. Decide inside the callback which connections
-need setup, e.g. `basename(settings.db_def_folder) == "db_esus"`. To single out
+need setup, e.g. `basename(settings.db_def_folder) == "db_legacy"`. To single out
 connections created by `register_connection`, check `settings.dynamic` rather than the folder
 name.
 

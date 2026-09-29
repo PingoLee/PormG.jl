@@ -31,8 +31,8 @@ Each array is cast to the column type its **field** renders, the same cast `bulk
 4. **`show_query` output differs on PostgreSQL.** It shows the SQL above, and `:params` returns one vector per column after any filter values. `chunk_size` is used as given (a non-positive one keeps the old cap), so a wide table or a large `chunk_size` now runs as fewer statements.
 
 Measured in the consuming apps on 2026-09-24:
-- `bi_server_nitro` has 30 `bulk_insert(` and 24 `bulk_update(` call sites. `bi_server` and `biESUS` have none.
-- `bi_server_nitro`'s golden SQL suite, `test/pormg_golden/sql/mutations.jl`, pins the old PostgreSQL SQL **and** parameter vectors for one `bulk_insert` and one `bulk_update`. Those two tests need re-baselining (see below). Its Model-direct-vs-`.objects` equality test keeps passing.
+- One app has 30 `bulk_insert(` and 24 `bulk_update(` call sites. Two others have none.
+- That app's golden-SQL suite pins the old PostgreSQL SQL **and** parameter vectors for one `bulk_insert` and one `bulk_update`. Those two tests need re-baselining (see below). Its Model-direct-vs-`.objects` equality test keeps passing.
 - Whether any `bulk_insert` target has a column that fails case 1 depends on the **database**, not the source. The query below answers it per database.
 
 ### How to find the calls to migrate

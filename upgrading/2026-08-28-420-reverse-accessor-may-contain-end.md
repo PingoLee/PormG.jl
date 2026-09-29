@@ -85,9 +85,9 @@ The escaped set is PormG's `reserved_words` list — 29 entries, most of them Ju
 all plausible legacy column names. Give such a field an explicit `related_name` in the generated
 file, or rename the column.
 
-All three returned nothing for `esus_back`. Run them against your own checkout rather than trusting
-a number recorded here — a count is only true of the tree it was measured on, and this file outlives
-any given snapshot.
+All three returned nothing for the consuming app they were first run against. Run them against
+your own checkout rather than trusting a number recorded here — a count is only true of the tree
+it was measured on, and this file outlives any given snapshot.
 
 ### Migrate your app
 

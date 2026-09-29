@@ -241,6 +241,11 @@ function _insert_many_to_many_joins(
     alias_b = _get_alias_name(instruct),
     key_b = relation.owner_column,
     how = join_type,
+    # #771: an explicit `through=` model says for itself. The synthesized one follows Django's rule
+    # (`Models.synthesize_many_to_many_through_models`): unmanaged only when BOTH ends are.
+    target_managed = relation.through_model_resolved === nothing ?
+      (Models.model_is_managed(owner_model) || Models.model_is_managed(related_model)) :
+      Models.model_is_managed(relation.through_model_resolved),
   )
 
   through_alias = _insert_join(instruct.row_join, through_row, instruct.row_path, "$(join_path)__through"; track_path=track_path)
@@ -258,6 +263,7 @@ function _insert_many_to_many_joins(
     alias_b = _get_alias_name(instruct),
     key_b = Models.model_column(related_model, relation.related_pk),
     how = join_type,
+    target_managed = Models.model_is_managed(related_model),   # #771
   )
 
   return _insert_join(instruct.row_join, related_row, instruct.row_path, join_path; track_path=track_path)
@@ -280,7 +286,8 @@ function _flag_to_many!(row_join::Vector{JoinRow}, alias::String)::ModelJoin
   row.to_many && return row
   stamped = ModelJoin(a = row.a, alias_a = row.alias_a, key_a = row.key_a,
                       b = row.b, alias_b = row.alias_b, key_b = row.key_b,
-                      how = row.how, to_many = true, on_conditions = row.on_conditions)
+                      how = row.how, to_many = true, on_conditions = row.on_conditions,
+                      target_managed = row.target_managed)
   row_join[i] = stamped
   return stamped
 end
@@ -454,6 +461,7 @@ function _forward_fk_hop(instruct::SQLInstruction, src_model::PormGModel, src_ta
     alias_b = _get_alias_name(instruct),
     key_b = Models.fk_target_column(field),
     how = how,
+    target_managed = Models.model_is_managed(next_model),   # #771
   )
   return (row, next_model, last_field)
 end
@@ -486,6 +494,7 @@ function _reverse_hop(instruct::SQLInstruction, src_model::PormGModel, src_table
     how = how,
     # #74: a reverse foreign key (one-to-many) makes the child table the many-side.
     to_many = true,
+    target_managed = Models.model_is_managed(reverse_model),   # #771
   )
   return (row, reverse_model, last_field)
 end

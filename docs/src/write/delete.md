@@ -253,8 +253,8 @@ down, with `SELECT … FOR UPDATE`. Each lock uses the same predicate as that mo
 locked parent row cannot change until the delete commits, so children are selected from parents
 whose own columns stay fixed. If another session already changed a parent while the lock was
 waiting, PostgreSQL re-checks the new version: the parent is not locked, and none of its children
-are deleted. (One limit, covered at the end of this section: a filter that reads a *related* table
-is not pinned.)
+are deleted. A filter across a relation also locks the related rows it reads; see
+[below](#A-filter-across-a-relation-locks-the-rows-it-reads).
 
 This applies at every depth. Deleting a circuit locks the circuit and then its races. A race moved
 to another circuit mid-delete is therefore neither deleted nor stripped of its results.
@@ -284,8 +284,9 @@ come first, root first.
 
 What this costs and what it doesn't:
 
-- **Leaves are never locked**, so a delete with nothing to cascade emits exactly one statement, as
-  before.
+- **A delete with nothing to cascade takes no lock**, so it emits exactly one statement, as before.
+  Leaves of the cascade are never locked as parents (a filter across a relation can still lock a
+  leaf table it reads; see below).
 - **The same rows are locked, but for longer.** `FOR UPDATE` is the lock each parent's own
   `DELETE` takes anyway. It is now held from the first statement of the cascade instead of only
   near the end. While a large cascade runs, a concurrent insert of a child row, an update of a
@@ -298,23 +299,70 @@ What this costs and what it doesn't:
 - **SQLite takes no locks.** Its writers are serialized for the whole delete transaction, so no
   parent can change under a cascade there.
 
-The lock pins the parent's **own row**. It cannot pin a root filter that reads another table, such
-as a filter across a relation:
+#### A filter across a relation locks the rows it reads
+
+A parent's own lock pins its own row. A filter across a relation also reads another table, and
+every statement in the cascade re-reads it:
 
 ```julia
 M.Race.objects.filter("year" => 2009, "circuitid__name" => "Circuit de Monaco").delete()
 ```
 
-Every statement in the cascade re-reads `circuit`. If another session renames that circuit while
-the delete is running, the results can already be gone when the race's own `DELETE` re-checks the
-new name and skips the race. The lock also doesn't stop the parent set from *growing*: a row that
-starts matching mid-cascade can be deleted without the children an earlier statement already
-passed over. The database's foreign keys catch that case wherever one exists (see *Concurrency*
-below).
+Without more, another session could rename that circuit mid-delete. The results would already be
+gone when the race's own `DELETE` re-checked the new name and skipped the race. So right after the
+root's own lock, `delete()` also locks every table the filter joins, one `SELECT … FOR SHARE` per
+hop, in the order the filter walks them:
 
-Where a filter on a related table decides which parents go, pin that table yourself, for example
-with [`select_for_update`](transaction.md#Row-Level-Locking) inside a transaction. Or serialize the
-two writers with an [advisory lock](../advisory_lock.md).
+```julia
+steps = M.Race.objects.filter("year" => 2009, "circuitid__name" => "Circuit de Monaco").delete(show_query = :dict)
+[(s[:operation], s[:model]) for s in steps if s[:operation] == :lock]
+# (:lock, "race")
+# (:lock, "circuit")
+
+steps[2][:sql_text]
+# SELECT count(*) FROM (SELECT 1 FROM "circuit" AS "__pormg_locked" WHERE "__pormg_locked"."circuitid" IN (SELECT DISTINCT "Tb_1"."circuitid"
+#   FROM "race" as "Tb"
+#    INNER JOIN "circuit" AS "Tb_1" ON "Tb"."circuitid" = "Tb_1"."circuitid"
+#   WHERE "Tb"."year" = $1 AND "Tb_1"."name" = $2) FOR SHARE) AS "__pormg_lock"
+```
+
+There is one lock step per join, and its `:model` is the joined table's name (for a many-to-many
+hop, the join table's). A circuit renamed *before* the lock is read in its
+new state by every statement that follows, so the race and its results agree on whether it matches.
+A rename attempted *after* the lock waits for the delete to commit.
+
+What these locks cost:
+
+- **An update of a row the filter reads waits for the whole delete** — the circuit here.
+- **They lock parents after children.** A forward hop (race → circuit) runs the opposite way to the
+  cascade's parents-first locks, so a joined race delete can now deadlock with a circuit delete, or
+  with a transaction that updates a circuit and then one of its races. PostgreSQL aborts one of the
+  two with a deadlock error; it does not hang.
+- **`FOR SHARE` needs UPDATE privilege** on the joined table, where the delete used to need only
+  `SELECT` on it.
+- **A reverse or many-to-many hop locks more than it tests.** It is keyed on the join column, so it
+  locks every child (or join-table row) of each matching parent, not only the rows the filter
+  compares.
+
+A hop into an [unmanaged model](../models.md#Unmanaged-models) is **not** locked. Such a model is
+usually a view or a table another system owns, and `FOR SHARE` fails on an aggregating or
+materialized view, or on a table the role may only read, so locking it would turn a working delete
+into an error. The managed hops of the same filter are still locked.
+
+Cases that remain unpinned:
+
+- **A hop into an unmanaged model**, as above.
+- **A filter that reads another table through a subquery**, such as
+  `"circuitid__@in" => M.Circuit.objects.filter("country" => "Monaco").values("circuitid")`. Every
+  statement re-reads it.
+- **A `cjoin_on` join**, which has no key column to lock by.
+- **A parent set that grows.** A row that starts matching mid-cascade can be deleted without the
+  children an earlier statement already passed over. The database's foreign keys catch this wherever
+  one exists (see *Concurrency* below).
+
+Where any of these decides which parents go, pin the table yourself, for example with
+[`select_for_update`](transaction.md#Row-Level-Locking) inside a transaction. Or serialize the two
+writers with an [advisory lock](../advisory_lock.md).
 
 ### Concurrency: a cascade path can be pruned out from under you on PostgreSQL
 

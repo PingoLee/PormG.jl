@@ -51,9 +51,24 @@ import PormG.Models
 # A worker store in miniature: runs own tasks (CASCADE), tasks carry notes (SET_NULL) and keyless
 # tags. The shape Nitro.jl#379 hit — a compare-and-delete on `mf_task` — plus one of each statement
 # kind the deletion collector can emit.
+# The org a run belongs to: gives a task filter a second hop (`run__org__name`) for #771.
+Mf_org = Models.Model("mf_org",
+  id   = Models.IDField(),
+  name = Models.CharField(),
+)
+
+# An unmanaged view a run points at (models.md → Unmanaged models): #771 must not lock through it.
+Mf_run_stats_v = Models.Model("mf_run_stats_v"; managed = false,
+  id    = Models.IDField(),
+  score = Models.IntegerField(),
+)
+
 Mf_run = Models.Model("mf_run",
   id     = Models.IDField(),
   status = Models.CharField(),
+  org    = Models.ForeignKey(Mf_org, on_delete = "DO_NOTHING", related_name = "runs", null = true),
+  stats  = Models.ForeignKey(Mf_run_stats_v, on_delete = "DO_NOTHING", related_name = "runs",
+    null = true, db_constraint = false),
 )
 
 Mf_task = Models.Model("mf_task",
@@ -67,6 +82,41 @@ Mf_note = Models.Model("mf_note",
   id   = Models.IDField(),
   body = Models.CharField(),
   task = Models.ForeignKey(Mf_task, on_delete = "SET_NULL", related_name = "notes", null = true),
+)
+
+# #771 — every other way a join can reach an unmanaged model. A reverse hop: an unmanaged audit view
+# keyed at tasks. And a many-to-many whose related end is unmanaged, from an unmanaged owner (so the
+# auto join table is unmanaged too, Django's rule) and from a managed one (so it is created, and
+# locked). Each owner has a CASCADE child, so it is a parent and takes locks at all.
+Mf_audit = Models.Model("mf_audit_v"; managed = false,
+  id    = Models.IDField(),
+  score = Models.IntegerField(),
+  task  = Models.ForeignKey(Mf_task, on_delete = "DO_NOTHING", related_name = "audits", null = true),
+)
+
+Mf_label = Models.Model("mf_label_v"; managed = false,
+  id    = Models.IDField(),
+  label = Models.CharField(),
+)
+
+Mf_feed = Models.Model("mf_feed_v"; managed = false,
+  id     = Models.IDField(),
+  labels = Models.ManyToManyField(Mf_label, related_name = "feeds"),
+)
+
+Mf_feed_item = Models.Model("mf_feed_item",
+  id   = Models.IDField(),
+  feed = Models.ForeignKey(Mf_feed, on_delete = "CASCADE", related_name = "items", db_constraint = false),
+)
+
+Mf_board = Models.Model("mf_board",
+  id     = Models.IDField(),
+  labels = Models.ManyToManyField(Mf_label, related_name = "boards"),
+)
+
+Mf_pin = Models.Model("mf_pin",
+  id    = Models.IDField(),
+  board = Models.ForeignKey(Mf_board, on_delete = "CASCADE", related_name = "pins"),
 )
 
 # Keyless: no primary key, so a joined update of it cannot go through a pk anyway.
@@ -251,6 +301,128 @@ _mf_ops(steps) = [(s[:operation], s[:model]) for s in steps]
     q = MF.Mf_run.objects
     q.filter("status" => "GONE")
     @test !any(s -> s[:operation] == :lock, _mf_steps(q, _MF_SL))
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #771: a root filter across a relation — the tables it JOINS are locked too
+# #770's lock pins the root's own row, and a joined filter also reads another table: a concurrent
+# rename of that row flipped the root after its children were gone (staged on db_2 in
+# test_mutation_fence_concurrency.jl). So right after the root's own lock comes one `FOR SHARE` per
+# hop, in chain order. Each sits on a plain scan of the hop's table, keyed through the join, never on
+# the nullable side of the LEFT JOIN, which PostgreSQL refuses to lock.
+# ─────────────────────────────────────────────────────────────────────────────
+_mf_locks(steps) = [s for s in steps if s[:operation] == :lock]
+
+@testset "a joined root locks the tables its filter reads (#771)" begin
+  @testset "PostgreSQL: one hop, FOR SHARE after the root's own lock, before any write" begin
+    q = MF.Mf_task.objects
+    q.filter("id" => 7, "run__status" => "OPEN")
+    steps = _mf_steps(q, _MF_PG)
+    @test _mf_ops(steps) == [(:lock, "mf_task"), (:lock, "mf_run"), (:update, "mf_note"), (:delete, "mf_task")]
+
+    hop = steps[2]
+    @test hop[:sql_text] ==
+      "SELECT count(*) FROM (SELECT 1 FROM \"mf_run\" AS \"__pormg_locked\" " *
+      "WHERE \"__pormg_locked\".\"id\" IN (SELECT DISTINCT \"Tb_1\".\"id\"\n" *
+      "  FROM \"mf_task\" as \"Tb\"\n" *
+      "   LEFT JOIN \"mf_run\" AS \"Tb_1\" ON \"Tb\".\"run\" = \"Tb_1\".\"id\" \n" *
+      "  WHERE \"Tb\".\"id\" = \$1 AND \"Tb_1\".\"status\" = \$2) FOR SHARE) AS \"__pormg_lock\""
+    @test hop[:parameters] == [7, "OPEN"]
+    assert_marker_count(hop, :postgres)
+    # The root's own lock is the #770 statement, untouched: FOR UPDATE, once.
+    @test count("FOR UPDATE", steps[1][:sql_text]) == 1
+    @test !occursin("FOR SHARE", steps[1][:sql_text])
+  end
+
+  @testset "PostgreSQL: two hops lock in chain order, each keyed through its own alias" begin
+    q = MF.Mf_task.objects
+    q.filter("run__org__name" => "ACME")
+    locks = _mf_locks(_mf_steps(q, _MF_PG))
+    @test [s[:model] for s in locks] == ["mf_task", "mf_run", "mf_org"]
+    @test startswith(locks[2][:sql_text],
+      "SELECT count(*) FROM (SELECT 1 FROM \"mf_run\" AS \"__pormg_locked\" WHERE \"__pormg_locked\".\"id\" IN (SELECT DISTINCT \"Tb_1\".\"id\"\n")
+    @test startswith(locks[3][:sql_text],
+      "SELECT count(*) FROM (SELECT 1 FROM \"mf_org\" AS \"__pormg_locked\" WHERE \"__pormg_locked\".\"id\" IN (SELECT DISTINCT \"Tb_2\".\"id\"\n")
+    for hop in locks[2:3]
+      @test endswith(hop[:sql_text], " FOR SHARE) AS \"__pormg_lock\"")
+      @test hop[:parameters] == ["ACME"]
+      assert_marker_count(hop, :postgres)
+    end
+  end
+
+  # An ON value binds ahead of the WHERE value in the text. PostgreSQL numbers `$N` as values bind
+  # (WHERE first), so the pin is that each number still names its own value.
+  @testset "PostgreSQL: a join carrying an ON value binds each marker to its own value" begin
+    q = MF.Mf_task.objects
+    q.filter("status" => "WHEREVAL")
+    q.cjoin("run" => "Mf_run", filters = ["status" => "ONVAL"], warn = false)
+    hop = _mf_locks(_mf_steps(q, _MF_PG))[2]
+    @test occursin("ON \"Tb\".\"run\" = \"Tb_1\".\"id\" AND \"Tb_1\".\"status\" = \$2 \n  WHERE \"Tb\".\"status\" = \$1)", hop[:sql_text])
+    @test hop[:parameters] == ["WHEREVAL", "ONVAL"]
+    assert_marker_count(hop, :postgres)
+  end
+
+  # A view cannot always be locked (`FOR SHARE` fails on an aggregating or materialized one, and needs
+  # UPDATE privilege), so a hop into an unmanaged model is left unpinned — the managed hop before it
+  # in the same chain is still locked.
+  @testset "PostgreSQL: a hop into an unmanaged model is not locked" begin
+    q = MF.Mf_task.objects
+    q.filter("run__status" => "OPEN", "run__stats__score__@gt" => 10)
+    locks = _mf_locks(_mf_steps(q, _MF_PG))
+    @test [s[:model] for s in locks] == ["mf_task", "mf_run"]
+    @test !any(s -> occursin("\"mf_run_stats_v\" AS \"__pormg_locked\"", s[:sql_text]), locks)
+    # ...but the view is still in the join the managed hop's selection reads.
+    @test occursin("JOIN \"mf_run_stats_v\"", locks[2][:sql_text])
+    assert_marker_count(locks[2], :postgres)
+  end
+
+  # The same skip through every other producer of a join row, each pinned on its own.
+  @testset "PostgreSQL: the skip holds for a reverse hop, a cjoin and a many-to-many" begin
+    lock_models(q) = [s[:model] for s in _mf_locks(_mf_steps(q, _MF_PG))]
+
+    # A reverse hop into the unmanaged audit view (`_reverse_hop`).
+    q = MF.Mf_task.objects
+    q.filter("id" => 7, "audits__score__@gt" => 10)
+    @test lock_models(q) == ["mf_task"]
+
+    # A cjoin into it, which rebuilds the row by copy (`_with_config`).
+    q = MF.Mf_run.objects
+    q.cjoin("stats" => "Mf_run_stats_v", filters = ["score" => 5], warn = false)
+    q.filter("status" => "OPEN")
+    # mf_task is the #770 lock of the next level down; no mf_run_stats_v hop sits between them.
+    @test lock_models(q) == ["mf_run", "mf_task"]
+
+    # Both ends unmanaged: the auto join table is unmanaged as well, so neither hop is locked.
+    q = MF.Mf_feed.objects
+    q.filter("labels__label" => "x")
+    @test lock_models(q) == ["mf_feed_v"]
+
+    # A managed owner: its auto join table is created by PormG, so it is locked; the unmanaged
+    # related end is not.
+    q = MF.Mf_board.objects
+    q.filter("labels__label" => "x")
+    locks = lock_models(q)
+    @test length(locks) == 2 && locks[1] == "mf_board"
+    @test !("mf_label_v" in locks)
+  end
+
+  @testset "PostgreSQL: a join-free root takes no FOR SHARE" begin
+    q = MF.Mf_run.objects
+    q.filter("status" => "GONE")
+    @test !any(s -> occursin("FOR SHARE", s[:sql_text]), _mf_steps(q, _MF_PG))
+  end
+
+  @testset "PostgreSQL: a joined root with nothing to cascade takes no lock at all" begin
+    q = MF.Mf_note.objects
+    q.filter("task__run__status" => "OPEN")
+    @test _mf_ops(_mf_steps(q, _MF_PG)) == [(:delete, "mf_note")]
+  end
+
+  @testset "SQLite: a joined root takes no lock" begin
+    q = MF.Mf_task.objects
+    q.filter("id" => 7, "run__status" => "OPEN")
+    @test isempty(_mf_locks(_mf_steps(q, _MF_SL)))
   end
 end
 

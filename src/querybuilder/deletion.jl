@@ -91,10 +91,13 @@ alone (#765). See *Filters are a fence on PostgreSQL* in [Deleting Records](writ
 On PostgreSQL, before any child statement runs, every collected model that is the parent of an
 emitted `DELETE` or `UPDATE` is locked top-down with `SELECT … FOR UPDATE` over the same predicate
 its `DELETE` uses, so a parent's own columns cannot change after its children are gone (#770). A
-root filter that reads another table (`"circuitid__name" => …`) is not pinned and can still change
-mid-cascade. Those lock statements appear in `show_query` and
-[`inspect_query`](@ref) output as `:operation => :lock` steps. A delete with nothing to cascade
-emits no lock, and SQLite emits none at all.
+root filter across a relation (`"circuitid__name" => …`) also locks the rows it reads in each
+joined table, `SELECT … FOR SHARE`, right after the root's own lock (#771) — except a table of an
+unmanaged model (`managed = false`, e.g. a view), which `FOR SHARE` may not be able to lock. A
+filter that reads another table through a subquery (`"x__@in" => M.Other.objects…`) is not
+pinned. Those lock statements appear in `show_query` and [`inspect_query`](@ref) output as
+`:operation => :lock` steps. A delete with nothing to cascade emits no lock, and SQLite emits none
+at all.
 
 The cascade descends at most 50 levels. Beyond that it raises `QueryBuildError` naming the models it
 walked. Usually that means a foreign-key cycle — two models declaring `on_delete = CASCADE` at each
@@ -300,10 +303,15 @@ function delete(objct::SQLObjectHandler;
     # #770: lock every parent, top-down, BEFORE any statement below reads it. See `lock_objects`.
     # PostgreSQL only: SQLite's writers are already serialized for the whole transaction (the
     # `BEGIN IMMEDIATE` + write-lock comment above), so no parent can change under the cascade there.
+    #
+    # #771: right after the root's own lock, the tables its filter JOINs are locked `FOR SHARE`, so a
+    # root filter across a relation cannot change mid-cascade either. See `lock_related_objects`.
     if connection isa PormGPostgres
       for lock_model in _models_to_lock(collector)
         res = lock_objects(connection, lock_model, collector.objects[lock_model], show_query, conn)
         push!(results, res)
+        lock_model === model &&
+          append!(results, lock_related_objects(connection, collector.objects[lock_model], show_query, conn))
       end
     end
 
@@ -832,9 +840,7 @@ function _collector_predicate(connection::Union{PormGPostgres, PormGSQLite},
   alias = ""
   for key in keys
     build_one = () -> begin
-      work = deepcopy(key[:objct].object)
-      empty!(work.values)
-      instruction = build(work, connection=connection, parameters=parameters)
+      instruction = _build_entry(connection, key, parameters)
       alias = quote_identifier(instruction.alias, connection)
       instruction
     end
@@ -882,12 +888,12 @@ end
 #     child-then-parent can now deadlock against a delete, which PostgreSQL detects and raises rather
 #     than hangs on.
 #
-# What it does NOT cover (staged on db_2 in the #770 review): the lock pins the parent's OWN row. A
-# root filter that reads another table — a joined `"circuitid__name" => …`, or an `"x__@in" =>
-# subquery` — is re-read by every later statement on a fresh snapshot, so if that other table changes
-# mid-cascade the root's fenced DELETE skips the parent after its children have gone, exactly as
-# before. Nor does it stop the parent set GROWING (a row that starts matching mid-cascade). Both are
-# documented in delete.md; closing the first needs its own design (#771).
+# This lock pins the parent's OWN row. A root filter that reads another table through a JOIN (a
+# `"circuitid__name" => …`) is pinned by `lock_related_objects`, which runs right after it — staged
+# on db_2 in the #770 review and closed by #771. Still NOT covered, and documented in delete.md: a
+# filter that reads another table through a SUBQUERY (`"x__@in" => subquery`), re-read by every later
+# statement on a fresh snapshot, a JOIN into an unmanaged model (skipped there on purpose), and a
+# parent set that GROWS (a row that starts matching mid-cascade).
 #
 # Leaves are never locked, so a delete with nothing to cascade emits exactly the statements it did
 # before. The `count(*)` wrapper keeps a large cascade from shipping one row per locked parent back to
@@ -927,6 +933,103 @@ function lock_objects(connection::PormGPostgres, model::PormGModel, keys::Vector
   end
   with_transaction(connection, sql, conn=conn, params=parameters)
   return nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lock the tables a joined filter reads (#771)
+#
+# `lock_objects` pins a parent's OWN row. A root filter that crosses a relation —
+# `M.Race.objects.filter("raceid" => r, "circuitid__name" => n)` — also reads `circuit`, and every
+# statement of the cascade re-reads it on a fresh READ COMMITTED snapshot. Staged on db_2 in the #770
+# review: a concurrent rename of the circuit mid-cascade let the results go, then the race's own
+# fenced DELETE re-read the new name and skipped the race. So right after the root's own lock, every
+# table its filter JOINs is locked `FOR SHARE` too — one statement per hop, in chain order — and a
+# rename (or delete) of a row the filter read now waits for the whole cascade.
+#
+# The statement is `SELECT 1 FROM <hop table> AS "__pormg_locked" WHERE "__pormg_locked".<key_b> IN
+# (SELECT DISTINCT <alias_b>.<key_b> FROM <root> … <joins> WHERE …) FOR SHARE`, not a `FOR SHARE OF`
+# on the root's own joined SELECT: across a nullable foreign key the join is a LEFT JOIN, PostgreSQL
+# refuses to lock the nullable side of one, and it must stay LEFT (`_target_predicate`'s header says
+# why). The lock sits on a plain single-table scan instead, and the joins print verbatim inside the IN.
+#
+# Why it holds, and in which order:
+#   - The root's own FOR UPDATE runs FIRST, so its foreign keys are pinned, and the hops follow in
+#     chain order, each pinning the key the next hop is reached through. Locking the related rows
+#     first would let a root row re-pointed in between reach an unlocked row.
+#   - The IN set is computed once, on the statement's snapshot. A lock that waited re-checks the new
+#     version only against that cached set — so a hop row whose join key changed drops out, and one
+#     whose other columns changed (the rename) is locked as it now stands. Either way every later
+#     statement of the cascade reads the same version, so the parent and its children agree on
+#     whether it matches.
+#   - `FOR SHARE`, not `FOR KEY SHARE`: a rename is a non-key update, and only `FOR SHARE` blocks it.
+#
+# What it costs, beyond one statement per hop:
+#   - LOCK ORDER: a forward hop locks a parent table (circuit) after its child (race) — the reverse
+#     of #770's parents-first order. A joined race delete and a circuit delete, or a transaction that
+#     updates a circuit and then one of its races, can now deadlock with it. PostgreSQL detects that
+#     and aborts one transaction.
+#   - PRIVILEGE: `FOR SHARE` needs UPDATE privilege on the locked table, where the delete needed only
+#     SELECT on it before.
+#   - BREADTH: keyed on the hop's join column, a reverse or many-to-many hop locks every child (or
+#     through row) of each matching root, not only the ones the filter tests; a `cjoin(join_type =
+#     "RIGHT")` hop also locks rows that pair with no root. Contention only — never a wrong row set.
+#
+# Skipped on purpose: a hop into an UNMANAGED model (`ModelJoin.target_managed`). Those are views and
+# tables another system owns — `docs/src/models.md` recommends exactly that for a view — and
+# `FOR SHARE` fails outright on an aggregating or materialized view, and on a table the role may only
+# read. Locking them would turn a delete that works into an error; leaving them unpinned keeps #770's
+# documented behavior for that hop.
+#
+# Also NOT covered, and delete.md says so: a filter that reads another table through a SUBQUERY
+# (`"x__@in" => M.Other.objects…`, `Subquery`, `Exists`), an anchorless `cjoin_on` (no key column to
+# lock by), and a parent set that GROWS mid-cascade (a lock pins the rows it found, not the rows that
+# may start matching).
+#
+# Called for the ROOT only: every cascade entry below it is a join-free `"<fk>__@in"` filter, and
+# building each one just to find no hop would cost a build per level of a deep cascade, each nesting
+# its whole ancestor chain. (A self-referential root still builds its own join-free child entries
+# once each — they are entries of the root model.)
+# ─────────────────────────────────────────────────────────────────────────────
+function lock_related_objects(connection::PormGPostgres, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
+    show_query::Symbol, conn)
+  results = Any[]
+  locked = quote_identifier("__pormg_locked", connection)
+  for key in keys
+    # One fresh build per statement, into its own collector: the hop statement is standalone, so its
+    # `$N` numbering starts at 1. The first build doubles as the probe — an entry with no lockable
+    # hop costs exactly one.
+    hop = 1
+    while true
+      parameters = get_parameter(connection)
+      instruction = _build_entry(connection, key, parameters)
+      rows = [r for r in instruction.row_join if r isa ModelJoin && r.target_managed]
+      hop > length(rows) && break
+      row = rows[hop]
+      sql = "SELECT count(*) FROM (SELECT 1 FROM $(safe_table_identifier(row.b, connection)) AS $(locked)" *
+        " WHERE $(_joined_key_selection(instruction, row, locked))" *
+        " FOR SHARE) AS $(quote_identifier("__pormg_lock", connection))"
+      if show_query !== :execute
+        # `:model` is the hop's physical table, which is all a `ModelJoin` carries — for a
+        # many-to-many hop it is the join table's name.
+        push!(results, _show_query_result(show_query, sql, connection, row.b, :lock, parameters=parameters))
+      else
+        with_transaction(connection, sql, conn=conn, params=parameters)
+      end
+      hop += 1
+    end
+  end
+  return results
+end
+
+"""
+A collected entry's query, built fresh into `parameters` for a row predicate. The projection is
+stripped from a private copy: the entry's `:key` projection is what a child's `"<fk>__@in"` reads,
+but a row predicate has no projection (#765, the #668 move).
+"""
+function _build_entry(connection::Union{PormGPostgres, PormGSQLite}, key::Dict{Symbol, Union{String, SQLObjectHandler}}, parameters)
+  work = deepcopy(key[:objct].object)
+  empty!(work.values)
+  return build(work, connection=connection, parameters=parameters)
 end
 
 function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},

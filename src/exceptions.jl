@@ -371,8 +371,9 @@ Base.showerror(io::IO, e::StatementError) = print(io,
     TransactionError(msg) <: PormGError
 
 The transaction API was used in a way that cannot work — `atomic(durable=true)` or
-[`without_foreign_keys`](@ref) nested inside an open transaction on the same database, or an
-operation on a model bound to one connection attempted while a transaction is open on another.
+[`without_foreign_keys`](@ref PormG.ConnectionPool.without_foreign_keys) nested inside an open
+transaction on the same database, or an operation on a model bound to one connection attempted
+while a transaction is open on another.
 
 Not a [`DatabaseError`](@ref): nothing was sent, and the database is not involved. Every case is
 caught before any statement is issued. A deadlock or a rollback the *server* forces is an

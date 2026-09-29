@@ -124,10 +124,17 @@ const _VRT_KINDS = [
     # …and with nothing to apply it is the identity, so a no-op interval never truncates a column.
     @test PormG.sql_canonicalize(PormG.CDate(), _VRT_SL, "\"Tb\".\"d\"") == "\"Tb\".\"d\""
 
-    # PostgreSQL: identity for every kind.
+    # PostgreSQL: identity for every kind but DATE.
     for (kind, _, _) in _VRT_KINDS
+      kind isa PormG.CDate && continue
       @test PormG.sql_canonicalize(kind, _VRT_PG, "\"Tb\".\"c\"") == "\"Tb\".\"c\""
     end
+    # #572: a DATE result is cast back to `date`, because PostgreSQL's own `date + interval` is a
+    # timestamp for any interval. The parentheses are part of the cell: `expr` may be any expression,
+    # and `::` binds tighter than every operator it could contain.
+    @test PormG.sql_canonicalize(PormG.CDate(), _VRT_PG, "\"Tb\".\"d\" + x") == "(\"Tb\".\"d\" + x)::date"
+    @test_throws PormG.QueryBuildError PormG.sql_canonicalize(
+      PormG.CDate(), _VRT_PG, "\"Tb\".\"d\"", ["'+' || ? || ' days'"])
     # SQLite-style modifiers on PostgreSQL are a caller bug, not a rendering choice: PostgreSQL
     # composes durations with `make_interval`. Fail loudly rather than emit something plausible.
     @test_throws PormG.QueryBuildError PormG.sql_canonicalize(

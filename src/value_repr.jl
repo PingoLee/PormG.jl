@@ -235,7 +235,9 @@ sqlite_bind_value(x, ::PormGSQLite = _SQLiteBindEngine()) = throw(InvalidValueEr
 # The asymmetry between the two engines IS the subject of #564, so it is stated in the table rather
 # than in an `if` at a call site: on PostgreSQL a temporal column has a real type and its value IS
 # its canonical form, so there is nothing to wrap; on SQLite the value is TEXT and the wrapper is the
-# only thing making the expression comparable to what the column holds.
+# only thing making the expression comparable to what the column holds. The one PostgreSQL wrap is
+# DATE (#572): the value is typed, but `date + interval` evaluates to a timestamp, so the cell casts
+# the expression back to the type the rule says it has.
 """
     sql_canonicalize(kind, backend, expr, modifiers = String[]) -> String
 
@@ -257,6 +259,23 @@ function sql_canonicalize(::CanonicalType, conn::PormGPostgres, expr::AbstractSt
     throw(QueryBuildError("PostgreSQL does not take SQLite-style datetime modifiers; " *
                           "compose the duration with make_interval instead"))
   return expr
+end
+
+# #572 — a DATE result on PostgreSQL is cast back to `date`. `date + interval` is a `timestamp` in
+# SQL:2003 for ANY interval, whole days included, so without the cast `F("date") + Day(1)` projected
+# a `DateTime` on PostgreSQL while SQLite's `date(...)` projected a `Date` — the same expression, two
+# kinds. PormG's rule is narrower than SQL's on purpose (`_shift_result_kind`: only a sub-day
+# component promotes), and this cell is what makes PostgreSQL's OUTPUT follow that rule instead of
+# SQL's. The cast is exact: the result of a whole-day shift on a date is always midnight.
+#
+# Only a `CDate` RESULT reaches this arm. A sub-day shift on a DATE column is typed `CDateTime` by
+# the caller before it gets here, so it keeps the generic identity arm above and stays a timestamp.
+function sql_canonicalize(::CDate, conn::PormGPostgres, expr::AbstractString,
+                          modifiers::Vector{String} = String[])
+  isempty(modifiers) ||
+    throw(QueryBuildError("PostgreSQL does not take SQLite-style datetime modifiers; " *
+                          "compose the duration with make_interval instead"))
+  return "($(expr))::date"
 end
 
 # A kind/backend pair with no canonical form of its own: the expression is already what it is.

@@ -869,3 +869,77 @@ end
     @test _fd_params(q; conn = _FD_SL) == Any[_FD_TS_TEXT]
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #572: whole-day arithmetic on a DATE column projects a date on PostgreSQL too.
+# PostgreSQL's own `date + interval` is a `timestamp` for ANY interval, so `F("seen") + Day(1)`
+# read back as a `DateTime` there while SQLite's `date(...)` read back a `Date`. The render is now
+# cast back to `date` whenever the RESULT kind is a date — which, by `_shift_result_kind`, is a
+# whole-day shift on a DATE. Everything that is not one (a sub-day shift, a TIMESTAMP column, a
+# zero-length link) must render exactly as before, and those are the controls below.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#572: a whole-day DATE shift is cast back to date on PostgreSQL" begin
+  # The three whole-day spellings on a DATE column. Asserted as the EXACT expression, so the cast's
+  # placement (outside the shift, not inside `make_interval`) is part of the contract.
+  @testset "every whole-day spelling on a DATE is cast" begin
+    for (label, expr, sql, params) in (
+        ("Day(1)",   F("seen") + Dates.Day(1),
+         "((\"Tb\".\"seen\" + make_interval(days => \$1::integer)))::date",   Any[1]),
+        ("bare 7",   F("seen") + 7,
+         "((\"Tb\".\"seen\" + make_interval(days => \$1::integer)))::date",   Any[7]),
+        ("Month(1)", F("seen") - Dates.Month(1),
+         "((\"Tb\".\"seen\" - make_interval(months => \$1::integer)))::date", Any[1]),
+      )
+      q = FD.Fd_result.objects
+      q.values("x" => expr)
+      @test occursin(sql, _fd_sql(q; conn = _FD_PG))
+      @test _fd_params(q; conn = _FD_PG) == params
+    end
+  end
+
+  # The controls: each is NOT a date-valued result, so none may carry the cast. A sub-day shift
+  # promotes to a timestamp (#527), a TIMESTAMP column was never a date, and a zero-length link
+  # emits no shift at all — casting any of them would silently truncate a time of day.
+  @testset "non-date results are not cast" begin
+    for expr in (F("seen") + Dates.Hour(6), F("logged_at") + Dates.Day(1),
+                 F("logged_at") + 7, F("seen") + Dates.Day(0))
+      q = FD.Fd_result.objects
+      q.values("x" => expr)
+      @test !occursin("::date", _fd_sql(q; conn = _FD_PG))
+    end
+  end
+
+  # A chain casts at every link, so a later sub-day link starts from a `date` and promotes from
+  # there — the same value SQL gives for `(date + 1 day) + 6 hours`.
+  @testset "a chain casts each whole-day link, and a sub-day link still promotes" begin
+    q = FD.Fd_result.objects
+    q.values("x" => (F("seen") + 7) + 3)
+    @test length(collect(eachmatch(r"\)::date", _fd_sql(q; conn = _FD_PG)))) == 2
+
+    q2 = FD.Fd_result.objects
+    q2.values("x" => (F("seen") + Dates.Day(1)) + Dates.Hour(6))
+    sql2 = _fd_sql(q2; conn = _FD_PG)
+    @test length(collect(eachmatch(r"\)::date", sql2))) == 1        # the inner link only
+    # The outer link is the sub-day one, so it wraps the cast date and is itself left uncast.
+    @test occursin("(((\"Tb\".\"seen\" + make_interval(days => \$1::integer)))::date " *
+                   "+ make_interval(hours => \$2::integer))", sql2)
+  end
+
+  # A joined DATE column resolves its kind only after the left is rendered (the render-then-type
+  # order); the cast depends on that kind, so it is the case that would silently lose it.
+  @testset "a dotted join key to a DATE is cast" begin
+    q = FD.Fd_result.objects
+    q.values("x" => F("race__date") + 30)
+    @test occursin("((\"Tb_1\".\"date\" + make_interval(days => \$1::integer)))::date",
+                   _fd_sql(q; conn = _FD_PG))
+  end
+
+  # SQLite already projected a date — its render must be byte-identical to before.
+  @testset "SQLite is unchanged" begin
+    q = FD.Fd_result.objects
+    q.values("x" => F("seen") + Dates.Day(1))
+    sql = _fd_sql(q; conn = _FD_SL)
+    @test occursin("date(\"Tb\".\"seen\", '+' || ? || ' days')", sql)
+    @test !occursin("::date", sql)
+  end
+end

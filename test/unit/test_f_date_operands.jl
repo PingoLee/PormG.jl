@@ -448,6 +448,27 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #541 — the node-as-container contract, pinned for BOTH families. The guard above covers `isequal`
+# and everything hashed on it; `in` and `findfirst(==(x), …)` reach `==`, which builds a predicate,
+# so the caller's boolean context throws. That is the recorded decision, not a gap: a `Bool`-returning
+# `==` between nodes would break `F("grid") == F("positionorder")`, and a `Base.in` override was
+# declined. Either change makes this testset fail — which is the point: it has to be a decision again.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#541: nodes answer isequal by identity; == stays a predicate, so `in` does not" begin
+  for (x, y) in ((F("points"), F("grid")), (Joined("r", "date"), Joined("r", "time")))
+    @test isequal(x, x) === true
+    @test isequal(x, y) === false
+    @test x in Set([x, y])
+    @test !(x in Set([y]))
+    @test length(unique([x, x, y])) == 2
+    @test findfirst(isequal(y), [x, y]) == 2
+    @test (x == y) isa QB.FExpression                   # the predicate #457 made `==` build
+    @test_throws TypeError x in [x, y]                  # ...so `in`, which asks `==`, cannot answer
+    @test_throws TypeError findfirst(==(y), [x, y])
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #536 — the SQL-text cast follows the COLUMN, the bytes follow the pair. On PostgreSQL a numeric
 # literal against a NUMERIC column keeps the explicit cast the raw arm always emitted (that is what
 # lets an integer column be compared against a double); against a boolean or text column it binds

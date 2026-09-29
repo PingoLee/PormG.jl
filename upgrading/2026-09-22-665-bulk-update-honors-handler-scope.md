@@ -1,6 +1,6 @@
 ## `bulk_update` keeps the handler's filters and no longer modifies the handler (#665)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-22
 - **PormG ref**: #665; `src/querybuilder/execution_bulk.jl` (`_bulk_update`), `src/querybuilder/execution.jl` (`_reject_unsafe_mutation_shape`)
 - **Severity**: breaking — a filtered handler now narrows the update, and some handler shapes now raise

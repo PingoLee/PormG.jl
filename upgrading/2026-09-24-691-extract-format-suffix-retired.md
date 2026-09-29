@@ -1,6 +1,6 @@
 ## `Extract` — the 3-arg `format` suffix is removed, and an unknown part raises `InvalidValueError` (#691)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-24
 - **PormG ref**: #691; `src/Dialect.jl` (`PG_EXTRACT_FIELDS`, `extract_part`, `EXTRACT`), `src/querybuilder/functions.jl` (`Extract`)
 - **Severity**: breaking — one arity removed, and a string that is not a date/time field now raises when the expression is built

@@ -1,6 +1,6 @@
 ## `migrate(connection, settings; path=…)`: the unused `path` keyword is removed (#732)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-25
 - **PormG ref**: #732; `src/migrations/runner.jl` (`migrate`)
 - **Severity**: breaking (keyword argument removed)

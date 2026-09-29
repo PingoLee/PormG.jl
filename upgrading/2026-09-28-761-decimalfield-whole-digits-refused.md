@@ -1,6 +1,6 @@
 ## `DecimalField` writes — a value with too many digits before the point raises `InvalidValueError` (#761)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-28
 - **PormG ref**: #761; `src/querybuilder/sanitization.jl` (`_decimal_digit_counts`, `_validate_field_value` step 9)
 - **Severity**: behavior change — a write SQLite used to store is refused, and on PostgreSQL the refusal changes type from `StatementError` to `InvalidValueError`

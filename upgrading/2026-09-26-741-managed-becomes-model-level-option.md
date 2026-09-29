@@ -1,6 +1,6 @@
 ## `managed` becomes a model-level option, so a field of that name needs `db_column` (#741)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **PormG ref**: #741; `src/constants.jl`, `src/Models.jl`, `src/Kernel.jl`, `src/migrations/planner.jl`,
   `src/migrations/importers.jl`, `docs/src/models.md`, `docs/src/import_django.md`
 - **Recorded**: 2026-09-26

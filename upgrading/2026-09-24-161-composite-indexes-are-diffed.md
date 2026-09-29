@@ -1,6 +1,6 @@
 ## `makemigrations` — composite indexes and uniqueness are diffed on existing tables, and undeclared ones are dropped (#161)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-24
 - **PormG ref**: #161, #19; `src/migrations/planner.jl` (`_plan_composite_actions!`, `_check_composite_names`), `src/migrations/introspection.jl` (`_pg_composite_indexes`, `_sqlite_composite_indexes`), `src/migrations/column_spec.jl` (`LiveComposite`, `declared_composites`)
 - **Severity**: behavior change — the first `makemigrations` after upgrading can plan statements for tables whose models did not change

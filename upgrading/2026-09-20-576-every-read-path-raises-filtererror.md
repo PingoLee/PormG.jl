@@ -1,6 +1,6 @@
 ## Every read path now raises `FilterError` for a value it cannot coerce (#576)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-20
 - **PormG ref**: #576; `src/querybuilder/build_helpers.jl` (`_guarded_format`,
   `_render_sargable_date_range`, the `SQLTypeFunction` branches, the #474 memo arm),

@@ -1,6 +1,6 @@
 ## `makemigrations` — refuses to drop a table that a view or a trigger still reads (#754)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-25
 - **PormG ref**: #754; `src/migrations/planner.jl` (`_refuse_dropped_table_dependents`), `src/migrations/introspection.jl` (`_pg_drop_table_dependents`, `_sqlite_drop_table_dependents`)
 - **Severity**: behavior change. Deleting a model that a view reads used to plan the drop; it now raises `InvalidMigrationError`

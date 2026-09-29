@@ -1,6 +1,6 @@
 ## `delete` / `update` — filters are written on the target row, so PostgreSQL re-checks them (#765)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-28
 - **PormG ref**: #765; `src/querybuilder/deletion.jl` (`_collector_predicate`), `src/querybuilder/execution.jl` (`_target_predicate`, `_target_pk_selection`, `_mutation_predicate`, `update`)
 - **Severity**: behavior change — the SQL text (and, for joined statements, the bound values) of every `delete()` and of a joined `update()` changes; which rows are written changes only under concurrency, and for a joined `update()` of a model without a primary key

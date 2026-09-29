@@ -1,6 +1,6 @@
 ## `migrate(…; dry_run_only = true)` is removed — use `dry_run(…)` (#737)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-26
 - **PormG ref**: #737; `src/migrations/runner.jl` (`migrate`, `dry_run`)
 - **Severity**: breaking (keyword argument removed)

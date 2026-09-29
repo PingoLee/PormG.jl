@@ -1,6 +1,6 @@
 ## An integer field's `default=` no longer accepts a `Decimals.Decimal` (#632)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-21
 - **PormG ref**: #632; `src/Models.jl` (`format2int64`)
 - **Severity**: breaking — a `default=` spelling that constructed a field now raises

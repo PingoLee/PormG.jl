@@ -1,6 +1,6 @@
 ## `values` / `aggregate` — a projection alias containing `__` raises `QueryBuildError` (#757)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-28
 - **PormG ref**: #757 (supersedes #723); `src/querybuilder/object_manager.jl` (`_values!`, `_refuse_path_alias`)
 - **Severity**: breaking. A `values(...)` or `aggregate(...)` call that names an alias with `__` now raises where it used to build

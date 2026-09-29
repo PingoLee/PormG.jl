@@ -1,6 +1,6 @@
 ## `bulk_insert` / `bulk_update` on PostgreSQL bind one typed array per column (#672)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-24
 - **PormG ref**: #672; `src/querybuilder/execution_bulk.jl` (`bulk_insert`, `_bulk_update`, `_pg_unnest_source!`, `_bulk_cell`, `_bulk_chunk_rows`)
 - **Severity**: behavior change — on PostgreSQL, a `bulk_insert` into a column with no assignment cast from its field's type now fails, a `Vector` in a text-like bulk cell now raises, and tests pinning bulk `show_query` output need re-baselining

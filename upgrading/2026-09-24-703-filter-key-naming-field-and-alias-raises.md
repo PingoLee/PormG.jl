@@ -1,6 +1,6 @@
 ## `filter` — a key that names both a model field and a projection alias raises `AmbiguousFieldError` (#703)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-24
 - **PormG ref**: #703; `src/querybuilder/build_query.jl` (`_guard_field_alias_collision`)
 - **Severity**: behavior change. A filter that used to resolve silently, to one meaning or the other

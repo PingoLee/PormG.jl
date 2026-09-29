@@ -1,6 +1,6 @@
 ## `migrate()` returns a `MigrationResult`, and nothing pending is no longer an error (#737)
 
-- **Version**: Unreleased
+- **Version**: 0.7.0
 - **Recorded**: 2026-09-26
 - **PormG ref**: #737; `src/migrations/runner.jl` (`migrate`, `MigrationResult`)
 - **Severity**: behavior change

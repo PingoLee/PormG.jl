@@ -2366,19 +2366,30 @@ _like_escape_clause() = " ESCAPE '\\'"
 # #27: JSON/JSONB support
 # ---
 
-# JSON path extraction as TEXT. `segments` are pre-validated (safe identifier charset or a
-# non-negative integer index) by `_validate_json_key_segments`, so interpolating them into the
-# path literal is injection-safe. A numeric segment is a JSON array index.
+# #779: THE test for "this JSON path segment is an array index" — ASCII digits only. The validator
+# (`QueryBuilder._validate_json_key_segments`) and both renderers below call this one function, so
+# the two sides cannot disagree. They did: the renderers asked `tryparse(Int, s)`, which also reads
+# `0x`/`0b`/`0o` prefixes and returns `nothing` for a digit string too wide for `Int`, while the
+# validator asked `^\d+$`, which in Julia's regex also matches non-ASCII digits such as `"١٢"`. So
+# `"١٢"` and an overlong digit string were accepted as an index and rendered as a key. `"0x1"` stayed
+# out of it only because `SAFE_JSON_KEY_PATTERN` refuses a leading digit. `[0-9]`, not `\d`, for the
+# reason `Models._BASE10_NUMBER` spells it that way (#773). `\A…\z`, not `^…$`: PCRE's `$` also
+# matches before a final newline, so `^[0-9]+$` accepts `"12\n"`.
+_is_json_array_index(segment::AbstractString)::Bool = occursin(r"\A[0-9]+\z", segment)
+
+# JSON path extraction as TEXT. `segments` are pre-validated (safe identifier charset or an ASCII
+# digit index) by `_validate_json_key_segments`, so interpolating them into the path literal is
+# injection-safe. An all-digit segment is a JSON array index (`_is_json_array_index`).
 function _json_extract_expr(::PormGPostgres, column::String, segments::Vector{String})::String
   # `#>>` takes a text[] path and returns text; a numeric element indexes an array. Non-numeric
   # keys are double-quoted so a key literally named `null`/`true`/`false` is a normal path element
   # rather than an array-literal keyword (segments are pre-validated, so no escaping is needed).
-  parts = map(s -> tryparse(Int, s) === nothing ? "\"$s\"" : s, segments)
+  parts = map(s -> _is_json_array_index(s) ? s : "\"$s\"", segments)
   return string(column, " #>> '{", join(parts, ","), "}'")
 end
 function _json_extract_expr(::PormGSQLite, column::String, segments::Vector{String})::String
   # SQLite JSONPath: numeric segment => [n] (array index); key => .key.
-  path = "\$" * join(map(s -> tryparse(Int, s) === nothing ? ".$s" : "[$s]", segments))
+  path = "\$" * join(map(s -> _is_json_array_index(s) ? "[$s]" : ".$s", segments))
   return string("json_extract(", column, ", '", path, "')")
 end
 

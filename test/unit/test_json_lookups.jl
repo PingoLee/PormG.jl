@@ -201,6 +201,52 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # One array-index test for the validator and both renderers: ASCII digits only (#779)
+  # The renderers used `tryparse(Int, s)` and the validator `^\d+$`, and the two disagreed in both
+  # directions: `tryparse` reads `0x`/`0b`/`0o` prefixes and returns `nothing` for a digit string too
+  # wide for `Int`, while Julia's `\d` also matches non-ASCII digits. `Dialect._is_json_array_index`
+  # is now the single answer, so a segment is an index exactly when the validator says it is one.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "array index means ASCII digits, in the validator and both renderers (#779)" begin
+    col = "\"Tb\".\"payload\""
+
+    # The renderer on its own: a prefixed segment is a KEY, never a subscript. The public path never
+    # hands these over (the validator refuses a leading digit in a key, below), which is exactly why
+    # the renderer is asked directly — it must not carry a second, laxer definition.
+    for key in ("0x1", "0b1", "0o7")
+      @test PormG.Dialect._json_extract_expr(_JL_SL, col, [key]) == "json_extract($col, '\$.$key')"
+      @test PormG.Dialect._json_extract_expr(_JL_PG, col, [key]) == "$col #>> '{\"$key\"}'"
+    end
+
+    # A digit string wider than `Int` is still an index — `tryparse(Int, …)` returned `nothing` for it
+    # and rendered it as a key, while the validator had accepted it as an index.
+    wide = "99999999999999999999"
+    @test tryparse(Int, wide) === nothing   # precondition: the old test's blind spot
+    mkq() = (q = JL.Json_scratch.objects; q.filter("payload__$(wide)__name" => "x"); q.values("id"); q)
+    @test occursin("json_extract($col, '\$[$wide].name')", _sql(mkq())[:sql_text])
+    @test occursin("$col #>> '{$wide,\"name\"}'", _sql(mkq(); conn = _JL_PG)[:sql_text])
+
+    # Non-ASCII digits are neither an index nor a safe key (a key cannot start with a digit), so they
+    # are refused. Before, `^\d+$` accepted `"١٢"` as an index and the renderer then emitted a key.
+    @test occursin(r"^\d+$", "١٢")          # precondition: the old validator test accepted it
+    q = JL.Json_scratch.objects; q.filter("payload__١٢" => "x"); q.values("id")
+    @test_throws "Invalid JSON key segment" inspect_query(q)
+
+    # Anchored with `\A…\z`: PCRE's `$` also matches before a final newline, so a `^[0-9]+$` spelling
+    # of the classifier would call `"12\n"` an index.
+    @test PormG.Dialect._is_json_array_index("12")
+    @test !PormG.Dialect._is_json_array_index("12\n")
+    @test !PormG.Dialect._is_json_array_index("")
+
+    # And the prefixed spellings stay refused through the public path, on both dialects.
+    for key in ("0x1", "0b1")
+      qq = JL.Json_scratch.objects; qq.filter("payload__$key" => 5); qq.values("id")
+      @test_throws "Invalid JSON key segment" inspect_query(qq)
+      @test_throws "Invalid JSON key segment" inspect_query(qq; connection = _JL_PG)
+    end
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # SQLite bucket alignment (the Option-B design guard)
   # The same JSON path appears in .values() (:select) AND .filter() (:where). The resolved
   # extraction is cached and reused verbatim across clauses; because the keys are interpolated

@@ -313,8 +313,10 @@ Supported comparisons on a path lookup: `=` (default), `@ne`, `@gt`, `@gte`, `@l
 `@isnull`. Path lookups also work in `.values(...)` and `.order_by(...)`.
 
 !!! note
-    Keys must be simple (letters, digits, underscore) or an integer array index — a key with
-    spaces, dots, or quotes is not addressable via the `__` path and raises an `InvalidValueError`.
+    Keys must be simple (a letter or underscore, then letters, digits, or underscores) or an
+    array index written in ASCII digits (`0`–`9`) — a key with spaces, dots, or quotes, or one that
+    starts with a digit (`0x1`), is not addressable via the `__` path and raises an
+    `InvalidValueError`.
     Extraction is text-based: comparisons are string comparisons unless you use a numeric operator
     (`@gte` etc.), which casts to numeric on PostgreSQL. Equality against a numeric JSON value
     (`"metadata__wins" => 121`) works on both backends.

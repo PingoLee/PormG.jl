@@ -271,3 +271,94 @@ end
         @test !occursin("DEFAULT", shown)
     end
 end
+
+# #762: `Circuit762 = Models.Model("f1_circuit762", …)` is how a generated models file declares a model
+# whose table carries an app prefix. `ManyToManyField("Circuit762")` names the BINDING, which appears
+# in neither the planner's schema-dict keys (physical tables) nor the model's `name`.
+_m2m762_models(target::String; extra::String = "") = (p -> write(p, "module models\nimport PormG.Models\n" *
+    "Circuit762 = Models.Model(\"f1_circuit762\", id = Models.IDField(), name = Models.CharField(null = true))\n" *
+    extra *
+    "Season762 = Models.Model(id = Models.IDField(), year = Models.IntegerField(default = 0),\n" *
+    "    circuits = Models.ManyToManyField(\"$(target)\"))\nend\n"))
+
+# Load a models file written by `write!` and plan it against an empty SQLite database, without
+# `set_models`, the way `makemigrations` does. Returns `(current, plan_or_exception)`.
+function _m2m762_plan(write!::Function)
+    dir = mktempdir()
+    pool = SQLiteConnectionPool(joinpath(dir, "probe762.sqlite"); pool_size = 1)
+    try
+        models_path = joinpath(dir, "models.jl")
+        write!(models_path)
+        settings = Configuration.Settings(connections = pool, db_def_folder = dir)
+        current = Migrations._load_current_models(models_path)
+        plan = try
+            _dc738_quiet(() -> Migrations.get_migration_plan(Migrations.LiveTable[], current, pool, settings;
+                                                             interactive = false))
+        catch e
+            e
+        end
+        return current, plan
+    finally
+        close_pool!(pool)
+        try rm(dir; recursive = true, force = true) catch end
+    end
+end
+
+_m2m762_season(current) = only(e[:model] for (k, e) in current if startswith(String(k), "season762"))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M2M target by binding: planned when its table differs (#762)
+# The issue's repro. The planner used to raise "not defined" here, which blocked `makemigrations`
+# and the drift gate for the whole model set; the target now resolves by binding, as at runtime.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#762: an M2M target whose table differs from its binding is planned" begin
+    current, plan = _m2m762_plan(_m2m762_models("Circuit762"))
+    # The write-back: the declared field holds the target model itself, not the string.
+    @test _m2m762_season(current).fields["circuits"].to === current[:f1_circuit762][:model]
+    @test !(plan isa Exception)
+    through = only(k for k in keys(plan) if startswith(String(k), "season762_"))
+    # The join table's key into the target names the target's PHYSICAL table.
+    @test occursin(r"REFERENCES\s+\"f1_circuit762\"", join(values(plan[through]), "\n"))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M2M target by binding: applied, then no drift (#762)
+# End to end on a temporary SQLite project: `makemigrations` → `migrate` creates the join table,
+# and the next plan is empty, so `check(kinds = [:schema_drift])` reports nothing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#762: makemigrations applies it and schema_drift is clean" begin
+    _dc738_applied_project("db762", _m2m762_models("Circuit762")) do pool, settings, _
+        tables = String.(DataFrame(PormG.ConnectionPool.fetch(pool,
+                         "SELECT name FROM sqlite_master WHERE type = 'table';")).name)
+        @test "f1_circuit762" in tables
+        @test count(t -> startswith(t, "season762_"), tables) == 1
+        @test isempty(_dc738_drift(pool, settings))
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M2M target by binding: a name bound to something else falls back (#762)
+# `position` is `Base.position` inside the models module, not a model. The binding lookup must pass
+# it over rather than throw, so the planner's own name match still finds the model named `position`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#762: an M2M target that is a non-model binding falls back to the model name" begin
+    pos_model = "Pos762 = Models.Model(\"position\", id = Models.IDField())\n"
+    current, plan = _m2m762_plan(_m2m762_models("position"; extra = pos_model))
+    # Left as the String: the binding `position` is `Base.position`, which is no model.
+    @test _m2m762_season(current).fields["circuits"].to == "position"
+    @test !(plan isa Exception)
+    through = only(k for k in keys(plan) if startswith(String(k), "season762_"))
+    @test occursin(r"REFERENCES\s+\"position\"", join(values(plan[through]), "\n"))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M2M target by binding: a name no model answers to still raises (#762)
+# The resolution is best-effort, so a typo is left to the planner's own lookup, which refuses it
+# with `ModelDefinitionError` naming the target, exactly as before.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#762: an M2M target that names no model still raises" begin
+    current, err = _m2m762_plan(_m2m762_models("Circuit762x"))
+    @test _m2m762_season(current).fields["circuits"].to == "Circuit762x"
+    @test err isa PormG.ModelDefinitionError
+    @test occursin("Circuit762x", sprint(showerror, err))
+end

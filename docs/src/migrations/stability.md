@@ -54,7 +54,16 @@ existing `format_version = 1` rows and files remain valid and are read under the
 `<db_folder>` is the database's configuration folder (the directory holding its `connection.yml`).
 When an applied filename would collide, a random 4-digit suffix is inserted
 (`YYYY-MM-DD_HH-MM-SS_NNNN_migration.jl`). Applying a plan also snapshots the models file alongside
-it as `YYYY-MM-DD_HH-MM-SS_old_models.jl`.
+it as `YYYY-MM-DD_HH-MM-SS_old_models.jl`. This is the file the plan was generated from: the
+connection's own `model_file`, or the one named by `makemigrations(db; models_file = …)`. A plan
+generated from another file records it in a `# pormg-models-file: <path>` comment under the
+format marker, followed by a `# pormg-models-sha256: <hex>` line with the file's SHA-256 at that
+moment. The path is relative to `<db_folder>` when the file sits under it, and written with
+Julia's `escape_string`, so a backslash appears doubled. Neither comment is part of the checksum,
+and a plan without them is unchanged. `migrate` snapshots the named file only if it still has
+that digest. If the header cannot be read, the file is gone, or the file changed after
+`makemigrations`, it logs a warning and takes no snapshot. The migration itself is still applied
+and archived.
 
 ### Content structure
 

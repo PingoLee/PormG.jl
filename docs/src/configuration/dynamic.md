@@ -45,6 +45,11 @@ PormG.register_connection("tenant_01", "postgres://user:pass@localhost/db_01")
 PormG.register_connection("temp_cache", "cache.db"; adapter="SQLite")
 ```
 
+A PostgreSQL connection can pick its driver with `postgres_driver = "Postgres"` (experimental; the
+default is `"LibPQ"`), as the `postgres_driver:` key does in `connection.yml` — see
+[Choosing the PostgreSQL driver](connection_yml.md#Choosing-the-PostgreSQL-driver). A resolver returning a `Dict` may
+carry a `"postgres_driver"` entry for the same purpose.
+
 To tell a dynamic entry from a folder-backed one, read `PormG.Configuration.status(key).dynamic`,
 or `settings.dynamic` inside a `before_connect` hook. Do not compare `db_def_folder`: a dynamic
 entry stores the label `"dynamic_connection"` there, and so does a static folder of that name

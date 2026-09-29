@@ -37,6 +37,7 @@ flowchart TD
   BK["Backend.jl<br/>backend_* generics (no driver type named)"]
   subgraph EXT["weakdep extensions — ext/"]
     PG["PormGLibPQExt.jl → LibPQ"]
+    PJ["PormGPostgresExt.jl → Postgres (experimental)"]
     SL["PormGSQLiteExt.jl → SQLite"]
   end
   DB[("PostgreSQL / SQLite")]
@@ -48,13 +49,15 @@ flowchart TD
   B --> DI
   Q --> FE --> POOL --> BK
   BK --> PG --> DB
+  BK --> PJ --> DB
   BK --> SL --> DB
   DB -->|rows| FE -->|results| U
 ```
 
 The key idea: **core never names a concrete driver type.** `Backend.jl` declares `backend_*`
-generics; the real bodies live in the `ext/` weak-dependency extensions, loaded only when `LibPQ`
-or `SQLite` is present.
+generics; the real bodies live in the `ext/` weak-dependency extensions, loaded only when `LibPQ`,
+`Postgres` or `SQLite` is present. A PostgreSQL pool names its driver (`postgres_driver:`), so the
+LibPQ and Postgres.jl extensions coexist.
 
 ## Read path — the query lifecycle
 
@@ -227,5 +230,5 @@ characterizations worth stating plainly.
 | Parameter ordering (PG `$1` vs SQLite `?` buckets) | `src/querybuilder/parameters.jl` |
 | Backend-specific SQL | `src/Dialect.jl` |
 | Pool, async, transactions | `src/ConnectionPool.jl` |
-| Driver bodies | `ext/PormGLibPQExt.jl`, `ext/PormGSQLiteExt.jl` |
+| Driver bodies | `ext/PormGLibPQExt.jl`, `ext/PormGPostgresExt.jl`, `ext/PormGSQLiteExt.jl` |
 | Schema reconciliation | `src/Migrations.jl`, `src/migrations/` |

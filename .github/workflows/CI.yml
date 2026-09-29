@@ -43,7 +43,7 @@ jobs:
 
       # julia-runtest runs test/runtests.jl via Pkg.test().
       # Unit tests have no external database dependency. The test target pulls in
-      # LibPQ + SQLite (Project.toml `[extras]`/`[targets]`) so the weakdep driver
+      # LibPQ + Postgres + SQLite (Project.toml `[extras]`/`[targets]`) so the weakdep driver
       # extensions load and the SQLite-backed unit tests run.
       - uses: julia-actions/julia-runtest@v1
         with:
@@ -193,7 +193,7 @@ jobs:
           # it out of `[extras]`, not to weaken the job.
           projects: '.'
           # `alldeps` also min-resolves weakdep CONSTRAINTS. Measured, it currently adds
-          # nothing over `deps`: LibPQ and SQLite arrive via the `[extras]` promotion path
+          # nothing over `deps`: the drivers arrive via the `[extras]` promotion path
           # regardless of mode, and `Revise` — weak-only, required by nothing installed —
           # never enters the manifest at all. Kept as `alldeps` so that a weakdep which
           # does become reachable gets floored without needing a workflow edit.
@@ -208,7 +208,7 @@ jobs:
         env:
           # Disables exactly one Aqua check, `stale_deps` — see the comment at the Aqua
           # testset in test/runtests.jl. Short version: the step above rewrote
-          # Project.toml, promoting six packages into `[deps]` that `src/` never imports,
+          # Project.toml, promoting seven packages into `[deps]` that `src/` never imports,
           # so stale_deps here judges a project layout that exists nowhere else.
           PORMG_FLOOR_RESOLVE: "1"
         with:

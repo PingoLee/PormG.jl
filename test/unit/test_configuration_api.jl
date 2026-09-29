@@ -1322,6 +1322,7 @@ end
                 "  fail_fast_on_connect: true\n" *
                 "  sqlite_split_read_write: false\n" *
                 "  extensions: []\n" *
+                "  postgres_driver: ''\n" *
                 "  options:\n" *
                 "    sqlite_split_read_write: false\n" *
                 "  config:\n" *
@@ -1508,5 +1509,86 @@ end
         dsn = _dsn_650("  host: 127.0.0.1\n  username: bob\n  password: 'corr3ct horse ''b\\x'\n")
         red = PormG.Configuration.redact_secret(dsn)
         @test red == "host='127.0.0.1' password=**** user=****"
+    end
+end
+
+@testset "postgres_driver picks the PostgreSQL pool's driver (#788)" begin
+    resolve = PormG.Configuration._resolve_postgres_driver
+    env_key = PormG.Configuration.POSTGRES_DRIVER_ENV
+
+    withenv(env_key => nothing) do
+        # Unset everywhere: LibPQ, as before #788.
+        @test resolve(nothing; source = "t") === :libpq
+        @test resolve(""; source = "t") === :libpq
+        # The package names, case-insensitively, and nothing else.
+        @test resolve("Postgres"; source = "t") === :postgres
+        @test resolve("  postgres "; source = "t") === :postgres
+        @test resolve("LIBPQ"; source = "t") === :libpq
+        err = try resolve("pq"; source = "connection.yml"); nothing catch e; e end
+        @test err isa PormG.InvalidConfigurationError
+        @test occursin("connection.yml", PormG.error_message(err))
+        @test occursin("`postgres_driver`", PormG.error_message(err))
+    end
+
+    # The environment variable is the fallback, never an override.
+    withenv(env_key => "Postgres") do
+        @test resolve(nothing; source = "t") === :postgres
+        @test resolve("LibPQ"; source = "t") === :libpq
+    end
+    withenv(env_key => "nonsense") do
+        err = try resolve(nothing; source = "t"); nothing catch e; e end
+        @test err isa PormG.InvalidConfigurationError
+        @test occursin(env_key, PormG.error_message(err))
+    end
+
+    CP = PormG.ConnectionPool
+    mktempdir() do temp_root
+        withenv(env_key => nothing) do
+            # connection.yml: the key reaches the pool, and it is not a libpq DSN keyword.
+            db_dir = _write_348_yml(joinpath(temp_root, "db788"),
+                "default_env: dev\n" *
+                "dev:\n" *
+                "  adapter: PostgreSQL\n" *
+                "  host: localhost\n" *
+                "  database: pormg788\n" *
+                "  postgres_driver: Postgres\n")
+            @test isempty(_load_348(db_dir))
+            pool = PormG.Configuration.get_settings(db_dir).connections
+            @test pool isa CP.PostgresConnectionPool{:postgres}
+            @test !occursin("postgres_driver", pool.connection_string)
+
+            # Under SQLite the key has nothing to pick, and says so.
+            sl_dir = _write_348_yml(joinpath(temp_root, "sl788"),
+                "default_env: dev\n" *
+                "dev:\n" *
+                "  adapter: SQLite\n" *
+                "  database: \":memory:\"\n" *
+                "  postgres_driver: Postgres\n")
+            warns = _load_348(sl_dir)
+            @test length(warns) == 1
+            @test occursin("postgres_driver", warns[1].message)
+
+            # register_connection: the kwarg, and the lazy resolver's Dict form.
+            key = "pormg788_dynamic"
+            PormG.Configuration.register_connection(key, "postgresql://u@localhost/d"; postgres_driver = "Postgres")
+            @test PormG.config[key].connections isa CP.PostgresConnectionPool{:postgres}
+            # A Symbol reads the same (a resolver Dict may carry one).
+            PormG.Configuration.register_connection(key, "postgresql://u@localhost/d"; postgres_driver = :postgres)
+            @test PormG.config[key].connections isa CP.PostgresConnectionPool{:postgres}
+            @test_logs (:warn, r"postgres_driver") PormG.Configuration.register_connection(
+                "pormg788_sqlite", ":memory:"; adapter = "SQLite", postgres_driver = "Postgres")
+
+            # The lazy resolver's Dict form carries the key too; a Tuple cannot.
+            previous = PormG.Configuration._CONNECTION_RESOLVER[]
+            try
+                PormG.Configuration.set_connection_resolver(k -> k == "pormg788_resolved" ?
+                    Dict("url" => "postgresql://u@localhost/d", "postgres_driver" => "Postgres") : nothing)
+                @test PormG.Configuration.get_settings("pormg788_resolved").connections isa CP.PostgresConnectionPool{:postgres}
+            finally
+                PormG.Configuration._CONNECTION_RESOLVER[] = previous
+            end
+
+            _cleanup_configuration_test_keys([db_dir, sl_dir, key, "pormg788_sqlite", "pormg788_resolved"])
+        end
     end
 end

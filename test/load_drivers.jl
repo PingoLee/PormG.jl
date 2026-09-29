@@ -1,8 +1,9 @@
 # ==============================================================================
 # Activate the SQL-driver extensions for the test session.
 #
-# Since #34, LibPQ and SQLite are WEAK dependencies of PormG (Project.toml `[weakdeps]`).
-# Loading them activates ext/PormGLibPQExt.jl / ext/PormGSQLiteExt.jl, which supply the
+# Since #34, LibPQ and SQLite are WEAK dependencies of PormG (Project.toml `[weakdeps]`), and so is
+# Postgres (#788). Loading them activates ext/PormGLibPQExt.jl / ext/PormGSQLiteExt.jl /
+# ext/PormGPostgresExt.jl, which supply the
 # `backend_*` methods PormG dispatches to. Without them every DB operation raises the
 # friendly "run `using LibPQ` / `using SQLite`" error.
 #
@@ -37,8 +38,9 @@
 # ==============================================================================
 
 let failures = Pair{String,String}[]
-    for (name, uuid) in (("LibPQ",  "194296ae-ab2e-5f79-8cd4-7183a0a5a0d1"),
-                         ("SQLite", "0aa819cd-b072-5ff4-a722-6bc24af294d9"))
+    for (name, uuid) in (("LibPQ",    "194296ae-ab2e-5f79-8cd4-7183a0a5a0d1"),
+                         ("Postgres", "8f23287e-300e-4f50-bc2b-9f1dfe95da84"),
+                         ("SQLite",   "0aa819cd-b072-5ff4-a722-6bc24af294d9"))
         sym = Symbol(name)
         try
             # Direct dep of the active env (Pkg.test, test/integration): `using` both loads
@@ -72,7 +74,7 @@ let failures = Pair{String,String}[]
         $causes
 
         If the cause above is "required but does not seem to be installed", this is the wrong
-        project rather than a broken checkout. LibPQ and SQLite are `[weakdeps]` (#34), so the
+        project rather than a broken checkout. LibPQ, Postgres and SQLite are `[weakdeps]` (#34), so the
         package environment never installs them, and `Manifest.toml` is gitignored so nothing
         local says so. Use one of the two environments that carry them:
 

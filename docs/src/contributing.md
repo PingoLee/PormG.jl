@@ -130,7 +130,7 @@ expression that reflects the specific scenario you are investigating:
    julia --project=. -e 'using Pkg; Pkg.test()'
    ```
    This is what CI runs, and the `-e` matters: handing the test script straight to
-   `julia --project=.` does *not* work. The `LibPQ` and `SQLite` drivers are weak
+   `julia --project=.` does *not* work. The `LibPQ`, `Postgres` and `SQLite` drivers are weak
    dependencies, so the package environment never installs them; `Pkg.test()` resolves
    them from the test target instead.
 5. Run the integration tests (requires a live PostgreSQL or SQLite database). Use

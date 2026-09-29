@@ -86,10 +86,11 @@ end
   @test Base.get_extension(PormG, :PormGLibPQExt) !== nothing
 
   # A NUL makes the LibPQ extension's own preflight throw its NUL message, so getting the driver
-  # refusal instead proves the refusal came first and libpq was never reached.
+  # refusal instead proves the refusal came first and libpq was never reached. `invoke` pins the
+  # LibPQ method: with the Postgres.jl extension loaded too (#788), plain dispatch picks that one.
   postgres_pool = CP.PostgresConnectionPool("host=h dbname=x\0y"; driver = :postgres)
   err = try
-    PormG.backend_connect(postgres_pool)
+    invoke(PormG.backend_connect, Tuple{PormG.PormGPostgres}, postgres_pool)
     nothing
   catch e
     e
@@ -97,10 +98,15 @@ end
   @test err isa PormG.InvalidConfigurationError
   @test occursin("using Postgres", PormG.error_message(err))
   @test !occursin("NUL", PormG.error_message(err))
+  # The LibPQ extension's own classifier calls that refusal permanent, which is what makes the pool
+  # fail fast on it rather than waiting out `pool_timeout`.
+  @test invoke(PormG.backend_is_permanent_connect_error, Tuple{PormG.PormGPostgres, Any}, postgres_pool, err)
 
-  # The same pool through the pool API: the refusal is permanent, so it fails fast rather than
-  # waiting out pool_timeout, and the cause is the refusal.
-  pool = CP.PostgresConnectionPool("host=h dbname=x"; driver = :postgres, pool_size = 1, pool_timeout = 30)
+  # The same pool through the pool API: a refusal is permanent, so it fails fast rather than
+  # waiting out pool_timeout, and the cause is the refusal. The NUL keeps this hermetic whichever
+  # extension answers: the LibPQ one refuses the driver, the Postgres.jl one refuses the NUL, and
+  # neither reaches the network.
+  pool = CP.PostgresConnectionPool("host=h dbname=x\0y"; driver = :postgres, pool_size = 1, pool_timeout = 30)
   t0 = time()
   err = try
     CP.acquire_connection(pool)

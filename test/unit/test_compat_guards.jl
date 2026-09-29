@@ -7,7 +7,7 @@
 # the third is about which END of one CI selects.
 #
 # CONTRACT 1 — `Decimals` keeps `LibPQ` installable (#558):
-#   PormG's declared `[compat]` must leave `LibPQ` — the only PostgreSQL driver — with an
+#   PormG's declared `[compat]` must leave `LibPQ` — the default PostgreSQL driver — with an
 #   installable version. Every `LibPQ` release from 1.1 through the current 1.18.0 pins
 #   `Decimals 0.4` (General registry, `L/LibPQ/Compat.toml`, range `["1.1-1"]`), so a
 #   `Decimals` range that excludes 0.4 leaves LibPQ with no versions left and *any* app
@@ -208,10 +208,21 @@ end
 #   Aqua   0.8.0-0.8.13 cannot introspect on Julia 1.12 — piracy detection reads
 #          `Core.TypeName.mt`, which 1.12 removed, and ambiguity detection reports false
 #          positives; 0.8.14 is the lowest that works.
+#   PrecompileTools  raised "1" -> "1.2" with the Postgres.jl driver (#788): every Reseau release
+#          (Postgres.jl's socket/TLS layer) requires `PrecompileTools = "1.2.0 - 1"`, so with Postgres
+#          in `[extras]` the floor job could no longer install 1.0.0. Measured before narrowing, as
+#          CONTRACT 2 asks: 1.2.0 resolves exactly alongside LibPQ 1.18.0 and Postgres 2.2.2, and the
+#          consuming app's declared dependency set (Nitro, which itself requires "^1.3") resolves
+#          with this PormG on 1.3.4. No app affected.
+#   Postgres  2.2.2 (#788). 2.2.1 is the correctness minimum — an unnamed execute that fails before
+#          BindComplete must close its socket (JuliaDatabases/Postgres.jl#17), or every later
+#          statement on the connection hits `EOFError` — but 2.2.2 changed `isvalid` (#20), the
+#          extension's liveness probe, and 2.2.2 is the version every probe and integration run used.
 #
 # Asserted as ">= the measured floor" rather than as the literal string, so a legitimate
 # later raise or a widening to a new major still passes. Mutation gate: restoring any of the
-# four to its old range (`"0.10"`, `"1"`, `"1"`, `"0.8"`) fails the matching assertion here.
+# six to its old range (`"0.10"`, `"1"`, `"1"`, `"0.8"`, `"1"`) or lowering Postgres below 2.2.2
+# fails the matching assertion here.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Measured floors that PormG cannot go below (#574)" begin
   # Lower bound of a range's FIRST comma-separated arm, as a VersionNumber. `"0.10.13"` and
@@ -241,6 +252,8 @@ end
     ("SQLite", v"1.6.1"),
     ("TimeZones", v"1.12.0"),
     ("Aqua", v"0.8.14"),
+    ("PrecompileTools", v"1.2.0"),
+    ("Postgres", v"2.2.2"),
   )
     entry = _compat_entry(name)
     @test entry !== nothing

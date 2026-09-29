@@ -14,7 +14,7 @@ In PormG, a **Configuration Folder** (like `db/` or `db_sch/`) is the unit of co
 PormG supports multiple environments within the same `connection.yml`. Common values are `dev`, `test`, and `prod`. You can specify the environment globally via `ENV["PORMG_ENV"]` or explicitly in the `load` call.
 
 ### 3. Supported Adapters
-- **PostgreSQL:** Primary adapter using `LibPQ.jl`. Supports high-performance async operations.
+- **PostgreSQL:** Primary adapter using `LibPQ.jl`. Supports high-performance async operations. The pure-Julia `Postgres.jl` driver is an experimental alternative — see [Choosing the PostgreSQL driver](connection_yml.md#Choosing-the-PostgreSQL-driver).
 - **SQLite:** Fully supported via `SQLite.jl`. PormG uses a unique **Contextual Buckets Strategy** to enable complex joins and CTEs that are normally difficult in SQLite.
 
 ## Philosophy

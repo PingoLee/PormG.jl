@@ -1770,17 +1770,22 @@ end
 function _plan_models_file(settings::PormGSettings, plan_path::String = _pending_plan_path(settings))
   path = nothing
   sha256 = nothing
-  for line in eachline(plan_path)
-    # The header block ends at the plan's first `import`; nothing below it is a header.
-    startswith(line, "import ") && break
-    m = match(MODELS_FILE_HEADER_RE, line)
-    if m !== nothing
-      p = unescape_string(m.captures[1])
-      path = isabspath(p) ? p : joinpath(settings.db_def_folder, p)
-      continue
+  # `open(...) do`, not `eachline(plan_path)`: a filename `eachline` closes its handle only when the
+  # iteration runs to the end, and this loop breaks early — the handle then lives until GC, and on
+  # Windows an open handle makes every later `rm`/`mv` of the archived plan fail with EBUSY.
+  open(plan_path) do io
+    for line in eachline(io)
+      # The header block ends at the plan's first `import`; nothing below it is a header.
+      startswith(line, "import ") && break
+      m = match(MODELS_FILE_HEADER_RE, line)
+      if m !== nothing
+        p = unescape_string(m.captures[1])
+        path = isabspath(p) ? p : joinpath(settings.db_def_folder, p)
+        continue
+      end
+      d = match(MODELS_SHA256_HEADER_RE, line)
+      d === nothing || (sha256 = String(d.captures[1]))
     end
-    d = match(MODELS_SHA256_HEADER_RE, line)
-    d === nothing || (sha256 = String(d.captures[1]))
   end
   return path === nothing ? nothing : (path = path, sha256 = sha256)
 end

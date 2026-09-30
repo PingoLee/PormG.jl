@@ -146,6 +146,13 @@ df = query |> DataFrame
 
 ## String Matching
 
+The `contains`, `startswith` and `endswith` lookups, with their case-insensitive, accent-insensitive
+and negated twins, match a **text value**. PormG wraps the value in `%` and escapes any `%` or `_`
+inside it, so it matches literally. That cannot be done to a column, so a column expression on the
+right (`"surname__@contains" => F("forename")`) raises a `FilterError` on both backends. The
+PostgreSQL-only `@regex` and `@iunaccent_exact` families do take a column, because they use their
+right-hand side as it is.
+
 ### Case-Sensitive (`@contains`)
 
 ```julia
@@ -312,6 +319,11 @@ M.Constructor.objects.values("name", "metadata__principal")
 Supported comparisons on a path lookup: `=` (default), `@ne`, `@gt`, `@gte`, `@lt`, `@lte`, and
 `@isnull`. Path lookups also work in `.values(...)` and `.order_by(...)`.
 
+A path lookup compares the extracted value against a **value**. A column expression on the right
+(`"metadata__principal" => F("name")`) raises a `FilterError` on both backends. The two engines extract
+different types (PostgreSQL text, SQLite the native JSON type), so no single comparison against a
+column means the same thing on both.
+
 !!! note
     Keys must be simple (a letter or underscore, then letters, digits, or underscores) or an
     array index written in ASCII digits (`0`–`9`) — a key with spaces, dots, or quotes, or one that
@@ -348,7 +360,8 @@ M.Constructor.objects.filter("metadata__@has_keys" => ["principal", "wins"])
 
 `@jcontains` accepts a `Dict`, `Vector`, `NamedTuple`, or a raw JSON string (validated at build
 time). `@has_any_keys` / `@has_keys` take a vector of keys. All values are sent as bound
-parameters.
+parameters. A column expression on the right (`"metadata__@has_key" => F("name")`) raises a
+`FilterError` on both backends.
 
 ---
 
@@ -380,6 +393,13 @@ query.filter("statusid__@in" => engine_statuses)
 ```
 
 The subquery must project exactly one column — see [Subqueries and CTEs](subqueries_and_ctes.md) for the full column-count rule and SQL-function projection examples.
+
+### A column is not a list
+
+`@in` and `@nin` take a list of values or a subquery. A column expression on the right, such as
+`"points__@in" => F("grid")`, a `Case`, or a `Joined`/`CTE` column, raises a `FilterError` when the
+filter is built. To test membership against another table's column, pass a subquery that projects
+it.
 
 ### Correlated EXISTS
 

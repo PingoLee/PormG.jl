@@ -600,6 +600,33 @@ const DOCERR_CASES = [
         InvalidValueError,
         () -> DOCERR_RESULT_PG.objects.filter("payload__bad key" => 1).list(show_query = :dict),
     ),
+    # #811 — the JSON path section and *A column is not a list* say a column expression on the right
+    # raises `FilterError`. Before #811 the path lookup bound the expression's `repr` on PostgreSQL
+    # (zero rows, no error) and `@in` rendered `IN "Tb"."points"` for the server to reject.
+    (
+        "read/filters_and_aggregates.md — a JSON path lookup against a column expression",
+        FilterError,
+        () -> DOCERR_RESULT_PG.objects.filter("payload__wins" => F("points")).list(show_query = :dict),
+    ),
+    (
+        "read/filters_and_aggregates.md — @in against a column expression",
+        FilterError,
+        () -> DOCERR_RESULT_PG.objects.filter("points__@in" => F("resultid")).list(show_query = :dict),
+    ),
+    # #811 (review) — the containment section says a column expression raises `FilterError` on both
+    # backends; it is refused at parse, ahead of the SQLite capability check, so the SQLite mock too.
+    (
+        "read/filters_and_aggregates.md — a JSONB containment lookup against a column expression",
+        FilterError,
+        () -> DOCERR_RESULT_SL.objects.filter("payload__@has_key" => F("points")).list(show_query = :dict),
+    ),
+    # #793 — *String Matching* says a LIKE-family lookup against a column raises `FilterError`; it used
+    # to concatenate the lookup name into the SQL (`"surname" contains "forename"`).
+    (
+        "read/filters_and_aggregates.md — a LIKE-family lookup against a column expression",
+        FilterError,
+        () -> DOCERR_DRIVER_PG.objects.filter("surname__@contains" => F("nationality")).list(show_query = :dict),
+    ),
     # #576. Both pages state the type for a period transform's rejected value, and both said
     # `InvalidValueError` — the write path's type, on a read. Neither claim was executed here
     # before, which is why it survived #411 and #467 untouched: the transform ladder is a different

@@ -674,8 +674,11 @@ end
 function When(x::Pair{JoinedReference, T}; then::Any = 0, otherwise::Any = missing) where T
   return When(_check_filter(x); then = then, otherwise = otherwise)
 end
+# #811: through `_check_filter`, like the two methods above. Calling `_get_pair_to_oper` on the raw
+# pair skipped the `__@` split, and only the split form has the column-expression arms:
+# `When("points__@gt" => F("grid"))` was a `MethodError`, while `Q` around the same pair worked.
 function When(x::Pair{String, T}; then::Any = 0, otherwise::Any = missing) where T
-  return _make_when(_get_pair_to_oper(x), then, otherwise)
+  return _make_when(_check_filter(x), then, otherwise)
 end
 function When(x::Union{SQLTypeQ, SQLTypeQor}; then::Any = 0, otherwise::Any = missing)
   return _make_when(x, then, otherwise)

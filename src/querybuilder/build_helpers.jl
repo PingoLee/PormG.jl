@@ -356,6 +356,39 @@ function _check_fixed_shape_lookup(suffix::AbstractString, value)
   return nothing
 end
 
+# #811: the lookups whose right-hand side is never a single column, refused on the column-reference
+# arms only (`F`, a function, `Joined`, `CTE`) — the scalar arm's `@in` binds a one-element list, which
+# is fine. A column is not a list, so `"points__@in" => F("grid")` rendered `IN "Tb"."grid"`, invalid
+# SQL found by the server; `IN CASE WHEN … END` likewise. Refused here, at parse, rather than in the
+# renderer: every spelling — `filter`, `Q`/`Qor`, `When`, `cjoin_on(on = …)`, a HAVING alias — reaches
+# these arms, so they all refuse the same way, on both engines.
+#
+# #793: the LIKE family, for the same reason one step removed. Its value is a text fragment that
+# `add_parameter!` wraps in `%` and LIKE-escapes, and neither can happen to a column, so the arm
+# concatenated the lookup NAME — `"Tb"."surname" contains "Tb"."forename"`, and no
+# `BackendCapabilityError` for `iunaccent_contains` on SQLite. Rendering `'%' || col || '%'` would
+# work, but the column's own `%` and `_` would then match as wildcards, unescaped. Refused instead
+# (the maintainer's call on #793). Every name in `LIKE_WILDCARD_OPERATORS` is also its own
+# `PormGsuffix` key, so the suffix is the membership test. The verbatim pattern lookups
+# (`@regex`, `@iunaccent_exact`) take a column as-is and are not refused (#635).
+function _check_column_rhs_lookup(path::Vector{String})
+  suffix = path[end]
+  lookup = join(path, "__@")
+  suffix in ("in", "nin") &&
+    throw(FilterError("Error in filter '$(lookup)': '$(suffix)' takes a list of values or a subquery, " *
+                      "not a column expression"))
+  suffix in LIKE_WILDCARD_OPERATORS &&
+    throw(FilterError("Error in filter '$(lookup)': '$(suffix)' matches a text value, " *
+                      "not a column expression"))
+  # #811, found in review: the JSON containment operators render in `_render_json_operator`, ahead of
+  # every column-RHS arm, and `has_key` bound `string(v.values)` — the expression's `repr` as the key,
+  # zero rows on PostgreSQL. Each takes a key, a key list or a document, never a column.
+  suffix in JSON_CONTAINMENT_OPERATORS &&
+    throw(FilterError("Error in filter '$(lookup)': '$(suffix)' takes a JSON key or document value, " *
+                      "not a column expression"))
+  return nothing
+end
+
 """
   _get_pair_to_oper(x::Pair)
 
@@ -457,6 +490,7 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeCTE
   _reject_cte_desc(x.second, "a filter comparison")
   if haskey(PormGsuffix, x.first[end])
     _check_fixed_shape_lookup(x.first[end], x.second)
+    _check_column_rhs_lookup(x.first)
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
@@ -468,6 +502,7 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeJoined
   _reject_joined_desc(x.second, "a filter comparison")
   if haskey(PormGsuffix, x.first[end])
     _check_fixed_shape_lookup(x.first[end], x.second)
+    _check_column_rhs_lookup(x.first)
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
@@ -476,6 +511,7 @@ end
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeF
   if haskey(PormGsuffix, x.first[end])
     _check_fixed_shape_lookup(x.first[end], x.second)
+    _check_column_rhs_lookup(x.first)
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
@@ -485,6 +521,7 @@ end
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeFunction
   if haskey(PormGsuffix, x.first[end])
     _check_fixed_shape_lookup(x.first[end], x.second)
+    _check_column_rhs_lookup(x.first)
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
@@ -1760,6 +1797,14 @@ function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc:
   # `#>> '{"kind"}' = 'UInt8[0x01, 0x02]'` — valid SQL, zero rows, no error. A JSON value is never a
   # byte payload, so the refusal is unconditional.
   _guard_scalar_bytes(v, nothing)
+  # #811: the same silent arm, reached by a column expression. `"payload__kind" => F("grid")` bound
+  # the `FExpression`'s `repr` as text on PostgreSQL — zero rows, no error — while SQLite refused it as
+  # an unbindable value. Comparing extracted JSON against a column needs a per-engine cast nobody has
+  # designed, so it is refused on both engines. It has to be here, not at parse: whether a path is a
+  # JSON path is only known once its column resolves. `@isnull` never gets this far (#808's parse check).
+  v.values isa SQLType && throw(FilterError(
+    "Error in filter '$(_filter_path_label(v))': a JSON path lookup compares the extracted value " *
+    "against a value, not a column expression"))
   is_pg = instruc.connection isa PormGPostgres
   if op == "ISNULL"
     # Render IS NULL directly — the shared ISNULL() rejects any column containing "(", which a
@@ -2283,15 +2328,15 @@ function _guard_scalar_bytes(v::SQLTypeOper, f_meta, label::AbstractString)
                                  ["in", "nin", "range", "nrange", "has_any_keys", "has_keys", "jcontains"])
 end
 # Label-deriving form, for the arms that have no field name of their own to pass (the JSON-path
-# lookup). Best effort: the path the user wrote, falling back to the rendered column.
-function _guard_scalar_bytes(v::SQLTypeOper, f_meta)
-  label = if isa(v.column, SQLTypeField) && isa(v.column.field, String)
-    v.column.field
-  else
-    k = memo_key(v.column)
-    k === nothing ? string(v.column) : k[2]
-  end
-  return _guard_scalar_bytes(v, f_meta, label)
+# lookup).
+_guard_scalar_bytes(v::SQLTypeOper, f_meta) = _guard_scalar_bytes(v, f_meta, _filter_path_label(v))
+
+# The path the user wrote, for an error message on an arm that has no field name of its own (the
+# JSON-path lookup). Best effort: falls back to the rendered column.
+function _filter_path_label(v::SQLTypeOper)
+  isa(v.column, SQLTypeField) && isa(v.column.field, String) && return v.column.field
+  k = memo_key(v.column)
+  return k === nothing ? string(v.column) : k[2]
 end
 
 # Bind an already-FORMATTED value in the shape `_render_predicate` expects for `operator` (#654).
@@ -2370,11 +2415,19 @@ end
 # `"surname__@regex" => F("forename")` rendered `surname regex forename` on both engines — a server
 # syntax error on PostgreSQL, and no `BackendCapabilityError` on SQLite. The verbatim-bound pattern
 # lookups take their RHS as-is, so they dispatch through Dialect exactly as a bound value does.
-# The LIKE family is NOT routed here: it would need `'%' || rhs || '%'`, which is its own design.
+#
+# Nothing else reaches this with a column RHS: `_check_column_rhs_lookup` refuses the LIKE family and
+# `@in`/`@nin` at parse (#811/#793), and `_check_fixed_shape_lookup` refuses `@range`/`@isnull` (#808).
+# So the fallthrough is a comparison, and anything else fails CLOSED rather than concatenating an
+# operator name into the SQL. That is the fail-safe for an operator node built past the parse
+# ladder (`OP` is internal, #202). No public spelling reaches it, so no test pins it: a test would
+# have to build the node by hand, past the API, which is the #596 fallback arm's rule too.
 function _render_column_rhs(column::AbstractString, operator::AbstractString, rhs,
                             instruc::SQLInstruction)::String
   operator in VERBATIM_PATTERN_OPERATORS &&
     return _render_predicate(column, operator, rhs, instruc)
+  operator in ("=", ">", "<", ">=", "<=", "<>", "!=") ||
+    throw(FilterError("Invalid filter operator: $(operator) does not take a column expression."))
   return string(column, " ", operator, " ", rhs)
 end
 

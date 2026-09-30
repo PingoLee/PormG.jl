@@ -1132,6 +1132,9 @@ function _build_over_clause(over::WindowSpec, instruc::SQLInstruction)::String
   # (Django's `Aggregate.get_group_by_cols` is empty for the same reason). Asked of the RESOLVED
   # term (`_resolved_contains_agg`), because a condition reading an aggregate alias renders the
   # aggregate while its own node carries only the name (#722).
+  # A MIXED term — `F("raceid") + Sum("points")` — is left out whole too, and the bare `raceid` in it
+  # is NOT grouped for the user: `_check_mixed_grouping` (#798, build_query.jl) refuses it unless the
+  # statement already groups that column.
   if !isempty(over.partition_by)
     partition_sql = String[]
     for field in over.partition_by

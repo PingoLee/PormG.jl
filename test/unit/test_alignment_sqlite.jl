@@ -2883,6 +2883,68 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Mixed-grouping guard (#798) - a JOINED column inside a mixed projection. The
+# guard compares a leaf's base column against the group set by rendering the path
+# again, which must resolve to the join the projection already built: no second
+# join, no new alias, and nothing bound (the marker count still matches). The same
+# projection beside a column that does not group `driverid__surname` is refused,
+# and an order_by on the path is a group route like any other.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Mixed projection (#798) - a joined column is grouped through its join" begin
+    label = () -> Concat("driverid__surname", Value(": "), Count("resultid"))
+    baseline = M.Result.objects
+    baseline.values("driverid__surname", "n" => Count("resultid"))
+    joins(sql) = count("JOIN", sql)
+
+    q = M.Result.objects
+    q.values("driverid__surname", "label" => label())
+    insp = q |> inspect_query
+    sql = insp[:sql_text]
+    @test occursin(r"GROUP BY 1\s*$", sql)
+    @test joins(sql) == joins((baseline |> inspect_query)[:sql_text])   # the driver join, once
+    @test count("?", sql) == length(insp[:parameters])
+
+    q = M.Result.objects
+    q.values("constructorid", "label" => label())
+    err = _g194_raised(() -> q |> inspect_query)
+    @test err isa PormG.QueryBuildError
+    plain = _g194_plain(err)
+    @test occursin("#798", plain)
+    @test occursin("reads the column \"driverid__surname\"", plain)
+
+    q = M.Result.objects
+    q.values("constructorid", "label" => label())
+    q.order_by("driverid__surname")                  # <- the only thing that groups the path
+    @test occursin(r"GROUP BY 1, \"\w+\"\.\"surname\"", (q |> inspect_query)[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mixed-grouping guard (#798) - a TRANSFORMED joined-copy column. The guard must
+# peel `Joined("d", "dob__@yyyy_q")` to its base before rendering it: the label
+# binds nine values, and the review of #798 caught a render of the whole handle
+# that bound them a third time (19 markers, 28 values on SQLite). Grouped by the
+# same label or by the base column it builds, with markers and values aligned;
+# grouped by neither it is refused.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Mixed projection (#798) - a transformed Joined column is matched, never rendered" begin
+    function joined_q(grouped, leaf)
+        q = M.Result.objects
+        q.cjoin_on("Driver", alias = "d", on = [Joined("d", "driverid") == F("driverid")])
+        q.values(grouped, "label" => Concat(leaf, Value(" "), Count("resultid")))
+        q
+    end
+    for (grouped, leaf) in ((Joined("d", "dob__@yyyy_q"), Joined("d", "dob__@yyyy_q")),
+                            (Joined("d", "dob"), Joined("d", "dob__@year")))
+        insp = joined_q(grouped, leaf) |> inspect_query
+        @test occursin(r"GROUP BY 1\s*$", insp[:sql_text])
+        @test count("?", insp[:sql_text]) == length(insp[:parameters])
+    end
+    err = _g194_raised(() -> joined_q("constructorid", Joined("d", "dob__@year")) |> inspect_query)
+    @test err isa PormG.QueryBuildError
+    @test occursin("reads the column Joined(\"d\", \"dob__@year\")", _g194_plain(err))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Grouped-correlation guard (#194) - negative case: a projected Subquery WITHOUT
 # an outer aggregate produces no GROUP BY and therefore must build silently. Locks
 # the guard to the dangerous combination only, so every plain #92 usage stays

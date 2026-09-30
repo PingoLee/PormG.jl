@@ -48,6 +48,9 @@ include("helper_marker_alignment.jl")
 # ─────────────────────────────────────────────────────────────────────────────
 struct AggFlagMockPostgres <: PormG.PormGPostgres end
 struct AggFlagMockSQLite <: PormG.PormGSQLite end
+# An ORDER BY on SQLite asks the backend's version for its NULLS placement (#798's order_by case);
+# the mock has no driver behind it, so pin one — the stub `test_window_functions.jl` uses.
+PormG.backend_sqlite_version(::AggFlagMockSQLite) = 3045000
 
 PormG.config["agg_flag_pg"] = PormG.Configuration.Settings(connections = AggFlagMockPostgres(), change_data = true)
 PormG.config["agg_flag_sl"] = PormG.Configuration.Settings(connections = AggFlagMockSQLite(), change_data = true)
@@ -477,5 +480,185 @@ end
       q.values("raceid", "s" => Subquery(inner))
       @test occursin(r"\(SELECT \"Tb\"\.\"points\" as \"o\" FROM", _flat(inspect_query(q)))
     end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #798 fixtures. `_plain` strips colour, which is on under CI and off a TTY. `_mixed_err` builds and
+# renders, returning the exception or `nothing`.
+# ─────────────────────────────────────────────────────────────────────────────
+_plain(msg) = replace(msg, r"\e\[[0-9;]*m" => "")
+_mixed_err(q) = try
+  inspect_query(q)
+  nothing
+catch e
+  e
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #798: a projection mixing a column and an aggregate needs that column grouped
+# The flag above leaves an aggregate-bearing projection out of GROUP BY whole — right for
+# `Coalesce(Sum(…), 0)`, wrong for `raceid + SUM(points)`, whose `raceid` is read per group. Beside
+# `surname` nothing grouped it: PostgreSQL raised `GroupingError` and SQLite answered with an
+# arbitrary row's `raceid`. Each spelling is now refused naming the column, and the same projection
+# beside a grouped `raceid` still renders `GROUP BY 1`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#798: a mixed projection reads a column that must be grouped" begin
+  shapes = (
+    ("arithmetic", () -> F("raceid") + Sum("points")),
+    ("Coalesce over F", () -> Coalesce(F("raceid"), Sum("points"))),
+    ("Coalesce over a path", () -> Coalesce("raceid", Sum("points"))),
+    # The column is in the condition, the aggregate in the branch.
+    ("a Case condition", () -> Case([When("raceid__@gt" => 0, then = Sum("points"))], default = 0)),
+  )
+  for (backend, Model_) in _AGG_FLAG_MODELS
+    for (label, mixed) in shapes
+      @testset "$backend — $label: refused beside an ungrouped column" begin
+        q = Model_.objects
+        q.values("surname", "x" => mixed())
+        err = _mixed_err(q)
+        @test err isa QueryBuildError
+        msg = _plain(PormG.error_message(err))
+        @test occursin("#798", msg)
+        @test occursin("projection x reads the column \"raceid\" outside an aggregate (in its expression)", msg)
+        @test occursin("Grouped by: \"Tb\".\"surname\"", msg)
+        @test occursin("add \"raceid\" to values(...)", msg)
+        @test occursin("Max(\"raceid\")", msg)
+      end
+      @testset "$backend — $label: builds once the column is grouped" begin
+        q = Model_.objects
+        q.values("raceid", "x" => mixed())
+        insp = inspect_query(q)
+        @test occursin(r"GROUP BY 1\s*$", insp[:sql_text])
+        assert_marker_count(insp, backend)
+      end
+    end
+
+    @testset "$backend — a Case branch reading a column over an aggregate alias" begin
+      # The condition names the alias `total` (#722, not a column); the branch reads `raceid`.
+      q = Model_.objects
+      q.values("surname", "total" => Sum("points"),
+               "x" => Case([When("total__@gte" => 100, then = Abs("raceid"))], default = 0))
+      err = _mixed_err(q)
+      @test err isa QueryBuildError
+      @test occursin("reads the column \"raceid\"", _plain(PormG.error_message(err)))
+    end
+
+    @testset "$backend — a literal is not a column" begin
+      # `Value(0)` is bound, and so is a String in a `When`'s `then`/`Case`'s `default` slot — it is
+      # a value there, not a path. Nothing to group beside `surname`.
+      q = Model_.objects
+      q.values("surname", "total" => Sum("points"),
+               "x" => Coalesce(Sum("points"), Value(0)),
+               "y" => Case([When("total__@gte" => 100, then = "raceid")], default = "none"))
+      @test occursin(r"GROUP BY 1\s*$", inspect_query(q)[:sql_text])
+    end
+
+    @testset "$backend — a transform: its path or its base column groups it" begin
+      q = Model_.objects
+      q.values("surname", "x" => F("born__@year") + Max("points"))
+      err = _mixed_err(q)
+      @test err isa QueryBuildError
+      # Spelled as written, so the fix line pastes back.
+      @test occursin("add \"born__@year\" to values(...)", _plain(PormG.error_message(err)))
+      for grouped in ("born__@year", "born")
+        q = Model_.objects
+        q.values(grouped, "x" => F("born__@year") + Max("points"))
+        @test occursin(r"GROUP BY 1\s*$", inspect_query(q)[:sql_text])
+      end
+    end
+
+    @testset "$backend — a transform built inside a function argument" begin
+      # `Concat("born__@year", …)` holds `EXTRACT(born)` by the time the projection list does — the
+      # node a grouped `values("born__@year")` holds, so it is covered. A different transform is not.
+      mixed = () -> Concat(Lower("born__@yyyy_mm"), Value(": "), Count("resultid"))
+      q = Model_.objects
+      q.values("born__@yyyy_mm", "x" => mixed())
+      insp = inspect_query(q)
+      @test occursin(r"GROUP BY 1\s*$", insp[:sql_text])
+      assert_marker_count(insp, backend)
+      q = Model_.objects
+      q.values("born__@year", "x" => mixed())
+      @test _mixed_err(q) isa QueryBuildError
+    end
+
+    @testset "$backend — a grouped expression reused whole inside a mixed one" begin
+      # Grouped as `rp`, then read whole beside an aggregate: PostgreSQL accepts the grouped
+      # expression as a subexpression, so this ran before #798 and must keep building. The match is
+      # structural (never `==`, which builds a predicate on these nodes — #541), so a copy that
+      # differs by a literal or an operator is still refused.
+      for (grouped, mixed, builds) in (
+          (() -> F("raceid") * F("points"), () -> F("raceid") * F("points"), true),
+          (() -> F("raceid") * F("points"), () -> F("raceid") + F("points"), false),
+          (() -> F("raceid") * 2, () -> F("raceid") * 3, false),
+          (() -> Case([When("raceid__@gt" => 1, then = 1)], default = 0),
+           () -> Case([When("raceid__@gt" => 1, then = 1)], default = 0), true),
+          (() -> Case([When("raceid__@gt" => 1, then = 1)], default = 0),
+           () -> Case([When("raceid__@gt" => 2, then = 1)], default = 0), false),
+          # A binding label built inside a function argument: `born__@yyyy_q` binds nine values.
+          (() -> "born__@yyyy_q", () -> Concat("born__@yyyy_q", Value(" "), Count("resultid")), true),
+        )
+        q = Model_.objects
+        q.values("g" => grouped(), "x" => Coalesce(mixed(), Sum("points")))
+        if builds
+          insp = inspect_query(q)
+          @test occursin(r"GROUP BY 1\s*$", insp[:sql_text])
+          assert_marker_count(insp, backend)
+        else
+          @test _mixed_err(q) isa QueryBuildError
+        end
+      end
+    end
+
+    @testset "$backend — a transformed condition needs its base column" begin
+      # The #352 sargable rewrite renders `born__@year__@gt` as `"Tb"."born" >= ?`, so a grouped
+      # `born__@year` does not cover it — a grouped `born` does.
+      mixed = () -> Case([When("born__@year__@gt" => 2000, then = Sum("points"))], default = 0)
+      q = Model_.objects
+      q.values("born__@year", "x" => mixed())
+      err = _mixed_err(q)
+      @test err isa QueryBuildError
+      @test occursin("reads the column \"born\"", _plain(PormG.error_message(err)))
+      q = Model_.objects
+      q.values("born", "x" => mixed())
+      @test occursin(r"GROUP BY 1\s*$", inspect_query(q)[:sql_text])
+    end
+
+    @testset "$backend — a grouped primary key does not cover it" begin
+      # PostgreSQL would accept this (functional dependency); PormG does not infer it, as for #194.
+      q = Model_.objects
+      q.values("resultid", "x" => F("raceid") + Sum("points"))
+      @test _mixed_err(q) isa QueryBuildError
+    end
+
+    @testset "$backend — a query-level order_by groups it" begin
+      q = Model_.objects
+      q.values("surname", "x" => F("raceid") + Sum("points"))
+      q.order_by("raceid")
+      @test occursin("GROUP BY 1, \"Tb\".\"raceid\"", inspect_query(q)[:sql_text])
+    end
+
+    @testset "$backend — aggregate() has no group set at all" begin
+      err = try
+        Model_.objects.aggregate("x" => Coalesce(F("raceid"), Sum("points")); show_query = :sql)
+        nothing
+      catch e
+        e
+      end
+      @test err isa QueryBuildError
+      @test occursin("Grouped by: (none", _plain(PormG.error_message(err)))
+    end
+  end
+
+  # The guard stops walking at an aggregate CALL, so its list must name every aggregate constructor
+  # — a missing one would over-refuse. `_is_agg` is not the question: it is true for a wrapper too.
+  @testset "_is_aggregate_call names every aggregate constructor, and no wrapper" begin
+    for name in _AGG_AGGREGATES
+      @test PormG.QueryBuilder._is_aggregate_call(getfield(PormG.Functions, name)("points"))
+    end
+    for (name, build) in _AGG_WRAPPERS
+      @test !PormG.QueryBuilder._is_aggregate_call(build(Sum("points")))
+    end
+    @test !PormG.QueryBuilder._is_aggregate_call(F("raceid") + Sum("points"))
   end
 end

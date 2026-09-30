@@ -989,6 +989,58 @@ HAVING COALESCE(SUM("Tb"."milliseconds"), $3::bigint) = $4
 Until [#702](https://github.com/PingoLee/PormG.jl/issues/702), most of these wrappers dropped the
 aggregate. The query printed no `GROUP BY`, and SQLite returned a single row for the whole table.
 
+### A Column Beside an Aggregate in One Expression
+
+An expression can also mix a plain column with an aggregate: `F("grid") - Avg("positionorder")`,
+`Coalesce("grid", Max("points"))`, or a `Case` whose condition reads a column while its branch
+aggregates. Such an expression is computed once per group, but the column in it has one value per
+row. It therefore needs that column grouped, which the query may not do. PormG does not pick a
+grouping for you. It raises `QueryBuildError` naming the column, unless the query already groups it:
+
+```julia
+using PormG.Functions: Avg   # `F` comes with `using PormG`
+
+# ✗ raises QueryBuildError: `grid` is one start's slot, but the query groups by driver
+query = M.Result.objects
+query.filter("raceid__year" => 1990)
+query.values("driverid__surname", "places_gained" => F("grid") - Avg("positionorder"))
+```
+
+There are two fixes, and they answer different questions. **Aggregate the column**, and each
+driver's average grid slot is compared with their average finish:
+
+```julia
+query = M.Result.objects
+query.filter("raceid__year" => 1990)
+query.values("driverid__surname", "places_gained" => Avg("grid") - Avg("positionorder"))
+```
+
+**Project the column**, and the query groups by it too, giving one row per driver and grid slot:
+
+```julia
+query = M.Result.objects
+query.filter("raceid__year" => 1990)
+query.values("driverid__surname", "grid", "places_gained" => F("grid") - Avg("positionorder"))
+```
+
+```sql
+SELECT "Tb_1"."surname" as "driverid__surname", "Tb"."grid" as "grid",
+  ("Tb"."grid" - AVG("Tb"."positionorder")) as "places_gained"
+FROM "result" as "Tb"
+ INNER JOIN "driver" AS "Tb_1" ON "Tb"."driverid" = "Tb_1"."driverid"
+ INNER JOIN "race" AS "Tb_2" ON "Tb"."raceid" = "Tb_2"."raceid"
+WHERE "Tb_2"."year" = $1
+GROUP BY 1, 2
+```
+
+A column grouped by any route satisfies the check: projected, named in `order_by`, or read by a
+window's `partition_by`. A transform is grouped by its own path or by its column, so on
+`M.Driver`, `F("dob__@year")` is covered by `"dob__@year"` or by `"dob"` in `values(...)`. As with
+[a correlated subquery](subqueries_and_ctes.md), grouping by the primary key alone is not enough.
+PostgreSQL would accept that, but PormG does not infer the dependency. Before
+[#798](https://github.com/PingoLee/PormG.jl/issues/798), PostgreSQL rejected these queries with a
+`GroupingError`, and SQLite ran them against an arbitrary row of each group.
+
 ### A Condition on an Aggregate Alias
 
 A condition can also reach an aggregate by its alias. A `When` that reads an aggregate alias compares

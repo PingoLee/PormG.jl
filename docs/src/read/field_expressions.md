@@ -408,6 +408,8 @@ df = query |> DataFrame
 
 Aggregate functions (`Sum`, `Count`, `Avg`, `Max`, `Min`) can participate in arithmetic. PormG automatically handles the `GROUP BY` and `HAVING` implications.
 
+Arithmetic that mixes a plain column with an aggregate, such as `F("grid") - Avg("positionorder")`, is the exception. The column has to be grouped, and PormG will not group it for you: it raises `QueryBuildError` unless the query already groups that column. See [A Column Beside an Aggregate in One Expression](filters_and_aggregates.md#A-Column-Beside-an-Aggregate-in-One-Expression).
+
 ### In Projections
 
 ```julia

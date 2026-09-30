@@ -613,6 +613,13 @@ const DOCERR_CASES = [
         FilterError,
         () -> DOCERR_RESULT_PG.objects.filter("points__@in" => F("resultid")).list(show_query = :dict),
     ),
+    # #793 — *String Matching* says a LIKE-family lookup against a column raises `FilterError`; it used
+    # to concatenate the lookup name into the SQL (`"surname" contains "forename"`).
+    (
+        "read/filters_and_aggregates.md — a LIKE-family lookup against a column expression",
+        FilterError,
+        () -> DOCERR_DRIVER_PG.objects.filter("surname__@contains" => F("nationality")).list(show_query = :dict),
+    ),
     # #576. Both pages state the type for a period transform's rejected value, and both said
     # `InvalidValueError` — the write path's type, on a read. Neither claim was executed here
     # before, which is why it survived #411 and #467 untouched: the transform ladder is a different

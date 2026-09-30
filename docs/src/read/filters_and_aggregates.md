@@ -146,6 +146,13 @@ df = query |> DataFrame
 
 ## String Matching
 
+The `contains`, `startswith` and `endswith` lookups, with their case-insensitive, accent-insensitive
+and negated twins, match a **text value**. PormG wraps the value in `%` and escapes any `%` or `_`
+inside it, so it matches literally. That cannot be done to a column, so a column expression on the
+right (`"surname__@contains" => F("forename")`) raises a `FilterError` on both backends. The
+PostgreSQL-only `@regex` and `@iunaccent_exact` families do take a column, because they use their
+right-hand side as it is.
+
 ### Case-Sensitive (`@contains`)
 
 ```julia

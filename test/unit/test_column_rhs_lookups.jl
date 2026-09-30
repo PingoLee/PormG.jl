@@ -211,3 +211,71 @@ end
     end
   end
 end
+
+# The column-expression spellings against the driver's text columns, for the pattern lookups.
+_crl_joined_drivers() = (q = CRL.Crl_driver.objects;
+                         q.cjoin_on("Crl_driver", alias = "d2", on = [Joined("d2", "id") == F("id")]); q)
+const _CRL_DRIVER_RHS = (
+  ("F",        _crl_drivers,        () -> F("forename")),
+  ("function", _crl_drivers,        () -> Lower("forename")),
+  ("Joined",   _crl_joined_drivers, () -> Joined("d2", "forename")),
+  ("CTE",      _crl_drivers,        () -> PormG.CTE("c", "x")),
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #793: the LIKE-family lookups refuse a column expression by name
+# A LIKE lookup's value is a text fragment that gets `%` decoration and LIKE escaping, neither of which
+# can happen to a column. So `"surname__@contains" => F("forename")` concatenated the lookup NAME into
+# the SQL (`"surname" contains "forename"`), and `iunaccent_contains` skipped its SQLite capability
+# error. Every `LIKE_WILDCARD_OPERATORS` lookup now raises a FilterError at the call, on both engines.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#793: LIKE-family lookups refuse a column expression" begin
+  # The constant, not a hand-written list: a LIKE lookup added later is covered without editing this.
+  @test length(PormG.LIKE_WILDCARD_OPERATORS) == 14
+  for (backend, conn) in _CRL_BACKENDS
+    @testset "$backend" begin
+      for op in PormG.LIKE_WILDCARD_OPERATORS, (label, query, rhs) in _CRL_DRIVER_RHS
+        @testset "@$op => $label" begin
+          err = _crl_err(() -> (q = query(); q.filter("surname__@$op" => rhs()); q), conn)
+          @test err isa PormG.FilterError
+          msg = _crl_msg(err)
+          @test occursin("surname__@$op", msg)
+          @test occursin("matches a text value, not a column expression", msg)
+        end
+      end
+    end
+  end
+
+  # The value forms render exactly as before: a `%`-wrapped bound fragment.
+  q = _crl_drivers()
+  q.filter("surname__@contains" => "enn")
+  @test _crl_params(q, _CRL_SL) == ["%enn%"]
+
+  # The SQLite capability refusal is still what a VALUE gets. For a column, the shape is refused
+  # before the engine is consulted, so both engines report the same FilterError, as asserted above.
+  err = _crl_err(() -> (q = _crl_drivers(); q.filter("surname__@iunaccent_contains" => "sena"); q), _CRL_SL)
+  @test err isa PormG.BackendCapabilityError
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #793: the lookups that DO take a column still render
+# The refusals above must not reach the comparisons, or the verbatim pattern lookups #635 routed
+# through `Dialect` (a column is a valid regex / unaccented-equality operand).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#793: comparisons and verbatim pattern lookups still take a column" begin
+  for (backend, conn) in _CRL_BACKENDS
+    @testset "$backend" begin
+      for (key, sqlop) in (("points", "="), ("points__@gt", ">"), ("points__@lte", "<="), ("points__@ne", "!="))
+        q = _crl_results()
+        q.filter(key => F("grid"))
+        @test occursin("\"Tb\".\"points\" $(sqlop) \"Tb\".\"grid\"", _crl_sql(q, conn))
+      end
+    end
+  end
+  q = _crl_drivers()
+  q.filter("surname__@regex" => F("forename"))
+  @test occursin("\"Tb\".\"surname\" ~ \"Tb\".\"forename\"", _crl_sql(q, _CRL_PG))
+  q = _crl_drivers()
+  q.filter("surname__@iunaccent_exact" => F("forename"))
+  @test occursin("immutable_unaccent(\"Tb\".\"forename\")", _crl_sql(q, _CRL_PG))
+end

@@ -362,11 +362,23 @@ end
 # SQL found by the server; `IN CASE WHEN … END` likewise. Refused here, at parse, rather than in the
 # renderer: every spelling — `filter`, `Q`/`Qor`, `When`, `cjoin_on(on = …)`, a HAVING alias — reaches
 # these arms, so they all refuse the same way, on both engines.
+#
+# #793: the LIKE family, for the same reason one step removed. Its value is a text fragment that
+# `add_parameter!` wraps in `%` and LIKE-escapes, and neither can happen to a column, so the arm
+# concatenated the lookup NAME — `"Tb"."surname" contains "Tb"."forename"`, and no
+# `BackendCapabilityError` for `iunaccent_contains` on SQLite. Rendering `'%' || col || '%'` would
+# work, but the column's own `%` and `_` would then match as wildcards, unescaped. Refused instead
+# (the maintainer's call on #793). Every name in `LIKE_WILDCARD_OPERATORS` is also its own
+# `PormGsuffix` key, so the suffix is the membership test. The verbatim pattern lookups
+# (`@regex`, `@iunaccent_exact`) take a column as-is and are not refused (#635).
 function _check_column_rhs_lookup(path::Vector{String})
   suffix = path[end]
   lookup = join(path, "__@")
   suffix in ("in", "nin") &&
     throw(FilterError("Error in filter '$(lookup)': '$(suffix)' takes a list of values or a subquery, " *
+                      "not a column expression"))
+  suffix in LIKE_WILDCARD_OPERATORS &&
+    throw(FilterError("Error in filter '$(lookup)': '$(suffix)' matches a text value, " *
                       "not a column expression"))
   return nothing
 end
@@ -2397,11 +2409,18 @@ end
 # `"surname__@regex" => F("forename")` rendered `surname regex forename` on both engines — a server
 # syntax error on PostgreSQL, and no `BackendCapabilityError` on SQLite. The verbatim-bound pattern
 # lookups take their RHS as-is, so they dispatch through Dialect exactly as a bound value does.
-# The LIKE family is NOT routed here: it would need `'%' || rhs || '%'`, which is its own design.
+#
+# Nothing else reaches this with a column RHS: `_check_column_rhs_lookup` refuses the LIKE family and
+# `@in`/`@nin` at parse (#811/#793), and `_check_fixed_shape_lookup` refuses `@range`/`@isnull` (#808).
+# So the fallthrough is a comparison, and anything else fails CLOSED rather than concatenating an
+# operator name into the SQL. That is the fail-safe for an operator node built past the parse
+# ladder (`OP` is internal, #202).
 function _render_column_rhs(column::AbstractString, operator::AbstractString, rhs,
                             instruc::SQLInstruction)::String
   operator in VERBATIM_PATTERN_OPERATORS &&
     return _render_predicate(column, operator, rhs, instruc)
+  operator in ("=", ">", "<", ">=", "<=", "<>", "!=") ||
+    throw(FilterError("Invalid filter operator: $(operator) does not take a column expression."))
   return string(column, " ", operator, " ", rhs)
 end
 

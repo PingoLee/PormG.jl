@@ -557,6 +557,84 @@ df = query |> DataFrame
 
 ---
 
+## How a CTE Column Is Typed
+
+The outer query treats each CTE column as a field, and that field's type decides how a value
+compared with the column is bound. PormG derives the type from the body's projection:
+
+| Projection in the CTE body | Column type |
+|---|---|
+| A field path (`"points"`, `"driverid__surname"`) | That field |
+| `Count`, `Sum` | Integer |
+| `Avg`, `Min`, `Max` | The aggregated column's field |
+| `Rank`, `DenseRank`, `RowNumber` | Integer |
+| `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` | The column the window reads |
+| A function given `output_field = …`, or `Cast(x, type)` | The type it names |
+| `Case` / `When` | See below |
+
+Any other function raises `QueryBuildError` when the query is built. Give it an `output_field` or
+wrap it in `Cast` to name its type. A declared `date` is refused on SQLite: there
+`CAST('2020-03-29' AS DATE)` returns the number `2020`, so a date filter on the column would match
+nothing. Project the date column itself instead.
+
+A `Case` column takes its `output_field` when you pass one. Otherwise PormG types it from its
+branches, meaning every `then` and the `default`:
+
+- A plain value is typed by its Julia type. `1` is an integer, `1.5` a float, `"win"` text and
+  `true` a boolean.
+- `F("points")` is typed as the `points` field. Arithmetic on numbers stays a number.
+- A window or aggregate is typed as in the table above.
+- `NULL` branches are skipped. That covers `missing` and `Case`'s own default, the string
+  `"NULL"`.
+
+The branches must agree. Integers and floats mix, giving a float. Anything else raises
+`QueryBuildError` and asks for `output_field`: text beside a number, only `NULL` branches, or a
+function PormG cannot type (`Lower`, `Concat`, …). PormG does not guess a type here, because the
+type decides how the value is bound, and a wrong guess changes the result without any error.
+Before #812 an expression branch made the column text. The filter below then bound the string
+`"7"`, and SQLite returned **no rows**.
+
+```julia
+using PormG.Functions: Case, When
+
+# Podium points in the 2009 Australian GP (race 1), 0 for everyone else.
+podium = M.Result.objects
+podium.filter("raceid" => 1)
+podium.values("resultid",
+    "podium_pts" => Case([When("positionorder__@lte" => 3, then = F("points"))], default = 0))
+
+query = M.Result.objects
+query.with("podium" => podium, join_field = "resultid" => "resultid")
+query.filter("raceid" => 1, "podium__podium_pts__@gt" => 7)   # 7 binds as a number
+query.values("resultid", "driverid__surname", "podium__podium_pts")
+df = query |> DataFrame   # Button (10.0) and Barrichello (8.0)
+```
+
+When PormG cannot type a branch, name the type yourself. The `output_field` also becomes the SQL
+cast, so every row really holds that type:
+
+```julia
+using PormG.Functions: Lower
+using PormG.Models: CharField
+
+winner = M.Result.objects
+winner.filter("raceid" => 1)
+winner.values("resultid",
+    "winner" => Case([When("positionorder" => 1, then = Lower("driverid__surname"))],
+                     default = "", output_field = CharField()))
+
+query = M.Result.objects
+query.with("w" => winner, join_field = "resultid" => "resultid")
+query.filter("raceid" => 1, "w__winner" => "button")
+query.values("resultid", "w__winner")
+df = query |> DataFrame   # one row: "button"
+```
+
+Without `output_field`, this `Case` raises `QueryBuildError`, since PormG does not infer the type of
+`Lower`.
+
+---
+
 ## Multiple CTEs
 
 Attach multiple CTEs to the same query:

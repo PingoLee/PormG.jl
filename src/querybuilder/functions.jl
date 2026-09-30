@@ -700,7 +700,9 @@ first match.
   (`F("grid")`) renders as that column.
 - `output_field`: the result type. Accepts a `PormGField` instance (e.g. `CharField()`, whose
   `.type` is used) or a raw SQL type string. Renders as a `::type` cast on PostgreSQL and a
-  `CAST(...)` on SQLite.
+  `CAST(...)` on SQLite. In a CTE body it is also the column's type; without it the type is
+  inferred from the branches, and branches that do not agree raise `QueryBuildError` — see
+  [How a CTE Column Is Typed](@ref).
 
 Usable anywhere a column expression is — in `values()`, nested inside [`Sum`](@ref), as a
 filter right-hand side, and in `.update()`.

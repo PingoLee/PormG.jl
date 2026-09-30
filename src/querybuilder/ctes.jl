@@ -1313,55 +1313,170 @@ function build_cte_clause(ctes::OrderedCollections.OrderedDict{String,CTEDict}, 
 end
 
 
-"""
-Infer the output PormGField type for a CASE/WHEN expression by inspecting
-the `then` values from WHEN branches and the `default`/`else` value.
-
-Returns IntegerField if all values are integers, FloatField if any are floats,
-or CharField as a safe fallback for strings or mixed types.
-"""
-function _infer_case_output_type(func::SQLTypeFunction)
-  output_values = Any[]
-
-  # Collect `else`/default from the CASE kwargs
-  if haskey(func.kwargs, "else") && !(func.kwargs["else"] isa Missing)
-    push!(output_values, func.kwargs["else"])
-  end
-
-  # Collect `then` from each WHEN branch (stored in func.column for CASE)
-  if func.column isa Vector
-    for when_branch in func.column
-      if hasproperty(when_branch, :kwargs) && haskey(when_branch.kwargs, "then")
-        push!(output_values, when_branch.kwargs["then"])
-      end
-    end
-  elseif func.function_name == "WHEN" && haskey(func.kwargs, "then")
-    push!(output_values, func.kwargs["then"])
-  end
-
-  # Infer type from collected values
-  if isempty(output_values)
-    return CharField()  # no values to infer from, safest default
-  elseif all(v -> v isa Integer, output_values)
-    return IntegerField()
-  elseif all(v -> v isa Number, output_values)
-    return FloatField()
-  elseif all(v -> v isa AbstractString, output_values)
-    return CharField()
+# #812 — the type of a CTE column projected from `Case`/`When`, resolved the way Django's
+# `Expression._resolve_output_field` does it: `output_field=` wins (handled by the caller); otherwise
+# every `then` and the `else` is resolved to a field, the NULL sentinels are skipped, and the fields
+# must agree. What they cannot agree on is REFUSED, not guessed.
+#
+# The guess this replaces typed every branch by `isa Integer`/`isa Number`/`isa AbstractString` and
+# fell back to `CharField`, so an expression branch (`then = Rank(…)`, `then = F("points")`) and the
+# `Case` default itself — the STRING `"NULL"` — made a numeric column text. The outer filter then
+# bound `"10"` for `c__top__@gt => 10`, and on SQLite, where neither a computed CTE column nor a
+# parameter has type affinity and INTEGER sorts below TEXT, that drops every row with no error.
+# It also collected no `then` at all from a single bare `Case(When(…))` or from
+# `When(…, otherwise = x)`, whose CASE holds ONE `WHEN` node rather than a vector of them.
+function _case_output_field(func::SQLTypeFunction, field::String, instruct::SQLInstruction)
+  outputs = Any[]
+  if func.function_name == "WHEN"
+    push!(outputs, func.kwargs["then"])
   else
-    return CharField()  # mixed types, safest default
+    for branch in (func.column isa AbstractVector ? func.column : (func.column,))
+      # A `Case` holds `When` nodes; anything else (a `When(…; otherwise = …)`, which is already a
+      # CASE, or a nested `Case`) renders no `THEN`, so there is no branch value to type.
+      (branch isa SQLTypeFunction && branch.function_name == "WHEN") ||
+        _refuse_case_type(field, "a Case branch is not a bare When(…)")
+      push!(outputs, branch.kwargs["then"])
+    end
+    push!(outputs, get(func.kwargs, "else", missing))
   end
+
+  fields = PormGField[]
+  for value in outputs
+    # `Value(missing)` is a NULL too — unwrap it before the check, not after.
+    _is_null_literal(value isa SQLText ? value.field : value) && continue
+    push!(fields, _case_value_field(value, field, instruct))
+  end
+  isempty(fields) && _refuse_case_type(field, "every branch is NULL, so there is no type to infer")
+  return _unify_case_fields(fields, field)
+end
+
+# A literal types by its Julia type; `Bool` first, because `true isa Integer`.
+_case_value_field(::Bool, ::String, ::SQLInstruction) = Models.BooleanField()
+_case_value_field(::Integer, ::String, ::SQLInstruction) = Models.IntegerField()
+_case_value_field(::Number, ::String, ::SQLInstruction) = Models.FloatField()
+_case_value_field(::AbstractString, ::String, ::SQLInstruction) = Models.CharField()
+_case_value_field(v::SQLText, field::String, instruct::SQLInstruction) = _case_value_field(v.field, field, instruct)
+_case_value_field(v::WindowFunction, field::String, instruct::SQLInstruction) =
+  _set_field_from_sql_function(v, field, instruct)
+_case_value_field(v::JoinedReference, field::String, instruct::SQLInstruction) =
+  _set_field_from_sql_function(v, field, instruct)
+function _case_value_field(v::SQLTypeFunction, field::String, instruct::SQLInstruction)
+  # A declared type, a nested CASE and the aggregates are what the CTE typing already knows how to
+  # read; anything else would die on the generic "not a recognized function", which says nothing
+  # about the `output_field=` that would fix it.
+  if _declared_type(v, instruct) === nothing && !(v.function_name in _CTE_TYPED_FUNCTIONS)
+    _refuse_case_type(field, "a branch is \e[31m$(v.function_name)\e[0m(…), whose result type PormG does not infer")
+  end
+  return _set_field_from_sql_function(v, field, instruct)
+end
+# A bare `F("points")` is that column. Arithmetic keeps a number a number — both sides integral stays
+# an integer (SQL integer arithmetic does, on both engines), otherwise a float — and anything else
+# (`F("date") + Day(1)`) is refused rather than given the column's type, as `_expression_formatter`
+# (build_query.jl) declines to type it too.
+function _case_value_field(v::FExpression, field::String, instruct::SQLInstruction)
+  if v.operation === nothing
+    v.column isa String || _refuse_case_type(field, "a branch is an F(…) over more than one column")
+    return _set_field_from_sql_function(v.column, v.column, instruct)
+  end
+  left = _f_operand_field(v.field_name, field, instruct)
+  right = _f_operand_field(v.operand, field, instruct)
+  if _is_number_field(left) && _is_number_field(right)
+    return _is_integral_field(left) && _is_integral_field(right) ? Models.IntegerField() : Models.FloatField()
+  end
+  _refuse_case_type(field, "a branch is F(…) arithmetic ($(v.operation)) on a value that is not a number")
+end
+_case_value_field(v, field::String, ::SQLInstruction) =
+  _refuse_case_type(field, "a branch is a $(nameof(typeof(v))), whose type PormG does not infer")
+
+# Inside `F` arithmetic a `String` is a column path, not a text literal.
+_f_operand_field(x::String, ::String, instruct::SQLInstruction) = _set_field_from_sql_function(x, x, instruct)
+_f_operand_field(x, field::String, instruct::SQLInstruction) = _case_value_field(x, field, instruct)
+
+# The functions `_set_field_from_sql_function(::SQLTypeFunction, …)` types without a declared type.
+const _CTE_TYPED_FUNCTIONS = ("CASE", "WHEN", "COUNT", "SUM", "AVG", "MIN", "MAX")
+
+_is_number_field(f::PormGField) = hasproperty(f, :formatter) && f.formatter === Models.format_number_sql
+_is_integral_field(f::PormGField) = f isa Union{Models.sIntegerField, Models.sBigIntegerField,
+  Models.sPositiveSmallIntegerField, Models.sPositiveIntegerField, Models.sIDField, Models.sForeignKey,
+  Models.sOneToOneField}
+
+# Fields of one struct type agree; numbers promote as they always have (all integral → integer,
+# otherwise float); text-with-text and the other same-formatter families keep the first field. Two
+# families refuse — there is no type both branches are.
+#
+# Two keys agree only when they point at the same parent: the outer query can traverse a CTE key
+# column (`c__who__surname`), and `F("driverid")` beside `F("constructorid")` typed as the FIRST key
+# would join constructor ids to drivers. They fall through to the numeric arm instead — a plain
+# integer column, which refuses the traversal rather than answer it wrongly.
+function _unify_case_fields(fields::Vector{PormGField}, field::String)
+  first_field = fields[1]
+  all(f -> typeof(f) === typeof(first_field) && _same_key_target(f, first_field), fields) && return first_field
+  if all(_is_number_field, fields)
+    return all(_is_integral_field, fields) ? Models.IntegerField() : Models.FloatField()
+  end
+  formatter = hasproperty(first_field, :formatter) ? first_field.formatter : nothing
+  if formatter !== nothing && all(f -> hasproperty(f, :formatter) && f.formatter === formatter, fields)
+    return first_field
+  end
+  other = fields[findfirst(f -> !(hasproperty(f, :formatter) && f.formatter === formatter), fields)]
+  _refuse_case_type(field, "its branches have different types " *
+    "(\e[31m$(_field_label(first_field))\e[0m and \e[31m$(_field_label(other))\e[0m)")
+end
+
+_key_target(f::PormGField) = (f.to isa PormGModel ? f.to.name : f.to, f.pk_field)
+_same_key_target(a::PormGField, b::PormGField) =
+  !(a isa Union{Models.sForeignKey,Models.sOneToOneField}) || isequal(_key_target(a), _key_target(b))
+
+# `IntegerField`, as the caller spells the constructor — not the `sIntegerField` struct behind it.
+_field_label(f::PormGField) = chopprefix(string(nameof(typeof(f))), "s")
+
+function _refuse_case_type(field::String, reason::String)
+  throw(QueryBuildError(
+    "The CTE column \e[4m\e[31m$(field)\e[0m is a Case whose type cannot be inferred: $(reason). " *
+    "Name the type the column holds with \e[32moutput_field\e[0m — e.g. " *
+    "\e[32mCase(…; output_field = CharField())\e[0m — so a filter on the column binds its value as " *
+    "that type (#812)."))
+end
+
+# The type a function declares — `output_field=` on `Case`/`Coalesce`/`Concat`/`Greatest`/`Least`,
+# `type` on `Cast` — as a field, or `nothing` when it declares none. A declared type outside the
+# families `_sql_type_field` (build_query.jl) recognises is refused rather than dropped: the caller
+# named it, and falling back to inference would quietly override them.
+#
+# `date` is refused on SQLite: the cast renders `CAST(x AS DATE)`, and SQLite gives the type name
+# DATE numeric affinity, so `'2020-03-29'` becomes the INTEGER `2020`. A column typed DateField would
+# then bind `"2020-01-01"` against a number, and INTEGER sorts below TEXT — the #812 silent-empty
+# result again, one route over. Project the date column itself, which keeps its text.
+function _declared_type(func::SQLTypeFunction, instruct::SQLInstruction)
+  declared = get(func.kwargs, func.function_name == "CAST" ? "type" : "output_field", nothing)
+  (declared isa AbstractString && !isempty(declared)) || return nothing
+  typed = _sql_type_field(declared)
+  typed === nothing && throw(QueryBuildError(
+    "A CTE column cannot be typed from the SQL type \e[4m\e[31m$(declared)\e[0m on " *
+    "$(func.function_name)(…). Name one of the text, integer, bigint, float, numeric, boolean or " *
+    "date types instead (#812)."))
+  if typed isa Models.sDateField && instruct.connection isa PormGSQLite
+    throw(QueryBuildError(
+      "A CTE column cannot be typed \e[4m\e[31mdate\e[0m by $(func.function_name)(…) on SQLite: " *
+      "SQLite's CAST(… AS DATE) turns '2020-03-29' into the number 2020, so a date filter on the " *
+      "column would match nothing. Project the date column itself instead (#812)."))
+  end
+  return typed
 end
 
 
 function _set_field_from_sql_function(func::SQLTypeFunction, field::String, instruct::SQLInstruction)
-  # CASE/WHEN: infer output type from `then` and `default`/`else` values
+  # #812: a declared type wins over anything inferred — it is also what the SQL casts the value to.
+  declared = _declared_type(func, instruct)
+  declared === nothing || return declared
+
   if func.function_name in ["CASE", "WHEN"]
-    return _infer_case_output_type(func)
+    return _case_output_field(func, field, instruct)
   end
 
   if !(func.function_name in ["COUNT", "SUM", "AVG", "MIN", "MAX"])
-    throw(QueryBuildError("Error in _set_field_from_sql_function, the function \e[4m\e[31m$(func.function_name)\e[0m is not a recognized function. Allowed: \e[4m\e[32mCOUNT, SUM, AVG, MIN, MAX, CASE, WHEN\e[0m"))
+    throw(QueryBuildError("Error in _set_field_from_sql_function, the function \e[4m\e[31m$(func.function_name)\e[0m is not a recognized function. Allowed: \e[4m\e[32mCOUNT, SUM, AVG, MIN, MAX, CASE, WHEN\e[0m " *
+      "— or name the column's type by wrapping it in \e[32mCast(…, \"text\")\e[0m (or the type it returns) (#812)."))
   end
 
   if func.function_name in ["COUNT", "SUM"]

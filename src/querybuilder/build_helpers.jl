@@ -2002,10 +2002,13 @@ function _resolve_bucket_column(raw_field::String, instruc::SQLInstruction)
   # A CTE model's column types are INFERRED (`_set_field_from_sql_function`, ctes.jl), so the
   # question is whether one can ever be typed DATE while the column holds something else. It cannot:
   # a plain-column projection reads the real field; COUNT/SUM yield IntegerField; CASE/WHEN route
-  # through `_infer_case_output_type`, which only ever returns Integer/Float/CharField; MIN/MAX
-  # carry the base DateField and genuinely produce a date; and every OTHER function — `ToChar`
-  # included, which is what would actually produce a "1991-10" text column — is rejected outright
-  # when the CTE model is built. So the DATE gate is as trustworthy here as anywhere else.
+  # through `_case_output_field`, which types a CASE as DATE only when every non-NULL branch is
+  # itself a date column (#812) or `output_field` names `date` — PostgreSQL only, where the SQL
+  # casts it to a real date; SQLite's `CAST(… AS DATE)` yields a NUMBER, so it is refused there;
+  # MIN/MAX carry the base DateField and genuinely produce a date; and every OTHER function —
+  # `ToChar` included, which is what would actually produce a "1991-10" text column — is rejected
+  # outright when the CTE model is built unless it declares its type. So the DATE gate is as
+  # trustworthy here as anywhere else.
   #
   # #376: the drift guard below still MATCHES on a CTE path. It matched before the fix too — both
   # sides read the SAME field object, so they agreed on the physical name and the rewrite was

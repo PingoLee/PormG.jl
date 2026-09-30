@@ -441,6 +441,49 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        # #812. *How a CTE Column Is Typed*: a `Case` whose branches do not agree (here text beside a
+        # number) raises rather than being typed text, because the type decides how a filter on the
+        # column binds its value. Raised when the outer query builds the CTE model.
+        "read/subqueries_and_ctes.md — a CTE Case column whose branches disagree is refused (#812)",
+        QueryBuildError,
+        () -> begin
+            body = DOCERR_RESULT_PG.objects
+            body.values("resultid", "top" => PormG.Functions.Case(
+                [PormG.Functions.When("points__@gte" => 15, then = 1)], default = "none"))
+            q = DOCERR_RESULT_PG.objects
+            q.with("c" => body, join_field = "resultid" => "resultid")
+            q.values("resultid", "c__top")
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #812. The same section: a declared `date` is refused on SQLite, whose `CAST(… AS DATE)`
+        # yields a number rather than a date.
+        "read/subqueries_and_ctes.md — a CTE column declared date is refused on SQLite (#812)",
+        QueryBuildError,
+        () -> begin
+            body = DOCERR_RESULT_SL.objects
+            body.values("resultid", "d" => PormG.Functions.Cast("points", "date"))
+            q = DOCERR_RESULT_SL.objects
+            q.with("c" => body, join_field = "resultid" => "resultid")
+            q.values("resultid", "c__d")
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #812. The same section: a function outside the table, with no declared type, raises.
+        "read/subqueries_and_ctes.md — a CTE column from an untyped function is refused (#812)",
+        QueryBuildError,
+        () -> begin
+            body = DOCERR_RESULT_PG.objects
+            body.values("resultid", "nm" => Lower("driverid__surname"))
+            q = DOCERR_RESULT_PG.objects
+            q.with("c" => body, join_field = "resultid" => "resultid")
+            q.values("resultid", "c__nm")
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
         # #435. Resolving `driverid__surname` builds the driver join DURING Phase 1, so it lands at
         # a higher `row_join` index than `d` — a forward reference. Phase 1b moves the predicate
         # onto it, and since it is `d`'s only one, `d` is left with no ON clause. The doc note tells

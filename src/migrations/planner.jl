@@ -2046,47 +2046,84 @@ function _exclude_unmanaged_models!(current_schema::Dict{Symbol, Dict{Symbol, Un
 end
 
 """
-    _refuse_managed_models_on_ignored_tables(current_schema, settings)
+    _refuse_managed_models_on_ignored_tables(current_schema, conn, settings)
 
-Raise `InvalidConfigurationError` when a managed model's table matches the connection's own
-`ignore_tables:` list (#749). The two say opposite things: the model asks PormG to migrate the table,
-the list asks PormG never to read it. An ignored table reads as absent, so the planner would emit
-`CREATE TABLE IF NOT EXISTS` — a no-op against the existing table, planned again on every run. Every
-offending model is listed, so they can all be fixed in one pass.
+Raise `InvalidConfigurationError` when a managed model's table matches an ignore list that
+`makemigrations` reads with. There are three: the connection's own `ignore_tables:` (#749), the
+`register_ignore_tables!` registry, and the backend default (`_backend_ignore_tables`) (#805). Each
+one contradicts the model: the model asks PormG to migrate the table, and the list asks PormG never
+to read it. An ignored table reads as absent, so the planner would emit `CREATE TABLE IF NOT EXISTS`,
+a no-op against the existing table, planned again on every run. Every offending model is listed,
+so they can all be fixed in one pass.
 
-Scoped to the per-connection list on purpose, not to the backend default or `register_ignore_tables!`:
-those predate the check, and a declared model under one of them still plans as a new table. Called
-after `_exclude_unmanaged_models!`, so a `managed = false` model — the sanctioned way to query a
-table PormG does not migrate — is never reported.
+Each line names every list the table matches, because the fix depends on all of them. An
+`ignore_tables:` entry can be removed, but that only helps a table no other list also hides. The
+registry and the default cannot be switched off for one connection, so under them the fix is
+`managed = false`, or a table name outside the prefix. A renamed table is a new, empty table, and
+the existing rows are not moved.
+
+These are the configuration lists and nothing else. `check`'s per-call `ignore_table=` stays a
+live-side filter (#738), so `check(kinds = [:schema_drift])` refuses exactly what `makemigrations`
+would. Called after `_exclude_unmanaged_models!`, so a `managed = false` model, the sanctioned way to
+query a table PormG does not migrate, is never reported.
 """
 function _refuse_managed_models_on_ignored_tables(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
-                                                  settings::PormGSettings)::Nothing
-  ignored = Configuration._configured_ignore_tables(settings)
-  isempty(ignored) && return nothing
+                                                  conn, settings::PormGSettings)::Nothing
+  default_list = _backend_ignore_tables(conn)
+  default_name = default_list === sqlite_ignore_schema ? "sqlite_ignore_schema" : "postgres_ignore_table"
+  # Most specific first, which is the order each line names its matches in.
+  sources = (
+    (:connection, Configuration._configured_ignore_tables(settings),
+     entry -> "ignore_tables entry \"$(entry)\" (connection.yml)"),
+    (:registry, _EXTRA_IGNORE_TABLES[],
+     entry -> "\"$(entry)\", registered with `register_ignore_tables!`"),
+    (:default, default_list,
+     entry -> "\"$(entry)\" in PormG's default ignore list (`$(default_name)`)"),
+  )
   problems = String[]
-  declared = false   # whether any problem is a model the user wrote, rather than a synthesized one
+  declared = false       # whether any problem is a model the user wrote, rather than a synthesized one
+  join_table = false
+  removable = false      # a table only `ignore_tables:` hides, so removing the entry fixes it
+  locked = Set{Symbol}() # the lists with no off switch that hide a declared model
   for (table, entry) in current_schema
-    matched = findfirst(prefix -> startswith(String(table), prefix), ignored)
-    matched === nothing && continue
+    hits = Tuple{Symbol, String}[]
+    for (source, prefixes, describe) in sources
+      matched = findfirst(prefix -> startswith(String(table), prefix), prefixes)
+      matched === nothing || push!(hits, (source, describe(prefixes[matched])))
+    end
+    isempty(hits) && continue
     model = entry[:model]
     # A ManyToManyField's auto join table is synthesized, so `managed = false` cannot be written on
     # it: it is managed whenever either end is. Its own fix is a `db_table` outside the prefix.
     what = if haskey(model.cache, "many_to_many_auto")
+      join_table = true
       "the auto join table of a ManyToManyField (table \"$(table)\"; give the field a `db_table` outside the prefix, or declare an explicit `through` model)"
     else
       declared = true
+      union!(locked, (source for (source, _) in hits if source !== :connection))
       "$(model.name) (table \"$(table)\")"
     end
-    push!(problems, "  - $(what) matches ignore_tables entry \"$(ignored[matched])\"")
+    all(hit -> hit[1] === :connection, hits) && (removable = true)
+    push!(problems, "  - $(what) matches $(join(last.(hits), " and "))")
   end
   isempty(problems) && return nothing
-  fix = declared ?
-    "Declare each model with `managed = false` to query its table without migrating it, apply the fix named on a join-table line, or remove the entry from `ignore_tables:` to let PormG migrate the table." :
-    "Apply the fix named on each line above, or remove the entry from `ignore_tables:` to let PormG migrate the table."
+  fixes = String[]
+  declared && push!(fixes, "declare each model with `managed = false` to query its table without migrating it")
+  join_table && push!(fixes, "apply the fix named on a join-table line")
+  if !isempty(locked)
+    names = String[]
+    :registry in locked && push!(names, "`register_ignore_tables!`")
+    :default in locked && push!(names, "the default list")
+    push!(fixes, "give the model a table name (or `db_table`) outside the prefix, since " *
+                 "$(join(names, " and ")) cannot be switched off (a new, empty table: the existing rows are not moved)")
+  end
+  removable && push!(fixes, "remove the entry from `ignore_tables:` for a table no other list names, to let PormG migrate it")
+  fix = length(fixes) == 1 ? only(fixes) :
+    join(fixes[1:end-1], ", ") * ", or " * fixes[end]
   throw(InvalidConfigurationError(
-    "Cannot plan the migration: a managed model's table is in this connection's `ignore_tables:` " *
-    "(connection.yml), so PormG would never read it and would plan to create it on every run:\n" *
-    "$(join(sort!(problems), "\n"))\n" * _emsg(fix)))
+    "Cannot plan the migration: a managed model's table matches an ignore list, so PormG would " *
+    "never read it and would plan to create it on every run:\n" *
+    "$(join(sort!(problems), "\n"))\n" * _emsg(uppercasefirst(fix) * ".")))
 end
 
 """
@@ -2188,7 +2225,7 @@ current_schema = Models.synthesize_many_to_many_through_models(current_schema, s
 # unmanaged table's index names and a SQLite view that reads it.
 unmanaged_tables = _exclude_unmanaged_models!(current_schema)
 _refuse_constrained_keys_into_unmanaged(current_schema)
-_refuse_managed_models_on_ignored_tables(current_schema, settings)
+_refuse_managed_models_on_ignored_tables(current_schema, conn, settings)
 all_live = live
 isempty(unmanaged_tables) || (live = LiveTable[t for t in all_live if !(t.name in unmanaged_tables)])
 # #161: every model-level index name the plan creates or renames to, across all tables — the scope

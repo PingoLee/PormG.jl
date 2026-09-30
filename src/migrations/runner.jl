@@ -1322,9 +1322,11 @@ For `:schema_drift` the two filter differently, on purpose:
     findings for a listed table are exactly the steps `makemigrations` would plan for it. A
     `ManyToManyField`'s through table is reported only when it is listed too.
   * `ignore_table` skips **live** tables only, as the default skip list does for `makemigrations`.
-    A declared model on an ignored table therefore reads as missing from the database — except
-    under the connection's `ignore_tables:`, where a managed model on a listed table raises
-    `InvalidConfigurationError`, as it does in `makemigrations`.
+    A declared model on a table only this keyword names therefore reads as missing from the
+    database. A managed model on a table under one of the lists `makemigrations` reads with, which
+    are the backend default, `register_ignore_tables!` and the connection's `ignore_tables:`, raises
+    `InvalidConfigurationError` instead, as it does in `makemigrations` (#749, #805). Replacing the
+    default list with this keyword does not switch that refusal off.
 
 `models_file` names the models file
 `:schema_drift` compares against; by default it is `settings.model_file` under the connection's
@@ -1429,7 +1431,7 @@ function check(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSet
                include_table::Union{Vector{String}, Nothing} = nothing,
                models_file::Union{AbstractString, Nothing} = nothing)::SchemaCheckResult
   _validate_check_kinds(kinds, models_file)
-  default_ignore = connection isa PormGSQLite ? sqlite_ignore_schema : postgres_ignore_table
+  default_ignore = _backend_ignore_tables(connection)
   # #749: a caller's `ignore_table` replaces the backend default only; the connection's own
   # `ignore_tables:` is always added on top, like the registry.
   base_ignore = _with_connection_ignores(something(ignore_table, default_ignore), settings)

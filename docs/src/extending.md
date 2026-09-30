@@ -51,6 +51,13 @@ an app's databases, use that connection's
 [`ignore_tables:`](configuration/connection_yml.md#Tables-PormG-leaves-alone) instead. The two
 lists add to each other. Both match entries as prefixes.
 
+Do not also declare a managed model on a registered table. PormG never reads the table, so it
+would plan to create it on every run. `makemigrations` and `check(kinds = [:schema_drift])` refuse
+it with `InvalidConfigurationError` instead. If your package queries its own table through PormG,
+build that model with `managed = false`, or keep it out of the consumer's models file. The same
+rule applies to every ignore list (see
+[Tables PormG leaves alone](configuration/connection_yml.md#Tables-PormG-leaves-alone)).
+
 ### `set_before_connect_hook(f)`
 
 Register a callback invoked **before** PormG opens a physical connection (not on pool reuse,

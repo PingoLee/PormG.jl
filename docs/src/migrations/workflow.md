@@ -128,7 +128,10 @@ those tables. Every declared model is still planned, so a `ManyToManyField`'s th
 reported only when you list it too. `ignore_table` skips live tables only, as the default skip list
 does for `makemigrations`. It replaces that default list, but the connection's own
 [`ignore_tables:`](../configuration/connection_yml.md#Tables-PormG-leaves-alone) still applies on top
-of it, and so does `register_ignore_tables!`.
+of it, and so does `register_ignore_tables!`. Replacing the default list does not make a managed
+model on a default-ignored table legal: that model is still refused with `InvalidConfigurationError`,
+as it is in `makemigrations` (see
+[Tables PormG leaves alone](../configuration/connection_yml.md#Tables-PormG-leaves-alone)).
 
 A column whose definition changes reads differently per engine. PostgreSQL reports
 `"Alter field: <column>"`. SQLite rebuilds the table, so its finding is `"Alter table: <table>"` and

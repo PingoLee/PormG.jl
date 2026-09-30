@@ -1530,6 +1530,36 @@ const DOCERR_CASES = [
                                                 interactive = false)
         end,
     ),
+    # #805: the same refusal under the backend default and the registry, which have no
+    # `ignore_tables:` entry to point at.
+    (
+        "configuration/connection_yml.md — Tables PormG leaves alone: a managed model on an auth_ table is refused on PostgreSQL with InvalidConfigurationError (#805)",
+        InvalidConfigurationError,
+        () -> begin
+            m = Model("auth_user"; id = IDField())
+            schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+                :auth_user => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => m, :exist => false))
+            PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema, DocErrMockPostgres(),
+                                                PormG.Configuration.Settings(); interactive = false)
+        end,
+    ),
+    (
+        "extending.md — register_ignore_tables!: a managed model on a registered table raises InvalidConfigurationError (#805)",
+        InvalidConfigurationError,
+        () -> begin
+            saved = copy(PormG._EXTRA_IGNORE_TABLES[])
+            try
+                PormG._EXTRA_IGNORE_TABLES[] = ["legacy_timing_"]
+                m = Model("legacy_timing_laps"; id = IDField())
+                schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+                    :legacy_timing_laps => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => m, :exist => false))
+                PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema, DocErrMockPostgres(),
+                                                    PormG.Configuration.Settings(); interactive = false)
+            finally
+                PormG._EXTRA_IGNORE_TABLES[] = saved
+            end
+        end,
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

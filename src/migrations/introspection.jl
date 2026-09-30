@@ -901,6 +901,16 @@ itself, and `check`'s expression-default arm, which does not go through the read
 _with_connection_ignores(base::Vector{String}, settings::PormGSettings)::Vector{String} =
   unique(vcat(base, Configuration._configured_ignore_tables(settings)))
 
+"""
+    _backend_ignore_tables(conn) -> Vector{String}
+
+The backend's built-in ignore list: `sqlite_ignore_schema` on SQLite, `postgres_ignore_table`
+otherwise. `check` uses it as the list its `ignore_table=` replaces. The planner's refusal (#805)
+uses it as the third configuration list a managed model must not fall under.
+"""
+_backend_ignore_tables(conn)::Vector{String} =
+  conn isa PormGSQLite ? sqlite_ignore_schema : postgres_ignore_table
+
 # `pragma_table_list`, the catalog that labels a table `virtual` / `shadow`, is SQLite 3.37.0+.
 const _SQLITE_TABLE_LIST_MIN_VERSION = 3_037_000
 

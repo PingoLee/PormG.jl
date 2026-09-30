@@ -187,14 +187,28 @@ table.
 **Declaring a model for an ignored table is a contradiction, and it is refused.** The model asks
 PormG to migrate the table, and the list asks PormG never to read it. Because PormG would not see
 the existing table, it would plan to create it again on every run. So `makemigrations` and
-`check(kinds = [:schema_drift])` raise `InvalidConfigurationError`, naming the model and the entry
-it matched. (`makemigrations` plans nothing at all under `change_db: false`, so there only `check`
-reports it.) The check covers every declared model, so `check`'s `include_table=` does not narrow
-it. To query such a table without migrating it, declare the model with
-[`managed = false`](../models.md#Unmanaged-models). An unmanaged model on an ignored table is
-fine. A `ManyToManyField` on it is not always: its automatic join table, `<table>_<field>`, is
-managed whenever the other end is, and it usually shares the prefix. Give that field a `db_table`
-outside the prefix, or declare an explicit `through` model.
+`check(kinds = [:schema_drift])` raise `InvalidConfigurationError`, naming the model, the entry it
+matched, and the list the entry came from. (`makemigrations` plans nothing at all under
+`change_db: false`, so there only `check` reports it.) The same rule covers all three lists:
+this key, `register_ignore_tables!`, and the backend's built-in list. So a managed model on an
+`auth_` or `django_` table is refused on PostgreSQL. The one list it does not cover is `check`'s own
+`ignore_table=` keyword, which only filters what `check` reads. The check covers every declared
+model, so `check`'s `include_table=` does not narrow it.
+
+The fix depends on what you want:
+
+- **Query the table without migrating it:** declare the model with
+  [`managed = false`](../models.md#Unmanaged-models). An unmanaged model on an ignored table is fine.
+- **Migrate it after all:** remove the entry from `ignore_tables:`. That only helps when no other
+  list also hides the table: the built-in list and `register_ignore_tables!` cannot be switched off
+  for one connection. The error names every list the table matches, and offers the removal only
+  when it would work.
+- **Let PormG own a new table instead:** give the model a table name (or `db_table`) outside the
+  prefix. That plans a new, empty table; the existing table and its rows stay where they are.
+
+A `ManyToManyField` on an unmanaged model is not always fine. Its automatic join table,
+`<table>_<field>`, is managed whenever the other end is, and it usually shares the prefix. Give that
+field a `db_table` outside the prefix, or declare an explicit `through` model.
 
 ## Configuration Settings (`config:`)
 

@@ -315,3 +315,161 @@ end
     end
   end
 end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# #805: the same refusal under the registry and the backend default
+#
+# #749 refused a managed model under the connection's `ignore_tables:` only. The other two lists
+# `makemigrations` reads with, `register_ignore_tables!` and the backend's built-in list, hid the
+# table just the same, so the model planned `CREATE TABLE IF NOT EXISTS` on every run and
+# `check(:schema_drift)` reported "New model" forever. All three lists now refuse it. `check`'s
+# per-call `ignore_table=` is not one of them: it stays a live-side filter (#738).
+# ═════════════════════════════════════════════════════════════════════════════
+struct IgnoreMockPg805 <: PormG.PormGPostgres end
+struct IgnoreMockSqlite805 <: PormG.PormGSQLite end
+
+_ig805_catch(f) = try
+  _ig749_quiet(f)
+  nothing
+catch e
+  e
+end
+
+# A declared-model schema for the refusal helper, shaped as `_load_current_models` returns it.
+_ig805_schema(tables::String...) = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+  Symbol(t) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(
+    :model => PormG.Models.Model(t; id = PormG.Models.IDField()), :exist => false) for t in tables)
+
+_ig805_refuse(conn, settings, tables::String...) = _ig805_catch(() ->
+  Migrations._refuse_managed_models_on_ignored_tables(_ig805_schema(tables...), conn, settings))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# register_ignore_tables!: a managed model on a registered table is refused
+# The issue's repro: a registered prefix and a declared model on a table under it, on a connection
+# with no `ignore_tables:`. Before #805 both makemigrations runs planned `CREATE TABLE IF NOT EXISTS`.
+# The fix offered is `managed = false` or a rename, never "remove the entry": the registry has no
+# per-connection off switch.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "ignore lists: a managed model on a registered table is refused (#805)" begin
+  lap_model(opts) = "Legacy_timing_laps = Models.Model(\"legacy_timing_laps\"; $(opts)id = Models.IDField(), lap = Models.IntegerField(null = true))\n"
+  saved = copy(PormG._EXTRA_IGNORE_TABLES[])
+  try
+    PormG._EXTRA_IGNORE_TABLES[] = ["legacy_timing_"]
+    _ig749_project("db805a") do pool, settings, models_path
+      _ig749_write_models(models_path; extra = lap_model(""))
+      err = _ig805_catch(() -> Migrations.makemigrations(pool, settings; path = models_path, interactive = false))
+      @test err isa PormG.InvalidConfigurationError
+      msg = PormG.error_message(err)
+      @test occursin("legacy_timing_laps", msg)
+      @test occursin("\"legacy_timing_\", registered with", msg)   # the entry and its list
+      @test occursin("register_ignore_tables!", msg)
+      @test occursin("managed = false", msg)
+      @test occursin("table name (or `db_table`) outside the prefix, since `register_ignore_tables!` cannot be switched off", msg)
+      @test occursin("the existing rows are not moved", msg)   # a rename is a new, empty table
+      @test !occursin("remove the entry", msg)       # no connection list to remove it from
+      @test !_ig749_pending(settings)
+
+      # check(:schema_drift) builds the same plan, so it refuses the same way. Its own
+      # `ignore_table=` replaces only the backend default, so passing one does not switch the
+      # refusal off: the model still contradicts the registry makemigrations reads with.
+      for kw in ((;), (; ignore_table = String[]))
+        check_err = _ig805_catch(() -> Migrations.check(pool, settings; kinds = [:schema_drift], kw...))
+        @test check_err isa PormG.InvalidConfigurationError
+        @test occursin("register_ignore_tables!", PormG.error_message(check_err))
+      end
+
+      # Unmanaged, the model is legitimate: nothing to plan, no error.
+      _ig749_write_models(models_path; extra = lap_model("managed = false, "))
+      _ig749_quiet(() -> Migrations.makemigrations(pool, settings; path = models_path, interactive = false))
+      @test !_ig749_pending(settings)
+    end
+  finally
+    PormG._EXTRA_IGNORE_TABLES[] = saved
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The backend default list: refused on the engine whose list names the prefix, and only there
+# SQLite's built-in list holds `pormg_migrations`, a prefix, so `pormg_migrations_audit` is hidden
+# on SQLite. PostgreSQL's also holds framework prefixes such as `auth_`: a model declared to
+# query Django's `auth_user` is refused there, and the same model is not refused on SQLite, whose
+# list has no `auth_`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "ignore lists: a managed model on a default-ignored table is refused (#805)" begin
+  _ig749_project("db805b") do pool, settings, models_path
+    _ig749_write_models(models_path; extra =
+      "Pormg_migrations_audit = Models.Model(\"pormg_migrations_audit\"; id = Models.IDField())\n")
+    err = _ig805_catch(() -> Migrations.makemigrations(pool, settings; path = models_path, interactive = false))
+    @test err isa PormG.InvalidConfigurationError
+    msg = PormG.error_message(err)
+    @test occursin("pormg_migrations_audit", msg)
+    @test occursin("\"pormg_migrations\" in PormG's default ignore list", msg)
+    @test occursin("sqlite_ignore_schema", msg)
+    @test !_ig749_pending(settings)
+  end
+
+  settings = PormG.Configuration.Settings()
+  pg_err = _ig805_refuse(IgnoreMockPg805(), settings, "auth_user")
+  @test pg_err isa PormG.InvalidConfigurationError
+  pg_msg = PormG.error_message(pg_err)
+  @test occursin("\"auth_\" in PormG's default ignore list", pg_msg)
+  @test occursin("postgres_ignore_table", pg_msg)
+  @test occursin("managed = false", pg_msg)
+  @test _ig805_refuse(IgnoreMockSqlite805(), settings, "auth_user") === nothing   # not in SQLite's list
+  @test _ig805_refuse(IgnoreMockPg805(), settings, "driver", "oauth_tokens") === nothing   # prefixes, not substrings
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Every list a table matches is named, and the fix follows all of them
+# Removing an `ignore_tables:` entry only helps a table no other list also hides, so "remove the
+# entry" is offered for a connection-only table and never for one the registry or the default list
+# also hides. Found in review: attributing the table to the most specific list alone offered the
+# removal, and the next run refused the same model under the other list.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "ignore lists: every matching list is named, and the fix follows them (#805)" begin
+  saved = copy(PormG._EXTRA_IGNORE_TABLES[])
+  try
+    settings = PormG.Configuration.Settings(db_config_settings = Dict{String,Any}("ignore_tables" => ["legacy_timing_", "auth_"]))
+
+    # Only the connection's list hides it: removing the entry is the fix.
+    msg = PormG.error_message(_ig805_refuse(IgnoreMockSqlite805(), settings, "legacy_timing_laps"))
+    @test occursin("matches ignore_tables entry \"legacy_timing_\" (connection.yml)\n", msg)
+    @test occursin("remove the entry from `ignore_tables:`", msg)
+    @test !occursin("outside the prefix, since", msg)
+
+    # The connection's list and the backend default both hide `auth_user`: both are named, and
+    # removing the entry is not offered, since the default would still hide the table.
+    msg = PormG.error_message(_ig805_refuse(IgnoreMockPg805(), settings, "auth_user"))
+    @test occursin("ignore_tables entry \"auth_\" (connection.yml) and \"auth_\" in PormG's default ignore list", msg)
+    @test !occursin("remove the entry", msg)
+    @test occursin("since the default list cannot be switched off", msg)
+
+    # The same table under the connection's list and the registry names the registry instead.
+    PormG._EXTRA_IGNORE_TABLES[] = ["legacy_timing_"]
+    msg = PormG.error_message(_ig805_refuse(IgnoreMockSqlite805(), settings, "legacy_timing_laps"))
+    @test occursin("(connection.yml) and \"legacy_timing_\", registered with `register_ignore_tables!`", msg)
+    @test !occursin("remove the entry", msg)
+    @test occursin("since `register_ignore_tables!` cannot be switched off", msg)
+
+    # Two models, one hidden only by the connection's list and one only by the default: both fixes.
+    PormG._EXTRA_IGNORE_TABLES[] = String[]
+    only_conn = PormG.Configuration.Settings(db_config_settings = Dict{String,Any}("ignore_tables" => ["legacy_timing_"]))
+    msg = PormG.error_message(_ig805_refuse(IgnoreMockPg805(), only_conn, "legacy_timing_laps", "auth_user"))
+    @test occursin("remove the entry from `ignore_tables:`", msg)
+    @test occursin("since the default list cannot be switched off", msg)
+
+    # A ManyToManyField's auto join table under a list with no off switch gets its own fix only:
+    # `managed = false` and a rename apply to a model the user wrote, not to a synthesized table.
+    PormG._EXTRA_IGNORE_TABLES[] = ["legacy_timing_"]
+    schema = _ig805_schema("legacy_timing_laps_circuits")
+    schema[:legacy_timing_laps_circuits][:model].cache["many_to_many_auto"] = Dict{String, Any}()
+    msg = PormG.error_message(_ig805_catch(() ->
+      Migrations._refuse_managed_models_on_ignored_tables(schema, IgnoreMockSqlite805(), PormG.Configuration.Settings())))
+    @test occursin("the auto join table of a ManyToManyField", msg)
+    @test occursin("Apply the fix named on a join-table line.", msg)
+    @test !occursin("outside the prefix, since", msg)
+    @test !occursin("managed = false", msg)
+  finally
+    PormG._EXTRA_IGNORE_TABLES[] = saved
+  end
+end

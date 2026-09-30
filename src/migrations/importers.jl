@@ -138,7 +138,7 @@ function import_models_from_sqlite(db::String = "db";
   end
 
   # Convert the database schema to models
-  models_array = convert_schema_to_models(conn, ignore_table=ignore_schema, include_table=include_table)
+  models_array = convert_schema_to_models(conn, ignore_table=_with_connection_ignores(ignore_schema, settings), include_table=include_table)
 
   if isempty(models_array)
     @warn("No tables found in the database to import.")
@@ -217,7 +217,7 @@ function import_models_from_postgres(db::String;
   
   
   # Convert the database schema to models
-  models_array = convert_schema_to_models(conn, ignore_table=ignore_table, include_table=include_table)
+  models_array = convert_schema_to_models(conn, ignore_table=_with_connection_ignores(ignore_table, settings), include_table=include_table)
 
   if isempty(models_array)
       @warn("No tables found in the database to import.")
@@ -261,7 +261,7 @@ function import_models_from_postgres(;db::PormGPostgres = connection(),
   end
     
   # Convert the database schema to models
-  models_array = convert_schema_to_models(db, ignore_table=ignore_table, include_table=include_table)
+  models_array = convert_schema_to_models(db, ignore_table=_with_connection_ignores(ignore_table, settings), include_table=include_table)
 
   if isempty(models_array)
       @warn("No tables found in the database to import.")

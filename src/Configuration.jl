@@ -778,6 +778,43 @@ function _configured_extensions(settings::PormGSettings)::Vector{String}
   return unique(normalized)
 end
 
+"""
+    _configured_ignore_tables(settings::PormGSettings)::Vector{String}
+
+Normalize the environment block's `ignore_tables:` value (#749) into the connection's own ignore
+list: tables introspection skips on **this** connection only, on top of the backend default and
+`register_ignore_tables!`. Entries are matched as a **prefix**, like every other ignore list (#325).
+
+Accepts a list or a bare string, trims each entry and drops duplicates. Case is kept: a table name
+is not a keyword, and PostgreSQL distinguishes a quoted `"Legacy"` from `legacy`. Returns an empty
+vector when the key is absent, `nothing`, `missing`, or a blank string; an empty list item is skipped.
+
+Raises `InvalidConfigurationError` for a value that is not a string or a list of strings, and for a
+blank string inside a list — as a prefix, `""` matches every table, which would hide the whole
+database.
+"""
+function _configured_ignore_tables(settings::PormGSettings)::Vector{String}
+  raw = get(settings.db_config_settings, "ignore_tables", nothing)
+  # `ignore_tables:` written with no value, or as `''`, means "not set" — the #348 convention. Only a
+  # blank entry INSIDE a list is refused below, since that one would be read as a prefix.
+  (raw === missing || _is_unset(raw)) && return String[]
+
+  values = raw isa AbstractString ? [raw] : raw isa AbstractVector ? raw :
+    throw(InvalidConfigurationError("The 'ignore_tables' setting must be a string or a list of strings, got $(typeof(raw))"))
+
+  normalized = String[]
+  for value in values
+    (value === nothing || value === missing) && continue   # a bare `- ` item, as `extensions:` skips it
+    value isa AbstractString || throw(InvalidConfigurationError(
+      "Every 'ignore_tables' entry must be a string (a table name or prefix), got $(repr(value))"))
+    name = String(strip(value))
+    isempty(name) && throw(InvalidConfigurationError(
+      "An 'ignore_tables' entry is blank. Entries match as a prefix, so a blank one would ignore every table; remove it"))
+    push!(normalized, name)
+  end
+  return unique(normalized)
+end
+
 # Detection-only check run at load() time. Installing extensions is DDL and is
 # handled by the migration runner (gated on change_db, deliberate operator step),
 # never on app boot. Here we only probe pg_extension and warn on misconfiguration
@@ -893,8 +930,8 @@ const VALID_CONFIG_KEYS = (
     VALID_CONNECTION_KEYS
 
 Allowed keys directly under an environment block in `connection.yml` (#348) — the peers of
-`config:`. Every entry is read by `_build_connection_pool!` or `_configured_extensions`;
-anything else is dead weight in the file and is warned about on load.
+`config:`. Every entry is read by `_build_connection_pool!`, `_configured_extensions` or
+`_configured_ignore_tables`; anything else is dead weight in the file and is warned about on load.
 
 Keep `host` ahead of `hostaddr`: `_suggest_name` keeps the *first* minimum, and `hostname`
 is equidistant from both.
@@ -910,6 +947,8 @@ const VALID_CONNECTION_KEYS = (
   "leak_detection_threshold", "fail_fast_on_connect",
   # Backend behaviour
   "sqlite_split_read_write", "extensions", "postgres_driver",
+  # Introspection (#749): read by the migration code, never forwarded to the driver
+  "ignore_tables",
   # Nested blocks
   "options", "config",
 )
@@ -1297,6 +1336,9 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   settings::PormGSettings = config[key]
 
   settings.db_config_settings = read_db_connection_data(path, settings)
+  # #749: validated here, before a pool exists, so a bad `ignore_tables:` fails at load and not at
+  # the first `makemigrations` — and leaves no open pool behind when it does.
+  _configured_ignore_tables(settings)
 
   _build_connection_pool!(settings, path)
   _check_configured_extensions!(settings)

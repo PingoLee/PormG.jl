@@ -46,6 +46,11 @@ tables and their shadow tables, PostgreSQL partitions, and tables an extension o
 PormG.register_ignore_tables!(["myframework_jobs", "myframework_cache"])
 ```
 
+The registry is process-wide: it applies to every connection. For tables that live in only one of
+an app's databases, use that connection's
+[`ignore_tables:`](configuration/connection_yml.md#Tables-PormG-leaves-alone) instead. The two
+lists add to each other. Both match entries as prefixes.
+
 ### `set_before_connect_hook(f)`
 
 Register a callback invoked **before** PormG opens a physical connection (not on pool reuse,

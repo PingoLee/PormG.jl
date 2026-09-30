@@ -1323,6 +1323,7 @@ end
                 "  sqlite_split_read_write: false\n" *
                 "  extensions: []\n" *
                 "  postgres_driver: ''\n" *
+                "  ignore_tables: ['legacy_timing_']\n" *
                 "  options:\n" *
                 "    sqlite_split_read_write: false\n" *
                 "  config:\n" *
@@ -1503,12 +1504,85 @@ end
         @test !occursin("SEC", msg) && !occursin("RET", msg)
     end
 
+    @testset "ignore_tables never reaches the DSN (#749)" begin
+        # `ignore_tables:` is read by the migration code, never by libpq. The DSN is built from a
+        # fixed key list, and this pins that the new key stays out of it, whatever its value.
+        dsn = _dsn_650("  host: 127.0.0.1\n  database: f1\n  ignore_tables: ['legacy_timing_', 'etl_']\n")
+        @test dsn == "host='127.0.0.1' dbname='f1'"
+        @test !occursin("legacy", dsn)
+    end
+
     @testset "a quoted password is still masked whole by redact_secret" begin
         # The builder's output now lands in the redaction rule's quoted arm; no fragment of a
         # passphrase containing a space or an escaped quote may survive into a log line.
         dsn = _dsn_650("  host: 127.0.0.1\n  username: bob\n  password: 'corr3ct horse ''b\\x'\n")
         red = PormG.Configuration.redact_secret(dsn)
         @test red == "host='127.0.0.1' password=**** user=****"
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# connection.yml `ignore_tables:` — parsing and load-time validation (#749)
+# The per-connection ignore list is PormG's own key, read by `_configured_ignore_tables`. It takes a
+# string or a list, keeps case (a table name is not a keyword), and refuses anything it cannot use
+# as a prefix at `load`, before a pool exists. A blank entry is the dangerous one: as a prefix, ""
+# matches every table, so it would hide the whole database from `makemigrations` and `check`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "connection.yml ignore_tables: parsing and validation (#749)" begin
+    _ignores(value) = PormG.Configuration._configured_ignore_tables(
+        PormG.Configuration.Settings(db_config_settings = Dict{String,Any}("ignore_tables" => value)))
+
+    @testset "a list or a bare string, trimmed, deduplicated, case kept" begin
+        @test _ignores(["legacy_timing_", " etl_staging ", "legacy_timing_"]) == ["legacy_timing_", "etl_staging"]
+        @test _ignores("legacy_timing_") == ["legacy_timing_"]
+        @test _ignores(["Legacy_Feed"]) == ["Legacy_Feed"]   # not lower-cased, unlike `extensions:`
+        # Absent, written with no value, or blank: no list (the #348 "unset" convention). An empty
+        # list item (`- `) is skipped, as `extensions:` skips one. A hermetic `Settings` carries an
+        # empty dict.
+        @test _ignores(nothing) == String[]
+        @test _ignores("") == String[]
+        @test _ignores("  ") == String[]
+        @test _ignores(Any[nothing, "legacy_timing_"]) == ["legacy_timing_"]
+        @test _ignores(String[]) == String[]
+        @test PormG.Configuration._configured_ignore_tables(PormG.Configuration.Settings()) == String[]
+    end
+
+    @testset "an unusable value raises InvalidConfigurationError" begin
+        @test_throws PormG.InvalidConfigurationError _ignores(Dict("a" => 1))   # a mapping
+        @test_throws PormG.InvalidConfigurationError _ignores(42)
+        @test_throws PormG.InvalidConfigurationError _ignores([2024])           # a non-string entry
+        err = try _ignores(["legacy_timing_", "  "]); nothing catch e; e end
+        @test err isa PormG.InvalidConfigurationError
+        @test occursin("blank", PormG.error_message(err))
+    end
+
+    @testset "load() reads the key and fails early on a bad one" begin
+        mktempdir() do temp_root
+            db_dir = _write_348_yml(joinpath(temp_root, "db"),
+                "dev:\n  adapter: SQLite\n  database: \":memory:\"\n" *
+                "  ignore_tables:\n    - legacy_timing_\n    - etl_staging\n")
+            @test isempty(_load_348(db_dir))    # an allowlisted key: no warning
+            s = PormG.Configuration.get_settings(db_dir)
+            @test PormG.Configuration._configured_ignore_tables(s) == ["legacy_timing_", "etl_staging"]
+            _cleanup_configuration_test_keys([db_dir])
+        end
+
+        mktempdir() do temp_root
+            db_dir = _write_348_yml(joinpath(temp_root, "db"),
+                "dev:\n  adapter: SQLite\n  database: \":memory:\"\n  ignore_tables: ['']\n")
+            @test_throws PormG.InvalidConfigurationError PormG.Configuration.load(db_dir; env = "dev")
+            _cleanup_configuration_test_keys([db_dir])
+        end
+    end
+
+    @testset "the singular spelling is a typo with a suggestion" begin
+        mktempdir() do temp_root
+            db_dir = _write_348_yml(joinpath(temp_root, "db"),
+                "dev:\n  adapter: SQLite\n  database: \":memory:\"\n  ignore_table: ['legacy_timing_']\n")
+            by_key = _by_key(_load_348(db_dir))
+            @test _kw(by_key["ignore_table"])[:did_you_mean] == "ignore_tables"
+            _cleanup_configuration_test_keys([db_dir])
+        end
     end
 end
 

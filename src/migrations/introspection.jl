@@ -890,6 +890,17 @@ were wrong in different directions:
 _is_ignored_table(table_name, ignore_table)::Bool =
   any(ignored -> startswith(String(table_name), ignored), ignore_table)
 
+"""
+    _with_connection_ignores(base, settings) -> Vector{String}
+
+`base` plus the connection's own `ignore_tables:` list (#749). The one merge point for every entry
+point that holds `settings` — `makemigrations`, `check`, the importers — so they all skip the same
+tables on the same connection. `_EXTRA_IGNORE_TABLES` is not added here: `read_live_schema` adds it
+itself, and `check`'s expression-default arm, which does not go through the reader, adds it there.
+"""
+_with_connection_ignores(base::Vector{String}, settings::PormGSettings)::Vector{String} =
+  unique(vcat(base, Configuration._configured_ignore_tables(settings)))
+
 # `pragma_table_list`, the catalog that labels a table `virtual` / `shadow`, is SQLite 3.37.0+.
 const _SQLITE_TABLE_LIST_MIN_VERSION = 3_037_000
 

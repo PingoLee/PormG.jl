@@ -29,6 +29,8 @@ import PormG: PormGError, MigrationError, InvalidMigrationError, ModelDefinition
 # importers.jl reports a wrong-backend connection with the precise type rather than folding it
 # into MigrationError — an unknown key already fails earlier as InvalidConfigurationError.
 import PormG: BackendCapabilityError
+# #749: a managed model on a table the connection's `ignore_tables:` hides contradicts the config.
+import PormG: InvalidConfigurationError
 # #472: introspection catches this NARROWLY to drop a column default it cannot represent
 # (`_field_or_drop_default`, migrations/introspection.jl). Naming an unimported binding inside a
 # `catch` body is not a precompile error — it would surface as an `UndefVarError` raised INSTEAD

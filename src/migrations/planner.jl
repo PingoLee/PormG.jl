@@ -2046,6 +2046,50 @@ function _exclude_unmanaged_models!(current_schema::Dict{Symbol, Dict{Symbol, Un
 end
 
 """
+    _refuse_managed_models_on_ignored_tables(current_schema, settings)
+
+Raise `InvalidConfigurationError` when a managed model's table matches the connection's own
+`ignore_tables:` list (#749). The two say opposite things: the model asks PormG to migrate the table,
+the list asks PormG never to read it. An ignored table reads as absent, so the planner would emit
+`CREATE TABLE IF NOT EXISTS` — a no-op against the existing table, planned again on every run. Every
+offending model is listed, so they can all be fixed in one pass.
+
+Scoped to the per-connection list on purpose, not to the backend default or `register_ignore_tables!`:
+those predate the check, and a declared model under one of them still plans as a new table. Called
+after `_exclude_unmanaged_models!`, so a `managed = false` model — the sanctioned way to query a
+table PormG does not migrate — is never reported.
+"""
+function _refuse_managed_models_on_ignored_tables(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
+                                                  settings::PormGSettings)::Nothing
+  ignored = Configuration._configured_ignore_tables(settings)
+  isempty(ignored) && return nothing
+  problems = String[]
+  declared = false   # whether any problem is a model the user wrote, rather than a synthesized one
+  for (table, entry) in current_schema
+    matched = findfirst(prefix -> startswith(String(table), prefix), ignored)
+    matched === nothing && continue
+    model = entry[:model]
+    # A ManyToManyField's auto join table is synthesized, so `managed = false` cannot be written on
+    # it: it is managed whenever either end is. Its own fix is a `db_table` outside the prefix.
+    what = if haskey(model.cache, "many_to_many_auto")
+      "the auto join table of a ManyToManyField (table \"$(table)\"; give the field a `db_table` outside the prefix, or declare an explicit `through` model)"
+    else
+      declared = true
+      "$(model.name) (table \"$(table)\")"
+    end
+    push!(problems, "  - $(what) matches ignore_tables entry \"$(ignored[matched])\"")
+  end
+  isempty(problems) && return nothing
+  fix = declared ?
+    "Declare each model with `managed = false` to query its table without migrating it, apply the fix named on a join-table line, or remove the entry from `ignore_tables:` to let PormG migrate the table." :
+    "Apply the fix named on each line above, or remove the entry from `ignore_tables:` to let PormG migrate the table."
+  throw(InvalidConfigurationError(
+    "Cannot plan the migration: a managed model's table is in this connection's `ignore_tables:` " *
+    "(connection.yml), so PormG would never read it and would plan to create it on every run:\n" *
+    "$(join(sort!(problems), "\n"))\n" * _emsg(fix)))
+end
+
+"""
     _refuse_constrained_keys_into_unmanaged(current_schema)
 
 Raise `InvalidMigrationError` when a managed model's foreign key into an unmanaged model would render
@@ -2144,6 +2188,7 @@ current_schema = Models.synthesize_many_to_many_through_models(current_schema, s
 # unmanaged table's index names and a SQLite view that reads it.
 unmanaged_tables = _exclude_unmanaged_models!(current_schema)
 _refuse_constrained_keys_into_unmanaged(current_schema)
+_refuse_managed_models_on_ignored_tables(current_schema, settings)
 all_live = live
 isempty(unmanaged_tables) || (live = LiveTable[t for t in all_live if !(t.name in unmanaged_tables)])
 # #161: every model-level index name the plan creates or renames to, across all tables — the scope
@@ -2329,9 +2374,12 @@ end
 @pormg_debug false
 # #522: the live side is read straight into `LiveTable`s; `convert_schema_to_models` (which builds
 # `PormGModel`s on top of them) is `inspectdb`'s form and is not called here.
+# #749: the connection's own `ignore_tables:` rides on top of the backend default. Built outside the
+# `try` below, which logs and returns: a bad list is a configuration error to raise, not a failed read.
+ignore = _with_connection_ignores(postgres_ignore_table, settings)
 live_schema = LiveTable[]
 try
-  live_schema = read_live_schema(connection)
+  live_schema = read_live_schema(connection; ignore_table = ignore)
 catch e
   error_message = sprint(showerror, e)
   if occursin("Table definition not found", error_message)
@@ -2364,9 +2412,10 @@ function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::
   end
   
   # #522: the live side is read straight into `LiveTable`s (see the PostgreSQL method above).
+  ignore = _with_connection_ignores(sqlite_ignore_schema, settings)   # outside the `try`: see above
   live_schema = LiveTable[]
   try
-    live_schema = read_live_schema(connection)
+    live_schema = read_live_schema(connection; ignore_table = ignore)
   catch e
     @error("Error reading the live schema: ", e)
     return

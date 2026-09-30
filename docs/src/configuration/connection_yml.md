@@ -114,6 +114,7 @@ These are the keys PormG reads **directly under an environment block** — the p
 | `extensions` | PostgreSQL | List of extensions to require — see [PostgreSQL Extensions](#PostgreSQL-Extensions). Ignored with a warning on SQLite. |
 | `postgres_driver` | PostgreSQL | The driver that opens the connections: `LibPQ` (the default) or `Postgres` (**experimental**). Case-insensitive. Unset, the `PORMG_POSTGRES_DRIVER` environment variable decides, then LibPQ. See [Choosing the PostgreSQL driver](#Choosing-the-PostgreSQL-driver). Ignored with a warning on SQLite. |
 | `sqlite_split_read_write` | SQLite | Split the pool into read and write connections. |
+| `ignore_tables` | both | Table-name prefixes that introspection skips on **this connection only**: `makemigrations`, `check` and the importers never read them. See [Tables PormG leaves alone](#Tables-PormG-leaves-alone). Never forwarded to the driver. |
 | `pool_size`, `pool_timeout`, `idle_timeout`, `max_lifetime`, `leak_detection_threshold`, `fail_fast_on_connect` | both | Connection-pool tuning — documented in [Advanced Configuration](advanced.md). |
 | `options` | both | Legacy nesting for `sqlite_split_read_write` only. Prefer setting that key directly on the block. |
 | `config` | both | The settings sub-dictionary described in the next section. |
@@ -144,6 +145,56 @@ PormG opens Postgres.jl sessions the way LibPQ.jl opens its own — `DateStyle=I
 - `passfile`, `hostaddr`, `service`, multiple hosts and Unix-socket hosts are not supported, nor is a `client_encoding` other than UTF-8 or a `target_session_attrs` other than `any`; `reconnect=true` in a connection string is refused (the pool renews connections itself).
 - `fetch_copy` reports the number of CSV records it sent rather than the server's `COPY n` count. That is exact for PormG's own `bulk_copy`, but can differ for a hand-written `COPY` with `HEADER true`, `FORMAT text` or `binary`, or a custom `QUOTE`.
 - `interval` values cast to text render in PostgreSQL's default style rather than ISO 8601.
+
+## Tables PormG leaves alone
+
+Some tables in a database belong to another system, like a timing feed another service loads or a
+reporting job's staging tables. PormG must not migrate them, and you do not want to model them.
+List them under `ignore_tables:` and PormG never reads them on **that connection**:
+
+```yaml
+dev:
+  adapter: PostgreSQL
+  database: f1
+  host: 127.0.0.1
+  username: my_user
+  password: my_password
+  ignore_tables:
+    - legacy_timing_
+    - etl_staging
+```
+
+- **Entries are prefixes.** `legacy_timing_` skips `legacy_timing_laps` and `legacy_timing_pits`.
+  A whole table name is its own prefix, so `etl_staging` skips that table, but it also skips
+  `etl_staging_2`. This is the same rule as every other ignore list.
+- **Skipped tables are invisible to** `makemigrations` (never dropped, never altered), to
+  [`check`](../migrations/workflow.md#Checking-the-Database-Against-the-Models), and to
+  `import_models_from_postgres` / `import_models_from_sqlite`.
+- **The list adds to the others and replaces none of them.** Those others are the backend's
+  built-in list (`pormg_migrations` on both engines, plus framework prefixes such as `django_` and
+  `auth_` on PostgreSQL), the process-wide
+  [`register_ignore_tables!`](../extending.md#Extension-points), and the `ignore_table=` keyword
+  that `check` and the importers take. The difference is scope: `ignore_tables:` applies to one
+  connection. An app that drives two databases can skip a table on the replica and still migrate it
+  on the primary.
+- **Case is kept.** Entries are table names, not keywords.
+
+`ignore_tables:` left empty, or set to `''`, means the key is not set. Two values are refused when
+the file loads, with `InvalidConfigurationError`. The first is a value that is not a string or a
+list of strings. The second is a blank string inside a list: as a prefix, `""` matches every
+table.
+
+**Declaring a model for an ignored table is a contradiction, and it is refused.** The model asks
+PormG to migrate the table, and the list asks PormG never to read it. Because PormG would not see
+the existing table, it would plan to create it again on every run. So `makemigrations` and
+`check(kinds = [:schema_drift])` raise `InvalidConfigurationError`, naming the model and the entry
+it matched. (`makemigrations` plans nothing at all under `change_db: false`, so there only `check`
+reports it.) The check covers every declared model, so `check`'s `include_table=` does not narrow
+it. To query such a table without migrating it, declare the model with
+[`managed = false`](../models.md#Unmanaged-models). An unmanaged model on an ignored table is
+fine. A `ManyToManyField` on it is not always: its automatic join table, `<table>_<field>`, is
+managed whenever the other end is, and it usually shares the prefix. Give that field a `db_table`
+outside the prefix, or declare an explicit `through` model.
 
 ## Configuration Settings (`config:`)
 

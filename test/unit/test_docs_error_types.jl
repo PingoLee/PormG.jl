@@ -1183,6 +1183,18 @@ const DOCERR_CASES = [
             q.list(show_query = :dict)
         end,
     ),
+    # #809. The window page (and its Current Limitations bullet) says a window's PLAIN argument beside
+    # an aggregate raises unless the query groups it — `Lag("raceid__round")` next to `Sum("points")`.
+    (
+        "read/window_functions.md + read/filters_and_aggregates.md — a plain window argument beside an aggregate is refused (#809)",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.values("driverid", "t" => PormG.Functions.Sum("points"),
+                     "prev" => PormG.Functions.Lag("resultid", over = WindowOver(order_by = ["driverid"])))
+            q.list(show_query = :dict)
+        end,
+    ),
     # #801. The date-arithmetic section states two refusals: a difference with a timestamp side on
     # SQLite (PostgreSQL returns an interval there), and `+`/`*`/`/` between two temporal values.
     (

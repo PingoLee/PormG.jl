@@ -369,16 +369,24 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Which write terminals return a parsed row (#648)
-# The docs name `create()` and `update_or_create` as the two write terminals whose returned row keeps
-# SQLite's raw number — they read it back without the query parsers, as they do for temporal columns —
-# and `get_or_create` as one that does not, because it reads its row through `first()`. Pinned, so the
-# day either path changes, the docs listing it fail here instead of drifting.
+# Every write terminal returns a parsed row (#648, #800)
+# #648 pinned `create()` and `update_or_create` as returning SQLite's raw number, because they read
+# their row back without the query parsers, and `get_or_create` as parsed, because it reads through
+# `first()` — so that the day either path changed, the docs listing it would fail here. #800 is that
+# day: the written row now goes through the model fields' parsers (`_row_to_field_keyed_dict`), so all
+# three agree with a re-read, and the docs no longer list them as raw.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "create() returns the raw cell; get_or_create returns the Decimal (#648)" begin
+@testset "every write terminal returns the Decimal (#648, #800)" begin
     row = D648.Amount.objects.create("label" => "raw-create", "v" => "12.5")
-    @test !(row[:v] isa _D648_D.Decimal)
-    @test row[:v] == 12.5
+    @test row[:v] isa _D648_D.Decimal && _d648_parts(row[:v]) == (0, 125, -1)
+
+    # `update_or_create`, both arms: the SQLite read-back after the upsert.
+    urow, ucreated = D648.Keyed.objects.update_or_create("code" => "u800"; defaults = ["v" => "12.5"])
+    @test ucreated
+    @test urow[:v] isa _D648_D.Decimal && _d648_parts(urow[:v]) == (0, 125, -1)
+    urow, ucreated = D648.Keyed.objects.update_or_create("code" => "u800"; defaults = ["v" => "7.25"])
+    @test !ucreated
+    @test urow[:v] isa _D648_D.Decimal && _d648_parts(urow[:v]) == (0, 725, -2)
 
     # The miss inserts, then reads the row back through `first()`…
     kept, created = D648.Keyed.objects.get_or_create("code" => "k648"; defaults = ["v" => "12.5"])

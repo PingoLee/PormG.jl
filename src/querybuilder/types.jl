@@ -1627,9 +1627,9 @@ Base.:<(::JoinedReference, operand::Missing)    = throw(_unsupported_compare_ope
 @kwdef struct FObject <: SQLTypeFunction
   function_name::String
   # #444: `SQLTypeCTE` is admitted for the TRANSFORM path — `CTE("ev", "seen__@yyyy_mm__@lte")`
-  # builds a `ToChar` over the CTE's column, and the retag puts the handle here. It does NOT open the
-  # aggregate door: `Sum`/`Avg`/`Count`/`Max`/`Min` refuse a `CTEReference` at the constructor
-  # (functions.jl), so no aggregate FObject can ever be built holding one.
+  # builds a `ToChar` over the CTE's column, and the retag puts the handle here. Aggregates hold one
+  # too: `Max("ev__x")` is retagged to a `CTEReference`, and `Max(CTE("ev", "x"))` passes one in —
+  # see the #444 note after `Min` in functions.jl, which records why there is no guard.
   column::Union{String,SQLTypeField,SQLTypeText,SQLTypeCTE,SQLTypeJoined,N,Vector{N},Vector{T},SQLTypeOper,SQLTypeQ,SQLTypeQor,SQLTypeF} where {N<:SQLTypeFunction,T}
   aggregate::Bool = false
   formatter::Union{Nothing,Function} = nothing # function to format the value

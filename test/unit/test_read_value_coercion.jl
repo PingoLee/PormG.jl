@@ -78,10 +78,10 @@ end
 const RVC = RvcModels
 
 """Build a query on the mock connection and return the recorded alias→kind map."""
-function _rvc_kinds(build!::Function)
+function _rvc_kinds(build!::Function; connection = _RVC_SL)
   q = RVC.Rvc_row.objects
   build!(q)
-  PormG.QueryBuilder.query(q; connection = _RVC_SL, show_query = :sql)
+  PormG.QueryBuilder.query(q; connection = connection, show_query = :sql)
   return q.object.projection_kinds
 end
 
@@ -504,13 +504,75 @@ end
     @test _rvc_kinds(q -> q.values("moved" => "d"))[:moved] == PormG.CDate()
   end
 
-  # An expression PormG cannot type records nothing, which is what keeps the fix fail-open: an
-  # aggregate or a text-producing function is left exactly as the driver delivered it.
+  # An expression PormG cannot type records nothing, which is what keeps the fix fail-open: a
+  # computed aggregate or a text-producing function is left exactly as the driver delivered it.
+  # (Until #800 this case projected `Max("ts")`, asserting the extremum untyped. #800 moved that
+  # boundary on purpose — see the testset below — so the case now pins a function that really
+  # cannot be typed.)
   @testset "an untypable projection records no kind" begin
-    kinds = _rvc_kinds(q -> q.values("x" => PormG.Functions.Max("ts"),
+    kinds = _rvc_kinds(q -> q.values("x" => PormG.Functions.Sum("dur"),
                                      "y" => PormG.Functions.ToChar("ts", "YYYY-MM")))
     @test !haskey(kinds, :x)
     @test !haskey(kinds, :y)
+  end
+
+  # #800: an extremum returns one of its operand's own values, so it has the column's kind — on
+  # SQLite `MAX(dur)` is the stored text `"00:00:23"`, which the interval parser undoes. A computed
+  # aggregate does not: a sum of intervals is not a value PormG wrote, and a decimal sum went through
+  # a double. Django answers the same question with `output_field`.
+  @testset "Max/Min record their column's kind; a computed aggregate records none (#800)" begin
+    F_ = PormG.Functions
+    cols = (ts = PormG.CDateTime(true), d = PormG.CDate(), t = PormG.CTime(),
+            dur = PormG.CInterval(), amount = PormG.CDecimal(12, 2))
+    for (col, kind) in pairs(cols), fn in (F_.Max, F_.Min)
+      @test _rvc_kinds(q -> q.values("m" => fn(String(col))))[:m] == kind
+    end
+    kinds = _rvc_kinds(q -> q.values(
+      "j" => F_.Max("team__founded"),          # joined: typed after it renders (#652's memo)
+      "b" => F_.Max(PormG.F("dur")),           # a bare `F` is the column
+      "n" => F_.Max("note"),                   # a kind the table does not own
+      "a" => F_.Max(PormG.F("amount") * 2),    # arithmetic inside: computed, not the column
+      "c" => F_.Coalesce("d", "d")))           # multi-operand: deliberately out of scope
+    @test kinds[:j] == PormG.CDate()
+    @test kinds[:b] == PormG.CInterval()
+    for alias in (:n, :a, :c)
+      @test !haskey(kinds, alias)
+    end
+    for fn in (F_.Sum, F_.Avg, F_.Count), col in ("dur", "amount", "d")
+      @test !haskey(_rvc_kinds(q -> q.values("s" => fn(col))), :s)
+    end
+  end
+
+  # #800 review: a CTE column's field is INFERRED from the CTE body — an `Avg("amount")` column is
+  # handed the operand's own `DecimalField` — so a Max over it must not inherit that kind, or SQLite
+  # would run a computed double through the decimal parser. Both spellings of the handle (the `__`
+  # path is retagged to the same `CTEReference`). Here the body projects the plain column, which is
+  # the case where a kind WOULD be right: the pin is that the handle is never typed, by design.
+  @testset "a Max over a CTE column records no kind (#800)" begin
+    F_ = PormG.Functions
+    for column in ("g__founded", PormG.CTE("g", "founded"))
+      kinds = _rvc_kinds(q -> begin
+        q.with("g" => RVC.Rvc_team.objects.values("id", "founded"),
+               join_field = "team" => "id", join_type = "INNER")
+        q.values("id", "mx" => F_.Max(column))
+      end)
+      @test !haskey(kinds, :mx)
+    end
+  end
+
+  # #800: the window VALUE functions return a row's own value of the column, so they are typed like
+  # an extremum. A ranking window is a number and records nothing. Built on the PostgreSQL mock: the
+  # SQLite window renderer asks the driver for its version, which a mock cannot answer, and the kind
+  # recorded is the same on either backend — only the parser it selects differs.
+  @testset "window value functions record their column's kind (#800)" begin
+    F_ = PormG.Functions
+    for fn in (c -> F_.Lag(c), c -> F_.Lead(c), c -> F_.FirstValue(c), c -> F_.LastValue(c),
+               c -> F_.NthValue(c, 2))
+      kinds = _rvc_kinds(q -> q.values("id", "wd" => fn("d"), "wi" => fn("dur")); connection = _RVC_PG)
+      @test kinds[:wd] == PormG.CDate()
+      @test kinds[:wi] == PormG.CInterval()
+    end
+    @test !haskey(_rvc_kinds(q -> q.values("id", "r" => F_.Rank()); connection = _RVC_PG), :r)
   end
 
   # #648: a DecimalField column records its kind, WITH its width, on every projection spelling that
@@ -545,5 +607,35 @@ end
     kinds = _rvc_kinds(q -> q.values("*"))
     @test kinds[:cost] == PormG.CDecimal(10, 2)
     @test kinds[:cost_eur] == PormG.CDecimal(10, 2)
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # #800 — THE WRITE RETURN. `create()` / `update_or_create` / `get_or_create` build their row with
+  # `_row_to_field_keyed_dict`, not through a query, so there is no projection record: the model's
+  # own fields say what each column is. Driven here with the row each engine actually returns.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "a written row is parsed field by field (#800)" begin
+    to_row = PormG.QueryBuilder._row_to_field_keyed_dict
+    text(kind, x) = PormG.value_formatter(kind, _RVC_SL)(x)
+    ts, d, t, dur = (probe for (_, probe) in _RVC_PROBES)
+    # SQLite's `SELECT *` read-back: stored text, under PHYSICAL names (`moved_at`).
+    raw = (id = 1, ts = text(PormG.CDateTime(true), ts), d = text(PormG.CDate(), d),
+           t = text(PormG.CTime(), t), dur = text(PormG.CInterval(), dur),
+           moved_at = text(PormG.CDateTime(true), ts), note = "2031-07-04", amount = 1234.5)
+    row = to_row(raw, RVC.Rvc_row, _RVC_SL)
+    @test row[:ts] == ts && row[:ts] isa TimeZones.ZonedDateTime
+    @test row[:d] === d
+    @test row[:t] == t && row[:t] isa Time
+    @test row[:dur] == dur && row[:dur] isa Dates.CompoundPeriod
+    @test row[:moved] == ts && !haskey(row, :moved_at)   # renamed, THEN parsed under the field name
+    @test row[:note] == "2031-07-04"                      # a text column that looks like a date stays text
+    @test row[:amount] == PormG.value_parser(PormG.CDecimal(12, 2), _RVC_SL)(1234.5)
+    @test !(row[:amount] isa Float64)
+    # PostgreSQL: typed by the driver, except the INTERVAL pin (#581). A key that is not a field —
+    # `update_or_create`'s `__pormg_created` sentinel — is never handed to a parser.
+    pg = to_row((id = 1, d = d, dur = Second(23), __pormg_created = true), RVC.Rvc_row, _RVC_PG)
+    @test pg[:d] === d
+    @test pg[:dur] isa Dates.CompoundPeriod && pg[:dur] == Second(23)
+    @test pg[:__pormg_created] === true
   end
 end

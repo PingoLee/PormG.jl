@@ -414,7 +414,7 @@ own `how`, else `LEFT` for a nullable ForeignKey and `INNER` for a `NOT NULL` on
 
 ### `bulk_insert`
 
-Inserts multiple records in a single operation. Returns `(count, rows)`: `count` is the rows inserted, summed across chunks (rows skipped by `on_conflict = :nothing` are not counted), and `rows` is `nothing`. See [Return Value](write/bulk.md#Return-Value).
+Inserts multiple records in a single operation. Returns `(count, rows)`: `count` is the rows inserted, summed across chunks (rows skipped by `on_conflict = :nothing` are not counted), and `rows` is `nothing` unless `returning=` asks for the written values. See [Return Value](write/bulk.md#Return-Value).
 
 ```julia
 df = DataFrame([
@@ -431,6 +431,13 @@ bulk_insert(M.Status, df, on_conflict = :nothing)                               
 bulk_insert(M.Status, df, on_conflict = (action = :nothing, target = ["statusid"]))  # targeted skip
 bulk_insert(M.Status, df,                                                          # upsert
     on_conflict = (action = :update, target = ["statusid"], set = ["status"]))
+```
+
+`returning=` hands back generated keys and database defaults as a `DataFrame` aligned row for row with the input — a row the call skipped is `missing` (see [Returning Generated Values](write/bulk.md#Returning-Generated-Values)):
+
+```julia
+r = bulk_insert(M.Driver, df; returning = ["driverid"])
+df.driverid = r.rows.driverid
 ```
 
 ### `bulk_update`

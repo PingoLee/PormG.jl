@@ -18,7 +18,7 @@ When a bulk operation executes, it returns a `NamedTuple` `(count, rows)`. `coun
 | `bulk_update()` | rows matched by `match_on=`, the handler's filters and `filters=` — matched, as `update()` counts them, whether or not a value changed |
 | `bulk_copy()` | rows copied, from PostgreSQL's `COPY n` command tag |
 
-`rows` is always `nothing` for now; it is reserved for returned values. An empty `DataFrame` returns `(count = 0, rows = nothing)`. The dry-run `show_query` modes are unchanged: they return the statement (or `nothing` for an empty `DataFrame`, which has none).
+`rows` is `nothing` unless you ask `bulk_insert()` for the written values with `returning=` — then it is a `DataFrame` aligned with your input, see [Returning Generated Values](#Returning-Generated-Values). An empty `DataFrame` returns `(count = 0, rows = nothing)` — with `returning=`, `rows` is an empty `DataFrame` carrying the requested columns. The dry-run `show_query` modes are unchanged: they return the statement (or `nothing` for an empty `DataFrame`, which has none).
 
 Check the count when a short one matters. It is the only way to tell that a `bulk_update()` matched only part of the frame, or nothing at all — say, `resultid` keys from another season sent to a handler [scoped](#Scoping-an-update-with-the-handler) to this one:
 
@@ -201,6 +201,50 @@ ON CONFLICT ("statusid") DO UPDATE SET "status" = EXCLUDED."status"
 - The returned `count` leaves out rows `DO NOTHING` skipped, on both engines, so `nrow(df) - count` is the number of duplicates. A `DO UPDATE` upsert counts each row it inserted or updated. See [Return Value](#Return-Value).
 - `bulk_copy()` cannot express `ON CONFLICT` (the COPY protocol has no such clause); use `bulk_insert(...; on_conflict=...)` when duplicates are possible.
 
+### Returning Generated Values
+
+`bulk_insert(...; returning = [...])` hands back the values the database wrote — generated primary keys, database defaults, what an upsert left in place — **one row per input row, in input order**:
+
+```julia
+rookies = DataFrame(
+    driverref   = ["lindblad", "browning"],
+    code        = ["LIN", "BRO"],
+    forename    = ["Arvid", "Luke"],
+    surname     = ["Lindblad", "Browning"],
+    dob         = [Date(2007, 8, 8), Date(2002, 1, 30)],
+    nationality = ["British", "British"],
+    url         = ["", ""],
+)
+
+r = bulk_insert(M.Driver.objects, rookies; returning = ["driverid"])
+rookies.driverid = r.rows.driverid     # r.rows[i, :] belongs to rookies[i, :]
+```
+
+`r.rows` is a `DataFrame` with one column per requested field (field names, not `db_column`s) and `nrow(rookies)` rows. A row the call did **not** write is `missing` — so under `on_conflict = :nothing` it tells you which rows were skipped (the key already existed, or repeated an earlier row of the frame):
+
+```julia
+r = bulk_insert(M.Status.objects, statuses_df; returning = ["statusid"], on_conflict = :nothing)
+already_present = statuses_df[ismissing.(r.rows.statusid), :]
+```
+
+**How rows are matched to your input.** Neither engine promises that a multi-row `INSERT` reports its rows in input order, so PormG matches them **by key value, never by position**:
+
+1. With an `on_conflict` `target`, by the target columns. Under `DO UPDATE` the row keeps the primary key it already had, so the target is the only key that finds it — and the returned row carries that existing id and the values just written.
+2. Otherwise by the primary key. If your frame carries it (or it is a `UUIDField(primary_key = true, auto_add = true)`, which PormG mints before the insert), that is the key. If it is a single auto-increment `IDField` the frame leaves out, PormG **pre-allocates** the ids from the column's own sequence first — exactly what [`allocate_primary_keys()`](#Pre-allocating-Primary-Keys-for-Cross-Table-FK-Wiring) does — inserts them explicitly, and matches on them. An `IDField(generated_always = true)` column is written with `OVERRIDING SYSTEM VALUE` for this, which is safe because the ids came from that identity's own sequence.
+3. Anything else — a primary key the database generates by some other means (a server-side default), with no `target` to match on — raises `QueryBuildError` rather than guess. Supply the key, or pass a `target` naming a unique key your frame carries.
+
+**Rules and behavior:**
+
+- `returning` takes model field names — one name, or a vector. An unknown name raises `UnknownFieldError`. The key columns are always read, whether or not you ask for them.
+- A `target` column the INSERT does not carry raises `QueryBuildError`: it is the key, so the frame must hold it.
+- A key repeated **inside** the frame under `DO NOTHING` is written once, by its first occurrence; the later occurrences are `missing`. A row whose key contains a `NULL` is written but cannot be looked up, so it is `missing` too — `missing` means "not correlated", which is "not written" for every row with a complete key.
+- Under `DO UPDATE`, a key repeated inside **one chunk** diverges across engines exactly as the [Conflict Handling](#conflict-handling-on-conflict) rules describe: PostgreSQL raises, SQLite applies the rows in turn and every occurrence gets the final row. Dedupe on the target first.
+- Keys are compared after the field's formatter, integers and decimals by value, so an integer key loaded as strings (`"42"`, `"042"`) or a decimal the column stores as `1.50` still matches. A returned row PormG cannot match to any input row, or — outside `DO NOTHING` — an input row that did not come back, raises `QueryBuildError` rather than reporting `missing`: that happens when the column normalizes a key in a way PormG does not model, such as a case-insensitive collation. Supply such keys as the database stores them.
+- **PostgreSQL** reads the rows from `RETURNING` on each chunk's `INSERT`. **SQLite** does not: PormG never uses SQLite's `RETURNING` (it can hang inside `libsqlite3` for some table shapes), so each chunk is read back with a `SELECT` on the same transaction connection. Under `DO NOTHING` it first reads which keys already exist, so a pre-existing row is never reported as written. The results are the same on both engines; SQLite pays one or two extra statements per chunk.
+- With pre-allocated ids the duplicate-key → sequence-resync retry is **skipped**, as it is under `on_conflict`: the retry would send the same ids again. A collision there means the sequence had drifted below `MAX(pk)` before the call — run [`resync_sequences()`](../schema_conventions.md#Explicit-repair:-resync_sequences) and retry. Pre-allocation on PostgreSQL also shares `allocate_primary_keys()`'s default-schema scope (see its [limitations](#Notes-and-Limitations)).
+- The dry-run `show_query` modes allocate nothing — drawing a sequence is a write — so the shown statement leaves an allocated pk column out. On PostgreSQL it carries the `RETURNING` clause.
+- `bulk_update()` and `bulk_copy()` do not take `returning=`.
+
 ### Auto-Generated Primary Keys
 
 Do not prefill an auto-increment primary key with `max(id) + 1` before calling `bulk_insert()` or `bulk_copy()`.
@@ -221,7 +265,9 @@ df[!, :token] = [UUIDs.uuid4() for _ in 1:DataFrames.nrow(df)]
 
 Sometimes you need the assigned primary key values **before** the insert—for example, when you are loading a parent table and a child table at the same time and need to populate a foreign key column.
 
-Use `allocate_primary_keys()` for this:
+If the ids are only needed *after* the parent insert — insert the drivers, then build the results from their ids — [`returning=`](#Returning-Generated-Values) is simpler: `bulk_insert(M.Driver.objects, drivers_df; returning = ["driverid"])` does the allocation for you and hands the ids back in row order.
+
+Use `allocate_primary_keys()` when they are needed before:
 
 ```julia
 drivers_df = CSV.File("f1/drivers.csv") |> DataFrame

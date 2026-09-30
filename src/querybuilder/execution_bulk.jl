@@ -1213,9 +1213,237 @@ function _bulk_chunk_rows(conn::Union{PormGPostgres, PormGSQLite}, requested::In
 end
 
 # What an executed bulk terminal returns (#670): the rows the statements affected, summed across
-# chunks, in Ecto's `{count, rows}` shape. `rows` is always `nothing` today; it is the slot #671's
-# `returning=` fills, so adding that option does not change the return type a second time.
-_bulk_result(count::Integer) = (count = Int(count), rows = nothing)
+# chunks, in Ecto's `{count, rows}` shape. `rows` is `nothing` unless `bulk_insert` was given
+# `returning=` (#671), which fills the slot without changing the return type a second time.
+_bulk_result(count::Integer, rows = nothing) = (count = Int(count), rows = rows)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# bulk_insert(…; returning=) (#671)
+#
+# The rows come back CORRELATED to the input: `rows[i, :]` belongs to input row `i`, and a row the
+# database did not write (skipped by `ON CONFLICT DO NOTHING`) is `missing`. Neither engine promises
+# that a multi-row INSERT reports its rows in input order, so the correlation is by KEY VALUE,
+# never by position:
+#
+#   1. `on_conflict` names a `target` → the target columns. They are what decides "the same row",
+#      and under DO UPDATE the written row keeps its old pk, so the pk could not match it.
+#   2. Otherwise the primary key. The frame either supplies it (a PormG-minted UUID `auto_add` pk
+#      counts: `_prepare_bulk_df!` has already filled it), or it is a single auto integer pk and the
+#      ids are PRE-ALLOCATED from the pk's own sequence before the INSERT, with the same allocators
+#      `allocate_primary_keys` uses. That is what makes an auto pk a key the client knows.
+#   3. Otherwise there is nothing the client knows to match on (a server-side default pk with no
+#      target), and the call refuses rather than guess.
+#
+# Pre-allocation was chosen over SQLAlchemy's insertmanyvalues trick (INSERT … SELECT … ORDER BY a
+# sentinel, then sort the RETURNING rows by pk). That trick rests on PostgreSQL drawing the sequence
+# in SELECT order, which holds in practice but is not documented, and it cannot tell which rows a
+# DO NOTHING skipped. Matching on a key the client already holds needs no ordering premise on
+# either engine. The cost is one extra round trip per call.
+#
+# PostgreSQL reads the rows from `RETURNING`. SQLite never uses RETURNING — `insert()` documents the
+# libsqlite3 hang (execution.jl) — and reads them back through the ORM on the same pinned
+# transaction connection instead.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The requested field names, validated against the model; `nothing` keeps the #670 shape.
+function _normalize_bulk_returning(returning, model::PormGModel)
+  returning === nothing && return nothing
+  requested = returning isa Union{AbstractString, Symbol} ? [returning] :
+    returning isa AbstractVector ? returning :
+    throw(QueryBuildError("Error in bulk_insert, returning must be a field name or a vector of field " *
+      "names, got $(typeof(returning))"))
+  isempty(requested) &&
+    throw(QueryBuildError("Error in bulk_insert, returning is empty; name at least one field, or leave it " *
+      "as nothing"))
+  fields = String[]
+  for name in requested
+    name isa Union{AbstractString, Symbol} ||
+      throw(QueryBuildError("Error in bulk_insert, returning entries must be field names, got $(typeof(name))"))
+    field = String(name)
+    _validate_field_name(model, field, "bulk_insert")   # UnknownFieldError for a name the model lacks
+    field in fields || push!(fields, field)
+  end
+  return fields
+end
+
+# The correlation key (see the block above) and, when the ids must be pre-allocated, the pk field
+# to allocate for. `fields_df` is the participating insert column list from `_prepare_bulk_df!`.
+function _bulk_returning_key(model::PormGModel, on_conflict, fields_df::Vector{String})
+  target = on_conflict isa NamedTuple ? _on_conflict_column_list(on_conflict, :target) : String[]
+  if !isempty(target)
+    absent = setdiff(target, fields_df)
+    isempty(absent) ||
+      throw(QueryBuildError("Error in bulk_insert, returning matches rows to the input by the on_conflict " *
+        "target, but target column(s) $(join(absent, ", ")) take no part in this INSERT; include them " *
+        "in the DataFrame/columns selection"))
+    return target, nothing
+  end
+
+  pks = String[field for field in model.field_names if model.fields[field].primary_key]
+  isempty(pks) &&
+    throw(QueryBuildError("Error in bulk_insert, returning needs a key to match rows to the input, and " *
+      "model $(model.name) has no primary key; pass on_conflict = (action = …, target = [...])"))
+  all(in(fields_df), pks) && return pks, nothing
+  if length(pks) == 1 && _is_auto_generated_bulk_primary_key(model.fields[pks[1]])
+    return pks, pks[1]
+  end
+  throw(QueryBuildError("Error in bulk_insert, returning cannot tell which written row belongs to which " *
+    "input row: the DataFrame does not carry the primary key of model $(model.name), and it is not an " *
+    "auto-increment integer PormG can pre-allocate. Supply the primary key column, or pass " *
+    "on_conflict = (action = …, target = [...]) naming a unique key the DataFrame carries"))
+end
+
+# A working-frame column name for a value PormG supplies, disjoint from every caller column —
+# the `_BULK_FILL_PREFIX` rule of #335, uniquified the same way `inject_fill_column!` does.
+function _bulk_private_column(df::DataFrames.DataFrame, field::String)
+  name = "$(_BULK_FILL_PREFIX)$(field)"
+  suffix = 1
+  while name in names(df)
+    suffix += 1
+    name = "$(_BULK_FILL_PREFIX)$(field):$(suffix)"
+  end
+  return name
+end
+
+# One key as a hashable tuple, or `nothing` when any part is NULL. Both sides — the input cell and
+# the value the database hands back — go through the field's own formatter and then to text, which
+# is what makes them comparable: the formatter is what the INSERT bound, but it is not canonical on
+# its own (`format_number_sql` keeps the TEXT of `"42"` and the `Int` of `42`, so a key column loaded
+# as strings would never equal what the database returns). As text, an `Int32` input and an `Int64`
+# result, `"42"` and `42`, or a `UUID` and its text, compare equal. A NULL never matches: SQL cannot
+# look it up, and it never conflicts, so such a row stays `missing`. A representation this still
+# cannot equate is caught by the checks in `_bulk_returning_fill!`, not silently reported `missing`.
+#
+# Text alone is stricter than the database where the column normalizes what it stores: an integer
+# column keeps 42 for "042" or "+42", and a DECIMAL returns 1.50 for 1.5. Those two kinds are
+# compared by value (the integer, the normalized decimal) instead. A normalization this does not
+# model — a case-insensitive collation, say — still fails loudly, never as a wrong match.
+function _bulk_returning_key_value(key_metas, key::Vector{String}, values)
+  parts = String[]
+  for (meta, field, value) in zip(key_metas, key, values)
+    (value === nothing || ismissing(value)) && return nothing
+    push!(parts, _bulk_returning_key_text(meta, _format_single(meta, field, value, "bulk_insert")))
+  end
+  return Tuple(parts)
+end
+
+# A numeric column is one whose formatter is `format_number_sql` — integer, float, decimal and
+# foreign-key fields alike — and `field_canonical_kind` cannot say so (it knows the temporal kinds and
+# DECIMAL only). Its key is compared as the integer when the text is integral, else as a normalized
+# decimal, so "042", 42 and 42.0 agree, and so do 1.5 and 1.50.
+function _bulk_returning_key_text(meta, formatted)
+  meta.formatter === Models.format_number_sql || return string(formatted)
+  formatted isa Integer && return string(formatted)
+  text = strip(string(formatted))
+  n = tryparse(Int128, text)
+  n === nothing || return string(n)
+  d = formatted isa Decimals.Decimal ? formatted : (try parse(Decimals.Decimal, text) catch; nothing end)
+  d === nothing && return string(formatted)
+  d = Decimals.normalize(d)
+  # An integral decimal (42.0 from a float column) is the integer, so it meets the Int arm above.
+  return d.q >= 0 ? string(Int128(d.s == 1 ? -d.c : d.c) * Int128(10)^d.q) : string(d)
+end
+
+# Write one chunk's returned rows into `rows` (one `Vector{Any}` per `returning` field) at the input
+# indices `range`. `returned` has a column per key and `returning` field, named by field.
+# `first_only`: under DO NOTHING a key repeated inside the input was written once, by its first
+# occurrence, and the later ones were skipped. Which occurrence gets the credit rests on the engine
+# inserting the row source in order — as the returned VALUES do not depend on it, only the index
+# they land on, this is the one ordering premise the design keeps. `existing`: keys that were already
+# in the table before a SQLite DO NOTHING chunk, so a read-back row with that key is not one this
+# call wrote.
+#
+# Two checks make a matching failure loud instead of a silent `missing`: every returned row must
+# belong to some input row of the chunk (it can only have come from one), and outside DO NOTHING
+# every input row with a non-NULL key must have come back (nothing was skipped).
+function _bulk_returning_fill!(rows::Vector{Vector{Any}}, returning::Vector{String},
+    returned::DataFrames.DataFrame, key::Vector{String}, key_metas, key_sources, range,
+    first_only::Bool, existing = Set{Any}())
+  unmatched() = throw(QueryBuildError("Error in bulk_insert, returning could not match the rows the " *
+    "database reported to the input rows by $(join(key, ", ")): a key value in the DataFrame does not " *
+    "compare equal to what the database stored for it. That happens when the column normalizes the " *
+    "value on write in a way PormG does not model (a case-insensitive collation, for instance); " *
+    "supply the key as the database stores it"))
+  inputs = Set{Any}()
+  for i in range
+    k = _bulk_returning_key_value(key_metas, key, (source[i] for source in key_sources))
+    k === nothing || push!(inputs, k)
+  end
+  lookup = Dict{Any, Int}()
+  for r in 1:DataFrames.nrow(returned)
+    k = _bulk_returning_key_value(key_metas, key, (returned[r, field] for field in key))
+    k === nothing && continue
+    k in inputs || unmatched()
+    lookup[k] = r
+  end
+  seen = Set{Any}()
+  for i in range
+    k = _bulk_returning_key_value(key_metas, key, (source[i] for source in key_sources))
+    (k === nothing || k in existing) && continue
+    first_only && k in seen && continue
+    push!(seen, k)
+    r = get(lookup, k, 0)
+    if r == 0
+      first_only || unmatched()
+      continue
+    end
+    for (c, field) in enumerate(returning)
+      rows[c][i] = returned[r, field]
+    end
+  end
+  return nothing
+end
+
+# Keys per read-back statement when the key has more than one column. A multi-column key renders as
+# `(a AND b) OR (a AND b) OR …`, which SQLite parses as a left-deep tree bounded by
+# `SQLITE_MAX_EXPR_DEPTH`. Measured with the SQLite the driver ships: 8,000 keys pass, 16,000 fail
+# with "Expression tree is too large (maximum depth 10000)" — and a narrow frame with a raised
+# `chunk_size` reaches that, since the chunk cap is the 32,766-parameter limit ÷ columns. A stock
+# SQLite build defaults to 1000, hence a batch well under both. A single-column key is one `IN (…)`
+# list and needs no batching.
+const _SQLITE_READ_BACK_BATCH = 200
+
+# SQLite read-back: the rows whose key is one of `keys` (raw input tuples), projecting `fields`,
+# through the ORM so the values are bound as parameters and parsed like any other read. A fresh
+# handler on the caller's connection key — the caller's own handler may carry filters, which
+# `bulk_insert` ignores and a read-back must not inherit.
+function _sqlite_bulk_read_back(objct::SQLObjectHandler, model::PormGModel, key::Vector{String},
+    keys::Vector, fields::Vector{String})
+  isempty(keys) && return DataFrames.DataFrame([field => Any[] for field in fields])
+  if length(key) > 1 && length(keys) > _SQLITE_READ_BACK_BATCH
+    batches = Iterators.partition(keys, _SQLITE_READ_BACK_BATCH)
+    return reduce(vcat, [_sqlite_bulk_read_back(objct, model, key, collect(batch), fields) for batch in batches];
+      cols = :union)
+  end
+  q = object(model)
+  q.object.connect_key = objct.object.connect_key
+  if length(key) == 1
+    q.filter("$(key[1])__@in" => [k[1] for k in keys])
+  else
+    q.filter(Qor([Q((key[j] => k[j] for j in eachindex(key))...) for k in keys]...))
+  end
+  q.values(fields...)
+  return DataFrames.DataFrame(q)
+end
+
+# PostgreSQL: RETURNING names its columns by `db_column`; rename them to fields and apply the read
+# parsers `DataFrame(query)` applies (#564/#581 — on PostgreSQL only an INTERVAL has one), so a value
+# comes back as the same type from either engine. A column the driver did not report (possible for a
+# zero-row result) is left alone: with no rows there is nothing in it to rename or parse.
+#
+# ONE `rename!` over every pair, never one per field: a `db_column` may be spelled like another
+# field's name (`a` stored as "x", `b` stored as "a"), and renaming "x" => "a" first would collide
+# with the "a" column still waiting to be renamed to `b`.
+function _pg_bulk_returned!(returned::DataFrames.DataFrame, model::PormGModel, fields::Vector{String}, connection)
+  present = [field for field in fields if hasproperty(returned, Models.model_column(model, field))]
+  DataFrames.rename!(returned, [Models.model_column(model, field) => field for field in present])
+  for field in present
+    kind = field_canonical_kind(model.fields[field])
+    parser = kind === nothing ? nothing : value_parser(kind, connection)
+    parser === nothing || (returned[!, field] = map(parser, returned[!, field]))
+  end
+  return returned
+end
 
 
 """
@@ -1244,6 +1472,16 @@ Inserts multiple rows into the database in bulk from a DataFrame.
     `on_conflict` is set, the duplicate-key → sequence-resync retry is skipped: a conflict is
     expected there, not a sequence desync, so any duplicate-key error that still surfaces
     (a different constraint than the target) propagates.
+  - `returning`: Optional (#671). A field name or a vector of field names whose written values
+    come back in `rows` — generated primary keys, `db_default`s, what a `DO UPDATE` wrote. Rows are
+    matched to the input by key, never by position: by the `on_conflict` `target` when there is
+    one, otherwise by the primary key. A single auto-increment pk the frame does not carry is
+    pre-allocated from its own sequence first (as `allocate_primary_keys` does), so it can be
+    matched. A model whose pk the database generates by any other means, with no `on_conflict`
+    target, raises `QueryBuildError`, as does a `target` column that is not inserted; an unknown
+    field name raises `UnknownFieldError`. PostgreSQL reads the rows from `RETURNING`; SQLite
+    reads them back on the same transaction connection, since PormG never uses SQLite's
+    `RETURNING`.
 
   The caller's DataFrame is never mutated (and never copied — the pipeline works on a
   zero-copy wrapper), so there is no `copy=` knob to think about.
@@ -1253,10 +1491,16 @@ Inserts multiple rows into the database in bulk from a DataFrame.
   - `count::Int` — rows inserted, summed across every chunk. Rows `on_conflict = :nothing` skipped
     are **not** counted, so `nrow(df) - count` is how many were duplicates. An
     `on_conflict = (action = :update, …)` upsert counts every row it inserted or updated.
-  - `rows` — always `nothing` for now; reserved for returned values.
+  - `rows` — `nothing` unless `returning` is given. Then a `DataFrame` with one column per
+    requested field and `nrow(df)` rows: row `i` belongs to input row `i`, and a row this call did
+    not write (skipped by `on_conflict = :nothing`, or a later duplicate of a key within the frame)
+    is `missing` — as is a row whose key contains a NULL, which cannot be looked up. A row the
+    database reports that matches no input key raises `QueryBuildError` instead of going missing.
 
-  An empty DataFrame returns `(count = 0, rows = nothing)` (`nothing` under a dry-run `show_query`,
-  since there is no statement). Otherwise a dry-run mode returns the statement, as described above.
+  An empty DataFrame returns `(count = 0, rows = nothing)` — `rows` is an empty `DataFrame` with the
+  requested columns when `returning` is given — and `nothing` under a dry-run `show_query`, since
+  there is no statement. Otherwise a dry-run mode returns the statement, as described above; it
+  pre-allocates nothing, so an auto pk it would allocate is absent from the shown column list.
 
   #### Examples
   ```julia
@@ -1276,13 +1520,18 @@ Inserts multiple rows into the database in bulk from a DataFrame.
   bulk_insert(query, df, columns=["title", "year", "author_name" => "author"])
   # Only "title", "year", and "author_name" (as field "author") participate in the INSERT;
   # the DataFrame's columns are never renamed or removed — the mapping is internal.
+
+  # Generated ids, one per input row
+  r = bulk_insert(query, df; returning = ["id"])
+  df.id = r.rows.id
   ```
 """
 function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     columns = nothing,
     chunk_size::Integer = 1000,
     show_query::Symbol = :execute,
-    on_conflict = nothing
+    on_conflict = nothing,
+    returning = nothing
   )
   model = objct.object.model
   ensure_model_transaction_scope(model)
@@ -1293,11 +1542,16 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # check if is allowed to insert
   !settings.change_data && throw(_write_not_allowed("bulk_insert", conn_key))
 
+  # Validated before the empty-frame return, so a typo'd field is refused on every input (#671).
+  _returning = _normalize_bulk_returning(returning, model)
+
   # If no rows then nothing to do
   if size(df_o, 1) == 0
     @warn("Warning in bulk_insert, the DataFrame is empty")
     # Executed: zero rows, in the executed shape (#670). A dry run has no statement to return, as before.
-    return show_query === :execute ? _bulk_result(0) : nothing
+    show_query === :execute || return nothing
+    empty_rows = _returning === nothing ? nothing : DataFrames.DataFrame([field => Any[] for field in _returning])
+    return _bulk_result(0, empty_rows)
   end
 
   df = _bulk_working_frame(df_o)   # #132: zero-copy, never mutates df_o (see helper)
@@ -1314,10 +1568,42 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   on_conflict_sql = _on_conflict === nothing ? nothing :
     Dialect.on_conflict_clause(_on_conflict.action, _on_conflict.target, _on_conflict.set, connection)
 
+  # returning= (#671): the correlation key, and the pk to pre-allocate when the key is an auto pk
+  # the frame does not carry. Allocation is a write (it draws the sequence), so a dry run skips it
+  # and shows the statement without the pk column.
+  returning_key, allocate_pk = _returning === nothing ? (String[], nothing) :
+    _bulk_returning_key(model, on_conflict, fields_df)
+  allocate_pk = show_query === :execute ? allocate_pk : nothing
+  do_nothing = _on_conflict !== nothing && _on_conflict.action === :nothing
+  returning_sql = nothing
+  if _returning !== nothing && connection isa PormGPostgres
+    returned_fields = unique(vcat(returning_key, _returning))
+    returning_sql = "RETURNING " * join([safe_column_identifier(Models.model_column(model, field), connection)
+      for field in returned_fields], ", ")
+  end
+  # A pre-allocated id is written explicitly, which a `generated_always` identity rejects unless the
+  # INSERT says OVERRIDING SYSTEM VALUE. Safe here: the ids came from that identity's own sequence.
+  # Only for pre-allocated ids — a pk the caller supplied still meets the column's refusal.
+  overriding = allocate_pk !== nothing && connection isa PormGPostgres &&
+    hasproperty(model.fields[allocate_pk], :generated_always) &&
+    getfield(model.fields[allocate_pk], :generated_always)
+
+  # A pre-allocated pk joins the column list here, like any field the frame carries, backed by a
+  # private working-frame column (a whole-column addition, so the #132 invariant holds). The ids
+  # themselves are drawn inside the transaction, in `insert_loop` — SQLite's allocator requires one.
+  if allocate_pk !== nothing
+    id_column = _bulk_private_column(df, allocate_pk)
+    df[!, id_column] = Vector{Int64}(undef, size(df, 1))
+    mapping[allocate_pk] = id_column
+    push!(fields_df, allocate_pk)
+  end
+
   # Cap the chunk so `effective_chunk × ncols` stays under the backend's bind-parameter limit
   # (#84). On SQLite each INSERT row binds one param per field and adds nothing else, so
   # per_row = ncols and there is no fixed per-statement overhead; on PostgreSQL a chunk binds one
   # array per field (#672), so a positive chunk_size is not capped (see `_bulk_chunk_rows`).
+  # The SQLite read-back of `returning=` binds one parameter per key cell, never more than the
+  # chunk's own INSERT did.
   effective_chunk = _bulk_chunk_rows(connection, chunk_size, length(fields_df), 0, :bulk_insert)
   effective_chunk < chunk_size &&
     @debug "bulk_insert: capped chunk_size $chunk_size → $effective_chunk to respect the backend bind-parameter limit" model = model.name
@@ -1337,7 +1623,24 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   sources = [df[!, mapping[field]] for field in fields_df]
 
   results = []
+  total_rows = size(df, 1)
+  # returning= (#671): one column per requested field, filled at the input row's index.
+  returned_rows = _returning === nothing ? Vector{Any}[] : [Vector{Any}(missing, total_rows) for _ in _returning]
   insert_loop = () -> begin
+    # Draw the pre-allocated ids inside the transaction, into the PormG-owned column set up above
+    # (never a caller vector). No sequence resync follows: the ids came from the sequence itself,
+    # so it is already past them.
+    if allocate_pk !== nothing
+      ids = connection isa PormGPostgres ? _allocate_pg_ids(model, connection, allocate_pk, total_rows) :
+        _allocate_sqlite_ids(model, connection, allocate_pk, total_rows, settings)
+      copyto!(df[!, mapping[allocate_pk]], ids)
+    end
+    # The key's cells, for matching. Only an executed call matches: a dry run allocated nothing, so
+    # an allocated pk key is not in its column list.
+    key_positions = show_query === :execute ? [findfirst(==(field), fields_df) for field in returning_key] : Int[]
+    key_metas = [metas[j] for j in key_positions]
+    key_sources = [sources[j] for j in key_positions]
+
     rows = String[]
     columns = new_columns()
     count::Integer = 0
@@ -1370,7 +1673,40 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
       if count == effective_chunk || index == total
         source_sql = pg_arrays ? "SELECT * FROM " * _pg_unnest_source!(parameters, columns, casts) :
                                  "VALUES " * join(rows, ", ")
-        res = _bulk_insert(model, connection, fields_df, source_sql, pk_field, settings, show_query, parameters; on_conflict_sql = on_conflict_sql)
+        chunk_range = (index - count + 1):index
+        run_chunk() = _bulk_insert(model, connection, fields_df, source_sql, pk_field, settings, show_query, parameters;
+          on_conflict_sql = on_conflict_sql, returning_sql = returning_sql, overriding = overriding,
+          resync_retry = allocate_pk === nothing)
+        res = if _returning === nothing || show_query !== :execute
+          run_chunk()
+        elseif connection isa PormGPostgres
+          # `RETURNING` reports what the chunk wrote, named by db column; renamed to fields here.
+          returned = _pg_bulk_returned!(run_chunk(), model, unique(vcat(returning_key, _returning)), connection)
+          _bulk_returning_fill!(returned_rows, _returning, returned, returning_key, key_metas, key_sources,
+            chunk_range, do_nothing)
+          DataFrames.nrow(returned)
+        else
+          # SQLite: no RETURNING (see the #671 block above `_normalize_bulk_returning`). Under DO
+          # NOTHING, first note which keys the table already held, so a read-back row with one of
+          # them is not reported as written by this call. Every read runs on the pinned transaction
+          # connection, so nothing can land between them and the INSERT.
+          chunk_keys = unique([Tuple(source[i] for source in key_sources) for i in chunk_range
+            if !any(source -> source[i] === nothing || ismissing(source[i]), key_sources)])
+          existing = Set{Any}()
+          if do_nothing
+            before = _sqlite_bulk_read_back(objct, model, returning_key, chunk_keys, returning_key)
+            for r in 1:DataFrames.nrow(before)
+              k = _bulk_returning_key_value(key_metas, returning_key, (before[r, field] for field in returning_key))
+              k === nothing || push!(existing, k)
+            end
+          end
+          written = run_chunk()   # counted before the read-back, which would overwrite changes()
+          returned = _sqlite_bulk_read_back(objct, model, returning_key, chunk_keys,
+            unique(vcat(returning_key, _returning)))
+          _bulk_returning_fill!(returned_rows, _returning, returned, returning_key, key_metas, key_sources,
+            chunk_range, do_nothing, existing)
+          written
+        end
         push!(results, res)
         count = 0
         rows = String[]
@@ -1404,8 +1740,12 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     return length(results) == 1 ? results[1] : results
   end
 
-  # Executed, each `_bulk_insert` returned its chunk's inserted-row count (#670).
-  return _bulk_result(sum(results; init = 0))
+  # Executed, each chunk contributed its inserted-row count (#670).
+  _returning === nothing && return _bulk_result(sum(results; init = 0))
+  # `identity.` narrows each column from `Any` to the values it holds, `Union{Missing,T}` when a row
+  # was skipped.
+  rows_df = DataFrames.DataFrame([field => identity.(column) for (field, column) in zip(_returning, returned_rows)])
+  return _bulk_result(sum(results; init = 0), rows_df)
 
 end
 bulk_insert(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_insert(model |> object, df; kwargs...)
@@ -1765,7 +2105,10 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
   fields::Vector{String}, source_sql::String,
   pk_field::Vector{String}, settings::PormGSettings,
   show_query::Symbol, parameters:: AbstractPormGParam;
-  on_conflict_sql::Union{Nothing, String} = nothing)
+  on_conflict_sql::Union{Nothing, String} = nothing,
+  returning_sql::Union{Nothing, String} = nothing,
+  overriding::Bool = false,
+  resync_retry::Bool = true)
 
   # Security: Quote table name and physical column names (db_column when set, #50).
   # The row source is positional and built in `fields` order — `VALUES` tuples on SQLite,
@@ -1778,12 +2121,18 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
   # untouched; appending it before the show_query branch means every show mode carries the
   # clause. A non-`nothing` clause also means "on_conflict active" and gates the sequence-resync
   # retry below.
+  # `returning_sql` (#671, PostgreSQL only) is rendered by the caller from quoted db columns and binds
+  # nothing, like the ON CONFLICT clause. `overriding` puts OVERRIDING SYSTEM VALUE between the column
+  # list and the row source, where PostgreSQL's grammar has it.
   sql = """
-  INSERT INTO $(safe_table_name) ($(join(quoted_fields, ", ")))
+  INSERT INTO $(safe_table_name) ($(join(quoted_fields, ", ")))$(overriding ? " OVERRIDING SYSTEM VALUE" : "")
   $(source_sql)
   """
   if on_conflict_sql !== nothing
     sql *= on_conflict_sql * "\n"
+  end
+  if returning_sql !== nothing
+    sql *= returning_sql * "\n"
   end
 
   # Execute the query or just show it
@@ -1794,8 +2143,12 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
     if connection isa PormGPostgres
       # Use a savepoint when inside an active transaction and the model has a PK field.
       # This lets the sequence-sync retry stay on the same TX connection. With on_conflict
-      # active there is no retry (see below), so the savepoint is skipped too.
-      use_savepoint = !isempty(pk_field) && on_conflict_sql === nothing
+      # active there is no retry (see below), so the savepoint is skipped too. Nor is there one
+      # for pre-allocated ids (`resync_retry = false`, #671): the retry re-sends the SAME ids, so a
+      # collision there means the sequence had drifted below MAX(pk) before the allocation, and
+      # `resync_sequences` is the fix — the error propagates rather than failing a second time.
+      retry_on_duplicate = on_conflict_sql === nothing && resync_retry
+      use_savepoint = !isempty(pk_field) && retry_on_duplicate
       # `result` is whichever INSERT actually landed: the first attempt, or the retry below.
       result = try
         if use_savepoint
@@ -1818,7 +2171,7 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
         # `showerror` is the contract for both wrapped and raw errors. Kept as a message match
         # rather than `e isa IntegrityError`: the sequence-resync retry is specific to a PostgreSQL
         # *duplicate-key* failure, not to constraint violations in general.
-        if on_conflict_sql === nothing && occursin("duplicate key value violates unique constraint", sprint(showerror, e))
+        if retry_on_duplicate && occursin("duplicate key value violates unique constraint", sprint(showerror, e))
           if !isempty(pk_field)
             # with_savepoint already rolled back and released the savepoint; the outer
             # transaction is still usable. Fix the sequence and retry without a savepoint.
@@ -1845,6 +2198,9 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
     else
       throw(_unsupported_conn("bulk_insert()", connection))
     end
+
+    # With RETURNING (#671) the written rows themselves; the caller counts them.
+    returning_sql !== nothing && return DataFrames.DataFrame(result)
 
     # Rows `ON CONFLICT DO NOTHING` skipped are not counted on either engine; a `DO UPDATE` upsert
     # counts each row it inserted or updated. Counted here, per chunk, because on SQLite the count is

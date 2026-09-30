@@ -119,6 +119,14 @@ const DOCERR_RACE_PG = let m = Model("docerr_race_docerr_pg",
     m.connect_key = "docerr_pg"; m._module = Main; m
 end
 
+# #671 — a primary key the database generates by some means other than an auto-increment PormG can
+# pre-allocate, which is what `returning=` refuses to guess about. Its own model because every other
+# fixture here has an `IDField` pk.
+const DOCERR_CIRCUIT_PG = let m = Model("docerr_circuit_docerr_pg",
+        circuitref = CharField(primary_key = true), name = CharField())
+    m.connect_key = "docerr_pg"; m._module = Main; m
+end
+
 # #459 — the cascade depth ceiling. Unlike every other fixture in this file, this one needs a real
 # `set_models` registration: the guard fires inside `find_related_objects!`, which walks
 # `model.related_objects`, and that map is populated by reverse-accessor registration. Hand-built
@@ -926,6 +934,27 @@ const DOCERR_CASES = [
             bulk_insert(DOCERR_STATUS_PG.objects, df,
                 columns = ["c1" => "status", "c2" => "status"], show_query = :dict)
         end,
+    ),
+    # #671 — `write/bulk.md` → Returning Generated Values names three refusals. All are build-time:
+    # the key is chosen before any statement runs, so a dry run reaches every one of them.
+    (
+        "write/bulk.md — returning= naming an unknown field raises UnknownFieldError (#671)",
+        UnknownFieldError,
+        () -> bulk_insert(DOCERR_STATUS_PG.objects, DataFrames.DataFrame(status = ["Finished"]),
+                          returning = ["statuz"], show_query = :dict),
+    ),
+    (
+        "write/bulk.md — returning= with an on_conflict target the INSERT does not carry raises (#671)",
+        QueryBuildError,
+        () -> bulk_insert(DOCERR_STATUS_PG.objects, DataFrames.DataFrame(status = ["Finished"]),
+                          returning = ["statusid"], show_query = :dict,
+                          on_conflict = (action = :nothing, target = ["statusid"])),
+    ),
+    (
+        "write/bulk.md — returning= with a database-generated non-auto pk and no target raises (#671)",
+        QueryBuildError,
+        () -> bulk_insert(DOCERR_CIRCUIT_PG.objects, DataFrames.DataFrame(name = ["Monza"]),
+                          returning = ["circuitref"], show_query = :dict),
     ),
     (
         # The page's claim is about `makemigrations`, which needs a database. This pins it one layer

@@ -1238,6 +1238,13 @@ All window functions work on SQLite **3.25.0 and later** (released 2018-09-15). 
 
 The only SQLite limitation is **explicit frame specifications** (`frame=` argument). These are PostgreSQL-only for now.
 
+The value functions (`Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`) return one of the
+column's own values, so they read back as the column does on both engines. For example,
+`Lag("date")` gives a `Date` and `Lag("duration")` a `Dates.CompoundPeriod`, where SQLite alone
+would hand back the stored text. A window whose value is computed, such as `Rank()` or
+`Lag(Sum(...))`, comes back as the engine delivers it, and so does a value function over a
+`CTE(...)` or `Joined(...)` handle.
+
 ---
 
 ## Function Reference

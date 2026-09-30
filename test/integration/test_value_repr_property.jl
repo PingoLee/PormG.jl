@@ -202,4 +202,88 @@ _vri_lap()  = M.Lap_times.objects.filter("raceid" => 1, "driverid" => 1, "lap" =
       M.Django_contract_scratch.objects.filter("label" => label).delete()
     end
   end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # #800: the two read paths that used to bypass the #564 table.
+  #
+  # An extremum and a window value function return one of the column's own values, so they read back
+  # as the column does — the same 23-second pit stop #581 pins is `Second(23)` from Postgres.jl and
+  # `"00:00:23"` from SQLite without it. And the row a write hands back carries the same types a
+  # re-read through a query does, on every write path.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "Max/Min and window value functions read back as the column (#800)" begin
+    pit() = M.Pit_stops.objects.filter("raceid" => 879, "driverid" => 4, "stop" => 2)
+    for fn in (Max, Min)
+      got = pit().values("m" => fn("duration")).list(:dict)[1][:m]
+      @test got isa Dates.CompoundPeriod
+      @test got == Dates.Second(23)
+      df = pit().values("m" => fn("duration")) |> DataFrame
+      @test df.m[1] isa Dates.CompoundPeriod && df.m[1] == Dates.Second(23)
+    end
+    # `aggregate()` reads through `list()`, so it inherits the kind.
+    agg = pit().aggregate("m" => Max("duration"))
+    @test agg.m isa Dates.CompoundPeriod && agg.m == Dates.Second(23)
+
+    d = _vri_race().values("m" => Min("date")).list(:dict)[1][:m]
+    @test d isa Date && d == _VRI_RACE_DATE
+    ts = _vri_race().values("m" => Max("start_at")).list(:dict)[1][:m]
+    @test ts isa Union{DateTime, TimeZones.ZonedDateTime}
+    @test vr_observed_text(:timestamp, ts) == Models.format_timezone_sql(_VRI_RACE_START)
+
+    q = M.Race.objects
+    q.filter("raceid__@in" => [1, 2])
+    q.values("raceid", "prev" => Lag("date", over = WindowOver(order_by = ["raceid"])))
+    rows = Dict(r[:raceid] => r for r in q.list(:dict))
+    @test rows[2][:prev] isa Date && rows[2][:prev] == _VRI_RACE_DATE
+    @test ismissing(rows[1][:prev]) || rows[1][:prev] === nothing
+
+    # A computed aggregate is not the column and is not typed: on SQLite `SUM` over the interval text
+    # is a number, on PostgreSQL the driver's own interval. Only its shape is pinned here.
+    sum_ = pit().values("s" => Sum("duration")).list(:dict)[1][:s]
+    @test _VRI_ENGINE === :sqlite ? sum_ isa Real : sum_ isa Union{Dates.Period, Dates.CompoundPeriod}
+  end
+
+  @testset "a written row reads back as a re-read does (#800)" begin
+    label = "vr800_write_probe"
+    cleanup = M.Django_contract_scratch.objects
+    cleanup.filter("label" => label)
+    cleanup.exists() && cleanup.delete()
+    reread() = M.Django_contract_scratch.objects.filter("label" => label).first()
+    function same_as_reread(written)
+      again = reread()
+      for f in (:event_time, :event_date, :price, :created_at, :updated_at)
+        @test typeof(written[f]) == typeof(again[f])
+        @test isequal(written[f], again[f])
+      end
+    end
+    try
+      row = M.Django_contract_scratch.objects.create("label" => label, "event_time" => VR_INSTANT,
+        "event_date" => Date(2031, 7, 4), "price" => 12.34)
+      @test row[:event_date] isa Date
+      same_as_reread(row)
+
+      # update_or_create, the UPDATE arm (the row exists) …
+      urow, created = M.Django_contract_scratch.objects.update_or_create("label" => label;
+        defaults = ["event_date" => Date(2031, 7, 5)])
+      @test !created
+      @test urow[:event_date] == Date(2031, 7, 5)
+      same_as_reread(urow)
+
+      # … and the INSERT arm.
+      M.Django_contract_scratch.objects.filter("label" => label).delete()
+      irow, created = M.Django_contract_scratch.objects.update_or_create("label" => label;
+        defaults = Pair{String,Any}["event_date" => Date(2031, 7, 6), "event_time" => VR_INSTANT])
+      @test created
+      same_as_reread(irow)
+
+      # get_or_create's miss: on PostgreSQL the `RETURNING *` row, on SQLite a `first()` read-back.
+      M.Django_contract_scratch.objects.filter("label" => label).delete()
+      grow, created = M.Django_contract_scratch.objects.get_or_create("label" => label;
+        defaults = Pair{String,Any}["event_date" => Date(2031, 7, 7), "price" => 1.5])
+      @test created
+      same_as_reread(grow)
+    finally
+      M.Django_contract_scratch.objects.filter("label" => label).delete()
+    end
+  end
 end

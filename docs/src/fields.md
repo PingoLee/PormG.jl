@@ -728,11 +728,12 @@ lap[:time] isa Dates.CompoundPeriod                            # true on every e
 lap[:time] == Dates.Minute(1) + Dates.Second(49) + Dates.Millisecond(88)   # 1:49.088
 ```
 
-Two places still return the driver's own value, as they do for every temporal column: the row a
-write hands back (`create()`, `update_or_create`, `get_or_create`), and an aggregate or function over
-the column (`Max("time")`). There the type is whatever the engine delivered — text on SQLite, and a
-bare `Period` or a `CompoundPeriod` on PostgreSQL. Re-read the row through a query when the type
-matters.
+The same holds for the row a write hands back (`create()`, `update_or_create`, `get_or_create`),
+and for a function that returns one of the column's own values: `Max("time")` and `Min("time")`,
+and the window value functions `Lag`, `Lead`, `FirstValue`, `LastValue` and `NthValue`. A computed
+value is not the column, so it is still whatever the engine delivered: text on SQLite, and a bare
+`Period` or a `CompoundPeriod` on PostgreSQL. That covers `Sum("time")`, arithmetic, and a
+multi-argument function such as `Coalesce`.
 
 The **components** inside it are the engine's own, though: the same lap time can arrive as minutes,
 seconds and milliseconds from one engine and as hours through nanoseconds from another. Compare

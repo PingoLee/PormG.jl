@@ -550,15 +550,38 @@ function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
   end
 end
 
+# #800 — the read parser a model FIELD's values need on this connection, or `nothing`. The per-field
+# twin of `_projection_parsers`: a row a write hands back carries no projection record, but its
+# columns are the model's own, so the field says what each one is. `_pg_bulk_returned!` shares it.
+function _field_value_parser(f::PormGField, connection)::Union{Function,Nothing}
+  kind = field_canonical_kind(f)
+  return kind === nothing ? nothing : value_parser(kind, connection)
+end
+
 # Build a Dict{Symbol,Any} from a result row, mapping physical column names back to the
 # declared field names so callers always see field-name keys even when a field maps to a
 # differently-named column via db_column (#50). No-op shape on the common path.
-function _row_to_field_keyed_dict(row, model::PormGModel)::Dict{Symbol,Any}
-  if !Models.model_has_db_column(model)
-    return Dict{Symbol,Any}(Symbol(k) => v for (k, v) in pairs(row))
+#
+# #800: and parse each field's value through the #564 read table, as `list()` does for the same
+# column. This is the row `create()` / `update_or_create` / `get_or_create` hand back (`RETURNING *`
+# on PostgreSQL, the `SELECT *` read-back on SQLite), and before this it arrived exactly as the driver
+# delivered it — text for every temporal column on SQLite, a bare `Period` for a one-component
+# INTERVAL on Postgres.jl — so re-reading the row through a query changed its types. A key that is
+# not a field (`__pormg_created`) is left alone.
+function _row_to_field_keyed_dict(row, model::PormGModel, connection)::Dict{Symbol,Any}
+  dict = if !Models.model_has_db_column(model)
+    Dict{Symbol,Any}(Symbol(k) => v for (k, v) in pairs(row))
+  else
+    rev = Dict{String,Symbol}(Models.field_db_column(f, string(k)) => Symbol(k) for (k, f) in model.fields)
+    Dict{Symbol,Any}(get(rev, string(k), Symbol(k)) => v for (k, v) in pairs(row))
   end
-  rev = Dict{String,Symbol}(Models.field_db_column(f, string(k)) => Symbol(k) for (k, f) in model.fields)
-  return Dict{Symbol,Any}(get(rev, string(k), Symbol(k)) => v for (k, v) in pairs(row))
+  for (fname, f) in model.fields
+    key = Symbol(fname)
+    haskey(dict, key) || continue
+    parser = _field_value_parser(f, connection)
+    parser === nothing || (dict[key] = parser(dict[key]))
+  end
+  return dict
 end
 
 # Shared row-level INSERT marshalling, extracted from insert() (#30) so insert() and
@@ -674,7 +697,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     result = fetch(settings, sql * " RETURNING *;", parameters)
     # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
     # write supplied an explicit primary key.
-    return PormGRow(_row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model), model)
+    return PormGRow(_row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model, connection), model)
   elseif connection isa PormGSQLite
     # SQLite: deliberately avoid `INSERT ... RETURNING *`. RETURNING can hang
     # indefinitely inside SQLite/libsqlite3 for some table shapes (observed: an
@@ -689,7 +712,8 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     #
     # The empty-rows fallback (read-back returned nothing, which should not happen after a
     # successful INSERT) builds the dict from real_obj.insert only, so it may omit an unreserved
-    # AUTOINCREMENT pk. The wrapped PormGRow is still returned; if that degenerate row is later
+    # AUTOINCREMENT pk, and its values are the caller's inputs, not parsed reads (#800 types only a
+    # row the database handed back). The wrapped PormGRow is still returned; if that degenerate row is later
     # mutated and .save()d, save() throws a clear "required key" error — no regression over the
     # previous incomplete-Dict return.
     do_insert = () -> begin
@@ -698,7 +722,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
         "SELECT * FROM $(safe_table_name) WHERE rowid = last_insert_rowid();") |> Tables.rowtable
       isempty(rows) ?
         Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(real_obj.insert)) :
-        _row_to_field_keyed_dict(rows[1], model)
+        _row_to_field_keyed_dict(rows[1], model, connection)
     end
 
     # INSERT and the row read-back must run on one connection (last_insert_rowid()
@@ -769,7 +793,7 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
       return _show_query_result(show_query, exec_sql, connection, model.name, :insert; parameters=parameters)
     end
     result = fetch(settings, exec_sql, parameters)
-    dict = _row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model)
+    dict = _row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model, connection)
     # Strip the sentinel so it isn't a phantom field; fail safe (false) if it is ever absent.
     created_raw = pop!(dict, Symbol("__pormg_created"), false)
     created = created_raw === true || created_raw == 1   # always a Bool (xmax = 0 → PG boolean)
@@ -807,7 +831,7 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
       rows = fetch(settings, readback_sql, make_target_params()) |> Tables.rowtable
       dict = isempty(rows) ?
         Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(real_obj.insert)) :
-        _row_to_field_keyed_dict(rows[1], model)
+        _row_to_field_keyed_dict(rows[1], model, connection)
       (dict, !existed)
     end
 
@@ -940,7 +964,7 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
       end
       rows = Tables.rowtable(result)
       if !isempty(rows)
-        dict = _row_to_field_keyed_dict(Base.first(rows), model)
+        dict = _row_to_field_keyed_dict(Base.first(rows), model, connection)
         # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if
         # this write supplied an explicit primary key.
         return (PormGRow(dict, model), true)

@@ -164,9 +164,10 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       # the duplication #564 exists to remove, and it would be free to drift.
       #
       # `FExpression` concretely, not the abstract `SQLTypeF`: `OuterRefObject` is also `<: SQLTypeF`
-      # (#533) and has no typed renderer. Everything else — functions, subqueries, window
-      # expressions — answers `nothing`, which means "no representation this table owns", and the
-      # read path then leaves the column exactly as the driver delivered it.
+      # (#533) and has no typed renderer. A function is typed only when it returns its operand's own
+      # value (`_function_projection_kind`, #800). Everything else — other functions, subqueries —
+      # answers `nothing`, which means "no representation this table owns", and the read path then
+      # leaves the column exactly as the driver delivered it.
       original = v_copy.field
       kind = nothing
       if original isa FExpression
@@ -179,6 +180,9 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
         # `TimeField` or `DurationField` has a representation to undo even though neither can be the
         # left of date arithmetic.
         original isa String && (kind = _projection_column_kind(original, instruc))
+        # #800: an extremum or a window value function has its operand's kind. Same order: render,
+        # then type.
+        original isa SQLTypeFunction && (kind = _function_projection_kind(original, instruc))
       end
       instruc.select[i] = v_copy
       if v_copy._as === nothing
@@ -815,6 +819,46 @@ function _expression_formatter(p::Union{String,CTEReference,JoinedReference}, in
   return column_field === nothing ? nothing : column_field.formatter
 end
 _expression_formatter(::Any, ::SQLInstruction) = nothing
+
+# #800 — the canonical kind a FUNCTION projection's value is stored as, for the #564 read path, or
+# `nothing` when it is not one the representation table owns or cannot be named.
+#
+# Django's `output_field` question, answered only where the answer is not a guess: an extremum and
+# the window VALUE functions return one of their operand's own values, so they have its kind — on
+# SQLite that is the column's stored text, which the column's parser undoes. `SUM`/`AVG`/`COUNT` are
+# computed and never inherit it: a sum of intervals is not an interval PormG wrote, and a decimal sum
+# went through a double (#648's reason). Every other function answers `nothing` and its value stays
+# as the driver delivered it — the fail-open default. The multi-operand operand-typed functions
+# (`COALESCE`, `GREATEST`, …) are deliberately not here: their operands can disagree, and a kind
+# taken from the first one would run a text column through a date parser.
+#
+# Called AFTER the projection renders, like `_projection_column_kind`: resolving a joined path is
+# what populates the memo `_alias_column_field` reads.
+const _KIND_PRESERVING_FUNCTIONS = ("MAX", "MIN", "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE")
+function _function_projection_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)::Union{CanonicalType,Nothing}
+  p.function_name in _KIND_PRESERVING_FUNCTIONS || return nothing
+  return _operand_kind(p.column, instruc)
+end
+_function_projection_kind(::Any, ::SQLInstruction) = nothing
+
+# The operand's kind: a column path is its field's; a bare `F(col)` is the column. Any other operand
+# — arithmetic, a nested function, a literal — answers `nothing`, rather than a kind the value may
+# not have.
+#
+# A `CTE(...)` or `Joined(...)` handle answers `nothing` too, as it does projected on its own (only a
+# `String` path is typed there). For a CTE that is a correctness line, not caution: a CTE column's
+# field is INFERRED from its body, and `_set_field_from_sql_function` hands an `Avg("amount")` column
+# the operand's own `DecimalField` — so `Max("ev__avg_v")` would run a computed double through the
+# decimal parser, the conversion #648 refuses for `Avg`. The joined handle's kind would be right, but
+# typing it here alone would make `Max(Joined(…))` and `Joined(…)` disagree.
+function _operand_kind(p::String, instruc::SQLInstruction)
+  column_field = _alias_column_field(p, instruc)
+  return column_field === nothing ? nothing : field_canonical_kind(column_field)
+end
+_operand_kind(p::FExpression, instruc::SQLInstruction) =
+  p.operation === nothing ? _operand_kind(p.field_name, instruc) : nothing
+_operand_kind(p::SQLField, instruc::SQLInstruction) = _operand_kind(p.field, instruc)
+_operand_kind(::Any, ::SQLInstruction) = nothing
 
 # The formatter for a type name `output_field=` / `Cast` holds — already validated and spelled by
 # `Dialect.cast_type_name`, so only the canonical words need recognising. A name outside the four

@@ -120,9 +120,11 @@ There is **no** `distinct` keyword: `MAX(DISTINCT x)` and `MAX(x)` are the same 
 [`Count`](@ref), [`Sum`](@ref) and [`Avg`](@ref) trip: duplicating rows across a to-many
 join cannot change an extremum, so the query is safe where a sum would be wrong.
 
-The value comes back in whatever form the backend returns for that column — an aggregate is
-not decoded through the model field's type, so a `MAX` over a `DateField` is the driver's
-representation (a `String` on SQLite), not a `Date`. Convert it yourself if you need one.
+The value reads back as the same Julia type the column itself does, on both engines: a `MAX`
+over a `DateField` is a `Date`, over a `DurationField` a `Dates.CompoundPeriod` (#800). `MAX`
+returns one of the column's own values, so the column's read-side parser applies to it. This does
+not extend to a computed aggregate: [`Sum`](@ref) and [`Avg`](@ref) come back as the engine
+delivers them.
 
 See also [`Min`](@ref), [Filters and Aggregates](@ref).
 """
@@ -135,7 +137,7 @@ end
 
 Aggregate `MIN(x)` — the smallest value of `x` in the group. The mirror of [`Max`](@ref) in
 every respect: no `distinct` keyword, exempt from the fan-out guard (#74), and the result
-is the backend's own representation rather than the model field's type.
+reads back as the column's own Julia type on both engines (#800).
 
 See also [Filters and Aggregates](@ref).
 """

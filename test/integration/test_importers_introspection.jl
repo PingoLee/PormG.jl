@@ -1137,7 +1137,7 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PostgreSQL non-negative CHECK: only PormG's exact clause reads as PormG's (#731)
-# The reader matched `pg_get_constraintdef … LIKE '%>= 0%'` and `get_constraints_check` matched
+# The reader matched `pg_get_constraintdef … LIKE '%>= 0%'` and `get_constraints_checks` matched
 # `ILIKE '%>= 0%'`, so a user's range check on an `IntegerField` column read as the CHECK a
 # `PositiveIntegerField` renders — and the planner, diffing it against the declared `IntegerField`,
 # proposed `DROP CONSTRAINT` on the user's constraint. Both now match the exact deparsed clause.
@@ -1146,7 +1146,7 @@ end
 # CHECKs are then added to the plain integer columns by hand. Dropped in `finally`.
 # SQLite already matched exactly; its parity test is hermetic (test/unit/test_live_schema_reader.jl).
 # Mutation gate: put `LIKE '%>= 0%'` back in the CTE and `grid`/`price` read as PormG's and the plan
-# is no longer empty; put `ILIKE '%>= 0%'` back in `get_constraints_check` and it names the user's
+# is no longer empty; put `ILIKE '%>= 0%'` back in `get_constraints_checks` and it names the user's
 # constraint for `grid`/`price`.
 # ─────────────────────────────────────────────────────────────────────────────
 if adapter_name == "PostgreSQL"
@@ -1201,11 +1201,11 @@ if adapter_name == "PostgreSQL"
       @test (has_nn("pos"), has_nn("pos_small"), has_nn("Mixed")) == (true, true, true)
 
       # The dropper agrees with the reader, column by column — and names PormG's constraint.
-      gcc(col) = PormG.get_constraints_check(pool, tbl, col)
-      @test (gcc("grid"), gcc("price"), gcc("lap")) === (nothing, nothing, nothing)
-      @test gcc("pos") == "pormg_it_nonneg_pos_check"
-      @test gcc("pos_small") == "pormg_it_nonneg_pos_small_check"
-      @test gcc("Mixed") == "pormg_it_nonneg_Mixed_check"
+      gcc(col) = PormG.get_constraints_checks(pool, tbl, col)
+      @test all(isempty, (gcc("grid"), gcc("price"), gcc("lap")))
+      @test gcc("pos") == ["pormg_it_nonneg_pos_check"]
+      @test gcc("pos_small") == ["pormg_it_nonneg_pos_small_check"]
+      @test gcc("Mixed") == ["pormg_it_nonneg_Mixed_check"]
 
       # The sibling lookups #731 moved to bound parameters, run against a real catalog — the unit
       # suite only sees their SQL text. The key is an identity column, which
@@ -1228,7 +1228,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # PostgreSQL byte-length CHECK: only PormG's exact clause reads as PormG's (#747)
 # #731's twin. The reader matched `pg_get_constraintdef … LIKE '%octet_length%' AND ~ '<= [0-9]+'`
-# and `get_constraints_byte_length_check` the same through `ILIKE`, so a user's compound bound on a
+# and `get_constraints_byte_length_checks` the same through `ILIKE`, so a user's compound bound on a
 # `BinaryField()` column read as `BinaryField(max_length = n)`'s CHECK — and the planner, diffing it
 # against the unbounded declaration, proposed `DROP CONSTRAINT` on the user's constraint. Both now
 # match the exact deparsed clause. The table is created from PormG's own plan, so `thumb` / `Mixed`
@@ -1305,11 +1305,11 @@ if adapter_name == "PostgreSQL"
 
       # The dropper agrees with the reader, column by column — and names PormG's constraint, never
       # the user's range on the same column.
-      gbl(col) = PormG.get_constraints_byte_length_check(pool, tbl, col)
-      @test (gbl("photo"), gbl("scan")) === (nothing, nothing)
-      @test gbl("thumb") == "pormg_it_bytelen_thumb_check"
-      @test gbl("Mixed") == "pormg_it_bytelen_Mixed_check"
-      @test gbl("doc") == "pormg_it_bytelen_doc_check"
+      gbl(col) = PormG.get_constraints_byte_length_checks(pool, tbl, col)
+      @test all(isempty, (gbl("photo"), gbl("scan")))
+      @test gbl("thumb") == ["pormg_it_bytelen_thumb_check"]
+      @test gbl("Mixed") == ["pormg_it_bytelen_Mixed_check"]
+      @test gbl("doc") == ["pormg_it_bytelen_doc_check"]
 
       # THE convergence assertion: the declared model against its live table plans nothing, so the
       # user's three CHECKs are kept and PormG's three are recognised.
@@ -1341,9 +1341,82 @@ if adapter_name == "PostgreSQL"
       ddl("ALTER TABLE \"$(tbl)\" ADD COLUMN \"size <= 9\" bytea CONSTRAINT pormg_it_bytelen_size_bound CHECK (octet_length(\"size <= 9\") <= 4)")
       @test "CHECK ((octet_length(\"size <= 9\") <= 4))" in defs747()
       @test bound(read747(), "size <= 9") == 4
-      @test gbl("size <= 9") == "pormg_it_bytelen_size_bound"
+      @test gbl("size <= 9") == ["pormg_it_bytelen_size_bound"]
     finally
       drop747!()
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: two PormG-form CHECKs on one column converge in one apply (#752)
+# A second CHECK in PormG's exact form (here an unnamed `ADD CHECK`, as an interrupted change would
+# leave it) made the reader and the dropper disagree: the reader reports the tightest byte bound
+# (`min()` = 4), the dropper named ONE constraint by `conname` (the declared 8), so the plan dropped
+# the 8, re-added the 8, and planned the same pair forever while the 4 kept rejecting values the
+# model allows. The `>= 0` twin: two identical CHECKs, and a transition to `IntegerField` dropped one
+# per run. The dropper now returns every name, the ALTER drops them all, and one apply converges.
+# Mutation gate: make `alter_field` drop only the first name and both "one apply" assertions fail
+# (the plan after the apply is not empty).
+# ─────────────────────────────────────────────────────────────────────────────
+if adapter_name == "PostgreSQL"
+  @testset "Doubled PormG-form CHECKs: the plan drops them all and converges in one apply (#752)" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
+    tbl = "pormg_it_752"
+    drop752!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
+    M752 = PormG.Models
+    # `grid` takes its field constructor as an argument: the last phase redeclares it.
+    model752(grid_ctor) = M752.Model(tbl;
+      id    = M752.IDField(),
+      photo = M752.BinaryField(max_length = 8),
+      grid  = grid_ctor())
+    schema752(model) = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+      Symbol(tbl) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => model, :exist => false))
+    settings752 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
+    plan752(live, grid_ctor) = PormG.Migrations.get_migration_plan(live, schema752(model752(grid_ctor)), pool,
+                                                                    settings752; interactive = false)
+    read752() = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
+    apply752!(plan) = for (_, sql) in get(plan, Symbol(tbl), []); ddl(sql); end
+    bound(live) = (checks = live.columns["photo"].checks;
+                   i = findfirst(c -> c isa PormG.ByteLengthCheck, checks);
+                   i === nothing ? nothing : checks[i].max_bytes)
+    # Every CHECK on the table, as PostgreSQL deparses it — duplicates kept, so a count is a count.
+    defs752() = sort(String.(DataFrame(PormG.ConnectionPool.fetch(pool,
+      "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = \$1::regclass AND contype = 'c'",
+      [tbl])).def))
+
+    drop752!()
+    try
+      apply752!(plan752(PormG.Migrations.LiveTable[], M752.PositiveIntegerField))
+      # The second copies, unnamed — PostgreSQL names them `…_check1`.
+      ddl("ALTER TABLE \"$(tbl)\" ADD CHECK (octet_length(photo) <= 4)")
+      ddl("ALTER TABLE \"$(tbl)\" ADD CHECK (grid >= 0)")
+
+      # Precondition: both copies are in PormG's exact form, so both matchers see both.
+      @test defs752() == sort(["CHECK ((octet_length(photo) <= 8))", "CHECK ((octet_length(photo) <= 4))",
+                               "CHECK ((grid >= 0))", "CHECK ((grid >= 0))"])
+      @test bound(read752()) == 4                      # the reader: the tightest, the one enforced
+      @test length(PormG.get_constraints_byte_length_checks(pool, tbl, "photo")) == 2
+      @test length(PormG.get_constraints_checks(pool, tbl, "grid")) == 2
+
+      # The declared 8 against the read 4: the plan drops BOTH byte CHECKs, then adds the 8 once.
+      stmts = join(values(plan752([read752()], M752.PositiveIntegerField)[Symbol(tbl)]), "\n")
+      @test count("DROP CONSTRAINT", stmts) == 2
+      @test count("ADD CHECK (octet_length(\"photo\") <= 8)", stmts) == 1
+      apply752!(plan752([read752()], M752.PositiveIntegerField))
+      # THE convergence assertion: one apply, one byte CHECK left, and nothing more to plan.
+      @test count(startswith("CHECK ((octet_length(photo)"), defs752()) == 1
+      @test bound(read752()) == 8
+      @test all(isempty, values(plan752([read752()], M752.PositiveIntegerField)))
+
+      # The `>= 0` twin: leaving the positive integer drops both identical CHECKs in one apply.
+      apply752!(plan752([read752()], M752.IntegerField))
+      @test isempty(PormG.get_constraints_checks(pool, tbl, "grid"))
+      @test !any(==("CHECK ((grid >= 0))"), defs752())
+      @test all(isempty, values(plan752([read752()], M752.IntegerField)))
+    finally
+      drop752!()
     end
   end
 end
@@ -1543,14 +1616,14 @@ end
 # CHECK is added as `ADD CONSTRAINT` plus a `COMMENT ON CONSTRAINT` holding PormG's marker, and that
 # marker is what the readers see: `grid >= 0`, which PostgreSQL stores exactly as a
 # `PositiveIntegerField`'s own CHECK, must NOT read as the column's `NonNegativeCheck`, nor be handed
-# to a column ALTER by `get_constraints_check`. A changed condition is replaced, a new name for the
+# to a column ALTER by `get_constraints_checks`. A changed condition is replaced, a new name for the
 # same condition is a RENAME, and the marker survives both a rename and an `ALTER COLUMN … TYPE` of
 # the column it names. A hand-written CHECK is left alone until declared, and then adopted with a
 # COMMENT. Rows that break a new condition fail the statement. And `inspectdb` writes the CHECKs back
 # so that its own output plans only that adoption. Dropped in `finally`.
 # Mutation gate, measured: drop `_PG_UNMARKED_CHECK` from the non-negative reader CTE alone and `grid`
 # reads as positive (the plan stays empty only because the dropper still finds nothing to drop); drop it
-# from the dropper alone and `get_constraints_check` names the declared CHECK. Each fails one assertion.
+# from the dropper alone and `get_constraints_checks` names the declared CHECK. Each fails one assertion.
 # ─────────────────────────────────────────────────────────────────────────────
 if adapter_name == "PostgreSQL"
   @testset "CheckConstraint: declared, marked, read back, replaced, renamed and adopted (#742)" begin
@@ -1594,7 +1667,7 @@ if adapter_name == "PostgreSQL"
       @test Set((c.name, c.marker !== nothing) for c in live.checks) ==
             Set([("pormg_it_742_grid_range", true), ("pormg_it_742_grid_nonneg", true)])
       @test isempty(live.columns["grid"].checks)
-      @test PormG.get_constraints_check(pool, tbl, "grid") === nothing
+      @test isempty(PormG.get_constraints_checks(pool, tbl, "grid"))
       @test all(isempty, values(plan742(model742(range, nonneg))))
 
       # A hand-written CHECK: never planned away.

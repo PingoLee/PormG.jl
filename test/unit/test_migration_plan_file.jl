@@ -38,8 +38,8 @@ struct PlanFileMockPg710 <: PormGPostgres end
 const PFPG710 = PlanFileMockPg710()
 PormG.get_constraints_pk(::PlanFileMockPg710, t::String, f::String) = nothing
 PormG.get_constraints_unique(::PlanFileMockPg710, t::String, f::String) = nothing
-PormG.get_constraints_check(::PlanFileMockPg710, t::String, f::String) = nothing
-PormG.get_constraints_byte_length_check(::PlanFileMockPg710, t::String, f::String) = nothing
+PormG.get_constraints_checks(::PlanFileMockPg710, t::String, f::String) = String[]
+PormG.get_constraints_byte_length_checks(::PlanFileMockPg710, t::String, f::String) = String[]
 fetch(::PlanFileMockPg710, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) = DataFrame()
 
 const PlanOf710 = OrderedDict{Symbol, OrderedDict{String, String}}

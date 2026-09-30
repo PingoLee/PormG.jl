@@ -18,7 +18,7 @@ struct MockSLBin <: PormG.PormGSQLite end
 # A Postgres mock whose byte-length-CHECK introspection returns a known name, so the
 # DROP-on-change path can be exercised without a database.
 struct MockPGBinNamed <: PormG.PormGPostgres end
-PormG.get_constraints_byte_length_check(::MockPGBinNamed, table_name::String, field_name::String) = "technical_document_payload_check"
+PormG.get_constraints_byte_length_checks(::MockPGBinNamed, table_name::String, field_name::String) = ["technical_document_payload_check"]
 
 # #507 phase 2: `alter_field` takes a `ColumnDelta` instead of a `Vector{Symbol}` of
 # field-attribute names. This builds the delta these renderer tests want — both fields compiled to
@@ -410,4 +410,39 @@ end
       @test !occursin("bytea", col)
     end
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL ALTER: a bound change drops EVERY PormG-form byte CHECK on the column (#752)
+# A column can carry two CHECKs in PormG's exact form (a hand-written copy with another bound, or
+# one left by an interrupted change). The reader reports the tightest; the dropper used to name one
+# by `conname`, so the plan dropped the looser bound, re-added it, and never converged. The dropper
+# now returns every name, and the ALTER drops each of them before adding the declared bound.
+# Mutation gate: push only `first(...)` of the dropper's answer in `alter_field` and the second
+# DROP assertion fails.
+# ─────────────────────────────────────────────────────────────────────────────
+struct MockPGBinTwice752 <: PormG.PormGPostgres end
+PormG.get_constraints_byte_length_checks(::MockPGBinTwice752, table_name::String, field_name::String) =
+  ["technical_document_payload_check", "technical_document_payload_check1"]
+
+@testset "PostgreSQL ALTER: a changed byte bound drops every PormG-form CHECK on the column (#752)" begin
+  # The live column reads as the tighter bound, 4; the model declares 8.
+  sql = PormG.Dialect.alter_field(MockPGBinTwice752(), "technical_document", "payload",
+                                  Models.BinaryField(max_length = 8),
+                                  _bin_delta(MockPGBinTwice752(), Models.BinaryField(max_length = 8),
+                                             Models.BinaryField(max_length = 4), [:checks]))
+  @test occursin("DROP CONSTRAINT \"technical_document_payload_check\";", sql)
+  @test occursin("DROP CONSTRAINT \"technical_document_payload_check1\";", sql)
+  # Both drops come before the one ADD, so the declared bound is the only CHECK left.
+  @test count("DROP CONSTRAINT", sql) == 2
+  @test count("ADD CHECK", sql) == 1
+  @test findlast("DROP CONSTRAINT", sql).start < findfirst("ADD CHECK", sql).start
+
+  # Bounded → unbounded drops them all too, and adds nothing.
+  removed = PormG.Dialect.alter_field(MockPGBinTwice752(), "technical_document", "payload",
+                                      Models.BinaryField(),
+                                      _bin_delta(MockPGBinTwice752(), Models.BinaryField(),
+                                                 Models.BinaryField(max_length = 4), [:checks]))
+  @test count("DROP CONSTRAINT", removed) == 2
+  @test !occursin("ADD CHECK", removed)
 end

@@ -31,7 +31,7 @@ import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CDecimal, CText, 
 # #564: the remaining temporal nouns, for the read-parser half of the value-representation table.
 import PormG: CDate, CDateTime, CInterval
 import PormG: _has_non_negative, _byte_bound
-import PormG: get_constraints_pk, get_constraints_unique, get_constraints_check, get_constraints_byte_length_check
+import PormG: get_constraints_pk, get_constraints_unique, get_constraints_checks, get_constraints_byte_length_checks
 import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column, format_timezone_sql, model_table_name, fk_target_table
 # #564: the read side of the canonical timestamp text, now that its PARSER lives here beside the
 # mask it inverts. `normalize_sqlite_datetime_string` stays in `Models` because it is also on the
@@ -1793,8 +1793,11 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   new_needs_check = _has_non_negative(delta.new_spec)
   old_needs_check = _has_non_negative(delta.old_spec)
   if checks_changed && old_needs_check && !new_needs_check
-    constraint = get_constraints_check(conn, raw_table_name, live_column)
-    constraint !== nothing && push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(_quote_table_ddl(constraint))";""")
+    # Every PormG-form `>= 0` CHECK, not the first (#752): two identical ones are one fact, and a
+    # transition that dropped only one left the column still refusing negatives.
+    for constraint in get_constraints_checks(conn, raw_table_name, live_column)
+      push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(_quote_table_ddl(constraint))";""")
+    end
   end
 
   # Byte-length CHECK diffing for BinaryField (#296), the `octet_length` analogue of the block
@@ -1810,8 +1813,12 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   old_byte_bound = _byte_bound(delta.old_spec)
   byte_bound_changed = checks_changed && new_byte_bound != old_byte_bound
   if byte_bound_changed && old_byte_bound !== nothing
-    constraint = get_constraints_byte_length_check(conn, raw_table_name, live_column)
-    constraint !== nothing && push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(_quote_table_ddl(constraint))";""")
+    # Every PormG-form bound on the column (#752). The reader reports the TIGHTEST of them, so a
+    # dropper that named one — by `conname` — could drop the looser bound, re-add the declared one,
+    # and leave the tighter one enforcing; the next run then planned the same pair forever.
+    for constraint in get_constraints_byte_length_checks(conn, raw_table_name, live_column)
+      push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(_quote_table_ddl(constraint))";""")
+    end
   end
 
   # DROP IDENTITY comes BEFORE the type change, and that ordering is load-bearing.

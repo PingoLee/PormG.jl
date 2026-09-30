@@ -465,11 +465,16 @@ end
 # The CHECK facts the IR carries are the two PormG renders, on the types it renders them on. A `>= 0`
 # on a text column or a byte bound on an integer is a fact no declaration could ever match, so
 # carrying it would be a permanent delta; such a clause is left to the database, unread.
+#
+# #752: of several byte bounds, the TIGHTEST, which is the one the database enforces, on both engines.
+# PostgreSQL's reader already collapses them with `min()`; SQLite's used to keep the first in DDL
+# order, so a doubled column could read as the looser bound, and plan nothing while the tighter one
+# rejected values the model allows.
 function _reader_checks(found::Vector{CheckKind}, ctype::CanonicalType)::Vector{CheckKind}
   kept = CheckKind[]
   any(c -> c isa NonNegativeCheck, found) && ctype isa Union{CInt16, CInt32} && push!(kept, NonNegativeCheck())
-  i = findfirst(c -> c isa ByteLengthCheck, found)
-  i !== nothing && ctype isa CBytes && push!(kept, found[i])
+  bounds = [c for c in found if c isa ByteLengthCheck]
+  !isempty(bounds) && ctype isa CBytes && push!(kept, argmin(c -> c.max_bytes, bounds))
   return kept
 end
 
@@ -1073,7 +1078,7 @@ const _PG_OWNABLE_TABLE_FILTER = """
 The predicate that recognises PormG's OWN non-negative CHECK on PostgreSQL (#731), over a
 `pg_constraint` row aliased `con` and the one `pg_attribute` row it constrains, aliased `a`. It is
 interpolated by BOTH the reader (the `non_negative_checks` CTE in `get_database_schema`) and the
-dropper (`get_constraints_check`), so what `makemigrations` reads as PormG's check and what
+dropper (`get_constraints_checks`), so what `makemigrations` reads as PormG's check and what
 `Dialect.alter_field` drops as PormG's check cannot differ.
 
 PormG writes `CHECK ("col" >= 0)` (`Dialect._non_negative_check_clause`), and
@@ -1109,7 +1114,7 @@ The predicate that recognises PormG's OWN byte-length CHECK on PostgreSQL (#747)
 `_PG_BYTE_LENGTH_CHECK_BOUND`, the expression that reads its bound — `_PG_NON_NEGATIVE_CHECK_MATCH`'s
 twin, over the same `con` / `a` aliases, and interpolated the same way by BOTH the reader (the
 `byte_length_checks` CTE in `get_database_schema`) and the dropper
-(`get_constraints_byte_length_check`).
+(`get_constraints_byte_length_checks`).
 
 `BinaryField(max_length = n)` writes `CHECK (octet_length("col") <= n)`
 (`Dialect._byte_length_check_clause`), and `pg_get_constraintdef` hands it back as
@@ -1142,12 +1147,12 @@ const _PG_BYTE_LENGTH_CHECK_MATCH =
 The predicate that keeps a DECLARED table CHECK (#742) out of the two exact-clause matchers above,
 over a `pg_constraint` row aliased `con`. Appended beside `_PG_NON_NEGATIVE_CHECK_MATCH` and
 `_PG_BYTE_LENGTH_CHECK_MATCH` wherever they are spliced — the reader CTEs and
-`_pg_single_column_check_name` — rather than folded into them, so the reader and the dropper still
+`_pg_single_column_check_names` — rather than folded into them, so the reader and the dropper still
 differ by the clause predicate alone.
 
 Needed because a `CheckConstraint(condition = "grid >= 0")` is stored by PostgreSQL as EXACTLY the
 clause a `PositiveIntegerField` renders, `CHECK ((grid >= 0))`: without this it would read as the
-column's `NonNegativeCheck`, and `get_constraints_check` would hand its name to a column ALTER to drop.
+column's `NonNegativeCheck`, and `get_constraints_checks` would hand its name to a column ALTER to drop.
 What tells them apart is the ownership marker PormG writes as the declared CHECK's comment.
 
 `COALESCE`, and it is load-bearing: PormG's own column CHECKs carry NO comment, `obj_description`
@@ -1665,8 +1670,8 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             -- another bound, or a stale one) would fan the outer row out and emit that column twice
             -- into the columns aggregate — after which the recovered max_length would depend on row
             -- order, which is exactly the drift this CTE prevents. min() also picks the tightest
-            -- bound, which is the one actually enforced. The dropper need not name that same
-            -- constraint, so such a column can fail to converge (#752).
+            -- bound, which is the one actually enforced. The dropper returns EVERY such constraint
+            -- (#752), so a changed bound replaces the whole set and the column converges in one apply.
             min($(_PG_BYTE_LENGTH_CHECK_BOUND)::bigint) AS byte_limit
         FROM pg_constraint con
         JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
@@ -1757,7 +1762,7 @@ function get_database_schema(;pickup::Union{PormGSQLite, PormGPostgres} = connec
   return get_database_schema(pickup)
 end
 
-# #498: hardened to match `get_constraints_pk` / `get_constraints_unique` / `get_constraints_check`
+# #498: hardened to match `get_constraints_pk` / `get_constraints_unique` / `get_constraints_checks`
 # below, which were fixed and left this one behind. Four defects, all of which the caller acts on by
 # DROPPING whatever name comes back:
 #
@@ -3944,7 +3949,7 @@ function get_constraints_pk(conn::PormGPostgres, table_name::String, field_name:
   # Filters on `tc.table_name` rather than `ccu.table_name` — `tc` IS the constrained table.
   #
   # #731: parameterized, search-path-restricted, and ordered by search-path position like
-  # `get_constraints_check` — the unqualified DDL this arms binds to the first schema that holds the
+  # `get_constraints_checks` — the unqualified DDL this arms binds to the first schema that holds the
   # table. The names used to be spliced into single-quoted literals, where a quote broke the query.
   query = """
   SELECT tc.constraint_name
@@ -4012,14 +4017,26 @@ end
 # The one query behind both CHECK droppers below (#747). They differ only in which clause is PormG's,
 # so they share the scoping, and it cannot drift between them again: before #747 the byte-length
 # dropper read `information_schema` with no single-column rule and no order, while
-# `get_constraints_check` had had both since #731.
+# `get_constraints_checks` had had both since #731.
 #
-# Scoped the way the DDL it feeds resolves: one column, a schema on the search path, the first such
-# schema winning — an unqualified `ALTER TABLE` binds to that one. Read from `pg_catalog` because the
-# predicate needs `con.oid`. `predicate` is one of the `_PG_*_CHECK_MATCH` constants, spliced as SQL,
+# Scoped the way the DDL it feeds resolves: one column of the table an unqualified `ALTER TABLE`
+# binds to, which `to_regclass(quote_ident($1))` resolves by the same search-path rule. Ranking by
+# search-path position alone was not enough: it ranked only the schemas holding a MATCHING CHECK, so
+# with `app.drivers` (no CHECK) ahead of `public.drivers` (two) it named public's constraints, and the
+# ALTER — bound to `app.drivers` — failed on a constraint that does not exist. Read from `pg_catalog`
+# because the predicate needs `con.oid`. `predicate` is one of the `_PG_*_CHECK_MATCH` constants, spliced as SQL,
 # so it must never carry a value; the table and column are bound as `$1`/`$2`.
-function _pg_single_column_check_name(conn::PormGPostgres, table_name::String, field_name::String,
-                                      predicate::String)::Union{String, Nothing}
+#
+# #752: EVERY matching name on that table, not the first. A column can carry two CHECKs in PormG's
+# exact form — a hand-written copy with another bound, or one left behind by an interrupted change —
+# and the reader and this dropper then answered different questions: the reader collapses the byte
+# bounds to `min()` (the one enforced), while the dropper returned one name ordered by `conname`,
+# usually the OTHER one. The plan dropped the looser bound, re-added it, and never converged. Two
+# identical `>= 0` CHECKs had the same shape: a transition away from a positive integer dropped one
+# per run. The column ALTER drops the whole list, so the declared clause is the only one left. The
+# list stays in the old order, so its first element is what the singular lookup used to return.
+function _pg_single_column_check_names(conn::PormGPostgres, table_name::String, field_name::String,
+                                       predicate::String)::Vector{String}
   query = """
   SELECT con.conname AS constraint_name
   FROM pg_constraint con
@@ -4028,6 +4045,7 @@ function _pg_single_column_check_name(conn::PormGPostgres, table_name::String, f
   JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
   WHERE con.contype = 'c'
     AND c.relname = \$1
+    AND con.conrelid = to_regclass(quote_ident(\$1))
     AND a.attname = \$2
     AND n.nspname = ANY(current_schemas(false))
     AND array_length(con.conkey, 1) = 1
@@ -4036,34 +4054,31 @@ function _pg_single_column_check_name(conn::PormGPostgres, table_name::String, f
   ORDER BY array_position(current_schemas(false), n.nspname), con.conname;
   """
   result = fetch(conn, query, [table_name, field_name]) |> DataFrame
-  if nrow(result) == 0
-      return nothing
-  end
-  return result[1, :constraint_name]
+  return String[string(r.constraint_name) for r in eachrow(result)]
 end
 
-# Find the non-negative CHECK constraint backing a positive integer column.
+# Find the non-negative CHECK constraints backing a positive integer column.
 # PostgreSQL has no unsigned integer type, so PormG enforces `col >= 0` with a
 # CHECK constraint; on a type transition away from a positive integer field the
 # migration engine needs the constraint's auto-generated name to drop it. We
 # match by column and clause rather than assuming a name, so it works even for
-# constraints PormG created anonymously at CREATE TABLE time. Returns `nothing`
-# when no such constraint exists.
+# constraints PormG created anonymously at CREATE TABLE time. Returns an empty
+# vector when no such constraint exists, and every one when there are several (#752).
 #
 # #731: the clause is matched EXACTLY, by the predicate the reader uses
 # (`_PG_NON_NEGATIVE_CHECK_MATCH`). It was `ILIKE '%>= 0%'` over
 # `information_schema`, so a user's `CHECK (grid >= 0 AND grid <= 30)` on the column
 # was returned as PormG's and dropped.
-get_constraints_check(conn::PormGPostgres, table_name::String, field_name::String)::Union{String, Nothing} =
-  _pg_single_column_check_name(conn, table_name, field_name, _PG_NON_NEGATIVE_CHECK_MATCH)
+get_constraints_checks(conn::PormGPostgres, table_name::String, field_name::String)::Vector{String} =
+  _pg_single_column_check_names(conn, table_name, field_name, _PG_NON_NEGATIVE_CHECK_MATCH)
 
-# Find the byte-length CHECK backing a bounded BinaryField (#296) — the `octet_length` sibling of
-# `get_constraints_check` above. `bytea` takes no length parameter, so `max_length` can only be a
+# Find the byte-length CHECKs backing a bounded BinaryField (#296) — the `octet_length` sibling of
+# `get_constraints_checks` above. `bytea` takes no length parameter, so `max_length` can only be a
 # CHECK, and on a transition away from a bounded BinaryField — or to another bound — the migration
-# engine needs the auto-generated name to drop it. Matched on the clause rather than the name, for
-# the same reason.
+# engine needs the auto-generated names to drop them. Matched on the clause rather than the name, for
+# the same reason. Every PormG-form bound on the column, whatever its value (#752).
 #
-# Deliberately a separate generic rather than a parameter on `get_constraints_check`: a table can
+# Deliberately a separate generic rather than a parameter on `get_constraints_checks`: a table can
 # carry both kinds, and matching the wrong one would drop a live constraint.
 #
 # #747: the clause is matched EXACTLY, by the predicate the reader uses
@@ -4072,8 +4087,8 @@ get_constraints_check(conn::PormGPostgres, table_name::String, field_name::Strin
 # dropped — and on a column carrying both, whichever row came first. The residual ambiguity is only
 # a hand-written copy of PormG's exact clause, which is the same fact by the same text. Matching the
 # auto-generated name instead would be worse — the name is not stable across the paths that create it.
-get_constraints_byte_length_check(conn::PormGPostgres, table_name::String, field_name::String)::Union{String, Nothing} =
-  _pg_single_column_check_name(conn, table_name, field_name, _PG_BYTE_LENGTH_CHECK_MATCH)
+get_constraints_byte_length_checks(conn::PormGPostgres, table_name::String, field_name::String)::Vector{String} =
+  _pg_single_column_check_names(conn, table_name, field_name, _PG_BYTE_LENGTH_CHECK_MATCH)
 
 # Same empty-result contract as `get_constraints_unique` above (#284).
 # Parameterized (#731): the names are the function's text arguments, bound rather than spliced.

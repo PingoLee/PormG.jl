@@ -45,8 +45,8 @@ struct FkOrderMockPg89 <: PormGPostgres end
 const FKPG89 = FkOrderMockPg89()
 PormG.get_constraints_pk(::FkOrderMockPg89, t::String, f::String) = nothing
 PormG.get_constraints_unique(::FkOrderMockPg89, t::String, f::String) = nothing
-PormG.get_constraints_check(::FkOrderMockPg89, t::String, f::String) = nothing
-PormG.get_constraints_byte_length_check(::FkOrderMockPg89, t::String, f::String) = nothing
+PormG.get_constraints_checks(::FkOrderMockPg89, t::String, f::String) = String[]
+PormG.get_constraints_byte_length_checks(::FkOrderMockPg89, t::String, f::String) = String[]
 fetch(::FkOrderMockPg89, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) = DataFrame()
 
 # #754: the same stubs, plus a canned answer to the dropped-table dependents query (the only catalog
@@ -58,8 +58,8 @@ const DDPG754_ROWS = Ref(DataFrame(dropped_table = String[], dependent = String[
 const DDPG754_READS = Tuple{String, Any}[]
 PormG.get_constraints_pk(::DropDepsMockPg754, t::String, f::String) = nothing
 PormG.get_constraints_unique(::DropDepsMockPg754, t::String, f::String) = nothing
-PormG.get_constraints_check(::DropDepsMockPg754, t::String, f::String) = nothing
-PormG.get_constraints_byte_length_check(::DropDepsMockPg754, t::String, f::String) = nothing
+PormG.get_constraints_checks(::DropDepsMockPg754, t::String, f::String) = String[]
+PormG.get_constraints_byte_length_checks(::DropDepsMockPg754, t::String, f::String) = String[]
 function fetch(::DropDepsMockPg754, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false)
     push!(DDPG754_READS, (sql, params))
     return occursin("pg_depend", sql) && occursin("pg_rewrite", sql) ? copy(DDPG754_ROWS[]) : DataFrame()

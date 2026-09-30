@@ -816,17 +816,29 @@ function _expression_formatter(p::Union{String,CTEReference,JoinedReference}, in
 end
 _expression_formatter(::Any, ::SQLInstruction) = nothing
 
-# The formatter for a type name `output_field=` / `Cast` holds — already validated and spelled by
+# The field a type name `output_field=` / `Cast` holds stands for — already validated and spelled by
 # `Dialect.cast_type_name`, so only the canonical words need recognising. A name outside the four
 # families (a timestamp, which has two representations, an array, `bytea`) answers `nothing`.
-function _sql_type_formatter(type_name::AbstractString)
+#
+# #812: one table for both readers. A CTE column typed from `Case(…; output_field = …)` needs a FIELD
+# (`_set_field_from_sql_function`, ctes.jl), a projection-alias filter only its formatter; answering
+# the formatter off the same field is what keeps the two from ever disagreeing on a type name.
+function _sql_type_field(type_name::AbstractString)::Union{PormGField,Nothing}
   base = lowercase(strip(first(split(type_name, '('))))
-  base in ("text", "varchar", "character varying", "char", "character") && return Models.format_text_sql
-  base in ("smallint", "integer", "int", "bigint", "real", "double precision", "float", "numeric",
-           "decimal") && return Models.format_number_sql
-  base in ("boolean", "bool") && return Models.format_bool_sql
-  base == "date" && return Models.format_date_sql
+  base == "text" && return Models.TextField()
+  base in ("varchar", "character varying", "char", "character") && return Models.CharField()
+  base in ("smallint", "integer", "int") && return Models.IntegerField()
+  base == "bigint" && return Models.BigIntegerField()
+  base in ("real", "double precision", "float") && return Models.FloatField()
+  base in ("numeric", "decimal") && return Models.DecimalField()
+  base in ("boolean", "bool") && return Models.BooleanField()
+  base == "date" && return Models.DateField()
   return nothing
+end
+
+function _sql_type_formatter(type_name::AbstractString)
+  field = _sql_type_field(type_name)
+  return field === nothing ? nothing : field.formatter
 end
 
 # The field a `Max`/`Min` or bare-`F` projection's column names, or `nothing` when it names none.

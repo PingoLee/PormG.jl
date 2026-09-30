@@ -665,3 +665,49 @@ end
     @test nrow(df_copy) == 10
     @test isequal(df_orig_again, df_first)    # original still renders/returns its own 100-row result
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CTE column typed from a Case with an expression branch (#812)
+# A `Case` column in a CTE body whose branch is an expression (`then = F("points")`,
+# `then = Rank(…)`) was typed CharField, so the outer `c__col__@gt => n` bound the STRING "n". On
+# SQLite a computed CTE column and a bound parameter both lack type affinity, INTEGER/REAL sort
+# below TEXT, and the filter silently returned no rows; PostgreSQL inferred the parameter type from
+# the column and happened to work. Each expected set is computed by a plain query on `result`, not by
+# the CTE path under test. Race 1 is the 2009 Australian GP: podium 10/8/6, points to 8th, none tied.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "CTE Case column with an expression branch filters as a number (#812)" begin
+    @testset "then = F(\"points\")" begin
+        body = M.Result.objects
+        body.filter("raceid" => 1)
+        body.values("resultid", "podium_pts" => Case([When("positionorder__@lte" => 3, then = F("points"))], default = 0))
+        q = M.Result.objects
+        q.with("c" => body, join_field = "resultid" => "resultid")
+        q.filter("raceid" => 1, "c__podium_pts__@gt" => 7)
+        q.values("resultid")
+        got = sort((q |> DataFrame).resultid)
+
+        # Independent: the podium finishers of race 1 with more than 7 points (the winner and 2nd).
+        expected = sort((M.Result.objects.filter("raceid" => 1, "positionorder__@lte" => 3, "points__@gt" => 7).
+            values("resultid") |> DataFrame).resultid)
+        @test length(expected) == 2
+        @test got == expected
+    end
+
+    @testset "then = Rank(…), the issue's spelling" begin
+        body = M.Result.objects
+        body.filter("raceid" => 1)
+        body.values("resultid", "rk" => Case([When("points__@gt" => 0, then = Rank(over = WindowOver(order_by = ["-points"])))], default = 0))
+        q = M.Result.objects
+        q.with("c" => body, join_field = "resultid" => "resultid")
+        q.filter("raceid" => 1, "c__rk__@gt" => 3)
+        q.values("resultid")
+        got = sort((q |> DataFrame).resultid)
+
+        # Independent: a scorer ranks above 3rd exactly when it scored less than the 3rd place's 6
+        # points, since no two scorers in race 1 share a total — 4th to 8th, five rows.
+        expected = sort((M.Result.objects.filter("raceid" => 1, "points__@gt" => 0, "points__@lt" => 6).
+            values("resultid") |> DataFrame).resultid)
+        @test length(expected) == 5
+        @test got == expected
+    end
+end

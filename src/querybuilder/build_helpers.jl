@@ -380,6 +380,12 @@ function _check_column_rhs_lookup(path::Vector{String})
   suffix in LIKE_WILDCARD_OPERATORS &&
     throw(FilterError("Error in filter '$(lookup)': '$(suffix)' matches a text value, " *
                       "not a column expression"))
+  # #811, found in review: the JSON containment operators render in `_render_json_operator`, ahead of
+  # every column-RHS arm, and `has_key` bound `string(v.values)` — the expression's `repr` as the key,
+  # zero rows on PostgreSQL. Each takes a key, a key list or a document, never a column.
+  suffix in JSON_CONTAINMENT_OPERATORS &&
+    throw(FilterError("Error in filter '$(lookup)': '$(suffix)' takes a JSON key or document value, " *
+                      "not a column expression"))
   return nothing
 end
 
@@ -2414,7 +2420,8 @@ end
 # `@in`/`@nin` at parse (#811/#793), and `_check_fixed_shape_lookup` refuses `@range`/`@isnull` (#808).
 # So the fallthrough is a comparison, and anything else fails CLOSED rather than concatenating an
 # operator name into the SQL. That is the fail-safe for an operator node built past the parse
-# ladder (`OP` is internal, #202).
+# ladder (`OP` is internal, #202). No public spelling reaches it, so no test pins it: a test would
+# have to build the node by hand, past the API, which is the #596 fallback arm's rule too.
 function _render_column_rhs(column::AbstractString, operator::AbstractString, rhs,
                             instruc::SQLInstruction)::String
   operator in VERBATIM_PATTERN_OPERATORS &&

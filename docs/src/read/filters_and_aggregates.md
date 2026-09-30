@@ -320,7 +320,7 @@ Supported comparisons on a path lookup: `=` (default), `@ne`, `@gt`, `@gte`, `@l
 `@isnull`. Path lookups also work in `.values(...)` and `.order_by(...)`.
 
 A path lookup compares the extracted value against a **value**. A column expression on the right
-(`"metadata__wins" => F("points")`) raises a `FilterError` on both backends. The two engines extract
+(`"metadata__principal" => F("name")`) raises a `FilterError` on both backends. The two engines extract
 different types (PostgreSQL text, SQLite the native JSON type), so no single comparison against a
 column means the same thing on both.
 
@@ -360,7 +360,8 @@ M.Constructor.objects.filter("metadata__@has_keys" => ["principal", "wins"])
 
 `@jcontains` accepts a `Dict`, `Vector`, `NamedTuple`, or a raw JSON string (validated at build
 time). `@has_any_keys` / `@has_keys` take a vector of keys. All values are sent as bound
-parameters.
+parameters. A column expression on the right (`"metadata__@has_key" => F("name")`) raises a
+`FilterError` on both backends.
 
 ---
 

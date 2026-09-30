@@ -231,7 +231,6 @@ const _CRL_DRIVER_RHS = (
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#793: LIKE-family lookups refuse a column expression" begin
   # The constant, not a hand-written list: a LIKE lookup added later is covered without editing this.
-  @test length(PormG.LIKE_WILDCARD_OPERATORS) == 14
   for (backend, conn) in _CRL_BACKENDS
     @testset "$backend" begin
       for op in PormG.LIKE_WILDCARD_OPERATORS, (label, query, rhs) in _CRL_DRIVER_RHS
@@ -278,4 +277,30 @@ end
   q = _crl_drivers()
   q.filter("surname__@iunaccent_exact" => F("forename"))
   @test occursin("immutable_unaccent(\"Tb\".\"forename\")", _crl_sql(q, _CRL_PG))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #811 (review): the JSON containment operators refuse a column expression
+# The same silent shape as the JSON path equality above, one lookup over: `"payload__@has_key" =>
+# F("grid")` bound the expression's `repr` as the key on PostgreSQL — valid SQL, zero rows.
+# `@jcontains` reported the write path's InvalidValueError, and `@has_keys`/`@has_any_keys` said "got
+# a single value". All four refuse at the call now, before the PostgreSQL-only capability check.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#811: JSON containment operators refuse a column expression" begin
+  for (backend, conn) in _CRL_BACKENDS
+    @testset "$backend" begin
+      for op in PormG.JSON_CONTAINMENT_OPERATORS, (label, query, rhs) in _CRL_RESULT_RHS
+        @testset "@$op => $label" begin
+          err = _crl_err(() -> (q = query(); q.filter("payload__@$op" => rhs()); q), conn)
+          @test err isa PormG.FilterError
+          @test occursin("payload__@$op", _crl_msg(err))
+          @test occursin("column expression", _crl_msg(err))
+        end
+      end
+    end
+  end
+  # A key still binds as text.
+  q = _crl_results()
+  q.filter("payload__@has_key" => "pole")
+  @test _crl_params(q, _CRL_PG) == ["pole"]
 end

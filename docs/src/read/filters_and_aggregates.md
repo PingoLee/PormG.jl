@@ -312,6 +312,11 @@ M.Constructor.objects.values("name", "metadata__principal")
 Supported comparisons on a path lookup: `=` (default), `@ne`, `@gt`, `@gte`, `@lt`, `@lte`, and
 `@isnull`. Path lookups also work in `.values(...)` and `.order_by(...)`.
 
+A path lookup compares the extracted value against a **value**. A column expression on the right
+(`"metadata__wins" => F("points")`) raises a `FilterError` on both backends. The two engines extract
+different types (PostgreSQL text, SQLite the native JSON type), so no single comparison against a
+column means the same thing on both.
+
 !!! note
     Keys must be simple (a letter or underscore, then letters, digits, or underscores) or an
     array index written in ASCII digits (`0`–`9`) — a key with spaces, dots, or quotes, or one that
@@ -380,6 +385,13 @@ query.filter("statusid__@in" => engine_statuses)
 ```
 
 The subquery must project exactly one column — see [Subqueries and CTEs](subqueries_and_ctes.md) for the full column-count rule and SQL-function projection examples.
+
+### A column is not a list
+
+`@in` and `@nin` take a list of values or a subquery. A column expression on the right, such as
+`"points__@in" => F("grid")`, a `Case`, or a `Joined`/`CTE` column, raises a `FilterError` when the
+filter is built. To test membership against another table's column, pass a subquery that projects
+it.
 
 ### Correlated EXISTS
 

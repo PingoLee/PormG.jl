@@ -122,6 +122,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "OuterRef Inside Scalar Functions and Window Columns (#535)" include("unit/test_outer_ref_in_functions.jl")
     @testset "OP Over a Function Column (#537)" include("unit/test_op_function_column.jl")
     @testset "Column Expressions in Value Slots (#808)" include("unit/test_expression_kwarg_slots.jl")
+    @testset "Column Expressions on Value-Shaped Lookups (#811/#793)" include("unit/test_column_rhs_lookups.jl")
     @testset "CTE Table Names & Alias Reservation (#479/#480)" include("unit/test_cte_table_name_and_alias_reservation.jl")
     @testset "Nested CTE Guard (#433)" include("unit/test_nested_cte_guard.jl")
     @testset "JSON Path Lookups (#27)" include("unit/test_json_lookups.jl")

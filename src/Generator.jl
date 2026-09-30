@@ -199,7 +199,9 @@ function _plan_unique_binding(key, used::Set{Symbol})::String
   end
 end
 
-function generate_migration_plan(file::String, migration_plan::OrderedDict{Symbol,OrderedDict{String,String}}, path::String) :: Nothing
+function generate_migration_plan(file::String, migration_plan::OrderedDict{Symbol,OrderedDict{String,String}}, path::String;
+                                 models_file::Union{String, Nothing} = nothing,
+                                 models_file_sha256::Union{String, Nothing} = nothing) :: Nothing
   open(joinpath(path, file), "w") do f
       module_name = replace(basename(file), ".jl" => "")
       # Stamp the frozen on-disk format version (issue #32) as an inert comment header rather than a
@@ -209,10 +211,17 @@ function generate_migration_plan(file::String, migration_plan::OrderedDict{Symbo
       # Migrations → Format Stability. The authoritative record is the pormg_migrations.format_version
       # column; this comment is the on-disk annotation.
       fmt_version = PormG.Migrations.MIGRATION_FORMAT_VERSION
+      # #736: the models file the plan was diffed against, and its digest, only when it is not the
+      # connection's own — so a default plan stays byte-identical. Below the format marker, which
+      # must stay the line right under `module`. The digest is hex, so it needs no escaping.
+      models_header = models_file === nothing ? "" :
+        string(PormG.Migrations.MODELS_FILE_HEADER, escape_string(models_file), "\n",
+               models_file_sha256 === nothing ? "" :
+                 string(PormG.Migrations.MODELS_SHA256_HEADER, models_file_sha256, "\n"))
       write(f, """
           module $module_name
           # pormg-migration-format: $fmt_version
-
+          $(models_header)
           import PormG.Migrations
           import OrderedCollections: OrderedDict
 

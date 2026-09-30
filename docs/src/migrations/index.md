@@ -56,6 +56,8 @@ Because every plan is a fresh diff between your models and the **live database**
 !!! tip "Coming from Django?"
     There is no migration graph, no `dependencies` list, and no per-file state replay. Read each `makemigrations` as `diff(your models, the live database)` — closer to Prisma / Atlas / Flyway's declarative diffing than to Django's ordered migration chain.
 
+    There is no `migrate app 0003` or `rollback` either. To go back, plan against the older models file — `makemigrations("db"; models_file = …)` — as described in [Reverting by declaring the old state](workflow.md#Reverting-by-declaring-the-old-state).
+
 ---
 
 ## Terminology Mapping

@@ -138,6 +138,22 @@ documented forward-migration path; never repurpose an existing version number.
 """
 const MIGRATION_FORMAT_VERSION = 1
 
+# The plan-header comment naming the models file a plan was diffed against, when that is not the
+# connection's own (#736): `makemigrations(db; models_file = …)` writes it, `migrate` reads it to
+# archive the right `_old_models.jl`. A comment, so it is additive within format v1 — the plan is
+# read as data and its checksum covers only the ordered SQL. The value is `escape_string`'d, so a
+# newline in a path cannot end the comment (#710); `_plan_models_file` unescapes it.
+const MODELS_FILE_HEADER = "# pormg-models-file: "
+const MODELS_FILE_HEADER_RE = r"^# pormg-models-file: (.*?)\r?$"
+# The SHA-256 of that file's bytes when the plan was generated, on the line below it. `migrate`
+# snapshots the file only if it still hashes the same: that catches an edit between `makemigrations`
+# and `migrate`, and it means a header naming some other file — a `config/secrets.jl` — copies
+# nothing into `applied_migrations/` unless its author already knew the contents.
+const MODELS_SHA256_HEADER = "# pormg-models-sha256: "
+const MODELS_SHA256_HEADER_RE = r"^# pormg-models-sha256: ([0-9a-f]{64})\r?$"
+
+_models_file_digest(path::AbstractString)::String = bytes2hex(SHA.sha256(read(path)))
+
 """
     compute_checksum(sql_content::String) -> String
 
@@ -1170,19 +1186,30 @@ end
 # purpose: the planner writes resolved foreign-key targets back into the field objects it is given,
 # and those would be a running application's live models.
 function _drift_declared_models(settings::PormGSettings, models_file)
-  path = if models_file === nothing
+  return _load_current_models(_resolve_models_file(settings, models_file, "check(kinds = [:schema_drift])"))
+end
+
+# The models file a planning entry point diffs against, as an ABSOLUTE path — shared by
+# `makemigrations(db; models_file)` and `check(kinds = [:schema_drift])` (#736), so the two cannot
+# disagree about which file a `models_file` names. `nothing` is the connection's own
+# `<db_def_folder>/<model_file>`; anything else is taken as given, a relative path against the
+# working directory. Absolute because `Base.include` resolves a relative path against the file being
+# included, not the working directory — the String form of `makemigrations` handed it
+# `joinpath(db, …)` as is, while its own `isfile` check had resolved that against the cwd.
+function _resolve_models_file(settings::PormGSettings, models_file, action::String)::String
+  if models_file === nothing
     # The folder is where the default models file lives (#683).
-    Configuration._require_folder_backed(settings, "check(kinds = [:schema_drift])")
-    joinpath(settings.db_def_folder, settings.model_file)
+    Configuration._require_folder_backed(settings, action)
+    path = joinpath(settings.db_def_folder, settings.model_file)
+    isfile(path) || throw(MissingConfigurationError(
+      "$(action) compares the database against the connection's models file, and $(path) does not " *
+      "exist. Create it, or pass `models_file = \"…\"` to name another."))
   else
-    String(models_file)
+    path = String(models_file)
+    isfile(path) || throw(MissingConfigurationError(
+      "$(action) was given `models_file = \"$(path)\"`, which does not exist."))
   end
-  isfile(path) || throw(MissingConfigurationError(
-    "check(kinds = [:schema_drift]) compares the database against a models file, and $(path) does " *
-    "not exist. Pass `models_file = \"…\"` to name it."))
-  # Absolute: `Base.include` resolves a relative path against the file being included, not the
-  # working directory.
-  return _load_current_models(abspath(path))
+  return abspath(path)
 end
 
 # `"Add field: country"` → `"country"`; `nothing` for a label that names no single column.
@@ -1703,12 +1730,64 @@ function _archive_migration_files(settings::PormGSettings, date_str::String)
   end
   
   mv(_pending_plan_path(settings), target_migration)
-  
+
   final_date_str = replace(basename(target_migration), "_migration.jl" => "")
-  models_path = joinpath(settings.db_def_folder, settings.model_file)
-  if isfile(models_path)
+  models_path = _snapshot_models_path(settings, target_migration)
+  if models_path !== nothing && isfile(models_path)
     cp(models_path, joinpath(path_applied, "$(final_date_str)_old_models.jl"), force=true)
   end
+  return nothing
+end
+
+# Which models file to snapshot beside an archived plan (#736): the one its header names, else the
+# connection's own. `nothing`, after a warning, when the header cannot be used — unreadable (a
+# hand-written value `escape_string` never encoded), no digest, the file gone, or its bytes no longer
+# the ones the plan was generated from. Never the default instead: a snapshot of a file the plan was
+# not diffed against is the defect the header exists to prevent. Read from the ARCHIVED plan, after
+# the move, so nothing here can leave an applied plan behind as pending.
+function _snapshot_models_path(settings::PormGSettings, plan_path::String)::Union{String, Nothing}
+  recorded = try
+    _plan_models_file(settings, plan_path)
+  catch e
+    @warn "The migration was applied, but its plan's models-file header could not be read, so no models snapshot was archived." plan = plan_path exception = e
+    return nothing
+  end
+  recorded === nothing && return joinpath(settings.db_def_folder, settings.model_file)
+  if !(recorded.sha256 !== nothing && isfile(recorded.path) && _models_file_digest(recorded.path) == recorded.sha256)
+    @warn "The migration was applied, but the models file its plan was generated from is gone or has changed since, so no models snapshot was archived." models_file = recorded.path
+    return nothing
+  end
+  return recorded.path
+end
+
+# The `# pormg-models-file:` header `makemigrations` writes when the plan was diffed against a file
+# other than the connection's own models file (#736), with the digest line below it — `(path,
+# sha256)`, or `nothing` when the header is absent; `sha256` is `nothing` when its line is missing.
+# Read by line scan, like the format marker, because `_read_migration_plan` parses the plan as data
+# and `Meta.parseall` drops comments. A relative path is relative to `db_def_folder`, so a plan
+# generated beside its models file still resolves from another cwd. Throws on a value
+# `unescape_string` rejects; `_snapshot_models_path` owns that case.
+function _plan_models_file(settings::PormGSettings, plan_path::String = _pending_plan_path(settings))
+  path = nothing
+  sha256 = nothing
+  # `open(...) do`, not `eachline(plan_path)`: a filename `eachline` closes its handle only when the
+  # iteration runs to the end, and this loop breaks early — the handle then lives until GC, and on
+  # Windows an open handle makes every later `rm`/`mv` of the archived plan fail with EBUSY.
+  open(plan_path) do io
+    for line in eachline(io)
+      # The header block ends at the plan's first `import`; nothing below it is a header.
+      startswith(line, "import ") && break
+      m = match(MODELS_FILE_HEADER_RE, line)
+      if m !== nothing
+        p = unescape_string(m.captures[1])
+        path = isabspath(p) ? p : joinpath(settings.db_def_folder, p)
+        continue
+      end
+      d = match(MODELS_SHA256_HEADER_RE, line)
+      d === nothing || (sha256 = String(d.captures[1]))
+    end
+  end
+  return path === nothing ? nothing : (path = path, sha256 = sha256)
 end
 
 # ==============================================================================

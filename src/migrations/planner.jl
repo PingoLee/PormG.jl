@@ -2281,7 +2281,7 @@ return migration_plan
 end
 
 """
-    makemigrations(db::String; interactive = true)
+    makemigrations(db::String; models_file = nothing, interactive = true)
     makemigrations(connection, settings::PormGSettings; path = "db/models.jl", interactive = true)
 
 Compare your `models.jl` against the live database and **write** the pending migration plan.
@@ -2293,7 +2293,13 @@ It does **not** touch the schema. The generated DDL lands in
 `PormG.Migrations.migrate(db)`.
 
 # Keyword arguments
-- `path`: the models file. Defaults to `<db>/<settings.model_file>` in the `String` form.
+- `models_file` (`String` form): the models file to diff against. Defaults to
+  `<db>/<settings.model_file>`; a relative path resolves against the working directory. Name an
+  **older** models file — one checked out from git, say — and the plan takes the database back to
+  that state: that is how PormG reverts, since it has no `rollback`. The plan header records a
+  non-default file, and `migrate` snapshots that file as the applied migration's `_old_models.jl`.
+  See [Reverting by declaring the old state](@ref).
+- `path` (connection form): the models file, as given.
 - `interactive`: when `true`, a model with no matching table prompts whether it is a new
   table or a rename of one that disappeared — a rename preserves the data. Answer `yes`, or the
   number of the old table. An unrecognised answer, or the end of input, raises
@@ -2307,7 +2313,8 @@ Returns `nothing`. Logs and returns early — writing no plan — when the conne
 [`discard_pending_migration`](@ref)), since that plan no longer describes any change (#727). The one
 exception is a plan a previous `migrate` already applied but failed to archive — its checksum
 matches the latest applied migration — which is kept, with a warning, for the next `migrate` to
-archive without re-applying. A missing models file raises `MissingConfigurationError`.
+archive without re-applying. A missing models file raises `MissingConfigurationError` (the
+`String` form).
 
 See also [`migrate`](@ref), [`get_migration_plan`](@ref), and the
 [Database Migrations in PormG](@ref) guide.
@@ -2345,7 +2352,7 @@ migration_plan = get_migration_plan(live_schema, current_models, connection, set
 
 @pormg_debug false
 
-_write_pending_plan(connection, settings, migration_plan)
+_write_pending_plan(connection, settings, migration_plan; models_path = path)
 return nothing
 end
 
@@ -2370,7 +2377,7 @@ function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::
 
   migration_plan = get_migration_plan(live_schema, current_models, connection, settings, interactive=interactive)
 
-  _write_pending_plan(connection, settings, migration_plan)
+  _write_pending_plan(connection, settings, migration_plan; models_path = path)
   return nothing
 end
 
@@ -2388,7 +2395,8 @@ end
 # does not take. So it is left where it is, and the message says what to do; discarding it would
 # lose its `applied_migrations/` archive and models snapshot.
 function _write_pending_plan(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
-                             migration_plan::OrderedDict{Symbol, OrderedDict{String, String}})::Nothing
+                             migration_plan::OrderedDict{Symbol, OrderedDict{String, String}};
+                             models_path::Union{String, Nothing} = nothing)::Nothing
   folder = joinpath(settings.db_def_folder, "migrations")
   if isempty(migration_plan)
     if isfile(joinpath(folder, "pending_migrations.jl"))
@@ -2403,10 +2411,25 @@ function _write_pending_plan(connection::Union{PormGPostgres, PormGSQLite}, sett
     return nothing
   end
   ispath(folder) || mkdir(folder)
-  generate_migration_plan("pending_migrations.jl", migration_plan, folder)
+  header = _models_file_header_value(settings, models_path)
+  generate_migration_plan("pending_migrations.jl", migration_plan, folder; models_file = header,
+                          models_file_sha256 = header === nothing ? nothing : _models_file_digest(models_path))
   @warn("The migration plan has been saved to '$(settings.db_def_folder)/migrations/pending_migrations.jl'. Review the plan before applying the migrations.")
   @info(_emsg("\e[32mMigration plan generated successfully. Run 'PormG.Migrations.migrate($( settings.db_def_folder == "db" ? "" : string("\"", settings.db_def_folder, "\"")))' to apply the migrations.\e[0m"))
   return nothing
+end
+
+# What the plan header records as the models file the plan was diffed against (#736): `nothing` when
+# that is the connection's own `<db_def_folder>/<model_file>` — the default plan stays byte-identical
+# — else a path relative to `db_def_folder` when the file sits under it, or absolute when it does not.
+# Relative so a plan generated beside its models file still resolves when `migrate` runs from another
+# working directory; `_plan_models_file` in runner.jl is the reader.
+function _models_file_header_value(settings::PormGSettings, models_path::Union{String, Nothing})::Union{String, Nothing}
+  models_path === nothing && return nothing
+  file = abspath(models_path)
+  file == abspath(joinpath(settings.db_def_folder, settings.model_file)) && return nothing
+  rel = relpath(file, abspath(settings.db_def_folder))
+  return first(splitpath(rel)) == ".." ? file : rel
 end
 
 # Whether the pending plan is the latest applied migration — the file a `migrate()` COMMITted and then
@@ -2427,12 +2450,15 @@ function _pending_plan_already_applied(connection::Union{PormGPostgres, PormGSQL
   return compute_checksum(all_sql) == latest
 end
 
-function makemigrations(db::String; config::Dict{String,PormGSettings} = config, interactive::Bool = true)
+function makemigrations(db::String; models_file::Union{AbstractString, Nothing} = nothing,
+                        config::Dict{String,PormGSettings} = config, interactive::Bool = true)
 settings = Configuration.get_settings(db)
-# Here as well as in the methods below: this one builds a path from the KEY before delegating.
+# Here as well as in the methods below, and unconditionally: the plan is written under the folder
+# whichever models file it is diffed against.
 Configuration._require_folder_backed(settings, "makemigrations")
-path = joinpath(db, settings.model_file)
-isfile(path) || throw(MissingConfigurationError("The models file $(path) does not exist for connection '$(db)'."))
+# #736: the resolution `check(kinds = [:schema_drift])` gives its own `models_file` — absolute, so
+# `Base.include` cannot resolve it against the calling source file instead of the cwd.
+path = _resolve_models_file(settings, models_file, "makemigrations(\"$(db)\")")
 makemigrations(settings.connections, settings, path=path, interactive=interactive)
 end
 

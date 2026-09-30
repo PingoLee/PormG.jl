@@ -46,6 +46,8 @@ PormG.Migrations.makemigrations("db")
 ```
 This connects to the physical database, compares the live table schema against the registered in-memory `PormGModel` subclasses, and generates the transition plan in `db/migrations/pending_migrations.jl`.
 
+The models file is the connection's own `model_file` under its folder. `models_file = "path/to/models.jl"` names another one; that is how you [revert](#Reverting-by-declaring-the-old-state).
+
 ### Answering the rename questions
 
 A model whose table does not exist, next to a table no model claims any more, may be the same table under a new name, and only you know which. `makemigrations` asks:
@@ -171,6 +173,54 @@ One pending plan is kept even then: a plan a previous `migrate()` applied but fa
 recognises it by checksum and warns instead of discarding it; run `migrate()` to archive it, which
 it does without applying the plan a second time. If that plan is destructive, pass
 `destructive=true`: the destructive guard runs before `migrate()` recognises the plan as applied.
+
+### Reverting by declaring the old state
+
+PormG has no `rollback`, no `down` migration, and no `migrate_to(version)`. It does not need them.
+A plan is `diff(live database, declared models)`, so planning against an **older** models file
+produces the way back. Going forward and going back are the same operation, and the same review
+applies to both.
+
+Say release 1.5 added a `nickname` column to `Driver`, and you want the database back at 1.4's
+models. Check out the old models file:
+
+```bash
+git show v1.4:db/models.jl > db/models_v1_4.jl
+```
+
+That restores one file. If your models file `include`s others, their paths resolve next to the
+copy, so the copy would load today's versions of them. The plan would then target a mix of 1.4
+and 1.5. Check out the whole revision instead, for example with `git worktree add ../app-v1.4 v1.4`,
+and pass `models_file = "../app-v1.4/db/models.jl"`.
+
+Then plan against it, review it, and apply it:
+
+```julia
+PormG.Migrations.makemigrations("db"; models_file = "db/models_v1_4.jl")
+PormG.Migrations.dry_run("db")                      # review: the plan drops "nickname"
+PormG.Migrations.migrate("db"; destructive = true)
+```
+
+`models_file` resolves relative to the working directory, like any path you type. The plan records
+which file it was generated from, and `migrate` snapshots **that** file as the applied migration's
+`_old_models.jl`.
+
+Finish by making the old file the declared state: `mv db/models_v1_4.jl db/models.jl` (or copy
+the old folder's files over the current ones), and commit.
+Until you do, `models.jl` still declares 1.5, so the next plain `makemigrations("db")` plans the
+column back, and `check("db"; kinds = [:schema_drift])` reports it.
+
+What a revert does not do:
+
+- **Dropped data does not come back.** Reverting a column's *addition* drops the column and
+  everything written to it since. Reverting its *removal* re-creates it empty. Only a backup
+  restores data.
+- **The destructive guard applies unchanged.** A revert that drops anything needs
+  `destructive = true`, like any other plan.
+- **It is recorded as a new migration, not an undo.** The history table only grows: the revert is
+  one more `applied` row.
+- **A rename reverts as a drop and an add** unless you answer the rename question `makemigrations`
+  asks (see [Answering the rename questions](#Answering-the-rename-questions)).
 
 ---
 

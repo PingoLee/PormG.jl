@@ -1513,6 +1513,25 @@ _shift_result_kind(kind::CDate, comps) =
   any(c -> c[1] in (:hour, :minute, :second), comps) ? CDateTime(false) : kind
 _shift_result_kind(kind::CanonicalType, comps) = kind
 
+# #801 — the other half of the same table: the kind `a - b` evaluates to when BOTH sides are temporal.
+# `_shift_result_kind` names `temporal ± duration`; this names `temporal - temporal`. Without it the
+# difference fell into the generic infix arm, which renders a bare `-` and types it `nothing` — and on
+# SQLite a DATE is TEXT, so `-` subtracts each side's leading numeric prefix: `'2009-04-28' -
+# '2009-03-29'` is `2009 - 2009 = 0`. A plausible integer, no error, on the engine with the bug only.
+#
+#   DATE - DATE  → `CInt32`: a whole number of days. PostgreSQL's own `date - date` is an `integer`,
+#                  so its SQL is unchanged and SQLite is rendered to agree with it.
+#   anything with a TIMESTAMP side (a sub-day-promoted DATE included) → `CInterval`, PostgreSQL's
+#                  `timestamp - timestamp`. Typed so the #581 read-back pin applies to it.
+#   anything else → `nothing`: not a temporal difference, rendered exactly as before.
+#
+# NOT Django's answer, deliberately: Django's `TemporalSubtraction` gives a `DurationField` for
+# `DateField - DateField`. An integer is what PostgreSQL already returns, and it keeps `gap > 30`
+# a numeric comparison on both engines — a duration on SQLite is TEXT and compares as TEXT.
+_difference_result_kind(::CDate, ::CDate) = CInt32()
+_difference_result_kind(::Union{CDate,CDateTime}, ::Union{CDate,CDateTime}) = CInterval()
+_difference_result_kind(_, _) = nothing
+
 # The LEFT side of an expression, rendered AND typed.
 #
 # RENDERS BEFORE IT TYPES, and the order is load-bearing rather than incidental: resolving the left
@@ -1610,6 +1629,57 @@ function _render_temporal_shift(left_side::AbstractString, kind::TemporalKind, o
   end
 end
 
+# #801 — THE DIFFERENCE OF TWO TEMPORAL SIDES, `kind` being `_difference_result_kind`'s answer.
+#
+# PostgreSQL types both columns, so its `-` is already the right operator; the text is the one the
+# generic infix arm always emitted. SQLite's `-` on two TEXT dates is the difference of the YEARS, so
+# the day count goes through `julianday`, which reads both `date(...)`'s output and the canonical UTC
+# text a `DateTimeField` stores, and propagates NULL. The difference of two midnights is a whole
+# number, so the `CAST` is exact — it only turns SQLite's REAL into the integer PostgreSQL returns.
+#
+# A TIMESTAMP difference is REFUSED on SQLite rather than approximated: PostgreSQL returns an
+# interval, and SQLite's INTERVAL text (`HH:MM:SS.fffffffff`) would have to be assembled from each
+# side several times over, re-binding every parameter inside it. Refused loudly instead of rendered
+# silently wrong, which is what it did before this.
+function _render_temporal_difference(left_side::AbstractString, right_side::AbstractString,
+                                     kind::CanonicalType, instruc::SQLInstruction)::String
+  if instruc.connection isa PormGPostgres
+    return "($(left_side) - $(right_side))"
+  elseif instruc.connection isa PormGSQLite
+    kind isa CInt32 && return "CAST(julianday($(left_side)) - julianday($(right_side)) AS INTEGER)"
+    throw(QueryBuildError("Subtracting two timestamps (or a date and a timestamp) is not supported on " *
+                          "SQLite: PostgreSQL returns an interval, and SQLite has no rendering of one " *
+                          "yet (#814). The difference of two DATE values is supported on both engines " *
+                          "and returns a whole number of days."))
+  else
+    throw(_unsupported_conn("date difference", instruc.connection))
+  end
+end
+
+# #801 — the RIGHT side of a binary expression, rendered AND typed, for the one caller that must know
+# what the right evaluates to: a `-` over a temporal left. Rendered exactly once — a second render
+# would bind its parameters a second time.
+#
+# Only the operands `F(...) - x` can carry reach here (`Integer`, `Float64`, `String`, `FExpression`,
+# a function — the `Base.:-` overloads in `types.jl`). A nested expression reports the kind it
+# EVALUATES to, not its rooted column's: `F("date") - (F("date") + Hour(6))` is a timestamp
+# difference. A `String` that names a field is the `F(...)` it stands for, which is the route
+# `_set_update_query_operand` already takes. Everything else — a function, a text literal, a number —
+# has no kind this build can know, and answers `nothing`.
+function _render_operand_typed(operand::Any, field_name::Any, operation::String, instruc::SQLInstruction;
+                               left_kind::TemporalKind = nothing)::Tuple{String,TemporalKind}
+  operand isa FExpression && return _set_update_query_typed(operand, instruc)
+  if operand isa String && (contains(operand, "__") || operand in instruc.object.model.field_names)
+    return _set_update_query_typed(FExpression(field_name = operand, function_name = "F", column = operand), instruc)
+  end
+  return _set_update_query_operand(operand, field_name, operation, instruc; left_kind = left_kind), nothing
+end
+
+# #801: arithmetic that has no meaning between two temporal values. PostgreSQL has no `date + date`
+# operator and fails at execution; SQLite adds the two years and returns a number. Refused at build
+# time on both, so the engines agree on the answer — an error — and neither is silent.
+const _TEMPORAL_PAIR_REFUSED_OPERATIONS = ("+", "*", "/")
+
 # The DURATION spelling (#25): `F(date) ± <a Dates period or an Interval>`.
 function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)::Tuple{String,TemporalKind}
   period = v.operand isa Interval ? v.operand.period : v.operand
@@ -1699,7 +1769,19 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # the value's own formatter family — still a formatted value, never a raw bind — mirroring what
     # `_format_date_operand` does one arm up.
     f = _operand_column_field(field_name, instruc)
-    formatter = f !== nothing ? f.formatter :
+    column_formatter = f === nothing ? nothing : f.formatter
+    # #801: the rooted column decides only while the left still EVALUATES to that column's kind.
+    # `F("date") - F("dob")` is rooted at a DateField and evaluates to a day count, so
+    # `(F("date") - F("dob")) > 30` bound `format_date_sql(30)` — an `InvalidValueError` on both
+    # engines. When the kinds differ, the LEFT's kind decides through the #564 table: a day count has
+    # no formatter there, so the literal falls to its own family below; a sub-day-promoted date is a
+    # timestamp, so `(F("date") + Hour(6)) > 5` still refuses the `5` instead of binding an integer
+    # SQLite would compare against TEXT (always true, silently). A left the build could not type
+    # (`nothing`) keeps the root, as it always has: `(F("date") * 2) > 5` binds exactly as before.
+    if left_kind !== nothing && f !== nothing && left_kind != field_canonical_kind(f)
+      column_formatter = value_formatter(left_kind, instruc.connection)
+    end
+    formatter = column_formatter !== nothing ? column_formatter :
                 operand isa Base.UUID ? Models.format_uuid_sql :
                 operand isa Dates.Time ? Models.format_text_sql :
                 Models.format_number_sql
@@ -1714,7 +1796,7 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # BooleanField), a UUID or a Time, and a numeric literal against a text or boolean column —
     # `F("flag") == 1` binds `true` and must not carry `::bigint` (review of #536 measured the cast
     # following the LITERAL there: `"flag" = $1::bigint` with `true` bound, a PostgreSQL error).
-    numeric_column = f === nothing || f.formatter === Models.format_number_sql
+    numeric_column = column_formatter === nothing || column_formatter === Models.format_number_sql
     sql_type = numeric_column && operand isa Union{Integer,Float16,Float32,Float64} && !(operand isa Bool) ?
                _infer_parameter_sql_type(operand, instruc) : nothing
     # #576: unguarded, and the issue listed it as SUSPECTED. It still is — no input was found that
@@ -1727,10 +1809,11 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     #
     # `field_name` is in scope, but `f` may be `nothing` (a nested expression, an unresolvable
     # path) — there the formatter came from the OPERAND's own type above, so the type label comes
-    # from the formatter rather than from a column that was never found.
+    # from the formatter rather than from a column that was never found. The same when the left's
+    # kind overrode the column's (#801): the column's `type` would name a formatter not used.
     return add_parameter!(instruc,
       _guarded_format(formatter, operand, operation, field_name,
-                      f !== nothing ? f.type : _formatter_type_label(formatter));
+                      f !== nothing && formatter === f.formatter ? f.type : _formatter_type_label(formatter));
       sql_type=sql_type)
   elseif isa(operand, String)
     # Check if it's a field reference
@@ -1880,6 +1963,24 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
       comps = _decompose_period(Dates.Day(v.operand))
       kind  = _shift_result_kind(left_kind, comps)   # whole days never promote; stated, not assumed
       return _render_temporal_shift(left_side, kind, v.operation, comps, instruc), kind
+    end
+
+    # #801 — ARITHMETIC OVER A TEMPORAL LEFT asks what the RIGHT evaluates to as well. A comparison
+    # never takes this branch (`F("date") > F("dob")` is the ordinary case and stays below), nor does
+    # a non-temporal left, so every other expression renders byte-for-byte as it did.
+    if left_kind isa Union{CDate,CDateTime} && v.operation in ("-", _TEMPORAL_PAIR_REFUSED_OPERATIONS...)
+      right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc;
+                                                     left_kind = left_kind)
+      if right_kind isa Union{CDate,CDateTime}
+        if v.operation == "-"
+          kind = _difference_result_kind(left_kind, right_kind)
+          return _render_temporal_difference(left_side, right_side, kind, instruc), kind
+        end
+        throw(QueryBuildError("`$(v.operation)` between two date/timestamp values has no meaning; only " *
+                              "`-` does (a whole number of days between two dates). To shift a date, " *
+                              "add a duration instead: F(\"date\") + Day(30)."))
+      end
+      return "($(left_side) $(v.operation) $(right_side))", nothing
     end
 
     # #564: the left's kind travels to the binder, so the representation the literal binds and the

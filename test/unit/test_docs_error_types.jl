@@ -119,6 +119,12 @@ const DOCERR_RACE_PG = let m = Model("docerr_race_docerr_pg",
     m.connect_key = "docerr_pg"; m._module = Main; m
 end
 
+# #801 — a date AND a timestamp column on SQLite, the engine that refuses a timestamp difference.
+const DOCERR_RACE801_SL = let m = Model("docerr_race801_docerr_sl",
+        raceid = IDField(), date = DateField(), start_at = DateTimeField(null = true))
+    m.connect_key = "docerr_sl"; m._module = Main; m
+end
+
 # #671 — a primary key the database generates by some means other than an auto-increment PormG can
 # pre-allocate, which is what `returning=` refuses to guess about. Its own model because every other
 # fixture here has an `IDField` pk.
@@ -1174,6 +1180,26 @@ const DOCERR_CASES = [
         () -> begin
             q = DOCERR_RESULT_PG.objects
             q.values("driverid", "x" => F("resultid") - PormG.Functions.Avg("points"))
+            q.list(show_query = :dict)
+        end,
+    ),
+    # #801. The date-arithmetic section states two refusals: a difference with a timestamp side on
+    # SQLite (PostgreSQL returns an interval there), and `+`/`*`/`/` between two temporal values.
+    (
+        "read/field_expressions.md — a timestamp difference is refused on SQLite (#801)",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RACE801_SL.objects
+            q.values("x" => F("start_at") - F("date"))
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "read/field_expressions.md — `+` between two dates is refused (#801)",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RACE801_SL.objects
+            q.values("x" => F("date") + F("date"))
             q.list(show_query = :dict)
         end,
     ),

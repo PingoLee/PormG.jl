@@ -526,3 +526,78 @@ end
     @test df_f.driverid == df_p.driverid
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #801: subtracting two dates returns a day count on both engines.
+# SQLite stores a DATE as TEXT, and `-` on TEXT subtracted the YEARS — `(date + 30 days) - date`
+# was 0 on SQLite and 30 on PostgreSQL. Every value here is recomputed in Julia from the stored
+# dates, so the two engines agreeing on a wrong number still fails. A timestamp difference reads back
+# as a `CompoundPeriod` on PostgreSQL and is refused on SQLite.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subtracting two dates (#801)" begin
+  is_sqlite = PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGSQLite
+
+  @testset "a whole-day shift minus its own date is the shift" begin
+    # The issue's repro, verbatim: race 1 (2009-03-29), shifted 30 days, minus itself.
+    query = M.Race.objects
+    query.filter("raceid" => 1)
+    query.values("gap" => (F("date") + Dates.Day(30)) - F("date"))
+    df = query |> DataFrame
+    @test size(df, 1) == 1
+    @test df[1, :gap] == 30
+  end
+
+  @testset "a joined difference equals the day count Julia computes" begin
+    # Each driver's age in days at the race — two DateFields on two joined models. The oracle is
+    # `Dates.value(date - dob)` over the same rows, read back as plain dates.
+    query = M.Result.objects
+    query.filter("raceid__year" => 2009)
+    query.values("resultid", "raceid__date", "driverid__dob",
+                 "age_days" => F("raceid__date") - F("driverid__dob"))
+    query.order_by("resultid")
+    df = query |> DataFrame
+    @test size(df, 1) > 0
+    expected = [Dates.value(Dates.Date(string(r)) - Dates.Date(string(d)))
+                for (r, d) in zip(df.raceid__date, df.driverid__dob)]
+    @test df.age_days == expected
+    # A day count, not a year difference: every driver is at least 17 years old at a race.
+    @test all(>(17 * 365), df.age_days)
+  end
+
+  @testset "a day count filters against an integer" begin
+    # `(date - dob) > N` raised before #801 on both engines (the literal was bound through the
+    # DateField's formatter). The oracle is the Julia-side filter over the same season.
+    threshold = 30 * 365
+    fexpr = M.Result.objects
+    fexpr.filter("raceid__year" => 2009, (F("raceid__date") - F("driverid__dob")) > threshold)
+    fexpr.values("resultid")
+    fexpr.order_by("resultid")
+
+    all_rows = M.Result.objects
+    all_rows.filter("raceid__year" => 2009)
+    all_rows.values("resultid", "raceid__date", "driverid__dob")
+    all_rows.order_by("resultid")
+    df_all = all_rows |> DataFrame
+    keep = [Dates.value(Dates.Date(string(r)) - Dates.Date(string(d))) > threshold
+            for (r, d) in zip(df_all.raceid__date, df_all.driverid__dob)]
+
+    df_f = fexpr |> DataFrame
+    # Both halves non-empty, so the filter is doing work and the equality is not vacuous.
+    @test 0 < size(df_f, 1) < size(df_all, 1)
+    @test df_f.resultid == df_all.resultid[keep]
+  end
+
+  @testset "a timestamp difference: an interval on PostgreSQL, refused on SQLite" begin
+    # Race 1's `start_at` is seeded as 2009-03-29T06:00 over a `date` of 2009-03-29.
+    query = M.Race.objects
+    query.filter("raceid" => 1)
+    query.values("since_midnight" => F("start_at") - F("date"))
+    if is_sqlite
+      @test_throws PormG.QueryBuildError (query |> DataFrame)
+    else
+      df = query |> DataFrame
+      @test df[1, :since_midnight] isa Dates.CompoundPeriod   # the #581 pin, on every driver
+      @test df[1, :since_midnight] == Dates.Hour(6)
+    end
+  end
+end

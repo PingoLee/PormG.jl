@@ -79,6 +79,15 @@ jobs:
           # already costing real signal — #593's bump is genuinely unsafe (#598), and not
           # one of these red jobs said so.
           force_latest_compatible_version: false
+          # -O0 (#819). The unit suite is ~90% JIT compilation, and ~40% of that is LLVM
+          # optimization of code that mostly runs once. The action passes this to
+          # Pkg.test's child as `--optimize=0`. Measured locally: full `Pkg.test()`
+          # 1664 s at the default -O2 → 978 s at -O0, 31308 pass / 4 broken in both.
+          # A bigger precompile workload was measured first and does not help the suite:
+          # warming the candidate workload cost 50 s of compile to save 46 s, because the
+          # one-process suite already shares first-touch compile across files. Moved into
+          # precompile, that cost comes back on every PR that touches `src/`.
+          optimize: '0'
 
   # Prove the loading contract: `using PormG` works with NO SQL driver present, and a
   # backend operation raises the friendly "load the driver" error instead of a missing
@@ -228,6 +237,9 @@ jobs:
           #     and report green.
           allow_reresolve: false
           force_latest_compatible_version: false
+          # Same as the test matrix above (#819): -O0 changes generated code, not behavior,
+          # so it changes nothing this job checks.
+          optimize: '0'
 
   # NOTE: `load-without-drivers` deliberately has no floor variant. What it asserts is
   # the weakdep fallback path — that `using PormG` works with no driver installed and

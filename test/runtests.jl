@@ -274,7 +274,7 @@ end
 
 
 # Full unit suite (what CI runs; resolves the LibPQ/SQLite weakdeps from [targets].test):
-#     julia --project=. -e 'using Pkg; Pkg.test()'
+#     julia -O0 --project=. -e 'using Pkg; Pkg.test()'
 # One file, unit or integration — that env carries the drivers as direct deps:
 #     julia --project=test/integration test/unit/test_<name>.jl
 # See test/load_drivers.jl for why `--project=.` cannot run a test script (#624).

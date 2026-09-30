@@ -992,6 +992,46 @@ It is the rule for any projection that mixes a column with an aggregate; see
 Before [#798](https://github.com/PingoLee/PormG.jl/issues/798), PostgreSQL rejected these queries
 with a `GroupingError`, and SQLite ran them against an arbitrary row of each group.
 
+A window's **plain** argument follows the same rule. `Lag("raceid__round")` reads one race's round,
+and next to `Sum("points")` the query holds one row per season, not per race. Nothing groups the
+argument: only `partition_by` and `order_by` columns join `GROUP BY`, as in Django. So PormG raises
+`QueryBuildError` naming the column, unless the query already groups it:
+
+```julia
+using PormG.Functions: Lag, Max, Sum, WindowOver
+
+senna = () -> M.Result.objects.filter("driverid__forename" => "Ayrton", "driverid__surname" => "Senna")
+
+# ✗ raises QueryBuildError: `raceid__round` has one value per race, and the query groups by season
+query = senna().values("raceid__year", "season_pts" => Sum("points"),
+    "prev_round" => Lag("raceid__round", over=WindowOver(order_by=["raceid__year"])))
+
+# ✓ aggregate it: the last round Senna started in the season before
+query = senna().values("raceid__year", "season_pts" => Sum("points"),
+    "prev_last_round" => Lag(Max("raceid__round"), over=WindowOver(order_by=["raceid__year"])))
+```
+
+```sql
+SELECT
+    "Tb_1"."year" as "raceid__year",
+    SUM("Tb"."points") as "season_pts",
+    LAG(MAX("Tb_1"."round"), $1::integer) OVER (ORDER BY "Tb_1"."year" ASC) as "prev_last_round"
+FROM "result" as "Tb"
+  INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
+  INNER JOIN "driver" AS "Tb_2" ON "Tb"."driverid" = "Tb_2"."driverid"
+WHERE "Tb_2"."forename" = $2
+  AND "Tb_2"."surname" = $3
+GROUP BY 1
+```
+
+Projecting `raceid__round` also builds, but the query then groups by season and round, one row per
+race; order the window by `raceid__round` too, or every round of a season ties and LAG reads an
+arbitrary one of them.
+A `default` that reads a column, as in `Lag(Sum("points"), default=Coalesce("grid", 0))`, is checked
+the same way. A `String` default is bound as a value, not read as a column. Before
+[#809](https://github.com/PingoLee/PormG.jl/issues/809), PostgreSQL rejected these queries with a
+`GroupingError`, and SQLite read an arbitrary row's value per group.
+
 ---
 
 ## Ordering Results by a Window Alias
@@ -1190,6 +1230,7 @@ The only SQLite limitation is **explicit frame specifications** (`frame=` argume
 
 - **Aggregate-over-window** (`SUM(...) OVER (...)`, an aggregate used *as* the window function) is not yet implemented. Use a CTE to aggregate first, then apply the window in the outer query. A window *over* an aggregate, such as `Lag(Sum(…))`, is supported; see [A Window Over an Aggregate](#A-Window-Over-an-Aggregate).
 - **A window term mixing a column and an aggregate** (`partition_by=[F("raceid__year") + Sum("points")]`) raises a `QueryBuildError` unless the query already groups that column. PormG does not group it for you; see [A Window Over an Aggregate](#A-Window-Over-an-Aggregate).
+- **A plain window argument beside an aggregate** (`Lag("raceid__round")` next to `Sum("points")`) raises a `QueryBuildError` unless the query already groups that column. Aggregate it (`Lag(Max("raceid__round"))`) or project it; see [A Window Over an Aggregate](#A-Window-Over-an-Aggregate).
 - **Filtering on a window alias** in the query that computes it raises a `QueryBuildError`. Filter on the column of a CTE instead — see [Filtering on a Window Result](#Filtering-on-a-Window-Result).
 - **Named `WINDOW` clauses** (`WINDOW w AS (...)`) are not supported. Each function carries its own inline `OVER`.
 - **SQLite explicit frame specs** throw a `BackendCapabilityError`. Use PostgreSQL for frame-bound queries.

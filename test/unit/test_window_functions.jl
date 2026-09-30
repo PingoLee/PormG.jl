@@ -2,8 +2,8 @@ using Test
 using PormG
 using PormG.Models: Model, IDField, IntegerField, FloatField, DateField
 using PormG.QueryBuilder: WindowOver, Rank, DenseRank, RowNumber, Lag, NthValue, inspect_query, Count, Sum, Q,
-                            WindowSpec, SQLOrder, SQLField, F
-using PormG.Functions: Case, When, Coalesce, Value
+                            WindowSpec, SQLOrder, SQLField, F, Max
+using PormG.Functions: Case, When, Coalesce, Value, FirstValue, Lead
 
 struct WindowMockPostgres <: PormG.PormGPostgres end
 struct WindowMockSQLite <: PormG.PormGSQLite end
@@ -848,6 +848,112 @@ end
   end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# #809: a window's PLAIN argument beside an aggregate needs its column grouped
+# `LAG("Tb"."raceid") OVER (…)` beside `SUM(…)` reads `raceid` once per group, and nothing grouped it:
+# #789 groups OVER terms only, and #798 entered the argument only when it held an aggregate.
+# PostgreSQL raised `GroupingError`; SQLite answered with an arbitrary row's `raceid`. Refused now,
+# like #798, and it still builds whenever the statement groups the column by any route.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#809: a plain window argument reads a column that must be grouped" begin
+  by_team = () -> WindowOver(order_by = ["constructorid"])
+  for (backend, Model_) in _WINDOW_685_MODELS
+    for (label, window) in (
+        # The issue's shape, then the other functions that take an argument.
+        ("Lag", () -> Lag("raceid", over = by_team())),
+        ("Lead", () -> Lead("raceid", over = by_team())),
+        ("FirstValue over an F expression", () -> FirstValue(F("raceid") * 2, over = by_team())),
+        ("NthValue", () -> NthValue("raceid", 2, over = by_team())),
+        ("LastValue", () -> PormG.QueryBuilder.LastValue("raceid", over = by_team())),
+      )
+      @testset "$backend — refused: $label" begin
+        q = Model_.objects
+        q.values("constructorid", "t" => Sum("points"), "prev" => window())
+        err = _window_err(() -> q)
+        @test err isa PormG.QueryBuildError
+        msg = replace(_window_msg(err), r"\e\[[0-9;]*m" => "")
+        @test occursin("projection prev reads the column \"raceid\"", msg)
+        @test occursin("in its window function's argument", msg)
+        @test occursin("add \"raceid\" to values(...)", msg)
+      end
+    end
+
+    @testset "$backend — refused: a plain default beside an aggregated argument" begin
+      # The argument is `SUM(points)`, which #798 already entered; `default` renders beside it and
+      # reads `raceid` per group just the same.
+      # (`default = F("raceid")` is the natural spelling, but it crashes before this check: #808.)
+      q = Model_.objects
+      q.values("constructorid", "prev" => Lag(Sum("points"), default = Coalesce("raceid", 0), over = by_team()))
+      err = _window_err(() -> q)
+      @test err isa PormG.QueryBuildError
+      msg = replace(_window_msg(err), r"\e\[[0-9;]*m" => "")
+      @test occursin("reads the column \"raceid\"", msg)
+      @test occursin("in its window function's default", msg)
+    end
+
+    @testset "$backend — refused: the window inside an expression" begin
+      q = Model_.objects
+      q.values("constructorid", "t" => Sum("points"), "d" => Lag("raceid", over = by_team()) - F("constructorid"))
+      err = _window_err(() -> q)
+      @test err isa PormG.QueryBuildError
+      @test occursin("in its window function's argument", _window_msg(err))
+    end
+
+    @testset "$backend — builds: the argument is projected" begin
+      q = Model_.objects
+      q.values("constructorid", "raceid", "t" => Sum("points"), "prev" => Lag("raceid", over = by_team()))
+      @test occursin(r"GROUP BY 1, 2\s*$", inspect_query(q)[:sql_text])
+    end
+
+    @testset "$backend — builds: the argument is grouped by a plain #789 term" begin
+      q = Model_.objects
+      q.values("constructorid", "t" => Sum("points"),
+               "prev" => Lag("raceid", over = WindowOver(partition_by = ["raceid"], order_by = ["constructorid"])))
+      @test occursin(r"GROUP BY 1, \"Tb\"\.\"raceid\"\s*$", inspect_query(q)[:sql_text])
+    end
+
+    @testset "$backend — builds: the argument is grouped through order_by" begin
+      q = Model_.objects
+      q.values("constructorid", "t" => Sum("points"), "prev" => Lag("raceid", over = by_team()))
+      q.order_by("raceid")
+      @test occursin("GROUP BY 1, \"Tb\".\"raceid\"", inspect_query(q)[:sql_text])
+    end
+
+    @testset "$backend — builds: the argument is aggregated" begin
+      q = Model_.objects
+      q.values("constructorid", "t" => Sum("points"), "prev" => Lag(Max("raceid"), over = by_team()))
+      sql = inspect_query(q)[:sql_text]
+      @test occursin("LAG(MAX(\"Tb\".\"raceid\")", sql)
+      @test occursin(r"GROUP BY 1\s*$", sql)
+    end
+
+    @testset "$backend — builds: a literal default is a bound value, not a column" begin
+      q = Model_.objects
+      q.values("constructorid", "prev" => Lag(Sum("points"), default = 0, over = by_team()))
+      @test occursin(r"GROUP BY 1\s*$", inspect_query(q)[:sql_text])
+    end
+  end
+
+  # A transform argument is grouped by its own projected path or by the column under it.
+  for (backend, Race) in (("PostgreSQL", Window789PgRace), ("SQLite", Window776SlRace))
+    @testset "$backend — builds: a transform argument grouped by path or by column" begin
+      for grouped in ("date__@year", "date")
+        q = Race.objects
+        q.values(grouped, "t" => Sum("points"), "prev" => Lag("date__@year", over = WindowOver(order_by = [grouped])))
+        @test occursin(r"GROUP BY 1\s*$", inspect_query(q)[:sql_text])
+      end
+    end
+
+    @testset "$backend — refused: a transform argument over an ungrouped column" begin
+      q = Race.objects
+      q.values("raceid", "t" => Sum("points"), "prev" => Lag("date__@year", over = WindowOver(order_by = ["raceid"])))
+      err = _window_err(() -> q)
+      @test err isa PormG.QueryBuildError
+      @test occursin("reads the column \"date\"", replace(_window_msg(err), r"\e\[[0-9;]*m" => ""))
+    end
+  end
+end
+
 # A CTE joins back through the model registry, which the standalone `Model(...)` fixtures above
 # never enter — so the CTE route gets its own `set_models` module, one config key per backend.
 PormG.config["window_685_pg"] = PormG.Configuration.Settings(connections = WindowMockPostgres(), change_data = true,
@@ -921,6 +1027,41 @@ end
       err = _window_err(() -> q)
       @test err isa PormG.QueryBuildError
       @test occursin("LAG", _window_msg(err))
+    end
+  end
+end
+
+# #809 through a CTE handle: the argument is a `CTE(...)` column, which is grouped only when the
+# query projects that handle or its `"<cte>__<col>"` path. Here, beside the #685 CTE fixtures, because
+# a CTE joins back through the model registry.
+@testset "#809: a CTE handle as a plain window argument" begin
+  for (backend, Model_) in (("PostgreSQL", Window685Pg.Result), ("SQLite", Window685Sl.Result))
+    with_ranked = () -> begin
+      ranked = Model_.objects
+      ranked.values("resultid", "rk" => Rank(over = WindowOver(partition_by = "raceid", order_by = ["-points"])))
+      q = Model_.objects
+      q.with("ranked" => ranked, join_field = "resultid" => "resultid")
+      q
+    end
+    by_race = WindowOver(order_by = ["raceid"])
+
+    @testset "$backend — refused: the handle is not grouped" begin
+      q = with_ranked()
+      q.values("raceid", "t" => Sum("points"), "prev" => Lag(PormG.CTE("ranked", "rk"), over = by_race))
+      err = _window_err(() -> q)
+      @test err isa PormG.QueryBuildError
+      msg = replace(_window_msg(err), r"\e\[[0-9;]*m" => "")
+      @test occursin("reads the column CTE(\"ranked\", \"rk\")", msg)
+      @test occursin("in its window function's argument", msg)
+    end
+
+    for (label, grouped) in (("the handle", PormG.CTE("ranked", "rk")), ("its path", "ranked__rk"))
+      @testset "$backend — builds: $label is projected" begin
+        q = with_ranked()
+        q.values(grouped, "t" => Sum("points"), "prev" => Lag(PormG.CTE("ranked", "rk"), over = by_race))
+        # The handle by position; `raceid` by #789, since the window orders by it.
+        @test occursin(r"GROUP BY 1, \"R1\"\.\"raceid\"\s*$", inspect_query(q)[:sql_text])
+      end
     end
   end
 end

@@ -1041,6 +1041,10 @@ PostgreSQL would accept that, but PormG does not infer the dependency. Before
 [#798](https://github.com/PingoLee/PormG.jl/issues/798), PostgreSQL rejected these queries with a
 `GroupingError`, and SQLite ran them against an arbitrary row of each group.
 
+A window function's argument is held to the same rule, even with no aggregate inside it:
+`Lag("raceid__round")` beside `Sum("points")` raises unless the query groups `raceid__round`. See
+[A Window Over an Aggregate](window_functions.md#A-Window-Over-an-Aggregate).
+
 ### A Condition on an Aggregate Alias
 
 A condition can also reach an aggregate by its alias. A `When` that reads an aggregate alias compares

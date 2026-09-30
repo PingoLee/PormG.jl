@@ -2109,6 +2109,11 @@ end
 # Django walks into the term and groups what it finds, which picks the grouping granularity for the
 # user. Refusing names the column and the two fixes, and a term whose columns ARE grouped still builds.
 #
+# A window's PLAIN argument is the same read (#809): `LAG("Tb"."raceid") OVER (…)` beside a `SUM` is
+# computed per group, and neither #789 (OVER terms only) nor the projection loop groups `raceid`.
+# Refused too — the maintainer's call on #809, where Django agrees for once: `Window.get_group_by_cols`
+# groups the partition and order terms, never the source expression.
+#
 # It runs beside #194, at the end of `build()`, for #194's reason: `get_order_query` and
 # `_group_window_terms!` extend GROUP BY after the projection loop, so only the end sees the final set.
 # The one render it performs — a leaf's BASE column, to compare against that set — binds nothing and
@@ -2291,8 +2296,8 @@ end
 #   - an `F` operand `String` is a path only by the renderer's own test (`_set_update_query_operand`);
 #   - a condition's column naming a projection ALIAS (#722) is not a column — that projection is
 #     grouped, aggregated, a window, or checked on its own turn;
-#   - a window is entered only for its terms that hold an aggregate: a plain PARTITION BY/ORDER BY
-#     term is grouped by #789, and a plain window argument is out of #798's scope;
+#   - a window's OVER terms are entered only when they hold an aggregate — a plain PARTITION BY/ORDER BY
+#     term is grouped by #789 — but its argument and `default` always are (#809);
 #   - `OuterRef` is constant per inner row (#194 owns the outer side), a subquery aggregates in its
 #     own statement, and `Value`/literals read no column.
 # `clause` names where the leaf sits, for the message. `covered(node)` answers whether a function or `F` node
@@ -2309,8 +2314,8 @@ function _each_bare_column(f::Function, node, instruc::SQLInstruction, clause::S
   elseif _is_aggregate_call(node)
     return nothing
   elseif node isa WindowFunction
-    # Only the slots that hold an aggregate: a plain one is #789's business (an OVER term) or out of
-    # #798's scope (a plain argument). Resolved, so an aggregate reached through an alias (#722) counts.
+    # An OVER term only when it holds an aggregate: a plain one is grouped by #789. Resolved, so an
+    # aggregate reached through an alias (#722) counts.
     for term in node.over.partition_by
       _resolved_contains_agg(term, instruc) && walk(term, "PARTITION BY")
     end
@@ -2318,9 +2323,11 @@ function _each_bare_column(f::Function, node, instruc::SQLInstruction, clause::S
       t = term isa SQLTypeOrder ? term.field : term
       _resolved_contains_agg(t, instruc) && walk(t, "ORDER BY")
     end
-    node.column !== nothing && _resolved_contains_agg(node.column, instruc) && walk(node.column, "argument")
-    for v in values(node.kwargs)   # `Lag`/`Lead`'s `default`, which renders beside the argument
-      v isa SQLType && _resolved_contains_agg(v, instruc) && walk(v, "argument")
+    # The argument always (#809): nothing groups a plain one — `LAG("Tb"."raceid")` beside a `SUM` reads
+    # `raceid` once per group exactly as `raceid + SUM(…)` does. `Rank()` and its kin carry none.
+    node.column !== nothing && walk(node.column, "argument")
+    for (k, v) in node.kwargs   # `Lag`/`Lead`'s `default`, which renders beside the argument
+      v isa SQLType && walk(v, k == "default" ? "default" : "argument")
     end
   elseif node isa FObject
     covered(node) && return nothing
@@ -2361,6 +2368,7 @@ end
 function _ungrouped_mixed_error_msg(label, clause::String, leaf, grouped::Vector{String})
   where_ = clause == "" ? "in its expression" :
            clause == "argument" ? "in its window function's argument" :
+           clause == "default" ? "in its window function's default" :
            string("in its window's ", clause, " term")
   groups = isempty(grouped) ?
     "(none — this query aggregates the whole table into a single row)" :

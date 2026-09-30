@@ -322,6 +322,43 @@ F("created_at") + Interval("01:30:00")    # + 1 hour 30 minutes
     verbatim into a column that is then no longer a valid date. Sub-day arithmetic only round-trips
     through `update()` on a `TIMESTAMP` / `DateTimeField` column.
 
+#### Subtracting two dates
+
+Subtracting one `DateField` expression from another gives the **number of days** between them, as an
+integer, on both engines — each driver's age in days on the day of the race, and only the results
+scored after their 30th birthday:
+
+```julia
+query = M.Result.objects
+query.filter("raceid__year" => 2009, (F("raceid__date") - F("driverid__dob")) > 30 * 365)
+query.values("driverid__surname", "raceid__name", "age_days" => F("raceid__date") - F("driverid__dob"))
+```
+
+Generated SQL (PostgreSQL) — its own `date - date` already returns an integer day count:
+```sql
+("Tb_2"."date" - "Tb_1"."dob")
+```
+
+Generated SQL (SQLite) — a date is stored as text there, so the difference goes through `julianday`:
+```sql
+CAST(julianday("Tb_2"."date") - julianday("Tb_1"."dob") AS INTEGER)
+```
+
+The result is a plain number, so it compares against an integer (`> 30 * 365` above) and composes with
+ordinary arithmetic. A whole-day shift is still a date, so `(F("date") + Day(30)) - F("date")` is `30`.
+
+| Difference | Reads back as |
+|---|---|
+| `DateField` − `DateField` (whole-day shifts included) | an integer number of days, both engines |
+| anything with a timestamp side — a `DateTimeField`, or a `DateField` plus a sub-day duration | a `Dates.CompoundPeriod` on PostgreSQL; raises `QueryBuildError` on SQLite |
+
+!!! note "An integer, not a duration"
+    Django returns a `DurationField` for `DateField - DateField`. PormG returns PostgreSQL's integer
+    day count instead, because a duration on SQLite is stored as text and would compare as text.
+
+`+`, `*` and `/` between two date or timestamp values have no meaning and raise `QueryBuildError`
+on both engines. To move a date, add a duration: `F("date") + Day(30)`.
+
 ### When NOT to Use F
 
 For plain scalar comparisons, always prefer the suffix filter API:

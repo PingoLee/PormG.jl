@@ -345,7 +345,8 @@ Window `LAG(x, offset)` — the value of `x` from `offset` rows **earlier** in t
   those rows come back `missing`/`NULL`.
 - `over`: the [`WindowOver`](@ref) spec. `order_by` is what makes "earlier" meaningful.
 
-`offset` and `default` are bound as query parameters, not interpolated.
+`offset` and a plain-value `default` are bound as query parameters, not interpolated. A column
+expression as `default` — `default = F("grid")` — renders as that column instead.
 
 See also [`Lead`](@ref), [Window Functions](@ref).
 """
@@ -641,8 +642,11 @@ One `WHEN condition THEN value` branch of a SQL `CASE`.
 - a `Q(...)` / `Qor(...)` object, for OR and nested boolean logic
 - an operator or function object, e.g. an `F` comparison
 
-`then` defaults to `0`. Both `then` and the `CASE` `ELSE` value are bound as query
-parameters.
+`then` defaults to `0`. A plain value in `then` or the `CASE` `ELSE` is bound as a query
+parameter; a column expression — `F("points")`, `F("points") * 2`, `Joined(…)`, a function —
+renders as SQL, so `When("positionorder" => 1, then = F("points"))` returns that row's points.
+`then = missing` renders as SQL `NULL`. (`otherwise = missing` is the default and means *no*
+`ELSE` of this branch's own — see the tip below.)
 
 !!! tip "`otherwise` makes `When` standalone"
     Passing `otherwise` wraps the branch in a complete `CASE … ELSE … END`, so a two-way
@@ -689,7 +693,8 @@ first match.
 - `conditions`: a `Vector` of `When` branches, or a single bare `When`.
 - `default`: the `ELSE` branch. Defaults to the **string** `"NULL"`, which is emitted as the
   SQL literal `NULL` — it is not a bound parameter, so pass a Julia value (`0`, `""`) when
-  you want a real default.
+  you want a real default. `missing` is emitted as `NULL` too, and a column expression
+  (`F("grid")`) renders as that column.
 - `output_field`: the result type. Accepts a `PormGField` instance (e.g. `CharField()`, whose
   `.type` is used) or a raw SQL type string. Renders as a `::type` cast on PostgreSQL and a
   `CAST(...)` on SQLite.

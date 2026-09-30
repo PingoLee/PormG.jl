@@ -1385,3 +1385,32 @@ end
     @test_throws PormG.InvalidValueError Cast("points", "int); DROP TABLE result; --")
     @test_throws PormG.InvalidValueError Coalesce("points", Value(0); output_field = "integer OR TRUE")
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #808: a column in a CASE branch executes — a conditional SUM over real 2009 results.
+# `then = F("points")` renders the branch as the column (nothing bound), so the SUM is each driver's
+# points in the races they won; it is cross-checked against a plain `Sum` over the winning rows, which
+# involves no CASE at all. The `then = F("points") * 2` twin binds its `2` between the WHEN value and
+# the ELSE value — SQLite binds positionally, so a misfiled value would change every total.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#808: then = F(...) in a conditional aggregate executes" begin
+    q = M.Result.objects
+    q.filter("raceid__year" => 2009)
+    q.values(
+        "driverid__surname",
+        "win_pts"    => Sum(Case([When("positionorder" => 1, then = F("points"))], default = 0)),
+        "win_pts_x2" => Sum(Case([When("positionorder" => 1, then = F("points") * 2)], default = 0)),
+    )
+    got = Dict(r[:driverid__surname] => (Float64(r[:win_pts]), Float64(r[:win_pts_x2])) for r in q.list())
+
+    # Independent answer: the same totals from the winning rows alone.
+    chk = M.Result.objects
+    chk.filter("raceid__year" => 2009, "positionorder" => 1)
+    chk.values("driverid__surname", "pts" => Sum("points"))
+    expected = Dict(r[:driverid__surname] => Float64(r[:pts]) for r in chk.list())
+
+    @test !isempty(expected)
+    @test all(got[k] == (v, 2v) for (k, v) in expected)
+    # Every driver without a win went through the ELSE branch only.
+    @test all(v == (0.0, 0.0) for (k, v) in got if !haskey(expected, k))
+end

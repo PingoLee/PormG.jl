@@ -964,3 +964,190 @@ end
     @test !occursin("::date", sql)
   end
 end
+
+# The kind a projected alias was recorded with — what the read path asks the #564 table about.
+function _fd_kinds(build!::Function; conn = _FD_SL)
+  q = FD.Fd_result.objects
+  build!(q)
+  QB.query(q; connection = conn, show_query = :sql)
+  return q.object.projection_kinds
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #801: DATE - DATE is a whole number of days on BOTH engines.
+# SQLite stores a DATE as TEXT, and `-` on two TEXT values subtracts their leading numeric
+# prefixes — `'2009-04-28' - '2009-03-29'` is `2009 - 2009 = 0`, silently. The difference now
+# renders through `julianday` there, cast to the integer PostgreSQL's own `date - date` returns;
+# PostgreSQL's text is unchanged. Each case pins the exact expression on both engines, because the
+# PostgreSQL half is a promise of NO change and the SQLite half is the fix.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#801: DATE - DATE renders a day count on both engines" begin
+  for (label, expr, sl_sql, pg_sql, params) in (
+      # Two columns, one through a join — the right side resolves its kind only once rendered.
+      ("column - joined column", F("seen") - F("race__date"),
+       "CAST(julianday(\"Tb\".\"seen\") - julianday(\"Tb_1\".\"date\") AS INTEGER)",
+       "(\"Tb\".\"seen\" - \"Tb_1\".\"date\")", Any[]),
+      # The issue's own repro: a whole-day shift is still a DATE, so the difference is days.
+      ("shifted - column", (F("seen") + Dates.Day(30)) - F("seen"),
+       "CAST(julianday(date(\"Tb\".\"seen\", '+' || ? || ' days')) - julianday(\"Tb\".\"seen\") AS INTEGER)",
+       "(((\"Tb\".\"seen\" + make_interval(days => \$1::integer)))::date - \"Tb\".\"seen\")", Any[30]),
+      # A field path as a bare String operand is the `F(...)` it names, and is typed as one.
+      ("String field operand", F("seen") - "race__date",
+       "CAST(julianday(\"Tb\".\"seen\") - julianday(\"Tb_1\".\"date\") AS INTEGER)",
+       "(\"Tb\".\"seen\" - \"Tb_1\".\"date\")", Any[]),
+    )
+    @testset "$label" begin
+      q = FD.Fd_result.objects
+      q.values("x" => expr)
+      @test occursin(sl_sql, _fd_sql(q; conn = _FD_SL))
+      @test _fd_params(q; conn = _FD_SL) == params
+
+      q_pg = FD.Fd_result.objects
+      q_pg.values("x" => expr)
+      @test occursin(pg_sql, _fd_sql(q_pg; conn = _FD_PG))
+      @test _fd_params(q_pg; conn = _FD_PG) == params
+    end
+  end
+
+  # The kind is NAMED, not left `nothing`: an integer on both engines, so the read path parses
+  # nothing and the alias arrives as the number the engine returned.
+  @testset "the alias is recorded as CInt32 on both engines" begin
+    for conn in (_FD_SL, _FD_PG)
+      kinds = _fd_kinds(q -> q.values("gap" => F("seen") - F("race__date")); conn = conn)
+      @test kinds[:gap] === PormG.CInt32()
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #801: a TIMESTAMP on either side is refused on SQLite and typed CInterval on PostgreSQL.
+# PostgreSQL's `timestamp - timestamp` (and `date - timestamp`) is an interval, which SQLite has no
+# rendering of yet — so SQLite raises QueryBuildError instead of subtracting the years. The
+# PostgreSQL text is unchanged; the CInterval kind is what makes #581's read-back pin apply to it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#801: a timestamp difference is refused on SQLite, an interval on PostgreSQL" begin
+  for (label, expr, pg_sql) in (
+      ("TIMESTAMP - TIMESTAMP", F("logged_at") - F("race__starts_at"),
+       "(\"Tb\".\"logged_at\" - \"Tb_1\".\"starts_at\")"),
+      ("DATE - TIMESTAMP", F("seen") - F("logged_at"), "(\"Tb\".\"seen\" - \"Tb\".\"logged_at\")"),
+      ("TIMESTAMP - DATE", F("logged_at") - F("seen"), "(\"Tb\".\"logged_at\" - \"Tb\".\"seen\")"),
+      # A sub-day shift promotes a DATE to a timestamp (#527), so this is a timestamp difference
+      # even though both roots are the same DATE column.
+      ("sub-day-promoted DATE - DATE", (F("seen") + Dates.Hour(6)) - F("seen"),
+       "((\"Tb\".\"seen\" + make_interval(hours => \$1::integer)) - \"Tb\".\"seen\")"),
+    )
+    @testset "$label" begin
+      q = FD.Fd_result.objects
+      q.values("x" => expr)
+      err = try _fd_sql(q; conn = _FD_SL); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      @test occursin("not supported on SQLite", sprint(showerror, err))
+
+      q_pg = FD.Fd_result.objects
+      q_pg.values("x" => expr)
+      @test occursin(pg_sql, _fd_sql(q_pg; conn = _FD_PG))
+      @test _fd_kinds(q -> q.values("x" => expr); conn = _FD_PG)[:x] === PormG.CInterval()
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #801: a day count compares against a number.
+# `(F("seen") - F("race__date")) > 30` raised on BOTH engines before: the comparison literal was
+# bound through the ROOTED column's formatter, which is a DateField's — `format_date_sql(30)`. The
+# left now evaluates to CInt32, which is not the column's kind, so the literal binds as a number.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#801: a date difference compares against an integer" begin
+  q = FD.Fd_result.objects
+  q.filter((F("seen") - F("race__date")) > 30)
+  @test occursin("WHERE (CAST(julianday(\"Tb\".\"seen\") - julianday(\"Tb_1\".\"date\") AS INTEGER) > ?)",
+                 _fd_sql(q; conn = _FD_SL))
+  @test _fd_params(q; conn = _FD_SL) == Any[30]
+
+  q_pg = FD.Fd_result.objects
+  q_pg.filter((F("seen") - F("race__date")) > 30)
+  @test occursin("WHERE ((\"Tb\".\"seen\" - \"Tb_1\".\"date\") > \$1::bigint)", _fd_sql(q_pg; conn = _FD_PG))
+  @test _fd_params(q_pg; conn = _FD_PG) == Any[30]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #801: `+`, `*` and `/` between two temporal values are refused on both engines.
+# PostgreSQL has no `date + date` and fails at execution; SQLite added the two years and returned a
+# number. Refusing at build time makes the engines agree, and neither answer is silent.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#801: arithmetic other than - between two temporal values is refused" begin
+  for expr in (F("seen") + F("race__date"), F("logged_at") * F("seen"), F("seen") / F("logged_at")),
+      conn in (_FD_SL, _FD_PG)
+    q = FD.Fd_result.objects
+    q.values("x" => expr)
+    err = try _fd_sql(q; conn = conn); nothing catch e; e end
+    @test err isa PormG.QueryBuildError
+    @test occursin("has no meaning", sprint(showerror, err))
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #801 controls: everything that is not a difference of two temporal values renders as before.
+# The new branch is entered only for arithmetic over a temporal left, and answers the old way when
+# the right is not temporal; a comparison never enters it. Pinned on both engines, as exact text.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#801: non-temporal differences are unchanged" begin
+  for (label, expr, sl_sql, pg_sql) in (
+      ("integer columns", F("points") - F("points"),
+       "(\"Tb\".\"points\" - \"Tb\".\"points\")", "(\"Tb\".\"points\" - \"Tb\".\"points\")"),
+      ("a DATE minus whole days", F("seen") - 7,
+       "date(\"Tb\".\"seen\", '-' || ? || ' days')",
+       "((\"Tb\".\"seen\" - make_interval(days => \$1::integer)))::date"),
+      # Nonsense, but it was a bare `-` before and its right side has no temporal kind.
+      ("a DATE minus an integer column", F("seen") - F("points"),
+       "(\"Tb\".\"seen\" - \"Tb\".\"points\")", "(\"Tb\".\"seen\" - \"Tb\".\"points\")"),
+      # A difference used as a number keeps composing as one.
+      ("a day count plus one", (F("seen") - F("race__date")) + 1,
+       "(CAST(julianday(\"Tb\".\"seen\") - julianday(\"Tb_1\".\"date\") AS INTEGER) + ?)",
+       "((\"Tb\".\"seen\" - \"Tb_1\".\"date\") + \$1::bigint)"),
+    )
+    @testset "$label" begin
+      q = FD.Fd_result.objects
+      q.values("x" => expr)
+      @test occursin(sl_sql, _fd_sql(q; conn = _FD_SL))
+      q_pg = FD.Fd_result.objects
+      q_pg.values("x" => expr)
+      @test occursin(pg_sql, _fd_sql(q_pg; conn = _FD_PG))
+    end
+  end
+
+  # An UNTYPED left keeps the rooted column's formatter, exactly as #536 left it.
+  @testset "untyped arithmetic compared against a literal binds as before" begin
+    q = FD.Fd_result.objects
+    q.filter(F("points") * 2 > 5)
+    @test occursin("WHERE ((\"Tb\".\"points\" * \$1::bigint) > \$2::bigint)", _fd_sql(q; conn = _FD_PG))
+    @test _fd_params(q; conn = _FD_PG) == Any[2, 5]
+
+    # The control above cannot tell the rule's `nothing` clause apart: an IntegerField's canonical
+    # kind is `nothing` too. A DATE root can — `F("seen") * 2` is untyped arithmetic, so the root
+    # still decides and `5` still reaches `format_date_sql`, which refuses it, as it did before.
+    q2 = FD.Fd_result.objects
+    q2.filter(F("seen") * 2 > 5)
+    err = try _fd_sql(q2; conn = _FD_SL); nothing catch e; e end
+    @test err isa PormG.FilterError
+  end
+
+  # A left whose kind differs from its root binds through the LEFT's kind, not the literal's own
+  # type: a sub-day-promoted DATE is a timestamp, so `5` is refused rather than bound as an integer
+  # that SQLite would compare against the TEXT timestamp (always true, silently).
+  @testset "a promoted timestamp compared against a number is still refused" begin
+    for conn in (_FD_SL, _FD_PG)
+      q = FD.Fd_result.objects
+      q.filter((F("seen") + Dates.Hour(6)) > 5)
+      err = try _fd_sql(q; conn = conn); nothing catch e; e end
+      @test err isa PormG.FilterError
+    end
+  end
+
+  # A date comparison is not arithmetic and never enters the new branch.
+  @testset "a date-to-date comparison is unchanged" begin
+    q = FD.Fd_result.objects
+    q.filter(F("seen") > F("race__date"))
+    @test occursin("WHERE (\"Tb\".\"seen\" > \"Tb_1\".\"date\")", _fd_sql(q; conn = _FD_SL))
+  end
+end

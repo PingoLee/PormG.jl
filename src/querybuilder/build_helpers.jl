@@ -337,6 +337,25 @@ function _raise_invalid_filter_operator(field_path::Vector{String}, shape::Abstr
   end
 end
 
+# #654: the two lookups whose value SHAPE is fixed, checked where the vector arm checks range
+# arity. A scalar `@range` reached the renderer and indexed `[2]` into it — a raw `BoundsError`
+# in WHERE, and in HAVING once #654 let an alias reach the range binder. A non-`Bool` `@isnull`
+# reached `ISNULL` as a `MethodError`, and once that arm joined the shared ladder, as
+# "ISNULL is not a supported operator" — a token nobody types, blaming the operator for the value.
+#
+# #808: every single-value arm calls it, not only the scalar one. The column-reference arms (`F`,
+# a function, `Joined`, `CTE`) skipped it, so `"points__@isnull" => F("grid")` rendered
+# `ISNULL "Tb"."grid"` and `@range => F(…)` a one-sided `BETWEEN` — both invalid SQL, surfacing at
+# the database — and on a JSON path `@isnull` reached `v.values == true`, which on an expression
+# builds a predicate (#541) and raised `TypeError: non-boolean`.
+function _check_fixed_shape_lookup(suffix::AbstractString, value)
+  suffix in ("range", "nrange") &&
+    throw(FilterError("Error in filter, '$(suffix)' operator requires exactly 2 values, got 1"))
+  suffix == "isnull" && !(value isa Bool) &&
+    throw(FilterError("Error in filter, 'isnull' takes true or false, got $(value isa SQLType ? "a column expression" : repr(value))"))
+  return nothing
+end
+
 """
   _get_pair_to_oper(x::Pair)
 
@@ -351,16 +370,7 @@ end
 """
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:Union{AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID}
   if haskey(PormGsuffix, x.first[end])
-    suffix = x.first[end]
-    # #654: the two lookups whose value SHAPE is fixed, checked where the vector arm checks range
-    # arity. A scalar `@range` reached the renderer and indexed `[2]` into it — a raw `BoundsError`
-    # in WHERE, and in HAVING once #654 let an alias reach the range binder. A non-`Bool` `@isnull`
-    # reached `ISNULL` as a `MethodError`, and once that arm joined the shared ladder, as
-    # "ISNULL is not a supported operator" — a token nobody types, blaming the operator for the value.
-    suffix in ("range", "nrange") &&
-      throw(FilterError("Error in filter, '$(suffix)' operator requires exactly 2 values, got 1"))
-    suffix == "isnull" && !(x.second isa Bool) &&
-      throw(FilterError("Error in filter, 'isnull' takes true or false, got $(repr(x.second))"))
+    _check_fixed_shape_lookup(x.first[end], x.second)
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__"))) # TODO, maybe I need to check if the column is valid and process the function before store
@@ -446,6 +456,7 @@ end
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeCTE
   _reject_cte_desc(x.second, "a filter comparison")
   if haskey(PormGsuffix, x.first[end])
+    _check_fixed_shape_lookup(x.first[end], x.second)
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
@@ -456,6 +467,7 @@ end
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeJoined
   _reject_joined_desc(x.second, "a filter comparison")
   if haskey(PormGsuffix, x.first[end])
+    _check_fixed_shape_lookup(x.first[end], x.second)
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
@@ -463,6 +475,7 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeJoined
 end
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeF
   if haskey(PormGsuffix, x.first[end])
+    _check_fixed_shape_lookup(x.first[end], x.second)
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
@@ -471,6 +484,7 @@ end
 # Allow Case/When and other FObject expressions as filter RHS values
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeFunction
   if haskey(PormGsuffix, x.first[end])
+    _check_fixed_shape_lookup(x.first[end], x.second)
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
@@ -1170,8 +1184,14 @@ function _build_over_clause(over::WindowSpec, instruc::SQLInstruction)::String
   return join(parts, " ")
 end
 
+# #808: the literal-NULL spellings a value slot (CASE `then`/`else`, `Lag`/`Lead` `default`) accepts.
+# Type-checked before any `==`: that slot also takes a column expression, and `==` on an
+# `FExpression` or `JoinedReference` builds a predicate node, not a `Bool` (#541) — `val == "NULL"`
+# on `then = F("points")` raised `TypeError: non-boolean (FExpression)` before any SQL existed.
+_is_null_literal(x) = x isa Missing || x === nothing || (x isa AbstractString && x == "NULL")
+
 function _resolve_window_kwarg(value, instruc::SQLInstruction; sql_type::Union{Nothing,String}=nothing)
-  if value isa Missing || value === nothing || value == "NULL"
+  if _is_null_literal(value)
     return "NULL"
   elseif value isa SQLType
     return _get_select_query(value, instruc)
@@ -1250,8 +1270,11 @@ function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Uni
     # For CASE/WHEN, THEN/ELSE must always be resolved after condition SQL so positional
     # placeholders follow SQL text order (important for SQLite/MySQL style backends).
     if k in parameterize_keys
-      if val isa Missing || val == "NULL"
-        resolved_kwargs[k] = val
+      # #808: stored as the literal, not as `val` — a `missing` reached `Dialect.CASE`/`WHEN`
+      # verbatim and rendered `ELSE missing` / `THEN missing`, which no engine parses. `WHEN`'s own
+      # `"else" => missing` placeholder takes this branch too; its renderer never reads the slot.
+      if _is_null_literal(val)
+        resolved_kwargs[k] = "NULL"
       else
         deferred_kwargs[k] = val
       end

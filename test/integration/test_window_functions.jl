@@ -674,3 +674,20 @@ end
     # 1991 had 16 races, each with a single winner.
     @test length(rows) == 16
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #808: `Lag(...; default = F(...))` executes. The default renders as a column in LAG's third
+# argument, so the opening lap falls back to its OWN time; every later lap reads the previous row.
+# Before #808 this raised `TypeError: non-boolean (FExpression)` while building.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#808: Lag default = F(...) falls back to the row's own column" begin
+    q = M.Lap_times.objects
+    q.filter("raceid" => 841, "driverid" => 1)
+    q.values("lap", "milliseconds",
+        "prev_ms" => Lag("milliseconds", default = F("milliseconds"), over = WindowOver(order_by = ["lap"])))
+    q.order_by("lap")
+    rows = q.list()
+    @test length(rows) > 1
+    @test rows[1][:prev_ms] == rows[1][:milliseconds]
+    @test all(rows[i][:prev_ms] == rows[i-1][:milliseconds] for i in 2:length(rows))
+end

@@ -679,6 +679,33 @@ ORDER BY "lap" ASC
 !!! tip
     The `offset` and `default` values are **parameterized** — `$1`/`$3` are the offsets (`1`), `$2`/`$4` are the defaults (`0`). They are never interpolated raw into the SQL string. The `::integer` and `::bigint` casts are PostgreSQL type-inference artefacts; SQLite omits them.
 
+`default` also takes a column expression, which renders as the column instead of binding a value.
+`default = F("milliseconds")` makes lap 1 fall back to its **own** time, so a lap-over-lap
+comparison reads "no change" on the opening lap instead of a jump from `0`:
+
+```julia
+using PormG: F
+
+query.values(
+    "lap",
+    "milliseconds",
+    "prev_ms" => Lag("milliseconds", default=F("milliseconds"),
+                     over=WindowOver(order_by=["lap"]))
+)
+```
+
+```sql
+LAG("Tb"."milliseconds", $1::integer, "Tb"."milliseconds") OVER (ORDER BY "Tb"."lap" ASC) as prev_ms
+```
+
+```
+ Row │ lap     milliseconds  prev_ms
+─────┼───────────────────────────────
+   1 │      1        100573   100573   ← no previous lap → this lap's own time
+   2 │      2         93774   100573
+   3 │      3         92900    93774
+```
+
 ---
 
 ## Value Functions — `FirstValue`, `LastValue`, `NthValue`

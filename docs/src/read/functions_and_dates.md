@@ -642,6 +642,64 @@ This generates a `SUM(CASE WHEN ... THEN 1 ELSE 0 END)` pattern — very useful 
     [`Interval`](field_expressions.md#The-Interval-helper) helper. See
     [Date Arithmetic](field_expressions.md#Date-Arithmetic) for the cross-database SQL these render.
 
+### A Column as the Branch Value
+
+`then`, `default` and `otherwise` take a column expression as well as a value. A plain value is
+bound as a parameter; `F("points")` renders as the column itself, so the branch returns each row's
+own value. That turns the conditional count above into a conditional **sum**:
+
+```julia
+using PormG: F
+using PormG.Functions: Case, When, Sum
+
+# Points each driver scored in the races they won, 2009 season
+query = M.Result.objects
+query.filter("raceid__year" => 2009)
+query.values(
+    "driverid__surname",
+    "win_pts" => Sum(Case([When("positionorder" => 1, then = F("points"))], default = 0))
+)
+query.filter("win_pts__@gt" => 0)
+query.order_by("-win_pts")
+df = query |> DataFrame
+```
+
+Generated SQL (PostgreSQL):
+```sql
+SELECT "Tb_1"."surname" AS driverid__surname,
+       SUM(CASE WHEN "Tb"."positionorder" = $1 THEN "Tb"."points" ELSE $2::bigint END) AS win_pts
+FROM "result" AS "Tb"
+INNER JOIN "driver" AS "Tb_1" ON "Tb"."driverid" = "Tb_1"."driverid"
+INNER JOIN "race"   AS "Tb_2" ON "Tb"."raceid"   = "Tb_2"."raceid"
+WHERE "Tb_2"."year" = $3
+GROUP BY 1
+HAVING SUM(CASE WHEN "Tb"."positionorder" = $4 THEN "Tb"."points" ELSE $5::bigint END) > $6
+ORDER BY "win_pts" DESC NULLS FIRST
+```
+
+Output:
+```
+6×2 DataFrame
+ Row │ driverid__surname  win_pts
+─────┼────────────────────────────
+   1 │ Button                55.0
+   2 │ Vettel                40.0
+   3 │ Webber                20.0
+   4 │ Hamilton              20.0
+   5 │ Barrichello           20.0
+   6 │ Räikkönen             10.0
+```
+
+`THEN "Tb"."points"` carries no placeholder: the branch is a column, not a value. Button's `55.0`
+is his six 2009 wins, one of them the half-points Malaysian Grand Prix. Arithmetic works in the
+branch too — `then = F("points") * 2` binds the `2` in its place in the SQL text, after the
+condition's own value.
+
+The column in the branch is part of the projection, so it groups like one: beside an aggregate it
+must sit inside the aggregate (as `F("points")` does here, inside `Sum`) or be listed in
+`values()` — see
+[A Column Beside an Aggregate in One Expression](filters_and_aggregates.md#A-Column-Beside-an-Aggregate-in-One-Expression).
+
 ### Case in Filters
 
 `Case` expressions can be used as the right-hand side of a `filter()` predicate to apply

@@ -335,9 +335,10 @@ _sdr_where(res) = strip(split(res[:sql_text], " WHERE ")[end])
   #     a CTE model's column types are INFERRED
   #     (`_set_field_from_sql_function`), so the question is whether one can be typed DATE while
   #     holding something else. It cannot: a plain-column projection reads the real field, COUNT/SUM
-  #     give IntegerField, CASE/WHEN route through `_infer_case_output_type` (Integer/Float/Char
-  #     only), MIN/MAX carry the base DateField and do produce a date — and every other function is
-  #     REJECTED when the CTE model is built. The last assertion pins that rejection, because it is
+  #     give IntegerField, CASE/WHEN route through `_case_output_field` (DATE only when every branch
+  #     is a date column or, on PostgreSQL only, `output_field` casts to one, #812), MIN/MAX carry the base DateField and
+  #     do produce a date — and every other function is REJECTED when the CTE model is built unless
+  #     it declares a type the SQL casts to. The last assertion pins that rejection, because it is
   #     what rules out the one shape that would matter here: a `ToChar` projection, whose column
   #     really would be TEXT holding "1991-10".
   # =========================================================================

@@ -12,9 +12,9 @@ A window function whose argument reads a plain column, in a query that aggregate
 `values("constructorid", "t" => Sum("points"), "prev" => Lag("raceid", over = …))`. The same holds
 for `Lead`, `FirstValue`, `LastValue` and `NthValue`, for an expression argument such as
 `FirstValue(F("raceid") * 2)`, and for a `Lag`/`Lead` `default` that reads a column, such as
-`default = Coalesce("grid", 0)`. (A `String` default is bound as a value and reads no column;
-`default = F(...)` fails earlier, on the separate #808.) The error names the projection, the column,
-and whether it sits in the argument or the default.
+`default = F("grid")` or `default = Coalesce("grid", 0)`. (A `String` default is bound as a value
+and reads no column.) The error names the projection, the column, and whether it sits in the
+argument or the default.
 
 The window is computed once per group, and nothing grouped its argument: #789 groups a window's
 `partition_by` / `order_by` columns, never the argument, which matches Django's

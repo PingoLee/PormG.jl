@@ -878,17 +878,25 @@ end
       end
     end
 
-    @testset "$backend — refused: a plain default beside an aggregated argument" begin
-      # The argument is `SUM(points)`, which #798 already entered; `default` renders beside it and
-      # reads `raceid` per group just the same.
-      # (`default = F("raceid")` is the natural spelling, but it crashes before this check: #808.)
+    # The argument is `SUM(points)`, which #798 already entered; `default` renders beside it and reads
+    # `raceid` per group just the same. `F(…)` is the natural spelling (renderable since #808); a
+    # function node reaches the same arm.
+    for (label, default) in (("an F default", () -> F("raceid")), ("a function default", () -> Coalesce("raceid", 0)))
+      @testset "$backend — refused: $label beside an aggregated argument" begin
+        q = Model_.objects
+        q.values("constructorid", "prev" => Lag(Sum("points"), default = default(), over = by_team()))
+        err = _window_err(() -> q)
+        @test err isa PormG.QueryBuildError
+        msg = replace(_window_msg(err), r"\e\[[0-9;]*m" => "")
+        @test occursin("reads the column \"raceid\"", msg)
+        @test occursin("in its window function's default", msg)
+      end
+    end
+
+    @testset "$backend — builds: an F default over a grouped column" begin
       q = Model_.objects
-      q.values("constructorid", "prev" => Lag(Sum("points"), default = Coalesce("raceid", 0), over = by_team()))
-      err = _window_err(() -> q)
-      @test err isa PormG.QueryBuildError
-      msg = replace(_window_msg(err), r"\e\[[0-9;]*m" => "")
-      @test occursin("reads the column \"raceid\"", msg)
-      @test occursin("in its window function's default", msg)
+      q.values("constructorid", "prev" => Lag(Sum("points"), default = F("constructorid"), over = by_team()))
+      @test occursin(r"GROUP BY 1\s*$", inspect_query(q)[:sql_text])
     end
 
     @testset "$backend — refused: the window inside an expression" begin

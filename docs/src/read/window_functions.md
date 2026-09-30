@@ -1054,8 +1054,8 @@ GROUP BY 1
 Projecting `raceid__round` also builds, but the query then groups by season and round, one row per
 race; order the window by `raceid__round` too, or every round of a season ties and LAG reads an
 arbitrary one of them.
-A `default` that reads a column, as in `Lag(Sum("points"), default=Coalesce("grid", 0))`, is checked
-the same way. A `String` default is bound as a value, not read as a column. Before
+A `default` that reads a column, as in `Lag(Sum("points"), default=F("grid"))`, is checked the same
+way. A `String` default is bound as a value, not read as a column. Before
 [#809](https://github.com/PingoLee/PormG.jl/issues/809), PostgreSQL rejected these queries with a
 `GroupingError`, and SQLite read an arbitrary row's value per group.
 

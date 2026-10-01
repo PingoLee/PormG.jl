@@ -312,9 +312,18 @@ df = query |> DataFrame
 ## Conditional Functions
 
 The operands of `Coalesce`, `NullIf`, `Greatest` and `Least` (and of `Power` and `Mod` above) are
-read by their type. A string is a column path. When the function is projected in `values(...)`,
-directly or as another function's argument, the path can end in a transform:
-`Coalesce("fp1_date", "start_at__@date")` falls back to the date of the race start. A number (of
+read by their type. A string is a column path, and the path can end in a transform:
+`Coalesce("fp1_date", "start_at__@date")` falls back to the date of the race start. That holds
+wherever the function sits. It can be projected in `values(...)`, on a filter's right-hand side
+(also inside `Q`/`Qor` and a `When` condition), in a `Case`/`When` branch, in `F` arithmetic, in a
+window's `partition_by`, as a `Lag`/`Lead` `default`, or as an `update(...)` value:
+
+```julia
+using PormG.Functions: Coalesce
+
+# Races whose date equals the first-practice date or, when there is none, the date of the start
+M.Race.objects.filter("date" => Coalesce("fp1_date", "start_at__@date"))
+``` A number (of
 any integer width), a `Bool`, a `Date`, a `DateTime`, a `ZonedDateTime` or a `Time` is a literal
 that PormG binds as a parameter. A **string literal** needs `Value(...)`: `NullIf("code", "")`
 would read `""` as a column name. Any other value raises `QueryBuildError` when the expression is

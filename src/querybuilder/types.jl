@@ -838,7 +838,7 @@ function Base.push!(q::SQLTypeQ, x...)
     if isa(v, Pair)
       push!(q.filters, _check_filter(v))
     elseif isa(v, FilterType)
-      push!(q.filters, v)
+      push!(q.filters, _check_filter_node(v))   # #863
     else
       throw(FilterError("Invalid argument: $(v); please use a pair (key => value) or a Q/Qor/OP object."))
     end
@@ -851,7 +851,7 @@ function Base.push!(q::SQLTypeQor, x...)
     if isa(v, Pair)
       push!(q.or, _check_filter(v))
     elseif isa(v, FilterType)
-      push!(q.or, v)
+      push!(q.or, _check_filter_node(v))   # #863
     else
       throw(FilterError("Invalid argument: $(v); please use a pair (key => value) or a Q/Qor/OP object."))
     end

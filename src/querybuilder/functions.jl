@@ -14,7 +14,7 @@ a.filter(Q("name" => "John", Qor("age" => 18, "age" => 19)))
 ```
 """
 function Q(x...)
-  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? v : throw(FilterError("Invalid argument: $(v); please use a pair (key => value).")) for v in x]
+  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? _check_filter_node(v) : throw(FilterError("Invalid argument: $(v); please use a pair (key => value).")) for v in x]   # #863
   return QObject(filters = colect)
 end
 
@@ -34,7 +34,7 @@ a.filter(Qor("name" => "John", Q("age__gte" => 18, "age__lte" => 19)))
 ```
 """
 function Qor(x...)
-  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? v : throw(FilterError("Invalid argument: $(v); please use a pair (key => value).")) for v in x]
+  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? _check_filter_node(v) : throw(FilterError("Invalid argument: $(v); please use a pair (key => value).")) for v in x]   # #863
   return QorObject(or = colect)
 end
 

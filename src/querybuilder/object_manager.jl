@@ -339,7 +339,9 @@ function _update!(q::SQLObject, values; kwargs...)
   # OrderedDict so the rendered UPDATE SET list follows call order deterministically (#97)
   q.insert = OrderedCollections.OrderedDict{String,Any}()
   for (k, v) in values
-    q.insert[k] = v
+    # #863: a SET value that is an expression resolves its transforms, as a projection does —
+    # `update("seen" => Coalesce("ts__@date", "seen"))` crashed the build like a filter RHS did.
+    q.insert[k] = _walk_slot(v)
   end
 
   return update(q, show_query=show_query)
@@ -460,7 +462,7 @@ end
 function _filter!(q::SQLObject, filter)
   for v in filter
     if isa(v, FilterType)
-      push!(q.filter, v) # TODO I need process the Qor and Q with _check_filter
+      push!(q.filter, _check_filter_node(v))   # #863: walk a node's expressions; a Q/Qor is already resolved
     elseif isa(v, Pair)
       push!(q.filter, _check_filter(v))
     else

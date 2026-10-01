@@ -3,7 +3,7 @@
 
 `OP` has four methods (`types.jl`); the two `SQLTypeFunction` arms build an `OperObject` whose
 `column` is an `FObject` or a `WindowFunction`. Rendering served exactly the functions whose
-formatter it could name — `EXTRACT`, `TO_CHAR`, `COUNT`, the `PormGTypeField` set — and PormG's own
+formatter it could name — `EXTRACT`, `EXTRACT_DATE` (`ToChar`), `COUNT`, the `PormGTypeField` set — and PormG's own
 `Y_Q` / `Y_QUAD` label transforms depend on that (`When(OP(MONTH(x), "<=", N))`, `functions.jl`),
 which is why the arms cannot be deleted. (#579 moved that expansion off `@quarter`/`@quadrimester`,
 which now extract the period number through one dialect function, onto the label keys.) Every OTHER function fell to the `else` ladder of
@@ -40,7 +40,7 @@ using Test
 using PormG
 using PormG.Models
 using PormG.QueryBuilder: inspect_query, OP
-using PormG.Functions: Sum, Count, Lower, Abs, Extract, Rank, WindowOver, Case, When
+using PormG.Functions: Sum, Count, Lower, Abs, Extract, Rank, WindowOver, Case, When, ToChar
 import PormG.QueryBuilder as QB
 
 # Dedicated config key + mock types: `runtests.jl` includes every unit file into one `Main`, so a
@@ -220,4 +220,54 @@ end
   @test !(PormG.SQLTypeF <: QB.ColumnPart)
   @test !(PormG.SQLTypeCTE <: QB.ColumnPart)
   @test !(PormG.SQLTypeJoined <: QB.ColumnPart)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #862: `PormGTypeField` keyed `TO_CHAR`, but `ToChar` builds an `EXTRACT_DATE` node, so the table
+# never typed a `ToChar` expression and `OP(ToChar(…), …)` took the #537 refusal although its result
+# is plain text. Keyed by the node's name now, it binds as text — and a `ToChar` carrying its own
+# `formatter=` (`Y_M` is `ToChar(x, "YYYY-MM", formatter = format_yyyy_mm)`) keeps that formatter
+# instead of the table's, as it does on the alias path. `202003` tells the two apart: the table's
+# `format_text_sql` gives `"202003"`, `format_yyyy_mm` gives `"2020-03"`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#862: OP over ToChar binds as text; its own formatter= wins" begin
+  ym = () -> ToChar("seen", "YYYY-MM", formatter = PormG.Models.format_yyyy_mm)
+  for (backend, conn) in _OPF_BACKENDS
+    @testset "$backend" begin
+      # Served now: the year bound as the text the `to_char`/`strftime` result is compared with.
+      q1 = OPF.Opf_row.objects
+      q1.values("note")
+      q1.filter(OP(ToChar("seen", "YYYY"), 2020))
+      @test _opf_err(() -> q1; conn = conn) === nothing
+      @test last(_opf_params(q1; conn = conn)) == "2020"
+
+      # The table's text formatter refuses what has no single text (#860) — typed, at render.
+      q2 = () -> (q = OPF.Opf_row.objects; q.values("note"); q.filter(OP(ToChar("seen", "YYYY"), 20.5)); q)
+      @test _opf_err(q2; conn = conn) isa PormG.FilterError
+
+      # The node's own formatter wins over the table on the bare-function arm…
+      q3 = OPF.Opf_row.objects
+      q3.values("note")
+      q3.filter(OP(ym(), 202003))
+      @test last(_opf_params(q3; conn = conn)) == "2020-03"
+      q4 = () -> (q = OPF.Opf_row.objects; q.values("note"); q.filter(OP(ym(), "nonsense")); q)
+      @test _opf_err(q4; conn = conn) isa PormG.FilterError
+
+      # …as it already did on the alias path, and on the public `@yyyy_mm` transform.
+      q5 = OPF.Opf_row.objects
+      q5.values("id", "ym" => ym())
+      q5.filter("ym" => 202003)
+      @test last(_opf_params(q5; conn = conn)) == "2020-03"
+      q6 = OPF.Opf_row.objects
+      q6.values("note")
+      q6.filter("seen__@yyyy_mm" => 202003)
+      @test occursin("2020-03", repr(_opf_params(q6; conn = conn)))
+
+      # A plain `ToChar` alias is typed through the table now, not a special case (#851's cell).
+      q7 = OPF.Opf_row.objects
+      q7.values("id", "y" => ToChar("seen", "YYYY"))
+      q7.filter("y" => 2020)
+      @test last(_opf_params(q7; conn = conn)) == "2020"
+    end
+  end
 end

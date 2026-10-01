@@ -805,7 +805,7 @@ end
 # value`) is the public way to write an operator predicate. The `SQLTypeFunction` arms exist for
 # PormG's own composite transforms — `Y_Q` / `Y_QUAD` (functions.jl), the year-qualified
 # `@yyyy_q` / `@yyyy_quad` labels — build `When(OP(MONTH(x), "<=", N))` — and a function column renders only where the filter path can name
-# a formatter: the `PormGTypeField` functions (EXTRACT, TO_CHAR, COUNT). Any other function column,
+# a formatter: the `PormGTypeField` functions (EXTRACT, EXTRACT_DATE = `ToChar`, COUNT). Any other function column,
 # and any aggregate or window column in a WHERE predicate, is refused at render with a
 # `QueryBuildError` naming the alias / suffix spelling (#537) rather than the raw `FieldError` it
 # used to be. Do not widen the arms without a consumer: `test_op_function_column.jl` pins both the

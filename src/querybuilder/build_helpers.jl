@@ -2534,7 +2534,14 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # `PormGTypeField` maps to `format_number_sql` / `format_text_sql` — the two formatters that
     # happen to carry an `AbstractArray` method, which is precisely the coincidence this issue is
     # about. Leaving them raw would keep that coincidence load-bearing.
-    _fmt = getfield(Models, PormGTypeField[v.column.function_name])
+    #
+    # #862: the node's own `formatter=` wins over the table, as it does on every other path (the
+    # wrapped arm above, `_expression_formatter`). Moot until #862 — the table keyed `TO_CHAR`, so a
+    # `ToChar` never got here — but `ToChar(x, "YYYY-MM", formatter = format_yyyy_mm)` is `Y_M`, and
+    # the table's `format_text_sql` would accept a value that formatter refuses. `MONTH(x)`, the one
+    # internal caller (`Y_Q`/`Y_QUAD`), carries `format_number_sql`, the same as the table.
+    _own = v.column isa FObject ? v.column.formatter : nothing
+    _fmt = _own !== nothing ? _own : getfield(Models, PormGTypeField[v.column.function_name])
     _label, _type, _subject = _transform_filter_labels(v.column, _fmt)   # #576
     _guard_scalar_bytes(v, nothing, _label)   # #596 — fail-safe; no public spelling reaches this arm
     placeholders = add_parameter!(instruc,
@@ -2544,7 +2551,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # #537 — a function column none of the branches above can bind. `OP(::SQLTypeFunction, …)` is a
     # constructor arm PormG itself relies on — `When(OP(MONTH(x), "<=", N))` builds `Y_Q` / `Y_QUAD`,
     # the `@yyyy_q` / `@yyyy_quad` labels (functions.jl; #579 moved that expansion off `@quarter` /
-    # `@quadrimester`) — but only the `PormGTypeField` functions (EXTRACT, TO_CHAR, COUNT)
+    # `@quadrimester`) — but only the `PormGTypeField` functions (EXTRACT, EXTRACT_DATE = `ToChar`, COUNT)
     # have a formatter this path can name. Every other function fell through to the `else` ladder
     # below and died reading `.field` off a node that has no such slot: a raw `FieldError`, outside
     # the #231 taxonomy. Refused HERE, ahead of any `.field` read, naming the two spellings that do

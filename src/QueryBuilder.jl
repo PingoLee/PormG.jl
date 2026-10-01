@@ -51,7 +51,7 @@ import PormG.ConnectionPool: fetch, fetch_copy, with_transaction, with_savepoint
 # #344: "was this failure a cancellation?" — sees through the DatabaseError wrapper the pool applies,
 # which a bare `e isa InterruptException` test cannot (every driver error crosses `_as_database_error`).
 import PormG.ConnectionPool: _await_abandoned
-import PormG.Configuration: with_tx_context, ensure_model_transaction_scope, transaction_connection_for,
+import PormG.Configuration: with_tx_context, ensure_transaction_scope, transaction_connection_for,
 	get_sqlite_reserved_primary_key_max, register_sqlite_reserved_primary_key_max!,
 	get_settings as get_configuration_settings
 import PormG: @pormg_debug

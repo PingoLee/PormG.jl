@@ -17,6 +17,11 @@
 #   atomic(durable=true), without_foreign_keys, the SQLite PK reservations, select_for_update) must
 #   look through enclosing blocks too.
 #
+#   ORM calls follow one rule on top of that (#838): while a transaction is open, an ORM
+#   statement must run on a pool with an open transaction, in this block or an enclosing one, or
+#   it raises TransactionError. The pool checked is the one the statement RUNS on — `.db(...)`
+#   included — not the model's binding. Raw `fetch` stays looser and runs in autocommit there.
+#
 # Hermetic: two real SQLite pools on temp files (a table that exists only in B is the witness for
 # "which database answered"), and mock PostgreSQL pools for the PG-only paths. No live database.
 #
@@ -92,16 +97,17 @@ end
 
 # ── Two mock PostgreSQL databases for the `select_for_update` guard ──
 # The guard only exists on PostgreSQL (SQLite never locks). A model bound to database A, read
-# through `.db(B)`, is what routes the query away from the model's own connection — past
-# `ensure_model_transaction_scope`, which checks the model's binding. `fetch` is stubbed to record
-# the statement and answer with no rows; distinct `name`s keep the two pools non-`===`.
+# through `.db(B)`, is what routes the query away from the model's own connection. `fetch` is
+# stubbed to record the statement and answer with no rows; distinct `name`s keep the two pools
+# non-`===`.
 struct MockSFUPool831 <: PormG.PormGPostgres
   name::String
 end
 const SFU_A_831 = MockSFUPool831("a")
 const SFU_B_831 = MockSFUPool831("b")
 PormG.config["pormg831_pg_a"] = CFG831.Settings(connections = SFU_A_831, change_data = true)
-PormG.config["pormg831_pg_b"] = CFG831.Settings(connections = SFU_B_831, change_data = true)
+PormG.config["pormg831_pg_b"] = CFG831.Settings(connections = SFU_B_831, change_data = true,
+  db_def_folder = "pormg831_pg_b")   # lets set_models bind the many-to-many pair below (#838)
 
 const SFU_SQL_831 = String[]
 function CP831.fetch(::MockSFUPool831, sql::String; kwargs...)
@@ -112,6 +118,28 @@ end
 const SFU_LAP_TIMES_831 = Model("pormg831_lap_times",
   id = IDField(), driver = CharField(), lap = IntegerField())
 SFU_LAP_TIMES_831.connect_key = "pormg831_pg_a"
+
+# ── A many-to-many pair bound to the mock database B (#838) ──
+# The manager's add/remove/clear/set issue raw `fetch` calls, so the scope check has to sit in
+# the manager itself; the recording `fetch` stub above shows whether anything was sent.
+module ScopeM2M831
+  import PormG
+  import PormG.Models
+  Driver = Models.Model("pormg831_m2m_drivers", id = Models.IDField(), surname = Models.CharField())
+  Championship = Models.Model("pormg831_m2m_championships",
+    id = Models.IDField(),
+    name = Models.CharField(),
+    drivers = Models.ManyToManyField(Driver, related_name = "championships"))
+  PormG.Models.set_models(@__MODULE__, "pormg831_pg_b")
+end
+
+# ── ORM models over the two SQLite scratch databases (#838) ──
+# The same `drivers` table, once bound to A and once to B, so `.db()` can route either one
+# across. Bound by key: the pools are registered under these keys inside the testset.
+const ORM_DRIVERS_A_831 = Model("drivers", id = IDField(), surname = CharField())
+ORM_DRIVERS_A_831.connect_key = POOL_A_KEY_831
+const ORM_DRIVERS_B_831 = Model("drivers", id = IDField(), surname = CharField())
+ORM_DRIVERS_B_831.connect_key = POOL_B_KEY_831
 
 @testset "Transaction context is scoped to its own pool (#831)" begin
   mktempdir() do dir
@@ -372,22 +400,161 @@ SFU_LAP_TIMES_831.connect_key = "pormg831_pg_a"
       # select_for_update needs the transaction on the pool the read runs on
       # A PostgreSQL row lock outside a transaction is released at once, so the guard raises.
       # `.db(B)` routes a model bound to A onto B: a transaction open on A does not hold B's lock.
-      # The control reads through A's own connection and passes the guard.
+      # Since #838 the routed read is refused one step earlier, by the transaction-scope check —
+      # a TransactionError naming B — so the lock guard itself is reached only with no
+      # transaction open anywhere. The control reads through A's own connection and passes both.
       # ─────────────────────────────────────────────────────────────────────────────
       @testset "select_for_update via .db() needs a transaction on that database" begin
         empty!(SFU_SQL_831)
         err = _raised_831(() -> CFG831.with_tx_context(SFU_A_831, :tx_a) do
           SFU_LAP_TIMES_831.objects.db("pormg831_pg_b").select_for_update().list()
         end)
+        @test err isa PormG.TransactionError
+        @test occursin("pormg831_pg_b", PormG.error_message(err))
+        @test isempty(SFU_SQL_831)   # refused before anything was sent
+
+        # No transaction anywhere: the lock guard is what refuses it.
+        err = _raised_831(() -> SFU_LAP_TIMES_831.objects.db("pormg831_pg_b").select_for_update().list())
         @test err isa PormG.QueryBuildError
         @test occursin("select_for_update() must run inside a transaction", PormG.error_message(err))
-        @test isempty(SFU_SQL_831)   # refused before anything was sent
+        @test isempty(SFU_SQL_831)
 
         CFG831.with_tx_context(SFU_A_831, :tx_a) do
           SFU_LAP_TIMES_831.objects.select_for_update().list()
         end
         @test length(SFU_SQL_831) == 1
         @test occursin("FOR UPDATE", SFU_SQL_831[1])
+      end
+
+      # ═════════════════════════════════════════════════════════════════════════════
+      # ORM calls: the scope check uses the pool the statement RUNS on (#838)
+      # One rule: while a transaction is open, an ORM statement must run on a pool that has an
+      # open transaction, in this block or an enclosing one; otherwise TransactionError. Before
+      # #838 the check compared the MODEL's binding with the INNERMOST block's pool, so a `.db()`
+      # call to another database passed it and ran in autocommit there, while a call that really
+      # was inside an open transaction (routed into it, or on an enclosing block's pool) was
+      # refused. B gets its own `drivers` table here, so an escaped write would be visible on B.
+      # ═════════════════════════════════════════════════════════════════════════════
+      CP831.fetch(b, "CREATE TABLE drivers (id INTEGER PRIMARY KEY, surname TEXT NOT NULL);")
+
+      # ─────────────────────────────────────────────────────────────────────────────
+      # A `.db()` call to a database with no open transaction is refused
+      # Write and read alike, before anything is sent: the write would otherwise commit on B on
+      # its own, surviving A's rollback. The error names B — the database the call targeted.
+      # ─────────────────────────────────────────────────────────────────────────────
+      @testset "a .db() call to a database with no transaction is refused" begin
+        for call in (() -> ORM_DRIVERS_A_831.objects.db(POOL_B_KEY_831).create("surname" => "Senna"),
+                     () -> ORM_DRIVERS_A_831.objects.db(POOL_B_KEY_831).filter("surname" => "Senna").update("surname" => "Ayrton"),
+                     () -> ORM_DRIVERS_A_831.objects.db(POOL_B_KEY_831).filter("surname" => "Senna").delete(),
+                     () -> ORM_DRIVERS_A_831.objects.db(POOL_B_KEY_831).filter("surname" => "Senna").list(),
+                     () -> PormG.allocate_primary_keys(ORM_DRIVERS_A_831.objects.db(POOL_B_KEY_831), DataFrame(surname = ["Senna"])),
+                     () -> PormG.bulk_insert(ORM_DRIVERS_A_831.objects.db(POOL_B_KEY_831), DataFrame(surname = ["Senna"])),
+                     () -> PormG.bulk_update(ORM_DRIVERS_A_831.objects.db(POOL_B_KEY_831), DataFrame(id = [1], surname = ["Senna"])),
+                     () -> ORM_DRIVERS_A_831.objects.db(POOL_B_KEY_831).get_or_create("surname" => "Senna"),
+                     () -> ORM_DRIVERS_A_831.objects.db(POOL_B_KEY_831).update_or_create("id" => 1; defaults = ["surname" => "Senna"]),
+                     () -> PormG.resync_sequences(ORM_DRIVERS_A_831.objects.db(POOL_B_KEY_831)))
+          err = _raised_831(() -> CP831.atomic(a) do
+            call()
+          end)
+          @test err isa PormG.TransactionError
+          @test occursin(POOL_B_KEY_831, PormG.error_message(err))
+        end
+        @test isempty(_driver_surnames_831(b))   # nothing reached B
+        @test all(a.available) && all(b.available)
+
+        # Control: outside any transaction the same routing is an ordinary autocommit write on B.
+        ORM_DRIVERS_A_831.objects.db(POOL_B_KEY_831).create("surname" => "Senna")
+        @test _driver_surnames_831(b) == ["Senna"]
+        CP831.fetch(b, "DELETE FROM drivers;")
+      end
+
+      # ─────────────────────────────────────────────────────────────────────────────
+      # Routed INTO the open transaction, the call joins it
+      # A model bound to B, sent to A with `.db()` inside A's transaction, runs on A's pinned
+      # connection and rolls back with it. Unpatched, the model's binding (B) was compared with
+      # the transaction (A) and the call was refused.
+      # ─────────────────────────────────────────────────────────────────────────────
+      @testset "a .db() call into the open transaction joins it" begin
+        err = _raised_831(() -> CP831.atomic(a) do
+          ORM_DRIVERS_B_831.objects.db(POOL_A_KEY_831).create("surname" => "Brabham")
+          @test "Brabham" ∈ _driver_surnames_831(a)   # visible inside, on A's connection
+          error("black flag")
+        end)
+        @test err isa ErrorException
+        @test "Brabham" ∉ _driver_surnames_831(a)     # rolled back with A
+        @test "Brabham" ∉ _driver_surnames_831(b)
+      end
+
+      # ─────────────────────────────────────────────────────────────────────────────
+      # A model on an enclosing block's database runs in that block's transaction
+      # `atomic(a) do; atomic(b) do; <model bound to A>`: A's transaction is still open, so the
+      # call runs on A's connection, as a raw `fetch(a, …)` already did since #831. Unpatched,
+      # the innermost block (B) was compared with the model (A) and the call was refused.
+      # ─────────────────────────────────────────────────────────────────────────────
+      @testset "a model on an enclosing transaction's database runs in it" begin
+        CP831.atomic(a) do
+          CP831.atomic(b) do
+            ORM_DRIVERS_A_831.objects.create("surname" => "Lauda")
+          end
+        end
+        @test "Lauda" ∈ _driver_surnames_831(a)
+        @test "Lauda" ∉ _driver_surnames_831(b)
+
+        err = _raised_831(() -> CP831.atomic(a) do
+          CP831.atomic(b) do
+            ORM_DRIVERS_A_831.objects.create("surname" => "Hunt")
+          end
+          error("red flag")
+        end)
+        @test err isa ErrorException
+        @test "Hunt" ∉ _driver_surnames_831(a)        # rolled back with A
+        @test all(a.available) && all(b.available)
+      end
+
+      # ─────────────────────────────────────────────────────────────────────────────
+      # Many-to-many manager writes follow the same rule
+      # add/remove/clear/set issue raw `fetch` calls on the owner's database, so they bypassed
+      # the check entirely: inside A's transaction, a manager on B wrote to B in autocommit.
+      # Each must now refuse before anything is sent (the B mock records every statement).
+      # ─────────────────────────────────────────────────────────────────────────────
+      @testset "many-to-many writes on a database with no transaction are refused" begin
+        rel = PormG.Models.get_many_to_many_relation(ScopeM2M831.Championship, "drivers")
+        manager = PormG.QueryBuilder.ManyToManyManager(ScopeM2M831.Championship, ScopeM2M831.Driver, rel, 1)
+        empty!(SFU_SQL_831)
+        for call in (() -> PormG.QueryBuilder.add(manager, 7),
+                     () -> PormG.QueryBuilder.remove(manager, 7),
+                     () -> PormG.QueryBuilder.clear(manager),
+                     () -> PormG.QueryBuilder.set(manager, 7))
+          err = _raised_831(() -> CFG831.with_tx_context(SFU_A_831, :tx_a) do
+            call()
+          end)
+          @test err isa PormG.TransactionError
+          @test occursin("pormg831_pg_b", PormG.error_message(err))
+        end
+        @test isempty(SFU_SQL_831)   # nothing reached B
+      end
+
+      # ─────────────────────────────────────────────────────────────────────────────
+      # SQLite PK reservations are read from the pool the insert runs on
+      # The reservation table lives in the transaction context, per pool. A reservation made on
+      # A must be what a later insert on A sees, even from inside a nested block on B; and B's
+      # (empty) table must not answer for A. Unpatched, both helpers read the INNERMOST context.
+      # ─────────────────────────────────────────────────────────────────────────────
+      @testset "SQLite PK reservations resolve through the routed pool" begin
+        CFG831.with_tx_context(a, :conn_a) do
+          CFG831.register_sqlite_reserved_primary_key_max!(ORM_DRIVERS_A_831, "id", 858, a)
+          CFG831.with_tx_context(b, :conn_b) do
+            @test CFG831.get_sqlite_reserved_primary_key_max(ORM_DRIVERS_A_831, "id", a) == 858
+            @test CFG831.get_sqlite_reserved_primary_key_max(ORM_DRIVERS_A_831, "id", b) === nothing
+            # A write through the chain lands in A's table, not in B's.
+            CFG831.register_sqlite_reserved_primary_key_max!(ORM_DRIVERS_A_831, "id", 900, a)
+            @test CFG831.get_sqlite_reserved_primary_key_max(ORM_DRIVERS_A_831, "id", b) === nothing
+          end
+          @test CFG831.get_sqlite_reserved_primary_key_max(ORM_DRIVERS_A_831, "id", a) == 900
+        end
+        # No transaction on the pool: nothing to read, and a register is a pass-through.
+        @test CFG831.get_sqlite_reserved_primary_key_max(ORM_DRIVERS_A_831, "id", a) === nothing
+        @test CFG831.register_sqlite_reserved_primary_key_max!(ORM_DRIVERS_A_831, "id", 7, a) == 7
       end
 
     finally

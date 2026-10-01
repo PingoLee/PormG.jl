@@ -58,7 +58,7 @@ Catch the umbrella when you want a category, the concrete type when you want a r
 | Call | Raises | When |
 |---|---|---|
 | `atomic(durable = true)` inside an open transaction on the same database | `TransactionError` | It must be the outermost transaction |
-| a model bound to another connection, inside a transaction | `TransactionError` | Open the transaction on that model's own connection |
+| an ORM call on a database with no open transaction — by the model's binding or routed with `.db()` — while a transaction is open on another | `TransactionError` | Wrap the call in `atomic` on the database it runs on, or move it outside the transaction |
 | `without_foreign_keys` inside an open transaction on the same database | `TransactionError` | It must be the outermost transaction, on both engines |
 | any query, connection lost mid-flight | `OperationalError` | Transient. Retry the **whole transaction**, never the statement |
 | any query, pool saturated | `PoolTimeoutError` | Raise `pool_size`/`pool_timeout` — see [Advanced Configuration](configuration/advanced.md) |

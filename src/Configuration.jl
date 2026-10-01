@@ -343,6 +343,14 @@ use the same database connection.
 Each nested block gets its own context, linked to the enclosing one through `parent`. The chain is
 what lets a block on database B, nested inside a transaction on database A, still find A's
 connection for a statement on A (#831): the innermost context alone names only B.
+
+`closed` is set when the block that created the context returns or throws (#839). A task spawned
+inside the block inherits the context, and one that is never awaited still holds it after the
+block has committed and released its connection; every reader skips a closed context, so that task
+falls through to ordinary acquisition in autocommit. It is atomic (release on the write, acquire on
+every read) because the reader is another task, possibly on another thread. This closes the
+connection to statements issued *after* the block ends; it is not a lock. A statement a leaked task
+issued just before then may still run on the block's connection, before or after the COMMIT.
 """
 mutable struct TransactionContext
   conn::Any  # driver connection handle (untyped: core never names LibPQ.Connection / SQLite.DB)
@@ -350,12 +358,46 @@ mutable struct TransactionContext
   depth::Int  # Track nested transaction contexts
   sqlite_reserved_primary_keys::Dict{Tuple{String, String}, Int64}
   parent::Union{Nothing, TransactionContext}  # the enclosing block's context, or `nothing` at the outermost
+  @atomic closed::Bool  # the block that created it has ended (#839)
 
-  TransactionContext() = new(nothing, nothing, 0, Dict{Tuple{String, String}, Int64}(), nothing)
+  TransactionContext() = new(nothing, nothing, 0, Dict{Tuple{String, String}, Int64}(), nothing, false)
 end
 
 # Task-local storage for transaction context; TODO i need study this more
 const _tx_context = ScopedValue(TransactionContext())
+
+# What the readers below answer when no open context is in scope. Never mutated: every writer
+# checks `depth > 0` first.
+const _NO_TX_CONTEXT = TransactionContext()
+
+_is_closed(ctx::TransactionContext) = @atomic :acquire ctx.closed
+
+# Logged once per process, the first time a reader steps over a closed context: the task issuing
+# the statement was spawned inside a transaction block and outlived it (#839). The flag, not
+# `maxlog`, is what makes it once: readers run several times per statement, and a logger is free to
+# ignore `maxlog`. Worded for both outcomes — the walk may still reach an enclosing block that is
+# open, which the task then joins.
+const _OUTLIVED_BLOCK_WARNED = Threads.Atomic{Bool}(false)
+
+function _warn_outlived_block()
+  Threads.atomic_xchg!(_OUTLIVED_BLOCK_WARNED, true) && return nothing
+  @warn "A task outlived the transaction block it was created in, so its statements no longer run \
+         in that block's transaction. Wait for the task (fetch/wait) inside the block if its work \
+         belongs to the transaction." task = repr(current_task())
+  return nothing
+end
+
+# The innermost context whose block is still running, or `_NO_TX_CONTEXT`. Skips the contexts of
+# blocks that have ended, which only a task that outlived its block can still see (#839).
+function _open_tx_context()
+  ctx = _tx_context[]
+  while ctx !== nothing && ctx.depth > 0
+    _is_closed(ctx) || return ctx
+    _warn_outlived_block()
+    ctx = ctx.parent
+  end
+  return _NO_TX_CONTEXT
+end
 
 """
     get_tx_connection() -> Union{Nothing, <driver connection>}
@@ -371,7 +413,7 @@ on other databases. Handing this one to another database runs the statement on t
 possibly through the other engine's driver (#831).
 """
 function get_tx_connection()
-  ctx = _tx_context[]
+  ctx = _open_tx_context()
   return ctx.depth > 0 ? ctx.conn : nothing
 end
 
@@ -382,7 +424,7 @@ Get the connection pool associated with the current (innermost) transaction cont
 whether a transaction is open on a given pool, enclosing blocks included, use `in_transaction_on`.
 """
 function get_tx_pool()
-  ctx = _tx_context[]
+  ctx = _open_tx_context()
   return ctx.depth > 0 ? ctx.pool : nothing
 end
 
@@ -392,16 +434,22 @@ end
 Check if we're currently inside a transaction context.
 """
 function in_transaction_context()
-  return _tx_context[].depth > 0
+  return _open_tx_context().depth > 0
 end
 
 # The innermost open context on `pool`, walking out through enclosing blocks on other databases;
 # `nothing` when no transaction is open on `pool` (#831). The innermost context alone is not
 # enough: in `atomic(a) do; atomic(b) do; …`, it names only B, while A's transaction is still open.
+# A closed context is stepped over wherever it sits in the chain (#839): a block can end while a
+# block opened under it by another task is still running.
 function _tx_context_for(pool::Union{PormGPostgres, PormGSQLite})
   ctx = _tx_context[]
   while ctx !== nothing && ctx.depth > 0
-    ctx.pool === pool && return ctx
+    if _is_closed(ctx)
+      _warn_outlived_block()
+    elseif ctx.pool === pool
+      return ctx
+    end
     ctx = ctx.parent
   end
   return nothing
@@ -423,7 +471,7 @@ The outermost `run_in_transaction`/`atomic` block is depth `1`; each nested save
 block increments it. Used to derive deterministic, per-level savepoint names (#26).
 """
 function current_transaction_depth()::Int
-  return _tx_context[].depth
+  return _open_tx_context().depth
 end
 
 """
@@ -456,10 +504,13 @@ drives savepoint naming), and a nested block on the **same pool** inherits the o
 reserved-primary-key reservations rather than starting a fresh table. A block on a different pool
 starts a fresh table, because the reservations are keyed by table name only (#831). Being a `ScopedValue` it is
 *dynamically* scoped — tasks spawned inside the block inherit it, and it unwinds automatically,
-including on a throw.
+including on a throw. A spawned task that is still running after the block ends no longer sees it
+as open: its statements run in autocommit on a connection of their own (#839).
 """
 function with_tx_context(f::Function, pool::Union{PormGPostgres, PormGSQLite}, conn)
-  old_ctx = _tx_context[]
+  # The enclosing block still running, not merely the one in scope (#839): a task that outlived
+  # its block and opens one of its own starts a fresh chain at depth 1.
+  old_ctx = _open_tx_context()
   new_ctx = TransactionContext()
   new_ctx.conn = conn
   new_ctx.pool = pool
@@ -474,8 +525,14 @@ function with_tx_context(f::Function, pool::Union{PormGPostgres, PormGSQLite}, c
     same_pool.sqlite_reserved_primary_keys :
     Dict{Tuple{String, String}, Int64}()
   
-  return with(_tx_context => new_ctx) do
-    f()
+  try
+    return with(_tx_context => new_ctx) do
+      f()
+    end
+  finally
+    # Closed on a throw as well as on a return: either way the caller is about to commit or roll
+    # back and hand the connection back, so a task still holding this context must not use it.
+    @atomic :release new_ctx.closed = true
   end
 end
 
@@ -488,21 +545,28 @@ function connection_key_for_pool(pool::Union{PormGPostgres, PormGSQLite})::Union
   return nothing
 end
 
-function ensure_model_transaction_scope(model::PormGModel)
-  tx_pool = get_tx_pool()
-  tx_pool === nothing && return
-  model.connect_key === nothing && throw(InvalidConfigurationError("Model $(model.name) is not bound to a database connection key"))
-  settings = get_settings(model.connect_key)
-  if tx_pool === settings.connections
-    return
-  end
-  active_key = connection_key_for_pool(tx_pool)
-  active_desc = active_key === nothing ? "unknown transaction" : active_key
+# While any transaction is open, an ORM statement must run on a pool that has an open transaction,
+# in this block or an enclosing one; otherwise it would quietly run in autocommit, outside the
+# rollback the caller is relying on. `pool` is the pool the statement EXECUTES on — what
+# `get_settings` resolved from `.db(...)`, a `connection =` override or the model's binding — not
+# the model's binding alone, which a `.db()` call overrides (#838). Raw `fetch` is deliberately
+# looser: it runs in autocommit on a pool with no open transaction, as Django does per connection.
+function ensure_transaction_scope(model::PormGModel, pool::Union{PormGPostgres, PormGSQLite})
+  in_transaction_context() || return
+  in_transaction_on(pool) && return
+  active_key = connection_key_for_pool(get_tx_pool())
+  active_desc = active_key === nothing ? "an unregistered connection" : active_key
+  target_key = connection_key_for_pool(pool)
+  target_desc = target_key === nothing ? "an unregistered connection" : target_key
+  fix = target_key === nothing ? "atomic on that connection" : "atomic(\"$(target_key)\")"
   # TransactionError, not InvalidConfigurationError (#268): the configuration is fine — both
   # connections are correctly declared — and the caller's *call pattern* is what cannot work. Its
   # sibling check, `ConnectionPool.atomic(durable=true)`, reported the same class as
   # QueryBuildError until #268 gave both one honest home.
-  throw(TransactionError("Active transaction on connection $(active_desc) cannot include model $(model.name) bound to $(model.connect_key). Run run_in_transaction(\"$(model.connect_key)\") or move this operation outside the current transaction."))
+  throw(TransactionError("Active transaction on connection $(active_desc) cannot include model \
+    $(model.name) on connection $(target_desc), which has no transaction open. Wrap the call in \
+    $(fix) to give it a transaction of its own on that database (it commits separately: there is \
+    no two-phase commit), or move it outside the current transaction."))
 end
 
 # The connection of the open transaction on `pool`, or `nothing`. Every path that reuses the
@@ -514,17 +578,19 @@ function transaction_connection_for(pool::Union{PormGPostgres, PormGSQLite})
 end
 transaction_connection_for(settings::PormGSettings) = transaction_connection_for(settings.connections)
 
-function get_sqlite_reserved_primary_key_max(model::PormGModel, pk_field::String)
-  ctx = _tx_context[]
-  ctx.depth > 0 || return nothing
+# The reservations live in the transaction context on `pool`, the pool the insert runs on — not the
+# innermost context, which names another database when the call is nested in a block on it (#838).
+function get_sqlite_reserved_primary_key_max(model::PormGModel, pk_field::String, pool::Union{PormGPostgres, PormGSQLite})
+  ctx = _tx_context_for(pool)
+  ctx === nothing && return nothing
   # Keyed on the PHYSICAL table (#59): the reservation is about that table's PK sequence, and two
   # models whose logical names fold together would otherwise share one overlay entry.
   return get(ctx.sqlite_reserved_primary_keys, (model_table_name(model), pk_field), nothing)
 end
 
-function register_sqlite_reserved_primary_key_max!(model::PormGModel, pk_field::String, max_id::Integer)
-  ctx = _tx_context[]
-  ctx.depth > 0 || return Int64(max_id)
+function register_sqlite_reserved_primary_key_max!(model::PormGModel, pk_field::String, max_id::Integer, pool::Union{PormGPostgres, PormGSQLite})
+  ctx = _tx_context_for(pool)
+  ctx === nothing && return Int64(max_id)
 
   key = (model_table_name(model), pk_field)  # physical table (#59) — must match the reader above
   current_max = get(ctx.sqlite_reserved_primary_keys, key, typemin(Int64))

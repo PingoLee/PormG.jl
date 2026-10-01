@@ -206,6 +206,44 @@ end
 
 If you need a task to participate in a transaction, create and start it from inside `run_in_transaction` (e.g., with `@async`) or explicitly acquire and install the transaction connection with `with_tx_context` before running the work.
 
+### Tasks that outlive their block
+
+A task spawned inside the block belongs to the transaction only while the block is running. When
+the block ends, it commits (or rolls back) and hands its connection back to the pool. A task that
+was never awaited and is still running afterwards does not reuse that connection for any statement
+it issues from then on. Those statements run the way they would outside the block: on a database
+with no other transaction open, each one runs in autocommit on a connection of its own, and nothing
+it does after that point is rolled back with the block. (A statement the task issued *before* the
+block ended may still run on the block's connection, before or after the `COMMIT`: nothing orders
+it against the block's end, which is one more reason to await the task inside the block.) PormG logs a
+warning the first time this happens, because an unawaited task inside a transaction is almost
+always a mistake:
+
+```julia
+leaked = Ref{Task}()
+
+PormG.run_in_transaction("db_2") do
+  M.Driver.objects.filter("driverid" => 1).update("code" => "HAM")
+
+  # Not awaited: this task is still running when the block commits
+  leaked[] = @async begin
+    sleep(0.5)
+    in_transaction_context()   # false: the block has already ended
+    M.Driver.objects.filter("driverid" => 2).update("code" => "HEI")   # autocommit, outside the transaction
+  end
+end
+
+wait(leaked[])
+```
+
+Only the block that ended is left behind. If the task outlived an inner block but an enclosing one is
+still running, that enclosing transaction is still open and the task still sees it: a statement on
+its database joins it, and an ORM call on the inner block's database raises `TransactionError` (see
+[Nested Transactions and Savepoints](#Nested-Transactions-and-Savepoints)).
+
+If the task's work belongs to the transaction, `wait` (or `fetch`) it inside the block, as in
+[Single Async Task](#Single-Async-Task) above.
+
 ### Multiple Concurrent Tasks
 
 You can spawn many tasks and let Julia's scheduler coordinate them:
@@ -242,6 +280,11 @@ end
 ```
 
 When the `@sync` block finishes, all tasks have completed and the transaction commits.
+
+Keep nested `atomic` blocks out of concurrent child tasks. Every child shares the one pinned
+connection, and a savepoint is named after its nesting depth, so two children nesting at the same
+time open savepoints with the same name on that connection, and a `ROLLBACK TO` from one can undo
+the other's work.
 
 ---
 
@@ -451,8 +494,10 @@ cannot work:
   be outermost. A transaction open on a different database does not count.
 - [`without_foreign_keys`](@ref) nested inside an already-open transaction on the same database —
   it must be outermost too, on both engines.
-- Touching a model bound to one connection while a transaction is open on another. Open the
-  transaction on that model's own connection instead: `run_in_transaction("<its connect_key>")`.
+- An ORM call that would run on a database with no open transaction while a transaction is open on
+  another. The database that counts is the one the call **runs** on: the model's own connection,
+  or the one `.db("<key>")` routes it to. Wrap the call in `atomic("<that key>")`, or move it
+  outside the transaction.
 
 It is deliberately **not** a `DatabaseError` — the database was never involved.
 
@@ -530,9 +575,22 @@ Semantics:
   it. If it must be transactional, open a transaction on that database as well, around this block or
   inside it: each raw `fetch` then runs in its own database's transaction, however the blocks nest.
   The two transactions still commit separately, because PormG has no two-phase commit.
-- An ORM call is stricter: a model bound to the outer database, used inside a block on another
-  database, raises `TransactionError`. Wrap that call in `atomic` on the model's own database where
-  it happens — with the outer transaction still open, that block is a savepoint on it.
+- An ORM call follows the same rule about *where* it runs, but it refuses instead of falling back
+  to autocommit. It runs on the database it targets: the model's own connection, or the one
+  `.db("<key>")` routes it to. If a transaction is open on that database, in this block or an
+  enclosing one, the call joins it. If not, it raises `TransactionError` before anything is sent.
+  So a model on the outer database, used inside a nested block on another database, runs in the
+  outer transaction. A `.db()` call to a third database with no open transaction is refused. Wrap
+  it in `atomic` on that database to give it a transaction of its own.
+
+```julia
+atomic("db_2") do
+  atomic("db_sl") do
+    M.Driver.objects.filter("driverid" => 1).update("code" => "HAM")   # db_2: joins the outer transaction
+  end
+  M.Driver.objects.db("db_sl").filter("driverid" => 1).update("code" => "HAM")   # TransactionError: no transaction open on db_sl
+end
+```
 
 Savepoints behave **identically on PostgreSQL and SQLite** — both support `SAVEPOINT` /
 `RELEASE SAVEPOINT` / `ROLLBACK TO SAVEPOINT` natively.

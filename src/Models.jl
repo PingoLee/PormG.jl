@@ -3064,8 +3064,11 @@ end
 #═══════════════════════════════════════════════════════════════════════════════
 
 
-function format_text_sql(value::Union{Int, Date, DateTime, ZonedDateTime})
-    return string(value)        
+# `Integer`, not `Int` (#860): an `Int32` or a `UInt8` has the same one base-10 text as the `Int64`
+# it would widen to, and `Int` alone sent both to a raw `MethodError`. `Bool` is an `Integer` too,
+# but its own method below is the more specific one.
+function format_text_sql(value::Union{Integer, Date, DateTime, ZonedDateTime})
+    return string(value)
 end
 function format_text_sql(value::Union{Missing, Nothing})
     return missing
@@ -3089,6 +3092,14 @@ function format_text_sql(value::AbstractArray)
 end
 function format_text_sql(value::Time)
   return string(value)
+end
+# #860: every other type is refused, typed, like the sibling formatters' fallbacks. A float or a
+# `Decimal` has no one text to compare a column against — `1.5` and `1.50` are the same number, and
+# `string(1e10)` is `"1.0e10"` — so guessing one would match nothing, silently. Without this method the
+# value escaped `_guarded_format` as a raw `MethodError`; an `InvalidValueError` is what that guard
+# reports as a `FilterError` naming the field, and what the write path raises as is.
+function format_text_sql(value)
+  throw(InvalidValueError("A text value must be a String, an integer, a date, or a time. Got a $(typeof(value)): pass its text explicitly, e.g. `string(x)`."))
 end
 
 """

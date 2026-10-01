@@ -1828,13 +1828,12 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     numeric_column = column_formatter === nothing || column_formatter === Models.format_number_sql
     sql_type = numeric_column && operand isa Union{Integer,Float16,Float32,Float64} && !(operand isa Bool) ?
                _infer_parameter_sql_type(operand, instruc) : nothing
-    # #576: unguarded, and the issue listed it as SUSPECTED. It still is — no input was found that
-    # reaches `InvalidValueError` here. This arm admits `Integer`/`Float`/`UUID`/`Time` only, and
-    # every mismatched pair those can form against a real column (`format_number_sql(::UUID)`,
-    # `(::Time)`, `format_text_sql(::UUID)`) has no method at all, so it raises `MethodError`, which
-    # `_rethrow_as_filter_error` rethrows untouched by design. Guarded anyway, because the guard is
-    # free and the reachability argument is about today's formatter method tables, not about this
-    # call site — but it fixes no observed leak, and the tests below do not pretend otherwise.
+    # #576: this arm was unguarded, and the issue listed it as SUSPECTED. Guarded since, and the guard
+    # became load-bearing with #860: `format_text_sql` now refuses anything it cannot render as text
+    # with `InvalidValueError`, so `F("surname") == 1.5` (a float or a UUID against a text column)
+    # reaches it and reports a `FilterError`. The pairs this arm can still form against
+    # `format_number_sql` (`::UUID`, `::Time`) have no method, so they raise `MethodError`, which
+    # `_rethrow_as_filter_error` rethrows untouched by design.
     #
     # `field_name` is in scope, but `f` may be `nothing` (a nested expression, an unresolvable
     # path) — there the formatter came from the OPERAND's own type above, so the type label comes

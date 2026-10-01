@@ -1303,7 +1303,9 @@ end
 # RENDERED, with their `?` placeholders in them. Repeating a rendered string would repeat a `?`
 # whose value was bound once, misbinding every parameter after it. Repeating the NODES instead makes
 # each rotation render — and bind — its own operands, in text order. Constructs, never mutates (#508).
-# One operand is left alone: SQLite's `coalesce` needs two, and `Greatest(x)` is not this issue.
+# Fewer than two operands are left alone: the constructors refuse them since #859 (SQLite's `max(x)`
+# with one argument is the AGGREGATE, and its `coalesce` needs two), so only a hand-built node gets
+# here with one, and the guard keeps it from a `coalesce` SQLite would reject.
 function _null_skipping_operands(v::SQLTypeFunction, instruc::SQLInstruction)
   (instruc.connection isa PormGSQLite && v.function_name in ("GREATEST", "LEAST") &&
    v.column isa AbstractVector && length(v.column) >= 2) || return v.column

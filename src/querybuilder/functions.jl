@@ -528,6 +528,21 @@ _text_operand(x::Union{Integer,Float16,Float32,Float64}) = throw(QueryBuildError
   "Write it as a string: \e[4m\e[32m\"$(x)\"\e[0m (#705)."))
 _text_operand(x) = _function_operand(x)
 
+# #859 — `Coalesce`, `Greatest` and `Least` take at least two expressions, as Django's do ("Greatest
+# must take at least two expressions"). One argument is never useful — the result IS that argument —
+# and it was not harmless: SQLite's `max(x)`/`min(x)` are scalar only with two or more arguments, so a
+# one-argument `Greatest(x)` rendered the AGGREGATE `MAX(x)` and collapsed the result to one row (no
+# GROUP BY, no warning), while PostgreSQL's `GREATEST(x)` returned `x` per row. `Coalesce(x)` failed
+# only at SQLite, whose `coalesce` needs two; no arguments at all failed only at the database.
+# Checked after `output_field` (a bad type string reports as itself) and before the operands.
+function _check_operand_count(fname::AbstractString, x::Tuple)
+  length(x) >= 2 && return nothing
+  throw(QueryBuildError(
+    "\e[4m\e[31m$(fname)\e[0m must take at least two expressions; got $(length(x)). With one " *
+    "argument the result is that argument: write it directly " *
+    "(\e[4m\e[32m\"points\"\e[0m or \e[4m\e[32mF(\"points\")\e[0m) (#859)."))
+end
+
 # #696: every `output_field=` goes through here, so a type string is validated when the expression
 # is built rather than when it renders. A field object contributes its canonical `type`; the dialect
 # maps that to the engine's spelling (`BLOB` → `bytea`). `""` has always meant "no cast" to `CASE`.
@@ -821,7 +836,8 @@ end
 """
     Coalesce(args...; output_field=nothing)
 
-Returns the first non-null value in the list of arguments.
+Returns the first non-null value in the list of arguments. It takes two or more arguments: fewer raise
+`QueryBuildError` when the expression is built (#859), since one argument is the argument itself.
 
 A string argument is a column path. A number, a `Bool`, or a `Date`/`DateTime`/`ZonedDateTime`/`Time`
 is a literal that is bound as a parameter
@@ -840,6 +856,7 @@ other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](
 """
 function Coalesce(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
+  _check_operand_count("Coalesce", x)   # #859
   processed_cols = Any[_function_operand(v) for v in x]   # #705
   return FObject(function_name = "COALESCE", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field))
 end
@@ -847,7 +864,8 @@ end
 """
     Greatest(args...; output_field=nothing)
 
-Returns the greatest value in the list of arguments.
+Returns the greatest value in the list of arguments. It takes two or more arguments: fewer raise
+`QueryBuildError` when the expression is built (#859), since one argument is the argument itself.
 
 A string argument is a column path. A number, a `Bool`, or a `Date`/`DateTime`/`ZonedDateTime`/`Time`
 is a literal that is bound as a parameter
@@ -866,6 +884,7 @@ other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](
 """
 function Greatest(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
+  _check_operand_count("Greatest", x)   # #859
   processed_cols = Any[_function_operand(v) for v in x]   # #705
   return FObject(function_name = "GREATEST", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field))
 end
@@ -873,7 +892,8 @@ end
 """
     Least(args...; output_field=nothing)
 
-Returns the least value in the list of arguments.
+Returns the least value in the list of arguments. It takes two or more arguments: fewer raise
+`QueryBuildError` when the expression is built (#859), since one argument is the argument itself.
 
 A string argument is a column path. A number, a `Bool`, or a `Date`/`DateTime`/`ZonedDateTime`/`Time`
 is a literal that is bound as a parameter
@@ -892,6 +912,7 @@ other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](
 """
 function Least(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
+  _check_operand_count("Least", x)   # #859
   processed_cols = Any[_function_operand(v) for v in x]   # #705
   return FObject(function_name = "LEAST", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field))
 end

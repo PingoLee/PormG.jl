@@ -138,7 +138,7 @@ end
   msg = PormG.error_message(err)
   @test !occursin('\e', msg) && !occursin('\n', msg)
   @test occursin("double precision", msg) && occursin("IntegerField()", msg)
-  err = try Coalesce("points"; output_field = "x y"); nothing catch e; e end
+  err = try Coalesce("points", 0; output_field = "x y"); nothing catch e; e end   # two operands (#859)
   @test startswith(PormG.error_message(err), "output_field:")
 
   # A long input fails as `InvalidValueError`, not as PCRE's `match limit exceeded`

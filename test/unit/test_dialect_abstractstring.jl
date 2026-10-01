@@ -220,7 +220,7 @@ struct _MockSl602 <: PormG.PormGSQLite end
       @test wide.column[1] isa String && wide.column[1] == "points"
       @test wide.column[2] isa String && wide.column[2] == "wins"
       @test wide.column[3] isa SQLTypeText && wide.column[3].field == 0
-      @test ctor(_lazy602("points")).column[1] === "points"
+      @test ctor(_lazy602("points"), _lazy602("wins")).column[1] === "points"   # #859: two or more
     end
 
     # `Replace`: column → `String`, find/replace → `Value` (a `SQLText` literal).

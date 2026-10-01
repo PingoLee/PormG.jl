@@ -19,7 +19,9 @@ Four things are pinned:
      Repeating a RENDERED string instead would have repeated a `?` bound once: a misbind.
   3. **The answer.** The rendered statement, executed on an in-memory SQLite, skips NULLs and gives
      NULL only when every argument is NULL.
-  4. **One operand is untouched.** `Greatest(x)` is left as it was; it is a separate question.
+  4. **Fewer than two operands are refused** (#859). A one-argument `Greatest(x)` rendered SQLite's
+     AGGREGATE `MAX(x)` and collapsed the result to one row; the constructors now raise
+     `QueryBuildError`, as Django's do, for `Coalesce` too.
 
 Everything renders through mock connections; the execution uses `SQLite.DB()` in memory — no live
 database.
@@ -32,7 +34,7 @@ using Dates
 using PormG
 using PormG.Models: Model, IDField, FloatField, CharField, DateField
 using PormG.QueryBuilder: inspect_query
-using PormG.Functions: Greatest, Least, Sum
+using PormG.Functions: Greatest, Least, Sum, Coalesce, Value
 
 include("helper_marker_alignment.jl")
 
@@ -90,10 +92,52 @@ end
   @test occursin("CAST(MAX(COALESCE(\"Tb\".\"a\", \"Tb\".\"b\"), COALESCE(\"Tb\".\"b\", \"Tb\".\"a\")) AS INTEGER)", sl)
   @test count("CAST(", sl) == 1
 
-  # One operand is left alone: SQLite's coalesce needs two arguments, and `Greatest(x)` is not
-  # what #844 is about.
-  sl = _gl_inspect(q -> q.values("g" => Greatest("a")), _GL_SL)[:sql_text]
-  @test !occursin("COALESCE", sl)
+  # A single operand never reaches the rewrite: the constructor refuses it (#859, next testset).
+  # This cell asserted a one-argument `Greatest("a")` rendered without rotations — which on SQLite
+  # was the aggregate `MAX("a")`.
+  @test_throws PormG.QueryBuildError Greatest("a")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #859: Coalesce/Greatest/Least take at least two expressions
+# SQLite's `max(x)`/`min(x)` are scalar only with two or more arguments, so a one-argument
+# `Greatest(x)` rendered the AGGREGATE `MAX(x)` and returned ONE row where PostgreSQL returned `x`
+# per row. One argument is never useful (the result is the argument), so the constructors refuse it
+# — and zero arguments, and `Coalesce(x)`, which SQLite's `coalesce` rejects — as Django's do.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#859: Coalesce/Greatest/Least refuse fewer than two arguments" begin
+  for (name, ctor) in (("Coalesce", Coalesce), ("Greatest", Greatest), ("Least", Least))
+    @testset "$name" begin
+      one = ["a"]      # a splat of one column: the shape a computed argument list takes
+      for args in ((), ("a",), (PormG.F("a"),), (Value(1),), Tuple(one))
+        err = try ctor(args...); nothing catch e; e end
+        @test err isa PormG.QueryBuildError
+        # The message names the function the caller wrote, and the way out.
+        msg = PormG.error_message(err)
+        @test occursin(name, msg) && occursin("at least two", msg) && occursin("#859", msg)
+      end
+      # The count is checked after `output_field`: a valid type does not hide the refusal…
+      @test_throws PormG.QueryBuildError ctor("a"; output_field = "integer")
+      # …and a malformed type still reports as itself, before the count.
+      @test_throws PormG.InvalidValueError ctor("a"; output_field = "x y")
+      # Two arguments build, as before.
+      @test ctor("a", "b") isa PormG.QueryBuilder.FObject
+    end
+  end
+
+  # The defect itself, executed: the old one-argument render collapsed three rows to one on SQLite.
+  isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+  db = Main.SQLite.DB()
+  try
+    Main.SQLite.DBInterface.execute(db, "CREATE TABLE r (id INTEGER, a REAL)")
+    Main.SQLite.DBInterface.execute(db, "INSERT INTO r VALUES (1, 1.0), (2, 5.0), (3, 3.0)")
+    # Read inside the iteration: a SQLite row is a view of the cursor.
+    nrows(sql) = length([row.id for row in Main.SQLite.DBInterface.execute(db, sql)])
+    @test nrows("SELECT id, MAX(a) AS g FROM r") == 1          # what `Greatest("a")` rendered
+    @test nrows("SELECT id, MAX(a, a) AS g FROM r") == 3       # the scalar form needs two
+  finally
+    close(db)
+  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

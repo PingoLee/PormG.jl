@@ -476,6 +476,13 @@ const DOCERR_CASES = [
         () -> PormG.Functions.Concat("year", PormG.Functions.Value("0"), "round"; output_field = "integer"),
     ),
     (
+        # #859. `Coalesce`, `Greatest` and `Least` take two or more arguments; one argument is
+        # refused when the expression is built (on SQLite it rendered the aggregate `MAX(x)`).
+        "read/functions_and_dates.md — Greatest with fewer than two arguments raises (#859)",
+        QueryBuildError,
+        () -> PormG.Functions.Greatest("dob"),
+    ),
+    (
         # #822. A temporal cast target other than `date` raises on SQLite, which has no time types:
         # `CAST(… AS TIMESTAMP)` there turns '2020-03-29 10:11:12' into the number 2020.
         "read/functions_and_dates.md — a timestamp cast raises on SQLite (#822)",

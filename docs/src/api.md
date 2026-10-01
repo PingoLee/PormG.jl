@@ -332,10 +332,10 @@ df = M.Result.objects.values(
 | Function | Description | Example |
 | :--- | :--- | :--- |
 | `Value(x)` | Literal value in SQL | `Value("hello")` |
-| `Coalesce(args...)` | First non-null value | `Coalesce("nickname", "forename")` |
+| `Coalesce(args...)` | First non-null value (two or more arguments) | `Coalesce("nickname", "forename")` |
 | `NullIf("field", value)` | Returns NULL if equal | `NullIf("code", Value(""))` |
-| `Greatest(args...)` | Maximum of values | `Greatest("points", 0)` |
-| `Least(args...)` | Minimum of values | `Least("points", 100)` |
+| `Greatest(args...)` | Maximum of values (two or more arguments) | `Greatest("points", 0)` |
+| `Least(args...)` | Minimum of values (two or more arguments) | `Least("points", 100)` |
 | `Cast("field", type)` | Type casting — a field object or a [type string](read/functions_and_dates.md#Cast-—-Type-Conversion) | `Cast("points", IntegerField())`, `Cast("points", "numeric(10,2)")` |
 | `Extract("field", "part")` | Extract date/time part | `Extract("dob", "year")` |
 | `ToChar("field", fmt)` | Format to string | `ToChar("dob", "YYYY-MM")` |

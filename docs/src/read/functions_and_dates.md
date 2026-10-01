@@ -320,6 +320,10 @@ that PormG binds as a parameter. A **string literal** needs `Value(...)`: `NullI
 would read `""` as a column name. Any other value raises `QueryBuildError` when the expression is
 built.
 
+`Coalesce`, `Greatest` and `Least` take two or more arguments. With fewer, they raise
+`QueryBuildError` when the expression is built: one argument is the argument itself, so write the
+column with `F("points")` directly.
+
 On SQLite a date or time literal binds as the same text its column stores (`Date(2021, 3, 28)` is
 `"2021-03-28"`), and an integer of any width binds as a 64-bit integer, so a comparison with a
 `DateField` column picks the same rows as on PostgreSQL. The *result* reads back as the column does
@@ -387,6 +391,10 @@ rotation of the arguments: `Greatest(a, b)` becomes
 `MAX(COALESCE(a, b), COALESCE(b, a))`. A literal argument binds once per place it appears. The SQL
 grows with the square of the argument count, so with `n` arguments each one is rendered `n` times;
 a `Subquery` argument runs once per rotation.
+
+A single argument is refused (see the start of this section). On SQLite, `MAX(x)` and `MIN(x)` with
+one argument are the *aggregates*, so a one-argument `Greatest` used to collapse the result to one
+row.
 
 ### `Cast` — Type Conversion
 

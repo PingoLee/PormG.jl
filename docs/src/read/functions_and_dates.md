@@ -416,9 +416,20 @@ name is a keyword in the SQL and cannot be a bind parameter, so PormG only write
 parsed, never the text it was given. That also refuses a few spellings PostgreSQL itself accepts: a
 schema-qualified or quoted name (`public.mood`, `"Mood"`), `interval year to month`, a negative
 scale, and a `COLLATE` clause. The same rules apply to the `output_field=` string of `Case`,
-`Coalesce`, `Concat`, `Greatest` and `Least`. The SQLite date rule above applies to `Case`'s
-`output_field`, the one that renders a cast there; `Coalesce`, `Greatest` and `Least` render no cast
-on SQLite and take the operand's value as it is.
+`Coalesce`, `Concat`, `Greatest` and `Least`.
+
+`Case`, `Coalesce`, `Greatest` and `Least` cast their result to the `output_field` they are given, on
+both engines, as `Cast` does. The SQLite date rule above applies to them too: a `date` renders
+`date(…)`, and a timestamp, time, interval or array type raises `BackendCapabilityError` on SQLite.
+The value, a filter on it, and a CTE column typed by it therefore all agree. Before the #852 fix,
+`Coalesce`, `Greatest` and `Least` rendered no cast on SQLite, and `Greatest` and `Least` rendered
+none on PostgreSQL either:
+
+```julia
+# The best of a result's points and zero, as an integer on both engines:
+# (GREATEST(…))::integer on PostgreSQL, CAST(MAX(…) AS INTEGER) on SQLite
+M.Result.objects.values("resultid", "pts" => Greatest("points", 0; output_field = "integer"))
+```
 
 `Concat` renders no cast on either engine, because its result is always text. Its `output_field`
 must therefore be a text type (`CharField()`, `TextField()`, `"text"`, `"varchar(20)"`). Any other

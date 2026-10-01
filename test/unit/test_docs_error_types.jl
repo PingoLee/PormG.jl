@@ -459,18 +459,14 @@ const DOCERR_CASES = [
         end,
     ),
     (
-        # #822. The CTE-typing section: a declared `date` on a function that renders no cast on
-        # SQLite (`Coalesce`) is refused there; `Cast` and `Case` are accepted.
-        "read/subqueries_and_ctes.md — a Coalesce CTE column declared date is refused on SQLite (#822)",
-        QueryBuildError,
-        () -> begin
-            body = DOCERR_RESULT_SL.objects
-            body.values("resultid", "d" => PormG.Functions.Coalesce("points", 0; output_field = "date"))
-            q = DOCERR_RESULT_SL.objects
-            q.with("c" => body, join_field = "resultid" => "resultid")
-            q.values("resultid", "c__d")
-            q.list(show_query = :dict)
-        end,
+        # #852 (was #822's Coalesce-date refusal, which #852 lifted). `Coalesce`, `Greatest` and
+        # `Least` cast to their `output_field` on SQLite too, so a temporal type other than `date`
+        # raises there, as `Cast` does.
+        "read/functions_and_dates.md — a timestamp output_field on Coalesce raises on SQLite (#852)",
+        BackendCapabilityError,
+        () -> DOCERR_RESULT_SL.objects.
+            values("resultid", "t" => PormG.Functions.Coalesce("points", 0; output_field = "timestamp")).
+            list(show_query = :dict),
     ),
     (
         # #835. `Concat` renders no cast on either engine, so a non-text `output_field` is refused

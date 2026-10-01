@@ -696,13 +696,100 @@ end
       @test rendered[1][:parameters] == rendered[2][:parameters]
       # Typed AS TEXT, not merely unrefused: a number compared with a text alias is formatted as
       # text, which is what makes `LOWER(…) = $1` executable on PostgreSQL (it has no `text = integer`
-      # operator). SQLite keeps native numbers by design (`_sqlite_preserve_native_parameter`).
+      # operator). On SQLite too since #851: this cell asserted the native `5` there, which a text
+      # expression never equals (`('' || 5) = 5` is 0 — no affinity on either side).
       for pred in ("nm" => 5, Q("nm" => 5))
         q = Model_.objects
         q.values("resultid", "nm" => projection)
         q.filter(pred)
-        @test last(inspect_query(q)[:parameters]) == (backend === :postgres ? "5" : 5)
+        @test last(inspect_query(q)[:parameters]) == "5"
       end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #851: SQLite keeps a number native only for a NUMBER-typed alias
+# `_sqlite_preserve_native_parameter` kept every Number native on SQLite, whatever the alias's type,
+# so a number compared with a text expression bound `7` against `'7'` and matched no rows (neither
+# side has affinity). A text alias now binds the number as text on both engines; a number alias
+# (an aggregate, a cast to integer) still binds it native on SQLite, which its `SUM(…) = '1.5'`
+# counterpart needs. The last block executes the SQLite SQL, so the cell is the rows, not a vector.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#851: SQLite binds a number as text against a text alias, native against a number alias" begin
+  # The alias keyed like a race code: the race id as text. `Concat` is text on both engines.
+  race_code() = PormG.Functions.Concat(["raceid", Value("")])
+  # The bound value of `filter(pred)` over `values(alias => projection)`, for a backend's model.
+  function bound(Model_, projection, pred)
+    q = Model_.objects
+    q.values("resultid", "rk" => projection)
+    q.filter(pred)
+    return inspect_query(q)[:parameters]
+  end
+  # A two-element `@in` list as bound: ONE array parameter on PostgreSQL, two `?` on SQLite.
+  in_list(params, backend) = backend === :postgres ? last(params) : params[end-1:end]
+
+  @testset "$backend — a text alias binds the number as text" for (backend, Model_) in _Q_AGG_MODELS
+    # Both spellings, and both operands of a range: each is the right-hand side of a comparison.
+    @test last(bound(Model_, race_code(), "rk" => 7)) == "7"
+    @test last(bound(Model_, race_code(), Q("rk" => 7))) == "7"
+    @test bound(Model_, race_code(), "rk__@gte" => 7)[end] == "7"
+    @test bound(Model_, race_code(), "rk__@range" => [1, 9])[end-1:end] == ["1", "9"]
+    @test in_list(bound(Model_, race_code(), "rk__@in" => [7, 9]), backend) == ["7", "9"]
+    # `ToChar` is text too: its alias had no type at all, so the year bound as the number 2020.
+    @test last(bound(Model_, PormG.QueryBuilder.ToChar("race_date", "YYYY"), "rk" => 2020)) == "2020"
+  end
+
+  @testset "$backend — a number alias keeps its native value on SQLite" for (backend, Model_) in _Q_AGG_MODELS
+    # `format_number_sql(1.5)` is the string "1.5": PostgreSQL binds it (`$1` is typed by the
+    # column), SQLite keeps the Float64, because `SUM(points) = '1.5'` is false there.
+    @test last(bound(Model_, Sum("points"), "rk__@gt" => 1.5)) == (backend === :postgres ? "1.5" : 1.5)
+    # An integer is native on both: `format_number_sql(::Integer)` returns it as is.
+    @test last(bound(Model_, PormG.QueryBuilder.Cast("points", "integer"), "rk" => 7)) === 7
+    # A membership list keeps each element native on SQLite, as a range does: before, the list
+    # reached the scalar rule whole, was never a `Number`, and bound `["25.5", "1.5"]`.
+    @test in_list(bound(Model_, Sum("points"), "rk__@in" => [25.5, 1.5]), backend) ==
+          (backend === :postgres ? ["25.5", "1.5"] : [25.5, 1.5])
+  end
+
+  # The rows, not the vector: run the SQLite SQL the builder emits against an in-memory table. The
+  # fix is a match where there was none; the PostgreSQL side is the matching row by construction.
+  @testset "SQLite — the filter matches the row" begin
+    isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+    db = Main.SQLite.DB()
+    # Read inside the iteration: a SQLite row is a view of the cursor, gone once it advances.
+    column(sql, name, params = ()) = [getproperty(row, name) for row in Main.SQLite.DBInterface.execute(db, sql, params)]
+    try
+      Main.SQLite.DBInterface.execute(db, "CREATE TABLE q_agg_results (resultid INTEGER, raceid INTEGER, " *
+                                          "points REAL, surname TEXT, race_date TEXT)")
+      Main.SQLite.DBInterface.execute(db, "INSERT INTO q_agg_results VALUES (1, 7, 25.0, 'Hamilton', '2020-03-29')")
+      # The issue's premise, stated directly: a text expression never equals a native integer.
+      @test column("SELECT ('' || 7) = 7 AS v", :v) == [0]
+      @test column("SELECT ('' || 7) = '7' AS v", :v) == [1]
+      for pred in ("rk" => 7, Q("rk" => 7))
+        q = QAggSlResult.objects
+        q.values("resultid", "rk" => race_code())
+        q.filter(pred)
+        insp = inspect_query(q)
+        # One row, the race-7 result; the native `7` matched none before #851.
+        @test column(insp[:sql_text], :resultid, insp[:parameters]) == [1]
+      end
+      # The two siblings the review of #851 found, executed the same way.
+      sibling_cases = (
+        # `strftime('%Y', …) = 2020` against the text '2020': no row while the year bound native.
+        ("ToChar", "rk" => PormG.QueryBuilder.ToChar("race_date", "YYYY"), "rk" => 2020),
+        # `SUM(points) IN ('25.0')`: a REAL never equals text, so no row while the list bound text.
+        ("Sum @in", "rk" => Sum("points"), "rk__@in" => [25.0, 1.5]),
+      )
+      for (label, projection, pred) in sibling_cases
+        q = QAggSlResult.objects
+        q.values("resultid", projection)
+        q.filter(pred)
+        insp = inspect_query(q)
+        @test column(insp[:sql_text], :resultid, insp[:parameters]) == [1]
+      end
+    finally
+      close(db)
     end
   end
 end

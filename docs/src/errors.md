@@ -34,7 +34,7 @@ Catch the umbrella when you want a category, the concrete type when you want a r
 | `row.driverid` on an unprojected `ForeignKey` / `OneToOneField` | `LazyTraversalError` | PormG never lazily loads a relation — project it with `values(...)` |
 | any filter, `values` or `order_by` | `UnknownFieldError` | The field name does not exist on the model (lookups are case-sensitive). Names the table searched and its available fields |
 | any filter | `FilterError` | The predicate itself is malformed |
-| PostgreSQL-only features on SQLite | `BackendCapabilityError` | e.g. `iunaccent_*`, the `regex` / `iregex` lookups and their negated twins, JSONB containment, window `frame=`, `with_advisory_lock(...; on_missing_lock = :error)`, a `ToChar` format outside the portable table, a `Cast`, or a `Case` `output_field`, to `timestamp`, `time` or `interval` |
+| PostgreSQL-only features on SQLite | `BackendCapabilityError` | e.g. `iunaccent_*`, the `regex` / `iregex` lookups and their negated twins, JSONB containment, window `frame=`, `with_advisory_lock(...; on_missing_lock = :error)`, a `ToChar` format outside the portable table, a `Cast`, or a `Case`/`Coalesce`/`Greatest`/`Least` `output_field`, to `timestamp`, `time` or `interval` |
 | `makemigrations` on SQLite | `BackendCapabilityError` | A `DecimalField` declares `max_digits` above 15, which SQLite cannot store exactly — see [`DecimalField`](fields.md#DecimalField(max_digits,-decimal_places)) |
 | anything else about query shape | `QueryBuildError` | The long-tail default |
 

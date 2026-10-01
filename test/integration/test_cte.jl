@@ -756,6 +756,58 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Coalesce/Greatest output_field is what the value is, on both engines (#852)
+# `start_at` is a timestamp — on SQLite the stored text `'2009-03-29T06:00:00.000+00:00'`. Declared
+# `date`, `Coalesce("start_at", "date")` was believed by both readers while SQLite rendered no cast,
+# so a date filter compared that timestamp text with `'2009-03-29'` and matched nothing (and the CTE
+# shape was refused outright). It now renders `date(COALESCE(…))`. Expected values come from the
+# plain `date` column, not from the cast under test.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Coalesce/Greatest output_field casts on both engines (#852)" begin
+    race_day() = Coalesce("start_at", "date"; output_field = "date")
+
+    @testset "an alias declared date filters, and reads back, as a date" begin
+        q = M.Race.objects
+        q.filter("year" => 2009)
+        q.values("raceid", "day" => race_day())
+        q.filter("day" => Date(2009, 3, 29))     # the 2009 Australian GP
+        df = q |> DataFrame
+        @test df.raceid == [1]
+        @test df[1, :day] isa Date && df[1, :day] == Date(2009, 3, 29)
+    end
+
+    @testset "a CTE column declared date filters by a date string" begin
+        body = M.Race.objects
+        body.filter("year" => 2009)
+        body.values("raceid", "day" => race_day())
+        q = M.Race.objects
+        q.with("c" => body, join_field = "raceid" => "raceid")
+        q.filter("c__day__@gte" => "2009-06-01")
+        q.values("raceid")
+        got = sort((q |> DataFrame).raceid)
+
+        expected = sort((M.Race.objects.filter("year" => 2009, "date__@gte" => "2009-06-01").
+            values("raceid") |> DataFrame).raceid)
+        @test !isempty(expected)
+        @test got == expected
+    end
+
+    @testset "Greatest declared integer filters by a number" begin
+        plain = M.Result.objects.filter("raceid" => 1).values("resultid", "points") |> DataFrame
+        expected = sort(plain.resultid[plain.points .== 10])
+        @test length(expected) == 1           # the winner's 10 points
+
+        q = M.Result.objects
+        q.filter("raceid" => 1)
+        q.values("resultid", "pts" => Greatest("points", 0; output_field = "integer"))
+        q.filter("pts" => 10)
+        df = q |> DataFrame
+        @test sort(df.resultid) == expected
+        @test all(x -> x isa Integer, df.pts)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CTE column typed from F arithmetic or a declared alias type (#823)
 # A body projecting `F` directly (`"gain" => F("grid") - F("positionorder")`) died as a MethodError
 # before any SQL ran, and `Cast(x, "int8")` / `output_field = PositiveIntegerField()` were refused as

@@ -528,8 +528,17 @@ function _group_window_terms!(instruc::SQLInstruction)
   return nothing
 end
 
-function _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc::SQLInstruction)
-  if instruc.connection isa PormGSQLite && raw_value isa Union{Number,Bool}
+# SQLite keeps a number compared with a NUMBER-typed alias native: an aggregate or arithmetic result
+# has no column affinity there, and neither has a bound parameter, so `SUM(x) = '1.5'` — what
+# `format_number_sql(1.5)` returns — is false. The same reasoning reverses for a TEXT alias (#851):
+# `LOWER(…)`, `a || b`, `COALESCE(<text>, …)` have no affinity either, so a native `7` against
+# `'7'` is false and the filter matched nothing where PostgreSQL bound `"7"` and matched. The value
+# therefore stays native only for the formatters whose SQL type is a number or a boolean — a
+# whitelist, because a node may carry its own formatter (`ToChar(…; formatter = …)`), and anything
+# but a number must bind as its formatter wrote it, exactly as the WHERE path does for a column.
+function _sqlite_preserve_native_parameter(raw_value, formatted_value, formatter, instruc::SQLInstruction)
+  if instruc.connection isa PormGSQLite && raw_value isa Union{Number,Bool} &&
+     (formatter === Models.format_number_sql || formatter === Models.format_bool_sql)
     return raw_value
   end
   return formatted_value
@@ -565,9 +574,13 @@ function _resolve_having_filter_value(alias::MemoKey, raw_value, instruc::SQLIns
                                     subject = "projection alias")
   # #654: a range is two scalars formatted as one iterable lookup, so the SQLite native-value rule
   # applies per operand — exactly what each would get as the right-hand side of a `@gte`/`@lte`.
-  operator in ("BETWEEN", "NOT BETWEEN") &&
-    return [_sqlite_preserve_native_parameter(r, f, instruc) for (r, f) in zip(raw_value, formatted_value)]
-  return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
+  # #851: so is a membership list. `@in`/`@nin` reached the scalar call below with a `Vector`, which
+  # is never a `Number`, so `Sum("points")` filtered `@in => [25.5, 1.5]` bound `["25.5", "1.5"]` and
+  # matched nothing on SQLite where `=` matched. Same condition as `_format_filter_value`'s
+  # element-wise arm, so an element is kept native exactly when it was formatted on its own.
+  operator in _ITERABLE_LOOKUP_OPERATORS && raw_value isa AbstractArray &&
+    return [_sqlite_preserve_native_parameter(r, f, formatter, instruc) for (r, f) in zip(raw_value, formatted_value)]
+  return _sqlite_preserve_native_parameter(raw_value, formatted_value, formatter, instruc)
 end
 
 # The formatter a HAVING/alias filter value must satisfy, resolved from whatever the alias projects.
@@ -788,7 +801,12 @@ end
 # them renders a cast, and `Concat` — the one that takes `output_field` — refuses a non-text type when
 # it is built (#835), so whenever a CTE body can type a `Concat` column (it needs an `output_field`
 # there), it types it text too.
-const _TEXT_OUTPUT_FUNCTIONS = ("LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "REPLACE", "CONCAT")
+#
+# `EXTRACT_DATE` is `ToChar` (`to_char` / `strftime`, text on both engines). Its alias had no type —
+# `PormGTypeField` keys `TO_CHAR`, a name no node carries — so a number compared with it bound as
+# given: `strftime('%Y', …) = 2020` matched nothing on SQLite, the #851 symptom by another route. A
+# `ToChar` built with its own `formatter=` keeps it: `p.formatter` is checked first.
+const _TEXT_OUTPUT_FUNCTIONS = ("LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "REPLACE", "CONCAT", "EXTRACT_DATE")
 # Functions whose result has the type of their operands — the first one that names a type decides.
 const _OPERAND_TYPED_FUNCTIONS = ("MAX", "MIN", "COALESCE", "GREATEST", "LEAST", "NULLIF")
 
@@ -849,12 +867,13 @@ _expression_formatter(::Any, ::SQLInstruction) = nothing
 #
 # #824: the `@date` transform is a date for the same reason — `(col)::date` on PostgreSQL,
 # `strftime('%Y-%m-%d', …)` on SQLite (`Dialect.DATE`) — whatever its operand. `COALESCE`, `GREATEST`
-# and `LEAST` render no cast on SQLite, so their value is one operand's own text: they are typed only
-# when every operand agrees (`_multi_operand_kind`). `NULLIF(a, b)` returns `a` or NULL, so it is `a`.
+# and `LEAST` declared `date` are dates for the `Cast` reason: since #852 they render the cast on both
+# engines (`date(…)` on SQLite). Otherwise their value is one operand's own: they are typed only when
+# every operand agrees (`_multi_operand_kind`). `NULLIF(a, b)` returns `a` or NULL, so it is `a`.
 const _KIND_PRESERVING_FUNCTIONS = ("MAX", "MIN", "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE")
 const _AGREEING_OPERAND_FUNCTIONS = ("COALESCE", "GREATEST", "LEAST")
 function _function_projection_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)::Union{CanonicalType,Nothing}
-  if p isa FObject && p.function_name in ("CAST", "CASE")
+  if p isa FObject && p.function_name in ("CAST", "CASE", "COALESCE", "GREATEST", "LEAST")
     declared = get(p.kwargs, p.function_name == "CAST" ? "type" : "output_field", nothing)
     declared isa AbstractString && _sql_type_field(declared) isa Models.sDateField && return CDate()
   end
@@ -871,8 +890,10 @@ _function_projection_kind(::Any, ::SQLInstruction) = nothing
 # same flavour). An operand with no kind — a text or number column, a number, arithmetic, a function
 # PormG does not type — disqualifies the whole projection: the value may be that operand's, and a
 # kind taken from the others would run text through a date parser (`Coalesce("note", Date(…))`). A
-# NULL literal is skipped: it is never the value. A declared `output_field` is kept only when it
-# names the kind the operands agree on — SQLite renders no cast here, so it cannot change the value.
+# NULL literal is skipped: it is never the value. A declared `output_field` other than `date` (which
+# `_function_projection_kind` answers first) is kept only when it names the kind the operands agree on:
+# the cast it renders (#852) is not a read kind of its own — `Cast(x, "numeric(10,2)")` records none
+# either — so a declaration that disagrees with the operands records nothing.
 function _multi_operand_kind(p::FObject, instruc::SQLInstruction)::Union{CanonicalType,Nothing}
   kind = nothing
   for operand in (p.column isa AbstractVector ? p.column : (p.column,))
@@ -941,6 +962,11 @@ end
 # number, boolean and date families (a timestamp, which has two representations, an array, `bytea`)
 # answers `nothing`.
 #
+# #852: an ARRAY answers `nothing` whatever its element. The split on `(` below drops the suffix, so
+# `"numeric(10,2)[]"` came back as a scalar `DecimalField` (and `"varchar(20)[]"` as `CharField`) while
+# `"integer[]"` answered `nothing` — a `Cast` to an array typed as a scalar by both readers.
+# `cast_type_name` writes every array suffix as a trailing `[]`, so the check is exact.
+#
 # #812: one table for both readers. A CTE column typed from `Case(…; output_field = …)` needs a FIELD
 # (`_set_field_from_sql_function`, ctes.jl), a projection-alias filter only its formatter; answering
 # the formatter off the same field is what keeps the two from ever disagreeing on a type name.
@@ -951,6 +977,7 @@ end
 # no cast enforces the sign. Widening this also widens the alias filter: a value compared with
 # `Cast(x, "int8")` is now checked as a number, where it used to bind unchecked.
 function _sql_type_field(type_name::AbstractString)::Union{PormGField,Nothing}
+  Base.endswith(strip(type_name), "]") && return nothing
   base = lowercase(strip(first(split(type_name, '('))))
   base == "text" && return Models.TextField()
   base in ("varchar", "character varying", "char", "character") && return Models.CharField()

@@ -395,12 +395,15 @@ ALTER would fail on — not an estimate:
 - `:integer_range` — the value as it would round, against the new width's range.
 - `:decimal_precision` — the value rounded to the new scale, which can carry into a digit the new
   precision does not have (`9.999` into `numeric(3,2)`).
+- `:add_not_null` — every row: the column does not exist yet, and a NOT NULL column with no default
+  has nothing to put in any of them (#829).
 """
 function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::Union{Nothing, Tuple{String, Vector{Any}}}
   lossy_alter_class(f) === :rows || return nothing
   table = Dialect._quote_table_ddl(f.table)
   col = "\"$(Dialect._quote_table_ddl(f.column))\""
   ph(i) = _precheck_ph(conn, i)
+  f.kind === :add_not_null && return ("SELECT COUNT(*) AS n FROM \"$table\"", Any[])
   pred, params = if f.kind === :set_not_null
     "$col IS NULL", Any[]
   elseif f.kind === :non_negative_check
@@ -443,6 +446,23 @@ end
 
 _live_column_exists(conn::PormGSQLite, table::AbstractString, column::AbstractString)::Bool =
   String(column) in _sqlite_table_xinfo_columns(conn, table)
+
+function _live_table_exists(conn::PormGPostgres, table::AbstractString)::Bool
+  rows = fetch(conn, "SELECT count(*) AS n FROM pg_class WHERE oid = to_regclass(quote_ident(\$1))",
+               [String(table)]) |> DataFrame
+  return nrow(rows) > 0 && rows[1, :n] > 0
+end
+
+_live_table_exists(conn::PormGSQLite, table::AbstractString)::Bool =
+  !isempty(_sqlite_table_xinfo_columns(conn, table))
+
+# Does the live schema still describe what the finding is about? For a change to an existing column,
+# the column is there; for a column the plan ADDS (#829), the table is there and the column is NOT —
+# a header naming a column that already exists was applied already (the #81 re-archive) or edited.
+_finding_applies(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::Bool =
+  f.kind === :add_not_null ?
+    (_live_table_exists(conn, f.table) && !_live_column_exists(conn, f.table, f.column)) :
+    _live_column_exists(conn, f.table, f.column)
 
 """
     _precheck_lossy_alters(conn, findings; timeouts) -> Vector{LossyAlter}
@@ -494,7 +514,7 @@ function _precheck_lossy_alters(conn::PormGPostgres, findings::Vector{LossyAlter
           # is the one worth reporting.
           gone = try
             with_transaction(conn, "ROLLBACK TO SAVEPOINT pormg_precheck;", conn = leased)
-            !_live_column_exists(conn, f.table, f.column)
+            !_finding_applies(conn, f)
           catch
             false
           end
@@ -522,7 +542,7 @@ end
 # One finding, counted — or `nothing` when its column is gone. On PostgreSQL it runs inside
 # `_precheck_lossy_alters`' transaction context, so the plain `fetch`es use its connection.
 function _precheck_one(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::Union{Nothing, LossyAlter}
-  if !_live_column_exists(conn, f.table, f.column)
+  if !_finding_applies(conn, f)
     _warn_stale_lossy_alter(f)
     return nothing
   end
@@ -534,8 +554,14 @@ function _precheck_one(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::
 end
 
 _warn_stale_lossy_alter(f::LossyAlter) =
-  @warn("The plan's header records a lossy change to a column the database does not have, so it is ignored. The plan was edited by hand, or another instance already applied it; if you edited it, regenerate it with makemigrations().",
+  @warn("The plan's header records a lossy change to a column the database does not have (or adds a column it already has), so it is ignored. The plan was edited by hand, or another instance already applied it; if you edited it, regenerate it with makemigrations().",
         finding = _lossy_alter_summary(f))
+
+# What to do instead, for a kind whose way out is not "fix the data" — appended once per kind present.
+const _LOSSY_ALTER_HINTS = Dict{Symbol, String}(
+  :add_not_null => "A new NOT NULL column needs a value for the rows already there: declare a `default` " *
+                   "(or `db_default`), or add the column with `null = true`, fill it, then make it NOT NULL " *
+                   "in a later migration.")
 
 # The findings `migrate` must refuse whatever the caller opts into: rows that would fail, and changes
 # PostgreSQL cannot apply as planned.
@@ -560,7 +586,8 @@ function _refuse_failing_alters(findings::Vector{LossyAlter}; interactive::Bool)
   isempty(failing) && return true
   msg = "The plan changes $(length(failing)) column(s) in a way the database would refuse on existing " *
         "rows, or cannot apply at all. Nothing was applied. Fix the data (or the models file) and run " *
-        "makemigrations() again; `destructive = true` does not bypass this."
+        "makemigrations() again; `destructive = true` does not bypass this." *
+        join((" " * _LOSSY_ALTER_HINTS[k] for k in unique(f.kind for f in failing) if haskey(_LOSSY_ALTER_HINTS, k)))
   (interactive && (stdin isa Base.TTY)) || throw(MigrationPrecheckError(msg, failing))
   @error(_emsg("\e[31m$msg\e[0m"))
   for f in failing

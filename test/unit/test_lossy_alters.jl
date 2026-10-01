@@ -554,3 +554,142 @@ end
         @test err isa MigrationPrecheckError
     end
 end
+
+# =============================================================================
+# #829: a NEW NOT NULL column with no default
+# It has no `ColumnDelta` — `_add_new_field` plans it, not `_plan_column_change!` — so #803 never
+# saw it. PostgreSQL's `ADD COLUMN … NOT NULL` fails on the first existing row; SQLite's refused it
+# on every table, even an empty one. Now it is an `:add_not_null` finding counted against the whole
+# table, and SQLite adds the column nullable and tightens it in the rebuild, so both engines fail
+# exactly when the table has rows — and the pre-check refuses that before any write.
+# =============================================================================
+
+_la829_kinds(field, conn; temporary_default = nothing) =
+    [f.kind for f in Migrations._lossy_add_column(Migrations.column_spec(field, conn; name = "grid"), conn;
+                                                  table = "t", temporary_default = temporary_default)]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#829): the added-column classifier and its harmless neighbours
+# Only a NOT NULL column with nothing to fill the existing rows is a finding. A default, a db_default,
+# the planner's temporary default (#607) and an identity all fill them; a nullable column needs none.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#829: a new NOT NULL defaultless column is a finding; anything that fills the rows is not" begin
+    M = Models
+    for conn in (PG_LA803, SL_LA803)
+        @test _la829_kinds(M.IntegerField(), conn) == [:add_not_null]
+        @test _la829_kinds(M.CharField(max_length = 3), conn) == [:add_not_null]
+        @test isempty(_la829_kinds(M.IntegerField(null = true), conn))
+        @test isempty(_la829_kinds(M.IntegerField(default = 0), conn))
+        @test isempty(_la829_kinds(M.DateTimeField(db_default = "CURRENT_TIMESTAMP"), conn))
+        # #607: a NOT NULL temporal column gets a temporary default the plan later drops.
+        @test isempty(_la829_kinds(M.DateTimeField(), conn; temporary_default = "1970-01-01"))
+        # The engine fills an identity itself.
+        @test isempty(_la829_kinds(M.IDField(), conn))
+    end
+    # The finding names the table and column, with no old type: the column does not exist yet.
+    f = only(Migrations._lossy_add_column(Migrations.column_spec(Models.IntegerField(), PG_LA803; name = "grid"),
+                                          PG_LA803; table = "race829"))
+    @test (f.table, f.column, f.old_type) == ("race829", "grid", "")
+    @test lossy_alter_class(f) === :rows
+    # The summary says what is being added rather than an arrow from an empty type.
+    @test Migrations._lossy_alter_summary(f) == "\"race829\".\"grid\": add_not_null ($(f.new_type))"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#829): recorded by the planner under the catalog's table name
+# `_add_new_field` is reached from `_resolve_table_fields`; the finding must land in the same sink
+# the column changes use, so `makemigrations` writes it into the header beside them.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#829: the planner records the added column, and only the defaultless NOT NULL one" begin
+    settings = Configuration.Settings()
+    settings.change_db = true
+    live = Models.Model("race829"; id = Models.IDField(), name = Models.CharField(max_length = 40))
+    declared = Models.Model("race829"; id = Models.IDField(), name = Models.CharField(max_length = 40),
+                            grid = Models.IntegerField(), laps = Models.IntegerField(default = 0),
+                            fastest = Models.IntegerField(null = true))
+    schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+        :race829 => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared, :exist => false))
+    sink = LossyAlter[]
+    plan = Migrations.get_migration_plan(PormGModel[live], schema, PG_LA803, settings;
+                                         interactive = false, lossy_alters = sink)
+    @test [(f.kind, f.table, f.column) for f in sink] == [(:add_not_null, "race829", "grid")]
+    # PostgreSQL's ADD COLUMN is unchanged: NOT NULL, as declared.
+    @test plan[:race829]["Add field: grid"] == "ALTER TABLE \"race829\" ADD COLUMN \"grid\" integer NOT NULL;"
+end
+
+@testset "#829: the pre-check counts every row of the table" begin
+    f = LossyAlter(:add_not_null, "Ev\"il", "grid", "", "INTEGER")
+    @test _precheck_sql(PG_LA803, f) == ("SELECT COUNT(*) AS n FROM \"Ev\"\"il\"", Any[])
+    @test _precheck_sql(SL_LA803, f) == ("SELECT COUNT(*) AS n FROM \"Ev\"\"il\"", Any[])
+end
+
+# The race table of `_la803_models` with one more column, `grid`.
+_la829_models(grid) = replace(_la803_models(), "\n)\nend" => ",\n    grid = $grid\n)\nend")
+_la829_columns(pool) = String.(DataFrame(fetch(pool, "PRAGMA table_info(race803);")).name)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#829): SQLite end to end — an empty table takes the column, a populated one is refused
+# Before #829 SQLite refused `ADD COLUMN … NOT NULL` with no default even on an EMPTY table. The
+# column is now added nullable and the rebuild declares it NOT NULL, so the empty table applies; with
+# a row, the pre-check counts it and refuses before any write, naming the two ways through.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite #829: an empty table takes a new NOT NULL column; a populated one is refused first" begin
+    _la803_with_key("la829empty") do key, pool
+        write(joinpath(key, "models.jl"), _la829_models("Models.IntegerField()"))
+        _la803_quiet(() -> Migrations.makemigrations(key; interactive = false))
+        pending = joinpath(key, "migrations", "pending_migrations.jl")
+        @test [f.kind for f in _plan_lossy_alters(pending)] == [:add_not_null]
+        # The ADD COLUMN is nullable; the rebuild that follows declares NOT NULL.
+        statements = Migrations.dry_run(key).statements
+        add = only(filter(s -> occursin("ADD COLUMN \"grid\"", s), statements))
+        @test occursin("\"grid\" INTEGER NULL", add)
+        @test only(Migrations.dry_run(key).lossy_alters).rows == 0
+        @test _la803_quiet(() -> Migrations.migrate(key; interactive = false, destructive = true)).outcome === :applied
+        @test _la803_notnull(pool, "grid") == 1
+    end
+
+    _la803_with_key("la829rows") do key, pool
+        fetch(pool, "INSERT INTO race803 (name, code, laps) VALUES ('Monaco', 'MON', 78);")
+        write(joinpath(key, "models.jl"), _la829_models("Models.IntegerField()"))
+        _la803_quiet(() -> Migrations.makemigrations(key; interactive = false))
+        history = _la803_history(pool)
+        err = try _la803_quiet(() -> Migrations.migrate(key; interactive = false, destructive = true)); nothing catch e; e end
+        @test err isa MigrationPrecheckError
+        @test err !== nothing && only(err.findings).kind === :add_not_null && only(err.findings).rows == 1
+        # The message names both ways through.
+        msg = err === nothing ? "" : sprint(showerror, err)
+        @test occursin("declare a `default`", msg) && occursin("`null = true`", msg)
+        # Nothing was written: no history row, no column.
+        @test _la803_history(pool) == history
+        @test !("grid" in _la829_columns(pool))
+    end
+
+    # The neighbour: a declared default fills the existing row, so there is no finding and it applies.
+    _la803_with_key("la829default") do key, pool
+        fetch(pool, "INSERT INTO race803 (name, code, laps) VALUES ('Monaco', 'MON', 78);")
+        write(joinpath(key, "models.jl"), _la829_models("Models.IntegerField(default = 0)"))
+        _la803_quiet(() -> Migrations.makemigrations(key; interactive = false))
+        @test isempty(_plan_lossy_alters(joinpath(key, "migrations", "pending_migrations.jl")))
+        @test _la803_quiet(() -> Migrations.migrate(key; interactive = false, destructive = true)).outcome === :applied
+        @test DataFrame(fetch(pool, "SELECT grid FROM race803;")).grid == [0]
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#829): a header for an added column the table already has is stale
+# For a changed column, "stale" means the column is gone; for an added one it is the opposite — the
+# column already exists, because the plan was applied (the #81 re-archive) or edited by hand.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite #829: an added-column finding applies only while the column is absent" begin
+    _la803_with_key("la829stale") do key, pool
+        absent = LossyAlter(:add_not_null, "race803", "grid", "", "INTEGER")
+        present = LossyAlter(:add_not_null, "race803", "laps", "", "INTEGER")
+        no_table = LossyAlter(:add_not_null, "race_gone", "grid", "", "INTEGER")
+        @test Migrations._finding_applies(pool, absent)
+        @test !Migrations._finding_applies(pool, present)
+        @test !Migrations._finding_applies(pool, no_table)
+        # Counted, the stale ones dropped with a warning.
+        counted = @test_logs (:warn,) (:warn,) Migrations._precheck_lossy_alters(pool, [absent, present, no_table])
+        @test [(f.column, f.rows) for f in counted] == [("grid", 0)]
+    end
+end

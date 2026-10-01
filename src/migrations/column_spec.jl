@@ -782,7 +782,8 @@ the plan's header; [`dry_run`](@ref) lists them and [`migrate`](@ref) acts on th
   `:decimal_scale`.
 - `table`, `column` — the names the live catalog knows **before** the plan runs, so a renamed column
   is reported under its old name.
-- `old_type`, `new_type` — the two column types as rendered.
+- `old_type`, `new_type` — the two column types as rendered; `old_type` is empty for a column the
+  plan adds (`:add_not_null`).
 - `bound`, `scale` — the limit the pre-check compares against (a VARCHAR length, an integer width in
   bits, whole digits and scale, a byte bound), or `nothing`.
 - `rows` — how many existing rows the change would fail on, filled in by `dry_run` / `migrate` for the
@@ -819,6 +820,7 @@ Every kind a [`LossyAlter`](@ref) can carry, with its class — the closed set, 
 | `:decimal_precision` | PostgreSQL | `:rows` | a NUMERIC loses whole digits (or rounds up into one) |
 | `:non_negative_check` | both | `:rows` | a `>= 0` CHECK is added (e.g. `PositiveIntegerField`) |
 | `:byte_length_check` | both | `:rows` | a `BinaryField` byte bound is added or lowered |
+| `:add_not_null` | both | `:rows` | a new NOT NULL column with no default is added to a table with rows |
 | `:decimal_scale` | PostgreSQL | `:silent` | a NUMERIC scale is lowered, so values round |
 | `:to_integer` | PostgreSQL | `:silent` | a float/decimal becomes an integer, so values round |
 | `:to_date` | PostgreSQL | `:silent` | a timestamp becomes a date, dropping the time |
@@ -837,6 +839,7 @@ const LOSSY_ALTER_KINDS = (
   decimal_precision  = :rows,
   non_negative_check = :rows,
   byte_length_check  = :rows,
+  add_not_null       = :rows,
   decimal_scale      = :silent,
   to_integer         = :silent,
   to_date            = :silent,
@@ -853,7 +856,9 @@ lossy_alter_class(f::LossyAlter)::Symbol = LOSSY_ALTER_KINDS[f.kind]
 # error types, so the four cannot describe one finding four ways. The names are `repr`'d: they come
 # from the live catalog, and a newline in one must not start a fresh line of output.
 function _lossy_alter_summary(f::LossyAlter)::String
-  what = f.old_type == f.new_type ? "" : " ($(f.old_type) → $(f.new_type))"
+  # An added column has no old type (#829): the header writes `old=` empty.
+  what = f.old_type == f.new_type ? "" :
+         isempty(f.old_type) ? " ($(f.new_type))" : " ($(f.old_type) → $(f.new_type))"
   rows = f.rows === nothing ? "" : " — $(f.rows) row(s) would fail"
   return "$(repr(f.table)).$(repr(f.column)): $(f.kind)$what$rows"
 end
@@ -943,6 +948,25 @@ function _lossy_alters(delta::ColumnDelta, conn::Union{PormGPostgres, PormGSQLit
   end
   append!(found, type_found)
   return found
+end
+
+"""
+    _lossy_add_column(spec, conn; table, temporary_default) -> Vector{LossyAlter}
+
+The finding for a column the plan ADDS (#829), which has no `ColumnDelta` and so never reaches
+`_lossy_alters`. A NOT NULL column with no default has nothing to put in the rows already there:
+PostgreSQL's `ADD COLUMN` fails on the first one, and SQLite's (routed through the table rebuild,
+see `Dialect.sqlite_add_column_defers_not_null`) fails on the copy. An empty table takes it on both.
+
+Not a finding: a nullable column; one with a `default` or `db_default` (both fill existing rows); one
+the planner gives a temporary default (`_get_temporary_default_value`, #607); and an identity, which
+the engine fills itself. `spec` is the declared column's; `table` is the catalog's name for the table.
+"""
+function _lossy_add_column(spec::ColumnSpec, ::Union{PormGPostgres, PormGSQLite};
+                           table::AbstractString, temporary_default::Any = nothing)::Vector{LossyAlter}
+  (spec.nullable || !(spec.default isa NoDefault) || temporary_default !== nothing ||
+   spec.identity !== nothing) && return LossyAlter[]
+  return [LossyAlter(:add_not_null, table, spec.name, "", spec.raw)]
 end
 
 # The byte-bound pre-check measures the column as it is NOW. SQLite's `length(CAST(… AS BLOB))`

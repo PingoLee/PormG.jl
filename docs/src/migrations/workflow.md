@@ -289,7 +289,7 @@ line per column). `dry_run()` lists them, and `migrate()` acts on them. There ar
 
 | Kind | Examples | What `migrate()` does |
 | :--- | :--- | :--- |
-| **Fails on existing rows** | `null = true` → `false` over rows holding `NULL`; a shorter `max_length`; `BigIntegerField` → `IntegerField`; fewer `max_digits`; `IntegerField` → `PositiveIntegerField` over negative values | Counts the offending rows first. Any row that would fail means the plan is refused before anything is written; none means it applies with no opt-in. |
+| **Fails on existing rows** | `null = true` → `false` over rows holding `NULL`; a shorter `max_length`; `BigIntegerField` → `IntegerField`; fewer `max_digits`; `IntegerField` → `PositiveIntegerField` over negative values; a **new** column that is `NOT NULL` with no `default`, added to a table that has rows | Counts the offending rows first. Any row that would fail means the plan is refused before anything is written; none means it applies with no opt-in. |
 | **Changes existing values** | fewer `decimal_places` (values round); `FloatField` or `DecimalField` → `IntegerField` (values round); `DateTimeField` → `DateField` (the time is dropped); a `TIMESTAMPTZ` → `TIMESTAMP` (the offset is dropped) | Needs `destructive = true`, exactly like a `DROP`. |
 | **Cannot run as planned** | text → a number, boolean, date, timestamp, UUID or JSON, or boolean ↔ a number, on PostgreSQL | Refused: PostgreSQL has no automatic cast between these and the plan carries no `USING` clause. |
 
@@ -300,6 +300,11 @@ or change the models file and run `makemigrations()`:
 r = PormG.Migrations.dry_run("db")
 r.lossy_alters     # one entry per column: table, column, kind, and `rows` for the failing kind
 ```
+A new `NOT NULL` column has nothing to put in the rows already there, so for it there is no data to
+fix: declare a `default` (or `db_default`), which fills them, or add the column with `null = true`,
+fill it, and make it `NOT NULL` in a later migration — that second step is the ordinary
+`null = true` → `false` change above, counted the same way. An empty table takes the column as
+declared, on both engines.
 In a non-interactive context a refused plan throws `PormG.Migrations.MigrationPrecheckError`, which
 carries the same findings; at a terminal the findings are logged and `migrate()` returns `:declined`.
 

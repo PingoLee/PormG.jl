@@ -13,7 +13,9 @@
 #       itself rejects it, which is the live check that the deny-list entry is true;
 #   (e) SET NOT NULL over a NULL is refused;
 #   (f) fewer NUMERIC whole digits and (g) a byte bound are counted by the server's own arithmetic;
-#   (h) text → PositiveIntegerField is reported by `dry_run` as refused, not raised as a query error.
+#   (h) text → PositiveIntegerField is reported by `dry_run` as refused, not raised as a query error;
+#   (j) a new NOT NULL column with no default is refused over a populated table with the rows
+#       counted, and applies over an empty one (#829).
 #
 # Run it under both PostgreSQL drivers: `PORMG_POSTGRES_DRIVER=Postgres` selects Postgres.jl (#788),
 # whose parameter typing differs from LibPQ's.
@@ -284,6 +286,34 @@ end
             try; PormG.ConnectionPool.with_transaction(st.connections, "ROLLBACK;"; conn = holder); catch; end
             PormG.ConnectionPool.release_connection(st.connections, holder)
         end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (j) A new NOT NULL column with no default: refused over rows, applied over an empty table (#829)
+# PostgreSQL's `ADD COLUMN … NOT NULL` fails on the first existing row (`contains null values`). The
+# column has no `ColumnDelta`, so #803 never recorded it; now the whole table is counted first. The
+# empty case is the neighbour that must NOT be refused.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: a new NOT NULL column is refused over rows, applied over none (#829)" begin
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, 'x', 1, NULL), ('PRO', 2, 2.5, 'y', 2, NULL);") do st
+        sink = _la803pg_plan!(st, _la803pg_models(laps = "Models.IntegerField()"))
+        @test [(f.kind, f.column) for f in sink] == [(:add_not_null, "laps")]
+        @test only(PormG.Migrations.dry_run(st.connections, st).lossy_alters).rows == 2
+        err = _la803pg_err(() -> _la803pg_migrate(st; destructive = true))
+        @test err isa PormG.Migrations.MigrationPrecheckError
+        @test err !== nothing && only(err.findings).rows == 2
+        # Nothing was written: the column is not there.
+        @test isempty(_la803pg_sql(st, """
+            SELECT 1 FROM pg_attribute WHERE attrelid = '$(_LA803PG_TABLE)'::regclass
+               AND attname = 'laps' AND NOT attisdropped"""))
+
+        # Emptied, the same plan applies and the column is NOT NULL.
+        PormG.ConnectionPool.fetch(st.connections, "DELETE FROM \"$(_LA803PG_TABLE)\";")
+        @test _la803pg_migrate(st).outcome === :applied
+        @test _la803pg_sql(st, """
+            SELECT attnotnull FROM pg_attribute WHERE attrelid = '$(_LA803PG_TABLE)'::regclass
+               AND attname = 'laps'""").attnotnull == [true]
     end
 end
 

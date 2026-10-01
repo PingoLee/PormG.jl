@@ -1503,7 +1503,8 @@ declared digits (#648). Every caller renders the desired model, so an existing w
 never refused on its own — only when PormG would create or re-create it.
 """
 function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite;
-                         temporary_default::Any=nothing, defer_db_default::Bool=false)::String
+                         temporary_default::Any=nothing, defer_db_default::Bool=false,
+                         defer_not_null::Bool=false)::String
   # Resolve the physical column name (db_column when set, else the field name) — #50.
   col_name = field_db_column(field, col_name)
   # #648: a DecimalField SQLite cannot store exactly is refused before any DDL exists.
@@ -1530,7 +1531,9 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite;
   # Nullability (default is NOT NULL if 'null' is false). `deferring` forces NULL: the default that
   # would have filled existing rows is being withheld from this statement, and SQLite refuses
   # `ADD COLUMN … NOT NULL` without one. The queued rebuild restores the declared nullability.
-  if (hasproperty(field, :null) && field.null) || deferring
+  # `defer_not_null` is the same move for a column that has no default to withhold (#829, see
+  # `sqlite_add_column_defers_not_null`).
+  if (hasproperty(field, :null) && field.null) || deferring || defer_not_null
     push!(constraints, "NULL")
   else
     push!(constraints, "NOT NULL")
@@ -2130,6 +2133,26 @@ function sqlite_add_column_can_inline_fk(field::PormGField, temporary_default::A
          !field.unique && !field.primary_key
 end
 
+"""
+    sqlite_add_column_defers_not_null(field, temporary_default) -> Bool
+
+Whether SQLite's `ADD COLUMN` for `field` must be rendered nullable and tightened by the table
+rebuild the planner queues after it (#829). SQLite refuses `ADD COLUMN … NOT NULL` with no default
+on every table, even an empty one (`Cannot add a NOT NULL column with default value NULL`), while
+the rebuild's `CREATE TABLE` declares the column NOT NULL and its copy fails only when rows exist.
+Routing it there makes SQLite fail where PostgreSQL does, on a populated table, and the row
+pre-check refuses that case before any write.
+
+A primary key is left out: SQLite refuses `ADD COLUMN … PRIMARY KEY` for a reason no nullability
+changes. Asked here and in `_add_new_field`, so the rendering and the queued rebuild cannot disagree.
+"""
+function sqlite_add_column_defers_not_null(field::PormGField, temporary_default::Any)::Bool
+  return !(hasproperty(field, :null) && getfield(field, :null)) &&
+         field.default === nothing && temporary_default === nothing &&
+         !(hasproperty(field, :db_default) && getfield(field, :db_default) !== nothing) &&
+         !(hasproperty(field, :primary_key) && getfield(field, :primary_key))
+end
+
 # `model` is accepted and IGNORED on PostgreSQL, so the planner has one call to make rather than a
 # backend branch. PostgreSQL adds its key separately and must keep doing so: `_add_constrains` emits
 # a named `ALTER TABLE … ADD CONSTRAINT … DEFERRABLE INITIALLY DEFERRED`, which an inline clause here
@@ -2170,7 +2193,8 @@ function add_field(conn::PormGSQLite, table_name::Union{String,Symbol}, field_na
   # `defer_db_default = true` — this is the one statement SQLite will not accept a non-constant
   # default on (#496). `_add_new_field` queues the rebuild that puts it back.
   column_sql = field_to_column(field_name, field, conn, temporary_default=temporary_default,
-                               defer_db_default=true)
+                               defer_db_default=true,
+                               defer_not_null=sqlite_add_column_defers_not_null(field, temporary_default))
   if model !== nothing && sqlite_add_column_can_inline_fk(field, temporary_default)
     column_sql *= " " * _foreign_key_references_sql(field; column = field_name, model = model)
   end

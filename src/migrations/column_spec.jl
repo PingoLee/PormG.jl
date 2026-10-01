@@ -744,6 +744,255 @@ function column_delta(new_field::PormGField, old_spec::ColumnSpec,
   return ColumnDelta(new_spec, old_spec, column_delta(new_spec, old_spec))
 end
 
+# ── Lossy column changes (#803) ──────────────────────────────────────────────────────────────────
+#
+# The destructive guard reads the plan's SQL text, so it sees a `DROP` and nothing that merely
+# NARROWS a column. What a column change can do to the rows already in it is a fact about the
+# delta — the old and new `CanonicalType`, the nullability, the CHECKs — so it is classified here,
+# from the `ColumnDelta` alone, and never from rendered SQL. `_plan_column_change!` is the one site
+# that turns a delta into an action, so it is the one site that records a finding.
+#
+# A finding is one of three classes, and the class — not the kind — decides what `migrate` does:
+#
+#   * `:rows`    — the ALTER FAILS on some existing rows (a NULL under SET NOT NULL, a value too long
+#                  for the new VARCHAR). The whole plan rolls back, so nothing is lost; what is
+#                  missing is the warning. `dry_run` and `migrate` count the offending rows first, and
+#                  `migrate` refuses a plan with any. No opt-in can make those rows fit, so
+#                  `destructive = true` does not bypass it.
+#   * `:silent`  — the ALTER succeeds and CHANGES data (a lower NUMERIC scale rounds). That is data
+#                  loss by another route, so it takes the destructive guard's opt-in.
+#   * `:refused` — the engine cannot apply the ALTER as rendered at all (PostgreSQL has no automatic
+#                  cast from text to integer, and the plan carries no `USING`).
+#
+# Engine asymmetry, stated once. PostgreSQL enforces a VARCHAR length, an integer width and a NUMERIC
+# precision, and casts on ALTER. SQLite enforces none of the three — its rebuild's `INSERT … SELECT`
+# copies any value into any column — so a narrowing there loses nothing, and the IR's SQLite
+# `IntegerField → PositiveIntegerField` (`CInt64 → CInt32`, both INTEGER affinity) must not read as
+# one. What SQLite does enforce is NOT NULL and a CHECK, and what it does change is text under a
+# numeric affinity (`'0042'` stores as `42`, `docs/src/fields.md`).
+
+"""
+    LossyAlter
+
+One column change in a migration plan that can fail on, or silently change, rows already in the
+table (#803). `makemigrations` records each one from the column's `ColumnDelta` and writes it into
+the plan's header; [`dry_run`](@ref) lists them and [`migrate`](@ref) acts on them.
+
+- `kind` — a key of [`LOSSY_ALTER_KINDS`](@ref), e.g. `:set_not_null`, `:varchar_length`,
+  `:decimal_scale`.
+- `table`, `column` — the names the live catalog knows **before** the plan runs, so a renamed column
+  is reported under its old name.
+- `old_type`, `new_type` — the two column types as rendered.
+- `bound`, `scale` — the limit the pre-check compares against (a VARCHAR length, an integer width in
+  bits, whole digits and scale, a byte bound), or `nothing`.
+- `rows` — how many existing rows the change would fail on, filled in by `dry_run` / `migrate` for the
+  `:rows` class; `nothing` until counted, and always `nothing` for the other classes.
+"""
+struct LossyAlter
+  kind::Symbol
+  table::String
+  column::String
+  old_type::String
+  new_type::String
+  bound::Union{Nothing, Int}
+  scale::Union{Nothing, Int}
+  rows::Union{Nothing, Int}
+end
+
+LossyAlter(kind::Symbol, table::AbstractString, column::AbstractString, old_type::AbstractString,
+           new_type::AbstractString; bound::Union{Nothing, Integer} = nothing,
+           scale::Union{Nothing, Integer} = nothing, rows::Union{Nothing, Integer} = nothing) =
+  LossyAlter(kind, String(table), String(column), String(old_type), String(new_type),
+             bound === nothing ? nothing : Int(bound), scale === nothing ? nothing : Int(scale),
+             rows === nothing ? nothing : Int(rows))
+
+"""
+    LOSSY_ALTER_KINDS
+
+Every kind a [`LossyAlter`](@ref) can carry, with its class — the closed set, in one place:
+
+| kind | engine | class | when |
+|:-----|:-------|:------|:-----|
+| `:set_not_null` | both | `:rows` | a nullable column becomes NOT NULL |
+| `:varchar_length` | PostgreSQL | `:rows` | a column becomes a VARCHAR shorter than it could hold |
+| `:integer_range` | PostgreSQL | `:rows` | an integer narrows, or a float/decimal becomes an integer |
+| `:decimal_precision` | PostgreSQL | `:rows` | a NUMERIC loses whole digits (or rounds up into one) |
+| `:non_negative_check` | both | `:rows` | a `>= 0` CHECK is added (e.g. `PositiveIntegerField`) |
+| `:byte_length_check` | both | `:rows` | a `BinaryField` byte bound is added or lowered |
+| `:decimal_scale` | PostgreSQL | `:silent` | a NUMERIC scale is lowered, so values round |
+| `:to_integer` | PostgreSQL | `:silent` | a float/decimal becomes an integer, so values round |
+| `:to_date` | PostgreSQL | `:silent` | a timestamp becomes a date, dropping the time |
+| `:to_time` | PostgreSQL | `:silent` | a timestamp becomes a time, dropping the date |
+| `:drop_timezone` | PostgreSQL | `:silent` | `timestamptz` becomes `timestamp`, dropping the offset |
+| `:text_affinity` | SQLite | `:silent` | text becomes a numeric/boolean column, so `'0042'` stores as `42` |
+| `:no_implicit_cast` | PostgreSQL | `:refused` | the engine has no automatic cast between the two types |
+
+`:rows` findings are counted before `migrate` runs and refuse the plan when any row would fail;
+`:silent` ones need `destructive = true`; `:refused` ones cannot be applied as planned.
+"""
+const LOSSY_ALTER_KINDS = (
+  set_not_null       = :rows,
+  varchar_length     = :rows,
+  integer_range      = :rows,
+  decimal_precision  = :rows,
+  non_negative_check = :rows,
+  byte_length_check  = :rows,
+  decimal_scale      = :silent,
+  to_integer         = :silent,
+  to_date            = :silent,
+  to_time            = :silent,
+  drop_timezone      = :silent,
+  text_affinity      = :silent,
+  no_implicit_cast   = :refused,
+)
+
+"""The class of a lossy-ALTER finding — `:rows`, `:silent` or `:refused` (see [`LOSSY_ALTER_KINDS`](@ref))."""
+lossy_alter_class(f::LossyAlter)::Symbol = LOSSY_ALTER_KINDS[f.kind]
+
+# One line per finding, shared by the `makemigrations` warning, `DryRunResult`'s display and both
+# error types, so the four cannot describe one finding four ways. The names are `repr`'d: they come
+# from the live catalog, and a newline in one must not start a fresh line of output.
+function _lossy_alter_summary(f::LossyAlter)::String
+  what = f.old_type == f.new_type ? "" : " ($(f.old_type) → $(f.new_type))"
+  rows = f.rows === nothing ? "" : " — $(f.rows) row(s) would fail"
+  return "$(repr(f.table)).$(repr(f.column)): $(f.kind)$what$rows"
+end
+
+const _IntType = Union{CInt16, CInt32, CInt64}
+const _TextType = Union{CText, CVarChar}
+const _NumericType = Union{CInt16, CInt32, CInt64, CFloat64, CDecimal}
+
+_int_bits(::CInt16)::Int = 16
+_int_bits(::CInt32)::Int = 32
+_int_bits(::CInt64)::Int = 64
+
+# Decimal digits an integer width ALWAYS holds (every 4-digit number fits a smallint, not every
+# 5-digit one) and the digits it CAN reach — the two sides of a precision comparison.
+_int_safe_digits(::CInt16)::Int = 4
+_int_safe_digits(::CInt32)::Int = 9
+_int_safe_digits(::CInt64)::Int = 18
+_int_max_digits(::CInt16)::Int = 5
+_int_max_digits(::CInt32)::Int = 10
+_int_max_digits(::CInt64)::Int = 19
+
+# A NUMERIC's scale: `numeric(p)` is scale 0 on PostgreSQL, and a bare `numeric` has none at all.
+_decimal_scale(t::CDecimal)::Union{Int, Nothing} =
+  t.precision === nothing ? nothing : something(t.scale, 0)
+
+# Whole (pre-point) digits a type can hold, or `nothing` for unbounded — a bare `numeric` or a float.
+_whole_digits(t::CDecimal)::Union{Int, Nothing} =
+  t.precision === nothing ? nothing : t.precision - something(t.scale, 0)
+_whole_digits(t::_IntType)::Union{Int, Nothing} = _int_max_digits(t)
+_whole_digits(::CFloat64)::Nothing = nothing
+
+# Fractional digits a type can hold: an integer none, a float or a bare `numeric` unbounded.
+_frac_digits(t::CDecimal)::Union{Int, Nothing} = _decimal_scale(t)
+_frac_digits(::_IntType)::Int = 0
+_frac_digits(::CFloat64)::Nothing = nothing
+
+# Does `a` hold more than `b`? `nothing` is unbounded.
+_exceeds(a::Union{Int, Nothing}, b::Int)::Bool = a === nothing || a > b
+
+# The pairs PostgreSQL cannot convert on `ALTER COLUMN … TYPE` without a `USING` clause the renderer
+# does not write. A DENY-list on purpose: listing a pair that actually converts would refuse a valid
+# migration with no way round it, while a pair missing from it fails inside the transaction and rolls
+# back — which is what every such plan did before this list existed. New types the renderer DOES
+# cast (`TIME`, `INTERVAL`, `bytea` all get a `USING`) are therefore absent.
+function _pg_no_implicit_cast(old::CanonicalType, new::CanonicalType)::Bool
+  old isa _TextType && return new isa Union{_NumericType, CBool, CDate, CDateTime, CUUID, CJSON}
+  old isa CBool && return new isa _NumericType
+  old isa _NumericType && return new isa CBool
+  return false
+end
+
+"""
+    _lossy_alters(delta, conn; table, column) -> Vector{LossyAlter}
+
+The lossy-ALTER findings for one column change, read from its `ColumnDelta` alone (#803). `table`
+and `column` are the catalog's names before the plan runs. One change can yield two findings: a
+float becoming an integer both rounds (`:to_integer`) and can overflow (`:integer_range`). A side
+the compiler could not read (`CUnsupported`, or a degraded spec) is never classified — PormG cannot
+say what it holds.
+"""
+function _lossy_alters(delta::ColumnDelta, conn::Union{PormGPostgres, PormGSQLite};
+                       table::AbstractString, column::AbstractString)::Vector{LossyAlter}
+  old_spec, new_spec = delta.old_spec, delta.new_spec
+  finding(kind; kw...) = LossyAlter(kind, table, column, old_spec.raw, new_spec.raw; kw...)
+  readable = !(old_spec.type isa CUnsupported) && !(new_spec.type isa CUnsupported)
+  type_found = (:type in delta && readable) ?
+    _lossy_type_alters(old_spec.type, new_spec.type, conn, finding) : LossyAlter[]
+  # An ALTER that cannot run at all makes every other finding on the column moot — and a CHECK
+  # finding beside it would be counted against a column of the OLD type (`"c" < 0` on a varchar),
+  # which PostgreSQL rejects as a query rather than answering.
+  any(f -> f.kind === :no_implicit_cast, type_found) && return type_found
+
+  found = LossyAlter[]
+  if :nullable in delta && old_spec.nullable && !new_spec.nullable
+    push!(found, finding(:set_not_null))
+  end
+  if :checks in delta
+    if any(c -> c isa NonNegativeCheck, new_spec.checks) && !any(c -> c isa NonNegativeCheck, old_spec.checks)
+      push!(found, finding(:non_negative_check))
+    end
+    new_bound = [c.max_bytes for c in new_spec.checks if c isa ByteLengthCheck]
+    old_bound = [c.max_bytes for c in old_spec.checks if c isa ByteLengthCheck]
+    if !isempty(new_bound) && (isempty(old_bound) || minimum(old_bound) > minimum(new_bound)) &&
+       _byte_length_countable(old_spec.type, conn)
+      push!(found, finding(:byte_length_check; bound = minimum(new_bound)))
+    end
+  end
+  append!(found, type_found)
+  return found
+end
+
+# The byte-bound pre-check measures the column as it is NOW. SQLite's `length(CAST(… AS BLOB))`
+# measures any value; PostgreSQL's `octet_length` exists for `bytea` and the string types only, so a
+# column of another type moving to a bounded `BinaryField` gets no count (and no finding: the
+# engine, not a stale type, decides that ALTER).
+_byte_length_countable(old::CanonicalType, ::PormGPostgres)::Bool = old isa Union{CBytes, _TextType}
+_byte_length_countable(::CanonicalType, ::PormGSQLite)::Bool = true
+
+function _lossy_type_alters(old::CanonicalType, new::CanonicalType, ::PormGSQLite, finding)::Vector{LossyAlter}
+  # SQLite enforces no length, width, precision or scale, so the only type change that alters a
+  # stored value is text moving under a numeric affinity.
+  (old isa _TextType && new isa Union{_NumericType, CBool}) ? [finding(:text_affinity)] : LossyAlter[]
+end
+
+function _lossy_type_alters(old::CanonicalType, new::CanonicalType, ::PormGPostgres, finding)::Vector{LossyAlter}
+  # The ALTER cannot run at all, so nothing narrower is worth reporting beside it.
+  _pg_no_implicit_cast(old, new) && return [finding(:no_implicit_cast)]
+  found = LossyAlter[]
+  if new isa CVarChar && new.length !== nothing
+    # Any old type converts to a string through its text form, so any of them can be too long.
+    (old isa CVarChar && old.length !== nothing && old.length <= new.length) ||
+      push!(found, finding(:varchar_length; bound = new.length))
+  end
+  if new isa _IntType
+    if old isa Union{CFloat64, CDecimal} && _exceeds(_frac_digits(old), 0)
+      push!(found, finding(:to_integer))
+    end
+    too_wide = old isa _IntType ? _int_bits(old) > _int_bits(new) :
+               old isa Union{CFloat64, CDecimal} ? _exceeds(_whole_digits(old), _int_safe_digits(new)) : false
+    too_wide && push!(found, finding(:integer_range; bound = _int_bits(new)))
+  end
+  if new isa CDecimal && new.precision !== nothing && old isa _NumericType
+    new_whole, new_scale = _whole_digits(new), _decimal_scale(new)
+    old_whole, old_frac = _whole_digits(old), _frac_digits(old)
+    # Equal whole digits still fail when the scale shrinks: `9.999` rounds UP to `10.00`, which a
+    # `numeric(3,2)` cannot hold.
+    fewer_whole = _exceeds(old_whole, new_whole)
+    carry = old_whole == new_whole && _exceeds(old_frac, new_scale)
+    (fewer_whole || carry) && push!(found, finding(:decimal_precision; bound = new_whole, scale = new_scale))
+    _exceeds(old_frac, new_scale) && push!(found, finding(:decimal_scale; scale = new_scale))
+  end
+  if old isa CDateTime
+    new isa CDate && push!(found, finding(:to_date))
+    new isa CTime && push!(found, finding(:to_time))
+    new isa CDateTime && old.with_timezone && !new.with_timezone && push!(found, finding(:drop_timezone))
+  end
+  return found
+end
+
 # ── inspectdb's compiler: ColumnSpec → PormGField ──────────────────────────────────────────────
 
 # Dispatch-only engines for the one reader that has no connection in hand — the PostgreSQL row

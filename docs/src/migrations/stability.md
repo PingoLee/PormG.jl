@@ -60,7 +60,10 @@ generated from another file records it in a `# pormg-models-file: <path>` commen
 format marker, followed by a `# pormg-models-sha256: <hex>` line with the file's SHA-256 at that
 moment. The path is relative to `<db_folder>` when the file sits under it, and written with
 Julia's `escape_string`, so a backslash appears doubled. Neither comment is part of the checksum,
-and a plan without them is unchanged. `migrate` snapshots the named file only if it still has
+and a plan without them is unchanged. The same holds for the `# pormg-lossy-alter:` lines below
+them — one per [lossy column change](workflow.md#Lossy-Column-Changes), each a tab-separated list
+of `key=value` fields with escaped values — which `dry_run` and `migrate` read back and which change
+nothing about the plan's SQL. `migrate` snapshots the named file only if it still has
 that digest. If the header cannot be read, the file is gone, or the file changed after
 `makemigrations`, it logs a warning and takes no snapshot. The migration itself is still applied
 and archived.

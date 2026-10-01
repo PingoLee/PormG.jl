@@ -77,12 +77,13 @@ Catch the umbrella when you want a category, the concrete type when you want a r
 | model definition | `FieldValidationError` / `ModelDefinitionError` | Bad field argument / bad model shape. Catch `DefinitionError` for both |
 | `makemigrations` / `migrate` | `InvalidMigrationError` | The migration or the schema it describes is not valid — a plan file that does not parse, say. No pending plan is **not** one: `migrate` returns `outcome = :nothing_pending` |
 | `makemigrations` / `migrate` / `status` / `dry_run` / `discard_pending_migration` / `import_models_from_*` | `InvalidConfigurationError` | The key is a `register_connection` entry, which has no models folder — see [Dynamic Multi-Tenancy](configuration/dynamic.md) |
-| `migrate` on a destructive plan | `PormG.Migrations.DestructiveMigrationError` | Non-interactive run without `destructive = true`; carries `statements` |
+| `migrate` on a destructive plan | `PormG.Migrations.DestructiveMigrationError` | Non-interactive run without `destructive = true`; carries `statements`, and `lossy_alters` for a column change that alters existing values |
+| `migrate` on a plan whose column change would fail on existing rows | `PormG.Migrations.MigrationPrecheckError` | Non-interactive run; nothing was written. `destructive = true` does not bypass it. Carries `findings` |
 
-!!! note "Two types need a qualified name"
-    `DestructiveMigrationError` and `MissingConfigurationError` are **not** on the `using PormG`
-    surface — reach them as `PormG.Migrations.DestructiveMigrationError` and
-    `PormG.Configuration.MissingConfigurationError`. Catching their umbrellas (`MigrationError`,
+!!! note "Three types need a qualified name"
+    `DestructiveMigrationError`, `MigrationPrecheckError` and `MissingConfigurationError` are **not**
+    on the `using PormG` surface — reach them as `PormG.Migrations.DestructiveMigrationError`,
+    `PormG.Migrations.MigrationPrecheckError` and `PormG.Configuration.MissingConfigurationError`. Catching their umbrellas (`MigrationError`,
     `ConfigurationError`) works unqualified.
 
 ## Reading a caught error
@@ -97,7 +98,8 @@ structured fields instead, and `e.msg` on those is a `FieldError`:
 | `PoolTimeoutError` | `adapter`, `pool_size`, `max_size`, `attempts`, `elapsed_seconds` |
 | `PoolConnectError` | `adapter`, `cause`, `connection`, `attempts`, `elapsed_seconds` |
 | `IntegrityError`, `OperationalError`, `StatementError` | `adapter`, `cause` |
-| `DestructiveMigrationError` | `msg`, `statements` |
+| `DestructiveMigrationError` | `msg`, `statements`, `lossy_alters` |
+| `MigrationPrecheckError` | `msg`, `findings` |
 
 `error_message` renders any of them to a plain `String`, so it is always safe:
 

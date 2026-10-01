@@ -180,6 +180,28 @@ end
   @test_throws PormG.InvalidValueError inspect_query(q)
 end
 
+@testset "a trailing newline is not part of an alias (#794)" begin
+  # PCRE's `$` also matches before a final newline, so a `^…$` spelling of the pattern accepted
+  # these. Pinned as a precondition, so the reason for `\A…\z` is visible here.
+  @test occursin(r"^driverid$", "driverid\n")
+  # The message `repr`s the name, so the newline that caused the refusal is visible in it.
+  for name in ["driverid\n", "localização\n"]
+    err = @test_throws PormG.InvalidValueError quote_identifier(name, nothing)
+    @test occursin("Invalid SQL identifier: $(repr(name))", err.value.msg)
+  end
+
+  # Through the public surfaces, not only the helper: a `.with(...)` CTE name and a SELECT label.
+  sub = IdentDriver.objects
+  sub.values("surname")
+  err = @test_throws PormG.InvalidValueError IdentDriver.objects.with("recent\n" => sub)
+  @test occursin("Invalid SQL identifier", err.value.msg)
+
+  q = IdentDriver.objects
+  q.values("label\n" => "points")
+  err = @test_throws PormG.InvalidValueError inspect_query(q)
+  @test occursin("Invalid SQL identifier", err.value.msg)
+end
+
 @testset "JSON path segments keep their own guard (#394)" begin
   # `SAFE_JSON_KEY_PATTERN` is a separate constant from `SAFE_IDENTIFIER_PATTERN` precisely so a
   # future relaxation of the identifier rules cannot widen this one. A segment is interpolated
@@ -189,7 +211,8 @@ end
   segs = PormG.QueryBuilder._validate_json_key_segments(["driver", "0", "team_name"])
   @test segs == ["driver", "0", "team_name"]
 
-  for bad in ["a b", "a'b", "a}b", "a,b", "a.b", ""]
+  # `"driver\n"`: a key with a trailing newline (#794), which a `^…$` pattern accepted.
+  for bad in ["a b", "a'b", "a}b", "a,b", "a.b", "", "driver\n"]
     @test_throws PormG.InvalidValueError PormG.QueryBuilder._validate_json_key_segments([bad])
   end
 end

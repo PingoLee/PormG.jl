@@ -620,13 +620,10 @@ end
 # a silent empty result) while the alias filter checked text. Refused here, at construction, so the
 # two readers agree by construction; the explicit spelling is `Cast(Concat(…), type)`, which does
 # render the cast. A text type stays legal: it is what the value already is.
-#
-# An array is not text whatever its element: `_sql_type_field` reads the name before the first `(`,
-# so `"varchar(20)[]"` would pass as `varchar` while `"text[]"` is refused. Checked here, not there —
-# the scalar answer for a `Cast` to an array is #852's to fix, not this guard's.
+# An array is not text whatever its element; `_sql_type_field` answers `nothing` for one (#852).
 function _check_concat_output_field(t::Union{String,Nothing})
   t === nothing && return nothing
-  !endswith(t, "]") && _sql_type_field(t) isa Union{Models.sCharField, Models.sTextField} && return nothing
+  _sql_type_field(t) isa Union{Models.sCharField, Models.sTextField} && return nothing
   throw(InvalidValueError(
     "Concat returns text on both engines and renders no cast, so its output_field cannot be " *
     "\e[31m$(t)\e[0m. Cast the result instead: \e[32mCast(Concat(…), \"$(lowercase(t))\")\e[0m (#835)."))
@@ -835,6 +832,11 @@ The value reads back as the column's own Julia type on both engines when every a
 type — `Coalesce("date", "fp1_date")` is a `Date`, not SQLite's stored text. When the argument types
 differ, the value comes back as the engine delivers it (#824): on SQLite, the stored value of the
 argument that won.
+
+`output_field` casts the result to the type it names, on both engines (#852):
+`Coalesce("points", 0; output_field = "integer")` renders `(…)::integer` on PostgreSQL and `CAST(… AS INTEGER)` on SQLite, so the value,
+a filter on it, and a CTE column typed by it all agree. On SQLite a `date` renders `date(…)`, and the
+other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](@ref).
 """
 function Coalesce(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
@@ -856,6 +858,11 @@ The value reads back as the column's own Julia type on both engines when every a
 type — `Greatest("date", "fp1_date")` is a `Date`, not SQLite's stored text. When the argument types
 differ, the value comes back as the engine delivers it (#824): on SQLite, the stored value of the
 argument that won.
+
+`output_field` casts the result to the type it names, on both engines (#852):
+`Greatest("points", 0; output_field = "integer")` renders `(…)::integer` on PostgreSQL and `CAST(… AS INTEGER)` on SQLite, so the value,
+a filter on it, and a CTE column typed by it all agree. On SQLite a `date` renders `date(…)`, and the
+other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](@ref).
 """
 function Greatest(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
@@ -877,6 +884,11 @@ The value reads back as the column's own Julia type on both engines when every a
 type — `Least("date", "fp1_date")` is a `Date`, not SQLite's stored text. When the argument types
 differ, the value comes back as the engine delivers it (#824): on SQLite, the stored value of the
 argument that won.
+
+`output_field` casts the result to the type it names, on both engines (#852):
+`Least("points", 25; output_field = "integer")` renders `(…)::integer` on PostgreSQL and `CAST(… AS INTEGER)` on SQLite, so the value,
+a filter on it, and a CTE column typed by it all agree. On SQLite a `date` renders `date(…)`, and the
+other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](@ref).
 """
 function Least(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696

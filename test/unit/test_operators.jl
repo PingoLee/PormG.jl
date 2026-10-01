@@ -1639,17 +1639,15 @@ end
 
       # #576's other declared-narrow case, same root: a bare `F` over a joined path. The oracle is
       # the ordinary WHERE filter on the same joined column — the alias must bind what the column
-      # would. PostgreSQL only: on SQLite the alias path keeps a native number
-      # (`_sqlite_preserve_native_parameter`) where the WHERE path binds the formatted text. That split
-      # predates #652 and holds for a base-model alias too, so it is not this change's to settle.
-      if conn === nothing
-        qf = _IN411R.objects
-        qf.values("points", "c" => F("eventid__code"))
-        qf.filter("c" => 5)
-        where_bound = _inspect(_IN411R.objects.filter("eventid__code" => 5))[:parameters]
-        @test where_bound == ["5"]
-        @test _inspect(qf)[:parameters] == where_bound
-      end
+      # would. On both engines since #851: SQLite's alias path used to keep the number native
+      # (`_sqlite_preserve_native_parameter`) where the WHERE path bound the formatted text, so this
+      # ran on PostgreSQL only.
+      qf = _IN411R.objects
+      qf.values("points", "c" => F("eventid__code"))
+      qf.filter("c" => 5)
+      where_bound = _inspect(_IN411R.objects.filter("eventid__code" => 5))[:parameters]
+      @test where_bound == ["5"]
+      @test _inspect(qf)[:parameters] == where_bound
       # And a text term — the fallback refused this outright as "the type number".
       qs = _IN411R.objects
       qs.values("points", "c" => F("eventid__code"))

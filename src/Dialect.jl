@@ -668,6 +668,26 @@ function sqlite_cast_sql(expr::AbstractString, type::AbstractString, conn::PormG
   return "CAST($(expr) AS $(cast_type_sql(type, conn; context = context)))"
 end
 
+# `sql` cast to a function's declared `output_field`, or `sql` itself when it declares none (#852).
+# `Coalesce`/`Greatest`/`Least` take an `output_field` that both type readers (`_declared_type`,
+# `_expression_formatter`) believe — so the SQL has to make it true on BOTH engines. Before #852 only
+# `Coalesce` on PostgreSQL rendered it; SQLite and `Greatest`/`Least` everywhere returned the
+# operand's own value, and a filter typed by the declaration could compare text with a number and
+# match nothing. SQLite goes through `sqlite_cast_sql`, so a `date` is `date(…)` and the other
+# temporal and array types raise `BackendCapabilityError`, as for `Cast` and `Case` (#822).
+# The single-`When` `CASE` arm uses it too; the vector arms keep their own spelling, because their
+# multi-line text is pinned (`END)::type`).
+function _output_field_cast(sql::AbstractString, format::Dict{String,Any}, conn::PormGPostgres)
+  output_field = get(format, "output_field", nothing)
+  (isnothing(output_field) || output_field == "") && return sql
+  return "($sql)::$(cast_type_sql(output_field, conn; context = "output_field"))"
+end
+function _output_field_cast(sql::AbstractString, format::Dict{String,Any}, conn::PormGSQLite)
+  output_field = get(format, "output_field", nothing)
+  (isnothing(output_field) || output_field == "") && return sql
+  return sqlite_cast_sql(sql, output_field, conn; context = "output_field")
+end
+
 # A window frame clause (#713) is SQL grammar, not a value, so it cannot be a bind parameter — the
 # #691 / #696 defect class a third time. `WindowOver(frame=)` used to write the caller's string into
 # `OVER (...)` after nothing but a `strip`. The grammar is PostgreSQL's `frame_clause`, with the
@@ -897,17 +917,8 @@ end
 # A single bare `When` reaches these two arms. They ignored `output_field` until #822, so
 # `Case(When(…); output_field = DateField())` rendered no cast on either engine while the vector form
 # cast on both — and the read path, which takes the declared type at its word, disagreed with the SQL.
-function CASE(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  sql = """CASE $(column) ELSE $(format["else"]) END"""
-  output_field = get(format, "output_field", nothing)
-  (isnothing(output_field) || output_field == "") && return sql
-  return "($sql)::$(cast_type_sql(output_field, conn; context = "output_field"))"
-end
-function CASE(column::String, format::Dict{String,Any}, conn::PormGSQLite)
-  sql = """CASE $(column) ELSE $(format["else"]) END"""
-  output_field = get(format, "output_field", nothing)
-  (isnothing(output_field) || output_field == "") && return sql
-  return sqlite_cast_sql(sql, output_field, conn; context = "output_field")
+function CASE(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+  return _output_field_cast("""CASE $(column) ELSE $(format["else"]) END""", format, conn)
 end
 function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
   resp::String = """CASE
@@ -927,36 +938,30 @@ function WHEN(column::String, format::Dict{String,Any}, conn::Union{PormGPostgre
   return "WHEN $(column) THEN $(format["then"])" |> string
 end
 
-function COALESCE(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
-  sql = "COALESCE($(join(columns, ", ")))"
-  output_field = get(format, "output_field", nothing)
-  if !isnothing(output_field) && output_field != ""
-    return "($sql)::$(cast_type_sql(output_field, conn; context = "output_field"))"
-  end
-  return sql
-end
-
-function COALESCE(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
-  return "COALESCE($(join(columns, ", ")))"
+# #852: each casts to its `output_field` on both engines — see `_output_field_cast`.
+function COALESCE(columns::Vector{Any}, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+  return _output_field_cast("COALESCE($(join(columns, ", ")))", format, conn)
 end
 
 function GREATEST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
-  return "GREATEST($(join(columns, ", ")))"
+  return _output_field_cast("GREATEST($(join(columns, ", ")))", format, conn)
 end
 
-# SQLite's scalar MAX/MIN return NULL if any argument is NULL. On SQLite the operands arrive here
-# already rewritten to NULL-skipping COALESCE rotations (#844, `_null_skipping_operands` in
-# querybuilder/build_helpers.jl), which is what makes these two match PostgreSQL's GREATEST/LEAST.
+# SQLite's multi-argument `MAX`/`MIN` are its scalar GREATEST/LEAST, except that they return NULL if
+# any argument is NULL. On SQLite the operands arrive here already rewritten to NULL-skipping
+# COALESCE rotations (#844, `_null_skipping_operands` in querybuilder/build_helpers.jl), which is what
+# makes these two match PostgreSQL's. The rotations carry no `output_field`, so the #852 cast is
+# applied once, here, to the whole `MAX`/`MIN`.
 function GREATEST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
-  return "MAX($(join(columns, ", ")))"
+  return _output_field_cast("MAX($(join(columns, ", ")))", format, conn)
 end
 
 function LEAST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
-  return "LEAST($(join(columns, ", ")))"
+  return _output_field_cast("LEAST($(join(columns, ", ")))", format, conn)
 end
 
 function LEAST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
-  return "MIN($(join(columns, ", ")))"
+  return _output_field_cast("MIN($(join(columns, ", ")))", format, conn)
 end
 
 function NULLIF(columns::Vector{Any}, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})

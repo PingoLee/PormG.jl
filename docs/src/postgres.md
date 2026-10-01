@@ -119,8 +119,8 @@ returns a different answer, so a test suite running on SQLite fails where produc
 - **Explicit window frames** — `WindowOver(...; frame = "ROWS BETWEEN …")`. See
   [Window Functions](read/window_functions.md).
 - **Casts to a time type** — `Cast(x, "timestamp")`, `"timestamptz"`, `"time"`, `"interval"`, and
-  `DateTimeField()` / `TimeField()` / `DurationField()` as a `Cast` target or a `Case`
-  `output_field`. SQLite
+  `DateTimeField()` / `TimeField()` / `DurationField()` as a `Cast` target or as the
+  `output_field` of `Case`, `Coalesce`, `Greatest` or `Least`. SQLite
   has no time types, so its `CAST` would turn the text into a number. A cast to `"date"` works on
   both and renders `date(x)` on SQLite. See
   [Functions and Dates → Cast](read/functions_and_dates.md#Cast-—-Type-Conversion).

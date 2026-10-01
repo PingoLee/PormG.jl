@@ -57,7 +57,8 @@ or edited by hand, is refused instead of run:
 - one binding per table, `name = OrderedDict{String, String}(` + `"label" => "sql"` pairs + `)`
   (the untyped constructor is accepted too), where every label and SQL is a plain string literal:
   no `\$` interpolation, no call, no concatenation. A name bound twice is refused, because under
-  `include` the second silently replaced the first and that table's statements were lost.
+  `include` the second silently replaced the first and that table's statements were lost. A label
+  repeated within one dict is refused for the same reason: only its last SQL would survive.
 
 Anything else raises `InvalidMigrationError` naming the line. The entries come back ordered by
 binding name, the order the `include`-based reader got from `names(mod, all = true)`. That order
@@ -115,6 +116,9 @@ function _read_plan_dict(ex, bad)::OrderedDict{String, String}
       s isa Expr && s.head === :string && bad("string interpolation (`\$`) is not allowed")
       s isa String || bad("the label and the SQL must be plain string literals")
     end
+    # The same loss one level down (#733): a repeated label keeps only the last SQL, so a hand-edited
+    # dict silently drops a statement. The generator writes from an `OrderedDict`, so never one.
+    haskey(dict, label) && bad("the label $(repr(label)) appears twice, so one of its statements would be lost")
     dict[label] = sql
   end
   return dict
@@ -873,8 +877,9 @@ end
     init_migrations(connection::Union{PormGPostgres, PormGSQLite})
 
 Create the pormg_migrations history table if it does not already exist.
-This is called automatically by `migrate()` and `status()` but can be
-invoked explicitly for bootstrapping.
+`migrate()`, `mark_applied`, `mark_failed` and `remove_migration_record` call it themselves; it can
+also be invoked explicitly for bootstrapping. `status()` does not: it is read-only, and reports a
+missing table instead of creating one.
 """
 function init_migrations(connection::PormGPostgres)
   ddl = Dialect.create_migrations_table(connection)
@@ -1117,7 +1122,7 @@ end
     MigrationStatus
 
 Structured result from `status()`. Contains applied migrations, pending files,
-failed migrations, and drift signals.
+failed migrations, and drift signals about the migration history (see `status`).
 """
 struct MigrationStatus
   applied::Vector{NamedTuple}    # Migrations recorded as 'applied' in DB
@@ -1157,8 +1162,11 @@ end
     status(connection, settings) -> MigrationStatus
 
 Report migration status: applied, failed, pending, and drift signals.
-Includes basic drift detection by comparing live database tables against
-the history of applied migrations.
+
+The drift signals are about the migration **history**, not the schema: a missing history table,
+failed records, a pending plan beside applied history, and recorded migrations over a database with
+no user tables at all. `status()` does not compare the live schema with the models — that is
+`check(db; kinds = [:schema_drift])`. It is read-only, and does not create the history table.
 """
 function status(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings)::MigrationStatus
   # #683: every folder-reading entry point refuses a `register_connection` entry first — its
@@ -2885,13 +2893,32 @@ function mark_applied(db::String, version::String, name::String; config::Dict{St
 end
 
 """
+    _require_recorded_version(connection, version, op)
+
+Throw `InvalidMigrationError` unless the history table holds a record with `version`. The repair
+ops that change an EXISTING record call it first (#733): their `UPDATE`/`DELETE` matches zero rows
+on a mistyped version, and they used to log success regardless — so the operator believed a record
+was reconciled when nothing had changed.
+"""
+function _require_recorded_version(connection::Union{PormGPostgres, PormGSQLite}, version::String, op::String)
+  any(r -> string(r[:version]) == version, _get_applied_migrations(connection)) && return nothing
+  throw(InvalidMigrationError(
+    "$op: no migration record has version '$version', so nothing was changed. " *
+    "`status(db)` lists the recorded versions."))
+end
+
+"""
     mark_failed(connection, settings, version)
 
 Update an existing migration record to 'failed' status.
 Useful after manual investigation of a partially-applied migration.
+
+Raises `InvalidMigrationError` when no record has `version`, and changes nothing.
 """
 function mark_failed(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
                      version::String)
+  # Before `init_migrations`, so a refused call does not even create the history table.
+  _require_recorded_version(connection, version, "mark_failed")
   init_migrations(connection)
   _update_migration_status(connection, version, "failed")
   @info("Marked version $version as failed.")
@@ -2908,11 +2935,15 @@ end
 Remove a migration record from the history table entirely.
 Use with caution — this erases history. Intended for cleanup after
 manual rollbacks or test scenarios.
+
+Raises `InvalidMigrationError` when no record has `version`, and changes nothing.
 """
 function remove_migration_record(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
                                  version::String)
+  # Before `init_migrations`, so a refused call does not even create the history table.
+  _require_recorded_version(connection, version, "remove_migration_record")
   init_migrations(connection)
-  
+
   # Use dialect-specific delete
   if connection isa PormGPostgres
     sql = """DELETE FROM pormg_migrations WHERE "version" = '$(replace(version, "'" => "''"))';"""

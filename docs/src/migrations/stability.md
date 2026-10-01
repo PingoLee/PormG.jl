@@ -24,16 +24,17 @@ constant `PormG.Migrations.MIGRATION_FORMAT_VERSION` (currently `1`):
   `module …`:
 
   ```julia
-  module 2026-06-22_18-57-26_migration
+  module pending_migrations
   # pormg-migration-format: 1
   ```
 
-  It is a **comment, not a `const`**, deliberately: migration files are re-`include`d across runs,
-  and a constant would emit `Warning: redefining constant` and conflict once files of different
-  format versions coexist. The header is read by line-scan with the regex
-  `^# pormg-migration-format: (\d+)\r?$` **before** the module is ever executed — so a future engine
-  detects the format and decides how to parse a file *before* trusting it. The optional `\r?` keeps
-  the scan line-ending agnostic (a file checked out with CRLF on Windows still matches).
+  It is a **comment, not a `const`**, deliberately. A plan file is parsed as data and never run (see
+  [A plan file is read as data, never executed](#A-plan-file-is-read-as-data,-never-executed)), and
+  the reader accepts no statement other than `import` or `using` lines and table entries, so a `const` would
+  make the file unreadable. A comment also needs no parsing: the regex
+  `^# pormg-migration-format: (\d+)\r?$` finds it by scanning lines, so a future engine can detect
+  the format *before* parsing a file whose shape the version-1 reader would refuse. The optional `\r?`
+  keeps the scan line-ending agnostic (a file checked out with CRLF on Windows still matches).
 
 - **In the database** — the `pormg_migrations.format_version` column records the format of each
   applied record. This column is the **authoritative** version source (the runtime history table is
@@ -70,12 +71,14 @@ and archived.
 
 ### Content structure
 
-A migration file is a **Julia module**. Each table touched by the plan is one variable bound to an
+A migration file is a **Julia module** named `pending_migrations`. Archiving it to
+`applied_migrations/` moves the file without rewriting it, so an applied migration keeps that module
+name; its timestamp is in the file name. Each table touched by the plan is one variable bound to an
 `OrderedDict{String, String}` mapping a human-readable **operation description** to the **SQL** that
 performs it. Order is preserved, so the dict reads as an executable changelog:
 
 ```julia
-module 2026-06-22_18-57-26_migration
+module pending_migrations
 # pormg-migration-format: 1
 
 import PormG.Migrations
@@ -114,8 +117,9 @@ above:
 
 Every label and every SQL must be a plain string literal. Anything else raises an
 `InvalidMigrationError` naming the line, and nothing in the file is evaluated. That includes `$`
-interpolation, a function call, string concatenation, a statement between entries and a name
-bound twice. If you see that error, regenerate the plan with `makemigrations()`.
+interpolation, a function call, string concatenation, a statement between entries, a name
+bound twice, and a label repeated within one entry (only its last SQL would survive). If you see
+that error, regenerate the plan with `makemigrations()`.
 
 This matters because a plan carries identifiers from the **live database**: undeclared table and
 index names, foreign-key and composite-constraint names. Before this rule, the file was

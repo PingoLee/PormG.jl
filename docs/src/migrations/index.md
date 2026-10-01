@@ -26,7 +26,7 @@ Because every plan is a fresh diff between your models and the **live database**
 - **`makemigrations` never reads previous migration files.** Each run compares your models against the live schema *only*; there is no dependency graph and no replay of earlier migrations to reconstruct state. Migration *order* does not accumulate — the database itself is the accumulated state.
 - **Migration files are an audit trail, not the source of truth.** `pending_migrations.jl` and everything under `applied_migrations/` record *what was done*; they are never re-read to plan or apply anything. Editing an already-applied file has **no effect** on future migrations — don't do it, it only desyncs the archive from the authoritative `pormg_migrations` table.
 - **You can regenerate freely.** A pending draft you dislike can be dropped with `discard_pending_migration("db")` and re-generated from scratch; there is no graph to keep consistent.
-- **"Drift" means the live schema diverging from your models** — an out-of-band `ALTER`/`DROP`, say — not an edited migration file. It is surfaced the normal way: the next `makemigrations` plans to reconcile it, and [`status()`](workflow.md) reports drift signals. Verifying old migration-file checksums buys you nothing here.
+- **"Drift" means the live schema diverging from your models** — an out-of-band `ALTER`/`DROP`, say — not an edited migration file. It is surfaced the normal way: the next `makemigrations` plans to reconcile it, and [`check("db"; kinds = [:schema_drift])`](workflow.md#Checking-the-Database-Against-the-Models) reports it without writing anything. (`status()` reports on the migration history, not the schema.) Verifying old migration-file checksums buys you nothing here.
 - **Both sides are compared as columns, not as field types.** Each declared field compiles to a canonical description of the column it renders — type, nullability, key, uniqueness, default, foreign key, CHECKs, identity — and the live schema is read straight into the same description from the catalog. Two fields that render the same column (`CharField`, `URLField` and `SlugField` with the same length; a `ForeignKey(unique = true)` and a `OneToOneField`) are therefore one column to the diff, and nothing about a live column is inferred from which field type it "looks like".
 
 !!! note "Adopting a schema PormG did not create"
@@ -42,21 +42,53 @@ Because every plan is a fresh diff between your models and the **live database**
 
     Tables PormG created itself always carry these facts, so nothing changes for them.
 
-!!! note "Relations PormG never reads, and so never drops"
-    Introspection reads only ordinary tables a model could declare. These are skipped on every run, whatever `ignore_table` says, so `makemigrations` never plans to drop them:
-
-    - views and materialized views, on both engines;
-    - SQLite virtual tables (`CREATE VIRTUAL TABLE … USING fts5(…)`, `rtree`) and the shadow tables their module stores data in (`<name>_data`, `<name>_idx`, `<name>_node`, …). When SQLite cannot confirm which tables are a virtual table's shadows on PormG's connection (its module is an extension your app loads elsewhere, such as sqlite-vec; the module does not report shadow tables; or SQLite is older than 3.37), every table named `<name>_…` is skipped and a warning lists them. Do not give your own tables that prefix: a model declaring one would plan `CREATE TABLE` and fail at `migrate`, because the table exists;
-    - PostgreSQL partitions of a partitioned table, and tables an extension owns (PostGIS's `spatial_ref_sys`).
-
-    Other tables you manage outside PormG belong in a connection's `ignore_tables:` (see [Tables PormG leaves alone](../configuration/connection_yml.md#Tables-PormG-leaves-alone)), or in `register_ignore_tables!` when every connection should skip them (see [Extension points](../extending.md#Extension-points)).
-
-    Never read is not the same as never touched: when SQLite has to rebuild a table, the views that read it and the triggers on it are dropped and re-created around the rebuild, as described under *SQLite: Table Recreation* below. And a table one of them still reads is never dropped: see [Deleting a Model](#Deleting-a-Model).
-
 !!! tip "Coming from Django?"
     There is no migration graph, no `dependencies` list, and no per-file state replay. Read each `makemigrations` as `diff(your models, the live database)` — closer to Prisma / Atlas / Flyway's declarative diffing than to Django's ordered migration chain.
 
     There is no `migrate app 0003` or `rollback` either. To go back, plan against the older models file — `makemigrations("db"; models_file = …)` — as described in [Reverting by declaring the old state](workflow.md#Reverting-by-declaring-the-old-state).
+
+---
+
+## What `makemigrations` Manages, Ignores, and Would Drop
+
+`makemigrations` owns the **tables your models declare**: their columns, keys, the indexes and
+constraints a model can declare, and the tables no model declares any more. Everything else in the
+database falls into one of the groups below. "Destructive" means `dry_run()` lists the statement and
+`migrate()` refuses it without `destructive = true` (see
+[Destructive Operations Safety](workflow.md#Destructive-Operations-Safety)).
+
+| What is in the database | What `makemigrations` does |
+| :--- | :--- |
+| Views and materialized views; functions and procedures; sequences; types, enums and domains; extensions; `EXCLUDE` constraints over several columns; tables in a PostgreSQL schema other than `public`; table and column comments | **Never reads them, so never drops or alters them.** |
+| PostgreSQL partitions of a partitioned table, and tables an extension owns (PostGIS's `spatial_ref_sys`); SQLite virtual tables (`fts5`, `rtree`) and their shadow tables | **Never reads them**, whatever `ignore_table` says. |
+| Tables listed in a connection's [`ignore_tables:`](../configuration/connection_yml.md#Tables-PormG-leaves-alone), in [`register_ignore_tables!`](../extending.md#Extension-points), or in the backend's built-in list | **Never reads them.** A *managed* model on an ignored table is refused with `InvalidConfigurationError`. |
+| Tables of [unmanaged models](../models.md#Unmanaged-models) | **Never creates, alters, renames or drops them.** They are still read, so that the plan's index names and SQLite views can be checked against them. |
+| A table no model declares | Plans `DROP TABLE`, **destructive**. Refused with `InvalidMigrationError` while a view or trigger still reads it (see [Deleting a Model](#Deleting-a-Model)). |
+| A column, an index or a `UNIQUE` constraint the model does not declare | Plans its removal, **destructive**. See [Changing composites on an existing table](../models.md#Changing-composites-on-an-existing-table) for indexes. |
+| A `CHECK` you wrote by hand | Reads it but **never plans it away**. On SQLite, a rebuild of the table loses it, with a warning (see below). A [`CheckConstraint`](../models.md#Check-Constraints) the model no longer declares *is* planned away. |
+| An index over several columns that a model cannot declare: partial, expression, non-b-tree, `DESC`, with an operator class, a collation or `INCLUDE` | **Never reads it, so never drops it.** On SQLite a rebuild re-creates it, unless it covers a column the rebuild removes. |
+| A **non-unique** index over **one** column with one of those properties | **Read as an ordinary index** if it has no `WHERE` and no expression: on PostgreSQL every other property above, and on SQLite `DESC` and `COLLATE`. So when the field does not declare `db_index = true`, its removal is planned, and that is **destructive**. Declare the index, or [ignore the table](../configuration/connection_yml.md#Tables-PormG-leaves-alone). Two PostgreSQL shapes are read worse than that. An `INCLUDE` column is read as indexed too, so its field plans a removal as well, which drops the whole index, unless it also declares `db_index = true`. And a one-column `EXCLUDE` constraint is read as a plain index, whose planned `DROP INDEX` then fails at `migrate`: declare `db_index = true` on that field, or ignore the table. |
+| Views and triggers on a table SQLite has to rebuild | Dropped and **re-created** around the rebuild. Refused when one would come back stale (see [Triggers and views across a rebuild](#SQLite:-Table-Recreation)). |
+| Table clauses no model can express, on a table SQLite rebuilds: a hand-written `CHECK`, `STRICT`, `WITHOUT ROWID`, a column `COLLATE`, a generated column, `ON CONFLICT`, a composite foreign key, a key's `ON UPDATE` / `DEFERRABLE` / `MATCH` | **Lost**, with one warning per table quoting them (see [SQLite: Table Recreation](#SQLite:-Table-Recreation)). SQL comments inside the `CREATE TABLE` text are lost too, without a warning. |
+| A column whose type PormG has no field for (`inet`, `citext`, an array, a custom type) | Plans a retype to the declared type, converting the column, unless you exclude the table (see *Adopting a schema PormG did not create*, above). |
+
+When SQLite cannot confirm which tables are a virtual table's shadows on PormG's connection (its
+module is an extension your app loads elsewhere, such as sqlite-vec; the module does not report
+shadow tables; or SQLite is older than 3.37), every table named `<name>_…` is skipped and a warning
+lists them. Do not give your own tables that prefix: a model declaring one would plan `CREATE TABLE`
+and fail at `migrate`, because the table exists.
+
+`check("db"; kinds = [:schema_drift])` reports a finding for exactly the steps `makemigrations` would
+plan. So it never reports the objects PormG does not read.
+
+"Never read" does not mean "never affected". On SQLite a table rebuild drops and re-creates the views
+and triggers that name the table, as the table above says. On PostgreSQL a `DROP TABLE` uses `CASCADE`, and
+PormG refuses it only for the dependents PostgreSQL records. A trigger function written in PL/pgSQL
+that names the table is not one of them (see [Deleting a Model](#Deleting-a-Model)).
+
+To change an object outside this scope, such as a view, a trigger or a function, use your own SQL
+outside the migration plan. To keep `makemigrations` away from a table you manage that way, list it
+in `ignore_tables:`.
 
 ---
 

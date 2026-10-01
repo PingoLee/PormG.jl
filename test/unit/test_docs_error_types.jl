@@ -53,6 +53,8 @@ using PormG.Functions: Extract
 # #696 — the `Cast` type-string claims on the functions page.
 using PormG.Functions: Cast
 import DataFrames
+# #733 — the repair-op claim reads a history table, so it needs the SQLite driver (idempotent reload).
+include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Mock backends: dialect dispatch is by connection TYPE, so a bare subtype is enough to render
 # SQL and to fire the backend-capability guards. No DB, no pool.
@@ -1511,6 +1513,40 @@ const DOCERR_CASES = [
             st = PormG.Configuration.Settings(change_data = true)
             st.db_def_folder = dir
             PormG.Migrations.dry_run(DocErrMockPostgres(), st)
+        end,
+    ),
+    # #733: a label repeated within one table's dict. Before #733 the reader kept the last SQL and
+    # the first statement vanished; now the plan is refused while it loads, as #710's case is.
+    (
+        "migrations/stability.md — a plan file repeating a label within one entry raises InvalidMigrationError (#733)",
+        InvalidMigrationError,
+        () -> mktempdir() do dir
+            mkpath(joinpath(dir, "migrations"))
+            write(joinpath(dir, "migrations", "pending_migrations.jl"),
+                  "module pending_migrations\nt = OrderedDict(\"Drop\" => \"SELECT 1;\", \"Drop\" => \"SELECT 2;\")\nend\n")
+            st = PormG.Configuration.Settings(change_data = true)
+            st.db_def_folder = dir
+            PormG.Migrations.dry_run(DocErrMockPostgres(), st)
+        end,
+    ),
+    # #733: the two repair ops that change an existing record. The only case here that needs a
+    # database, because the lookup reads the history table; an in-memory SQLite one is enough.
+    (
+        "migrations/advanced.md — mark_failed on a version with no record raises InvalidMigrationError (#733)",
+        InvalidMigrationError,
+        () -> begin
+            pool = PormG.ConnectionPool.SQLiteConnectionPool(":memory:"; pool_size = 1)
+            st = PormG.Configuration.Settings(connections = pool, change_data = true)
+            PormG.Migrations.mark_failed(pool, st, "20310101000000999")
+        end,
+    ),
+    (
+        "migrations/advanced.md — remove_migration_record on a version with no record raises InvalidMigrationError (#733)",
+        InvalidMigrationError,
+        () -> begin
+            pool = PormG.ConnectionPool.SQLiteConnectionPool(":memory:"; pool_size = 1)
+            st = PormG.Configuration.Settings(connections = pool, change_data = true)
+            PormG.Migrations.remove_migration_record(pool, st, "20310101000000999")
         end,
     ),
     # #726: a rename question with nothing left on stdin. `devnull` is end of input at once — the

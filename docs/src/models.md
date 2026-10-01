@@ -236,10 +236,14 @@ database plans nothing.
     is. The removal is **destructive**: `dry_run()` lists it, and `migrate()` refuses it without
     `destructive=true`. Declare the index to keep it.
 
-    Indexes PormG cannot reproduce are never read, so they are never dropped either: partial
+    Composite indexes PormG cannot reproduce are never read, so they are never dropped either: partial
     (`WHERE …`), functional (`lower(name)`), non-b-tree, `DESC` / `NULLS FIRST`, an explicit
     operator class or collation, `INCLUDE (…)`, `NULLS NOT DISTINCT`, a `DEFERRABLE` constraint,
-    and an invalid index. The [PostgreSQL guide](postgres.md#Production-notes) lists them.
+    and an invalid index. The [PostgreSQL guide](postgres.md#Production-notes) lists them. A
+    **one-column non-unique** index is read differently: only a partial or an expression index is
+    skipped, so a one-column `DESC`, non-b-tree or collated index is read as a `db_index` and planned
+    for removal when the field does not declare one (see
+    [What `makemigrations` manages](migrations/index.md#What-makemigrations-Manages,-Ignores,-and-Would-Drop)).
 
 A composite over a column you are dropping goes with the column — nothing extra is planned for it.
 

@@ -206,11 +206,12 @@ function generate_migration_plan(file::String, migration_plan::OrderedDict{Symbo
   open(joinpath(path, file), "w") do f
       module_name = replace(basename(file), ".jl" => "")
       # Stamp the frozen on-disk format version (issue #32) as an inert comment header rather than a
-      # `const`: generated files are re-included across runs, and a const would warn on redefinition
-      # and conflict once files of different format versions coexist. The header is read by line-scan
-      # (`^# pormg-migration-format: (\\d+)\\r?$`, CRLF-tolerant) *before* the module is executed — see docs:
-      # Migrations → Format Stability. The authoritative record is the pormg_migrations.format_version
-      # column; this comment is the on-disk annotation.
+      # `const`: the plan is parsed as data, never included (#710), and `Migrations._read_migration_plan`
+      # refuses any statement but `import`/`using` lines and `OrderedDict` bindings. A line-scan
+      # (`^# pormg-migration-format: (\\d+)\\r?$`, CRLF-tolerant) finds it without parsing the file, so a
+      # future engine can tell a format whose shape the v1 reader would refuse; today only the tests
+      # read it (see docs: Migrations → Format Stability). The authoritative record is the
+      # pormg_migrations.format_version column; this comment is the on-disk annotation.
       fmt_version = PormG.Migrations.MIGRATION_FORMAT_VERSION
       # #736: the models file the plan was diffed against, and its digest, only when it is not the
       # connection's own — so a default plan stays byte-identical. Below the format marker, which

@@ -1,30 +1,8 @@
 # Advanced Migrations
 
-Beyond schema changes, PormG supports custom SQL migrations, repair operations, and data migrations using transactions.
+This page covers the history-table repair operations, and changing data with Julia code around a migration.
 
-## Manual SQL in Pending Migrations
-
-If you need to perform custom SQL (e.g., creating views, adding initial data, or complex indexing), you can manually edit the generated `pending_migrations.jl` file. Add your SQL as `OrderedDict` entries after the auto-generated ones:
-
-```julia
-# Inside pending_migrations.jl
-custom_entries = OrderedDict{String, String}(
-    "Normalize nationality" =>
-    \"\"\"UPDATE drivers SET nationality = 'Unknown' WHERE nationality IS NULL;\"\"\"
-)
-```
-
-!!! warning "Manual Editing"
-    Always keep the `OrderedDict` structure. PormG will compute checksums for your custom entries and record them in the history table.
-
-    Edit the file **after** your last `makemigrations`, just before `migrate`. `makemigrations` rewrites it whenever your models differ from the database, and moves it aside to `pending_migrations.jl.discarded` when they do not. Either way your hand-added entries are no longer pending.
-
-!!! warning "Hand-added SQL goes through the destructive guard"
-    The guard checks your entries the same way it checks generated ones. A hand-added `DROP VIEW`,
-    `DROP SCHEMA`, `TRUNCATE`, or `DELETE` with no `WHERE` makes the plan destructive: `dry_run()`
-    lists it, and `migrate()` refuses it until you pass `destructive = true`. The full list is under
-    [Destructive Operations Safety](workflow.md#Destructive-Operations-Safety). The `UPDATE … WHERE`
-    above is not destructive, and an `UPDATE` without `WHERE` is not flagged either.
+The migration engine plans and applies **schema** changes only. It has no data-migration step: no recorded, ordered place in a plan for an `UPDATE` or a backfill. Until it has one, change data with your own code, as described in [Changing Data Around a Migration](#Changing-Data-Around-a-Migration).
 
 ---
 
@@ -37,24 +15,29 @@ If a migration fails or requires manual intervention, you can use repair command
 # recorded checksum is computed from — and later verifiable against — the real statements.
 # Passing neither `sql_content` nor an explicit `checksum` is refused: a fabricated digest
 # could never be verified and would silently defeat integrity checks.
-PormG.Migrations.mark_applied("db", "20260310120000", "manual_fix";
-    sql_content = \"\"\"ALTER TABLE drivers ADD COLUMN nationality VARCHAR(255);\"\"\")
+PormG.Migrations.mark_applied("db", "20260310120000000", "manual_fix";
+    sql_content = """ALTER TABLE driver ADD COLUMN nationality VARCHAR(255);""")
 
 # Already have the digest? Pass it explicitly instead of the SQL:
-# PormG.Migrations.mark_applied("db", "20260310120000", "manual_fix"; checksum = "…64-hex…")
+# PormG.Migrations.mark_applied("db", "20260310120000000", "manual_fix"; checksum = "…64-hex…")
 
 # Mark a version as failed
-PormG.Migrations.mark_failed("db", "20260310120000")
+PormG.Migrations.mark_failed("db", "20260310120000000")
 
 # Remove a migration record entirely (use with caution)
-PormG.Migrations.remove_migration_record("db", "20260310120000")
+PormG.Migrations.remove_migration_record("db", "20260310120000000")
 ```
+
+`mark_failed` and `remove_migration_record` change a record that already exists. When no record has
+the version you pass, they raise `InvalidMigrationError` and change nothing. `status("db")` lists the
+recorded versions.
 
 ---
 
-## Data Migrations with Transactions
+## Changing Data Around a Migration
 
-For complex logic that requires Julia-side data processing, use `run_in_transaction` to ensure atomicity:
+For a data change that goes with a schema change, such as filling a column the last migration added,
+use `run_in_transaction`, so the change commits whole or not at all:
 
 ```julia
 using PormG, LibPQ   # load SQLite instead for a SQLite app
@@ -62,7 +45,7 @@ using PormG, LibPQ   # load SQLite instead for a SQLite app
 PormG.run_in_transaction("db") do
     # Fetch data
     drivers = M.Driver.objects.filter("code__@isnull" => true).list()
-    
+
     # Process and Update
     for d in drivers
         code = uppercase(first(d[:surname], 3))
@@ -70,6 +53,14 @@ PormG.run_in_transaction("db") do
     end
 end
 ```
+
+This code runs **outside** the migration engine, so none of its guarantees apply:
+
+- **Nothing records it.** No row goes into `pormg_migrations`, and `status()` does not know it ran.
+- **It runs every time your code runs it.** Write it so a second run changes nothing. Here the
+  `code__@isnull` filter does that: a driver that already has a code is not selected again.
+- **It takes no migration lock.** Run it after `migrate()` has returned, not alongside it, and from
+  one process.
 
 ---
 

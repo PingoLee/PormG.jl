@@ -14,6 +14,9 @@ using PormG.Migrations
 using OrderedCollections
 using Dates
 
+# Section 6c opens an in-memory SQLite pool (runtests.jl loads the driver too; re-loading is idempotent).
+include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+
 # ==============================================================================
 # SECTION 1: Checksum and Version Generation
 #
@@ -107,8 +110,8 @@ using Dates
 
     # ─────────────────────────────────────────────────────────────────────────────
     # Destructive guard: statements a hand-edited plan can carry (#728)
-    # The generator never writes these; they reach a plan through the manual-SQL
-    # recipe in docs/src/migrations/advanced.md, where the guard is the only review.
+    # The generator never writes these; they reach a plan through a hand edit of
+    # pending_migrations.jl, where the guard is the only review.
     # Each one ran without `destructive = true` before #728.
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "Destructive Detection: every DROP, TRUNCATE, unqualified DELETE (#728)" begin
@@ -563,6 +566,57 @@ using Dates
 
         # When both are supplied the explicit checksum wins (caller's stated intent).
         @test Migrations._resolve_mark_checksum("deadbeef", sql) == "deadbeef"
+    end
+
+    # ==============================================================================
+    # SECTION 6c: repair ops on a version that has no record (#733)
+    #
+    # mark_failed and remove_migration_record change an EXISTING record. On a mistyped version
+    # their UPDATE/DELETE matched zero rows and they still logged "Marked …" / "Removed …", so an
+    # operator reconciling a failed deploy believed the history was fixed when nothing changed.
+    # Now they raise before writing. One in-memory SQLite database per call, so a refused call is
+    # checked against the exact row set it started from.
+    # ==============================================================================
+
+    @testset "mark_failed / remove_migration_record refuse an unknown version (#733)" begin
+        pool = PormG.ConnectionPool.SQLiteConnectionPool(":memory:"; pool_size = 1)
+        settings = PormG.Configuration.Settings(
+            connections = pool, change_data = true, db_def_folder = "mr733_repair")
+        Migrations.mark_applied(pool, settings, "20310101000000001", "known";
+                                sql_content = "-- repair test")
+        rows() = [(string(r[:version]), r[:status]) for r in Migrations._get_applied_migrations(pool)]
+        before = rows()
+
+        for op in (Migrations.mark_failed, Migrations.remove_migration_record)
+            err = try
+                op(pool, settings, "20310101000000999")
+                nothing
+            catch e
+                e
+            end
+            @test err isa PormG.InvalidMigrationError
+            msg = PormG.error_message(err)
+            @test occursin(string(nameof(op)), msg)
+            @test occursin("'20310101000000999'", msg)
+            @test occursin("nothing was changed", msg)
+            @test rows() == before
+        end
+
+        # "Nothing was changed" includes the history table itself: on a database that has none, the
+        # refusal comes before `init_migrations`, so the table is not created as a side effect.
+        fresh = PormG.ConnectionPool.SQLiteConnectionPool(":memory:"; pool_size = 1)
+        fresh_settings = PormG.Configuration.Settings(
+            connections = fresh, change_data = true, db_def_folder = "mr733_fresh")
+        for op in (Migrations.mark_failed, Migrations.remove_migration_record)
+            @test_throws PormG.InvalidMigrationError op(fresh, fresh_settings, "20310101000000001")
+            @test !Migrations._migrations_table_exists(fresh)
+        end
+
+        # The known version still goes through both ops.
+        Migrations.mark_failed(pool, settings, "20310101000000001")
+        @test rows() == [("20310101000000001", "failed")]
+        Migrations.remove_migration_record(pool, settings, "20310101000000001")
+        @test isempty(rows())
     end
 
     @testset "SQLite Statement Splitting" begin

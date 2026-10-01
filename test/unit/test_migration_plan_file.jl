@@ -178,6 +178,32 @@ const HOSTILE_STRINGS_710 = [
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # A label repeated within one dict is refused, not collapsed to its last SQL (#733)
+  # The "bound twice" case one level down. Before #733 this plan read back as ONE statement — the
+  # `ADD COLUMN` silently gone — and the plan applied without it. The writer never produces one, so
+  # only a hand edit reaches this; a distinct label in the same dict still reads in order.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a label repeated within one dict is refused (#733)" begin
+    head = "module pending_migrations\nimport OrderedCollections: OrderedDict\n"
+    twice = head * "drivers = OrderedDict{String, String}(\n" *
+            "\"Add field: nationality\" => \"ALTER TABLE drivers ADD COLUMN nationality TEXT;\",\n" *
+            "\"Add field: nationality\" => \"UPDATE drivers SET nationality = 'Unknown';\")\nend\n"
+    err = _read_text_710(twice)
+    @test err isa PormG.InvalidMigrationError
+    msg = PormG.error_message(err)
+    @test occursin("\"Add field: nationality\" appears twice", msg)
+    @test occursin("line 3", msg)
+
+    distinct = replace(twice, "\"Add field: nationality\" => \"UPDATE" => "\"Backfill nationality\" => \"UPDATE")
+    mktempdir() do dir
+      path = joinpath(dir, "pending_migrations.jl")
+      write(path, distinct)
+      loaded = Migrations._read_migration_plan(path)
+      @test collect(keys(only(loaded))) == ["Add field: nationality", "Backfill nationality"]
+    end
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # Distinct table names that PARSE to one binding each keep their own entry
   # The parser normalizes the name inside `var"..."`: a raw CR becomes LF, a decomposed `é`
   # becomes the composed one, `µ` (micro sign) becomes `μ` (Greek mu). And `_` is written as

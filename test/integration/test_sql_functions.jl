@@ -103,6 +103,38 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Greatest/Least skip a NULL argument on both engines (#844)
+# PostgreSQL's GREATEST/LEAST ignore NULLs; SQLite rendered MAX(a, b)/MIN(a, b), which return NULL
+# when any argument is NULL. Race 1000 (2018 Hungarian GP) has a `date` and no practice dates, so
+# it was `missing` on SQLite and the race date on PostgreSQL. Race 1100 has every date and is the
+# control: no NULL, so the answer was always the same. Both practice dates NULL gives NULL.
+# The values read back as `Date` on both engines (#824).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Greatest/Least skip NULL arguments (#844)" begin
+    rows = M.Race.objects.filter("raceid__@in" => [1000, 1100]).values(
+        "raceid",
+        "g"  => Greatest("date", "fp1_date"),
+        "l"  => Least("date", "fp1_date"),
+        "g3" => Greatest("fp1_date", "date", "fp2_date"),
+        "gn" => Greatest("fp1_date", "fp2_date")
+    ).order_by("raceid").list(:dict)
+
+    hungary, australia = rows
+    # The issue's case: the NULL `fp1_date` is skipped, so both functions give the race date.
+    @test isequal(hungary[:g], Date(2018, 7, 29))
+    @test isequal(hungary[:l], Date(2018, 7, 29))
+    # Three operands, two of them NULL, and the NULLs lead: still the race date.
+    @test isequal(hungary[:g3], Date(2018, 7, 29))
+    # Every argument NULL: NULL, as on PostgreSQL.
+    @test ismissing(hungary[:gn])
+
+    # The control: race 1100 has a Friday practice (31 March 2023) and a Sunday race (2 April).
+    @test australia[:g] == Date(2023, 4, 2)
+    @test australia[:l] == Date(2023, 3, 31)
+    @test australia[:gn] == Date(2023, 3, 31)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Literals that SQLite used to bind as a serialized BLOB (#721)
 # A date literal, a narrow integer and a projected `Value(Date)` must behave identically on both
 # engines. Before #721 a date literal was refused as a function operand (#705's stop-gap, since

@@ -74,9 +74,12 @@ end
       insp = inspect_query(q)
       # The column is still a column…
       @test occursin("\"Tb\".\"$(label == "Concat's number part" ? "surname" : "points")\"", insp[:sql_text])
-      # …and the literal is a bound parameter, in text order.
+      # …and the literal is a bound parameter, in text order. On SQLite a two-operand
+      # Greatest/Least renders one COALESCE per rotation (#844), so its literal appears — and
+      # binds — twice; everywhere else it binds once.
+      rotations = backend === :sqlite && expr.function_name in ("GREATEST", "LEAST") ? 2 : 1
       assert_marker_count(insp, backend)
-      assert_bound_in_text_order(insp, Any[literal])
+      assert_bound_in_text_order(insp, Any[literal for _ in 1:rotations])
     end
   end
 end
@@ -146,9 +149,14 @@ end
       # The raw value on PostgreSQL, the converted one on SQLite — type included, since
       # `Int16(2) == 2` would hide the conversion.
       expected = backend == :postgres ? pg_value : sl_value
-      @test only(insp[:parameters]) == expected
-      @test typeof(only(insp[:parameters])) == (backend == :postgres ? typeof(pg_value) :
-                                                sl_value isa Integer ? Int64 : String)
+      # One binding per appearance: a two-operand Greatest/Least on SQLite renders its literal in
+      # both COALESCE rotations (#844); every other case binds it once.
+      expr = build()
+      rotations = backend === :sqlite && expr.function_name in ("GREATEST", "LEAST") ? 2 : 1
+      @test length(insp[:parameters]) == rotations
+      @test all(==(expected), insp[:parameters])
+      @test all(p -> typeof(p) == (backend == :postgres ? typeof(pg_value) :
+                                   sl_value isa Integer ? Int64 : String), insp[:parameters])
     end
   end
 end

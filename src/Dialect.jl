@@ -944,6 +944,9 @@ function GREATEST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPos
   return "GREATEST($(join(columns, ", ")))"
 end
 
+# SQLite's scalar MAX/MIN return NULL if any argument is NULL. On SQLite the operands arrive here
+# already rewritten to NULL-skipping COALESCE rotations (#844, `_null_skipping_operands` in
+# querybuilder/build_helpers.jl), which is what makes these two match PostgreSQL's GREATEST/LEAST.
 function GREATEST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
   return "MAX($(join(columns, ", ")))"
 end

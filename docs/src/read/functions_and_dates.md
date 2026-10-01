@@ -367,6 +367,24 @@ query.filter("year" => 2020)
 query.values("name", "not_before_2021" => Greatest("date", Date(2021, 1, 1)))
 ```
 
+`Greatest` and `Least` skip a `NULL` argument on both engines. The result is `NULL` only when
+every argument is `NULL`. The 2018 Hungarian Grand Prix has a race date and no practice dates:
+
+```julia
+query = M.Race.objects
+query.filter("raceid" => 1000)
+query.values("latest" => Greatest("date", "fp1_date"), "none" => Greatest("fp1_date", "fp2_date"))
+query.list(:dict)
+# [Dict(:latest => Date("2018-07-29"), :none => missing)]
+```
+
+PostgreSQL's `GREATEST` and `LEAST` behave this way natively. SQLite has neither function, and its
+scalar `MAX(a, b)` returns `NULL` when any argument is, so on SQLite PormG renders one `COALESCE` per
+rotation of the arguments: `Greatest(a, b)` becomes
+`MAX(COALESCE(a, b), COALESCE(b, a))`. A literal argument binds once per place it appears. The SQL
+grows with the square of the argument count, so with `n` arguments each one is rendered `n` times;
+a `Subquery` argument runs once per rotation.
+
 ### `Cast` — Type Conversion
 
 ```julia

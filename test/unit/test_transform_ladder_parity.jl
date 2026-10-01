@@ -541,3 +541,71 @@ end
   @test arith.operand.column[1] == "ts__@year"
   @test rhs.column[1] == "ts__@date"
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #863: every entry point that STORES a filter node walks it
+# A filter node handed over directly — F arithmetic compared with a value, or an `OP` — is stored by
+# eight call sites, and each one used to push it raw: `Q`, `Qor`, `push!` on both, `.on`, `.cjoin`,
+# `.cjoin_on`, and `filter`. A pair whose right-hand side is F arithmetic takes its own method too.
+# Each site is driven here with the string spelling and the `F(path)` spelling of the same transform,
+# so a site that stops walking crashes the string spelling ("does not have a 'how' property") and
+# fails this testset. A results/drivers pair supplies the relation the join entry points need.
+# ─────────────────────────────────────────────────────────────────────────────
+module TlpJoinModels
+import PormG
+import PormG.Models
+Tlp_driver = Models.Model("tlp_driver", id = Models.IDField(), surname = Models.CharField(null = true),
+  dob = Models.DateField(null = true))
+Tlp_result = Models.Model("tlp_result", id = Models.IDField(),
+  driver = Models.ForeignKey(Tlp_driver, on_delete = "CASCADE", related_name = "tlp_results", null = true),
+  points = Models.IntegerField(null = true), grid = Models.IntegerField(null = true),
+  ts = Models.DateTimeField(null = true))
+PormG.Models.set_models(@__MODULE__, "tlp_mock")
+end
+
+@testset "#863: every entry point that stores a filter node walks it" begin
+  QB = PormG.QueryBuilder; Fn = PormG.Functions; J = TlpJoinModels
+  # The arithmetic node over the result's own `ts`, and over the joined driver's `dob`.
+  node(op) = (F("id") + Fn.Coalesce(op, 0)) > 5
+  entry_points = (
+    ("filter",     "ts",  (q, op) -> q.filter(node(op))),
+    ("Q",          "ts",  (q, op) -> q.filter(QB.Q("grid" => 1, node(op)))),
+    ("Qor",        "ts",  (q, op) -> q.filter(QB.Qor("grid" => 1, node(op)))),
+    ("push! Q",    "ts",  (q, op) -> (c = QB.Q("grid" => 1); push!(c, node(op)); q.filter(c))),
+    ("push! Qor",  "ts",  (q, op) -> (c = QB.Qor("grid" => 1); push!(c, node(op)); q.filter(c))),
+    ("cjoin_on",   "ts",  (q, op) -> q.cjoin_on("Tlp_driver", alias = "d", on = [Joined("d", "id") == F("driver"), node(op)])),
+    # A pair whose right-hand side is F arithmetic (`_get_pair_to_oper(::SQLTypeF)`), both branches.
+    ("pair F rhs, suffix", "ts", (q, op) -> q.filter("points__@gt" => F("id") + Fn.Coalesce(op, 0))),
+    ("pair F rhs, =",      "ts", (q, op) -> q.filter("points" => F("id") + Fn.Coalesce(op, 0))),
+    # A hand-built `OP` whose value is a function (`_check_function(::SQLTypeOper)` walks `values`).
+    ("OP value",   "ts",  (q, op) -> q.filter(QB.OP("points", ">", Fn.Coalesce(op, 0)))),
+  )
+  for (backend, conn) in _TLP_BACKENDS, (label, col, entry!) in entry_points
+    @testset "$backend — $label" begin
+      path = "$(col)__@year"
+      a = J.Tlp_result.objects; entry!(a, path)
+      b = J.Tlp_result.objects; entry!(b, F(path))
+      ia = inspect_query(a; connection = conn)
+      ib = inspect_query(b; connection = conn)
+      @test ia[:sql_text] == ib[:sql_text]
+      @test ia[:parameters] == ib[:parameters]
+    end
+  end
+
+  # `.on` and `.cjoin`: an F-arithmetic node goes through their join prefixer, which refuses it
+  # whatever its operands, so they are driven with a hand-built `OP` node — stored by the same push
+  # site — whose column is the joined model's and whose VALUE is the function to walk.
+  op_node(op) = QB.OP("id", ">", Fn.Coalesce(op, 0))   # `id` is the joined driver's; the value is not prefixed
+  joins = (
+    ("on",    (q, op) -> (q.on("driver", op_node(op)); q.values("id", "driver__surname"))),
+    ("cjoin", (q, op) -> (q.cjoin("driver" => "Tlp_driver", filters = [op_node(op)], warn = false); q.values("id"))),
+  )
+  for (backend, conn) in _TLP_BACKENDS, (label, entry!) in joins
+    @testset "$backend — $label" begin
+      a = J.Tlp_result.objects; entry!(a, "ts__@year")
+      b = J.Tlp_result.objects; entry!(b, F("ts__@year"))
+      @test _tlp_sql(a; conn = conn) == _tlp_sql(b; conn = conn)
+      @test _tlp_params(a; conn = conn) == _tlp_params(b; conn = conn)
+    end
+  end
+end

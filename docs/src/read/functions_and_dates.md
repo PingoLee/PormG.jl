@@ -323,8 +323,12 @@ using PormG.Functions: Coalesce
 
 # Races whose date equals the first-practice date or, when there is none, the date of the start
 M.Race.objects.filter("date" => Coalesce("fp1_date", "start_at__@date"))
-``` A number (of
-any integer width), a `Bool`, a `Date`, a `DateTime`, a `ZonedDateTime` or a `Time` is a literal
+```
+
+A CTE column inside a function in those positions is named with the `CTE("name", "column")` handle,
+not with the `"name__column"` string, which is read only where a column path is.
+
+A number (of any integer width), a `Bool`, a `Date`, a `DateTime`, a `ZonedDateTime` or a `Time` is a literal
 that PormG binds as a parameter. A **string literal** needs `Value(...)`: `NullIf("code", "")`
 would read `""` as a column name. Any other value raises `QueryBuildError` when the expression is
 built.

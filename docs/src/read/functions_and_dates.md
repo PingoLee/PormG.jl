@@ -319,9 +319,12 @@ raises `QueryBuildError` when the expression is built.
 
 On SQLite a date or time literal binds as the same text its column stores (`Date(2021, 3, 28)` is
 `"2021-03-28"`), and an integer of any width binds as a 64-bit integer, so a comparison with a
-`DateField` column picks the same rows as on PostgreSQL. The *result* of a function over a date
-column is typed on PostgreSQL (a `Date`) but is that ISO text on SQLite (`"2021-04-01"`), as for any
-function over a date column there.
+`DateField` column picks the same rows as on PostgreSQL. The *result* reads back as the column does
+on both engines (#824) when every argument is of one type: `Coalesce("date", Date(2021, 3, 28))` and
+`Greatest("date", "fp1_date")` give a `Date`, and `NullIf` takes its first argument's type. When the
+argument types differ, PormG does not guess: PostgreSQL resolves one result type itself
+(`Coalesce("date", "start_at")` is a timestamp there), or refuses the call outright (a date beside a
+text column), while SQLite returns the stored text of whichever argument won.
 
 ### `Coalesce` — First Non-Null Value
 

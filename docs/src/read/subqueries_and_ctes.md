@@ -580,6 +580,13 @@ wrap it in `Cast` to name its type. The same applies to `F` arithmetic on a valu
 number (a text column plus `1`, or `F("date") + Day(1)`) and to `Value(missing)`. A `Subquery` or `Exists`
 projected in the body raises `QueryBuildError` too; project it in the outer query instead.
 
+This type is for **binding** a value compared with the column. **Reading** the column back is a
+separate question, and the answer is the body's own. A column the body selects, such as
+`"date"`, `Max("date")` or `Cast(x, "date")`, reads back with the same Julia type the body would give
+it (a `Date` on both engines). A column the body computes, such as `Avg("points")` or `F` arithmetic,
+comes back as the engine delivers it, even though the table above binds it as the aggregated column's
+field (#824). This is the same rule `values(...)` follows outside a CTE.
+
 The type you declare can be a text, integer, bigint, float, numeric, boolean or date type. That
 includes the aliases `int2`, `int4`, `int8`, `float4` and `float8`, and any field object with one of
 those types, such as `PositiveIntegerField()`, which is typed as a plain integer because a cast does

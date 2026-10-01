@@ -303,8 +303,9 @@ end
 # `DateField`, a `TimeField` and a `DurationField` all read back as `String` while PostgreSQL
 # delivered `Date`, `Time` and a `Period`. The bodies live in `Dialect` beside the masks they invert.
 #
-# PostgreSQL needs none but one: the drivers deliver typed values, which is what the
-# `p3 = (:sqlite,)` marks in `test/unit/helper_value_repr_cases.jl` measure. The exception is
+# PostgreSQL needs none but one: the drivers deliver typed values, which is what the one-sided
+# `p3 = (:sqlite,)` marks in `test/unit/helper_value_repr_cases.jl` measured (the last two, on the
+# `@date` transform, were cleared by #824). The exception is
 # INTERVAL (#581), where the value is typed but not the SAME type on every driver — Postgres.jl hands
 # back a bare `Period` for a one-component interval — so its cell normalizes the concrete type.
 """

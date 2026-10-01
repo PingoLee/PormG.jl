@@ -532,7 +532,9 @@ end
       "b" => F_.Max(PormG.F("dur")),           # a bare `F` is the column
       "n" => F_.Max("note"),                   # a kind the table does not own
       "a" => F_.Max(PormG.F("amount") * 2),    # arithmetic inside: computed, not the column
-      "c" => F_.Coalesce("d", "d")))           # multi-operand: deliberately out of scope
+      # Multi-operand, operands disagreeing. (Until #824 this was `Coalesce("d", "d")`, pinned untyped
+      # while multi-operand functions were out of scope; #824 types the agreeing case on purpose.)
+      "c" => F_.Coalesce("d", "ts")))
     @test kinds[:j] == PormG.CDate()
     @test kinds[:b] == PormG.CInterval()
     for alias in (:n, :a, :c)
@@ -543,12 +545,12 @@ end
     end
   end
 
-  # #800 review: a CTE column's field is INFERRED from the CTE body — an `Avg("amount")` column is
-  # handed the operand's own `DecimalField` — so a Max over it must not inherit that kind, or SQLite
-  # would run a computed double through the decimal parser. Both spellings of the handle (the `__`
-  # path is retagged to the same `CTEReference`). Here the body projects the plain column, which is
-  # the case where a kind WOULD be right: the pin is that the handle is never typed, by design.
-  @testset "a Max over a CTE column records no kind (#800)" begin
+  # #824: a CTE column's field is INFERRED from the CTE body — an `Avg("amount")` column is handed the
+  # operand's own `DecimalField` — so its read kind is the body's own record instead, and a Max over a
+  # plain body column is that column's kind. Both spellings of the handle (the `__` path is retagged
+  # to the same `CTEReference`). Until #824 this testset pinned the handle as never typed (#800's
+  # boundary); the computed-column half of that reason is the next testset.
+  @testset "a Max over a CTE column has the body column's kind (#824)" begin
     F_ = PormG.Functions
     for column in ("g__founded", PormG.CTE("g", "founded"))
       kinds = _rvc_kinds(q -> begin
@@ -556,15 +558,16 @@ end
                join_field = "team" => "id", join_type = "INNER")
         q.values("id", "mx" => F_.Max(column))
       end)
-      @test !haskey(kinds, :mx)
+      @test kinds[:mx] == PormG.CDate()
     end
   end
 
   # #822: a declared date is a date because the SQL casts it to one on both engines (`date(…)` on
-  # SQLite), so it records `CDate` and SQLite reads a `Date` back as PostgreSQL does. Only `Cast` and
-  # `Case`: `Coalesce` renders no cast on SQLite, so its value is the operand's text, and a declared
+  # SQLite), so it records `CDate` and SQLite reads a `Date` back as PostgreSQL does. `Coalesce`
+  # renders no cast on SQLite, so its declaration alone cannot type it: since #824 it records `CDate`
+  # here only because both operands are DATE columns (the agreement rule, tested below). A declared
   # type other than date records nothing new.
-  @testset "Cast / Case declared date records CDate; Coalesce does not (#822)" begin
+  @testset "Cast / Case declared date records CDate; Coalesce by its operands (#822, #824)" begin
     F_ = PormG.Functions
     for conn in (_RVC_SL, _RVC_PG)
       kinds = _rvc_kinds(q -> q.values(
@@ -576,7 +579,7 @@ end
       @test kinds[:c] == PormG.CDate()
       @test kinds[:cf] == PormG.CDate()
       @test kinds[:k] == PormG.CDate()
-      @test !haskey(kinds, :co)
+      @test kinds[:co] == PormG.CDate()   # #824: the operands agree; was `!haskey` under #822
       @test !haskey(kinds, :ct)
     end
   end
@@ -594,6 +597,117 @@ end
       @test kinds[:wi] == PormG.CInterval()
     end
     @test !haskey(_rvc_kinds(q -> q.values("id", "r" => F_.Rank()); connection = _RVC_PG), :r)
+  end
+
+  # #824: the `@date` transform is a date whatever its operand — `(col)::date` on PostgreSQL,
+  # `strftime('%Y-%m-%d', …)` on SQLite — so every spelling of it records `CDate`. Each reaches the
+  # recorder by a different route: the path is a DATE `FObject` from `values()`, `F(…)` is an
+  # `FExpression` the column lookup cannot name, the joined and handle spellings are retagged nodes,
+  # and `Max` reads it as a nested operand. A different transform is not a date and records nothing.
+  @testset "the @date transform records CDate on every spelling (#824)" begin
+    F_ = PormG.Functions
+    kinds = _rvc_kinds(q -> q.values("p" => "ts__@date", "pd" => "d__@date", "f" => PormG.F("ts__@date"),
+                                     "j" => "team__founded__@date", "m" => F_.Max("ts__@date"),
+                                     "y" => "ts__@year", "fy" => PormG.F("ts__@year")))
+    for alias in (:p, :pd, :f, :j)
+      @test kinds[alias] == PormG.CDate()
+    end
+    @test _rvc_kinds(q -> q.values("m" => F_.Max("ts__@date")))[:m] == PormG.CDate()
+    @test !haskey(kinds, :y)
+    @test !haskey(kinds, :fy)
+    kinds = _rvc_kinds(q -> begin
+      q.cjoin_on(RVC.Rvc_team; alias = "tm", on = [PormG.Joined("tm", "id") == PormG.F("team")])
+      q.values("jd" => PormG.Joined("tm", "founded__@date"))
+    end)
+    @test kinds[:jd] == PormG.CDate()
+  end
+
+  # #824: `Coalesce`, `Greatest` and `Least` return one of their operands' own values, and render no
+  # cast on SQLite — so they are typed only when every operand names the same kind. A NULL literal is
+  # never the value and is skipped; a date literal binds as the column's own text (#721), so it agrees
+  # with a DATE column. `NullIf(a, b)` returns `a` or NULL, so it is `a`'s kind whatever `b` is.
+  @testset "Coalesce/Greatest/Least record the kind their operands agree on (#824)" begin
+    F_ = PormG.Functions
+    for conn in (_RVC_SL, _RVC_PG)
+      kinds = _rvc_kinds(q -> q.values(
+        "c"  => F_.Coalesce("d", "d"),
+        "cl" => F_.Coalesce("d", Date(2031, 1, 1)),
+        "cn" => F_.Coalesce("d", F_.Value(nothing)),
+        "g"  => F_.Greatest("ts", "ts"),
+        "l"  => F_.Least("amount", "amount"),
+        "j"  => F_.Coalesce("team__founded", "d"),
+        "n"  => F_.NullIf("d", "ts")); connection = conn)
+      for alias in (:c, :cl, :cn, :j, :n)
+        @test kinds[alias] == PormG.CDate()
+      end
+      @test kinds[:g] == PormG.CDateTime(true)
+      @test kinds[:l] == PormG.CDecimal(12, 2)
+    end
+    # A nested function is its own kind, in either direction.
+    kinds = _rvc_kinds(q -> q.values("cm" => F_.Coalesce(F_.Max("d"), F_.Min("d")),
+                                     "mc" => F_.Max(F_.Coalesce("d", "d"))))
+    @test kinds[:cm] == PormG.CDate()
+    @test kinds[:mc] == PormG.CDate()
+  end
+
+  # …and record nothing on any doubt, which leaves the value exactly as the driver delivered it. A text
+  # operand beside a date (the issue's own example) would run text through the date parser; two kinds
+  # that differ — a DATE and a TIMESTAMP column, or a decimal and a number literal — name no single
+  # representation; only NULLs name none at all. A declared `output_field` that is not the kind the
+  # operands agree on cannot change their text on SQLite, so it records nothing either.
+  @testset "a disagreeing or untypable operand records no kind (#824)" begin
+    F_ = PormG.Functions
+    kinds = _rvc_kinds(q -> q.values(
+      "a" => F_.Coalesce("note", Date(2031, 1, 1)),
+      "b" => F_.Coalesce("d", "ts"),
+      "c" => F_.Coalesce("amount", 0),
+      "e" => F_.Coalesce(F_.Value(nothing), F_.Value(nothing)),
+      "f" => F_.Coalesce("d", "d"; output_field = "text"),
+      "g" => F_.Greatest("d", PormG.F("d") + 1),
+      "h" => F_.NullIf("note", "d"),
+      # Agreement is exact equality: two DecimalFields of different widths name two representations
+      # (SQLite's parser checks the value against the width), and so do the TIMESTAMPTZ column `ts`
+      # and a naive `DateTime` literal (`CDateTime(true)` vs `CDateTime(false)`).
+      "w" => F_.Coalesce("amount", "cost"),
+      "z" => F_.Coalesce("ts", DateTime(2031, 1, 1))))
+    for alias in (:a, :b, :c, :e, :f, :g, :h, :w, :z)
+      @test !haskey(kinds, alias)
+    end
+  end
+
+  # #824: a `Joined(...)` handle is the joined column, typed exactly as a `Max` over it is — the two used
+  # to agree only by both answering nothing.
+  @testset "a Joined handle and a Max over it record the column's kind (#824)" begin
+    F_ = PormG.Functions
+    kinds = _rvc_kinds(q -> begin
+      q.cjoin_on(RVC.Rvc_team; alias = "tm", on = [PormG.Joined("tm", "id") == PormG.F("team")])
+      q.values("x" => PormG.Joined("tm", "founded"), "m" => F_.Max(PormG.Joined("tm", "founded")))
+    end)
+    @test kinds[:x] == PormG.CDate()
+    @test kinds[:m] == PormG.CDate()
+  end
+
+  # #824: a CTE column reads back as the BODY recorded it, never as its inferred field. `a` is
+  # `Avg("amount")`, which the CTE model types as the operand's `DecimalField(12, 2)` — the field a
+  # filter on it binds through — yet its value is a computed double, so it must record nothing, here
+  # and under a `Max`. `m` is `Max("amount")`, one of the column's own values, so it keeps the width.
+  @testset "a CTE column reads as its body recorded it; a computed column records none (#824)" begin
+    F_ = PormG.Functions
+    kinds = _rvc_kinds(q -> begin
+      q.with("g" => RVC.Rvc_row.objects.values("id", "d", "team", "a" => F_.Avg("amount"), "m" => F_.Max("amount")),
+             join_field = "id" => "id", join_type = "INNER")
+      q.values("id", "x" => "g__d", "y" => PormG.CTE("g", "d"), "md" => F_.Max(PormG.CTE("g", "d")),
+               "dd" => PormG.CTE("g", "d__@date"), "m" => "g__m", "a" => "g__a", "ma" => F_.Max("g__a"),
+               # A path that hops on through the CTE's foreign key ends at a real model field, which
+               # the join walk memoised — not at a body projection.
+               "h" => PormG.CTE("g", "team__founded"))
+    end)
+    for alias in (:x, :y, :md, :dd, :h)
+      @test kinds[alias] == PormG.CDate()
+    end
+    @test kinds[:m] == PormG.CDecimal(12, 2)
+    @test !haskey(kinds, :a)
+    @test !haskey(kinds, :ma)
   end
 
   # #648: a DecimalField column records its kind, WITH its width, on every projection spelling that

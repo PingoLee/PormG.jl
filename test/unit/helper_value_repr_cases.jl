@@ -212,15 +212,12 @@ const VR_CASES = VRCase[
   # is a named function the dialect renders per engine, so both spellings denote the same `Date`.
   vrcase("at_date_f", :timestamp, c -> F("$(c)__@date"), v -> Date(_vr_utc_naive(v)),
          result_kind = :date, pair = c -> "$(c)__@date",
-         # P3 is still broken on SQLite, and it is a DIFFERENT defect from the one #562 fixed: the
-         # value is right (`'2031-07-04'`, agreeing with the string spelling) but arrives as TEXT,
-         # because `build_query.jl` records a projection kind only for a plain path — a FUNCTION
-         # projection deliberately answers `nothing`, so the read path leaves it as the driver
-         # delivered it. On SQLite `strftime` delivers text; PostgreSQL's `(col)::date` delivers a
-         # real `Date`, which is why the mark is one-sided. Typing function projections belongs to
-         # #564's read table, not to the ladder.
-         shape = (x, engine) -> engine === :sqlite ? x isa AbstractString : x isa Date,
-         p3 = (:sqlite,)),
+         # P3 FIXED by #824, a DIFFERENT defect from the one #562 fixed: the value was right
+         # (`'2031-07-04'`, agreeing with the string spelling) but arrived as TEXT on SQLite, because
+         # no projection kind was recorded for the transform. It now records `CDate`, so the read path
+         # parses SQLite's `strftime` text as PostgreSQL's `(col)::date` already delivers it. The
+         # `shape` stays: it pins the RAW value, and on SQLite that is still the engine's text.
+         shape = (x, engine) -> engine === :sqlite ? x isa AbstractString : x isa Date),
   # #571 FIXED: `EXTRACT(YEAR FROM …)` is `numeric` on PostgreSQL ≥ 14, delivered as a `Decimal`,
   # while SQLite's `CAST(strftime('%Y', …) AS INTEGER)` is an `Int` — same value, two types. The
   # PostgreSQL arm now casts `::integer`, so P3 holds on both engines. The four siblings below share
@@ -257,11 +254,10 @@ const VR_CASES = VRCase[
   # #527 control: a sub-day duration on a DATE column promotes to a timestamp on both engines.
   vrcase("plus_hour6", :date, c -> F(c) + Hour(6), v -> DateTime(v) + Hour(6),
          result_kind = :timestamp),
-  # #562 FIXED, on a DATE column: same collapse, and the same one-sided P3 remainder as the
-  # TIMESTAMP case above — a function projection carries no kind for the read path to undo.
+  # #562 FIXED, on a DATE column: same collapse; and the same P3 remainder as the TIMESTAMP case
+  # above, fixed by #824 the same way. The raw `shape` is unchanged.
   vrcase("at_date_f", :date, c -> F("$(c)__@date"), v -> v, pair = c -> "$(c)__@date",
-         shape = (x, engine) -> engine === :sqlite ? x isa AbstractString : x isa Date,
-         p3 = (:sqlite,)),
+         shape = (x, engine) -> engine === :sqlite ? x isa AbstractString : x isa Date),
   # #571 FIXED on a DATE column too — same cast, same four siblings, same nudge caveat as above.
   vrcase("at_year_f", :date, c -> F("$(c)__@year"), v -> year(v), result_kind = :integer,
          pair = c -> "$(c)__@year"),

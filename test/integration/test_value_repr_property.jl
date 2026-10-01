@@ -32,6 +32,7 @@ if !isdefined(Main, :PormG)
 end
 
 include(joinpath(@__DIR__, "..", "unit", "helper_value_repr_cases.jl"))
+import Decimals   # #824: the `Decimal` a CTE's `Max` column reads back as
 
 const _VRI_ENGINE = PORMG_DB_FOLDER == "db_sl" ? :sqlite : :postgres
 
@@ -285,5 +286,55 @@ _vri_lap()  = M.Lap_times.objects.filter("raceid" => 1, "driverid" => 1, "lap" =
     finally
       M.Django_contract_scratch.objects.filter("label" => label).delete()
     end
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # #824: the projections #800 left untyped. Each returns one column's own stored value — the
+  # agreeing operand of `Coalesce`/`Greatest`/`NullIf`, the `@date` transform, a `Joined` column, a
+  # column a CTE body selects — so it reads back as the column does on both engines. A computed CTE
+  # column and a `Coalesce` whose operands differ stay as the engine delivered them.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "Coalesce/Greatest/NullIf, @date, Joined and CTE columns read back as the column (#824)" begin
+    # Race 1 has no published FP1 date, so `Coalesce` falls through to `date`.
+    row = _vri_race().values("c" => Coalesce("fp1_date", "date"), "g" => Greatest("date", "date"),
+                             "n" => NullIf("date", "fp1_date"), "p" => "start_at__@date",
+                             "f" => F("start_at__@date")).list(:dict)[1]
+    for k in (:c, :g, :n, :p, :f)
+      @test row[k] isa Date && row[k] == _VRI_RACE_DATE
+    end
+    # A DATE beside a TIMESTAMP names no single representation: SQLite's own text.
+    mixed = _vri_race().values("x" => Coalesce("fp1_date", "start_at")).list(:dict)[1][:x]
+    _VRI_ENGINE === :sqlite && @test mixed isa AbstractString
+
+    q = M.Race.objects
+    q.filter("raceid" => 2)
+    q.cjoin_on(M.Race; alias = "prev", on = [Joined("prev", "raceid") == F("raceid") - 1])
+    q.values("j" => Joined("prev", "date"), "jm" => Max(Joined("prev", "date")))
+    got = q.list(:dict)[1]
+    @test got[:j] isa Date && got[:j] == _VRI_RACE_DATE
+    @test got[:jm] isa Date && got[:jm] == _VRI_RACE_DATE
+
+    q = M.Race.objects
+    q.filter("raceid" => 1)
+    q.with("ev" => M.Race.objects.filter("raceid" => 1).values("raceid", "d" => "date"),
+           join_field = "raceid" => "raceid", join_type = "INNER")
+    q.values("raceid", "x" => "ev__d", "y" => CTE("ev", "d"))
+    got = q.list(:dict)[1]
+    @test got[:x] isa Date && got[:x] == _VRI_RACE_DATE
+    @test got[:y] isa Date && got[:y] == _VRI_RACE_DATE
+
+    # The CTE model binds `avg_pts` as the aggregated `DecimalField`, but its value is a computed
+    # average — on SQLite a double, which must not be dressed up as an exact `Decimal` (#648).
+    # `max_pts` is one of the column's own values, so it keeps the column's `Decimal`.
+    body = M.Constructor_results.objects
+    body.filter("raceid" => 1)
+    body.values("constructorid", "avg_pts" => Avg("points"), "max_pts" => Max("points"))
+    q = M.Constructor_results.objects
+    q.filter("raceid" => 1, "constructorid" => 23)
+    q.with("cr" => body, join_field = "constructorid" => "constructorid", join_type = "INNER")
+    q.values("constructorid", "a" => "cr__avg_pts", "m" => "cr__max_pts")
+    got = q.list(:dict)[1]
+    @test got[:m] isa Decimals.Decimal && got[:m] == 18
+    _VRI_ENGINE === :sqlite && @test got[:a] isa AbstractFloat
   end
 end

@@ -24,7 +24,7 @@ import PormG: postgres_type_map_reverse, date_format_map, sqlite_type_map_revers
 # these types live in `Kernel` (layer 1) rather than in `Migrations` — this module is included
 # BEFORE it, and a submodule resolves `import PormG: …` at include time. `_has_non_negative` and
 # `_byte_bound` are underscore-private, hence named explicitly.
-import PormG: ColumnDelta, LiteralDefault, ExpressionDefault
+import PormG: ColumnDelta, LiteralDefault, ExpressionDefault, NoDefault
 # #522: the two `USING` casts in `alter_field` read the LIVE column's canonical type off the delta
 # instead of dispatching on a reconstructed field struct — the readers no longer build one.
 import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CDecimal, CText, CVarChar, CTime
@@ -1957,6 +1957,22 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   # difference in `ColumnSpec.type`, because the spec's type is parsed from the RENDERED column. The
   # statements below still read the field for their text: the spec says *that* the type changed, not
   # how PostgreSQL should be told to change it.
+  # #828: a `USING` converts the column's VALUES, not its DEFAULT — PostgreSQL still converts the
+  # default with an assignment cast, and for exactly the pairs that need a `USING` there is none
+  # (`default for column "c" cannot be cast automatically`), on every table. So the old default is
+  # dropped first, and the declared one is put back by the DEFAULT step below (forced, because a
+  # delta that saw `0 == false` as equal would otherwise leave the column with no default at all).
+  # The sequence PostgreSQL's own `ALTER TABLE` documentation gives for this case.
+  default_dropped = false
+  function retype!(type_sql::AbstractString)
+    using_sql = _postgres_retype_using(field_name, delta.old_spec.type, delta.new_spec.type, type_sql)
+    if using_sql !== nothing && !(delta.old_spec.default isa NoDefault)
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" DROP DEFAULT;""")
+      default_dropped = true
+    end
+    push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE $type_sql""" *
+                          (using_sql === nothing ? ";" : " USING $using_sql;"))
+  end
   if :type in delta
     if new_field isa sCharField
       max_length = hasproperty(new_field, :max_length) ? new_field.max_length : 255
@@ -1964,10 +1980,7 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
     elseif new_field isa sDecimalField
       max_digits = hasproperty(new_field, :max_digits) ? new_field.max_digits : 10
       decimal_places = hasproperty(new_field, :decimal_places) ? new_field.decimal_places : 2
-      type_sql = "DECIMAL($max_digits, $decimal_places)"
-      using_sql = _postgres_retype_using(field_name, delta.old_spec.type, delta.new_spec.type, type_sql)
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE $type_sql""" *
-                            (using_sql === nothing ? ";" : " USING $using_sql;"))
+      retype!("DECIMAL($max_digits, $decimal_places)")
       # A lower scale rounds existing values. That used to be a `@warn` here, which a deploy never
       # read; since #803 the planner records it from the delta as a `:decimal_scale` finding, which
       # `migrate` will not apply without `destructive = true`.
@@ -1986,10 +1999,7 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
     else
       # #828: a pair with no assignment cast gets its `USING`; every other pair is left to
       # PostgreSQL's own cast, as before.
-      type_sql = _get_column_type(new_field, conn)
-      using_sql = _postgres_retype_using(field_name, delta.old_spec.type, delta.new_spec.type, type_sql)
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE $type_sql""" *
-                            (using_sql === nothing ? ";" : " USING $using_sql;"))
+      retype!(_get_column_type(new_field, conn))
     end
   end
 
@@ -2044,9 +2054,11 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   #   * `NoDefault` — DROP. Note this is NOT reached for the one asymmetric case #496 introduced:
   #     a live expression default the model does not declare never enters the delta at all
   #     (`_defaults_equal`, `src/column_ir.jl`), so PormG cannot propose dropping it.
-  if :default in delta
+  if :default in delta || default_dropped
     new_default = delta.new_spec.default
-    if new_default isa LiteralDefault
+    if new_default isa NoDefault && default_dropped
+      # Already dropped ahead of the retype.
+    elseif new_default isa LiteralDefault
       default_value = _format_default_sql_value(new_default.value, conn)
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" SET DEFAULT $default_value;""")
     elseif new_default isa ExpressionDefault

@@ -330,7 +330,7 @@ A few things to know:
 - **What is not checked.** A constraint the count cannot evaluate before the plan runs is left to the
   database, which refuses it inside the migration and rolls back: a `CheckConstraint` over a column
   the same plan adds, renames or retypes; a `UniqueConstraint` over a column it adds; and a foreign
-  key whose parent table the same plan creates or renames, or whose column it retypes. Likewise the
+  key whose parent table (or key column) the same plan creates or renames, or whose column it retypes. Likewise the
   `>= 0` `CHECK` of a `PositiveIntegerField` converted from text or a boolean, since the column still
   holds the old type when the count runs. A change that loses
   precision rather than digits (a `DecimalField` or `BigIntegerField` → `FloatField`) is not reported

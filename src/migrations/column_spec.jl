@@ -1082,6 +1082,10 @@ function _lossy_add_column(spec::ColumnSpec, ::Union{PormGPostgres, PormGSQLite}
                            table::AbstractString, temporary_default::Any = nothing)::Vector{LossyAlter}
   (spec.nullable || !(spec.default isa NoDefault) || temporary_default !== nothing ||
    spec.identity !== nothing) && return LossyAlter[]
+  # A spec the compiler could not read (the #69 fail-safe's `CUnsupported`) says nothing reliable
+  # about its default — `_degraded_spec` writes `NoDefault()` when the default would not compile — so
+  # it is not classified, as `_lossy_alters` skips an unreadable side.
+  spec.type isa CUnsupported && return LossyAlter[]
   return [LossyAlter(:add_not_null, table, spec.name, "", spec.raw)]
 end
 

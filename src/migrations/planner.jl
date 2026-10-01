@@ -2591,7 +2591,7 @@ function _write_pending_plan(connection::Union{PormGPostgres, PormGSQLite}, sett
                           lossy_alters = lossy_alters)
   # #803: named here, at plan time, as well as by `dry_run` and `migrate` — which also count the rows.
   if !isempty(lossy_alters)
-    @warn("The plan changes $(length(lossy_alters)) column(s) in a way that can fail on, or change, existing rows. Run dry_run() to see which, and how many rows each would fail on.",
+    @warn("The plan has $(length(lossy_alters)) change(s) that can fail on, or change, existing rows. Run dry_run() to see which, and how many rows each would fail on.",
           findings = [_lossy_alter_summary(f) for f in lossy_alters])
   end
   @warn("The migration plan has been saved to '$(settings.db_def_folder)/migrations/pending_migrations.jl'. Review the plan before applying the migrations.")

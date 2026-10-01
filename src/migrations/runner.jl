@@ -528,7 +528,7 @@ const _PG_INPUT_IS_VALID = 160000
 # non-NULL value counts as unverifiable: such a retype over a populated table needs PostgreSQL 16.
 const _TEXT_CAST_RE = (
   int = raw"^\s*[+-]?[0-9]+\s*$",
-  float = raw"^\s*([+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?|[+-]?(inf|infinity)|nan)\s*$",
+  float = raw"^\s*([+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?|[+-]?(inf|infinity|nan))\s*$",
   numeric = raw"^\s*([+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?|nan)\s*$",
   bool = raw"^\s*(t|tr|tru|true|y|ye|yes|on|1|f|fa|fal|fals|false|n|no|of|off|0)\s*$",
   uuid = raw"^\{?[0-9a-f]{4}(-?[0-9a-f]{4}){7}\}?$",
@@ -542,7 +542,9 @@ function _text_cast_fallback(col::AbstractString, target::CanonicalType)::Tuple{
     return ("CASE WHEN $t ~ \$1 THEN CAST($t AS numeric) NOT BETWEEN \$2::numeric AND \$3::numeric ELSE true END",
             Any[_TEXT_CAST_RE.int, Int(lo), Int(hi)])
   elseif target isa CDecimal && _whole_digits(target) !== nothing
-    return ("CASE WHEN $t ~* \$1 THEN lower(btrim($t)) <> 'nan' AND " *
+    # NaN fits any `numeric(p, s)`. Matched with the same `\s` the grammar allows (`btrim` would
+    # strip spaces only, and a tab-padded `NaN` would reach `abs()`).
+    return ("CASE WHEN $t ~* \$1 THEN $t !~* '^\\s*nan\\s*\$' AND " *
             "abs(round(CAST($t AS numeric), \$2::integer)) >= power(10::numeric, \$3::integer) ELSE true END",
             Any[_TEXT_CAST_RE.numeric, _decimal_scale(target), _whole_digits(target)])
   elseif target isa Union{CFloat64, CDecimal, CBool, CUUID}
@@ -731,8 +733,8 @@ than being told about a failure in a log it may not read.
 function _refuse_failing_alters(findings::Vector{LossyAlter}; interactive::Bool)::Bool
   failing = _failing_alters(findings)
   isempty(failing) && return true
-  msg = "The plan changes $(length(failing)) column(s) in a way the database would refuse on existing " *
-        "rows, or cannot apply at all. Nothing was applied. Fix the data (or the models file) and run " *
+  msg = "The plan has $(length(failing)) change(s) the database would refuse on existing rows, or " *
+        "cannot apply at all. Nothing was applied. Fix the data (or the models file) and run " *
         "makemigrations() again; `destructive = true` does not bypass this." *
         join((" " * _LOSSY_ALTER_HINTS[k] for k in unique(f.kind for f in failing) if haskey(_LOSSY_ALTER_HINTS, k)))
   (interactive && (stdin isa Base.TTY)) || throw(MigrationPrecheckError(msg, failing))

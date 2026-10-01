@@ -1045,3 +1045,42 @@ end
                                  "a0ee-bc99-9c0b-4ef8-bb6d-6bb9-bd38-0a11"))
     @test !any(v -> ok(:uuid, v), ("a0eebc99", "g0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"))
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#828, review): a USING retype of a column with a DEFAULT drops it first
+# The `USING` converts values, not the default; PostgreSQL converts the default with an assignment
+# cast, and the castless pairs have none — so `TYPE … USING` failed on every table while the old
+# default was still there. The sequence is DROP DEFAULT → TYPE … USING → SET DEFAULT <declared>.
+# `0 == false` in Julia, so an integer default of 0 moving to a boolean default of false is not a
+# `:default` delta; the declared default must still be put back.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#828 review: a USING retype drops the old default first and restores the declared one" begin
+    drop = "ALTER TABLE \"t828\" ALTER COLUMN \"c\" DROP DEFAULT;"
+    steps(sql) = [strip(l) for l in split(sql, '\n') if !isempty(strip(l))]
+
+    s = steps(_la828_alter(Models.IntegerField(default = 0), Models.CharField(max_length = 5, default = "0")))
+    @test s[1] == drop
+    @test startswith(s[2], "ALTER TABLE \"t828\" ALTER COLUMN \"c\" TYPE ") && occursin(" USING CAST(\"c\" AS ", s[2])
+    @test s[end] == "ALTER TABLE \"t828\" ALTER COLUMN \"c\" SET DEFAULT 0;"
+
+    s = steps(_la828_alter(Models.BooleanField(default = false), Models.IntegerField(default = 0)))
+    @test s[1] == drop && occursin("USING (\"c\" <> 0);", s[2])
+    @test s[end] == "ALTER TABLE \"t828\" ALTER COLUMN \"c\" SET DEFAULT FALSE;"
+
+    # No declared default: the drop is the whole story — one DROP, not two.
+    s = steps(_la828_alter(Models.IntegerField(), Models.BooleanField(default = true)))
+    @test count(==(drop), s) == 1 && s[1] == drop
+
+    # No old default: nothing to drop.
+    @test !occursin("DROP DEFAULT", _la828_alter(Models.IntegerField(default = 0), Models.CharField(max_length = 5)))
+end
+
+@testset "#829 review: an uncompilable added column is not classified" begin
+    spec = Migrations._degraded_spec(Models.IntegerField(), PG_LA803, "<uncompilable:new>"; name = "grid")
+    @test isempty(Migrations._lossy_add_column(spec, PG_LA803; table = "t"))
+end
+
+@testset "#828 review: the float grammar takes a signed NaN" begin
+    ok(v) = occursin(Regex(Migrations._TEXT_CAST_RE.float, "i"), v)
+    @test ok("-nan") && ok("+NaN") && ok("\tnan ")
+end

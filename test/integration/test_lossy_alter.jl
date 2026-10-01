@@ -18,7 +18,9 @@
 #       counted, and applies over an empty one (#829);
 #   (k) `unique = true` over duplicates, (l) a foreign key over an orphan and (m) a CheckConstraint
 #       over a failing row are each counted by the server and refused (#830);
-#   (n) the pre-16 grammar fallback for `:text_cast` counts what `pg_input_is_valid` counts (#828).
+#   (n) the pre-16 grammar fallback for `:text_cast` counts what `pg_input_is_valid` counts (#828);
+#   (o) a text column with a DEFAULT retypes to integer — the old default is dropped before the
+#       `USING`, which PostgreSQL would otherwise try to cast and refuse (#828).
 #
 # Run it under both PostgreSQL drivers: `PORMG_POSTGRES_DRIVER=Postgres` selects Postgres.jl (#788),
 # whose parameter typing differs from LibPQ's.
@@ -406,6 +408,30 @@ end
         @test err !== nothing && only(err.findings).rows == 1   # the NULL passes a CHECK
         PormG.ConnectionPool.fetch(st.connections, "UPDATE \"$(_LA803PG_TABLE)\" SET grid = 0 WHERE grid < 0;")
         @test _la803pg_migrate(st).outcome === :applied
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (o) A castless retype of a column with a DEFAULT applies, and carries the declared default (#828)
+# `TYPE … USING` converts the values but casts the DEFAULT with an assignment cast, which a castless
+# pair does not have: with the old `'0'` default left in place the ALTER fails on every table. The
+# plan drops it first and sets the declared default after.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: a text column with a DEFAULT retypes to integer and keeps the declared default (#828)" begin
+    _la803pg_case("") do st
+        _la803pg_plan!(st, _la803pg_models(note = "Models.TextField(null = true, default = \"0\")"))
+        @test _la803pg_migrate(st).outcome === :applied
+        PormG.ConnectionPool.fetch(st.connections, _LA803PG_INSERT * "('SEN', 1, 1.5, '7', 1, NULL);")
+
+        sink = _la803pg_plan!(st, _la803pg_models(note = "Models.IntegerField(null = true, default = 5)"))
+        @test [f.kind for f in sink] == [:text_cast]
+        @test _la803pg_migrate(st).outcome === :applied
+        @test _la803pg_type(st, "note") == "integer"
+        @test _la803pg_sql(st, "SELECT note FROM \"$(_LA803PG_TABLE)\";").note == [7]
+        @test _la803pg_sql(st, """
+            SELECT pg_get_expr(d.adbin, d.adrelid) AS d FROM pg_attrdef d
+              JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+             WHERE d.adrelid = '$(_LA803PG_TABLE)'::regclass AND a.attname = 'note'""").d == ["5"]
     end
 end
 

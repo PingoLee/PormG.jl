@@ -420,6 +420,19 @@ scale, and a `COLLATE` clause. The same rules apply to the `output_field=` strin
 `output_field`, the one that renders a cast there; `Coalesce`, `Greatest` and `Least` render no cast
 on SQLite and take the operand's value as it is.
 
+`Concat` renders no cast on either engine, because its result is always text. Its `output_field`
+must therefore be a text type (`CharField()`, `TextField()`, `"text"`, `"varchar(20)"`). Any other
+type raises `InvalidValueError` when the expression is built, since the SQL would never apply it.
+To get a number out of a concatenation, cast the result:
+
+```julia
+using PormG.Functions: Cast, Concat, Value
+
+# Season 2020, round 7 → the text '202007' → the integer 202007 (rounds 1–9 only, for the padding)
+M.Race.objects.filter("year" => 2020, "round__@lt" => 10).
+    values("raceid", "season_round" => Cast(Concat("year", Value("0"), "round"), "integer"))
+```
+
 ### `Extract` — Extract Date/Time Part
 
 ```julia

@@ -1482,9 +1482,10 @@ end
 #
 # `date` from `Cast` or `Case` types the column on both engines: SQLite renders the cast `date(x)`
 # (#822), whose text is what a DateField binds. It was refused here until then, because
-# `CAST(x AS DATE)` made `2020` of `'2020-03-29'`. `Coalesce`, `Greatest`, `Least` and `Concat` stay
-# refused on SQLite: they render no cast there, so the column holds the operand's text — a
-# timestamp, say — and a date filter on it would match nothing, the #812 silent-empty result.
+# `CAST(x AS DATE)` made `2020` of `'2020-03-29'`. `Coalesce`, `Greatest` and `Least` stay refused on
+# SQLite: they render no cast there, so the column holds the operand's text — a timestamp, say — and
+# a date filter on it would match nothing, the #812 silent-empty result. `Concat` never reaches that
+# arm: it renders no cast on EITHER engine, so its constructor refuses any non-text type (#835).
 function _declared_type(func::SQLTypeFunction, instruct::SQLInstruction)
   declared = get(func.kwargs, func.function_name == "CAST" ? "type" : "output_field", nothing)
   (declared isa AbstractString && !isempty(declared)) || return nothing

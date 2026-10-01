@@ -1282,6 +1282,73 @@ _cte_refusal(Model_, expr) = try _cte_case_field(Model_, expr); nothing catch e;
   end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# #835: the two readers of a declared type agree on Concat
+# #812 made `_sql_type_field` the one table behind both readers — the CTE column's field and the
+# projection alias's formatter — so they could never disagree. `Concat` did: the CTE typed
+# `Concat(…; output_field = "integer")` INTEGER, refusing "abc" and binding 7 as a number against
+# the text `CONCAT`/`||` actually returns (SQLite: no rows), while the alias filter checked text.
+# The invariant, over every type family: whatever `Concat` BUILDS with, a filter on it as a CTE
+# column and as a projection alias accepts or refuses the same value and binds it the same way.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The last bound value of a filter on `expr`, or the error type it raised: one reader's verdict.
+function _concat_reader_verdict(Model_, expr, v; via_cte::Bool)
+  try
+    q = Model_.objects
+    if via_cte
+      body = Model_.objects
+      body.values("resultid", "x" => expr)
+      q.with("c" => body, join_field = "resultid" => "resultid")
+      q.values("resultid", "c__x")
+      q.filter("c__x" => v)
+    else
+      q.values("resultid", "x" => expr)
+      q.filter("x" => v)
+    end
+    return inspect_query(q)[:parameters][end]
+  catch e
+    return typeof(e)
+  end
+end
+
+@testset "#835: a Concat CTE column and a Concat alias are typed alike" begin
+  Concat_ = PormG.Functions.Concat
+  for (backend, Model_) in (("PostgreSQL", Window685Pg.Result), ("SQLite", Window685Sl.Result))
+    for t in ("text", "varchar(20)", "integer", "bigint", "float8", "numeric", "boolean", "date")
+      @testset "$backend — output_field = $(repr(t))" begin
+        expr = try Concat_(["surname", "raceid"]; output_field = t) catch e; e end
+        if expr isa Exception
+          # A type the SQL would never apply is refused at construction; nothing reaches a reader.
+          @test expr isa PormG.InvalidValueError
+        else
+          # It built, so it is text: the CTE column is a text field, as the alias filter assumes.
+          @test _cte_case_field(Model_, expr) isa Union{PormG.Models.sCharField, PormG.Models.sTextField}
+          for v in ("abc", 7)
+            cte = _concat_reader_verdict(Model_, expr, v; via_cte = true)
+            alias = _concat_reader_verdict(Model_, expr, v; via_cte = false)
+            # Neither reader refuses a text value or a number compared with text…
+            @test !(cte isa Type) && !(alias isa Type)
+            # …and both bind it identically — the disagreement the issue reported. Except one cell:
+            # on SQLite the ALIAS path keeps a number native whatever the formatter
+            # (`_sqlite_preserve_native_parameter`), and `('' || 7) = 7` is false there — no affinity
+            # on either side — so it matches no rows where the CTE's "7" matches. Older than #835 and
+            # not Concat's (every text-function alias does it; #707's test pins the native 5); left
+            # to #851, and broken here so the fix shows up when it lands.
+            if backend == "SQLite" && v isa Number
+              @test_broken isequal(cte, alias)
+            else
+              @test isequal(cte, alias)
+            end
+          end
+          # Text on PostgreSQL binds the number as text: there is no `text = integer` operator.
+          backend == "PostgreSQL" && @test _concat_reader_verdict(Model_, expr, 7; via_cte = true) == "7"
+        end
+      end
+    end
+  end
+end
+
 # #809 through a CTE handle: the argument is a `CTE(...)` column, which is grouped only when the
 # query projects that handle or its `"<cte>__<col>"` path. Here, beside the #685 CTE fixtures, because
 # a CTE joins back through the model registry.

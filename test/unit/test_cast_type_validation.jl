@@ -66,6 +66,50 @@ _c696_sql(q, conn) = inspect_query(q; connection = conn)[:sql_text]
 _c696_q() = Cast696Models.Cast696_result.objects
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #835: Concat's output_field must be a text type
+# `CONCAT(…)` / `a || b` is text on both engines and renders no cast, so a declared number or date
+# was a type the SQL never applied — the CTE typing believed it while the alias filter checked text.
+# A non-text type is now refused when the expression is built, on both engines alike (nothing here
+# renders), and the message names the explicit spelling, `Cast(Concat(…), type)`. Text types still
+# build and still render no cast: the value already is text.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#835: Concat refuses a non-text output_field" begin
+  parts = ["points", Value("-")]
+  # Every non-text family `_sql_type_field` names, as a string and as a field object, plus types it
+  # names no family for at all (a timestamp, a user enum) and arrays — of text too: `_sql_type_field`
+  # reads `"varchar(20)[]"` as `varchar`, which the guard must not take for text.
+  for t in ("integer", IntegerField(), "bigint", BigIntegerField(), "float8", FloatField(),
+            "numeric(10,2)", DecimalField(), "boolean", BooleanField(), "date", DateField(),
+            "timestamptz", DateTimeField(), "integer[]", "text[]", "varchar(20)[]", "char(3)[]", "mood")
+    @testset "$(t isa AbstractString ? repr(t) : nameof(typeof(t)))" begin
+      err = try Concat(parts; output_field = t); nothing catch e; e end
+      @test err isa PormG.InvalidValueError
+      # Names the cast that does what the caller asked for, spelled with the type they gave.
+      msg = replace(PormG.error_message(err), r"\e\[[0-9;]*m" => "")
+      want = lowercase(t isa AbstractString ? t : Dialect.cast_type_name(t.type))
+      @test occursin("Cast(Concat(…), \"$(want)\")", msg)
+      # The variadic spelling is the same constructor.
+      @test_throws PormG.InvalidValueError Concat("points", Value("-"); output_field = t)
+    end
+  end
+
+  # Text builds — the shipped `@yyyy_q` label passes `CharField()` — and renders no cast on either
+  # engine, because there is nothing to cast. `""` keeps meaning "no type" as on every function.
+  for t in (CharField(), TextField(), "text", "varchar(20)", "character varying", "char(3)", "TEXT", "")
+    @testset "accepted: $(t isa AbstractString ? repr(t) : nameof(typeof(t)))" begin
+      q = _c696_q(); q.values("c" => Concat(parts; output_field = t))
+      for conn in (_CPG, _CSL)
+        sql = _c696_sql(q, conn)
+        # A cast on the RESULT. (`Value("-")` binds as `$1::text` on PostgreSQL — an operand's
+        # bind cast, preceded by the marker, not by the closing parenthesis of the call.)
+        @test !occursin(r"\)\s*::"s, sql)
+        @test !occursin(r"CAST\("i, sql)
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #696: a hostile type string is refused when the expression is BUILT
 # Every public entry point that takes a type string raises `InvalidValueError` before any SQL exists,
 # so the refusal does not depend on which engine eventually renders the node.

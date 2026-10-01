@@ -473,6 +473,13 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        # #835. `Concat` renders no cast on either engine, so a non-text `output_field` is refused
+        # when the expression is built — before any query or connection exists.
+        "read/functions_and_dates.md — a non-text output_field on Concat raises (#835)",
+        InvalidValueError,
+        () -> PormG.Functions.Concat("year", PormG.Functions.Value("0"), "round"; output_field = "integer"),
+    ),
+    (
         # #822. A temporal cast target other than `date` raises on SQLite, which has no time types:
         # `CAST(… AS TIMESTAMP)` there turns '2020-03-29 10:11:12' into the number 2020.
         "read/functions_and_dates.md — a timestamp cast raises on SQLite (#822)",

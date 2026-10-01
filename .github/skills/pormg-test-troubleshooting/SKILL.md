@@ -27,7 +27,7 @@ for the fix itself.
 
 ## Test layout & how to run a narrow slice
 
-- `test/runtests.jl` — unit suite (`julia --project=. -e 'using Pkg; Pkg.test()'`). No live DB required;
+- `test/runtests.jl` — unit suite (`julia -O0 --project=. -e 'using Pkg; Pkg.test()'`). No live DB required;
   SQLite `:memory:` only. This is what CI (`.github/workflows/CI.yml`) runs — integration tests are
   **not** part of CI, they're local/dev-only.
 - `test/integration/runtests.jl` — phased integration suite against a live DB (migration bootstrap
@@ -74,7 +74,7 @@ has isolated the failure, or when the rung-5 table in
 
 ```powershell
 # Unit suite (CI-equivalent — julia-actions/julia-runtest calls exactly this)
-julia --project=. -e 'using Pkg; Pkg.test()'
+julia -O0 --project=. -e 'using Pkg; Pkg.test()'
 
 # A single unit file (rungs 1-2). --project=test/integration carries LibPQ + SQLite
 julia --project=test/integration test/unit/test_order_by_nulls.jl

@@ -236,7 +236,7 @@ suite that fails tells you far less than the narrow slice that fails.
 |---|---|---|---|---|
 | 1 | The new or changed test file alone — `julia --project=test/integration test/unit/test_x.jl` | ✅ | ✅ | ✅ |
 | 2 | The **guard tests your change could trip** — see below | ✅ | ✅ | ✅ |
-| 3 | `julia --project=. -e 'using Pkg; Pkg.test()'` (full unit) | — CI's job | ✅ | ✅ |
+| 3 | `julia -O0 --project=. -e 'using Pkg; Pkg.test()'` (full unit) | — CI's job | ✅ | ✅ |
 | 4 | **Integration slice** — only the files your diff reaches — no ask; the suite lock queues it | — | when the diff reaches integration | ✅ |
 | 5 | Full `test/integration/runtests.jl` — **only if the diff is in the rung-5 table below** — **ask the user first** | — | if triggered | ✅ |
 

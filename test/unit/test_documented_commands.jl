@@ -26,7 +26,7 @@
 # developer with LibPQ/SQLite in their shared default environment also sees it "work".)
 #
 # THE TWO SPELLINGS THAT DO WORK, and what each is for:
-#   julia --project=. -e 'using Pkg; Pkg.test()'        full unit suite; what CI runs
+#   julia -O0 --project=. -e 'using Pkg; Pkg.test()'    full unit suite; what CI runs
 #   julia --project=test/integration <test_file.jl>     one file — unit OR integration
 #
 # THE INTEGRATION RESCUE IS FLAGGED TOO (#628) — `--project=. test/integration/<file>.jl`.
@@ -150,7 +150,7 @@ using PormG
         A prescribed command hands a test script to `--project=.`, which cannot load the SQL
         driver extensions (#624) — or, for a test/integration/ script, runs only because
         common_setup.jl rescues it, which is not the spelling to teach (#628). Use one of:
-          full unit suite   julia --project=. -e 'using Pkg; Pkg.test()'
+          full unit suite   julia -O0 --project=. -e 'using Pkg; Pkg.test()'
           one test file     julia --project=test/integration <path/to/test_file.jl>
         Offending lines:
         """ * "\n" * join(hits, "\n")

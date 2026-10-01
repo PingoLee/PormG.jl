@@ -243,7 +243,7 @@ slice unless the diff is in the rung-5 table in
 [`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md) → *Verify*.
 
 ```powershell
-julia --project=. -e 'using Pkg; Pkg.test()'                                               # unit — no permission needed
+julia -O0 --project=. -e 'using Pkg; Pkg.test()'                                           # unit — no permission needed
 julia -t auto --project=test/integration test/integration/test_bulk_copy.jl                # rung 4 slice — no ask
 julia -t auto --project=test/integration test/integration/runtests.jl                      # rung 5 — ask; release gate
 $env:PORMG_DB="db_sl"; julia -t 1 --project=test/integration test/integration/runtests.jl  # rung 5, SQLite — ask (-t 1 required)

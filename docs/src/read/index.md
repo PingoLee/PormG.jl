@@ -161,14 +161,16 @@ PostgreSQL where more than fifteen digits is the point.
     Projected as the column itself — a field path, a bare `F("amount")`, or the model's `*` — a
     `DecimalField` reaches `.list(:json)` as a `Decimal` on both engines, so both emit the same
     digits: `{"amount":1234567.89}`. Before, SQLite handed back a `Float64`, which Julia renders in
-    exponent form from a million up (`{"amount":1.23456789e6}`).
+    exponent form from a million up (`{"amount":1.23456789e6}`). The same applies to a function
+    that returns one of the column's own values (`Max("amount")`, `Min("amount")`, and the window
+    value functions `Lag`, `Lead`, `FirstValue`, `LastValue` and `NthValue`), and to the row a write
+    hands back (`create()`, `update_or_create`, `get_or_create`).
 
     Everything else still arrives on SQLite as the number SQLite holds or computed, and renders that
     way:
-    - an **expression** over the column — an aggregate, arithmetic or SQL function (`Sum("amount")`,
-      `F("amount") * 2`, `Round(...)`), a `Joined(...)` or `CTE(...)` reference, a subquery;
-    - a row returned by **`create()`** or **`update_or_create`**, which is read back without the query
-      parsers, as temporal columns are (`get_or_create` reads through `first()`, so it is parsed);
+    - a **computed expression** over the column — an aggregate that computes (`Sum("amount")`,
+      `Avg`), arithmetic (`F("amount") * 2`), an SQL function (`Round(...)`, `Coalesce(...)`), a
+      `Joined(...)` or `CTE(...)` reference, a subquery;
     - a value that does **not fit the declaration**, such as the unrounded double an `F`-arithmetic
       `update(...)` leaves behind on SQLite, where PostgreSQL rounds it to the column's scale;
     - a field declared **wider than fifteen digits**.

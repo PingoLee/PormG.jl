@@ -84,3 +84,56 @@ end
     @test e isa PormGError && occursin("missing its primary-key column", e.msg)
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #800 — the row a write hands back goes through the #564 read table, as `list()` does.
+#
+# Postgres.jl delivers a one-component INTERVAL as a bare `Period` (`Second(23)` for a 23-second pit
+# stop); the same column read through a query is a `Dates.CompoundPeriod` (#581). Before #800 the
+# `RETURNING *` row skipped the table, so `create()` and a re-read disagreed on the type. The mock
+# hands back exactly what Postgres.jl does, so this fails on the unpatched call sites.
+# ─────────────────────────────────────────────────────────────────────────────
+
+using Dates
+using PormG.Models: DurationField, DateField
+
+DurRowModel = Model("durrow", id = IDField(), label = CharField(), dur = DurationField(), day = DateField())
+DurRowModel.connect_key = "create_pormgrow_dur"
+
+struct MockPgDuration <: PormG.PormGPostgres end
+
+function fetch(connection::MockPgDuration, sql::String;
+  conn = nothing, params = nothing, ignore_tx::Bool = false)
+  occursin("INSERT INTO", sql) && occursin("RETURNING", sql) || return DataFrame()
+  row = DataFrame(id = [9], label = ["pit"], dur = [Second(23)], day = [Date(2011, 4, 10)])
+  occursin("__pormg_created", sql) && (row.__pormg_created = [true])
+  return row
+end
+
+PormG.config["create_pormgrow_dur"] =
+  PormG.Configuration.Settings(connections = MockPgDuration(), change_data = true)
+
+@testset "a written row's INTERVAL reads back as a CompoundPeriod (#800)" begin
+  row = DurRowModel.objects.create("label" => "pit", "dur" => Second(23), "day" => Date(2011, 4, 10))
+  @test row.dur isa Dates.CompoundPeriod
+  @test row.dur == Second(23)
+  # A kind whose PostgreSQL value is already typed has no parser, and is handed back untouched.
+  @test row.day === Date(2011, 4, 10)
+  @test row.label == "pit"
+
+  urow, created = DurRowModel.objects.update_or_create("label" => "pit";
+    defaults = ["dur" => Second(23), "day" => Date(2011, 4, 10)])
+  @test created
+  @test urow.dur isa Dates.CompoundPeriod
+  @test urow.dur == Second(23)
+  # The sentinel column is not a field: stripped, never parsed.
+  @test !haskey(getfield(urow, :_data), :__pormg_created)
+
+  # get_or_create's miss: the lookup finds nothing (the mock answers every SELECT with no rows), so
+  # it inserts and hands back the `RETURNING *` row — the third call site.
+  grow, gcreated = DurRowModel.objects.get_or_create("label" => "pit";
+    defaults = ["dur" => Second(23), "day" => Date(2011, 4, 10)])
+  @test gcreated
+  @test grow.dur isa Dates.CompoundPeriod
+  @test grow.dur == Second(23)
+end

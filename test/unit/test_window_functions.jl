@@ -1039,6 +1039,142 @@ end
   end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# CTE column typed from a Case (#812): resolved from the branches, refused on doubt
+# A `Case` column in a CTE body used to be typed by `isa Integer/Number/AbstractString` on its
+# branch values, so an expression branch (`then = Rank(…)`, `then = F("points")`) and the `Case`
+# default itself (the string "NULL") made it a CharField — and the outer `c__top__@gt => 10` bound
+# "10", which SQLite compares as TEXT and silently drops every row. Now `output_field=` wins, every
+# branch is resolved to a field with NULLs skipped, and branches that do not agree raise.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The field the CTE model gives the `top` column: the body built on its own, then typed by the same
+# `_build_cte_custom_model` the outer build calls (whose per-build copy the caller never sees).
+function _cte_case_field(Model_, expr)
+  body = Model_.objects
+  body.values("resultid", "top" => expr)
+  instruction = PormG.QueryBuilder.build(body.object; connection = Model_.connect_key == "window_685_pg" ?
+                                                                    WindowMockPostgres() : WindowMockSQLite())
+  cte = PormG.QueryBuilder.CTEDict()
+  PormG.QueryBuilder._build_cte_custom_model(cte, instruction)
+  return cte["model"].fields["top"]
+end
+
+# The outer filter's bound values for `c__top__@gt => 10` over a CTE whose `top` is `expr`.
+function _cte_case_filter_params(Model_, expr)
+  body = Model_.objects
+  body.values("resultid", "top" => expr)
+  q = Model_.objects
+  q.with("c" => body, join_field = "resultid" => "resultid")
+  q.values("resultid", "c__top")
+  q.filter("c__top__@gt" => 10)
+  return inspect_query(q)[:parameters]
+end
+
+@testset "#812: a CTE column typed from Case resolves its branches" begin
+  for (backend, Model_) in (("PostgreSQL", Window685Pg.Result), ("SQLite", Window685Sl.Result))
+    @testset "$backend — the issue's repro binds a number, not a string" begin
+      # `then = Rank(…)` is the spelling the window docs show. Before the fix the last parameter was
+      # "10"; the two before it are the CASE's own `WHEN raceid = 1` value and `ELSE 0`.
+      params = _cte_case_filter_params(Model_,
+        Case([When("raceid" => 1, then = Rank(over = WindowOver(order_by = ["points"])))], default = 0))
+      @test params == Any[1, 0, 10]
+      @test params[end] isa Integer
+    end
+
+    @testset "$backend — an F branch and the NULL default bind a number too" begin
+      # `F("points")` resolves to the points FloatField. A Case with no `default` carries the string
+      # "NULL" as its ELSE, which is SQL NULL and must not count as a text branch.
+      @test _cte_case_filter_params(Model_,
+        Case([When("raceid" => 1, then = F("points"))], default = 0))[end] === 10
+      @test _cte_case_filter_params(Model_, Case([When("raceid" => 1, then = 1)]))[end] === 10
+    end
+
+    @testset "$backend — the resolved field per branch shape" begin
+      # A bare column resolves to that column's field; the NULL sentinel is skipped.
+      @test _cte_case_field(Model_, Case([When("raceid" => 1, then = F("raceid"))])) isa PormG.Models.sIntegerField
+      # A single bare `When` inside `Case`, and `When(…, otherwise = …)`, hold ONE WHEN node rather than
+      # a vector — their `then` was never read, so the ELSE alone (`0`) typed them as integers.
+      @test _cte_case_field(Model_, Case(When("raceid" => 1, then = 1.5), default = 0)) isa PormG.Models.sFloatField
+      @test _cte_case_field(Model_, When("raceid" => 1, then = 1.5, otherwise = 0)) isa PormG.Models.sFloatField
+      # `Bool` is checked before `Integer`, because `true isa Integer`.
+      @test _cte_case_field(Model_, Case([When("raceid" => 1, then = true)], default = false)) isa PormG.Models.sBooleanField
+      # Window arithmetic on an integer stays an integer.
+      @test _cte_case_field(Model_,
+        Case([When("raceid" => 1, then = Rank(over = WindowOver(order_by = ["points"])) - 1)], default = 0)) isa
+        PormG.Models.sIntegerField
+      # `output_field` wins over the branches — it is also the type the SQL casts the value to.
+      @test _cte_case_field(Model_,
+        Case([When("raceid" => 1, then = "7")], default = "0", output_field = IntegerField())) isa PormG.Models.sIntegerField
+    end
+
+    @testset "$backend — a declared type types any function's CTE column" begin
+      # `output_field` / `Cast` are what the refusals point at, so they must work outside `Case`
+      # too: before #812 every function but the aggregates died as "not a recognized function".
+      @test _cte_case_field(Model_, PormG.Functions.Cast(PormG.Functions.Lower("surname"), "text")) isa
+        PormG.Models.sTextField
+      @test _cte_case_field(Model_, Coalesce("raceid", 0, output_field = "integer")) isa PormG.Models.sIntegerField
+      # A declared type outside the families a field can stand for is refused, not dropped in
+      # favour of inference — the caller named it.
+      err = try _cte_case_field(Model_, PormG.Functions.Cast("points", "timestamp")); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      @test occursin("timestamp", _window_msg(err))
+    end
+
+    @testset "$backend — a declared date type is a real date only on PostgreSQL" begin
+      # Found in review: SQLite's `CAST(… AS DATE)` has numeric affinity and turns '2020-03-29'
+      # into 2020, so a DateField-typed column there would bind date text against a number.
+      for expr in (PormG.Functions.Cast("points", "date"),
+                   Case([When("raceid" => 1, then = F("points"))], default = 0, output_field = "date"))
+        if backend == "PostgreSQL"
+          @test _cte_case_field(Model_, expr) isa PormG.Models.sDateField
+        else
+          err = try _cte_case_field(Model_, expr); nothing catch e; e end
+          @test err isa PormG.QueryBuildError
+          @test occursin("SQLite", _window_msg(err))
+        end
+      end
+    end
+
+    @testset "$backend — review edges: Value(missing), a non-When branch" begin
+      # `Value(missing)` is NULL like `missing` itself, so the other branch decides.
+      @test _cte_case_field(Model_,
+        Case([When("raceid" => 1, then = Value(missing))], default = 1)) isa PormG.Models.sIntegerField
+      # A `When(…; otherwise = …)` is already a CASE: inside `Case([...])` it renders no THEN.
+      # Refused as a typed error rather than a raw KeyError on the missing "then".
+      err = try _cte_case_field(Model_, Case([When("raceid" => 1, then = 1, otherwise = 2)])); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+    end
+
+    @testset "$backend — branches that do not agree are refused, naming output_field" begin
+      refusals = (
+        "mixed types" => Case([When("raceid" => 1, then = 1)], default = "none"),
+        "all NULL" => Case([When("raceid" => 1, then = missing)]),
+        "text arithmetic" => Case([When("raceid" => 1, then = F("surname") + 1)], default = 0),
+        "untyped function" => Case([When("raceid" => 1, then = PormG.Functions.Lower("surname"))], default = "none"),
+      )
+      for (label, expr) in refusals
+        err = try _cte_case_field(Model_, expr); nothing catch e; e end
+        @test err isa PormG.QueryBuildError
+        msg = replace(_window_msg(err), r"\e\[[0-9;]*m" => "")
+        # The message names the CTE column and the fix, whatever the reason was.
+        @test occursin("CTE column top", msg) && occursin("output_field", msg)
+      end
+      err = try _cte_case_field(Model_, Case([When("raceid" => 1, then = 1)], default = "none")); nothing catch e; e end
+      @test occursin("(IntegerField and CharField)", replace(_window_msg(err), r"\e\[[0-9;]*m" => ""))
+    end
+  end
+
+  # Found in review: two key branches share a struct type but not a parent. Typed as the first key,
+  # an outer `c__who__surname` joined constructor ids to drivers; they are a plain integer instead.
+  # Driven through the unifier directly — the fixture models above carry no foreign keys.
+  unify = PormG.QueryBuilder._unify_case_fields
+  to_driver = PormG.Models.ForeignKey("Driver", pk_field = "driverid")
+  to_constructor = PormG.Models.ForeignKey("Constructor", pk_field = "constructorid")
+  @test unify(PormG.PormGField[to_driver, to_constructor], "who") isa PormG.Models.sIntegerField
+  @test unify(PormG.PormGField[to_driver, PormG.Models.ForeignKey("Driver", pk_field = "driverid")], "who") === to_driver
+end
+
 # #809 through a CTE handle: the argument is a `CTE(...)` column, which is grouped only when the
 # query projects that handle or its `"<cte>__<col>"` path. Here, beside the #685 CTE fixtures, because
 # a CTE joins back through the model registry.

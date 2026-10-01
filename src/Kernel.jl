@@ -171,7 +171,8 @@ signatures, which all read model-only attributes (#186).
 
 Fields own their validation — a value is checked here, before any SQL is generated — and
 carry the formatter that coerces a Julia value on its way *into* the database (inserts, bulk
-writes, bound filter parameters). Values read back are not decoded through the field type.
+writes, bound filter parameters). The way back is not the field's job: values read back are
+decoded by the representation table (`value_parser`), per canonical kind and backend.
 
 See also [PormG Field Types Reference](@ref).
 """

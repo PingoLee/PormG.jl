@@ -8,7 +8,7 @@
 # friendly "run `using LibPQ` / `using SQLite`" error.
 #
 # TWO environments carry the drivers, and both spell the project explicitly (#624):
-#   • `julia --project=. -e 'using Pkg; Pkg.test()'` — the drivers are direct deps of the
+#   • `julia -O0 --project=. -e 'using Pkg; Pkg.test()'` — the drivers are direct deps of the
 #     temp test env (`[extras]` + `[targets].test`), so a plain `using` works. This is what
 #     CI runs, via julia-actions/julia-runtest.
 #   • `julia --project=test/integration …` — that env lists LibPQ and SQLite in `[deps]` and
@@ -78,7 +78,7 @@ let failures = Pair{String,String}[]
         package environment never installs them, and `Manifest.toml` is gitignored so nothing
         local says so. Use one of the two environments that carry them:
 
-          full unit suite   julia --project=. -e 'using Pkg; Pkg.test()'
+          full unit suite   julia -O0 --project=. -e 'using Pkg; Pkg.test()'
           one test file     julia --project=test/integration <path/to/test_file.jl>
 
         First use of the second one in a fresh checkout or worktree needs it instantiated once:

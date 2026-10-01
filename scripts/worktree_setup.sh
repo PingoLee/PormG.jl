@@ -109,7 +109,7 @@ if ! git -C "$WT" diff --quiet -- test/integration/Project.toml 2>/dev/null; the
 fi
 
 echo "done — worktree ready for unit + SQLite(db_sl) tests:"
-echo "  full unit suite   julia --project=. -e 'using Pkg; Pkg.test()'"
+echo "  full unit suite   julia -O0 --project=. -e 'using Pkg; Pkg.test()'"
 echo "  one test file     julia --project=test/integration test/unit/test_<name>.jl"
 echo "  (docs only)       julia --project=docs -e 'import Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'"
 echo

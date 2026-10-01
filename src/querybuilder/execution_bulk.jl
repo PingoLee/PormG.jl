@@ -1438,8 +1438,7 @@ function _pg_bulk_returned!(returned::DataFrames.DataFrame, model::PormGModel, f
   present = [field for field in fields if hasproperty(returned, Models.model_column(model, field))]
   DataFrames.rename!(returned, [Models.model_column(model, field) => field for field in present])
   for field in present
-    kind = field_canonical_kind(model.fields[field])
-    parser = kind === nothing ? nothing : value_parser(kind, connection)
+    parser = _field_value_parser(model.fields[field], connection)   # #800: one rule with create()
     parser === nothing || (returned[!, field] = map(parser, returned[!, field]))
   end
   return returned

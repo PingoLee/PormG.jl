@@ -172,6 +172,10 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       kind = nothing
       if original isa FExpression
         v_copy.field, kind = _set_update_query_typed(original, instruc)
+        # #824: a bare `F("ts__@date")` is the transform's result, which the column lookup above
+        # cannot name. Here and not in `_set_update_query_typed`: that also types the LEFT of date
+        # arithmetic, and a transformed left is not this issue's to change.
+        kind === nothing && original.operation === nothing && (kind = _operand_kind(original, instruc))
       else
         v_copy.field = _get_select_query(original, instruc, _as=v_copy._as)
         # A plain path: render first (above), THEN type — the memo ordering `_render_left_typed`
@@ -183,6 +187,9 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
         # #800: an extremum or a window value function has its operand's kind. Same order: render,
         # then type.
         original isa SQLTypeFunction && (kind = _function_projection_kind(original, instruc))
+        # #824: a `Joined(...)` / `CTE(...)` handle (and a `"cte__col"` path, retagged to one before
+        # this loop) reads as `Max` over it does — one rule, `_operand_kind`.
+        original isa Union{JoinedReference,CTEReference} && (kind = _operand_kind(original, instruc))
       end
       instruc.select[i] = v_copy
       if v_copy._as === nothing
@@ -828,46 +835,103 @@ _expression_formatter(::Any, ::SQLInstruction) = nothing
 # SQLite that is the column's stored text, which the column's parser undoes. `SUM`/`AVG`/`COUNT` are
 # computed and never inherit it: a sum of intervals is not an interval PormG wrote, and a decimal sum
 # went through a double (#648's reason). Every other function answers `nothing` and its value stays
-# as the driver delivered it — the fail-open default. The multi-operand operand-typed functions
-# (`COALESCE`, `GREATEST`, …) are deliberately not here: their operands can disagree, and a kind
-# taken from the first one would run a text column through a date parser.
+# as the driver delivered it — the fail-open default.
 #
 # Called AFTER the projection renders, like `_projection_column_kind`: resolving a joined path is
 # what populates the memo `_alias_column_field` reads.
 #
 # #822: a `Cast(x, "date")`, or a `Case` whose `output_field` is a date, is a date because the SQL
 # makes it one on both engines — `::date` on PostgreSQL, `date(…)` on SQLite — so it reads back as a
-# `Date` on both, not a `Date` on one and a `String` on the other. Only those two: `Coalesce`,
-# `Greatest` and `Least` render no cast on SQLite, so their value is whatever text the operand held.
+# `Date` on both, not a `Date` on one and a `String` on the other.
+#
+# #824: the `@date` transform is a date for the same reason — `(col)::date` on PostgreSQL,
+# `strftime('%Y-%m-%d', …)` on SQLite (`Dialect.DATE`) — whatever its operand. `COALESCE`, `GREATEST`
+# and `LEAST` render no cast on SQLite, so their value is one operand's own text: they are typed only
+# when every operand agrees (`_multi_operand_kind`). `NULLIF(a, b)` returns `a` or NULL, so it is `a`.
 const _KIND_PRESERVING_FUNCTIONS = ("MAX", "MIN", "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE")
+const _AGREEING_OPERAND_FUNCTIONS = ("COALESCE", "GREATEST", "LEAST")
 function _function_projection_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)::Union{CanonicalType,Nothing}
   if p isa FObject && p.function_name in ("CAST", "CASE")
     declared = get(p.kwargs, p.function_name == "CAST" ? "type" : "output_field", nothing)
     declared isa AbstractString && _sql_type_field(declared) isa Models.sDateField && return CDate()
   end
+  p isa FObject && p.function_name == "DATE" && return CDate()
+  p isa FObject && p.function_name in _AGREEING_OPERAND_FUNCTIONS && return _multi_operand_kind(p, instruc)
+  p isa FObject && p.function_name == "NULLIF" && return _operand_kind(first(p.column), instruc)
   p.function_name in _KIND_PRESERVING_FUNCTIONS || return nothing
   return _operand_kind(p.column, instruc)
 end
 _function_projection_kind(::Any, ::SQLInstruction) = nothing
 
-# The operand's kind: a column path is its field's; a bare `F(col)` is the column. Any other operand
-# — arithmetic, a nested function, a literal — answers `nothing`, rather than a kind the value may
-# not have.
+# #824 — the kind of a function whose value is one of several operands' own values. Typed only on
+# agreement: every operand names the SAME kind (a `CDecimal` of the same width, a `CDateTime` of the
+# same flavour). An operand with no kind — a text or number column, a number, arithmetic, a function
+# PormG does not type — disqualifies the whole projection: the value may be that operand's, and a
+# kind taken from the others would run text through a date parser (`Coalesce("note", Date(…))`). A
+# NULL literal is skipped: it is never the value. A declared `output_field` is kept only when it
+# names the kind the operands agree on — SQLite renders no cast here, so it cannot change the value.
+function _multi_operand_kind(p::FObject, instruc::SQLInstruction)::Union{CanonicalType,Nothing}
+  kind = nothing
+  for operand in (p.column isa AbstractVector ? p.column : (p.column,))
+    _is_null_literal(operand isa SQLText ? operand.field : operand) && continue   # the #812 `Case` rule
+    k = _operand_kind(operand, instruc)
+    (k === nothing || (kind !== nothing && k != kind)) && return nothing
+    kind = k
+  end
+  declared = get(p.kwargs, "output_field", nothing)
+  if kind !== nothing && declared isa AbstractString
+    declared_field = _sql_type_field(declared)
+    (declared_field === nothing || field_canonical_kind(declared_field) != kind) && return nothing
+  end
+  return kind
+end
+
+# The operand's kind: a column path is its field's; a bare `F(col)` is the column; a function is what
+# `_function_projection_kind` says of it, so `Max(Coalesce(…))` and `Coalesce(Max("d"), …)` compose; a
+# literal is its Julia type's (#721's rule, the kind a projected `Value(x)` records). Any other operand
+# — arithmetic, a subquery — answers `nothing`, rather than a kind the value may not have.
 #
-# A `CTE(...)` or `Joined(...)` handle answers `nothing` too, as it does projected on its own (only a
-# `String` path is typed there). For a CTE that is a correctness line, not caution: a CTE column's
-# field is INFERRED from its body, and `_set_field_from_sql_function` hands an `Avg("amount")` column
-# the operand's own `DecimalField` — so `Max("ev__avg_v")` would run a computed double through the
-# decimal parser, the conversion #648 refuses for `Avg`. The joined handle's kind would be right, but
-# typing it here alone would make `Max(Joined(…))` and `Joined(…)` disagree.
+# #824: a `Joined(...)` handle is the joined column, exactly as `Max(Joined(…))` reads it, so the two
+# agree. A `CTE(...)` handle is NOT its inferred field: `_set_field_from_sql_function` hands an
+# `Avg("amount")` column the operand's own `DecimalField`, which would run a computed double through
+# the decimal parser (#648). It is the body's own read record instead — see `_cte_column_kind`.
 function _operand_kind(p::String, instruc::SQLInstruction)
+  # A transformed path (`"ts__@date"`) names the transform's result, not the column — through the one
+  # transform ladder (#562), the call `_get_filter_query(::String)` renders with.
+  occursin("__@", p) && return _function_projection_kind(_check_function(p), instruc)
   column_field = _alias_column_field(p, instruc)
   return column_field === nothing ? nothing : field_canonical_kind(column_field)
 end
 _operand_kind(p::FExpression, instruc::SQLInstruction) =
   p.operation === nothing ? _operand_kind(p.field_name, instruc) : nothing
 _operand_kind(p::SQLField, instruc::SQLInstruction) = _operand_kind(p.field, instruc)
+_operand_kind(p::SQLText, ::SQLInstruction) = literal_canonical_kind(p.field)
+_operand_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction) = _function_projection_kind(p, instruc)
+function _operand_kind(p::JoinedReference, instruc::SQLInstruction)
+  column_field = _alias_column_field(p, instruc)
+  return column_field === nothing ? nothing : field_canonical_kind(column_field)
+end
+_operand_kind(p::CTEReference, instruc::SQLInstruction) = _cte_column_kind(p, instruc)
 _operand_kind(::Any, ::SQLInstruction) = nothing
+
+# #824 — the read kind of a CTE column. The body is built before the outer query (`build_cte_clause`
+# runs first), and building it recorded the kind of each of its own projections under the same
+# output name the CTE model gives the column — so that record IS the answer, by the same rule, on the
+# same connection: a plain column has its kind, `Max` its operand's, a `Cast(…, "date")` `CDate`, and
+# `Avg`/`Sum`/`Count`/arithmetic none. A path that hops on through the CTE column
+# (`CTE("ev", "parent__x")`) ends at a real model field, which the join walk memoised. No record —
+# a body not built in this pass — answers `nothing`, the fail-open default.
+function _cte_column_kind(ref::CTEReference, instruc::SQLInstruction)::Union{CanonicalType,Nothing}
+  if occursin("__", ref.path)
+    column_field = _alias_column_field(ref, instruc)
+    return column_field === nothing ? nothing : field_canonical_kind(column_field)
+  end
+  cte = get(instruc.object.ctes, ref.name, nothing)
+  cte === nothing && return nothing
+  body = get(cte, "query", nothing)
+  body isa SQLObjectHandler || return nothing
+  return get(body.object.projection_kinds, Symbol(ref.path), nothing)
+end
 
 # The field a type name `output_field=` / `Cast` holds stands for — already validated and spelled by
 # `Dialect.cast_type_name`, so only the canonical words need recognising. A name outside the text,

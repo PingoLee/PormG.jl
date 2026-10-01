@@ -796,6 +796,11 @@ A string argument is a column path. A number, a `Bool`, or a `Date`/`DateTime`/`
 is a literal that is bound as a parameter
 (`Coalesce("points", 0)` means `Coalesce("points", Value(0))`). Wrap a string literal in `Value`. Any other value raises `QueryBuildError`
 when the expression is built (#705).
+
+The value reads back as the column's own Julia type on both engines when every argument is of one
+type — `Coalesce("date", "fp1_date")` is a `Date`, not SQLite's stored text. When the argument types
+differ, the value comes back as the engine delivers it (#824): on SQLite, the stored value of the
+argument that won.
 """
 function Coalesce(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
@@ -812,6 +817,11 @@ A string argument is a column path. A number, a `Bool`, or a `Date`/`DateTime`/`
 is a literal that is bound as a parameter
 (`Greatest("points", 0)` means `Greatest("points", Value(0))`). Wrap a string literal in `Value`. Any other value raises `QueryBuildError`
 when the expression is built (#705).
+
+The value reads back as the column's own Julia type on both engines when every argument is of one
+type — `Greatest("date", "fp1_date")` is a `Date`, not SQLite's stored text. When the argument types
+differ, the value comes back as the engine delivers it (#824): on SQLite, the stored value of the
+argument that won.
 """
 function Greatest(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
@@ -828,6 +838,11 @@ A string argument is a column path. A number, a `Bool`, or a `Date`/`DateTime`/`
 is a literal that is bound as a parameter
 (`Least("points", 25)` means `Least("points", Value(25))`). Wrap a string literal in `Value`. Any other value raises `QueryBuildError`
 when the expression is built (#705).
+
+The value reads back as the column's own Julia type on both engines when every argument is of one
+type — `Least("date", "fp1_date")` is a `Date`, not SQLite's stored text. When the argument types
+differ, the value comes back as the engine delivers it (#824): on SQLite, the stored value of the
+argument that won.
 """
 function Least(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
@@ -893,6 +908,9 @@ is a literal that is bound as a parameter
 when the expression is built (#705).
 
 `NullIf("code", "")` compares two columns; write `NullIf("code", Value(""))` for the empty string.
+
+The value is `field1`'s, so it reads back as `field1`'s own Julia type on both engines: `NullIf("date",
+"fp1_date")` is a `Date`, not SQLite's stored text (#824).
 """
 function NullIf(x, y)
   column = Any[_function_operand(x), _function_operand(y)]   # #705

@@ -496,7 +496,8 @@ using Dates
         result = Migrations.DryRunResult(
             Migrations.compute_checksum(join(stmts, "\n")),
             stmts,
-            String[]  # no destructive statements
+            String[],  # no destructive statements
+            Migrations.LossyAlter[]  # #803: no lossy column changes
         )
         @test Migrations.is_destructive(result) == false
         @test Migrations.total_statements(result) == 2
@@ -512,7 +513,8 @@ using Dates
         result2 = Migrations.DryRunResult(
             Migrations.compute_checksum(join(stmts_destr, "\n")),
             stmts_destr,
-            destr_stmts
+            destr_stmts,
+            Migrations.LossyAlter[]
         )
         @test Migrations.is_destructive(result2) == true
         @test length(result2.destructive_statements) == 1

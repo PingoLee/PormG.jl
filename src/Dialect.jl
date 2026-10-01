@@ -1866,11 +1866,9 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
       max_digits = hasproperty(new_field, :max_digits) ? new_field.max_digits : 10
       decimal_places = hasproperty(new_field, :decimal_places) ? new_field.decimal_places : 2
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE DECIMAL($max_digits, $decimal_places);""")
-      # #522: the live precision is read off the delta's old spec, not off a reconstructed field.
-      old_type = delta.old_spec.type
-      if old_type isa CDecimal && old_type.scale !== nothing && decimal_places < old_type.scale
-        @warn "The new decimal_places is less than the old decimal_places in table $(table_name) and field $(field_name)"
-      end
+      # A lower scale rounds existing values. That used to be a `@warn` here, which a deploy never
+      # read; since #803 the planner records it from the delta as a `:decimal_scale` finding, which
+      # `migrate` will not apply without `destructive = true`.
     elseif new_field isa sTimeField
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE TIME USING "$(_quote_table_ddl(field_name))"::time without time zone;""")
     elseif new_field isa sDurationField

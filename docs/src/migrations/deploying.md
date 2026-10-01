@@ -24,7 +24,7 @@ what happened, and none of the five is an error:
 | `:already_applied` | The plan is already the latest applied migration: another instance got there first, or an earlier run committed it and then failed to archive the file. Nothing ran. | Continue. |
 | `:nothing_pending` | There is no `pending_migrations.jl`, or it holds no statements. The history table and any configured [extensions](../configuration/connection_yml.md) were still ensured. | Continue. |
 | `:disabled` | The connection is `change_db: false`. Nothing was read or written. | Continue if this environment is meant to be read-only; otherwise fix the configuration. |
-| `:declined` | At a terminal, someone answered "no" at the confirmation prompt, or a destructive plan was refused for lack of `destructive = true`. A boot script never sees this: with `interactive = false`, or with no terminal attached, there is no prompt, and a destructive plan throws instead. | — |
+| `:declined` | At a terminal, someone answered "no" at the confirmation prompt, a destructive plan was refused for lack of `destructive = true`, or a column change would fail on existing rows. A boot script never sees this: with `interactive = false`, or with no terminal attached, there is no prompt, and each of those refusals throws instead. | — |
 
 `version` is the `pormg_migrations.version` of the row involved, and `n_statements` is how many plan
 statements this call executed.
@@ -37,6 +37,10 @@ A **failure** is an exception, and at boot the right response is usually to let 
   instance's boot call needs `destructive = true`. Without it, any instance that still sees the plan
   throws, although the plan is already applied. That means its own copy, or a shared folder read
   before the first instance archived the plan.
+- `MigrationPrecheckError`: a column change in the plan would fail on existing rows — a `NULL` under
+  a new `NOT NULL`, a value longer than a new `max_length` — so nothing was applied. The rows were
+  counted first; `destructive = true` does not bypass it. See
+  [Lossy Column Changes](workflow.md#Lossy-Column-Changes).
 - `InvalidMigrationError`: the plan file does not parse.
 - a `DatabaseError`: a statement failed. The whole plan is rolled back and recorded as `failed` in
   `pormg_migrations`.

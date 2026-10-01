@@ -1315,7 +1315,8 @@ function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
                               delta::ColumnDelta,
                               hashed_name::String;
                               old_column::Union{String, Nothing} = nothing,
-                              catalog_table::Symbol = model_name)::Nothing
+                              catalog_table::Symbol = model_name,
+                              lossy_alters::Vector{LossyAlter} = LossyAlter[])::Nothing
   isempty(delta) && old_column === nothing && return nothing
   # ONE source for "the column the live catalog knows", shared with the four constraint-name lookups
   # inside `Dialect.alter_field` (which read `delta.old_spec.name` for the same reason). On a rename
@@ -1373,6 +1374,9 @@ function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
     alter_sql = Dialect.alter_field(conn, declared_model, field_name, new_field, delta;
                                     catalog_table = string(catalog_table))
     _configure_order_dict_migration_plan(migration_plan, model_name, alter_key, alter_sql)
+    # #803: what this change can do to the rows already there, read off the same delta. Keyed on the
+    # catalog's names, because the pre-check that counts those rows runs before the plan does.
+    append!(lossy_alters, _lossy_alters(delta, conn; table = String(catalog_table), column = drop_column))
   end
 
   # 4. Add the constraint for an `:add` or a `:repoint`.
@@ -1384,7 +1388,8 @@ end
 function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, live::LiveTable, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::PormGSettings; interactive::Bool = true,
                              composite_targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}(),
                              sqlite_rebuild_context::Dict{Symbol, Tuple{Symbol, Dict{String, String}}} =
-                               Dict{Symbol, Tuple{Symbol, Dict{String, String}}}())::Nothing
+                               Dict{Symbol, Tuple{Symbol, Dict{String, String}}}(),
+                             lossy_alters::Vector{LossyAlter} = LossyAlter[])::Nothing
   # @pormg_debug model_name == :new_join_position
   # #507 phase 2: NO whole-model early-out. `Models.are_model_fields_equal` used to short-circuit
   # this whole function when every field compared equal, and it was a second answer to a question
@@ -1472,7 +1477,8 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
   _plan_check_drops!(conn, migration_plan, model_name, current_schema[model_name][:model], check_plan)
 
   # Pass maps to resolve fields so original keys can be used for accessing model.fields
-  _resolve_table_fields(conn, model_name, live, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive, index_actions=index_actions, sqlite_rename_map=sqlite_rename_map)
+  _resolve_table_fields(conn, model_name, live, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive, index_actions=index_actions, sqlite_rename_map=sqlite_rename_map,
+                        lossy_alters=lossy_alters)
   # #742: every rename is answered now — refuse a declared condition naming a column that goes away.
   _refuse_stale_check_conditions(current_schema[model_name][:model], sqlite_rename_map, keys(live.columns))
 
@@ -1534,7 +1540,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
       # filter has nothing left to remove.
       _plan_column_change!(conn, migration_plan, model_name, current_schema[model_name][:model],
                            field_name_stripped, field, delta, name;
-                           catalog_table = catalog_table)
+                           catalog_table = catalog_table, lossy_alters = lossy_alters)
 
       # Index differences are RECORDED here and emitted after the loop — see `index_actions`.
 
@@ -1628,7 +1634,9 @@ function _resolve_table_fields(
                                 # Defaulted so the function stays callable on its own.
                                 index_actions::Vector{Tuple{Symbol, String, String, Union{String, Nothing}}} =
                                   Tuple{Symbol, String, String, Union{String, Nothing}}[],
-                                sqlite_rename_map::Dict{String, String} = Dict{String, String}()
+                                sqlite_rename_map::Dict{String, String} = Dict{String, String}(),
+                                # #803: the lossy-ALTER sink, owned by `get_migration_plan`'s caller.
+                                lossy_alters::Vector{LossyAlter} = LossyAlter[]
                               )::Nothing
   # The catalog's name for this table at plan time — `model_name` except on a table rename (#615).
   # Lookups ask for it; DDL names `model_name`. See `_alter_table_fields`.
@@ -1722,7 +1730,8 @@ function _resolve_table_fields(
                              new_field, delta,
                              hashed_new_name;
                              old_column = old_field_name,
-                             catalog_table = catalog_table)
+                             catalog_table = catalog_table,
+                             lossy_alters = lossy_alters)
 
         # #556: a rename that ALSO flips `db_index` now plans the index action in THIS migration.
         # The read is identical to the alteration loop's in `_alter_table_fields` — presence of the
@@ -2206,13 +2215,15 @@ table is diffed (see `_retarget_references`). That is why every table-rename que
 before any field-rename question. A child that also changes its key — a different `on_delete`, say —
 still re-points, against the new name, after the rename has run.
 """
-function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn, settings::PormGSettings; interactive::Bool = true)
+function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn, settings::PormGSettings; interactive::Bool = true,
+                            lossy_alters::Vector{LossyAlter} = LossyAlter[])
   # The adapter (#522): a `PormGModel` read as a live table — see `live_table` for what it keeps.
   return get_migration_plan(LiveTable[live_table(model, conn) for model in models], current_schema,
-                            conn, settings; interactive = interactive)
+                            conn, settings; interactive = interactive, lossy_alters = lossy_alters)
 end
 
-function get_migration_plan(live::Vector{LiveTable}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn, settings::PormGSettings; interactive::Bool = true)
+function get_migration_plan(live::Vector{LiveTable}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn, settings::PormGSettings; interactive::Bool = true,
+                            lossy_alters::Vector{LossyAlter} = LossyAlter[])
 # `live` is the schema as the database holds it; `current_schema` is the models file (see the docstring).
 
 migration_plan = OrderedDict{Symbol, OrderedDict{String, String}}()
@@ -2311,7 +2322,8 @@ sqlite_rebuild_context = Dict{Symbol, Tuple{Symbol, Dict{String, String}}}()
 
 for table in matched
   _alter_table_fields(conn, migration_plan, Symbol(table.name), retarget(table), current_schema, settings, interactive=interactive,
-                      composite_targets = composite_targets, sqlite_rebuild_context = sqlite_rebuild_context)
+                      composite_targets = composite_targets, sqlite_rebuild_context = sqlite_rebuild_context,
+                      lossy_alters = lossy_alters)
 end
 
 for (model_name, old_model_name) in decisions
@@ -2326,7 +2338,8 @@ for (model_name, old_model_name) in decisions
     # planned; the call below also passed `(new::Symbol, old)` to a `(old::String, new::String)`
     # method. Registered under `model_name`, like the column work it precedes.
     _alter_table_fields(conn, migration_plan, model_name, retarget(futher_processing[:drop_table][old_model_name]["model"]), current_schema, settings, interactive=interactive,
-                        composite_targets = composite_targets, sqlite_rebuild_context = sqlite_rebuild_context)
+                        composite_targets = composite_targets, sqlite_rebuild_context = sqlite_rebuild_context,
+                        lossy_alters = lossy_alters)
     _configure_order_dict_migration_plan(migration_plan, model_name, "Rename table", Dialect.rename_table(conn, string(old_model_name), string(model_name)))
   end
 end
@@ -2433,11 +2446,14 @@ current_models = _load_current_models(path)
 
 @pormg_debug false
 
-migration_plan = get_migration_plan(live_schema, current_models, connection, settings, interactive=interactive)
+# #803: the plan's lossy column changes, recorded where each delta becomes an action.
+lossy_alters = LossyAlter[]
+migration_plan = get_migration_plan(live_schema, current_models, connection, settings, interactive=interactive,
+                                    lossy_alters = lossy_alters)
 
 @pormg_debug false
 
-_write_pending_plan(connection, settings, migration_plan; models_path = path)
+_write_pending_plan(connection, settings, migration_plan; models_path = path, lossy_alters = lossy_alters)
 return nothing
 end
 
@@ -2461,9 +2477,11 @@ function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::
   # get module from the path (load + resolve FK targets + default pk_field — #62)
   current_models = _load_current_models(path)
 
-  migration_plan = get_migration_plan(live_schema, current_models, connection, settings, interactive=interactive)
+  lossy_alters = LossyAlter[]   # #803: see the PostgreSQL method above
+  migration_plan = get_migration_plan(live_schema, current_models, connection, settings, interactive=interactive,
+                                      lossy_alters = lossy_alters)
 
-  _write_pending_plan(connection, settings, migration_plan; models_path = path)
+  _write_pending_plan(connection, settings, migration_plan; models_path = path, lossy_alters = lossy_alters)
   return nothing
 end
 
@@ -2482,7 +2500,8 @@ end
 # lose its `applied_migrations/` archive and models snapshot.
 function _write_pending_plan(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
                              migration_plan::OrderedDict{Symbol, OrderedDict{String, String}};
-                             models_path::Union{String, Nothing} = nothing)::Nothing
+                             models_path::Union{String, Nothing} = nothing,
+                             lossy_alters::Vector{LossyAlter} = LossyAlter[])::Nothing
   folder = joinpath(settings.db_def_folder, "migrations")
   if isempty(migration_plan)
     if isfile(joinpath(folder, "pending_migrations.jl"))
@@ -2499,7 +2518,13 @@ function _write_pending_plan(connection::Union{PormGPostgres, PormGSQLite}, sett
   ispath(folder) || mkdir(folder)
   header = _models_file_header_value(settings, models_path)
   generate_migration_plan("pending_migrations.jl", migration_plan, folder; models_file = header,
-                          models_file_sha256 = header === nothing ? nothing : _models_file_digest(models_path))
+                          models_file_sha256 = header === nothing ? nothing : _models_file_digest(models_path),
+                          lossy_alters = lossy_alters)
+  # #803: named here, at plan time, as well as by `dry_run` and `migrate` — which also count the rows.
+  if !isempty(lossy_alters)
+    @warn("The plan changes $(length(lossy_alters)) column(s) in a way that can fail on, or change, existing rows. Run dry_run() to see which, and how many rows each would fail on.",
+          findings = [_lossy_alter_summary(f) for f in lossy_alters])
+  end
   @warn("The migration plan has been saved to '$(settings.db_def_folder)/migrations/pending_migrations.jl'. Review the plan before applying the migrations.")
   @info(_emsg("\e[32mMigration plan generated successfully. Run 'PormG.Migrations.migrate($( settings.db_def_folder == "db" ? "" : string("\"", settings.db_def_folder, "\"")))' to apply the migrations.\e[0m"))
   return nothing

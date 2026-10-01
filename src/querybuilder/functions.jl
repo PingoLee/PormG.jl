@@ -530,6 +530,8 @@ _output_field_type(s::AbstractString) = isempty(s) ? nothing : Dialect.cast_type
     Cast(expression, type)
 
 Casts a column or expression to a SQL type — PostgreSQL `(x)::type`, SQLite `CAST(x AS type)`.
+SQLite has no time types: a `date` target renders `date(x)` there, and `timestamp`, `timestamptz`,
+`time` and `interval` raise `BackendCapabilityError` (#822).
 
 `type` is preferably a field object (`Cast("points", IntegerField())`), which renders in each
 engine's own spelling. A string is accepted when it is a single type name (`"integer"`, `"bigint"`,
@@ -702,7 +704,8 @@ first match.
   (`F("grid")`) renders as that column.
 - `output_field`: the result type. Accepts a `PormGField` instance (e.g. `CharField()`, whose
   `.type` is used) or a raw SQL type string. Renders as a `::type` cast on PostgreSQL and a
-  `CAST(...)` on SQLite. In a CTE body it is also the column's type; without it the type is
+  `CAST(...)` on SQLite — `date(...)` for a date, and a time type raises `BackendCapabilityError`
+  there (#822). In a CTE body it is also the column's type; without it the type is
   inferred from the branches, and branches that do not agree raise `QueryBuildError` — see
   [How a CTE Column Is Typed](@ref).
 

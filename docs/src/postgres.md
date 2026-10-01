@@ -118,6 +118,12 @@ returns a different answer, so a test suite running on SQLite fails where produc
   [Functions and Dates → Extract](read/functions_and_dates.md#Extract-—-Extract-Date/Time-Part).
 - **Explicit window frames** — `WindowOver(...; frame = "ROWS BETWEEN …")`. See
   [Window Functions](read/window_functions.md).
+- **Casts to a time type** — `Cast(x, "timestamp")`, `"timestamptz"`, `"time"`, `"interval"`, and
+  `DateTimeField()` / `TimeField()` / `DurationField()` as a `Cast` target or a `Case`
+  `output_field`. SQLite
+  has no time types, so its `CAST` would turn the text into a number. A cast to `"date"` works on
+  both and renders `date(x)` on SQLite. See
+  [Functions and Dates → Cast](read/functions_and_dates.md#Cast-—-Type-Conversion).
 
 ## Advanced SQL (both backends, PostgreSQL-first)
 
@@ -148,6 +154,7 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **JSONB lookups** (`@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys`) | JSONB operators | `BackendCapabilityError` — `__` key paths still work |
 | **Accent-insensitive lookups** (`@iunaccent_*`, `@niunaccent_*`) | `unaccent` extension | `BackendCapabilityError` |
 | **Regex lookups** (`@regex`, `@iregex`, `@nregex`, `@niregex`) | POSIX `~` / `~*` | `BackendCapabilityError` |
+| **`Cast` to a time type** | `::date`, `::timestamp`, `::time`, `::interval` | `date` renders `date(x)`; the others raise `BackendCapabilityError` |
 | **`ToChar` formats** | any `to_char` template | the portable table only; others raise `BackendCapabilityError` |
 | **`Extract` parts** | every PostgreSQL `EXTRACT` field, any case; a non-field raises `InvalidValueError` | `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY`, any case; other PostgreSQL fields raise `BackendCapabilityError`, a non-field `InvalidValueError` |
 | **Row locks** (`select_for_update()`) | `SELECT … FOR UPDATE` | silent no-op — a SQLite write already locks the whole database |

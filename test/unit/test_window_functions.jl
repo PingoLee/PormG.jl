@@ -1116,23 +1116,32 @@ end
       @test _cte_case_field(Model_, Coalesce("raceid", 0, output_field = "integer")) isa PormG.Models.sIntegerField
       # A declared type outside the families a field can stand for is refused, not dropped in
       # favour of inference — the caller named it.
-      err = try _cte_case_field(Model_, PormG.Functions.Cast("points", "timestamp")); nothing catch e; e end
+      err = try _cte_case_field(Model_, PormG.Functions.Cast("points", "mood")); nothing catch e; e end
       @test err isa PormG.QueryBuildError
+      @test occursin("mood", _window_msg(err))
+      # A timestamp is refused too — on SQLite one step earlier, by the cast itself, which has no
+      # SQLite spelling (#822).
+      err = try _cte_case_field(Model_, PormG.Functions.Cast("points", "timestamp")); nothing catch e; e end
+      @test err isa (backend == "PostgreSQL" ? PormG.QueryBuildError : PormG.BackendCapabilityError)
       @test occursin("timestamp", _window_msg(err))
     end
 
-    @testset "$backend — a declared date type is a real date only on PostgreSQL" begin
-      # Found in review: SQLite's `CAST(… AS DATE)` has numeric affinity and turns '2020-03-29'
-      # into 2020, so a DateField-typed column there would bind date text against a number.
+    @testset "$backend — a declared date type is a date on both engines" begin
+      # #812 refused this on SQLite, whose `CAST(… AS DATE)` turned '2020-03-29' into 2020. SQLite
+      # renders the cast `date(…)` since #822, which is the text a DateField binds.
       for expr in (PormG.Functions.Cast("points", "date"),
                    Case([When("raceid" => 1, then = F("points"))], default = 0, output_field = "date"))
-        if backend == "PostgreSQL"
-          @test _cte_case_field(Model_, expr) isa PormG.Models.sDateField
-        else
-          err = try _cte_case_field(Model_, expr); nothing catch e; e end
-          @test err isa PormG.QueryBuildError
-          @test occursin("SQLite", _window_msg(err))
-        end
+        @test _cte_case_field(Model_, expr) isa PormG.Models.sDateField
+      end
+      # `Coalesce` renders no cast on SQLite, so its declared date is not what the column holds:
+      # still refused there, and the message points at the `Cast` that makes it one.
+      expr = Coalesce("raceid", 0, output_field = "date")
+      if backend == "PostgreSQL"
+        @test _cte_case_field(Model_, expr) isa PormG.Models.sDateField
+      else
+        err = try _cte_case_field(Model_, expr); nothing catch e; e end
+        @test err isa PormG.QueryBuildError
+        @test occursin("COALESCE", _window_msg(err)) && occursin("Cast", _window_msg(err))
       end
     end
 

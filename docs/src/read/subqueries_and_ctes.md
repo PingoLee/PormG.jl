@@ -573,9 +573,9 @@ compared with the column is bound. PormG derives the type from the body's projec
 | `Case` / `When` | See below |
 
 Any other function raises `QueryBuildError` when the query is built. Give it an `output_field` or
-wrap it in `Cast` to name its type. A declared `date` is refused on SQLite: there
-`CAST('2020-03-29' AS DATE)` returns the number `2020`, so a date filter on the column would match
-nothing. Project the date column itself instead.
+wrap it in `Cast` to name its type. On SQLite a declared `date` on `Coalesce`, `Greatest`, `Least`
+or `Concat` raises `QueryBuildError` too: those functions render no cast there, so the column would
+hold the operand's text rather than a date. Wrap the function in `Cast(…, "date")` instead.
 
 A `Case` column takes its `output_field` when you pass one. Otherwise PormG types it from its
 branches, meaning every `then` and the `default`:

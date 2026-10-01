@@ -621,6 +621,51 @@ function cast_type_sql(type::AbstractString, conn::PormGSQLite; context::Abstrac
   return uppercase(_map_cast_name(sqlite_type_map_reverse, name, suffix) * suffix)
 end
 
+# #822 — SQLite has no temporal types, only type AFFINITY, and every temporal type name gets NUMERIC
+# affinity (it contains none of INT/CHAR/CLOB/TEXT/BLOB/REAL/FLOA/DOUB). A NUMERIC cast reads the
+# longest numeric prefix of the text, so it does not fail — it returns a wrong number:
+#
+#   sqlite> SELECT CAST('2020-03-29' AS DATE), CAST('2020-03-29 10:11:12' AS DATETIME),
+#      ...>        CAST('10:30:00' AS TIME), CAST('1 day' AS INTERVAL);
+#   2020|2020|10|1
+#
+# PostgreSQL returns a real `date` / `timestamp` / `time` / `interval`, so the engines disagreed, and
+# a filter comparing the INTEGER with date text matched nothing (INTEGER sorts below TEXT).
+#
+# A `date` target renders `date(x)` instead. Its output is `YYYY-MM-DD`, exactly what
+# `Models.format_date_sql` stores, and a timestamp is cut to its date as PostgreSQL's `::date` does.
+# On other input SQLite never raises where PostgreSQL does: text that is no date gives NULL, an
+# impossible date rolls over (`'2020-02-30'` → `2020-03-01`), and a number is a Julian day number
+# (`date(0)` → `-4713-11-24`). The docs say so. Every other temporal target
+# is refused: each has more than one plausible text form (a fraction, a zone), and refusing now
+# leaves the choice open — a rendering added later is additive, a wrong one is not.
+#
+# Keyed on the FIRST word of the parsed name, before the reverse map: `"time with time zone"`,
+# `"timestamp(3) with time zone"` and `TIMESTAMPTZ` (which the map spells `DATETIME`) all land here.
+const _SQLITE_NUMERIC_TEMPORAL_CASTS = ("TIMESTAMP", "TIMESTAMPTZ", "DATETIME", "TIME", "TIMETZ", "INTERVAL")
+
+"""
+    sqlite_cast_sql(expr, type, conn; context = "Cast") -> String
+
+`expr` cast to `type` on SQLite (#822): `date(expr)` for a `date` target, `BackendCapabilityError`
+for the other temporal targets, which SQLite's NUMERIC affinity would turn into a number, and
+`CAST(expr AS <cast_type_sql(type)>)` for everything else.
+"""
+function sqlite_cast_sql(expr::AbstractString, type::AbstractString, conn::PormGSQLite; context::AbstractString = "Cast")
+  name, suffix = _parse_cast_type(type, context)
+  # `cast_type_sql` below refuses an array too, but a `date[]` must not reach the temporal message.
+  occursin('[', suffix) && throw(BackendCapabilityError("$(context): SQLite has no array types; $(repr(name * suffix)) is PostgreSQL-only."))
+  base = uppercase(first(split(name)))
+  base == "DATE" && isempty(suffix) && return "date($(expr))"
+  if base == "DATE" || base in _SQLITE_NUMERIC_TEMPORAL_CASTS
+    throw(BackendCapabilityError("$(context): SQLite cannot cast to $(repr(name * suffix)). It has no " *
+                                 "time types, and CAST(… AS $(uppercase(name * suffix))) turns " *
+                                 "'2020-03-29 10:11:12' into the number 2020. Project the column " *
+                                 "itself, or cast to \"text\" or \"date\" (#822)."))
+  end
+  return "CAST($(expr) AS $(cast_type_sql(type, conn; context = context)))"
+end
+
 # A window frame clause (#713) is SQL grammar, not a value, so it cannot be a bind parameter — the
 # #691 / #696 defect class a third time. `WindowOver(frame=)` used to write the caller's string into
 # `OVER (...)` after nothing but a `strip`. The grammar is PostgreSQL's `frame_clause`, with the
@@ -751,7 +796,7 @@ function CAST(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   return """($column)::$(cast_type_sql(format["type"], conn))"""
 end
 function CAST(column::String, format::Dict{String,Any}, conn::PormGSQLite)
-  return "CAST($column AS $(cast_type_sql(format["type"], conn)))"
+  return sqlite_cast_sql(column, format["type"], conn)
 end
 function CONCAT(column::Array{Any,1}, format::Dict{String,Any}, conn::PormGPostgres)
   return "CONCAT($(join(column, ",\n")))"
@@ -847,11 +892,20 @@ function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres
     """
   end
 end
+# A single bare `When` reaches these two arms. They ignored `output_field` until #822, so
+# `Case(When(…); output_field = DateField())` rendered no cast on either engine while the vector form
+# cast on both — and the read path, which takes the declared type at its word, disagreed with the SQL.
 function CASE(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  return """CASE $(column) ELSE $(format["else"]) END"""
+  sql = """CASE $(column) ELSE $(format["else"]) END"""
+  output_field = get(format, "output_field", nothing)
+  (isnothing(output_field) || output_field == "") && return sql
+  return "($sql)::$(cast_type_sql(output_field, conn; context = "output_field"))"
 end
 function CASE(column::String, format::Dict{String,Any}, conn::PormGSQLite)
-  return """CASE $(column) ELSE $(format["else"]) END"""
+  sql = """CASE $(column) ELSE $(format["else"]) END"""
+  output_field = get(format, "output_field", nothing)
+  (isnothing(output_field) || output_field == "") && return sql
+  return sqlite_cast_sql(sql, output_field, conn; context = "output_field")
 end
 function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
   resp::String = """CASE
@@ -861,7 +915,7 @@ function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
     """
   output_field = get(format, "output_field", nothing)
   if !isnothing(output_field) && output_field != ""
-    return "CAST($resp AS $(cast_type_sql(output_field, conn; context = "output_field")))"
+    return sqlite_cast_sql(resp, output_field, conn; context = "output_field")
   else
     return resp
   end

@@ -164,9 +164,6 @@ end
     ("double precision",               "double precision",            "DOUBLE PRECISION"),
     ("DOUBLE   PRECISION",             "DOUBLE PRECISION",            "DOUBLE PRECISION"),
     ("character varying(20)",          "character varying(20)",       "CHARACTER VARYING(20)"),
-    ("timestamptz",                    "timestamptz",                 "DATETIME"),
-    ("timestamp with time zone",       "timestamp with time zone",    "TIMESTAMP WITH TIME ZONE"),
-    ("timestamp(3) with time zone",    "timestamp(3) with time zone", "TIMESTAMP(3) WITH TIME ZONE"),
     ("mood",                           "mood",                        "MOOD"),   # a user-defined type
   ]
   for (input, pg, sl) in cases
@@ -209,6 +206,8 @@ end
       @test haskey(PormG.sqlite_type_map_reverse, t)
       node = Cast("points", f)
       @test Dialect.CAST("x", node.kwargs, _CPG) == "(x)::" * PormG.postgres_type_map_reverse[t]
+      # The temporal fields are #822's, below: SQLite has no time types to cast to.
+      t in ("DATE", "TIMESTAMPTZ", "TIME", "INTERVAL") && continue
       @test Dialect.CAST("x", node.kwargs, _CSL) == "CAST(x AS " * PormG.sqlite_type_map_reverse[t] * ")"
     end
   end
@@ -231,4 +230,91 @@ end
   q = _c696_q(); q.values("c" => Coalesce("points", Value(0); output_field = "numeric(10,2)"))
   @test occursin(")::numeric(10,2)", _c696_sql(q, _CPG))
   @test !occursin(r"(?i)numeric|decimal", _c696_sql(q, _CSL))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #822: SQLite has no time types — a `date` cast is `date(x)`, the other temporal targets refuse
+# Every temporal type name has NUMERIC affinity on SQLite, so `CAST('2020-03-29' AS DATE)` was the
+# integer 2020 and a date filter on it matched nothing. These rows used to sit in the two tables
+# above with `CAST(x AS DATE)` / `CAST(x AS DATETIME)` as the expected SQLite spelling: that pinned
+# the defect, which `sqlite3` shows directly (`SELECT CAST('2020-03-29' AS DATE)` → `2020`).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#822: SQLite renders a date cast as date(), and refuses the other temporal casts" begin
+  _sl_cast(type) = Dialect.CAST("x", Dict{String,Any}("type" => type), _CSL)
+
+  @testset "date" begin
+    for type in ("date", "DATE", Cast("points", DateField()).kwargs["type"])
+      @test _sl_cast(type) == "date(x)"
+    end
+    # PostgreSQL is unchanged — it has a real date type.
+    @test Dialect.CAST("x", Dict{String,Any}("type" => "date"), _CPG) == "(x)::date"
+  end
+
+  @testset "the other temporal targets are a capability error" begin
+    for type in ("timestamp", "timestamptz", "TIMESTAMPTZ", "datetime", "time", "timetz", "interval",
+                 "timestamp with time zone", "timestamp without time zone", "timestamp(3) with time zone",
+                 "time with time zone", "time without time zone", "timestamp(3)", "date(3)",
+                 Cast("points", DateTimeField()).kwargs["type"],
+                 Cast("points", TimeField()).kwargs["type"],
+                 Cast("points", DurationField()).kwargs["type"])
+      @testset "$(repr(type))" begin
+        err = try _sl_cast(type); nothing catch e; e end
+        @test err isa PormG.BackendCapabilityError
+        @test occursin("SQLite", err.msg) && occursin("#822", err.msg)
+      end
+    end
+    # A name that only STARTS like a temporal word is not classified as one: it renders as before.
+    # (Not a claim that the SQLite cast is useful — any unknown type name has NUMERIC affinity there.)
+    @test _sl_cast("timestamp_ms") == "CAST(x AS TIMESTAMP_MS)"
+    @test _sl_cast("text") == "CAST(x AS TEXT)"
+  end
+
+  @testset "output_field = date through the build" begin
+    q = _c696_q(); q.values("c" => Case([When("positionorder" => 1, then = "2020-03-29")]; default = "NULL", output_field = DateField()))
+    sl = _c696_sql(q, _CSL)
+    @test occursin(r"date\(CASE.*END\s*\)"s, sl)
+    @test !occursin("AS DATE", sl)
+    @test occursin("END)::date", _c696_sql(q, _CPG))
+
+    q = _c696_q(); q.values("c" => Case([When("positionorder" => 1, then = "x")]; output_field = TimeField()))
+    @test_throws PormG.BackendCapabilityError _c696_sql(q, _CSL)
+
+    # A single bare `When` takes the same cast — it rendered none on either engine before.
+    q = _c696_q(); q.values("c" => Case(When("positionorder" => 1, then = "2020-03-29"); output_field = DateField()))
+    @test occursin(r"date\(CASE WHEN .* END\)"s, _c696_sql(q, _CSL))
+    @test occursin(r"\(CASE WHEN .* END\)::date"s, _c696_sql(q, _CPG))
+    q = _c696_q(); q.values("c" => Case(When("positionorder" => 1, then = 1); default = 0, output_field = IntegerField()))
+    @test occursin(r"CAST\(CASE WHEN .* END AS INTEGER\)"s, _c696_sql(q, _CSL))
+    q = _c696_q(); q.values("c" => Case(When("positionorder" => 1, then = 1); default = 0))
+    @test !occursin(r"CAST|::"s, _c696_sql(q, _CSL))
+  end
+
+  # The array refusal names the array, not SQLite's missing time types.
+  @testset "date[] is an array error" begin
+    err = try _sl_cast("date[]"); nothing catch e; e end
+    @test err isa PormG.BackendCapabilityError
+    @test occursin("array", err.msg)
+  end
+
+  # The renderer's output, executed: SQLite returns the date text, where the old spelling returned a
+  # number. A timestamp is cut to its date, as PostgreSQL's `::date` does.
+  @testset "SQLite returns the date, not a number" begin
+    isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+    db = Main.SQLite.DB()
+    # Read inside the iteration: a SQLite row is a view of the cursor, gone once it advances.
+    function _run(sql)
+      for row in Main.SQLite.DBInterface.execute(db, "SELECT " * sql * " AS v")
+        return row.v
+      end
+    end
+    try
+      @test _run(Dialect.CAST("'2020-03-29'", Dict{String,Any}("type" => "date"), _CSL)) == "2020-03-29"
+      @test _run(Dialect.CAST("'2020-03-29T10:11:12.000+00:00'", Dict{String,Any}("type" => "date"), _CSL)) == "2020-03-29"
+      @test _run(Dialect.CAST("'2020-03-29 10:11:12'", Dict{String,Any}("type" => "date"), _CSL)) == "2020-03-29"
+      # The comparison a filter makes: date text against date text, so it can match.
+      @test _run(Dialect.CAST("'2020-03-29'", Dict{String,Any}("type" => "date"), _CSL) * " = '2020-03-29'") == 1
+    finally
+      close(db)
+    end
+  end
 end

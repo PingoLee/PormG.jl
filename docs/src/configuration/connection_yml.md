@@ -142,7 +142,7 @@ Load the driver package as you would LibPQ — `using PormG, Postgres` — so it
 
 PormG opens Postgres.jl sessions the way LibPQ.jl opens its own — `DateStyle=ISO,YMD` and `TimeZone=UTC` — and decodes results to the same types (`Decimals.Decimal`, `ZonedDateTime` in UTC, `DateTime`). Server notices go to `@debug` rather than the log. Known gaps while it is experimental:
 
-- **Migrations that send several statements in one string fail**, for example an `alter_field` that changes a column's type and nullability together. Postgres.jl runs every statement over the extended protocol; see [JuliaDatabases/Postgres.jl#23](https://github.com/JuliaDatabases/Postgres.jl/issues/23).
+- **A hand-written string holding several statements fails** when you send it yourself, for example two `ALTER TABLE`s in one `fetch` call. Postgres.jl runs every statement over the extended protocol; see [JuliaDatabases/Postgres.jl#23](https://github.com/JuliaDatabases/Postgres.jl/issues/23). Send one statement per call. Migrations are not affected: `migrate` sends a plan one statement at a time under either driver.
 - `passfile`, `hostaddr`, `service`, multiple hosts and Unix-socket hosts are not supported, nor is a `client_encoding` other than UTF-8 or a `target_session_attrs` other than `any`; `reconnect=true` in a connection string is refused (the pool renews connections itself).
 - `fetch_copy` reports the number of CSV records it sent rather than the server's `COPY n` count. That is exact for PormG's own `bulk_copy`, but can differ for a hand-written `COPY` with `HEADER true`, `FORMAT text` or `binary`, or a custom `QUOTE`.
 - `interval` values cast to text render in PostgreSQL's default style rather than ISO 8601.

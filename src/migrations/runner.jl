@@ -2074,12 +2074,165 @@ end
     _execute_statements_pg(connection, statements; conn) -> Nothing
 
 Execute a list of SQL statements on a PostgreSQL connection within a transaction.
+Each plan entry is cut by [`_split_pg_statements`](@ref) first and sent one statement per call,
+whichever driver holds the connection (#841). A plan entry can hold several statements —
+`alter_field` joins every change to one column, `add_check_constraint` adds the constraint and its
+marker comment — and only LibPQ accepts that in one call: it sends a parameterless string over the
+simple query protocol, while Postgres.jl prepares every statement it is given and PostgreSQL refuses
+a prepared statement holding more than one command (`42601`). Both drivers take the same path so the
+LibPQ suite exercises it too. Atomicity is unchanged: every call runs on `conn`, inside the
+migration's one transaction. The whole plan is cut before the first call, so a plan the splitter
+refuses runs none of its statements.
 """
 function _execute_statements_pg(connection::PormGPostgres, statements::Vector{String}; conn)
-  for action in statements
-    @debug "Executing: $action"
-    with_transaction(connection, action, conn=conn)
+  parts = String[part for action in statements for part in _split_pg_statements(action)]
+  for part in parts
+    @debug "Executing: $part"
+    with_transaction(connection, part, conn=conn)
   end
+end
+
+# PostgreSQL's identifier characters, for the dollar-quote rules below: a tag is made of them, and a
+# `$` right after one belongs to that identifier (`a$b`) rather than opening a quote.
+_pg_ident_start(c::Char) = isletter(c) || c == '_' || c > '\x7f'
+_pg_ident_char(c::Char) = _pg_ident_start(c) || isdigit(c) || c == '$'
+
+# The dollar-quote delimiter (`$$`, `$tag$`) opening at `cs[i]`, or `nothing` when that `$` opens none:
+# a positional parameter (`$1`), or a `$` inside an identifier.
+function _pg_dollar_tag(cs::Vector{Char}, i::Int)::Union{String, Nothing}
+  (i > 1 && _pg_ident_char(cs[i - 1])) && return nothing
+  n = length(cs)
+  j = i + 1
+  if j <= n && _pg_ident_start(cs[j])
+    while j <= n && _pg_ident_char(cs[j]) && cs[j] != '$'
+      j += 1
+    end
+  end
+  (j <= n && cs[j] == '$') || return nothing
+  return String(cs[i:j])
+end
+
+# Raised for a literal, quoted identifier, dollar quote or block comment that never closes: everything
+# after it would read as quoted, so a cut there would run a fragment and nothing would say so.
+function _pg_unterminated(cs::Vector{Char}, i::Int, what::AbstractString)
+  throw(InvalidMigrationError(
+    "This migration has an unterminated $(what), so where its statements end cannot be found and " *
+    "none of them is run; close it: $(strip(String(cs[i:min(length(cs), i + 79)]))) …"))
+end
+
+# The index just past the string literal, quoted identifier, dollar quote or comment that opens at
+# `cs[i]`, or `i` itself when none does. PostgreSQL's lexical rules, which are not SQLite's: block
+# comments nest, `E'…'` takes backslash escapes, and `$tag$ … $tag$` quotes anything but its own tag,
+# with no escape at all. A string literal or quoted identifier escapes its own quote by doubling. A
+# `--` comment runs to the end of the line — `\n` or `\r`, as PostgreSQL's lexer has it — or of the text.
+function _pg_lex_skip(cs::Vector{Char}, i::Int)::Int
+  n = length(cs)
+  c = cs[i]
+  if c == '-' && i < n && cs[i + 1] == '-'
+    while i <= n && cs[i] != '\n' && cs[i] != '\r'
+      i += 1
+    end
+    return i
+  elseif c == '/' && i < n && cs[i + 1] == '*'
+    from, depth = i, 1
+    i += 2
+    while i < n
+      if cs[i] == '/' && cs[i + 1] == '*'
+        depth += 1
+        i += 2
+      elseif cs[i] == '*' && cs[i + 1] == '/'
+        depth -= 1
+        i += 2
+        depth == 0 && return i
+      else
+        i += 1
+      end
+    end
+    _pg_unterminated(cs, from, "/* comment")
+  elseif c == '\'' || c == '"'
+    # `E'…'`: the `E` must be a token of its own, or it is the end of an identifier (`name'…'`).
+    backslash = c == '\'' && i > 1 && cs[i - 1] in ('E', 'e') && (i == 2 || !_pg_ident_char(cs[i - 2]))
+    from = i
+    i += 1
+    while i <= n
+      if backslash && cs[i] == '\\'
+        i += 2
+      elseif cs[i] == c && i < n && cs[i + 1] == c
+        i += 2
+      elseif cs[i] == c
+        return i + 1
+      else
+        i += 1
+      end
+    end
+    _pg_unterminated(cs, from, c == '"' ? "quoted identifier" : "string literal")
+  elseif c == '$'
+    tag = _pg_dollar_tag(cs, i)
+    tag === nothing && return i
+    t = collect(tag)
+    k = i + length(t)
+    while k + length(t) - 1 <= n
+      cs[k:k + length(t) - 1] == t && return k + length(t)
+      k += 1
+    end
+    _pg_unterminated(cs, i, "dollar quote ($(tag))")
+  end
+  return i
+end
+
+"""
+    _split_pg_statements(sql) -> Vector{String}
+
+`sql` cut into the statements it holds, each without its terminating `;`, for a driver that runs one
+statement per call (#841). Statements holding nothing but whitespace and comments are dropped.
+
+A `;` ends a statement only outside a string literal (`'…'`, `E'…'`), a quoted identifier, a
+dollar quote (`\$\$ … \$\$`, `\$tag\$ … \$tag\$`), a comment (`--`, and `/* … */`, which nests on
+PostgreSQL) and parentheses — psql's own rule, which keeps a `CREATE RULE … DO (…; …)` whole. The
+plan text is PormG's own, but a `;` still reaches it legitimately inside a `SET DEFAULT '…'`
+literal, a CHECK condition, or the DBA comment a CHECK adoption keeps. A plain `'…'` is read with
+`standard_conforming_strings = on`, the setting every other quote PormG renders already assumes.
+
+One shape psql recognizes is not: a SQL-standard `BEGIN ATOMIC … END` function body, which PormG never
+renders. A hand-written one in a pending plan is cut inside its body, and the server refuses the
+fragment, so the migration fails and rolls back rather than half-applying.
+
+**It fails closed.** One of those that never closes raises `InvalidMigrationError`: everything after
+it would be read as quoted, so the cut would run a fragment and nothing would say so. An unclosed
+parenthesis raises too. The SQLite twin
+is [`_split_sqlite_statements`](@ref), which reads SQLite's rules instead.
+"""
+function _split_pg_statements(sql::AbstractString)::Vector{String}
+  cs = collect(sql)
+  n = length(cs)
+  statements = String[]
+  start, content, depth = 1, false, 0
+  i = 1
+  while i <= n
+    c = cs[i]
+    j = _pg_lex_skip(cs, i)
+    if j != i
+      # A comment is not content; a literal, a quoted identifier or a dollar quote is.
+      (c == '-' || c == '/') || (content = true)
+      i = j
+    elseif c == ';' && depth == 0
+      text = strip(String(cs[start:i - 1]))
+      content && !isempty(text) && push!(statements, text)
+      start, content = i + 1, false
+      i += 1
+    else
+      c == '(' && (depth += 1)
+      c == ')' && (depth = max(depth - 1, 0))
+      isspace(c) || (content = true)
+      i += 1
+    end
+  end
+  # An unclosed `(` would carry every statement after it into one call, which Postgres.jl refuses
+  # with a 42601 that names the wrong cause; say what is wrong instead.
+  depth > 0 && _pg_unterminated(cs, start, "parenthesis")
+  text = strip(String(cs[start:n]))
+  content && !isempty(text) && push!(statements, text)
+  return statements
 end
 
 # The index just past the string literal, quoted identifier or comment that opens at `cs[i]`, or `i`

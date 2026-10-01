@@ -1179,8 +1179,10 @@ if adapter_name == "PostgreSQL"
     try
       created = PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema847, pool, settings847;
                                                      interactive = false)
+      # Plan entries are applied one statement per call, as `migrate` sends them: an entry can hold
+      # several, and Postgres.jl refuses that in one call (#841). Every apply loop below does the same.
       for (_, sql) in created[Symbol(tbl)]
-        ddl(sql)
+        foreach(ddl, PormG.Migrations._split_pg_statements(sql))
       end
       # PormG's own index on a column DECLARED with a non-default collation (an adopted schema; PormG
       # emits none). ALTER TYPE rebuilds the index, which then carries the column's collation —
@@ -1264,7 +1266,7 @@ if adapter_name == "PostgreSQL"
       created = PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema731, pool, settings731;
                                                      interactive = false)
       for (_, sql) in created[Symbol(tbl)]
-        ddl(sql)
+        foreach(ddl, PormG.Migrations._split_pg_statements(sql))
       end
       # The user's own CHECKs, on the columns declared as plain `IntegerField`.
       ddl("ALTER TABLE \"$(tbl)\" ADD CONSTRAINT pormg_it_nonneg_grid_range CHECK (grid >= 0 AND grid <= 30)")
@@ -1366,7 +1368,7 @@ if adapter_name == "PostgreSQL"
     drop747!()
     try
       for (_, sql) in plan747(PormG.Migrations.LiveTable[], 4, 8)[Symbol(tbl)]
-        ddl(sql)
+        foreach(ddl, PormG.Migrations._split_pg_statements(sql))
       end
       # The user's own CHECKs: #747's compound bound, a `BETWEEN` range, and a range on a column that
       # also carries PormG's bound.
@@ -1417,7 +1419,7 @@ if adapter_name == "PostgreSQL"
       @test occursin("ADD CHECK (octet_length(\"doc\") <= 16)", stmts)
       @test !occursin("_user", stmts)
       for (_, sql) in changed
-        ddl(sql)
+        foreach(ddl, PormG.Migrations._split_pg_statements(sql))
       end
       relived = read747()
       @test (bound(relived, "thumb"), bound(relived, "doc")) == (8, 16)
@@ -1468,7 +1470,7 @@ if adapter_name == "PostgreSQL"
     plan752(live, grid_ctor) = PormG.Migrations.get_migration_plan(live, schema752(model752(grid_ctor)), pool,
                                                                     settings752; interactive = false)
     read752() = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
-    apply752!(plan) = for (_, sql) in get(plan, Symbol(tbl), []); ddl(sql); end
+    apply752!(plan) = for (_, sql) in get(plan, Symbol(tbl), []); foreach(ddl, PormG.Migrations._split_pg_statements(sql)); end
     bound(live) = (checks = live.columns["photo"].checks;
                    i = findfirst(c -> c isa PormG.ByteLengthCheck, checks);
                    i === nothing ? nothing : checks[i].max_bytes)
@@ -1538,7 +1540,7 @@ if adapter_name == "PostgreSQL"
     plan751(live, big) = PormG.Migrations.get_migration_plan(live, schema751(model751(big)), pool,
                                                              settings751; interactive = false)
     read751() = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
-    apply751!(plan) = for (_, sql) in get(plan, Symbol(tbl), []); ddl(sql); end
+    apply751!(plan) = for (_, sql) in get(plan, Symbol(tbl), []); foreach(ddl, PormG.Migrations._split_pg_statements(sql)); end
     defs751() = sort(String.(DataFrame(PormG.ConnectionPool.fetch(pool,
       "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = \$1::regclass AND contype = 'c'",
       [tbl])).def))
@@ -1795,7 +1797,7 @@ if adapter_name == "PostgreSQL"
     live742() = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
     plan742(m) = PormG.Migrations.get_migration_plan([live742()], schema742(m), pool, settings742; interactive = false)
     apply742!(plan) = for sql in first(PormG.Migrations._order_statements(collect(values(plan))))
-      ddl(sql)
+      foreach(ddl, PormG.Migrations._split_pg_statements(sql))
     end
     comments742() = Dict(String(r.conname) => (r.comment === missing ? nothing : String(r.comment))
       for r in eachrow(ddl("SELECT conname, obj_description(oid, 'pg_constraint') AS comment " *

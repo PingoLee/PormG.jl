@@ -223,6 +223,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Error Message ANSI (TTY-aware)" include("unit/test_error_message_ansi.jl")
     @testset "SQLite Advisory-Lock Signalling (#277)" include("unit/test_advisory_lock_sqlite.jl")
     @testset "Migration Runner (checksum, guardrails)" include("unit/test_migrations_runner.jl")
+    @testset "Migration Runner: PostgreSQL entries run one statement per call (#841)" include("unit/test_pg_statement_split.jl")
     @testset "Migration Advisory-Lock Identity (#90)" include("unit/test_migration_lock_key.jl")
     @testset "migrate() at Boot: Outcome and Locking (#737)" include("unit/test_migrate_outcome.jl")
     @testset "Migration Statement Ordering: FK invariant (#89)" include("unit/test_migration_fk_ordering.jl")

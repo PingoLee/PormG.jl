@@ -9,11 +9,18 @@
 #   (a) a shorter VARCHAR over a longer value is refused with the row counted; fixed, it applies;
 #   (b) bigint → integer over 3e9 is refused;
 #   (c) a lower NUMERIC scale rounds, so it needs `destructive = true` and is recorded destructive;
-#   (d) text → integer is refused as `:no_implicit_cast` — and, with the header stripped, PostgreSQL
-#       itself rejects it, which is the live check that the deny-list entry is true;
+#   (d) text → integer applies through the `USING` #828 added, and a value that does not parse is
+#       counted and refused — while a bare ALTER, run by hand, is still rejected by the server;
 #   (e) SET NOT NULL over a NULL is refused;
 #   (f) fewer NUMERIC whole digits and (g) a byte bound are counted by the server's own arithmetic;
-#   (h) text → PositiveIntegerField is reported by `dry_run` as refused, not raised as a query error.
+#   (h) text → PositiveIntegerField is reported by `dry_run`, not raised as a query error;
+#   (j) a new NOT NULL column with no default is refused over a populated table with the rows
+#       counted, and applies over an empty one (#829);
+#   (k) `unique = true` over duplicates, (l) a foreign key over an orphan and (m) a CheckConstraint
+#       over a failing row are each counted by the server and refused (#830);
+#   (n) the pre-16 grammar fallback for `:text_cast` counts what `pg_input_is_valid` counts (#828);
+#   (o) a text column with a DEFAULT retypes to integer — the old default is dropped before the
+#       `USING`, which PostgreSQL would otherwise try to cast and refuse (#828).
 #
 # Run it under both PostgreSQL drivers: `PORMG_POSTGRES_DRIVER=Postgres` selects Postgres.jl (#788),
 # whose parameter typing differs from LibPQ's.
@@ -173,24 +180,53 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# (d) text → integer: refused, and PostgreSQL itself confirms it cannot run
-# The deny-list entry is a claim about PostgreSQL: with no `USING`, the ALTER fails even on a table
-# whose values would all convert. With the header line removed the plan goes to the server, which
-# must refuse it — the live evidence that the refusal blocks nothing that would have worked.
+# (d) text → integer: cast with a USING — applied over '42', refused over 'x' with the row counted (#828)
+# Before #828 the plan had no `USING`, and PostgreSQL refused the bare ALTER even over a table whose
+# values would all convert, so #803 refused it up front. The plan now casts, and the server's own
+# parser (`pg_input_is_valid`) counts the values that would not parse. The bare ALTER is still run
+# once by hand, as the live evidence that the `USING` is what makes the change possible.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "PostgreSQL: text → integer is refused as no_implicit_cast, as the server confirms (#803)" begin
-    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, '42', 1, NULL);") do st
+@testset "PostgreSQL: text → integer applies through its USING, and a value that does not parse is counted (#828)" begin
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, ' 42 ', 1, NULL), ('PRO', 2, 2.5, NULL, 2, NULL);") do st
+        bare = _la803pg_err(() -> PormG.ConnectionPool.fetch(st.connections,
+            "ALTER TABLE \"$(_LA803PG_TABLE)\" ALTER COLUMN note TYPE integer;"))
+        @test bare !== nothing && occursin("cannot be cast automatically", sprint(showerror, bare))
+
         sink = _la803pg_plan!(st, _la803pg_models(note = "Models.IntegerField(null = true)"))
-        @test [f.kind for f in sink] == [:no_implicit_cast]
+        @test [f.kind for f in sink] == [:text_cast]
+        @test only(PormG.Migrations.dry_run(st.connections, st).lossy_alters).rows == 0
+        @test _la803pg_migrate(st).outcome === :applied
+        @test _la803pg_type(st, "note") == "integer"
+        @test sort(collect(skipmissing(_la803pg_sql(st, "SELECT note FROM \"$(_LA803PG_TABLE)\";").note))) == [42]
+    end
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, '42', 1, NULL), ('PRO', 2, 2.5, 'x', 2, NULL), " *
+                                    "('ALO', 3, 3.5, '99999999999', 3, NULL);") do st
+        _la803pg_plan!(st, _la803pg_models(note = "Models.IntegerField(null = true)"))
         err = _la803pg_err(() -> _la803pg_migrate(st; destructive = true))
         @test err isa PormG.Migrations.MigrationPrecheckError
-
-        pending = joinpath(st.db_def_folder, "migrations", "pending_migrations.jl")
-        write(pending, join(filter(l -> !startswith(l, PormG.Migrations.LOSSY_ALTER_HEADER), readlines(pending)), "\n") * "\n")
-        raw = _la803pg_err(() -> _la803pg_migrate(st; destructive = true))
-        @test raw !== nothing && !(raw isa PormG.Migrations.MigrationPrecheckError)
-        @test raw !== nothing && occursin("cannot be cast automatically", sprint(showerror, raw))
+        @test err !== nothing && only(err.findings).rows == 2   # 'x' does not parse; 99999999999 overflows
         @test _la803pg_type(st, "note") == "text"
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (n) The pre-16 grammar fallback agrees with the server's parser (#828)
+# `pg_input_is_valid` is PostgreSQL 16+, so an older server counts with an anchored regex per target
+# type. Both predicates run here, on this server, over the same values: the fallback must count what
+# the parser counts. Only the counting SQL runs — no plan, no ALTER.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: the pre-16 text_cast fallback counts what pg_input_is_valid counts (#828)" begin
+    values = ["42", " -7 ", "4.2", "x", "99999999999", "1e3", "NaN", "t", "YES", "of", "o", "maybe",
+              "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "{a0eebc999c0b4ef8bb6d6bb9bd380a11}", "a0eebc99", "123.456"]
+    rows = join(("('SEN', 1, 1.5, '$(v)', 1, NULL)" for v in values), ", ")
+    _la803pg_case(_LA803PG_INSERT * rows * ";") do st
+        for type in ("INTEGER", "SMALLINT", "BIGINT", "DOUBLE PRECISION", "DECIMAL(5, 2)", "BOOLEAN", "UUID")
+            f = PormG.Migrations.LossyAlter(:text_cast, _LA803PG_TABLE, "note", "TEXT", type)
+            modern = PormG.Migrations._precheck_sql(st.connections, f; server_version = 160000)
+            legacy = PormG.Migrations._precheck_sql(st.connections, f; server_version = 150000)
+            n(q) = Int(DataFrame(PormG.ConnectionPool.fetch(st.connections, q[1], q[2])).n[1])
+            @test (type, n(legacy)) == (type, n(modern))
+        end
     end
 end
 
@@ -239,7 +275,7 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# (h) A refused cast beside a new CHECK: `dry_run` reports it, it does not raise
+# (h) A castless retype beside a new CHECK: `dry_run` reports it, it does not raise
 # Text → PositiveIntegerField used to add a `"c" < 0` count on the text column, which PostgreSQL
 # rejects as a query, so `dry_run` raised a database error instead of describing the plan.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -247,7 +283,9 @@ end
     _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, '-5', 1, NULL);") do st
         _la803pg_plan!(st, _la803pg_models(note = "Models.PositiveIntegerField(null = true)"))
         r = PormG.Migrations.dry_run(st.connections, st)
-        @test [f.kind for f in r.lossy_alters] == [:no_implicit_cast]
+        # #828: the cast is counted ('-5' parses); the `>= 0` CHECK is the database's to enforce,
+        # since the column is still text when the count runs.
+        @test [(f.kind, f.rows) for f in r.lossy_alters] == [(:text_cast, 0)]
     end
 end
 
@@ -284,6 +322,116 @@ end
             try; PormG.ConnectionPool.with_transaction(st.connections, "ROLLBACK;"; conn = holder); catch; end
             PormG.ConnectionPool.release_connection(st.connections, holder)
         end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (j) A new NOT NULL column with no default: refused over rows, applied over an empty table (#829)
+# PostgreSQL's `ADD COLUMN … NOT NULL` fails on the first existing row (`contains null values`). The
+# column has no `ColumnDelta`, so #803 never recorded it; now the whole table is counted first. The
+# empty case is the neighbour that must NOT be refused.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: a new NOT NULL column is refused over rows, applied over none (#829)" begin
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, 'x', 1, NULL), ('PRO', 2, 2.5, 'y', 2, NULL);") do st
+        sink = _la803pg_plan!(st, _la803pg_models(laps = "Models.IntegerField()"))
+        @test [(f.kind, f.column) for f in sink] == [(:add_not_null, "laps")]
+        @test only(PormG.Migrations.dry_run(st.connections, st).lossy_alters).rows == 2
+        err = _la803pg_err(() -> _la803pg_migrate(st; destructive = true))
+        @test err isa PormG.Migrations.MigrationPrecheckError
+        @test err !== nothing && only(err.findings).rows == 2
+        # Nothing was written: the column is not there.
+        @test isempty(_la803pg_sql(st, """
+            SELECT 1 FROM pg_attribute WHERE attrelid = '$(_LA803PG_TABLE)'::regclass
+               AND attname = 'laps' AND NOT attisdropped"""))
+
+        # Emptied, the same plan applies and the column is NOT NULL.
+        PormG.ConnectionPool.fetch(st.connections, "DELETE FROM \"$(_LA803PG_TABLE)\";")
+        @test _la803pg_migrate(st).outcome === :applied
+        @test _la803pg_sql(st, """
+            SELECT attnotnull FROM pg_attribute WHERE attrelid = '$(_LA803PG_TABLE)'::regclass
+               AND attname = 'laps'""").attnotnull == [true]
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (k) `unique = true` over duplicate values: counted, refused, then applied (#830)
+# PostgreSQL's `ADD UNIQUE` fails on the duplicates; NULLs are distinct and are not counted.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: unique = true over duplicates is refused, then applies (#830)" begin
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, 'x', 1, NULL), ('SEN', 2, 2.5, 'y', 2, NULL), " *
+                                    "(NULL, 3, 3.5, 'z', 3, NULL), (NULL, 4, 4.5, 'w', 4, NULL);") do st
+        models = _la803pg_models(code = "Models.CharField(max_length = 20, null = true, unique = true)")
+        sink = _la803pg_plan!(st, models)
+        @test [(f.kind, f.column) for f in sink] == [(:add_unique, "code")]
+        err = _la803pg_err(() -> _la803pg_migrate(st; destructive = true))
+        @test err isa PormG.Migrations.MigrationPrecheckError
+        @test err !== nothing && only(err.findings).rows == 2
+        PormG.ConnectionPool.fetch(st.connections, "UPDATE \"$(_LA803PG_TABLE)\" SET code = 'PRO' WHERE big = 2;")
+        @test _la803pg_migrate(st).outcome === :applied
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (l) A foreign key added over an orphan row: counted against the parent, refused, then applied (#830)
+# Self-referencing, so the parent is the scratch table itself and nothing else in the fixture is
+# planned. It starts as `db_constraint = false` (a plain column, no constraint) and becomes a key.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: a foreign key over an orphan row is refused, then applies (#830)" begin
+    _la803pg_case("") do st
+        fk(c) = "Models.ForeignKey(\"Pormg_test_lossy803\", pk_field = \"id\", null = true, db_constraint = $c)"
+        _la803pg_plan!(st, _la803pg_models(parent = fk(false)))
+        @test _la803pg_migrate(st).outcome === :applied
+        PormG.ConnectionPool.fetch(st.connections, _LA803PG_INSERT * "('SEN', 1, 1.5, 'x', 1, NULL), ('PRO', 2, 2.5, 'y', 2, NULL);")
+        PormG.ConnectionPool.fetch(st.connections, "UPDATE \"$(_LA803PG_TABLE)\" SET parent = id + 1000 WHERE big = 2;")
+
+        sink = _la803pg_plan!(st, _la803pg_models(parent = fk(true)))
+        @test [(f.kind, f.column, f.references) for f in sink] == [(:add_foreign_key, "parent", (_LA803PG_TABLE, "id"))]
+        err = _la803pg_err(() -> _la803pg_migrate(st))
+        @test err isa PormG.Migrations.MigrationPrecheckError
+        @test err !== nothing && only(err.findings).rows == 1
+        PormG.ConnectionPool.fetch(st.connections, "UPDATE \"$(_LA803PG_TABLE)\" SET parent = NULL WHERE big = 2;")
+        @test _la803pg_migrate(st).outcome === :applied
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (m) A CheckConstraint over a failing row: the condition is evaluated by the server, inside the
+# pre-check's READ ONLY transaction (#830)
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: a CheckConstraint over a failing row is refused, then applies (#830)" begin
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, 'x', -1, NULL), ('PRO', 2, 2.5, 'y', NULL, NULL);") do st
+        models = _la803pg_models(constraints = "[Models.CheckConstraint(condition = \"grid >= 0\", name = \"pormg_test_lossy803_grid_ck\")]")
+        sink = _la803pg_plan!(st, models)
+        @test [f.kind for f in sink] == [:add_check]
+        err = _la803pg_err(() -> _la803pg_migrate(st))
+        @test err isa PormG.Migrations.MigrationPrecheckError
+        @test err !== nothing && only(err.findings).rows == 1   # the NULL passes a CHECK
+        PormG.ConnectionPool.fetch(st.connections, "UPDATE \"$(_LA803PG_TABLE)\" SET grid = 0 WHERE grid < 0;")
+        @test _la803pg_migrate(st).outcome === :applied
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (o) A castless retype of a column with a DEFAULT applies, and carries the declared default (#828)
+# `TYPE … USING` converts the values but casts the DEFAULT with an assignment cast, which a castless
+# pair does not have: with the old `'0'` default left in place the ALTER fails on every table. The
+# plan drops it first and sets the declared default after.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: a text column with a DEFAULT retypes to integer and keeps the declared default (#828)" begin
+    _la803pg_case("") do st
+        _la803pg_plan!(st, _la803pg_models(note = "Models.TextField(null = true, default = \"0\")"))
+        @test _la803pg_migrate(st).outcome === :applied
+        PormG.ConnectionPool.fetch(st.connections, _LA803PG_INSERT * "('SEN', 1, 1.5, '7', 1, NULL);")
+
+        sink = _la803pg_plan!(st, _la803pg_models(note = "Models.IntegerField(null = true, default = 5)"))
+        @test [f.kind for f in sink] == [:text_cast]
+        @test _la803pg_migrate(st).outcome === :applied
+        @test _la803pg_type(st, "note") == "integer"
+        @test _la803pg_sql(st, "SELECT note FROM \"$(_LA803PG_TABLE)\";").note == [7]
+        @test _la803pg_sql(st, """
+            SELECT pg_get_expr(d.adbin, d.adrelid) AS d FROM pg_attrdef d
+              JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+             WHERE d.adrelid = '$(_LA803PG_TABLE)'::regclass AND a.attname = 'note'""").d == ["5"]
     end
 end
 

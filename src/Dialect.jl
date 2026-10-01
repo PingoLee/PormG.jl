@@ -24,12 +24,14 @@ import PormG: postgres_type_map_reverse, date_format_map, sqlite_type_map_revers
 # these types live in `Kernel` (layer 1) rather than in `Migrations` — this module is included
 # BEFORE it, and a submodule resolves `import PormG: …` at include time. `_has_non_negative` and
 # `_byte_bound` are underscore-private, hence named explicitly.
-import PormG: ColumnDelta, LiteralDefault, ExpressionDefault
+import PormG: ColumnDelta, LiteralDefault, ExpressionDefault, NoDefault
 # #522: the two `USING` casts in `alter_field` read the LIVE column's canonical type off the delta
 # instead of dispatching on a reconstructed field struct — the readers no longer build one.
 import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CDecimal, CText, CVarChar, CTime
 # #564: the remaining temporal nouns, for the read-parser half of the value-representation table.
 import PormG: CDate, CDateTime, CInterval
+# #828: the rest of the castless-retype targets, for `_postgres_retype_using`.
+import PormG: CBool, CUUID, CJSON
 import PormG: _has_non_negative, _byte_bound
 import PormG: get_constraints_pk, get_constraints_unique, get_constraints_checks, get_constraints_byte_length_checks
 import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column, format_timezone_sql, model_table_name, fk_target_table
@@ -1216,6 +1218,39 @@ function _postgres_bytea_cast_expression(field_name::Union{String, Symbol}, old_
   return "$(column_ref)::bytea"
 end
 
+"""
+    _postgres_retype_using(field_name, old_type, new_type, type_sql) -> Union{Nothing, String}
+
+The `USING` expression for a PostgreSQL retype between types with no assignment cast (#828), or
+`nothing` for a pair PostgreSQL converts on its own (or one PormG has no expression for). Without
+it, `ALTER COLUMN … TYPE` fails on every table, even an empty one: `column "c" cannot be cast
+automatically to type integer`.
+
+- text / varchar → a number, boolean, date, timestamp, UUID or JSON: an explicit cast, which parses
+  each value with the target type's own input function — a value that does not parse fails the
+  ALTER, and the planner records an `:text_cast` finding that counts those rows first;
+- boolean → a number: through `integer`, the one numeric type PostgreSQL casts a boolean to
+  (`true` is 1, `false` 0);
+- a number → boolean: `<> 0`, since only `integer` has a cast to boolean at all. Any non-zero value
+  becomes `true`, which is why the planner records it as `:to_boolean`, needing `destructive = true`.
+
+`NULL` stays `NULL` in all three. The planner's classifier asks this same function whether a pair
+has a `USING`, so the rendered ALTER and the finding cannot disagree.
+"""
+function _postgres_retype_using(field_name::Union{String, Symbol}, old_type::CanonicalType,
+                                new_type::CanonicalType, type_sql::AbstractString)::Union{Nothing, String}
+  numeric = Union{CInt16, CInt32, CInt64, CFloat64, CDecimal}
+  ref = "\"$(_quote_table_ddl(field_name))\""
+  if old_type isa Union{CText, CVarChar} && new_type isa Union{numeric, CBool, CDate, CDateTime, CUUID, CJSON}
+    return "CAST($ref AS $type_sql)"
+  elseif old_type isa CBool && new_type isa numeric
+    return "CAST(CAST($ref AS integer) AS $type_sql)"
+  elseif old_type isa numeric && new_type isa CBool
+    return "($ref <> 0)"
+  end
+  return nothing
+end
+
 function _postgres_interval_cast_expression(field_name::Union{String, Symbol}, old_type::Union{Nothing, CanonicalType})
   column_ref = "\"$(_quote_table_ddl(field_name))\""
 
@@ -1503,7 +1538,8 @@ declared digits (#648). Every caller renders the desired model, so an existing w
 never refused on its own — only when PormG would create or re-create it.
 """
 function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite;
-                         temporary_default::Any=nothing, defer_db_default::Bool=false)::String
+                         temporary_default::Any=nothing, defer_db_default::Bool=false,
+                         defer_not_null::Bool=false)::String
   # Resolve the physical column name (db_column when set, else the field name) — #50.
   col_name = field_db_column(field, col_name)
   # #648: a DecimalField SQLite cannot store exactly is refused before any DDL exists.
@@ -1530,7 +1566,9 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite;
   # Nullability (default is NOT NULL if 'null' is false). `deferring` forces NULL: the default that
   # would have filled existing rows is being withheld from this statement, and SQLite refuses
   # `ADD COLUMN … NOT NULL` without one. The queued rebuild restores the declared nullability.
-  if (hasproperty(field, :null) && field.null) || deferring
+  # `defer_not_null` is the same move for a column that has no default to withhold (#829, see
+  # `sqlite_add_column_defers_not_null`).
+  if (hasproperty(field, :null) && field.null) || deferring || defer_not_null
     push!(constraints, "NULL")
   else
     push!(constraints, "NOT NULL")
@@ -1919,6 +1957,22 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   # difference in `ColumnSpec.type`, because the spec's type is parsed from the RENDERED column. The
   # statements below still read the field for their text: the spec says *that* the type changed, not
   # how PostgreSQL should be told to change it.
+  # #828: a `USING` converts the column's VALUES, not its DEFAULT — PostgreSQL still converts the
+  # default with an assignment cast, and for exactly the pairs that need a `USING` there is none
+  # (`default for column "c" cannot be cast automatically`), on every table. So the old default is
+  # dropped first, and the declared one is put back by the DEFAULT step below (forced, because a
+  # delta that saw `0 == false` as equal would otherwise leave the column with no default at all).
+  # The sequence PostgreSQL's own `ALTER TABLE` documentation gives for this case.
+  default_dropped = false
+  function retype!(type_sql::AbstractString)
+    using_sql = _postgres_retype_using(field_name, delta.old_spec.type, delta.new_spec.type, type_sql)
+    if using_sql !== nothing && !(delta.old_spec.default isa NoDefault)
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" DROP DEFAULT;""")
+      default_dropped = true
+    end
+    push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE $type_sql""" *
+                          (using_sql === nothing ? ";" : " USING $using_sql;"))
+  end
   if :type in delta
     if new_field isa sCharField
       max_length = hasproperty(new_field, :max_length) ? new_field.max_length : 255
@@ -1926,7 +1980,7 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
     elseif new_field isa sDecimalField
       max_digits = hasproperty(new_field, :max_digits) ? new_field.max_digits : 10
       decimal_places = hasproperty(new_field, :decimal_places) ? new_field.decimal_places : 2
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE DECIMAL($max_digits, $decimal_places);""")
+      retype!("DECIMAL($max_digits, $decimal_places)")
       # A lower scale rounds existing values. That used to be a `@warn` here, which a deploy never
       # read; since #803 the planner records it from the delta as a `:decimal_scale` finding, which
       # `migrate` will not apply without `destructive = true`.
@@ -1943,7 +1997,9 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
       cast_expression = _postgres_bytea_cast_expression(field_name, delta.old_spec.type)
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE bytea USING $cast_expression;""")
     else
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE $(_get_column_type(new_field, conn));""")
+      # #828: a pair with no assignment cast gets its `USING`; every other pair is left to
+      # PostgreSQL's own cast, as before.
+      retype!(_get_column_type(new_field, conn))
     end
   end
 
@@ -1997,10 +2053,14 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   #     at the wrong engine.
   #   * `NoDefault` — DROP. Note this is NOT reached for the one asymmetric case #496 introduced:
   #     a live expression default the model does not declare never enters the delta at all
-  #     (`_defaults_equal`, `src/column_ir.jl`), so PormG cannot propose dropping it.
-  if :default in delta
+  #     (`_defaults_equal`, `src/column_ir.jl`), so PormG cannot propose dropping it — except through
+  #     `retype!` above, which must drop it for a `USING` retype to run; the planner records that
+  #     case as a `:drop_default` finding (#828), so it takes `destructive = true`.
+  if :default in delta || default_dropped
     new_default = delta.new_spec.default
-    if new_default isa LiteralDefault
+    if new_default isa NoDefault && default_dropped
+      # Already dropped ahead of the retype.
+    elseif new_default isa LiteralDefault
       default_value = _format_default_sql_value(new_default.value, conn)
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" SET DEFAULT $default_value;""")
     elseif new_default isa ExpressionDefault
@@ -2130,6 +2190,26 @@ function sqlite_add_column_can_inline_fk(field::PormGField, temporary_default::A
          !field.unique && !field.primary_key
 end
 
+"""
+    sqlite_add_column_defers_not_null(field, temporary_default) -> Bool
+
+Whether SQLite's `ADD COLUMN` for `field` must be rendered nullable and tightened by the table
+rebuild the planner queues after it (#829). SQLite refuses `ADD COLUMN … NOT NULL` with no default
+on every table, even an empty one (`Cannot add a NOT NULL column with default value NULL`), while
+the rebuild's `CREATE TABLE` declares the column NOT NULL and its copy fails only when rows exist.
+Routing it there makes SQLite fail where PostgreSQL does, on a populated table, and the row
+pre-check refuses that case before any write.
+
+A primary key is left out: SQLite refuses `ADD COLUMN … PRIMARY KEY` for a reason no nullability
+changes. Asked here and in `_add_new_field`, so the rendering and the queued rebuild cannot disagree.
+"""
+function sqlite_add_column_defers_not_null(field::PormGField, temporary_default::Any)::Bool
+  return !(hasproperty(field, :null) && getfield(field, :null)) &&
+         field.default === nothing && temporary_default === nothing &&
+         !(hasproperty(field, :db_default) && getfield(field, :db_default) !== nothing) &&
+         !(hasproperty(field, :primary_key) && getfield(field, :primary_key))
+end
+
 # `model` is accepted and IGNORED on PostgreSQL, so the planner has one call to make rather than a
 # backend branch. PostgreSQL adds its key separately and must keep doing so: `_add_constrains` emits
 # a named `ALTER TABLE … ADD CONSTRAINT … DEFERRABLE INITIALLY DEFERRED`, which an inline clause here
@@ -2170,7 +2250,8 @@ function add_field(conn::PormGSQLite, table_name::Union{String,Symbol}, field_na
   # `defer_db_default = true` — this is the one statement SQLite will not accept a non-constant
   # default on (#496). `_add_new_field` queues the rebuild that puts it back.
   column_sql = field_to_column(field_name, field, conn, temporary_default=temporary_default,
-                               defer_db_default=true)
+                               defer_db_default=true,
+                               defer_not_null=sqlite_add_column_defers_not_null(field, temporary_default))
   if model !== nothing && sqlite_add_column_can_inline_fk(field, temporary_default)
     column_sql *= " " * _foreign_key_references_sql(field; column = field_name, model = model)
   end

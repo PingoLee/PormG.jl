@@ -761,8 +761,9 @@ end
 #                  `destructive = true` does not bypass it.
 #   * `:silent`  — the ALTER succeeds and CHANGES data (a lower NUMERIC scale rounds). That is data
 #                  loss by another route, so it takes the destructive guard's opt-in.
-#   * `:refused` — the engine cannot apply the ALTER as rendered at all (PostgreSQL has no automatic
-#                  cast from text to integer, and the plan carries no `USING`).
+#   * `:refused` — the engine cannot apply the ALTER as rendered at all (a pair PostgreSQL has no
+#                  automatic cast for, in a plan that carries no `USING` — since #828 only a plan
+#                  written before the renderer wrote one).
 #
 # Engine asymmetry, stated once. PostgreSQL enforces a VARCHAR length, an integer width and a NUMERIC
 # precision, and casts on ALTER. SQLite enforces none of the three — its rebuild's `INSERT … SELECT`
@@ -781,12 +782,21 @@ the plan's header; [`dry_run`](@ref) lists them and [`migrate`](@ref) acts on th
 - `kind` — a key of [`LOSSY_ALTER_KINDS`](@ref), e.g. `:set_not_null`, `:varchar_length`,
   `:decimal_scale`.
 - `table`, `column` — the names the live catalog knows **before** the plan runs, so a renamed column
-  is reported under its old name.
-- `old_type`, `new_type` — the two column types as rendered.
+  is reported under its old name. For a table-level constraint (`:add_composite_unique`,
+  `:add_check`) `column` holds the constraint's name.
+- `old_type`, `new_type` — the two column types as rendered; `old_type` is empty for a column the
+  plan adds (`:add_not_null`).
 - `bound`, `scale` — the limit the pre-check compares against (a VARCHAR length, an integer width in
   bits, whole digits and scale, a byte bound), or `nothing`.
 - `rows` — how many existing rows the change would fail on, filled in by `dry_run` / `migrate` for the
-  `:rows` class; `nothing` until counted, and always `nothing` for the other classes.
+  `:rows` class; `nothing` until counted, and always `nothing` for the other classes. A finding the
+  pre-check cannot count against the live schema (a foreign key whose parent table this same plan
+  creates or renames) also stays `nothing`, and the database checks it when the migration runs.
+- `columns` — the catalog's columns of a composite `UniqueConstraint` (`:add_composite_unique`);
+  empty otherwise.
+- `references` — `(table, column)` of the parent a foreign key points at (`:add_foreign_key`), or
+  `nothing`.
+- `condition` — the SQL condition of a `CheckConstraint` (`:add_check`), or `nothing`.
 """
 struct LossyAlter
   kind::Symbol
@@ -797,14 +807,34 @@ struct LossyAlter
   bound::Union{Nothing, Int}
   scale::Union{Nothing, Int}
   rows::Union{Nothing, Int}
+  # #830: what a constraint finding needs beyond one column. A `Tuple`, not a `Vector`, so two equal
+  # findings compare `==` (an immutable struct's default `==` is `===`, and a `Vector` field is
+  # compared by identity).
+  columns::Tuple{Vararg{String}}
+  references::Union{Nothing, Tuple{String, String}}
+  condition::Union{Nothing, String}
 end
 
 LossyAlter(kind::Symbol, table::AbstractString, column::AbstractString, old_type::AbstractString,
+           new_type::AbstractString, bound, scale, rows) =
+  LossyAlter(kind, String(table), String(column), String(old_type), String(new_type), bound, scale, rows,
+             (), nothing, nothing)
+
+LossyAlter(kind::Symbol, table::AbstractString, column::AbstractString, old_type::AbstractString,
            new_type::AbstractString; bound::Union{Nothing, Integer} = nothing,
-           scale::Union{Nothing, Integer} = nothing, rows::Union{Nothing, Integer} = nothing) =
+           scale::Union{Nothing, Integer} = nothing, rows::Union{Nothing, Integer} = nothing,
+           columns = (), references::Union{Nothing, Tuple{AbstractString, AbstractString}} = nothing,
+           condition::Union{Nothing, AbstractString} = nothing) =
   LossyAlter(kind, String(table), String(column), String(old_type), String(new_type),
              bound === nothing ? nothing : Int(bound), scale === nothing ? nothing : Int(scale),
-             rows === nothing ? nothing : Int(rows))
+             rows === nothing ? nothing : Int(rows), Tuple(String(c) for c in columns),
+             references === nothing ? nothing : (String(references[1]), String(references[2])),
+             condition === nothing ? nothing : String(condition))
+
+# The same finding with its rows counted (`nothing`: it could not be).
+_with_rows(f::LossyAlter, rows::Union{Nothing, Int})::LossyAlter =
+  LossyAlter(f.kind, f.table, f.column, f.old_type, f.new_type, f.bound, f.scale, rows,
+             f.columns, f.references, f.condition)
 
 """
     LOSSY_ALTER_KINDS
@@ -819,16 +849,31 @@ Every kind a [`LossyAlter`](@ref) can carry, with its class — the closed set, 
 | `:decimal_precision` | PostgreSQL | `:rows` | a NUMERIC loses whole digits (or rounds up into one) |
 | `:non_negative_check` | both | `:rows` | a `>= 0` CHECK is added (e.g. `PositiveIntegerField`) |
 | `:byte_length_check` | both | `:rows` | a `BinaryField` byte bound is added or lowered |
+| `:add_not_null` | both | `:rows` | a new NOT NULL column with no default is added to a table with rows |
+| `:add_unique` | both | `:rows` | `unique = true` is added to a column holding duplicates |
+| `:add_primary_key` | both | `:rows` | `primary_key = true` moves to a column holding duplicates (or NULLs, on PostgreSQL) |
+| `:add_composite_unique` | both | `:rows` | a `UniqueConstraint` is added over columns holding duplicate tuples |
+| `:add_check` | both | `:rows` | a `CheckConstraint` is added that some rows fail |
+| `:add_foreign_key` | both | `:rows` | a foreign key is added or re-pointed over rows with no parent |
 | `:decimal_scale` | PostgreSQL | `:silent` | a NUMERIC scale is lowered, so values round |
 | `:to_integer` | PostgreSQL | `:silent` | a float/decimal becomes an integer, so values round |
 | `:to_date` | PostgreSQL | `:silent` | a timestamp becomes a date, dropping the time |
 | `:to_time` | PostgreSQL | `:silent` | a timestamp becomes a time, dropping the date |
 | `:drop_timezone` | PostgreSQL | `:silent` | `timestamptz` becomes `timestamp`, dropping the offset |
 | `:text_affinity` | SQLite | `:silent` | text becomes a numeric/boolean column, so `'0042'` stores as `42` |
-| `:no_implicit_cast` | PostgreSQL | `:refused` | the engine has no automatic cast between the two types |
+| `:text_cast` | PostgreSQL | `:rows` | text becomes a number, boolean, date, timestamp, UUID or JSON (the plan casts with `USING`), and some values do not parse |
+| `:to_boolean` | PostgreSQL | `:silent` | a number becomes a boolean (`USING "c" <> 0`), so every non-zero value becomes `true` |
+| `:drop_default` | PostgreSQL | `:silent` | a `USING` retype must drop a database default the model does not declare, and nothing puts it back |
+| `:no_implicit_cast` | PostgreSQL | `:refused` | the engine has no automatic cast between the two types and the plan writes no `USING` |
 
 `:rows` findings are counted before `migrate` runs and refuse the plan when any row would fail;
 `:silent` ones need `destructive = true`; `:refused` ones cannot be applied as planned.
+
+Since #828 every pair `:no_implicit_cast` used to name gets a `USING` (see
+`Dialect._postgres_retype_using`), so the planner no longer records it: text into a parsed type is
+`:text_cast`, a number into a boolean `:to_boolean`, and a boolean into a number nothing at all — `true`
+is 1 and `false` 0. The kind stays, for a plan written before #828, whose SQL has no `USING` and
+which is still refused.
 """
 const LOSSY_ALTER_KINDS = (
   set_not_null       = :rows,
@@ -837,8 +882,17 @@ const LOSSY_ALTER_KINDS = (
   decimal_precision  = :rows,
   non_negative_check = :rows,
   byte_length_check  = :rows,
+  add_not_null       = :rows,
+  add_unique         = :rows,
+  add_primary_key    = :rows,
+  add_composite_unique = :rows,
+  add_check          = :rows,
+  add_foreign_key    = :rows,
   decimal_scale      = :silent,
+  text_cast          = :rows,
   to_integer         = :silent,
+  to_boolean         = :silent,
+  drop_default       = :silent,
   to_date            = :silent,
   to_time            = :silent,
   drop_timezone      = :silent,
@@ -853,9 +907,13 @@ lossy_alter_class(f::LossyAlter)::Symbol = LOSSY_ALTER_KINDS[f.kind]
 # error types, so the four cannot describe one finding four ways. The names are `repr`'d: they come
 # from the live catalog, and a newline in one must not start a fresh line of output.
 function _lossy_alter_summary(f::LossyAlter)::String
-  what = f.old_type == f.new_type ? "" : " ($(f.old_type) → $(f.new_type))"
+  # An added column has no old type (#829): the header writes `old=` empty.
+  what = f.old_type == f.new_type ? "" :
+         isempty(f.old_type) ? " ($(f.new_type))" : " ($(f.old_type) → $(f.new_type))"
   rows = f.rows === nothing ? "" : " — $(f.rows) row(s) would fail"
-  return "$(repr(f.table)).$(repr(f.column)): $(f.kind)$what$rows"
+  over = isempty(f.columns) ? "" : " over ($(join(repr.(f.columns), ", ")))"
+  ref = f.references === nothing ? "" : " → $(repr(f.references[1])).$(repr(f.references[2]))"
+  return "$(repr(f.table)).$(repr(f.column)): $(f.kind)$what$over$ref$rows"
 end
 
 const _IntType = Union{CInt16, CInt32, CInt64}
@@ -893,17 +951,27 @@ _frac_digits(::CFloat64)::Nothing = nothing
 # Does `a` hold more than `b`? `nothing` is unbounded.
 _exceeds(a::Union{Int, Nothing}, b::Int)::Bool = a === nothing || a > b
 
-# The pairs PostgreSQL cannot convert on `ALTER COLUMN … TYPE` without a `USING` clause the renderer
-# does not write. A DENY-list on purpose: listing a pair that actually converts would refuse a valid
-# migration with no way round it, while a pair missing from it fails inside the transaction and rolls
-# back — which is what every such plan did before this list existed. New types the renderer DOES
-# cast (`TIME`, `INTERVAL`, `bytea` all get a `USING`) are therefore absent.
+# The pairs PostgreSQL cannot convert on `ALTER COLUMN … TYPE` without a `USING` clause. A DENY-list
+# on purpose: listing a pair that actually converts would refuse a valid migration with no way round
+# it, while a pair missing from it fails inside the transaction and rolls back — which is what every
+# such plan did before this list existed. New types the renderer has always cast (`TIME`,
+# `INTERVAL`, `bytea` all get a `USING`) are therefore absent.
+#
+# Since #828 the renderer writes a `USING` for every pair listed here too, so a castless pair is
+# refused only when `_pg_retype_has_using` says otherwise — today, never. The list stays the
+# definition of "castless": it is what decides that a pair NEEDS the `USING` and the row count.
 function _pg_no_implicit_cast(old::CanonicalType, new::CanonicalType)::Bool
   old isa _TextType && return new isa Union{_NumericType, CBool, CDate, CDateTime, CUUID, CJSON}
   old isa CBool && return new isa _NumericType
   old isa _NumericType && return new isa CBool
   return false
 end
+
+# Does the plan carry a `USING` for this pair? Asked of the renderer itself, so the ALTER it writes and
+# the finding recorded here cannot disagree (#828). The column name and type text do not affect the
+# answer.
+_pg_retype_has_using(old::CanonicalType, new::CanonicalType)::Bool =
+  Dialect._postgres_retype_using("c", old, new, "t") !== nothing
 
 """
     _lossy_alters(delta, conn; table, column) -> Vector{LossyAlter}
@@ -925,12 +993,27 @@ function _lossy_alters(delta::ColumnDelta, conn::Union{PormGPostgres, PormGSQLit
   # finding beside it would be counted against a column of the OLD type (`"c" < 0` on a varchar),
   # which PostgreSQL rejects as a query rather than answering.
   any(f -> f.kind === :no_implicit_cast, type_found) && return type_found
+  # #828: the same reason, one step weaker. Across a castless pair the column holds the OLD type
+  # until the `USING` runs, so a CHECK count (`"c" < 0`) would compare text or a boolean with a
+  # number, which PostgreSQL rejects as a query. The nullability and uniqueness findings below read
+  # no value and stay; the CHECK one is left to the database, which still enforces it.
+  castless = conn isa PormGPostgres && :type in delta && readable &&
+             _pg_no_implicit_cast(old_spec.type, new_spec.type)
+  # #828: `alter_field` drops the old default before a `USING` retype (PostgreSQL would cast it, and
+  # cannot) and sets the DECLARED one after. A live expression default the model does not declare is
+  # never part of the delta (`_defaults_equal`), so nothing would set it back: the retype would remove
+  # it silently. That is a change to how future rows are written, so it takes the opt-in — or the
+  # model declares it as a `db_default`, and it is restored.
+  if castless && _pg_retype_has_using(old_spec.type, new_spec.type) &&
+     old_spec.default isa ExpressionDefault && new_spec.default isa NoDefault
+    push!(type_found, finding(:drop_default))
+  end
 
   found = LossyAlter[]
   if :nullable in delta && old_spec.nullable && !new_spec.nullable
     push!(found, finding(:set_not_null))
   end
-  if :checks in delta
+  if :checks in delta && !castless
     if any(c -> c isa NonNegativeCheck, new_spec.checks) && !any(c -> c isa NonNegativeCheck, old_spec.checks)
       push!(found, finding(:non_negative_check))
     end
@@ -941,8 +1024,80 @@ function _lossy_alters(delta::ColumnDelta, conn::Union{PormGPostgres, PormGSQLit
       push!(found, finding(:byte_length_check; bound = minimum(new_bound)))
     end
   end
+  # #830: a constraint the rows must already satisfy. A primary key is unique too, so a column that
+  # becomes the key is one finding, not two.
+  if :primary_key in delta && new_spec.primary_key && !old_spec.primary_key
+    push!(found, finding(:add_primary_key))
+  elseif :unique in delta && new_spec.unique && !old_spec.unique && !new_spec.primary_key
+    push!(found, finding(:add_unique))
+  end
   append!(found, type_found)
   return found
+end
+
+"""
+    _lossy_foreign_key(delta; table, column) -> Vector{LossyAlter}
+
+The `:add_foreign_key` finding for a column change that adds or re-points a foreign key (#830): rows
+whose value has no parent row fail the constraint. `table` and `column` are the catalog's names.
+None when the parent's physical table is unknown, or when the same change retypes the column — the
+count would compare the child's OLD type against the parent key, which PostgreSQL may reject as a
+query; the database still checks such a key when the migration runs.
+"""
+function _lossy_foreign_key(delta::ColumnDelta; table::AbstractString, column::AbstractString)::Vector{LossyAlter}
+  ref, old_ref = delta.new_spec.reference, delta.old_spec.reference
+  (ref === nothing || ref.table === nothing || :type in delta) && return LossyAlter[]
+  # The same decision `_fk_constraint_action` makes: a new key, or one whose target moved.
+  (old_ref === nothing || !isempty(reference_delta(ref, old_ref))) || return LossyAlter[]
+  return [LossyAlter(:add_foreign_key, table, column, delta.old_spec.raw, delta.new_spec.raw;
+                     references = (ref.table, ref.column))]
+end
+
+"""
+    _lossy_composite_unique(table, name, columns) -> Vector{LossyAlter}
+
+The `:add_composite_unique` finding for a `UniqueConstraint` the plan creates on an existing table
+(#830). `columns` are the catalog's names for its members, or `nothing` for a member the catalog
+does not have yet (a column this plan adds): that one cannot be counted, so there is no finding.
+"""
+function _lossy_composite_unique(table::AbstractString, name::AbstractString,
+                                 columns::AbstractVector)::Vector{LossyAlter}
+  any(c -> c === nothing, columns) && return LossyAlter[]
+  return [LossyAlter(:add_composite_unique, table, name, "", ""; columns = String[c for c in columns])]
+end
+
+"""
+    _lossy_check(table, check, countable) -> Vector{LossyAlter}
+
+The `:add_check` finding for a `CheckConstraint` the plan adds to an existing table (#830): the rows
+whose condition is false fail it. `countable` is the planner's answer to whether every column the
+condition names exists in the catalog with its current type — a condition over a column this plan
+adds or retypes cannot be evaluated before the plan runs, so it is not a finding.
+"""
+_lossy_check(table::AbstractString, c::Models.CheckConstraint, countable::Bool)::Vector{LossyAlter} =
+  countable ? [LossyAlter(:add_check, table, c.name, "", ""; condition = c.condition)] : LossyAlter[]
+
+"""
+    _lossy_add_column(spec, conn; table, temporary_default) -> Vector{LossyAlter}
+
+The finding for a column the plan ADDS (#829), which has no `ColumnDelta` and so never reaches
+`_lossy_alters`. A NOT NULL column with no default has nothing to put in the rows already there:
+PostgreSQL's `ADD COLUMN` fails on the first one, and SQLite's (routed through the table rebuild,
+see `Dialect.sqlite_add_column_defers_not_null`) fails on the copy. An empty table takes it on both.
+
+Not a finding: a nullable column; one with a `default` or `db_default` (both fill existing rows); one
+the planner gives a temporary default (`_get_temporary_default_value`, #607); and an identity, which
+the engine fills itself. `spec` is the declared column's; `table` is the catalog's name for the table.
+"""
+function _lossy_add_column(spec::ColumnSpec, ::Union{PormGPostgres, PormGSQLite};
+                           table::AbstractString, temporary_default::Any = nothing)::Vector{LossyAlter}
+  (spec.nullable || !(spec.default isa NoDefault) || temporary_default !== nothing ||
+   spec.identity !== nothing) && return LossyAlter[]
+  # A spec the compiler could not read (the #69 fail-safe's `CUnsupported`) says nothing reliable
+  # about its default — `_degraded_spec` writes `NoDefault()` when the default would not compile — so
+  # it is not classified, as `_lossy_alters` skips an unreadable side.
+  spec.type isa CUnsupported && return LossyAlter[]
+  return [LossyAlter(:add_not_null, table, spec.name, "", spec.raw)]
 end
 
 # The byte-bound pre-check measures the column as it is NOW. SQLite's `length(CAST(… AS BLOB))`
@@ -959,8 +1114,16 @@ function _lossy_type_alters(old::CanonicalType, new::CanonicalType, ::PormGSQLit
 end
 
 function _lossy_type_alters(old::CanonicalType, new::CanonicalType, ::PormGPostgres, finding)::Vector{LossyAlter}
-  # The ALTER cannot run at all, so nothing narrower is worth reporting beside it.
-  _pg_no_implicit_cast(old, new) && return [finding(:no_implicit_cast)]
+  if _pg_no_implicit_cast(old, new)
+    # The ALTER cannot run at all, so nothing narrower is worth reporting beside it.
+    _pg_retype_has_using(old, new) || return [finding(:no_implicit_cast)]
+    # #828: it runs through the `USING`. Text is parsed by the target type, so a value that does not
+    # parse (or overflows it) fails the ALTER — one count covers both. A number into a boolean
+    # applies and changes values; a boolean into a number loses nothing.
+    old isa _TextType && return [finding(:text_cast)]
+    new isa CBool && return [finding(:to_boolean)]
+    return LossyAlter[]
+  end
   found = LossyAlter[]
   if new isa CVarChar && new.length !== nothing
     # Any old type converts to a string through its text form, so any of them can be too long.

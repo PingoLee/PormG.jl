@@ -109,10 +109,11 @@ _la803_one(declared, live, conn) =
     @test isempty(_la803_kinds(M.DateTimeField(), M.DateField(), PG_LA803))
     @test isempty(_la803_kinds(M.DateTimeField(), M.DateTimeField(type = "TIMESTAMP"), PG_LA803))
 
-    # No automatic cast: text → integer cannot run on PostgreSQL at all. The reverse, and the types
-    # the renderer DOES cast with a `USING` (interval, time, bytea), are not refused.
-    @test _la803_kinds(M.IntegerField(), M.CharField(), PG_LA803) == [:no_implicit_cast]
-    @test _la803_kinds(M.BooleanField(), M.CharField(), PG_LA803) == [:no_implicit_cast]
+    # No automatic cast: text → integer runs only through the `USING` the renderer writes since #828,
+    # which parses each value — so it is counted (`:text_cast`), not refused. The reverse, and the
+    # types the renderer has always cast (interval, time, bytea), are not findings at all.
+    @test _la803_kinds(M.IntegerField(), M.CharField(), PG_LA803) == [:text_cast]
+    @test _la803_kinds(M.BooleanField(), M.CharField(), PG_LA803) == [:text_cast]
     @test isempty(_la803_kinds(M.TextField(), M.IntegerField(), PG_LA803))
     @test isempty(_la803_kinds(M.DurationField(), M.IntegerField(), PG_LA803))
     @test isempty(_la803_kinds(M.TimeField(), M.CharField(), PG_LA803))
@@ -129,7 +130,8 @@ _la803_one(declared, live, conn) =
 
     # Every kind the classifier can emit belongs to the closed table, with one of the three classes.
     @test Set(values(LOSSY_ALTER_KINDS)) == Set([:rows, :silent, :refused])
-    @test lossy_alter_class(_la803_one(M.IntegerField(), M.CharField(), PG_LA803)) === :refused
+    @test lossy_alter_class(_la803_one(M.IntegerField(), M.CharField(), PG_LA803)) === :rows
+    @test lossy_alter_class(LossyAlter(:no_implicit_cast, "t", "c", "a", "b")) === :refused
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -270,7 +272,8 @@ _la803_notnull(pool, col) =
     only(DataFrame(fetch(pool, "PRAGMA table_info(race803);")) |> d -> d[d.name .== col, :notnull])
 
 # A connection registered under `key`, the way the `String` forms find it. Restores the global config.
-function _la803_with_key(f, tag::String)
+# `v1` is the models file the database starts from.
+function _la803_with_key(f, tag::String; v1::String = _la803_models())
     saved = copy(PormG.config)
     dir = mktempdir()
     pool = nothing
@@ -281,7 +284,7 @@ function _la803_with_key(f, tag::String)
             settings = Configuration.Settings(connections = pool, db_def_folder = tag)
             settings.change_db = true
             PormG.config[tag] = settings
-            write(joinpath(tag, "models.jl"), _la803_models())
+            write(joinpath(tag, "models.jl"), v1)
             _la803_quiet(() -> Migrations.makemigrations(tag; interactive = false))
             _la803_quiet(() -> Migrations.migrate(tag; interactive = false))
             f(tag, pool)
@@ -444,17 +447,19 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Review fixes: a refused cast stands alone, and a CHECK is only counted where it can be
+# Review fixes: across a castless pair a CHECK is not counted, and a CHECK is only counted where it can be
 # `CharField → PositiveIntegerField` used to yield `:non_negative_check` beside the refusal, and its
 # count (`"c" < 0` on a varchar) was a query PostgreSQL rejects — `dry_run` raised a database error
-# instead of reporting the plan. Integer ↔ boolean is refused in both directions.
+# instead of reporting the plan. Since #828 the pair runs through a `USING`, so it is counted as a
+# `:text_cast`, and the column is still text (or boolean) when the count runs: the CHECK stays the
+# database's. Integer → boolean changes values; boolean → integer loses nothing.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "a refused cast is the only finding, and a CHECK is only counted where it can be" begin
+@testset "a castless pair carries no CHECK count, and a CHECK is only counted where it can be" begin
     M = Models
-    @test _la803_kinds(M.PositiveIntegerField(), M.CharField(), PG_LA803) == [:no_implicit_cast]
-    @test _la803_kinds(M.PositiveIntegerField(), M.BooleanField(), PG_LA803) == [:no_implicit_cast]
-    @test _la803_kinds(M.BooleanField(), M.IntegerField(), PG_LA803) == [:no_implicit_cast]
-    @test _la803_kinds(M.IntegerField(), M.CharField(null = true), PG_LA803) == [:no_implicit_cast]
+    @test _la803_kinds(M.PositiveIntegerField(), M.CharField(), PG_LA803) == [:text_cast]
+    @test isempty(_la803_kinds(M.PositiveIntegerField(), M.BooleanField(), PG_LA803))
+    @test _la803_kinds(M.BooleanField(), M.IntegerField(), PG_LA803) == [:to_boolean]
+    @test _la803_kinds(M.IntegerField(), M.CharField(null = true), PG_LA803) == [:set_not_null, :text_cast]
     # `octet_length` exists for bytea and strings only on PostgreSQL; SQLite measures anything.
     @test isempty(_la803_kinds(M.BinaryField(max_length = 16), M.IntegerField(), PG_LA803))
     @test _la803_kinds(M.BinaryField(max_length = 16), M.CharField(), PG_LA803) == [:byte_length_check]
@@ -552,5 +557,578 @@ end
         @test only(filter(f -> f.kind === :non_negative_check, r.lossy_alters)).rows == 1
         err = try _la803_quiet(() -> Migrations.migrate(key; interactive = false, destructive = true)); nothing catch e; e end
         @test err isa MigrationPrecheckError
+    end
+end
+
+# =============================================================================
+# #829: a NEW NOT NULL column with no default
+# It has no `ColumnDelta` — `_add_new_field` plans it, not `_plan_column_change!` — so #803 never
+# saw it. PostgreSQL's `ADD COLUMN … NOT NULL` fails on the first existing row; SQLite's refused it
+# on every table, even an empty one. Now it is an `:add_not_null` finding counted against the whole
+# table, and SQLite adds the column nullable and tightens it in the rebuild, so both engines fail
+# exactly when the table has rows — and the pre-check refuses that before any write.
+# =============================================================================
+
+_la829_kinds(field, conn; temporary_default = nothing) =
+    [f.kind for f in Migrations._lossy_add_column(Migrations.column_spec(field, conn; name = "grid"), conn;
+                                                  table = "t", temporary_default = temporary_default)]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#829): the added-column classifier and its harmless neighbours
+# Only a NOT NULL column with nothing to fill the existing rows is a finding. A default, a db_default,
+# the planner's temporary default (#607) and an identity all fill them; a nullable column needs none.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#829: a new NOT NULL defaultless column is a finding; anything that fills the rows is not" begin
+    M = Models
+    for conn in (PG_LA803, SL_LA803)
+        @test _la829_kinds(M.IntegerField(), conn) == [:add_not_null]
+        @test _la829_kinds(M.CharField(max_length = 3), conn) == [:add_not_null]
+        @test isempty(_la829_kinds(M.IntegerField(null = true), conn))
+        @test isempty(_la829_kinds(M.IntegerField(default = 0), conn))
+        @test isempty(_la829_kinds(M.DateTimeField(db_default = "CURRENT_TIMESTAMP"), conn))
+        # #607: a NOT NULL temporal column gets a temporary default the plan later drops.
+        @test isempty(_la829_kinds(M.DateTimeField(), conn; temporary_default = "1970-01-01"))
+        # The engine fills an identity itself.
+        @test isempty(_la829_kinds(M.IDField(), conn))
+    end
+    # The finding names the table and column, with no old type: the column does not exist yet.
+    f = only(Migrations._lossy_add_column(Migrations.column_spec(Models.IntegerField(), PG_LA803; name = "grid"),
+                                          PG_LA803; table = "race829"))
+    @test (f.table, f.column, f.old_type) == ("race829", "grid", "")
+    @test lossy_alter_class(f) === :rows
+    # The summary says what is being added rather than an arrow from an empty type.
+    @test Migrations._lossy_alter_summary(f) == "\"race829\".\"grid\": add_not_null ($(f.new_type))"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#829): recorded by the planner under the catalog's table name
+# `_add_new_field` is reached from `_resolve_table_fields`; the finding must land in the same sink
+# the column changes use, so `makemigrations` writes it into the header beside them.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#829: the planner records the added column, and only the defaultless NOT NULL one" begin
+    settings = Configuration.Settings()
+    settings.change_db = true
+    live = Models.Model("race829"; id = Models.IDField(), name = Models.CharField(max_length = 40))
+    declared = Models.Model("race829"; id = Models.IDField(), name = Models.CharField(max_length = 40),
+                            grid = Models.IntegerField(), laps = Models.IntegerField(default = 0),
+                            fastest = Models.IntegerField(null = true))
+    schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+        :race829 => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared, :exist => false))
+    sink = LossyAlter[]
+    plan = Migrations.get_migration_plan(PormGModel[live], schema, PG_LA803, settings;
+                                         interactive = false, lossy_alters = sink)
+    @test [(f.kind, f.table, f.column) for f in sink] == [(:add_not_null, "race829", "grid")]
+    # PostgreSQL's ADD COLUMN is unchanged: NOT NULL, as declared.
+    @test plan[:race829]["Add field: grid"] == "ALTER TABLE \"race829\" ADD COLUMN \"grid\" integer NOT NULL;"
+end
+
+@testset "#829: the pre-check counts every row of the table" begin
+    f = LossyAlter(:add_not_null, "Ev\"il", "grid", "", "INTEGER")
+    @test _precheck_sql(PG_LA803, f) == ("SELECT COUNT(*) AS n FROM \"Ev\"\"il\"", Any[])
+    @test _precheck_sql(SL_LA803, f) == ("SELECT COUNT(*) AS n FROM \"Ev\"\"il\"", Any[])
+end
+
+# The race table of `_la803_models` with one more column, `grid`.
+_la829_models(grid) = replace(_la803_models(), "\n)\nend" => ",\n    grid = $grid\n)\nend")
+_la829_columns(pool) = String.(DataFrame(fetch(pool, "PRAGMA table_info(race803);")).name)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#829): SQLite end to end — an empty table takes the column, a populated one is refused
+# Before #829 SQLite refused `ADD COLUMN … NOT NULL` with no default even on an EMPTY table. The
+# column is now added nullable and the rebuild declares it NOT NULL, so the empty table applies; with
+# a row, the pre-check counts it and refuses before any write, naming the two ways through.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite #829: an empty table takes a new NOT NULL column; a populated one is refused first" begin
+    _la803_with_key("la829empty") do key, pool
+        write(joinpath(key, "models.jl"), _la829_models("Models.IntegerField()"))
+        _la803_quiet(() -> Migrations.makemigrations(key; interactive = false))
+        pending = joinpath(key, "migrations", "pending_migrations.jl")
+        @test [f.kind for f in _plan_lossy_alters(pending)] == [:add_not_null]
+        # The ADD COLUMN is nullable; the rebuild that follows declares NOT NULL.
+        statements = Migrations.dry_run(key).statements
+        add = only(filter(s -> occursin("ADD COLUMN \"grid\"", s), statements))
+        @test occursin("\"grid\" INTEGER NULL", add)
+        @test only(Migrations.dry_run(key).lossy_alters).rows == 0
+        @test _la803_quiet(() -> Migrations.migrate(key; interactive = false, destructive = true)).outcome === :applied
+        @test _la803_notnull(pool, "grid") == 1
+    end
+
+    _la803_with_key("la829rows") do key, pool
+        fetch(pool, "INSERT INTO race803 (name, code, laps) VALUES ('Monaco', 'MON', 78);")
+        write(joinpath(key, "models.jl"), _la829_models("Models.IntegerField()"))
+        _la803_quiet(() -> Migrations.makemigrations(key; interactive = false))
+        history = _la803_history(pool)
+        err = try _la803_quiet(() -> Migrations.migrate(key; interactive = false, destructive = true)); nothing catch e; e end
+        @test err isa MigrationPrecheckError
+        @test err !== nothing && only(err.findings).kind === :add_not_null && only(err.findings).rows == 1
+        # The message names both ways through.
+        msg = err === nothing ? "" : sprint(showerror, err)
+        @test occursin("declare a `default`", msg) && occursin("`null = true`", msg)
+        # Nothing was written: no history row, no column.
+        @test _la803_history(pool) == history
+        @test !("grid" in _la829_columns(pool))
+    end
+
+    # The neighbour: a declared default fills the existing row, so there is no finding and it applies.
+    _la803_with_key("la829default") do key, pool
+        fetch(pool, "INSERT INTO race803 (name, code, laps) VALUES ('Monaco', 'MON', 78);")
+        write(joinpath(key, "models.jl"), _la829_models("Models.IntegerField(default = 0)"))
+        _la803_quiet(() -> Migrations.makemigrations(key; interactive = false))
+        @test isempty(_plan_lossy_alters(joinpath(key, "migrations", "pending_migrations.jl")))
+        @test _la803_quiet(() -> Migrations.migrate(key; interactive = false, destructive = true)).outcome === :applied
+        @test DataFrame(fetch(pool, "SELECT grid FROM race803;")).grid == [0]
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#829): a header for an added column the table already has is stale
+# For a changed column, "stale" means the column is gone; for an added one it is the opposite — the
+# column already exists, because the plan was applied (the #81 re-archive) or edited by hand.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite #829: an added-column finding applies only while the column is absent" begin
+    _la803_with_key("la829stale") do key, pool
+        absent = LossyAlter(:add_not_null, "race803", "grid", "", "INTEGER")
+        present = LossyAlter(:add_not_null, "race803", "laps", "", "INTEGER")
+        no_table = LossyAlter(:add_not_null, "race_gone", "grid", "", "INTEGER")
+        @test Migrations._finding_applies(pool, absent)
+        @test !Migrations._finding_applies(pool, present)
+        @test !Migrations._finding_applies(pool, no_table)
+        # Counted, the stale ones dropped with a warning.
+        counted = @test_logs (:warn,) (:warn,) Migrations._precheck_lossy_alters(pool, [absent, present, no_table])
+        @test [(f.column, f.rows) for f in counted] == [("grid", 0)]
+    end
+end
+
+# =============================================================================
+# #830: constraint adds the rows already there can violate
+# UNIQUE, PRIMARY KEY, a composite UniqueConstraint, a CheckConstraint and a foreign key were not
+# pre-counted: such a plan failed inside its transaction, rolled back and left a `failed` history
+# row. Each is now a `:rows` finding, recorded where the action is planned and counted with the
+# predicate the engine itself enforces.
+# =============================================================================
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#830): UNIQUE and PRIMARY KEY read off the column delta
+# A key column is unique too, so becoming the key is ONE finding. Dropping either, or keeping it,
+# is harmless.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#830: unique and primary key added to a column are findings; removed or kept are not" begin
+    M = Models
+    for conn in (PG_LA803, SL_LA803)
+        @test _la803_kinds(M.IntegerField(unique = true), M.IntegerField(), conn) == [:add_unique]
+        @test isempty(_la803_kinds(M.IntegerField(), M.IntegerField(unique = true), conn))
+        @test isempty(_la803_kinds(M.IntegerField(unique = true), M.IntegerField(unique = true), conn))
+    end
+    # Becoming the key: built from specs, since only a few field structs take `primary_key` at all.
+    key(pk, uq) = PormG.ColumnSpec("c", PormG.CInt64(), false, pk, uq, PormG.NoDefault(), nothing,
+                                   PormG.CheckKind[], nothing, "BIGINT")
+    kinds(new, old) = [f.kind for f in _lossy_alters(PormG.ColumnDelta(new, old, PormG.column_delta(new, old)),
+                                                     PG_LA803; table = "t", column = "c")]
+    @test kinds(key(true, false), key(false, false)) == [:add_primary_key]
+    @test kinds(key(true, true), key(false, false)) == [:add_primary_key]   # one finding, not two
+    @test kinds(key(true, true), key(false, true)) == [:add_primary_key]
+    @test isempty(kinds(key(false, false), key(true, true)))
+end
+
+# A ColumnSpec with a foreign key to `table`.`column` (or none), for the delta-level FK classifier.
+_la830_spec(ref; type = PormG.CInt64(), raw = "BIGINT") =
+    PormG.ColumnSpec("circuitid", type, true, false, false, PormG.NoDefault(),
+                     ref === nothing ? nothing : PormG.ForeignKeyRef(ref[1], nothing, ref[2], "CASCADE"),
+                     PormG.CheckKind[], nothing, raw)
+_la830_fk(new, old) = Migrations._lossy_foreign_key(PormG.ColumnDelta(new, old, PormG.column_delta(new, old));
+                                                    table = "race830", column = "circuitid")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#830): a foreign key added or re-pointed, and the cases that cannot be counted
+# The count compares the child column with the parent key, so it needs the parent's physical table
+# and the child's CURRENT type; without either there is no finding and the database checks the key.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#830: a foreign key added or re-pointed is a finding with its parent" begin
+    f = only(_la830_fk(_la830_spec(("circuit830", "id")), _la830_spec(nothing)))
+    @test (f.kind, f.table, f.column, f.references) == (:add_foreign_key, "race830", "circuitid", ("circuit830", "id"))
+    @test length(_la830_fk(_la830_spec(("track830", "id")), _la830_spec(("circuit830", "id")))) == 1   # re-pointed
+    @test isempty(_la830_fk(_la830_spec(("circuit830", "id")), _la830_spec(("circuit830", "id"))))      # unchanged
+    @test isempty(_la830_fk(_la830_spec(nothing), _la830_spec(("circuit830", "id"))))                   # dropped
+    @test isempty(_la830_fk(_la830_spec((nothing, "id")), _la830_spec(nothing)))                         # parent unknown
+    # Retyped in the same change: the count would compare the OLD type with the parent key.
+    @test isempty(_la830_fk(_la830_spec(("circuit830", "id")), _la830_spec(nothing; type = PormG.CText(), raw = "TEXT")))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#830): the pre-check SQL for each constraint kind
+# Duplicates exclude NULLs (both engines treat NULLs as distinct); a primary key also counts NULLs on
+# PostgreSQL only; a CHECK counts rows where the condition is FALSE; an orphan is a non-NULL value no
+# parent holds. Identifiers are escaped like every other plan identifier.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#830: the pre-check SQL counts duplicates, NULL keys, failing checks and orphans" begin
+    dups(col) = "SELECT COALESCE(SUM(n), 0) AS n FROM (SELECT COUNT(*) AS n FROM \"Ev\"\"il\" WHERE $col IS NOT NULL " *
+                "GROUP BY $col HAVING COUNT(*) > 1) AS pormg_duplicates"
+    unique = LossyAlter(:add_unique, "Ev\"il", "c", "INTEGER", "INTEGER")
+    for conn in (PG_LA803, SL_LA803)
+        @test _precheck_sql(conn, unique) == ("SELECT CAST(($(dups("\"c\""))) AS BIGINT) AS n", Any[])
+    end
+    pk = LossyAlter(:add_primary_key, "Ev\"il", "c", "INTEGER", "INTEGER")
+    @test _precheck_sql(PG_LA803, pk) ==
+          ("SELECT CAST(($(dups("\"c\""))) + (SELECT COUNT(*) FROM \"Ev\"\"il\" WHERE \"c\" IS NULL) AS BIGINT) AS n", Any[])
+    @test _precheck_sql(SL_LA803, pk) == _precheck_sql(SL_LA803, unique)
+
+    comp = LossyAlter(:add_composite_unique, "Ev\"il", "uq", "", ""; columns = ["a", "b\"c"])
+    @test _precheck_sql(PG_LA803, comp) ==
+          ("SELECT CAST((SELECT COALESCE(SUM(n), 0) AS n FROM (SELECT COUNT(*) AS n FROM \"Ev\"\"il\" " *
+           "WHERE \"a\" IS NOT NULL AND \"b\"\"c\" IS NOT NULL GROUP BY \"a\", \"b\"\"c\" HAVING COUNT(*) > 1) " *
+           "AS pormg_duplicates) AS BIGINT) AS n", Any[])
+
+    check = LossyAlter(:add_check, "Ev\"il", "ck", "", ""; condition = "laps >= 0")
+    @test _precheck_sql(SL_LA803, check) == ("SELECT COUNT(*) AS n FROM \"Ev\"\"il\" WHERE NOT (laps >= 0)", Any[])
+
+    fk = LossyAlter(:add_foreign_key, "Ev\"il", "circuitid", "BIGINT", "BIGINT"; references = ("cir\"cuit", "id"))
+    @test _precheck_sql(PG_LA803, fk) ==
+          ("SELECT COUNT(*) AS n FROM \"Ev\"\"il\" AS pormg_child WHERE pormg_child.\"circuitid\" IS NOT NULL " *
+           "AND NOT EXISTS (SELECT 1 FROM \"cir\"\"cuit\" AS pormg_parent " *
+           "WHERE pormg_parent.\"id\" = pormg_child.\"circuitid\")", Any[])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#830): the header carries members, parent and condition — and the condition is
+# trusted only when the plan itself adds that CHECK
+# The CHECK condition is the one value the pre-check interpolates into SQL. The header sits outside
+# what `migrate` executes, so a condition that no plan statement carries is refused as damage.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#830: the header round-trips the new fields, and an unplanned CHECK condition is refused" begin
+    dir = mktempdir()
+    try
+        cond = "laps >= 0 AND name <> 'a\tb'"
+        plan = OrderedDict{Symbol, OrderedDict{String, String}}(
+            :race830 => OrderedDict{String, String}(
+                "Create check constraint: ck" => "ALTER TABLE \"race830\" ADD CONSTRAINT \"ck\" CHECK ($cond);"))
+        findings = [LossyAlter(:add_composite_unique, "race830", "uq", "", ""; columns = ["name", "co,de\t"]),
+                    LossyAlter(:add_foreign_key, "race830", "circuitid", "BIGINT", "BIGINT"; references = ("circuit830", "id")),
+                    LossyAlter(:add_check, "race830", "ck", "", ""; condition = cond)]
+        PormG.Generator.generate_migration_plan("p.jl", plan, dir; lossy_alters = findings)
+        @test _plan_lossy_alters(joinpath(dir, "p.jl")) == findings
+
+        # A condition the plan does not add — here, the same CHECK widened in the header only.
+        text = read(joinpath(dir, "p.jl"), String)
+        write(joinpath(dir, "tampered.jl"), replace(text, "condition=laps >= 0" => "condition=laps >= 0 OR true OR laps >= 0"))
+        err = try _plan_lossy_alters(joinpath(dir, "tampered.jl")); nothing catch e; e end
+        @test err isa InvalidMigrationError
+        @test err !== nothing && occursin("names a condition no statement in the plan adds", sprint(showerror, err))
+
+        # Each kind without the field it counts against is refused, not counted as zero.
+        for (damage, needle) in ((r"\tmember=[^\t]*" => "", "no `member`"),
+                                 (r"\tref_table=[^\t]*" => "", "no `ref_table`"),
+                                 (r"\tcondition=[^\t\n]*" => "", "no `condition`"))
+            write(joinpath(dir, "damaged.jl"), replace(text, damage))
+            err = try _plan_lossy_alters(joinpath(dir, "damaged.jl")); nothing catch e; e end
+            @test err isa InvalidMigrationError
+            @test err !== nothing && occursin(needle, sprint(showerror, err))
+        end
+    finally
+        rm(dir; recursive = true, force = true)
+    end
+end
+
+# A two-table models file for the FK case: the race's `circuitid` points at `Circuit830`, with
+# `db_constraint` as given (`false` declares no constraint at all, so `true` is an `:add`).
+_la830_fk_models(db_constraint) =
+    "module models\nimport PormG.Models\nCircuit830 = Models.Model(\n    id = Models.IDField(),\n" *
+    "    name = Models.CharField(null = true)\n)\nRace803 = Models.Model(\n    id = Models.IDField(),\n" *
+    "    name = Models.CharField(null = true),\n" *
+    "    circuitid = Models.ForeignKey(\"Circuit830\", pk_field = \"id\", null = true, db_constraint = $db_constraint)\n)\nend\n"
+
+# The race table of `_la803_models` with a `constraints = [...]` list.
+_la830_models(constraint; kw...) = replace(_la803_models(; kw...), "\n)\nend" => ",\n    constraints = [$constraint]\n)\nend")
+
+# Refused with `rows` counted, nothing written; returns the error.
+function _la830_refused(key, pool, kind, rows)
+    _la803_quiet(() -> Migrations.makemigrations(key; interactive = false))
+    @test [f.kind for f in _plan_lossy_alters(joinpath(key, "migrations", "pending_migrations.jl"))] == [kind]
+    history = _la803_history(pool)
+    err = try _la803_quiet(() -> Migrations.migrate(key; interactive = false, destructive = true)); nothing catch e; e end
+    @test err isa MigrationPrecheckError
+    @test err !== nothing && only(err.findings).kind === kind && only(err.findings).rows == rows
+    @test _la803_history(pool) == history
+    return err
+end
+_la830_applies(key) = _la803_quiet(() -> Migrations.migrate(key; interactive = false, destructive = true)).outcome === :applied
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#830): SQLite end to end, one case per constraint kind
+# Each starts from rows that violate the new constraint: refused before any write with the offending
+# rows counted (NULLs never count as duplicates), then the same plan applies once the data is fixed.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite #830: unique = true over duplicates is counted and refused, then applies" begin
+    _la803_with_key("la830uq") do key, pool
+        fetch(pool, "INSERT INTO race803 (name, code) VALUES ('Monaco', 'MON'), ('Monte Carlo', 'MON'), " *
+                    "('Spa', 'SPA'), ('Imola', NULL), ('Monza', NULL);")
+        write(joinpath(key, "models.jl"), _la803_models(code = "Models.CharField(null = true, unique = true)"))
+        _la830_refused(key, pool, :add_unique, 2)
+        fetch(pool, "UPDATE race803 SET code = 'MCO' WHERE name = 'Monte Carlo';")
+        @test _la830_applies(key)
+    end
+end
+
+@testset "SQLite #830: a UniqueConstraint over duplicate tuples is counted and refused, then applies" begin
+    _la803_with_key("la830comp") do key, pool
+        fetch(pool, "INSERT INTO race803 (name, code) VALUES ('Monaco', 'MON'), ('Monaco', 'MON'), " *
+                    "('Monaco', NULL), ('Monaco', NULL);")
+        write(joinpath(key, "models.jl"), _la830_models("Models.UniqueConstraint(fields = (\"name\", \"code\"))"))
+        err = _la830_refused(key, pool, :add_composite_unique, 2)
+        @test err !== nothing && only(err.findings).columns == ("name", "code")
+        fetch(pool, "DELETE FROM race803 WHERE id = (SELECT MAX(id) FROM race803 WHERE code = 'MON');")
+        @test _la830_applies(key)
+    end
+end
+
+@testset "SQLite #830: a CheckConstraint some rows fail is counted and refused, then applies" begin
+    _la803_with_key("la830ck") do key, pool
+        fetch(pool, "INSERT INTO race803 (name, laps) VALUES ('Monaco', 78), ('Spa', -1), ('Monza', NULL);")
+        write(joinpath(key, "models.jl"),
+              _la830_models("Models.CheckConstraint(condition = \"laps >= 0\", name = \"race803_laps_ck\")"))
+        _la830_refused(key, pool, :add_check, 1)   # NULL passes a CHECK, so it is not counted
+        fetch(pool, "UPDATE race803 SET laps = 1 WHERE laps < 0;")
+        @test _la830_applies(key)
+    end
+end
+
+@testset "SQLite #830: a CHECK naming a column the same plan adds is not counted, and applies" begin
+    _la803_with_key("la830cknew") do key, pool
+        fetch(pool, "INSERT INTO race803 (name, laps) VALUES ('Monaco', 78);")
+        models = replace(_la830_models("Models.CheckConstraint(condition = \"grid >= 0\", name = \"race803_grid_ck\")"),
+                         "\n    constraints" => "\n    grid = Models.IntegerField(null = true),\n    constraints")
+        write(joinpath(key, "models.jl"), models)
+        _la803_quiet(() -> Migrations.makemigrations(key; interactive = false))
+        @test isempty(_plan_lossy_alters(joinpath(key, "migrations", "pending_migrations.jl")))
+        @test _la830_applies(key)
+    end
+end
+
+@testset "SQLite #830: a tampered CHECK condition in the header is refused by dry_run and migrate" begin
+    _la803_with_key("la830tamper") do key, pool
+        write(joinpath(key, "models.jl"),
+              _la830_models("Models.CheckConstraint(condition = \"laps >= 0\", name = \"race803_laps_ck\")"))
+        _la803_quiet(() -> Migrations.makemigrations(key; interactive = false))
+        pending = joinpath(key, "migrations", "pending_migrations.jl")
+        write(pending, replace(read(pending, String), "condition=laps >= 0" => "condition=1 = 1"))
+        @test (try Migrations.dry_run(key); nothing catch e; e end) isa InvalidMigrationError
+        @test (try _la803_quiet(() -> Migrations.migrate(key; interactive = false, destructive = true)); nothing catch e; e end) isa InvalidMigrationError
+    end
+end
+
+@testset "SQLite #830: a foreign key added over orphan rows is counted and refused, then applies" begin
+    _la803_with_key("la830fk"; v1 = _la830_fk_models(false)) do key, pool
+        fetch(pool, "INSERT INTO circuit830 (name) VALUES ('Monaco');")
+        fetch(pool, "INSERT INTO race803 (name, circuitid) VALUES ('Monaco GP', 1), ('Ghost GP', 99), ('TBA', NULL);")
+        write(joinpath(key, "models.jl"), _la830_fk_models(true))
+        err = _la830_refused(key, pool, :add_foreign_key, 1)   # NULL has no parent to miss
+        @test err !== nothing && only(err.findings).references == ("circuit830", "id")
+        fetch(pool, "UPDATE race803 SET circuitid = NULL WHERE circuitid = 99;")
+        @test _la830_applies(key)
+    end
+end
+
+# =============================================================================
+# #828: PostgreSQL retypes with no automatic cast get a USING
+# Text into a number, boolean, date, timestamp, UUID or JSON, and boolean ↔ a number, have no
+# assignment cast, so a bare `ALTER COLUMN … TYPE` failed on every table, even an empty one. #803
+# refused them up front; the renderer now writes the `USING`, and the classifier turns each refusal
+# into what the cast can actually do to the rows: text that does not parse fails (`:text_cast`,
+# counted), a number becomes `true`/`false` (`:to_boolean`, an opt-in), a boolean becomes 1/0 (nothing).
+# =============================================================================
+
+const _LA828_TEXT_TARGETS = (Models.IntegerField(), Models.BigIntegerField(),
+                             Models.FloatField(), Models.DecimalField(max_digits = 8, decimal_places = 2),
+                             Models.BooleanField(), Models.DateField(), Models.DateTimeField(),
+                             Models.UUIDField(), Models.JSONField())
+const _LA828_NUMBERS = (Models.IntegerField(), Models.BigIntegerField(), Models.FloatField(),
+                        Models.DecimalField(max_digits = 8, decimal_places = 2))
+
+# The ALTER the PostgreSQL planner writes for one live → declared change of column `c` on table `t`.
+function _la828_alter(declared, live)
+    settings = Configuration.Settings()
+    settings.change_db = true
+    live_model = Models.Model("t828"; id = Models.IDField(), c = live)
+    declared_model = Models.Model("t828"; id = Models.IDField(), c = declared)
+    schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+        :t828 => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared_model, :exist => false))
+    plan = Migrations.get_migration_plan(PormGModel[live_model], schema, PG_LA803, settings; interactive = false)
+    return plan[:t828]["Alter field: c"]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#828): every castless pair is rendered with its USING
+# The type in the `USING` is the one the `TYPE` clause names, so the two cannot disagree. A pair
+# PostgreSQL casts by itself (integer → text, integer → bigint) is rendered exactly as before.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#828: every castless pair is rendered with a USING, and other retypes are unchanged" begin
+    # `alter_field`'s DecimalField branch spells its own `DECIMAL(p, s)`; every other one renders the type.
+    type_sql(f) = f isa Models.sDecimalField ? "DECIMAL($(f.max_digits), $(f.decimal_places))" :
+                                               Dialect._get_column_type(f, PG_LA803)
+    for target in _LA828_TEXT_TARGETS, live in (Models.CharField(max_length = 20), Models.TextField())
+        @test _la828_alter(target, live) ==
+              "ALTER TABLE \"t828\" ALTER COLUMN \"c\" TYPE $(type_sql(target)) USING CAST(\"c\" AS $(type_sql(target)));"
+    end
+    for n in _LA828_NUMBERS
+        @test _la828_alter(n, Models.BooleanField()) ==
+              "ALTER TABLE \"t828\" ALTER COLUMN \"c\" TYPE $(type_sql(n)) USING CAST(CAST(\"c\" AS integer) AS $(type_sql(n)));"
+        @test _la828_alter(Models.BooleanField(), n) ==
+              "ALTER TABLE \"t828\" ALTER COLUMN \"c\" TYPE $(type_sql(Models.BooleanField())) USING (\"c\" <> 0);"
+    end
+    # No USING where PostgreSQL has its own cast.
+    @test _la828_alter(Models.TextField(), Models.IntegerField()) ==
+          "ALTER TABLE \"t828\" ALTER COLUMN \"c\" TYPE $(type_sql(Models.TextField()));"
+    @test _la828_alter(Models.BigIntegerField(), Models.IntegerField()) ==
+          "ALTER TABLE \"t828\" ALTER COLUMN \"c\" TYPE $(type_sql(Models.BigIntegerField()));"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#828): the classifier no longer refuses a pair that has a USING
+# `_pg_no_implicit_cast` still names every castless pair; the renderer now covers all of them, so
+# none is `:no_implicit_cast` any more. The kind stays for a plan written before #828, whose SQL has
+# no USING — `migrate` still refuses that header.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#828: text is counted, a number into a boolean needs the opt-in, a boolean into a number is free" begin
+    for target in _LA828_TEXT_TARGETS
+        @test _la803_kinds(target, Models.CharField(), PG_LA803) == [:text_cast]
+    end
+    for n in _LA828_NUMBERS
+        @test isempty(_la803_kinds(n, Models.BooleanField(), PG_LA803))
+        @test _la803_kinds(Models.BooleanField(), n, PG_LA803) == [:to_boolean]
+    end
+    @test lossy_alter_class(LossyAlter(:to_boolean, "t", "c", "a", "b")) === :silent
+    # A pre-#828 plan's header is still refused, whatever the opt-in.
+    @test Migrations._failing_alters([LossyAlter(:no_implicit_cast, "t", "c", "text", "integer")]) ==
+          [LossyAlter(:no_implicit_cast, "t", "c", "text", "integer")]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#828): the text_cast count — pg_input_is_valid on 16+, the input grammar below it
+# On 16+ the server's own parser answers, typmod included, so an overflow counts as a failing value.
+# Before 16 the integer, numeric, float, boolean and UUID grammars are matched as anchored regexes
+# (with the range / precision check the parser would apply), and a date, timestamp or JSON value
+# cannot be verified at all, so every non-NULL one counts.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#828: the text_cast count asks the server's parser on 16+, and the input grammar below it" begin
+    f(new) = LossyAlter(:text_cast, "Ev\"il", "c", "VARCHAR(20)", new)
+    base = "SELECT COUNT(*) AS n FROM \"Ev\"\"il\" WHERE \"c\" IS NOT NULL AND "
+    @test _precheck_sql(PG_LA803, f("INTEGER"); server_version = 160004) ==
+          (base * "pg_input_is_valid(CAST(\"c\" AS text), \$1) IS FALSE", Any["INTEGER"])
+    @test _precheck_sql(PG_LA803, f("DECIMAL(8, 2)"); server_version = 170000)[2] == Any["DECIMAL(8, 2)"]
+
+    # PostgreSQL 15: an integer is its grammar plus the width's range.
+    sql, params = _precheck_sql(PG_LA803, f("SMALLINT"); server_version = 150008)
+    @test sql == base * "CASE WHEN CAST(\"c\" AS text) ~ \$1 THEN CAST(CAST(\"c\" AS text) AS numeric) " *
+                        "NOT BETWEEN \$2::numeric AND \$3::numeric ELSE true END"
+    @test params == Any[Migrations._TEXT_CAST_RE.int, -32768, 32767]
+    # A bounded numeric checks its precision after rounding to its scale, like the parser.
+    sql, params = _precheck_sql(PG_LA803, f("DECIMAL(8, 2)"); server_version = 150008)
+    @test occursin("abs(round(CAST(CAST(\"c\" AS text) AS numeric), \$2::integer)) >= power(10::numeric, \$3::integer)", sql)
+    @test params == Any[Migrations._TEXT_CAST_RE.numeric, 2, 6, Migrations._TEXT_CAST_RE.nan]
+    @test occursin("CAST(\"c\" AS text) !~* \$4 AND", sql)   # the NaN test is bound, not a literal
+    for (type, re) in (("DOUBLE PRECISION", :float), ("BOOLEAN", :bool), ("UUID", :uuid))
+        @test _precheck_sql(PG_LA803, f(type); server_version = 110000) ==
+              (base * "CAST(\"c\" AS text) !~* \$1", Any[getfield(Migrations._TEXT_CAST_RE, re)])
+    end
+    for type in ("DATE", "TIMESTAMP WITH TIME ZONE", "JSONB")
+        @test _precheck_sql(PG_LA803, f(type); server_version = 150008) == (base * "true", Any[])
+    end
+
+    # The regexes accept what the input functions accept, and refuse their neighbours.
+    ok(re, v) = occursin(Regex(getfield(Migrations._TEXT_CAST_RE, re), "i"), v)
+    @test all(v -> ok(:int, v), (" 42 ", "-7", "+0"))
+    @test !any(v -> ok(:int, v), ("4.2", "x", "", "1e3"))
+    @test all(v -> ok(:numeric, v), ("1.5", ".5", "-2e3", "NaN", " 7 "))
+    @test !any(v -> ok(:numeric, v), ("1.2.3", "abc", "Infinity"))
+    @test all(v -> ok(:float, v), ("1.5", "-Infinity", "inf", "NaN", "1e-9"))
+    @test all(v -> ok(:bool, v), ("t", "TRUE", " yes ", "of", "0", "On"))
+    @test !any(v -> ok(:bool, v), ("o", "maybe", "2"))
+    @test all(v -> ok(:uuid, v), ("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "{a0eebc999c0b4ef8bb6d6bb9bd380a11}",
+                                 "a0ee-bc99-9c0b-4ef8-bb6d-6bb9-bd38-0a11"))
+    @test !any(v -> ok(:uuid, v), ("a0eebc99", "g0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#828, review): a USING retype of a column with a DEFAULT drops it first
+# The `USING` converts values, not the default; PostgreSQL converts the default with an assignment
+# cast, and the castless pairs have none — so `TYPE … USING` failed on every table while the old
+# default was still there. The sequence is DROP DEFAULT → TYPE … USING → SET DEFAULT <declared>.
+# `0 == false` in Julia, so an integer default of 0 moving to a boolean default of false is not a
+# `:default` delta; the declared default must still be put back.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#828 review: a USING retype drops the old default first and restores the declared one" begin
+    drop = "ALTER TABLE \"t828\" ALTER COLUMN \"c\" DROP DEFAULT;"
+    steps(sql) = [strip(l) for l in split(sql, '\n') if !isempty(strip(l))]
+
+    s = steps(_la828_alter(Models.IntegerField(default = 0), Models.CharField(max_length = 5, default = "0")))
+    @test s[1] == drop
+    @test startswith(s[2], "ALTER TABLE \"t828\" ALTER COLUMN \"c\" TYPE ") && occursin(" USING CAST(\"c\" AS ", s[2])
+    @test s[end] == "ALTER TABLE \"t828\" ALTER COLUMN \"c\" SET DEFAULT 0;"
+
+    s = steps(_la828_alter(Models.BooleanField(default = false), Models.IntegerField(default = 0)))
+    @test s[1] == drop && occursin("USING (\"c\" <> 0);", s[2])
+    @test s[end] == "ALTER TABLE \"t828\" ALTER COLUMN \"c\" SET DEFAULT FALSE;"
+
+    # No declared default: the drop is the whole story — one DROP, not two.
+    s = steps(_la828_alter(Models.IntegerField(), Models.BooleanField(default = true)))
+    @test count(==(drop), s) == 1 && s[1] == drop
+
+    # No old default: nothing to drop.
+    @test !occursin("DROP DEFAULT", _la828_alter(Models.IntegerField(default = 0), Models.CharField(max_length = 5)))
+end
+
+@testset "#829 review: an uncompilable added column is not classified" begin
+    spec = Migrations._degraded_spec(Models.IntegerField(), PG_LA803, "<uncompilable:new>"; name = "grid")
+    @test isempty(Migrations._lossy_add_column(spec, PG_LA803; table = "t"))
+end
+
+@testset "#828 review: the float grammar takes a signed NaN" begin
+    ok(v) = occursin(Regex(Migrations._TEXT_CAST_RE.float, "i"), v)
+    @test ok("-nan") && ok("+NaN") && ok("\tnan ")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#828, delta review): an undeclared database default dropped by a USING retype
+# The retype must drop the old default to run. A live expression default the model does not declare
+# is never part of the delta, so nothing sets it back: future inserts lose it. That is recorded as a
+# `:silent` finding, so it takes the opt-in; declaring it as a `db_default` restores it instead.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#828 review: a USING retype that would silently drop an undeclared expression default is a finding" begin
+    M = Models
+    @test _la803_kinds(M.IntegerField(), M.CharField(max_length = 5, db_default = (postgres = "'0'",)), PG_LA803) ==
+          [:text_cast, :drop_default]
+    @test lossy_alter_class(LossyAlter(:drop_default, "t", "c", "a", "b")) === :silent
+    # Declared on the new side: it is set back after the retype, so nothing is lost.
+    @test _la803_kinds(M.IntegerField(db_default = (postgres = "0",)), M.CharField(max_length = 5, db_default = (postgres = "'0'",)), PG_LA803) ==
+          [:text_cast]
+    # A literal default is a `:default` delta like any other, dropped by the plan on purpose.
+    @test _la803_kinds(M.IntegerField(), M.CharField(max_length = 5, default = "0"), PG_LA803) == [:text_cast]
+    # No USING, no forced drop.
+    @test isempty(_la803_kinds(M.TextField(), M.IntegerField(db_default = (postgres = "0",)), PG_LA803))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#830, security review): the CHECK count runs only a condition the models declare
+# The plan is data (#710): `dry_run` never executes its statements. A header condition rewritten
+# together with the plan's own CHECK statement passes `_refuse_unplanned_conditions`, so that check
+# cannot be what decides which SQL the count runs. The models file is: a condition it does not
+# declare is left uncounted, and the payload — here a query that would raise if it ever ran — never
+# reaches the database.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite #830: a CHECK condition the models do not declare is never run by dry_run" begin
+    _la803_with_key("la830anchor") do key, pool
+        fetch(pool, "INSERT INTO race803 (name, laps) VALUES ('Spa', -1);")
+        write(joinpath(key, "models.jl"),
+              _la830_models("Models.CheckConstraint(condition = \"laps >= 0\", name = \"race803_laps_ck\")"))
+        _la803_quiet(() -> Migrations.makemigrations(key; interactive = false))
+        pending = joinpath(key, "migrations", "pending_migrations.jl")
+        # Declared: counted (the -1 row).
+        @test only(Migrations.dry_run(key).lossy_alters).rows == 1
+        # Header and statement rewritten together: the plan-text guard is satisfied, the models are not.
+        payload = "laps >= (SELECT COUNT(*) FROM pormg_no_such_table_830)"
+        write(pending, replace(read(pending, String), "laps >= 0" => payload))
+        @test only(Migrations._plan_lossy_alters(pending)).condition == payload   # the guard passes
+        r = _la803_quiet(() -> Migrations.dry_run(key))                            # and nothing raises
+        @test only(r.lossy_alters).rows === nothing
+        @test only(r.lossy_alters).condition === nothing
     end
 end

@@ -726,7 +726,12 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
                                   live_composites::Vector{LiveComposite};
                                   column_renames::Dict{String, String} = Dict{String, String}(),
                                   catalog_table::Symbol = model_name,
-                                  targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}())::Set{String}
+                                  targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}(),
+                                  # #830: the table's live columns, and the lossy-ALTER sink a new
+                                  # `UniqueConstraint` records into. `nothing` for a table this plan
+                                  # creates — it is empty, so nothing can fail.
+                                  live_columns = nothing,
+                                  lossy_alters::Vector{LossyAlter} = LossyAlter[])::Set{String}
   declared = declared_composites(model)
   table = String(model_table_name(model))
   declared_cols = _model_physical_columns(model)
@@ -778,6 +783,15 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
     j = matched[i]
     if j === nothing
       push!(creates, d)
+      # #830: a UniqueConstraint the table does not have yet fails on duplicate tuples already there.
+      # Counted under the catalog's column names — a member renamed by this plan under its old one, a
+      # member it adds under none (then there is no finding: the column cannot be counted).
+      if d.unique && !d.auto && live_columns !== nothing
+        live_name(c) = something(findfirst(==(c), column_renames),
+                                 c in live_columns ? c : nothing, Some(nothing))
+        append!(lossy_alters, _lossy_composite_unique(String(catalog_table), d.name,
+                                                      Union{String, Nothing}[live_name(c) for c in d.columns]))
+      end
       continue
     end
     lc = live[j][1]
@@ -1087,6 +1101,26 @@ function _refuse_stale_check_conditions(model::PormGModel, renames::Dict{String,
   return nothing
 end
 
+# #830: can a CHECK this plan adds be counted against the table as it is now? Only when every column
+# its condition names is a live column the plan does not retype. A name the declared model has but
+# the catalog does not is a column this plan adds (or the new side of a rename), which the count
+# cannot see. Names are read with the same token scan `_refuse_stale_check_conditions` uses: a token
+# followed by `(` is a function, bare tokens compare case-insensitively, and a token that names no
+# declared column (a keyword, a literal's neighbour) is ignored.
+function _check_countable(c::Models.CheckConstraint, model::PormGModel, live::LiveTable,
+                          retyped::Set{String})::Bool
+  declared_cols = _model_physical_columns(model)
+  live_cols = keys(live.columns)
+  for t in _sqlite_identifier_tokens(c.condition)
+    t.called && continue
+    for name in declared_cols
+      (t.quoted ? t.name == name : lowercase(t.name) == lowercase(name)) || continue
+      (name in live_cols && !(name in retyped)) || return false
+    end
+  end
+  return true
+end
+
 function _add_new_table(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel;
                         composite_targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}())::Nothing
   _configure_order_dict_migration_plan(migration_plan, model_name, "New model", Dialect.create_table(conn, model))
@@ -1110,10 +1144,20 @@ end
 # One of the four producers of the shared SQLite "Alter table: <model>" key. It registers the BARE
 # rebuild; the indexes, triggers and views around it are rendered once the whole plan is known, by
 # `_finalize_sqlite_rebuilds!` (#729). Until then the table's rename map is still growing (#556).
-function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::String; temporary_default_value::Any = nothing)::Nothing
+function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::String; temporary_default_value::Any = nothing,
+                        # #829: the table as the catalog knows it at plan time (`model_name` except on
+                        # a table rename, #615), and the lossy-ALTER sink the finding goes into.
+                        catalog_table::Union{Symbol, Nothing} = nothing,
+                        lossy_alters::Vector{LossyAlter} = LossyAlter[])::Nothing
   field = model.fields[field_name]
   Models.is_many_to_many_field(field) && return nothing
   name = _hash_field_name(model_name, field_name)
+  # #829: a NOT NULL column with no default cannot be added to a table that has rows, on either
+  # engine. It has no `ColumnDelta`, so `_plan_column_change!` never sees it; the finding is recorded
+  # here, from the declared column's spec, and counted by `migrate` before anything is written.
+  append!(lossy_alters, _lossy_add_column(_spec_or_degraded(field, conn, "<uncompilable:new>"; name = field_name), conn;
+                                          table = String(something(catalog_table, model_name)),
+                                          temporary_default = temporary_default_value))
   # #514: `model` lets `Dialect.add_field` resolve the parent table and render SQLite's `REFERENCES`
   # clause inline. PostgreSQL accepts and ignores it — its key is added separately, by
   # `_add_constrains` on the next line.
@@ -1126,12 +1170,11 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
   # new renderer. One predicate, asked here and in `add_field`, so the two halves cannot disagree.
   #
   # STATED LIMIT, because this repairs less than it looks like: the rebuild is queued AFTER the
-  # `ADD COLUMN`, and SQLite refuses `ADD COLUMN … UNIQUE` and `ADD COLUMN … NOT NULL` without a
-  # default whether or not a foreign key is involved. So of the ineligible shapes only NOT NULL WITH
-  # a default is actually fixed here; a `unique` key (an `sOneToOneField`) and a NOT NULL key with no
-  # default still abort on the first statement — exactly as they did before #514, since that refusal
-  # is about the column, not the constraint. Pre-existing, unchanged, and filed separately rather
-  # than widened into here.
+  # `ADD COLUMN`, and SQLite refuses `ADD COLUMN … UNIQUE` whether or not a foreign key is involved,
+  # so a `unique` key (an `sOneToOneField`) still aborts on the first statement — exactly as it did
+  # before #514, since that refusal is about the column, not the constraint. The other half of this
+  # note, a NOT NULL key with no default, is #829's and is no longer a limit: such a column is added
+  # nullable and tightened by the rebuild below (`needs_sqlite_not_null_rebuild`).
   needs_sqlite_fk_rebuild = conn isa PormGSQLite && field isa Models.sRelationalColumn &&
                             field.db_constraint &&
                             !Dialect.sqlite_add_column_can_inline_fk(field, temporary_default_value)
@@ -1149,6 +1192,13 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
   # a list of statements that may be re-run against a partially-migrated database.
   needs_sqlite_db_default_rebuild = conn isa PormGSQLite &&
                                     Dialect.db_default_sql(field, conn) !== nothing
+  # #829, the fourth reason. SQLite refuses `ADD COLUMN … NOT NULL` with no default on EVERY table,
+  # even an empty one, so `Dialect.add_field` renders such a column nullable (the same predicate) and
+  # the rebuild below declares it NOT NULL. That fails on the copy exactly when PostgreSQL's
+  # `ADD COLUMN` fails — when the table has rows — and the `:add_not_null` finding recorded above
+  # refuses that case before any write.
+  needs_sqlite_not_null_rebuild = conn isa PormGSQLite &&
+                                  Dialect.sqlite_add_column_defers_not_null(field, temporary_default_value)
   if needs_sqlite_db_default_rebuild
     physical = Models.field_db_column(field, field_name)
     expr = Dialect.db_default_sql(field, conn)
@@ -1158,7 +1208,8 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
       """SET "$(Dialect._quote_table_ddl(physical))" = $expr """ *
       """WHERE "$(Dialect._quote_table_ddl(physical))" IS NULL;""")
   end
-  if temporary_default_value !== nothing || needs_sqlite_fk_rebuild || needs_sqlite_db_default_rebuild
+  if temporary_default_value !== nothing || needs_sqlite_fk_rebuild || needs_sqlite_db_default_rebuild ||
+     needs_sqlite_not_null_rebuild
     # SQLite requires a full table recreation to drop the temporary default.
     # Use the same stable "Alter table:" key so multiple datetime fields being
     # added at once don't produce duplicate recreation statements.
@@ -1242,8 +1293,8 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
   end
   return nothing
 end
-function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Symbol; temporary_default_value::Any = nothing)::Nothing
-  _add_new_field(conn, migration_plan, model_name, model, field_name |> string, temporary_default_value=temporary_default_value)
+function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Symbol; kwargs...)::Nothing
+  _add_new_field(conn, migration_plan, model_name, model, field_name |> string; kwargs...)
 end
 
 """
@@ -1379,7 +1430,9 @@ function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
     append!(lossy_alters, _lossy_alters(delta, conn; table = String(catalog_table), column = drop_column))
   end
 
-  # 4. Add the constraint for an `:add` or a `:repoint`.
+  # 4. Add the constraint for an `:add` or a `:repoint` — and #830's finding for it: the rows whose
+  #    value no parent holds fail the new key, on either engine.
+  append!(lossy_alters, _lossy_foreign_key(delta; table = String(catalog_table), column = drop_column))
   _add_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name, new_field, delta,
                                    hashed_name; drop_key_column = drop_column)
   return nothing
@@ -1476,6 +1529,10 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
   check_plan = _diff_checks(current_schema[model_name][:model], live.checks)
   _plan_check_drops!(conn, migration_plan, model_name, current_schema[model_name][:model], check_plan)
 
+  # #830: the columns this plan retypes. A CHECK over one cannot be counted before the plan runs —
+  # its condition would be evaluated against the OLD type.
+  retyped = Set{String}()
+
   # Pass maps to resolve fields so original keys can be used for accessing model.fields
   _resolve_table_fields(conn, model_name, live, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive, index_actions=index_actions, sqlite_rename_map=sqlite_rename_map,
                         lossy_alters=lossy_alters)
@@ -1541,6 +1598,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
       _plan_column_change!(conn, migration_plan, model_name, current_schema[model_name][:model],
                            field_name_stripped, field, delta, name;
                            catalog_table = catalog_table, lossy_alters = lossy_alters)
+      :type in delta && push!(retyped, field_name_stripped)
 
       # Index differences are RECORDED here and emitted after the loop — see `index_actions`.
 
@@ -1575,7 +1633,16 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
                                                 current_schema[model_name][:model], live.composites;
                                                 column_renames = sqlite_rename_map,
                                                 catalog_table = catalog_table,
-                                                targets = composite_targets)
+                                                targets = composite_targets,
+                                                live_columns = Set{String}(keys(live.columns)),
+                                                lossy_alters = lossy_alters)
+
+  # #830: each CHECK this plan adds fails on the rows already there whose condition is false — on
+  # both engines (SQLite adds it through the rebuild `_plan_check_drops!` registered).
+  for c in check_plan.adds
+    append!(lossy_alters, _lossy_check(String(catalog_table), c,
+                                       _check_countable(c, current_schema[model_name][:model], live, retyped)))
+  end
 
   # #742: the table CHECKs, second half — PostgreSQL's renames and adds, behind every column they name.
   _plan_check_adds!(conn, migration_plan, model_name, current_schema[model_name][:model], check_plan;
@@ -1649,7 +1716,8 @@ function _resolve_table_fields(
     if colect_deletion |> isempty
       # `field_name` here is the physical column; pass the real field key so _add_new_field's
       # model.fields lookup resolves (the DDL re-derives the db_column from the field) (#50).
-      _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings))
+      _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings),
+                     catalog_table = catalog_table, lossy_alters = lossy_alters)
     else
       # Only the answer is parsed inside the reader; the rename work below propagates its own
       # failures as themselves (#197).
@@ -1666,7 +1734,8 @@ function _resolve_table_fields(
 
       if old_field_sym === nothing
         # `field_name` is the physical column; pass the real field key (see above) (#50).
-        _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings))
+        _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings),
+                       catalog_table = catalog_table, lossy_alters = lossy_alters)
       else
         old_field_name = old_field_sym |> string
         new_field = current_model.fields[current_fields_map[field_name]]
@@ -2522,7 +2591,7 @@ function _write_pending_plan(connection::Union{PormGPostgres, PormGSQLite}, sett
                           lossy_alters = lossy_alters)
   # #803: named here, at plan time, as well as by `dry_run` and `migrate` — which also count the rows.
   if !isempty(lossy_alters)
-    @warn("The plan changes $(length(lossy_alters)) column(s) in a way that can fail on, or change, existing rows. Run dry_run() to see which, and how many rows each would fail on.",
+    @warn("The plan has $(length(lossy_alters)) change(s) that can fail on, or change, existing rows. Run dry_run() to see which, and how many rows each would fail on.",
           findings = [_lossy_alter_summary(f) for f in lossy_alters])
   end
   @warn("The migration plan has been saved to '$(settings.db_def_folder)/migrations/pending_migrations.jl'. Review the plan before applying the migrations.")

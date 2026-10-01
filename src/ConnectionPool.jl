@@ -2491,8 +2491,11 @@ For transactions, you typically want to keep the connection for multiple queries
 """
 function with_transaction_async(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
   conn = nothing,
-  params::Union{Nothing, AbstractPormGParam} = nothing)
+  params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing)
 
+  # Raw values are normalized as `fetch_async` does it (#218/#721), and before the acquire, so a
+  # value SQLite refuses to bind raises without leasing a connection.
+  params isa ManualParams && (params = _normalize_manual_params(params, pool))
   if conn === nothing
     if pool isa PormGSQLite
       conn = acquire_connection(pool; mode=:write)
@@ -2534,7 +2537,9 @@ transaction.
   `mode = :write`, since a transaction writes.
 - `release_conn`: return the connection to the pool when this call finishes. Leave it `false`
   while the transaction is still open; you receive `conn` back in the return tuple.
-- `params`: bound query parameters. Never interpolate values into `sql`.
+- `params`: bound query parameters. Never interpolate values into `sql`. A plain vector or tuple
+  of values works as it does for `fetch` (#218): write the backend's own placeholders (`\$1, \$2`
+  on PostgreSQL, `?` on SQLite), since PormG translates none, and `nothing` binds as `NULL`.
 
 On error the connection is never orphaned: it is released if this call acquired it, and a
 transaction-ending `ROLLBACK` that itself failed causes a renew-or-discard instead, so a
@@ -2557,7 +2562,7 @@ See also [`acquire_connection`](@ref), `with_transaction_async`, and the
 function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
   conn = nothing,
   release_conn::Bool = false,
-  params::Union{Nothing, AbstractPormGParam} = nothing)
+  params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing)
 
   conn_acquired = false
   rollback_failed = false
@@ -2577,6 +2582,10 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
   end
 
   try
+    # Raw values are normalized as `fetch_async` does it (#218/#721). Inside the `try`, so a value
+    # SQLite refuses to bind still reaches the release below — a caller's `release_conn = true`
+    # included (#846). `_as_database_error` passes that `InvalidValueError` through as it is.
+    params isa ManualParams && (params = _normalize_manual_params(params, pool))
     # Use async execution but await immediately
     task = if pool isa PormGPostgres
       backend_execute_async(pool, conn, sql, params)
@@ -2608,8 +2617,8 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
     end
   end
 end
-with_transaction(pool::PormGSettings, sql::AbstractString; conn = nothing, release_conn::Bool = false, params::Union{Nothing, AbstractPormGParam} = nothing) = with_transaction(pool.connections, sql; conn=conn, release_conn=release_conn, params=params)
-with_transaction_async(pool::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam} = nothing) = with_transaction_async(pool.connections, sql; conn=conn, params=params)
+with_transaction(pool::PormGSettings, sql::AbstractString; conn = nothing, release_conn::Bool = false, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing) = with_transaction(pool.connections, sql; conn=conn, release_conn=release_conn, params=params)
+with_transaction_async(pool::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing) = with_transaction_async(pool.connections, sql; conn=conn, params=params)
 
 """
     with_savepoint(f::Function, settings::PormGSettings, name::String) -> result

@@ -447,7 +447,8 @@ renewed and the statement retried once.
 [`TransactionError`](../errors.md) is raised *before* anything is sent, for three call patterns that
 cannot work:
 
-- `atomic(durable = true)` nested inside an already-open transaction — it must be outermost.
+- `atomic(durable = true)` nested inside an already-open transaction on the same database — it must
+  be outermost. A transaction open on a different database does not count.
 - [`without_foreign_keys`](@ref) nested inside an already-open transaction on the same database —
   it must be outermost too, on both engines.
 - Touching a model bound to one connection while a transaction is open on another. Open the
@@ -522,12 +523,22 @@ Semantics:
   transaction and is undone only if the **outer** transaction later rolls back.
 - A nested block that throws **rolls back to** its savepoint and re-raises, leaving the outer
   transaction unaffected until the exception reaches it.
-- A nested `atomic` targeting a **different** database opens its own independent transaction.
+- A nested `atomic` targeting a **different** database opens its own independent transaction, unless
+  one is already open on that database further out — then it is a savepoint on that one.
+- A raw `fetch` on a **different** database inside the block runs on that database's own
+  connection, in autocommit. It is not part of the open transaction, so it is not rolled back with
+  it. If it must be transactional, open a transaction on that database as well, around this block or
+  inside it: each raw `fetch` then runs in its own database's transaction, however the blocks nest.
+  The two transactions still commit separately, because PormG has no two-phase commit.
+- An ORM call is stricter: a model bound to the outer database, used inside a block on another
+  database, raises `TransactionError`. Wrap that call in `atomic` on the model's own database where
+  it happens — with the outer transaction still open, that block is a savepoint on it.
 
 Savepoints behave **identically on PostgreSQL and SQLite** — both support `SAVEPOINT` /
 `RELEASE SAVEPOINT` / `ROLLBACK TO SAVEPOINT` natively.
 
-Pass `durable = true` to assert a block is the outermost transaction; it raises if one is already active:
+Pass `durable = true` to assert a block is the outermost transaction on its database; it raises if
+one is already active on the **same** database (a transaction on another database does not count):
 
 ```julia
 atomic("db_2"; durable = true) do
@@ -596,7 +607,7 @@ If you need finer control (e.g., manual `SAVEPOINT` or multi-statement blocks), 
 
 - **`with_tx_context(conn_pool, conn::LibPQ.Connection, block)`**: Install a connection in thread-local storage so child tasks inherit it.
 - **`with_transaction(settings, sql, conn=nothing, release_conn=false)`**: Execute raw SQL inside a transaction context.
-- **`get_tx_connection()`**: Check if a transaction context is active and return the connection.
+- **`get_tx_connection()`**: Check whether a transaction context is active, on any database, and return its connection. It does not say which database that is, so never hand it to a query for a different one.
 - **`finalize_transaction_connection!(settings, conn; rollback_error=nothing)`**: Return `conn` to the pool exactly once from a terminal `finally`. Pass `rollback_error=nothing` when the COMMIT succeeded or the cleanup ROLLBACK ran cleanly; pass the caught error when the cleanup ROLLBACK itself threw, and a non-benign one causes the connection to be renewed or discarded instead of released.
 - **`acquire_connection(pool; timeout_seconds=nothing)`** / **`release_connection(pool, conn)`**: Lease a connection and give it back. Every acquire must be paired with a release, from a `finally`. `with_transaction` does this for you when you pass `conn=nothing`. Neither is exported — call them qualified, as below.
 

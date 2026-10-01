@@ -641,8 +641,8 @@ end
   @test occursin("COALESCE(obj_description(con.oid, 'pg_constraint'), '')", pred)
 
   cap = CheckCapturePg742(String[], DataFrame())
-  PormG.get_constraints_check(cap, "result", "grid")
-  PormG.get_constraints_byte_length_check(cap, "result", "thumb")
+  PormG.get_constraints_checks(cap, "result", "grid")
+  PormG.get_constraints_byte_length_checks(cap, "result", "thumb")
   @test all(sql -> occursin(pred, sql), cap.sqls)
 
   h = check_marker("grid >= 0 AND grid <= 40")

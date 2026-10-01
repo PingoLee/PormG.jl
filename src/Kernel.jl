@@ -258,11 +258,11 @@ const config::Dict{String,PormGSettings} = Dict()
 # `Migrations` both extend AND call them, so neither can own the binding.
 function get_constraints_pk end
 function get_constraints_unique end
-function get_constraints_check end
-# BinaryField's byte-length CHECK (#296). A separate generic from `get_constraints_check`, which
+function get_constraints_checks end
+# BinaryField's byte-length CHECK (#296). A separate generic from `get_constraints_checks`, which
 # matches only the `>= 0` clause of a positive-integer field — the two constraints can coexist on
 # one table and must never be mistaken for each other when a column type transitions.
-function get_constraints_byte_length_check end
+function get_constraints_byte_length_checks end
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Error-message helper
@@ -460,8 +460,8 @@ export PormGError,
        TransactionError
 
 # Shared state / generics
-export config, get_constraints_pk, get_constraints_unique, get_constraints_check,
-       get_constraints_byte_length_check
+export config, get_constraints_pk, get_constraints_unique, get_constraints_checks,
+       get_constraints_byte_length_checks
 
 # Paths and file-name constants
 export DBDF_FOLDER_NAME, CONFIG_PATH, ENV_PATH, LOG_PATH, APP_PATH, RESOURCES_PATH,

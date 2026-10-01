@@ -1138,6 +1138,13 @@ const DOCERR_CASES = [
         FieldValidationError,
         () -> FloatField(default = "Inf"),
     ),
+    # #751. `fields.md` → *BinaryField* and the constructor docstring name the type a byte bound
+    # above 1 GiB raises; the boundary itself is pinned in `test_binary_field_bytes.jl`.
+    (
+        "fields.md + src/models/fields.jl — BinaryField docstring: a max_length above 1 GiB raises (#751)",
+        FieldValidationError,
+        () -> PormG.Models.BinaryField(max_length = 1_073_741_825),
+    ),
     # #446. `errors.md` has promised `UnknownFieldError` for "the field name does not exist on the
     # model" since the taxonomy landed, and until now the code raised a bare `KeyError` for every one
     # of these shapes — an untyped error naming an internal dict lookup, for the single most common

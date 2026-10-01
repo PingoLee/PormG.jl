@@ -772,7 +772,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # PostgreSQL: PormG's non-negative CHECK is recognised by its exact clause, reader and dropper alike (#731)
 # The `non_negative_checks` CTE matched `pg_get_constraintdef … LIKE '%>= 0%'` and
-# `get_constraints_check` matched `check_clause ILIKE '%>= 0%'`, so a user's
+# `get_constraints_checks` matched `check_clause ILIKE '%>= 0%'`, so a user's
 # `CHECK (grid >= 0 AND grid <= 30)` — or `CHECK (price >= 0.5)` — read as the one a
 # `PositiveIntegerField` renders, and the planner could propose dropping it. Both now interpolate
 # ONE predicate, `_PG_NON_NEGATIVE_CHECK_MATCH`: the constraint text must equal what PostgreSQL
@@ -798,7 +798,7 @@ fetch(::NonNegSqlMockPg731, sql::String; conn = nothing, params = nothing, ignor
   with_logger(NullLogger()) do                 # an empty dump warns "No tables found"
     Migrations.get_database_schema(NonNegSqlMockPg731())
   end
-  @test Migrations.get_constraints_check(NonNegSqlMockPg731(), "lap_times", "grid") === nothing
+  @test Migrations.get_constraints_checks(NonNegSqlMockPg731(), "lap_times", "grid") == String[]
   (dump_sql, _), (drop_sql, _) = PG731_CALLS
   for sql in (dump_sql, drop_sql)
     @test occursin(_PG_NON_NEGATIVE_CHECK_MATCH, sql)
@@ -809,11 +809,14 @@ fetch(::NonNegSqlMockPg731, sql::String; conn = nothing, params = nothing, ignor
   @test occursin("array_length(con.conkey, 1) = 1", drop_sql)
   @test occursin("n.nspname = ANY(current_schemas(false))", drop_sql)
   @test occursin("ORDER BY array_position(current_schemas(false), n.nspname)", drop_sql)
+  # #752: pinned to the table the unqualified ALTER binds to, not merely the first schema that holds a
+  # matching CHECK — a same-named table earlier on the search path with no CHECK would otherwise lose.
+  @test occursin("con.conrelid = to_regclass(quote_ident(\$1))", drop_sql)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PostgreSQL: the get_constraints_* lookups bind the names they are given (#731)
-# `get_constraints_check`, `get_constraints_pk` and `get_sequence_name` spliced the table and
+# `get_constraints_checks`, `get_constraints_pk` and `get_sequence_name` spliced the table and
 # column into single-quoted literals, so a quote in a name broke the query and the family broke
 # the parameterized-queries-only rule. Every one now sends `$1`/`$2`, and the names travel in
 # `params`. `get_constraints_unique` / `_byte_length_check` / `_fk` / `_index` already did.
@@ -822,18 +825,22 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "PostgreSQL: the get_constraints_* lookups bind table and column, never splice them (#731)" begin
   table, column = "o'connor_laps", "o'grid"   # a quote a spliced literal cannot survive
-  lookups = (Migrations.get_constraints_check, Migrations.get_constraints_pk, Migrations.get_sequence_name,
-             Migrations.get_constraints_unique, Migrations.get_constraints_byte_length_check)
-  for lookup in lookups
+  # Each lookup with its own empty answer: the two CHECK droppers return every name (#752), so theirs
+  # is `String[]`; the single-name lookups still answer `nothing`.
+  lookups = ((Migrations.get_constraints_checks, String[]), (Migrations.get_constraints_pk, nothing),
+             (Migrations.get_sequence_name, nothing), (Migrations.get_constraints_unique, nothing),
+             (Migrations.get_constraints_byte_length_checks, String[]))
+  for (lookup, empty_answer) in lookups
     empty!(PG731_CALLS)
-    @test lookup(NonNegSqlMockPg731(), table, column) === nothing
+    answer = lookup(NonNegSqlMockPg731(), table, column)
+    @test (nameof(lookup), answer isa typeof(empty_answer) && isequal(answer, empty_answer)) == (nameof(lookup), true)
     sql, params = only(PG731_CALLS)
     @test (nameof(lookup), occursin("\$1", sql) && occursin("\$2", sql)) == (nameof(lookup), true)
     @test (nameof(lookup), occursin("o'", sql)) == (nameof(lookup), false)
     @test (nameof(lookup), collect(params)) == (nameof(lookup), [table, column])
   end
   # The two `information_schema` lookups join `kcu` on the TABLE as well — a foreign key elsewhere
-  # may share the constraint's name (#498) — and, like `get_constraints_check`, put the first schema
+  # may share the constraint's name (#498) — and, like `get_constraints_checks`, put the first schema
   # on the search path first, the one an unqualified `ALTER TABLE` binds to.
   for lookup in (Migrations.get_constraints_pk, Migrations.get_constraints_unique)
     empty!(PG731_CALLS)
@@ -848,13 +855,13 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # The planner acts on whatever the reader says about a CHECK — which is why the misread mattered (#731)
 # Hermetic, over the PostgreSQL row decoder. A declared `IntegerField` against a live column the
-# reader marks with PormG's `>= 0` check plans a `DROP CONSTRAINT` of the name `get_constraints_check`
+# reader marks with PormG's `>= 0` check plans a `DROP CONSTRAINT` of the name `get_constraints_checks`
 # returns — the user's range check, before the fix. Against the same column read correctly (no
 # PormG check) it plans nothing. This pins the planner's half of the contract; it passes before the
 # fix too, and the SQL assertions above are the ones that fail on the old reader.
 # ─────────────────────────────────────────────────────────────────────────────
 struct NonNegPlanMockPg731 <: PormG.PormGPostgres end
-PormG.get_constraints_check(::NonNegPlanMockPg731, t::String, f::String) = f == "grid" ? "lap_times_grid_range" : nothing
+PormG.get_constraints_checks(::NonNegPlanMockPg731, t::String, f::String) = f == "grid" ? ["lap_times_grid_range"] : String[]
 fetch(::NonNegPlanMockPg731, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) = DataFrame()
 
 @testset "an IntegerField column converges unless the reader claims PormG's >= 0 check on it (#731)" begin
@@ -895,7 +902,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # PostgreSQL: PormG's byte-length CHECK is recognised by its exact clause, reader and dropper alike (#747)
 # #731's twin, on the other CHECK PormG writes. The `byte_length_checks` CTE matched
-# `LIKE '%octet_length%' AND ~ '<= [0-9]+'` and `get_constraints_byte_length_check` matched the
+# `LIKE '%octet_length%' AND ~ '<= [0-9]+'` and `get_constraints_byte_length_checks` matched the
 # same through `ILIKE`, so a user's `CHECK (octet_length(photo) <= 1048576 AND octet_length(photo)
 # > 0)` on a `BinaryField()` read as `BinaryField(max_length = 1048576)`'s bound, and the planner
 # dropped it. Both now interpolate ONE predicate, `_PG_BYTE_LENGTH_CHECK_MATCH`: the constraint text
@@ -925,7 +932,7 @@ fetch(::ByteLenSqlMockPg747, sql::String; conn = nothing, params = nothing, igno
   with_logger(NullLogger()) do                 # an empty dump warns "No tables found"
     Migrations.get_database_schema(ByteLenSqlMockPg747())
   end
-  @test Migrations.get_constraints_byte_length_check(ByteLenSqlMockPg747(), "drivers", "photo") === nothing
+  @test Migrations.get_constraints_byte_length_checks(ByteLenSqlMockPg747(), "drivers", "photo") == String[]
   (dump_sql, _), (drop_sql, _) = PG747_CALLS
   for sql in (dump_sql, drop_sql)
     @test occursin(_PG_BYTE_LENGTH_CHECK_MATCH, sql)
@@ -933,15 +940,18 @@ fetch(::ByteLenSqlMockPg747, sql::String; conn = nothing, params = nothing, igno
   end
   # The reader takes the bound it reports from the same anchored extraction the match rebuilds with.
   @test occursin("min($(_PG_BYTE_LENGTH_CHECK_BOUND)::bigint) AS byte_limit", dump_sql)
-  # The dropper is scoped like `get_constraints_check`, from the same query: one column, and the
+  # The dropper is scoped like `get_constraints_checks`, from the same query: one column, and the
   # table an unqualified name resolves to — the first schema on the search path that holds it.
   @test occursin("FROM pg_constraint con", drop_sql)
   @test occursin("array_length(con.conkey, 1) = 1", drop_sql)
   @test occursin("n.nspname = ANY(current_schemas(false))", drop_sql)
   @test occursin("ORDER BY array_position(current_schemas(false), n.nspname)", drop_sql)
+  # #752: pinned to the table the unqualified ALTER binds to, not merely the first schema that holds a
+  # matching CHECK — a same-named table earlier on the search path with no CHECK would otherwise lose.
+  @test occursin("con.conrelid = to_regclass(quote_ident(\$1))", drop_sql)
   # The two droppers are the same query but for the predicate — neither one matches the other's CHECK.
   empty!(PG747_CALLS)
-  Migrations.get_constraints_check(ByteLenSqlMockPg747(), "drivers", "photo")
+  Migrations.get_constraints_checks(ByteLenSqlMockPg747(), "drivers", "photo")
   nn_sql, _ = only(PG747_CALLS)
   @test replace(nn_sql, _PG_NON_NEGATIVE_CHECK_MATCH => _PG_BYTE_LENGTH_CHECK_MATCH) == drop_sql
   @test !occursin(_PG_BYTE_LENGTH_CHECK_MATCH, nn_sql) && !occursin(_PG_NON_NEGATIVE_CHECK_MATCH, drop_sql)
@@ -951,13 +961,13 @@ end
 # The planner drops whatever byte bound the reader claims — which is why the misread mattered (#747)
 # Hermetic, over the PostgreSQL row decoder. A declared `BinaryField()` against a `bytea` column the
 # reader credits with a 1 MiB bound plans a `DROP CONSTRAINT` of the name
-# `get_constraints_byte_length_check` returns — the user's compound check, before the fix. Against
+# `get_constraints_byte_length_checks` returns — the user's compound check, before the fix. Against
 # the same column read correctly (no PormG bound) it plans nothing. This pins the planner's half of
 # the contract; it passes before the fix too, and the SQL assertions above fail on the old reader.
 # ─────────────────────────────────────────────────────────────────────────────
 struct ByteLenPlanMockPg747 <: PormG.PormGPostgres end
-PormG.get_constraints_byte_length_check(::ByteLenPlanMockPg747, t::String, f::String) =
-  f == "photo" ? "drivers_photo_user_bound" : nothing
+PormG.get_constraints_byte_length_checks(::ByteLenPlanMockPg747, t::String, f::String) =
+  f == "photo" ? ["drivers_photo_user_bound"] : String[]
 fetch(::ByteLenPlanMockPg747, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) = DataFrame()
 
 @testset "an unbounded BinaryField column converges unless the reader claims a byte bound on it (#747)" begin
@@ -988,4 +998,69 @@ end
     "thumb" BLOB CHECK (length("thumb") <= 4))""")
   @test !haskey(checks, "photo")
   @test checks["thumb"] == CheckKind[ByteLengthCheck(4)]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Both readers report the TIGHTEST of several PormG-form byte bounds (#752)
+# PostgreSQL's reader collapses a doubled column with `min()`; SQLite's kept the first bound in DDL
+# order, so `<= 8` then `<= 4` read as 8 — no plan against a declared 8 while the 4 rejected values
+# the model allows. Now both read 4, the bound enforced, and a declared 8 plans the (rebuild) change.
+# Mutation gate: put `findfirst` back in `_reader_checks` and the read-back and delta assertions fail.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: a column with two PormG-form byte bounds reads as the tightest one (#752)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "bytes752.sqlite"); pool_size = 1)
+    try
+      # The looser bound comes first in the DDL, so the old first-match rule read it.
+      fetch(pool, """CREATE TABLE "drivers" ("id" INTEGER PRIMARY KEY AUTOINCREMENT,
+                                           "photo" BLOB CHECK (length("photo") <= 8) CHECK (length("photo") <= 4));""")
+      col = only(read_live_schema(pool; include_table = ["drivers"])).columns["photo"]
+      @test col.checks == CheckKind[ByteLengthCheck(4)]
+      # A declared 8 is a change (the rebuild leaves one CHECK); a declared 4 is not.
+      @test :checks in column_delta(Models.BinaryField(max_length = 8, null = true), col, pool; name = "photo").changed
+      @test isempty(column_delta(Models.BinaryField(max_length = 4, null = true), col, pool; name = "photo").changed)
+    finally
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A byte bound above 1 GiB is left unread, on both engines (#751)
+# No `BinaryField` can declare one (the constructor caps `max_length` at 1 GiB), so it is a fact no
+# declaration can match — carried, it would be a permanent delta, and `field_from_spec` would build a
+# field the constructor refuses. PostgreSQL never read one above 2147483647 (`'N'::bigint`); SQLite
+# read it fine. Both now leave it to the database. A bound at the cap still reads.
+# Mutation gate: drop the cap filter from `_reader_checks` and the SQLite and PostgreSQL columns read
+# a bound, and `model_from_live` raises FieldValidationError.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "A byte bound above 1 GiB is left unread, on both engines (#751)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "bytes751.sqlite"); pool_size = 1)
+    try
+      fetch(pool, """CREATE TABLE "drivers" ("id" INTEGER PRIMARY KEY AUTOINCREMENT,
+                                           "big" BLOB CHECK (length("big") <= 3000000000),
+                                           "cap" BLOB CHECK (length("cap") <= 1073741824));""")
+      table = only(read_live_schema(pool; include_table = ["drivers"]))
+      @test isempty(table.columns["big"].checks)
+      @test table.columns["cap"].checks == CheckKind[ByteLengthCheck(1_073_741_824)]
+      # The column reads back as an unbounded field rather than one the constructor refuses.
+      m = model_from_live(table, pool)
+      @test m.fields["big"].max_length === nothing
+      @test m.fields["cap"].max_length == 1_073_741_824
+      # And an unbounded declaration converges against it.
+      @test isempty(column_delta(Models.BinaryField(null = true), table.columns["big"], pool; name = "big").changed)
+    finally
+      close_pool!(pool)
+    end
+  end
+
+  # PostgreSQL: the digit form between the cap and 2147483647 reaches the decoder; it is left unread too.
+  live = _pg_live_table(_row522(table_name = "drivers",
+    columns = [_col522("id", "bigint"; notnull = true, identity = "d"),
+               _col522("big", "bytea"; notnull = true, byte_limit = 1_500_000_000),
+               _col522("cap", "bytea"; notnull = true, byte_limit = 1_073_741_824)],
+    primary_keys = ["id"]))
+  @test isempty(live.columns["big"].checks)
+  @test live.columns["cap"].checks == CheckKind[ByteLengthCheck(1_073_741_824)]
 end

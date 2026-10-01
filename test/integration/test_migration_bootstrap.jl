@@ -1706,7 +1706,7 @@ end
   # sync with the model as a column's type transitions in and out of the field:
   #   IntegerField → PositiveSmallIntegerField  adds the CHECK
   #   PositiveSmallIntegerField → IntegerField  drops it
-  # On PostgreSQL the DROP path runs the real get_constraints_check introspection
+  # On PostgreSQL the DROP path runs the real get_constraints_checks introspection
   # against information_schema; on SQLite the CHECK is re-derived on table recreation.
   # MigrationTest and TypesTable must stay in every model file written by the
   # 8a2/8a3 lifecycle phases: the destructive migrate would otherwise DROP them
@@ -1750,7 +1750,7 @@ end
     @test column_has_nonneg_check(pool, "posintcheck", "level")
 
     # Transition back out to IntegerField — the CHECK must be dropped. On PostgreSQL
-    # this exercises the get_constraints_check + DROP CONSTRAINT path end to end.
+    # this exercises the get_constraints_checks + DROP CONSTRAINT path end to end.
     write_edge_models(phase8_models * """
     PosIntCheck = Models.Model(
         id = Models.IDField(),

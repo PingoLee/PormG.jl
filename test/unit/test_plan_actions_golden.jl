@@ -63,8 +63,8 @@ const GSL507 = GoldenMockSl507()
 # The four constraint-name lookups `alter_field`'s DROP branches ask the catalog for.
 PormG.get_constraints_pk(::GoldenMockPg507, t::String, f::String) = f == "col" ? "child_t_pkey" : nothing
 PormG.get_constraints_unique(::GoldenMockPg507, t::String, f::String) = f == "col" ? "child_t_col_key" : nothing
-PormG.get_constraints_check(::GoldenMockPg507, t::String, f::String) = f == "col" ? "child_t_col_check" : nothing
-PormG.get_constraints_byte_length_check(::GoldenMockPg507, t::String, f::String) = f == "col" ? "child_t_col_bytes" : nothing
+PormG.get_constraints_checks(::GoldenMockPg507, t::String, f::String) = f == "col" ? ["child_t_col_check"] : String[]
+PormG.get_constraints_byte_length_checks(::GoldenMockPg507, t::String, f::String) = f == "col" ? ["child_t_col_bytes"] : String[]
 PormG.backend_sqlite_version(::GoldenMockSl507) = 3045000
 
 const GOLDEN_LIVE_FK_CONSTRAINT = "child_t_col_0ld00001_fk"

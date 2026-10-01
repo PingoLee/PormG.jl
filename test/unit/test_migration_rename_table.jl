@@ -59,9 +59,9 @@ const RT_INDEX = Dict(("old_t", "a") => "old_t_a_live_idx", ("old_t", "c") => "o
 PormG.get_constraints_pk(::RenameTableMockPg615, t::String, f::String) = (push!(RT_ASKED, t); nothing)
 PormG.get_constraints_unique(::RenameTableMockPg615, t::String, f::String) =
     (push!(RT_ASKED, t); get(RT_UNIQUE, (t, f), nothing))
-PormG.get_constraints_check(::RenameTableMockPg615, t::String, f::String) = (push!(RT_ASKED, t); nothing)
-PormG.get_constraints_byte_length_check(::RenameTableMockPg615, t::String, f::String) =
-    (push!(RT_ASKED, t); nothing)
+PormG.get_constraints_checks(::RenameTableMockPg615, t::String, f::String) = (push!(RT_ASKED, t); String[])
+PormG.get_constraints_byte_length_checks(::RenameTableMockPg615, t::String, f::String) =
+    (push!(RT_ASKED, t); String[])
 
 # The parameterized lookups (`get_constraints_fk`, `get_constraints_index`) all bind the table
 # first. The 3-positional-arg `fetch(conn, sql, params)` forwards to this keyword form.

@@ -838,7 +838,9 @@ An `AbstractString` is also accepted on write and stored as its **UTF-8 code uni
 **Key Parameters**:
 - `max_length::Union{Int, Nothing} = nothing`: maximum payload size in **bytes**, not characters.
   Enforced before the query is built *and* by a `CHECK` constraint in the schema
-  (`octet_length` on PostgreSQL, `length` on SQLite). `nothing` means unbounded.
+  (`octet_length` on PostgreSQL, `length` on SQLite). `nothing` means unbounded. The largest
+  accepted bound is `1073741824` (1 GiB, PostgreSQL's limit for one `bytea` value); a larger one
+  raises `FieldValidationError`, since it would constrain nothing.
 - `default::Union{Vector{UInt8}, Nothing} = nothing`: rendered into the DDL as a byte literal
   (`'\xdeadbeef'::bytea` / `X'deadbeef'`). Must be a `Vector{UInt8}` — a `String` raises
   `FieldValidationError` rather than guessing between its code units and a decoded encoding.

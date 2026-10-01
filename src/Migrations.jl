@@ -45,7 +45,7 @@ import PormG.Configuration: MissingConfigurationError
 
 import PormG: Models, Migration, Dialect
 import PormG.Models: format_model_name, model_table_name, model_is_managed, fk_target_table
-import PormG: connection, config, get_constraints_pk, get_constraints_unique, get_constraints_check, get_constraints_byte_length_check
+import PormG: connection, config, get_constraints_pk, get_constraints_unique, get_constraints_checks, get_constraints_byte_length_checks
 import PormG: backend_sqlite_version  # SQLite library-version probe (driver body in the weakdep extension)
 import PormG: PormGModel, PormGField, PormGSettings, PormGBackend, PormGPostgres, PormGSQLite
 # The canonical column IR (#507). The NOUNS live in `Kernel` (`src/column_ir.jl`) because `Dialect`
@@ -110,7 +110,7 @@ export get_migration_plan
 #   get_constraints_fk, get_constraints_index, get_sequence_name,
 #   read_live_schema, LiveTable, live_table, model_from_live, field_from_spec  (#522)
 #
-# get_constraints_pk / get_constraints_unique / get_constraints_check are NOT re-exported here
+# get_constraints_pk / get_constraints_unique / get_constraints_checks are NOT re-exported here
 # either — they are Kernel generics (Kernel.jl) that Kernel already exports, so `PormG.get_*`
 # keeps resolving; re-exporting them from Migrations only duplicated the name.
 

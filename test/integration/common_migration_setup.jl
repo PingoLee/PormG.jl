@@ -373,7 +373,7 @@ end
 function column_has_nonneg_check(pool::PormG.PormGPostgres, table_name::String, col_name::String)::Bool
   # Reuse the production introspection path so the test exercises the same query the
   # migration engine uses to locate the constraint for dropping it.
-  return PormG.get_constraints_check(pool, table_name, col_name) !== nothing
+  return !isempty(PormG.get_constraints_checks(pool, table_name, col_name))
 end
 
 """

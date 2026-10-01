@@ -182,6 +182,6 @@ end
     # The two siblings that were already correct — pinned so the contract stays uniform
     # across the family rather than being fixed for two of four.
     @test PormG.Migrations.get_constraints_pk(conn, "circuits", "alt") === nothing
-    @test PormG.Migrations.get_constraints_check(conn, "circuits", "alt") === nothing
+    @test PormG.Migrations.get_constraints_checks(conn, "circuits", "alt") == String[]
   end
 end

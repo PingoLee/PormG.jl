@@ -18,7 +18,7 @@ struct MockSLCheck <: PormG.PormGSQLite end
 # A second Postgres mock whose introspection returns a known constraint name, so the
 # DROP-on-transition path can be exercised deterministically without querying a database.
 struct MockPGCheckNamed <: PormG.PormGPostgres end
-PormG.get_constraints_check(::MockPGCheckNamed, table_name::String, field_name::String) = "circuits_alt_check"
+PormG.get_constraints_checks(::MockPGCheckNamed, table_name::String, field_name::String) = ["circuits_alt_check"]
 
 # #507 phase 2: `alter_field` takes a `ColumnDelta` rather than a `Vector{Symbol}` of
 # field-attribute names. `_psi_delta` compiles both fields and names the facets under test, which is
@@ -217,4 +217,24 @@ end
     # A plain INTEGER column must keep mapping to IntegerField.
     @test model.fields["lap"] isa Models.sIntegerField
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL ALTER: leaving a positive integer drops EVERY PormG-form `>= 0` CHECK (#752)
+# Two identical `CHECK ((alt >= 0))` rows are one fact, but the dropper used to name only the first,
+# so a transition to `IntegerField` left the column refusing negatives and took one run per CHECK.
+# Mutation gate: push only `first(...)` of the dropper's answer in `alter_field` and the count fails.
+# ─────────────────────────────────────────────────────────────────────────────
+struct MockPGCheckTwice752 <: PormG.PormGPostgres end
+PormG.get_constraints_checks(::MockPGCheckTwice752, table_name::String, field_name::String) =
+  ["circuits_alt_check", "circuits_alt_check1"]
+
+@testset "PostgreSQL ALTER: leaving a positive integer drops every PormG-form >= 0 CHECK (#752)" begin
+  new_field = Models.IntegerField()
+  old_field = Models.PositiveIntegerField()
+  sql = PormG.Dialect.alter_field(MockPGCheckTwice752(), "circuits", "alt", new_field,
+                                  _psi_delta(MockPGCheckTwice752(), new_field, old_field, [:checks]))
+  @test occursin("DROP CONSTRAINT \"circuits_alt_check\";", sql)
+  @test occursin("DROP CONSTRAINT \"circuits_alt_check1\";", sql)
+  @test count("DROP CONSTRAINT", sql) == 2
 end

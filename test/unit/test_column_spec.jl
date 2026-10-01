@@ -59,8 +59,8 @@ const SL507 = MockSlSpec507()
 # without a database — returning a name exercises the DROP branches rather than skipping them.
 PormG.get_constraints_pk(::MockPgSpec507, table_name::String, field_name::String) = "t_pkey"
 PormG.get_constraints_unique(::MockPgSpec507, table_name::String, field_name::String) = "t_c_key"
-PormG.get_constraints_check(::MockPgSpec507, table_name::String, field_name::String) = "t_c_check"
-PormG.get_constraints_byte_length_check(::MockPgSpec507, table_name::String, field_name::String) = "t_c_bytes"
+PormG.get_constraints_checks(::MockPgSpec507, table_name::String, field_name::String) = ["t_c_check"]
+PormG.get_constraints_byte_length_checks(::MockPgSpec507, table_name::String, field_name::String) = ["t_c_bytes"]
 
 # A referential action whose RENDERING explodes, for the fail-safe testset.
 #

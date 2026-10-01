@@ -34,6 +34,15 @@ mock.
 > was unreachable through PormG itself (its only caller passed the wrong arity and always raised
 > `MethodError`), which is why it is recorded here rather than as its own entry.
 
+> **Amended by #752:** the two CHECK lookups were renamed and now return every matching constraint:
+> `get_constraints_check` → `get_constraints_checks` and `get_constraints_byte_length_check` →
+> `get_constraints_byte_length_checks`, each returning a `Vector{String}` (empty when none) instead
+> of one `String` or `nothing`. A column can carry two CHECKs in PormG's exact form, and a migration
+> that dropped only one never converged. A qualified call or a mock method needs the new name and the
+> vector form: `PormG.get_constraints_checks(::MyMock, t::String, f::String) = String[]`. A mock still
+> defined under an old name fails loudly, raising `UndefVarError` where it is defined. Recorded here
+> rather than as its own entry because no consuming app calls or extends either name (measured: 0 of 3).
+
 `names(PormG)` is unchanged (63), so nothing that only does `using PormG` is affected.
 
 ### How to find the calls to migrate

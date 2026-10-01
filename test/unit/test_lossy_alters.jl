@@ -37,8 +37,8 @@ const SL_LA803 = MockSlLa803()
 # The constraint-name lookups `alter_field` and the planner ask a PostgreSQL catalog for.
 PormG.get_constraints_pk(::MockPgLa803, t::String, f::String) = nothing
 PormG.get_constraints_unique(::MockPgLa803, t::String, f::String) = nothing
-PormG.get_constraints_check(::MockPgLa803, t::String, f::String) = nothing
-PormG.get_constraints_byte_length_check(::MockPgLa803, t::String, f::String) = nothing
+PormG.get_constraints_checks(::MockPgLa803, t::String, f::String) = String[]
+PormG.get_constraints_byte_length_checks(::MockPgLa803, t::String, f::String) = String[]
 
 # The kinds one change yields: `declared` is the models file, `live` the database (the planner's
 # own argument order — new side first).

@@ -1138,7 +1138,10 @@ same whether the filter is written top-level or inside `Q(...)`/`Qor(...)`:
 - a column (`F("grid")`, `Max("grid")`, `Coalesce("code", Value("-"))`) has the column's type;
 - a text function (`Lower`, `Upper`, `Trim`, `Replace`, `Concat`) is text;
 - `Sum`, `Count`, `Avg` and arithmetic on numbers are numbers;
-- `Cast(...)`, or a function given `output_field = ...`, has the type it names.
+- `Cast(...)`, or a function given `output_field = ...`, has the type it names when that is a text,
+  number (`integer`, `int8`, `float8`, `numeric`, …), boolean or date type. For any other type, such
+  as a timestamp, `Coalesce`, `Greatest` and `Least` fall back to their operand's type, and `Cast`
+  and `Case` bind the value as given. `Concat` is checked as text whatever its `output_field`.
 
 A value of the wrong type raises `FilterError`, which names the alias. When PormG cannot tell what
 type an expression returns, for example a `Case` with no `output_field`, it binds the value as

@@ -1364,33 +1364,59 @@ function _case_value_field(v::SQLTypeFunction, field::String, instruct::SQLInstr
   # A declared type, a nested CASE and the aggregates are what the CTE typing already knows how to
   # read; anything else would die on the generic "not a recognized function", which says nothing
   # about the `output_field=` that would fix it.
-  if _declared_type(v, instruct) === nothing && !(v.function_name in _CTE_TYPED_FUNCTIONS)
+  _is_typed_function(v, instruct) ||
     _refuse_case_type(field, "a branch is \e[31m$(v.function_name)\e[0m(…), whose result type PormG does not infer")
-  end
   return _set_field_from_sql_function(v, field, instruct)
 end
+_is_typed_function(v::SQLTypeFunction, instruct::SQLInstruction) =
+  _declared_type(v, instruct) !== nothing || v.function_name in _CTE_TYPED_FUNCTIONS
+_case_value_field(v::FExpression, field::String, instruct::SQLInstruction) =
+  _f_expression_field(v, field, instruct, _refuse_case_type)
+_case_value_field(v, field::String, ::SQLInstruction) =
+  _refuse_case_type(field, "a branch is a $(nameof(typeof(v))), whose type PormG does not infer")
+
 # A bare `F("points")` is that column. Arithmetic keeps a number a number — both sides integral stays
 # an integer (SQL integer arithmetic does, on both engines), otherwise a float — and anything else
 # (`F("date") + Day(1)`) is refused rather than given the column's type, as `_expression_formatter`
 # (build_query.jl) declines to type it too.
-function _case_value_field(v::FExpression, field::String, instruct::SQLInstruction)
+#
+# #823: one rule for a `Case` branch and for an `F` projected at the top of a CTE body, so the refusal
+# is a parameter — `refuse(field, reason)` — and the message names what the caller wrote: a `Case`
+# (`_refuse_case_type`) or the bare expression (`_refuse_projection_type`). The operands receive it
+# too, so a refusal nested inside a top-level `F` never reports itself as a Case.
+function _f_expression_field(v::FExpression, field::String, instruct::SQLInstruction, refuse)
   if v.operation === nothing
-    v.column isa String || _refuse_case_type(field, "a branch is an F(…) over more than one column")
+    v.column isa String || refuse(field, "it is an F(…) over more than one column")
     return _set_field_from_sql_function(v.column, v.column, instruct)
   end
-  left = _f_operand_field(v.field_name, field, instruct)
-  right = _f_operand_field(v.operand, field, instruct)
+  left = _f_operand_field(v.field_name, field, instruct, refuse)
+  right = _f_operand_field(v.operand, field, instruct, refuse)
   if _is_number_field(left) && _is_number_field(right)
     return _is_integral_field(left) && _is_integral_field(right) ? Models.IntegerField() : Models.FloatField()
   end
-  _refuse_case_type(field, "a branch is F(…) arithmetic ($(v.operation)) on a value that is not a number")
+  refuse(field, "it is F(…) arithmetic ($(v.operation)) on a value that is not a number")
 end
-_case_value_field(v, field::String, ::SQLInstruction) =
-  _refuse_case_type(field, "a branch is a $(nameof(typeof(v))), whose type PormG does not infer")
 
-# Inside `F` arithmetic a `String` is a column path, not a text literal.
-_f_operand_field(x::String, ::String, instruct::SQLInstruction) = _set_field_from_sql_function(x, x, instruct)
-_f_operand_field(x, field::String, instruct::SQLInstruction) = _case_value_field(x, field, instruct)
+# Inside `F` arithmetic a `String` is a column path, not a text literal. A number, a window, a joined
+# column and a function the CTE typing knows type as a `Case` branch does; anything else is refused.
+_f_operand_field(x::String, ::String, instruct::SQLInstruction, refuse) = _set_field_from_sql_function(x, x, instruct)
+_f_operand_field(x::Number, field::String, instruct::SQLInstruction, refuse) = _case_value_field(x, field, instruct)
+_f_operand_field(x::SQLText, field::String, instruct::SQLInstruction, refuse) =
+  x.field isa Number ? _case_value_field(x.field, field, instruct) :
+  refuse(field, "an operand is a Value of type $(nameof(typeof(x.field))), which is not a number")
+_f_operand_field(x::FExpression, field::String, instruct::SQLInstruction, refuse) =
+  _f_expression_field(x, field, instruct, refuse)
+_f_operand_field(x::WindowFunction, field::String, instruct::SQLInstruction, refuse) =
+  _set_field_from_sql_function(x, field, instruct)
+_f_operand_field(x::JoinedReference, field::String, instruct::SQLInstruction, refuse) =
+  _set_field_from_sql_function(x, field, instruct)
+function _f_operand_field(x::SQLTypeFunction, field::String, instruct::SQLInstruction, refuse)
+  _is_typed_function(x, instruct) ||
+    refuse(field, "an operand is \e[31m$(x.function_name)\e[0m(…), whose result type PormG does not infer")
+  return _set_field_from_sql_function(x, field, instruct)
+end
+_f_operand_field(x, field::String, ::SQLInstruction, refuse) =
+  refuse(field, "an operand is a $(nameof(typeof(x))), whose type PormG does not infer")
 
 # The functions `_set_field_from_sql_function(::SQLTypeFunction, …)` types without a declared type.
 const _CTE_TYPED_FUNCTIONS = ("CASE", "WHEN", "COUNT", "SUM", "AVG", "MIN", "MAX")
@@ -1438,6 +1464,17 @@ function _refuse_case_type(field::String, reason::String)
     "that type (#812)."))
 end
 
+# #823: the twin of `_refuse_case_type` for an expression projected directly. There is no `Case` to
+# give an `output_field`, so the fix it names is `Cast` — or, for a shape `Cast` does not take
+# (`Subquery`, `Exists`), projecting it in the outer query instead of the body.
+const _CAST_HINT = "Name the type the column holds by wrapping the expression in " *
+                   "\e[32mCast(…, \"integer\")\e[0m (or the type it returns)"
+function _refuse_projection_type(field::String, reason::String; hint::String = _CAST_HINT)
+  throw(QueryBuildError(
+    "The CTE column \e[4m\e[31m$(field)\e[0m cannot be typed: $(reason). $(hint), so a filter on " *
+    "the column binds its value as that type (#823)."))
+end
+
 # The type a function declares — `output_field=` on `Case`/`Coalesce`/`Concat`/`Greatest`/`Least`,
 # `type` on `Cast` — as a field, or `nothing` when it declares none. A declared type outside the
 # families `_sql_type_field` (build_query.jl) recognises is refused rather than dropped: the caller
@@ -1454,8 +1491,8 @@ function _declared_type(func::SQLTypeFunction, instruct::SQLInstruction)
   typed = _sql_type_field(declared)
   typed === nothing && throw(QueryBuildError(
     "A CTE column cannot be typed from the SQL type \e[4m\e[31m$(declared)\e[0m on " *
-    "$(func.function_name)(…). Name one of the text, integer, bigint, float, numeric, boolean or " *
-    "date types instead (#812)."))
+    "$(func.function_name)(…). Name a text, integer, bigint, float, numeric, boolean or date type " *
+    "instead (#812, #823)."))
   if typed isa Models.sDateField && instruct.connection isa PormGSQLite && !(func.function_name in ("CAST", "CASE"))
     throw(QueryBuildError(
       "A CTE column cannot be typed \e[4m\e[31mdate\e[0m by $(func.function_name)(…; output_field = …) " *
@@ -1551,6 +1588,34 @@ function _set_field_from_sql_function(func::String, field::String, instruct::SQL
     throw(UnknownFieldError("Error in _set_field_from_sql_function, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m"))
   end
 end
+# #823 — an `F` projected at the top of a CTE body (`"half" => F("year") / 2`) types as a `Case`
+# branch does. Without this method it reached no arm here and died as a raw MethodError.
+_set_field_from_sql_function(v::FExpression, field::String, instruct::SQLInstruction) =
+  _f_expression_field(v, field, instruct, _refuse_projection_type)
+# #823 — every other shape a body can project (`Subquery`, `Exists`, …) has no type PormG infers, and
+# is refused by name rather than left to a MethodError. `Cast` does not take these, so the hint
+# points at the outer query.
+_set_field_from_sql_function(v, field, ::SQLInstruction) =
+  _refuse_projection_type(string(something(field, "?")),
+                          "it is $(chopsuffix(string(nameof(typeof(v))), "Object"))(…), whose type PormG does not infer";
+                          hint = "Project it in the outer query instead of the CTE body")
+
+# #823 — a `Value(x)` projection. `values` holds the `SQLText` itself, whose `field` is the literal
+# and whose `_as` is `nothing`, so it never reached a `_set_field_from_sql_function` arm. A literal
+# types by its Julia type, as a `Case` branch does — but only the types `_infer_parameter_sql_type`
+# gives a PostgreSQL bind cast (`Integer`, `Bool`, `AbstractFloat`, `AbstractString`). Any other
+# `Number` (`pi`, `1//2`) binds as a bare `$1`, which PostgreSQL resolves as TEXT: typing that column
+# a float would bind a number against text, the #812 mismatch. A NULL has no type, and any other
+# literal (a `Date`, bound as text on SQLite) is refused rather than guessed.
+function _value_projection_field(v::SQLText, field::String, instruct::SQLInstruction)
+  v.field isa Union{Integer,AbstractFloat,AbstractString} && return _case_value_field(v.field, field, instruct)
+  _refuse_projection_type(field, v.field === nothing || v.field === missing ? "it is a NULL Value, which has no type" :
+                                 "it is a Value of type $(nameof(typeof(v.field))), whose type PormG does not infer")
+end
+# `values("resultid", Value(1))` — no alias, so the column has no name for the outer query to use.
+_value_projection_field(::SQLText, ::Nothing, ::SQLInstruction) = throw(QueryBuildError(
+  "A Value(…) projected in a CTE body needs an alias — e.g. \e[32m\"flag\" => Value(1)\e[0m — so the " *
+  "outer query can name the column (#823)."))
 
 function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   values = instruct.object.values
@@ -1587,8 +1652,9 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
       # body emits two columns under the same name — while this loop still registers both names. So
       # `values("id", "sku", "code" => "sku")` puts `code` on the model though the body emits `sku`
       # twice and no `code` at all. It reproduces identically with no db_column anywhere.
-      fields[key_new] = Models.field_without_db_column(
-        _set_field_from_sql_function(value_part.field, value_part._as, instruct))
+      typed = value_part isa SQLText ? _value_projection_field(value_part, key_new, instruct) :
+              _set_field_from_sql_function(value_part.field, value_part._as, instruct)
+      fields[key_new] = Models.field_without_db_column(typed)
       push!(selected_field_names, key_new)
     catch e
       @pormg_debug false

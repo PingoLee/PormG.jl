@@ -327,7 +327,11 @@ function query(q::SQLObjectHandler;
   # taken then immediately released at autocommit. Fail loudly (Django's TransactionManagementError
   # analog). Guarded on the execute path only, so inspect_query/show_query still render FOR UPDATE
   # without a live transaction. SQLite never locks (clause rendered ""), so it is exempt.
-  if q.object.for_update !== nothing && instruction.connection isa PormGPostgres && !in_transaction_context()
+  # The transaction must be on the pool this read runs on (#831): `.db("other")` routes it away from
+  # the model's own connection, past `ensure_model_transaction_scope`, and a transaction open on
+  # another database does not hold this lock.
+  if q.object.for_update !== nothing && instruction.connection isa PormGPostgres &&
+     transaction_connection_for(instruction.connection) === nothing
     throw(QueryBuildError("select_for_update() must run inside a transaction (run_in_transaction/atomic) on PostgreSQL; otherwise the row lock is released immediately at autocommit."))
   end
   return resposta

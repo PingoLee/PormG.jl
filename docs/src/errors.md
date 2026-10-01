@@ -57,7 +57,7 @@ Catch the umbrella when you want a category, the concrete type when you want a r
 
 | Call | Raises | When |
 |---|---|---|
-| `atomic(durable = true)` inside an open transaction | `TransactionError` | It must be the outermost transaction |
+| `atomic(durable = true)` inside an open transaction on the same database | `TransactionError` | It must be the outermost transaction |
 | a model bound to another connection, inside a transaction | `TransactionError` | Open the transaction on that model's own connection |
 | `without_foreign_keys` inside an open transaction on the same database | `TransactionError` | It must be the outermost transaction, on both engines |
 | any query, connection lost mid-flight | `OperationalError` | Transient. Retry the **whole transaction**, never the statement |

@@ -47,7 +47,7 @@ export pool_stats
 # ambiguous and therefore undefined (#35). Callers in this package use `CP.close_pool!`.
 
 # Import transaction context helpers from Configuration
-import PormG.Configuration: get_tx_connection, get_tx_pool, with_tx_context, transaction_connection_for, get_settings, ensure_before_connect!, connection_key_for_pool, in_transaction_context, current_transaction_depth, redact_secret
+import PormG.Configuration: get_tx_connection, get_tx_pool, with_tx_context, transaction_connection_for, get_settings, ensure_before_connect!, connection_key_for_pool, in_transaction_context, in_transaction_on, current_transaction_depth, redact_secret
 
 # #218: a raw-SQL manual-params array/tuple the caller binds with backend-native placeholders
 # ($1,$2 on PostgreSQL, ? on SQLite). PormG performs NO placeholder translation — the caller
@@ -2304,8 +2304,11 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
     params = _normalize_manual_params(params, connection)
   end
 
-  # Check for transaction context first
-  tx_conn = ignore_tx ? nothing : get_tx_connection()
+  # Check for transaction context first — on THIS pool only (#831). A transaction open on another
+  # database is not this statement's transaction: reusing its connection would run the statement on
+  # the wrong database, possibly through the other engine's driver. Fall through to normal
+  # acquisition instead, so it runs in autocommit on its own pool, as Django does per connection.
+  tx_conn = ignore_tx ? nothing : transaction_connection_for(connection)
   use_tx_context = conn === nothing && tx_conn !== nothing
 
   if use_tx_context
@@ -2449,8 +2452,8 @@ The driver-specific streaming (`LibPQ.CopyIn` + result drain) lives in the Postg
 extension as `backend_copy_in!`.
 """
 function fetch_copy(connection::PormGPostgres, sql::String, data_itr)
-  # Check for transaction context
-  tx_conn = get_tx_connection()
+  # Check for transaction context — on this pool only, for the reason `fetch_async` gives (#831)
+  tx_conn = transaction_connection_for(connection)
 
   # COPY bypasses `fetch`/`await_result` entirely, so it needs its own catch to honor the
   # database-error contract (#268) — before this it was the one write path that still leaked raw
@@ -2705,7 +2708,9 @@ end
 # `without_foreign_keys` must open the outermost transaction on its pool, on both backends — each
 # method says why its own engine needs it. Raised before any connection is touched (#686).
 function _refuse_nested_without_foreign_keys(pool)
-  if in_transaction_context() && get_tx_pool() === pool
+  # `in_transaction_on`, not the innermost pool (#831): a block on another database in between does
+  # not close this pool's transaction.
+  if in_transaction_on(pool)
     throw(TransactionError(
       "without_foreign_keys must be the outermost transaction on this pool — it cannot nest inside \
        run_in_transaction/atomic. Inside a transaction the foreign keys PormG creates are already \
@@ -2911,8 +2916,12 @@ function run_in_transaction(f::Function, pool::Union{PormGPostgres, PormGSQLite}
   # Reentrancy (#26): a nested run_in_transaction / atomic on the SAME pool becomes a
   # SAVEPOINT on the already-pinned connection instead of a second independent BEGIN.
   # A nested call targeting a DIFFERENT pool (e.g. a second database) still opens its own
-  # transaction — correct multi-DB behavior, already guarded by ensure_model_transaction_scope.
-  if in_transaction_context() && get_tx_pool() === pool
+  # transaction — correct multi-DB behavior, already guarded by ensure_model_transaction_scope —
+  # unless a transaction on that pool is open further out, which makes it a savepoint there.
+  # "Already open on this pool" includes enclosing blocks (#831): in `atomic(a) do; atomic(b) do;
+  # atomic(a)`, the innermost context names only B, but A's transaction is still open, and a second
+  # BEGIN on A would block behind it on SQLite or run outside it on PostgreSQL.
+  if in_transaction_on(pool)
     return _nested_savepoint(f, _settings_for_pool(pool))
   end
   # Serialize SQLite writers around the whole BEGIN..COMMIT so concurrent write
@@ -3120,16 +3129,20 @@ atomic("db_2") do
 end
 ```
 
-Pass `durable=true` to require this block be the outermost transaction — it throws if a
-transaction is already active (mirrors Django's `atomic(durable=True)`).
+Pass `durable=true` to require this block be the outermost transaction on its database — it throws
+if a transaction is already active on the **same** database (mirrors Django's `atomic(durable=True)`,
+which is checked per connection). A transaction open on a different database does not count.
 """
 function atomic(f::Function, pool::Union{PormGPostgres, PormGSQLite}; durable::Bool=false)
-  if durable && in_transaction_context()
+  # Same pool only (#831), like `_refuse_nested_without_foreign_keys` (#686): a transaction on
+  # another database is a separate transaction, and this block still opens the outermost one here.
+  # Enclosing blocks count, so a block on another database in between does not hide this pool's.
+  if durable && in_transaction_on(pool)
     # TransactionError, not QueryBuildError: nothing is wrong with the query shape — the
     # transaction API was called in a way that cannot work. Its sibling check,
     # `Configuration.ensure_model_transaction_scope`, reports the same class and used to say
     # InvalidConfigurationError; #268 gave both one honest home.
-    throw(TransactionError("atomic(durable=true) must be the outermost transaction, but a transaction is already active"))
+    throw(TransactionError("atomic(durable=true) must be the outermost transaction, but a transaction is already active on this database"))
   end
   return run_in_transaction(f, pool)
 end

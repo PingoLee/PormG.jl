@@ -339,14 +339,19 @@ Base.showerror(io::IO, e::MissingConfigurationError) =
 Holds the current transaction connection for a task/thread.
 Used to ensure that nested fetch() calls within a transaction
 use the same database connection.
+
+Each nested block gets its own context, linked to the enclosing one through `parent`. The chain is
+what lets a block on database B, nested inside a transaction on database A, still find A's
+connection for a statement on A (#831): the innermost context alone names only B.
 """
 mutable struct TransactionContext
   conn::Any  # driver connection handle (untyped: core never names LibPQ.Connection / SQLite.DB)
   pool::Union{Nothing, PormGPostgres, PormGSQLite}
   depth::Int  # Track nested transaction contexts
   sqlite_reserved_primary_keys::Dict{Tuple{String, String}, Int64}
-  
-  TransactionContext() = new(nothing, nothing, 0, Dict{Tuple{String, String}, Int64}())
+  parent::Union{Nothing, TransactionContext}  # the enclosing block's context, or `nothing` at the outermost
+
+  TransactionContext() = new(nothing, nothing, 0, Dict{Tuple{String, String}, Int64}(), nothing)
 end
 
 # Task-local storage for transaction context; TODO i need study this more
@@ -357,6 +362,13 @@ const _tx_context = ScopedValue(TransactionContext())
 
 Get the current transaction connection if we're inside a transaction context.
 Returns `nothing` if not in a transaction.
+
+This answers *whether any transaction is open*, on whichever database, and returns the
+**innermost** block's connection. It does not say which pool that connection belongs to. Code that
+is about to **execute** on a specific pool must use `transaction_connection_for(pool)` instead,
+which returns the connection of the open transaction on that pool, looking through enclosing blocks
+on other databases. Handing this one to another database runs the statement on the wrong database,
+possibly through the other engine's driver (#831).
 """
 function get_tx_connection()
   ctx = _tx_context[]
@@ -364,9 +376,10 @@ function get_tx_connection()
 end
 
 """
-    get_tx_pool() -> Union{Nothing, PormGPostgres}
+    get_tx_pool() -> Union{Nothing, PormGPostgres, PormGSQLite}
 
-Get the connection pool associated with the current transaction context.
+Get the connection pool associated with the current (innermost) transaction context. To ask
+whether a transaction is open on a given pool, enclosing blocks included, use `in_transaction_on`.
 """
 function get_tx_pool()
   ctx = _tx_context[]
@@ -381,6 +394,26 @@ Check if we're currently inside a transaction context.
 function in_transaction_context()
   return _tx_context[].depth > 0
 end
+
+# The innermost open context on `pool`, walking out through enclosing blocks on other databases;
+# `nothing` when no transaction is open on `pool` (#831). The innermost context alone is not
+# enough: in `atomic(a) do; atomic(b) do; …`, it names only B, while A's transaction is still open.
+function _tx_context_for(pool::Union{PormGPostgres, PormGSQLite})
+  ctx = _tx_context[]
+  while ctx !== nothing && ctx.depth > 0
+    ctx.pool === pool && return ctx
+    ctx = ctx.parent
+  end
+  return nothing
+end
+
+"""
+    in_transaction_on(pool) -> Bool
+
+Whether a transaction is open on `pool`, in this block or any enclosing one. Unlike
+`in_transaction_context()`, a transaction on a different database does not count (#831).
+"""
+in_transaction_on(pool::Union{PormGPostgres, PormGSQLite}) = _tx_context_for(pool) !== nothing
 
 """
     current_transaction_depth() -> Int
@@ -419,8 +452,9 @@ end
 ```
 
 The context nests: `depth` increments by one per block (so [`current_transaction_depth`](@ref)
-drives savepoint naming), and a nested block **inherits** the outer block's SQLite
-reserved-primary-key reservations rather than starting a fresh table. Being a `ScopedValue` it is
+drives savepoint naming), and a nested block on the **same pool** inherits the outer block's SQLite
+reserved-primary-key reservations rather than starting a fresh table. A block on a different pool
+starts a fresh table, because the reservations are keyed by table name only (#831). Being a `ScopedValue` it is
 *dynamically* scoped — tasks spawned inside the block inherit it, and it unwinds automatically,
 including on a throw.
 """
@@ -430,8 +464,14 @@ function with_tx_context(f::Function, pool::Union{PormGPostgres, PormGSQLite}, c
   new_ctx.conn = conn
   new_ctx.pool = pool
   new_ctx.depth = old_ctx.depth + 1
-  new_ctx.sqlite_reserved_primary_keys = old_ctx.depth > 0 ?
-    old_ctx.sqlite_reserved_primary_keys :
+  new_ctx.parent = old_ctx.depth > 0 ? old_ctx : nothing
+  # Shared with the enclosing transaction on the SAME pool only (#831), found through the chain so
+  # an intervening block on another database does not break it. The table is keyed by (table, pk)
+  # with no database in the key, so sharing it with ANOTHER database's transaction would let each
+  # read the other's reservations and write into one Dict that outlives the inner block.
+  same_pool = _tx_context_for(pool)
+  new_ctx.sqlite_reserved_primary_keys = same_pool !== nothing ?
+    same_pool.sqlite_reserved_primary_keys :
     Dict{Tuple{String, String}, Int64}()
   
   return with(_tx_context => new_ctx) do
@@ -465,11 +505,14 @@ function ensure_model_transaction_scope(model::PormGModel)
   throw(TransactionError("Active transaction on connection $(active_desc) cannot include model $(model.name) bound to $(model.connect_key). Run run_in_transaction(\"$(model.connect_key)\") or move this operation outside the current transaction."))
 end
 
-function transaction_connection_for(settings::PormGSettings)
-  tx_pool = get_tx_pool()
-  tx_conn = get_tx_connection()
-  return tx_conn !== nothing && tx_pool === settings.connections ? tx_conn : nothing
+# The connection of the open transaction on `pool`, or `nothing`. Every path that reuses the
+# ambient connection must go through here rather than `get_tx_connection()`, which does not say
+# which pool the connection came from (#831).
+function transaction_connection_for(pool::Union{PormGPostgres, PormGSQLite})
+  ctx = _tx_context_for(pool)
+  return ctx === nothing ? nothing : ctx.conn
 end
+transaction_connection_for(settings::PormGSettings) = transaction_connection_for(settings.connections)
 
 function get_sqlite_reserved_primary_key_max(model::PormGModel, pk_field::String)
   ctx = _tx_context[]

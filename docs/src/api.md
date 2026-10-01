@@ -496,7 +496,7 @@ end
 
 **Key features:**
 - Async context propagation — spawned `@async` tasks inherit the transaction
-- Connection sharing — all queries in the block use the same connection
+- Connection sharing — all queries on that database in the block use the same connection
 - Automatic rollback on error
 
 See [Transactions](write/transaction.md) for the full reference including savepoints and multithreaded patterns.
@@ -521,7 +521,7 @@ atomic("db") do
 end
 ```
 
-Pass `durable = true` to require the block be the outermost transaction (raises if one is already active).
+Pass `durable = true` to require the block be the outermost transaction on its database (raises if one is already active on the same database; a transaction on another database does not count).
 
 ### `select_for_update`
 

@@ -53,7 +53,6 @@ import PormG.ConnectionPool: fetch, fetch_copy, with_transaction, with_savepoint
 import PormG.ConnectionPool: _await_abandoned
 import PormG.Configuration: with_tx_context, ensure_model_transaction_scope, transaction_connection_for,
 	get_sqlite_reserved_primary_key_max, register_sqlite_reserved_primary_key_max!,
-	in_transaction_context,
 	get_settings as get_configuration_settings
 import PormG: @pormg_debug
 import Base: first, last, get

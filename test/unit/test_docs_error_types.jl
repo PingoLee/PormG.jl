@@ -495,6 +495,21 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        # #823. The same section: `F` arithmetic on a value that is not a number, projected straight
+        # into the body, raises rather than being typed as its column (it was a raw MethodError).
+        # A JSON column stands in for the page's text one; the fixture has no text column of its own.
+        "read/subqueries_and_ctes.md — CTE F arithmetic on a non-number is refused (#823)",
+        QueryBuildError,
+        () -> begin
+            body = DOCERR_RESULT_PG.objects
+            body.values("resultid", "later" => F("payload") + 1)
+            q = DOCERR_RESULT_PG.objects
+            q.with("c" => body, join_field = "resultid" => "resultid")
+            q.values("resultid", "c__later")
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
         # #435. Resolving `driverid__surname` builds the driver join DURING Phase 1, so it lands at
         # a higher `row_join` index than `d` — a forward reference. Phase 1b moves the predicate
         # onto it, and since it is `d`'s only one, `d` is left with no ON clause. The doc note tells

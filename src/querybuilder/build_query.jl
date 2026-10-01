@@ -870,19 +870,26 @@ _operand_kind(p::SQLField, instruc::SQLInstruction) = _operand_kind(p.field, ins
 _operand_kind(::Any, ::SQLInstruction) = nothing
 
 # The field a type name `output_field=` / `Cast` holds stands for — already validated and spelled by
-# `Dialect.cast_type_name`, so only the canonical words need recognising. A name outside the four
-# families (a timestamp, which has two representations, an array, `bytea`) answers `nothing`.
+# `Dialect.cast_type_name`, so only the canonical words need recognising. A name outside the text,
+# number, boolean and date families (a timestamp, which has two representations, an array, `bytea`)
+# answers `nothing`.
 #
 # #812: one table for both readers. A CTE column typed from `Case(…; output_field = …)` needs a FIELD
 # (`_set_field_from_sql_function`, ctes.jl), a projection-alias filter only its formatter; answering
 # the formatter off the same field is what keeps the two from ever disagreeing on a type name.
+#
+# #823: the names PormG's own fields produce (`PositiveIntegerField().type` is `INTEGER UNSIGNED`) and
+# PostgreSQL's `int2`/`int4`/`int8`/`float4`/`float8` aliases. Each casts to the same affinity on SQLite
+# (INT / FLOA in the name). `integer unsigned` is a plain integer: PostgreSQL renders it `integer`, and
+# no cast enforces the sign. Widening this also widens the alias filter: a value compared with
+# `Cast(x, "int8")` is now checked as a number, where it used to bind unchecked.
 function _sql_type_field(type_name::AbstractString)::Union{PormGField,Nothing}
   base = lowercase(strip(first(split(type_name, '('))))
   base == "text" && return Models.TextField()
   base in ("varchar", "character varying", "char", "character") && return Models.CharField()
-  base in ("smallint", "integer", "int") && return Models.IntegerField()
-  base == "bigint" && return Models.BigIntegerField()
-  base in ("real", "double precision", "float") && return Models.FloatField()
+  base in ("smallint", "integer", "int", "int2", "int4", "integer unsigned") && return Models.IntegerField()
+  base in ("bigint", "int8") && return Models.BigIntegerField()
+  base in ("real", "double precision", "float", "float4", "float8") && return Models.FloatField()
   base in ("numeric", "decimal") && return Models.DecimalField()
   base in ("boolean", "bool") && return Models.BooleanField()
   base == "date" && return Models.DateField()

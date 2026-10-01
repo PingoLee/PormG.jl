@@ -570,10 +570,21 @@ compared with the column is bound. PormG derives the type from the body's projec
 | `Rank`, `DenseRank`, `RowNumber` | Integer |
 | `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` | The column the window reads |
 | A function given `output_field = …`, or `Cast(x, type)` | The type it names |
+| `F("points")` | That field |
+| `F` arithmetic (`F("grid") - F("positionorder")`) | Integer when every operand is an integer, otherwise float |
+| `Value(x)` | Its Julia type: `1` is an integer, `1.5` a float, `"win"` text |
 | `Case` / `When` | See below |
 
 Any other function raises `QueryBuildError` when the query is built. Give it an `output_field` or
-wrap it in `Cast` to name its type. On SQLite a declared `date` on `Coalesce`, `Greatest`, `Least`
+wrap it in `Cast` to name its type. The same applies to `F` arithmetic on a value that is not a
+number (a text column plus `1`, or `F("date") + Day(1)`) and to `Value(missing)`. A `Subquery` or `Exists`
+projected in the body raises `QueryBuildError` too; project it in the outer query instead.
+
+The type you declare can be a text, integer, bigint, float, numeric, boolean or date type. That
+includes the aliases `int2`, `int4`, `int8`, `float4` and `float8`, and any field object with one of
+those types, such as `PositiveIntegerField()`, which is typed as a plain integer because a cast does
+not enforce the sign. A timestamp, time or interval type is refused, since each has more than one
+text form. On SQLite a declared `date` on `Coalesce`, `Greatest`, `Least`
 or `Concat` raises `QueryBuildError` too: those functions render no cast there, so the column would
 hold the operand's text rather than a date. Wrap the function in `Cast(…, "date")` instead.
 
@@ -632,6 +643,23 @@ df = query |> DataFrame   # one row: "button"
 
 Without `output_field`, this `Case` raises `QueryBuildError`, since PormG does not infer the type of
 `Lower`.
+
+`F` arithmetic needs no declaration when its operands are numbers. Here `grid` and `positionorder`
+are integers, so `gain` is an integer and the filter binds `5` as a number:
+
+```julia
+# Drivers who gained at least 5 places in the 2009 Australian GP (race 1).
+gained = M.Result.objects
+gained.filter("raceid" => 1)
+gained.values("resultid", "gain" => F("grid") - F("positionorder"))
+
+query = M.Result.objects
+query.with("g" => gained, join_field = "resultid" => "resultid")
+query.filter("raceid" => 1, "g__gain__@gte" => 5)
+query.values("driverid__surname", "grid", "positionorder", "g__gain")
+query.order_by("-g__gain")
+df = query |> DataFrame   # 6 rows, from Trulli (20th → 3rd, 17) down to Alonso (10th → 5th, 5)
+```
 
 ---
 

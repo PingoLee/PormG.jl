@@ -1,6 +1,6 @@
 using Test
 using PormG
-using PormG.Models: Model, IDField, IntegerField, FloatField, DateField
+using PormG.Models: Model, IDField, IntegerField, FloatField, DateField, PositiveIntegerField
 using PormG.QueryBuilder: WindowOver, Rank, DenseRank, RowNumber, Lag, NthValue, inspect_query, Count, Sum, Q,
                             WindowSpec, SQLOrder, SQLField, F, Max
 using PormG.Functions: Case, When, Coalesce, Value, FirstValue, Lead
@@ -1161,6 +1161,9 @@ end
         "all NULL" => Case([When("raceid" => 1, then = missing)]),
         "text arithmetic" => Case([When("raceid" => 1, then = F("surname") + 1)], default = 0),
         "untyped function" => Case([When("raceid" => 1, then = PormG.Functions.Lower("surname"))], default = "none"),
+        # #823: a refusal from an OPERAND of an F branch still names the Case's own fix, not `Cast`.
+        "untyped function operand" =>
+          Case([When("raceid" => 1, then = F("raceid") + PormG.Functions.Lower("surname"))], default = 0),
       )
       for (label, expr) in refusals
         err = try _cte_case_field(Model_, expr); nothing catch e; e end
@@ -1182,6 +1185,101 @@ end
   to_constructor = PormG.Models.ForeignKey("Constructor", pk_field = "constructorid")
   @test unify(PormG.PormGField[to_driver, to_constructor], "who") isa PormG.Models.sIntegerField
   @test unify(PormG.PormGField[to_driver, PormG.Models.ForeignKey("Driver", pk_field = "driverid")], "who") === to_driver
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CTE column typing gaps (#823): declared type aliases, and expressions projected directly
+# `_sql_type_field` refused the names PormG's own fields produce (`PositiveIntegerField().type` is
+# "INTEGER UNSIGNED") and PostgreSQL's int/float aliases. A body projecting `F`, `Value`, `Subquery`
+# or `Exists` at the top reached no `_set_field_from_sql_function` arm and died as a raw MethodError.
+# Now `F` and a `Value` literal type as a `Case` branch does, and the rest are a QueryBuildError.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_cte_refusal(Model_, expr) = try _cte_case_field(Model_, expr); nothing catch e; e end
+
+@testset "#823: CTE column typing — declared aliases and top-level expressions" begin
+  for (backend, Model_) in (("PostgreSQL", Window685Pg.Result), ("SQLite", Window685Sl.Result))
+    @testset "$backend — the int/float aliases and PositiveIntegerField are declared types" begin
+      Cast_ = PormG.Functions.Cast
+      @test _cte_case_field(Model_, Cast_("raceid", "int8")) isa PormG.Models.sBigIntegerField
+      @test _cte_case_field(Model_, Cast_("raceid", "int4")) isa PormG.Models.sIntegerField
+      @test _cte_case_field(Model_, Cast_("raceid", "int2")) isa PormG.Models.sIntegerField
+      @test _cte_case_field(Model_, Cast_("points", "float4")) isa PormG.Models.sFloatField
+      @test _cte_case_field(Model_, Cast_("points", "float8")) isa PormG.Models.sFloatField
+      # `PositiveIntegerField().type` is "INTEGER UNSIGNED". A cast does not enforce the sign, so the
+      # column is a plain integer, as `PositiveSmallIntegerField()`'s "SMALLINT" already was.
+      @test _cte_case_field(Model_, Coalesce("raceid", 0, output_field = PositiveIntegerField())) isa
+        PormG.Models.sIntegerField
+      @test _cte_case_field(Model_,
+        Case([When("raceid" => 1, then = "7")], default = "0", output_field = PositiveIntegerField())) isa
+        PormG.Models.sIntegerField
+      # The column binds its filter value as a number, the #812 failure mode on SQLite.
+      @test _cte_case_filter_params(Model_, Cast_("raceid", "int8"))[end] === 10
+    end
+
+    @testset "$backend — F projected directly types as a Case branch does" begin
+      @test _cte_case_field(Model_, F("raceid") / 2) isa PormG.Models.sIntegerField
+      @test _cte_case_field(Model_, F("points") * 2) isa PormG.Models.sFloatField
+      @test _cte_case_field(Model_, F("raceid") + F("points")) isa PormG.Models.sFloatField
+      # A bare `F` is the column's own field.
+      @test _cte_case_field(Model_, F("points")) isa PormG.Models.sFloatField
+      # The issue's shape: the outer query projects the column and filters on it, binding a number.
+      @test _cte_case_filter_params(Model_, F("raceid") / 2) == Any[2, 10]
+    end
+
+    @testset "$backend — a Value literal types by its Julia type" begin
+      @test _cte_case_field(Model_, Value(1)) isa PormG.Models.sIntegerField
+      @test _cte_case_field(Model_, Value(1.5)) isa PormG.Models.sFloatField
+      @test _cte_case_field(Model_, Value("win")) isa PormG.Models.sCharField
+    end
+
+    @testset "$backend — what cannot be typed is a QueryBuildError, not a MethodError" begin
+      sub = Model_.objects
+      sub.filter("raceid" => PormG.OuterRef("raceid"))
+      sub.values("points")
+      refusals = (
+        "text arithmetic" => (F("surname") + 1, "Cast"),
+        "an untyped function operand" => (F("raceid") + PormG.Functions.Lower("surname"), "Cast"),
+        "a NULL Value" => (Value(missing), "Cast"),
+        "a Subquery" => (PormG.Subquery(sub), "outer query"),
+        "an Exists" => (PormG.Exists(sub), "outer query"),
+      )
+      for (label, (expr, fix)) in refusals
+        err = _cte_refusal(Model_, expr)
+        @test err isa PormG.QueryBuildError
+        msg = replace(_window_msg(err), r"\e\[[0-9;]*m" => "")
+        # Names the column and its own fix. It is not a Case, so it does not say so.
+        @test occursin("CTE column top", msg) && occursin(fix, msg)
+        @test !occursin("Case", msg)
+      end
+      # Found in review: PostgreSQL gives `pi` no bind cast, so its bare `$1` makes the column TEXT,
+      # which a float type would contradict. (SQLite refuses the value itself when it binds.)
+      if backend == "PostgreSQL"
+        @test _cte_refusal(Model_, Value(pi)) isa PormG.QueryBuildError
+      end
+      # A `Value` with no alias names no column at all.
+      body = Model_.objects
+      body.values("resultid", Value(1))
+      instruction = PormG.QueryBuilder.build(body.object;
+        connection = backend == "PostgreSQL" ? WindowMockPostgres() : WindowMockSQLite())
+      err = try PormG.QueryBuilder._build_cte_custom_model(PormG.QueryBuilder.CTEDict(), instruction); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      @test occursin("needs an alias", _window_msg(err))
+    end
+  end
+
+  # The same table types the alias filter (#707): a value compared with an `int8` cast is now checked
+  # as a number, where it used to bind unchecked. Driven on both engines through one projection alias.
+  for Model_ in (WindowPgResult, WindowSlResult)
+    q = Model_.objects
+    q.values("resultid", "x" => PormG.Functions.Cast("raceid", "int8"))
+    q.filter("x" => "abc")
+    @test_throws PormG.FilterError inspect_query(q)
+    q = Model_.objects
+    q.values("resultid", "x" => PormG.Functions.Cast("raceid", "int8"))
+    q.filter("x" => 7)
+    @test inspect_query(q)[:parameters][end] === 7
+  end
 end
 
 # #809 through a CTE handle: the argument is a `CTE(...)` column, which is grouped only when the

@@ -754,3 +754,38 @@ end
         @test got == expected
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CTE column typed from F arithmetic or a declared alias type (#823)
+# A body projecting `F` directly (`"gain" => F("grid") - F("positionorder")`) died as a MethodError
+# before any SQL ran, and `Cast(x, "int8")` / `output_field = PositiveIntegerField()` were refused as
+# unknown types. Each now types the column as a number, so the outer filter binds one. The expected
+# set is computed in Julia from the plain `grid`/`positionorder` columns, not by the CTE path under
+# test. Race 1 is the 2009 Australian GP: six finishers gained five places or more.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "CTE column from F arithmetic or a declared alias type filters as a number (#823)" begin
+    plain = M.Result.objects.filter("raceid" => 1).values("resultid", "grid", "positionorder") |> DataFrame
+    expected = sort(plain.resultid[(plain.grid .- plain.positionorder) .>= 5])
+    @test length(expected) == 6
+
+    gain = F("grid") - F("positionorder")
+    for (label, expr) in (
+        "F arithmetic, the issue's shape" => gain,
+        "Cast(…, \"int8\")" => Cast(gain, "int8"),
+        "output_field = PositiveIntegerField()" =>
+            Coalesce(gain, 0, output_field = PormG.Models.PositiveIntegerField()),
+    )
+        @testset "$label" begin
+            body = M.Result.objects
+            body.filter("raceid" => 1)
+            body.values("resultid", "gain" => expr)
+            q = M.Result.objects
+            q.with("g" => body, join_field = "resultid" => "resultid")
+            q.filter("raceid" => 1, "g__gain__@gte" => 5)
+            q.values("resultid", "g__gain")
+            df = q |> DataFrame
+            @test sort(df.resultid) == expected
+            @test all(x -> x isa Integer, df.g__gain)
+        end
+    end
+end

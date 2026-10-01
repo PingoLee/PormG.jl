@@ -217,9 +217,12 @@ models file is the trusted source the plan was written from, loaded with `makemi
 loader, and only when the header has a CHECK finding at all.
 
 A condition the models do not declare — a hand-edited header, a table renamed in the same plan, a
-models file changed since `makemigrations`, or one that does not load — is not counted: the finding
-keeps its place with no condition (`_finding_countable`), and the database checks the CHECK when the
-migration runs, as it did before #830.
+models file changed since `makemigrations`, or one that does not load — is not counted. So is every
+CHECK of a plan made with `makemigrations(…; models_file = …)` naming another file: the anchor is the
+connection's own models file, never a path the plan header names, because loading a file is running
+it and the plan is data (#736 only hashes the file it records, for the same reason). Not counted
+means the finding keeps its place with no condition (`_finding_countable`), and the database checks
+the CHECK when the migration runs, as it did before #830.
 """
 function _anchor_check_conditions(findings::Vector{LossyAlter}, settings::PormGSettings)::Vector{LossyAlter}
   any(f -> f.kind === :add_check, findings) || return findings
@@ -234,6 +237,7 @@ function _anchor_check_conditions(findings::Vector{LossyAlter}, settings::PormGS
       end
     end
   catch e
+    (e isa InterruptException || e isa StackOverflowError) && rethrow()
     @warn("The models file could not be loaded, so no CheckConstraint is pre-counted; the database still checks each one when the migration runs.",
           exception = e)
   end

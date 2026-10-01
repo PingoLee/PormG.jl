@@ -341,7 +341,8 @@ A few things to know:
   longer has is ignored with a warning. A `CheckConstraint`'s line carries its condition, but the
   plan is data, so that text is never what the count runs: the condition is counted only when the
   models file declares the same `CheckConstraint` (same table, name and condition), and otherwise the
-  database checks it during the migration. A line whose condition no statement in the plan adds is
+  database checks it during the migration. That is the connection's own models file: a plan made with
+  `makemigrations(…; models_file = "other.jl")` gets no `CheckConstraint` count. A line whose condition no statement in the plan adds is
   refused as damaged.
 
 ---

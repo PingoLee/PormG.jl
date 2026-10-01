@@ -83,14 +83,16 @@ function _plan_inspectdb_bindings!(models_array)::Dict{String, String}
 end
 
 """
-    import_models_from_sqlite(db::String="db"; force_replace::Bool=false, ignore_schema::Vector{String}=sqlite_ignore_schema, include_table=nothing, file::String="automatic_models.jl")
+    import_models_from_sqlite(db::String="db"; force_replace::Bool=false, ignore_schema=nothing, include_table=nothing, file::String="automatic_models.jl")
 
 Import models from a SQLite database and generate a Julia file with model definitions.
 
 # Arguments
 - `db::String="db"`: The database key from the configuration (must resolve to a registered SQLite connection).
 - `force_replace::Bool=false`: Whether to overwrite the file if it already exists.
-- `ignore_schema::Vector{String}=sqlite_ignore_schema`: Table name patterns to ignore.
+- `ignore_schema::Union{Vector{String},Nothing}=nothing`: Table name prefixes to ignore. `nothing` is the
+  connection's default list: `sqlite_ignore_schema`, less any `unignore_defaults:` entry. A vector
+  replaces it. The connection's `ignore_tables:` and `register_ignore_tables!` are added either way.
 - `include_table::Union{Vector{String},Nothing}=nothing`: When set, only these tables are imported.
 - `file::String="automatic_models.jl"`: The output filename for the generated models.
 
@@ -114,7 +116,7 @@ PormG.Migrations.import_models_from_sqlite("db_sl")
 """
 function import_models_from_sqlite(db::String = "db";
                                   force_replace::Bool=false,
-                                  ignore_schema::Vector{String} = sqlite_ignore_schema,
+                                  ignore_schema::Union{Vector{String}, Nothing} = nothing,
                                   include_table::Union{Vector{String}, Nothing} = nothing,
                                   file::String="automatic_models.jl")
 
@@ -138,7 +140,9 @@ function import_models_from_sqlite(db::String = "db";
   end
 
   # Convert the database schema to models
-  models_array = convert_schema_to_models(conn, ignore_table=_with_connection_ignores(ignore_schema, settings), include_table=include_table)
+  # #818: `nothing` is the connection's default list — the built-in one less its `unignore_defaults:`.
+  base = something(ignore_schema, _backend_ignore_tables(conn, settings))
+  models_array = convert_schema_to_models(conn, ignore_table=_with_connection_ignores(base, settings), include_table=include_table)
 
   if isempty(models_array)
     @warn("No tables found in the database to import.")
@@ -168,14 +172,16 @@ function import_models_from_sqlite(db::String = "db";
 end
 
 """
-    import_models_from_postgres(db::String; force_replace::Bool=false, ignore_table::Vector{String}=postgres_ignore_table, file::String="automatic_models.jl")
+    import_models_from_postgres(db::String; force_replace::Bool=false, ignore_table=nothing, file::String="automatic_models.jl")
 
 Import models from a PostgreSQL database and generate a Julia file with model definitions.
 
 # Arguments
 - `db::String`: The database key from the configuration.
 - `force_replace::Bool=false`: Whether to overwrite the file if it already exists.
-- `ignore_table::Vector{String}=postgres_ignore_table`: A vector of table name patterns to ignore.
+- `ignore_table::Union{Vector{String},Nothing}=nothing`: Table name prefixes to ignore. `nothing` is the
+  connection's default list: `postgres_ignore_table`, less any `unignore_defaults:` entry (#818). A
+  vector replaces it. The connection's `ignore_tables:` and `register_ignore_tables!` are added either way.
 - `file::String="automatic_models.jl"`: The output filename for the generated models.
 
 # Description
@@ -199,7 +205,7 @@ PormG.Migrations.import_models_from_postgres("db", force_replace=true, file="my_
 """
 function import_models_from_postgres(db::String;
   force_replace::Bool=false, 
-  ignore_table::Vector{String} = postgres_ignore_table,
+  ignore_table::Union{Vector{String}, Nothing} = nothing,
   include_table::Union{Vector{String}, Nothing} = nothing,
   file::String="automatic_models.jl",
   config::Dict{String,PormGSettings} = config)
@@ -217,7 +223,9 @@ function import_models_from_postgres(db::String;
   
   
   # Convert the database schema to models
-  models_array = convert_schema_to_models(conn, ignore_table=_with_connection_ignores(ignore_table, settings), include_table=include_table)
+  # #818: `nothing` is the connection's default list — the built-in one less its `unignore_defaults:`.
+  base = something(ignore_table, _backend_ignore_tables(conn, settings))
+  models_array = convert_schema_to_models(conn, ignore_table=_with_connection_ignores(base, settings), include_table=include_table)
 
   if isempty(models_array)
       @warn("No tables found in the database to import.")
@@ -247,7 +255,7 @@ end
 function import_models_from_postgres(;db::PormGPostgres = connection(), 
                                   settings::PormGSettings,
                                   force_replace::Bool=false, 
-                                  ignore_table::Vector{String} = postgres_ignore_table,
+                                  ignore_table::Union{Vector{String}, Nothing} = nothing,
                                   include_table::Union{Vector{String}, Nothing} = nothing,
                                   file::String="automatic_models.jl")
 
@@ -261,7 +269,9 @@ function import_models_from_postgres(;db::PormGPostgres = connection(),
   end
     
   # Convert the database schema to models
-  models_array = convert_schema_to_models(db, ignore_table=_with_connection_ignores(ignore_table, settings), include_table=include_table)
+  # #818: `nothing` is the connection's default list — the built-in one less its `unignore_defaults:`.
+  base = something(ignore_table, _backend_ignore_tables(db, settings))
+  models_array = convert_schema_to_models(db, ignore_table=_with_connection_ignores(base, settings), include_table=include_table)
 
   if isempty(models_array)
       @warn("No tables found in the database to import.")

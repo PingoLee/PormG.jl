@@ -115,6 +115,7 @@ These are the keys PormG reads **directly under an environment block** — the p
 | `postgres_driver` | PostgreSQL | The driver that opens the connections: `LibPQ` (the default) or `Postgres` (**experimental**). Case-insensitive. Unset, the `PORMG_POSTGRES_DRIVER` environment variable decides, then LibPQ. See [Choosing the PostgreSQL driver](#Choosing-the-PostgreSQL-driver). Ignored with a warning on SQLite. |
 | `sqlite_split_read_write` | SQLite | Split the pool into read and write connections. |
 | `ignore_tables` | both | Table-name prefixes that introspection skips on **this connection only**: `makemigrations`, `check` and the importers never read them. See [Tables PormG leaves alone](#Tables-PormG-leaves-alone). Never forwarded to the driver. |
+| `unignore_defaults` | PostgreSQL | Entries of PormG's **built-in** ignore list that this connection reads and migrates after all, such as `account_` for a Django app labelled `account`. Each must equal a built-in entry exactly. See [Switching a built-in entry off](#Switching-a-built-in-entry-off). Any entry is refused on SQLite, whose list has none to remove. Never forwarded to the driver. |
 | `pool_size`, `pool_timeout`, `idle_timeout`, `max_lifetime`, `leak_detection_threshold`, `fail_fast_on_connect` | both | Connection-pool tuning — documented in [Advanced Configuration](advanced.md). |
 | `options` | both | Legacy nesting for `sqlite_split_read_write` only. Prefer setting that key directly on the block. |
 | `config` | both | The settings sub-dictionary described in the next section. |
@@ -171,8 +172,7 @@ dev:
   [`check`](../migrations/workflow.md#Checking-the-Database-Against-the-Models), and to
   `import_models_from_postgres` / `import_models_from_sqlite`.
 - **The list adds to the others and replaces none of them.** Those others are the backend's
-  built-in list (`pormg_migrations` on both engines, plus framework prefixes such as `django_` and
-  `auth_` on PostgreSQL), the process-wide
+  built-in list (see [below](#The-built-in-list)), the process-wide
   [`register_ignore_tables!`](../extending.md#Extension-points), and the `ignore_table=` keyword
   that `check` and the importers take. The difference is scope: `ignore_tables:` applies to one
   connection. An app that drives two databases can skip a table on the replica and still migrate it
@@ -199,16 +199,64 @@ The fix depends on what you want:
 
 - **Query the table without migrating it:** declare the model with
   [`managed = false`](../models.md#Unmanaged-models). An unmanaged model on an ignored table is fine.
-- **Migrate it after all:** remove the entry from `ignore_tables:`. That only helps when no other
-  list also hides the table: the built-in list and `register_ignore_tables!` cannot be switched off
-  for one connection. The error names every list the table matches, and offers the removal only
-  when it would work.
+- **Migrate it after all:** take the table off every list that hides it, on that connection. Remove
+  the entry from `ignore_tables:`, and list a built-in entry under
+  [`unignore_defaults:`](#Switching-a-built-in-entry-off). `register_ignore_tables!` cannot be
+  switched off for one connection, and neither can the built-in `pormg_migrations` entry. The error
+  names every list the table matches, and offers only the fixes that would work.
 - **Let PormG own a new table instead:** give the model a table name (or `db_table`) outside the
   prefix. That plans a new, empty table; the existing table and its rows stay where they are.
 
 A `ManyToManyField` on an unmanaged model is not always fine. Its automatic join table,
 `<table>_<field>`, is managed whenever the other end is, and it usually shares the prefix. Give that
 field a `db_table` outside the prefix, or declare an explicit `through` model.
+
+### The built-in list
+
+PormG skips these prefixes on every connection, before `ignore_tables:` adds any:
+
+| Engine | Built-in entries |
+|---|---|
+| PostgreSQL (`postgres_ignore_table`) | `auth_`, `django_`, `social_`, `account_`, `allauth_`, `admin_`, `celery_`, `django_celery_`, `djcelery_`, `kombu_`, `pormg_migrations` |
+| SQLite (`sqlite_ignore_schema`) | `sqlite_sequence`, `sqlite_autoindex`, `pormg_migrations` |
+
+The PostgreSQL list hides the tables of Django, django-allauth, python-social-auth and Celery, which
+often share a PostgreSQL database with the tables PormG migrates. The SQLite list holds no framework
+prefix, so the two engines differ: a model on an `auth_` table is refused on PostgreSQL and
+migrated on SQLite.
+
+### Switching a built-in entry off
+
+Django names a table `<app_label>_<model>`, so your own Django app labelled `account` keeps its
+tables under `account_`, a prefix the PostgreSQL list hides. List the entry under
+`unignore_defaults:` and that connection reads and migrates those tables like any other:
+
+```yaml
+dev:
+  adapter: PostgreSQL
+  database: f1
+  host: 127.0.0.1
+  username: my_user
+  password: my_password
+  unignore_defaults:
+    - account_
+```
+
+- **Each entry must equal a built-in entry.** `account_` is one; `account` or `account_sponsor` is
+  not. A value that is not an entry is refused when the file loads, with `InvalidConfigurationError`
+  naming the entries you can remove, so a typo cannot silently do nothing. Use `ignore_tables:` to
+  hide more tables, not this key.
+- **The whole prefix comes back.** Every table under `account_` becomes visible to `makemigrations`,
+  `check` and the importers on that connection, including any that belong to django-allauth. A
+  visible table that no model declares is planned for removal, like any other undeclared table, so
+  declare a model for each one you keep (with `managed = false` if PormG should only read it).
+- **Entries are independent, and some overlap.** Removing `django_` leaves `django_celery_` in
+  place, so `django_celery_beat_*` stays hidden; list both to read those tables. When a managed
+  model is refused, the error names every entry that hides its table.
+- **`pormg_migrations` and the SQLite engine tables cannot be removed.** They belong to PormG and to
+  the engine. On SQLite that leaves nothing to remove, so any entry is refused.
+- **It is per connection, like `ignore_tables:`.** Another connection in the same process keeps the
+  full list. `register_ignore_tables!` is not affected.
 
 ## Configuration Settings (`config:`)
 

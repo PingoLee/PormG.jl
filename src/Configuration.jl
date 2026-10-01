@@ -7,6 +7,7 @@ import PormG: ConfigurationError, InvalidConfigurationError  # semantic error ta
 import PormG: TransactionError  # cross-connection transaction misuse (#268); the config is valid, the call pattern is not
 import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT, UTC_TIMEZONE, DEFAULT_POOL_TIMEOUT
 import PormG: _suggest_name  # typo suggestion helper (Kernel)
+import PormG: sqlite_ignore_schema, postgres_ignore_table  # built-in ignore lists `unignore_defaults:` is checked against (#818, Kernel)
 import PormG: _canonical_folder_path  # models-folder identity, shared with Models (#550, Kernel)
 import PormG: Generator
 import PormG: @pormg_debug
@@ -902,27 +903,81 @@ Raises `InvalidConfigurationError` for a value that is not a string or a list of
 blank string inside a list — as a prefix, `""` matches every table, which would hide the whole
 database.
 """
-function _configured_ignore_tables(settings::PormGSettings)::Vector{String}
-  raw = get(settings.db_config_settings, "ignore_tables", nothing)
-  # `ignore_tables:` written with no value, or as `''`, means "not set" — the #348 convention. Only a
-  # blank entry INSIDE a list is refused below, since that one would be read as a prefix.
+_configured_ignore_tables(settings::PormGSettings)::Vector{String} =
+  _configured_prefix_list(settings, "ignore_tables"; what = "a table name or prefix",
+                          blank = "Entries match as a prefix, so a blank one would ignore every table")
+
+# The one normalizer behind `ignore_tables:` (#749) and `unignore_defaults:` (#818), so the two keys
+# accept exactly the same shapes and refuse exactly the same mistakes. `what` names an entry and
+# `blank` says why a blank one is refused, since the two keys match differently.
+function _configured_prefix_list(settings::PormGSettings, key::String; what::String, blank::String)::Vector{String}
+  raw = get(settings.db_config_settings, key, nothing)
+  # Written with no value, or as `''`, means "not set" — the #348 convention. Only a blank entry
+  # INSIDE a list is refused below, since no key can use one (`blank` says why for each).
   (raw === missing || _is_unset(raw)) && return String[]
 
   values = raw isa AbstractString ? [raw] : raw isa AbstractVector ? raw :
-    throw(InvalidConfigurationError("The 'ignore_tables' setting must be a string or a list of strings, got $(typeof(raw))"))
+    throw(InvalidConfigurationError("The '$(key)' setting must be a string or a list of strings, got $(typeof(raw))"))
 
   normalized = String[]
   for value in values
     (value === nothing || value === missing) && continue   # a bare `- ` item, as `extensions:` skips it
     value isa AbstractString || throw(InvalidConfigurationError(
-      "Every 'ignore_tables' entry must be a string (a table name or prefix), got $(repr(value))"))
+      "Every '$(key)' entry must be a string ($(what)), got $(repr(value))"))
     name = String(strip(value))
     isempty(name) && throw(InvalidConfigurationError(
-      "An 'ignore_tables' entry is blank. Entries match as a prefix, so a blank one would ignore every table; remove it"))
+      "An '$(key)' entry is blank. $(blank); remove it"))
     push!(normalized, name)
   end
   return unique(normalized)
 end
+
+# Built-in ignore entries no connection may remove (#818): PormG's own history table, and SQLite's
+# engine tables. Un-hiding one would put it in front of the planner, which drops a live table no model
+# declares.
+const _UNREMOVABLE_IGNORES = ("pormg_migrations", "sqlite_sequence", "sqlite_autoindex")
+
+"""
+    _configured_unignore_defaults(settings, builtin::Vector{String})::Vector{String}
+
+Normalize the environment block's `unignore_defaults:` value (#818): the entries of the backend's
+built-in ignore list (`builtin`, `postgres_ignore_table` or `sqlite_ignore_schema`) that **this**
+connection reads and migrates after all. It is the only way to switch a built-in entry off, and it is
+per connection, so an app labelled `account` in Django can migrate its `account_*` tables on one
+database while every other connection keeps hiding them.
+
+Same shapes as `ignore_tables:`. Each entry must **equal** an entry of `builtin`, not merely match a
+table, so a typo raises instead of silently removing nothing. `_UNREMOVABLE_IGNORES` never qualifies.
+Raises `InvalidConfigurationError` otherwise.
+"""
+function _configured_unignore_defaults(settings::PormGSettings, builtin::Vector{String})::Vector{String}
+  entries = _configured_prefix_list(settings, "unignore_defaults"; what = "an entry of the built-in ignore list",
+                                    blank = "An entry must equal a built-in entry, and none is blank")
+  removable = [e for e in builtin if !(e in _UNREMOVABLE_IGNORES)]
+  for entry in entries
+    entry in removable && continue
+    # Only an entry this backend's list actually holds is "owned"; a SQLite entry named on a
+    # PostgreSQL connection is simply not an entry there.
+    reason = if entry in builtin && entry in _UNREMOVABLE_IGNORES
+      "\"$(entry)\" is a table PormG or the database engine owns, so it can never be unignored"
+    else
+      hint = _suggest_name(entry, removable)
+      "\"$(entry)\" is not an entry of this backend's built-in ignore list" *
+        (hint === nothing ? "" : " (did you mean \"$(hint)\"?)")
+    end
+    allowed = isempty(removable) ?
+      "This backend's built-in list holds no removable entry: it names only PormG's and the engine's own tables." :
+      "Removable entries: $(join(("\"$(e)\"" for e in removable), ", ")). An entry must match one exactly; use `ignore_tables:` to hide more tables."
+    throw(InvalidConfigurationError("Invalid 'unignore_defaults' entry: $(reason). $(allowed)"))
+  end
+  return entries
+end
+
+# The built-in list `unignore_defaults:` is checked against at load(), picked by the `adapter:` key.
+# The migration code picks it from the connection type instead (`_backend_ignore_tables`), and checks
+# again there, so a connection built without load() is still validated.
+_builtin_ignores_for_adapter(adapter)::Vector{String} =
+  adapter == "SQLite" ? sqlite_ignore_schema : postgres_ignore_table
 
 # Detection-only check run at load() time. Installing extensions is DDL and is
 # handled by the migration runner (gated on change_db, deliberate operator step),
@@ -1039,8 +1094,9 @@ const VALID_CONFIG_KEYS = (
     VALID_CONNECTION_KEYS
 
 Allowed keys directly under an environment block in `connection.yml` (#348) — the peers of
-`config:`. Every entry is read by `_build_connection_pool!`, `_configured_extensions` or
-`_configured_ignore_tables`; anything else is dead weight in the file and is warned about on load.
+`config:`. Every entry is read by `_build_connection_pool!`, `_configured_extensions`,
+`_configured_ignore_tables` or `_configured_unignore_defaults`; anything else is dead weight in the
+file and is warned about on load.
 
 Keep `host` ahead of `hostaddr`: `_suggest_name` keeps the *first* minimum, and `hostname`
 is equidistant from both.
@@ -1056,8 +1112,8 @@ const VALID_CONNECTION_KEYS = (
   "leak_detection_threshold", "fail_fast_on_connect",
   # Backend behaviour
   "sqlite_split_read_write", "extensions", "postgres_driver",
-  # Introspection (#749): read by the migration code, never forwarded to the driver
-  "ignore_tables",
+  # Introspection (#749, #818): read by the migration code, never forwarded to the driver
+  "ignore_tables", "unignore_defaults",
   # Nested blocks
   "options", "config",
 )
@@ -1445,9 +1501,11 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   settings::PormGSettings = config[key]
 
   settings.db_config_settings = read_db_connection_data(path, settings)
-  # #749: validated here, before a pool exists, so a bad `ignore_tables:` fails at load and not at
-  # the first `makemigrations` — and leaves no open pool behind when it does.
+  # #749, #818: validated here, before a pool exists, so a bad `ignore_tables:` or
+  # `unignore_defaults:` fails at load and not at the first `makemigrations` — and leaves no open pool
+  # behind when it does.
   _configured_ignore_tables(settings)
+  _configured_unignore_defaults(settings, _builtin_ignores_for_adapter(get(settings.db_config_settings, "adapter", nothing)))
 
   _build_connection_pool!(settings, path)
   _check_configured_extensions!(settings)

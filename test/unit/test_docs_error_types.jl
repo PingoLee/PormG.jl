@@ -1714,6 +1714,22 @@ const DOCERR_CASES = [
             end
         end,
     ),
+    # #818: `unignore_defaults:` takes only exact built-in entries, checked when the file loads; and
+    # SQLite's built-in list has no removable entry at all.
+    (
+        "configuration/connection_yml.md — Switching a built-in entry off: an entry that is not a built-in entry raises InvalidConfigurationError (#818)",
+        InvalidConfigurationError,
+        () -> PormG.Configuration._configured_unignore_defaults(
+            PormG.Configuration.Settings(db_config_settings = Dict{String,Any}("unignore_defaults" => ["account_profile"])),
+            PormG.postgres_ignore_table),
+    ),
+    (
+        "configuration/connection_yml.md — Switching a built-in entry off: any entry on SQLite raises InvalidConfigurationError (#818)",
+        InvalidConfigurationError,
+        () -> PormG.Configuration._configured_unignore_defaults(
+            PormG.Configuration.Settings(db_config_settings = Dict{String,Any}("unignore_defaults" => ["sqlite_sequence"])),
+            PormG.sqlite_ignore_schema),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

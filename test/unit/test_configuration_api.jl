@@ -1324,6 +1324,7 @@ end
                 "  extensions: []\n" *
                 "  postgres_driver: ''\n" *
                 "  ignore_tables: ['legacy_timing_']\n" *
+                "  unignore_defaults: []\n" *
                 "  options:\n" *
                 "    sqlite_split_read_write: false\n" *
                 "  config:\n" *
@@ -1512,6 +1513,12 @@ end
         @test !occursin("legacy", dsn)
     end
 
+    @testset "unignore_defaults never reaches the DSN (#818)" begin
+        dsn = _dsn_650("  host: 127.0.0.1\n  database: f1\n  unignore_defaults: ['account_']\n")
+        @test dsn == "host='127.0.0.1' dbname='f1'"
+        @test !occursin("account", dsn)
+    end
+
     @testset "a quoted password is still masked whole by redact_secret" begin
         # The builder's output now lands in the redaction rule's quoted arm; no fragment of a
         # passphrase containing a space or an escaped quote may survive into a log line.
@@ -1581,6 +1588,93 @@ end
                 "dev:\n  adapter: SQLite\n  database: \":memory:\"\n  ignore_table: ['legacy_timing_']\n")
             by_key = _by_key(_load_348(db_dir))
             @test _kw(by_key["ignore_table"])[:did_you_mean] == "ignore_tables"
+            _cleanup_configuration_test_keys([db_dir])
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# connection.yml `unignore_defaults:` — parsing and load-time validation (#818)
+# The only off switch for an entry of the backend's built-in ignore list, per connection. It takes
+# the same shapes as `ignore_tables:`, but each entry must EQUAL a built-in entry: a typo that removed
+# nothing would leave the user's tables hidden with no signal. PormG's own `pormg_migrations` and
+# SQLite's engine tables can never be removed, so SQLite has no removable entry at all.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "connection.yml unignore_defaults: parsing and validation (#818)" begin
+    pg = PormG.postgres_ignore_table
+    sq = PormG.sqlite_ignore_schema
+    _settings(value) = PormG.Configuration.Settings(db_config_settings = Dict{String,Any}("unignore_defaults" => value))
+    _unignore(value, builtin = pg) = PormG.Configuration._configured_unignore_defaults(_settings(value), builtin)
+    _err(value, builtin = pg) = try _unignore(value, builtin); nothing catch e; e end
+
+    @testset "built-in entries, as a list or a bare string, trimmed and deduplicated" begin
+        @test _unignore(["account_", " admin_ ", "account_"]) == ["account_", "admin_"]
+        @test _unignore("social_") == ["social_"]
+        @test _unignore(nothing) == String[]
+        @test _unignore("") == String[]
+        @test _unignore(String[]) == String[]
+        @test PormG.Configuration._configured_unignore_defaults(PormG.Configuration.Settings(), pg) == String[]
+    end
+
+    @testset "an entry that is not a built-in entry is refused, with a suggestion" begin
+        # A table name under the prefix, or the prefix without its underscore, is not an entry.
+        for bad in ("account_emailaddress", "account", "legacy_timing_")
+            err = _err([bad])
+            @test err isa PormG.InvalidConfigurationError
+            msg = PormG.error_message(err)
+            @test occursin("\"$(bad)\" is not an entry of this backend's built-in ignore list", msg)
+            @test occursin("Removable entries: \"auth_\"", msg)
+            @test !occursin("pormg_migrations", msg)   # never offered as removable
+        end
+        @test occursin("did you mean \"account_\"", PormG.error_message(_err(["acount_"])))
+    end
+
+    @testset "PormG's and the engine's own entries are never removable" begin
+        msg = PormG.error_message(_err(["pormg_migrations"]))
+        @test occursin("\"pormg_migrations\" is a table PormG or the database engine owns", msg)
+        # SQLite's list holds no removable entry, so even its own entries are refused, and a
+        # PostgreSQL prefix is not an entry there at all.
+        for entry in ("sqlite_sequence", "sqlite_autoindex", "account_")
+            msg = PormG.error_message(_err([entry], sq))
+            @test occursin("holds no removable entry", msg)
+        end
+        # A SQLite entry named on PostgreSQL is not "owned" there: it is simply not an entry.
+        msg = PormG.error_message(_err(["sqlite_sequence"]))
+        @test occursin("\"sqlite_sequence\" is not an entry of this backend's built-in ignore list", msg)
+        @test !occursin("owns", msg)
+    end
+
+    @testset "the same shapes as ignore_tables: are refused, in this key's own words" begin
+        @test occursin("'unignore_defaults' setting must be a string or a list", PormG.error_message(_err(Dict("a" => 1))))
+        @test occursin("must be a string (an entry of the built-in ignore list)", PormG.error_message(_err([2024])))
+        msg = PormG.error_message(_err(["account_", " "]))
+        @test occursin("'unignore_defaults' entry is blank", msg)
+        @test !occursin("prefix", msg)   # this key matches exactly, not as a prefix
+    end
+
+    @testset "load() validates the key against the adapter's list, before a pool exists" begin
+        mktempdir() do temp_root
+            db_dir = _write_348_yml(joinpath(temp_root, "db"),
+                "dev:\n  adapter: SQLite\n  database: \":memory:\"\n  unignore_defaults: []\n")
+            @test isempty(_load_348(db_dir))    # an allowlisted key: no warning
+            _cleanup_configuration_test_keys([db_dir])
+        end
+        # PostgreSQL: refused before the pool is built, so no server is needed for this file.
+        mktempdir() do temp_root
+            db_dir = _write_348_yml(joinpath(temp_root, "db"),
+                "dev:\n  adapter: PostgreSQL\n  host: 127.0.0.1\n  database: f1\n  unignore_defaults: ['acount_']\n")
+            err = try PormG.Configuration.load(db_dir; env = "dev"); nothing catch e; e end
+            @test err isa PormG.InvalidConfigurationError
+            @test occursin("did you mean \"account_\"", PormG.error_message(err))
+            _cleanup_configuration_test_keys([db_dir])
+        end
+        # SQLite: `account_` is a PostgreSQL entry, so it is refused there.
+        mktempdir() do temp_root
+            db_dir = _write_348_yml(joinpath(temp_root, "db"),
+                "dev:\n  adapter: SQLite\n  database: \":memory:\"\n  unignore_defaults: ['account_']\n")
+            err = try PormG.Configuration.load(db_dir; env = "dev"); nothing catch e; e end
+            @test err isa PormG.InvalidConfigurationError
+            @test occursin("holds no removable entry", PormG.error_message(err))
             _cleanup_configuration_test_keys([db_dir])
         end
     end

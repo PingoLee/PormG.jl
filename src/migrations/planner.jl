@@ -2134,11 +2134,14 @@ to read it. An ignored table reads as absent, so the planner would emit `CREATE 
 a no-op against the existing table, planned again on every run. Every offending model is listed,
 so they can all be fixed in one pass.
 
-Each line names every list the table matches, because the fix depends on all of them. An
-`ignore_tables:` entry can be removed, but that only helps a table no other list also hides. The
-registry and the default cannot be switched off for one connection, so under them the fix is
-`managed = false`, or a table name outside the prefix. A renamed table is a new, empty table, and
-the existing rows are not moved.
+Each line names every list the table matches, because the fix depends on all of them. Two lists
+have a per-connection off switch: an `ignore_tables:` entry can be removed, and a default entry can be
+listed under `unignore_defaults:` (#818). Either only helps a table the registry does not also hide,
+and the default entry is the one the connection already reads with, so a table it lists under
+`unignore_defaults:` is never reported here at all. The registry, and the default's own entries
+(`pormg_migrations`, the engine's tables), cannot be switched off, so under them the fix is
+`managed = false`, or a table name outside the prefix. A renamed table is a new, empty table, and the
+existing rows are not moved.
 
 These are the configuration lists and nothing else. `check`'s per-call `ignore_table=` stays a
 live-side filter (#738), so `check(kinds = [:schema_drift])` refuses exactly what `makemigrations`
@@ -2147,8 +2150,9 @@ query a table PormG does not migrate, is never reported.
 """
 function _refuse_managed_models_on_ignored_tables(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
                                                   conn, settings::PormGSettings)::Nothing
-  default_list = _backend_ignore_tables(conn)
-  default_name = default_list === sqlite_ignore_schema ? "sqlite_ignore_schema" : "postgres_ignore_table"
+  # #818: the default this connection reads with — the built-in list less its `unignore_defaults:`.
+  default_list = _backend_ignore_tables(conn, settings)
+  default_name = _backend_ignore_tables(conn) === sqlite_ignore_schema ? "sqlite_ignore_schema" : "postgres_ignore_table"
   # Most specific first, which is the order each line names its matches in.
   sources = (
     (:connection, Configuration._configured_ignore_tables(settings),
@@ -2162,14 +2166,27 @@ function _refuse_managed_models_on_ignored_tables(current_schema::Dict{Symbol, D
   declared = false       # whether any problem is a model the user wrote, rather than a synthesized one
   join_table = false
   removable = false      # a table only `ignore_tables:` hides, so removing the entry fixes it
+  unignore = String[]    # default entries that alone (with `ignore_tables:`) hide a table, and can be switched off (#818)
   locked = Set{Symbol}() # the lists with no off switch that hide a declared model
+  locked_defaults = Set{String}()   # built-in entries no connection may remove that hide a declared model
   for (table, entry) in current_schema
     hits = Tuple{Symbol, String}[]
+    default_entries = String[]
     for (source, prefixes, describe) in sources
-      matched = findfirst(prefix -> startswith(String(table), prefix), prefixes)
-      matched === nothing || push!(hits, (source, describe(prefixes[matched])))
+      if source === :default
+        # Every match, not the first: built-in entries overlap (`django_` and `django_celery_`), and
+        # `unignore_defaults:` must name all of them before the table comes back (#818).
+        default_entries = [prefix for prefix in prefixes if startswith(String(table), prefix)]
+        isempty(default_entries) || push!(hits, (source, join(describe.(default_entries), " and ")))
+      else
+        matched = findfirst(prefix -> startswith(String(table), prefix), prefixes)
+        matched === nothing || push!(hits, (source, describe(prefixes[matched])))
+      end
     end
     isempty(hits) && continue
+    # A default entry no connection may remove leaves the default list locked for this table.
+    locked_entries = filter(e -> e in Configuration._UNREMOVABLE_IGNORES, default_entries)
+    default_locked = !isempty(locked_entries)
     model = entry[:model]
     # A ManyToManyField's auto join table is synthesized, so `managed = false` cannot be written on
     # it: it is managed whenever either end is. Its own fix is a `db_table` outside the prefix.
@@ -2178,24 +2195,38 @@ function _refuse_managed_models_on_ignored_tables(current_schema::Dict{Symbol, D
       "the auto join table of a ManyToManyField (table \"$(table)\"; give the field a `db_table` outside the prefix, or declare an explicit `through` model)"
     else
       declared = true
-      union!(locked, (source for (source, _) in hits if source !== :connection))
+      any(hit -> hit[1] === :registry, hits) && push!(locked, :registry)
+      union!(locked_defaults, locked_entries)
       "$(model.name) (table \"$(table)\")"
     end
     all(hit -> hit[1] === :connection, hits) && (removable = true)
+    # Switchable on this connection alone: no registry hit, and a default entry `unignore_defaults:`
+    # accepts. Any `ignore_tables:` entry for the same table has to go too, which the fix says.
+    if !isempty(default_entries) && !default_locked && !any(hit -> hit[1] === :registry, hits)
+      append!(unignore, default_entries)
+    end
     push!(problems, "  - $(what) matches $(join(last.(hits), " and "))")
   end
   isempty(problems) && return nothing
   fixes = String[]
   declared && push!(fixes, "declare each model with `managed = false` to query its table without migrating it")
   join_table && push!(fixes, "apply the fix named on a join-table line")
-  if !isempty(locked)
+  if !isempty(locked) || !isempty(locked_defaults)
     names = String[]
     :registry in locked && push!(names, "`register_ignore_tables!`")
-    :default in locked && push!(names, "the default list")
+    isempty(locked_defaults) || push!(names,
+      "the built-in $(join(("\"$(e)\"" for e in sort!(collect(locked_defaults))), " and ")) " *
+      (length(locked_defaults) == 1 ? "entry" : "entries"))
     push!(fixes, "give the model a table name (or `db_table`) outside the prefix, since " *
                  "$(join(names, " and ")) cannot be switched off (a new, empty table: the existing rows are not moved)")
   end
   removable && push!(fixes, "remove the entry from `ignore_tables:` for a table no other list names, to let PormG migrate it")
+  if !isempty(unignore)
+    entries = join(("\"$(e)\"" for e in sort!(unique(unignore))), ", ")
+    push!(fixes, "list $(entries) under `unignore_defaults:` in this connection's connection.yml, and drop any " *
+                 "`ignore_tables:` entry for the same table, to let PormG read and migrate it; every other table " *
+                 "under a listed prefix becomes visible too, and one no model declares is planned for removal")
+  end
   fix = length(fixes) == 1 ? only(fixes) :
     join(fixes[1:end-1], ", ") * ", or " * fixes[end]
   throw(InvalidConfigurationError(
@@ -2493,9 +2524,10 @@ end
 @pormg_debug false
 # #522: the live side is read straight into `LiveTable`s; `convert_schema_to_models` (which builds
 # `PormGModel`s on top of them) is `inspectdb`'s form and is not called here.
-# #749: the connection's own `ignore_tables:` rides on top of the backend default. Built outside the
-# `try` below, which logs and returns: a bad list is a configuration error to raise, not a failed read.
-ignore = _with_connection_ignores(postgres_ignore_table, settings)
+# #749: the connection's own `ignore_tables:` rides on top of the backend default, less the entries its
+# `unignore_defaults:` removes (#818). Built outside the `try` below, which logs and returns: a bad list
+# is a configuration error to raise, not a failed read.
+ignore = _with_connection_ignores(_backend_ignore_tables(connection, settings), settings)
 live_schema = LiveTable[]
 try
   live_schema = read_live_schema(connection; ignore_table = ignore)
@@ -2534,7 +2566,7 @@ function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::
   end
   
   # #522: the live side is read straight into `LiveTable`s (see the PostgreSQL method above).
-  ignore = _with_connection_ignores(sqlite_ignore_schema, settings)   # outside the `try`: see above
+  ignore = _with_connection_ignores(_backend_ignore_tables(connection, settings), settings)   # outside the `try`: see above
   live_schema = LiveTable[]
   try
     live_schema = read_live_schema(connection; ignore_table = ignore)

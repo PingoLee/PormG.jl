@@ -270,7 +270,8 @@ _la803_notnull(pool, col) =
     only(DataFrame(fetch(pool, "PRAGMA table_info(race803);")) |> d -> d[d.name .== col, :notnull])
 
 # A connection registered under `key`, the way the `String` forms find it. Restores the global config.
-function _la803_with_key(f, tag::String)
+# `v1` is the models file the database starts from.
+function _la803_with_key(f, tag::String; v1::String = _la803_models())
     saved = copy(PormG.config)
     dir = mktempdir()
     pool = nothing
@@ -281,7 +282,7 @@ function _la803_with_key(f, tag::String)
             settings = Configuration.Settings(connections = pool, db_def_folder = tag)
             settings.change_db = true
             PormG.config[tag] = settings
-            write(joinpath(tag, "models.jl"), _la803_models())
+            write(joinpath(tag, "models.jl"), v1)
             _la803_quiet(() -> Migrations.makemigrations(tag; interactive = false))
             _la803_quiet(() -> Migrations.migrate(tag; interactive = false))
             f(tag, pool)
@@ -691,5 +692,233 @@ end
         # Counted, the stale ones dropped with a warning.
         counted = @test_logs (:warn,) (:warn,) Migrations._precheck_lossy_alters(pool, [absent, present, no_table])
         @test [(f.column, f.rows) for f in counted] == [("grid", 0)]
+    end
+end
+
+# =============================================================================
+# #830: constraint adds the rows already there can violate
+# UNIQUE, PRIMARY KEY, a composite UniqueConstraint, a CheckConstraint and a foreign key were not
+# pre-counted: such a plan failed inside its transaction, rolled back and left a `failed` history
+# row. Each is now a `:rows` finding, recorded where the action is planned and counted with the
+# predicate the engine itself enforces.
+# =============================================================================
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#830): UNIQUE and PRIMARY KEY read off the column delta
+# A key column is unique too, so becoming the key is ONE finding. Dropping either, or keeping it,
+# is harmless.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#830: unique and primary key added to a column are findings; removed or kept are not" begin
+    M = Models
+    for conn in (PG_LA803, SL_LA803)
+        @test _la803_kinds(M.IntegerField(unique = true), M.IntegerField(), conn) == [:add_unique]
+        @test isempty(_la803_kinds(M.IntegerField(), M.IntegerField(unique = true), conn))
+        @test isempty(_la803_kinds(M.IntegerField(unique = true), M.IntegerField(unique = true), conn))
+    end
+    # Becoming the key: built from specs, since only a few field structs take `primary_key` at all.
+    key(pk, uq) = PormG.ColumnSpec("c", PormG.CInt64(), false, pk, uq, PormG.NoDefault(), nothing,
+                                   PormG.CheckKind[], nothing, "BIGINT")
+    kinds(new, old) = [f.kind for f in _lossy_alters(PormG.ColumnDelta(new, old, PormG.column_delta(new, old)),
+                                                     PG_LA803; table = "t", column = "c")]
+    @test kinds(key(true, false), key(false, false)) == [:add_primary_key]
+    @test kinds(key(true, true), key(false, false)) == [:add_primary_key]   # one finding, not two
+    @test kinds(key(true, true), key(false, true)) == [:add_primary_key]
+    @test isempty(kinds(key(false, false), key(true, true)))
+end
+
+# A ColumnSpec with a foreign key to `table`.`column` (or none), for the delta-level FK classifier.
+_la830_spec(ref; type = PormG.CInt64(), raw = "BIGINT") =
+    PormG.ColumnSpec("circuitid", type, true, false, false, PormG.NoDefault(),
+                     ref === nothing ? nothing : PormG.ForeignKeyRef(ref[1], nothing, ref[2], "CASCADE"),
+                     PormG.CheckKind[], nothing, raw)
+_la830_fk(new, old) = Migrations._lossy_foreign_key(PormG.ColumnDelta(new, old, PormG.column_delta(new, old));
+                                                    table = "race830", column = "circuitid")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#830): a foreign key added or re-pointed, and the cases that cannot be counted
+# The count compares the child column with the parent key, so it needs the parent's physical table
+# and the child's CURRENT type; without either there is no finding and the database checks the key.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#830: a foreign key added or re-pointed is a finding with its parent" begin
+    f = only(_la830_fk(_la830_spec(("circuit830", "id")), _la830_spec(nothing)))
+    @test (f.kind, f.table, f.column, f.references) == (:add_foreign_key, "race830", "circuitid", ("circuit830", "id"))
+    @test length(_la830_fk(_la830_spec(("track830", "id")), _la830_spec(("circuit830", "id")))) == 1   # re-pointed
+    @test isempty(_la830_fk(_la830_spec(("circuit830", "id")), _la830_spec(("circuit830", "id"))))      # unchanged
+    @test isempty(_la830_fk(_la830_spec(nothing), _la830_spec(("circuit830", "id"))))                   # dropped
+    @test isempty(_la830_fk(_la830_spec((nothing, "id")), _la830_spec(nothing)))                         # parent unknown
+    # Retyped in the same change: the count would compare the OLD type with the parent key.
+    @test isempty(_la830_fk(_la830_spec(("circuit830", "id")), _la830_spec(nothing; type = PormG.CText(), raw = "TEXT")))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#830): the pre-check SQL for each constraint kind
+# Duplicates exclude NULLs (both engines treat NULLs as distinct); a primary key also counts NULLs on
+# PostgreSQL only; a CHECK counts rows where the condition is FALSE; an orphan is a non-NULL value no
+# parent holds. Identifiers are escaped like every other plan identifier.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#830: the pre-check SQL counts duplicates, NULL keys, failing checks and orphans" begin
+    dups(col) = "SELECT COALESCE(SUM(n), 0) AS n FROM (SELECT COUNT(*) AS n FROM \"Ev\"\"il\" WHERE $col IS NOT NULL " *
+                "GROUP BY $col HAVING COUNT(*) > 1) AS pormg_duplicates"
+    unique = LossyAlter(:add_unique, "Ev\"il", "c", "INTEGER", "INTEGER")
+    for conn in (PG_LA803, SL_LA803)
+        @test _precheck_sql(conn, unique) == ("SELECT CAST(($(dups("\"c\""))) AS BIGINT) AS n", Any[])
+    end
+    pk = LossyAlter(:add_primary_key, "Ev\"il", "c", "INTEGER", "INTEGER")
+    @test _precheck_sql(PG_LA803, pk) ==
+          ("SELECT CAST(($(dups("\"c\""))) + (SELECT COUNT(*) FROM \"Ev\"\"il\" WHERE \"c\" IS NULL) AS BIGINT) AS n", Any[])
+    @test _precheck_sql(SL_LA803, pk) == _precheck_sql(SL_LA803, unique)
+
+    comp = LossyAlter(:add_composite_unique, "Ev\"il", "uq", "", ""; columns = ["a", "b\"c"])
+    @test _precheck_sql(PG_LA803, comp) ==
+          ("SELECT CAST((SELECT COALESCE(SUM(n), 0) AS n FROM (SELECT COUNT(*) AS n FROM \"Ev\"\"il\" " *
+           "WHERE \"a\" IS NOT NULL AND \"b\"\"c\" IS NOT NULL GROUP BY \"a\", \"b\"\"c\" HAVING COUNT(*) > 1) " *
+           "AS pormg_duplicates) AS BIGINT) AS n", Any[])
+
+    check = LossyAlter(:add_check, "Ev\"il", "ck", "", ""; condition = "laps >= 0")
+    @test _precheck_sql(SL_LA803, check) == ("SELECT COUNT(*) AS n FROM \"Ev\"\"il\" WHERE NOT (laps >= 0)", Any[])
+
+    fk = LossyAlter(:add_foreign_key, "Ev\"il", "circuitid", "BIGINT", "BIGINT"; references = ("cir\"cuit", "id"))
+    @test _precheck_sql(PG_LA803, fk) ==
+          ("SELECT COUNT(*) AS n FROM \"Ev\"\"il\" AS pormg_child WHERE pormg_child.\"circuitid\" IS NOT NULL " *
+           "AND NOT EXISTS (SELECT 1 FROM \"cir\"\"cuit\" AS pormg_parent " *
+           "WHERE pormg_parent.\"id\" = pormg_child.\"circuitid\")", Any[])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#830): the header carries members, parent and condition — and the condition is
+# trusted only when the plan itself adds that CHECK
+# The CHECK condition is the one value the pre-check interpolates into SQL. The header sits outside
+# what `migrate` executes, so a condition that no plan statement carries is refused as damage.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#830: the header round-trips the new fields, and an unplanned CHECK condition is refused" begin
+    dir = mktempdir()
+    try
+        cond = "laps >= 0 AND name <> 'a\tb'"
+        plan = OrderedDict{Symbol, OrderedDict{String, String}}(
+            :race830 => OrderedDict{String, String}(
+                "Create check constraint: ck" => "ALTER TABLE \"race830\" ADD CONSTRAINT \"ck\" CHECK ($cond);"))
+        findings = [LossyAlter(:add_composite_unique, "race830", "uq", "", ""; columns = ["name", "co,de\t"]),
+                    LossyAlter(:add_foreign_key, "race830", "circuitid", "BIGINT", "BIGINT"; references = ("circuit830", "id")),
+                    LossyAlter(:add_check, "race830", "ck", "", ""; condition = cond)]
+        PormG.Generator.generate_migration_plan("p.jl", plan, dir; lossy_alters = findings)
+        @test _plan_lossy_alters(joinpath(dir, "p.jl")) == findings
+
+        # A condition the plan does not add — here, the same CHECK widened in the header only.
+        text = read(joinpath(dir, "p.jl"), String)
+        write(joinpath(dir, "tampered.jl"), replace(text, "condition=laps >= 0" => "condition=laps >= 0 OR true OR laps >= 0"))
+        err = try _plan_lossy_alters(joinpath(dir, "tampered.jl")); nothing catch e; e end
+        @test err isa InvalidMigrationError
+        @test err !== nothing && occursin("names a condition no statement in the plan adds", sprint(showerror, err))
+
+        # Each kind without the field it counts against is refused, not counted as zero.
+        for (damage, needle) in ((r"\tmember=[^\t]*" => "", "no `member`"),
+                                 (r"\tref_table=[^\t]*" => "", "no `ref_table`"),
+                                 (r"\tcondition=[^\t\n]*" => "", "no `condition`"))
+            write(joinpath(dir, "damaged.jl"), replace(text, damage))
+            err = try _plan_lossy_alters(joinpath(dir, "damaged.jl")); nothing catch e; e end
+            @test err isa InvalidMigrationError
+            @test err !== nothing && occursin(needle, sprint(showerror, err))
+        end
+    finally
+        rm(dir; recursive = true, force = true)
+    end
+end
+
+# A two-table models file for the FK case: the race's `circuitid` points at `Circuit830`, with
+# `db_constraint` as given (`false` declares no constraint at all, so `true` is an `:add`).
+_la830_fk_models(db_constraint) =
+    "module models\nimport PormG.Models\nCircuit830 = Models.Model(\n    id = Models.IDField(),\n" *
+    "    name = Models.CharField(null = true)\n)\nRace803 = Models.Model(\n    id = Models.IDField(),\n" *
+    "    name = Models.CharField(null = true),\n" *
+    "    circuitid = Models.ForeignKey(\"Circuit830\", pk_field = \"id\", null = true, db_constraint = $db_constraint)\n)\nend\n"
+
+# The race table of `_la803_models` with a `constraints = [...]` list.
+_la830_models(constraint; kw...) = replace(_la803_models(; kw...), "\n)\nend" => ",\n    constraints = [$constraint]\n)\nend")
+
+# Refused with `rows` counted, nothing written; returns the error.
+function _la830_refused(key, pool, kind, rows)
+    _la803_quiet(() -> Migrations.makemigrations(key; interactive = false))
+    @test [f.kind for f in _plan_lossy_alters(joinpath(key, "migrations", "pending_migrations.jl"))] == [kind]
+    history = _la803_history(pool)
+    err = try _la803_quiet(() -> Migrations.migrate(key; interactive = false, destructive = true)); nothing catch e; e end
+    @test err isa MigrationPrecheckError
+    @test err !== nothing && only(err.findings).kind === kind && only(err.findings).rows == rows
+    @test _la803_history(pool) == history
+    return err
+end
+_la830_applies(key) = _la803_quiet(() -> Migrations.migrate(key; interactive = false, destructive = true)).outcome === :applied
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#830): SQLite end to end, one case per constraint kind
+# Each starts from rows that violate the new constraint: refused before any write with the offending
+# rows counted (NULLs never count as duplicates), then the same plan applies once the data is fixed.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite #830: unique = true over duplicates is counted and refused, then applies" begin
+    _la803_with_key("la830uq") do key, pool
+        fetch(pool, "INSERT INTO race803 (name, code) VALUES ('Monaco', 'MON'), ('Monte Carlo', 'MON'), " *
+                    "('Spa', 'SPA'), ('Imola', NULL), ('Monza', NULL);")
+        write(joinpath(key, "models.jl"), _la803_models(code = "Models.CharField(null = true, unique = true)"))
+        _la830_refused(key, pool, :add_unique, 2)
+        fetch(pool, "UPDATE race803 SET code = 'MCO' WHERE name = 'Monte Carlo';")
+        @test _la830_applies(key)
+    end
+end
+
+@testset "SQLite #830: a UniqueConstraint over duplicate tuples is counted and refused, then applies" begin
+    _la803_with_key("la830comp") do key, pool
+        fetch(pool, "INSERT INTO race803 (name, code) VALUES ('Monaco', 'MON'), ('Monaco', 'MON'), " *
+                    "('Monaco', NULL), ('Monaco', NULL);")
+        write(joinpath(key, "models.jl"), _la830_models("Models.UniqueConstraint(fields = (\"name\", \"code\"))"))
+        err = _la830_refused(key, pool, :add_composite_unique, 2)
+        @test err !== nothing && only(err.findings).columns == ("name", "code")
+        fetch(pool, "DELETE FROM race803 WHERE id = (SELECT MAX(id) FROM race803 WHERE code = 'MON');")
+        @test _la830_applies(key)
+    end
+end
+
+@testset "SQLite #830: a CheckConstraint some rows fail is counted and refused, then applies" begin
+    _la803_with_key("la830ck") do key, pool
+        fetch(pool, "INSERT INTO race803 (name, laps) VALUES ('Monaco', 78), ('Spa', -1), ('Monza', NULL);")
+        write(joinpath(key, "models.jl"),
+              _la830_models("Models.CheckConstraint(condition = \"laps >= 0\", name = \"race803_laps_ck\")"))
+        _la830_refused(key, pool, :add_check, 1)   # NULL passes a CHECK, so it is not counted
+        fetch(pool, "UPDATE race803 SET laps = 1 WHERE laps < 0;")
+        @test _la830_applies(key)
+    end
+end
+
+@testset "SQLite #830: a CHECK naming a column the same plan adds is not counted, and applies" begin
+    _la803_with_key("la830cknew") do key, pool
+        fetch(pool, "INSERT INTO race803 (name, laps) VALUES ('Monaco', 78);")
+        models = replace(_la830_models("Models.CheckConstraint(condition = \"grid >= 0\", name = \"race803_grid_ck\")"),
+                         "\n    constraints" => "\n    grid = Models.IntegerField(null = true),\n    constraints")
+        write(joinpath(key, "models.jl"), models)
+        _la803_quiet(() -> Migrations.makemigrations(key; interactive = false))
+        @test isempty(_plan_lossy_alters(joinpath(key, "migrations", "pending_migrations.jl")))
+        @test _la830_applies(key)
+    end
+end
+
+@testset "SQLite #830: a tampered CHECK condition in the header is refused by dry_run and migrate" begin
+    _la803_with_key("la830tamper") do key, pool
+        write(joinpath(key, "models.jl"),
+              _la830_models("Models.CheckConstraint(condition = \"laps >= 0\", name = \"race803_laps_ck\")"))
+        _la803_quiet(() -> Migrations.makemigrations(key; interactive = false))
+        pending = joinpath(key, "migrations", "pending_migrations.jl")
+        write(pending, replace(read(pending, String), "condition=laps >= 0" => "condition=1 = 1"))
+        @test (try Migrations.dry_run(key); nothing catch e; e end) isa InvalidMigrationError
+        @test (try _la803_quiet(() -> Migrations.migrate(key; interactive = false, destructive = true)); nothing catch e; e end) isa InvalidMigrationError
+    end
+end
+
+@testset "SQLite #830: a foreign key added over orphan rows is counted and refused, then applies" begin
+    _la803_with_key("la830fk"; v1 = _la830_fk_models(false)) do key, pool
+        fetch(pool, "INSERT INTO circuit830 (name) VALUES ('Monaco');")
+        fetch(pool, "INSERT INTO race803 (name, circuitid) VALUES ('Monaco GP', 1), ('Ghost GP', 99), ('TBA', NULL);")
+        write(joinpath(key, "models.jl"), _la830_fk_models(true))
+        err = _la830_refused(key, pool, :add_foreign_key, 1)   # NULL has no parent to miss
+        @test err !== nothing && only(err.findings).references == ("circuit830", "id")
+        fetch(pool, "UPDATE race803 SET circuitid = NULL WHERE circuitid = 99;")
+        @test _la830_applies(key)
     end
 end

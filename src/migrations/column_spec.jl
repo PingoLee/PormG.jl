@@ -781,13 +781,21 @@ the plan's header; [`dry_run`](@ref) lists them and [`migrate`](@ref) acts on th
 - `kind` — a key of [`LOSSY_ALTER_KINDS`](@ref), e.g. `:set_not_null`, `:varchar_length`,
   `:decimal_scale`.
 - `table`, `column` — the names the live catalog knows **before** the plan runs, so a renamed column
-  is reported under its old name.
+  is reported under its old name. For a table-level constraint (`:add_composite_unique`,
+  `:add_check`) `column` holds the constraint's name.
 - `old_type`, `new_type` — the two column types as rendered; `old_type` is empty for a column the
   plan adds (`:add_not_null`).
 - `bound`, `scale` — the limit the pre-check compares against (a VARCHAR length, an integer width in
   bits, whole digits and scale, a byte bound), or `nothing`.
 - `rows` — how many existing rows the change would fail on, filled in by `dry_run` / `migrate` for the
-  `:rows` class; `nothing` until counted, and always `nothing` for the other classes.
+  `:rows` class; `nothing` until counted, and always `nothing` for the other classes. A finding the
+  pre-check cannot count against the live schema (a foreign key whose parent table this same plan
+  creates or renames) also stays `nothing`, and the database checks it when the migration runs.
+- `columns` — the catalog's columns of a composite `UniqueConstraint` (`:add_composite_unique`);
+  empty otherwise.
+- `references` — `(table, column)` of the parent a foreign key points at (`:add_foreign_key`), or
+  `nothing`.
+- `condition` — the SQL condition of a `CheckConstraint` (`:add_check`), or `nothing`.
 """
 struct LossyAlter
   kind::Symbol
@@ -798,14 +806,34 @@ struct LossyAlter
   bound::Union{Nothing, Int}
   scale::Union{Nothing, Int}
   rows::Union{Nothing, Int}
+  # #830: what a constraint finding needs beyond one column. A `Tuple`, not a `Vector`, so two equal
+  # findings compare `==` (an immutable struct's default `==` is `===`, and a `Vector` field is
+  # compared by identity).
+  columns::Tuple{Vararg{String}}
+  references::Union{Nothing, Tuple{String, String}}
+  condition::Union{Nothing, String}
 end
 
 LossyAlter(kind::Symbol, table::AbstractString, column::AbstractString, old_type::AbstractString,
+           new_type::AbstractString, bound, scale, rows) =
+  LossyAlter(kind, String(table), String(column), String(old_type), String(new_type), bound, scale, rows,
+             (), nothing, nothing)
+
+LossyAlter(kind::Symbol, table::AbstractString, column::AbstractString, old_type::AbstractString,
            new_type::AbstractString; bound::Union{Nothing, Integer} = nothing,
-           scale::Union{Nothing, Integer} = nothing, rows::Union{Nothing, Integer} = nothing) =
+           scale::Union{Nothing, Integer} = nothing, rows::Union{Nothing, Integer} = nothing,
+           columns = (), references::Union{Nothing, Tuple{AbstractString, AbstractString}} = nothing,
+           condition::Union{Nothing, AbstractString} = nothing) =
   LossyAlter(kind, String(table), String(column), String(old_type), String(new_type),
              bound === nothing ? nothing : Int(bound), scale === nothing ? nothing : Int(scale),
-             rows === nothing ? nothing : Int(rows))
+             rows === nothing ? nothing : Int(rows), Tuple(String(c) for c in columns),
+             references === nothing ? nothing : (String(references[1]), String(references[2])),
+             condition === nothing ? nothing : String(condition))
+
+# The same finding with its rows counted (`nothing`: it could not be).
+_with_rows(f::LossyAlter, rows::Union{Nothing, Int})::LossyAlter =
+  LossyAlter(f.kind, f.table, f.column, f.old_type, f.new_type, f.bound, f.scale, rows,
+             f.columns, f.references, f.condition)
 
 """
     LOSSY_ALTER_KINDS
@@ -821,6 +849,11 @@ Every kind a [`LossyAlter`](@ref) can carry, with its class — the closed set, 
 | `:non_negative_check` | both | `:rows` | a `>= 0` CHECK is added (e.g. `PositiveIntegerField`) |
 | `:byte_length_check` | both | `:rows` | a `BinaryField` byte bound is added or lowered |
 | `:add_not_null` | both | `:rows` | a new NOT NULL column with no default is added to a table with rows |
+| `:add_unique` | both | `:rows` | `unique = true` is added to a column holding duplicates |
+| `:add_primary_key` | both | `:rows` | `primary_key = true` moves to a column holding duplicates (or NULLs, on PostgreSQL) |
+| `:add_composite_unique` | both | `:rows` | a `UniqueConstraint` is added over columns holding duplicate tuples |
+| `:add_check` | both | `:rows` | a `CheckConstraint` is added that some rows fail |
+| `:add_foreign_key` | both | `:rows` | a foreign key is added or re-pointed over rows with no parent |
 | `:decimal_scale` | PostgreSQL | `:silent` | a NUMERIC scale is lowered, so values round |
 | `:to_integer` | PostgreSQL | `:silent` | a float/decimal becomes an integer, so values round |
 | `:to_date` | PostgreSQL | `:silent` | a timestamp becomes a date, dropping the time |
@@ -840,6 +873,11 @@ const LOSSY_ALTER_KINDS = (
   non_negative_check = :rows,
   byte_length_check  = :rows,
   add_not_null       = :rows,
+  add_unique         = :rows,
+  add_primary_key    = :rows,
+  add_composite_unique = :rows,
+  add_check          = :rows,
+  add_foreign_key    = :rows,
   decimal_scale      = :silent,
   to_integer         = :silent,
   to_date            = :silent,
@@ -860,7 +898,9 @@ function _lossy_alter_summary(f::LossyAlter)::String
   what = f.old_type == f.new_type ? "" :
          isempty(f.old_type) ? " ($(f.new_type))" : " ($(f.old_type) → $(f.new_type))"
   rows = f.rows === nothing ? "" : " — $(f.rows) row(s) would fail"
-  return "$(repr(f.table)).$(repr(f.column)): $(f.kind)$what$rows"
+  over = isempty(f.columns) ? "" : " over ($(join(repr.(f.columns), ", ")))"
+  ref = f.references === nothing ? "" : " → $(repr(f.references[1])).$(repr(f.references[2]))"
+  return "$(repr(f.table)).$(repr(f.column)): $(f.kind)$what$over$ref$rows"
 end
 
 const _IntType = Union{CInt16, CInt32, CInt64}
@@ -946,9 +986,58 @@ function _lossy_alters(delta::ColumnDelta, conn::Union{PormGPostgres, PormGSQLit
       push!(found, finding(:byte_length_check; bound = minimum(new_bound)))
     end
   end
+  # #830: a constraint the rows must already satisfy. A primary key is unique too, so a column that
+  # becomes the key is one finding, not two.
+  if :primary_key in delta && new_spec.primary_key && !old_spec.primary_key
+    push!(found, finding(:add_primary_key))
+  elseif :unique in delta && new_spec.unique && !old_spec.unique && !new_spec.primary_key
+    push!(found, finding(:add_unique))
+  end
   append!(found, type_found)
   return found
 end
+
+"""
+    _lossy_foreign_key(delta; table, column) -> Vector{LossyAlter}
+
+The `:add_foreign_key` finding for a column change that adds or re-points a foreign key (#830): rows
+whose value has no parent row fail the constraint. `table` and `column` are the catalog's names.
+None when the parent's physical table is unknown, or when the same change retypes the column — the
+count would compare the child's OLD type against the parent key, which PostgreSQL may reject as a
+query; the database still checks such a key when the migration runs.
+"""
+function _lossy_foreign_key(delta::ColumnDelta; table::AbstractString, column::AbstractString)::Vector{LossyAlter}
+  ref, old_ref = delta.new_spec.reference, delta.old_spec.reference
+  (ref === nothing || ref.table === nothing || :type in delta) && return LossyAlter[]
+  # The same decision `_fk_constraint_action` makes: a new key, or one whose target moved.
+  (old_ref === nothing || !isempty(reference_delta(ref, old_ref))) || return LossyAlter[]
+  return [LossyAlter(:add_foreign_key, table, column, delta.old_spec.raw, delta.new_spec.raw;
+                     references = (ref.table, ref.column))]
+end
+
+"""
+    _lossy_composite_unique(table, name, columns) -> Vector{LossyAlter}
+
+The `:add_composite_unique` finding for a `UniqueConstraint` the plan creates on an existing table
+(#830). `columns` are the catalog's names for its members, or `nothing` for a member the catalog
+does not have yet (a column this plan adds): that one cannot be counted, so there is no finding.
+"""
+function _lossy_composite_unique(table::AbstractString, name::AbstractString,
+                                 columns::AbstractVector)::Vector{LossyAlter}
+  any(c -> c === nothing, columns) && return LossyAlter[]
+  return [LossyAlter(:add_composite_unique, table, name, "", ""; columns = String[c for c in columns])]
+end
+
+"""
+    _lossy_check(table, check, countable) -> Vector{LossyAlter}
+
+The `:add_check` finding for a `CheckConstraint` the plan adds to an existing table (#830): the rows
+whose condition is false fail it. `countable` is the planner's answer to whether every column the
+condition names exists in the catalog with its current type — a condition over a column this plan
+adds or retypes cannot be evaluated before the plan runs, so it is not a finding.
+"""
+_lossy_check(table::AbstractString, c::Models.CheckConstraint, countable::Bool)::Vector{LossyAlter} =
+  countable ? [LossyAlter(:add_check, table, c.name, "", ""; condition = c.condition)] : LossyAlter[]
 
 """
     _lossy_add_column(spec, conn; table, temporary_default) -> Vector{LossyAlter}

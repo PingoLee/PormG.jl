@@ -168,6 +168,16 @@ function _lossy_alter_header(f::LossyAlter)::String
                              "old" => f.old_type, "new" => f.new_type]
   f.bound === nothing || push!(fields, "bound" => f.bound)
   f.scale === nothing || push!(fields, "scale" => f.scale)
+  # #830: one `member=` per composite column, in order — repeated rather than joined, so no
+  # separator inside a column name needs escaping.
+  for c in f.columns
+    push!(fields, "member" => c)
+  end
+  if f.references !== nothing
+    push!(fields, "ref_table" => f.references[1])
+    push!(fields, "ref_column" => f.references[2])
+  end
+  f.condition === nothing || push!(fields, "condition" => f.condition)
   return LOSSY_ALTER_HEADER * join(("$(k)=$(escape_string(string(v)))" for (k, v) in fields), "\t")
 end
 
@@ -192,18 +202,41 @@ function _plan_lossy_alters(plan_path::AbstractString)::Vector{LossyAlter}
       push!(found, _parse_lossy_alter_header(m.captures[1], file))
     end
   end
+  _refuse_unplanned_conditions(found, plan_path)
   return found
+end
+
+# #830: an `:add_check` finding carries the condition the pre-check interpolates into its
+# `SELECT COUNT(*) … WHERE NOT (<condition>)`. That is SQL the developer wrote, and the plan runs it
+# as DDL anyway — but the header is outside what `migrate` executes, so a condition is only taken
+# from it when the plan's own statements carry the same CHECK: `CHECK (<condition>)` on PostgreSQL,
+# `CHECK (<condition> /* pormg:check:… */)` in SQLite's rebuild. A header that does not match was
+# edited apart from the plan, and is refused like any other damaged line.
+function _refuse_unplanned_conditions(found::Vector{LossyAlter}, plan_path::AbstractString)::Nothing
+  checks = filter(f -> f.kind === :add_check, found)
+  isempty(checks) && return nothing
+  statements, _ = _order_statements(_read_migration_plan(plan_path))
+  for f in checks
+    pg, sl = "CHECK ($(f.condition))", "CHECK ($(f.condition) /* "
+    any(s -> occursin(pg, s) || occursin(sl, s), statements) && continue
+    throw(InvalidMigrationError(
+      "Migration plan '$(basename(plan_path))': a `$(strip(LOSSY_ALTER_HEADER))` line of kind `add_check` " *
+      "names a condition no statement in the plan adds (constraint $(repr(f.column)) on $(repr(f.table))). " *
+      "Regenerate the plan with makemigrations()."))
+  end
+  return nothing
 end
 
 function _parse_lossy_alter_header(body::AbstractString, file::AbstractString)::LossyAlter
   bad(what) = throw(InvalidMigrationError(
     "Migration plan '$file': a `$(strip(LOSSY_ALTER_HEADER))` line $what. Regenerate the plan with makemigrations()."))
   fields = Dict{String, String}()
+  members = String[]
   for part in split(body, '\t')
     k, sep, v = _partition_first(part, '=')
     sep || bad("has a field without `=`")
     value = try unescape_string(v) catch; bad("has a value that does not unescape") end
-    fields[k] = value
+    k == "member" ? push!(members, value) : (fields[k] = value)
   end
   for key in ("kind", "table", "column", "old", "new")
     haskey(fields, key) || bad("has no `$key` field")
@@ -224,8 +257,19 @@ function _parse_lossy_alter_header(body::AbstractString, file::AbstractString)::
   end
   kind === :integer_range && !(bound in (16, 32, 64)) &&
     bad("of kind `integer_range` has a `bound` that is not an integer width (16, 32 or 64)")
+  # #830: the constraint kinds count against these instead of a limit — and an absent one would
+  # count nothing, so it is refused the same way.
+  kind === :add_composite_unique && isempty(members) && bad("of kind `add_composite_unique` has no `member` field")
+  references = nothing
+  if kind === :add_foreign_key
+    (haskey(fields, "ref_table") && haskey(fields, "ref_column")) ||
+      bad("of kind `add_foreign_key` has no `ref_table` / `ref_column` field")
+    references = (fields["ref_table"], fields["ref_column"])
+  end
+  kind === :add_check && !haskey(fields, "condition") && bad("of kind `add_check` has no `condition` field")
   return LossyAlter(kind, fields["table"], fields["column"], fields["old"], fields["new"];
-                    bound = bound, scale = scale)
+                    bound = bound, scale = scale, columns = members, references = references,
+                    condition = kind === :add_check ? fields["condition"] : nothing)
 end
 
 # The limits each counted kind is compared against (`_precheck_sql`).
@@ -345,10 +389,10 @@ end
 """
     MigrationPrecheckError(msg, findings)
 
-Raised by [`migrate`](@ref) when the pending plan changes a column in a way existing rows cannot
-survive — a `SET NOT NULL` over rows that hold NULL, a `VARCHAR(n)` shorter than values already
-stored, an integer too narrow for them — or in a way PostgreSQL cannot apply at all (text to
-integer, with no `USING`). `findings` lists each [`LossyAlter`](@ref), with `rows` counted.
+Raised by [`migrate`](@ref) when the pending plan changes a column or adds a constraint in a way
+existing rows cannot survive — a `SET NOT NULL` over rows that hold NULL, a `VARCHAR(n)` shorter than
+values already stored, an integer too narrow for them, duplicates under a new UNIQUE, rows with no
+parent under a new foreign key — or in a way PostgreSQL cannot apply at all. `findings` lists each [`LossyAlter`](@ref), with `rows` counted.
 
 Nothing has been written when it is raised: the pre-check counts before the migration starts.
 `destructive = true` does not bypass it, because no opt-in can make those rows fit. Fix the data (or
@@ -397,13 +441,43 @@ ALTER would fail on — not an estimate:
   precision does not have (`9.999` into `numeric(3,2)`).
 - `:add_not_null` — every row: the column does not exist yet, and a NOT NULL column with no default
   has nothing to put in any of them (#829).
+- `:add_unique`, `:add_composite_unique` — every row in a group of two or more equal non-NULL
+  values (tuples), since a NULL is distinct from every value on both engines (#830).
+- `:add_primary_key` — the same duplicates, plus the NULLs on PostgreSQL, which makes a key column
+  NOT NULL. SQLite's non-`INTEGER` primary key accepts NULL, and its `INTEGER PRIMARY KEY` fills one
+  with a rowid, so NULLs fail it only through NOT NULL — which is `:set_not_null`'s finding.
+- `:add_check` — the rows whose condition is FALSE. A NULL condition passes a CHECK on both engines,
+  and `NOT (NULL)` is NULL, so they are not counted either.
+- `:add_foreign_key` — the non-NULL values no parent row holds.
 """
 function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::Union{Nothing, Tuple{String, Vector{Any}}}
   lossy_alter_class(f) === :rows || return nothing
   table = Dialect._quote_table_ddl(f.table)
-  col = "\"$(Dialect._quote_table_ddl(f.column))\""
+  q(name) = "\"$(Dialect._quote_table_ddl(name))\""
+  col = q(f.column)
   ph(i) = _precheck_ph(conn, i)
   f.kind === :add_not_null && return ("SELECT COUNT(*) AS n FROM \"$table\"", Any[])
+  # The rows in duplicate groups, as one integer on both engines (PostgreSQL's `SUM` of a count is
+  # `numeric`).
+  duplicates(cols) = "SELECT COALESCE(SUM(n), 0) AS n FROM (SELECT COUNT(*) AS n FROM \"$table\" WHERE " *
+                     join(("$c IS NOT NULL" for c in cols), " AND ") * " GROUP BY $(join(cols, ", ")) " *
+                     "HAVING COUNT(*) > 1) AS pormg_duplicates"
+  if f.kind === :add_unique || (f.kind === :add_primary_key && conn isa PormGSQLite)
+    return ("SELECT CAST(($(duplicates([col]))) AS BIGINT) AS n", Any[])
+  elseif f.kind === :add_primary_key
+    return ("SELECT CAST(($(duplicates([col]))) + (SELECT COUNT(*) FROM \"$table\" WHERE $col IS NULL) AS BIGINT) AS n", Any[])
+  elseif f.kind === :add_composite_unique
+    return ("SELECT CAST(($(duplicates([q(c) for c in f.columns]))) AS BIGINT) AS n", Any[])
+  elseif f.kind === :add_check
+    # Interpolated, and only here: `_plan_lossy_alters` has already matched the condition against a
+    # CHECK the plan itself adds (`_refuse_unplanned_conditions`).
+    return ("SELECT COUNT(*) AS n FROM \"$table\" WHERE NOT ($(f.condition))", Any[])
+  elseif f.kind === :add_foreign_key
+    parent, key = f.references
+    return ("SELECT COUNT(*) AS n FROM \"$table\" AS pormg_child WHERE pormg_child.$col IS NOT NULL " *
+            "AND NOT EXISTS (SELECT 1 FROM $(q(parent)) AS pormg_parent " *
+            "WHERE pormg_parent.$(q(key)) = pormg_child.$col)", Any[])
+  end
   pred, params = if f.kind === :set_not_null
     "$col IS NULL", Any[]
   elseif f.kind === :non_negative_check
@@ -459,10 +533,22 @@ _live_table_exists(conn::PormGSQLite, table::AbstractString)::Bool =
 # Does the live schema still describe what the finding is about? For a change to an existing column,
 # the column is there; for a column the plan ADDS (#829), the table is there and the column is NOT —
 # a header naming a column that already exists was applied already (the #81 re-archive) or edited.
-_finding_applies(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::Bool =
-  f.kind === :add_not_null ?
-    (_live_table_exists(conn, f.table) && !_live_column_exists(conn, f.table, f.column)) :
-    _live_column_exists(conn, f.table, f.column)
+# A table-level constraint (#830) names no single column: a CHECK applies while its table is there,
+# a composite while every member is.
+function _finding_applies(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::Bool
+  f.kind === :add_not_null &&
+    return _live_table_exists(conn, f.table) && !_live_column_exists(conn, f.table, f.column)
+  f.kind === :add_check && return _live_table_exists(conn, f.table)
+  f.kind === :add_composite_unique && return all(c -> _live_column_exists(conn, f.table, c), f.columns)
+  return _live_column_exists(conn, f.table, f.column)
+end
+
+# Can the count run against the schema as it is now? A foreign key's parent may be one this same plan
+# creates, or renames (the reference names the NEW table, the catalog still has the old one), or
+# whose key column it renames. Then there is nothing to count against, and the finding is kept
+# uncounted: the database checks the key when the migration runs, as it did before #830.
+_finding_countable(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::Bool =
+  f.kind !== :add_foreign_key || _live_column_exists(conn, f.references[1], f.references[2])
 
 """
     _precheck_lossy_alters(conn, findings; timeouts) -> Vector{LossyAlter}
@@ -546,11 +632,16 @@ function _precheck_one(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::
     _warn_stale_lossy_alter(f)
     return nothing
   end
+  if !_finding_countable(conn, f)
+    @info("A foreign key's parent is not in the database yet (this plan creates or renames it), so its rows are not pre-counted; the database checks them when the migration runs.",
+          finding = _lossy_alter_summary(f))
+    return f
+  end
   q = _precheck_sql(conn, f)
   q === nothing && return f
   counted = fetch(conn, q[1], q[2]) |> DataFrame
   n = nrow(counted) == 0 ? 0 : Int(something(counted[1, :n], 0))
-  return LossyAlter(f.kind, f.table, f.column, f.old_type, f.new_type, f.bound, f.scale, n)
+  return _with_rows(f, n)
 end
 
 _warn_stale_lossy_alter(f::LossyAlter) =

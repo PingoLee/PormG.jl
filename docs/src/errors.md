@@ -78,7 +78,7 @@ Catch the umbrella when you want a category, the concrete type when you want a r
 | `makemigrations` / `migrate` | `InvalidMigrationError` | The migration or the schema it describes is not valid — a plan file that does not parse, say. No pending plan is **not** one: `migrate` returns `outcome = :nothing_pending` |
 | `makemigrations` / `migrate` / `status` / `dry_run` / `discard_pending_migration` / `import_models_from_*` | `InvalidConfigurationError` | The key is a `register_connection` entry, which has no models folder — see [Dynamic Multi-Tenancy](configuration/dynamic.md) |
 | `migrate` on a destructive plan | `PormG.Migrations.DestructiveMigrationError` | Non-interactive run without `destructive = true`; carries `statements`, and `lossy_alters` for a column change that alters existing values |
-| `migrate` on a plan whose column change would fail on existing rows | `PormG.Migrations.MigrationPrecheckError` | Non-interactive run; nothing was written. `destructive = true` does not bypass it. Carries `findings` |
+| `migrate` on a plan whose column or constraint change would fail on existing rows | `PormG.Migrations.MigrationPrecheckError` | Non-interactive run; nothing was written. `destructive = true` does not bypass it. Carries `findings` |
 
 !!! note "Three types need a qualified name"
     `DestructiveMigrationError`, `MigrationPrecheckError` and `MissingConfigurationError` are **not**

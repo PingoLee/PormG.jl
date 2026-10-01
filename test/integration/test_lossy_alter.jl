@@ -15,7 +15,9 @@
 #   (f) fewer NUMERIC whole digits and (g) a byte bound are counted by the server's own arithmetic;
 #   (h) text → PositiveIntegerField is reported by `dry_run` as refused, not raised as a query error;
 #   (j) a new NOT NULL column with no default is refused over a populated table with the rows
-#       counted, and applies over an empty one (#829).
+#       counted, and applies over an empty one (#829);
+#   (k) `unique = true` over duplicates, (l) a foreign key over an orphan and (m) a CheckConstraint
+#       over a failing row are each counted by the server and refused (#830).
 #
 # Run it under both PostgreSQL drivers: `PORMG_POSTGRES_DRIVER=Postgres` selects Postgres.jl (#788),
 # whose parameter typing differs from LibPQ's.
@@ -314,6 +316,64 @@ end
         @test _la803pg_sql(st, """
             SELECT attnotnull FROM pg_attribute WHERE attrelid = '$(_LA803PG_TABLE)'::regclass
                AND attname = 'laps'""").attnotnull == [true]
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (k) `unique = true` over duplicate values: counted, refused, then applied (#830)
+# PostgreSQL's `ADD UNIQUE` fails on the duplicates; NULLs are distinct and are not counted.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: unique = true over duplicates is refused, then applies (#830)" begin
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, 'x', 1, NULL), ('SEN', 2, 2.5, 'y', 2, NULL), " *
+                                    "(NULL, 3, 3.5, 'z', 3, NULL), (NULL, 4, 4.5, 'w', 4, NULL);") do st
+        models = _la803pg_models(code = "Models.CharField(max_length = 20, null = true, unique = true)")
+        sink = _la803pg_plan!(st, models)
+        @test [(f.kind, f.column) for f in sink] == [(:add_unique, "code")]
+        err = _la803pg_err(() -> _la803pg_migrate(st; destructive = true))
+        @test err isa PormG.Migrations.MigrationPrecheckError
+        @test err !== nothing && only(err.findings).rows == 2
+        PormG.ConnectionPool.fetch(st.connections, "UPDATE \"$(_LA803PG_TABLE)\" SET code = 'PRO' WHERE big = 2;")
+        @test _la803pg_migrate(st).outcome === :applied
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (l) A foreign key added over an orphan row: counted against the parent, refused, then applied (#830)
+# Self-referencing, so the parent is the scratch table itself and nothing else in the fixture is
+# planned. It starts as `db_constraint = false` (a plain column, no constraint) and becomes a key.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: a foreign key over an orphan row is refused, then applies (#830)" begin
+    _la803pg_case("") do st
+        fk(c) = "Models.ForeignKey(\"Pormg_test_lossy803\", pk_field = \"id\", null = true, db_constraint = $c)"
+        _la803pg_plan!(st, _la803pg_models(parent = fk(false)))
+        @test _la803pg_migrate(st).outcome === :applied
+        PormG.ConnectionPool.fetch(st.connections, _LA803PG_INSERT * "('SEN', 1, 1.5, 'x', 1, NULL), ('PRO', 2, 2.5, 'y', 2, NULL);")
+        PormG.ConnectionPool.fetch(st.connections, "UPDATE \"$(_LA803PG_TABLE)\" SET parent = id + 1000 WHERE big = 2;")
+
+        sink = _la803pg_plan!(st, _la803pg_models(parent = fk(true)))
+        @test [(f.kind, f.column, f.references) for f in sink] == [(:add_foreign_key, "parent", (_LA803PG_TABLE, "id"))]
+        err = _la803pg_err(() -> _la803pg_migrate(st))
+        @test err isa PormG.Migrations.MigrationPrecheckError
+        @test err !== nothing && only(err.findings).rows == 1
+        PormG.ConnectionPool.fetch(st.connections, "UPDATE \"$(_LA803PG_TABLE)\" SET parent = NULL WHERE big = 2;")
+        @test _la803pg_migrate(st).outcome === :applied
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (m) A CheckConstraint over a failing row: the condition is evaluated by the server, inside the
+# pre-check's READ ONLY transaction (#830)
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: a CheckConstraint over a failing row is refused, then applies (#830)" begin
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, 'x', -1, NULL), ('PRO', 2, 2.5, 'y', NULL, NULL);") do st
+        models = _la803pg_models(constraints = "[Models.CheckConstraint(condition = \"grid >= 0\", name = \"pormg_test_lossy803_grid_ck\")]")
+        sink = _la803pg_plan!(st, models)
+        @test [f.kind for f in sink] == [:add_check]
+        err = _la803pg_err(() -> _la803pg_migrate(st))
+        @test err isa PormG.Migrations.MigrationPrecheckError
+        @test err !== nothing && only(err.findings).rows == 1   # the NULL passes a CHECK
+        PormG.ConnectionPool.fetch(st.connections, "UPDATE \"$(_LA803PG_TABLE)\" SET grid = 0 WHERE grid < 0;")
+        @test _la803pg_migrate(st).outcome === :applied
     end
 end
 

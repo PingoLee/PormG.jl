@@ -285,11 +285,11 @@ hanging on a prompt or silently skipping the migration.
 The guard above reads the SQL text, so it sees a `DROP` — but not an `ALTER` that narrows a column.
 `makemigrations` therefore also classifies each column change from what the column held before and
 what it will hold, and writes what it finds into the plan's header (a `# pormg-lossy-alter:` comment
-line per column). `dry_run()` lists them, and `migrate()` acts on them. There are three kinds:
+line per column or constraint). `dry_run()` lists them, and `migrate()` acts on them. There are three kinds:
 
 | Kind | Examples | What `migrate()` does |
 | :--- | :--- | :--- |
-| **Fails on existing rows** | `null = true` → `false` over rows holding `NULL`; a shorter `max_length`; `BigIntegerField` → `IntegerField`; fewer `max_digits`; `IntegerField` → `PositiveIntegerField` over negative values; a **new** column that is `NOT NULL` with no `default`, added to a table that has rows | Counts the offending rows first. Any row that would fail means the plan is refused before anything is written; none means it applies with no opt-in. |
+| **Fails on existing rows** | `null = true` → `false` over rows holding `NULL`; a shorter `max_length`; `BigIntegerField` → `IntegerField`; fewer `max_digits`; `IntegerField` → `PositiveIntegerField` over negative values; a **new** column that is `NOT NULL` with no `default`, added to a table that has rows; `unique = true` over duplicate values; `primary_key = true` moved to a column with duplicates (or `NULL`s, on PostgreSQL); a new `UniqueConstraint` over duplicate tuples; a new `CheckConstraint` some rows fail; a new or re-pointed foreign key over rows with no parent | Counts the offending rows first. Any row that would fail means the plan is refused before anything is written; none means it applies with no opt-in. |
 | **Changes existing values** | fewer `decimal_places` (values round); `FloatField` or `DecimalField` → `IntegerField` (values round); `DateTimeField` → `DateField` (the time is dropped); a `TIMESTAMPTZ` → `TIMESTAMP` (the offset is dropped) | Needs `destructive = true`, exactly like a `DROP`. |
 | **Cannot run as planned** | text → a number, boolean, date, timestamp, UUID or JSON, or boolean ↔ a number, on PostgreSQL | Refused: PostgreSQL has no automatic cast between these and the plan carries no `USING` clause. |
 
@@ -315,17 +315,23 @@ A few things to know:
   still make the `ALTER` fail, and then the whole migration rolls back as it always did.
 - **PostgreSQL and SQLite differ.** SQLite enforces no `VARCHAR` length, no integer width and no
   decimal scale, so a narrowing there changes nothing and is not reported. What SQLite does enforce
-  is `NOT NULL` and a `CHECK`, and what it does change is text moved into a numeric column: `'0042'`
+  is `NOT NULL`, a `CHECK`, `UNIQUE` and a foreign key, and what it does change is text moved into a numeric column: `'0042'`
   is stored as `42`. That last case needs `destructive = true` — which every SQLite column change
   already does, because SQLite rebuilds the table to apply it.
-- **What is not checked.** Adding a `unique = true`, a primary key, a foreign key or a
-  `CheckConstraint` over rows that violate it is not pre-counted; the database refuses it inside the
-  migration, which rolls back. A change that loses precision rather than digits (a `DecimalField` or
-  `BigIntegerField` → `FloatField`) is not reported either.
+- **Constraints are counted the way the database enforces them.** A `NULL` is never a duplicate, and
+  a `CheckConstraint` whose condition is `NULL` passes, so neither is counted.
+- **What is not checked.** A constraint the count cannot evaluate before the plan runs is left to the
+  database, which refuses it inside the migration and rolls back: a `CheckConstraint` over a column
+  the same plan adds, renames or retypes; a `UniqueConstraint` over a column it adds; and a foreign
+  key whose parent table the same plan creates or renames, or whose column it retypes. A change that loses
+  precision rather than digits (a `DecimalField` or `BigIntegerField` → `FloatField`) is not reported
+  either.
 - **Hand-editing the plan.** The header describes the plan `makemigrations` wrote. If you add a
   backfill or a `USING` clause by hand to get past a finding, delete that finding's
   `# pormg-lossy-alter:` line too, or regenerate the plan. A line naming a column the database no
-  longer has is ignored with a warning.
+  longer has is ignored with a warning. A `CheckConstraint`'s line carries its condition, which the
+  count evaluates; it is used only when the plan itself adds that same `CHECK`, and a line whose
+  condition no statement in the plan adds is refused as damaged.
 
 ---
 

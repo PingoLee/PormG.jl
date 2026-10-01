@@ -37,8 +37,9 @@ A **failure** is an exception, and at boot the right response is usually to let 
   instance's boot call needs `destructive = true`. Without it, any instance that still sees the plan
   throws, although the plan is already applied. That means its own copy, or a shared folder read
   before the first instance archived the plan.
-- `MigrationPrecheckError`: a column change in the plan would fail on existing rows — a `NULL` under
-  a new `NOT NULL`, a value longer than a new `max_length` — so nothing was applied. The rows were
+- `MigrationPrecheckError`: a column or constraint change in the plan would fail on existing rows — a
+  `NULL` under a new `NOT NULL`, a value longer than a new `max_length`, duplicates under a new
+  `unique = true` — so nothing was applied. The rows were
   counted first; `destructive = true` does not bypass it. See
   [Lossy Column Changes](workflow.md#Lossy-Column-Changes).
 - `InvalidMigrationError`: the plan file does not parse.

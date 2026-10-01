@@ -726,7 +726,12 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
                                   live_composites::Vector{LiveComposite};
                                   column_renames::Dict{String, String} = Dict{String, String}(),
                                   catalog_table::Symbol = model_name,
-                                  targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}())::Set{String}
+                                  targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}(),
+                                  # #830: the table's live columns, and the lossy-ALTER sink a new
+                                  # `UniqueConstraint` records into. `nothing` for a table this plan
+                                  # creates — it is empty, so nothing can fail.
+                                  live_columns = nothing,
+                                  lossy_alters::Vector{LossyAlter} = LossyAlter[])::Set{String}
   declared = declared_composites(model)
   table = String(model_table_name(model))
   declared_cols = _model_physical_columns(model)
@@ -778,6 +783,15 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
     j = matched[i]
     if j === nothing
       push!(creates, d)
+      # #830: a UniqueConstraint the table does not have yet fails on duplicate tuples already there.
+      # Counted under the catalog's column names — a member renamed by this plan under its old one, a
+      # member it adds under none (then there is no finding: the column cannot be counted).
+      if d.unique && !d.auto && live_columns !== nothing
+        live_name(c) = something(findfirst(==(c), column_renames),
+                                 c in live_columns ? c : nothing, Some(nothing))
+        append!(lossy_alters, _lossy_composite_unique(String(catalog_table), d.name,
+                                                      Union{String, Nothing}[live_name(c) for c in d.columns]))
+      end
       continue
     end
     lc = live[j][1]
@@ -1085,6 +1099,26 @@ function _refuse_stale_check_conditions(model::PormGModel, renames::Dict{String,
     end
   end
   return nothing
+end
+
+# #830: can a CHECK this plan adds be counted against the table as it is now? Only when every column
+# its condition names is a live column the plan does not retype. A name the declared model has but
+# the catalog does not is a column this plan adds (or the new side of a rename), which the count
+# cannot see. Names are read with the same token scan `_refuse_stale_check_conditions` uses: a token
+# followed by `(` is a function, bare tokens compare case-insensitively, and a token that names no
+# declared column (a keyword, a literal's neighbour) is ignored.
+function _check_countable(c::Models.CheckConstraint, model::PormGModel, live::LiveTable,
+                          retyped::Set{String})::Bool
+  declared_cols = _model_physical_columns(model)
+  live_cols = keys(live.columns)
+  for t in _sqlite_identifier_tokens(c.condition)
+    t.called && continue
+    for name in declared_cols
+      (t.quoted ? t.name == name : lowercase(t.name) == lowercase(name)) || continue
+      (name in live_cols && !(name in retyped)) || return false
+    end
+  end
+  return true
 end
 
 function _add_new_table(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel;
@@ -1396,7 +1430,9 @@ function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
     append!(lossy_alters, _lossy_alters(delta, conn; table = String(catalog_table), column = drop_column))
   end
 
-  # 4. Add the constraint for an `:add` or a `:repoint`.
+  # 4. Add the constraint for an `:add` or a `:repoint` — and #830's finding for it: the rows whose
+  #    value no parent holds fail the new key, on either engine.
+  append!(lossy_alters, _lossy_foreign_key(delta; table = String(catalog_table), column = drop_column))
   _add_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name, new_field, delta,
                                    hashed_name; drop_key_column = drop_column)
   return nothing
@@ -1493,6 +1529,10 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
   check_plan = _diff_checks(current_schema[model_name][:model], live.checks)
   _plan_check_drops!(conn, migration_plan, model_name, current_schema[model_name][:model], check_plan)
 
+  # #830: the columns this plan retypes. A CHECK over one cannot be counted before the plan runs —
+  # its condition would be evaluated against the OLD type.
+  retyped = Set{String}()
+
   # Pass maps to resolve fields so original keys can be used for accessing model.fields
   _resolve_table_fields(conn, model_name, live, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive, index_actions=index_actions, sqlite_rename_map=sqlite_rename_map,
                         lossy_alters=lossy_alters)
@@ -1558,6 +1598,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
       _plan_column_change!(conn, migration_plan, model_name, current_schema[model_name][:model],
                            field_name_stripped, field, delta, name;
                            catalog_table = catalog_table, lossy_alters = lossy_alters)
+      :type in delta && push!(retyped, field_name_stripped)
 
       # Index differences are RECORDED here and emitted after the loop — see `index_actions`.
 
@@ -1592,7 +1633,16 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
                                                 current_schema[model_name][:model], live.composites;
                                                 column_renames = sqlite_rename_map,
                                                 catalog_table = catalog_table,
-                                                targets = composite_targets)
+                                                targets = composite_targets,
+                                                live_columns = Set{String}(keys(live.columns)),
+                                                lossy_alters = lossy_alters)
+
+  # #830: each CHECK this plan adds fails on the rows already there whose condition is false — on
+  # both engines (SQLite adds it through the rebuild `_plan_check_drops!` registered).
+  for c in check_plan.adds
+    append!(lossy_alters, _lossy_check(String(catalog_table), c,
+                                       _check_countable(c, current_schema[model_name][:model], live, retyped)))
+  end
 
   # #742: the table CHECKs, second half — PostgreSQL's renames and adds, behind every column they name.
   _plan_check_adds!(conn, migration_plan, model_name, current_schema[model_name][:model], check_plan;

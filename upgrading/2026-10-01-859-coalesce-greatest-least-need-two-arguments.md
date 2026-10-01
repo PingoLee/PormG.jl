@@ -24,8 +24,8 @@ fewer than two expressions in the same way.
 ### Who this affects
 
 Apps that call one of the three functions with a single argument, or with a computed argument list
-that can hold one element. Before the change, the consuming apps were measured at **0** such
-`Greatest`/`Least` call sites.
+that can hold one element. Before the change, the consuming apps were measured at **0** call sites
+of any of the three (code search; the `coalesce` hits there are Julia's own `Base.coalesce`).
 
 ### How to find the calls to migrate
 
@@ -50,4 +50,5 @@ M.Result.objects.values("resultid", "best" => F("points"))
 ```
 
 For a computed list, branch on its length, or append a neutral second operand that cannot win, as
-in `Greatest(cols..., 0)` for non-negative values.
+in `Greatest(cols..., 0)` for non-negative values. That operand also changes a `NULL` result: both
+engines skip a `NULL` argument (#844), so a single `NULL` column then gives `0`, not `NULL`.

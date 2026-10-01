@@ -539,8 +539,7 @@ function _check_operand_count(fname::AbstractString, x::Tuple)
   length(x) >= 2 && return nothing
   throw(QueryBuildError(
     "\e[4m\e[31m$(fname)\e[0m must take at least two expressions; got $(length(x)). With one " *
-    "argument the result is that argument: write it directly " *
-    "(\e[4m\e[32m\"points\"\e[0m or \e[4m\e[32mF(\"points\")\e[0m) (#859)."))
+    "argument the result is that argument: write it directly, as \e[4m\e[32mF(\"points\")\e[0m (#859)."))
 end
 
 # #696: every `output_field=` goes through here, so a type string is validated when the expression

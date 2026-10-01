@@ -164,7 +164,10 @@ end
   whens = Any["WHEN a THEN 1"]
   @test_throws PormG.InvalidValueError Dialect.CASE(whens, Dict{String,Any}("else" => "0", "output_field" => bad), _CPG)
   @test_throws PormG.InvalidValueError Dialect.CASE(whens, Dict{String,Any}("else" => "0", "output_field" => bad), _CSL)
-  @test_throws PormG.InvalidValueError Dialect.COALESCE(Any["a", "b"], Dict{String,Any}("output_field" => bad), _CPG)
+  # #852: the three operand-typed functions cast on both engines now, so each is a sink on each.
+  for f in (Dialect.COALESCE, Dialect.GREATEST, Dialect.LEAST), conn in (_CPG, _CSL)
+    @test_throws PormG.InvalidValueError f(Any["a", "b"], Dict{String,Any}("output_field" => bad), conn)
+  end
 
   # The bind cast: `Case`'s `default=` value is a parameter, cast to `output_field` on PostgreSQL.
   # Hand-built so the constructor's own check is bypassed. The bind path only runs when the CASE
@@ -262,7 +265,8 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # #696: output_field through the full build, both engines
 # `Case` casts the whole expression and its `default=` bind parameter on PostgreSQL; SQLite wraps
-# the CASE in `CAST(… AS …)`. `Coalesce` casts on PostgreSQL only (SQLite ignores `output_field`).
+# the CASE in `CAST(… AS …)`. `Coalesce`, `Greatest` and `Least` cast the same way on both engines
+# since #852 — SQLite ignored their `output_field`, and `Greatest`/`Least` cast on neither.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#696: output_field renders through the build" begin
   q = _c696_q(); q.values("c" => Case([When("positionorder" => 1, then = 1)]; default = 0, output_field = IntegerField()))
@@ -271,9 +275,19 @@ end
   @test occursin(r"ELSE \$\d+::integer", pg)     # the bind cast on the default
   @test occursin(r"CAST\(CASE.*END\s+AS INTEGER\)"s, _c696_sql(q, _CSL))
 
-  q = _c696_q(); q.values("c" => Coalesce("points", Value(0); output_field = "numeric(10,2)"))
-  @test occursin(")::numeric(10,2)", _c696_sql(q, _CPG))
-  @test !occursin(r"(?i)numeric|decimal", _c696_sql(q, _CSL))
+  # SQLite keeps the sized spelling: an unsized name goes through the reverse type map, a sized one
+  # is upper-cased as written (`Dialect._map_cast_name`).
+  for (ctor, pg_fn, sl_fn) in ((Coalesce, "COALESCE(", "COALESCE("), (Greatest, "GREATEST(", "MAX("),
+                               (Least, "LEAST(", "MIN("))
+    q = _c696_q(); q.values("c" => ctor("points", Value(0); output_field = "numeric(10,2)"))
+    pg = _c696_sql(q, _CPG)
+    @test occursin("($(pg_fn)", pg) && occursin(")::numeric(10,2)", pg)
+    @test occursin("CAST($(sl_fn)", _c696_sql(q, _CSL)) && occursin("AS NUMERIC(10,2))", _c696_sql(q, _CSL))
+    # No `output_field`: no expression cast, on either engine. (PostgreSQL still types the literal's
+    # bind parameter, `$1::bigint`, which is not a cast of the result.)
+    q = _c696_q(); q.values("c" => ctor("points", Value(0)))
+    @test !occursin(")::", _c696_sql(q, _CPG)) && !occursin("CAST(", _c696_sql(q, _CSL))
+  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -360,5 +374,60 @@ end
     finally
       close(db)
     end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #852: Coalesce/Greatest/Least cast to their output_field on SQLite too
+# Both type readers believe a declared `output_field`, but SQLite rendered no cast for these three
+# (and PostgreSQL none for `Greatest`/`Least`), so a filter typed by the declaration compared the
+# operand's text with a number and matched nothing. They now cast through `sqlite_cast_sql`, so the
+# #822 temporal rules apply to them exactly as to `Cast` and `Case`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#852: Coalesce/Greatest/Least render their output_field cast on SQLite" begin
+  ctors = ((Coalesce, "COALESCE("), (Greatest, "MAX("), (Least, "MIN("))
+
+  @testset "a date is date(…) on SQLite, ::date on PostgreSQL" for (ctor, sl_fn) in ctors
+    q = _c696_q(); q.values("c" => ctor("positionorder", Value(0); output_field = DateField()))
+    @test occursin("date($(sl_fn)", _c696_sql(q, _CSL))
+    @test !occursin("AS DATE", _c696_sql(q, _CSL))
+    @test occursin(")::date", _c696_sql(q, _CPG))
+  end
+
+  @testset "another temporal type or an array is a capability error on SQLite" for (ctor, _) in ctors
+    for type in ("timestamp", "time", DateTimeField(), "integer[]", "numeric(10,2)[]")
+      q = _c696_q(); q.values("c" => ctor("positionorder", Value(0); output_field = type))
+      @test_throws PormG.BackendCapabilityError _c696_sql(q, _CSL)
+    end
+    # PostgreSQL has every one of them, so the same projection renders there.
+    q = _c696_q(); q.values("c" => ctor("positionorder", Value(0); output_field = "timestamp"))
+    @test occursin(")::timestamp", _c696_sql(q, _CPG))
+  end
+
+  # The issue's point, executed: the operand's own text never equals a number, the cast does.
+  @testset "SQLite: the cast is what makes the comparison match" begin
+    isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+    db = Main.SQLite.DB()
+    # Read inside the iteration: a SQLite row is a view of the cursor, gone once it advances.
+    value(sql) = only([row.v for row in Main.SQLite.DBInterface.execute(db, "SELECT " * sql * " AS v")])
+    try
+      before = "COALESCE(NULL, '7')"   # what SQLite rendered for output_field = "integer"
+      after = Dialect.COALESCE(Any["NULL", "'7'"], Dict{String,Any}("output_field" => "integer"), _CSL)
+      @test after == "CAST(COALESCE(NULL, '7') AS INTEGER)"
+      @test value(before * " = 7") == 0
+      @test value(after * " = 7") == 1
+    finally
+      close(db)
+    end
+  end
+
+  # The "Related" half: an array is not a scalar to either reader, whatever its element.
+  @testset "_sql_type_field answers nothing for an array" begin
+    for type in ("integer[]", "text[]", "numeric(10,2)[]", "varchar(20)[]", "char(3)[]")
+      @test PormG.QueryBuilder._sql_type_field(type) === nothing
+    end
+    # The scalar spellings are unchanged.
+    @test PormG.QueryBuilder._sql_type_field("numeric(10,2)") isa PormG.Models.sDecimalField
+    @test PormG.QueryBuilder._sql_type_field("varchar(20)") isa PormG.Models.sCharField
   end
 end

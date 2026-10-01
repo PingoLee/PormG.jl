@@ -1133,16 +1133,9 @@ end
                    Case([When("raceid" => 1, then = F("points"))], default = 0, output_field = "date"))
         @test _cte_case_field(Model_, expr) isa PormG.Models.sDateField
       end
-      # `Coalesce` renders no cast on SQLite, so its declared date is not what the column holds:
-      # still refused there, and the message points at the `Cast` that makes it one.
-      expr = Coalesce("raceid", 0, output_field = "date")
-      if backend == "PostgreSQL"
-        @test _cte_case_field(Model_, expr) isa PormG.Models.sDateField
-      else
-        err = try _cte_case_field(Model_, expr); nothing catch e; e end
-        @test err isa PormG.QueryBuildError
-        @test occursin("COALESCE", _window_msg(err)) && occursin("Cast", _window_msg(err))
-      end
+      # `Coalesce` too, on both engines since #852: it renders `date(COALESCE(…))` on SQLite. This
+      # cell asserted a `QueryBuildError` there while `Coalesce` rendered no cast.
+      @test _cte_case_field(Model_, Coalesce("raceid", 0, output_field = "date")) isa PormG.Models.sDateField
     end
 
     @testset "$backend — review edges: Value(missing), a non-When branch" begin
@@ -1339,6 +1332,46 @@ end
         end
       end
     end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #852: the two readers of a declared type agree on Coalesce/Greatest/Least, and the SQL applies it
+# Both readers believed `output_field` while SQLite rendered no cast (and PostgreSQL none for
+# `Greatest`/`Least`), so `Coalesce("surname", Value("?"); output_field = "integer")` refused "abc"
+# and bound 7 against the surname text — no rows. The cast now renders on both engines, so the
+# declaration is what the value is. The invariant is #835's, over every function and type family:
+# a CTE column and a projection alias accept or refuse the same value and bind it the same way.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#852: a Coalesce/Greatest/Least CTE column and alias are typed alike, and cast" begin
+  F_ = PormG.Functions
+  for (backend, Model_) in (("PostgreSQL", Window685Pg.Result), ("SQLite", Window685Sl.Result)),
+      (fname, ctor) in (("Coalesce", F_.Coalesce), ("Greatest", F_.Greatest), ("Least", F_.Least)),
+      (t, field_type, values_) in (("integer", PormG.Models.sIntegerField, (7, "abc")),
+                                   ("text", PormG.Models.sTextField, ("abc", 7)),
+                                   ("date", PormG.Models.sDateField, (PormG.QueryBuilder.Dates.Date(2020, 3, 29), "2020-03-29")))
+    @testset "$backend — $fname(…; output_field = $(repr(t)))" begin
+      expr = ctor("raceid", F_.Value(0); output_field = t)
+      # The CTE column is the declared type…
+      @test _cte_case_field(Model_, expr) isa field_type
+      # …and the alias filter agrees with it on every value, accepted or refused.
+      for v in values_
+        @test isequal(_concat_reader_verdict(Model_, expr, v; via_cte = true),
+                      _concat_reader_verdict(Model_, expr, v; via_cte = false))
+      end
+      # The SQL casts: what made the declaration true on PostgreSQL's `Coalesce` only.
+      q = Model_.objects
+      q.values("resultid", "x" => expr)
+      sql = inspect_query(q)[:sql_text]
+      @test occursin(backend == "PostgreSQL" ? ")::$(t)" : (t == "date" ? "date(" : "CAST("), sql)
+    end
+  end
+
+  # A temporal type with no exact SQLite rendering is refused by the cast, before either reader —
+  # the order `Cast(x, "timestamp")` has (#822). PostgreSQL has the type, so its reader decides.
+  for (backend, Model_) in (("PostgreSQL", Window685Pg.Result), ("SQLite", Window685Sl.Result))
+    err = try _cte_case_field(Model_, F_.Coalesce("raceid", F_.Value(0); output_field = "timestamp")); nothing catch e; e end
+    @test err isa (backend == "PostgreSQL" ? PormG.QueryBuildError : PormG.BackendCapabilityError)
   end
 end
 

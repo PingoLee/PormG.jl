@@ -1480,12 +1480,13 @@ end
 # families `_sql_type_field` (build_query.jl) recognises is refused rather than dropped: the caller
 # named it, and falling back to inference would quietly override them.
 #
-# `date` from `Cast` or `Case` types the column on both engines: SQLite renders the cast `date(x)`
-# (#822), whose text is what a DateField binds. It was refused here until then, because
-# `CAST(x AS DATE)` made `2020` of `'2020-03-29'`. `Coalesce`, `Greatest` and `Least` stay refused on
-# SQLite: they render no cast there, so the column holds the operand's text — a timestamp, say — and
-# a date filter on it would match nothing, the #812 silent-empty result. `Concat` never reaches that
-# arm: it renders no cast on EITHER engine, so its constructor refuses any non-text type (#835).
+# A declared type is believed because the SQL applies it on both engines: `Cast` and `Case` render
+# their cast (`date(x)` for a date on SQLite, #822), and since #852 so do `Coalesce`, `Greatest` and
+# `Least` (`Dialect._output_field_cast`). Those three were refused a `date` on SQLite until then —
+# they rendered no cast there, so the column held the operand's text (a timestamp, say) and a date
+# filter on it matched nothing, the #812 silent-empty result. A temporal type with no exact SQLite
+# rendering never reaches this function: the body's SELECT raises `BackendCapabilityError` first.
+# `Concat` renders no cast on EITHER engine, so its constructor refuses any non-text type (#835).
 function _declared_type(func::SQLTypeFunction, instruct::SQLInstruction)
   declared = get(func.kwargs, func.function_name == "CAST" ? "type" : "output_field", nothing)
   (declared isa AbstractString && !isempty(declared)) || return nothing
@@ -1494,12 +1495,6 @@ function _declared_type(func::SQLTypeFunction, instruct::SQLInstruction)
     "A CTE column cannot be typed from the SQL type \e[4m\e[31m$(declared)\e[0m on " *
     "$(func.function_name)(…). Name a text, integer, bigint, float, numeric, boolean or date type " *
     "instead (#812, #823)."))
-  if typed isa Models.sDateField && instruct.connection isa PormGSQLite && !(func.function_name in ("CAST", "CASE"))
-    throw(QueryBuildError(
-      "A CTE column cannot be typed \e[4m\e[31mdate\e[0m by $(func.function_name)(…; output_field = …) " *
-      "on SQLite: it renders no cast there, so the column holds its operand's text rather than a date. " *
-      "Wrap it in \e[32mCast(…, \"date\")\e[0m, which renders date(…) (#822)."))
-  end
   return typed
 end
 

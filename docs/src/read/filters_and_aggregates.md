@@ -1139,9 +1139,11 @@ same whether the filter is written top-level or inside `Q(...)`/`Qor(...)`:
 - a text function (`Lower`, `Upper`, `Trim`, `Replace`, `Concat`) is text;
 - `Sum`, `Count`, `Avg` and arithmetic on numbers are numbers;
 - `Cast(...)`, or a function given `output_field = ...`, has the type it names when that is a text,
-  number (`integer`, `int8`, `float8`, `numeric`, …), boolean or date type. For any other type, such
-  as a timestamp, `Coalesce`, `Greatest` and `Least` fall back to their operand's type, and `Cast`
-  and `Case` bind the value as given.
+  number (`integer`, `int8`, `float8`, `numeric`, …), boolean or date type. The SQL casts the value
+  to that type on both engines, so the filter compares like with like. For any other type, such as
+  a timestamp on PostgreSQL, `Coalesce`, `Greatest` and `Least` fall back to their operand's type,
+  and `Cast` and `Case` bind the value as given. On SQLite the cast itself refuses a timestamp (see
+  [Functions and Dates](functions_and_dates.md)).
 
 A value of the wrong type raises `FilterError`, which names the alias. When PormG cannot tell what
 type an expression returns, for example a `Case` with no `output_field`, it binds the value as

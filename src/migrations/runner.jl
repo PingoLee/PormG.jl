@@ -1063,55 +1063,35 @@ _get_live_table_names(connection::PormGSQLite)::Vector{String} = sort!(_sqlite_u
     _record_migration(connection, version, name, checksum, sql_content, status, is_destructive; conn)
 
 Insert a migration record into the history table within an existing transaction connection.
-"""
-function _record_migration(pool::PormGPostgres, version::String, name::String, checksum::String, 
-                           sql_content::String, status::String, is_destr::Bool;
-                           conn = nothing)
-  sql = """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive", "format_version")
-           VALUES ('$(replace(version, "'" => "''"))', '$(replace(name, "'" => "''"))', '$(replace(checksum, "'" => "''"))',
-           '$(replace(sql_content, "'" => "''"))', '$(replace(status, "'" => "''"))', $(is_destr), $(MIGRATION_FORMAT_VERSION));"""
-  # Release the connection iff we acquired it here (conn === nothing). When the
-  # caller supplies a `conn` it owns the connection (e.g. the migration tx) and
-  # frees it itself; without this, the fire-and-forget call sites (mark_applied /
-  # mark_failed and the lifecycle failure paths) would acquire a write connection
-  # and never return it to the pool on success — a slow pool leak.
-  with_transaction(pool, sql, conn=conn, release_conn = conn === nothing)
-end
 
-function _record_migration(pool::PormGSQLite, version::String, name::String, checksum::String, 
-                           sql_content::String, status::String, is_destr::Bool;
+Every value is bound, never interpolated (#846): `version` and `name` arrive from the public repair
+ops and `sql_content` is the whole plan's SQL. The statement is `Dialect.insert_migration_record_sql`,
+which on SQLite also writes `applied_at` explicitly (#570).
+
+Releases the connection iff it acquired one here (`conn === nothing`). A caller that passes `conn`
+owns it (the migration transaction) and frees it itself; without this, the fire-and-forget call
+sites (`mark_applied` / `mark_failed` and the lifecycle failure paths) would take a write connection
+and never return it on success, a slow pool leak.
+"""
+function _record_migration(pool::Union{PormGPostgres, PormGSQLite}, version::String, name::String,
+                           checksum::String, sql_content::String, status::String, is_destr::Bool;
                            conn = nothing)
-  is_destr_val = is_destr ? 1 : 0
-  # `applied_at` is written explicitly rather than left to the column DEFAULT (#570): a table
-  # created before #570 keeps its `datetime('now')` default forever (`CREATE TABLE IF NOT EXISTS`
-  # never revisits it, and SQLite cannot alter a default in place), so only an explicit value
-  # guarantees the canonical text on every database.
-  sql = """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive", "format_version", "applied_at")
-           VALUES ('$(replace(version, "'" => "''"))', '$(replace(name, "'" => "''"))', '$(replace(checksum, "'" => "''"))',
-           '$(replace(sql_content, "'" => "''"))', '$(replace(status, "'" => "''"))', $(is_destr_val), $(MIGRATION_FORMAT_VERSION),
-           $(Dialect.sqlite_applied_at_now_sql()));"""
-  # Release the connection iff we acquired it here (conn === nothing). When the
-  # caller supplies a `conn` it owns the connection (e.g. the migration tx) and
-  # frees it itself; without this, the fire-and-forget call sites (mark_applied /
-  # mark_failed and the lifecycle failure paths) would acquire a write connection
-  # and never return it to the pool on success — a slow pool leak.
-  with_transaction(pool, sql, conn=conn, release_conn = conn === nothing)
+  # SQLite stores the bound `Bool` as the integer `1`/`0` the column has always held.
+  params = Any[version, name, checksum, sql_content, status, is_destr, MIGRATION_FORMAT_VERSION]
+  with_transaction(pool, Dialect.insert_migration_record_sql(pool);
+                   conn = conn, release_conn = conn === nothing, params = params)
 end
 
 """
     _update_migration_status(connection, version, new_status; conn)
 
-Update the status of an existing migration record.
+Update the status of an existing migration record. Both values are bound (#846), and the connection
+is released iff it was acquired here, as in `_record_migration`.
 """
-function _update_migration_status(pool::Union{PormGPostgres, PormGSQLite}, version::String, new_status::String; 
+function _update_migration_status(pool::Union{PormGPostgres, PormGSQLite}, version::String, new_status::String;
                                   conn = nothing)
-  sql = """UPDATE pormg_migrations SET "status" = '$(replace(new_status, "'" => "''"))' WHERE "version" = '$(replace(version, "'" => "''"))';"""
-  # Release the connection iff we acquired it here (conn === nothing). When the
-  # caller supplies a `conn` it owns the connection (e.g. the migration tx) and
-  # frees it itself; without this, the fire-and-forget call sites (mark_applied /
-  # mark_failed and the lifecycle failure paths) would acquire a write connection
-  # and never return it to the pool on success — a slow pool leak.
-  with_transaction(pool, sql, conn=conn, release_conn = conn === nothing)
+  with_transaction(pool, Dialect.update_migration_status_sql(pool);
+                   conn = conn, release_conn = conn === nothing, params = Any[new_status, version])
 end
 
 # ==============================================================================
@@ -2944,13 +2924,8 @@ function remove_migration_record(connection::Union{PormGPostgres, PormGSQLite}, 
   _require_recorded_version(connection, version, "remove_migration_record")
   init_migrations(connection)
 
-  # Use dialect-specific delete
-  if connection isa PormGPostgres
-    sql = """DELETE FROM pormg_migrations WHERE "version" = '$(replace(version, "'" => "''"))';"""
-  else
-    sql = """DELETE FROM pormg_migrations WHERE "version" = '$(replace(version, "'" => "''"))';"""
-  end
-  fetch(connection, sql)
+  # Bound, never interpolated (#846). No `conn`: `fetch` acquires and releases its own.
+  fetch(connection, Dialect.delete_migration_record_sql(connection); params = Any[version])
   @info("Removed migration record for version $version.")
 end
 

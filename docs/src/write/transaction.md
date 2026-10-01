@@ -606,7 +606,7 @@ end
 If you need finer control (e.g., manual `SAVEPOINT` or multi-statement blocks), PormG exposes:
 
 - **`with_tx_context(conn_pool, conn::LibPQ.Connection, block)`**: Install a connection in thread-local storage so child tasks inherit it.
-- **`with_transaction(settings, sql, conn=nothing, release_conn=false)`**: Execute raw SQL inside a transaction context.
+- **`with_transaction(settings, sql, conn=nothing, release_conn=false, params=nothing)`**: Execute raw SQL inside a transaction context. Bind values with `params`, a vector or tuple in the backend's own placeholder style (`$1, $2` on PostgreSQL, `?` on SQLite), as with [raw `fetch`](@ref "Binding values — a manual-params array"). Never interpolate them into `sql`.
 - **`get_tx_connection()`**: Check whether a transaction context is active, on any database, and return its connection. It does not say which database that is, so never hand it to a query for a different one.
 - **`finalize_transaction_connection!(settings, conn; rollback_error=nothing)`**: Return `conn` to the pool exactly once from a terminal `finally`. Pass `rollback_error=nothing` when the COMMIT succeeded or the cleanup ROLLBACK ran cleanly; pass the caught error when the cleanup ROLLBACK itself threw, and a non-benign one causes the connection to be renewed or discarded instead of released.
 - **`acquire_connection(pool; timeout_seconds=nothing)`** / **`release_connection(pool, conn)`**: Lease a connection and give it back. Every acquire must be paired with a release, from a `finally`. `with_transaction` does this for you when you pass `conn=nothing`. Neither is exported — call them qualified, as below.

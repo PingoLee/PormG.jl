@@ -1023,7 +1023,8 @@ end
     # A bounded numeric checks its precision after rounding to its scale, like the parser.
     sql, params = _precheck_sql(PG_LA803, f("DECIMAL(8, 2)"); server_version = 150008)
     @test occursin("abs(round(CAST(CAST(\"c\" AS text) AS numeric), \$2::integer)) >= power(10::numeric, \$3::integer)", sql)
-    @test params == Any[Migrations._TEXT_CAST_RE.numeric, 2, 6]
+    @test params == Any[Migrations._TEXT_CAST_RE.numeric, 2, 6, Migrations._TEXT_CAST_RE.nan]
+    @test occursin("CAST(\"c\" AS text) !~* \$4 AND", sql)   # the NaN test is bound, not a literal
     for (type, re) in (("DOUBLE PRECISION", :float), ("BOOLEAN", :bool), ("UUID", :uuid))
         @test _precheck_sql(PG_LA803, f(type); server_version = 110000) ==
               (base * "CAST(\"c\" AS text) !~* \$1", Any[getfield(Migrations._TEXT_CAST_RE, re)])
@@ -1083,4 +1084,51 @@ end
 @testset "#828 review: the float grammar takes a signed NaN" begin
     ok(v) = occursin(Regex(Migrations._TEXT_CAST_RE.float, "i"), v)
     @test ok("-nan") && ok("+NaN") && ok("\tnan ")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#828, delta review): an undeclared database default dropped by a USING retype
+# The retype must drop the old default to run. A live expression default the model does not declare
+# is never part of the delta, so nothing sets it back: future inserts lose it. That is recorded as a
+# `:silent` finding, so it takes the opt-in; declaring it as a `db_default` restores it instead.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#828 review: a USING retype that would silently drop an undeclared expression default is a finding" begin
+    M = Models
+    @test _la803_kinds(M.IntegerField(), M.CharField(max_length = 5, db_default = (postgres = "'0'",)), PG_LA803) ==
+          [:text_cast, :drop_default]
+    @test lossy_alter_class(LossyAlter(:drop_default, "t", "c", "a", "b")) === :silent
+    # Declared on the new side: it is set back after the retype, so nothing is lost.
+    @test _la803_kinds(M.IntegerField(db_default = (postgres = "0",)), M.CharField(max_length = 5, db_default = (postgres = "'0'",)), PG_LA803) ==
+          [:text_cast]
+    # A literal default is a `:default` delta like any other, dropped by the plan on purpose.
+    @test _la803_kinds(M.IntegerField(), M.CharField(max_length = 5, default = "0"), PG_LA803) == [:text_cast]
+    # No USING, no forced drop.
+    @test isempty(_la803_kinds(M.TextField(), M.IntegerField(db_default = (postgres = "0",)), PG_LA803))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#830, security review): the CHECK count runs only a condition the models declare
+# The plan is data (#710): `dry_run` never executes its statements. A header condition rewritten
+# together with the plan's own CHECK statement passes `_refuse_unplanned_conditions`, so that check
+# cannot be what decides which SQL the count runs. The models file is: a condition it does not
+# declare is left uncounted, and the payload — here a query that would raise if it ever ran — never
+# reaches the database.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite #830: a CHECK condition the models do not declare is never run by dry_run" begin
+    _la803_with_key("la830anchor") do key, pool
+        fetch(pool, "INSERT INTO race803 (name, laps) VALUES ('Spa', -1);")
+        write(joinpath(key, "models.jl"),
+              _la830_models("Models.CheckConstraint(condition = \"laps >= 0\", name = \"race803_laps_ck\")"))
+        _la803_quiet(() -> Migrations.makemigrations(key; interactive = false))
+        pending = joinpath(key, "migrations", "pending_migrations.jl")
+        # Declared: counted (the -1 row).
+        @test only(Migrations.dry_run(key).lossy_alters).rows == 1
+        # Header and statement rewritten together: the plan-text guard is satisfied, the models are not.
+        payload = "laps >= (SELECT COUNT(*) FROM pormg_no_such_table_830)"
+        write(pending, replace(read(pending, String), "laps >= 0" => payload))
+        @test only(Migrations._plan_lossy_alters(pending)).condition == payload   # the guard passes
+        r = _la803_quiet(() -> Migrations.dry_run(key))                            # and nothing raises
+        @test only(r.lossy_alters).rows === nothing
+        @test only(r.lossy_alters).condition === nothing
+    end
 end

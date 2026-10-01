@@ -290,7 +290,7 @@ line per column or constraint). `dry_run()` lists them, and `migrate()` acts on 
 | Kind | Examples | What `migrate()` does |
 | :--- | :--- | :--- |
 | **Fails on existing rows** | `null = true` → `false` over rows holding `NULL`; a shorter `max_length`; `BigIntegerField` → `IntegerField`; fewer `max_digits`; `IntegerField` → `PositiveIntegerField` over negative values; a **new** column that is `NOT NULL` with no `default`, added to a table that has rows; `unique = true` over duplicate values; `primary_key = true` moved to a column with duplicates (or `NULL`s, on PostgreSQL); a new `UniqueConstraint` over duplicate tuples; a new `CheckConstraint` some rows fail; a new or re-pointed foreign key over rows with no parent; on PostgreSQL, text → a number, boolean, date, timestamp, UUID or JSON over values that do not parse as the new type | Counts the offending rows first. Any row that would fail means the plan is refused before anything is written; none means it applies with no opt-in. |
-| **Changes existing values** | fewer `decimal_places` (values round); `FloatField` or `DecimalField` → `IntegerField` (values round); `DateTimeField` → `DateField` (the time is dropped); a `TIMESTAMPTZ` → `TIMESTAMP` (the offset is dropped); on PostgreSQL, a number → `BooleanField` (every non-zero value becomes `true`) | Needs `destructive = true`, exactly like a `DROP`. |
+| **Changes existing values** | fewer `decimal_places` (values round); `FloatField` or `DecimalField` → `IntegerField` (values round); `DateTimeField` → `DateField` (the time is dropped); a `TIMESTAMPTZ` → `TIMESTAMP` (the offset is dropped); on PostgreSQL, a number → `BooleanField` (every non-zero value becomes `true`); on PostgreSQL, one of the text or boolean conversions above on a column with a database default the model does not declare as a `db_default` — the conversion has to drop it | Needs `destructive = true`, exactly like a `DROP`. |
 | **Cannot run as planned** | a plan written by an older PormG that changes text → a number, boolean, date, timestamp, UUID or JSON, or boolean ↔ a number, on PostgreSQL | Refused: PostgreSQL has no automatic cast between these, and that plan carries no `USING` clause. Run `makemigrations()` again; current plans write the `USING`. |
 
 For the first kind, `destructive = true` does **not** get the plan through — no opt-in can make a
@@ -338,9 +338,11 @@ A few things to know:
 - **Hand-editing the plan.** The header describes the plan `makemigrations` wrote. If you add a
   backfill or a `USING` clause by hand to get past a finding, delete that finding's
   `# pormg-lossy-alter:` line too, or regenerate the plan. A line naming a column the database no
-  longer has is ignored with a warning. A `CheckConstraint`'s line carries its condition, which the
-  count evaluates; it is used only when the plan itself adds that same `CHECK`, and a line whose
-  condition no statement in the plan adds is refused as damaged.
+  longer has is ignored with a warning. A `CheckConstraint`'s line carries its condition, but the
+  plan is data, so that text is never what the count runs: the condition is counted only when the
+  models file declares the same `CheckConstraint` (same table, name and condition), and otherwise the
+  database checks it during the migration. A line whose condition no statement in the plan adds is
+  refused as damaged.
 
 ---
 

@@ -863,6 +863,7 @@ Every kind a [`LossyAlter`](@ref) can carry, with its class — the closed set, 
 | `:text_affinity` | SQLite | `:silent` | text becomes a numeric/boolean column, so `'0042'` stores as `42` |
 | `:text_cast` | PostgreSQL | `:rows` | text becomes a number, boolean, date, timestamp, UUID or JSON (the plan casts with `USING`), and some values do not parse |
 | `:to_boolean` | PostgreSQL | `:silent` | a number becomes a boolean (`USING "c" <> 0`), so every non-zero value becomes `true` |
+| `:drop_default` | PostgreSQL | `:silent` | a `USING` retype must drop a database default the model does not declare, and nothing puts it back |
 | `:no_implicit_cast` | PostgreSQL | `:refused` | the engine has no automatic cast between the two types and the plan writes no `USING` |
 
 `:rows` findings are counted before `migrate` runs and refuse the plan when any row would fail;
@@ -891,6 +892,7 @@ const LOSSY_ALTER_KINDS = (
   text_cast          = :rows,
   to_integer         = :silent,
   to_boolean         = :silent,
+  drop_default       = :silent,
   to_date            = :silent,
   to_time            = :silent,
   drop_timezone      = :silent,
@@ -997,6 +999,15 @@ function _lossy_alters(delta::ColumnDelta, conn::Union{PormGPostgres, PormGSQLit
   # no value and stay; the CHECK one is left to the database, which still enforces it.
   castless = conn isa PormGPostgres && :type in delta && readable &&
              _pg_no_implicit_cast(old_spec.type, new_spec.type)
+  # #828: `alter_field` drops the old default before a `USING` retype (PostgreSQL would cast it, and
+  # cannot) and sets the DECLARED one after. A live expression default the model does not declare is
+  # never part of the delta (`_defaults_equal`), so nothing would set it back: the retype would remove
+  # it silently. That is a change to how future rows are written, so it takes the opt-in — or the
+  # model declares it as a `db_default`, and it is restored.
+  if castless && _pg_retype_has_using(old_spec.type, new_spec.type) &&
+     old_spec.default isa ExpressionDefault && new_spec.default isa NoDefault
+    push!(type_found, finding(:drop_default))
+  end
 
   found = LossyAlter[]
   if :nullable in delta && old_spec.nullable && !new_spec.nullable

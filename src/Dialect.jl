@@ -2053,7 +2053,9 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   #     at the wrong engine.
   #   * `NoDefault` — DROP. Note this is NOT reached for the one asymmetric case #496 introduced:
   #     a live expression default the model does not declare never enters the delta at all
-  #     (`_defaults_equal`, `src/column_ir.jl`), so PormG cannot propose dropping it.
+  #     (`_defaults_equal`, `src/column_ir.jl`), so PormG cannot propose dropping it — except through
+  #     `retype!` above, which must drop it for a `USING` retype to run; the planner records that
+  #     case as a `:drop_default` finding (#828), so it takes `destructive = true`.
   if :default in delta || default_dropped
     new_default = delta.new_spec.default
     if new_default isa NoDefault && default_dropped

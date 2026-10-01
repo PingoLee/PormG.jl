@@ -206,6 +206,44 @@ function _plan_lossy_alters(plan_path::AbstractString)::Vector{LossyAlter}
   return found
 end
 
+"""
+    _anchor_check_conditions(findings, settings) -> Vector{LossyAlter}
+
+The findings, with each `:add_check` condition kept only when the models file declares that same
+CHECK — same table, same name, same condition text (#830). The condition is the one value the
+pre-check interpolates into SQL, and the plan is DATA (#710): `dry_run` never executes its
+statements, so neither the header nor a statement beside it may decide what SQL the count runs. The
+models file is the trusted source the plan was written from, loaded with `makemigrations`' own
+loader, and only when the header has a CHECK finding at all.
+
+A condition the models do not declare — a hand-edited header, a table renamed in the same plan, a
+models file changed since `makemigrations`, or one that does not load — is not counted: the finding
+keeps its place with no condition (`_finding_countable`), and the database checks the CHECK when the
+migration runs, as it did before #830.
+"""
+function _anchor_check_conditions(findings::Vector{LossyAlter}, settings::PormGSettings)::Vector{LossyAlter}
+  any(f -> f.kind === :add_check, findings) || return findings
+  declared = Set{Tuple{String, String, String}}()
+  try
+    schema = _load_current_models(_resolve_models_file(settings, nothing, "the CheckConstraint row count"))
+    for entry in values(schema)
+      m = get(entry, :model, nothing)
+      m isa PormGModel || continue
+      for c in Models.declared_check_constraints(m)
+        push!(declared, (String(model_table_name(m)), c.name, c.condition))
+      end
+    end
+  catch e
+    @warn("The models file could not be loaded, so no CheckConstraint is pre-counted; the database still checks each one when the migration runs.",
+          exception = e)
+  end
+  anchored(f) = f.kind !== :add_check || (f.table, f.column, something(f.condition, "")) in declared
+  return LossyAlter[anchored(f) ? f :
+                    LossyAlter(f.kind, f.table, f.column, f.old_type, f.new_type, f.bound, f.scale, f.rows,
+                               f.columns, f.references, nothing)
+                    for f in findings]
+end
+
 # #830: an `:add_check` finding carries the condition the pre-check interpolates into its
 # `SELECT COUNT(*) … WHERE NOT (<condition>)`. That is SQL the developer wrote, and the plan runs it
 # as DDL anyway — but the header is outside what `migrate` executes, so a condition is only taken
@@ -474,8 +512,10 @@ function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
   elseif f.kind === :add_composite_unique
     return ("SELECT CAST(($(duplicates([q(c) for c in f.columns]))) AS BIGINT) AS n", Any[])
   elseif f.kind === :add_check
-    # Interpolated, and only here: `_plan_lossy_alters` has already matched the condition against a
-    # CHECK the plan itself adds (`_refuse_unplanned_conditions`).
+    # Interpolated, and only here — and only a condition the models file declares: `dry_run` and
+    # `migrate` pass every finding through `_anchor_check_conditions`, which strips any other, and
+    # `_finding_countable` keeps a stripped one from reaching this line.
+    f.condition === nothing && throw(InvalidMigrationError("No CheckConstraint condition to count with."))
     return ("SELECT COUNT(*) AS n FROM \"$table\" WHERE NOT ($(f.condition))", Any[])
   elseif f.kind === :add_foreign_key
     parent, key = f.references
@@ -520,10 +560,11 @@ end
 const _PG_INPUT_IS_VALID = 160000
 
 # PostgreSQL 11–15 has no `pg_input_is_valid`, so the `:text_cast` count falls back to the grammar of
-# the target type's input function, as an anchored regex over the text (#828). Exact enough for the
-# types whose input is a fixed grammar — an integer (and its range), a float, a numeric (and its
-# precision), a boolean, a UUID — and, for an approximation, erring the safe way where it can: a
-# value it wrongly accepts still fails the ALTER, which rolls back. Dates, timestamps and JSON have
+# the target type's input function, as an anchored regex over the text (#828). Exact for an integer
+# (and its range), a numeric (and its precision) and a boolean; close for a float and a UUID, whose
+# input functions accept a few rare spellings these do not (a hex float; a UUID hyphenated at odd
+# places is accepted, unbalanced braces too). A value wrongly refused costs a hand-written step on a
+# pre-16 server; one wrongly accepted still fails the ALTER, which rolls back. Dates, timestamps and JSON have
 # no such grammar (`'Jan 5 2020'`, a `DateStyle`-dependent order, nested JSON), so there every
 # non-NULL value counts as unverifiable: such a retype over a populated table needs PostgreSQL 16.
 const _TEXT_CAST_RE = (
@@ -532,6 +573,7 @@ const _TEXT_CAST_RE = (
   numeric = raw"^\s*([+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?|nan)\s*$",
   bool = raw"^\s*(t|tr|tru|true|y|ye|yes|on|1|f|fa|fal|fals|false|n|no|of|off|0)\s*$",
   uuid = raw"^\{?[0-9a-f]{4}(-?[0-9a-f]{4}){7}\}?$",
+  nan = raw"^\s*nan\s*$",
 )
 
 function _text_cast_fallback(col::AbstractString, target::CanonicalType)::Tuple{String, Vector{Any}}
@@ -543,10 +585,11 @@ function _text_cast_fallback(col::AbstractString, target::CanonicalType)::Tuple{
             Any[_TEXT_CAST_RE.int, Int(lo), Int(hi)])
   elseif target isa CDecimal && _whole_digits(target) !== nothing
     # NaN fits any `numeric(p, s)`. Matched with the same `\s` the grammar allows (`btrim` would
-    # strip spaces only, and a tab-padded `NaN` would reach `abs()`).
-    return ("CASE WHEN $t ~* \$1 THEN $t !~* '^\\s*nan\\s*\$' AND " *
+    # strip spaces only, and a tab-padded `NaN` would reach `abs()`), and bound like every other
+    # pattern here, so `standard_conforming_strings` cannot change what it means.
+    return ("CASE WHEN $t ~* \$1 THEN $t !~* \$4 AND " *
             "abs(round(CAST($t AS numeric), \$2::integer)) >= power(10::numeric, \$3::integer) ELSE true END",
-            Any[_TEXT_CAST_RE.numeric, _decimal_scale(target), _whole_digits(target)])
+            Any[_TEXT_CAST_RE.numeric, _decimal_scale(target), _whole_digits(target), _TEXT_CAST_RE.nan])
   elseif target isa Union{CFloat64, CDecimal, CBool, CUUID}
     re = target isa CFloat64 ? _TEXT_CAST_RE.float : target isa CDecimal ? _TEXT_CAST_RE.numeric :
          target isa CBool ? _TEXT_CAST_RE.bool : _TEXT_CAST_RE.uuid
@@ -596,8 +639,14 @@ end
 # creates, or renames (the reference names the NEW table, the catalog still has the old one), or
 # whose key column it renames. Then there is nothing to count against, and the finding is kept
 # uncounted: the database checks the key when the migration runs, as it did before #830.
-_finding_countable(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::Bool =
-  f.kind !== :add_foreign_key || _live_column_exists(conn, f.references[1], f.references[2])
+#
+# A CHECK whose condition is not declared in the models (`_anchor_check_conditions`) is the other
+# uncountable case: there is no trusted condition to count with.
+function _finding_countable(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::Bool
+  f.kind === :add_check && return f.condition !== nothing
+  f.kind === :add_foreign_key && return _live_column_exists(conn, f.references[1], f.references[2])
+  return true
+end
 
 """
     _precheck_lossy_alters(conn, findings; timeouts) -> Vector{LossyAlter}
@@ -686,7 +735,9 @@ function _precheck_one(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
     return nothing
   end
   if !_finding_countable(conn, f)
-    @info("A foreign key's parent is not in the database yet (this plan creates or renames it), so its rows are not pre-counted; the database checks them when the migration runs.",
+    @info(f.kind === :add_check ?
+            "This CheckConstraint's condition is not declared in the models file as the plan records it, so its rows are not pre-counted; the database checks them when the migration runs." :
+            "A foreign key's parent is not in the database yet (this plan creates or renames it), so its rows are not pre-counted; the database checks them when the migration runs.",
           finding = _lossy_alter_summary(f))
     return f
   end
@@ -1391,7 +1442,7 @@ function dry_run(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGS
   
   checksum = compute_checksum(all_sql)
   destructive_stmts = detect_destructive_actions(ordered_statements)
-  lossy_alters = _plan_lossy_alters(_pending_plan_path(settings))
+  lossy_alters = _anchor_check_conditions(_plan_lossy_alters(_pending_plan_path(settings)), settings)
   isempty(lossy_alters) || (lossy_alters = _precheck_lossy_alters(connection, lossy_alters))
 
   return DryRunResult(
@@ -2434,7 +2485,8 @@ function migrate(connection::PormGBackend, settings::PormGSettings;
   destructive_stmts = detect_destructive_actions(ordered_statements)
   # #803: the lossy column changes `makemigrations` recorded in the plan header. The SQL alone cannot
   # say what a column held before, so the header is the only source; a plan without one has none.
-  lossy_alters = isempty(ordered_statements) ? LossyAlter[] : _plan_lossy_alters(_pending_plan_path(settings))
+  lossy_alters = isempty(ordered_statements) ? LossyAlter[] :
+    _anchor_check_conditions(_plan_lossy_alters(_pending_plan_path(settings)), settings)
 
   # --- Phase 2: Confirm, BEFORE the lock (#737). A prompt waits on a human; holding the migration
   # lock meanwhile would stall every other instance booting against this database. TTY-aware:

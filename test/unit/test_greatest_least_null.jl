@@ -84,6 +84,12 @@ end
   @test occursin("LEAST(\"Tb\".\"a\", \"Tb\".\"b\", \"Tb\".\"c\")", pg)
   @test !occursin("COALESCE", pg)
 
+  # A declared `output_field` casts the whole result once (#852), outside the rotations: the
+  # COALESCE nodes carry no declaration of their own.
+  sl = _gl_inspect(q -> q.values("g" => Greatest("a", "b"; output_field = "integer")), _GL_SL)[:sql_text]
+  @test occursin("CAST(MAX(COALESCE(\"Tb\".\"a\", \"Tb\".\"b\"), COALESCE(\"Tb\".\"b\", \"Tb\".\"a\")) AS INTEGER)", sl)
+  @test count("CAST(", sl) == 1
+
   # One operand is left alone: SQLite's coalesce needs two arguments, and `Greatest(x)` is not
   # what #844 is about.
   sl = _gl_inspect(q -> q.values("g" => Greatest("a")), _GL_SL)[:sql_text]

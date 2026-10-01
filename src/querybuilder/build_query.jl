@@ -574,7 +574,11 @@ function _resolve_having_filter_value(alias::MemoKey, raw_value, instruc::SQLIns
                                     subject = "projection alias")
   # #654: a range is two scalars formatted as one iterable lookup, so the SQLite native-value rule
   # applies per operand — exactly what each would get as the right-hand side of a `@gte`/`@lte`.
-  operator in ("BETWEEN", "NOT BETWEEN") &&
+  # #851: so is a membership list. `@in`/`@nin` reached the scalar call below with a `Vector`, which
+  # is never a `Number`, so `Sum("points")` filtered `@in => [25.5, 1.5]` bound `["25.5", "1.5"]` and
+  # matched nothing on SQLite where `=` matched. Same condition as `_format_filter_value`'s
+  # element-wise arm, so an element is kept native exactly when it was formatted on its own.
+  operator in _ITERABLE_LOOKUP_OPERATORS && raw_value isa AbstractArray &&
     return [_sqlite_preserve_native_parameter(r, f, formatter, instruc) for (r, f) in zip(raw_value, formatted_value)]
   return _sqlite_preserve_native_parameter(raw_value, formatted_value, formatter, instruc)
 end
@@ -797,7 +801,12 @@ end
 # them renders a cast, and `Concat` — the one that takes `output_field` — refuses a non-text type when
 # it is built (#835), so whenever a CTE body can type a `Concat` column (it needs an `output_field`
 # there), it types it text too.
-const _TEXT_OUTPUT_FUNCTIONS = ("LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "REPLACE", "CONCAT")
+#
+# `EXTRACT_DATE` is `ToChar` (`to_char` / `strftime`, text on both engines). Its alias had no type —
+# `PormGTypeField` keys `TO_CHAR`, a name no node carries — so a number compared with it bound as
+# given: `strftime('%Y', …) = 2020` matched nothing on SQLite, the #851 symptom by another route. A
+# `ToChar` built with its own `formatter=` keeps it: `p.formatter` is checked first.
+const _TEXT_OUTPUT_FUNCTIONS = ("LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "REPLACE", "CONCAT", "EXTRACT_DATE")
 # Functions whose result has the type of their operands — the first one that names a type decides.
 const _OPERAND_TYPED_FUNCTIONS = ("MAX", "MIN", "COALESCE", "GREATEST", "LEAST", "NULLIF")
 

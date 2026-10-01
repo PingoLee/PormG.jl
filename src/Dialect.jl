@@ -30,6 +30,8 @@ import PormG: ColumnDelta, LiteralDefault, ExpressionDefault
 import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CDecimal, CText, CVarChar, CTime
 # #564: the remaining temporal nouns, for the read-parser half of the value-representation table.
 import PormG: CDate, CDateTime, CInterval
+# #828: the rest of the castless-retype targets, for `_postgres_retype_using`.
+import PormG: CBool, CUUID, CJSON
 import PormG: _has_non_negative, _byte_bound
 import PormG: get_constraints_pk, get_constraints_unique, get_constraints_checks, get_constraints_byte_length_checks
 import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column, format_timezone_sql, model_table_name, fk_target_table
@@ -1216,6 +1218,39 @@ function _postgres_bytea_cast_expression(field_name::Union{String, Symbol}, old_
   return "$(column_ref)::bytea"
 end
 
+"""
+    _postgres_retype_using(field_name, old_type, new_type, type_sql) -> Union{Nothing, String}
+
+The `USING` expression for a PostgreSQL retype between types with no assignment cast (#828), or
+`nothing` for a pair PostgreSQL converts on its own (or one PormG has no expression for). Without
+it, `ALTER COLUMN … TYPE` fails on every table, even an empty one: `column "c" cannot be cast
+automatically to type integer`.
+
+- text / varchar → a number, boolean, date, timestamp, UUID or JSON: an explicit cast, which parses
+  each value with the target type's own input function — a value that does not parse fails the
+  ALTER, and the planner records an `:text_cast` finding that counts those rows first;
+- boolean → a number: through `integer`, the one numeric type PostgreSQL casts a boolean to
+  (`true` is 1, `false` 0);
+- a number → boolean: `<> 0`, since only `integer` has a cast to boolean at all. Any non-zero value
+  becomes `true`, which is why the planner records it as `:to_boolean`, needing `destructive = true`.
+
+`NULL` stays `NULL` in all three. The planner's classifier asks this same function whether a pair
+has a `USING`, so the rendered ALTER and the finding cannot disagree.
+"""
+function _postgres_retype_using(field_name::Union{String, Symbol}, old_type::CanonicalType,
+                                new_type::CanonicalType, type_sql::AbstractString)::Union{Nothing, String}
+  numeric = Union{CInt16, CInt32, CInt64, CFloat64, CDecimal}
+  ref = "\"$(_quote_table_ddl(field_name))\""
+  if old_type isa Union{CText, CVarChar} && new_type isa Union{numeric, CBool, CDate, CDateTime, CUUID, CJSON}
+    return "CAST($ref AS $type_sql)"
+  elseif old_type isa CBool && new_type isa numeric
+    return "CAST(CAST($ref AS integer) AS $type_sql)"
+  elseif old_type isa numeric && new_type isa CBool
+    return "($ref <> 0)"
+  end
+  return nothing
+end
+
 function _postgres_interval_cast_expression(field_name::Union{String, Symbol}, old_type::Union{Nothing, CanonicalType})
   column_ref = "\"$(_quote_table_ddl(field_name))\""
 
@@ -1929,7 +1964,10 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
     elseif new_field isa sDecimalField
       max_digits = hasproperty(new_field, :max_digits) ? new_field.max_digits : 10
       decimal_places = hasproperty(new_field, :decimal_places) ? new_field.decimal_places : 2
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE DECIMAL($max_digits, $decimal_places);""")
+      type_sql = "DECIMAL($max_digits, $decimal_places)"
+      using_sql = _postgres_retype_using(field_name, delta.old_spec.type, delta.new_spec.type, type_sql)
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE $type_sql""" *
+                            (using_sql === nothing ? ";" : " USING $using_sql;"))
       # A lower scale rounds existing values. That used to be a `@warn` here, which a deploy never
       # read; since #803 the planner records it from the delta as a `:decimal_scale` finding, which
       # `migrate` will not apply without `destructive = true`.
@@ -1946,7 +1984,12 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
       cast_expression = _postgres_bytea_cast_expression(field_name, delta.old_spec.type)
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE bytea USING $cast_expression;""")
     else
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE $(_get_column_type(new_field, conn));""")
+      # #828: a pair with no assignment cast gets its `USING`; every other pair is left to
+      # PostgreSQL's own cast, as before.
+      type_sql = _get_column_type(new_field, conn)
+      using_sql = _postgres_retype_using(field_name, delta.old_spec.type, delta.new_spec.type, type_sql)
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE $type_sql""" *
+                            (using_sql === nothing ? ";" : " USING $using_sql;"))
     end
   end
 

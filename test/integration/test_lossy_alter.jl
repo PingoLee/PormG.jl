@@ -9,15 +9,16 @@
 #   (a) a shorter VARCHAR over a longer value is refused with the row counted; fixed, it applies;
 #   (b) bigint → integer over 3e9 is refused;
 #   (c) a lower NUMERIC scale rounds, so it needs `destructive = true` and is recorded destructive;
-#   (d) text → integer is refused as `:no_implicit_cast` — and, with the header stripped, PostgreSQL
-#       itself rejects it, which is the live check that the deny-list entry is true;
+#   (d) text → integer applies through the `USING` #828 added, and a value that does not parse is
+#       counted and refused — while a bare ALTER, run by hand, is still rejected by the server;
 #   (e) SET NOT NULL over a NULL is refused;
 #   (f) fewer NUMERIC whole digits and (g) a byte bound are counted by the server's own arithmetic;
-#   (h) text → PositiveIntegerField is reported by `dry_run` as refused, not raised as a query error;
+#   (h) text → PositiveIntegerField is reported by `dry_run`, not raised as a query error;
 #   (j) a new NOT NULL column with no default is refused over a populated table with the rows
 #       counted, and applies over an empty one (#829);
 #   (k) `unique = true` over duplicates, (l) a foreign key over an orphan and (m) a CheckConstraint
-#       over a failing row are each counted by the server and refused (#830).
+#       over a failing row are each counted by the server and refused (#830);
+#   (n) the pre-16 grammar fallback for `:text_cast` counts what `pg_input_is_valid` counts (#828).
 #
 # Run it under both PostgreSQL drivers: `PORMG_POSTGRES_DRIVER=Postgres` selects Postgres.jl (#788),
 # whose parameter typing differs from LibPQ's.
@@ -177,24 +178,53 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# (d) text → integer: refused, and PostgreSQL itself confirms it cannot run
-# The deny-list entry is a claim about PostgreSQL: with no `USING`, the ALTER fails even on a table
-# whose values would all convert. With the header line removed the plan goes to the server, which
-# must refuse it — the live evidence that the refusal blocks nothing that would have worked.
+# (d) text → integer: cast with a USING — applied over '42', refused over 'x' with the row counted (#828)
+# Before #828 the plan had no `USING`, and PostgreSQL refused the bare ALTER even over a table whose
+# values would all convert, so #803 refused it up front. The plan now casts, and the server's own
+# parser (`pg_input_is_valid`) counts the values that would not parse. The bare ALTER is still run
+# once by hand, as the live evidence that the `USING` is what makes the change possible.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "PostgreSQL: text → integer is refused as no_implicit_cast, as the server confirms (#803)" begin
-    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, '42', 1, NULL);") do st
+@testset "PostgreSQL: text → integer applies through its USING, and a value that does not parse is counted (#828)" begin
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, ' 42 ', 1, NULL), ('PRO', 2, 2.5, NULL, 2, NULL);") do st
+        bare = _la803pg_err(() -> PormG.ConnectionPool.fetch(st.connections,
+            "ALTER TABLE \"$(_LA803PG_TABLE)\" ALTER COLUMN note TYPE integer;"))
+        @test bare !== nothing && occursin("cannot be cast automatically", sprint(showerror, bare))
+
         sink = _la803pg_plan!(st, _la803pg_models(note = "Models.IntegerField(null = true)"))
-        @test [f.kind for f in sink] == [:no_implicit_cast]
+        @test [f.kind for f in sink] == [:text_cast]
+        @test only(PormG.Migrations.dry_run(st.connections, st).lossy_alters).rows == 0
+        @test _la803pg_migrate(st).outcome === :applied
+        @test _la803pg_type(st, "note") == "integer"
+        @test sort(collect(skipmissing(_la803pg_sql(st, "SELECT note FROM \"$(_LA803PG_TABLE)\";").note))) == [42]
+    end
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, '42', 1, NULL), ('PRO', 2, 2.5, 'x', 2, NULL), " *
+                                    "('ALO', 3, 3.5, '99999999999', 3, NULL);") do st
+        _la803pg_plan!(st, _la803pg_models(note = "Models.IntegerField(null = true)"))
         err = _la803pg_err(() -> _la803pg_migrate(st; destructive = true))
         @test err isa PormG.Migrations.MigrationPrecheckError
-
-        pending = joinpath(st.db_def_folder, "migrations", "pending_migrations.jl")
-        write(pending, join(filter(l -> !startswith(l, PormG.Migrations.LOSSY_ALTER_HEADER), readlines(pending)), "\n") * "\n")
-        raw = _la803pg_err(() -> _la803pg_migrate(st; destructive = true))
-        @test raw !== nothing && !(raw isa PormG.Migrations.MigrationPrecheckError)
-        @test raw !== nothing && occursin("cannot be cast automatically", sprint(showerror, raw))
+        @test err !== nothing && only(err.findings).rows == 2   # 'x' does not parse; 99999999999 overflows
         @test _la803pg_type(st, "note") == "text"
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (n) The pre-16 grammar fallback agrees with the server's parser (#828)
+# `pg_input_is_valid` is PostgreSQL 16+, so an older server counts with an anchored regex per target
+# type. Both predicates run here, on this server, over the same values: the fallback must count what
+# the parser counts. Only the counting SQL runs — no plan, no ALTER.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: the pre-16 text_cast fallback counts what pg_input_is_valid counts (#828)" begin
+    values = ["42", " -7 ", "4.2", "x", "99999999999", "1e3", "NaN", "t", "YES", "of", "o", "maybe",
+              "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "{a0eebc999c0b4ef8bb6d6bb9bd380a11}", "a0eebc99", "123.456"]
+    rows = join(("('SEN', 1, 1.5, '$(v)', 1, NULL)" for v in values), ", ")
+    _la803pg_case(_LA803PG_INSERT * rows * ";") do st
+        for type in ("INTEGER", "SMALLINT", "BIGINT", "DOUBLE PRECISION", "DECIMAL(5, 2)", "BOOLEAN", "UUID")
+            f = PormG.Migrations.LossyAlter(:text_cast, _LA803PG_TABLE, "note", "TEXT", type)
+            modern = PormG.Migrations._precheck_sql(st.connections, f; server_version = 160000)
+            legacy = PormG.Migrations._precheck_sql(st.connections, f; server_version = 150000)
+            n(q) = Int(DataFrame(PormG.ConnectionPool.fetch(st.connections, q[1], q[2])).n[1])
+            @test (type, n(legacy)) == (type, n(modern))
+        end
     end
 end
 
@@ -243,7 +273,7 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# (h) A refused cast beside a new CHECK: `dry_run` reports it, it does not raise
+# (h) A castless retype beside a new CHECK: `dry_run` reports it, it does not raise
 # Text → PositiveIntegerField used to add a `"c" < 0` count on the text column, which PostgreSQL
 # rejects as a query, so `dry_run` raised a database error instead of describing the plan.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -251,7 +281,9 @@ end
     _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, '-5', 1, NULL);") do st
         _la803pg_plan!(st, _la803pg_models(note = "Models.PositiveIntegerField(null = true)"))
         r = PormG.Migrations.dry_run(st.connections, st)
-        @test [f.kind for f in r.lossy_alters] == [:no_implicit_cast]
+        # #828: the cast is counted ('-5' parses); the `>= 0` CHECK is the database's to enforce,
+        # since the column is still text when the count runs.
+        @test [(f.kind, f.rows) for f in r.lossy_alters] == [(:text_cast, 0)]
     end
 end
 

@@ -289,9 +289,9 @@ line per column or constraint). `dry_run()` lists them, and `migrate()` acts on 
 
 | Kind | Examples | What `migrate()` does |
 | :--- | :--- | :--- |
-| **Fails on existing rows** | `null = true` → `false` over rows holding `NULL`; a shorter `max_length`; `BigIntegerField` → `IntegerField`; fewer `max_digits`; `IntegerField` → `PositiveIntegerField` over negative values; a **new** column that is `NOT NULL` with no `default`, added to a table that has rows; `unique = true` over duplicate values; `primary_key = true` moved to a column with duplicates (or `NULL`s, on PostgreSQL); a new `UniqueConstraint` over duplicate tuples; a new `CheckConstraint` some rows fail; a new or re-pointed foreign key over rows with no parent | Counts the offending rows first. Any row that would fail means the plan is refused before anything is written; none means it applies with no opt-in. |
-| **Changes existing values** | fewer `decimal_places` (values round); `FloatField` or `DecimalField` → `IntegerField` (values round); `DateTimeField` → `DateField` (the time is dropped); a `TIMESTAMPTZ` → `TIMESTAMP` (the offset is dropped) | Needs `destructive = true`, exactly like a `DROP`. |
-| **Cannot run as planned** | text → a number, boolean, date, timestamp, UUID or JSON, or boolean ↔ a number, on PostgreSQL | Refused: PostgreSQL has no automatic cast between these and the plan carries no `USING` clause. |
+| **Fails on existing rows** | `null = true` → `false` over rows holding `NULL`; a shorter `max_length`; `BigIntegerField` → `IntegerField`; fewer `max_digits`; `IntegerField` → `PositiveIntegerField` over negative values; a **new** column that is `NOT NULL` with no `default`, added to a table that has rows; `unique = true` over duplicate values; `primary_key = true` moved to a column with duplicates (or `NULL`s, on PostgreSQL); a new `UniqueConstraint` over duplicate tuples; a new `CheckConstraint` some rows fail; a new or re-pointed foreign key over rows with no parent; on PostgreSQL, text → a number, boolean, date, timestamp, UUID or JSON over values that do not parse as the new type | Counts the offending rows first. Any row that would fail means the plan is refused before anything is written; none means it applies with no opt-in. |
+| **Changes existing values** | fewer `decimal_places` (values round); `FloatField` or `DecimalField` → `IntegerField` (values round); `DateTimeField` → `DateField` (the time is dropped); a `TIMESTAMPTZ` → `TIMESTAMP` (the offset is dropped); on PostgreSQL, a number → `BooleanField` (every non-zero value becomes `true`) | Needs `destructive = true`, exactly like a `DROP`. |
+| **Cannot run as planned** | a plan written by an older PormG that changes text → a number, boolean, date, timestamp, UUID or JSON, or boolean ↔ a number, on PostgreSQL | Refused: PostgreSQL has no automatic cast between these, and that plan carries no `USING` clause. Run `makemigrations()` again; current plans write the `USING`. |
 
 For the first kind, `destructive = true` does **not** get the plan through — no opt-in can make a
 `NULL` fit a `NOT NULL` column. Fix the data, then run `migrate()` again (the same plan counts again),
@@ -318,12 +318,21 @@ A few things to know:
   is `NOT NULL`, a `CHECK`, `UNIQUE` and a foreign key, and what it does change is text moved into a numeric column: `'0042'`
   is stored as `42`. That last case needs `destructive = true` — which every SQLite column change
   already does, because SQLite rebuilds the table to apply it.
+- **Text into another type is parsed by the server.** On PostgreSQL the plan converts with
+  `USING CAST(col AS <type>)`, and the count asks the server's own parser (`pg_input_is_valid`)
+  which values would not convert, so a value too large for the new type counts too. That function
+  is PostgreSQL 16+. An older server checks numbers, booleans and UUIDs by their input grammar, and
+  cannot check dates, timestamps or JSON at all: there every non-`NULL` value counts as failing, so
+  such a change over a populated table needs PostgreSQL 16, or a hand-written step. A boolean
+  becomes a number as `1` / `0`, which loses nothing and is not reported.
 - **Constraints are counted the way the database enforces them.** A `NULL` is never a duplicate, and
   a `CheckConstraint` whose condition is `NULL` passes, so neither is counted.
 - **What is not checked.** A constraint the count cannot evaluate before the plan runs is left to the
   database, which refuses it inside the migration and rolls back: a `CheckConstraint` over a column
   the same plan adds, renames or retypes; a `UniqueConstraint` over a column it adds; and a foreign
-  key whose parent table the same plan creates or renames, or whose column it retypes. A change that loses
+  key whose parent table the same plan creates or renames, or whose column it retypes. Likewise the
+  `>= 0` `CHECK` of a `PositiveIntegerField` converted from text or a boolean, since the column still
+  holds the old type when the count runs. A change that loses
   precision rather than digits (a `DecimalField` or `BigIntegerField` → `FloatField`) is not reported
   either.
 - **Hand-editing the plan.** The header describes the plan `makemigrations` wrote. If you add a

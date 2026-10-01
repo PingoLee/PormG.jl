@@ -449,8 +449,13 @@ ALTER would fail on — not an estimate:
 - `:add_check` — the rows whose condition is FALSE. A NULL condition passes a CHECK on both engines,
   and `NOT (NULL)` is NULL, so they are not counted either.
 - `:add_foreign_key` — the non-NULL values no parent row holds.
+- `:text_cast` — the non-NULL values the target type does not accept (#828), asked of the server's own
+  input function with `pg_input_is_valid` — the parser the `USING` cast runs, typmod included, so an
+  overflow counts too. That function is PostgreSQL 16+; on an older `server_version` (an `Int` in
+  `server_version_num` form) see `_text_cast_fallback`.
 """
-function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::Union{Nothing, Tuple{String, Vector{Any}}}
+function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
+                       server_version::Union{Nothing, Int} = nothing)::Union{Nothing, Tuple{String, Vector{Any}}}
   lossy_alter_class(f) === :rows || return nothing
   table = Dialect._quote_table_ddl(f.table)
   q(name) = "\"$(Dialect._quote_table_ddl(name))\""
@@ -477,6 +482,11 @@ function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::
     return ("SELECT COUNT(*) AS n FROM \"$table\" AS pormg_child WHERE pormg_child.$col IS NOT NULL " *
             "AND NOT EXISTS (SELECT 1 FROM $(q(parent)) AS pormg_parent " *
             "WHERE pormg_parent.$(q(key)) = pormg_child.$col)", Any[])
+  elseif f.kind === :text_cast
+    pred, params = something(server_version, _PG_INPUT_IS_VALID) >= _PG_INPUT_IS_VALID ?
+      ("pg_input_is_valid(CAST($col AS text), $(ph(1))) IS FALSE", Any[f.new_type]) :
+      _text_cast_fallback(col, parse_canonical_type(f.new_type, conn))
+    return ("SELECT COUNT(*) AS n FROM \"$table\" WHERE $col IS NOT NULL AND $pred", params)
   end
   pred, params = if f.kind === :set_not_null
     "$col IS NULL", Any[]
@@ -504,6 +514,43 @@ function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::
     throw(InvalidMigrationError("No pre-check is defined for the lossy-ALTER kind `$(f.kind)`."))
   end
   return ("SELECT COUNT(*) AS n FROM \"$table\" WHERE $pred", params)
+end
+
+# `pg_input_is_valid` arrived in PostgreSQL 16 (`server_version_num` 160000); PormG's floor is 11.
+const _PG_INPUT_IS_VALID = 160000
+
+# PostgreSQL 11–15 has no `pg_input_is_valid`, so the `:text_cast` count falls back to the grammar of
+# the target type's input function, as an anchored regex over the text (#828). Exact enough for the
+# types whose input is a fixed grammar — an integer (and its range), a float, a numeric (and its
+# precision), a boolean, a UUID — and, for an approximation, erring the safe way where it can: a
+# value it wrongly accepts still fails the ALTER, which rolls back. Dates, timestamps and JSON have
+# no such grammar (`'Jan 5 2020'`, a `DateStyle`-dependent order, nested JSON), so there every
+# non-NULL value counts as unverifiable: such a retype over a populated table needs PostgreSQL 16.
+const _TEXT_CAST_RE = (
+  int = raw"^\s*[+-]?[0-9]+\s*$",
+  float = raw"^\s*([+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?|[+-]?(inf|infinity)|nan)\s*$",
+  numeric = raw"^\s*([+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?|nan)\s*$",
+  bool = raw"^\s*(t|tr|tru|true|y|ye|yes|on|1|f|fa|fal|fals|false|n|no|of|off|0)\s*$",
+  uuid = raw"^\{?[0-9a-f]{4}(-?[0-9a-f]{4}){7}\}?$",
+)
+
+function _text_cast_fallback(col::AbstractString, target::CanonicalType)::Tuple{String, Vector{Any}}
+  t = "CAST($col AS text)"
+  if target isa _IntType
+    lo, hi = _INT_RANGE[_int_bits(target)]
+    # `CASE`, not `AND`: PostgreSQL does not promise to evaluate the regex before the cast.
+    return ("CASE WHEN $t ~ \$1 THEN CAST($t AS numeric) NOT BETWEEN \$2::numeric AND \$3::numeric ELSE true END",
+            Any[_TEXT_CAST_RE.int, Int(lo), Int(hi)])
+  elseif target isa CDecimal && _whole_digits(target) !== nothing
+    return ("CASE WHEN $t ~* \$1 THEN lower(btrim($t)) <> 'nan' AND " *
+            "abs(round(CAST($t AS numeric), \$2::integer)) >= power(10::numeric, \$3::integer) ELSE true END",
+            Any[_TEXT_CAST_RE.numeric, _decimal_scale(target), _whole_digits(target)])
+  elseif target isa Union{CFloat64, CDecimal, CBool, CUUID}
+    re = target isa CFloat64 ? _TEXT_CAST_RE.float : target isa CDecimal ? _TEXT_CAST_RE.numeric :
+         target isa CBool ? _TEXT_CAST_RE.bool : _TEXT_CAST_RE.uuid
+    return ("$t !~* \$1", Any[re])
+  end
+  return ("true", Any[])
 end
 
 # Does the live table still have this column? A plan header can outlive what it describes — the plan
@@ -590,10 +637,13 @@ function _precheck_lossy_alters(conn::PormGPostgres, findings::Vector{LossyAlter
     # A `fetch(...; conn = leased)` would not: an explicit `conn` is treated as outside any
     # transaction and handed back to the pool when the statement finishes — mid-transaction (#139).
     Configuration.with_tx_context(conn, leased) do
+      # #828: the `:text_cast` count depends on the server's version; read once, and only for one.
+      version = any(f -> f.kind === :text_cast, findings) ?
+        Int(DataFrame(fetch(conn, "SELECT current_setting('server_version_num')::integer AS v"))[1, :v]) : nothing
       for f in findings
         with_transaction(conn, "SAVEPOINT pormg_precheck;", conn = leased)
         counted = try
-          _precheck_one(conn, f)
+          _precheck_one(conn, f; server_version = version)
         catch
           # Did the column vanish while the count waited (another instance's plan renamed it)?
           # If this recovery itself fails the transaction is unusable, and the count's own error
@@ -627,7 +677,8 @@ end
 
 # One finding, counted — or `nothing` when its column is gone. On PostgreSQL it runs inside
 # `_precheck_lossy_alters`' transaction context, so the plain `fetch`es use its connection.
-function _precheck_one(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::Union{Nothing, LossyAlter}
+function _precheck_one(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
+                      server_version::Union{Nothing, Int} = nothing)::Union{Nothing, LossyAlter}
   if !_finding_applies(conn, f)
     _warn_stale_lossy_alter(f)
     return nothing
@@ -637,10 +688,15 @@ function _precheck_one(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::
           finding = _lossy_alter_summary(f))
     return f
   end
-  q = _precheck_sql(conn, f)
+  q = _precheck_sql(conn, f; server_version = server_version)
   q === nothing && return f
   counted = fetch(conn, q[1], q[2]) |> DataFrame
   n = nrow(counted) == 0 ? 0 : Int(something(counted[1, :n], 0))
+  if n > 0 && f.kind === :text_cast && server_version !== nothing && server_version < _PG_INPUT_IS_VALID &&
+     parse_canonical_type(f.new_type, conn) isa Union{CDate, CDateTime, CJSON}
+    @warn("This PostgreSQL server is older than 16, so it cannot check which values would parse as the new type; every non-NULL value is counted as failing. Convert the column on PostgreSQL 16+, or with a hand-written step.",
+          finding = _lossy_alter_summary(f))
+  end
   return _with_rows(f, n)
 end
 

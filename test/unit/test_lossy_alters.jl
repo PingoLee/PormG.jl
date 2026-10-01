@@ -109,10 +109,11 @@ _la803_one(declared, live, conn) =
     @test isempty(_la803_kinds(M.DateTimeField(), M.DateField(), PG_LA803))
     @test isempty(_la803_kinds(M.DateTimeField(), M.DateTimeField(type = "TIMESTAMP"), PG_LA803))
 
-    # No automatic cast: text → integer cannot run on PostgreSQL at all. The reverse, and the types
-    # the renderer DOES cast with a `USING` (interval, time, bytea), are not refused.
-    @test _la803_kinds(M.IntegerField(), M.CharField(), PG_LA803) == [:no_implicit_cast]
-    @test _la803_kinds(M.BooleanField(), M.CharField(), PG_LA803) == [:no_implicit_cast]
+    # No automatic cast: text → integer runs only through the `USING` the renderer writes since #828,
+    # which parses each value — so it is counted (`:text_cast`), not refused. The reverse, and the
+    # types the renderer has always cast (interval, time, bytea), are not findings at all.
+    @test _la803_kinds(M.IntegerField(), M.CharField(), PG_LA803) == [:text_cast]
+    @test _la803_kinds(M.BooleanField(), M.CharField(), PG_LA803) == [:text_cast]
     @test isempty(_la803_kinds(M.TextField(), M.IntegerField(), PG_LA803))
     @test isempty(_la803_kinds(M.DurationField(), M.IntegerField(), PG_LA803))
     @test isempty(_la803_kinds(M.TimeField(), M.CharField(), PG_LA803))
@@ -129,7 +130,8 @@ _la803_one(declared, live, conn) =
 
     # Every kind the classifier can emit belongs to the closed table, with one of the three classes.
     @test Set(values(LOSSY_ALTER_KINDS)) == Set([:rows, :silent, :refused])
-    @test lossy_alter_class(_la803_one(M.IntegerField(), M.CharField(), PG_LA803)) === :refused
+    @test lossy_alter_class(_la803_one(M.IntegerField(), M.CharField(), PG_LA803)) === :rows
+    @test lossy_alter_class(LossyAlter(:no_implicit_cast, "t", "c", "a", "b")) === :refused
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -445,17 +447,19 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Review fixes: a refused cast stands alone, and a CHECK is only counted where it can be
+# Review fixes: across a castless pair a CHECK is not counted, and a CHECK is only counted where it can be
 # `CharField → PositiveIntegerField` used to yield `:non_negative_check` beside the refusal, and its
 # count (`"c" < 0` on a varchar) was a query PostgreSQL rejects — `dry_run` raised a database error
-# instead of reporting the plan. Integer ↔ boolean is refused in both directions.
+# instead of reporting the plan. Since #828 the pair runs through a `USING`, so it is counted as a
+# `:text_cast`, and the column is still text (or boolean) when the count runs: the CHECK stays the
+# database's. Integer → boolean changes values; boolean → integer loses nothing.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "a refused cast is the only finding, and a CHECK is only counted where it can be" begin
+@testset "a castless pair carries no CHECK count, and a CHECK is only counted where it can be" begin
     M = Models
-    @test _la803_kinds(M.PositiveIntegerField(), M.CharField(), PG_LA803) == [:no_implicit_cast]
-    @test _la803_kinds(M.PositiveIntegerField(), M.BooleanField(), PG_LA803) == [:no_implicit_cast]
-    @test _la803_kinds(M.BooleanField(), M.IntegerField(), PG_LA803) == [:no_implicit_cast]
-    @test _la803_kinds(M.IntegerField(), M.CharField(null = true), PG_LA803) == [:no_implicit_cast]
+    @test _la803_kinds(M.PositiveIntegerField(), M.CharField(), PG_LA803) == [:text_cast]
+    @test isempty(_la803_kinds(M.PositiveIntegerField(), M.BooleanField(), PG_LA803))
+    @test _la803_kinds(M.BooleanField(), M.IntegerField(), PG_LA803) == [:to_boolean]
+    @test _la803_kinds(M.IntegerField(), M.CharField(null = true), PG_LA803) == [:set_not_null, :text_cast]
     # `octet_length` exists for bytea and strings only on PostgreSQL; SQLite measures anything.
     @test isempty(_la803_kinds(M.BinaryField(max_length = 16), M.IntegerField(), PG_LA803))
     @test _la803_kinds(M.BinaryField(max_length = 16), M.CharField(), PG_LA803) == [:byte_length_check]
@@ -921,4 +925,123 @@ end
         fetch(pool, "UPDATE race803 SET circuitid = NULL WHERE circuitid = 99;")
         @test _la830_applies(key)
     end
+end
+
+# =============================================================================
+# #828: PostgreSQL retypes with no automatic cast get a USING
+# Text into a number, boolean, date, timestamp, UUID or JSON, and boolean ↔ a number, have no
+# assignment cast, so a bare `ALTER COLUMN … TYPE` failed on every table, even an empty one. #803
+# refused them up front; the renderer now writes the `USING`, and the classifier turns each refusal
+# into what the cast can actually do to the rows: text that does not parse fails (`:text_cast`,
+# counted), a number becomes `true`/`false` (`:to_boolean`, an opt-in), a boolean becomes 1/0 (nothing).
+# =============================================================================
+
+const _LA828_TEXT_TARGETS = (Models.IntegerField(), Models.BigIntegerField(),
+                             Models.FloatField(), Models.DecimalField(max_digits = 8, decimal_places = 2),
+                             Models.BooleanField(), Models.DateField(), Models.DateTimeField(),
+                             Models.UUIDField(), Models.JSONField())
+const _LA828_NUMBERS = (Models.IntegerField(), Models.BigIntegerField(), Models.FloatField(),
+                        Models.DecimalField(max_digits = 8, decimal_places = 2))
+
+# The ALTER the PostgreSQL planner writes for one live → declared change of column `c` on table `t`.
+function _la828_alter(declared, live)
+    settings = Configuration.Settings()
+    settings.change_db = true
+    live_model = Models.Model("t828"; id = Models.IDField(), c = live)
+    declared_model = Models.Model("t828"; id = Models.IDField(), c = declared)
+    schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+        :t828 => Dict{Symbol, Union{Bool, PormGModel}}(:model => declared_model, :exist => false))
+    plan = Migrations.get_migration_plan(PormGModel[live_model], schema, PG_LA803, settings; interactive = false)
+    return plan[:t828]["Alter field: c"]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#828): every castless pair is rendered with its USING
+# The type in the `USING` is the one the `TYPE` clause names, so the two cannot disagree. A pair
+# PostgreSQL casts by itself (integer → text, integer → bigint) is rendered exactly as before.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#828: every castless pair is rendered with a USING, and other retypes are unchanged" begin
+    # `alter_field`'s DecimalField branch spells its own `DECIMAL(p, s)`; every other one renders the type.
+    type_sql(f) = f isa Models.sDecimalField ? "DECIMAL($(f.max_digits), $(f.decimal_places))" :
+                                               Dialect._get_column_type(f, PG_LA803)
+    for target in _LA828_TEXT_TARGETS, live in (Models.CharField(max_length = 20), Models.TextField())
+        @test _la828_alter(target, live) ==
+              "ALTER TABLE \"t828\" ALTER COLUMN \"c\" TYPE $(type_sql(target)) USING CAST(\"c\" AS $(type_sql(target)));"
+    end
+    for n in _LA828_NUMBERS
+        @test _la828_alter(n, Models.BooleanField()) ==
+              "ALTER TABLE \"t828\" ALTER COLUMN \"c\" TYPE $(type_sql(n)) USING CAST(CAST(\"c\" AS integer) AS $(type_sql(n)));"
+        @test _la828_alter(Models.BooleanField(), n) ==
+              "ALTER TABLE \"t828\" ALTER COLUMN \"c\" TYPE $(type_sql(Models.BooleanField())) USING (\"c\" <> 0);"
+    end
+    # No USING where PostgreSQL has its own cast.
+    @test _la828_alter(Models.TextField(), Models.IntegerField()) ==
+          "ALTER TABLE \"t828\" ALTER COLUMN \"c\" TYPE $(type_sql(Models.TextField()));"
+    @test _la828_alter(Models.BigIntegerField(), Models.IntegerField()) ==
+          "ALTER TABLE \"t828\" ALTER COLUMN \"c\" TYPE $(type_sql(Models.BigIntegerField()));"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#828): the classifier no longer refuses a pair that has a USING
+# `_pg_no_implicit_cast` still names every castless pair; the renderer now covers all of them, so
+# none is `:no_implicit_cast` any more. The kind stays for a plan written before #828, whose SQL has
+# no USING — `migrate` still refuses that header.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#828: text is counted, a number into a boolean needs the opt-in, a boolean into a number is free" begin
+    for target in _LA828_TEXT_TARGETS
+        @test _la803_kinds(target, Models.CharField(), PG_LA803) == [:text_cast]
+    end
+    for n in _LA828_NUMBERS
+        @test isempty(_la803_kinds(n, Models.BooleanField(), PG_LA803))
+        @test _la803_kinds(Models.BooleanField(), n, PG_LA803) == [:to_boolean]
+    end
+    @test lossy_alter_class(LossyAlter(:to_boolean, "t", "c", "a", "b")) === :silent
+    # A pre-#828 plan's header is still refused, whatever the opt-in.
+    @test Migrations._failing_alters([LossyAlter(:no_implicit_cast, "t", "c", "text", "integer")]) ==
+          [LossyAlter(:no_implicit_cast, "t", "c", "text", "integer")]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#828): the text_cast count — pg_input_is_valid on 16+, the input grammar below it
+# On 16+ the server's own parser answers, typmod included, so an overflow counts as a failing value.
+# Before 16 the integer, numeric, float, boolean and UUID grammars are matched as anchored regexes
+# (with the range / precision check the parser would apply), and a date, timestamp or JSON value
+# cannot be verified at all, so every non-NULL one counts.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#828: the text_cast count asks the server's parser on 16+, and the input grammar below it" begin
+    f(new) = LossyAlter(:text_cast, "Ev\"il", "c", "VARCHAR(20)", new)
+    base = "SELECT COUNT(*) AS n FROM \"Ev\"\"il\" WHERE \"c\" IS NOT NULL AND "
+    @test _precheck_sql(PG_LA803, f("INTEGER"); server_version = 160004) ==
+          (base * "pg_input_is_valid(CAST(\"c\" AS text), \$1) IS FALSE", Any["INTEGER"])
+    @test _precheck_sql(PG_LA803, f("DECIMAL(8, 2)"); server_version = 170000)[2] == Any["DECIMAL(8, 2)"]
+
+    # PostgreSQL 15: an integer is its grammar plus the width's range.
+    sql, params = _precheck_sql(PG_LA803, f("SMALLINT"); server_version = 150008)
+    @test sql == base * "CASE WHEN CAST(\"c\" AS text) ~ \$1 THEN CAST(CAST(\"c\" AS text) AS numeric) " *
+                        "NOT BETWEEN \$2::numeric AND \$3::numeric ELSE true END"
+    @test params == Any[Migrations._TEXT_CAST_RE.int, -32768, 32767]
+    # A bounded numeric checks its precision after rounding to its scale, like the parser.
+    sql, params = _precheck_sql(PG_LA803, f("DECIMAL(8, 2)"); server_version = 150008)
+    @test occursin("abs(round(CAST(CAST(\"c\" AS text) AS numeric), \$2::integer)) >= power(10::numeric, \$3::integer)", sql)
+    @test params == Any[Migrations._TEXT_CAST_RE.numeric, 2, 6]
+    for (type, re) in (("DOUBLE PRECISION", :float), ("BOOLEAN", :bool), ("UUID", :uuid))
+        @test _precheck_sql(PG_LA803, f(type); server_version = 110000) ==
+              (base * "CAST(\"c\" AS text) !~* \$1", Any[getfield(Migrations._TEXT_CAST_RE, re)])
+    end
+    for type in ("DATE", "TIMESTAMP WITH TIME ZONE", "JSONB")
+        @test _precheck_sql(PG_LA803, f(type); server_version = 150008) == (base * "true", Any[])
+    end
+
+    # The regexes accept what the input functions accept, and refuse their neighbours.
+    ok(re, v) = occursin(Regex(getfield(Migrations._TEXT_CAST_RE, re), "i"), v)
+    @test all(v -> ok(:int, v), (" 42 ", "-7", "+0"))
+    @test !any(v -> ok(:int, v), ("4.2", "x", "", "1e3"))
+    @test all(v -> ok(:numeric, v), ("1.5", ".5", "-2e3", "NaN", " 7 "))
+    @test !any(v -> ok(:numeric, v), ("1.2.3", "abc", "Infinity"))
+    @test all(v -> ok(:float, v), ("1.5", "-Infinity", "inf", "NaN", "1e-9"))
+    @test all(v -> ok(:bool, v), ("t", "TRUE", " yes ", "of", "0", "On"))
+    @test !any(v -> ok(:bool, v), ("o", "maybe", "2"))
+    @test all(v -> ok(:uuid, v), ("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "{a0eebc999c0b4ef8bb6d6bb9bd380a11}",
+                                 "a0ee-bc99-9c0b-4ef8-bb6d-6bb9-bd38-0a11"))
+    @test !any(v -> ok(:uuid, v), ("a0eebc99", "g0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"))
 end

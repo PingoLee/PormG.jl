@@ -761,8 +761,9 @@ end
 #                  `destructive = true` does not bypass it.
 #   * `:silent`  — the ALTER succeeds and CHANGES data (a lower NUMERIC scale rounds). That is data
 #                  loss by another route, so it takes the destructive guard's opt-in.
-#   * `:refused` — the engine cannot apply the ALTER as rendered at all (PostgreSQL has no automatic
-#                  cast from text to integer, and the plan carries no `USING`).
+#   * `:refused` — the engine cannot apply the ALTER as rendered at all (a pair PostgreSQL has no
+#                  automatic cast for, in a plan that carries no `USING` — since #828 only a plan
+#                  written before the renderer wrote one).
 #
 # Engine asymmetry, stated once. PostgreSQL enforces a VARCHAR length, an integer width and a NUMERIC
 # precision, and casts on ALTER. SQLite enforces none of the three — its rebuild's `INSERT … SELECT`
@@ -860,10 +861,18 @@ Every kind a [`LossyAlter`](@ref) can carry, with its class — the closed set, 
 | `:to_time` | PostgreSQL | `:silent` | a timestamp becomes a time, dropping the date |
 | `:drop_timezone` | PostgreSQL | `:silent` | `timestamptz` becomes `timestamp`, dropping the offset |
 | `:text_affinity` | SQLite | `:silent` | text becomes a numeric/boolean column, so `'0042'` stores as `42` |
-| `:no_implicit_cast` | PostgreSQL | `:refused` | the engine has no automatic cast between the two types |
+| `:text_cast` | PostgreSQL | `:rows` | text becomes a number, boolean, date, timestamp, UUID or JSON (the plan casts with `USING`), and some values do not parse |
+| `:to_boolean` | PostgreSQL | `:silent` | a number becomes a boolean (`USING "c" <> 0`), so every non-zero value becomes `true` |
+| `:no_implicit_cast` | PostgreSQL | `:refused` | the engine has no automatic cast between the two types and the plan writes no `USING` |
 
 `:rows` findings are counted before `migrate` runs and refuse the plan when any row would fail;
 `:silent` ones need `destructive = true`; `:refused` ones cannot be applied as planned.
+
+Since #828 every pair `:no_implicit_cast` used to name gets a `USING` (see
+`Dialect._postgres_retype_using`), so the planner no longer records it: text into a parsed type is
+`:text_cast`, a number into a boolean `:to_boolean`, and a boolean into a number nothing at all — `true`
+is 1 and `false` 0. The kind stays, for a plan written before #828, whose SQL has no `USING` and
+which is still refused.
 """
 const LOSSY_ALTER_KINDS = (
   set_not_null       = :rows,
@@ -879,7 +888,9 @@ const LOSSY_ALTER_KINDS = (
   add_check          = :rows,
   add_foreign_key    = :rows,
   decimal_scale      = :silent,
+  text_cast          = :rows,
   to_integer         = :silent,
+  to_boolean         = :silent,
   to_date            = :silent,
   to_time            = :silent,
   drop_timezone      = :silent,
@@ -938,17 +949,27 @@ _frac_digits(::CFloat64)::Nothing = nothing
 # Does `a` hold more than `b`? `nothing` is unbounded.
 _exceeds(a::Union{Int, Nothing}, b::Int)::Bool = a === nothing || a > b
 
-# The pairs PostgreSQL cannot convert on `ALTER COLUMN … TYPE` without a `USING` clause the renderer
-# does not write. A DENY-list on purpose: listing a pair that actually converts would refuse a valid
-# migration with no way round it, while a pair missing from it fails inside the transaction and rolls
-# back — which is what every such plan did before this list existed. New types the renderer DOES
-# cast (`TIME`, `INTERVAL`, `bytea` all get a `USING`) are therefore absent.
+# The pairs PostgreSQL cannot convert on `ALTER COLUMN … TYPE` without a `USING` clause. A DENY-list
+# on purpose: listing a pair that actually converts would refuse a valid migration with no way round
+# it, while a pair missing from it fails inside the transaction and rolls back — which is what every
+# such plan did before this list existed. New types the renderer has always cast (`TIME`,
+# `INTERVAL`, `bytea` all get a `USING`) are therefore absent.
+#
+# Since #828 the renderer writes a `USING` for every pair listed here too, so a castless pair is
+# refused only when `_pg_retype_has_using` says otherwise — today, never. The list stays the
+# definition of "castless": it is what decides that a pair NEEDS the `USING` and the row count.
 function _pg_no_implicit_cast(old::CanonicalType, new::CanonicalType)::Bool
   old isa _TextType && return new isa Union{_NumericType, CBool, CDate, CDateTime, CUUID, CJSON}
   old isa CBool && return new isa _NumericType
   old isa _NumericType && return new isa CBool
   return false
 end
+
+# Does the plan carry a `USING` for this pair? Asked of the renderer itself, so the ALTER it writes and
+# the finding recorded here cannot disagree (#828). The column name and type text do not affect the
+# answer.
+_pg_retype_has_using(old::CanonicalType, new::CanonicalType)::Bool =
+  Dialect._postgres_retype_using("c", old, new, "t") !== nothing
 
 """
     _lossy_alters(delta, conn; table, column) -> Vector{LossyAlter}
@@ -970,12 +991,18 @@ function _lossy_alters(delta::ColumnDelta, conn::Union{PormGPostgres, PormGSQLit
   # finding beside it would be counted against a column of the OLD type (`"c" < 0` on a varchar),
   # which PostgreSQL rejects as a query rather than answering.
   any(f -> f.kind === :no_implicit_cast, type_found) && return type_found
+  # #828: the same reason, one step weaker. Across a castless pair the column holds the OLD type
+  # until the `USING` runs, so a CHECK count (`"c" < 0`) would compare text or a boolean with a
+  # number, which PostgreSQL rejects as a query. The nullability and uniqueness findings below read
+  # no value and stay; the CHECK one is left to the database, which still enforces it.
+  castless = conn isa PormGPostgres && :type in delta && readable &&
+             _pg_no_implicit_cast(old_spec.type, new_spec.type)
 
   found = LossyAlter[]
   if :nullable in delta && old_spec.nullable && !new_spec.nullable
     push!(found, finding(:set_not_null))
   end
-  if :checks in delta
+  if :checks in delta && !castless
     if any(c -> c isa NonNegativeCheck, new_spec.checks) && !any(c -> c isa NonNegativeCheck, old_spec.checks)
       push!(found, finding(:non_negative_check))
     end
@@ -1072,8 +1099,16 @@ function _lossy_type_alters(old::CanonicalType, new::CanonicalType, ::PormGSQLit
 end
 
 function _lossy_type_alters(old::CanonicalType, new::CanonicalType, ::PormGPostgres, finding)::Vector{LossyAlter}
-  # The ALTER cannot run at all, so nothing narrower is worth reporting beside it.
-  _pg_no_implicit_cast(old, new) && return [finding(:no_implicit_cast)]
+  if _pg_no_implicit_cast(old, new)
+    # The ALTER cannot run at all, so nothing narrower is worth reporting beside it.
+    _pg_retype_has_using(old, new) || return [finding(:no_implicit_cast)]
+    # #828: it runs through the `USING`. Text is parsed by the target type, so a value that does not
+    # parse (or overflows it) fails the ALTER — one count covers both. A number into a boolean
+    # applies and changes values; a boolean into a number loses nothing.
+    old isa _TextType && return [finding(:text_cast)]
+    new isa CBool && return [finding(:to_boolean)]
+    return LossyAlter[]
+  end
   found = LossyAlter[]
   if new isa CVarChar && new.length !== nothing
     # Any old type converts to a string through its text form, so any of them can be too long.

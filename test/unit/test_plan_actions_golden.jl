@@ -288,6 +288,15 @@ end
 #             the constraint already gone and aborted the whole migration. Only the FK drop moved:
 #             the PRIMARY KEY / UNIQUE / CHECK drops in this corpus come from `alter_field`, not
 #             `drop_foreign_key`, and are unchanged.
+# ─────────────────────────────────────────────────────────────────────────────
+# `char_to_int`, `rename_and_retype` (PG)
+#     BEFORE  ALTER COLUMN "col" TYPE integer;
+#     AFTER   ALTER COLUMN "col" TYPE integer USING CAST("col" AS integer);
+#     WHY     #828. Text has no assignment cast to integer, so PostgreSQL refused the bare form on
+#             every table, even an empty one ("cannot be cast automatically"), and #803 refused the
+#             plan up front. These two goldens recorded a statement that could not run; the
+#             integration file re-checks the bare form against a real server. The `USING` parses each
+#             value, and the planner counts the ones that would not parse first (`:text_cast`).
 
 const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   "unchanged/PG" => [
@@ -296,7 +305,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
   ],
   "char_to_int/PG" => [
     "Alter field: col" =>
-      "ALTER TABLE \"child_t\" ALTER COLUMN \"col\" TYPE integer;",
+      "ALTER TABLE \"child_t\" ALTER COLUMN \"col\" TYPE integer USING CAST(\"col\" AS integer);",
   ],
   "char_to_int/SL" => [
     "Alter table: child_t" =>
@@ -582,7 +591,7 @@ const PLAN_GOLDEN = Dict{String, Vector{Pair{String, String}}}(
     "Rename field: col2" =>
       "ALTER TABLE \"child_t\" RENAME COLUMN \"col\" TO \"col2\";",
     "Alter field: col2" =>
-      "ALTER TABLE \"child_t\" ALTER COLUMN \"col2\" TYPE integer;",
+      "ALTER TABLE \"child_t\" ALTER COLUMN \"col2\" TYPE integer USING CAST(\"col2\" AS integer);",
   ],
   "rename_and_retype/SL" => [
     "Rename field: col2" =>

@@ -238,7 +238,11 @@ Before applying, verify the current migration state:
 s = PormG.Migrations.status("db")
 println(s)
 ```
-This reports applied migrations, failed migrations, and any "drift" between files and the database.
+This reports the state of the migration **history**: applied migrations, failed migrations, whether a
+pending plan exists, and warnings about the history itself, such as a missing `pormg_migrations`
+table or migrations recorded over a database with no tables. It is read-only, and it does not compare
+the live schema with your models. For that, use `check("db"; kinds = [:schema_drift])` (see
+[Checking the Database Against the Models](#Checking-the-Database-Against-the-Models)).
 
 ---
 
@@ -266,7 +270,7 @@ PormG blocks destructive SQL by default. A statement is destructive when it is:
   has no `TRUNCATE`, it is the only way to write one. A `DELETE … WHERE` and any `UPDATE` are not
   flagged, because a targeted data step or a backfill is not a table wipe.
 
-`makemigrations` writes only the first kind, but a [hand-edited plan](advanced.md#Manual-SQL-in-Pending-Migrations)
+`makemigrations` writes only the first kind, but a [hand-edited plan](stability.md#A-plan-file-is-read-as-data,-never-executed)
 can carry any of them. The guard reads the SQL text and does not parse it, so it errs toward flagging. A
 string literal that reads like one of these also flags the plan: `default = "Drop zone"` renders as
 `SET DEFAULT 'Drop zone'`. It can also miss a few hand-written spellings: any `WHERE` excuses a

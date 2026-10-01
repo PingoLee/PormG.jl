@@ -2321,6 +2321,11 @@ end
     all_versions = vcat([m[:version] for m in st3.applied], [m[:version] for m in st3.failed])
     @test !("99990101000001" in all_versions)
 
+    # #733: the record is gone now, so both ops refuse it on the real backend instead of logging a
+    # change that matched no row — and the refusal leaks no connection (checked below).
+    @test_throws PormG.InvalidMigrationError Migrations.mark_failed(pool, edge_settings, "99990101000001")
+    @test_throws PormG.InvalidMigrationError Migrations.remove_migration_record(pool, edge_settings, "99990101000001")
+
     # No connection leaked across the repair + status calls (all synchronous).
     @test pool_in_use(pool) == in_use_before
   end

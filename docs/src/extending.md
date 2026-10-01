@@ -40,7 +40,7 @@ skip. Additive and idempotent. Use it for your framework's own infrastructure ta
 
 Relations no model can declare are skipped already, with no registration: views, SQLite virtual
 tables and their shadow tables, PostgreSQL partitions, and tables an extension owns (see
-[Relations PormG never reads](migrations/index.md#What-this-means-in-practice)).
+[What `makemigrations` manages](migrations/index.md#What-makemigrations-Manages,-Ignores,-and-Would-Drop)).
 
 ```julia
 PormG.register_ignore_tables!(["myframework_jobs", "myframework_cache"])

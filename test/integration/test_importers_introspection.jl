@@ -1136,6 +1136,97 @@ if adapter_name == "PostgreSQL"
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL one-column indexes PormG cannot re-emit are not read as `db_index` (#847)
+# The dump's `indexes` CTE filtered only primary/unique/partial/arity, so each hand-made index below
+# read as `db_index`, and a model declaring none of them planned a destructive `DROP INDEX` per
+# column — on the `EXCLUDE` one a DROP PostgreSQL refuses at `migrate`, since the constraint owns the
+# index, and on the `INCLUDE` one a second removal for the payload column, which `ANY(indkey)` read as
+# indexed. The CTE now carries the composite reader's filters. The table is created from PormG's own
+# plan, so `plain`, `plain_txt` and `colc` carry exactly the index `db_index = true` writes — the
+# positive controls that the filters did not refuse PormG's own shape, on an integer column, a text
+# column, and a text column declared `COLLATE "C"`; the other indexes are added by hand. Dropped in
+# `finally`.
+# An invalid index (a failed `CREATE INDEX CONCURRENTLY`) is pinned only in the SQL text
+# (test/unit/test_live_schema_reader.jl): producing one live needs a concurrent failure.
+# SQLite's half (`DESC`, an explicit `COLLATE`) is hermetic: test/unit/test_sqlite_index_filter.jl.
+# Mutation gate: restore the pre-#847 CTE and every hand-made column reads as indexed and the plan
+# is no longer empty; tighten the collation test to `= 0` and `plain_txt`/`colc` stop reading back.
+# ─────────────────────────────────────────────────────────────────────────────
+if adapter_name == "PostgreSQL"
+  @testset "One-column index PormG cannot re-emit is neither read nor dropped (#847)" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
+    tbl = "pormg_it_onecol847"
+    drop847!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
+    M847 = PormG.Models
+    model = M847.Model(tbl;
+      id    = M847.IDField(),
+      plain = M847.IntegerField(db_index = true),
+      plain_txt = M847.CharField(max_length = 40, db_index = true),
+      colc  = M847.CharField(max_length = 40, db_index = true),
+      dsc   = M847.IntegerField(),
+      hsh   = M847.IntegerField(),
+      ops   = M847.CharField(max_length = 40),
+      coll  = M847.CharField(max_length = 40),
+      inc_a = M847.IntegerField(),
+      inc_b = M847.IntegerField(),
+      exc   = M847.IntegerField())
+    schema847 = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+      Symbol(tbl) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => model, :exist => false))
+    settings847 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
+
+    drop847!()
+    try
+      created = PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema847, pool, settings847;
+                                                     interactive = false)
+      for (_, sql) in created[Symbol(tbl)]
+        ddl(sql)
+      end
+      # PormG's own index on a column DECLARED with a non-default collation (an adopted schema; PormG
+      # emits none). ALTER TYPE rebuilds the index, which then carries the column's collation —
+      # `indcollation = attcollation`, so the relative test must still read it.
+      ddl("ALTER TABLE \"$(tbl)\" ALTER COLUMN colc TYPE varchar(40) COLLATE \"C\"")
+      # One hand-made one-column index per shape PormG cannot write.
+      ddl("CREATE INDEX pormg_it_847_dsc ON \"$(tbl)\" (dsc DESC)")
+      ddl("CREATE INDEX pormg_it_847_hsh ON \"$(tbl)\" USING hash (hsh)")
+      ddl("CREATE INDEX pormg_it_847_ops ON \"$(tbl)\" (ops varchar_pattern_ops)")
+      ddl("CREATE INDEX pormg_it_847_coll ON \"$(tbl)\" (coll COLLATE \"C\")")
+      ddl("CREATE INDEX pormg_it_847_inc ON \"$(tbl)\" (inc_a) INCLUDE (inc_b)")
+      # b-tree exclusion needs no extension, so it isolates `NOT indisexclusion`: it passes the
+      # `amname = 'btree'` test, and every other one.
+      ddl("ALTER TABLE \"$(tbl)\" ADD CONSTRAINT pormg_it_847_exc EXCLUDE USING btree (exc WITH =)")
+
+      # Precondition — the EXCLUDE index is the shape the old CTE admitted: one key column,
+      # non-unique, non-primary, unfiltered, b-tree. Without it the absence below proves nothing.
+      exc = ddl("""SELECT i.indisexclusion, i.indisunique, i.indnkeyatts, am.amname::text AS am
+                   FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_am am ON am.oid = c.relam
+                   WHERE c.relname = 'pormg_it_847_exc'""")
+      @test (exc.indisexclusion[1], exc.indisunique[1], exc.indnkeyatts[1], exc.am[1]) == (true, false, 1, "btree")
+
+      # The reader: only PormG's own indexes are a `db_index`; `inc_b` (INCLUDE payload) is not either.
+      # `plain_txt` and `colc` are the positive controls a collation predicate can get wrong: a text
+      # column's index carries a non-zero collation (and `text_ops`, the default opclass), so a test
+      # tightened to `indcollation = 0` would refuse PormG's own index and re-propose it forever.
+      live = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
+      @test Set(keys(live.indexes)) == Set(["plain", "plain_txt", "colc"])
+
+      # THE convergence assertion: the declared model, which declares none of the hand-made indexes,
+      # plans nothing against its live table — no `DROP INDEX` for any of them.
+      again = PormG.Migrations.get_migration_plan([live], schema847, pool, settings847; interactive = false)
+      @test all(isempty, values(again))
+
+      # …and all six survive, untouched.
+      left = Set(String.(DataFrame(PormG.ConnectionPool.fetch(pool,
+        "SELECT indexname FROM pg_indexes WHERE tablename = \$1", [tbl])).indexname))
+      @test issubset(Set(["pormg_it_847_dsc", "pormg_it_847_hsh", "pormg_it_847_ops", "pormg_it_847_coll",
+                          "pormg_it_847_inc", "pormg_it_847_exc"]), left)
+    finally
+      drop847!()
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PostgreSQL non-negative CHECK: only PormG's exact clause reads as PormG's (#731)
 # The reader matched `pg_get_constraintdef … LIKE '%>= 0%'` and `get_constraints_checks` matched
 # `ILIKE '%>= 0%'`, so a user's range check on an `IntegerField` column read as the CHECK a

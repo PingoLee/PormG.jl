@@ -692,15 +692,27 @@ writes it; an `InvalidMigrationError` says so otherwise. SQLite does not check t
 target exists at `CREATE TABLE` time, so a statement carrying foreign keys reads fine on its own —
 and, the parent being absent, its `to_table` keeps the `REFERENCES` spelling rather than a
 canonical one.
+
+A name holding a `"` is read whole (#837): a quoted identifier escapes it as `""`, which is how PormG's
+own DDL writes such a `db_table`. If the statement does not create the table it names, an
+`InvalidMigrationError` says so, rather than an empty model coming back.
 """
 function convertSQLToModel(sql::String)::PormGModel
-  table_name_match = match(r"CREATE TABLE \"(.+?)\"", sql)
-  table_name = table_name_match !== nothing ? table_name_match.captures[1] :
+  # `""` is an escaped quote INSIDE the identifier, so the name runs to the first `"` not doubled.
+  # The lazy `(.+?)` this replaced stopped at the first `"` of all, reading `"Te""am"` as `Te`.
+  table_name_match = match(r"CREATE TABLE \"((?:[^\"]|\"\")+)\"", sql)
+  table_name = table_name_match !== nothing ? replace(table_name_match.captures[1], "\"\"" => "\"") :
     throw(InvalidMigrationError("Cannot introspect: CREATE TABLE statement has no double-quoted table name (table created outside PormG?): $(first(sql, 120))"))
   return mktempdir() do dir
     pool = SQLiteConnectionPool(joinpath(dir, "convert_sql.sqlite"); pool_size = 1)
     try
       fetch(pool, sql)
+      # The reader degrades an unknown table to an empty model, which here would hide a misparsed
+      # name — the #837 symptom. The scratch database holds only what `sql` created, so a name it
+      # lacks is a statement that did not create it. Case-insensitive, as SQLite resolves names.
+      found = fetch(pool, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE",
+                    [table_name]) |> DataFrame
+      nrow(found) == 0 && throw(InvalidMigrationError("Cannot introspect: the statement did not create table \"$(table_name)\": $(first(sql, 120))"))
       return convertSQLToModel(pool, String(table_name))
     finally
       # Release the handle first, or Windows cannot remove the temp directory (WAL keeps it open).
@@ -1263,10 +1275,10 @@ Two details the naive query gets wrong:
 `indnkeyatts` is PostgreSQL 11+, which the pre-existing `indexes` CTE already requires, so this adds
 no floor of its own.
 
-The partition with the `db_index` reader is per INDEX (`indnkeyatts = 1` there, `> 1` here), not per
-column: the older CTE still selects its column with `attnum = ANY(indkey)`, so a covering
-`CREATE INDEX ON t (a) INCLUDE (b, c)` marks `b`/`c` as `db_index` too. That is pre-existing and
-untouched here — no index reaches both readers.
+The partition with the `db_index` reader is per INDEX (`indnkeyatts = 1` there, `> 1` here), so no
+index reaches both readers. Since #847 that reader applies these same filters at arity 1 — it used to
+read a one-column `DESC`, non-b-tree, `INCLUDE` or `EXCLUDE` index as a `db_index`, so the planner
+proposed dropping an index PormG never made.
 """
 function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing} = "public")::Dict{String, Vector{LiveComposite}}
   # Parameterized rather than interpolated: `schema` is a keyword argument, so it is caller-supplied
@@ -1617,6 +1629,24 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
     --     `HAVING COUNT(*) = 1` for composite UNIQUE.
     -- An expression index joins no `pg_attribute` row (its `indkey` entry is 0) and so drops out
     -- on its own.
+    --
+    -- #847: and only an index `Dialect.create_index` could have written — the composite reader's
+    -- filters (`_pg_composite_indexes`, which explains each), applied at arity 1. Without them a
+    -- hand-made one-column index PormG cannot re-emit read as `db_index`, so a field that did not
+    -- declare one planned a destructive `DROP INDEX` for it:
+    --   * am.amname = 'btree' — a GIN/GiST/hash index.
+    --   * NOT indisexclusion — a one-column `EXCLUDE` constraint, whose planned `DROP INDEX` named
+    --     the index explicitly and so PostgreSQL refused it at `migrate` (the constraint owns it).
+    --   * indisvalid — a failed `CREATE INDEX CONCURRENTLY`.
+    --   * indnatts = indnkeyatts — no `INCLUDE`. The payload columns used to be read as indexed
+    --     too, through `attnum = ANY(indkey)`, so an undeclared one planned a removal that dropped
+    --     the whole index. `unnest … WITH ORDINALITY` with `ord <= indnkeyatts` is the composite
+    --     reader's key-columns-only join, kept even though this predicate already refuses INCLUDE.
+    --   * per column, read through the same `[k.ord - 1]` subscripts as the composite reader (the
+    --     `- 1` is load-bearing; its docstring has the measurement): the default sort
+    --     (`indoption = 0`, so neither DESC nor NULLS FIRST), the default operator class, and no
+    --     collation of the index's own (`indcollation` 0 or the column's — RELATIVE, as there).
+    -- An index this skips is simply not read, so it is neither declared nor dropped.
     indexes AS (
         -- #455: one object per (column, index name) pair. These two aggregates were the other
         -- positional zip, and they were the ASYMMETRIC one — `index_columns` was raw `attname`
@@ -1629,11 +1659,22 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
                      ORDER BY a.attnum)::text AS indexes
         FROM pg_index i
         JOIN pg_class c ON c.oid = i.indexrelid
-        JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+        JOIN pg_am am ON am.oid = c.relam
+        JOIN LATERAL unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
+          ON k.ord <= i.indnkeyatts
+        JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+        JOIN pg_opclass oc ON oc.oid = (i.indclass::oid[])[k.ord - 1]
         WHERE NOT i.indisprimary
           AND NOT i.indisunique
           AND i.indpred IS NULL
           AND i.indnkeyatts = 1
+          AND am.amname = 'btree'
+          AND NOT i.indisexclusion
+          AND i.indisvalid
+          AND i.indnatts = i.indnkeyatts
+          AND (i.indoption::int2[])[k.ord - 1] = 0
+          AND oc.opcdefault
+          AND (i.indcollation::oid[])[k.ord - 1] IN (0, a.attcollation)
         GROUP BY i.indrelid
     ),
     non_negative_checks AS (
@@ -2068,16 +2109,46 @@ The three filters mirror the `unique` reader's, each excluding an index that is 
 `CREATE INDEX … WHERE` and so shares this reader's `origin = 'c'`. It constrains rows rather than
 the column, PormG cannot declare one, and reading it would be permanent churn.
 
+Two more, since #847, refuse the one-column index PormG could not have written — the composite
+reader's filters ([`_sqlite_composite_indexes`](@ref)) at arity 1. Such an index used to read as
+`db_index`, so a field that did not declare one planned a destructive `DROP INDEX` for it:
+
+  * a **descending** key (`"desc" = 1` in `pragma_index_xinfo`, whose `key = 1` drops the rowid SQLite
+    appends to every index — `pragma_index_info` has neither column);
+  * an explicit **`COLLATE`** in the index — an unquoted `COLLATE` token in the index's own DDL,
+    found by the tokenizer [`_sqlite_index_is_unmodellable`](@ref) uses, so a column named
+    `"collate"` is not mistaken for one.
+
+The collation test is **relative** (did the index override the column's collation?), unlike the
+composite reader's absolute non-`BINARY` test, and that is deliberate. `pragma_index_xinfo` reports the
+EFFECTIVE collation, so on a column *declared* `COLLATE NOCASE` — an adopted schema; PormG emits no
+collation — even the plain index `Dialect.create_index` writes reports `NOCASE`. Refusing it here would
+make a declared `db_index` on that column never read back, and `makemigrations` would propose the same
+`CREATE INDEX` forever. Re-emitting a plain index on that column reproduces it exactly, which is the
+same reasoning PostgreSQL's relative test follows. The DDL is the only place an index-level `COLLATE`
+is recorded; `PRAGMA` cannot tell the two apart.
+
+An expression member has a NULL `name`, so `MIN(ii.name)` is NULL and the row is skipped below.
+
+One divergence from PostgreSQL follows, documented in `docs/src/migrations/index.md`: a field that
+DECLARES `db_index = true` on a column whose only index is one this skips gets PormG's own index
+beside it on PostgreSQL, but — for a `DESC` or explicitly collated index — nothing on SQLite. The
+planner's SQLite `:create` step probes `get_constraints_index`, which answers for any non-unique
+`CREATE INDEX` listing the column as a plain member (#82, #325, #161), so such an index satisfies the
+declaration there. An expression index (no plain member) or a unique one does not, and PormG's own
+index is created as on PostgreSQL. Both converge.
+
 Returns the index NAME as well as the column because the planner needs it to drop an index the model
 no longer declares (`model.cache["index"]`); the PostgreSQL path builds the same mapping from its
 `indexes` CTE. ONE query per table; an unknown table yields an empty dict rather than throwing.
 """
 function _sqlite_single_column_indexed_columns(conn::PormGSQLite, table_name)::Dict{String, String}
   rows = fetch(conn, """
-    SELECT MIN(ii.name) AS col, il.name AS idx
+    SELECT MIN(ii.name) AS col, il.name AS idx, MAX(ii."desc") AS is_desc, MIN(sm.sql) AS ddl
     FROM pragma_index_list(?) AS il
-    JOIN pragma_index_info(il.name) AS ii
-    WHERE il."unique" = 0 AND il.origin = 'c' AND il.partial = 0
+    JOIN pragma_index_xinfo(il.name) AS ii
+    LEFT JOIN sqlite_master AS sm ON sm.type = 'index' AND sm.name = il.name
+    WHERE il."unique" = 0 AND il.origin = 'c' AND il.partial = 0 AND ii."key" = 1
     GROUP BY il.name
     HAVING COUNT(*) = 1
     """, [string(table_name)]) |> DataFrame
@@ -2086,6 +2157,11 @@ function _sqlite_single_column_indexed_columns(conn::PormGSQLite, table_name)::D
   out = Dict{String, String}()
   for r in eachrow(rows)
     (r.col === missing || r.idx === missing) && continue
+    # #847 (see the docstring). Both default to REFUSED on a NULL: an `origin = 'c'` index always has
+    # its DDL in `sqlite_master`, so a missing one is unexpected, and an index is never read
+    # approximately.
+    (r.is_desc === missing || r.is_desc != 0) && continue
+    (r.ddl === missing || _sqlite_index_has_explicit_collate(string(r.ddl))) && continue
     # First index wins if two single-column indexes cover the same column — the duplicate is
     # redundant, and `db_index` is a boolean either way.
     get!(out, string(r.col), string(r.idx))
@@ -2632,6 +2708,26 @@ function _sqlite_index_is_unmodellable(index_sql::AbstractString, pragma_members
   for t in _sqlite_identifier_tokens(_sqlite_index_argument_region(index_sql))
     t.quoted && continue
     uppercase(t.name) in _SQLITE_INDEX_UNMODELLABLE_WORDS && return true
+  end
+  return false
+end
+
+"""
+    _sqlite_index_has_explicit_collate(index_sql) -> Bool
+
+Whether a `CREATE INDEX` statement's column list carries an explicit `COLLATE` — an UNQUOTED `COLLATE`
+token, exactly as [`_sqlite_index_is_unmodellable`](@ref) reads one, so a column named `"collate"`
+does not count. Used by [`_sqlite_single_column_indexed_columns`](@ref) for its relative collation test
+(#847): `pragma_index_xinfo` reports only the effective collation, which a collation declared on the
+COLUMN sets just as well.
+
+Any explicit `COLLATE` counts, even one naming the column's own collation — the DDL does not say
+whether it differs, and refusing is the safe direction (the index is then neither read nor dropped).
+PostgreSQL's test compares collation oids and so still reads that one; neither engine drops it.
+"""
+function _sqlite_index_has_explicit_collate(index_sql::AbstractString)::Bool
+  for t in _sqlite_identifier_tokens(_sqlite_index_argument_region(index_sql))
+    !t.quoted && uppercase(t.name) == "COLLATE" && return true
   end
   return false
 end

@@ -564,9 +564,16 @@ end
     Concat(expressions; output_field=nothing)
 
 Concatenates multiple strings or columns.
+
+The result is text on both engines, so `output_field`, when given, must be a text type
+(`CharField()`, `TextField()`, `"text"`, `"varchar(20)"`). Any other type raises
+`InvalidValueError` when the expression is built. `Concat` renders no cast, so a number declared
+there would be a type the SQL never applies. To get a number, cast the result explicitly:
+`Cast(Concat(…), "integer")`.
 """
 function Concat(x::Vector; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing, _as::AbstractString="")
   output_field = _output_field_type(output_field)   # #603, #696
+  _check_concat_output_field(output_field)          # #835
   # #603: the string ELEMENTS too, so no view is ever stored on the node. The original reason was
   # that `_check_function`'s vector arm assigns its result back in place and a narrowly-typed vector
   # would fail that store; since #612 made the container `Any[]` the store cannot fail, so this is
@@ -598,6 +605,24 @@ function Concat(x::Vector; output_field::Union{N, AbstractString, Nothing} where
   processed_cols = Any[v isa AbstractString ? String(v) : _function_operand(v) for v in x]
   return FObject(function_name = "CONCAT", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field, "as" => String(_as)))
 end
+# #835: `CONCAT(…)` / `a || b` is text on both engines, and `Dialect.CONCAT` renders no cast, so a
+# non-text `output_field` named a type the SQL never applied. The CTE typing believed it (a column
+# of `'Hamilton1'` typed INTEGER, refusing "abc" and binding 7 as a number against text — on SQLite
+# a silent empty result) while the alias filter checked text. Refused here, at construction, so the
+# two readers agree by construction; the explicit spelling is `Cast(Concat(…), type)`, which does
+# render the cast. A text type stays legal: it is what the value already is.
+#
+# An array is not text whatever its element: `_sql_type_field` reads the name before the first `(`,
+# so `"varchar(20)[]"` would pass as `varchar` while `"text[]"` is refused. Checked here, not there —
+# the scalar answer for a `Cast` to an array is #852's to fix, not this guard's.
+function _check_concat_output_field(t::Union{String,Nothing})
+  t === nothing && return nothing
+  !endswith(t, "]") && _sql_type_field(t) isa Union{Models.sCharField, Models.sTextField} && return nothing
+  throw(InvalidValueError(
+    "Concat returns text on both engines and renders no cast, so its output_field cannot be " *
+    "\e[31m$(t)\e[0m. Cast the result instead: \e[32mCast(Concat(…), \"$(lowercase(t))\")\e[0m (#835)."))
+end
+
 # Variadic convenience: Concat("forename", Value(" "), "surname") → same as vector form
 Concat(args...; kwargs...) = Concat(collect(args); kwargs...)
 

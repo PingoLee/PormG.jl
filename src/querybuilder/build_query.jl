@@ -784,7 +784,10 @@ function _having_alias_formatter(alias::MemoKey, instruc::SQLInstruction)
   return _expression_formatter(source.field, instruc)
 end
 
-# Functions whose result is text whatever their operands are.
+# Functions whose result is text whatever their operands are. Checked BEFORE `output_field`: none of
+# them renders a cast, and `Concat` — the one that takes `output_field` — refuses a non-text type when
+# it is built (#835), so whenever a CTE body can type a `Concat` column (it needs an `output_field`
+# there), it types it text too.
 const _TEXT_OUTPUT_FUNCTIONS = ("LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "REPLACE", "CONCAT")
 # Functions whose result has the type of their operands — the first one that names a type decides.
 const _OPERAND_TYPED_FUNCTIONS = ("MAX", "MIN", "COALESCE", "GREATEST", "LEAST", "NULLIF")
@@ -799,7 +802,7 @@ function _expression_formatter(p::SQLTypeFunction, instruc::SQLInstruction)
   haskey(PormGTypeField, name) && return getfield(Models, PormGTypeField[name])
   name in ("SUM", "COUNT") && return Models.format_number_sql
   name in _TEXT_OUTPUT_FUNCTIONS && return Models.format_text_sql
-  # `Cast` names its type; `Case`/`Coalesce`/`Concat`/`Greatest`/`Least` may (`output_field=`).
+  # `Cast` names its type; `Case`/`Coalesce`/`Greatest`/`Least` may (`output_field=`).
   declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
   if declared isa AbstractString
     formatter = _sql_type_formatter(declared)

@@ -591,9 +591,11 @@ The type you declare can be a text, integer, bigint, float, numeric, boolean or 
 includes the aliases `int2`, `int4`, `int8`, `float4` and `float8`, and any field object with one of
 those types, such as `PositiveIntegerField()`, which is typed as a plain integer because a cast does
 not enforce the sign. A timestamp, time or interval type is refused, since each has more than one
-text form. On SQLite a declared `date` on `Coalesce`, `Greatest`, `Least`
-or `Concat` raises `QueryBuildError` too: those functions render no cast there, so the column would
-hold the operand's text rather than a date. Wrap the function in `Cast(…, "date")` instead.
+text form. On SQLite a declared `date` on `Coalesce`, `Greatest` or `Least`
+raises `QueryBuildError` too: those functions render no cast there, so the column would hold the
+operand's text rather than a date. Wrap the function in `Cast(…, "date")` instead. `Concat` only
+takes a text type, on both engines (see
+[Functions and Dates](functions_and_dates.md)).
 
 A `Case` column takes its `output_field` when you pass one. Otherwise PormG types it from its
 branches, meaning every `then` and the `default`:

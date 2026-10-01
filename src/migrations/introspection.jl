@@ -792,13 +792,14 @@ under another spelling used to lose every CHECK.
 """
 function _sqlite_live_table(db::PormGSQLite, table_name::AbstractString)::LiveTable
   table_name = _sqlite_canonical_table_name(db, String(table_name))
-  cols = fetch(db, "PRAGMA table_info(\"$table_name\")") |> DataFrame
-  fks = fetch(db, "PRAGMA foreign_key_list(\"$table_name\")") |> DataFrame
-  # PRAGMA cannot see CHECK constraints, so they come from the stored DDL text (#296). Parameterized,
-  # not interpolated: `table_name` is caller-supplied (`convertSQLToModel` is public), and unlike the
-  # PRAGMA calls above — which interpolate into a *quoted identifier* — this value lands inside a
-  # single-quoted literal, where an embedded `'` would break out. An exact `name = ?` is correct only
-  # because the name was resolved to the catalog spelling above (#531).
+  # The table-valued pragma functions, so the name is a bound parameter (#832): the statement form,
+  # `PRAGMA table_info("…")`, put it inside a quoted identifier, and a `"` in the name — which
+  # `db_table` accepts (#59) — made the statement a syntax error. The result columns are the same.
+  cols = fetch(db, "SELECT * FROM pragma_table_info(?)", [table_name]) |> DataFrame
+  fks = fetch(db, "SELECT * FROM pragma_foreign_key_list(?)", [table_name]) |> DataFrame
+  # PRAGMA cannot see CHECK constraints, so they come from the stored DDL text (#296), bound for the
+  # same reason: `table_name` is caller-supplied (`convertSQLToModel` is public). An exact `name = ?`
+  # is correct only because the name was resolved to the catalog spelling above (#531).
   ddl_rows = fetch(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?", [table_name]) |> DataFrame
   create_sql = nrow(ddl_rows) == 0 || ismissing(ddl_rows[1, :sql]) ? nothing : ddl_rows[1, :sql]
   checks = _sqlite_column_checks(create_sql)
@@ -1938,15 +1939,19 @@ end
 # STILL REQUIRED after #318 gave introspection a `unique` flag, and deliberately BROADER than it: this
 # answers "would SQLite refuse to drop this column?", which is true for a composite-unique member and
 # for a `CREATE UNIQUE INDEX` column — neither of which sets `field.unique`. Do not collapse the two.
+#
+# One bound join, the shape of `get_constraints_index` and the readers after it (#832): the table
+# name is a parameter and the index name never leaves SQLite, where interpolating either into
+# `PRAGMA index_list("…")` / `PRAGMA index_info("…")` broke on a `"` in the name.
 function _sqlite_column_is_unique(conn::PormGSQLite, table_name, field_name::String)::Bool
-  idx_list = fetch(conn, "PRAGMA index_list(\"$(string(table_name))\")") |> DataFrame
-  isempty(idx_list) && return false
-  for row in eachrow(idx_list)
-    row.unique == 1 || continue
-    idx_info = fetch(conn, "PRAGMA index_info(\"$(row.name)\")") |> DataFrame
-    (!isempty(idx_info) && field_name in idx_info.name) && return true
-  end
-  return false
+  rows = fetch(conn, """
+    SELECT 1 AS hit
+    FROM pragma_index_list(?) AS il
+    JOIN pragma_index_info(il.name) AS ii
+    WHERE il."unique" = 1 AND ii.name = ?
+    LIMIT 1
+    """, [string(table_name), field_name]) |> DataFrame
+  return nrow(rows) > 0
 end
 
 """

@@ -1892,3 +1892,98 @@ if adapter_name == "PostgreSQL"
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# unignore_defaults: switches a built-in prefix off, on the live PostgreSQL read path (#818)
+# `account_` is in `postgres_ignore_table`, so a user's own Django app labelled `account` was
+# invisible to `check` and the importers on every connection. Listing the entry under the connection's
+# `unignore_defaults:` makes that connection read it; the same table without the key stays hidden.
+# PostgreSQL only: SQLite's built-in list holds no removable entry. The key is set on the suite's
+# settings for the duration and removed in `finally`, with the fixture table and the imported file.
+# `makemigrations` builds its own live-read list, so it is pinned separately: a declared managed model
+# on the table is refused without the key and, with it, planned as an existing table rather than as
+# `CREATE TABLE IF NOT EXISTS` (#805's churn). It runs on this pool with a scratch `Settings` in a
+# temporary folder, so the plan file never lands in the suite's own folder and nothing is applied. The
+# scratch connection's `ignore_tables:` lists every other live table, so the plan holds this table only
+# and never reaches the drop guards for the suite's own tables. The keyed run must log no error, since
+# a failed live read returns with no plan and would make the CREATE TABLE assertion pass vacuously.
+# Mutation gate: make `_backend_ignore_tables(conn, settings)` return the built-in list unchanged, and
+# every "with the key" assertion goes red; revert only `makemigrations`' list to `postgres_ignore_table`,
+# and the CREATE TABLE assertion does.
+# ─────────────────────────────────────────────────────────────────────────────
+if adapter_name == "PostgreSQL"
+  @testset "unignore_defaults: a built-in prefix read again on one connection (#818)" begin
+    settings = PormG.config[PORMG_DB_FOLDER]
+    pool = settings.connections
+    ddl(sql) = PormG.ConnectionPool.fetch(pool, sql)
+    tbl = "account_pormg_it818"
+    file = "pormg_it818_imported.jl"
+    imported = joinpath(settings.db_def_folder, file)
+    had_key = haskey(settings.db_config_settings, "unignore_defaults")
+    @test !had_key   # the suite's connection.yml does not set it, so `finally` can simply delete it
+
+    reported() = Set(f.table for f in PormG.Migrations.check(pool, settings; include_table = [tbl]).findings)
+    import818() = PormG.Migrations.import_models_from_postgres(; db = pool, settings = settings,
+      include_table = [tbl], file = file, force_replace = true)
+
+    ddl("DROP TABLE IF EXISTS \"$(tbl)\"")
+    try
+      # `now()` is an expression default, which `check`'s default kind reports for any table it reads.
+      ddl("CREATE TABLE \"$(tbl)\" (id BIGINT PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT now())")
+
+      # Without the key, the built-in `account_` hides the table from both readers.
+      @test !(tbl in reported())
+      import818()
+      @test !isfile(imported)   # nothing to import, so no file is written
+
+      settings.db_config_settings["unignore_defaults"] = ["account_"]
+      @test tbl in reported()
+      import818()
+      @test occursin(tbl, read(imported, String))
+
+      # makemigrations: the model mirrors the live table, so with the key nothing is planned for it.
+      mktempdir() do dir
+        folder = joinpath(dir, "db818")   # absolute, so no `cd` under `-t auto`
+        mkpath(folder)
+        scratch = PormG.Configuration.Settings(connections = pool, db_def_folder = folder)
+        scratch.change_db = true
+        # Every other live table, read the way the keyed run below reads, goes under `ignore_tables:`:
+        # the plan then holds the fixture table only. A stray `account_*` table is listed too.
+        keyed = filter(!=("account_"), PormG.postgres_ignore_table)
+        others = [t.name for t in PormG.Migrations.read_live_schema(pool; ignore_table = keyed) if t.name != tbl]
+        @test !any(o -> startswith(tbl, o), others)   # no entry may hide the fixture table itself
+        scratch.db_config_settings = Dict{String,Any}("ignore_tables" => others)
+        models_path = joinpath(folder, scratch.model_file)
+        write(models_path, "module models\nimport PormG.Models\n" *
+          "Account_pormg_it818 = Models.Model(\"$(tbl)\"; id = Models.BigIntegerField(primary_key = true), " *
+          "created_at = Models.DateTimeField(auto_now_add = true))\nend\n")
+        plan_file = joinpath(folder, "migrations", "pending_migrations.jl")
+
+        err = try
+          Base.CoreLogging.with_logger(() -> PormG.Migrations.makemigrations(pool, scratch; path = models_path, interactive = false),
+                                       Base.CoreLogging.NullLogger())
+          nothing
+        catch e
+          e
+        end
+        @test err isa PormG.InvalidConfigurationError
+        @test occursin("list \"account_\" under `unignore_defaults:`", PormG.error_message(err))
+
+        scratch.db_config_settings["unignore_defaults"] = ["account_"]
+        # A failed live read is logged and returns with no plan, which would make the assertion below
+        # pass vacuously: so the run must log no error. (Found in review.)
+        logger = Test.TestLogger(min_level = Base.CoreLogging.Info)
+        Base.CoreLogging.with_logger(() -> PormG.Migrations.makemigrations(pool, scratch; path = models_path, interactive = false), logger)
+        @test !any(r -> r.level >= Base.CoreLogging.Error, logger.logs)
+        # No plan file at all when the model matches the table; at most an ALTER otherwise. The
+        # mutation gate above shows this is not vacuous: hide the table and it is CREATE.
+        plan = isfile(plan_file) ? read(plan_file, String) : ""
+        @test !occursin("CREATE TABLE IF NOT EXISTS \"$(tbl)\"", plan)
+      end
+    finally
+      delete!(settings.db_config_settings, "unignore_defaults")
+      rm(imported; force = true)
+      ddl("DROP TABLE IF EXISTS \"$(tbl)\"")
+    end
+  end
+end

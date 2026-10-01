@@ -927,13 +927,27 @@ _with_connection_ignores(base::Vector{String}, settings::PormGSettings)::Vector{
 
 """
     _backend_ignore_tables(conn) -> Vector{String}
+    _backend_ignore_tables(conn, settings) -> Vector{String}
 
 The backend's built-in ignore list: `sqlite_ignore_schema` on SQLite, `postgres_ignore_table`
-otherwise. `check` uses it as the list its `ignore_table=` replaces. The planner's refusal (#805)
-uses it as the third configuration list a managed model must not fall under.
+otherwise. With `settings`, the list **this connection** reads with: the built-in list minus its
+`unignore_defaults:` entries (#818), which is the only way to switch a built-in entry off.
+
+The two-argument form is what every entry point holding `settings` starts from — `makemigrations`,
+`check` (as the list its `ignore_table=` replaces), the importers, and the planner's refusal (#805),
+which also takes the one-argument form to name the list in its message.
 """
 _backend_ignore_tables(conn)::Vector{String} =
   conn isa PormGSQLite ? sqlite_ignore_schema : postgres_ignore_table
+
+function _backend_ignore_tables(conn, settings::PormGSettings)::Vector{String}
+  builtin = _backend_ignore_tables(conn)
+  # Validated again here, against the list the connection type picks: a connection built without
+  # load() never went through the load-time check.
+  removed = Configuration._configured_unignore_defaults(settings, builtin)
+  isempty(removed) && return builtin
+  return [entry for entry in builtin if !(entry in removed)]
+end
 
 # `pragma_table_list`, the catalog that labels a table `virtual` / `shadow`, is SQLite 3.37.0+.
 const _SQLITE_TABLE_LIST_MIN_VERSION = 3_037_000

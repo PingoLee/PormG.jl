@@ -66,8 +66,21 @@ Auth_user = Models.Model("auth_user"; id = Models.IDField(), username = Models.C
 Auth_user = Models.Model("auth_user"; managed = false, id = Models.IDField(), username = Models.CharField())
 ```
 
-PormG cannot migrate a table under the registry or the built-in list, since neither can be
-switched off for one connection. To have PormG own a table anyway, give the model a table name (or
+If PormG should migrate the table, take it off the list that hides it, on that connection. A
+built-in entry is switched off with `unignore_defaults:` in `connection.yml` (#818), for example
+for your own Django app labelled `account`:
+
+```yaml
+# ✓ after: this connection reads and migrates every account_* table
+dev:
+  adapter: PostgreSQL
+  unignore_defaults:
+    - account_
+```
+
+Every table under that prefix becomes visible, and one no model declares is planned for removal,
+so declare each one you keep. A table hidden only by an `ignore_tables:` entry can be migrated by
+removing that entry. The registry and the built-in `pormg_migrations` entry cannot be switched off
+for one connection: to have PormG own such a table anyway, give the model a table name (or
 `db_table`) outside the prefix. That plans a **new, empty** table; the existing one and its rows
-stay where they are, so copy the data yourself if you need it. A table hidden only by an
-`ignore_tables:` entry in `connection.yml` can be migrated by removing that entry.
+stay where they are, so copy the data yourself if you need it.

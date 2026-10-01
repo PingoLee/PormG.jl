@@ -134,7 +134,10 @@ does for `makemigrations`. It replaces that default list, but the connection's o
 of it, and so does `register_ignore_tables!`. Replacing the default list does not make a managed
 model on a default-ignored table legal: that model is still refused with `InvalidConfigurationError`,
 as it is in `makemigrations` (see
-[Tables PormG leaves alone](../configuration/connection_yml.md#Tables-PormG-leaves-alone)).
+[Tables PormG leaves alone](../configuration/connection_yml.md#Tables-PormG-leaves-alone)). Listing
+the built-in entry under
+[`unignore_defaults:`](../configuration/connection_yml.md#Switching-a-built-in-entry-off) does,
+for that connection, because `check` and `makemigrations` then both read the table.
 
 A column whose definition changes reads differently per engine. PostgreSQL reports
 `"Alter field: <column>"`. SQLite rebuilds the table, so its finding is `"Alter table: <table>"` and

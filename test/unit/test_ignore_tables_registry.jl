@@ -405,6 +405,9 @@ end
     @test occursin("pormg_migrations_audit", msg)
     @test occursin("\"pormg_migrations\" in PormG's default ignore list", msg)
     @test occursin("sqlite_ignore_schema", msg)
+    # PormG's own entry has no off switch (#818), so the rename is the way to migrate the table.
+    @test occursin("since the built-in \"pormg_migrations\" entry cannot be switched off", msg)
+    @test !occursin("unignore_defaults", msg)
     @test !_ig749_pending(settings)
   end
 
@@ -438,11 +441,15 @@ end
     @test !occursin("outside the prefix, since", msg)
 
     # The connection's list and the backend default both hide `auth_user`: both are named, and
-    # removing the entry is not offered, since the default would still hide the table.
+    # removing the entry alone is not offered, since the default would still hide the table. Since
+    # #818 the default entry has a per-connection off switch, so that fix (which also says to drop the
+    # `ignore_tables:` entry) replaces the rename this case used to get.
     msg = PormG.error_message(_ig805_refuse(IgnoreMockPg805(), settings, "auth_user"))
     @test occursin("ignore_tables entry \"auth_\" (connection.yml) and \"auth_\" in PormG's default ignore list", msg)
     @test !occursin("remove the entry", msg)
-    @test occursin("since the default list cannot be switched off", msg)
+    @test occursin("list \"auth_\" under `unignore_defaults:`", msg)
+    @test occursin("drop any `ignore_tables:` entry for the same table", msg)
+    @test !occursin("outside the prefix, since", msg)
 
     # The same table under the connection's list and the registry names the registry instead.
     PormG._EXTRA_IGNORE_TABLES[] = ["legacy_timing_"]
@@ -456,7 +463,7 @@ end
     only_conn = PormG.Configuration.Settings(db_config_settings = Dict{String,Any}("ignore_tables" => ["legacy_timing_"]))
     msg = PormG.error_message(_ig805_refuse(IgnoreMockPg805(), only_conn, "legacy_timing_laps", "auth_user"))
     @test occursin("remove the entry from `ignore_tables:`", msg)
-    @test occursin("since the default list cannot be switched off", msg)
+    @test occursin("list \"auth_\" under `unignore_defaults:`", msg)   # #818: was the rename
 
     # A ManyToManyField's auto join table under a list with no off switch gets its own fix only:
     # `managed = false` and a rename apply to a model the user wrote, not to a synthesized table.
@@ -469,6 +476,110 @@ end
     @test occursin("Apply the fix named on a join-table line.", msg)
     @test !occursin("outside the prefix, since", msg)
     @test !occursin("managed = false", msg)
+  finally
+    PormG._EXTRA_IGNORE_TABLES[] = saved
+  end
+end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# #818: `unignore_defaults:` switches a built-in entry off, for one connection
+#
+# PostgreSQL's built-in list hides framework prefixes such as `account_`, `admin_` and `social_`,
+# and nothing could switch one off. A user's own Django app labelled `account` keeps its tables under
+# `account_`, so since #805 a managed model there was refused with no way to migrate the table. The
+# key removes exact built-in entries from the list every `settings`-holding reader starts from, and
+# the refusal reads the same list, so the two cannot disagree. PostgreSQL only: SQLite's built-in list
+# has no removable entry, so these use the `IgnoreMockPg805` connection and no database.
+# ═════════════════════════════════════════════════════════════════════════════
+_ig818_settings(unignore) = PormG.Configuration.Settings(db_config_settings = Dict{String,Any}("unignore_defaults" => unignore))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The list a connection reads with drops exactly the named entries
+# The one function `makemigrations`, `check`, the importers and the refusal all start from. It
+# validates again, because a connection built without load() never went through the load check.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "unignore_defaults: the connection's default list drops exactly the named entries (#818)" begin
+  pg = PormG.postgres_ignore_table
+  effective = Migrations._backend_ignore_tables(IgnoreMockPg805(), _ig818_settings(["account_", "django_"]))
+  @test effective == [e for e in pg if !(e in ("account_", "django_"))]
+  @test "django_celery_" in effective   # entries are independent: `django_` does not take it along
+  @test "pormg_migrations" in effective
+  # No key: the built-in list itself, on both engines.
+  @test Migrations._backend_ignore_tables(IgnoreMockPg805(), PormG.Configuration.Settings()) == pg
+  @test Migrations._backend_ignore_tables(IgnoreMockSqlite805(), PormG.Configuration.Settings()) == PormG.sqlite_ignore_schema
+  # Validated against the list the connection type picks, whatever the settings' `adapter:` says.
+  @test_throws PormG.InvalidConfigurationError Migrations._backend_ignore_tables(IgnoreMockPg805(), _ig818_settings(["acount_"]))
+  @test_throws PormG.InvalidConfigurationError Migrations._backend_ignore_tables(IgnoreMockSqlite805(), _ig818_settings(["account_"]))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The #805 refusal: a model under an unignored entry is legal; the fix text names the key
+# Without the key, `account_profile` is refused and the fix names the exact entry to list, with the
+# warning that every table under it becomes visible. With it, the same model plans like any other.
+# The key removes only what it names: `auth_user` stays refused, and `django_celery_` survives a
+# removed `django_`. The registry has no per-connection off switch, so a table it also hides is not
+# offered the key.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "unignore_defaults: the refusal honours the key and offers it (#818)" begin
+  saved = copy(PormG._EXTRA_IGNORE_TABLES[])
+  try
+    PormG._EXTRA_IGNORE_TABLES[] = String[]
+    pg = IgnoreMockPg805()
+
+    err = _ig805_refuse(pg, PormG.Configuration.Settings(), "account_profile")
+    @test err isa PormG.InvalidConfigurationError
+    msg = PormG.error_message(err)
+    @test occursin("\"account_\" in PormG's default ignore list", msg)
+    @test occursin("list \"account_\" under `unignore_defaults:`", msg)
+    @test occursin("every other table under a listed prefix becomes visible too", msg)
+    @test occursin("planned for removal", msg)
+    @test !occursin("outside the prefix, since", msg)   # the default is no longer locked here
+
+    with_key = _ig818_settings(["account_"])
+    @test _ig805_refuse(pg, with_key, "account_profile") === nothing
+    msg = PormG.error_message(_ig805_refuse(pg, with_key, "account_profile", "auth_user"))
+    @test occursin("\"auth_\" in PormG's default ignore list", msg)
+    @test !occursin("account_profile", msg)               # the unignored model is not reported
+
+    # Built-in entries overlap: `django_celery_beat_task` is under `django_` AND `django_celery_`.
+    # With no key, the fix names both, since listing one alone leaves the table hidden (found in
+    # review: naming the first match sent the user round twice). With `django_` listed, only the
+    # remaining entry is named, and with both the model is legal.
+    msg = PormG.error_message(_ig805_refuse(pg, PormG.Configuration.Settings(), "django_celery_beat_task"))
+    @test occursin("\"django_\" in PormG's default ignore list (`postgres_ignore_table`) and \"django_celery_\" in", msg)
+    @test occursin("list \"django_\", \"django_celery_\" under `unignore_defaults:`", msg)
+    msg = PormG.error_message(_ig805_refuse(pg, _ig818_settings(["django_"]), "django_celery_beat_task"))
+    @test occursin("\"django_celery_\" in PormG's default ignore list", msg)
+    @test occursin("list \"django_celery_\" under `unignore_defaults:`", msg)
+    @test !occursin("\"django_\" in PormG's default ignore list", msg)
+    @test _ig805_refuse(pg, _ig818_settings(["django_", "django_celery_"]), "django_celery_beat_task") === nothing
+
+    # A locked entry and a switchable one in the same plan: each fix names its own entry, so the
+    # message does not read as "the default list cannot be switched off" next to the key's offer.
+    msg = PormG.error_message(_ig805_refuse(pg, PormG.Configuration.Settings(), "pormg_migrations_audit", "account_profile"))
+    @test occursin("since the built-in \"pormg_migrations\" entry cannot be switched off", msg)
+    @test occursin("list \"account_\" under `unignore_defaults:`", msg)
+    @test !occursin("pormg_migrations\" under `unignore_defaults:`", msg)
+
+    # The registry hides it too: the key would not help, so it is not offered, and the rename is.
+    PormG._EXTRA_IGNORE_TABLES[] = ["account_"]
+    msg = PormG.error_message(_ig805_refuse(pg, PormG.Configuration.Settings(), "account_profile"))
+    @test !occursin("unignore_defaults", msg)
+    @test occursin("since `register_ignore_tables!` cannot be switched off", msg)
+    # ...and unignoring the default entry leaves the registry's refusal standing.
+    msg = PormG.error_message(_ig805_refuse(pg, with_key, "account_profile"))
+    @test occursin("registered with `register_ignore_tables!`", msg)
+    @test !occursin("PormG's default ignore list", msg)
+
+    # A ManyToManyField's auto join table under a default entry can be unignored the same way.
+    PormG._EXTRA_IGNORE_TABLES[] = String[]
+    schema = _ig805_schema("account_profile_circuits")
+    schema[:account_profile_circuits][:model].cache["many_to_many_auto"] = Dict{String, Any}()
+    msg = PormG.error_message(_ig805_catch(() ->
+      Migrations._refuse_managed_models_on_ignored_tables(schema, pg, PormG.Configuration.Settings())))
+    @test occursin("the auto join table of a ManyToManyField", msg)
+    @test occursin("list \"account_\" under `unignore_defaults:`", msg)
+    @test Migrations._refuse_managed_models_on_ignored_tables(schema, pg, with_key) === nothing
   finally
     PormG._EXTRA_IGNORE_TABLES[] = saved
   end

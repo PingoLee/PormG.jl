@@ -42,7 +42,14 @@ grep -rnE '(Coalesce|Greatest|Least)\(' --include='*.jl' <your-app>/src | grep '
 A multi-line call can hide from that grep. On SQLite the error is raised when the query is built,
 so a test run surfaces every temporal or array one that remains. A temporal type raises
 `output_field: SQLite cannot cast to …`, and an array raises `output_field: SQLite has no array types; …`.
-A CTE column typed by an array raises `A CTE column cannot be typed from the SQL type …`.
+
+On PostgreSQL, a CTE column typed by a sized array raises
+`A CTE column cannot be typed from the SQL type …` when the query is built. That covers a `Cast`
+as well as an `output_field`, so search for both:
+
+```bash
+grep -rnE '(Cast|output_field).*\[\]' --include='*.jl' <your-app>/src
+```
 
 ### Migrate your app
 

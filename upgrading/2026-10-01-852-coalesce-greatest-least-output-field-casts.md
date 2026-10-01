@@ -18,6 +18,7 @@ did not always apply it, though, so the value could be the operand's own:
 | SQLite | all three | no cast | `CAST(… AS TYPE)`, or `date(…)` for a `date` |
 | SQLite | a `timestamp`, `time`, `interval` or array type | ignored | raises `BackendCapabilityError`, as `Cast(x, type)` does (#822) |
 | SQLite | a CTE column declared `date` on these three | raised `QueryBuildError` | accepted: the column is a date |
+| PostgreSQL | a CTE column typed by a sized array, e.g. `Cast(x, "numeric(10,2)[]")` or `"varchar(20)[]"` | typed as the scalar (a decimal, a varchar) | raises `QueryBuildError`, as `"integer[]"` always did |
 
 On SQLite, the missing cast meant that a filter typed by the declaration compared the operand's own
 value with a value of the declared type. A `start_at` timestamp declared `date` never equalled a date,
@@ -39,8 +40,9 @@ grep -rnE '(Coalesce|Greatest|Least)\(' --include='*.jl' <your-app>/src | grep '
 ```
 
 A multi-line call can hide from that grep. On SQLite the error is raised when the query is built,
-so a test run surfaces every temporal or array one that remains:
-`output_field: SQLite cannot cast to …`.
+so a test run surfaces every temporal or array one that remains. A temporal type raises
+`output_field: SQLite cannot cast to …`, and an array raises `output_field: SQLite has no array types; …`.
+A CTE column typed by an array raises `A CTE column cannot be typed from the SQL type …`.
 
 ### Migrate your app
 

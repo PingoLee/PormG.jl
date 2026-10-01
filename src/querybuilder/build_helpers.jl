@@ -2004,7 +2004,7 @@ function _resolve_bucket_column(raw_field::String, instruc::SQLInstruction)
   # a plain-column projection reads the real field; COUNT/SUM yield IntegerField; CASE/WHEN route
   # through `_case_output_field`, which types a CASE as DATE only when every non-NULL branch is
   # itself a date column (#812) or `output_field` names `date`, which the SQL casts to a date on
-  # both engines (`date(…)` on SQLite since #822; `Coalesce` & co. render no cast there and stay refused);
+  # both engines (`date(…)` on SQLite since #822, and for `Coalesce` & co. since #852);
   # MIN/MAX carry the base DateField and genuinely produce a date; and every OTHER function —
   # `ToChar` included, which is what would actually produce a "1991-10" text column — is rejected
   # outright when the CTE model is built unless it declares its type. So the DATE gate is as

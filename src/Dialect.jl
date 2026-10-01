@@ -675,7 +675,8 @@ end
 # operand's own value, and a filter typed by the declaration could compare text with a number and
 # match nothing. SQLite goes through `sqlite_cast_sql`, so a `date` is `date(…)` and the other
 # temporal and array types raise `BackendCapabilityError`, as for `Cast` and `Case` (#822).
-# The `CASE` arms keep their own spelling: the vector form's multi-line text is pinned (`END)::type`).
+# The single-`When` `CASE` arm uses it too; the vector arms keep their own spelling, because their
+# multi-line text is pinned (`END)::type`).
 function _output_field_cast(sql::AbstractString, format::Dict{String,Any}, conn::PormGPostgres)
   output_field = get(format, "output_field", nothing)
   (isnothing(output_field) || output_field == "") && return sql
@@ -916,17 +917,8 @@ end
 # A single bare `When` reaches these two arms. They ignored `output_field` until #822, so
 # `Case(When(…); output_field = DateField())` rendered no cast on either engine while the vector form
 # cast on both — and the read path, which takes the declared type at its word, disagreed with the SQL.
-function CASE(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  sql = """CASE $(column) ELSE $(format["else"]) END"""
-  output_field = get(format, "output_field", nothing)
-  (isnothing(output_field) || output_field == "") && return sql
-  return "($sql)::$(cast_type_sql(output_field, conn; context = "output_field"))"
-end
-function CASE(column::String, format::Dict{String,Any}, conn::PormGSQLite)
-  sql = """CASE $(column) ELSE $(format["else"]) END"""
-  output_field = get(format, "output_field", nothing)
-  (isnothing(output_field) || output_field == "") && return sql
-  return sqlite_cast_sql(sql, output_field, conn; context = "output_field")
+function CASE(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+  return _output_field_cast("""CASE $(column) ELSE $(format["else"]) END""", format, conn)
 end
 function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
   resp::String = """CASE

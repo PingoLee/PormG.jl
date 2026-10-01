@@ -575,11 +575,18 @@ end
         "cf" => F_.Cast("note", PormG.Models.DateField()),
         "k"  => F_.Case([PormG.Functions.When("id" => 1, then = PormG.F("d"))], output_field = "date"),
         "co" => F_.Coalesce("d", "d"; output_field = "date"),
+        "cts" => F_.Coalesce("ts", "ts"; output_field = "date"),
+        "gts" => F_.Greatest("ts", "ts"; output_field = "date"),
         "ct" => F_.Cast("d", "text")); connection = conn)
       @test kinds[:c] == PormG.CDate()
       @test kinds[:cf] == PormG.CDate()
       @test kinds[:k] == PormG.CDate()
       @test kinds[:co] == PormG.CDate()   # #824: the operands agree; was `!haskey` under #822
+      # #852: the declaration alone, over timestamp operands. The operands agree on a TIMESTAMP, so
+      # the #824 agreement rule would record nothing; the date cast (`date(…)` on SQLite) is what
+      # makes the value a date, and SQLite reads a `Date` back where it read the timestamp text.
+      @test kinds[:cts] == PormG.CDate()
+      @test kinds[:gts] == PormG.CDate()
       @test !haskey(kinds, :ct)
     end
   end
@@ -622,8 +629,9 @@ end
     @test kinds[:jd] == PormG.CDate()
   end
 
-  # #824: `Coalesce`, `Greatest` and `Least` return one of their operands' own values, and render no
-  # cast on SQLite — so they are typed only when every operand names the same kind. A NULL literal is
+  # #824: `Coalesce`, `Greatest` and `Least` return one of their operands' own values, and with no
+  # `output_field` render no cast (a declared `date` is #852's, tested above) — so they are typed only
+  # when every operand names the same kind. A NULL literal is
   # never the value and is skipped; a date literal binds as the column's own text (#721), so it agrees
   # with a DATE column. `NullIf(a, b)` returns `a` or NULL, so it is `a`'s kind whatever `b` is.
   @testset "Coalesce/Greatest/Least record the kind their operands agree on (#824)" begin

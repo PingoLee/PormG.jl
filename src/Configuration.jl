@@ -545,21 +545,28 @@ function connection_key_for_pool(pool::Union{PormGPostgres, PormGSQLite})::Union
   return nothing
 end
 
-function ensure_model_transaction_scope(model::PormGModel)
-  tx_pool = get_tx_pool()
-  tx_pool === nothing && return
-  model.connect_key === nothing && throw(InvalidConfigurationError("Model $(model.name) is not bound to a database connection key"))
-  settings = get_settings(model.connect_key)
-  if tx_pool === settings.connections
-    return
-  end
-  active_key = connection_key_for_pool(tx_pool)
-  active_desc = active_key === nothing ? "unknown transaction" : active_key
+# While any transaction is open, an ORM statement must run on a pool that has an open transaction,
+# in this block or an enclosing one; otherwise it would quietly run in autocommit, outside the
+# rollback the caller is relying on. `pool` is the pool the statement EXECUTES on — what
+# `get_settings` resolved from `.db(...)`, a `connection =` override or the model's binding — not
+# the model's binding alone, which a `.db()` call overrides (#838). Raw `fetch` is deliberately
+# looser: it runs in autocommit on a pool with no open transaction, as Django does per connection.
+function ensure_transaction_scope(model::PormGModel, pool::Union{PormGPostgres, PormGSQLite})
+  in_transaction_context() || return
+  in_transaction_on(pool) && return
+  active_key = connection_key_for_pool(get_tx_pool())
+  active_desc = active_key === nothing ? "an unregistered connection" : active_key
+  target_key = connection_key_for_pool(pool)
+  target_desc = target_key === nothing ? "an unregistered connection" : target_key
+  fix = target_key === nothing ? "atomic on that connection" : "atomic(\"$(target_key)\")"
   # TransactionError, not InvalidConfigurationError (#268): the configuration is fine — both
   # connections are correctly declared — and the caller's *call pattern* is what cannot work. Its
   # sibling check, `ConnectionPool.atomic(durable=true)`, reported the same class as
   # QueryBuildError until #268 gave both one honest home.
-  throw(TransactionError("Active transaction on connection $(active_desc) cannot include model $(model.name) bound to $(model.connect_key). Run run_in_transaction(\"$(model.connect_key)\") or move this operation outside the current transaction."))
+  throw(TransactionError("Active transaction on connection $(active_desc) cannot include model \
+    $(model.name) on connection $(target_desc), which has no transaction open. Wrap the call in \
+    $(fix) to give it a transaction of its own on that database (it commits separately: there is \
+    no two-phase commit), or move it outside the current transaction."))
 end
 
 # The connection of the open transaction on `pool`, or `nothing`. Every path that reuses the
@@ -571,17 +578,19 @@ function transaction_connection_for(pool::Union{PormGPostgres, PormGSQLite})
 end
 transaction_connection_for(settings::PormGSettings) = transaction_connection_for(settings.connections)
 
-function get_sqlite_reserved_primary_key_max(model::PormGModel, pk_field::String)
-  ctx = _open_tx_context()
-  ctx.depth > 0 || return nothing
+# The reservations live in the transaction context on `pool`, the pool the insert runs on — not the
+# innermost context, which names another database when the call is nested in a block on it (#838).
+function get_sqlite_reserved_primary_key_max(model::PormGModel, pk_field::String, pool::Union{PormGPostgres, PormGSQLite})
+  ctx = _tx_context_for(pool)
+  ctx === nothing && return nothing
   # Keyed on the PHYSICAL table (#59): the reservation is about that table's PK sequence, and two
   # models whose logical names fold together would otherwise share one overlay entry.
   return get(ctx.sqlite_reserved_primary_keys, (model_table_name(model), pk_field), nothing)
 end
 
-function register_sqlite_reserved_primary_key_max!(model::PormGModel, pk_field::String, max_id::Integer)
-  ctx = _open_tx_context()
-  ctx.depth > 0 || return Int64(max_id)
+function register_sqlite_reserved_primary_key_max!(model::PormGModel, pk_field::String, max_id::Integer, pool::Union{PormGPostgres, PormGSQLite})
+  ctx = _tx_context_for(pool)
+  ctx === nothing && return Int64(max_id)
 
   key = (model_table_name(model), pk_field)  # physical table (#59) — must match the reader above
   current_max = get(ctx.sqlite_reserved_primary_keys, key, typemin(Int64))

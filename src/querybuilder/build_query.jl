@@ -1986,9 +1986,9 @@ function build(object::SQLObject;
   parameters::Union{Nothing,AbstractPormGParam}=nothing,
   set_contexts::Bool=true,
   outer::Union{Nothing,SQLInstruction}=nothing)
-  ensure_model_transaction_scope(object.model)
 
   settings, connection, conn_key = get_settings(object, connection=connection)
+  ensure_transaction_scope(object.model, connection)
 
   table_alias === nothing && (table_alias = SQLTbAlias())
   parameters === nothing && (parameters = get_parameter(connection))

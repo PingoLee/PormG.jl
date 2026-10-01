@@ -142,10 +142,10 @@ function delete(objct::SQLObjectHandler;
     show_query::Symbol = :execute,
     allow_delete_all::Bool = false)
   model = objct.object.model
-  ensure_model_transaction_scope(model)
   
   # Resolve settings
   settings, connection, conn_key = get_settings(objct, connection=connection)
+  ensure_transaction_scope(model, connection)
     
   # check if is allowed to delete
   !settings.change_data && throw(_write_not_allowed("delete", conn_key))

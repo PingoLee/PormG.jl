@@ -2916,7 +2916,7 @@ function run_in_transaction(f::Function, pool::Union{PormGPostgres, PormGSQLite}
   # Reentrancy (#26): a nested run_in_transaction / atomic on the SAME pool becomes a
   # SAVEPOINT on the already-pinned connection instead of a second independent BEGIN.
   # A nested call targeting a DIFFERENT pool (e.g. a second database) still opens its own
-  # transaction — correct multi-DB behavior, already guarded by ensure_model_transaction_scope —
+  # transaction — correct multi-DB behavior, already guarded by ensure_transaction_scope —
   # unless a transaction on that pool is open further out, which makes it a savepoint there.
   # "Already open on this pool" includes enclosing blocks (#831): in `atomic(a) do; atomic(b) do;
   # atomic(a)`, the innermost context names only B, but A's transaction is still open, and a second
@@ -3140,7 +3140,7 @@ function atomic(f::Function, pool::Union{PormGPostgres, PormGSQLite}; durable::B
   if durable && in_transaction_on(pool)
     # TransactionError, not QueryBuildError: nothing is wrong with the query shape — the
     # transaction API was called in a way that cannot work. Its sibling check,
-    # `Configuration.ensure_model_transaction_scope`, reports the same class and used to say
+    # `Configuration.ensure_transaction_scope`, reports the same class and used to say
     # InvalidConfigurationError; #268 gave both one honest home.
     throw(TransactionError("atomic(durable=true) must be the outermost transaction, but a transaction is already active on this database"))
   end

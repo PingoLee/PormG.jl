@@ -494,8 +494,10 @@ cannot work:
   be outermost. A transaction open on a different database does not count.
 - [`without_foreign_keys`](@ref) nested inside an already-open transaction on the same database —
   it must be outermost too, on both engines.
-- Touching a model bound to one connection while a transaction is open on another. Open the
-  transaction on that model's own connection instead: `run_in_transaction("<its connect_key>")`.
+- An ORM call that would run on a database with no open transaction while a transaction is open on
+  another. The database that counts is the one the call **runs** on: the model's own connection,
+  or the one `.db("<key>")` routes it to. Wrap the call in `atomic("<that key>")`, or move it
+  outside the transaction.
 
 It is deliberately **not** a `DatabaseError` — the database was never involved.
 
@@ -573,9 +575,22 @@ Semantics:
   it. If it must be transactional, open a transaction on that database as well, around this block or
   inside it: each raw `fetch` then runs in its own database's transaction, however the blocks nest.
   The two transactions still commit separately, because PormG has no two-phase commit.
-- An ORM call is stricter: a model bound to the outer database, used inside a block on another
-  database, raises `TransactionError`. Wrap that call in `atomic` on the model's own database where
-  it happens — with the outer transaction still open, that block is a savepoint on it.
+- An ORM call follows the same rule about *where* it runs, but it refuses instead of falling back
+  to autocommit. It runs on the database it targets: the model's own connection, or the one
+  `.db("<key>")` routes it to. If a transaction is open on that database, in this block or an
+  enclosing one, the call joins it. If not, it raises `TransactionError` before anything is sent.
+  So a model on the outer database, used inside a nested block on another database, runs in the
+  outer transaction. A `.db()` call to a third database with no open transaction is refused. Wrap
+  it in `atomic` on that database to give it a transaction of its own.
+
+```julia
+atomic("db_2") do
+  atomic("db_sl") do
+    M.Driver.objects.filter("driverid" => 1).update("code" => "HAM")   # db_2: joins the outer transaction
+  end
+  M.Driver.objects.db("db_sl").filter("driverid" => 1).update("code" => "HAM")   # TransactionError: no transaction open on db_sl
+end
+```
 
 Savepoints behave **identically on PostgreSQL and SQLite** — both support `SAVEPOINT` /
 `RELEASE SAVEPOINT` / `ROLLBACK TO SAVEPOINT` natively.

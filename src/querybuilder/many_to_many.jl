@@ -57,6 +57,10 @@ function _m2m_settings(manager::ManyToManyManager)
     end
   end
   settings = get_configuration_settings(conn_key)
+  # Every manager operation resolves its database here, so this is the one place the
+  # transaction-scope rule covers add/remove/clear/set and the id read (#838). They issue raw
+  # `fetch` calls, which would otherwise run in autocommit on a database with no open transaction.
+  ensure_transaction_scope(manager.owner_model, settings.connections)
   return settings, settings.connections, conn_key
 end
 

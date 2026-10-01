@@ -319,6 +319,7 @@ end
 function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; clone::Bool=true)
   model = objct.object.model
   settings, connection, conn_key = get_settings(objct)
+  ensure_transaction_scope(model, connection)
   !settings.change_data && throw(_write_not_allowed("allocate_primary_keys", conn_key))
 
   # NOT the #132 zero-copy wrapper: unlike the bulk ops' internal working frames, this
@@ -423,8 +424,8 @@ M.Driver.objects.create("forename" => "Auto")
 """
 function resync_sequences(objct::SQLObjectHandler)
   model = objct.object.model
-  ensure_model_transaction_scope(model)
   settings, connection, conn_key = get_settings(objct)
+  ensure_transaction_scope(model, connection)
   !settings.change_data && throw(_write_not_allowed("resync_sequences", conn_key))
 
   # ALL of the model's declared pk fields — unlike _prepare_row_insert!'s pk_field (built from
@@ -490,8 +491,8 @@ end
 # avoid concurrent races — a future direct caller MUST preserve that invariant. Both
 # current callers do: allocate_primary_keys auto-wraps this in run_in_transaction whenever
 # one isn't already active (#88), and the create() path (execution.jl) reaches here only
-# when get_sqlite_reserved_primary_key_max returned non-nothing, which already implies an
-# open transaction (reservation overlay is a no-op at depth 0).
+# when get_sqlite_reserved_primary_key_max returned non-nothing, which already implies a
+# transaction open on this connection (the overlay is read from that pool's context, #838).
 function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_field::String, n::Int, settings::PormGSettings)
   safe_table = Models.model_table_name(model)
   safe_table_name = safe_table_identifier(safe_table, connection)
@@ -510,12 +511,12 @@ function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_fie
   result = fetch(settings, sql) |> DataFrames.DataFrame
   max_id = result[1, :max_id]
   max_id = (ismissing(max_id) || isnothing(max_id)) ? Int64(0) : Int64(max_id)
-  reserved_max = get_sqlite_reserved_primary_key_max(model, pk_field)
+  reserved_max = get_sqlite_reserved_primary_key_max(model, pk_field, connection)
   max_id = max(max_id, something(reserved_max, Int64(0)))
   new_max = max_id + n
 
   has_sequence && _sqlite_sequence_upsert!(settings, safe_table_literal, new_max)
-  register_sqlite_reserved_primary_key_max!(model, pk_field, new_max)
+  register_sqlite_reserved_primary_key_max!(model, pk_field, new_max, connection)
 
   return collect((max_id + 1):new_max)
 end
@@ -1533,10 +1534,10 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     returning = nothing
   )
   model = objct.object.model
-  ensure_model_transaction_scope(model)
 
   # Resolve settings
   settings, connection, conn_key = get_settings(objct)
+  ensure_transaction_scope(model, connection)
 
   # check if is allowed to insert
   !settings.change_data && throw(_write_not_allowed("bulk_insert", conn_key))
@@ -1879,10 +1880,10 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     show_query::Symbol = :execute
   )
   model = objct.object.model
-  ensure_model_transaction_scope(model)
   
   # Resolve settings
   settings, connection, conn_key = get_settings(objct)
+  ensure_transaction_scope(model, connection)
 
   !(connection isa PormGPostgres) && throw(BackendCapabilityError("bulk_copy is only supported for PostgreSQL. Use bulk_insert for SQLite."))
 
@@ -2318,10 +2319,10 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   chunk_size::Integer=1000)
 
   model = objct.object.model
-  ensure_model_transaction_scope(model)
   
   # Resolve settings
   settings, connection, conn_key = get_settings(objct)
+  ensure_transaction_scope(model, connection)
 
   # check if is allowed to insert
   !settings.change_data && throw(_write_not_allowed("bulk_update", conn_key))

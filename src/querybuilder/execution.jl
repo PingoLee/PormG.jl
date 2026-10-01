@@ -327,9 +327,10 @@ function query(q::SQLObjectHandler;
   # taken then immediately released at autocommit. Fail loudly (Django's TransactionManagementError
   # analog). Guarded on the execute path only, so inspect_query/show_query still render FOR UPDATE
   # without a live transaction. SQLite never locks (clause rendered ""), so it is exempt.
-  # The transaction must be on the pool this read runs on (#831): `.db("other")` routes it away from
-  # the model's own connection, past `ensure_model_transaction_scope`, and a transaction open on
-  # another database does not hold this lock.
+  # The transaction must be on the pool this read runs on (#831): a transaction open on another
+  # database does not hold this lock. Inside one, `build`'s `ensure_transaction_scope` already
+  # refuses a read routed to a pool with no transaction (#838), so what reaches here unguarded is
+  # a read with no transaction open anywhere.
   if q.object.for_update !== nothing && instruction.connection isa PormGPostgres &&
      transaction_connection_for(instruction.connection) === nothing
     throw(QueryBuildError("select_for_update() must run inside a transaction (run_in_transaction/atomic) on PostgreSQL; otherwise the row lock is released immediately at autocommit."))
@@ -624,7 +625,7 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
     auto_pk_fields = [field for field in fields if _is_auto_generated_bulk_primary_key(model.fields[field])]
     if length(auto_pk_fields) == 1
       pk_name = auto_pk_fields[1]
-      reserved_max = get_sqlite_reserved_primary_key_max(model, pk_name)
+      reserved_max = get_sqlite_reserved_primary_key_max(model, pk_name, connection)
       if reserved_max !== nothing && !haskey(real_obj.insert, pk_name)
         reserved_id = _allocate_sqlite_ids(model, connection, pk_name, 1, settings)[1]
         real_obj.insert[pk_name] = reserved_id
@@ -659,10 +660,10 @@ end
 function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Symbol = :execute)
 real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
-  ensure_model_transaction_scope(model)
   
   # Resolve settings
   settings, connection, conn_key = get_settings(objct, connection=connection)
+  ensure_transaction_scope(model, connection)
   
   # Collect column names and parameter values
   parameters = get_parameter(connection)
@@ -762,9 +763,9 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
     set_fields::Vector{String}, show_query::Symbol = :execute)
   real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
-  ensure_model_transaction_scope(model)
 
   settings, connection, conn_key = get_settings(objct)
+  ensure_transaction_scope(model, connection)
 
   parameters = get_parameter(connection)
   set_context!(parameters, :select)
@@ -901,9 +902,9 @@ end
 function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_query::Symbol = :execute)
   real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
-  ensure_model_transaction_scope(model)
 
   settings, connection, conn_key = get_settings(objct)
+  ensure_transaction_scope(model, connection)
   !settings.change_data && throw(_write_not_allowed("get_or_create", conn_key))
 
   # Capture the raw lookup values BEFORE any INSERT marshalling mutates real_obj.insert.
@@ -2351,10 +2352,10 @@ end
 function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Symbol = :execute)
   real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
-  ensure_model_transaction_scope(model)
 
   # Resolve settings
   settings, connection, conn_key = get_settings(objct, connection=connection)
+  ensure_transaction_scope(model, connection)
 
   # Check if is allowed to update
   !settings.change_data && throw(_write_not_allowed("update", conn_key))

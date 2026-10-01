@@ -1422,6 +1422,69 @@ if adapter_name == "PostgreSQL"
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: a byte bound above 1 GiB is left unread, and the column still converges (#751)
+# `BinaryField(max_length = 3_000_000_000)` wrote `CHECK (octet_length(big) <= 3000000000)`, which
+# PostgreSQL parses as a `bigint` literal and deparses as `<= '3000000000'::bigint`. The reader never
+# matched that form, so the declared bound was "missing" on every run and `makemigrations` added the
+# CHECK again, forever. Such a declaration is now refused (the cap is 1 GiB), and a live bound above
+# the cap — the `::bigint` form, or a digit form between the cap and 2147483647 — is left unread: it
+# constrains nothing. Both columns converge against an unbounded declaration, and a real bound added
+# beside the vacuous one is read, planned once and converges.
+# Mutation gate: drop the cap filter from `_reader_checks` and `mid` reads 1500000000, so the
+# unbounded declaration plans a DROP CONSTRAINT and the first convergence assertion fails.
+# ─────────────────────────────────────────────────────────────────────────────
+if adapter_name == "PostgreSQL"
+  @testset "Byte bound above 1 GiB: left unread, and the column converges (#751)" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
+    tbl = "pormg_it_751"
+    drop751!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
+    M751 = PormG.Models
+    model751(big) = M751.Model(tbl; id = M751.IDField(), big = big, mid = M751.BinaryField())
+    schema751(model) = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+      Symbol(tbl) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => model, :exist => false))
+    settings751 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
+    plan751(live, big) = PormG.Migrations.get_migration_plan(live, schema751(model751(big)), pool,
+                                                             settings751; interactive = false)
+    read751() = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
+    apply751!(plan) = for (_, sql) in get(plan, Symbol(tbl), []); ddl(sql); end
+    defs751() = sort(String.(DataFrame(PormG.ConnectionPool.fetch(pool,
+      "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = \$1::regclass AND contype = 'c'",
+      [tbl])).def))
+
+    # The declaration that used to write the bigint form is refused now.
+    @test_throws PormG.FieldValidationError M751.BinaryField(max_length = 3_000_000_000)
+
+    drop751!()
+    try
+      apply751!(plan751(PormG.Migrations.LiveTable[], M751.BinaryField()))
+      # What an app created before the cap would have: PormG's clause, with an out-of-range bound.
+      ddl("ALTER TABLE \"$(tbl)\" ADD CHECK (octet_length(big) <= 3000000000)")
+      ddl("ALTER TABLE \"$(tbl)\" ADD CHECK (octet_length(mid) <= 1500000000)")
+      # Precondition: the bigint deparse #751 is about, and the digit form below 2147483647.
+      @test defs751() == sort(["CHECK ((octet_length(big) <= '3000000000'::bigint))",
+                               "CHECK ((octet_length(mid) <= 1500000000))"])
+
+      live = read751()
+      @test isempty(live.columns["big"].checks)
+      @test isempty(live.columns["mid"].checks)
+      # THE convergence assertion: an unbounded declaration plans nothing against either column.
+      @test all(isempty, values(plan751([live], M751.BinaryField())))
+
+      # A real bound beside the vacuous one: planned once, applied, read back, converged.
+      stmts = join(values(plan751([live], M751.BinaryField(max_length = 5_000_000))[Symbol(tbl)]), "\n")
+      @test count("ADD CHECK (octet_length(\"big\") <= 5000000)", stmts) == 1
+      apply751!(plan751([live], M751.BinaryField(max_length = 5_000_000)))
+      relived = read751()
+      @test relived.columns["big"].checks == PormG.CheckKind[PormG.ByteLengthCheck(5_000_000)]
+      @test all(isempty, values(plan751([relived], M751.BinaryField(max_length = 5_000_000))))
+    finally
+      drop751!()
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Dropped tables: what DROP TABLE … CASCADE would take besides foreign keys (#754)
 # `makemigrations` refuses to drop a table while a view (or anything else CASCADE would silently take
 # with it) still reads it. This pins the catalog query that decides that on real PostgreSQL. Reported:

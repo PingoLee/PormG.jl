@@ -2844,6 +2844,14 @@ mutable struct sBinaryField <: PormGField
   db_default::DbDefault
 end
 
+# #751: the largest `max_length` a `BinaryField` accepts — 1 GiB, PostgreSQL's limit for one `bytea`
+# value (SQLite's default `SQLITE_MAX_LENGTH` is lower still). A larger bound constrains nothing, and
+# on PostgreSQL one above 2147483647 is a `bigint` literal that `pg_get_constraintdef` deparses as
+# `<= '3000000000'::bigint`, which the reader does not match — so `makemigrations` re-added the same
+# CHECK on every run. Refusing the declaration makes that shape unrepresentable on both engines, and
+# the readers leave a live bound above it unread (`Migrations._reader_checks`) for the same reason.
+const BINARY_FIELD_MAX_BYTES = 1_073_741_824
+
 """
     BinaryField(; max_length = nothing, kwargs...)
 
@@ -2862,7 +2870,9 @@ bytes of an encoded string, decode it yourself: `hex2bytes(s)`, `base64decode(s)
 # Keyword Arguments
 - `max_length::Union{Int, Nothing} = nothing`: maximum payload size in **bytes** (not characters).
   Enforced both before the query is built and by a `CHECK` constraint in the DDL —
-  `octet_length` on PostgreSQL, `length` on SQLite. `nothing` means unbounded.
+  `octet_length` on PostgreSQL, `length` on SQLite. `nothing` means unbounded. At most
+  `1073741824` (1 GiB, PostgreSQL's limit for one `bytea` value); a larger bound raises
+  `FieldValidationError`, because it would constrain nothing.
 - `default::Union{Vector{UInt8}, Nothing} = nothing`: rendered into the DDL as a byte literal
 - `db_default::Union{String, NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). `"CURRENT_TIMESTAMP"` and `"CURRENT_DATE"` render on both engines; any other expression must name its engine — `(postgres = "now()",)` — and raises `BackendCapabilityError` on the other one rather than emitting DDL it would reject. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
   (`'\\x…'::bytea` / `X'…'`). Must be a `Vector{UInt8}`; a `String` raises
@@ -2925,6 +2935,11 @@ function BinaryField(; kwargs...)
   max_length === nothing || (max_length = _int_kwarg("BinaryField", "max_length", max_length; strings = true))
   if max_length isa Int && max_length <= 0
     throw(_fielderr("The 'max_length' must be a positive integer"))
+  end
+  if max_length isa Int && max_length > BINARY_FIELD_MAX_BYTES
+    throw(_fielderr("The 'max_length' of a BinaryField cannot exceed $(BINARY_FIELD_MAX_BYTES) bytes " *
+                    "(1 GiB, PostgreSQL's limit for one bytea value), got $(max_length); a larger bound " *
+                    "constrains nothing. Use max_length = nothing for no limit"))
   end
   # Return the field instance
   return sBinaryField(

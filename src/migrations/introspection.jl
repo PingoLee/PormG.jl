@@ -470,10 +470,16 @@ end
 # PostgreSQL's reader already collapses them with `min()`; SQLite's used to keep the first in DDL
 # order, so a doubled column could read as the looser bound, and plan nothing while the tighter one
 # rejected values the model allows.
+#
+# #751: a bound above `Models.BINARY_FIELD_MAX_BYTES` is such a fact too — no `BinaryField` can
+# declare it — so it is left unread. That is what makes the engines agree on it: PostgreSQL deparses
+# one above 2147483647 as `<= 'N'::bigint`, which its matcher never reads, while SQLite's
+# `length(c) <= N` reads fine. It also keeps `field_from_spec` from building a field the constructor
+# refuses out of a bound written before the cap.
 function _reader_checks(found::Vector{CheckKind}, ctype::CanonicalType)::Vector{CheckKind}
   kept = CheckKind[]
   any(c -> c isa NonNegativeCheck, found) && ctype isa Union{CInt16, CInt32} && push!(kept, NonNegativeCheck())
-  bounds = [c for c in found if c isa ByteLengthCheck]
+  bounds = [c for c in found if c isa ByteLengthCheck && c.max_bytes <= Models.BINARY_FIELD_MAX_BYTES]
   !isempty(bounds) && ctype isa CBytes && push!(kept, argmin(c -> c.max_bytes, bounds))
   return kept
 end
@@ -1134,8 +1140,10 @@ user's constraint. The SQLite reader already matched the rendered clause exactly
 (`_sqlite_column_checks`). As with the non-negative CHECK, a hand-written copy of PormG's exact
 clause is still read as PormG's, on both engines.
 
-One shape of PormG's own clause is still not read: a bound above 2147483647 is a `bigint` literal,
-which `pg_get_constraintdef` deparses as `<= '3000000000'::bigint` (#751).
+One shape of PormG's own clause is not read: a bound above 2147483647 is a `bigint` literal, which
+`pg_get_constraintdef` deparses as `<= '3000000000'::bigint`. Since #751 no `BinaryField` can declare
+one (the constructor caps `max_length` at 1 GiB), and `_reader_checks` leaves any bound above that
+cap unread on both engines, so the form needs no match.
 """
 const _PG_BYTE_LENGTH_CHECK_MATCH =
   "pg_get_constraintdef(con.oid) = 'CHECK ((octet_length(' || quote_ident(a.attname) || ') <= ' || " *

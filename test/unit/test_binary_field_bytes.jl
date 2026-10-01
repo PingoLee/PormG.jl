@@ -78,6 +78,18 @@ end
     @test Models.BinaryField(max_length = 4).max_length == 4
     @test_throws PormG.FieldValidationError Models.BinaryField(max_length = 0)
     @test_throws PormG.FieldValidationError Models.BinaryField(max_length = -1)
+
+    # #751: and at most 1 GiB, PostgreSQL's limit for one bytea value. A larger bound constrains
+    # nothing, and above 2147483647 PostgreSQL deparses it as `'N'::bigint`, which the reader never
+    # read back — so `makemigrations` re-added the CHECK on every run. The boundary is inclusive, and
+    # the string spelling goes through the same check.
+    @test Models.BINARY_FIELD_MAX_BYTES == 1_073_741_824
+    @test Models.BinaryField(max_length = 1_073_741_824).max_length == 1_073_741_824
+    @test_throws PormG.FieldValidationError Models.BinaryField(max_length = 1_073_741_825)
+    @test_throws PormG.FieldValidationError Models.BinaryField(max_length = 3_000_000_000)
+    @test_throws PormG.FieldValidationError Models.BinaryField(max_length = "3000000000")
+    msg = try; Models.BinaryField(max_length = 3_000_000_000); ""; catch e; sprint(showerror, e); end
+    @test occursin("1073741824", msg) && occursin("max_length = nothing", msg)
   end
 
   # ───────────────────────────────────────────────────────────────────────────

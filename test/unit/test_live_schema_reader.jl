@@ -1024,3 +1024,43 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A byte bound above 1 GiB is left unread, on both engines (#751)
+# No `BinaryField` can declare one (the constructor caps `max_length` at 1 GiB), so it is a fact no
+# declaration can match — carried, it would be a permanent delta, and `field_from_spec` would build a
+# field the constructor refuses. PostgreSQL never read one above 2147483647 (`'N'::bigint`); SQLite
+# read it fine. Both now leave it to the database. A bound at the cap still reads.
+# Mutation gate: drop the cap filter from `_reader_checks` and the SQLite and PostgreSQL columns read
+# a bound, and `model_from_live` raises FieldValidationError.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "A byte bound above 1 GiB is left unread, on both engines (#751)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "bytes751.sqlite"); pool_size = 1)
+    try
+      fetch(pool, """CREATE TABLE "drivers" ("id" INTEGER PRIMARY KEY AUTOINCREMENT,
+                                           "big" BLOB CHECK (length("big") <= 3000000000),
+                                           "cap" BLOB CHECK (length("cap") <= 1073741824));""")
+      table = only(read_live_schema(pool; include_table = ["drivers"]))
+      @test isempty(table.columns["big"].checks)
+      @test table.columns["cap"].checks == CheckKind[ByteLengthCheck(1_073_741_824)]
+      # The column reads back as an unbounded field rather than one the constructor refuses.
+      m = model_from_live(table, pool)
+      @test m.fields["big"].max_length === nothing
+      @test m.fields["cap"].max_length == 1_073_741_824
+      # And an unbounded declaration converges against it.
+      @test isempty(column_delta(Models.BinaryField(null = true), table.columns["big"], pool; name = "big").changed)
+    finally
+      close_pool!(pool)
+    end
+  end
+
+  # PostgreSQL: the digit form between the cap and 2147483647 reaches the decoder; it is left unread too.
+  live = _pg_live_table(_row522(table_name = "drivers",
+    columns = [_col522("id", "bigint"; notnull = true, identity = "d"),
+               _col522("big", "bytea"; notnull = true, byte_limit = 1_500_000_000),
+               _col522("cap", "bytea"; notnull = true, byte_limit = 1_073_741_824)],
+    primary_keys = ["id"]))
+  @test isempty(live.columns["big"].checks)
+  @test live.columns["cap"].checks == CheckKind[ByteLengthCheck(1_073_741_824)]
+end

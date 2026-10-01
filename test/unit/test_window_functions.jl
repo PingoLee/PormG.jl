@@ -1329,17 +1329,10 @@ end
             alias = _concat_reader_verdict(Model_, expr, v; via_cte = false)
             # Neither reader refuses a text value or a number compared with text…
             @test !(cte isa Type) && !(alias isa Type)
-            # …and both bind it identically — the disagreement the issue reported. Except one cell:
-            # on SQLite the ALIAS path keeps a number native whatever the formatter
-            # (`_sqlite_preserve_native_parameter`), and `('' || 7) = 7` is false there — no affinity
-            # on either side — so it matches no rows where the CTE's "7" matches. Older than #835 and
-            # not Concat's (every text-function alias does it; #707's test pins the native 5); left
-            # to #851, and broken here so the fix shows up when it lands.
-            if backend == "SQLite" && v isa Number
-              @test_broken isequal(cte, alias)
-            else
-              @test isequal(cte, alias)
-            end
+            # …and both bind it identically — the disagreement the issue reported. The SQLite number
+            # cell was `@test_broken` until #851: the alias path kept the `7` native there, and
+            # `('' || 7) = 7` is false (no affinity on either side) where the CTE's "7" matched.
+            @test isequal(cte, alias)
           end
           # Text on PostgreSQL binds the number as text: there is no `text = integer` operator.
           backend == "PostgreSQL" && @test _concat_reader_verdict(Model_, expr, 7; via_cte = true) == "7"

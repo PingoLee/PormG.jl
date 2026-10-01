@@ -528,8 +528,17 @@ function _group_window_terms!(instruc::SQLInstruction)
   return nothing
 end
 
-function _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc::SQLInstruction)
-  if instruc.connection isa PormGSQLite && raw_value isa Union{Number,Bool}
+# SQLite keeps a number compared with a NUMBER-typed alias native: an aggregate or arithmetic result
+# has no column affinity there, and neither has a bound parameter, so `SUM(x) = '1.5'` — what
+# `format_number_sql(1.5)` returns — is false. The same reasoning reverses for a TEXT alias (#851):
+# `LOWER(…)`, `a || b`, `COALESCE(<text>, …)` have no affinity either, so a native `7` against
+# `'7'` is false and the filter matched nothing where PostgreSQL bound `"7"` and matched. The value
+# therefore stays native only for the formatters whose SQL type is a number or a boolean — a
+# whitelist, because a node may carry its own formatter (`ToChar(…; formatter = …)`), and anything
+# but a number must bind as its formatter wrote it, exactly as the WHERE path does for a column.
+function _sqlite_preserve_native_parameter(raw_value, formatted_value, formatter, instruc::SQLInstruction)
+  if instruc.connection isa PormGSQLite && raw_value isa Union{Number,Bool} &&
+     (formatter === Models.format_number_sql || formatter === Models.format_bool_sql)
     return raw_value
   end
   return formatted_value
@@ -566,8 +575,8 @@ function _resolve_having_filter_value(alias::MemoKey, raw_value, instruc::SQLIns
   # #654: a range is two scalars formatted as one iterable lookup, so the SQLite native-value rule
   # applies per operand — exactly what each would get as the right-hand side of a `@gte`/`@lte`.
   operator in ("BETWEEN", "NOT BETWEEN") &&
-    return [_sqlite_preserve_native_parameter(r, f, instruc) for (r, f) in zip(raw_value, formatted_value)]
-  return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
+    return [_sqlite_preserve_native_parameter(r, f, formatter, instruc) for (r, f) in zip(raw_value, formatted_value)]
+  return _sqlite_preserve_native_parameter(raw_value, formatted_value, formatter, instruc)
 end
 
 # The formatter a HAVING/alias filter value must satisfy, resolved from whatever the alias projects.

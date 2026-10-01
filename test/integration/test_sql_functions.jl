@@ -222,6 +222,25 @@ end
     @test df[1, :full_info] == "Lewis Hamilton (1)"
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Text alias filtered by a number: the race id as a text code (#851)
+# `Concat` is text on both engines. A number compared with it binds as text ("7"); SQLite used to
+# bind it native, and `('' || 7) = 7` is false there — no affinity on either side — so the filter
+# returned no rows where PostgreSQL returned the race. Both spellings go through the alias path.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "A number filter on a text alias matches on both engines (#851)" begin
+    for pred in ("race_code" => 7, Q("race_code" => 7))
+        q = M.Race.objects
+        q.values("raceid", "name", "race_code" => Concat(["raceid", Value("")]))
+        q.filter(pred)
+        df = q |> DataFrame
+        # Exactly the 2009 Turkish Grand Prix — raceid 7 — on both engines.
+        @test nrow(df) == 1
+        @test df[1, :raceid] == 7
+        @test df[1, :race_code] == "7"
+    end
+end
+
 @testset "Extraction & ToChar" begin
     # Logic: Test explicit Extract and ToChar functions.
     # Why: Provides more control over date/time formatting than standard modifiers.

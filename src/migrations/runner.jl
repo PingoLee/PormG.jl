@@ -1507,14 +1507,14 @@ function _sqlite_expression_default_findings(db::PormGSQLite;
     end
     _is_ignored_table(table_name, ignore_table) && continue
 
-    # Same quoted-identifier interpolation the live reader uses for the PRAGMA calls.
-    cols = fetch(db, "PRAGMA table_info(\"$table_name\")") |> DataFrame
+    # The same bound pragma functions the live reader uses (#832).
+    cols = fetch(db, "SELECT * FROM pragma_table_info(?)", [table_name]) |> DataFrame
     # The reader SKIPS a composite foreign key rather than splitting it into N single-column
     # relations (#415), so such a child column has no relation and falls through to the
     # bare-`IDField` key arm when it is a key. `fk_cols` has to be filtered the same way or the arm
     # below would differ from the reader's. PostgreSQL needs no equivalent: its `foreign_keys` CTE
     # already filters on `array_length(con.conkey, 1) = 1`.
-    fks = fetch(db, "PRAGMA foreign_key_list(\"$table_name\")") |> DataFrame
+    fks = fetch(db, "SELECT * FROM pragma_foreign_key_list(?)", [table_name]) |> DataFrame
     cols_per_fk = Dict{Any, Int}()
     for r in eachrow(fks)
       cols_per_fk[r.id] = get(cols_per_fk, r.id, 0) + 1

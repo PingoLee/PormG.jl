@@ -126,6 +126,6 @@ export MigrationStatus, DryRunResult, SchemaCheckResult, SchemaCheckFinding, Mig
 # of the page while `checkdocs` still demands it.
 public MIGRATION_FORMAT_VERSION
 export compute_checksum, is_destructive, total_statements, detect_destructive_actions
-export DestructiveMigrationError
+export DestructiveMigrationError, MigrationPrecheckError, LossyAlter, LOSSY_ALTER_KINDS
 
 end # module Migrations

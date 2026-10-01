@@ -201,7 +201,8 @@ end
 
 function generate_migration_plan(file::String, migration_plan::OrderedDict{Symbol,OrderedDict{String,String}}, path::String;
                                  models_file::Union{String, Nothing} = nothing,
-                                 models_file_sha256::Union{String, Nothing} = nothing) :: Nothing
+                                 models_file_sha256::Union{String, Nothing} = nothing,
+                                 lossy_alters = ()) :: Nothing
   open(joinpath(path, file), "w") do f
       module_name = replace(basename(file), ".jl" => "")
       # Stamp the frozen on-disk format version (issue #32) as an inert comment header rather than a
@@ -218,6 +219,12 @@ function generate_migration_plan(file::String, migration_plan::OrderedDict{Symbo
         string(PormG.Migrations.MODELS_FILE_HEADER, escape_string(models_file), "\n",
                models_file_sha256 === nothing ? "" :
                  string(PormG.Migrations.MODELS_SHA256_HEADER, models_file_sha256, "\n"))
+      # #803: one line per lossy column change, after the models-file lines. Untyped because this
+      # module is included before `Migrations` defines `LossyAlter`; a plan without any stays
+      # byte-identical. The line escapes its own values (`_lossy_alter_header`).
+      for finding in lossy_alters
+        models_header *= string(PormG.Migrations._lossy_alter_header(finding), "\n")
+      end
       write(f, """
           module $module_name
           # pormg-migration-format: $fmt_version

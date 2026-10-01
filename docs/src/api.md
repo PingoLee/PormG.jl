@@ -762,7 +762,8 @@ specific subtype for a specific reaction (#231, completed in #239):
 Use `error_message(e)`, **not** `e.msg`. Most subtypes carry a `msg::String`, but the ones built
 from structured fields — `DoesNotExist`, `MultipleObjectsReturned`, `PoolTimeoutError`,
 `PoolConnectError`, the three `DatabaseError` subtypes (`IntegrityError`, `OperationalError`,
-`StatementError`), and `DestructiveMigrationError` (which renders its `statements` too) — do not
+`StatementError`), and `DestructiveMigrationError` and `MigrationPrecheckError` (which render their
+`statements` and findings too) — do not
 render from `msg` alone, so reaching for that field breaks on exactly the errors you are least
 likely to have tested against. See [Error Handling](errors.md) for the per-type field list.
 
@@ -815,9 +816,10 @@ field, and for the few with their own `showerror` it returns the richer renderin
 | `ConfigurationError` *(abstract)* | Umbrella for configuration failures — covers `InvalidConfigurationError`, `MissingConfigurationError`, **and** `WritesDisabledError` (listed in the Querying table above, where users meet it). |
 | `InvalidConfigurationError` | The configuration — or the install it runs from — is unusable: unsupported adapter, unknown connection key, malformed `extensions`, a model not bound to a connection (or bound to an entry whose pool was never built), a missing driver package, an attempt to overwrite a static connection, or a missing or empty `upgrading/` log bundled with the install (`upgrade_guide`). |
 | `MissingConfigurationError` | No configuration folder / `connection.yml`, or the selected environment has no matching block. **Not on the `using PormG` surface** — name it `PormG.Configuration.MissingConfigurationError`. |
-| `MigrationError` *(abstract)* | Umbrella for migration-engine failures — `catch` it to get both cases below. |
+| `MigrationError` *(abstract)* | Umbrella for migration-engine failures — `catch` it to get the three cases below. |
 | `InvalidMigrationError` | A duplicate index name in a plan, a `CheckConstraint` name its table already holds or a condition still naming a column the plan renames or removes, a managed model's constrained key into an unmanaged one, a plan file that does not parse, an invalid answer to an interactive `makemigrations` prompt or end of input at one, or a migration-engine step that cannot proceed. Having no pending plan is not one: `migrate()` returns `outcome = :nothing_pending`. |
-| `DestructiveMigrationError` | A destructive plan was applied non-interactively without `destructive=true`; carries the refused `statements`. **Not on the `using PormG` surface** — name it `PormG.Migrations.DestructiveMigrationError`. |
+| `DestructiveMigrationError` | A destructive plan was applied non-interactively without `destructive=true`; carries the refused `statements`, and `lossy_alters` for a column change that alters existing values. **Not on the `using PormG` surface** — name it `PormG.Migrations.DestructiveMigrationError`. |
+| `MigrationPrecheckError` | A plan's column change would fail on existing rows (a `NULL` under a new `NOT NULL`, a value too long for a shorter `max_length`), or cannot run on PostgreSQL at all; refused before anything is written, whatever `destructive` says. Carries `findings`. **Not on the `using PormG` surface** — name it `PormG.Migrations.MigrationPrecheckError`. |
 | `PoolError` *(abstract)* | Umbrella for connection-pool failures — `catch` it to get both cases below. |
 | `PoolTimeoutError` / `PoolConnectError` | The pool is saturated / a physical connection could not be opened. Both carry structured fields (`adapter`, `pool_size`, `attempts`, …) rather than a `msg` — read them with `error_message`. |
 

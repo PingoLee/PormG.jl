@@ -212,6 +212,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Discard Pending Migration" include("unit/test_discard_pending_migration.jl")
     @testset "makemigrations: no stale pending plan (#727)" include("unit/test_makemigrations_stale_pending.jl")
     @testset "makemigrations: plan against any models file (#736)" include("unit/test_makemigrations_models_file.jl")
+    @testset "Lossy ALTERs: classified from the delta, pre-checked against the rows (#803)" include("unit/test_lossy_alters.jl")
     @testset "Positive Integer Fields CHECK" include("unit/test_positive_small_integer_check.jl")
     @testset "BinaryField Byte Storage (#296)" include("unit/test_binary_field_bytes.jl")
     @testset "alter_field Constraint DROPs (#283, #284)" include("unit/test_alter_field_constraint_drops.jl")
@@ -274,7 +275,7 @@ end
 
 
 # Full unit suite (what CI runs; resolves the LibPQ/SQLite weakdeps from [targets].test):
-#     julia --project=. -e 'using Pkg; Pkg.test()'
+#     julia -O0 --project=. -e 'using Pkg; Pkg.test()'
 # One file, unit or integration — that env carries the drivers as direct deps:
 #     julia --project=test/integration test/unit/test_<name>.jl
 # See test/load_drivers.jl for why `--project=.` cannot run a test script (#624).

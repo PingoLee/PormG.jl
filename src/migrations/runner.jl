@@ -154,6 +154,92 @@ const MODELS_SHA256_HEADER_RE = r"^# pormg-models-sha256: ([0-9a-f]{64})\r?$"
 
 _models_file_digest(path::AbstractString)::String = bytes2hex(SHA.sha256(read(path)))
 
+# The plan-header comment carrying one lossy column change (#803): `makemigrations` classifies it
+# from the column's `ColumnDelta`, and `dry_run` / `migrate` need it back — but by then the plan is
+# SQL text, which cannot say what the column held before. A comment, so it is additive within format
+# v1 and outside the checksum, like the #736 lines above. Tab-separated `key=value` fields, each value
+# `escape_string`'d, so a tab or a newline inside a catalog name cannot end the field or the comment
+# (#710); unknown keys are ignored on read, so a later field needs no format bump.
+const LOSSY_ALTER_HEADER = "# pormg-lossy-alter: "
+const LOSSY_ALTER_HEADER_RE = r"^# pormg-lossy-alter: (.*?)\r?$"
+
+function _lossy_alter_header(f::LossyAlter)::String
+  fields = Pair{String, Any}["kind" => f.kind, "table" => f.table, "column" => f.column,
+                             "old" => f.old_type, "new" => f.new_type]
+  f.bound === nothing || push!(fields, "bound" => f.bound)
+  f.scale === nothing || push!(fields, "scale" => f.scale)
+  return LOSSY_ALTER_HEADER * join(("$(k)=$(escape_string(string(v)))" for (k, v) in fields), "\t")
+end
+
+"""
+    _plan_lossy_alters(plan_path) -> Vector{LossyAlter}
+
+The lossy column changes a plan's header records (#803), in file order; empty for a plan without
+any, including every plan written before #803. A line that does not read back — a missing field, an
+unknown kind, a bound that is not an integer — raises `InvalidMigrationError`: the finding decides
+whether `migrate` may run, so a damaged one is refused rather than dropped.
+"""
+function _plan_lossy_alters(plan_path::AbstractString)::Vector{LossyAlter}
+  found = LossyAlter[]
+  isfile(plan_path) || return found
+  file = basename(plan_path)
+  # `open(...) do`: this loop breaks early, see `_plan_models_file`.
+  open(plan_path) do io
+    for line in eachline(io)
+      startswith(line, "import ") && break
+      m = match(LOSSY_ALTER_HEADER_RE, line)
+      m === nothing && continue
+      push!(found, _parse_lossy_alter_header(m.captures[1], file))
+    end
+  end
+  return found
+end
+
+function _parse_lossy_alter_header(body::AbstractString, file::AbstractString)::LossyAlter
+  bad(what) = throw(InvalidMigrationError(
+    "Migration plan '$file': a `$(strip(LOSSY_ALTER_HEADER))` line $what. Regenerate the plan with makemigrations()."))
+  fields = Dict{String, String}()
+  for part in split(body, '\t')
+    k, sep, v = _partition_first(part, '=')
+    sep || bad("has a field without `=`")
+    value = try unescape_string(v) catch; bad("has a value that does not unescape") end
+    fields[k] = value
+  end
+  for key in ("kind", "table", "column", "old", "new")
+    haskey(fields, key) || bad("has no `$key` field")
+  end
+  kind = Symbol(fields["kind"])
+  haskey(LOSSY_ALTER_KINDS, kind) || bad("names an unknown kind `$(fields["kind"])`")
+  function int(key)
+    haskey(fields, key) || return nothing
+    n = tryparse(Int, fields[key])
+    n === nothing && bad("has a `$key` that is not an integer")
+    return n
+  end
+  bound, scale = int("bound"), int("scale")
+  # The pre-check counts against these, so a kind that needs one and lacks it would count nothing
+  # and pass the plan silently — the one outcome a damaged header must not have.
+  for key in get(_LOSSY_ALTER_REQUIRED, kind, ())
+    (key === :bound ? bound : scale) === nothing && bad("of kind `$kind` has no `$key` field")
+  end
+  kind === :integer_range && !(bound in (16, 32, 64)) &&
+    bad("of kind `integer_range` has a `bound` that is not an integer width (16, 32 or 64)")
+  return LossyAlter(kind, fields["table"], fields["column"], fields["old"], fields["new"];
+                    bound = bound, scale = scale)
+end
+
+# The limits each counted kind is compared against (`_precheck_sql`).
+const _LOSSY_ALTER_REQUIRED = Dict{Symbol, Tuple{Vararg{Symbol}}}(
+  :varchar_length => (:bound,), :integer_range => (:bound,), :byte_length_check => (:bound,),
+  :decimal_precision => (:bound, :scale))
+
+# `split(s, '=', limit = 2)` without losing whether there was a separator at all.
+function _partition_first(s::AbstractString, c::Char)
+  i = findfirst(c, s)
+  i === nothing && return (String(s), false, "")
+  return (String(s[1:prevind(s, i)]), true, String(s[nextind(s, i):end]))
+end
+
 """
     compute_checksum(sql_content::String) -> String
 
@@ -234,13 +320,253 @@ Reparented from `Exception` to `MigrationError <: PormGError` (#239). Catching
 struct DestructiveMigrationError <: MigrationError
   msg::String
   statements::Vector{String}
+  # #803: the plan's `:silent` lossy column changes — ALTERs that apply and change existing values,
+  # which take the same opt-in as a DROP. Empty for a plan the regex alone flagged.
+  lossy_alters::Vector{LossyAlter}
 end
+
+DestructiveMigrationError(msg::AbstractString, statements::Vector{String}) =
+  DestructiveMigrationError(String(msg), statements, LossyAlter[])
 
 function Base.showerror(io::IO, e::DestructiveMigrationError)
   print(io, "DestructiveMigrationError: ", e.msg)
   for s in e.statements
     print(io, "\n  → ", length(s) > 120 ? first(s, 120) * "..." : s)
   end
+  for f in e.lossy_alters
+    print(io, "\n  → ", _lossy_alter_summary(f))
+  end
+end
+
+# ==============================================================================
+# Lossy column changes (#803): the row pre-check and its refusal
+# ==============================================================================
+
+"""
+    MigrationPrecheckError(msg, findings)
+
+Raised by [`migrate`](@ref) when the pending plan changes a column in a way existing rows cannot
+survive — a `SET NOT NULL` over rows that hold NULL, a `VARCHAR(n)` shorter than values already
+stored, an integer too narrow for them — or in a way PostgreSQL cannot apply at all (text to
+integer, with no `USING`). `findings` lists each [`LossyAlter`](@ref), with `rows` counted.
+
+Nothing has been written when it is raised: the pre-check counts before the migration starts.
+`destructive = true` does not bypass it, because no opt-in can make those rows fit. Fix the data (or
+the models file) and run `makemigrations()` again; a hand-written backfill or `USING` added to the
+plan is the other way through, described in the migrations workflow guide.
+
+Like [`DestructiveMigrationError`](@ref), it is raised only where nobody can be asked: at an
+interactive terminal the same plan logs the findings and `migrate` returns `:declined`.
+"""
+struct MigrationPrecheckError <: MigrationError
+  msg::String
+  findings::Vector{LossyAlter}
+end
+
+function Base.showerror(io::IO, e::MigrationPrecheckError)
+  print(io, "MigrationPrecheckError: ", e.msg)
+  for f in e.findings
+    print(io, "\n  → ", _lossy_alter_summary(f))
+  end
+end
+
+_precheck_ph(::PormGPostgres, i::Int)::String = "\$$(i)"
+_precheck_ph(::PormGSQLite, ::Int)::String = "?"
+
+const _INT_RANGE = Dict(16 => (typemin(Int16), typemax(Int16)),
+                        32 => (typemin(Int32), typemax(Int32)),
+                        64 => (typemin(Int64), typemax(Int64)))
+
+"""
+    _precheck_sql(conn, finding) -> Union{Nothing, Tuple{String, Vector{Any}}}
+
+The `SELECT COUNT(*)` that counts the rows a `:rows`-class finding would fail on, or `nothing` for a
+finding of another class. The table and column are catalog names read back from the plan header,
+so they go through `Dialect._quote_table_ddl` exactly as every plan statement's identifiers do; the
+bounds are always bound parameters, never interpolated.
+
+Each predicate is the condition the engine itself refuses on, so the count is the number of rows the
+ALTER would fail on — not an estimate:
+
+- `:set_not_null` — `IS NULL`. Neither engine backfills an existing NULL from a declared default
+  (PostgreSQL's `SET NOT NULL` checks the rows as they are; SQLite's rebuild copies the NULL).
+- `:varchar_length` — the length with trailing spaces trimmed: PostgreSQL silently truncates an
+  over-long value whose excess is all spaces.
+- `:integer_range` — the value as it would round, against the new width's range.
+- `:decimal_precision` — the value rounded to the new scale, which can carry into a digit the new
+  precision does not have (`9.999` into `numeric(3,2)`).
+"""
+function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::Union{Nothing, Tuple{String, Vector{Any}}}
+  lossy_alter_class(f) === :rows || return nothing
+  table = Dialect._quote_table_ddl(f.table)
+  col = "\"$(Dialect._quote_table_ddl(f.column))\""
+  ph(i) = _precheck_ph(conn, i)
+  pred, params = if f.kind === :set_not_null
+    "$col IS NULL", Any[]
+  elseif f.kind === :non_negative_check
+    # SQLite: the rebuild copies a text `'-5'` into an INTEGER-affinity column as `-5`, so compare
+    # the number it becomes — a text value never compares `< 0` there. Over-counts one shape: junk
+    # like `'-5abc'` casts to -5 but stays text in the new column (and passes the CHECK), so it is
+    # a refusal the data did not strictly need — the safe direction. PostgreSQL only reaches this
+    # with a numeric old type (a text one is `:no_implicit_cast`), so the plain comparison is exact.
+    (conn isa PormGSQLite ? "CAST($col AS REAL) < 0" : "$col < 0"), Any[]
+  elseif f.kind === :byte_length_check
+    (conn isa PormGPostgres ? "octet_length($col) > $(ph(1))::integer" :
+                              "length(CAST($col AS BLOB)) > $(ph(1))"), Any[f.bound]
+  elseif f.kind === :varchar_length
+    "char_length(rtrim(CAST($col AS text))) > $(ph(1))::integer", Any[f.bound]
+  elseif f.kind === :integer_range
+    lo, hi = _INT_RANGE[f.bound]
+    "round(CAST($col AS numeric)) NOT BETWEEN $(ph(1))::numeric AND $(ph(2))::numeric", Any[Int(lo), Int(hi)]
+  elseif f.kind === :decimal_precision
+    # `NaN` is a value a constrained `numeric(p, s)` accepts, so it is not a failing row.
+    "CAST($col AS numeric) <> 'NaN'::numeric AND " *
+    "abs(round(CAST($col AS numeric), $(ph(1))::integer)) >= power(10::numeric, $(ph(2))::integer)",
+      Any[f.scale, f.bound]
+  else
+    throw(InvalidMigrationError("No pre-check is defined for the lossy-ALTER kind `$(f.kind)`."))
+  end
+  return ("SELECT COUNT(*) AS n FROM \"$table\" WHERE $pred", params)
+end
+
+# Does the live table still have this column? A plan header can outlive what it describes — the plan
+# was edited by hand, or the #81 path re-archives a plan whose ALTER already ran — and a finding
+# about a column that is gone is stale, not a reason to refuse.
+function _live_column_exists(conn::PormGPostgres, table::AbstractString, column::AbstractString)::Bool
+  rows = fetch(conn, """
+    SELECT count(*) AS n FROM pg_attribute
+     WHERE attrelid = to_regclass(quote_ident(\$1)) AND attname = \$2
+       AND attnum > 0 AND NOT attisdropped
+    """, [String(table), String(column)]) |> DataFrame
+  return nrow(rows) > 0 && rows[1, :n] > 0
+end
+
+_live_column_exists(conn::PormGSQLite, table::AbstractString, column::AbstractString)::Bool =
+  String(column) in _sqlite_table_xinfo_columns(conn, table)
+
+"""
+    _precheck_lossy_alters(conn, findings; timeouts) -> Vector{LossyAlter}
+
+The findings with `rows` counted for each `:rows`-class one (#803), read-only. A finding whose column
+the live table no longer has is dropped with a warning (see `_live_column_exists`). The count is
+advisory in one direction only: rows can change between it and the ALTER, and an ALTER that then
+fails still rolls the whole migration back.
+
+On PostgreSQL the counts run in one `READ ONLY` transaction whose `lock_timeout` is `lock_wait` (and
+whose `statement_timeout` is the caller's), because they run BEFORE the migration lock: an instance
+booting while another holds the table for its own `ALTER` must wait no longer than `lock_wait` says,
+as it would on the advisory lock. Each count sits behind a savepoint, so one that fails because the
+column vanished meanwhile (the other instance's plan renamed it) is dropped as stale instead of
+aborting the rest; any other failure is raised.
+
+`timeouts` is untyped because `_MigrationTimeouts` is defined further down this file. SQLite has no
+lock to wait on, so it takes and ignores them.
+"""
+function _precheck_lossy_alters(conn::PormGSQLite, findings::Vector{LossyAlter};
+                                timeouts = nothing)::Vector{LossyAlter}
+  return LossyAlter[c for c in (_precheck_one(conn, f) for f in findings) if c !== nothing]
+end
+
+function _precheck_lossy_alters(conn::PormGPostgres, findings::Vector{LossyAlter};
+                                timeouts = nothing)::Vector{LossyAlter}
+  timeouts === nothing && (timeouts = _migration_timeouts())
+  checked = LossyAlter[]
+  # READ COMMITTED explicitly: the stale re-probe below must see a rename another instance just
+  # committed, which a session default of REPEATABLE READ would hide behind this transaction's snapshot.
+  _, leased = with_transaction(conn, "BEGIN READ ONLY ISOLATION LEVEL READ COMMITTED;")
+  local rollback_error = nothing
+  try
+    # Values are `Int`s PormG formatted (`_migration_timeouts`), never caller text.
+    with_transaction(conn, "SET LOCAL lock_timeout = '$(timeouts.lock_wait_ms)ms';", conn = leased)
+    timeouts.statement_timeout_ms === nothing ||
+      with_transaction(conn, "SET LOCAL statement_timeout = '$(timeouts.statement_timeout_ms)ms';", conn = leased)
+    # Under the transaction context, so every `fetch` below runs on `leased` and leaves it leased.
+    # A `fetch(...; conn = leased)` would not: an explicit `conn` is treated as outside any
+    # transaction and handed back to the pool when the statement finishes — mid-transaction (#139).
+    Configuration.with_tx_context(conn, leased) do
+      for f in findings
+        with_transaction(conn, "SAVEPOINT pormg_precheck;", conn = leased)
+        counted = try
+          _precheck_one(conn, f)
+        catch
+          # Did the column vanish while the count waited (another instance's plan renamed it)?
+          # If this recovery itself fails the transaction is unusable, and the count's own error
+          # is the one worth reporting.
+          gone = try
+            with_transaction(conn, "ROLLBACK TO SAVEPOINT pormg_precheck;", conn = leased)
+            !_live_column_exists(conn, f.table, f.column)
+          catch
+            false
+          end
+          gone || rethrow()
+          _warn_stale_lossy_alter(f)
+          nothing
+        end
+        counted === nothing || push!(checked, counted)
+      end
+    end
+    with_transaction(conn, "COMMIT;", conn = leased, release_conn = false)
+  catch e
+    try
+      with_transaction(conn, "ROLLBACK;", conn = leased, release_conn = false)
+    catch rollback_err
+      rollback_error = rollback_err
+    end
+    rethrow(e)
+  finally
+    finalize_transaction_connection!(conn, leased; rollback_error = rollback_error)
+  end
+  return checked
+end
+
+# One finding, counted — or `nothing` when its column is gone. On PostgreSQL it runs inside
+# `_precheck_lossy_alters`' transaction context, so the plain `fetch`es use its connection.
+function _precheck_one(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter)::Union{Nothing, LossyAlter}
+  if !_live_column_exists(conn, f.table, f.column)
+    _warn_stale_lossy_alter(f)
+    return nothing
+  end
+  q = _precheck_sql(conn, f)
+  q === nothing && return f
+  counted = fetch(conn, q[1], q[2]) |> DataFrame
+  n = nrow(counted) == 0 ? 0 : Int(something(counted[1, :n], 0))
+  return LossyAlter(f.kind, f.table, f.column, f.old_type, f.new_type, f.bound, f.scale, n)
+end
+
+_warn_stale_lossy_alter(f::LossyAlter) =
+  @warn("The plan's header records a lossy change to a column the database does not have, so it is ignored. The plan was edited by hand, or another instance already applied it; if you edited it, regenerate it with makemigrations().",
+        finding = _lossy_alter_summary(f))
+
+# The findings `migrate` must refuse whatever the caller opts into: rows that would fail, and changes
+# PostgreSQL cannot apply as planned.
+_failing_alters(findings::Vector{LossyAlter})::Vector{LossyAlter} =
+  filter(f -> lossy_alter_class(f) === :refused ||
+              (lossy_alter_class(f) === :rows && something(f.rows, 0) > 0), findings)
+
+# The findings that apply and change data — the destructive guard's opt-in covers them.
+_silent_alters(findings::Vector{LossyAlter})::Vector{LossyAlter} =
+  filter(f -> lossy_alter_class(f) === :silent, findings)
+
+"""
+    _refuse_failing_alters(findings; interactive) -> Bool
+
+The pre-check's verdict for `migrate`: `true` to go on, `false` to decline (a terminal: the findings
+are logged and `migrate` returns `:declined`). Throws [`MigrationPrecheckError`](@ref) where nobody
+can be asked — the same terminal rule as `_confirm_migration`, so automation fails loudly rather
+than being told about a failure in a log it may not read.
+"""
+function _refuse_failing_alters(findings::Vector{LossyAlter}; interactive::Bool)::Bool
+  failing = _failing_alters(findings)
+  isempty(failing) && return true
+  msg = "The plan changes $(length(failing)) column(s) in a way the database would refuse on existing " *
+        "rows, or cannot apply at all. Nothing was applied. Fix the data (or the models file) and run " *
+        "makemigrations() again; `destructive = true` does not bypass this."
+  (interactive && (stdin isa Base.TTY)) || throw(MigrationPrecheckError(msg, failing))
+  @error(_emsg("\e[31m$msg\e[0m"))
+  for f in failing
+    @error("  → $(_lossy_alter_summary(f))")
+  end
+  return false
 end
 
 """
@@ -256,20 +582,28 @@ Returns `true` to proceed, `false` to abort quietly (the caller then `return not
 automation fails loudly instead of hanging or silently skipping.
 """
 function _confirm_migration(has_destructive::Bool, destructive::Bool,
-                            destructive_stmts::Vector{String}; interactive::Bool)::Bool
+                            destructive_stmts::Vector{String}; interactive::Bool,
+                            lossy_alters::Vector{LossyAlter} = LossyAlter[])::Bool
   can_prompt = interactive && (stdin isa Base.TTY)
 
-  # Destructive guard: a destructive plan requires an explicit `destructive=true` opt-in.
+  # Destructive guard: a destructive plan requires an explicit `destructive=true` opt-in. Since #803
+  # `lossy_alters` — the plan's `:silent` column changes — count too, and `has_destructive` already
+  # includes them; a PostgreSQL plan can be destructive through them alone, with no DROP in it.
   if has_destructive && !destructive
-    msg = "Migration contains $(length(destructive_stmts)) destructive operation(s). " *
-          "Pass `destructive=true` to confirm."
+    parts = String[]
+    isempty(destructive_stmts) || push!(parts, "$(length(destructive_stmts)) destructive operation(s)")
+    isempty(lossy_alters) || push!(parts, "$(length(lossy_alters)) column change(s) that alter existing values")
+    msg = "Migration contains $(join(parts, " and ")). Pass `destructive=true` to confirm."
     # Non-interactive (CI / no TTY / interactive=false): fail loudly so automation cannot
     # silently skip — and never reach the blocking readline() below.
-    can_prompt || throw(DestructiveMigrationError(msg, destructive_stmts))
+    can_prompt || throw(DestructiveMigrationError(msg, destructive_stmts, lossy_alters))
     @error(_emsg("\e[31m$msg\e[0m"))
     for s in destructive_stmts
       display_s = length(s) > 120 ? first(s, 120) * "..." : s
       @error("  → $display_s")
+    end
+    for f in lossy_alters
+      @error("  → $(_lossy_alter_summary(f))")
     end
     return false
   end
@@ -277,7 +611,7 @@ function _confirm_migration(has_destructive::Bool, destructive::Bool,
   # Interactive confirmation — only when a human can actually answer (real TTY).
   if can_prompt
     if has_destructive
-      @info(_emsg("\e[31m⚠ This migration contains DESTRUCTIVE operations (a DROP, a TRUNCATE, or a DELETE with no WHERE).\e[0m"))
+      @info(_emsg("\e[31m⚠ This migration contains DESTRUCTIVE operations (a DROP, a TRUNCATE, a DELETE with no WHERE, or a column change that alters existing values).\e[0m"))
     end
     @info(_emsg("\e[33mBefore applying the migrations, make sure to back up your database.\e[0m"))
     print(_emsg("\e[31mAre you sure you want to apply the migrations? (yes/no): \e[0m"))
@@ -797,36 +1131,67 @@ Result of a dry-run migration analysis.
 
 Contains only the substantive fields needed to evaluate the migration plan.
 Use `is_destructive(r)` and `total_statements(r)` for derived properties.
+
+- `checksum`, `statements` — the plan's SQL in execution order, and its digest.
+- `destructive_statements` — the statements the destructive guard flags (a `DROP`, a `TRUNCATE`, a
+  `DELETE` with no `WHERE`).
+- `lossy_alters` — the plan's lossy column changes (#803), one [`LossyAlter`](@ref) each, with `rows`
+  counted against the live database for those that fail on existing rows.
 """
 struct DryRunResult
   checksum::String
   statements::Vector{String}
   destructive_statements::Vector{String}
+  lossy_alters::Vector{LossyAlter}
 end
 
-"""Whether the dry-run result contains any destructive statements."""
-is_destructive(r::DryRunResult) = !isempty(r.destructive_statements)
+"""
+    is_destructive(r::DryRunResult) -> Bool
+
+Whether applying the plan needs `migrate(…; destructive = true)`: it has a destructive statement, or
+a column change that silently alters existing values (a lower `NUMERIC` scale, say — #803). A plan
+that would fail on existing rows is not "destructive"; `migrate` refuses it whatever the opt-in —
+see `r.lossy_alters`.
+"""
+is_destructive(r::DryRunResult) = !isempty(r.destructive_statements) || !isempty(_silent_alters(r.lossy_alters))
 
 """Total number of SQL statements in the dry-run result."""
 total_statements(r::DryRunResult) = length(r.statements)
 
 function Base.show(io::IO, r::DryRunResult)
   println(io, "Dry Run Result:")
-  println(io, "  Checksum: ", r.checksum[1:min(16, length(r.checksum))], "...")
+  println(io, "  Checksum: ", first(r.checksum, 16), "...")
   println(io, "  Total statements: ", total_statements(r))
-  if is_destructive(r)
+  if !isempty(r.destructive_statements)
     println(io, _emsg(io, "  \e[31m⚠ DESTRUCTIVE: $(length(r.destructive_statements)) destructive statement(s)\e[0m"))
     for s in r.destructive_statements
-      # Show first 120 chars of each destructive statement
-      display_s = length(s) > 120 ? s[1:120] * "..." : s
+      # Show first 120 chars of each destructive statement. `first`, not `s[1:120]`: a byte index
+      # can land inside a multibyte character of a table name or a default.
+      display_s = length(s) > 120 ? first(s, 120) * "..." : s
       println(io, "    → ", display_s)
     end
-  else
+  end
+  # #803, one section per class — each asks something different of the operator.
+  silent = _silent_alters(r.lossy_alters)
+  failing = _failing_alters(r.lossy_alters)
+  if !isempty(silent)
+    println(io, _emsg(io, "  \e[31m⚠ CHANGES EXISTING VALUES: $(length(silent)) column change(s) — needs `destructive = true`\e[0m"))
+    for f in silent
+      println(io, "    → ", _lossy_alter_summary(f))
+    end
+  end
+  if !isempty(failing)
+    println(io, _emsg(io, "  \e[31m✗ WOULD FAIL: $(length(failing)) column change(s) — migrate() refuses this plan\e[0m"))
+    for f in failing
+      println(io, "    → ", _lossy_alter_summary(f))
+    end
+  end
+  if isempty(r.destructive_statements) && isempty(silent) && isempty(failing)
     println(io, _emsg(io, "  \e[32m✓ Safe (no destructive operations)\e[0m"))
   end
   println(io, "\n  SQL statements:")
   for (i, s) in enumerate(r.statements)
-    display_s = length(s) > 200 ? s[1:200] * "..." : s
+    display_s = length(s) > 200 ? first(s, 200) * "..." : s
     println(io, "    $i. ", display_s)
   end
 end
@@ -837,6 +1202,11 @@ end
 Analyze pending migrations without applying them.
 Validates ordering, checksums, destructive actions, and SQL generation.
 Does NOT modify the database or move files.
+
+When the plan's header records a lossy column change (#803), `dry_run` reads the database: it
+checks each such column still exists and, for a change that can fail on existing rows, counts those
+rows with a read-only `SELECT COUNT(*)`, reported in `r.lossy_alters`. A plan with no such change
+reads nothing.
 """
 function dry_run(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings)::DryRunResult
   Configuration._require_folder_backed(settings, "dry_run")
@@ -845,11 +1215,14 @@ function dry_run(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGS
   
   checksum = compute_checksum(all_sql)
   destructive_stmts = detect_destructive_actions(ordered_statements)
-  
+  lossy_alters = _plan_lossy_alters(_pending_plan_path(settings))
+  isempty(lossy_alters) || (lossy_alters = _precheck_lossy_alters(connection, lossy_alters))
+
   return DryRunResult(
     checksum,
     ordered_statements,
-    destructive_stmts
+    destructive_stmts,
+    lossy_alters
   )
 end
 
@@ -882,7 +1255,7 @@ so a script that runs `migrate` at boot can branch on the outcome instead of par
     | `:already_applied` | The pending plan is the latest applied migration (its checksum matches): another instance applied it first, or a previous `migrate` committed it and then failed to archive the file. Nothing ran; the file is archived — by this call, or already by an instance sharing the plan folder (#81). |
     | `:nothing_pending` | There is no `pending_migrations.jl`, or it holds no statements. The history table and any configured extensions were still ensured. |
     | `:disabled` | The connection is `change_db: false`. Nothing was read or written. |
-    | `:declined` | An interactive run was not confirmed at the prompt, or a destructive plan was refused there for lack of `destructive = true`. |
+    | `:declined` | An interactive run was not confirmed at the prompt, a destructive plan was refused there for lack of `destructive = true`, or a column change would fail on existing rows (#803). |
 
   * `version` — the `pormg_migrations.version` of the row involved: the new row for `:applied`,
     the matched row for `:already_applied`, `nothing` for every other outcome.
@@ -890,8 +1263,9 @@ so a script that runs `migrate` at boot can branch on the outcome instead of par
     `0` for every other outcome.
 
 A **failure** is still an exception, not an outcome: a destructive plan without
-`destructive = true` in a non-interactive run (`DestructiveMigrationError`), a plan file that does
-not parse (`InvalidMigrationError`), a statement the database rejects (the plan is rolled back,
+`destructive = true` in a non-interactive run (`DestructiveMigrationError`), a column change that
+would fail on existing rows (`MigrationPrecheckError`, raised before anything is written), a plan
+file that does not parse (`InvalidMigrationError`), a statement the database rejects (the plan is rolled back,
 recorded as `failed`, and the error rethrown), and a migration lock not acquired within `lock_wait`
 (`OperationalError`).
 
@@ -1813,8 +2187,9 @@ several instances at once — see the [Deploying](@ref deploying-migrations) gui
 # Lifecycle
 1. Validate: `change_db`, then read and order the plan from disk and detect destructive statements.
    **Nothing is written to the database before step 3.**
-2. Confirm: destructive guard + interactive confirmation (TTY-aware — see `_confirm_migration`).
-   Before the lock, so a prompt waiting on a human never holds it.
+2. Confirm: the lossy-ALTER row pre-check (#803 — a read-only count, refused whatever
+   `destructive` says), then the destructive guard + interactive confirmation (TTY-aware — see
+   `_confirm_migration`). Before the lock, so a prompt waiting on a human never holds it.
 3. Lock (PostgreSQL): the advisory lock `MIGRATION_LOCK_KEY`, waited on for up to `lock_wait`.
    Everything below runs while it is held (#737).
 4. Bootstrap: create `pormg_migrations` if needed and install configured extensions — also when
@@ -1832,8 +2207,11 @@ apply the same plan.
   terminal**. In a non-interactive process (CI, `Pkg.test`, deploy script) no prompt is shown and
   `migrate()` never blocks on `readline()`.
 - `destructive::Bool=false`: must be `true` to apply a plan `is_destructive` flags — any `DROP` (table,
-  column, constraint, index, view, …), a `TRUNCATE`, or a `DELETE` with no `WHERE`. A destructive
-  plan in a non-interactive context throws `DestructiveMigrationError` unless this is set.
+  column, constraint, index, view, …), a `TRUNCATE`, or a `DELETE` with no `WHERE` — or one whose
+  header records a column change that silently alters existing values (a lower `decimal_places`,
+  float to integer, timestamp to date; see [`LOSSY_ALTER_KINDS`](@ref)). A destructive plan in a
+  non-interactive context throws `DestructiveMigrationError` unless this is set. It does **not**
+  get past a column change that would fail on existing rows: that is `MigrationPrecheckError`.
 - `name::String="pending_migration"`: name for this migration in the history table.
 - `lock_wait::Real=30`: seconds to wait for another instance's migration to finish (PostgreSQL). On
   timeout `migrate` throws `OperationalError`, naming the process that holds the lock.
@@ -1878,14 +2256,27 @@ function migrate(connection::PormGBackend, settings::PormGSettings;
   version = generate_version()
   checksum = compute_checksum(all_sql)
   destructive_stmts = detect_destructive_actions(ordered_statements)
-  has_destructive = !isempty(destructive_stmts)
+  # #803: the lossy column changes `makemigrations` recorded in the plan header. The SQL alone cannot
+  # say what a column held before, so the header is the only source; a plan without one has none.
+  lossy_alters = isempty(ordered_statements) ? LossyAlter[] : _plan_lossy_alters(_pending_plan_path(settings))
 
   # --- Phase 2: Confirm, BEFORE the lock (#737). A prompt waits on a human; holding the migration
   # lock meanwhile would stall every other instance booting against this database. TTY-aware:
   # never blocks on readline() without a terminal, and throws in the non-interactive destructive
   # case so automation fails loudly (see `_confirm_migration`).
+  #
+  # #803: the row pre-check runs first, and is not bypassed by `destructive = true`: a plan that
+  # would fail on existing rows cannot be made to succeed by an opt-in, so it is refused before any
+  # write rather than rolled back halfway through. It only READS, and only when the header records
+  # something to count. The `:silent` findings then join the destructive guard's opt-in.
+  isempty(lossy_alters) || (lossy_alters = _precheck_lossy_alters(connection, lossy_alters; timeouts = timeouts))
+  silent_alters = _silent_alters(lossy_alters)
+  has_destructive = !isempty(destructive_stmts) || !isempty(silent_alters)
   if !isempty(ordered_statements)
-    _confirm_migration(has_destructive, destructive, destructive_stmts; interactive=interactive) ||
+    _refuse_failing_alters(lossy_alters; interactive = interactive) ||
+      return MigrationResult(:declined, nothing, 0)
+    _confirm_migration(has_destructive, destructive, destructive_stmts; interactive=interactive,
+                       lossy_alters = silent_alters) ||
       return MigrationResult(:declined, nothing, 0)
   end
 

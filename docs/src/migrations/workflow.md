@@ -71,10 +71,13 @@ Use `dry_run()` for a detailed report:
 result = PormG.Migrations.dry_run("db")
 println(result)
 ```
-This shows the SQL statements that will be executed and detects any destructive operations.
+This shows the SQL statements that will be executed and detects any destructive operations, and
+any [lossy column change](#Lossy-Column-Changes) — with, for a change that would fail on existing
+rows, how many rows it would fail on.
 
-`dry_run()` only **reads** the plan file: it parses it and never executes it, even though it is
-written in Julia syntax. A table or index name from the database that happens to contain `$(…)`
+`dry_run()` only **reads**: it parses the plan file and never executes it, even though it is
+written in Julia syntax, and all it asks the database is about a lossy column change the plan
+records: whether the column still exists, and how many rows would fail. A table or index name from the database that happens to contain `$(…)`
 therefore stays text. A hand-edited plan that contains anything other than plain string literals
 raises `InvalidMigrationError`. See
 [Format Stability → A plan file is read as data](stability.md).
@@ -248,7 +251,8 @@ Applied migrations are recorded in the history table and archived to `db/migrati
 
 `migrate()` returns a `MigrationResult` whose `outcome` is `:applied`, `:already_applied`,
 `:nothing_pending`, `:disabled` (the connection is `change_db: false`) or `:declined` (you answered
-"no" at the prompt, or a destructive plan was refused at the terminal for lack of `destructive=true`). Having nothing to apply is `:nothing_pending`, not an error. What each outcome
+"no" at the prompt, a destructive plan was refused at the terminal for lack of `destructive=true`, or
+a [lossy column change](#Lossy-Column-Changes) would fail on existing rows). Having nothing to apply is `:nothing_pending`, not an error. What each outcome
 means, and how to run `migrate()` at application boot: [Deploying](deploying.md).
 
 ### Destructive Operations Safety
@@ -276,6 +280,47 @@ At an interactive terminal, a destructive plan without `destructive=true` prints
 can re-run with the opt-in. In a **non-interactive** context (CI, `Pkg.test`, a deploy script, or piped
 stdin) the same plan throws a `DestructiveMigrationError` instead — automation fails loudly rather than
 hanging on a prompt or silently skipping the migration.
+
+### Lossy Column Changes
+The guard above reads the SQL text, so it sees a `DROP` — but not an `ALTER` that narrows a column.
+`makemigrations` therefore also classifies each column change from what the column held before and
+what it will hold, and writes what it finds into the plan's header (a `# pormg-lossy-alter:` comment
+line per column). `dry_run()` lists them, and `migrate()` acts on them. There are three kinds:
+
+| Kind | Examples | What `migrate()` does |
+| :--- | :--- | :--- |
+| **Fails on existing rows** | `null = true` → `false` over rows holding `NULL`; a shorter `max_length`; `BigIntegerField` → `IntegerField`; fewer `max_digits`; `IntegerField` → `PositiveIntegerField` over negative values | Counts the offending rows first. Any row that would fail means the plan is refused before anything is written; none means it applies with no opt-in. |
+| **Changes existing values** | fewer `decimal_places` (values round); `FloatField` or `DecimalField` → `IntegerField` (values round); `DateTimeField` → `DateField` (the time is dropped); a `TIMESTAMPTZ` → `TIMESTAMP` (the offset is dropped) | Needs `destructive = true`, exactly like a `DROP`. |
+| **Cannot run as planned** | text → a number, boolean, date, timestamp, UUID or JSON, or boolean ↔ a number, on PostgreSQL | Refused: PostgreSQL has no automatic cast between these and the plan carries no `USING` clause. |
+
+For the first kind, `destructive = true` does **not** get the plan through — no opt-in can make a
+`NULL` fit a `NOT NULL` column. Fix the data, then run `migrate()` again (the same plan counts again),
+or change the models file and run `makemigrations()`:
+```julia
+r = PormG.Migrations.dry_run("db")
+r.lossy_alters     # one entry per column: table, column, kind, and `rows` for the failing kind
+```
+In a non-interactive context a refused plan throws `PormG.Migrations.MigrationPrecheckError`, which
+carries the same findings; at a terminal the findings are logged and `migrate()` returns `:declined`.
+
+A few things to know:
+
+- **The row count reads the database.** It is one `SELECT COUNT(*)` per such column, run before
+  `migrate()` takes its lock. It is advisory: rows written between the count and the `ALTER` can
+  still make the `ALTER` fail, and then the whole migration rolls back as it always did.
+- **PostgreSQL and SQLite differ.** SQLite enforces no `VARCHAR` length, no integer width and no
+  decimal scale, so a narrowing there changes nothing and is not reported. What SQLite does enforce
+  is `NOT NULL` and a `CHECK`, and what it does change is text moved into a numeric column: `'0042'`
+  is stored as `42`. That last case needs `destructive = true` — which every SQLite column change
+  already does, because SQLite rebuilds the table to apply it.
+- **What is not checked.** Adding a `unique = true`, a primary key, a foreign key or a
+  `CheckConstraint` over rows that violate it is not pre-counted; the database refuses it inside the
+  migration, which rolls back. A change that loses precision rather than digits (a `DecimalField` or
+  `BigIntegerField` → `FloatField`) is not reported either.
+- **Hand-editing the plan.** The header describes the plan `makemigrations` wrote. If you add a
+  backfill or a `USING` clause by hand to get past a finding, delete that finding's
+  `# pormg-lossy-alter:` line too, or regenerate the plan. A line naming a column the database no
+  longer has is ignored with a warning.
 
 ---
 

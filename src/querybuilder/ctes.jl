@@ -1443,10 +1443,11 @@ end
 # families `_sql_type_field` (build_query.jl) recognises is refused rather than dropped: the caller
 # named it, and falling back to inference would quietly override them.
 #
-# `date` is refused on SQLite: the cast renders `CAST(x AS DATE)`, and SQLite gives the type name
-# DATE numeric affinity, so `'2020-03-29'` becomes the INTEGER `2020`. A column typed DateField would
-# then bind `"2020-01-01"` against a number, and INTEGER sorts below TEXT — the #812 silent-empty
-# result again, one route over. Project the date column itself, which keeps its text.
+# `date` from `Cast` or `Case` types the column on both engines: SQLite renders the cast `date(x)`
+# (#822), whose text is what a DateField binds. It was refused here until then, because
+# `CAST(x AS DATE)` made `2020` of `'2020-03-29'`. `Coalesce`, `Greatest`, `Least` and `Concat` stay
+# refused on SQLite: they render no cast there, so the column holds the operand's text — a
+# timestamp, say — and a date filter on it would match nothing, the #812 silent-empty result.
 function _declared_type(func::SQLTypeFunction, instruct::SQLInstruction)
   declared = get(func.kwargs, func.function_name == "CAST" ? "type" : "output_field", nothing)
   (declared isa AbstractString && !isempty(declared)) || return nothing
@@ -1455,11 +1456,11 @@ function _declared_type(func::SQLTypeFunction, instruct::SQLInstruction)
     "A CTE column cannot be typed from the SQL type \e[4m\e[31m$(declared)\e[0m on " *
     "$(func.function_name)(…). Name one of the text, integer, bigint, float, numeric, boolean or " *
     "date types instead (#812)."))
-  if typed isa Models.sDateField && instruct.connection isa PormGSQLite
+  if typed isa Models.sDateField && instruct.connection isa PormGSQLite && !(func.function_name in ("CAST", "CASE"))
     throw(QueryBuildError(
-      "A CTE column cannot be typed \e[4m\e[31mdate\e[0m by $(func.function_name)(…) on SQLite: " *
-      "SQLite's CAST(… AS DATE) turns '2020-03-29' into the number 2020, so a date filter on the " *
-      "column would match nothing. Project the date column itself instead (#812)."))
+      "A CTE column cannot be typed \e[4m\e[31mdate\e[0m by $(func.function_name)(…; output_field = …) " *
+      "on SQLite: it renders no cast there, so the column holds its operand's text rather than a date. " *
+      "Wrap it in \e[32mCast(…, \"date\")\e[0m, which renders date(…) (#822)."))
   end
   return typed
 end

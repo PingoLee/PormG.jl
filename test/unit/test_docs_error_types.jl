@@ -457,16 +457,27 @@ const DOCERR_CASES = [
         end,
     ),
     (
-        # #812. The same section: a declared `date` is refused on SQLite, whose `CAST(… AS DATE)`
-        # yields a number rather than a date.
-        "read/subqueries_and_ctes.md — a CTE column declared date is refused on SQLite (#812)",
+        # #822. The CTE-typing section: a declared `date` on a function that renders no cast on
+        # SQLite (`Coalesce`) is refused there; `Cast` and `Case` are accepted.
+        "read/subqueries_and_ctes.md — a Coalesce CTE column declared date is refused on SQLite (#822)",
         QueryBuildError,
         () -> begin
             body = DOCERR_RESULT_SL.objects
-            body.values("resultid", "d" => PormG.Functions.Cast("points", "date"))
+            body.values("resultid", "d" => PormG.Functions.Coalesce("points", 0; output_field = "date"))
             q = DOCERR_RESULT_SL.objects
             q.with("c" => body, join_field = "resultid" => "resultid")
             q.values("resultid", "c__d")
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #822. A temporal cast target other than `date` raises on SQLite, which has no time types:
+        # `CAST(… AS TIMESTAMP)` there turns '2020-03-29 10:11:12' into the number 2020.
+        "read/functions_and_dates.md — a timestamp cast raises on SQLite (#822)",
+        BackendCapabilityError,
+        () -> begin
+            q = DOCERR_RESULT_SL.objects
+            q.values("resultid", "t" => PormG.Functions.Cast("points", "timestamp"))
             q.list(show_query = :dict)
         end,
     ),

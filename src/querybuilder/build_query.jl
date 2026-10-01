@@ -834,8 +834,17 @@ _expression_formatter(::Any, ::SQLInstruction) = nothing
 #
 # Called AFTER the projection renders, like `_projection_column_kind`: resolving a joined path is
 # what populates the memo `_alias_column_field` reads.
+#
+# #822: a `Cast(x, "date")`, or a `Case` whose `output_field` is a date, is a date because the SQL
+# makes it one on both engines — `::date` on PostgreSQL, `date(…)` on SQLite — so it reads back as a
+# `Date` on both, not a `Date` on one and a `String` on the other. Only those two: `Coalesce`,
+# `Greatest` and `Least` render no cast on SQLite, so their value is whatever text the operand held.
 const _KIND_PRESERVING_FUNCTIONS = ("MAX", "MIN", "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE")
 function _function_projection_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)::Union{CanonicalType,Nothing}
+  if p isa FObject && p.function_name in ("CAST", "CASE")
+    declared = get(p.kwargs, p.function_name == "CAST" ? "type" : "output_field", nothing)
+    declared isa AbstractString && _sql_type_field(declared) isa Models.sDateField && return CDate()
+  end
   p.function_name in _KIND_PRESERVING_FUNCTIONS || return nothing
   return _operand_kind(p.column, instruc)
 end

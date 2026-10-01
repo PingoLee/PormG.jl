@@ -390,12 +390,32 @@ when it has this shape:
 - on PostgreSQL only, optionally followed by array brackets: `"integer[]"`. SQLite has no array
   types and raises `BackendCapabilityError`.
 
+SQLite has no date or time types either. There, a cast to `"date"` (or `DateField()`) renders
+`date(x)`, which returns the `YYYY-MM-DD` text a `DateField` stores and cuts a timestamp to its
+date, as PostgreSQL's `::date` does. Both engines read the result back as a `Date`. Cast a date or
+timestamp column: on other input SQLite does not raise where PostgreSQL does. Text that is no date
+gives `NULL`, an impossible date rolls over (`'2020-02-30'` is 1 March), and a number is read as a
+Julian day (`0` is in 4714 BC). Every other
+time target raises `BackendCapabilityError` on SQLite: `timestamp`, `timestamptz`, `time`,
+`interval` and their spellings, and `DateTimeField()`, `TimeField()`, `DurationField()`. A plain
+SQLite `CAST` to one of them returns a number (`2020` for `'2020-03-29 10:11:12'`), not a
+different spelling of the value. Project the column itself instead.
+
+```julia
+using PormG.Functions: Cast
+
+# The race date as a Date, on both engines
+M.Race.objects.filter("year" => 2020).values("raceid", "day" => Cast("date", "date"))
+```
+
 Any other string raises `InvalidValueError` when the expression is built, on both engines. A type
 name is a keyword in the SQL and cannot be a bind parameter, so PormG only writes a spelling it has
 parsed, never the text it was given. That also refuses a few spellings PostgreSQL itself accepts: a
 schema-qualified or quoted name (`public.mood`, `"Mood"`), `interval year to month`, a negative
 scale, and a `COLLATE` clause. The same rules apply to the `output_field=` string of `Case`,
-`Coalesce`, `Concat`, `Greatest` and `Least`.
+`Coalesce`, `Concat`, `Greatest` and `Least`. The SQLite date rule above applies to `Case`'s
+`output_field`, the one that renders a cast there; `Coalesce`, `Greatest` and `Least` render no cast
+on SQLite and take the operand's value as it is.
 
 ### `Extract` — Extract Date/Time Part
 

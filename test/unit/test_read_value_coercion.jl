@@ -560,6 +560,27 @@ end
     end
   end
 
+  # #822: a declared date is a date because the SQL casts it to one on both engines (`date(…)` on
+  # SQLite), so it records `CDate` and SQLite reads a `Date` back as PostgreSQL does. Only `Cast` and
+  # `Case`: `Coalesce` renders no cast on SQLite, so its value is the operand's text, and a declared
+  # type other than date records nothing new.
+  @testset "Cast / Case declared date records CDate; Coalesce does not (#822)" begin
+    F_ = PormG.Functions
+    for conn in (_RVC_SL, _RVC_PG)
+      kinds = _rvc_kinds(q -> q.values(
+        "c"  => F_.Cast("ts", "date"),
+        "cf" => F_.Cast("note", PormG.Models.DateField()),
+        "k"  => F_.Case([PormG.Functions.When("id" => 1, then = PormG.F("d"))], output_field = "date"),
+        "co" => F_.Coalesce("d", "d"; output_field = "date"),
+        "ct" => F_.Cast("d", "text")); connection = conn)
+      @test kinds[:c] == PormG.CDate()
+      @test kinds[:cf] == PormG.CDate()
+      @test kinds[:k] == PormG.CDate()
+      @test !haskey(kinds, :co)
+      @test !haskey(kinds, :ct)
+    end
+  end
+
   # #800: the window VALUE functions return a row's own value of the column, so they are typed like
   # an extremum. A ranking window is a number and records nothing. Built on the PostgreSQL mock: the
   # SQLite window renderer asks the driver for its version, which a mock cannot answer, and the kind

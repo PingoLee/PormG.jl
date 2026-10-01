@@ -711,3 +711,46 @@ end
         @test got == expected
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cast(…, "date") is a date on both engines (#822)
+# SQLite rendered `CAST(date AS DATE)`, and its DATE type name has NUMERIC affinity, so the race date
+# `'2009-03-29'` came back as the integer 2009 and a date filter on a CTE column built from it matched
+# nothing (#812 refused that CTE shape on SQLite for this reason). SQLite now renders `date(…)`. Each
+# expected value comes from the plain `date` column, not from the cast under test.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Cast(…, \"date\") is a date on both engines (#822)" begin
+    @testset "projected, it reads back as the column's Date" begin
+        q = M.Race.objects
+        q.filter("raceid__@lte" => 3)
+        q.order_by("raceid")
+        q.values("raceid", "day" => Cast("date", "date"))
+        got = q |> DataFrame
+
+        plain = M.Race.objects
+        plain.filter("raceid__@lte" => 3)
+        plain.order_by("raceid")
+        plain.values("raceid", "date")
+        expected = plain |> DataFrame
+
+        @test nrow(got) == 3
+        @test all(d -> d isa Date, got.day)
+        @test got.day == expected.date
+    end
+
+    @testset "a CTE column declared date filters by a date string" begin
+        body = M.Race.objects
+        body.filter("year" => 2009)
+        body.values("raceid", "day" => Cast("date", "date"))
+        q = M.Race.objects
+        q.with("c" => body, join_field = "raceid" => "raceid")
+        q.filter("c__day__@gte" => "2009-06-01")
+        q.values("raceid")
+        got = sort((q |> DataFrame).raceid)
+
+        expected = sort((M.Race.objects.filter("year" => 2009, "date__@gte" => "2009-06-01").
+            values("raceid") |> DataFrame).raceid)
+        @test !isempty(expected)
+        @test got == expected
+    end
+end

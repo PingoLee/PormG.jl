@@ -620,6 +620,17 @@ end
       q.values("jd" => PormG.Joined("tm", "founded__@date"))
     end)
     @test kinds[:jd] == PormG.CDate()
+    # #843: the transform as a STRING operand of a multi-operand function. It used to crash the build
+    # before anything was recorded; it now resolves to the same DATE node, so `Coalesce` of it and a
+    # date column agrees on `CDate`, on both engines, as #824 noted it would once it rendered.
+    for conn in (_RVC_SL, _RVC_PG)
+      kinds = _rvc_kinds(q -> q.values("c" => F_.Coalesce("ts__@date", "d"),
+                                       "g" => F_.Greatest("d", "ts__@date"),
+                                       "n" => F_.NullIf("ts__@date", "d")); connection = conn)
+      @test kinds[:c] == PormG.CDate()
+      @test kinds[:g] == PormG.CDate()
+      @test kinds[:n] == PormG.CDate()
+    end
   end
 
   # #824: `Coalesce`, `Greatest` and `Least` return one of their operands' own values, and render no

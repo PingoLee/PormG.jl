@@ -168,8 +168,10 @@ end
 # groups and a filter on its alias still goes to HAVING.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#705 controls: strings, nodes and the aggregate flag" begin
+  # A string is stored bare, as a path for the build walk to resolve (#843) — not wrapped as an
+  # `SQLField`, which the walk passes through unresolved.
   node = Coalesce("points", "surname")
-  @test all(c -> c isa PormG.SQLTypeField, node.column)
+  @test all(c -> c isa String, node.column)
   @test Replace("surname", "a", "b").column[2] isa PormG.SQLTypeText
   @test _is_agg(Power(Sum("points"), 2))
   @test !_is_agg(Power("points", 2))

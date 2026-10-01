@@ -135,6 +135,22 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# A transform in a function's string operand (#843)
+# `Coalesce("fp1_date", "start_at__@date")` used to crash the build ("does not have a 'how'
+# property"): the string operand was wrapped so the `@date` transform was never resolved. Race 1000
+# has no `fp1_date`, so Coalesce falls through to the start timestamp's date. `Mod` over `@year`
+# is the numeric transform in the same seam: 2018 mod 4.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Transform in a function's string operand (#843)" begin
+    row = M.Race.objects.filter("raceid" => 1000).values(
+        "c" => Coalesce("fp1_date", "start_at__@date"),
+        "m" => Mod("start_at__@year", 4)
+    ).list(:dict) |> only
+    @test row[:c] == Date(2018, 7, 29)
+    @test row[:m] == 2
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Literals that SQLite used to bind as a serialized BLOB (#721)
 # A date literal, a narrow integer and a projected `Value(Date)` must behave identically on both
 # engines. Before #721 a date literal was refused as a function operand (#705's stop-gap, since

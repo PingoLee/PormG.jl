@@ -73,14 +73,20 @@ end
 # follows. #508 phase 2 settled the slot: `WindowFunction` is a `struct` now and the `_retag_*`
 # walkers construct, so no build step can write through a shared `over` any more. Sharing is a
 # property of the types here, not a bet on call paths.
+# The operand LIST is copied before the walk, because the `Vector` arm below writes its results
+# back in place. Without the copy, `values("x" => h)` rewrote the user's own `h`: since #843 stores a
+# string operand bare, `Coalesce("ts__@date", "d")` held a `DATE` node in `h.column` afterwards. The
+# result was idempotent, but a node the caller still holds must not change under them (#508).
+_fresh_operands(c::AbstractVector) = copy(c)
+_fresh_operands(c) = c
 function _check_function(f::FObject)
-  return FObject(function_name=f.function_name, column=_check_function(f.column),
+  return FObject(function_name=f.function_name, column=_check_function(_fresh_operands(f.column)),
                  aggregate=f.aggregate, formatter=f.formatter, _as=f._as,
                  kwargs=copy(f.kwargs))
 end
 function _check_function(f::WindowFunction)
   return WindowFunction(function_name=f.function_name,
-                        column=f.column === nothing ? nothing : _check_function(f.column),
+                        column=f.column === nothing ? nothing : _check_function(_fresh_operands(f.column)),
                         over=f.over, aggregate=f.aggregate, formatter=f.formatter,
                         _as=f._as, kwargs=copy(f.kwargs))
 end

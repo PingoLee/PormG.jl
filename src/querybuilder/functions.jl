@@ -500,9 +500,18 @@ Value(x::JoinedReference) = throw(QueryBuildError(
 # bare duration has no one reading as an operand (an interval on PostgreSQL, text on SQLite). A PormG
 # node passes through untouched — the walk owns those. Anything else is refused HERE, at the
 # constructor, rather than as a `MethodError` from the walk.
+#
+# #843 — a string operand is stored as a bare `String`, the reading `Concat` already used, and not
+# wrapped as `SQLField(x)`. The build walk resolves a bare string through the transform ladder
+# (`_check_function(::AbstractString)`, #562), so `Coalesce("ts__@date", "d")` gets the same `DATE`
+# node `Max("ts__@date")` and `F("ts__@date")` get. The `SQLField` arm of the walk returns its node
+# untouched, so the wrap sent `__@date` on to join resolution as if it named a column, and the build
+# died with "does not have a 'how' property". The wrap existed to dodge the walk's `Vector{String}`
+# arm, which reads a vector as ONE split path; every constructor below builds an `Any[]` column, which
+# takes the per-element arm instead, so there is nothing left to dodge.
 const _FunctionLiteral = Union{Bool,Integer,Float16,Float32,Float64,
                                Dates.Date,Dates.DateTime,Dates.Time,ZonedDateTime}
-_function_operand(x::AbstractString) = SQLField(String(x))
+_function_operand(x::AbstractString) = String(x)
 _function_operand(x::_FunctionLiteral) = Value(x)
 _function_operand(x::Union{SQLType,SQLObject}) = x
 _function_operand(x) = throw(QueryBuildError(
@@ -597,12 +606,12 @@ function Concat(x::Vector; output_field::Union{N, AbstractString, Nothing} where
   # hands the pieces straight to it. Concat's payload is a list of operands, never one split path,
   # so the fix belongs at the seam that knows which of the two this is.
   #
-  # Not the `SQLField(String(v))` wrap that `Coalesce`/`Greatest`/`Least` use to dodge the same arm:
-  # Concat's elements legitimately carry `__@` transform paths (`Concat("date__@year", ...)`), and
-  # wrapping would strip the per-element resolution that makes those work.
-  # #705: a number part is a literal (`Value`), as in the other operand-taking constructors; a string
-  # part stays a `String`, for the reason above.
-  processed_cols = Any[v isa AbstractString ? String(v) : _function_operand(v) for v in x]
+  # Not an `SQLField(String(v))` wrap: Concat's elements legitimately carry `__@` transform paths
+  # (`Concat("date__@year", ...)`), and wrapping would strip the per-element resolution that makes
+  # those work. The other operand-taking constructors used that wrap until #843 found it broke them
+  # the same way; `_function_operand` now stores a string bare for all of them.
+  # #705: a number part is a literal (`Value`), as in the other operand-taking constructors.
+  processed_cols = Any[_function_operand(v) for v in x]
   return FObject(function_name = "CONCAT", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field, "as" => String(_as)))
 end
 # #835: `CONCAT(…)` / `a || b` is text on both engines, and `Dialect.CONCAT` renders no cast, so a

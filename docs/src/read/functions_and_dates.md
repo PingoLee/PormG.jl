@@ -312,10 +312,13 @@ df = query |> DataFrame
 ## Conditional Functions
 
 The operands of `Coalesce`, `NullIf`, `Greatest` and `Least` (and of `Power` and `Mod` above) are
-read by their type. A string is a column path. A number (of any integer width), a `Bool`, a `Date`,
-a `DateTime`, a `ZonedDateTime` or a `Time` is a literal that PormG binds as a parameter. A **string
-literal** needs `Value(...)`: `NullIf("code", "")` would read `""` as a column name. Any other value
-raises `QueryBuildError` when the expression is built.
+read by their type. A string is a column path. When the function is projected in `values(...)`,
+directly or as another function's argument, the path can end in a transform:
+`Coalesce("fp1_date", "start_at__@date")` falls back to the date of the race start. A number (of
+any integer width), a `Bool`, a `Date`, a `DateTime`, a `ZonedDateTime` or a `Time` is a literal
+that PormG binds as a parameter. A **string literal** needs `Value(...)`: `NullIf("code", "")`
+would read `""` as a column name. Any other value raises `QueryBuildError` when the expression is
+built.
 
 On SQLite a date or time literal binds as the same text its column stores (`Date(2021, 3, 28)` is
 `"2021-03-28"`), and an integer of any width binds as a 64-bit integer, so a comparison with a

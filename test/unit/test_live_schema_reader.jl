@@ -770,6 +770,54 @@ fetch(::OwnershipMockPg730, sql::String; conn = nothing, params = nothing, ignor
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: the one-column `db_index` reader carries the composite reader's filters (#847)
+# The dump's `indexes` CTE filtered only primary/unique/partial/arity, so a hand-made one-column GIN,
+# hash, DESC, opclass, collated, invalid, INCLUDE or EXCLUDE index read as `db_index`, and a model that
+# did not declare one planned a destructive `DROP INDEX` — for `EXCLUDE`, one PostgreSQL then refused.
+# `attnum = ANY(indkey)` also marked an `INCLUDE` payload column as indexed. CI runs no PostgreSQL, so
+# this pins each predicate in the SQL text; the live half, one index per shape on a real server, is
+# `test/integration/test_importers_introspection.jl`.
+# Mutation gate: delete any one predicate from the CTE and its assertion fails.
+# ─────────────────────────────────────────────────────────────────────────────
+struct IndexCteMockPg847 <: PormG.PormGPostgres end
+const PG847_SQL = String[]
+fetch(::IndexCteMockPg847, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
+  (push!(PG847_SQL, sql); DataFrame())
+
+@testset "PostgreSQL: the one-column index reader refuses what PormG cannot re-emit (#847)" begin
+  empty!(PG847_SQL)
+  with_logger(NullLogger()) do                 # an empty dump warns "No tables found"
+    Migrations.get_database_schema(IndexCteMockPg847())
+  end
+  dump_sql = only(PG847_SQL)
+  # Just the `indexes` CTE: the dump's other CTEs legitimately still use `ANY(…indkey)` (the primary
+  # key) and must not satisfy or fail an assertion meant for this one.
+  m = match(r"\bindexes AS \((.*?)\n\s*\),\s*\n\s*non_negative_checks AS"s, dump_sql)
+  @test m !== nothing
+  cte = String(m.captures[1])
+  # The pre-existing filters stay.
+  for p in ("NOT i.indisprimary", "NOT i.indisunique", "i.indpred IS NULL", "i.indnkeyatts = 1")
+    @test occursin(p, cte)
+  end
+  # Whole-index refusals, as in `_pg_composite_indexes`.
+  @test occursin("JOIN pg_am am ON am.oid = c.relam", cte)
+  @test occursin("am.amname = 'btree'", cte)                 # GIN / GiST / hash
+  @test occursin("NOT i.indisexclusion", cte)                # a one-column EXCLUDE constraint
+  @test occursin("i.indisvalid", cte)                        # a failed CREATE INDEX CONCURRENTLY
+  @test occursin("i.indnatts = i.indnkeyatts", cte)          # an INCLUDE clause
+  # Key columns only, in index order, and never `ANY(indkey)` — which read INCLUDE payload as indexed.
+  @test occursin("unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)", cte)
+  @test occursin("ON k.ord <= i.indnkeyatts", cte)
+  @test occursin("a.attnum = k.attnum", cte)
+  @test !occursin("ANY(i.indkey)", cte)
+  # Per-column refusals, through the 0-based `[k.ord - 1]` subscripts the composite reader measured.
+  @test occursin("(i.indoption::int2[])[k.ord - 1] = 0", cte)                    # DESC / NULLS FIRST
+  @test occursin("pg_opclass oc ON oc.oid = (i.indclass::oid[])[k.ord - 1]", cte)
+  @test occursin("oc.opcdefault", cte)                                           # varchar_pattern_ops
+  @test occursin("(i.indcollation::oid[])[k.ord - 1] IN (0, a.attcollation)", cte)  # COLLATE "C"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PostgreSQL: PormG's non-negative CHECK is recognised by its exact clause, reader and dropper alike (#731)
 # The `non_negative_checks` CTE matched `pg_get_constraintdef … LIKE '%>= 0%'` and
 # `get_constraints_checks` matched `check_clause ILIKE '%>= 0%'`, so a user's

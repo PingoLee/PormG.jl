@@ -1163,3 +1163,78 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #847: the one-column `db_index` reader skips an index PormG could not have written
+# `_sqlite_single_column_indexed_columns` filtered only `unique`, `origin` and `partial`, so a hand-made
+# one-column `DESC` or explicitly collated index read as `db_index` — and a model that did not declare
+# one planned a destructive `DROP INDEX` for it. It now applies the composite reader's two SQLite
+# refusals at arity 1. The collation test is RELATIVE (an explicit `COLLATE` in the index), so a plain
+# index on a column DECLARED `COLLATE NOCASE` is still read: refusing it would leave a declared
+# `db_index` on that column never converging. Quoted columns named `desc`/`collate` pin the tokenizer.
+# Mutation gate: drop the `is_desc` line and `dsc` is read; drop the collate line and `coll` is read,
+# and either way the plan below gains a `Remove index on …` step.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "one-column index reader skips DESC and explicit COLLATE (#847)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "onecol847.sqlite"); pool_size = 1)
+    try
+      fetch(pool, """CREATE TABLE "t847" ("id" INTEGER PRIMARY KEY AUTOINCREMENT, "plain" TEXT,
+        "dsc" TEXT, "coll" TEXT, "nocase" TEXT COLLATE NOCASE, "desc" TEXT, "collate" TEXT,
+        "up" TEXT);""")
+      fetch(pool, """CREATE INDEX "ix847_plain" ON "t847" ("plain");""")
+      fetch(pool, """CREATE INDEX "ix847_dsc" ON "t847" ("dsc" DESC);""")                # refused
+      fetch(pool, """CREATE INDEX "ix847_coll" ON "t847" ("coll" COLLATE NOCASE);""")    # refused
+      fetch(pool, """CREATE INDEX "ix847_nocase" ON "t847" ("nocase");""")   # column's collation
+      fetch(pool, """CREATE INDEX "ix847_qdesc" ON "t847" ("desc");""")      # a COLUMN named desc
+      fetch(pool, """CREATE INDEX "ix847_qcoll" ON "t847" ("collate");""")   # …and one named collate
+      fetch(pool, """CREATE INDEX "ix847_up" ON "t847" ("up" ASC);""")       # ASC is the default order
+
+      idx = _sqlite_single_column_indexed_columns(pool, :t847)
+      @test !haskey(idx, "dsc")       # a descending key: PormG re-emits ascending
+      @test !haskey(idx, "coll")      # an explicit COLLATE: a different comparison, so a different index
+      # The relative half of the decision: xinfo reports NOCASE for this plain index too (the
+      # column's collation), and refusing it would re-propose its CREATE on every makemigrations.
+      @test idx["nocase"] == "ix847_nocase"
+      # Quoted identifiers are columns, not syntax — the same confusion `_SQLITE_INDEX_SYNTAX_WORDS`
+      # guards against for the rebuild path.
+      @test idx["desc"] == "ix847_qdesc"
+      @test idx["collate"] == "ix847_qcoll"
+      @test idx["up"] == "ix847_up"
+      @test idx["plain"] == "ix847_plain"
+      @test length(idx) == 5
+
+      # The helper on its own, so a tokenizer regression names itself rather than surfacing as a
+      # missing key above.
+      @test PormG.Migrations._sqlite_index_has_explicit_collate("""CREATE INDEX i ON t (a COLLATE NOCASE)""")
+      @test !PormG.Migrations._sqlite_index_has_explicit_collate("""CREATE INDEX i ON t ("collate")""")
+      @test !PormG.Migrations._sqlite_index_has_explicit_collate("""CREATE INDEX "collate" ON t (a)""")
+
+      # END TO END: the model declares db_index everywhere PormG could have written the index, and
+      # nothing on `dsc`/`coll`. Before #847 both read as db_index, so the plan held
+      # `Remove index on dsc` and `Remove index on coll` — destructive drops of hand-made indexes.
+      T = PormG.Models.TextField
+      declared = PormG.Models.Model("t847"; id = PormG.Models.IDField(),
+        plain = T(null = true, db_index = true), dsc = T(null = true), coll = T(null = true),
+        nocase = T(null = true, db_index = true), desc = T(null = true, db_index = true),
+        collate = T(null = true, db_index = true), up = T(null = true, db_index = true))
+      steps = _ei_steps(_ei_plan(pool, declared, :t847), :t847)
+      @test !any(st -> startswith(st, "Remove index"), steps)
+      @test !any(st -> startswith(st, "Create index"), steps)   # and the relative test adds nothing
+
+      # The documented PostgreSQL/SQLite divergence: DECLARING `db_index` on a column whose only
+      # index is one the reader skips creates nothing on SQLite — the planner's `:create` probe
+      # (`get_constraints_index`) takes the hand-made index as satisfying it. PostgreSQL creates its
+      # own beside it. Pinned so a change to either side is a deliberate one (not a #847 gate: before
+      # #847 these indexes read as db_index, so nothing was planned either).
+      declared_ix = PormG.Models.Model("t847"; id = PormG.Models.IDField(),
+        plain = T(null = true, db_index = true), dsc = T(null = true, db_index = true),
+        coll = T(null = true, db_index = true),
+        nocase = T(null = true, db_index = true), desc = T(null = true, db_index = true),
+        collate = T(null = true, db_index = true), up = T(null = true, db_index = true))
+      @test isempty(_ei_steps(_ei_plan(pool, declared_ix, :t847), :t847))
+    finally
+      close_pool!(pool)
+    end
+  end
+end

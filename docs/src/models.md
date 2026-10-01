@@ -240,9 +240,9 @@ database plans nothing.
     (`WHERE …`), functional (`lower(name)`), non-b-tree, `DESC` / `NULLS FIRST`, an explicit
     operator class or collation, `INCLUDE (…)`, `NULLS NOT DISTINCT`, a `DEFERRABLE` constraint,
     and an invalid index. The [PostgreSQL guide](postgres.md#Production-notes) lists them. A
-    **one-column non-unique** index is read differently: only a partial or an expression index is
-    skipped, so a one-column `DESC`, non-b-tree or collated index is read as a `db_index` and planned
-    for removal when the field does not declare one (see
+    **one-column non-unique** index with one of those properties is skipped the same way, rather than
+    read as a `db_index`, so it is never dropped either — including a one-column `EXCLUDE` constraint
+    (see
     [What `makemigrations` manages](migrations/index.md#What-makemigrations-Manages,-Ignores,-and-Would-Drop)).
 
 A composite over a column you are dropping goes with the column — nothing extra is planned for it.

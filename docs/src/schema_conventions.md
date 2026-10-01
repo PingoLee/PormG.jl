@@ -766,7 +766,7 @@ digits and punctuation — so a `db_table` outside that pattern migrated cleanly
 | :--- | :--- | :--- |
 | A physical **table** — `db_table`, or the model name | escaped (`"` → `""`), then quoted | You pinned it, or PormG read it out of the database catalog. Either way it is a name that already exists. |
 | A physical **column** — `db_column`, or the field name | the same | `db_column` carries an arbitrary spelling for the same reason `db_table` does (#50). |
-| A query **alias** — a join alias, a `.with("name" => …)` CTE name, a `cjoin_on` alias, a `values("label" => …)` label | validated against `^[\p{L}_][\p{L}\p{M}\p{N}_]*$`, then quoted | Chosen while the query is built, frequently a literal you typed, and it names nothing that already exists — so there is nothing to be faithful to. |
+| A query **alias** — a join alias, a `.with("name" => …)` CTE name, a `cjoin_on` alias, a `values("label" => …)` label | validated against `\A[\p{L}_][\p{L}\p{M}\p{N}_]*\z` (the whole name — a trailing newline is refused), then quoted | Chosen while the query is built, frequently a literal you typed, and it names nothing that already exists — so there is nothing to be faithful to. |
 | A **JSON path** segment — the `a`/`b` in `payload__a__b` | validated against its own pattern | Interpolated *unquoted* into a path literal, so it has no quoting to fall back on. |
 
 The invariant that follows is the one worth remembering:

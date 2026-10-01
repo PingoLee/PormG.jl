@@ -210,7 +210,7 @@ accepted it and died at render with a raw `MethodError`. #529 reported one; ther
 \* `key_b` is the one dual-natured slot: on a CTE join it holds the CTE's **projection alias**, not a physical column. `_with` validates that name fail-closed at declaration (`join_field.second`), which is why the render site can stay escape-only.
 | **Alias** / query-time name — `instruc.alias`, a `cjoin_on` alias, a `.with(...)` CTE name, a SELECT `_as`/`custom_as` | `quote_identifier(name, conn)` | fail-closed: `_validate_identifier` then wrap |
 
-- `_validate_identifier(id)` validates against `SAFE_IDENTIFIER_PATTERN` (`^[\p{L}_][\p{L}\p{M}\p{N}_]*$`) and throws **`InvalidValueError`** on invalid input; it never silently removes characters.
+- `_validate_identifier(id)` validates against `SAFE_IDENTIFIER_PATTERN` (`\A[\p{L}_][\p{L}\p{M}\p{N}_]*\z` — `\A…\z`, not `^…$`: PCRE's `$` matches before a final newline, #794) and throws **`InvalidValueError`** on invalid input; it never silently removes characters.
 - `_escape_identifier(name)` is the shared escape. `_quote_ident_raw` is the same thing without a `conn`, for a name interpolated into a SQL string literal that PostgreSQL re-parses as an identifier (`setval`'s `regclass`, `to_regclass`) — see `_table_ident_literal` in `execution.jl`.
 - `SAFE_JSON_KEY_PATTERN` is a **separate constant** with the same body, used only by `_validate_json_key_segments` (`build_joins.jl`). A JSON path segment is interpolated *unquoted* into a path literal, so the charset check is its entire guard; keeping the constants apart is what stops a relaxation of the identifier rules from widening it.
 

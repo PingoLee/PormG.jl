@@ -20,7 +20,10 @@
 #
 # Do NOT collapse these back into one function. The split IS the fix: a single rule cannot be both
 # permissive enough for a legacy table name and strict enough for a caller-supplied alias.
-const SAFE_IDENTIFIER_PATTERN = r"^[\p{L}_][\p{L}\p{M}\p{N}_]*$"
+#
+# `\A…\z`, not `^…$`, on both patterns here (#794): PCRE's `$` also matches before a final newline,
+# so `^…$` accepted `"driver\n"`. `Dialect._is_json_array_index` is anchored the same way (#779).
+const SAFE_IDENTIFIER_PATTERN = r"\A[\p{L}_][\p{L}\p{M}\p{N}_]*\z"
 
 # #394: a JSON path segment is NOT a SQL identifier, and this constant is not duplication for its own
 # sake. `_validate_json_key_segments` (build_joins.jl) interpolates a segment UNQUOTED into a path
@@ -28,12 +31,13 @@ const SAFE_IDENTIFIER_PATTERN = r"^[\p{L}_][\p{L}\p{M}\p{N}_]*$"
 # quoting to fall back on and the charset check IS the entire guard there. It is kept separate, with a
 # body that merely happens to match the one above, so that relaxing the SQL-identifier rules can never
 # widen the JSON guard by accident. If you touch `SAFE_IDENTIFIER_PATTERN`, this one does not move.
-const SAFE_JSON_KEY_PATTERN = r"^[\p{L}_][\p{L}\p{M}\p{N}_]*$"
+const SAFE_JSON_KEY_PATTERN = r"\A[\p{L}_][\p{L}\p{M}\p{N}_]*\z"
 
 function _validate_identifier(identifier::String)::String
     if !occursin(SAFE_IDENTIFIER_PATTERN, identifier)
+        # `repr`, so a refused newline or other control character is visible in the message (#794).
         throw(InvalidValueError(
-            "Invalid SQL identifier: $(identifier). PormG requires a plain identifier here because " *
+            "Invalid SQL identifier: $(repr(identifier)). PormG requires a plain identifier here because " *
             "this name is used as a query ALIAS — a join alias, a `.with(...)` CTE name, a " *
             "`cjoin_on` alias, or a `values(\"label\" => ...)` label. A physical table or column may " *
             "carry any spelling; pin it with db_table / db_column instead."))

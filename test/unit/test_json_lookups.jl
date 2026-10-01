@@ -247,6 +247,24 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # A KEY segment is anchored the same way as the index test above (#794)
+  # `SAFE_JSON_KEY_PATTERN` was `^…$`, so `"driver\n"` passed as a key and the newline went unquoted
+  # into the path literal: `'$.driver⏎'` on SQLite, `'{"driver⏎"}'` on PostgreSQL.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a key with a trailing newline is refused on both dialects (#794)" begin
+    for path in ("payload__driver\n", "payload__driver__name\n")
+      q = JL.Json_scratch.objects; q.filter(path => "x"); q.values("id")
+      @test_throws "Invalid JSON key segment" inspect_query(q)
+      @test_throws "Invalid JSON key segment" inspect_query(q; connection = _JL_PG)
+    end
+
+    # The message `repr`s the segment, so the newline that caused the refusal is visible in it.
+    q = JL.Json_scratch.objects; q.filter("payload__driver\n" => "x"); q.values("id")
+    err = @test_throws PormG.InvalidValueError inspect_query(q)
+    @test occursin(repr("driver\n"), err.value.msg)
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # SQLite bucket alignment (the Option-B design guard)
   # The same JSON path appears in .values() (:select) AND .filter() (:where). The resolved
   # extraction is cached and reused verbatim across clauses; because the keys are interpolated

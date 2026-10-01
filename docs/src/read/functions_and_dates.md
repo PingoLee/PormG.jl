@@ -325,8 +325,9 @@ using PormG.Functions: Coalesce
 M.Race.objects.filter("date" => Coalesce("fp1_date", "start_at__@date"))
 ```
 
-A CTE column inside a function in those positions is named with the `CTE("name", "column")` handle,
-not with the `"name__column"` string, which is read only where a column path is.
+A CTE column is the exception. Outside a projection, a function names it with the
+`CTE("name", "column")` handle; the `"name__column"` string works only inside `values(...)`. A
+transform on a CTE column is not available in these positions with either spelling.
 
 A number (of any integer width), a `Bool`, a `Date`, a `DateTime`, a `ZonedDateTime` or a `Time` is a literal
 that PormG binds as a parameter. A **string literal** needs `Value(...)`: `NullIf("code", "")`

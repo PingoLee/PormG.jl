@@ -692,15 +692,27 @@ writes it; an `InvalidMigrationError` says so otherwise. SQLite does not check t
 target exists at `CREATE TABLE` time, so a statement carrying foreign keys reads fine on its own —
 and, the parent being absent, its `to_table` keeps the `REFERENCES` spelling rather than a
 canonical one.
+
+A name holding a `"` is read whole (#837): a quoted identifier escapes it as `""`, which is how PormG's
+own DDL writes such a `db_table`. If the statement does not create the table it names, an
+`InvalidMigrationError` says so, rather than an empty model coming back.
 """
 function convertSQLToModel(sql::String)::PormGModel
-  table_name_match = match(r"CREATE TABLE \"(.+?)\"", sql)
-  table_name = table_name_match !== nothing ? table_name_match.captures[1] :
+  # `""` is an escaped quote INSIDE the identifier, so the name runs to the first `"` not doubled.
+  # The lazy `(.+?)` this replaced stopped at the first `"` of all, reading `"Te""am"` as `Te`.
+  table_name_match = match(r"CREATE TABLE \"((?:[^\"]|\"\")+)\"", sql)
+  table_name = table_name_match !== nothing ? replace(table_name_match.captures[1], "\"\"" => "\"") :
     throw(InvalidMigrationError("Cannot introspect: CREATE TABLE statement has no double-quoted table name (table created outside PormG?): $(first(sql, 120))"))
   return mktempdir() do dir
     pool = SQLiteConnectionPool(joinpath(dir, "convert_sql.sqlite"); pool_size = 1)
     try
       fetch(pool, sql)
+      # The reader degrades an unknown table to an empty model, which here would hide a misparsed
+      # name — the #837 symptom. The scratch database holds only what `sql` created, so a name it
+      # lacks is a statement that did not create it. Case-insensitive, as SQLite resolves names.
+      found = fetch(pool, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE",
+                    [table_name]) |> DataFrame
+      nrow(found) == 0 && throw(InvalidMigrationError("Cannot introspect: the statement did not create table \"$(table_name)\": $(first(sql, 120))"))
       return convertSQLToModel(pool, String(table_name))
     finally
       # Release the handle first, or Windows cannot remove the temp directory (WAL keeps it open).

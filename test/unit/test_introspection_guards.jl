@@ -2607,3 +2607,40 @@ end
   @test model.fields["hometown"].default == "São José"
   @test model.fields["team"].default == "Ferrari"
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# convertSQLToModel(sql): a table name holding an escaped quote is read whole (#837)
+# The name was extracted with the lazy `CREATE TABLE "(.+?)"`, which stops at the first `"` — but a
+# quoted identifier escapes `"` as `""`, exactly how PormG's own DDL writes such a `db_table` (#59,
+# #394). `"Te""am837"` read as `Te`, no such table existed in the scratch database, and the reader
+# returned a model with NO fields and no error. The parse now runs to the first undoubled quote, and a
+# statement that does not create the table it names raises instead of returning an empty model.
+# Hermetic: the function runs its statement in a throwaway SQLite file.
+# Mutation gate: restore `(.+?)` and the first block reads `Te` and raises (no table `Te`); drop the
+# existence check and the second block returns an empty model named `main` instead of raising.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "convertSQLToModel(sql) reads an escaped-quote table name (#837)" begin
+  m = convertSQLToModel(
+    "CREATE TABLE \"Te\"\"am837\" (\"id\" INTEGER PRIMARY KEY AUTOINCREMENT, \"name\" TEXT);")
+  @test m.name == "Te\"am837"
+  @test Set(keys(m.fields)) == Set(["id", "name"])
+
+  # A doubled quote at either end of the name, too — the boundary cases of the alternation.
+  m2 = convertSQLToModel("CREATE TABLE \"\"\"lead\" (\"id\" INTEGER PRIMARY KEY);")
+  @test m2.name == "\"lead"
+  @test haskey(m2.fields, "id")
+
+  # A statement that names a table it does not create raises rather than coming back empty. The
+  # realistic shape: a schema-qualified name, whose first quoted identifier is the SCHEMA — the scratch
+  # database has no table `main`, which used to read as a model `main` with no fields.
+  err = try
+    convertSQLToModel("CREATE TABLE \"main\".\"driver837\" (\"id\" INTEGER PRIMARY KEY);"); nothing
+  catch e
+    e
+  end
+  @test err isa PormG.InvalidMigrationError
+  @test err isa PormG.InvalidMigrationError && occursin("did not create table \"main\"", PormG.error_message(err))
+
+  # The pre-existing contract is unchanged: no double-quoted name at all still raises (#231).
+  @test_throws PormG.InvalidMigrationError convertSQLToModel("CREATE TABLE noquotes837 (x INTEGER)")
+end

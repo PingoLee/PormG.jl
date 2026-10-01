@@ -312,10 +312,13 @@ df = query |> DataFrame
 ## Conditional Functions
 
 The operands of `Coalesce`, `NullIf`, `Greatest` and `Least` (and of `Power` and `Mod` above) are
-read by their type. A string is a column path. A number (of any integer width), a `Bool`, a `Date`,
-a `DateTime`, a `ZonedDateTime` or a `Time` is a literal that PormG binds as a parameter. A **string
-literal** needs `Value(...)`: `NullIf("code", "")` would read `""` as a column name. Any other value
-raises `QueryBuildError` when the expression is built.
+read by their type. A string is a column path. When the function is projected in `values(...)`,
+directly or as another function's argument, the path can end in a transform:
+`Coalesce("fp1_date", "start_at__@date")` falls back to the date of the race start. A number (of
+any integer width), a `Bool`, a `Date`, a `DateTime`, a `ZonedDateTime` or a `Time` is a literal
+that PormG binds as a parameter. A **string literal** needs `Value(...)`: `NullIf("code", "")`
+would read `""` as a column name. Any other value raises `QueryBuildError` when the expression is
+built.
 
 On SQLite a date or time literal binds as the same text its column stores (`Date(2021, 3, 28)` is
 `"2021-03-28"`), and an integer of any width binds as a 64-bit integer, so a comparison with a
@@ -366,6 +369,24 @@ query = M.Race.objects
 query.filter("year" => 2020)
 query.values("name", "not_before_2021" => Greatest("date", Date(2021, 1, 1)))
 ```
+
+`Greatest` and `Least` skip a `NULL` argument on both engines. The result is `NULL` only when
+every argument is `NULL`. The 2018 Hungarian Grand Prix has a race date and no practice dates:
+
+```julia
+query = M.Race.objects
+query.filter("raceid" => 1000)
+query.values("latest" => Greatest("date", "fp1_date"), "none" => Greatest("fp1_date", "fp2_date"))
+query.list(:dict)
+# [Dict(:latest => Date("2018-07-29"), :none => missing)]
+```
+
+PostgreSQL's `GREATEST` and `LEAST` behave this way natively. SQLite has neither function, and its
+scalar `MAX(a, b)` returns `NULL` when any argument is, so on SQLite PormG renders one `COALESCE` per
+rotation of the arguments: `Greatest(a, b)` becomes
+`MAX(COALESCE(a, b), COALESCE(b, a))`. A literal argument binds once per place it appears. The SQL
+grows with the square of the argument count, so with `n` arguments each one is rendered `n` times;
+a `Subquery` argument runs once per rotation.
 
 ### `Cast` — Type Conversion
 

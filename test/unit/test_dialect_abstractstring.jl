@@ -182,26 +182,28 @@ struct _MockSl602 <: PormG.PormGSQLite end
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Function constructors: `isa(x, AbstractString)`, wrap through `String(x)`
+  # Function constructors: `isa(x, AbstractString)`, normalized through `String(x)`
   # A string argument to `Power`/`Mod`/`Coalesce`/`Greatest`/`Least`/`NullIf`/`Replace` means "a
-  # column"; the constructor wraps it in `SQLField`. The old `isa(x, String)` left a `SubString`
-  # raw, so the node built fine and then failed at render time inside `_check_function`. `Replace`'s
-  # search/replacement strings are LITERALS (`Value`), the one place the wrap is a `SQLText`.
+  # column path"; the constructor stores it as a plain `String` for the build walk to resolve. It was
+  # wrapped in `SQLField` until #843, which the walk passed through unresolved, so a transform path
+  # (`"ts__@date"`) crashed. The old `isa(x, String)` left a `SubString` raw, so the node built fine
+  # and then failed at render time inside `_check_function`. `Replace`'s search/replacement strings
+  # are LITERALS (`Value`), the one place a string becomes a `SQLText`.
   # Mutation gate: revert any one branch to `isa(x, String)` and its `SubString` row below is a raw
-  # `SubString` in `.column` (the `isa SQLTypeField` assertion fails), and the render row raises
+  # `SubString` in `.column` (the `isa String` assertion fails), and the render row raises
   # `MethodError` instead of building SQL.
   # ─────────────────────────────────────────────────────────────────────────────
-  @testset "Function constructors wrap any AbstractString column in SQLField" begin
-    # Two-argument scalar functions: both positions are wrapped.
+  @testset "Function constructors store any AbstractString column as a String" begin
+    # Two-argument scalar functions: both positions are normalized.
     for ctor in (Power, Mod, NullIf)
       base = ctor("points", "wins")
       wide = ctor(_sub602("points"), _sub602("wins"))
       lazy = ctor(_lazy602("points"), _lazy602("wins"))
       for node in (wide, lazy)
         @test node.function_name == base.function_name
-        @test all(c -> c isa SQLTypeField, node.column)
-        @test [c.field for c in node.column] == [c.field for c in base.column] == ["points", "wins"]
-        @test all(c -> c.field isa String, node.column)   # `String(x)`, not the probe passed through
+        # `String(x)`, not the probe passed through — exactly `String`, which is what `isa` checks.
+        @test all(c -> c isa String, node.column)
+        @test node.column == base.column == ["points", "wins"]
       end
       # A number operand is a literal (#705). It used to be stored raw, and that raw `2` is what
       # `_check_function` had no arm for: `values("x" => Power("points", 2))` died with a
@@ -210,21 +212,21 @@ struct _MockSl602 <: PormG.PormGSQLite end
       @test ctor(_sub602("points"), 2).column[2].field == 2
     end
 
-    # Variadic: every string element is wrapped; a number is a `Value` literal (#705).
+    # Variadic: every string element is normalized; a number is a `Value` literal (#705).
     for ctor in (Coalesce, Greatest, Least)
       base = ctor("points", "wins", 0)
       wide = ctor(_sub602("points"), _sub602("wins"), 0)
       @test wide.function_name == base.function_name
-      @test wide.column[1] isa SQLTypeField && wide.column[1].field == "points"
-      @test wide.column[2] isa SQLTypeField && wide.column[2].field == "wins"
+      @test wide.column[1] isa String && wide.column[1] == "points"
+      @test wide.column[2] isa String && wide.column[2] == "wins"
       @test wide.column[3] isa SQLTypeText && wide.column[3].field == 0
-      @test ctor(_lazy602("points")).column[1].field == "points"
+      @test ctor(_lazy602("points")).column[1] === "points"
     end
 
-    # `Replace`: column → `SQLField`, find/replace → `Value` (a `SQLText` literal).
+    # `Replace`: column → `String`, find/replace → `Value` (a `SQLText` literal).
     base = Replace("surname", "-", " ")
     wide = Replace(_sub602("surname"), _sub602("-"), _sub602(" "))
-    @test wide.column[1] isa SQLTypeField && wide.column[1].field == "surname"
+    @test wide.column[1] isa String && wide.column[1] == "surname"
     @test wide.column[2] isa SQLTypeText && wide.column[2].field == "-"
     @test wide.column[3] isa SQLTypeText && wide.column[3].field == " "
     @test wide.column[2].field isa String && wide.column[3].field isa String

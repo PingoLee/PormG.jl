@@ -73,14 +73,20 @@ end
 # follows. #508 phase 2 settled the slot: `WindowFunction` is a `struct` now and the `_retag_*`
 # walkers construct, so no build step can write through a shared `over` any more. Sharing is a
 # property of the types here, not a bet on call paths.
+# The operand LIST is copied before the walk, because the `Vector` arm below writes its results
+# back in place. Without the copy, `values("x" => h)` rewrote the user's own `h`: since #843 stores a
+# string operand bare, `Coalesce("ts__@date", "d")` held a `DATE` node in `h.column` afterwards. The
+# result was idempotent, but a node the caller still holds must not change under them (#508).
+_fresh_operands(c::AbstractVector) = copy(c)
+_fresh_operands(c) = c
 function _check_function(f::FObject)
-  return FObject(function_name=f.function_name, column=_check_function(f.column),
+  return FObject(function_name=f.function_name, column=_check_function(_fresh_operands(f.column)),
                  aggregate=f.aggregate, formatter=f.formatter, _as=f._as,
                  kwargs=copy(f.kwargs))
 end
 function _check_function(f::WindowFunction)
   return WindowFunction(function_name=f.function_name,
-                        column=f.column === nothing ? nothing : _check_function(f.column),
+                        column=f.column === nothing ? nothing : _check_function(_fresh_operands(f.column)),
                         over=f.over, aggregate=f.aggregate, formatter=f.formatter,
                         _as=f._as, kwargs=copy(f.kwargs))
 end
@@ -1284,6 +1290,28 @@ function _extract_leading_alias(s)
   m === nothing ? nothing : replace(m.captures[1], "\"\"" => "\"")
 end
 
+# #844 — `Greatest`/`Least` skip a NULL argument on both engines, as PostgreSQL's GREATEST/LEAST do.
+# SQLite has neither: `Dialect` renders its scalar `MAX(a, b)` / `MIN(a, b)`, which return NULL when
+# ANY argument is NULL, so the same query answered differently per engine and said nothing.
+#
+# The fix rewrites the OPERANDS, one COALESCE per rotation of the list:
+#   GREATEST(a, b, c)  →  MAX(COALESCE(a, b, c), COALESCE(b, c, a), COALESCE(c, a, b))
+# Each rotation yields some non-NULL operand, and every non-NULL operand leads one rotation, so the
+# MAX over them is the largest non-NULL value; all NULL still gives NULL, as on PostgreSQL.
+#
+# It lives here and not in `Dialect.GREATEST`, because the dialect receives operands already
+# RENDERED, with their `?` placeholders in them. Repeating a rendered string would repeat a `?`
+# whose value was bound once, misbinding every parameter after it. Repeating the NODES instead makes
+# each rotation render — and bind — its own operands, in text order. Constructs, never mutates (#508).
+# One operand is left alone: SQLite's `coalesce` needs two, and `Greatest(x)` is not this issue.
+function _null_skipping_operands(v::SQLTypeFunction, instruc::SQLInstruction)
+  (instruc.connection isa PormGSQLite && v.function_name in ("GREATEST", "LEAST") &&
+   v.column isa AbstractVector && length(v.column) >= 2) || return v.column
+  cols = collect(Any, v.column)
+  return Any[FObject(function_name = "COALESCE", column = circshift(cols, 1 - k),
+                     aggregate = _any_agg(cols)) for k in 1:length(cols)]
+end
+
 function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   # Parameterize scalar kwargs instead of rendering them as SQL literals.
   # IMPORTANT: these must be parameterized AFTER the column is resolved, because the SQL text order
@@ -1323,7 +1351,7 @@ function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Uni
   end
 
   # Phase 2: Resolve column (conditions) — this adds condition params in SQL text order
-  resolved_column = _get_select_query(v.column, instruc, _as=_as)
+  resolved_column = _get_select_query(_null_skipping_operands(v, instruc), instruc, _as=_as)
 
   # #74 fan-out guard: record COUNT/SUM/AVG and the source alias of their column so build() can
   # refuse aggregates a to-many join would silently inflate. MAX/MIN are immune and omitted; a

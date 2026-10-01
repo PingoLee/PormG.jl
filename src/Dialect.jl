@@ -947,7 +947,11 @@ function GREATEST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPos
   return _output_field_cast("GREATEST($(join(columns, ", ")))", format, conn)
 end
 
-# SQLite's multi-argument `MAX`/`MIN` are its scalar GREATEST/LEAST.
+# SQLite's multi-argument `MAX`/`MIN` are its scalar GREATEST/LEAST, except that they return NULL if
+# any argument is NULL. On SQLite the operands arrive here already rewritten to NULL-skipping
+# COALESCE rotations (#844, `_null_skipping_operands` in querybuilder/build_helpers.jl), which is what
+# makes these two match PostgreSQL's. The rotations carry no `output_field`, so the #852 cast is
+# applied once, here, to the whole `MAX`/`MIN`.
 function GREATEST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
   return _output_field_cast("MAX($(join(columns, ", ")))", format, conn)
 end

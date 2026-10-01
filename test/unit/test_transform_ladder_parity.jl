@@ -31,6 +31,7 @@ julia --project=test/integration test/unit/test_transform_ladder_parity.jl
 """
 
 using Test
+using Dates
 using PormG
 using PormG.Models
 using PormG.QueryBuilder: inspect_query
@@ -349,4 +350,91 @@ end
     # last, so the predicate received the separator "-Q" and the ordering expression received "x".
     @test params == in_text_order
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #843: a transform in a function's STRING operand goes up the same ladder
+# `Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`, `Mod` and `Replace`'s column take their
+# operands through `_function_operand`, which wrapped a string as `SQLField(x)`. The walk returns an
+# `SQLField` untouched, so `Coalesce("ts__@date", "seen")` sent `__@date` to join resolution as a
+# column and the build died ("does not have a 'how' property") — while `Max("ts__@date")` and
+# `Coalesce(F("ts__@date"), "seen")` worked. Same shape as the #562 test above: iterate the
+# constant, and require the string spelling to render exactly what the `F` spelling renders, SQL
+# and parameters both, on each engine.
+# ─────────────────────────────────────────────────────────────────────────────
+const _TLP_843_CTORS = (
+  ("Coalesce", op -> PormG.Functions.Coalesce(op, "seen")),
+  ("Greatest", op -> PormG.Functions.Greatest(op, "seen")),
+  ("Least",    op -> PormG.Functions.Least(op, "seen")),
+  ("NullIf",   op -> PormG.Functions.NullIf(op, "seen")),
+  ("Power",    op -> PormG.Functions.Power(op, 2)),
+  ("Mod",      op -> PormG.Functions.Mod(op, 4)),
+  ("Replace",  op -> PormG.Functions.Replace(op, "-", "/")),
+)
+
+@testset "#843: a transform in a function's string operand renders like its F spelling" begin
+  for (backend, conn) in _TLP_BACKENDS, (name, ctor) in _TLP_843_CTORS
+    for key in sort(collect(keys(PormG.PormGtransform))), col in ("seen", "ts")
+      path = "$(col)__@$(key)"
+      a = TLP.Tlp_row.objects; a.values("x" => ctor(path))
+      b = TLP.Tlp_row.objects; b.values("x" => ctor(F(path)))
+      ia = inspect_query(a; connection = conn)
+      ib = inspect_query(b; connection = conn)
+      @test ia[:sql_text] == ib[:sql_text]
+      @test ia[:parameters] == ib[:parameters]
+    end
+  end
+  # The issue's own query, spelled out: the transform renders, the plain path stays a column.
+  sql = _tlp_sql((q = TLP.Tlp_row.objects; q.values("c" => PormG.Functions.Coalesce("ts__@date", "seen")); q);
+                 conn = _TLP_SL)
+  @test occursin("COALESCE(strftime('%Y-%m-%d', \"Tb\".\"ts\"), \"Tb\".\"seen\")", sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #843 controls: what a bare string operand must still do
+# Storing the operand as a bare string hands it to the same walk every other string path takes,
+# so three things are pinned. A CTE path (`"ev__seen"`) still resolves to the CTE column, as
+# `CTE("ev", "seen")` does. A suffix that is an OPERATOR, not a transform, is refused with
+# `FilterError` rather than reaching the join resolver. And a filter on the projection's alias
+# binds the compared date exactly as the `F` spelling does.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#843 controls: CTE paths, operator suffixes and alias filters" begin
+  # A CTE column through the string path and through the explicit handle: one query.
+  for (backend, conn) in _TLP_BACKENDS
+    ev() = (c = TLP.Tlp_row.objects; c.values("id", "seen"); c)
+    a = TLP.Tlp_row.objects
+    a.with("ev" => ev(), join_field = "id" => "id")
+    a.values("x" => PormG.Functions.Coalesce("ev__seen", "seen"))
+    b = TLP.Tlp_row.objects
+    b.with("ev" => ev(), join_field = "id" => "id")
+    b.values("x" => PormG.Functions.Coalesce(CTE("ev", "seen"), "seen"))
+    @test _tlp_sql(a; conn = conn) == _tlp_sql(b; conn = conn)
+  end
+
+  # `@gt` is an operator: in a function operand it is the ladder's FilterError, not a join crash.
+  q = TLP.Tlp_row.objects
+  @test_throws PormG.FilterError q.values("x" => PormG.Functions.Coalesce("ts__@gt", "seen"))
+
+  # Filtering on the alias binds the same date, through either spelling.
+  for (backend, conn) in _TLP_BACKENDS
+    a = TLP.Tlp_row.objects
+    a.values("c" => PormG.Functions.Coalesce("ts__@date", "seen"))
+    a.filter("c__@gte" => Date(2020, 1, 1))
+    b = TLP.Tlp_row.objects
+    b.values("c" => PormG.Functions.Coalesce(F("ts__@date"), "seen"))
+    b.filter("c__@gte" => Date(2020, 1, 1))
+    @test _tlp_sql(a; conn = conn) == _tlp_sql(b; conn = conn)
+    @test _tlp_params(a; conn = conn) == _tlp_params(b; conn = conn)
+  end
+
+  # The caller's handle is not rewritten by the build (#508). The walk resolves the transform into a
+  # `DATE` node; before the operand list was copied, that node was written back into `h.column`.
+  # The `h.column` assertion is the gate. The second is a control: the old write was idempotent, so
+  # the reused handle rendered the same SQL either way, and it must keep doing so.
+  h = PormG.Functions.Coalesce("ts__@date", "seen")
+  sqls = map(_TLP_BACKENDS) do (backend, conn)
+    _tlp_sql((q = TLP.Tlp_row.objects; q.values("x" => h); q); conn = conn)
+  end
+  @test h.column == Any["ts__@date", "seen"]
+  @test sqls[1] == _tlp_sql((q = TLP.Tlp_row.objects; q.values("x" => h); q); conn = _TLP_PG)
 end

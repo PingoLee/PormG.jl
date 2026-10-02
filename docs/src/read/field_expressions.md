@@ -383,6 +383,17 @@ duration (`"100:00:00"` sorts before `"99:00:00"`, and a negative difference sor
 This is an intentional divergence. To order by a difference on SQLite, compare whole days instead, by
 subtracting two `DateField` values.
 
+On SQLite a timestamp difference is that text everywhere, so the same divergence reaches further:
+
+- **Arithmetic on it** (`d + d`, `d * 2`, `d + Hour(1)`, `F("points") * d`) raises `QueryBuildError`
+  on SQLite; PostgreSQL's interval arithmetic works.
+- **A window function as one side** (`F("start_at") - Lag("start_at", over = …)`) raises
+  `QueryBuildError` on SQLite, where the difference is computed in a subquery the window cannot see
+  through. Project the window value in a CTE first and subtract the column. `Max`/`Min` are fine.
+- **Ordering or aggregating it** — `order_by` on its alias, `Max(…)` over it — is not refused, and
+  sorts the text, exactly as it does for a `DurationField` column on SQLite: right below 100 hours,
+  wrong at and above it, and for negative differences.
+
 A duration compares only against an interval — a timestamp difference or a `DurationField`. Against
 anything else (`F("date") > Hour(1)`, or a day count) it raises `QueryBuildError`. A `Time` is a time
 of day, not a duration, and is refused against an interval: write `Hour(1)` or `Minute(90)` instead.

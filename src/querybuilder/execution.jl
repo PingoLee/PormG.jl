@@ -1713,6 +1713,37 @@ function _render_temporal_difference(left_side::AbstractString, right_side::Abst
   end
 end
 
+# #814 — a WINDOW function cannot be a side of that subquery. It is evaluated over the rows of the
+# SELECT it appears in, and the subquery's inner SELECT has exactly one: `LAG(x) OVER (…)` there is
+# NULL on every row and `FIRST_VALUE(x)` is `x`, silently (measured on SQLite 3.45). An aggregate is
+# safe — SQLite attributes an aggregate over outer columns to the outer query — so only a window is
+# refused. Its value can still be subtracted on SQLite once it is a column: project it in a CTE or a
+# subquery first.
+_has_window_function(::WindowFunction) = true
+_has_window_function(x::FExpression) = _has_window_function(x.field_name) || _has_window_function(x.operand)
+_has_window_function(x::FObject) = _has_window_function(x.column)
+_has_window_function(x::SQLField) = _has_window_function(x.field)
+_has_window_function(x::AbstractVector) = any(_has_window_function, x)
+_has_window_function(::Any) = false
+
+function _refuse_window_in_interval(left, right, instruc::SQLInstruction)
+  instruc.connection isa PormGSQLite && (_has_window_function(left) || _has_window_function(right)) || return nothing
+  throw(QueryBuildError("A window function (Lag, Lead, FirstValue, …) cannot be a side of a timestamp " *
+                        "difference on SQLite: the difference is computed in a subquery, where the window " *
+                        "sees one row. Project the window value in a CTE first and subtract the column."))
+end
+
+# #814 — ARITHMETIC on a timestamp difference is refused on SQLite for the reason ordering is: the
+# difference is interval TEXT there, so `d + d` is the sum of the leading hours and `d * 2` the hours
+# doubled, silently. PostgreSQL's interval arithmetic is native and left alone.
+function _refuse_interval_arithmetic(operation::AbstractString, instruc::SQLInstruction)
+  instruc.connection isa PormGSQLite || return nothing
+  throw(QueryBuildError("`$(operation)` on the difference of two timestamps is not supported on SQLite: " *
+                        "the difference is interval TEXT there (`HH:MM:SS`), not a number. Subtract two " *
+                        "DateField values for a whole number of days, or run the arithmetic on PostgreSQL."))
+end
+const _ARITHMETIC_OPERATIONS = ("+", "-", "*", "/")
+
 # #814 — the operators whose answer depends on ORDER, as opposed to equality.
 const _ORDERING_OPERATIONS = (">", "<", ">=", "<=")
 
@@ -1824,6 +1855,9 @@ function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
 
   # Resolve the left side FIRST — see `_render_temporal_shift`'s note on why the order is the fix.
   left_side, left_kind = _render_left_typed(v.field_name, v.operation, instruc)
+  # #814: `d + Hour(1)` on a timestamp difference is text arithmetic on SQLite; refused by name
+  # rather than by `sql_canonicalize`'s generic "no canonical form" refusal further down.
+  _is_computed_interval(v.field_name, left_kind) && _refuse_interval_arithmetic(v.operation, instruc)
   kind = _shift_result_kind(left_kind, comps)
 
   # Soft validation (#25, best-effort): a duration only makes sense on a date/time column. Only
@@ -1919,13 +1953,21 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     if left_kind !== nothing && f !== nothing && left_kind != field_canonical_kind(f)
       column_formatter = value_formatter(left_kind, instruc.connection)
     end
+    # #814: an interval left with NO rooted column — `Max(ts) - Min(ts)`, a window difference — has
+    # no column formatter to override, so it falls to the literal's own family below, and a duration
+    # reached `format_number_sql(::Hour)`, a raw `MethodError`. The left's kind names the formatter.
+    left_kind isa CInterval && f === nothing && (column_formatter = value_formatter(left_kind, instruc.connection))
     # #814: a duration and an interval belong together, in both directions. The kind that decides is
-    # the one the formatter above was chosen by — the left's, else the rooted column's.
+    # the left's; the rooted column's only while the left IS that column. Untyped arithmetic over a
+    # DurationField (`F("lap") * 2`) is not known to be an interval — on SQLite it is a NUMBER, and a
+    # duration bound against it compares number to text — so it does not admit one.
     #   * A duration against anything else has no formatter that can bind it (`format_number_sql`
     #     has no `::Hour` method, a raw `MethodError`), and no meaning: `F("points") > Hour(1)`.
     #   * A `Time` against an interval reached `format_duration_sql`, which refuses it with a message
     #     about durations that never says why a `Time` is not one.
-    decided_kind = left_kind !== nothing ? left_kind : (f === nothing ? nothing : field_canonical_kind(f))
+    left_is_column = !(field_name isa FExpression && field_name.operation !== nothing)
+    decided_kind = left_kind !== nothing ? left_kind :
+                   (f !== nothing && left_is_column) ? field_canonical_kind(f) : nothing
     if operand isa Union{Dates.Period,Dates.CompoundPeriod} && !(decided_kind isa CInterval)
       throw(QueryBuildError("A duration ($(operand)) compares only against an interval — a DurationField, " *
                             "or the difference of two timestamps. To compare dates, shift one instead: " *
@@ -2082,6 +2124,9 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
     # `F("driverid__dob") + 30` can only be typed afterwards. Deciding first types every joined
     # temporal column as `nothing` and silently drops it to plain arithmetic.
     left_side, left_kind = _render_left_typed(v.field_name, v.operation, instruc)
+    # #814: arithmetic on a timestamp difference is text arithmetic on SQLite — refused there.
+    v.operation in _ARITHMETIC_OPERATIONS && _is_computed_interval(v.field_name, left_kind) &&
+      _refuse_interval_arithmetic(v.operation, instruc)
 
     # #568 — A BARE INTEGER ON ± OVER A TEMPORAL LEFT IS WHOLE DAYS, rendered by the one temporal
     # renderer rather than by a second implementation. Ahead of the operand bind below, because that
@@ -2135,6 +2180,7 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
       if right_kind isa Union{CDate,CDateTime}
         if v.operation == "-"
           kind = _difference_result_kind(left_kind, right_kind)
+          kind isa CInterval && _refuse_window_in_interval(v.field_name, v.operand, instruc)
           return _render_temporal_difference(left_side, right_side, kind, instruc), kind
         end
         throw(QueryBuildError("`$(v.operation)` between two date/timestamp values has no meaning; only " *
@@ -2159,6 +2205,7 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
     if left_kind isa Union{CInt32,CInterval} && v.operation in ("+", "-")
       right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc;
                                                      left_kind = left_kind)
+      _is_computed_interval(v.operand, right_kind) && _refuse_interval_arithmetic(v.operation, instruc)
       if right_kind isa Union{CDate,CDateTime}
         v.operation == "-" &&
           throw(QueryBuildError("A $(left_kind isa CInt32 ? "day count" : "duration") minus a date has no " *
@@ -2186,11 +2233,16 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
     # refused on SQLite, where that difference is TEXT (`_refuse_interval_ordering`). The right side
     # is typed for this one question, and rendered exactly once: `_set_update_query_typed` is the
     # call `_set_update_query_operand` makes for an expression operand, so the text is the same.
-    if v.operation in _ORDERING_OPERATIONS
-      _is_computed_interval(v.field_name, left_kind) && _refuse_interval_ordering(v.operation, instruc)
+    # The same question for ARITHMETIC with a difference on the right (`F("points") * d`); a
+    # difference on the left was refused above, as soon as it rendered.
+    if v.operation in _ORDERING_OPERATIONS || v.operation in _ARITHMETIC_OPERATIONS
+      ordering = v.operation in _ORDERING_OPERATIONS
+      ordering && _is_computed_interval(v.field_name, left_kind) && _refuse_interval_ordering(v.operation, instruc)
       if v.operand isa FExpression
         right_side, right_kind = _set_update_query_typed(v.operand, instruc)
-        _is_computed_interval(v.operand, right_kind) && _refuse_interval_ordering(v.operation, instruc)
+        if _is_computed_interval(v.operand, right_kind)
+          ordering ? _refuse_interval_ordering(v.operation, instruc) : _refuse_interval_arithmetic(v.operation, instruc)
+        end
         return "($(left_side) $(v.operation) $(right_side))", nothing
       end
     end

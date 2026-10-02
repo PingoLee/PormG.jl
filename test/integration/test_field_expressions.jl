@@ -673,6 +673,23 @@ end
           [Dates.DateTime(s) + (d - opener) for (s, d) in zip(df.start_at, dates)]
   end
 
+  @testset "an aggregate side of a timestamp difference is the outer query's (#814)" begin
+    # On SQLite the difference is computed in a correlated subquery. An aggregate inside it over the
+    # outer query's columns belongs to the OUTER query, so this is the span of the whole season. A
+    # window function would not be, and is refused (unit-tested); this pins the case that is allowed.
+    span = M.Race.objects
+    span.filter("year" => 2009, "start_at__@isnull" => false)
+    span.values("season" => PormG.Functions.Max("start_at") - PormG.Functions.Min("start_at"))
+    span_df = span |> DataFrame
+
+    rows = M.Race.objects
+    rows.filter("year" => 2009, "start_at__@isnull" => false)
+    rows.values("start_at")
+    starts = [Dates.DateTime(x) for x in (rows |> DataFrame).start_at]
+    @test size(span_df, 1) == 1
+    @test Dates.toms(span_df[1, :season]) == Dates.value(maximum(starts) - minimum(starts))
+  end
+
   @testset "a timestamp difference compares against a duration (#814)" begin
     # Equality is exact on both engines: the rendered text is the text the literal binds as.
     eq = M.Race.objects

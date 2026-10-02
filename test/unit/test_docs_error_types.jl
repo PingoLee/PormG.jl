@@ -1343,6 +1343,24 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        "read/field_expressions.md — arithmetic on a timestamp difference is refused on SQLite (#814)",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RACE801_SL.objects
+            q.values("x" => (F("start_at") - F("date")) * 2)
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "read/field_expressions.md — a window function side of a timestamp difference is refused on SQLite (#814)",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RACE801_SL.objects
+            q.values("x" => F("start_at") - PormG.Functions.Lag("start_at", over = WindowOver(order_by = ["raceid"])))
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
         "read/field_expressions.md — a duration compares only against an interval (#814)",
         QueryBuildError,
         () -> begin

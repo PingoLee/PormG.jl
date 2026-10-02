@@ -210,6 +210,237 @@ function _plan_lossy_alters(plan_path::AbstractString)::Vector{LossyAlter}
   return found
 end
 
+# ==============================================================================
+# The schema precondition (#739): the plan records the schema it was diffed against
+# ==============================================================================
+
+# One plan-header comment per table the plan's diff compared: `makemigrations` writes the
+# fingerprint of that table as the live database held it — `absent` for a declared table that did
+# not exist yet — and `migrate` refuses the plan when the database it is applied to holds anything
+# else. A comment, so it is additive within format v1 and outside the checksum, like the #736 and
+# #803 lines above. The fingerprint is hex and the name `escape_string`'d, so neither a tab nor a
+# newline in a catalog name can end the field or the comment (#710).
+const SCHEMA_TABLE_HEADER = "# pormg-schema-table: "
+const SCHEMA_TABLE_HEADER_RE = r"^# pormg-schema-table: (absent|[0-9a-f]{16})\t(.+?)\r?$"
+# What counts as an ATTEMPT at such a line: looser than the line itself, so an indented, re-spaced or
+# hand-mangled one is refused as damaged instead of skipped — skipping every line would apply the
+# plan with no check at all.
+const SCHEMA_TABLE_HEADER_LOOSE_RE = r"^\s*#\s*pormg-schema-table\b"
+const SCHEMA_TABLE_ABSENT = "absent"
+
+# The version prefix of the serialization below. A change to what it covers changes every
+# fingerprint, which refuses every plan generated before it — so bump this with the change, and say
+# so in the upgrade log.
+const _SCHEMA_FINGERPRINT_VERSION = "pormg-schema-table/1"
+
+# The text a fingerprint is the digest of. Written out term by term, never through `repr` or
+# `Base.hash`: it is persisted in a plan file and compared in another process, possibly on another
+# Julia version, so it has to mean the same bytes there. The IR structs serialize as their type name
+# and fields, so a slot added to one changes the fingerprint — `test_plan_schema_fingerprint.jl` pins
+# the exact digest to make that visible.
+_fp_term(io::IO, ::Nothing) = print(io, '~')
+_fp_term(io::IO, x::AbstractString) = print(io, '"', escape_string(x), '"')
+_fp_term(io::IO, x::Union{Bool, Integer, Symbol}) = print(io, x)
+function _fp_term(io::IO, x::AbstractVector)
+  print(io, '[')
+  for (i, v) in enumerate(x)
+    i > 1 && print(io, ',')
+    _fp_term(io, v)
+  end
+  print(io, ']')
+end
+# A literal default holds whatever the reader parsed — a number, a string, a timestamp, bytes — so it
+# carries its type beside its value: `0` and `"0"` are different defaults. Each value is written in a
+# form its own package does not get to change: not `repr`, which for a `ZonedDateTime` is TimeZones'
+# to decide. The readers normalize a timestamp to UTC (`_literal_default`), so its UTC wall time is
+# the whole of it.
+_fp_literal(io::IO, v::AbstractString) = _fp_term(io, v)
+_fp_literal(io::IO, v::AbstractVector{UInt8}) = print(io, bytes2hex(v))
+_fp_literal(io::IO, v::ZonedDateTime) = print(io, Dates.format(DateTime(v, Dates.UTC), dateformat"yyyy-mm-ddTHH:MM:SS.sss"))
+_fp_literal(io::IO, v) = print(io, string(v))
+function _fp_term(io::IO, d::LiteralDefault)
+  print(io, "LiteralDefault(", nameof(typeof(d.value)), ':')
+  _fp_literal(io, d.value)
+  print(io, ')')
+end
+function _fp_term(io::IO, x::Union{CanonicalType, ColumnDefault, CheckKind, ColumnIdentity, ForeignKeyRef,
+                                   LiveComposite, LiveCheck})
+  T = typeof(x)
+  print(io, nameof(T), '(')
+  for (i, f) in enumerate(fieldnames(T))
+    i > 1 && print(io, ',')
+    print(io, f, '=')
+    _fp_term(io, getfield(x, f))
+  end
+  print(io, ')')
+end
+# Every field but `raw`: the rendered type text is how the catalog happened to spell the type, and
+# `type` already carries what it means. `name` is kept — unlike `==` on `ColumnSpec`, which leaves
+# renames to the planner — because a renamed column is a different schema for a plan to run on.
+function _fp_term(io::IO, s::ColumnSpec)
+  print(io, "ColumnSpec(")
+  for (i, f) in enumerate(Iterators.filter(!=(:raw), fieldnames(ColumnSpec)))
+    i > 1 && print(io, ',')
+    print(io, f, '=')
+    _fp_term(io, getfield(s, f))
+  end
+  print(io, ')')
+end
+
+"""
+    _schema_table_fingerprint(table::Union{LiveTable, Nothing}) -> String
+
+What a plan header records for one table (#739): `"absent"` when the table does not exist, otherwise
+the first 16 hex digits of the SHA-256 of the table's serialized [`LiveTable`](@ref) — every column's
+[`ColumnSpec`](@ref) but its `raw` text, the single-column indexes, the composite indexes and the
+named CHECKs. Columns, indexes and constraints are sorted by name, so the physical column order (which
+an SQLite rebuild can change) is not part of it.
+
+Both sides are read by the same `read_live_schema` the drift `check` uses. The fingerprint is
+**stricter** than the planner's diff, on purpose: it also covers what the diff treats as equal or
+leaves to other passes — the names of indexes and constraints, a CHECK's comment, both axes of a
+foreign key's target. A plan's statements name those objects (`DROP INDEX "<name>"`), so a database
+that differs in them is not one the plan was written for, even where `makemigrations` would plan
+nothing there.
+"""
+function _schema_table_fingerprint(t::Union{LiveTable, Nothing})::String
+  t === nothing && return SCHEMA_TABLE_ABSENT
+  io = IOBuffer()
+  println(io, _SCHEMA_FINGERPRINT_VERSION)
+  print(io, "table "); _fp_term(io, t.name); println(io)
+  for name in sort!(collect(keys(t.columns)))
+    print(io, "column "); _fp_term(io, t.columns[name]); println(io)
+  end
+  for name in sort!(collect(keys(t.indexes)))
+    print(io, "index "); _fp_term(io, name); print(io, ' '); _fp_term(io, t.indexes[name]); println(io)
+  end
+  for c in sort(t.composites; by = c -> c.name)
+    print(io, "composite "); _fp_term(io, c); println(io)
+  end
+  for c in sort(t.checks; by = c -> c.name)
+    print(io, "check "); _fp_term(io, c); println(io)
+  end
+  return bytes2hex(sha256(take!(io)))[1:16]
+end
+
+"""
+    _schema_table_fingerprints(live, scope) -> OrderedDict{String, String}
+
+The header `makemigrations` writes: one fingerprint per table in `scope`, sorted by name — the live
+table's when `live` holds it, `"absent"` when it does not.
+"""
+function _schema_table_fingerprints(live::Vector{LiveTable}, scope)::OrderedDict{String, String}
+  by_name = Dict{String, LiveTable}(t.name => t for t in live)
+  return OrderedDict{String, String}(name => _schema_table_fingerprint(get(by_name, name, nothing))
+                                     for name in sort!(collect(String, scope)))
+end
+
+_schema_table_header(name::AbstractString, fingerprint::AbstractString)::String =
+  string(SCHEMA_TABLE_HEADER, fingerprint, '\t', escape_string(name))
+
+"""
+    _plan_schema_tables(plan_path) -> Union{OrderedDict{String, String}, Nothing}
+
+The schema precondition a plan's header records (#739): table name ⇒ fingerprint, in file order.
+`nothing` when the plan has no such line — every plan written before #739, and one whose lines were
+deleted on purpose, which is the documented way to apply a plan to a schema it was not generated
+from. A line that does not read back, or a table named twice, raises `InvalidMigrationError`: the
+precondition decides whether `migrate` may run, so a damaged one is refused rather than dropped.
+"""
+function _plan_schema_tables(plan_path::AbstractString)::Union{OrderedDict{String, String}, Nothing}
+  isfile(plan_path) || return nothing
+  file = basename(plan_path)
+  bad(what) = throw(InvalidMigrationError(
+    "Migration plan '$file': a `$(strip(SCHEMA_TABLE_HEADER))` line $what. Regenerate the plan with makemigrations()."))
+  found = OrderedDict{String, String}()
+  # `open(...) do`: this loop breaks early, see `_plan_models_file`.
+  open(plan_path) do io
+    for line in eachline(io)
+      startswith(line, "import ") && break
+      occursin(SCHEMA_TABLE_HEADER_LOOSE_RE, line) || continue
+      m = match(SCHEMA_TABLE_HEADER_RE, line)
+      m === nothing && bad("is not `$(SCHEMA_TABLE_HEADER)<16 hex digits or absent><TAB><table>`")
+      name = try unescape_string(m.captures[2]) catch; bad("has a table name that does not unescape") end
+      haskey(found, name) && bad("names table $(repr(name)) twice")
+      found[name] = String(m.captures[1])
+    end
+  end
+  return isempty(found) ? nothing : found
+end
+
+"""
+    PlanPreconditionError(msg, tables)
+
+Raised by [`migrate`](@ref) when the database no longer holds the schema the pending plan was
+generated against (#739). `makemigrations` records a fingerprint of every table its diff compared in
+the plan header; `migrate` reads the same tables again and refuses on any difference — once before
+the migration lock, so a stale plan fails before any prompt or row count, and again inside it, which
+is the check that decides. Either way no plan statement runs and no `failed` row is recorded; a
+refusal inside the lock comes after `migrate` has ensured the history table and the configured
+extensions, as it does on every call.
+
+`tables` lists each table that differs, as `(table, expected, found)` fingerprints, where
+`"absent"` means the table does not exist. A table the plan never compared — one created in the
+database after `makemigrations`, outside the models — is not part of the precondition.
+
+This is what stops an old plan from replaying: a `pending_migrations.jl` baked into an earlier
+release names the schema *before* its own changes, which a database already past them no longer
+holds. To apply a plan anyway, regenerate it against this database with `makemigrations()`, or
+delete its `# pormg-schema-table:` lines: a plan without them applies without the check.
+"""
+struct PlanPreconditionError <: MigrationError
+  msg::String
+  tables::Vector{NamedTuple{(:table, :expected, :found), Tuple{String, String, String}}}
+end
+
+function _precondition_summary(t)::String
+  t.expected == SCHEMA_TABLE_ABSENT && return "$(t.table): did not exist when the plan was generated, and now does"
+  t.found == SCHEMA_TABLE_ABSENT && return "$(t.table): existed when the plan was generated, and no longer does"
+  return "$(t.table): differs from the schema the plan was generated against"
+end
+
+function Base.showerror(io::IO, e::PlanPreconditionError)
+  print(io, "PlanPreconditionError: ", e.msg)
+  for t in e.tables
+    print(io, "\n  → ", _precondition_summary(t))
+  end
+end
+
+"""
+    _schema_precondition_drift(connection, settings, recorded) -> Vector
+
+The recorded tables whose live fingerprint is not the one the plan header records, read through
+`read_live_schema` with the ignore list `makemigrations` and `check` build. Read-only. On SQLite,
+inside `migrate`'s write transaction, the caller binds the transaction's connection with
+`with_tx_context`, so the read sees what the transaction sees.
+"""
+function _schema_precondition_drift(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
+                                    recorded::AbstractDict{String, String})
+  ignore = _with_connection_ignores(_backend_ignore_tables(connection, settings), settings)
+  live = read_live_schema(connection; ignore_table = ignore, include_table = collect(String, keys(recorded)))
+  by_name = Dict{String, LiveTable}(t.name => t for t in live)
+  drift = NamedTuple{(:table, :expected, :found), Tuple{String, String, String}}[]
+  for (name, expected) in recorded
+    found = _schema_table_fingerprint(get(by_name, name, nothing))
+    found == expected || push!(drift, (table = name, expected = expected, found = found))
+  end
+  return drift
+end
+
+_plan_precondition_error(drift, recorded::AbstractDict{String, String})::PlanPreconditionError =
+  PlanPreconditionError(
+    "The database no longer holds the schema the pending plan was generated against " *
+    "($(length(drift)) of $(length(recorded)) recorded table(s) differ), so no statement of the plan was run. " *
+    "Run makemigrations() against this database to plan from what it holds, or remove the plan's " *
+    "`$(strip(SCHEMA_TABLE_HEADER))` lines to apply it without the check.", drift)
+
+function _check_schema_precondition(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
+                                    recorded::AbstractDict{String, String})::Nothing
+  drift = _schema_precondition_drift(connection, settings, recorded)
+  isempty(drift) || throw(_plan_precondition_error(drift, recorded))
+  return nothing
+end
+
 """
     _anchor_check_conditions(findings, settings) -> Vector{LossyAlter}
 
@@ -1103,10 +1334,15 @@ end
 
 Structured result from `status()`. Contains applied migrations, pending files,
 failed migrations, and drift signals about the migration history (see `status`).
+
+A `failed` row whose plan a later run applied — a later `applied` row with the same checksum — is in
+`superseded`, not in `failed` (#739): a plan runs in one transaction, so the failure wrote nothing,
+and the retry that succeeded resolved it. `failed` holds only the failures nothing has resolved.
 """
 struct MigrationStatus
   applied::Vector{NamedTuple}    # Migrations recorded as 'applied' in DB
-  failed::Vector{NamedTuple}     # Migrations recorded as 'failed' in DB
+  failed::Vector{NamedTuple}     # 'failed' rows no later apply of the same checksum resolved
+  superseded::Vector{NamedTuple} # 'failed' rows a later 'applied' row of the same checksum resolved (#739)
   pending::Bool                  # Whether a pending_migrations.jl file exists
   has_history_table::Bool        # Whether pormg_migrations table exists
   drift_signals::Vector{String}  # Informational messages about potential drift
@@ -1122,6 +1358,8 @@ function Base.show(io::IO, s::MigrationStatus)
       println(io, "    - v", m[:version], " ", m[:name])
     end
   end
+  isempty(s.superseded) ||
+    println(io, "  Superseded failures: ", length(s.superseded), " (a later run applied the same plan)")
   println(io, "  Pending file: ", _emsg(io, s.pending ? "\e[33myes (review and run migrate)\e[0m" : "none"))
   if !isempty(s.drift_signals)
     println(io, _emsg(io, "  \e[33mDrift signals:\e[0m"))
@@ -1145,7 +1383,12 @@ Report migration status: applied, failed, pending, and drift signals.
 
 The drift signals are about the migration **history**, not the schema: a missing history table,
 failed records, a pending plan beside applied history, and recorded migrations over a database with
-no user tables at all. `status()` does not compare the live schema with the models — that is
+no user tables at all.
+
+A failed record counts only while nothing has resolved it (#739). Failures do not block the next
+`migrate`, and a plan runs in one transaction on both engines, so a `failed` row means nothing was
+applied; once a later run applies the same plan (the same checksum), the failure moves to
+`superseded` and its drift signal clears. A failure no later apply matches stays in `failed`. `status()` does not compare the live schema with the models — that is
 `check(db; kinds = [:schema_drift])`. It is read-only, and does not create the history table.
 """
 function status(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings)::MigrationStatus
@@ -1156,15 +1399,19 @@ function status(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSe
   
   applied = NamedTuple[]
   failed = NamedTuple[]
+  superseded = NamedTuple[]
   drift_signals = String[]
   
   if has_table
     all_records = _get_applied_migrations(connection)
-    for r in all_records
+    for (i, r) in enumerate(all_records)
       if r[:status] == "applied"
         push!(applied, r)
       elseif r[:status] == "failed"
-        push!(failed, r)
+        # Records come back in version order, so "later" is "after it in this list" (#739).
+        resolved = any(l -> l[:status] == "applied" && isequal(l[:checksum], r[:checksum]),
+                       @view all_records[i+1:end])
+        push!(resolved ? superseded : failed, r)
       end
     end
   else
@@ -1202,7 +1449,7 @@ function status(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSe
     end
   end
   
-  return MigrationStatus(applied, failed, has_pending, has_table, drift_signals)
+  return MigrationStatus(applied, failed, superseded, has_pending, has_table, drift_signals)
 end
 
 function status(settings::PormGSettings)::MigrationStatus
@@ -1483,8 +1730,9 @@ so a script that runs `migrate` at boot can branch on the outcome instead of par
 
 A **failure** is still an exception, not an outcome: a destructive plan without
 `destructive = true` in a non-interactive run (`DestructiveMigrationError`), a column change that
-would fail on existing rows (`MigrationPrecheckError`, raised before anything is written), a plan
-file that does not parse (`InvalidMigrationError`), a statement the database rejects (the plan is rolled back,
+would fail on existing rows (`MigrationPrecheckError`, raised before anything is written), a
+database that no longer holds the schema the plan was generated against (`PlanPreconditionError`,
+raised before anything is written, #739), a plan file that does not parse (`InvalidMigrationError`), a statement the database rejects (the plan is rolled back,
 recorded as `failed`, and the error rethrown), and a migration lock not acquired within `lock_wait`
 (`OperationalError`).
 
@@ -2562,20 +2810,27 @@ several instances at once — see the [Deploying](@ref deploying-migrations) gui
 # Lifecycle
 1. Validate: `change_db`, then read and order the plan from disk and detect destructive statements.
    **Nothing is written to the database before step 3.**
-2. Confirm: the lossy-ALTER row pre-check (#803 — a read-only count, refused whatever
+2. Confirm: the schema precondition (#739 — the tables the plan header records are read again and
+   compared, and a difference raises [`PlanPreconditionError`](@ref); skipped for the #81 case
+   below), then the lossy-ALTER row pre-check (#803 — a read-only count, refused whatever
    `destructive` says), then the destructive guard + interactive confirmation (TTY-aware — see
    `_confirm_migration`). Before the lock, so a prompt waiting on a human never holds it.
 3. Lock (PostgreSQL): the advisory lock `MIGRATION_LOCK_KEY`, waited on for up to `lock_wait`.
    Everything below runs while it is held (#737).
 4. Bootstrap: create `pormg_migrations` if needed and install configured extensions — also when
    nothing is pending.
-5. Execute: skip a plan whose checksum is the latest applied migration (#81); otherwise run the
-   plan and record it in `pormg_migrations`, in one transaction.
+5. Execute: skip a plan whose checksum is the latest applied migration (#81); otherwise check the
+   schema precondition again — this is the check that decides, since another instance may have
+   changed the schema since step 2 — then run the plan and record it in `pormg_migrations`, in one
+   transaction. A refusal writes no `failed` row: no statement was attempted.
 6. Archive: move the plan to `applied_migrations/`.
 
-SQLite has no advisory lock, so steps 4–6 run unlocked there; its #81 check runs inside the
-`BEGIN IMMEDIATE` write transaction instead, so two processes that race on one file cannot both
-apply the same plan.
+SQLite has no advisory lock, so steps 4–6 run unlocked there; its #81 check and the deciding
+precondition run inside the `BEGIN IMMEDIATE` write transaction instead, so two processes that race
+on one file cannot both apply the same plan, nor change a table between the check and the apply.
+
+A plan with no `# pormg-schema-table:` header — one generated before #739, or one whose lines were
+deleted on purpose — is applied without the precondition.
 
 # Keywords
 - `interactive::Bool=true`: prompt for confirmation before applying — **only when stdin is a real
@@ -2635,6 +2890,9 @@ function migrate(connection::PormGBackend, settings::PormGSettings;
   # say what a column held before, so the header is the only source; a plan without one has none.
   lossy_alters = isempty(ordered_statements) ? LossyAlter[] :
     _anchor_check_conditions(_plan_lossy_alters(_pending_plan_path(settings)), settings)
+  # #739: the schema the plan was generated against, read here so a damaged header is refused before
+  # anything is written. `nothing` for a plan without one, which applies without the check.
+  schema_tables = isempty(ordered_statements) ? nothing : _plan_schema_tables(_pending_plan_path(settings))
 
   # --- Phase 2: Confirm, BEFORE the lock (#737). A prompt waits on a human; holding the migration
   # lock meanwhile would stall every other instance booting against this database. TTY-aware:
@@ -2645,7 +2903,27 @@ function migrate(connection::PormGBackend, settings::PormGSettings;
   # would fail on existing rows cannot be made to succeed by an opt-in, so it is refused before any
   # write rather than rolled back halfway through. It only READS, and only when the header records
   # something to count. The `:silent` findings then join the destructive guard's opt-in.
-  isempty(lossy_alters) || (lossy_alters = _precheck_lossy_alters(connection, lossy_alters; timeouts = timeouts))
+  #
+  # #739: the schema precondition goes first of all. On a database the plan was not generated
+  # against, the pre-check would count rows in columns that are not what the plan assumes — or are
+  # not there — and the prompt would ask a human to confirm a plan that cannot apply. This early read
+  # refuses the common case before any of that; the check that decides runs again inside the lock,
+  # after the #81 guard, because another instance can change the schema in between. The #81 case is
+  # not refused here, for the same reason it is not refused there: a plan already applied has
+  # changed its own tables. It goes on through the pre-check and the destructive guard below, as it
+  # did before #739, and the lock then archives it as `:already_applied`.
+  #
+  # The schema is read FIRST and the history only when it differs. Read the other way round, a
+  # second instance booting with the same plan could see no `applied` row, then see the first
+  # instance's committed changes, and refuse a plan that is already applied. Both engines commit the
+  # DDL and the history row together, so a schema read that saw the changes is followed by a history
+  # read that sees the row.
+  if schema_tables !== nothing
+    drift = _schema_precondition_drift(connection, settings, schema_tables)
+    isempty(drift) || _plan_is_latest_applied(connection, checksum) ||
+      throw(_plan_precondition_error(drift, schema_tables))
+  end
+  isempty(lossy_alters) ||(lossy_alters = _precheck_lossy_alters(connection, lossy_alters; timeouts = timeouts))
   silent_alters = _silent_alters(lossy_alters)
   has_destructive = !isempty(destructive_stmts) || !isempty(silent_alters)
   if !isempty(ordered_statements)
@@ -2658,8 +2936,14 @@ function migrate(connection::PormGBackend, settings::PormGSettings;
 
   # --- Phase 3: Lock, bootstrap, execute (advisory lock on PostgreSQL, direct on SQLite) ---
   return _run_locked_lifecycle(connection, settings, ordered_statements, all_sql,
-                               version, name, checksum, has_destructive; timeouts = timeouts)
+                               version, name, checksum, has_destructive; timeouts = timeouts,
+                               schema_tables = schema_tables)
 end
+
+# Whether `checksum` is the latest applied migration's — the #81 guard's question, asked outside
+# the lock and without creating the history table, which `migrate` has not ensured yet at this point.
+_plan_is_latest_applied(connection::Union{PormGPostgres, PormGSQLite}, checksum::String)::Bool =
+  _migrations_table_exists(connection) && _latest_applied_checksum(connection) == checksum
 
 # ==============================================================================
 # Backend-specific execution wrapper. PostgreSQL serializes migrations with an advisory
@@ -2696,19 +2980,21 @@ _migration_lock_key(::PormGSettings)::String = MIGRATION_LOCK_KEY
 
 function _run_locked_lifecycle(connection::PormGPostgres, settings::PormGSettings,
                                ordered_statements, all_sql, version, name, checksum, has_destructive;
-                               timeouts::_MigrationTimeouts = _migration_timeouts())
+                               timeouts::_MigrationTimeouts = _migration_timeouts(),
+                               schema_tables::Union{AbstractDict{String, String}, Nothing} = nothing)
   lock_key = _migration_lock_key(settings)
   AdvisoryLock.with_advisory_lock(connection, lock_key; wait=true, timeout_ms=timeouts.lock_wait_ms) do
     _locked_migration(connection, settings, ordered_statements, all_sql,
-                      version, name, checksum, has_destructive, timeouts)
+                      version, name, checksum, has_destructive, timeouts; schema_tables = schema_tables)
   end
 end
 
 function _run_locked_lifecycle(connection::PormGSQLite, settings::PormGSettings,
                                ordered_statements, all_sql, version, name, checksum, has_destructive;
-                               timeouts::_MigrationTimeouts = _migration_timeouts())
+                               timeouts::_MigrationTimeouts = _migration_timeouts(),
+                               schema_tables::Union{AbstractDict{String, String}, Nothing} = nothing)
   _locked_migration(connection, settings, ordered_statements, all_sql,
-                    version, name, checksum, has_destructive, timeouts)
+                    version, name, checksum, has_destructive, timeouts; schema_tables = schema_tables)
 end
 
 # Everything `migrate` writes, in the order it writes it — on PostgreSQL all of it inside the
@@ -2724,7 +3010,8 @@ end
 function _locked_migration(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
                            ordered_statements::Vector{String}, all_sql::String, version::String,
                            name::String, checksum::String, has_destructive::Bool,
-                           timeouts::_MigrationTimeouts)::MigrationResult
+                           timeouts::_MigrationTimeouts;
+                           schema_tables::Union{AbstractDict{String, String}, Nothing} = nothing)::MigrationResult
   init_migrations(connection)
   Configuration._install_configured_extensions!(settings)
 
@@ -2734,7 +3021,8 @@ function _locked_migration(connection::Union{PormGPostgres, PormGSQLite}, settin
   end
 
   return _execute_migration_lifecycle(connection, settings, ordered_statements, all_sql,
-                                      version, name, checksum, has_destructive, timeouts)
+                                      version, name, checksum, has_destructive, timeouts;
+                                      schema_tables = schema_tables)
 end
 
 # `SET LOCAL` the opt-in timeouts on the migration transaction's connection (#737). LOCAL, so they
@@ -2756,7 +3044,8 @@ function _execute_migration_lifecycle(connection::PormGPostgres, settings::PormG
                                       ordered_statements::Vector{String}, all_sql::String,
                                       version::String, name::String, checksum::String,
                                       has_destructive::Bool,
-                                      timeouts::_MigrationTimeouts = _migration_timeouts())::MigrationResult
+                                      timeouts::_MigrationTimeouts = _migration_timeouts();
+                                      schema_tables::Union{AbstractDict{String, String}, Nothing} = nothing)::MigrationResult
   date_str = Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")
 
   # Idempotency guard (issue #81). Runs inside the advisory lock, so the check-and-skip is
@@ -2775,6 +3064,12 @@ function _execute_migration_lifecycle(connection::PormGPostgres, settings::PormG
     end
     return MigrationResult(:already_applied, string(latest[:version]), 0)
   end
+
+  # #739: the schema precondition that decides, inside the advisory lock and after the #81 guard — a
+  # plan already applied has changed its own tables, so it is archived above, never refused here.
+  # Before BEGIN, so a refusal writes no `failed` row: nothing was attempted. The lock serializes
+  # every migrator, so no other plan can change these tables between this read and the BEGIN.
+  schema_tables === nothing || _check_schema_precondition(connection, settings, schema_tables)
 
   # Begin transaction
   _, conn = with_transaction(connection, "BEGIN;")
@@ -2837,7 +3132,8 @@ function _execute_migration_lifecycle(connection::PormGSQLite, settings::PormGSe
                                       ordered_statements::Vector{String}, all_sql::String,
                                       version::String, name::String, checksum::String,
                                       has_destructive::Bool,
-                                      ::_MigrationTimeouts = _migration_timeouts())::MigrationResult
+                                      ::_MigrationTimeouts = _migration_timeouts();
+                                      schema_tables::Union{AbstractDict{String, String}, Nothing} = nothing)::MigrationResult
   date_str = Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")
 
   # Serialize the whole BEGIN..COMMIT against any concurrent SQLite writer, like
@@ -2895,6 +3191,16 @@ function _execute_migration_lifecycle(connection::PormGSQLite, settings::PormGSe
         if latest !== nothing && String(latest[:checksum]) == checksum
           with_transaction(connection, "ROLLBACK;", conn=conn, release_conn=false)
           return latest
+        end
+
+        # #739: the schema precondition, after the #81 guard for the reason given in the PostgreSQL
+        # lifecycle, and inside `BEGIN IMMEDIATE` — the only mutual exclusion SQLite has — so no other
+        # process can change these tables before our COMMIT. The read runs on this transaction's own
+        # connection through `with_tx_context`: a `fetch(...; conn = conn)` would hand the connection
+        # back to the pool mid-transaction (#139). A refusal leaves `attempted` false, so it rolls
+        # back without a `failed` row.
+        schema_tables === nothing || Configuration.with_tx_context(connection, conn) do
+          _check_schema_precondition(connection, settings, schema_tables)
         end
 
         attempted = true

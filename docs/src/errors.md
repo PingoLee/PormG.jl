@@ -79,11 +79,13 @@ Catch the umbrella when you want a category, the concrete type when you want a r
 | `makemigrations` / `migrate` / `status` / `dry_run` / `discard_pending_migration` / `import_models_from_*` | `InvalidConfigurationError` | The key is a `register_connection` entry, which has no models folder — see [Dynamic Multi-Tenancy](configuration/dynamic.md) |
 | `migrate` on a destructive plan | `PormG.Migrations.DestructiveMigrationError` | Non-interactive run without `destructive = true`; carries `statements`, and `lossy_alters` for a column change that alters existing values |
 | `migrate` on a plan whose column or constraint change would fail on existing rows | `PormG.Migrations.MigrationPrecheckError` | Non-interactive run; nothing was written. `destructive = true` does not bypass it. Carries `findings` |
+| `migrate` on a database that no longer holds the schema the plan was generated against | `PormG.Migrations.PlanPreconditionError` | No statement of the plan ran and no `failed` row was recorded. Regenerate the plan against this database, or remove its `# pormg-schema-table:` lines. Carries `tables` |
 
-!!! note "Three types need a qualified name"
-    `DestructiveMigrationError`, `MigrationPrecheckError` and `MissingConfigurationError` are **not**
-    on the `using PormG` surface — reach them as `PormG.Migrations.DestructiveMigrationError`,
-    `PormG.Migrations.MigrationPrecheckError` and `PormG.Configuration.MissingConfigurationError`. Catching their umbrellas (`MigrationError`,
+!!! note "Four types need a qualified name"
+    `DestructiveMigrationError`, `MigrationPrecheckError`, `PlanPreconditionError` and
+    `MissingConfigurationError` are **not** on the `using PormG` surface — reach them as
+    `PormG.Migrations.DestructiveMigrationError`, `PormG.Migrations.MigrationPrecheckError`,
+    `PormG.Migrations.PlanPreconditionError` and `PormG.Configuration.MissingConfigurationError`. Catching their umbrellas (`MigrationError`,
     `ConfigurationError`) works unqualified.
 
 ## Reading a caught error
@@ -100,6 +102,7 @@ structured fields instead, and `e.msg` on those is a `FieldError`:
 | `IntegrityError`, `OperationalError`, `StatementError` | `adapter`, `cause` |
 | `DestructiveMigrationError` | `msg`, `statements`, `lossy_alters` |
 | `MigrationPrecheckError` | `msg`, `findings` |
+| `PlanPreconditionError` | `msg`, `tables` |
 
 `error_message` renders any of them to a plain `String`, so it is always safe:
 

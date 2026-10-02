@@ -243,7 +243,9 @@ println(s)
 ```
 This reports the state of the migration **history**: applied migrations, failed migrations, whether a
 pending plan exists, and warnings about the history itself, such as a missing `pormg_migrations`
-table or migrations recorded over a database with no tables. It is read-only, and it does not compare
+table or migrations recorded over a database with no tables. A failed attempt that a later run
+resolved by applying the same plan is listed under `superseded`, not `failed`, and raises no
+warning: a plan runs in one transaction, so the failure wrote nothing. It is read-only, and it does not compare
 the live schema with your models. For that, use `check("db"; kinds = [:schema_drift])` (see
 [Checking the Database Against the Models](#Checking-the-Database-Against-the-Models)).
 
@@ -261,6 +263,12 @@ Applied migrations are recorded in the history table and archived to `db/migrati
 "no" at the prompt, a destructive plan was refused at the terminal for lack of `destructive=true`, or
 a [lossy column change](#Lossy-Column-Changes) would fail on existing rows). Having nothing to apply is `:nothing_pending`, not an error. What each outcome
 means, and how to run `migrate()` at application boot: [Deploying](deploying.md).
+
+The plan records the schema it was generated against, and `migrate()` refuses it with a
+`PlanPreconditionError` when the database no longer holds that schema — another plan, or a hand
+change, touched one of its tables since `makemigrations`. None of its statements runs. Run `makemigrations()`
+again to plan from what the database holds now; see
+[Shipping a plan with a release](deploying.md#Shipping-a-plan-with-a-release).
 
 ### Destructive Operations Safety
 PormG blocks destructive SQL by default. A statement is destructive when it is:

@@ -8,7 +8,10 @@
 #      a connection (the issue suspected a PoolTimeoutError; the pool grows on demand);
 #   2. a held migration lock makes `migrate` give up after `lock_wait`, naming the holder;
 #   3. `lock_timeout` makes a plan statement queued behind another session's table lock fail fast
-#      instead of waiting — and blocking every later query on that table — indefinitely.
+#      instead of waiting — and blocking every later query on that table — indefinitely;
+#   4. a plan whose recorded schema the database no longer holds is refused inside the advisory
+#      lock, before BEGIN, with no `failed` row (#739 — the SQLite lifecycle is pinned in
+#      `test/unit/test_plan_schema_fingerprint.jl`).
 #
 # Isolation: each pool gets a temporary `db_def_folder`, so the plan files are private. The shared
 # fixture is touched only through one scratch table and the history rows this file writes, and
@@ -171,6 +174,87 @@ end
         PormG.ConnectionPool.fetch(st.connections, "DELETE FROM pormg_migrations WHERE name = '$(_BOOT737_NAME)';")
         PormG.ConnectionPool.fetch(st.connections, "DROP TABLE IF EXISTS \"$(table)\";")
         _boot737_close(blocker)
+        _boot737_close(st)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# migrate() at boot: the schema precondition on PostgreSQL (#739)
+# The unit file pins the SQLite lifecycle; this is the PostgreSQL one, where the deciding check runs
+# inside the advisory lock and before BEGIN. A plan recording a scratch table's fingerprint is
+# refused once the table is altered out of band — through `migrate` (the early check) and through
+# the locked lifecycle alone (the in-lock check) — with no `failed` row and the plan's column not
+# added. Back in its recorded state, the table takes the plan, and a `failed` row of that same
+# checksum written earlier is then reported as superseded by `status()`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "migrate at boot: a drifted plan is refused inside the lock (#739)" begin
+    table = "pormg_boot739_scratch"
+    name = "pormg_test_boot739"
+    st = _boot737_settings("precondition"; pool_size = 2)
+    pg = st.connections
+    try
+        PormG.ConnectionPool.fetch(pg, "CREATE TABLE IF NOT EXISTS \"$(table)\" (id integer PRIMARY KEY);")
+        PormG.Migrations.init_migrations(pg)
+        live_fp() = PormG.Migrations._schema_table_fingerprint(
+            only(PormG.Migrations.read_live_schema(pg; include_table = [table])))
+        recorded = OrderedDict{String, String}(table => live_fp())
+
+        plan = OrderedDict{Symbol, OrderedDict{String, String}}(
+            Symbol(table) => OrderedDict{String, String}(
+                "Add field: note" => "ALTER TABLE \"$(table)\" ADD COLUMN \"note\" TEXT;"))
+        folder = joinpath(st.db_def_folder, "migrations")
+        mkpath(folder)
+        PormG.Generator.generate_migration_plan("pending_migrations.jl", plan, folder; schema_tables = recorded)
+        stmts, all_sql = PormG.Migrations._order_statements(PormG.Migrations._load_migration_plan(st))
+        checksum = PormG.Migrations.compute_checksum(all_sql)
+        columns() = DataFrame(PormG.ConnectionPool.fetch(pg,
+            "SELECT column_name FROM information_schema.columns WHERE table_name = '$(table)';")).column_name
+        rows() = DataFrame(PormG.ConnectionPool.fetch(pg,
+            "SELECT status FROM pormg_migrations WHERE name = '$(name)' ORDER BY version;")).status
+
+        # Out of band, after the plan was generated.
+        PormG.ConnectionPool.fetch(pg, "ALTER TABLE \"$(table)\" ADD COLUMN \"location\" TEXT;")
+        @test live_fp() != recorded[table]
+
+        # Through migrate: refused, nothing written.
+        e = try
+            _boot737_quiet(() -> PormG.Migrations.migrate(pg, st; interactive = false, name = name)); nothing
+        catch err
+            err
+        end
+        @test e isa PormG.Migrations.PlanPreconditionError
+        @test e !== nothing && [t.table for t in e.tables] == [table]
+        @test !("note" in columns())
+        @test isempty(rows())
+
+        # The in-lock check on its own, past the early one: still refused, still nothing recorded.
+        e2 = try
+            _boot737_quiet(() -> PormG.Migrations._run_locked_lifecycle(pg, st, stmts, all_sql,
+                PormG.Migrations.generate_version(), name, checksum, false; schema_tables = recorded)); nothing
+        catch err
+            err
+        end
+        @test e2 isa PormG.Migrations.PlanPreconditionError
+        @test isempty(rows())
+
+        # A failed attempt of this same plan, recorded before the apply below.
+        PormG.Migrations._record_migration(pg, "20000101000000739", name, checksum, all_sql, "failed", false)
+
+        # Back to the recorded state: the plan applies.
+        PormG.ConnectionPool.fetch(pg, "ALTER TABLE \"$(table)\" DROP COLUMN \"location\";")
+        @test live_fp() == recorded[table]
+        r = _boot737_quiet(() -> PormG.Migrations.migrate(pg, st; interactive = false, name = name))
+        @test r.outcome === :applied
+        @test "note" in columns()
+        @test rows() == ["failed", "applied"]
+
+        # status(): the earlier failure of this checksum is superseded, not a failure.
+        s = PormG.Migrations.status(pg, st)
+        @test any(m -> m[:name] == name, s.superseded)
+        @test !any(m -> m[:name] == name, s.failed)
+    finally
+        PormG.ConnectionPool.fetch(pg, "DELETE FROM pormg_migrations WHERE name = '$(name)';")
+        PormG.ConnectionPool.fetch(pg, "DROP TABLE IF EXISTS \"$(table)\";")
         _boot737_close(st)
     end
 end

@@ -42,9 +42,14 @@ A **failure** is an exception, and at boot the right response is usually to let 
   `unique = true` — so nothing was applied. The rows were
   counted first; `destructive = true` does not bypass it. See
   [Lossy Column Changes](workflow.md#Lossy-Column-Changes).
+- `PlanPreconditionError`: the database no longer holds the schema the plan was generated against,
+  so nothing was applied and no `failed` row was recorded. See
+  [Shipping a plan with a release](#Shipping-a-plan-with-a-release).
 - `InvalidMigrationError`: the plan file does not parse.
 - a `DatabaseError`: a statement failed. The whole plan is rolled back and recorded as `failed` in
-  `pormg_migrations`.
+  `pormg_migrations`. A failure does not block the next `migrate()`: the plan wrote nothing, so it
+  can simply be retried. Once a later run applies the same plan, `status()` lists the failed attempt
+  under *superseded* instead of as a failure, and its warning clears.
 - `OperationalError`: another instance held the migration lock for longer than `lock_wait` (below).
 
 !!! note "Before `MigrationResult`"
@@ -61,7 +66,10 @@ lock instead of racing each other's DDL. The lock is per database; see
 [Advisory Locking](index.md#PostgreSQL:-Advisory-Locking) for how the key is scoped.
 
 The plan is read, and a destructive plan refused, **before** the lock is requested, so an instance
-never holds the lock while it validates or waits on a prompt.
+never holds the lock while it validates or waits on a prompt. The
+[schema precondition](#Shipping-a-plan-with-a-release) is checked there too, so a stale plan fails
+before any prompt or row count; it is checked **again** inside the lock, which is the check that
+decides, because another instance may change the schema in between.
 
 ### `lock_wait`: how long to queue
 
@@ -101,7 +109,7 @@ PormG.Migrations.migrate("db"; interactive = false,
 When either is exceeded the statement fails, the plan rolls back and is recorded as `failed`, and
 `migrate()` rethrows the error. Retry at a quieter moment. `pormg_migrations` then holds a `failed`
 row for that attempt, which [`status()`](workflow.md) reports; the next successful run records its
-own `applied` row.
+own `applied` row, and from then on `status()` lists the failed attempt as superseded.
 
 ### Permissions: `migrate()` needs a role that may run DDL
 
@@ -169,12 +177,41 @@ Each finding is a step the next `makemigrations` would plan. Details:
 ## Shipping a plan with a release
 
 The pending plan is a diff: the SQL that takes the schema the plan was **generated against** to
-the schema the models declare. `migrate()` checks that the plan is not already applied. It does
-**not** check that the database is still in the state the plan was generated from. Generate the
-plan against a database whose schema matches production's, review it, and ship that plan with that
-release.
+the schema the models declare. So the plan records that starting point. `makemigrations` writes one
+header line per table its diff compared — every table the managed models declare (many-to-many join
+tables included), and every table it read from the database:
 
-Do not let an instance running an older release apply a plan generated for a newer one, or the
-reverse. During a rolling deploy, run `migrate()` from the new release only. Recording a plan's
-expected starting point and refusing a stale plan are tracked in
-[#739](https://github.com/PingoLee/PormG.jl/issues/739).
+```
+# pormg-schema-table: 3f9a1c0e7b2d4a51	circuits
+# pormg-schema-table: absent	driver_standings
+```
+
+Each value is a fingerprint of the table as the database held it — its columns, indexes and
+constraints, **names included** — or `absent` for a table that did not exist yet. The names count
+because the plan's statements name those objects (`DROP INDEX "<name>"`): a database whose index is
+called something else is not one the plan was written for. So "a schema that matches production's"
+means one built the same way, not one that merely holds the same columns. Before it applies anything,
+`migrate()` reads the same tables again and compares. On any difference it throws
+`PlanPreconditionError`, naming each table that changed, appeared or disappeared, and runs none of
+the plan's statements — nor records a `failed` row for it.
+
+That is the release workflow:
+
+1. Generate the plan against a database whose schema matches production's.
+2. Review it, and ship that file with the release.
+3. `migrate()` at boot applies it only while production still holds the schema it was reviewed
+   against. The SQL that runs is the SQL that was reviewed; nothing is re-planned at boot.
+
+It also stops an old plan from replaying. Say release N shipped plan P1 and release N+1 shipped P2.
+An instance still on release N that restarts after P2 was applied finds P1 pending again, and the
+tables P1 compared are now in their N+1 state, so P1 is refused instead of re-run. The plan applied
+*last* is the exception: it is recognised by its checksum first and archived as `:already_applied`,
+although its own changes moved its tables.
+
+A table the plan never compared does not count, so a table created in production outside the models
+does not block a plan.
+
+When a refusal is expected — production was changed by hand, on purpose, and you have checked that
+the plan still applies — either regenerate the plan against that database with `makemigrations()`,
+or delete its `# pormg-schema-table:` lines. A plan without them is applied without the check, as
+every plan generated before the check existed is.

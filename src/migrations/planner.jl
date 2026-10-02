@@ -2316,14 +2316,17 @@ before any field-rename question. A child that also changes its key — a differ
 still re-points, against the new name, after the rename has run.
 """
 function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn, settings::PormGSettings; interactive::Bool = true,
-                            lossy_alters::Vector{LossyAlter} = LossyAlter[])
+                            lossy_alters::Vector{LossyAlter} = LossyAlter[],
+                            schema_scope::Union{Set{String}, Nothing} = nothing)
   # The adapter (#522): a `PormGModel` read as a live table — see `live_table` for what it keeps.
   return get_migration_plan(LiveTable[live_table(model, conn) for model in models], current_schema,
-                            conn, settings; interactive = interactive, lossy_alters = lossy_alters)
+                            conn, settings; interactive = interactive, lossy_alters = lossy_alters,
+                            schema_scope = schema_scope)
 end
 
 function get_migration_plan(live::Vector{LiveTable}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn, settings::PormGSettings; interactive::Bool = true,
-                            lossy_alters::Vector{LossyAlter} = LossyAlter[])
+                            lossy_alters::Vector{LossyAlter} = LossyAlter[],
+                            schema_scope::Union{Set{String}, Nothing} = nothing)
 # `live` is the schema as the database holds it; `current_schema` is the models file (see the docstring).
 
 migration_plan = OrderedDict{Symbol, OrderedDict{String, String}}()
@@ -2339,6 +2342,13 @@ _refuse_constrained_keys_into_unmanaged(current_schema)
 _refuse_managed_models_on_ignored_tables(current_schema, conn, settings)
 all_live = live
 isempty(unmanaged_tables) || (live = LiveTable[t for t in all_live if !(t.name in unmanaged_tables)])
+# #739: the tables this diff compares — every managed declared table (many-to-many join tables
+# included, synthesized above) and every live table it classifies. Reported to `makemigrations`,
+# which records the fingerprint of each in the plan header as `migrate`'s precondition. An
+# unmanaged table is in neither set: the plan never touches it, so it is no part of what the plan
+# assumes. `current_schema` is keyed by physical table name (#59), like the live side.
+schema_scope === nothing ||
+  union!(schema_scope, (String(k) for k in keys(current_schema)), (t.name for t in live))
 # #161: every model-level index name the plan creates or renames to, across all tables — the scope
 # the database enforces. See `_claim_composite_target!`.
 composite_targets = Dict{String, Tuple{String, String}}()
@@ -2549,12 +2559,16 @@ current_models = _load_current_models(path)
 
 # #803: the plan's lossy column changes, recorded where each delta becomes an action.
 lossy_alters = LossyAlter[]
+# #739: the tables the diff compares, and their fingerprints as read — before the planner runs.
+schema_scope = Set{String}()
+live_fingerprints = _schema_table_fingerprints(live_schema, (t.name for t in live_schema))
 migration_plan = get_migration_plan(live_schema, current_models, connection, settings, interactive=interactive,
-                                    lossy_alters = lossy_alters)
+                                    lossy_alters = lossy_alters, schema_scope = schema_scope)
 
 @pormg_debug false
 
-_write_pending_plan(connection, settings, migration_plan; models_path = path, lossy_alters = lossy_alters)
+_write_pending_plan(connection, settings, migration_plan; models_path = path, lossy_alters = lossy_alters,
+                    schema_tables = _scoped_fingerprints(live_fingerprints, schema_scope))
 return nothing
 end
 
@@ -2579,10 +2593,13 @@ function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::
   current_models = _load_current_models(path)
 
   lossy_alters = LossyAlter[]   # #803: see the PostgreSQL method above
+  schema_scope = Set{String}()  # #739: see the PostgreSQL method above
+  live_fingerprints = _schema_table_fingerprints(live_schema, (t.name for t in live_schema))
   migration_plan = get_migration_plan(live_schema, current_models, connection, settings, interactive=interactive,
-                                      lossy_alters = lossy_alters)
+                                      lossy_alters = lossy_alters, schema_scope = schema_scope)
 
-  _write_pending_plan(connection, settings, migration_plan; models_path = path, lossy_alters = lossy_alters)
+  _write_pending_plan(connection, settings, migration_plan; models_path = path, lossy_alters = lossy_alters,
+                      schema_tables = _scoped_fingerprints(live_fingerprints, schema_scope))
   return nothing
 end
 
@@ -2602,7 +2619,8 @@ end
 function _write_pending_plan(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
                              migration_plan::OrderedDict{Symbol, OrderedDict{String, String}};
                              models_path::Union{String, Nothing} = nothing,
-                             lossy_alters::Vector{LossyAlter} = LossyAlter[])::Nothing
+                             lossy_alters::Vector{LossyAlter} = LossyAlter[],
+                             schema_tables::Union{AbstractDict{String, String}, Nothing} = nothing)::Nothing
   folder = joinpath(settings.db_def_folder, "migrations")
   if isempty(migration_plan)
     if isfile(joinpath(folder, "pending_migrations.jl"))
@@ -2620,7 +2638,7 @@ function _write_pending_plan(connection::Union{PormGPostgres, PormGSQLite}, sett
   header = _models_file_header_value(settings, models_path)
   generate_migration_plan("pending_migrations.jl", migration_plan, folder; models_file = header,
                           models_file_sha256 = header === nothing ? nothing : _models_file_digest(models_path),
-                          lossy_alters = lossy_alters)
+                          lossy_alters = lossy_alters, schema_tables = schema_tables)
   # #803: named here, at plan time, as well as by `dry_run` and `migrate` — which also count the rows.
   if !isempty(lossy_alters)
     @warn("The plan has $(length(lossy_alters)) change(s) that can fail on, or change, existing rows. Run dry_run() to see which, and how many rows each would fail on.",
@@ -2630,6 +2648,12 @@ function _write_pending_plan(connection::Union{PormGPostgres, PormGSQLite}, sett
   @info(_emsg("\e[32mMigration plan generated successfully. Run 'PormG.Migrations.migrate($( settings.db_def_folder == "db" ? "" : string("\"", settings.db_def_folder, "\"")))' to apply the migrations.\e[0m"))
   return nothing
 end
+
+# The plan header's schema precondition (#739): the fingerprint of every table in `scope`, the
+# live one when the database held it and `absent` when it did not. Sorted by name, so two runs over
+# one schema write the same header.
+_scoped_fingerprints(live::AbstractDict{String, String}, scope::Set{String})::OrderedDict{String, String} =
+  OrderedDict{String, String}(name => get(live, name, SCHEMA_TABLE_ABSENT) for name in sort!(collect(scope)))
 
 # What the plan header records as the models file the plan was diffed against (#736): `nothing` when
 # that is the connection's own `<db_def_folder>/<model_file>` — the default plan stays byte-identical

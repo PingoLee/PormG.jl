@@ -32,6 +32,8 @@ import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CDecimal, CText, 
 import PormG: CDate, CDateTime, CInterval
 # #828: the rest of the castless-retype targets, for `_postgres_retype_using`.
 import PormG: CBool, CUUID, CJSON
+# #28: the network-address kinds, for the same function.
+import PormG: CInet, CCidr
 import PormG: _has_non_negative, _byte_bound
 import PormG: get_constraints_pk, get_constraints_unique, get_constraints_checks, get_constraints_byte_length_checks
 import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column, format_timezone_sql, model_table_name, fk_target_table
@@ -1115,7 +1117,7 @@ end
 # ---
 # Convert PormGField to SQL column string
 # ---
-import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sRelationalColumn, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField, sBinaryField, sImageField
+import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sRelationalColumn, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField, sBinaryField, sImageField, sGenericIPAddressField, sCIDRField
 
 """
     db_default_sql(field, conn) -> Union{String, Nothing}
@@ -1276,15 +1278,24 @@ automatically to type integer`.
 - a number → boolean: `<> 0`, since only `integer` has a cast to boolean at all. Any non-zero value
   becomes `true`, which is why the planner records it as `:to_boolean`, needing `destructive = true`.
 
-`NULL` stays `NULL` in all three. The planner's classifier asks this same function whether a pair
+- text / varchar → `inet` / `cidr` (#28): the same explicit cast, for the same reason;
+- `inet` → text / varchar (#28): `abbrev(…)`, which is the text `inet` PRINTS (`10.0.0.1`) — the
+  value a read of the column returned before the change. The assignment cast PostgreSQL would apply
+  on its own writes the mask too (`10.0.0.1/32`), so every row's text would change. A `cidr` needs
+  no `USING`: its cast to text keeps the prefix, which is what it prints, while `abbrev(cidr)` would
+  drop the zero octets (`10.1/16`).
+
+`NULL` stays `NULL` in all of them. The planner's classifier asks this same function whether a pair
 has a `USING`, so the rendered ALTER and the finding cannot disagree.
 """
 function _postgres_retype_using(field_name::Union{String, Symbol}, old_type::CanonicalType,
                                 new_type::CanonicalType, type_sql::AbstractString)::Union{Nothing, String}
   numeric = Union{CInt16, CInt32, CInt64, CFloat64, CDecimal}
   ref = "\"$(_quote_table_ddl(field_name))\""
-  if old_type isa Union{CText, CVarChar} && new_type isa Union{numeric, CBool, CDate, CDateTime, CUUID, CJSON}
+  if old_type isa Union{CText, CVarChar} && new_type isa Union{numeric, CBool, CDate, CDateTime, CUUID, CJSON, CInet, CCidr}
     return "CAST($ref AS $type_sql)"
+  elseif old_type isa CInet && new_type isa Union{CText, CVarChar}
+    return "abbrev($ref)"
   elseif old_type isa CBool && new_type isa numeric
     return "CAST(CAST($ref AS integer) AS $type_sql)"
   elseif old_type isa numeric && new_type isa CBool
@@ -1356,6 +1367,8 @@ function _get_column_type(field::PormGField, conn::PormGPostgres; type_map::Dict
     return type_map[field.type]
   elseif field isa sJSONField
     return type_map[field.type]
+  elseif field isa Union{sGenericIPAddressField, sCIDRField}
+    return type_map[field.type]   # `inet` / `cidr` (#28)
   elseif field isa sBinaryField
     # `bytea` takes no length parameter — a BinaryField's `max_length` is a BYTE bound enforced by
     # the CHECK constraint below, not by the column type (#296).
@@ -1406,6 +1419,10 @@ function _get_column_type(field::PormGField, conn::PormGSQLite; type_map::Dict{S
   elseif field isa sUUIDField
     return sql_type
   elseif field isa sJSONField
+    return sql_type
+  elseif field isa Union{sGenericIPAddressField, sCIDRField}
+    # #28: for the migration compiler only — `field_to_column` refuses these on SQLite, so no DDL
+    # PormG writes carries it. See `_refuse_specialized_sqlite_type`.
     return sql_type
   elseif field isa sBinaryField
     # `BLOB` takes no length parameter (and SQLite would ignore one anyway — BLOB affinity means
@@ -1483,6 +1500,30 @@ function _refuse_inexact_sqlite_decimal(col_name::AbstractString, field::PormGFi
     "$(SQLITE_EXACT_DECIMAL_DIGITS), or use PostgreSQL, whose numeric type is exact at any width. " *
     "PormG re-creates every column when it rebuilds a SQLite table, so this also refuses a change " *
     "elsewhere in the same table; narrowing max_digits in that same change is enough."))
+end
+
+# ── #28: a specialized PostgreSQL type has no SQLite column ───────────────────────────────────────
+#
+# `inet` and `cidr` are what the general rule calls SPECIALIZED: SQLite has no type that stores and
+# compares an address with PostgreSQL's semantics (network order, a mask, one value for every
+# spelling). The default for such a type is to refuse it on SQLite rather than emulate it — see
+# `general.instructions.md` → *Keep PostgreSQL and SQLite aligned*. Emulating one is a maintainer's
+# decision, made with its cost on the table; #28 built a TEXT fallback first and reverted it.
+#
+# Here for #648's reasons, word for word: every caller of the SQLite `field_to_column` renders the
+# DESIRED model, the planner renders at `makemigrations` (so it fires before a pending file exists),
+# and `_get_column_type` is no place for it — the migration compiler launders its errors into a
+# warning. `_get_column_type` still renders these fields (`TEXT`), for that compiler only: no DDL
+# PormG writes ever carries it.
+function _refuse_specialized_sqlite_type(col_name::AbstractString, field::PormGField)::Nothing
+  field isa Union{sGenericIPAddressField, sCIDRField} || return nothing
+  name = field isa sCIDRField ? "CIDRField" : "GenericIPAddressField"
+  pg = field isa sCIDRField ? "cidr" : "inet"
+  throw(BackendCapabilityError(
+    "$(name) \"$(col_name)\" is PostgreSQL's native `$(pg)` type, which SQLite does not have: it has " *
+    "no type that compares an address by network or stores one value for every spelling of it. " *
+    "PormG refuses the column on SQLite rather than emulate it as text. Run this model on " *
+    "PostgreSQL, or declare the column as a CharField/TextField if you only need to store the text."))
 end
 
 # ── Physical-column identity ── moved out (#507) ───────────────────────────────────────
@@ -1578,6 +1619,9 @@ Raises `BackendCapabilityError` for a `DecimalField` with `max_digits` above
 `SQLITE_EXACT_DECIMAL_DIGITS` (15): SQLite stores it through NUMERIC affinity and cannot keep the
 declared digits (#648). Every caller renders the desired model, so an existing wide column is
 never refused on its own — only when PormG would create or re-create it.
+
+Raises `BackendCapabilityError` for a `GenericIPAddressField` or `CIDRField` too: SQLite has no
+column for PostgreSQL's `inet`/`cidr`, and PormG refuses rather than emulates them (#28).
 """
 function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite;
                          temporary_default::Any=nothing, defer_db_default::Bool=false,
@@ -1586,6 +1630,8 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite;
   col_name = field_db_column(field, col_name)
   # #648: a DecimalField SQLite cannot store exactly is refused before any DDL exists.
   _refuse_inexact_sqlite_decimal(col_name, field)
+  # #28: so is a specialized PostgreSQL type (`inet`, `cidr`).
+  _refuse_specialized_sqlite_type(col_name, field)
   # Determine the base SQL type
   base_type = _get_column_type(field, conn)
   # #496: is this the deferred ADD COLUMN rendering? Computed before the nullability block, which
@@ -2018,7 +2064,9 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   if :type in delta
     if new_field isa sCharField
       max_length = hasproperty(new_field, :max_length) ? new_field.max_length : 255
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE VARCHAR($max_length);""")
+      # Through `retype!` since #28, so an `inet` column gets its `abbrev` `USING`; every pair that
+      # existed before has none and renders the same statement it always did.
+      retype!("VARCHAR($max_length)")
     elseif new_field isa sDecimalField
       max_digits = hasproperty(new_field, :max_digits) ? new_field.max_digits : 10
       decimal_places = hasproperty(new_field, :decimal_places) ? new_field.decimal_places : 2
@@ -2652,6 +2700,21 @@ end
 function has_keys(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
 end
+
+# #28: the operand a pattern lookup (`@contains`, `@startswith`, `@regex`, …) reads from a network
+# column. PostgreSQL has no `LIKE` for `inet`/`cidr`, so the column is turned into the text it PRINTS
+# — Django's backend makes the same choice (`HOST(%s)` for a `GenericIPAddressField`). `HOST`, not a
+# cast, for `inet`: `CAST(… AS text)` writes the mask too (`10.0.0.1/32`), and the pattern would then
+# disagree with what a read of the column returns. A `cidr` keeps its prefix in the printed form,
+# which is what its text cast gives. PostgreSQL only: SQLite has no such column (#28).
+#
+# The field is typed into the signature on purpose: an untyped 3-argument Dialect helper matches the
+# `(PormGPostgres, AbstractString, AbstractString)` shape `test_operators.jl` reflects over as an
+# operator renderer (#604).
+_network_pattern_operand(::PormGPostgres, ::sGenericIPAddressField, column::AbstractString)::String =
+  "HOST($(column))"
+_network_pattern_operand(::PormGPostgres, ::sCIDRField, column::AbstractString)::String =
+  "CAST($(column) AS text)"
 
 function contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"

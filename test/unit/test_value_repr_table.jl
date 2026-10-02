@@ -19,7 +19,7 @@ engine; this file asserts the TABLE's own shape, hermetically. Neither replaces 
 property test would still pass if the table were bypassed entirely, and this one would still pass if
 the renderers never consulted it.
 
-The census (`length(concrete) == 25`) deliberately lives in `test_value_repr_property.jl` only —
+The census (`length(concrete) == 27`) deliberately lives in `test_value_repr_property.jl` only —
 two copies of one census is the allowlist mistake, where the second copy is updated and the first
 quietly stops meaning anything.
 

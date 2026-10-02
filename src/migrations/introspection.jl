@@ -377,6 +377,13 @@ function _coerce_default(value, ctype::CanonicalType)
     value isa AbstractString && return Time(String(value))
   elseif ctype isa CUUID
     return Models.format_uuid_sql(String(value))
+  elseif ctype isa CInet
+    # #28: the field's own formatter, so a catalog default reads back in the text a declared one is
+    # stored in. A masked `inet` default (`'10.0.0.0/8'`) is refused here as the field refuses it,
+    # and so warned about and dropped rather than read as something it is not.
+    return Models.format_inet_sql(String(value))
+  elseif ctype isa CCidr
+    return Models.format_cidr_sql(String(value))
   elseif ctype isa CInterval
     return Models.format_duration_sql(value)
   elseif ctype isa CBytes

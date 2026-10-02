@@ -65,7 +65,7 @@ import .Kernel: _wrapped_in_parens
 # `Dialect.alter_field` and `Migrations.column_spec` can `import PormG: …` it while a
 # `using PormG.Kernel` elsewhere does not inherit two dozen `C*` type names.
 import .Kernel: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CBool, CText, CDate, CTime,
-                CInterval, CUUID, CJSON, CBytes, CVarChar, CDecimal, CDateTime, CUnsupported,
+                CInterval, CUUID, CJSON, CBytes, CInet, CCidr, CVarChar, CDecimal, CDateTime, CUnsupported,
                 ColumnDefault, NoDefault, LiteralDefault, ExpressionDefault,
                 CheckKind, NonNegativeCheck, ByteLengthCheck,
                 ColumnIdentity, ForeignKeyRef, ColumnSpec, ColumnDelta,

@@ -72,7 +72,7 @@ the three keywords outright. There is no slot left to classify — they are gone
 `sOneToOneField`, and `_common_kwargs` refuses them at declaration time instead.
 """
 const NON_DB_ATTRS = (:blank, :choices, :db_index, :editable, :verbose_name, :related_name,
-                      :how, :formatter,
+                      :how, :formatter, :protocol, :unpack_ipv4,
                       :auto_now, :auto_now_add, :auto_add, :auto_hash,
                       :through, :db_table, :source_field, :target_field)
 
@@ -168,6 +168,11 @@ function parse_canonical_type(raw::AbstractString, ::PormGPostgres)::CanonicalTy
   base == "uuid"                          && return CUUID()
   base in ("json", "jsonb")               && return CJSON()
   base == "bytea"                         && return CBytes()
+  # #28. The SQLite arm below has no counterpart, on purpose: SQLite has no column for these fields
+  # (`Dialect.field_to_column` refuses them), so a foreign `INET` declared type is a column PormG did
+  # not write and stays `CUnsupported`.
+  base == "inet"                          && return CInet()
+  base == "cidr"                          && return CCidr()
   return CUnsupported(lowercase(strip(String(raw))))
 end
 
@@ -861,7 +866,7 @@ Every kind a [`LossyAlter`](@ref) can carry, with its class — the closed set, 
 | `:to_time` | PostgreSQL | `:silent` | a timestamp becomes a time, dropping the date |
 | `:drop_timezone` | PostgreSQL | `:silent` | `timestamptz` becomes `timestamp`, dropping the offset |
 | `:text_affinity` | SQLite | `:silent` | text becomes a numeric/boolean column, so `'0042'` stores as `42` |
-| `:text_cast` | PostgreSQL | `:rows` | text becomes a number, boolean, date, timestamp, UUID or JSON (the plan casts with `USING`), and some values do not parse |
+| `:text_cast` | PostgreSQL | `:rows` | text becomes a number, boolean, date, timestamp, UUID, JSON or an IP address or network (the plan casts with `USING`), and some values do not parse |
 | `:to_boolean` | PostgreSQL | `:silent` | a number becomes a boolean (`USING "c" <> 0`), so every non-zero value becomes `true` |
 | `:drop_default` | PostgreSQL | `:silent` | a `USING` retype must drop a database default the model does not declare, and nothing puts it back |
 | `:no_implicit_cast` | PostgreSQL | `:refused` | the engine has no automatic cast between the two types and the plan writes no `USING` |
@@ -961,7 +966,7 @@ _exceeds(a::Union{Int, Nothing}, b::Int)::Bool = a === nothing || a > b
 # refused only when `_pg_retype_has_using` says otherwise — today, never. The list stays the
 # definition of "castless": it is what decides that a pair NEEDS the `USING` and the row count.
 function _pg_no_implicit_cast(old::CanonicalType, new::CanonicalType)::Bool
-  old isa _TextType && return new isa Union{_NumericType, CBool, CDate, CDateTime, CUUID, CJSON}
+  old isa _TextType && return new isa Union{_NumericType, CBool, CDate, CDateTime, CUUID, CJSON, CInet, CCidr}
   old isa CBool && return new isa _NumericType
   old isa _NumericType && return new isa CBool
   return false
@@ -1004,7 +1009,11 @@ function _lossy_alters(delta::ColumnDelta, conn::Union{PormGPostgres, PormGSQLit
   # never part of the delta (`_defaults_equal`), so nothing would set it back: the retype would remove
   # it silently. That is a change to how future rows are written, so it takes the opt-in — or the
   # model declares it as a `db_default`, and it is restored.
-  if castless && _pg_retype_has_using(old_spec.type, new_spec.type) &&
+  #
+  # Asked of `_pg_retype_has_using` alone, not of `castless`: `inet` → text has an assignment cast
+  # and still gets a `USING` (`abbrev`, #28), and `alter_field` drops the default before ANY `USING`.
+  if conn isa PormGPostgres && :type in delta && readable &&
+     _pg_retype_has_using(old_spec.type, new_spec.type) &&
      old_spec.default isa ExpressionDefault && new_spec.default isa NoDefault
     push!(type_found, finding(:drop_default))
   end
@@ -1259,7 +1268,7 @@ silently:
     `numeric(10, 2)` and said nothing);
   * a type outside the closed `CanonicalType` set is emitted as `TextField` with a warning naming
     the raw type — the old reader's silent `:TextField` fallback made a declared `TextField` equal
-    to an `inet` column forever;
+    to an `inet` column forever (an `inet` is in the set since #28; a `macaddr` is not);
   * an integer key is `IDField` on both engines, the only integer key PormG can declare, carrying
     the catalog's identity on PostgreSQL; `PROTECT` comes back as `RESTRICT` and `DO_NOTHING` as no
     action, the folds `_foreign_key_on_delete_sql` documents.
@@ -1449,13 +1458,18 @@ function _inspectdb_field(spec::ColumnSpec, table_name::AbstractString,
     return Models.UUIDField(; base...)
   elseif ctype isa CJSON
     return Models.JSONField(; base...)
+  elseif ctype isa CInet
+    return Models.GenericIPAddressField(; base...)
+  elseif ctype isa CCidr
+    return Models.CIDRField(; base...)
   elseif ctype isa CBytes
     bound = findfirst(c -> c isa ByteLengthCheck, spec.checks)
     return bound === nothing ? Models.BinaryField(; base...) :
                                Models.BinaryField(; base..., max_length = spec.checks[bound].max_bytes)
   end
   # `CUnsupported`: nothing in PormG's vocabulary declares this column. Said out loud — the old
-  # reader's silent `:TextField` fallback is how a declared `TextField` came to equal an `inet`.
+  # reader's silent `:TextField` fallback is how a declared `TextField` came to equal an `inet`
+  # (before #28 gave `inet` a field of its own).
   @warn "inspectdb: the column's type has no PormG field type; emitting it as TextField. A declared " *
         "TextField will NOT match this column, so makemigrations plans a retype unless the column is " *
         "excluded or declared by hand." table = string(table_name) column = spec.name type = spec.raw

@@ -465,6 +465,16 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:Union{AbstractStr
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__"))) # TODO, maybe I need to check if the column is valid and process the function before store
   end
 end
+# `Sockets.IPAddr` (#28): a network-address field takes one on write, so a filter — and the lookup
+# `get_or_create` builds from its pairs — must take one too. It used to fall off this ladder as a raw
+# `MethodError`, and `get_or_create` failed on a hit where `create` succeeded. Taken as its printed
+# text (`format_inet_sql`) — `OperObject` carries no address type of its own. The printed form, not
+# `string(ip)`: Sockets prints `::ffff:1.2.3.4` as `::ffff:102:304`, which a network field's formatter
+# would re-normalize but a text column compared against it would not match.
+_get_pair_to_oper(x::Pair{Vector{String},T}) where T<:Sockets.IPAddr =
+  _get_pair_to_oper(x.first => Models.format_inet_sql(x.second))
+_get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Sockets.IPAddr =
+  _get_pair_to_oper(x.first => String[Models.format_inet_sql(v) for v in x.second])
 # #635: a Julia `Regex` is PCRE, while the `@regex` family is evaluated by PostgreSQL as POSIX ARE.
 # Accepting the object would reinterpret its pattern in the other dialect — the divergence #635
 # refused to ship — so it is refused with the spelling that works. It used to fall off this ladder
@@ -2525,6 +2535,37 @@ function _render_column_rhs(column::AbstractString, operator::AbstractString, rh
   return string(column, " ", operator, " ", rhs)
 end
 
+# The field a filter's left-hand side names, and the path to report it by — a key of the model's own
+# fields, or the terminal field of a joined path from the #474 memo. `(nothing, "")` when the operand
+# is not a field. Read AFTER the column is rendered: rendering is what fills the memo.
+function _operand_field(v::SQLTypeOper, instruc::SQLInstruction)
+  v.column isa SQLField || return nothing, ""
+  if v.column.field isa String && haskey(instruc.object.model.fields, v.column.field)
+    return instruc.object.model.fields[v.column.field], v.column.field
+  end
+  f = memo_field(instruc, memo_key(v.column))
+  return f === nothing ? (nothing, "") : (f, memo_key(v.column)[2])
+end
+
+# #28: what a network column needs before its predicate renders. A pattern lookup reads the column's
+# printed text (`Dialect._network_pattern_operand`), because PostgreSQL has no `LIKE` for `inet` or
+# `cidr`. Everything else — `=`, `@in`, `@isnull`, the ordering lookups — compares the column itself,
+# natively. PostgreSQL only: SQLite has no such column, and the DDL that would create one is refused
+# (`Dialect._refuse_specialized_sqlite_type`), so there the predicate is left as written.
+function _network_operand!(column::AbstractString, field, operator::AbstractString,
+                           instruc::SQLInstruction)::String
+  instruc.connection isa PormGPostgres && operator in PATTERN_LOOKUP_OPERATORS &&
+    return Dialect._network_pattern_operand(instruc.connection, field, column)
+  return String(column)
+end
+
+# The formatter a filter value goes through. A pattern lookup's value is a FRAGMENT of an address
+# (`"10.20."`, `"::ffff"`), which the field's strict formatter would refuse, so it binds as plain
+# text — Django's `PatternLookup` skips the field's `get_prep_value` for the same reason. Every
+# other field and lookup keeps its own formatter.
+_lookup_formatter(field, operator::AbstractString) =
+  _is_network_field(field) && operator in PATTERN_LOOKUP_OPERATORS ? Models.format_text_sql : field.formatter
+
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   @pormg_debug false
   # #352/#373: rewrite a non-sargable date-bucket comparison (to_char/EXTRACT on the column) into a
@@ -2546,6 +2587,12 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   # unnamed expression and `memo_json_lookup` answers `false` for a `nothing` key.
   if isa(v.column, SQLTypeField) && memo_json_lookup(instruc, memo_key(v.column))
     return _render_json_lookup_comparison(v, column, instruc)
+  end
+  # #28: a network column. Here, once, so the model-field arm, the joined-path arm and a column RHS
+  # all get it.
+  network_field, _ = _operand_field(v, instruc)
+  if network_field !== nothing && _is_network_field(network_field)
+    column = _network_operand!(column, network_field, v.operator, instruc)
   end
   if isa(v.values, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
     @pormg_debug false
@@ -2670,14 +2717,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       # `["x", "y"]` on a date column went to the database as two strings instead of refusing, and
       # a `Date` bound as a `Date` rather than as the text form its equality twin binds. It takes the
       # terminal field from the memo exactly as the joined-path equality arm below does (#474/#576).
-      range_field, range_label = if v.column isa SQLField && v.column.field isa String &&
-                                    haskey(instruc.object.model.fields, v.column.field)
-        instruc.object.model.fields[v.column.field], v.column.field
-      elseif v.column isa SQLField && (_rf = memo_field(instruc, memo_key(v.column))) !== nothing
-        _rf, memo_key(v.column)[2]
-      else
-        nothing, ""
-      end
+      range_field, range_label = _operand_field(v, instruc)
       formatted = range_field === nothing ? v.values :
         _guarded_format(range_field.formatter, v.values, v.operator, range_label, range_field.type)
       placeholders = _bind_predicate_value(instruc, v.operator, formatted)
@@ -2692,7 +2732,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       # said it wanted ("`add_parameter!` stays outside the new `try`") and what the `BETWEEN` arm
       # above already does — only the operand formatting is being converted, never the binding.
       placeholders = add_parameter!(instruc,
-        _guarded_format(_f_meta.formatter, v.values, v.operator, v.column.field, _f_meta.type),
+        _guarded_format(_lookup_formatter(_f_meta, v.operator), v.values, v.operator, v.column.field, _f_meta.type),
         contains=is_like_op, operator=v.operator)
       # Why the conversion exists at all, kept from #411's `catch` body:
       #
@@ -2725,7 +2765,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       # probe was wrong, not the arm. `_vc_field` is a real field, so no label is synthesised —
       # the memo key's second half is the path the user wrote.
       placeholders = add_parameter!(instruc,
-        _guarded_format(_vc_field.formatter, v.values, v.operator,
+        _guarded_format(_lookup_formatter(_vc_field, v.operator), v.values, v.operator,
                         memo_key(v.column)[2], _vc_field.type),
         contains=is_like_op, operator=v.operator)
     elseif isa(v.column, SQLTypeField)

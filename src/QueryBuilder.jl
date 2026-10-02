@@ -6,6 +6,7 @@ import DataFrames, Tables, JSON, CSV, OrderedCollections
 # resolve creates a public-but-undefined entry, which Aqua's `test_undefined_exports` rightly fails.
 import DataFrames: DataFrame
 using Dates, TimeZones, Decimals, UUIDs
+import Sockets  # #28: a `Sockets.IPAddr` is a network-address field value
 
 # `sForeignKey` is imported for `src/precompile.jl`, which warms `_determine_join_type` through
 # `QB.sForeignKey`; nothing in this module or `src/querybuilder/` names it any more, since the

@@ -1,12 +1,13 @@
 """
 Field-constructor behavior snapshot (#260).
 
-Pins the **observable result** of every field constructor: for each of the 27 constructors, the
+Pins the **observable result** of every field constructor: for each of the 28 constructors, the
 complete struct field set as built (a) with no keyword arguments and (b) with each common keyword
 explicitly set to a non-default value, one at a time.
 
-There are **27** constructors, not the 26 the `*Field` naming suggests — `ForeignKey` doesn't end in
-`Field`, which is exactly how it escaped the first inventory. If a constructor is added, it must be
+There are **28** constructors (26 until #28 added `GenericIPAddressField` and `CIDRField`), one more
+than the `*Field` naming suggests — `ForeignKey` doesn't end in `Field`, which is exactly how it
+escaped the first inventory. If a constructor is added, it must be
 added to `FKE_CTORS` or the row-count guard below fails.
 
 Why a frozen snapshot rather than hand-written assertions: #260 collapsed a kwargs preamble that had
@@ -16,10 +17,11 @@ by changing a default. Four common keywords do **not** share a default across co
     unique       true in IDField, OneToOneField                               (false elsewhere)
     db_index     true in IDField, OneToOneField, SlugField, ForeignKey         (false elsewhere)
     editable     true in CharField, PasswordField, FileField, UUIDField,
-                 URLField, SlugField, JSONField                                (false elsewhere)
+                 URLField, SlugField, JSONField, GenericIPAddressField,
+                 CIDRField                                                     (false elsewhere)
     primary_key  true in IDField                                               (false elsewhere)
 
-Ten constructors deviate. (`AutoField` was an eleventh until #408 retired it — it is no longer a
+Twelve constructors deviate. (`AutoField` was an eleventh until #408 retired it — it is no longer a
 constructor at all, only a stub that raises, so it has no default state to freeze.) A shared helper with hardcoded defaults would have flipped behavior at
 those sites with every existing test still green, because nothing else asserts a constructor's
 default state field-by-field. This file is that missing guard.
@@ -66,6 +68,8 @@ const FKE_CTORS = Dict{String,Function}(
     "URLField"                  => kw -> FKE_M.URLField(; kw...),
     "SlugField"                 => kw -> FKE_M.SlugField(; kw...),
     "JSONField"                 => kw -> FKE_M.JSONField(; kw...),
+    "GenericIPAddressField"     => kw -> FKE_M.GenericIPAddressField(; kw...),
+    "CIDRField"                 => kw -> FKE_M.CIDRField(; kw...),
     "ForeignKey"                => kw -> FKE_M.ForeignKey("Driver"; kw...),
     "ManyToManyField"           => kw -> FKE_M.ManyToManyField("Driver"; kw...),
     "OneToOneField"             => kw -> FKE_M.OneToOneField("Driver"; kw...),
@@ -147,9 +151,10 @@ else
 
     # Guard the guard: an empty or truncated harness would pass a naive comparison.
     @test length(actual) == length(FKE_CTORS) * length(FKE_PROBES)
-    # 26 constructors x 13 probes. Was 297 until #408 retired AutoField, which took 11 rows with it,
-    # and 286 until #496 added the two `db_default` probes (+52).
-    @test length(actual) >= 338
+    # 28 constructors x 13 probes. Was 297 until #408 retired AutoField, which took 11 rows with it,
+    # 286 until #496 added the two `db_default` probes (+52), and 338 until #28 added the two
+    # network-address fields (+26).
+    @test length(actual) >= 364
     # No probe may error — every common keyword must remain accepted (or ignored with a warning) by
     # every constructor. An ERROR row would mean a keyword stopped being accepted, which breaks the
     # `Model_to_str` round-trip contract (generated model files reload through this kwargs form).

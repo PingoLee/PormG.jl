@@ -1947,7 +1947,7 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       # `get_model_pk_field`, which reads this model downstream, sees only the first.
       #
       # `unsupported_pk` is a THIRD reading, and it disagrees with both of the above in the same
-      # direction: a `codigo = models.GenericIPAddressField(primary_key=True)` builds nothing and
+      # direction: a `codigo = models.FilePathField(primary_key=True)` builds nothing and
       # declares nothing this function can see, yet Django's table is keyed on that column all the
       # same. Substituting `id` there would name a column that table has not got — the very defect
       # the two readings above exist to prevent, reached through #410's new skip path.
@@ -2438,7 +2438,7 @@ pairs instead — see the [`Vector{Pair}` method](@ref import_models_from_django
   `through=`, is left alone.
 - `auth_user_model::Union{Nothing, String}`: which model `settings.AUTH_USER_MODEL` refers to, spelled as Django spells it (`"access.User"`, or a bare `"User"` when unambiguous). Defaults to `nothing`, which auto-detects the single class inheriting `AbstractUser`. If a relation names `settings.AUTH_USER_MODEL` and there is not exactly one candidate, the import raises `InvalidMigrationError` naming them — deliberately hard, since one omitted keyword would otherwise turn every user relation in the project into a plain integer column.
 - `strict_relations::Bool`: when `false` (the default), a relation whose target is not in this import keeps its column and loses only the relation metadata, with a `# PormG:` marker saying so. `true` raises `InvalidMigrationError` instead. The lenient default is what makes the importer usable on a project that touches `django.contrib`.
-- `strict_fields::Bool`: when `false` (the default), a field whose Django type PormG does not implement (`GenericIPAddressField`, `SmallIntegerField`, …) is skipped — the column is not imported, and a `@warn` plus a `# PormG:` marker name the field, its class and its `models.py` line. `true` raises `InvalidMigrationError` instead. The lenient default exists because the alternative is not "one bad column": before it, a single unimplemented type aborted the import of every model in every app of the call. Note the skipped column still exists in the database, so `makemigrations` reads it as drift and proposes dropping it until you declare it by hand — which is the case `true` is for.
+- `strict_fields::Bool`: when `false` (the default), a field whose Django type PormG does not implement (`FilePathField`, `SmallIntegerField`, …) is skipped — the column is not imported, and a `@warn` plus a `# PormG:` marker name the field, its class and its `models.py` line. `true` raises `InvalidMigrationError` instead. The lenient default exists because the alternative is not "one bad column": before it, a single unimplemented type aborted the import of every model in every app of the call. Note the skipped column still exists in the database, so `makemigrations` reads it as drift and proposes dropping it until you declare it by hand — which is the case `true` is for.
 - `binding_overrides::AbstractDict`: `"<app_label>.<ClassName>" => "<JuliaBinding>"` (or a bare class name when unambiguous), to spell a generated binding differently from the derived one. The value must be a legal, capitalized Julia identifier that no other model claims; every violation is an error rather than a silent fallback.
 - `autofields_ignore::Vector{String}`: Fields to ignore automatically. Defaults to `["Manager"]`.
 - `parameters_ignore::Vector{String}`: Parameters to ignore during field processing. Defaults to `["help_text"]`.
@@ -4626,7 +4626,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     delete!(ignored_fields, field_key)
 
     # #410: a field type PormG does not implement. Skip the COLUMN, not the file. Before this, one
-    # `models.GenericIPAddressField` aborted `_import_django_apps` outright and every model in every
+    # `models.GenericIPAddressField` (mapped since #28) aborted `_import_django_apps` outright and every model in every
     # app of the call was lost — the same blast radius #268, #342 and #399 each closed for one
     # specific CAUSE, walked back into by the next unmapped type. Degrading is the general fix;
     # mapping names one at a time is a treadmill.
@@ -4844,10 +4844,10 @@ can hand to `getfield(Models, …)` and call.
 
 Both halves are load-bearing, and neither is a stand-in for the other:
 
-  * `isdefined` is the real question. `getfield(Models, :GenericIPAddressField)` is the `UndefVarError`
+  * `isdefined` is the real question. `getfield(Models, :FilePathField)` is the `UndefVarError`
     that used to abort the import of the whole project (#410), and Django ships plenty of types PormG
     has no counterpart for — `SmallIntegerField`, `PositiveBigIntegerField`, `FilePathField`,
-    `GenericIPAddressField`, `GeneratedField`.
+    `GeneratedField`. (`GenericIPAddressField` was the #410 example until #28 implemented it.)
   * the suffix test stops a `models.X(...)` call that is NOT a column from being constructed merely
     because `Models` happens to define the same name. `models.UniqueConstraint(...)` and
     `models.Index(...)` are the live examples: both resolve in `Models`, neither is a field, and both

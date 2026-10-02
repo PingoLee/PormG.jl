@@ -3770,8 +3770,9 @@ end
 # Django Importer (#410): an unimplemented field type costs its COLUMN, not the file
 #
 # `process_class_fields!` resolves the constructor by name, and #342's retry cannot help an unknown
-# TYPE — so one `models.GenericIPAddressField` raised out of `_import_django_apps` and every model in
-# every app of the call was lost. Django ships plenty of types PormG does not implement
+# TYPE — so one `models.GenericIPAddressField` (mapped since #28; the fixtures below use
+# `FilePathField` instead) raised out of `_import_django_apps` and every model in every app of the
+# call was lost. Django ships plenty of types PormG does not implement
 # (`SmallIntegerField`, `PositiveBigIntegerField`, `FilePathField`, `GeneratedField`, …), and #268,
 # #342 and #399 each closed this blast radius for one specific cause before the next unmapped type
 # walked straight back into it.
@@ -3786,7 +3787,7 @@ from django.db import models
 
 class Thing(models.Model):
     id = models.BigAutoField(primary_key=True)
-    ip = models.GenericIPAddressField()
+    caminho = models.FilePathField()
     nome = models.CharField(max_length=10)
 
 class EverythingElse(models.Model):
@@ -3809,12 +3810,12 @@ class Untouched(models.Model):
         # ...and so does the other app, which the old failure took down with it.
         @test occursin("Untouched = Models.Model(", generated)
         # The column itself is gone, and that is what the marker exists to say.
-        @test !occursin("ip = Models.", generated)
+        @test !occursin("caminho = Models.", generated)
 
         # The report names the field, the class AND the models.py line — a reader with the generated
         # file open has to be able to find the declaration in the Django source.
-        @test occursin("# PormG: field 'ip' on 'racing.Thing' (models.py line 5) is a " *
-                       "models.GenericIPAddressField", generated)
+        @test occursin("# PormG: field 'caminho' on 'racing.Thing' (models.py line 5) is a " *
+                       "models.FilePathField", generated)
         @test occursin("NOT imported", generated)
         # The hazard the skip creates: the live column is now invisible to the model, so the planner
         # reads it as drift. Saying so in the artifact is the difference between a documented gap and
@@ -3824,7 +3825,7 @@ class Untouched(models.Model):
         sandbox = Module()
         Core.eval(sandbox, Meta.parse(generated))
         thing = Core.eval(sandbox, :(unknown_field_type.Thing))
-        @test !haskey(thing.fields, "ip")
+        @test !haskey(thing.fields, "caminho")
         @test haskey(thing.fields, "nome")
         @test Base.invokelatest(PormG.Models.get_model_pk_field, thing) == :id
     finally
@@ -3838,7 +3839,7 @@ class Untouched(models.Model):
 from django.db import models
 
 class Thing(models.Model):
-    ip = models.GenericIPAddressField()
+    caminho = models.FilePathField()
     nome = models.CharField(max_length=10)
 """
     key_strict, existed_strict = project_config!()
@@ -3853,8 +3854,8 @@ class Thing(models.Model):
         end
         @test err isa PormG.InvalidMigrationError
         msg = sprint(showerror, err)
-        @test occursin("field 'ip' in class 'racing.Thing'", msg)
-        @test occursin("models.GenericIPAddressField", msg)
+        @test occursin("field 'caminho' in class 'racing.Thing'", msg)
+        @test occursin("models.FilePathField", msg)
         @test occursin("strict_fields = true", msg)
         # ...and it really did abort: nothing was written.
         @test !isfile(joinpath(key_strict, "strict_fields.jl"))
@@ -3935,7 +3936,7 @@ class Thing(models.Model):
 from django.db import models
 
 class Thing(models.Model):
-    ip = models.GenericIPAddressField(choices=[('a', 'A')])
+    caminho = models.FilePathField(choices=[('a', 'A')])
     porta = models.SmallIntegerField()
     nome = models.CharField(max_length=10)
 """
@@ -3946,13 +3947,52 @@ class Thing(models.Model):
     try
         # `porta` was dropped by the caller: no column, and no report either.
         @test !occursin("porta", gen_ord)
-        # `ip` was dropped by PormG: reported once, as a TYPE problem...
-        @test occursin("field 'ip' on 'racing.Thing'", gen_ord)
+        # `caminho` was dropped by PormG: reported once, as a TYPE problem...
+        @test occursin("field 'caminho' on 'racing.Thing'", gen_ord)
         # ...and not a second time as an option problem on a column that does not exist.
         @test !occursin("has no choices slot", gen_ord)
         @test occursin("nome = Models.CharField(max_length=10)", gen_ord)
     finally
         cleanup_project_test!(key_ord, existed_ord)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#28): GenericIPAddressField imports as itself, options included
+# The type was #410's own example of a field PormG could not build, so it used to be skipped with a
+# marker. It is a PormG field of the same name now, and the importer maps by name — so the column,
+# `protocol` (Django spells it `'IPv4'`) and `unpack_ipv4` must all come through, and the generated
+# file must reload into the same field.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a Django GenericIPAddressField imports with its options (#28)" begin
+    src = """
+from django.db import models
+
+class PitWallSession(models.Model):
+    client_ip = models.GenericIPAddressField()
+    relay_ip = models.GenericIPAddressField(protocol='IPv4', null=True, blank=True)
+    mapped_ip = models.GenericIPAddressField(unpack_ipv4=True)
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => src];
+                                                           output_file = "network_fields.jl")
+    try
+        # Imported, not skipped: no #410 marker for any of the three.
+        @test !occursin("NOT imported", generated)
+        @test occursin("client_ip = Models.GenericIPAddressField()", generated)
+        # `protocol` is stored lower-cased, so the file says one thing however Django spelled it.
+        @test occursin("relay_ip = Models.GenericIPAddressField(", generated)
+        @test occursin("protocol=\"ipv4\"", generated)
+        @test occursin("mapped_ip = Models.GenericIPAddressField(unpack_ipv4=true)", generated)
+
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        session = Core.eval(sandbox, :(network_fields.PitWallSession))
+        relay = session.fields["relay_ip"]
+        @test relay isa PormG.Models.sGenericIPAddressField
+        @test relay.protocol == "ipv4" && relay.null
+        @test session.fields["mapped_ip"].formatter === PormG.Models.format_inet_unpacked_sql
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
     end
 end
 

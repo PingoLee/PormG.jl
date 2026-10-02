@@ -781,7 +781,12 @@ function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
     (conn isa PormGPostgres ? "octet_length($col) > $(ph(1))::integer" :
                               "length(CAST($col AS BLOB)) > $(ph(1))"), Any[f.bound]
   elseif f.kind === :varchar_length
-    "char_length(rtrim(CAST($col AS text))) > $(ph(1))::integer", Any[f.bound]
+    # #28: an `inet` is measured as the text the ALTER writes — `abbrev`, the printed form (see
+    # `Dialect._postgres_retype_using`) — not as its text cast, which adds the mask (`/32`) and would
+    # refuse a value that fits.
+    measured = conn isa PormGPostgres && parse_canonical_type(f.old_type, conn) isa CInet ?
+      "abbrev($col)" : "CAST($col AS text)"
+    "char_length(rtrim($measured)) > $(ph(1))::integer", Any[f.bound]
   elseif f.kind === :integer_range
     lo, hi = _INT_RANGE[f.bound]
     "round(CAST($col AS numeric)) NOT BETWEEN $(ph(1))::numeric AND $(ph(2))::numeric", Any[Int(lo), Int(hi)]
@@ -805,8 +810,10 @@ const _PG_INPUT_IS_VALID = 160000
 # input functions accept a few rare spellings these do not (a hex float; a UUID hyphenated at odd
 # places is accepted, unbalanced braces too). A value wrongly refused costs a hand-written step on a
 # pre-16 server; one wrongly accepted still fails the ALTER, which rolls back. Dates, timestamps and JSON have
-# no such grammar (`'Jan 5 2020'`, a `DateStyle`-dependent order, nested JSON), so there every
-# non-NULL value counts as unverifiable: such a retype over a populated table needs PostgreSQL 16.
+# no such grammar (`'Jan 5 2020'`, a `DateStyle`-dependent order, nested JSON), and neither do `inet`
+# and `cidr` (#28: the server takes classful short forms such as `10.1` that PormG's own parser
+# refuses, so that parser is not the server's grammar), so there every non-NULL value counts as
+# unverifiable: such a retype over a populated table needs PostgreSQL 16.
 const _TEXT_CAST_RE = (
   int = raw"^\s*[+-]?[0-9]+\s*$",
   float = raw"^\s*([+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?|[+-]?(inf|infinity|nan))\s*$",

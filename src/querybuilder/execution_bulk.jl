@@ -1652,9 +1652,9 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     for index in 1:total
       try
         # Validation checks consistent with single insert(), row by row, so the first row that
-        # fails is the one reported.
+        # fails is the one reported, by its row and field (#875).
         for (j, field) in enumerate(fields_df)
-          _validate_field_value(model, field, metas[j], sources[j][index], "bulk_insert")
+          _validate_bulk_cell(model, field, metas[j], sources[j][index], "bulk_insert", index)
         end
 
         # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
@@ -1666,7 +1666,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
         end
       catch e
         _depuration_values_bulk_insert(fields_df, mapping, model, df[index, :], index)
-        e isa PormGError && rethrow()   # keep the taxonomy type; the depuration log above carries the row context
+        e isa PormGError && rethrow()   # keep the taxonomy type; a value refusal already names its row (the depuration pass above, or `_validate_bulk_cell`, #875)
         throw(InvalidValueError("Error in bulk_insert, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
       end
       count += 1
@@ -1948,7 +1948,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
           catch e
             # A value refusal names the cell: bulk_copy logs no per-row depuration, so this message
             # is the only place a 100k-row frame's bad cell is located (#869).
-            e isa InvalidValueError && throw(_bulk_copy_cell_error(e, model, field, row_index))
+            e isa InvalidValueError && throw(_bulk_cell_error(e, "bulk_copy", model, field, row_index))
             e isa PormGError && rethrow()   # any other taxonomy type is not about the value, and passes as is
             throw(InvalidValueError("Error in bulk_copy, row $(row_index) for model $(model.name), field \"$(field)\" failed validation or formatting: $(e)"))
           end
@@ -1993,12 +1993,25 @@ bulk_copy(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_copy(mo
 # the refusals already name part of the cell, so the message says each part once: `_single_value`'s
 # own "field `x` was given …" is kept as it is (#712 pins that wording for every writer), and
 # `_validation_error`'s model-and-field prefix is dropped for the one this adds.
-function _bulk_copy_cell_error(e::InvalidValueError, model::PormGModel, field::AbstractString, row_index::Integer)
-  head = "Error in bulk_copy, row $(row_index) for model $(model.name)"
-  startswith(e.msg, "Error in bulk_copy, field `$(field)` ") &&                    # _single_value
-    return InvalidValueError("$(head), $(chopprefix(e.msg, "Error in bulk_copy, "))")
-  reason = chopprefix(e.msg, "Error in bulk_copy for model $(model.name), field \"$(field)\": ")   # _validation_error
+# #875: shared by all three bulk writers — `bulk_insert` and `bulk_update` raise it for a validation
+# refusal, which their formatter-only depuration pass cannot locate.
+function _bulk_cell_error(e::InvalidValueError, op::AbstractString, model::PormGModel, field::AbstractString, row_index::Integer)
+  head = "Error in $(op), row $(row_index) for model $(model.name)"
+  startswith(e.msg, "Error in $(op), field `$(field)` ") &&                    # _single_value
+    return InvalidValueError("$(head), $(chopprefix(e.msg, "Error in $(op), "))")
+  reason = chopprefix(e.msg, "Error in $(op) for model $(model.name), field \"$(field)\": ")   # _validation_error
   return InvalidValueError("$(head), field \"$(field)\": $(reason)")
+end
+
+# One cell's value checks, with a refusal re-raised naming its row (#875). Every other error passes
+# as raised: `_validate_field_value` raises nothing untyped, and the caller's `catch` owns that arm.
+function _validate_bulk_cell(model::PormGModel, field::AbstractString, f_meta, value, op::AbstractString, row_index::Integer)
+  try
+    _validate_field_value(model, field, f_meta, value, op)
+  catch e
+    e isa InvalidValueError && throw(_bulk_cell_error(e, op, model, field, row_index))
+    rethrow()
+  end
 end
 
 function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{String, String}, model::PormGModel, row::DataFrames.DataFrameRow, index::Integer; op::AbstractString = "bulk_insert")
@@ -2451,7 +2464,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
       try
         # Validation checks consistent with single update(), on the SET columns only
         for (j, field) in enumerate(set_fields)
-          _validate_field_value(model, field, set_metas[j], set_sources[j][index], "bulk_update")
+          _validate_bulk_cell(model, field, set_metas[j], set_sources[j][index], "bulk_update", index)
         end
 
         # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
@@ -2463,7 +2476,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
         end
       catch e
         _depuration_values_bulk_insert(fields_df, mapping, model, df[index, :], index; op = "bulk_update")
-        e isa PormGError && rethrow()   # keep the taxonomy type; the depuration log above carries the row context
+        e isa PormGError && rethrow()   # keep the taxonomy type; a value refusal already names its row (the depuration pass above, or `_validate_bulk_cell`, #875)
         throw(InvalidValueError("Error in bulk_update, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
       end
       count += 1

@@ -377,24 +377,56 @@ query = M.Race.objects
 query.filter("year" => 2009, (F("start_at") - F("date")) == Hour(6))
 ```
 
-`==` and `!=` work on both engines. Ordering (`>`, `<`, `>=`, `<=`) works on PostgreSQL and raises
-`QueryBuildError` on **SQLite**: the difference is text there, and text does not order like a
-duration (`"100:00:00"` sorts before `"99:00:00"`, and a negative difference sorts by its digits).
-This is an intentional divergence. To order by a difference on SQLite, compare whole days instead, by
-subtracting two `DateField` values.
+All six comparisons work on both engines — here, the 2009 races that started after noon UTC:
 
-On SQLite a timestamp difference is that text everywhere, so the same divergence reaches further:
+```julia
+query = M.Race.objects
+query.filter("year" => 2009, (F("start_at") - F("date")) > Hour(12))
+query.values("name")
+```
 
-- **Arithmetic on it** (`d + d`, `d * 2`, `d + Hour(1)`, `F("points") * d`) raises `QueryBuildError`
-  on SQLite; PostgreSQL's interval arithmetic works.
-- **A window function as one side** (`F("start_at") - Lag("start_at", over = …)`) raises
-  `QueryBuildError` on SQLite, where the difference is computed in a subquery the window cannot see
-  through. Project the window value in a CTE first and subtract the column. `Max`/`Min` are fine.
-- **Ordering or aggregating it** is not refused. `order_by` on its alias, `Max`/`Min`, `Greatest` and
-  `Least` sort the text, exactly as they do for a `DurationField` column on SQLite: right below 100
-  hours, wrong at and above it, and for negative differences. `Sum`, `Avg` and `Abs` read the text's
-  leading number, so they work on whole hours and drop the minutes and seconds. Aggregate durations
-  on PostgreSQL.
+A timestamp difference also takes interval arithmetic: `+` and `-` with another difference, a
+`DurationField` or a duration (`Hour(1)`), and `*` or `/` by a number (`d * 2`, `2 * d`,
+`F("points") * d`, `d / 2`). How far each 2009 start was from 14:00 UTC, negative when earlier:
+
+```julia
+query = M.Race.objects
+query.filter("year" => 2009)
+query.values("name", "from_14h" => (F("start_at") - F("date")) - Hour(14))
+```
+
+A date or timestamp plus or minus an interval *value* — a difference or a `DurationField` — is a
+timestamp, with the date on either side. When each driver's first lap of the 2009 Australian GP ended:
+
+```julia
+query = M.Lap_times.objects
+query.filter("raceid__year" => 2009, "raceid__round" => 1, "lap" => 1)
+query.values("driverid__surname", "ended_at" => F("raceid__start_at") + F("time"))
+```
+
+SQLite has no interval type, so PormG computes an interval there as a whole number of
+**milliseconds** and turns only the finished value into the `DurationField` text. Comparisons are
+numeric, so a difference of 100 hours or more, and a negative one, order correctly. Two limits follow
+from it, and both are intentional divergences:
+
+- **Precision** is the millisecond on SQLite, the precision a stored timestamp has; PostgreSQL keeps
+  microseconds. Dividing by zero gives `NULL` on SQLite and an error on PostgreSQL.
+- **What has no millisecond form is refused on SQLite** with `QueryBuildError`: an extremum over a
+  `DurationField` (`Max("time") + d`), a month or a year (`d + Month(1)`, which has no fixed length),
+  and a window function inside the interval (`F("start_at") - Lag("start_at", over = …)`). The window
+  sees a single row in the subquery that formats the text; project its value in a CTE first and use
+  the column. `Max`/`Min` over a timestamp are fine.
+
+Some shapes have no operator on PostgreSQL either, which fails when the statement runs: `d * d`,
+`d / d`, `F("points") / d`, a number plus or minus an interval (`d + 5`, `count + d`), and a date
+times an interval. SQLite refuses them at build time with `QueryBuildError`.
+
+**Ordering or aggregating the projected value** is not affected. The value a query returns is the
+text, so `order_by` on its alias, `Max`/`Min`, `Greatest` and `Least` sort the text, exactly as they
+do for a `DurationField` column on SQLite: right below 100 hours, wrong at and above it, and for
+negative differences. `Sum`, `Avg` and `Abs` read the text's leading number, so they work on whole
+hours and drop the minutes and seconds. Aggregate durations on PostgreSQL. A `DurationField` column
+compared with a duration (`F("time") > Minute(2)`) also still compares its stored text.
 
 A duration compares only against an interval — a timestamp difference or a `DurationField`. Against
 anything else (`F("date") > Hour(1)`, or a day count) it raises `QueryBuildError`. A `Time` is a time
@@ -434,10 +466,29 @@ query.filter("year" => 2009)
 query.values("name", "doubled" => F("date") + (F("date") - Date(2009, 3, 29)))
 ```
 
+An integer column (`IntegerField`, `PositiveIntegerField`, `PositiveSmallIntegerField`,
+`BigIntegerField`) is a day count too, so it shifts a date the same way on both engines — here, each
+2009 race date moved back by its round number:
+
+```julia
+query = M.Race.objects
+query.filter("year" => 2009)
+query.values("name", "round", "shifted" => F("date") - F("round"))
+```
+
+PostgreSQL renders `("Tb"."date" - "Tb"."round")`; SQLite shifts the julian-day number,
+`date(julianday("Tb"."date") - ("Tb"."round"))`. A `BigIntegerField` is cast to `integer` on
+PostgreSQL, which has `date - integer` but no `date - bigint`. Only a plain column counts: a
+`ForeignKey`, an ID, `F("round") * 2`, a float, a text column or `Sum(...)` beside a date raises
+`QueryBuildError` on SQLite, where a date is text and `+` or `-` would use only its year.
+PostgreSQL has no such operator for these either, and fails when the statement runs. A `TimeField` is
+the one exception: PostgreSQL's `date + time` is a timestamp, while SQLite raises `QueryBuildError`
+for it — an intentional divergence. On SQLite, add the time as a duration instead
+(`F("date") + Hour(6)`).
+
 A day count **minus** a date has no meaning and raises `QueryBuildError` on both engines; subtract the
 count from the date instead. Shifting a date or timestamp by an interval *value* — a `DurationField`
-or a timestamp difference — works on PostgreSQL and raises `QueryBuildError` on SQLite, where both
-are text; shift by a duration (`F("start_at") + Hour(6)`) or a day count there.
+or a timestamp difference — gives a timestamp on both engines (see above).
 
 ### When NOT to Use F
 

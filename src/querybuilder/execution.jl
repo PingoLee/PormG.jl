@@ -1568,8 +1568,8 @@ _difference_result_kind(_, _) = nothing
 # way `_projection_column_kind` can answer for one. Type first and every joined temporal column silently
 # becomes `nothing` — on PostgreSQL that is `timestamptz + bigint`, a hard error; on SQLite it is a
 # `date()` truncation nobody sees.
-function _render_left_typed(value::Any, operation::String, instruc::SQLInstruction)::Tuple{String,TemporalKind}
-  value isa FExpression && return _set_update_query_typed(value, instruc)
+function _render_left_typed(value::Any, operation::String, instruc::SQLInstruction)::Tuple{String,_RenderKind}
+  value isa FExpression && return _render_expr_typed(value, instruc)
   sql = _set_update_query_left(value, operation, instruc)
   return sql, _side_kind(value, instruc)
 end
@@ -1588,6 +1588,52 @@ _side_kind(value::Any, instruc::SQLInstruction) = _projection_column_kind(value,
 _side_kind(value::String, instruc::SQLInstruction) =
   occursin("__@", value) ? _operand_kind(value, instruc) : _projection_column_kind(value, instruc)
 _side_kind(value::SQLTypeFunction, instruc::SQLInstruction) = _function_projection_kind(value, instruc)
+
+# #882 — AN INTEGER COLUMN BESIDE A DATE IS A WHOLE NUMBER OF DAYS. An integer literal already is
+# (#568), and so is a `DATE - DATE` count (#814); an integer COLUMN was untyped, because
+# `field_canonical_kind` answers `nothing` for an `IntegerField`. So `F("seen") - F("points")` shifted
+# the date by `points` days on PostgreSQL, and on SQLite subtracted `points` from the YEAR, silently.
+#
+# Typed HERE, for date arithmetic only, and not in `field_canonical_kind`: that table also drives the
+# read path, the CTE kind records and the #536 comparison binder, and an integer column has no
+# representation for any of them to undo. `CInt64` for a `BigIntegerField`, because PostgreSQL has
+# `date ± integer` but no `date ± bigint`, so that count is cast (`_day_count_sql`).
+#
+# A bare column only — `F("points") * 2` is arithmetic over one, and a ForeignKey or an ID is an
+# integer that is not a quantity of anything. Both stay untyped, and an untyped side combined with a
+# date is refused on SQLite (`_refuse_untyped_date_operand`).
+function _day_count_column_kind(side, kind::_RenderKind, instruc::SQLInstruction)::_RenderKind
+  kind === nothing && _is_bare_column(side) || return kind
+  f = _operand_column_field(side, instruc)
+  # The whole integer family a quantity is declared as. SMALLINT needs no cast: PostgreSQL reaches
+  # `date ± integer` through its implicit int2 -> int4 (measured on db_2).
+  f isa Union{Models.sIntegerField,Models.sPositiveIntegerField,Models.sPositiveSmallIntegerField} &&
+    return CInt32()
+  f isa Models.sBigIntegerField && return CInt64()
+  return nothing
+end
+_is_bare_column(s::String) = !occursin("__@", s)
+_is_bare_column(::JoinedReference) = true
+_is_bare_column(x::FExpression) = x.operation === nothing && _is_bare_column(x.field_name)
+_is_bare_column(::Any) = false
+
+# A day count's SQL as a day shift reads it. Only a `BIGINT` count on PostgreSQL changes.
+_day_count_sql(sql::AbstractString, kind::TemporalKind, instruc::SQLInstruction) =
+  kind isa CInt64 && instruc.connection isa PormGPostgres ? "CAST($(sql) AS integer)" : sql
+
+# #882 — `date ± x` where `x` is none of the kinds a date combines with: a text column, `Sum(...)`,
+# `F("points") * 2`, a float. SQLite stores a date as TEXT, so `+`/`-` there added the date's YEAR to
+# the number, silently. Refused on SQLite; PostgreSQL's SQL is left as it was. For most of these
+# PostgreSQL has no operator either and fails when the statement runs. The exception is a `TimeField`:
+# PostgreSQL's `date + time` is a timestamp, which SQLite does not render — an intentional divergence,
+# documented beside the integer-column rule.
+function _refuse_untyped_date_operand(operation::AbstractString, instruc::SQLInstruction)
+  instruc.connection isa PormGSQLite || return nothing
+  throw(QueryBuildError("`$(operation)` between a date and a value PormG cannot type is not supported on " *
+                        "SQLite, where a date is text and `$(operation)` would use only its year. Add a " *
+                        "whole number of days (an IntegerField, F(\"date\") + 7) or a duration " *
+                        "(F(\"date\") + Day(7))."))
+end
 
 # #564/#568 — THE ONE TEMPORAL RENDERER. It takes an ALREADY-RENDERED left side and the kind that
 # left evaluates to, which is what lets the duration spelling and the bare-integer spelling share it:
@@ -1681,44 +1727,79 @@ end
 # text a `DateTimeField` stores, and propagates NULL. The difference of two midnights is a whole
 # number, so the `CAST` is exact — it only turns SQLite's REAL into the integer PostgreSQL returns.
 #
-# #814 — a TIMESTAMP difference on SQLite is the INTERVAL text a `DurationField` stores there
-# (`Models._duration_nanoseconds_to_string`: `[-]HH:MM:SS[.f]`, hours never folded into days, the
-# fraction's trailing zeros stripped), so `value_parser(::CInterval, ::PormGSQLite)` reads it back as
-# the `Dates.CompoundPeriod` PostgreSQL's `interval` reads back as — the #581 pin, on both engines.
+# #814 — a TIMESTAMP difference is an interval. PostgreSQL's `-` already is one.
 #
-# The text needs the difference FOUR times (sign, hours, minutes, seconds and the fraction), and
-# each side may carry bound parameters (`(F(ts) + Hour(1)) - F(ts)`). Repeating the side's text would
-# leave more `?` than bound values; re-rendering it, as the SQLite `xor` arm does, would bind them
-# again. So the difference is computed ONCE, in a correlated scalar subquery, and named there: each
-# side's text — and each of its parameters — appears exactly once. Milliseconds, because that is the
-# precision a stored timestamp carries (the #79 mask); `round` absorbs `julianday`'s binary fraction.
-# NULL on either side is NULL, as on PostgreSQL.
+# #881 — on SQLite it is the INTEGER number of milliseconds between the two instants, kind
+# `_IntervalMs`, and it stays that number while the expression around it is built, so `d > Hour(1)`,
+# `d + d` and `F("date") + d` are arithmetic on a number. It becomes the interval TEXT a `DurationField`
+# stores there (`[-]HH:MM:SS[.f]`, which `value_parser(::CInterval, ::PormGSQLite)` reads back as the
+# `Dates.CompoundPeriod` PostgreSQL's `interval` reads back as, the #581 pin) only once, where its SQL
+# leaves the expression tree (`_finalize_render`). Under #814 it was that text from the start, so
+# ordering compared text (`"100:00:00" < "99:00:00"`) and arithmetic added the leading hours; both
+# were refused on SQLite.
 #
-# The result is TEXT, and TEXT does not order like a duration — `"100:00:00" < "99:00:00"`, and a
-# negative sorts by its digits. That is the existing `DurationField`-on-SQLite property, and it is why
-# `_refuse_interval_ordering` refuses `<`/`>` against a difference on SQLite while `==`/`!=` stay exact.
+# Milliseconds, because that is the precision a stored timestamp carries (the #79 mask); `round`
+# absorbs `julianday`'s binary fraction. Each side appears exactly once, so each of its parameters is
+# bound once. NULL on either side is NULL, as on PostgreSQL.
 function _render_temporal_difference(left_side::AbstractString, right_side::AbstractString,
-                                     kind::CanonicalType, instruc::SQLInstruction)::String
+                                     kind::CanonicalType, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   if instruc.connection isa PormGPostgres
-    return "($(left_side) - $(right_side))"
+    return "($(left_side) - $(right_side))", kind
   elseif instruc.connection isa PormGSQLite
-    kind isa CInt32 && return "CAST(julianday($(left_side)) - julianday($(right_side)) AS INTEGER)"
-    return "(SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE " *
-           "(CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || " *
-           "printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || " *
-           "(CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END " *
-           "FROM (SELECT CAST(round((julianday($(left_side)) - julianday($(right_side))) * 86400000) AS INTEGER) AS _pormg_ms))"
+    kind isa CInt32 && return "CAST(julianday($(left_side)) - julianday($(right_side)) AS INTEGER)", kind
+    return "CAST(round((julianday($(left_side)) - julianday($(right_side))) * 86400000) AS INTEGER)", _IntervalMs()
   else
     throw(_unsupported_conn("date difference", instruc.connection))
   end
 end
 
-# #814 — a WINDOW function cannot be a side of that subquery. It is evaluated over the rows of the
-# SELECT it appears in, and the subquery's inner SELECT has exactly one: `LAG(x) OVER (…)` there is
-# NULL on every row and `FIRST_VALUE(x)` is `x`, silently (measured on SQLite 3.45). An aggregate is
-# safe — SQLite attributes an aggregate over outer columns to the outer query — so only a window is
-# refused. Its value can still be subtracted on SQLite once it is a column: project it in a CTE or a
-# subquery first.
+# #881 — where a rendered expression LEAVES the tree (`_set_update_query`, the projection in
+# `build_query.jl`), an interval held in milliseconds becomes the stored text, read back as `CInterval`.
+# Every other kind is already what its SQL evaluates to.
+_finalize_render(sql::AbstractString, kind::TemporalKind, ::SQLInstruction) = (String(sql), kind)
+_finalize_render(sql::AbstractString, ::_IntervalMs, ::SQLInstruction) =
+  (Dialect._sqlite_interval_text(sql), CInterval())
+
+# The text of a side, for the places that compare or combine it as text rather than as a number.
+_as_interval_text(sql::AbstractString, kind::_RenderKind) =
+  kind isa _IntervalMs ? Dialect._sqlite_interval_text(sql) : String(sql)
+
+_is_interval_kind(kind::_RenderKind) = kind isa Union{CInterval,_IntervalMs}
+
+# #881 — a side as SQLite milliseconds, or `nothing` when it has no such form. An `_IntervalMs` side
+# is one already. A `DurationField` column is its stored text, parsed in SQL; the column reference is
+# repeated by the parse, which is safe because a column binds no parameter. Any other interval — an
+# extremum over a duration column (`Max("lap")`), a `Coalesce` — is text whose SQL may carry
+# parameters, and has no millisecond form here.
+function _interval_ms_sql(sql::AbstractString, side, kind::_RenderKind)::Union{String,Nothing}
+  kind isa _IntervalMs && return String(sql)
+  kind isa CInterval && _is_bare_column(side) && return Dialect._sqlite_interval_ms(sql)
+  return nothing
+end
+
+# #881 — a duration literal as the milliseconds it binds against an `_IntervalMs` side, rounded half
+# away from zero as the difference is. A month or a year has no fixed length, so it has no millisecond
+# count (PostgreSQL's `interval` keeps months apart for the same reason).
+function _duration_ms(p)::Int64
+  period = p isa Interval ? p.period : p
+  ns = try
+    Models._duration_to_nanoseconds(period)
+  catch e
+    e isa InvalidValueError || rethrow()
+    throw(QueryBuildError("A duration of months or years ($(period)) has no fixed length, so it cannot be " *
+                          "combined with a timestamp difference on SQLite. Use weeks, days or a time: " *
+                          "Day(30), Hour(1)."))
+  end
+  q, r = divrem(ns, 1_000_000)
+  return 2 * abs(r) >= 1_000_000 ? q + sign(ns) : q
+end
+
+# #814 — a WINDOW function cannot be inside a SQLite interval. The interval becomes text in a correlated
+# scalar subquery (`Dialect._sqlite_interval_text`), and a window is evaluated over the rows of the
+# SELECT it appears in, which there is exactly one: `LAG(x) OVER (…)` there is NULL on every row and
+# `FIRST_VALUE(x)` is `x`, silently (measured on SQLite 3.45). An aggregate is safe — SQLite attributes
+# an aggregate over outer columns to the outer query — so only a window is refused. Its value can
+# still be used on SQLite once it is a column: project it in a CTE or a subquery first.
 _has_window_function(::WindowFunction) = true
 _has_window_function(x::FExpression) = _has_window_function(x.field_name) || _has_window_function(x.operand)
 # `kwargs` too: `When(…; then = Lag(…))` keeps its branch value there, not in `column`.
@@ -1730,42 +1811,24 @@ _has_window_function(::Any) = false
 function _refuse_window_in_interval(left, right, instruc::SQLInstruction)
   instruc.connection isa PormGSQLite && (_has_window_function(left) || _has_window_function(right)) || return nothing
   throw(QueryBuildError("A window function (Lag, Lead, FirstValue, …) cannot be a side of a timestamp " *
-                        "difference on SQLite: the difference is computed in a subquery, where the window " *
-                        "sees one row. Project the window value in a CTE first and subtract the column."))
+                        "difference, or of arithmetic on one, on SQLite: the interval is turned into text in " *
+                        "a subquery, where the window sees one row. Project the window value in a CTE first " *
+                        "and use the column."))
 end
 
-# #814 — ARITHMETIC on a timestamp difference is refused on SQLite for the reason ordering is: the
-# difference is interval TEXT there, so `d + d` is the sum of the leading hours and `d * 2` the hours
-# doubled, silently. PostgreSQL's interval arithmetic is native and left alone.
-function _refuse_interval_arithmetic(operation::AbstractString, instruc::SQLInstruction)
-  instruc.connection isa PormGSQLite || return nothing
-  throw(QueryBuildError("`$(operation)` on the difference of two timestamps is not supported on SQLite: " *
-                        "the difference is interval TEXT there (`HH:MM:SS`), not a number. Subtract two " *
-                        "DateField values for a whole number of days, or run the arithmetic on PostgreSQL."))
-end
 const _ARITHMETIC_OPERATIONS = ("+", "-", "*", "/")
 
 # #814 — the operators whose answer depends on ORDER, as opposed to equality.
 const _ORDERING_OPERATIONS = (">", "<", ">=", "<=")
 
-# #814 — is this side a COMPUTED interval: a difference of two temporal values, rather than a
-# `DurationField` column? Only the difference is new: comparing a `DurationField` column with `<` on
-# SQLite already compared stored TEXT, before this issue and outside it, and refusing it here would
-# take away a comparison that is correct for every duration under 100 hours.
-_is_computed_interval(side, kind::TemporalKind) =
-  kind isa CInterval && side isa FExpression && side.operation !== nothing
-
-# #814 — SQLite renders a difference as TEXT (see `_render_temporal_difference`), so `<` would compare
-# it as text: wrong past 99 hours and for any negative difference, and silently. Refused there; the
-# same comparison is an `interval` comparison on PostgreSQL and is left alone. Equality is exact on
-# both: the rendered text is the canonical form a duration literal binds as.
-function _refuse_interval_ordering(operation::AbstractString, instruc::SQLInstruction)
-  operation in _ORDERING_OPERATIONS && instruc.connection isa PormGSQLite || return nothing
-  throw(QueryBuildError("`$(operation)` against the difference of two timestamps is not supported on " *
-                        "SQLite: the difference is interval TEXT there (`HH:MM:SS`), and text does not " *
-                        "order like a duration (\"100:00:00\" sorts before \"99:00:00\"). `==` and `!=` " *
-                        "are supported on both engines; ordering is supported on PostgreSQL."))
-end
+# #881 — what SQLite still cannot do with an interval, each because the matching PostgreSQL
+# expression has no operator either (`interval + integer`, `interval * interval`, `integer / interval`
+# fail when the statement runs) or because the side has no millisecond form (`_interval_ms_sql`).
+# Refused at build time on SQLite, where it would otherwise compute on text or on a number, silently.
+_sqlite_interval_error(what::AbstractString) =
+  QueryBuildError("$(what) is not supported on SQLite. An interval there is a timestamp difference, a " *
+                  "DurationField column or a duration (Hour(1)); it combines with another interval " *
+                  "(+, -, comparisons), with a number (* and /), or with a date (date + interval).")
 
 # #801 — the RIGHT side of a binary expression, rendered AND typed, for the one caller that must know
 # what the right evaluates to: a `-` over a temporal left. Rendered exactly once — a second render
@@ -1784,10 +1847,10 @@ end
 # PostgreSQL it carries the cast that names it, because `date - $1` has three candidate operators
 # (`date - date`, `date - integer`, `date - interval`) and an uncast parameter is ambiguous among them.
 function _render_operand_typed(operand::Any, field_name::Any, operation::String, instruc::SQLInstruction;
-                               left_kind::TemporalKind = nothing)::Tuple{String,TemporalKind}
-  operand isa FExpression && return _set_update_query_typed(operand, instruc)
+                               left_kind::TemporalKind = nothing)::Tuple{String,_RenderKind}
+  operand isa FExpression && return _render_expr_typed(operand, instruc)
   if operand isa String && _is_field_path(operand, instruc)
-    return _set_update_query_typed(FExpression(field_name = operand, function_name = "F", column = operand), instruc)
+    return _render_expr_typed(FExpression(field_name = operand, function_name = "F", column = operand), instruc)
   end
   if operand isa _TemporalLiteral
     kind = literal_canonical_kind(operand)
@@ -1833,15 +1896,152 @@ function _render_day_count_shift(date_side::AbstractString, date_kind::Union{CDa
   end
 end
 
-# #814 — a date or timestamp shifted by an INTERVAL value (a `DurationField`, or the difference of
-# two timestamps) rather than by a duration literal. PostgreSQL's `timestamp ± interval` is native and
-# is left alone. On SQLite both sides are TEXT, and `+` added the year to the hours, silently. Refused
-# there until it has a rendering; a duration literal (`+ Hour(6)`) is the supported spelling.
-function _refuse_interval_shift(instruc::SQLInstruction)
-  instruc.connection isa PormGSQLite || return nothing
-  throw(QueryBuildError("Adding an interval value (a DurationField, or the difference of two timestamps) " *
-                        "to a date or timestamp is not supported on SQLite, where both are text. Shift " *
-                        "by a duration instead — F(\"start_at\") + Hour(6) — or a whole number of days."))
+# #814/#881 — a date or timestamp shifted by an INTERVAL value (a `DurationField`, or the difference
+# of two timestamps) rather than by a duration literal. PostgreSQL's `timestamp ± interval` is native
+# and its SQL is left alone. SQLite stores both as text, where `+` added the year to the hours,
+# silently; #814 refused it. #881 shifts the julian-day number by the interval's milliseconds, through
+# the day-count shift above, so the date may be on either side and its text order is kept.
+#
+# PostgreSQL's `date ± interval` is a `timestamp`, so a DATE side becomes `CDateTime(false)`; a
+# timestamp keeps its own kind. Typed on both engines, so both read the result back the same way.
+function _render_interval_shift(date_side::AbstractString, date_kind::Union{CDate,CDateTime},
+                                interval_side::AbstractString, interval_node, interval_kind::_RenderKind,
+                                operation::String, date_first::Bool, instruc::SQLInstruction)::Tuple{String,_RenderKind}
+  kind = date_kind isa CDate ? CDateTime(false) : date_kind
+  if instruc.connection isa PormGSQLite
+    ms = _interval_ms_sql(interval_side, interval_node, interval_kind)
+    ms === nothing &&
+      throw(_sqlite_interval_error("Shifting a date by an interval that is not a timestamp difference or a " *
+                                   "DurationField column"))
+    return _render_day_count_shift(date_side, kind, "($(ms)) / 86400000.0", operation, date_first, instruc), kind
+  end
+  sql = date_first ? "($(date_side) $(operation) $(interval_side))" : "($(interval_side) + $(date_side))"
+  return sql, kind
+end
+
+# A side a duration can be multiplied or divided by: a typed number, or a value PormG does not type —
+# but not a text literal, and not a bare column that holds no number. A text, UUID or boolean column
+# also has no canonical kind, and SQLite multiplied the milliseconds by its numeric prefix, silently
+# (PostgreSQL has no `interval * varchar`). Review of #881.
+const _NUMERIC_FIELDS = Union{Models.sIntegerField, Models.sPositiveIntegerField, Models.sPositiveSmallIntegerField,
+                              Models.sBigIntegerField, Models.sFloatField, Models.sDecimalField}
+function _is_number_side(side, kind::_RenderKind, instruc::SQLInstruction)::Bool
+  kind isa Union{CInt32,CInt64,CDecimal} && return true
+  kind === nothing || return false
+  side isa Bool && return false                                        # `Bool <: Integer`, but not a number
+  side isa String && !_is_field_path(side, instruc) && return false   # a text literal
+  _is_bare_column(side) || return true                                 # untyped arithmetic, a function
+  f = _operand_column_field(side, instruc)
+  return f === nothing || f isa _NUMERIC_FIELDS
+end
+
+# #881 — EVERYTHING AN INTERVAL ON THE LEFT COMBINES WITH, on both engines: a timestamp difference
+# (`_IntervalMs` on SQLite, `CInterval` on PostgreSQL), arithmetic on one, or a `DurationField` column
+# (`CInterval` on both). `± duration` never reaches here (`_render_date_period_arithmetic` owns it).
+#
+# PostgreSQL renders the SQL it always rendered; what changes there is the KIND. Interval arithmetic
+# is typed `CInterval`, so `(d + d) > Hour(1)` binds the duration as an interval, as `d > Hour(1)`
+# does, and a projected `d + d` reads back as a `Dates.CompoundPeriod`. SQLite computes on
+# milliseconds (`_interval_ms_sql`) and refuses what has no millisecond form, or no operator on
+# PostgreSQL either.
+#
+# One rule keeps the old text comparison: a `DurationField` column against a literal or another
+# column compares its stored text, as before #881. Only an `_IntervalMs` side makes it a number.
+function _render_interval_left(v::FExpression, left_side::String, left_kind::_RenderKind,
+                               instruc::SQLInstruction)::Tuple{String,_RenderKind}
+  op = v.operation
+  sqlite = instruc.connection isa PormGSQLite
+  bind_kind = left_kind isa _IntervalMs ? CInterval() : left_kind   # what the binder may see
+  expr_right = v.operand isa FExpression || (v.operand isa String && _is_field_path(v.operand, instruc))
+
+  if op in _COMPARISON_OPERATIONS
+    if expr_right
+      right_side, right_kind = _render_operand_typed(v.operand, v.field_name, op, instruc; left_kind = bind_kind)
+      if sqlite && (left_kind isa _IntervalMs || right_kind isa _IntervalMs)
+        lms = _interval_ms_sql(left_side, v.field_name, left_kind)
+        rms = _interval_ms_sql(right_side, v.operand, right_kind)
+        lms !== nothing && rms !== nothing && return "($(lms) $(op) $(rms))", nothing
+        op in _ORDERING_OPERATIONS &&
+          throw(_sqlite_interval_error("Ordering (`$(op)`) an interval against a value with no millisecond form"))
+      end
+      return "($(_as_interval_text(left_side, left_kind)) $(op) $(_as_interval_text(right_side, right_kind)))", nothing
+    end
+    if sqlite && left_kind isa _IntervalMs
+      if v.operand isa Union{Dates.Period,Dates.CompoundPeriod}
+        return "($(left_side) $(op) $(add_parameter!(instruc, _duration_ms(v.operand))))", nothing
+      end
+      op in _ORDERING_OPERATIONS &&
+        throw(_sqlite_interval_error("Ordering (`$(op)`) an interval against $(typeof(v.operand))"))
+      # Equality against any other literal compares the text, exactly as before #881, and the binder
+      # raises what it always raised for a literal that is not a duration.
+      left_side = _as_interval_text(left_side, left_kind)
+    end
+    return "($(left_side) $(op) $(_set_update_query_operand(v.operand, v.field_name, op, instruc; left_kind = bind_kind)))", nothing
+  end
+
+  if op in _ARITHMETIC_OPERATIONS
+    right_side, right_kind = _render_operand_typed(v.operand, v.field_name, op, instruc; left_kind = bind_kind)
+    if op in ("+", "-")
+      if right_kind isa Union{CDate,CDateTime}
+        op == "-" &&
+          throw(QueryBuildError("A duration minus a date has no meaning. To move a date back, subtract from " *
+                                "the date instead: F(\"date\") - (F(\"date\") - F(\"dob\")), or " *
+                                "F(\"date\") - Day(30)."))
+        return _render_interval_shift(right_side, right_kind, left_side, v.field_name, left_kind, "+", false, instruc)
+      end
+      if _is_interval_kind(right_kind)
+        sqlite || return "($(left_side) $(op) $(right_side))", CInterval()
+        lms = _interval_ms_sql(left_side, v.field_name, left_kind)
+        rms = _interval_ms_sql(right_side, v.operand, right_kind)
+        (lms === nothing || rms === nothing) &&
+          throw(_sqlite_interval_error("`$(op)` with an interval that is not a timestamp difference or a DurationField column"))
+        _refuse_window_in_interval(v.field_name, v.operand, instruc)
+        return "($(lms) $(op) $(rms))", _IntervalMs()
+      end
+      sqlite && throw(_sqlite_interval_error("`$(op)` between an interval and a number"))
+      return "($(left_side) $(op) $(right_side))", nothing
+    end
+    # `*` and `/`, by a number only.
+    if _is_number_side(v.operand, right_kind, instruc)
+      sqlite || return "($(left_side) $(op) $(right_side))", CInterval()
+      lms = _interval_ms_sql(left_side, v.field_name, left_kind)
+      lms === nothing &&
+        throw(_sqlite_interval_error("`$(op)` on an interval that is not a timestamp difference or a DurationField column"))
+      _refuse_window_in_interval(v.field_name, v.operand, instruc)
+      product = op == "*" ? "($(lms)) * ($(right_side))" : "($(lms)) * 1.0 / ($(right_side))"
+      return "CAST(round($(product)) AS INTEGER)", _IntervalMs()
+    end
+    sqlite && throw(_sqlite_interval_error("`$(op)` between an interval and $(right_kind === nothing ? "a value that is not a number (text, a boolean, a UUID)" : "a date or an interval")"))
+    return "($(left_side) $(op) $(right_side))", nothing
+  end
+
+  # Any other operator (bitwise, …) has no interval meaning; the interval is its text, as before #881.
+  left_side = _as_interval_text(left_side, left_kind)
+  return "($(left_side) $(op) $(_set_update_query_operand(v.operand, v.field_name, op, instruc; left_kind = bind_kind)))", nothing
+end
+
+# #881 — an interval on the RIGHT of a left that is neither a date nor an interval. Only a number
+# times an interval is one (`F("points") * d`, and `2 * d`, which is `d * 2`). On SQLite, ordering a
+# number against a `DurationField` column still compares the stored text, as before #881; every other
+# shape has no PostgreSQL operator either and is refused there.
+function _render_interval_right(v::FExpression, left_side::String, left_kind::_RenderKind,
+                                right_side::String, right_kind::_RenderKind,
+                                instruc::SQLInstruction)::Tuple{String,_RenderKind}
+  op = v.operation
+  sqlite = instruc.connection isa PormGSQLite
+  if op == "*" && _is_number_side(v.field_name, left_kind, instruc)
+    sqlite || return "($(left_side) * $(right_side))", CInterval()
+    rms = _interval_ms_sql(right_side, v.operand, right_kind)
+    rms === nothing &&
+      throw(_sqlite_interval_error("`*` on an interval that is not a timestamp difference or a DurationField column"))
+    _refuse_window_in_interval(v.field_name, v.operand, instruc)
+    return "CAST(round(($(left_side)) * ($(rms))) AS INTEGER)", _IntervalMs()
+  end
+  if sqlite
+    right_kind isa CInterval && op in _ORDERING_OPERATIONS && return "($(left_side) $(op) $(right_side))", nothing
+    throw(_sqlite_interval_error("`$(op)` with an interval on the right of a value that is not one"))
+  end
+  return "($(left_side) $(op) $(right_side))", nothing
 end
 
 # #801: arithmetic that has no meaning between two temporal values. PostgreSQL has no `date + date`
@@ -1850,15 +2050,18 @@ end
 const _TEMPORAL_PAIR_REFUSED_OPERATIONS = ("+", "*", "/")
 
 # The DURATION spelling (#25): `F(date) ± <a Dates period or an Interval>`.
-function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)::Tuple{String,TemporalKind}
+function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   period = v.operand isa Interval ? v.operand.period : v.operand
   comps  = _decompose_period(period)
 
   # Resolve the left side FIRST — see `_render_temporal_shift`'s note on why the order is the fix.
   left_side, left_kind = _render_left_typed(v.field_name, v.operation, instruc)
-  # #814: `d + Hour(1)` on a timestamp difference is text arithmetic on SQLite; refused by name
-  # rather than by `sql_canonicalize`'s generic "no canonical form" refusal further down.
-  _is_computed_interval(v.field_name, left_kind) && _refuse_interval_arithmetic(v.operation, instruc)
+  # #881: `d ± Hour(1)` on a SQLite interval is millisecond arithmetic. A zero-length duration is the
+  # identity and binds nothing, as `_render_temporal_shift` does on both engines.
+  if left_kind isa _IntervalMs
+    isempty(comps) && return left_side, left_kind
+    return "($(left_side) $(v.operation) $(add_parameter!(instruc, _duration_ms(period))))", left_kind
+  end
   kind = _shift_result_kind(left_kind, comps)
 
   # Soft validation (#25, best-effort): a duration only makes sense on a date/time column. Only
@@ -2074,7 +2277,14 @@ _set_update_query(v::JoinedReference, instruc::SQLInstruction) = _get_select_que
 # matter": where the result is genuinely not temporal, `nothing` is the ANSWER, not the default.
 _set_update_query(v::FExpression, instruc::SQLInstruction) = first(_set_update_query_typed(v, instruc))
 
-function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple{String,TemporalKind}
+# #881 — the two doors out of the renderer (`_set_update_query` above, the projection in
+# `build_query.jl`) see only kinds a reader or a binder can act on: an interval the renderer held in
+# milliseconds leaves as its stored text, typed `CInterval`. Inside, `_render_expr_typed` and its
+# helpers pass `_IntervalMs` along, so an interval stays a number for as long as it is being computed.
+_set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple{String,TemporalKind} =
+  _finalize_render(_render_expr_typed(v, instruc)..., instruc)
+
+function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   if v.operation === nothing
     # Resolve the field using existing logic for joins and modifiers
     if v.field_name isa String
@@ -2126,9 +2336,6 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
     # `F("driverid__dob") + 30` can only be typed afterwards. Deciding first types every joined
     # temporal column as `nothing` and silently drops it to plain arithmetic.
     left_side, left_kind = _render_left_typed(v.field_name, v.operation, instruc)
-    # #814: arithmetic on a timestamp difference is text arithmetic on SQLite — refused there.
-    v.operation in _ARITHMETIC_OPERATIONS && _is_computed_interval(v.field_name, left_kind) &&
-      _refuse_interval_arithmetic(v.operation, instruc)
 
     # #568 — A BARE INTEGER ON ± OVER A TEMPORAL LEFT IS WHOLE DAYS, rendered by the one temporal
     # renderer rather than by a second implementation. Ahead of the operand bind below, because that
@@ -2179,43 +2386,62 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
       end
       right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc;
                                                      left_kind = left_kind)
+      # #882: an integer column on the right is a day count, typed once it has rendered.
+      v.operation in ("+", "-") && (right_kind = _day_count_column_kind(v.operand, right_kind, instruc))
       if right_kind isa Union{CDate,CDateTime}
         if v.operation == "-"
           kind = _difference_result_kind(left_kind, right_kind)
           kind isa CInterval && _refuse_window_in_interval(v.field_name, v.operand, instruc)
-          return _render_temporal_difference(left_side, right_side, kind, instruc), kind
+          return _render_temporal_difference(left_side, right_side, kind, instruc)
         end
         throw(QueryBuildError("`$(v.operation)` between two date/timestamp values has no meaning; only " *
                               "`-` does (a whole number of days between two dates). To shift a date, " *
                               "add a duration instead: F(\"date\") + Day(30)."))
       end
-      # #814: `date ± count` is a whole-day shift; `date ± interval` is refused on SQLite.
+      # #814: `date ± count` is a whole-day shift. #881: `date ± interval` is a shift by the interval.
       if v.operation in ("+", "-")
-        if right_kind isa CInt32
-          return _render_day_count_shift(left_side, left_kind, right_side, v.operation, true, instruc), left_kind
+        if right_kind isa Union{CInt32,CInt64}
+          return _render_day_count_shift(left_side, left_kind, _day_count_sql(right_side, right_kind, instruc),
+                                         v.operation, true, instruc), left_kind
         end
-        right_kind isa CInterval && _refuse_interval_shift(instruc)
+        _is_interval_kind(right_kind) &&
+          return _render_interval_shift(left_side, left_kind, right_side, v.operand, right_kind,
+                                        v.operation, true, instruc)
+        # #882: anything else beside a date used only the date's year on SQLite.
+        _refuse_untyped_date_operand(v.operation, instruc)
       end
+      # `*` and `/`: a date times an interval has no meaning on either engine; on SQLite the
+      # interval would be milliseconds, so it is refused there rather than multiplied.
+      right_kind isa _IntervalMs && throw(_sqlite_interval_error("`$(v.operation)` between a date and an interval"))
       return "($(left_side) $(v.operation) $(right_side))", nothing
     end
 
-    # #814 — the same two pairings with the DATE on the right. `count + date` is the shift
-    # `date + count`, and `interval + date` is `date + interval`, refused on SQLite as above. A count
-    # or an interval MINUS a date has no meaning: PostgreSQL has neither `integer - date` nor
-    # `interval - date` and failed at execution, and SQLite subtracted a year. Refused on both. A
-    # count or interval with a non-temporal right renders exactly as before.
-    if left_kind isa Union{CInt32,CInterval} && v.operation in ("+", "-")
+    # #881 — AN INTERVAL ON THE LEFT: a timestamp difference, arithmetic on one, or a `DurationField`
+    # column. Everything it can be combined with is decided in one place, on both engines.
+    _is_interval_kind(left_kind) && return _render_interval_left(v, left_side, left_kind, instruc)
+
+    # #814 — the same pairing with the DATE on the right. `count + date` is the shift `date + count`.
+    # A count MINUS a date has no meaning: PostgreSQL has no `integer - date` and failed at execution,
+    # and SQLite subtracted a year. Refused on both. A count with a non-temporal right renders exactly
+    # as before. (An interval on the left was decided above, by `_render_interval_left`.)
+    #
+    # #882: an integer column on the left is a count too (`F("points") + F("seen")`). Typed for this
+    # branch only; the right still renders against the left's own kind, so an integer column with a
+    # non-temporal right binds exactly as it did.
+    count_kind = v.operation in ("+", "-") ? _day_count_column_kind(v.field_name, left_kind, instruc) : left_kind
+    if count_kind isa Union{CInt32,CInt64} && v.operation in ("+", "-")
       right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc;
                                                      left_kind = left_kind)
-      _is_computed_interval(v.operand, right_kind) && _refuse_interval_arithmetic(v.operation, instruc)
+      # #881: PostgreSQL has no `integer ± interval` and fails when the statement runs.
+      _is_interval_kind(right_kind) && instruc.connection isa PormGSQLite &&
+        throw(_sqlite_interval_error("`$(v.operation)` between a number and an interval"))
       if right_kind isa Union{CDate,CDateTime}
         v.operation == "-" &&
-          throw(QueryBuildError("A $(left_kind isa CInt32 ? "day count" : "duration") minus a date has no " *
-                                "meaning. To move a date back, subtract from the date instead: " *
-                                "F(\"date\") - (F(\"date\") - F(\"dob\")), or F(\"date\") - Day(30)."))
-        left_kind isa CInt32 &&
-          return _render_day_count_shift(right_side, right_kind, left_side, "+", false, instruc), right_kind
-        _refuse_interval_shift(instruc)
+          throw(QueryBuildError("A day count minus a date has no meaning. To move a date back, subtract " *
+                                "from the date instead: F(\"date\") - (F(\"date\") - F(\"dob\")), or " *
+                                "F(\"date\") - Day(30)."))
+        return _render_day_count_shift(right_side, right_kind, _day_count_sql(left_side, count_kind, instruc),
+                                       "+", false, instruc), right_kind
       end
       return "($(left_side) $(v.operation) $(right_side))", nothing
     end
@@ -2231,20 +2457,20 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
                             "Max/Min of one, or a `__@date` path. The left side here is none of those."))
     end
 
-    # #814: an ORDERING comparison against the difference of two timestamps — on either side — is
-    # refused on SQLite, where that difference is TEXT (`_refuse_interval_ordering`). The right side
-    # is typed for this one question, and rendered exactly once: `_set_update_query_typed` is the
-    # call `_set_update_query_operand` makes for an expression operand, so the text is the same.
-    # The same question for ARITHMETIC with a difference on the right (`F("points") * d`); a
-    # difference on the left was refused above, as soon as it rendered.
+    # Ordering and arithmetic with an EXPRESSION on the right of a left that is neither a date nor an
+    # interval (both were decided above). The right is typed for this one question and rendered
+    # exactly once: `_render_operand_typed` is the call `_set_update_query_operand` makes for an
+    # expression operand, and a field-path String is the `F(...)` it names, so the text is the same.
     if v.operation in _ORDERING_OPERATIONS || v.operation in _ARITHMETIC_OPERATIONS
-      ordering = v.operation in _ORDERING_OPERATIONS
-      ordering && _is_computed_interval(v.field_name, left_kind) && _refuse_interval_ordering(v.operation, instruc)
-      if v.operand isa FExpression
-        right_side, right_kind = _set_update_query_typed(v.operand, instruc)
-        if _is_computed_interval(v.operand, right_kind)
-          ordering ? _refuse_interval_ordering(v.operation, instruc) : _refuse_interval_arithmetic(v.operation, instruc)
-        end
+      if v.operand isa FExpression || (v.operand isa String && _is_field_path(v.operand, instruc))
+        right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc)
+        # #881: an interval on the right (`F("points") * d`, `F("points") > d`).
+        _is_interval_kind(right_kind) &&
+          return _render_interval_right(v, left_side, left_kind, right_side, right_kind, instruc)
+        # #882: a date on the right of `+`/`-` whose left PormG cannot type (a text column, `Sum(...)`,
+        # `F("points") * 2`). Every typed left was handled above, so this left is not a count.
+        v.operation in ("+", "-") && right_kind isa Union{CDate,CDateTime} &&
+          _refuse_untyped_date_operand(v.operation, instruc)
         return "($(left_side) $(v.operation) $(right_side))", nothing
       end
     end

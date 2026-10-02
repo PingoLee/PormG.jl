@@ -754,14 +754,17 @@ the window value functions `Lag`, `Lead`, `FirstValue`, `LastValue` and `NthValu
 `Coalesce`, `Greatest`, `Least` or `NullIf` over `time` (#824). It also holds for a `Joined(...)`
 handle on the column, and for a `CTE(...)` column whose body projects it. A computed value is not
 the column, so it is still whatever the engine delivered: text on SQLite, and a bare `Period` or a
-`CompoundPeriod` on PostgreSQL. That covers `Sum("time")`, arithmetic, a `CTE(...)` column the body
-computes, and a `Coalesce` whose arguments are of different types. The one computed interval PormG
-types is the difference of two timestamps, `F("start_at") - F("date")`: it reads back as a
+`CompoundPeriod` on PostgreSQL. That covers `Sum("time")`, a `CTE(...)` column the body computes,
+and a `Coalesce` whose arguments are of different types. The computed intervals PormG types are the
+difference of two timestamps, `F("start_at") - F("date")`, and interval arithmetic — `F("time") * 2`,
+`F("time") + (F("start_at") - F("date"))`, a difference plus a duration: each reads back as a
 `CompoundPeriod` on both engines (see *Subtracting two dates* in the F-expressions guide).
 
 On **SQLite** a duration is stored as text (`00:01:49.088`), and hours are never folded
-into days, so `<` and `>` against the column compare that text: right below 100 hours, wrong at and
-above it (`"100:00:00"` sorts before `"99:00:00"`) and for negative durations. `==` is exact.
+into days, so `<` and `>` between the column and a duration or another column compare that text:
+right below 100 hours, wrong at and above it (`"100:00:00"` sorts before `"99:00:00"`) and for
+negative durations. `==` is exact. Inside arithmetic, or against a timestamp difference, the column is
+read as milliseconds instead, so those compare and add as durations (`(F("time") * 2) > Minute(3)`).
 
 The **components** inside it are the engine's own, though: the same lap time can arrive as minutes,
 seconds and milliseconds from one engine and as hours through nanoseconds from another. Compare

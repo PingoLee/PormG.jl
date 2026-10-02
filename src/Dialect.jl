@@ -273,6 +273,40 @@ function _parse_sqlite_interval(v::Any)
     end
 end
 
+# #881 — the same text, in SQL, both ways. SQLite has no interval type, so inside an expression an
+# interval is an INTEGER number of milliseconds, the precision a stored timestamp carries (#79), and
+# these two convert at its edges. Beside `_parse_sqlite_interval` so the writer, the reader and both
+# SQL renderings of the one format live in one place.
+
+"""
+    _sqlite_interval_text(ms) -> String
+
+SQL turning the millisecond expression `ms` into the text `Models._duration_nanoseconds_to_string`
+writes (`[-]HH:MM:SS[.f]`, hours never folded into days, the fraction's trailing zeros stripped).
+The text needs the value four times and `ms` may carry bound parameters, so `ms` is evaluated once,
+in a correlated scalar subquery, and named there. NULL in is NULL out.
+"""
+_sqlite_interval_text(ms::AbstractString) =
+  "(SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE " *
+  "(CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || " *
+  "printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || " *
+  "(CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END " *
+  "FROM (SELECT $(ms) AS _pormg_ms))"
+
+"""
+    _sqlite_interval_ms(col) -> String
+
+SQL reading a stored `[-]HH:MM:SS[.f]` value as signed milliseconds. `col` appears six times, so it
+must be a column reference, which binds no parameter. Hours of any width are the text's leading
+integer, minutes the two digits after the first `:`, and the seconds with their fraction everything
+after the second; the fraction is rounded to the millisecond. NULL in is NULL out.
+"""
+_sqlite_interval_ms(col::AbstractString) =
+  "((CASE WHEN substr($(col), 1, 1) = '-' THEN -1 ELSE 1 END) * " *
+  "(CAST(ltrim($(col), '+-') AS INTEGER) * 3600000 + " *
+  "CAST(substr($(col), instr($(col), ':') + 1, 2) AS INTEGER) * 60000 + " *
+  "CAST(round(CAST(substr($(col), instr($(col), ':') + 4) AS REAL) * 1000) AS INTEGER)))"
+
 """
     _parse_postgres_interval(v) -> Union{Dates.CompoundPeriod, typeof(v)}
 

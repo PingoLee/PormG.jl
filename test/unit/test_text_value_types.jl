@@ -254,7 +254,9 @@ end
       @test !occursin("max_length", msg)
 
       q = M.objects; q.filter("driverid" => 1)
-      @test textval860_refusal(() -> q.update("code" => v, show_query = :dict)) isa PormG.InvalidValueError
+      err = textval860_refusal(() -> q.update("code" => v, show_query = :dict))
+      @test err isa PormG.InvalidValueError
+      @test occursin("Got a Bool", textval868_msg(err))
     end
   end
 end
@@ -262,10 +264,30 @@ end
 # The bulk writers format through the same formatter, so their depuration pass names the cell
 # (#875/#869 own that wording); here only that a `Bool` is refused at all, on the PostgreSQL mock
 # for the reason the #868 bulk testset above gives.
-@testset "#876: bulk_insert refuses a Bool in a text field" begin
+@testset "#876: bulk_insert and bulk_update refuse a Bool in a text field" begin
   M = last(first(TEXTVAL868_MODELS))
-  df = PormG.QueryBuilder.DataFrames.DataFrame(code = Any["SEN", true])
-  err = textval860_refusal(() -> PormG.QueryBuilder.bulk_insert(M.objects, df; show_query = :dict))
+  df = PormG.QueryBuilder.DataFrames.DataFrame(driverid = [1, 2], code = Any["SEN", true])
+  err = textval860_refusal(() -> PormG.QueryBuilder.bulk_insert(M.objects, df[:, [:code]]; show_query = :dict))
   @test err isa PormG.InvalidValueError
   @test occursin("Got a Bool", textval868_msg(err))
+  err = textval860_refusal(() -> PormG.QueryBuilder.bulk_update(M.objects, df; columns = ["code"],
+                                                                match_on = ["driverid"], show_query = :dict))
+  @test err isa PormG.InvalidValueError
+  @test occursin("Got a Bool", textval868_msg(err))
+end
+
+# `TimeField` has no formatter of its own and rides `format_text_sql`, so a `Bool` compared with a
+# time is refused by the same method. Before #876 it bound `true` against the time column.
+textval876_lap(key) = begin
+  m = Model("textval876_lap", lapid = IDField(), lap_time = PormG.Models.TimeField(null = true))
+  m.connect_key = key
+  m
+end
+@testset "#876: a Bool compared with a TimeField raises FilterError" begin
+  for key in ("textval860_pg", "textval860_sl")
+    M = textval876_lap(key)
+    err = textval860_refusal(() -> (q = M.objects; q.filter("lap_time" => true); inspect_query(q)))
+    @test err isa PormG.FilterError
+    @test occursin("lap_time", textval868_msg(err))
+  end
 end

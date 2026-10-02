@@ -8,8 +8,8 @@
 ### What changed
 
 `format_text_sql` is the formatter of every plain text field: `CharField`, `TextField`, `EmailField`,
-`URLField`, `SlugField`, `FileField` and `ImageField`. It returned a `Bool` unformatted, so each
-driver chose the text that was stored:
+`URLField`, `SlugField`, `PasswordField`, `FileField` and `ImageField`. It returned a `Bool`
+unformatted, so each driver chose the text that was stored:
 
 | call | PostgreSQL before | SQLite before | after, both engines |
 |---|---|---|---|
@@ -18,8 +18,10 @@ driver chose the text that was stored:
 | `CharField(max_length = 3)` given `true` | an untyped driver error | stores `"1"` | raises `InvalidValueError` |
 
 A `Bool` has no single text, so PormG now refuses it as it refuses a float (#860) and asks for the
-text you mean. A text field's `default = true` was already a `FieldValidationError` when the model
-was defined. Text values, integers, dates and times behave exactly as before.
+text you mean. `TimeField` formats through the same function, so a `Bool` compared with a time
+(`filter("t" => true)`) now raises `FilterError` too, where it bound `true`. A text field's
+`default = true` was already a `FieldValidationError` when the model was defined. Text values,
+integers, dates and times behave exactly as before.
 
 ### Who this affects
 
@@ -39,7 +41,7 @@ A text value must be a String, an integer, a date, or a time. Got a Bool
 Then check the text fields that hold flag-like values:
 
 ```bash
-grep -rnE '(CharField|TextField)\(' --include='*.jl' <your-app>/src
+grep -rnE '(Char|Text|Email|URL|Slug|Password|File|Image)Field\(' --include='*.jl' <your-app>/src
 ```
 
 ### Migrate your app
@@ -49,10 +51,14 @@ for rows written on SQLite it is `"1"`/`"0"`. If the column is really a flag, th
 declare it as a `BooleanField`.
 
 ```julia
+# A race calendar loaded from a feed keeps its sprint flag in a text column, `sprint = CharField()`.
+
 # ✗ before: stored "true" on PostgreSQL, "1" on SQLite
-M.Driver.objects.create("code" => is_champion)
+M.Race.objects.create("name" => "Brazilian Grand Prix", "sprint" => has_sprint)
 
 # ✓ after: the text the column holds, spelled explicitly
-M.Driver.objects.create("code" => string(is_champion))   # "true" / "false"
-M.Driver.objects.create("code" => is_champion ? "1" : "0")
+M.Race.objects.create("name" => "Brazilian Grand Prix", "sprint" => string(has_sprint))   # "true" / "false"
+M.Race.objects.create("name" => "Brazilian Grand Prix", "sprint" => has_sprint ? "1" : "0")
+
+# ✓ or, when the column really is a flag, declare it `sprint = BooleanField()` and keep the Bool
 ```

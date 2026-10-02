@@ -33,6 +33,8 @@ This skill is for the migration subsystem itself, not for ordinary ORM query beh
 ### Runtime source of truth
 
 - Treat `pormg_migrations` as the canonical runtime history table
+- `run_once` data steps live in their own table, `pormg_migrations_data` (#740), so the frozen
+  `pormg_migrations` v1 column set stays untouched
 - Files in `applied_migrations/` are useful artifacts, but not the primary state source
 
 ### Recommended operator flow
@@ -44,6 +46,7 @@ Keep docs, tests, and implementation aligned with this sequence:
 3. `makemigrations()`
 4. `dry_run()`
 5. `migrate()`
+6. `run_once()` for a Julia data step — a backfill after `migrate()`, an index step before it
 
 `status()` and `dry_run()` are part of the normal operator flow, not optional extras.
 
@@ -111,6 +114,53 @@ So:
 - **Reads inside the SQLite migration transaction go through `Configuration.with_tx_context(pool, conn)`**,
   never `fetch(...; conn = conn)`, which hands the connection back to the pool mid-transaction (#139).
 
+### Data steps (#740)
+
+Two homes, both settled by the maintainer: a hand-written plan entry labelled `Data (pre): …` /
+`Data (post): …`, or `Migrations.run_once(f, db, name)` outside the plan. A `RunPython`-style plan
+entry stays ruled out: the plan is data, never executed (#710).
+
+**Plan data steps.**
+
+- `_order_statements` is a thin wrapper over `_ordered_entries`, which keeps each label beside its
+  SQL. `Data (pre)` is the first bucket and `Data (post)` the last, after `Create index`. A new bucket
+  goes between them, never outside.
+- The data checks come **first** in the label `if` chain: `"Data (pre): Rename field …"` must not
+  reach the `contains("Rename field")` arm.
+- A plan with no data label must order — and so checksum — byte-for-byte as before;
+  `test_migration_format_v1` pins it.
+- **The planner must never generate a label matching `DATA_STEP_LOOSE_RE`** (`^\s*data\s*\(`,
+  case-insensitive). It would be refused, or moved to the data bucket.
+- Detection is loose, parsing strict (`_data_step_kind`): a near-miss is `InvalidMigrationError`,
+  never the catch-all bucket.
+- **Every path that replaces or discards the pending plan calls `_refuse_overwriting_data_steps`.**
+  Today that is both arms of `_write_pending_plan`. Data steps exist only in that file, and the
+  empty-diff arm is the likely one: models and database already agree.
+- Known limit, left to the maintainer: `migrate`'s lossy row pre-check (#803) counts on the live
+  database before any statement runs, so a `Data (pre)` step cannot satisfy it. Do not "fix" it by
+  skipping the pre-check; that is a design change.
+
+**`run_once` invariants.**
+
+- Validate the name and `lock_wait` before the `change_db` gate, then refuse inside an open
+  transaction on the same pool (`TransactionError`, the `atomic(durable = true)` rule). It needs no
+  `_require_folder_backed`: it reads no files.
+- PostgreSQL: everything under `_migration_lock_key(settings)`, the **same key as `migrate`**.
+- SQLite with `transaction = true`: the record check runs **inside** `run_in_transaction`'s
+  `BEGIN IMMEDIATE` (the #737 shape). `test_data_migrations.jl` pins it with a real cross-process race.
+- SQLite with `transaction = false` is deliberately **not** serialized. Do not wrap `f` in
+  `with_sqlite_write_lock`: it stalls every writer in the process and deadlocks on a task `f` waits
+  for. A runner that loses the race to record the name gets `IntegrityError` on the UNIQUE name, and
+  that maps to `:already_applied`.
+- The record is written with `fetch(pool, sql; params)` and **no `conn`**, so inside the transaction
+  context it commits or rolls back with `f`.
+- A PormG-owned table must sit under the `pormg_migrations` ignore prefix, as
+  `pormg_migrations_data` does, or be added to every ignore list. Otherwise `makemigrations` plans
+  to DROP it. The lists match by prefix (`_is_ignored_table`).
+- An index a step creates must be declared on the model (`db_index = true`), or the next
+  `makemigrations` drops it. The schema fingerprint counts indexes, so such a step runs **before**
+  `migrate` at boot. The docs say so; keep them saying it.
+
 ### Unsupported behavior
 
 - Do not ship a public verb that cannot succeed. `migrate_to(version)` was exported and documented
@@ -153,6 +203,10 @@ Use unit tests when validating:
 - plan-header round trips, the schema precondition and `status()` supersede
   (`test/unit/test_plan_schema_fingerprint.jl` — hermetic SQLite; its PostgreSQL twin is a testset in
   `test/integration/test_migrate_boot.jl`)
+- data-step buckets, the `makemigrations` refusal and `run_once`
+  (`test/unit/test_data_migrations.jl` — hermetic SQLite, including a cross-process race against a
+  child process holding `BEGIN IMMEDIATE`; the PostgreSQL lock, rollback and `CONCURRENTLY` cases are
+  a testset in `test/integration/test_migrate_boot.jl`)
 
 ### Isolation discipline
 

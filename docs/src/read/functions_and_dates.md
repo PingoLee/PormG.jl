@@ -312,13 +312,31 @@ df = query |> DataFrame
 ## Conditional Functions
 
 The operands of `Coalesce`, `NullIf`, `Greatest` and `Least` (and of `Power` and `Mod` above) are
-read by their type. A string is a column path. When the function is projected in `values(...)`,
-directly or as another function's argument, the path can end in a transform:
-`Coalesce("fp1_date", "start_at__@date")` falls back to the date of the race start. A number (of
-any integer width), a `Bool`, a `Date`, a `DateTime`, a `ZonedDateTime` or a `Time` is a literal
+read by their type. A string is a column path, and the path can end in a transform:
+`Coalesce("fp1_date", "start_at__@date")` falls back to the date of the race start. That holds
+wherever the function sits. It can be projected in `values(...)`, on a filter's right-hand side
+(also inside `Q`/`Qor` and a `When` condition), in a `Case`/`When` branch, in `F` arithmetic, in a
+window's `partition_by`, as a `Lag`/`Lead` `default`, or as an `update(...)` value:
+
+```julia
+using PormG.Functions: Coalesce
+
+# Races whose date equals the first-practice date or, when there is none, the date of the start
+M.Race.objects.filter("date" => Coalesce("fp1_date", "start_at__@date"))
+```
+
+A CTE column is the exception. Outside a projection, a function names it with the
+`CTE("name", "column")` handle; the `"name__column"` string works only inside `values(...)`. A
+transform on a CTE column is not available in these positions with either spelling.
+
+A number (of any integer width), a `Bool`, a `Date`, a `DateTime`, a `ZonedDateTime` or a `Time` is a literal
 that PormG binds as a parameter. A **string literal** needs `Value(...)`: `NullIf("code", "")`
 would read `""` as a column name. Any other value raises `QueryBuildError` when the expression is
 built.
+
+`Coalesce`, `Greatest` and `Least` take two or more arguments. With fewer, they raise
+`QueryBuildError` when the expression is built: one argument is the argument itself, so write the
+column with `F("points")` directly.
 
 On SQLite a date or time literal binds as the same text its column stores (`Date(2021, 3, 28)` is
 `"2021-03-28"`), and an integer of any width binds as a 64-bit integer, so a comparison with a
@@ -387,6 +405,10 @@ rotation of the arguments: `Greatest(a, b)` becomes
 `MAX(COALESCE(a, b), COALESCE(b, a))`. A literal argument binds once per place it appears. The SQL
 grows with the square of the argument count, so with `n` arguments each one is rendered `n` times;
 a `Subquery` argument runs once per rotation.
+
+A single argument is refused (see the start of this section). On SQLite, `MAX(x)` and `MIN(x)` with
+one argument are the *aggregates*, so a one-argument `Greatest` used to collapse the result to one
+row.
 
 ### `Cast` — Type Conversion
 

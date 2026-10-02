@@ -151,6 +151,34 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# A transform in a function, in every position a function can sit (#863)
+# The same `start_at__@…` operands as #843, outside `values(...)`: a filter's right-hand side, a
+# Case branch, F arithmetic and a window partition each crashed the build before #863. Expected
+# values come from the plain columns of race 1000 (2018 German GP: no `fp1_date`), not from the
+# expressions under test.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Transform in a function, every position (#863)" begin
+    plain = M.Race.objects.filter("raceid" => 1000).values("raceid", "date", "start_at").list(:dict) |> only
+    start_year = year(plain[:start_at])
+
+    # A filter's right-hand side: race date against Coalesce(fp1_date, start_at's date).
+    got = M.Race.objects.filter("raceid" => 1000, "date" => Coalesce("fp1_date", "start_at__@date")).
+        values("raceid").list(:dict)
+    @test [r[:raceid] for r in got] == (plain[:date] == Date(plain[:start_at]) ? [1000] : Int[])
+    @test !isempty(got)
+
+    row = M.Race.objects.filter("raceid" => 1000).values(
+        # A Case branch, F arithmetic and a window partition over the same transform.
+        "case_m" => Case([When("raceid" => 1000, then = Mod("start_at__@year", 4))], default = -1),
+        "plus" => F("raceid") + Coalesce("start_at__@year", 0),
+        "rk" => Rank(over = WindowOver(partition_by = [Coalesce("start_at__@year", 0)], order_by = ["raceid"]))
+    ).list(:dict) |> only
+    @test row[:case_m] == mod(start_year, 4)
+    @test row[:plus] == 1000 + start_year
+    @test row[:rk] == 1
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Literals that SQLite used to bind as a serialized BLOB (#721)
 # A date literal, a narrow integer and a projected `Value(Date)` must behave identically on both
 # engines. Before #721 a date literal was refused as a function operand (#705's stop-gap, since

@@ -438,3 +438,174 @@ end
   @test h.column == Any["ts__@date", "seen"]
   @test sqls[1] == _tlp_sql((q = TLP.Tlp_row.objects; q.values("x" => h); q); conn = _TLP_PG)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #863: a transform resolves in a function wherever the function sits, not only in values(...)
+# `_check_function` was the only walker that resolves `"col__@transform"`, it walked a function's
+# `column` only, and only `values(...)` called it. So a transform inside a function on a filter's
+# right-hand side, in a Case/When branch, in F arithmetic, in a window's `partition_by`, in a
+# `Lag` default or in an `update` SET value reached join resolution as a column name, and the build
+# died ("does not have a 'how' property"). Same oracle as #843: every position, with the string
+# spelling and with the `F(path)` spelling, renders the same SQL and binds the same parameters.
+# `yyyy_q` binds parameters of its own, which pins their order in each position.
+# ─────────────────────────────────────────────────────────────────────────────
+const _TLP_863_POSITIONS = let QB = PormG.QueryBuilder, Fn = PormG.Functions
+  (
+    ("filter right-hand side", (q, op) -> q.filter("seen__@gte" => Fn.Coalesce(op, "seen"))),
+    ("Q right-hand side",      (q, op) -> q.filter(QB.Q("seen__@gte" => Fn.Coalesce(op, "seen")))),
+    ("When condition",         (q, op) -> q.values("c" => Fn.Case([Fn.When("seen__@gte" => Fn.Coalesce(op, "seen"), then = 1)], default = 0))),
+    ("Case then and default",  (q, op) -> q.values("c" => Fn.Case([Fn.When("id" => 1, then = Fn.Coalesce(op, "seen"))], default = Fn.Coalesce(op, "seen")))),
+    ("When otherwise",         (q, op) -> q.values("c" => Fn.When("id" => 1, then = 1, otherwise = Fn.Coalesce(op, 0)))),
+    ("then = Greatest (#844)", (q, op) -> q.values("c" => Fn.Case([Fn.When("id" => 1, then = Fn.Greatest(op, "seen"))]))),
+    ("F arithmetic operand",   (q, op) -> q.values("x" => F("id") + Fn.Coalesce(op, 0))),
+    ("F arithmetic filter",    (q, op) -> q.filter((F("id") + Fn.Coalesce(op, 0)) > 5)),
+    ("window partition_by",    (q, op) -> q.values("id", "r" => QB.Rank(over = QB.WindowOver(partition_by = [Fn.Coalesce(op, 0)], order_by = ["id"])))),
+    ("Lag default",            (q, op) -> q.values("id", "l" => QB.Lag("seen", default = Fn.Coalesce(op, "seen"), over = QB.WindowOver(order_by = ["id"])))),
+  )
+end
+
+@testset "#863: a transform in a function resolves in every position, like its F spelling" begin
+  for (backend, conn) in _TLP_BACKENDS, (label, position) in _TLP_863_POSITIONS
+    @testset "$backend — $label" begin
+      for key in ("date", "year", "yyyy_q"), col in ("seen", "ts")
+        path = "$(col)__@$(key)"
+        a = TLP.Tlp_row.objects; position(a, path)
+        b = TLP.Tlp_row.objects; position(b, F(path))
+        ia = inspect_query(a; connection = conn)
+        ib = inspect_query(b; connection = conn)
+        @test ia[:sql_text] == ib[:sql_text]
+        @test ia[:parameters] == ib[:parameters]
+      end
+    end
+  end
+
+  # `Max(…) - Min(…)`: the expression is the arithmetic's LEFT side (`field_name`), not its operand.
+  for (backend, conn) in _TLP_BACKENDS
+    q = TLP.Tlp_row.objects
+    q.values("span" => PormG.QueryBuilder.Max("ts__@year") - PormG.QueryBuilder.Min("ts__@year"))
+    @test occursin(backend == "SQLite" ? "MAX(CAST(strftime('%Y', \"Tb\".\"ts\") AS INTEGER))" :
+                                         "MAX(EXTRACT(YEAR FROM \"Tb\".\"ts\")::integer)", _tlp_sql(q; conn = conn))
+  end
+
+  # The issue's own query, and an `update` SET value (SQLite: `update` renders on the model's own
+  # connection, which is this file's SQLite mock).
+  sql = _tlp_sql((q = TLP.Tlp_row.objects; q.filter("seen__@gte" => PormG.QueryBuilder.Max("ts__@date")); q);
+                 conn = _TLP_SL)
+  @test occursin("\"Tb\".\"seen\" >= MAX(strftime('%Y-%m-%d', \"Tb\".\"ts\"))", sql)
+  q = TLP.Tlp_row.objects
+  q.filter("id" => 1)
+  upd = q.update("seen" => PormG.Functions.Coalesce("ts__@date", "seen"), show_query = :dict)
+  @test occursin("SET \"seen\" = COALESCE(strftime('%Y-%m-%d', \"Tb\".\"ts\"), \"Tb\".\"seen\")", upd[:sql_text])
+
+  # An operator suffix in the operand is the ladder's FilterError, raised by filter() itself.
+  q = TLP.Tlp_row.objects
+  @test_throws PormG.FilterError q.filter("seen" => PormG.Functions.Coalesce("ts__@gt", "seen"))
+
+  # A subquery operand is already resolved: these two died with a MethodError naming the walker.
+  for (backend, conn) in _TLP_BACKENDS
+    inner() = (i = TLP.Tlp_row.objects; i.filter("id" => PormG.QueryBuilder.OuterRef("id")); i)
+    q = TLP.Tlp_row.objects
+    q.values("id", "c" => PormG.Functions.Case([PormG.Functions.When(PormG.QueryBuilder.Q(PormG.QueryBuilder.Exists(inner())), then = 1)], default = 0))
+    @test occursin("EXISTS", _tlp_sql(q; conn = conn))
+    s = inner(); s.values("seen")
+    q = TLP.Tlp_row.objects
+    q.values("id", "g" => PormG.Functions.Greatest(PormG.QueryBuilder.Subquery(s), "seen"))
+    @test occursin("SELECT", _tlp_sql(q; conn = conn))
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #863: the walk constructs — a handle the caller still holds is never rewritten (#508)
+# Every newly walked slot is a place a user's own node sits: a branch, a partition entry, an
+# arithmetic operand, a right-hand side. The walk resolves into NEW nodes; the handles keep their
+# unresolved `"ts__@…"` operand across two builds, and a shared WindowSpec is not written into.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#863: walked slots leave the caller's handles untouched" begin
+  Fn = PormG.Functions; QB = PormG.QueryBuilder
+  branch = Fn.Coalesce("ts__@date", "seen")
+  case = Fn.Case([Fn.When("id" => 1, then = branch)])
+  part = Fn.Coalesce("ts__@year", 0)
+  spec = QB.WindowOver(partition_by = [part], order_by = ["id"])
+  arith = F("id") + Fn.Coalesce("ts__@year", 0)
+  rhs = Fn.Coalesce("ts__@date", "seen")
+  for (backend, conn) in _TLP_BACKENDS, _ in 1:2
+    q = TLP.Tlp_row.objects
+    q.values("id", "c" => case, "r" => QB.Rank(over = spec), "x" => arith)
+    q.filter("seen__@gte" => rhs)
+    _tlp_sql(q; conn = conn)
+  end
+  @test branch.column[1] == "ts__@date"
+  @test case.column[1].kwargs["then"] === branch
+  @test part.column[1] == "ts__@year"
+  @test spec.partition_by[1] === part
+  @test arith.operand.column[1] == "ts__@year"
+  @test rhs.column[1] == "ts__@date"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #863: every entry point that STORES a filter node walks it
+# A filter node handed over directly — F arithmetic compared with a value, or an `OP` — is stored by
+# eight call sites, and each one used to push it raw: `Q`, `Qor`, `push!` on both, `.on`, `.cjoin`,
+# `.cjoin_on`, and `filter`. A pair whose right-hand side is F arithmetic takes its own method too.
+# Each site is driven here with the string spelling and the `F(path)` spelling of the same transform,
+# so a site that stops walking crashes the string spelling ("does not have a 'how' property") and
+# fails this testset. A results/drivers pair supplies the relation the join entry points need.
+# ─────────────────────────────────────────────────────────────────────────────
+module TlpJoinModels
+import PormG
+import PormG.Models
+Tlp_driver = Models.Model("tlp_driver", id = Models.IDField(), surname = Models.CharField(null = true),
+  dob = Models.DateField(null = true))
+Tlp_result = Models.Model("tlp_result", id = Models.IDField(),
+  driver = Models.ForeignKey(Tlp_driver, on_delete = "CASCADE", related_name = "tlp_results", null = true),
+  points = Models.IntegerField(null = true), grid = Models.IntegerField(null = true),
+  ts = Models.DateTimeField(null = true))
+PormG.Models.set_models(@__MODULE__, "tlp_mock")
+end
+
+@testset "#863: every entry point that stores a filter node walks it" begin
+  QB = PormG.QueryBuilder; Fn = PormG.Functions; J = TlpJoinModels
+  # The arithmetic node over the result's own `ts`, and over the joined driver's `dob`.
+  node(op) = (F("id") + Fn.Coalesce(op, 0)) > 5
+  entry_points = (
+    ("filter",     "ts",  (q, op) -> q.filter(node(op))),
+    ("Q",          "ts",  (q, op) -> q.filter(QB.Q("grid" => 1, node(op)))),
+    ("Qor",        "ts",  (q, op) -> q.filter(QB.Qor("grid" => 1, node(op)))),
+    ("push! Q",    "ts",  (q, op) -> (c = QB.Q("grid" => 1); push!(c, node(op)); q.filter(c))),
+    ("push! Qor",  "ts",  (q, op) -> (c = QB.Qor("grid" => 1); push!(c, node(op)); q.filter(c))),
+    ("cjoin_on",   "ts",  (q, op) -> q.cjoin_on("Tlp_driver", alias = "d", on = [Joined("d", "id") == F("driver"), node(op)])),
+    # A pair whose right-hand side is F arithmetic (`_get_pair_to_oper(::SQLTypeF)`), both branches.
+    ("pair F rhs, suffix", "ts", (q, op) -> q.filter("points__@gt" => F("id") + Fn.Coalesce(op, 0))),
+    ("pair F rhs, =",      "ts", (q, op) -> q.filter("points" => F("id") + Fn.Coalesce(op, 0))),
+    # A hand-built `OP` whose value is a function (`_check_function(::SQLTypeOper)` walks `values`).
+    ("OP value",   "ts",  (q, op) -> q.filter(QB.OP("points", ">", Fn.Coalesce(op, 0)))),
+  )
+  for (backend, conn) in _TLP_BACKENDS, (label, col, entry!) in entry_points
+    @testset "$backend — $label" begin
+      path = "$(col)__@year"
+      a = J.Tlp_result.objects; entry!(a, path)
+      b = J.Tlp_result.objects; entry!(b, F(path))
+      ia = inspect_query(a; connection = conn)
+      ib = inspect_query(b; connection = conn)
+      @test ia[:sql_text] == ib[:sql_text]
+      @test ia[:parameters] == ib[:parameters]
+    end
+  end
+
+  # `.on` and `.cjoin`: an F-arithmetic node goes through their join prefixer, which refuses it
+  # whatever its operands, so they are driven with a hand-built `OP` node — stored by the same push
+  # site — whose column is the joined model's and whose VALUE is the function to walk.
+  op_node(op) = QB.OP("id", ">", Fn.Coalesce(op, 0))   # `id` is the joined driver's; the value is not prefixed
+  joins = (
+    ("on",    (q, op) -> (q.on("driver", op_node(op)); q.values("id", "driver__surname"))),
+    ("cjoin", (q, op) -> (q.cjoin("driver" => "Tlp_driver", filters = [op_node(op)], warn = false); q.values("id"))),
+  )
+  for (backend, conn) in _TLP_BACKENDS, (label, entry!) in joins
+    @testset "$backend — $label" begin
+      a = J.Tlp_result.objects; entry!(a, "ts__@year")
+      b = J.Tlp_result.objects; entry!(b, F("ts__@year"))
+      @test _tlp_sql(a; conn = conn) == _tlp_sql(b; conn = conn)
+      @test _tlp_params(a; conn = conn) == _tlp_params(b; conn = conn)
+    end
+  end
+end

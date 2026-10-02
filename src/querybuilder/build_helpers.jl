@@ -79,16 +79,51 @@ end
 # result was idempotent, but a node the caller still holds must not change under them (#508).
 _fresh_operands(c::AbstractVector) = copy(c)
 _fresh_operands(c) = c
+
+# #863 — the walk covers every slot an expression can hide in, not only `column`. It used to stop
+# there, and `values(...)` was the only caller, so a transform (`"ts__@date"`) inside a function in
+# any other position reached join resolution as if it named a column and the build died with "does
+# not have a 'how' property": a `Case`/`When` branch (kwargs), an `F` arithmetic operand, a window's
+# `partition_by` or a `Lag`/`Lead` `default`, and every right-hand side (`filter("d__@gte" =>
+# Max("ts__@date"))`, `update(...)` SET) — which nothing walked at all.
+#
+# Only an EXPRESSION is walked: a function or an `FExpression`. A string in a slot is a literal or
+# format data (`then = "win"`, `"format"`, `"output_field"`), and an `F("ts__@date")` path resolves at
+# render through its own String path, so neither is touched. Subqueries, `Exists`, CTE/Joined/OuterRef
+# handles and `Value`s are already resolved or resolve themselves.
+_walk_slot(v) = v isa Union{SQLTypeFunction,FExpression} ? _check_function(v) : v
+# A kwargs Dict copied, then reassigned key by key — never rebuilt from an iteration — so the
+# copy keeps the original's order, which is the order `_get_select_query(::SQLTypeFunction)` binds
+# the SQLType kwargs in.
+function _walk_kwargs(kwargs::Dict{String,Any})
+  out = copy(kwargs)
+  for k in collect(keys(out))
+    v = out[k]
+    v isa Union{SQLTypeFunction,FExpression} && (out[k] = _check_function(v))
+  end
+  return out
+end
+
 function _check_function(f::FObject)
   return FObject(function_name=f.function_name, column=_check_function(_fresh_operands(f.column)),
                  aggregate=f.aggregate, formatter=f.formatter, _as=f._as,
-                 kwargs=copy(f.kwargs))
+                 kwargs=_walk_kwargs(f.kwargs))
+end
+# The spec is rebuilt only when a partition entry is an expression to walk; otherwise `over` stays
+# shared and the built node is byte-identical to before #863. A rebuilt spec is a FRESH one (the
+# `_retag_cte_string(::WindowFunction)` shape, ctes.jl): the caller's spec may be shared across two
+# window functions, which is documented as supported, so it is never written into.
+function _walk_window_spec(over::WindowSpec)
+  any(p -> p isa Union{SQLTypeFunction,FExpression}, over.partition_by) || return over
+  return WindowSpec(partition_by = WindowPartitionPart[_walk_slot(p) for p in over.partition_by],
+                    order_by = WindowOrderPart[o for o in over.order_by],
+                    frame = over.frame)
 end
 function _check_function(f::WindowFunction)
   return WindowFunction(function_name=f.function_name,
                         column=f.column === nothing ? nothing : _check_function(_fresh_operands(f.column)),
-                        over=f.over, aggregate=f.aggregate, formatter=f.formatter,
-                        _as=f._as, kwargs=copy(f.kwargs))
+                        over=_walk_window_spec(f.over), aggregate=f.aggregate, formatter=f.formatter,
+                        _as=f._as, kwargs=_walk_kwargs(f.kwargs))
 end
 function _check_function(f::Vector{FObject})
   for i in 1:size(f, 1)
@@ -96,8 +131,9 @@ function _check_function(f::Vector{FObject})
   end
   return f
 end
+# #863: the right-hand side too, when it is an expression (a `When` condition, a hand-built `OP`).
 function _check_function(f::SQLTypeOper)
-  return OperObject(operator=f.operator, values=f.values, column=_check_function(f.column))
+  return OperObject(operator=f.operator, values=_walk_slot(f.values), column=_check_function(f.column))
 end
 function _check_function(f::Union{SQLText,SQLField})
   return f
@@ -156,9 +192,23 @@ _check_function(x::AbstractString) = _check_function(String.(split(x, "__@")))
 # `split("date__@year", "__@")` to the wrong semantics instead of the `MethodError` it raises today.
 # `Vector{String}` stays strictly more specific, so this adds no ambiguity.
 _check_function(x::Vector{<:AbstractString}) = _check_function(String.(x))
+# #863: arithmetic carries expressions in `field_name` (`Max(…) - Min(…)`) and `operand`
+# (`F("id") + Coalesce(…)`). Each is walked when it IS an expression; a String `field_name` is left
+# alone (it resolves at render), and so is every literal or handle operand. When nothing changed the
+# node itself comes back, so a plain `F(...)` is returned as given. Otherwise every slot rides across,
+# `aggregate` included — the walk resolves transforms, it does not change what the node aggregates.
 function _check_function(x::FExpression)
-  return x
+  field_name = _walk_slot(x.field_name)
+  operand = _walk_slot(x.operand)
+  (field_name === x.field_name && operand === x.operand) && return x
+  return FExpression(field_name=field_name, operation=x.operation, operand=operand,
+                     function_name=x.function_name, column=x.column, aggregate=x.aggregate,
+                     _as=x._as, kwargs=copy(x.kwargs))
 end
+# #863: a subquery's own query was resolved by its own `filter`/`values` calls, so there is nothing
+# to walk. Without these two arms `Greatest(Subquery(…), "n")` — documented under Greatest/Least —
+# and `When(Q(Exists(…)))` died with a raw `MethodError` naming this function.
+_check_function(x::Union{ExistsObject,SubqueryObject}) = x
 # #444 — a CTE handle is already fully resolved; there is nothing left to peel.
 _check_function(x::CTEReference) = x
 # #535 — an outer-query reference is fully resolved too. `OuterRefObject <: SQLTypeF`, so every
@@ -514,13 +564,17 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeJoined
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
   end
 end
+# #863: the right-hand side is walked like a projection (`_walk_slot`), so a transform inside it
+# resolves: `filter("seen__@gte" => Max("ts__@date"))` and `F("id") + Coalesce("ts__@year", 0)`. Every
+# pair spelling reaches these two methods — `filter`, `Q`/`Qor`, `When` conditions, CTE- and
+# Joined-keyed pairs, `.on`/`.cjoin`/`.cjoin_on` — so this is the one place to do it.
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeF
   if haskey(PormGsuffix, x.first[end])
     _check_fixed_shape_lookup(x.first[end], x.second)
     _check_column_rhs_lookup(x.first)
-    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[x.first[end]], values=_walk_slot(x.second), column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-    return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
+    return OperObject(operator="=", values=_walk_slot(x.second), column=SQLField(_check_function(x.first), join(x.first, "__")))
   end
 end
 # Allow Case/When and other FObject expressions as filter RHS values
@@ -528,9 +582,9 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeFunction
   if haskey(PormGsuffix, x.first[end])
     _check_fixed_shape_lookup(x.first[end], x.second)
     _check_column_rhs_lookup(x.first)
-    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[x.first[end]], values=_check_function(x.second), column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-    return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
+    return OperObject(operator="=", values=_check_function(x.second), column=SQLField(_check_function(x.first), join(x.first, "__")))
   end
 end
 # `Base.UUID` and `AbstractVector{UInt8}` (#411, #466): without them a `Vector{UUID}` or a
@@ -702,6 +756,13 @@ function _validate_membership_subquery(v::SQLTypeOper)
     detail * " Fix: call .values(\"field_name\") on the subquery so it projects only the key used by the filter."
   ))
 end
+
+# #863 — a filter NODE handed over directly (`filter((F("id") + Coalesce("ts__@year", 0)) > 5)`,
+# `OP(Max("ts__@date"), …)`) is walked like a pair's right-hand side. A `Q`/`Qor` container is not
+# re-entered: its pairs were resolved when it was built, and a container can hold itself
+# (`push!(q, q)`, pinned by test_cte_reference.jl). `Exists` resolves its own inner query.
+_check_filter_node(v::Union{SQLTypeOper,FExpression}) = _check_function(v)
+_check_filter_node(v) = v
 
 function _check_filter(x::Pair)
   # #444: a CTE-scoped LHS. Delegate on `ref.path` so the whole String pipeline runs — the `__@`
@@ -1303,7 +1364,9 @@ end
 # RENDERED, with their `?` placeholders in them. Repeating a rendered string would repeat a `?`
 # whose value was bound once, misbinding every parameter after it. Repeating the NODES instead makes
 # each rotation render — and bind — its own operands, in text order. Constructs, never mutates (#508).
-# One operand is left alone: SQLite's `coalesce` needs two, and `Greatest(x)` is not this issue.
+# Fewer than two operands are left alone: the constructors refuse them since #859 (SQLite's `max(x)`
+# with one argument is the AGGREGATE, and its `coalesce` needs two), so only a hand-built node gets
+# here with one, and the guard keeps it from a `coalesce` SQLite would reject.
 function _null_skipping_operands(v::SQLTypeFunction, instruc::SQLInstruction)
   (instruc.connection isa PormGSQLite && v.function_name in ("GREATEST", "LEAST") &&
    v.column isa AbstractVector && length(v.column) >= 2) || return v.column

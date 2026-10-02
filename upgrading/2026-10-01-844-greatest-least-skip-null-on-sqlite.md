@@ -21,7 +21,8 @@ SQLite now gives PostgreSQL's answer. It renders one `COALESCE` per rotation of 
 | every argument `NULL` | `missing` | `missing` |
 | no argument `NULL` | the value | the same value |
 
-A single-argument `Greatest(x)` / `Least(x)` is not affected.
+A single-argument `Greatest(x)` / `Least(x)` is not affected by this change. #859 refuses it
+separately: see its own entry.
 
 ### How to find the calls to migrate
 

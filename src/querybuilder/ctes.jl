@@ -953,7 +953,7 @@ function _on(q::SQLObject, join_path::String, filters::AbstractVector; join_type
     if isa(prefixed, Pair)
       push!(parsed_filters, _check_filter(prefixed))
     elseif isa(prefixed, FilterType)
-      push!(parsed_filters, prefixed)
+      push!(parsed_filters, _check_filter_node(prefixed))   # #863
     else
       throw(FilterError("Invalid filter type: $(typeof(prefixed)). Use Pair, Q, Qor, OP, or F expressions."))
     end
@@ -1116,7 +1116,7 @@ function _cjoin(
     if isa(prefixed, Pair)
       push!(parsed_filters, _check_filter(prefixed))
     elseif isa(prefixed, FilterType)
-      push!(parsed_filters, prefixed)
+      push!(parsed_filters, _check_filter_node(prefixed))   # #863
     else
       throw(FilterError("Invalid filter type: $(typeof(prefixed)). Use Pair, Q, Qor, OP, or F expressions."))
     end
@@ -1212,7 +1212,7 @@ function _cjoin_on(q::SQLObject, target::PormGModel, on::AbstractVector; alias::
     if isa(f, Pair)
       push!(parsed, _check_filter(f))
     elseif isa(f, FilterType)
-      push!(parsed, f)
+      push!(parsed, _check_filter_node(f))   # #863
     else
       throw(FilterError("Invalid cjoin_on `on` element: $(typeof(f)). Use Pair, Q, Qor, OP, or F expressions."))
     end

@@ -12,8 +12,11 @@
 # typed error, and widens `Int` to `Integer`. Deterministic and DB-free: mock connections on both
 # engines, `inspect_query` for the bound parameters, `show_query = :dict` for the write path.
 #
-# #868 (the last three testsets) is the write-side follow-up: once an integer or a date is written
-# as text, a text field's `max_length` has to measure that text too, not only a String's.
+# #868 (the three testsets after #860's) is the write-side follow-up: once an integer or a date is
+# written as text, a text field's `max_length` has to measure that text too, not only a String's.
+#
+# #876 (the last testsets) refuses a `Bool` the same way #860 refuses a float. It was passed through
+# unformatted, so each driver chose its text — `"true"` on PostgreSQL, `"1"` on SQLite.
 # ============================================================
 
 using Test
@@ -74,12 +77,13 @@ end
     @test occursin(string(typeof(v)), msg)
     @test occursin("string(x)", msg)
   end
-  # Every integer width has the one text an `Int64` has. `Bool` keeps its own method (it is an
-  # `Integer` too), so it is pinned here as unchanged rather than as base-10 text.
+  # Every integer width has the one text an `Int64` has. `Bool` is an `Integer` too but keeps its own
+  # method, which refuses it (#876) — pinned with the #876 testsets below. Until #876 this line pinned
+  # `format_text_sql(true) === true`, recorded as "unchanged" while the Bool question was open; #876
+  # settled it as a refusal, so that pin is replaced, not lost.
   @test PormG.Models.format_text_sql(Int32(5)) == "5"
   @test PormG.Models.format_text_sql(UInt8(3)) == "3"
   @test PormG.Models.format_text_sql(big(7)) == "7"
-  @test PormG.Models.format_text_sql(true) === true
   # A collection maps element-wise, so one float element refuses the whole list the same way.
   @test textval860_refusal(() -> PormG.Models.format_text_sql([1, 1.5])) isa PormG.InvalidValueError
 end
@@ -171,16 +175,13 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # #868: the boundary. A value whose text fits is written as before, at exactly max_length and
-# below. A `Bool` is still written: it is not measured (each engine stores it as a different text),
-# and it would not be refused if it were, since `length(true) == 1` — so this line pins that the
-# check did not start refusing it, not the skip itself.
+# below. (A `Bool` was pinned here as still written; since #876 it is refused, below.)
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#868: a value whose text fits max_length is still written" begin
   for (backend, M) in TEXTVAL868_MODELS
     @test "123" in M.objects.create("code" => 123, show_query = :dict)[:parameters]
     @test "255" in M.objects.create("code" => UInt8(255), show_query = :dict)[:parameters]
     @test "SEN" in M.objects.create("code" => "SEN", show_query = :dict)[:parameters]
-    @test M.objects.create("code" => true, show_query = :dict) isa AbstractDict
     # An over-length String is refused exactly as before #868.
     @test textval860_refusal(() -> M.objects.create("code" => "SENNA", show_query = :dict)) isa PormG.InvalidValueError
   end
@@ -198,4 +199,73 @@ end
   err = textval860_refusal(() -> PormG.QueryBuilder.bulk_insert(M.objects, df; show_query = :dict))
   @test err isa PormG.InvalidValueError
   @test occursin("max_length is 3", textval868_msg(err))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #876 — a `Bool` written to or compared with a text field is refused, typed, like a float (#860).
+# `format_text_sql(::Bool)` returned the `Bool` unformatted, so the driver chose its text: LibPQ binds
+# `"true"`, SQLite stores `1` as `"1"`. The same `create` stored different text per engine, and
+# `filter("code" => true)` matched on one of them. A text field's `default = true` was already a
+# `FieldValidationError`; now a written or filtered `Bool` is refused too, on both engines.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#876: format_text_sql refuses a Bool, alone or in a list" begin
+  for v in (true, false, [true], ["SEN", false])
+    @testset "$(repr(v))" begin
+      err = textval860_refusal(() -> PormG.Models.format_text_sql(v))
+      @test err isa PormG.InvalidValueError
+      # The message names the type and the explicit spelling that does work.
+      msg = textval868_msg(err)
+      @test occursin("Got a Bool", msg)
+      @test occursin("string(x)", msg)
+    end
+  end
+end
+
+@testset "#876: a Bool compared with text raises FilterError" begin
+  for (backend, M) in TEXTVAL860_MODELS, r in TEXTVAL860_ROUTES, v in (true, false)
+    @testset "$backend · $(r.route) · $v" begin
+      err = textval860_refusal(() -> r.build(M, v))
+      @test err isa PormG.FilterError
+      @test occursin(r.label, textval868_msg(err))
+    end
+  end
+  # An `__in` list of `Bool`s maps element-wise into the same refusal. This one is pinned, not fixed:
+  # before #876 the element failed to `convert` into the formatter's `Vector{String}`, which the
+  # filter guard already reported as this `FilterError` (a mixed list such as `["SEN", true]` stops
+  # earlier still, at the homogeneous-list check). It must stay refused now that the cause is typed.
+  for (backend, M) in TEXTVAL860_MODELS, v in ([true], [true, false])
+    @testset "$backend · __in $(repr(v))" begin
+      err = textval860_refusal(() -> (q = M.objects; q.filter("surname__in" => v); inspect_query(q)))
+      @test err isa PormG.FilterError
+      @test occursin("surname", textval868_msg(err))
+    end
+  end
+end
+
+@testset "#876: create and update refuse a Bool in a text field" begin
+  for (backend, M) in TEXTVAL868_MODELS, v in (true, false)
+    @testset "$backend · $v" begin
+      err = textval860_refusal(() -> M.objects.create("code" => v, show_query = :dict))
+      @test err isa PormG.InvalidValueError
+      msg = textval868_msg(err)
+      @test occursin("Got a Bool", msg)
+      # Refused as a Bool, not measured as a length: `CharField(max_length = 3)` has no text to
+      # measure a `Bool` against, which was #868's open half.
+      @test !occursin("max_length", msg)
+
+      q = M.objects; q.filter("driverid" => 1)
+      @test textval860_refusal(() -> q.update("code" => v, show_query = :dict)) isa PormG.InvalidValueError
+    end
+  end
+end
+
+# The bulk writers format through the same formatter, so their depuration pass names the cell
+# (#875/#869 own that wording); here only that a `Bool` is refused at all, on the PostgreSQL mock
+# for the reason the #868 bulk testset above gives.
+@testset "#876: bulk_insert refuses a Bool in a text field" begin
+  M = last(first(TEXTVAL868_MODELS))
+  df = PormG.QueryBuilder.DataFrames.DataFrame(code = Any["SEN", true])
+  err = textval860_refusal(() -> PormG.QueryBuilder.bulk_insert(M.objects, df; show_query = :dict))
+  @test err isa PormG.InvalidValueError
+  @test occursin("Got a Bool", textval868_msg(err))
 end

@@ -200,13 +200,17 @@ Access_token = Models.Model(
 **A text value is a string, an integer, a date or a time.** An integer of any width (`1`,
 `Int32(1)`, `UInt8(1)`) is written as its base-10 text, and a date or a time as its ISO text. A
 float or a `Decimal` has no single text: `1.5` and `1.50` are the same number, and Julia prints
-`1e10` as `"1.0e10"`. So it raises `InvalidValueError` on a write and `FilterError` in a filter,
-instead of comparing against a text that matches nothing. Pass the text you mean.
+`1e10` as `"1.0e10"`. Neither has a `Bool`, although Julia counts it as an integer: `true` could be
+`"true"`, `"1"` or `"t"`, and before this was refused the two engines each picked a different one.
+Each of these raises `InvalidValueError` on a write and `FilterError` in a filter,
+instead of comparing against a text that matches nothing. Pass the text you mean. A text field's
+`default = true` is refused the same way, as a `FieldValidationError` when the model is defined.
 
 ```julia
 M.Result.objects.filter("positiontext" => 1)      # compared as "1"
 M.Result.objects.filter("positiontext" => "1")    # the same
 M.Result.objects.filter("positiontext" => 1.0)    # FilterError: pass the text, "1"
+M.Result.objects.filter("positiontext" => true)   # FilterError: pass the text the column holds
 ```
 
 `max_length` counts the characters of the text that is written, whatever the value was: `12345` in a

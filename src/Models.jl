@@ -3066,16 +3066,20 @@ end
 
 # `Integer`, not `Int` (#860): an `Int32` or a `UInt8` has the same one base-10 text as the `Int64`
 # it would widen to, and `Int` alone sent both to a raw `MethodError`. `Bool` is an `Integer` too,
-# but its own method below is the more specific one.
+# but its own method below is the more specific one, and it refuses (#876).
 function format_text_sql(value::Union{Integer, Date, DateTime, ZonedDateTime})
     return string(value)
 end
 function format_text_sql(value::Union{Missing, Nothing})
     return missing
 end
+# #876: a `Bool` is refused, typed, for #860's reason — it has no single text. Passed through, each
+# driver picked one: LibPQ binds `"true"`, SQLite stores `1` as `"1"`, so the same write stored
+# different text per engine and `filter("code" => true)` matched on one of them. A text field's
+# `default = true` is already a `FieldValidationError`, for the same reason. Its own method, because
+# `Bool <: Integer` would otherwise reach the base-10 method above and be written as `"true"`.
 function format_text_sql(value::Bool)
-  return value
-    # return value ? "'true'" : "'false'"
+  throw(InvalidValueError("A text value must be a String, an integer, a date, or a time. Got a Bool, which has no single text (\"true\", \"1\", \"t\"): pass the text the column holds explicitly, e.g. `string(x)`."))
 end
 function format_text_sql(value::AbstractString)
   return value

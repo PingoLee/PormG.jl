@@ -1178,6 +1178,30 @@ const DOCERR_CASES = [
             q = m.objects; q.filter("positiontext" => 1.0); q.list(show_query = :dict)
         end,
     ),
+    # #876. The same *Text Fields* section names the types a `Bool` raises against a text field: on a
+    # write, in a filter, and as a `default=`. Every route and both engines are pinned in
+    # `test_text_value_types.jl`.
+    (
+        "fields.md — a Bool in a text field raises on a write (#876)",
+        InvalidValueError,
+        () -> let m = Model("docerr_postext_876", id = IDField(), positiontext = CharField())
+            m.connect_key = "docerr_pg"; m._module = Main
+            m.objects.create("positiontext" => true, show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — a Bool compared with a text field raises in a filter (#876)",
+        FilterError,
+        () -> let m = Model("docerr_postext_876f", id = IDField(), positiontext = CharField())
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("positiontext" => true); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — a text field's default = true raises (#876)",
+        FieldValidationError,
+        () -> CharField(default = true),
+    ),
     # #868. The same *Text Fields* section says `max_length` counts the text an integer is written
     # as. Every writer, value type and both engines are pinned in `test_text_value_types.jl`.
     (

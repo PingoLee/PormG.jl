@@ -958,7 +958,15 @@ const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 # Adding a member is still two halves: the union here AND an oracle row in `test_f_date_operands.jl`.
 # The testset that walks `Base.uniontypes(_CompareLiteral)` fails on a member with no row, which is
 # what keeps this comment a rule rather than a list.
-const _CompareLiteral = Union{Integer,Float16,Float32,Float64,String,Base.UUID,Dates.Time,Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime}
+#
+# #814 added `Dates.Period` and `Dates.CompoundPeriod`, for `(F("ts") - F("other_ts")) > Hour(1)` and
+# `F("duration") == Minute(90)`: the column (or the difference) is an interval, and the literal binds
+# through `format_duration_sql`, as the pair `filter("duration" => Minute(90))` does. This is not the
+# conflation #494 was about — the #25 ARITHMETIC operands (`_DurationOperand`) still are not this
+# union, and `Interval` is not in it. A duration against anything that is not an interval is refused
+# by the literal arm with a `QueryBuildError`, rather than reaching a formatter with no method for it.
+const _CompareLiteral = Union{Integer,Float16,Float32,Float64,String,Base.UUID,Dates.Time,Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime,
+                              Dates.Period,Dates.CompoundPeriod}
 const _ColumnHandle   = Union{SQLTypeCTE,SQLTypeJoined}
 
 # Carrier for an F reference and any arithmetic built on top of it. Users construct it through
@@ -1151,6 +1159,26 @@ end
 # Reversed + only: `Day(30) + F("date")` commutes to `F("date") + Day(30)`. Reversed - is omitted
 # on purpose (`interval - date` is not valid date arithmetic).
 Base.:+(operand::_DurationOperand, f::FExpression) = f + operand
+
+# #814 — a date or timestamp LITERAL as the right side of `-`: the time from that instant to the
+# expression's, `F("date") - Date(2009, 3, 1)`. `-` only: adding, multiplying or dividing two
+# instants has no meaning (#801 refuses the column spelling of each). The literal is the explicit
+# spelling of what `F("date") - "2009-03-01"` attempted, which bound TEXT — PostgreSQL has no
+# `date - text`, and SQLite subtracted the years — and which is now refused on both engines.
+# The renderer types the literal (`_render_operand_typed`) and refuses it against a left that is not
+# temporal.
+const _TemporalLiteral = Union{Dates.Date, Dates.DateTime, TimeZones.ZonedDateTime}
+
+function Base.:-(f::FExpression, operand::_TemporalLiteral)
+  return FExpression(
+    field_name=f.operation === nothing ? f.field_name : f,
+    operation="-",
+    operand=operand,
+    function_name="F",
+    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
+    aggregate=f.aggregate
+  )
+end
 
 # Comparison operations for F expressions
 #
@@ -1740,6 +1768,10 @@ end
 function Base.:-(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
   return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", aggregate=_is_agg(operand))
 end
+# #814: `Lag("date", …) - Date(2009, 3, 1)`, the window-function twin of the `F` method above.
+function Base.:-(f::WindowFunction, operand::_TemporalLiteral)
+  return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", aggregate=false)
+end
 function Base.:*(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
   return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", aggregate=_is_agg(operand))
 end
@@ -1762,6 +1794,10 @@ function Base.:+(f::FObject, operand::Union{Integer,Float64,String,FExpression,F
 end
 function Base.:-(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
   return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
+end
+# #814: `Max("date") - Date(2009, 3, 1)`, the function twin of the `F` method above.
+function Base.:-(f::FObject, operand::_TemporalLiteral)
+  return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", aggregate=f.aggregate)
 end
 function Base.:*(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
   return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))

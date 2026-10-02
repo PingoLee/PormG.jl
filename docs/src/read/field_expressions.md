@@ -26,7 +26,7 @@
 
 ```julia
 using PormG: F
-using PormG.Functions: Count, Sum
+using PormG.Functions: Count, Sum, Max, Min
 
 # Field reference
 F("grid")
@@ -350,14 +350,94 @@ ordinary arithmetic. A whole-day shift is still a date, so `(F("date") + Day(30)
 | Difference | Reads back as |
 |---|---|
 | `DateField` − `DateField` (whole-day shifts included) | an integer number of days, both engines |
-| anything with a timestamp side — a `DateTimeField`, or a `DateField` plus a sub-day duration | a `Dates.CompoundPeriod` on PostgreSQL; raises `QueryBuildError` on SQLite |
+| anything with a timestamp side — a `DateTimeField`, or a `DateField` plus a sub-day duration | an interval, read back as a `Dates.CompoundPeriod`, both engines |
 
 !!! note "An integer, not a duration"
     Django returns a `DurationField` for `DateField - DateField`. PormG returns PostgreSQL's integer
     day count instead, because a duration on SQLite is stored as text and would compare as text.
 
+A timestamp difference is the time from one instant to the other — here, how long after midnight
+each 2009 race started:
+
+```julia
+query = M.Race.objects
+query.filter("year" => 2009)
+query.values("name", "since_midnight" => F("start_at") - F("date"))
+```
+
+PostgreSQL renders `("Tb"."start_at" - "Tb"."date")`, an `interval`. SQLite has no interval type, so
+the difference is rendered as the text a `DurationField` stores there —
+`06:00:00`, with hours never folded into days (`126:00:00`) and a fraction only when there is one —
+and both read back as the same `Dates.CompoundPeriod` (`== Hour(6)`).
+
+Compare a timestamp difference against a duration:
+
+```julia
+query = M.Race.objects
+query.filter("year" => 2009, (F("start_at") - F("date")) == Hour(6))
+```
+
+`==` and `!=` work on both engines. Ordering (`>`, `<`, `>=`, `<=`) works on PostgreSQL and raises
+`QueryBuildError` on **SQLite**: the difference is text there, and text does not order like a
+duration (`"100:00:00"` sorts before `"99:00:00"`, and a negative difference sorts by its digits).
+This is an intentional divergence. To order by a difference on SQLite, compare whole days instead, by
+subtracting two `DateField` values.
+
+On SQLite a timestamp difference is that text everywhere, so the same divergence reaches further:
+
+- **Arithmetic on it** (`d + d`, `d * 2`, `d + Hour(1)`, `F("points") * d`) raises `QueryBuildError`
+  on SQLite; PostgreSQL's interval arithmetic works.
+- **A window function as one side** (`F("start_at") - Lag("start_at", over = …)`) raises
+  `QueryBuildError` on SQLite, where the difference is computed in a subquery the window cannot see
+  through. Project the window value in a CTE first and subtract the column. `Max`/`Min` are fine.
+- **Ordering or aggregating it** is not refused. `order_by` on its alias, `Max`/`Min`, `Greatest` and
+  `Least` sort the text, exactly as they do for a `DurationField` column on SQLite: right below 100
+  hours, wrong at and above it, and for negative differences. `Sum`, `Avg` and `Abs` read the text's
+  leading number, so they work on whole hours and drop the minutes and seconds. Aggregate durations
+  on PostgreSQL.
+
+A duration compares only against an interval — a timestamp difference or a `DurationField`. Against
+anything else (`F("date") > Hour(1)`, or a day count) it raises `QueryBuildError`. A `Time` is a time
+of day, not a duration, and is refused against an interval: write `Hour(1)` or `Minute(90)` instead.
+
 `+`, `*` and `/` between two date or timestamp values have no meaning and raise `QueryBuildError`
 on both engines. To move a date, add a duration: `F("date") + Day(30)`.
+
+Either side of a difference can be more than a column. An extremum (`Max`, `Min`), a window value
+function (`Lag`, `Lead`, `FirstValue`, …), a `__@date` path and a date literal each count as the date
+or timestamp they produce, so the same rules apply — the length of the 2009 season in days, and how
+many days after the season opener each race was held:
+
+```julia
+query = M.Race.objects
+query.filter("year" => 2009)
+query.values("season_days" => Max("date") - Min("date"))
+
+query = M.Race.objects
+query.filter("year" => 2009)
+query.values("name", "since_opener" => F("date") - Date(2009, 3, 29))
+```
+
+A date literal is a `Date`, `DateTime` or `ZonedDateTime`. A **string** on the right of date
+arithmetic is text, not a date (`F("date") - "2009-03-29"`), and raises `QueryBuildError` on both
+engines; a string that names a field (`F("date") - "dob"`) is that field. Subtracting a date literal
+from something that is not a date or timestamp PormG can type — a number, `Sum(...)`, `__@year` —
+raises `QueryBuildError` too.
+
+A day count combined with a date is a whole-day **shift**, as it is on PostgreSQL: `F("date") ± count`
+and `count + F("date")` are dates (timestamps stay timestamps), on both engines. Each 2009 race moved
+as far again past the season opener:
+
+```julia
+query = M.Race.objects
+query.filter("year" => 2009)
+query.values("name", "doubled" => F("date") + (F("date") - Date(2009, 3, 29)))
+```
+
+A day count **minus** a date has no meaning and raises `QueryBuildError` on both engines; subtract the
+count from the date instead. Shifting a date or timestamp by an interval *value* — a `DurationField`
+or a timestamp difference — works on PostgreSQL and raises `QueryBuildError` on SQLite, where both
+are text; shift by a duration (`F("start_at") + Hour(6)`) or a day count there.
 
 ### When NOT to Use F
 

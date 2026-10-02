@@ -369,9 +369,13 @@ end
   @test !(QBA.OuterRefObject <: fieldtype(QBA.FExpression, :field_name))
   @test QBA.FExpression <: slot
 
-  # The duration operands stay OUT of the comparison union: `F("seen") + Day(1)` is arithmetic, and
-  # conflating the two was the whole of #494.
-  @test !(Dates.Period <: QBA._CompareOperand)
+  # #814 admitted `Period`/`CompoundPeriod` as COMPARISON literals — `(F(ts) - F(ts2)) > Hour(1)` —
+  # with their own consumer (the literal arm binds `format_duration_sql`, and refuses a duration
+  # against a non-interval) and oracle rows. What #494 forbade was the two unions drifting, which
+  # composition still rules out. The arithmetic wrapper `Interval` stays out: it has no comparison
+  # consumer.
+  @test Dates.Period <: QBA._CompareOperand
+  @test !(QBA.Interval <: QBA._CompareOperand)
   @test Dates.Period <: slot
 end
 

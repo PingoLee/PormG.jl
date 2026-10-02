@@ -1037,12 +1037,13 @@ end
     @test contains(r3[:sql_text], "(\"Tb\".\"happened\" + make_interval(months => \$1::integer))")
     @test r3[:parameters] == [2]
 
-    # Bare-seconds string ≥ 100 must PARSE, not throw: the duration normalizer emits "00:00:120"
-    # (three seconds digits), which the parser must accept.
+    # Bare-seconds string ≥ 100 must PARSE, not throw. Before #891 the duration normalizer emitted
+    # "00:00:120" (three seconds digits) and the parser had to accept it, binding `secs => 120.0`;
+    # it now folds to "00:02:00", so the same interval binds as two minutes.
     q4 = _E.objects; q4.values("s" => F("logged_at") + Interval("120"))
     r4 = q4.list(show_query=:dict)
-    @test contains(r4[:sql_text], "make_interval(secs => \$1::double precision)")
-    @test r4[:parameters] == [120.0]
+    @test contains(r4[:sql_text], "make_interval(mins => \$1::integer)")
+    @test r4[:parameters] == [2]
   end
 
   @testset "Chained (unparenthesised) periods nest into separate intervals" begin

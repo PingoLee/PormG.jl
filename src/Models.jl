@@ -3172,53 +3172,55 @@ function _duration_to_nanoseconds(value::Dates.CompoundPeriod)::Int64
   return total
 end
 
-function _duration_from_seconds_string(value::AbstractString)::String
-  # `String(...)` FIRST, never `match(re, value)` directly (#598). Base defines `match` only for
-  # `String`, `SubString{String}` and `AnnotatedString`; every other `AbstractString` raises
-  # `ArgumentError: regex matching is only available for the String and AnnotatedString types` —
-  # neither a `PormGError` nor anything the caller can act on.
-  #
-  # `String(x)`, NOT `string(x)`. They are not interchangeable here: `string` is identity for some
-  # `AbstractString`s — `string(::LazyString)` returns the `LazyString` — so `strip(string(value))`
-  # yields a `SubString{LazyString}` and the regex still throws. Measured, not assumed; #598's own
-  # write-up recommends the `string` spelling, and it does not hold. Every conversion on this path
-  # is therefore `String`.
-  s = String(value)
-  match_result = match(r"^([+-]?)(\d+)(?:\.(\d+))?$", s)
-  match_result === nothing && throw(InvalidValueError("The duration $value is invalid"))
+const _DURATION_FORMATS_MSG = "Accepted formats: HH:MM:SS(.sss), M:SS(.sss), or SS(.sss)."
 
-  sign, seconds_str, fraction = match_result.captures
-  fraction = fraction === nothing ? "" : ".$(rstrip(fraction, '0'))"
-  fraction = fraction == "." ? "" : fraction
-  return "$(sign === "-" ? "-" : "")00:00:$(lpad(seconds_str, 2, '0'))$(fraction)"
-end
-
-function _normalize_duration_string(value::AbstractString)::String
-  # `strip` PRESERVES the input's string type — `strip(::LazyString)` is not a `String` — so an
-  # `::AbstractString` signature alone does not make the three regexes below safe (#598). Convert
-  # first; see `_duration_from_seconds_string` above for why it is `String` and not `string`.
-  # The failure was uneven and therefore easy to miss: the third branch uses `occursin`, which has
-  # a generic fallback, so it cleared its own guard and then died one frame down inside
-  # `_duration_from_seconds_string`.
+# The signed nanoseconds a duration string spells — one parser for the three accepted forms,
+# `H:MM:SS(.f)`, `M:SS(.f)` and bare `SS(.f)`, so a string reaches the writer the way a `Period`
+# does: as one count, rendered by `_duration_nanoseconds_to_string`. Before #891 each form rebuilt
+# the text from its own captures and nothing folded a field past its range: `"125:30"` was written
+# `"00:125:30"`, `"120"` was `"00:00:120"` and `"01:75:00"` passed through unchanged — none of them
+# the shape `Dialect._parse_sqlite_interval` reads back, and `Dialect._sqlite_interval_ms` (two
+# minute digits) parsed `"00:125:30"` as 12:05, silently.
+#
+# The leading field is unbounded on input, which is what makes `"125:30"` read as minutes; the
+# fields after it keep their two digits, as before. A fraction is truncated to the nanosecond, the
+# precision the writer and both readers carry, and a count past `Int64` is as invalid as any other
+# unreadable duration.
+#
+# `String(value)`, NOT `string(value)`, and before `strip` (#598). Base defines `match` only for
+# `String`, `SubString{String}` and `AnnotatedString`; every other `AbstractString` raises
+# `ArgumentError: regex matching is only available for the String and AnnotatedString types` —
+# neither a `PormGError` nor anything the caller can act on. `strip` PRESERVES the input's string
+# type, and `string` is identity for some `AbstractString`s — `string(::LazyString)` returns the
+# `LazyString` — so neither makes the match safe. Measured, not assumed; #598's own write-up
+# recommends the `string` spelling, and it does not hold.
+function _duration_string_nanoseconds(value::AbstractString)::Int64
   stripped = strip(String(value))
   isempty(stripped) && throw(InvalidValueError("The duration cannot be empty"))
-
-  if (match_result = match(r"^([+-]?)(\d+):(\d{2}):(\d{2})(?:\.(\d+))?$", stripped)) !== nothing
-    sign, hours, minutes, seconds, fraction = match_result.captures
-    fraction = fraction === nothing ? "" : ".$(rstrip(fraction, '0'))"
-    fraction = fraction == "." ? "" : fraction
-    return "$(sign === "-" ? "-" : "")$(hours):$(minutes):$(seconds)$(fraction)"
-  elseif (match_result = match(r"^([+-]?)(\d+):(\d{2})(?:\.(\d+))?$", stripped)) !== nothing
-    sign, minutes, seconds, fraction = match_result.captures
-    fraction = fraction === nothing ? "" : ".$(rstrip(fraction, '0'))"
-    fraction = fraction == "." ? "" : fraction
-    return "$(sign === "-" ? "-" : "")00:$(lpad(minutes, 2, '0')):$(seconds)$(fraction)"
-  elseif occursin(r"^[+-]?\d+(?:\.\d+)?$", stripped)
-    return _duration_from_seconds_string(stripped)
+  m = match(r"^([+-]?)(?:(?:(\d+):)?(\d+):)?(\d+)(?:\.(\d+))?$", stripped)
+  invalid() = InvalidValueError("The duration $value is invalid. $(_DURATION_FORMATS_MSG)")
+  m === nothing && throw(invalid())
+  sign, hours, minutes, seconds, fraction = m.captures
+  # The two-digit rule for every field after the leading one.
+  minutes !== nothing && length(seconds) != 2 && throw(invalid())
+  hours !== nothing && length(minutes) != 2 && throw(invalid())
+  nanos = fraction === nothing ? Int64(0) : parse(Int64, rpad(first(fraction, 9), 9, '0'))
+  total = try
+    whole = Int64(0)
+    for (field, unit) in ((hours, 3600), (minutes, 60), (seconds, 1))
+      field === nothing && continue
+      whole = Base.Checked.checked_add(whole, Base.Checked.checked_mul(parse(Int64, field), Int64(unit)))
+    end
+    Base.Checked.checked_add(Base.Checked.checked_mul(whole, Int64(1_000_000_000)), nanos)
+  catch e
+    e isa OverflowError || rethrow()
+    throw(InvalidValueError("The duration $value is out of range. $(_DURATION_FORMATS_MSG)"))
   end
-
-  throw(InvalidValueError("The duration $value is invalid. Accepted formats: HH:MM:SS(.sss), M:SS(.sss), or SS(.sss)."))
+  return sign == "-" ? -total : total
 end
+
+_normalize_duration_string(value::AbstractString)::String =
+  _duration_nanoseconds_to_string(_duration_string_nanoseconds(value))
 
 function _duration_nanoseconds_to_string(total_nanoseconds::Int64)::String
   sign = total_nanoseconds < 0 ? "-" : ""
@@ -4469,7 +4471,7 @@ function validate_timezone(value::AbstractString, format::AbstractString)
   # `::AbstractString` and `String(value)` both matter (#598): the signature so `format_timezone_sql`
   # can hand a `SubString` through, and the conversion so the `match` at the offset check below sees
   # a type Base's regex engine accepts. `strip` alone would preserve the caller's type, and
-  # `string` would too for a `LazyString` — see `_duration_from_seconds_string`.
+  # `string` would too for a `LazyString` — see `_duration_string_nanoseconds`.
   s = replace(strip(String(value)), ' ' => 'T', count = 1)
   # Julia's DateTime is millisecond-precision: truncate any sub-millisecond digits (e.g.
   # Python's microsecond `isoformat()`) so naive and offset spellings of the same instant

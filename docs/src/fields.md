@@ -737,6 +737,15 @@ Onboard_video = Models.Model(
 )
 ```
 
+**Accepts**: a `Dates.Period` or `Dates.CompoundPeriod` of weeks down to nanoseconds, or a string
+in one of three forms — `HH:MM:SS(.sss)`, `M:SS(.sss)` or bare seconds `SS(.sss)`. A string is
+written in the same canonical `HH:MM:SS` form as the period it spells, so a field past its range
+is carried into the next one: `"125:30"` is stored as `"02:05:30"`, `"90"` as `"00:01:30"`, and
+`"01:75:00"` as `"02:15:00"`. Hours are never carried into days. Months and years are refused,
+because they have no fixed length. Before #891 a string was stored as it was spelled (`1:27:30`,
+`00:00:90`, `00:125:30`), so on SQLite a row written then can still hold that spelling. The upgrade
+guide's #891 entry shows how to re-save those rows.
+
 **Reads back as**: a `Dates.CompoundPeriod` — on PostgreSQL (either driver) and on SQLite alike, so
 code can dispatch on it. That holds for the column read through a query: `list()`, `DataFrame`, and
 the column in `values(...)`, including a whole-second value like a `23 seconds` pit stop, which one

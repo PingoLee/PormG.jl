@@ -884,8 +884,8 @@ end
 # then rebuilds the period directly WITHOUT `canonicalize` (which would roll >=24h into days and
 # >=7d into weeks — surprising for a time duration and would break the portable time-only guarantee).
 function _parse_time_string_to_compoundperiod(s::AbstractString)::Dates.CompoundPeriod
-  normalized = Models._normalize_duration_string(s)  # -> "±H:MM:SS(.fff)" (fields may exceed 2 digits,
-                                                     # e.g. bare "120" seconds normalizes to "00:00:120")
+  normalized = Models._normalize_duration_string(s)  # -> "±HH:MM:SS(.fff)", minutes and seconds folded
+                                                     # (#891: bare "120" is "00:02:00"); hours may exceed 2 digits
   m = match(r"^(-?)(\d+):(\d+):(\d+)(?:\.(\d+))?$", normalized)
   m === nothing && throw(InvalidValueError("Interval: could not parse normalized duration '$(normalized)'"))
   sign = m.captures[1] == "-" ? -1 : 1

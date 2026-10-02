@@ -1658,7 +1658,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
         end
 
         # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-        cells = [_format_single(metas[j], field, sources[j][index], "bulk_insert") for (j, field) in enumerate(fields_df)]
+        cells = [_format_bulk_cell(model, field, metas[j], sources[j][index], "bulk_insert", index) for (j, field) in enumerate(fields_df)]
         if pg_arrays
           foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
         else
@@ -1666,7 +1666,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
         end
       catch e
         _depuration_values_bulk_insert(fields_df, mapping, model, df[index, :], index)
-        e isa PormGError && rethrow()   # keep the taxonomy type; a value refusal already names its row (the depuration pass above, or `_validate_bulk_cell`, #875)
+        e isa PormGError && rethrow()   # keep the taxonomy type; a value refusal already names its row (the depuration pass above, or `_validate_bulk_cell` / `_format_bulk_cell`, #875)
         throw(InvalidValueError("Error in bulk_insert, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
       end
       count += 1
@@ -2003,11 +2003,23 @@ function _bulk_cell_error(e::InvalidValueError, op::AbstractString, model::PormG
   return InvalidValueError("$(head), field \"$(field)\": $(reason)")
 end
 
-# One cell's value checks, with a refusal re-raised naming its row (#875). Every other error passes
-# as raised: `_validate_field_value` raises nothing untyped, and the caller's `catch` owns that arm.
+# One cell's value checks, and its format step, with a refusal re-raised naming its row (#875).
+# Every other error passes as raised; the caller's `catch` owns the untyped arm. The format step is
+# wrapped for the collection refusal (`_single_value`): the depuration pass's formatter maps a list
+# of text without throwing, so it finds nothing there and the caller rethrows this error as it is.
+# A formatter's own refusal is still reported by the depuration pass, which runs first in the catch.
 function _validate_bulk_cell(model::PormGModel, field::AbstractString, f_meta, value, op::AbstractString, row_index::Integer)
   try
     _validate_field_value(model, field, f_meta, value, op)
+  catch e
+    e isa InvalidValueError && throw(_bulk_cell_error(e, op, model, field, row_index))
+    rethrow()
+  end
+end
+
+function _format_bulk_cell(model::PormGModel, field::AbstractString, f_meta, value, op::AbstractString, row_index::Integer)
+  try
+    _format_single(f_meta, field, value, op)
   catch e
     e isa InvalidValueError && throw(_bulk_cell_error(e, op, model, field, row_index))
     rethrow()
@@ -2029,7 +2041,12 @@ function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{St
       # in the catch: a collection the formatter maps fine (`["A", "B"]`) must not pre-empt another
       # field's real error — a later cell this pass rejects, or a validation error the caller
       # rethrows once this pass finds nothing.
-      _refuse_collection(model.fields[field], field, row[col_name], op)
+      try
+        _refuse_collection(model.fields[field], field, row[col_name], op)
+      catch refusal
+        refusal isa InvalidValueError && throw(_bulk_cell_error(refusal, op, model, field, index))
+        rethrow()
+      end
       # #335: `col_name` is PormG's own private fill column whenever the value was auto-populated,
       # and printing that name would point the caller at a DataFrame column they never wrote. Name
       # the source of the value instead.
@@ -2468,7 +2485,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
         end
 
         # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-        cells = [_format_single(joined_metas[j], field, joined_sources[j][index], "bulk_update") for (j, field) in enumerate(joined_columns)]
+        cells = [_format_bulk_cell(model, field, joined_metas[j], joined_sources[j][index], "bulk_update", index) for (j, field) in enumerate(joined_columns)]
         if pg_arrays
           foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
         else
@@ -2476,7 +2493,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
         end
       catch e
         _depuration_values_bulk_insert(fields_df, mapping, model, df[index, :], index; op = "bulk_update")
-        e isa PormGError && rethrow()   # keep the taxonomy type; a value refusal already names its row (the depuration pass above, or `_validate_bulk_cell`, #875)
+        e isa PormGError && rethrow()   # keep the taxonomy type; a value refusal already names its row (the depuration pass above, or `_validate_bulk_cell` / `_format_bulk_cell`, #875)
         throw(InvalidValueError("Error in bulk_update, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
       end
       count += 1

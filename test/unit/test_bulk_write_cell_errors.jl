@@ -125,3 +125,29 @@ const BWCE875_FORMATTER_CASES = (
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A collection in one cell names its row too (#875 review). Two routes, the sibling of the
+# validation case above: a list of text is mapped element-wise by the text formatter, so the
+# depuration pass finds nothing and the format step's refusal is the one raised; a tuple in an
+# integer field fails that formatter, and the depuration pass raises the collection refusal itself.
+# Either way the #712 wording — field `<f>` was given … — is kept after the row (#712 pins it for
+# every writer in `test_single_row_collection_value.jl`).
+# ─────────────────────────────────────────────────────────────────────────────
+const BWCE875_COLLECTION_CASES = (
+  (source = "a list in a text field", column = :code, bad = ["SEN", "PRO"]),
+  (source = "a tuple in an integer field", column = :year, bad = (1988, 1989)),
+)
+
+@testset "#875: a bulk collection refusal names the row" begin
+  for (backend, model) in pairs(BWCE875_MODELS), writer in (:bulk_insert, :bulk_update), c in BWCE875_COLLECTION_CASES
+    @testset "$backend $writer: $(c.source)" begin
+      err = bwce875_refusal(writer, model, c.column, c.bad)
+      @test err isa PormG.InvalidValueError
+      msg = bwce875_msg(err)
+      @test occursin("Error in $writer, row 3 for model bwce875_result, field `$(c.column)` was given", msg)
+      @test occursin("a column holds a single value", msg)
+      @test count("Error in $writer", msg) == 1
+    end
+  end
+end

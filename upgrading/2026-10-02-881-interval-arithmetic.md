@@ -24,7 +24,9 @@ interval, so it reads back as one.
 | `(d + d) > Hour(1)` on **PostgreSQL** | `QueryBuildError` (the sum was untyped, so the duration was "not against an interval") | an interval comparison |
 | `d + d`, `d * 2`, `F("time") * 2`, `d + Hour(1)` projected on **PostgreSQL** | the driver's own value (a `Period`, or a `CompoundPeriod`) | always a `Dates.CompoundPeriod` |
 | `F("date") + F("time")`, `F("date") + d` projected on **PostgreSQL** | the driver's own value | a timestamp read like a `DateTimeField(type = "TIMESTAMP")` column |
+| `(F("date") + F("time")) == DateTime(2009, 3, 29, 6)` on **PostgreSQL** | bound the calendar date `"2009-03-29"`, so the 06:00 instant never matched | binds the timestamp, and matches it |
 | `F("time") + 1` on **SQLite** | a number (1 added to the leading hours) | `QueryBuildError`, as PostgreSQL has no `interval + integer` |
+| `d * F(<text, UUID or boolean column>)` on **SQLite** | `QueryBuildError` (any arithmetic on a difference) | `QueryBuildError`, as PostgreSQL has no `interval * varchar` |
 | `d == Hour(6)` on **SQLite** | compared the text | compares milliseconds, which matches the same rows |
 
 Still refused on SQLite: a month or a year added to a difference (no fixed length), an extremum over a

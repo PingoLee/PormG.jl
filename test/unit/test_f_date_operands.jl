@@ -1918,6 +1918,25 @@ _fd_diff() = F("logged_at") - F("race__starts_at")
     end
   end
 
+  # A numeric column that is not an integer is a number too: a FloatField multiplies the milliseconds.
+  @testset "a float column times an interval" begin
+    q = FD.Fd_result.objects
+    q.values("x" => F("amount") * _fd_diff())
+    @test occursin("FROM (SELECT CAST(round((\"Tb\".\"amount\") * ($(_FD_MS_DIFF))) AS INTEGER) AS _pormg_ms))",
+                   _fd_sql(q; conn = _FD_SL))
+  end
+
+  # Review of #881: a date shifted by an interval value is a timestamp on PostgreSQL too, so a
+  # timestamp literal compared against it binds the timestamp. Before, the rooted DateField decided,
+  # the literal bound its calendar date ("2009-03-29") and a 06:00 instant never matched.
+  @testset "a timestamp literal against date + interval binds the timestamp" begin
+    for conn in (_FD_SL, _FD_PG)
+      q = FD.Fd_result.objects
+      q.filter((F("seen") + F("lap")) == Dates.DateTime(2009, 3, 29, 6))
+      @test _fd_params(q; conn = conn) == Any["2009-03-29T06:00:00.000+00:00"]
+    end
+  end
+
   # A zero-length duration is the identity and binds nothing, as it does on a date.
   @testset "d + Hour(0) is d" begin
     q = FD.Fd_result.objects
@@ -1956,6 +1975,11 @@ end
     ("d + Month(1)", _fd_diff() + Dates.Month(1), "no fixed length"),
     ("Max(lap) + d", _FN.Max("lap") + _fd_diff(), "not a timestamp difference or a DurationField column"),
     ("d * Lag(points)", _fd_diff() * _FN.Lag("points", over = _FN.WindowOver(order_by = ["id"])), "window function"),
+    # Review of #881: a text, UUID or boolean column has no canonical kind either, and SQLite multiplied
+    # the milliseconds by its numeric prefix. PostgreSQL has no `interval * varchar`.
+    ("d * a text column", _fd_diff() * F("code"), "between an interval and text"),
+    ("a text column * d", F("code") * _fd_diff(), "on the right of a value that is not one"),
+    ("d / a boolean column", _fd_diff() / F("flag"), "between an interval and text"),
   )
   q = FD.Fd_result.objects
   q.values("x" => expr)

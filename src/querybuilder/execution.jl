@@ -1919,8 +1919,20 @@ function _render_interval_shift(date_side::AbstractString, date_kind::Union{CDat
   return sql, kind
 end
 
-# A side a duration can be multiplied or divided by: a number, or a value PormG does not type.
-_is_number_kind(kind::_RenderKind) = kind === nothing || kind isa Union{CInt32,CInt64,CDecimal}
+# A side a duration can be multiplied or divided by: a typed number, or a value PormG does not type —
+# but not a text literal, and not a bare column that holds no number. A text, UUID or boolean column
+# also has no canonical kind, and SQLite multiplied the milliseconds by its numeric prefix, silently
+# (PostgreSQL has no `interval * varchar`). Review of #881.
+const _NUMERIC_FIELDS = Union{Models.sIntegerField, Models.sPositiveIntegerField, Models.sPositiveSmallIntegerField,
+                              Models.sBigIntegerField, Models.sFloatField, Models.sDecimalField}
+function _is_number_side(side, kind::_RenderKind, instruc::SQLInstruction)::Bool
+  kind isa Union{CInt32,CInt64,CDecimal} && return true
+  kind === nothing || return false
+  side isa String && !_is_field_path(side, instruc) && return false   # a text literal
+  _is_bare_column(side) || return true                                 # untyped arithmetic, a function
+  f = _operand_column_field(side, instruc)
+  return f === nothing || f isa _NUMERIC_FIELDS
+end
 
 # #881 — EVERYTHING AN INTERVAL ON THE LEFT COMBINES WITH, on both engines: a timestamp difference
 # (`_IntervalMs` on SQLite, `CInterval` on PostgreSQL), arithmetic on one, or a `DurationField` column
@@ -1988,8 +2000,8 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
       sqlite && throw(_sqlite_interval_error("`$(op)` between an interval and a number"))
       return "($(left_side) $(op) $(right_side))", nothing
     end
-    # `*` and `/`, by a number only. A text literal is not one.
-    if _is_number_kind(right_kind) && !(v.operand isa String && !_is_field_path(v.operand, instruc))
+    # `*` and `/`, by a number only.
+    if _is_number_side(v.operand, right_kind, instruc)
       sqlite || return "($(left_side) $(op) $(right_side))", CInterval()
       lms = _interval_ms_sql(left_side, v.field_name, left_kind)
       lms === nothing &&
@@ -2016,7 +2028,7 @@ function _render_interval_right(v::FExpression, left_side::String, left_kind::_R
                                 instruc::SQLInstruction)::Tuple{String,_RenderKind}
   op = v.operation
   sqlite = instruc.connection isa PormGSQLite
-  if op == "*" && _is_number_kind(left_kind)
+  if op == "*" && _is_number_side(v.field_name, left_kind, instruc)
     sqlite || return "($(left_side) * $(right_side))", CInterval()
     rms = _interval_ms_sql(right_side, v.operand, right_kind)
     rms === nothing &&

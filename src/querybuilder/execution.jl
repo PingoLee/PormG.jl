@@ -1605,7 +1605,10 @@ _side_kind(value::SQLTypeFunction, instruc::SQLInstruction) = _function_projecti
 function _day_count_column_kind(side, kind::_RenderKind, instruc::SQLInstruction)::_RenderKind
   kind === nothing && _is_bare_column(side) || return kind
   f = _operand_column_field(side, instruc)
-  f isa Models.sIntegerField && return CInt32()
+  # The whole integer family a quantity is declared as. SMALLINT needs no cast: PostgreSQL reaches
+  # `date ± integer` through its implicit int2 -> int4 (measured on db_2).
+  f isa Union{Models.sIntegerField,Models.sPositiveIntegerField,Models.sPositiveSmallIntegerField} &&
+    return CInt32()
   f isa Models.sBigIntegerField && return CInt64()
   return nothing
 end
@@ -1620,8 +1623,10 @@ _day_count_sql(sql::AbstractString, kind::TemporalKind, instruc::SQLInstruction)
 
 # #882 — `date ± x` where `x` is none of the kinds a date combines with: a text column, `Sum(...)`,
 # `F("points") * 2`, a float. SQLite stores a date as TEXT, so `+`/`-` there added the date's YEAR to
-# the number, silently. Refused on SQLite. PostgreSQL has no such operator either and fails when the
-# statement runs; its SQL is left as it was.
+# the number, silently. Refused on SQLite; PostgreSQL's SQL is left as it was. For most of these
+# PostgreSQL has no operator either and fails when the statement runs. The exception is a `TimeField`:
+# PostgreSQL's `date + time` is a timestamp, which SQLite does not render — an intentional divergence,
+# documented beside the integer-column rule.
 function _refuse_untyped_date_operand(operation::AbstractString, instruc::SQLInstruction)
   instruc.connection isa PormGSQLite || return nothing
   throw(QueryBuildError("`$(operation)` between a date and a value PormG cannot type is not supported on " *

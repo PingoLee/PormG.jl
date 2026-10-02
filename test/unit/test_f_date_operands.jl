@@ -97,6 +97,9 @@ Fd_result = Models.Model("fd_result",
   lap       = Models.DurationField(null = true),
   # #882 — a BIGINT day count, which PostgreSQL must cast: it has `date - integer`, not `date - bigint`.
   laps      = Models.BigIntegerField(null = true),
+  # #882 review — the rest of the integer family, SMALLINT and a positive INTEGER.
+  grid      = Models.PositiveSmallIntegerField(null = true),
+  rank      = Models.PositiveIntegerField(null = true),
 )
 
 PormG.Models.set_models(@__MODULE__, "fd_mock")
@@ -838,7 +841,9 @@ end
     @test !occursin("days", sql)
     q_sl = FD.Fd_result.objects
     q_sl.values("x" => F("logged_at") + true)
-    @test_throws PormG.QueryBuildError _fd_sql(q_sl; conn = _FD_SL)
+    err = try _fd_sql(q_sl; conn = _FD_SL); nothing catch e; e end
+    @test err isa PormG.QueryBuildError
+    @test occursin("cannot type is not supported on SQLite", sprint(showerror, err))
   end
 
   # The control that keeps the normalization from swallowing ordinary arithmetic: an integer column
@@ -1779,6 +1784,13 @@ end
       ("bigint + timestamp", F("laps") + F("logged_at"),
        _jd_ts("(\"Tb\".\"laps\") + julianday(\"Tb\".\"logged_at\")"),
        "(make_interval(days => CAST(\"Tb\".\"laps\" AS integer)) + \"Tb\".\"logged_at\")"),
+      # The rest of the integer family (review of #882). SMALLINT needs no cast: PostgreSQL reaches
+      # `date ± integer` through its implicit int2 -> int4 (measured on db_2).
+      ("date + smallint", F("seen") + F("grid"),
+       "date(julianday(\"Tb\".\"seen\") + (\"Tb\".\"grid\"))", "(\"Tb\".\"seen\" + \"Tb\".\"grid\")"),
+      ("positive int + timestamp", F("rank") + F("logged_at"),
+       _jd_ts("(\"Tb\".\"rank\") + julianday(\"Tb\".\"logged_at\")"),
+       "(make_interval(days => \"Tb\".\"rank\") + \"Tb\".\"logged_at\")"),
     )
     q = FD.Fd_result.objects
     q.values("x" => expr)
@@ -1806,20 +1818,24 @@ end
     for conn in (_FD_SL, _FD_PG), expr in (F("points") - F("seen"), F("laps") - F("logged_at"))
       q = FD.Fd_result.objects
       q.values("x" => expr)
-      @test_throws PormG.QueryBuildError _fd_sql(q; conn = conn)
+      err = try _fd_sql(q; conn = conn); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      @test occursin("A day count minus a date has no meaning", sprint(showerror, err))
     end
   end
 
   # Everything else beside a date: SQLite used only the date's year. Refused there; PostgreSQL keeps
-  # its SQL (it has no such operator either, and fails when the statement runs).
-  @testset "an untyped side beside a date is refused on SQLite: $label" for (label, expr) in (
-      ("a text column", F("seen") - F("code")),
-      ("a ForeignKey", F("seen") - F("race")),
-      ("arithmetic over an integer", F("seen") + F("points") * 2),
-      ("a float literal", F("seen") + 1.5),
-      ("a float column", F("logged_at") - F("amount")),
-      ("a text column on the left", F("code") + F("seen")),
-      ("arithmetic on the left", F("points") * 2 + F("seen")),
+  # its SQL, pinned exactly. It has no such operator for most of these and fails when the statement
+  # runs; a TimeField is the exception (`date + time` is a timestamp there), a documented divergence.
+  @testset "an untyped side beside a date is refused on SQLite: $label" for (label, expr, pg_sql) in (
+      ("a text column", F("seen") - F("code"), "(\"Tb\".\"seen\" - \"Tb\".\"code\")"),
+      ("a ForeignKey", F("seen") - F("race"), "(\"Tb\".\"seen\" - \"Tb\".\"race\")"),
+      ("arithmetic over an integer", F("seen") + F("points") * 2, "(\"Tb\".\"seen\" + (\"Tb\".\"points\" * \$1::bigint))"),
+      ("a float literal", F("seen") + 1.5, "(\"Tb\".\"seen\" + \$1::double precision)"),
+      ("a float column", F("logged_at") - F("amount"), "(\"Tb\".\"logged_at\" - \"Tb\".\"amount\")"),
+      ("a text column on the left", F("code") + F("seen"), "(\"Tb\".\"code\" + \"Tb\".\"seen\")"),
+      ("arithmetic on the left", F("points") * 2 + F("seen"), "((\"Tb\".\"points\" * \$1::bigint) + \"Tb\".\"seen\")"),
+      ("a TimeField", F("seen") + F("at"), "(\"Tb\".\"seen\" + \"Tb\".\"at\")"),
     )
     q = FD.Fd_result.objects
     q.values("x" => expr)
@@ -1828,7 +1844,7 @@ end
     @test occursin("cannot type is not supported on SQLite", sprint(showerror, err))
     q_pg = FD.Fd_result.objects
     q_pg.values("x" => expr)
-    @test occursin(r"\(.+ [-+] .+\)", _fd_sql(q_pg; conn = _FD_PG))
+    @test occursin("    $(pg_sql) as \"x\"", _fd_sql(q_pg; conn = _FD_PG))   # the whole projection
   end
 
   # The typing is local to date arithmetic. Integer arithmetic, an integer compared against a number,

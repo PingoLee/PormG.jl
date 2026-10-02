@@ -100,6 +100,11 @@ Pit_wall_session = Models.Model("pit_wall_session",
 - A text → `inet`/`cidr` retype is parsed by the server, and a row that does not parse is counted
   before anything runs. An `inet` → text retype writes the printed form (`abbrev`, `10.0.0.1`), not the
   masked `10.0.0.1/32` PostgreSQL's own cast would.
+- A `GenericIPAddressField` → `CIDRField` retype keeps every host (`10.0.0.1` becomes `10.0.0.1/32`).
+  An address with bits set right of its mask (`10.0.0.1/24`, written outside PormG) is not a network:
+  PostgreSQL's own cast would quietly zero those bits (`10.0.0.0/24`), so such rows are counted and the
+  plan is refused. To keep the network, set those values to it yourself (PostgreSQL's `network()`)
+  and migrate again.
 - `Cast(…, "text")` over an `inet` column follows PostgreSQL's cast and includes the mask
   (`10.0.0.1/32`); the column's value, read directly, does not.
 - Why SQLite is refused: it has no type that compares an address by network. A text column would sort

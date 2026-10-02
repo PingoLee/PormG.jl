@@ -22,7 +22,9 @@
 #   (o) a text column with a DEFAULT retypes to integer — the old default is dropped before the
 #       `USING`, which PostgreSQL would otherwise try to cast and refuse (#828);
 #   (p) text → `inet` parses through its `USING`, a value that is no address is counted, and `inet`
-#       → text writes the printed form (`abbrev`), not the masked cast (#28).
+#       → text writes the printed form (`abbrev`), not the masked cast (#28);
+#   (q) `inet` → `cidr` counts and refuses an address with bits right of its mask, which the bare
+#       ALTER would zero silently; a column of hosts applies (#905).
 #
 # Run it under both PostgreSQL drivers: `PORMG_POSTGRES_DRIVER=Postgres` selects Postgres.jl (#788),
 # whose parameter typing differs from LibPQ's.
@@ -464,6 +466,51 @@ end
         @test err isa PormG.Migrations.MigrationPrecheckError
         @test err !== nothing && only(err.findings).rows == 1
         @test _la803pg_type(st, "note") == "text"
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (q) inet → cidr (#905)
+# A host is its own network (`/32`, `/128`) and converts unchanged, so a column of hosts applies with
+# the finding counted at 0. An address with bits right of its mask is counted and refused: the
+# assignment cast — the bare ALTER, run once by hand below — would zero those bits silently, and the
+# plan's `USING` (through text) is refused by `cidr`'s parser instead.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: inet → cidr counts the addresses with host bits, and refuses them (#905)" begin
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, '10.0.0.1', 1, NULL), ('PRO', 2, 2.5, '2001:db8::1', 2, NULL), " *
+                  "('ALO', 3, 3.5, NULL, 3, NULL);") do st
+        _la803pg_plan!(st, _la803pg_models(note = "Models.GenericIPAddressField(null = true)"))
+        @test _la803pg_migrate(st).outcome === :applied
+
+        sink = _la803pg_plan!(st, _la803pg_models(note = "Models.CIDRField(null = true)"))
+        @test [f.kind for f in sink] == [:host_bits]
+        @test only(PormG.Migrations.dry_run(st.connections, st).lossy_alters).rows == 0
+        @test _la803pg_migrate(st).outcome === :applied
+        @test _la803pg_type(st, "note") == "cidr"
+        @test collect(skipmissing(_la803pg_sql(st, "SELECT CAST(note AS text) AS v FROM \"$(_LA803PG_TABLE)\" ORDER BY code;").v)) ==
+              ["2001:db8::1/128", "10.0.0.1/32"]
+    end
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, '10.0.0.1/24', 1, NULL), ('PRO', 2, 2.5, '10.0.0.0/24', 2, NULL), " *
+                  "('ALO', 3, 3.5, '2001:db8::1/64', 3, NULL), ('HAM', 4, 4.5, '2001:db8::/64', 4, NULL);") do st
+        _la803pg_plan!(st, _la803pg_models(note = "Models.GenericIPAddressField(null = true)"))
+        @test _la803pg_migrate(st).outcome === :applied
+
+        _la803pg_plan!(st, _la803pg_models(note = "Models.CIDRField(null = true)"))
+        err = _la803pg_err(() -> _la803pg_migrate(st; destructive = true))
+        @test err isa PormG.Migrations.MigrationPrecheckError
+        @test err !== nothing && only(err.findings).kind === :host_bits && only(err.findings).rows == 2
+        @test _la803pg_type(st, "note") == "inet"
+        note_of(code) = _la803pg_sql(st, "SELECT CAST(note AS text) AS v FROM \"$(_LA803PG_TABLE)\" WHERE code = '$code';").v[1]
+        @test note_of("SEN") == "10.0.0.1/24"
+
+        # The plan's statement itself refuses the row a count could miss (one written after it)…
+        alter = "ALTER TABLE \"$(_LA803PG_TABLE)\" ALTER COLUMN note TYPE cidr"
+        @test _la803pg_err(() -> PormG.ConnectionPool.fetch(st.connections, alter * " USING CAST(CAST(note AS text) AS cidr);")) !== nothing
+        @test _la803pg_type(st, "note") == "inet"
+        # …where the bare ALTER — what the plan was before #905 — applies and zeroes the host bits.
+        PormG.ConnectionPool.fetch(st.connections, alter * ";")
+        @test _la803pg_type(st, "note") == "cidr"
+        @test note_of("SEN") == "10.0.0.0/24" && note_of("ALO") == "2001:db8::/64"
     end
 end
 

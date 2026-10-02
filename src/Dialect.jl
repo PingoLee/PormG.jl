@@ -1270,7 +1270,8 @@ end
 The `USING` expression for a PostgreSQL retype between types with no assignment cast (#828), or
 `nothing` for a pair PostgreSQL converts on its own (or one PormG has no expression for). Without
 it, `ALTER COLUMN … TYPE` fails on every table, even an empty one: `column "c" cannot be cast
-automatically to type integer`.
+automatically to type integer`. Two pairs that DO have an assignment cast get one too, because that
+cast would change values: `inet` → text (#28) and `inet` → `cidr` (#905), below.
 
 - text / varchar → a number, boolean, date, timestamp, UUID or JSON: an explicit cast, which parses
   each value with the target type's own input function — a value that does not parse fails the
@@ -1286,6 +1287,11 @@ automatically to type integer`.
   on its own writes the mask too (`10.0.0.1/32`), so every row's text would change. A `cidr` needs
   no `USING`: its cast to text keeps the prefix, which is what it prints, while `abbrev(cidr)` would
   drop the zero octets (`10.1/16`).
+- `inet` → `cidr` (#905): through text, `CAST(CAST(… AS text) AS cidr)`. The assignment cast
+  PostgreSQL would apply on its own zeroes the bits right of the mask (`10.0.0.1/24` becomes
+  `10.0.0.0/24`) without a word; `cidr`'s input function refuses that value instead, so such a row
+  fails the ALTER. The planner records a `:host_bits` finding that counts those rows first. A host
+  (`10.0.0.1`, which is `/32`) has no such bits and converts unchanged.
 
 `NULL` stays `NULL` in all of them. The planner's classifier asks this same function whether a pair
 has a `USING`, so the rendered ALTER and the finding cannot disagree.
@@ -1298,6 +1304,8 @@ function _postgres_retype_using(field_name::Union{String, Symbol}, old_type::Can
     return "CAST($ref AS $type_sql)"
   elseif old_type isa CInet && new_type isa Union{CText, CVarChar}
     return "abbrev($ref)"
+  elseif old_type isa CInet && new_type isa CCidr
+    return "CAST(CAST($ref AS text) AS $type_sql)"
   elseif old_type isa CBool && new_type isa numeric
     return "CAST(CAST($ref AS integer) AS $type_sql)"
   elseif old_type isa numeric && new_type isa CBool

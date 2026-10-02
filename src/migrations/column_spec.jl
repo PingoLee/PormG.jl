@@ -962,6 +962,7 @@ Every kind a [`LossyAlter`](@ref) can carry, with its class — the closed set, 
 | `:drop_timezone` | PostgreSQL | `:silent` | `timestamptz` becomes `timestamp`, dropping the offset |
 | `:text_affinity` | SQLite | `:silent` | text becomes a numeric/boolean column, so `'0042'` stores as `42` |
 | `:text_cast` | PostgreSQL | `:rows` | text becomes a number, boolean, date, timestamp, UUID, JSON or an IP address or network (the plan casts with `USING`), and some values do not parse |
+| `:host_bits` | PostgreSQL | `:rows` | an IP address (`inet`) becomes a network (`cidr`), and some values have bits set right of their mask (`10.0.0.1/24`) |
 | `:to_boolean` | PostgreSQL | `:silent` | a number becomes a boolean (`USING "c" <> 0`), so every non-zero value becomes `true` |
 | `:drop_default` | PostgreSQL | `:silent` | a `USING` retype must drop a database default the model does not declare, and nothing puts it back |
 | `:no_implicit_cast` | PostgreSQL | `:refused` | the engine has no automatic cast between the two types and the plan writes no `USING` |
@@ -990,6 +991,7 @@ const LOSSY_ALTER_KINDS = (
   add_foreign_key    = :rows,
   decimal_scale      = :silent,
   text_cast          = :rows,
+  host_bits          = :rows,
   to_integer         = :silent,
   to_boolean         = :silent,
   drop_default       = :silent,
@@ -1060,6 +1062,8 @@ _exceeds(a::Union{Int, Nothing}, b::Int)::Bool = a === nothing || a > b
 # Since #828 the renderer writes a `USING` for every pair listed here too, so a castless pair is
 # refused only when `_pg_retype_has_using` says otherwise — today, never. The list stays the
 # definition of "castless": it is what decides that a pair NEEDS the `USING` and the row count.
+# Not the only pairs with a `USING`, though: `inet` → text (#28) and `inet` → `cidr` (#905) have an
+# assignment cast that would change values, so they get one anyway and are not castless.
 function _pg_no_implicit_cast(old::CanonicalType, new::CanonicalType)::Bool
   old isa _TextType && return new isa Union{_NumericType, CBool, CDate, CDateTime, CUUID, CJSON, CInet, CCidr}
   old isa CBool && return new isa _NumericType
@@ -1229,6 +1233,11 @@ function _lossy_type_alters(old::CanonicalType, new::CanonicalType, ::PormGPostg
     return LossyAlter[]
   end
   found = LossyAlter[]
+  # #905: an address with bits right of its mask is not a network. The plan converts through text
+  # (`Dialect._postgres_retype_using`), so such a row fails the ALTER instead of having those bits
+  # zeroed by the assignment cast; a host (`/32`, `/128`) converts unchanged. `cidr` → `inet` loses
+  # nothing.
+  old isa CInet && new isa CCidr && push!(found, finding(:host_bits))
   if new isa CVarChar && new.length !== nothing
     # Any old type converts to a string through its text form, so any of them can be too long.
     (old isa CVarChar && old.length !== nothing && old.length <= new.length) ||

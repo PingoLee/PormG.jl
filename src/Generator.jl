@@ -202,7 +202,8 @@ end
 function generate_migration_plan(file::String, migration_plan::OrderedDict{Symbol,OrderedDict{String,String}}, path::String;
                                  models_file::Union{String, Nothing} = nothing,
                                  models_file_sha256::Union{String, Nothing} = nothing,
-                                 lossy_alters = ()) :: Nothing
+                                 lossy_alters = (),
+                                 schema_tables = nothing) :: Nothing
   open(joinpath(path, file), "w") do f
       module_name = replace(basename(file), ".jl" => "")
       # Stamp the frozen on-disk format version (issue #32) as an inert comment header rather than a
@@ -225,6 +226,13 @@ function generate_migration_plan(file::String, migration_plan::OrderedDict{Symbo
       # byte-identical. The line escapes its own values (`_lossy_alter_header`).
       for finding in lossy_alters
         models_header *= string(PormG.Migrations._lossy_alter_header(finding), "\n")
+      end
+      # #739: the schema the plan was diffed against, one line per table, after the lossy lines.
+      # `nothing` — every direct call that does not pass it — keeps the plan byte-identical.
+      if schema_tables !== nothing
+        for (table, fingerprint) in schema_tables
+          models_header *= string(PormG.Migrations._schema_table_header(table, fingerprint), "\n")
+        end
       end
       write(f, """
           module $module_name

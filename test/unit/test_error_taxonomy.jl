@@ -37,6 +37,8 @@ const TAXONOMY_TYPES = (
     PormG.Migrations.DestructiveMigrationError,
     # #803: a plan that would fail on existing rows, refused before any write.
     PormG.Migrations.MigrationPrecheckError,
+    # #739: a plan whose database no longer holds the schema it was generated against.
+    PormG.Migrations.PlanPreconditionError,
     # #268 — the database-error boundary: what the database itself refused, once a statement got
     # there. Plus transaction-API misuse, which is neither a query-shape nor a config problem.
     PormG.IntegrityError, PormG.OperationalError, PormG.StatementError,
@@ -51,6 +53,7 @@ const STRUCTURED_TYPES = (
     PormG.PoolTimeoutError, PormG.PoolConnectError,
     PormG.Migrations.DestructiveMigrationError,
     PormG.Migrations.MigrationPrecheckError,
+    PormG.Migrations.PlanPreconditionError,
     PormG.IntegrityError, PormG.OperationalError, PormG.StatementError,
 )
 
@@ -118,6 +121,7 @@ end
         @test PormG.InvalidMigrationError <: PormG.MigrationError
         @test PormG.Migrations.DestructiveMigrationError <: PormG.MigrationError
         @test PormG.Migrations.MigrationPrecheckError <: PormG.MigrationError
+        @test PormG.Migrations.PlanPreconditionError <: PormG.MigrationError
 
         # #268 audit: the definition-time pair grouped under one umbrella, and the write-switch
         # error reparented under ConfigurationError (its remedy is a connection.yml edit).
@@ -276,6 +280,9 @@ end
             # #803: carries the lossy column changes the pre-check refused
             PormG.Migrations.MigrationPrecheckError("boom",
                 [PormG.Migrations.LossyAlter(:set_not_null, "results", "grid", "integer", "integer"; rows = 2)]),
+            # #739: carries the tables whose fingerprint no longer matches the plan's
+            PormG.Migrations.PlanPreconditionError("boom",
+                [(table = "drivers", expected = "0123456789abcdef", found = "absent")]),
             # #268 — (adapter, cause); the cause is the driver's own exception
             PormG.IntegrityError("SQLite", ErrorException("UNIQUE constraint failed: drivers.code")),
             PormG.OperationalError("PostgreSQL", ErrorException("server closed the connection")),
@@ -312,6 +319,7 @@ end
         for T in STRUCTURED_TYPES
             T === PormG.Migrations.DestructiveMigrationError && continue  # carries msg AND statements
             T === PormG.Migrations.MigrationPrecheckError && continue     # carries msg AND findings
+            T === PormG.Migrations.PlanPreconditionError && continue      # carries msg AND tables
             @test :msg ∉ fieldnames(T)
         end
 
@@ -327,7 +335,9 @@ end
         for e2 in (PormG.Configuration.MissingConfigurationError("no connection.yml"),
                    PormG.Migrations.DestructiveMigrationError("refused", ["DROP TABLE \"drivers\""]),
                    PormG.Migrations.MigrationPrecheckError("refused",
-                       [PormG.Migrations.LossyAlter(:varchar_length, "drivers", "code", "varchar(8)", "varchar(3)"; bound = 3, rows = 1)]))
+                       [PormG.Migrations.LossyAlter(:varchar_length, "drivers", "code", "varchar(8)", "varchar(3)"; bound = 3, rows = 1)]),
+                   PormG.Migrations.PlanPreconditionError("refused",
+                       [(table = "drivers", expected = "0123456789abcdef", found = "fedcba9876543210")]))
             # `occursin` already implies the result is no shorter, so one assertion suffices.
             @test occursin(e2.msg, PormG.error_message(e2))
         end

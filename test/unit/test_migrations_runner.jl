@@ -443,6 +443,7 @@ include(joinpath(@__DIR__, "..", "load_drivers.jl"))
         s = Migrations.MigrationStatus(
             NamedTuple[],
             NamedTuple[],
+            NamedTuple[],
             false,
             false,
             ["History table pormg_migrations does not exist."]
@@ -460,6 +461,7 @@ include(joinpath(@__DIR__, "..", "load_drivers.jl"))
         s2 = Migrations.MigrationStatus(
             mock_applied,
             NamedTuple[],
+            NamedTuple[],
             false,
             true,
             String[]
@@ -475,6 +477,7 @@ include(joinpath(@__DIR__, "..", "load_drivers.jl"))
         s3 = Migrations.MigrationStatus(
             mock_applied,
             mock_failed,
+            NamedTuple[],
             true,  # pending file also exists
             true,
             ["Pending migrations file exists alongside applied history"]

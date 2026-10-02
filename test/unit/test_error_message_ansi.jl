@@ -147,6 +147,7 @@ end
     status = PormG.Migrations.MigrationStatus(
         NamedTuple[],                          # applied
         [(version = "0001", name = "init")],   # failed   → red line
+        NamedTuple[],                          # superseded
         true,                                  # pending  → yellow line
         true,                                  # has_history_table
         ["schema drift detected"],             # drift_signals → yellow line

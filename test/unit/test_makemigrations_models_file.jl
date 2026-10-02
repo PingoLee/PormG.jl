@@ -82,13 +82,16 @@ end
         _mf736_quiet(() -> Migrations.migrate(key; interactive = false))
         fetch(pool, "INSERT INTO driver736 (surname, code) VALUES ('Senna', 'SEN');")
 
-        # v2 replaces it. The default plan carries no models-file header: byte-for-byte today's
-        # layout, the format marker still the line right under `module`.
+        # v2 replaces it. The default plan carries no models-file header, and the format marker is
+        # still the line right under `module`. Since #739 the line after it is no longer blank: every
+        # `makemigrations` plan records its schema precondition there, and only that.
         write(joinpath(key, "models.jl"), _mf736_models(with_nickname = true))
         _mf736_quiet(() -> Migrations.makemigrations(key; interactive = false))
         lines = readlines(pending)
         @test lines[2] == "# pormg-migration-format: $(Migrations.MIGRATION_FORMAT_VERSION)"
-        @test lines[3] == ""
+        @test lines[3] == Migrations._schema_table_header("driver736",
+                            Migrations._schema_table_fingerprint(only(Migrations.read_live_schema(pool; include_table = ["driver736"]))))
+        @test lines[4] == ""
         @test !any(l -> startswith(l, Migrations.MODELS_FILE_HEADER), lines)
         _mf736_quiet(() -> Migrations.migrate(key; interactive = false))
         fetch(pool, "UPDATE driver736 SET nickname = 'Magic' WHERE surname = 'Senna';")

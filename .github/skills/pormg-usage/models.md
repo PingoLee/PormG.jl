@@ -154,3 +154,12 @@ PormG.Migrations.migrate("db")           # apply
   default).
 - `migrate` serializes on a PostgreSQL advisory lock, so two app instances starting together
   cannot both migrate. On SQLite a column change is a table rebuild — expect that in the plan.
+- **A plan only applies to the schema it was generated against.** `makemigrations` records each
+  table it compared in `# pormg-schema-table:` header lines, and `migrate` throws
+  `PormG.Migrations.PlanPreconditionError` — naming the tables — when the database changed since.
+  Nothing was applied. Run `makemigrations` again against that database and review the new plan.
+  Deleting the header lines skips the check: do that only with the user's approval, never to get
+  past the error.
+- A `failed` row that a later run of the same plan resolved shows under `status("db").superseded`,
+  not `.failed`. Failures do not block the next `migrate`; a plan runs in one transaction, so a
+  failure applied nothing.

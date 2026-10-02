@@ -25,7 +25,7 @@ This skill is for the migration subsystem itself, not for ordinary ORM query beh
 
 - Treat `Generator.create_db_folder_and_yml()` as the expected bootstrap path for creating `db/connection.yml` before migration workflows touch project config
 - PormG uses a state-based migration engine that reconciles current Julia model state against the live database schema via introspection
-- **State-based, not Django-graph — do not port Django assumptions.** `makemigrations` computes `diff(live-DB introspection, models file)` and **never reads previous migration files**; there is no dependency graph or replay. `pending_migrations.jl` and `applied_migrations/` are **inert audit artifacts**, not a source of truth — editing an applied file changes nothing downstream. "Drift" that matters is live-schema-vs-models (surfaced by `check(db; kinds = [:schema_drift])` and the next `makemigrations`), not migration-file checksum divergence. `status()` reports history-table health only, never schema drift (#733). Concept doc: `docs/src/migrations/index.md` → *What this means in practice*.
+- **State-based, not Django-graph — do not port Django assumptions.** `makemigrations` computes `diff(live-DB introspection, models file)` and **never reads previous migration files**; there is no dependency graph or replay. `applied_migrations/` is an **inert audit trail**, not a source of truth — editing an applied file changes nothing downstream. The *pending* plan is not inert in the same way: its SQL is what `migrate` runs, and its header comments are read and enforced (see *Plan-header comments* below). "Drift" that matters is live-schema-vs-models (surfaced by `check(db; kinds = [:schema_drift])` and the next `makemigrations`), not migration-file checksum divergence. `status()` reports history-table health only, never schema drift (#733). Concept doc: `docs/src/migrations/index.md` → *What this means in practice*.
 - Keep docs, tests, and CLI guidance explicit about unsupported or partial behavior (the rule lives under *Unsupported behavior* below)
 
 ## Core Rules
@@ -52,6 +52,64 @@ Keep docs, tests, and implementation aligned with this sequence:
 - If `dry_run()` reports destructive SQL, require explicit `destructive=true`
 - Tests and docs must reflect that guard
 - Never normalize destructive behavior as implicit or safe by default
+
+### Plan-header comments
+
+The plan is read as data, never executed (#710). Everything `makemigrations` knows that the SQL
+cannot carry rides in `#` comments between the `# pormg-migration-format:` marker and the first
+`import`, which `dry_run` and `migrate` read back by line scan:
+
+| Line | Issue | Read by |
+|---|---|---|
+| `# pormg-models-file:` / `# pormg-models-sha256:` | #736 | `_plan_models_file` — which models file to snapshot |
+| `# pormg-lossy-alter:` | #803 | `_plan_lossy_alters` — the row pre-check and the destructive opt-in |
+| `# pormg-schema-table:` | #739 | `_plan_schema_tables` — the schema precondition `migrate` enforces |
+
+A new kind of header line follows the same contract, or it breaks one of them:
+
+- **Constants beside the others** in `src/migrations/runner.jl` (`*_HEADER` plus an anchored, CRLF-tolerant `*_RE`).
+- **Outside the checksum.** The checksum covers the ordered SQL only; a header must never change it.
+- **Values escaped** with `escape_string`, so a catalog name cannot end the field or the comment line.
+- **Read with `open(path) do io … eachline(io)`**, stopping at the first `import `. A bare
+  `eachline(path)` that breaks early leaks the handle and fails every later `mv` with EBUSY on Windows.
+- **Fail closed.** A damaged line raises `InvalidMigrationError`. Detect loosely and parse strictly
+  (`SCHEMA_TABLE_HEADER_LOOSE_RE`), so a mangled line is refused instead of skipped.
+- **Absent means "as before".** A plan without the line — every plan written before it existed —
+  must behave exactly as it did. That is what keeps it additive within format v1.
+- **Document it** in `docs/src/migrations/stability.md`, next to the existing header paragraph.
+
+Tests that pin the exact header layout (`test_makemigrations_models_file.jl`) must expect the
+`# pormg-schema-table:` lines that every `makemigrations` plan now carries.
+
+### The schema fingerprint is a persisted format
+
+`_schema_table_fingerprint` digests a `LiveTable` through an explicit serialization: every
+`ColumnSpec` field except `raw`, plus indexes, composites and CHECKs, names included. Plans in flight
+carry those digests, and `migrate` compares them in another process, maybe on another PormG version.
+So:
+
+- **Adding, removing or renaming a field** in `ColumnSpec`, `LiveTable`, `LiveComposite`, `LiveCheck`
+  or any column-IR struct (`src/column_ir.jl`) changes every fingerprint. The pinned digest in
+  `test/unit/test_plan_schema_fingerprint.jl` then fails, on purpose. **Do not just re-pin it.** Bump
+  `_SCHEMA_FINGERPRINT_VERSION` and add an upgrade-log entry: every reviewed plan generated before
+  the upgrade will be refused after it, and its users must regenerate.
+- Never serialize through `repr` or `Base.hash`. Neither is stable across processes or package
+  versions (`repr(::ZonedDateTime)` belongs to TimeZones). Write each value out explicitly.
+- The fingerprint is deliberately **stricter than the planner's diff**: names count, because the
+  plan's statements name the objects. Do not loosen it to match `==` on `ColumnSpec`.
+
+### `migrate` ordering invariants
+
+- **The #81 guard runs before the precondition**, inside the lock (PostgreSQL: before `BEGIN`;
+  SQLite: inside `BEGIN IMMEDIATE`). A plan that is already applied has changed its own tables, so
+  it is archived as `:already_applied`, never refused.
+- **A pre-lock check reads the schema first and the history second.** Read the other way round, a
+  second instance booting with the same plan can miss the first one's `applied` row and still see
+  its committed DDL — and refuse an applied plan. Both engines commit the DDL and the history row
+  together, which is what makes schema-then-history safe.
+- **A refusal before any plan statement runs writes no `failed` row** (SQLite: `attempted` stays false).
+- **Reads inside the SQLite migration transaction go through `Configuration.with_tx_context(pool, conn)`**,
+  never `fetch(...; conn = conn)`, which hands the connection back to the pool mid-transaction (#139).
 
 ### Unsupported behavior
 
@@ -92,6 +150,9 @@ Use unit tests when validating:
 - checksum generation
 - dry-run result shaping
 - internal ordering logic
+- plan-header round trips, the schema precondition and `status()` supersede
+  (`test/unit/test_plan_schema_fingerprint.jl` — hermetic SQLite; its PostgreSQL twin is a testset in
+  `test/integration/test_migrate_boot.jl`)
 
 ### Isolation discipline
 

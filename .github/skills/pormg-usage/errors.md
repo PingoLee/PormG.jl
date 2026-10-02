@@ -59,7 +59,9 @@ PormGError
 │   └── PormG.Configuration.MissingConfigurationError   no connection.yml (qualified name)
 ├── MigrationError              (umbrella)
 │   ├── InvalidMigrationError
-│   └── PormG.Migrations.DestructiveMigrationError      non-interactive destructive plan (qualified name)
+│   ├── PormG.Migrations.DestructiveMigrationError      non-interactive destructive plan (qualified name)
+│   ├── PormG.Migrations.MigrationPrecheckError         a column change would fail on existing rows
+│   └── PormG.Migrations.PlanPreconditionError          the database changed since makemigrations
 ├── PoolError                   (umbrella)
 │   ├── PoolTimeoutError        pool saturated — raise pool_size / pool_timeout
 │   └── PoolConnectError        database unreachable, or a connection string libpq cannot parse
@@ -109,6 +111,8 @@ end
 | `Configuration.load` with bad settings | `InvalidConfigurationError` |
 | a definition error in `models.jl` | `FieldValidationError` / `ModelDefinitionError` |
 | non-interactive `migrate` of a destructive plan | `PormG.Migrations.DestructiveMigrationError` |
+| `migrate` of a column change that would fail on existing rows | `PormG.Migrations.MigrationPrecheckError` (nothing written) |
+| `migrate` on a database that changed since `makemigrations` | `PormG.Migrations.PlanPreconditionError` (nothing applied; regenerate the plan) |
 
 ## Upgrading an app with old catch blocks
 

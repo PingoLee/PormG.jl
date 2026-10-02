@@ -390,9 +390,11 @@ On SQLite a timestamp difference is that text everywhere, so the same divergence
 - **A window function as one side** (`F("start_at") - Lag("start_at", over = …)`) raises
   `QueryBuildError` on SQLite, where the difference is computed in a subquery the window cannot see
   through. Project the window value in a CTE first and subtract the column. `Max`/`Min` are fine.
-- **Ordering or aggregating it** — `order_by` on its alias, `Max(…)` over it — is not refused, and
-  sorts the text, exactly as it does for a `DurationField` column on SQLite: right below 100 hours,
-  wrong at and above it, and for negative differences.
+- **Ordering or aggregating it** is not refused. `order_by` on its alias, `Max`/`Min`, `Greatest` and
+  `Least` sort the text, exactly as they do for a `DurationField` column on SQLite: right below 100
+  hours, wrong at and above it, and for negative differences. `Sum`, `Avg` and `Abs` read the text's
+  leading number, so they work on whole hours and drop the minutes and seconds. Aggregate durations
+  on PostgreSQL.
 
 A duration compares only against an interval — a timestamp difference or a `DurationField`. Against
 anything else (`F("date") > Hour(1)`, or a day count) it raises `QueryBuildError`. A `Time` is a time

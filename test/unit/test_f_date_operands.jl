@@ -1089,7 +1089,9 @@ end
     for expr in (F("logged_at") - _FN.Lag("logged_at", over = w),
                  _FN.FirstValue("logged_at", over = w) - F("seen"),
                  # Nested inside a function: the walker has to reach it through `Coalesce`.
-                 F("logged_at") - _FN.Coalesce(_FN.Lead("logged_at", over = w), "logged_at"))
+                 F("logged_at") - _FN.Coalesce(_FN.Lead("logged_at", over = w), "logged_at"),
+                 # … and through a `When` branch, whose value lives in its kwargs, not its column.
+                 F("logged_at") - _FN.Case(_FN.When("points" => 1; then = _FN.Lag("seen", over = w)); output_field = "date"))
       q = FD.Fd_result.objects
       q.values("x" => expr)
       err = try _fd_sql(q; conn = _FD_SL); nothing catch e; e end
@@ -1203,16 +1205,29 @@ end
     end
   end
 
-  # Untyped arithmetic over a DurationField is not known to be an interval: on SQLite `lap * 2` is a
-  # NUMBER, so a duration bound against it would compare number with text and answer a constant.
-  # Review of #814 found the rooted column admitting the duration anyway; it is refused instead.
-  @testset "untyped arithmetic over a DurationField does not admit a duration" begin
-    for expr in ((F("lap") * 2) > Dates.Hour(1), (F("lap") + F("lap")) == Dates.Hour(2)), conn in (_FD_SL, _FD_PG)
+  # Untyped arithmetic over a DurationField: on PostgreSQL `lap * 2` is an interval and the duration
+  # binds as one; on SQLite it is a NUMBER, so a duration bound against it would compare number with
+  # text and answer a constant. Review of #814 found SQLite admitting the duration through the rooted
+  # column; it is refused there, and only there.
+  @testset "untyped arithmetic over a DurationField admits a duration on PostgreSQL only" begin
+    for (expr, bound) in (((F("lap") * 2) > Dates.Hour(1), "01:00:00"), ((F("lap") + F("lap")) == Dates.Hour(2), "02:00:00"))
       q = FD.Fd_result.objects
       q.filter(expr)
-      err = try _fd_sql(q; conn = conn); nothing catch e; e end
+      err = try _fd_sql(q; conn = _FD_SL); nothing catch e; e end
       @test err isa PormG.QueryBuildError
       @test occursin("compares only against an interval", sprint(showerror, err))
+
+      q_pg = FD.Fd_result.objects
+      q_pg.filter(expr)
+      @test last(_fd_params(q_pg; conn = _FD_PG)) == bound
+    end
+    # A Time against it still gets the hint naming the duration to write, on both engines.
+    for conn in (_FD_SL, _FD_PG)
+      q = FD.Fd_result.objects
+      q.filter((F("lap") * 2) == Dates.Time(1))
+      err = try _fd_sql(q; conn = conn); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      @test occursin("Hour(1)", sprint(showerror, err))
     end
   end
 
@@ -1321,7 +1336,8 @@ end
   # Each now matches what the same expression over a plain column of that kind does.
   @testset "typed sides change shifts and comparisons over them" begin
     # `@date` compared with a DateTime binds the calendar date, exactly as the pair spelling does.
-    # Before, it bound the canonical timestamp and matched nothing on either engine.
+    # Before, it bound the canonical timestamp text: no match on SQLite, while PostgreSQL's date input
+    # dropped the time and matched (measured on db_2).
     for conn in (_FD_SL, _FD_PG)
       fq = FD.Fd_result.objects
       fq.filter(F("logged_at__@date") == Dates.DateTime(2009, 3, 1, 12))

@@ -1721,7 +1721,8 @@ end
 # subquery first.
 _has_window_function(::WindowFunction) = true
 _has_window_function(x::FExpression) = _has_window_function(x.field_name) || _has_window_function(x.operand)
-_has_window_function(x::FObject) = _has_window_function(x.column)
+# `kwargs` too: `When(…; then = Lag(…))` keeps its branch value there, not in `column`.
+_has_window_function(x::FObject) = _has_window_function(x.column) || any(_has_window_function, values(x.kwargs))
 _has_window_function(x::SQLField) = _has_window_function(x.field)
 _has_window_function(x::AbstractVector) = any(_has_window_function, x)
 _has_window_function(::Any) = false
@@ -1958,21 +1959,22 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # reached `format_number_sql(::Hour)`, a raw `MethodError`. The left's kind names the formatter.
     left_kind isa CInterval && f === nothing && (column_formatter = value_formatter(left_kind, instruc.connection))
     # #814: a duration and an interval belong together, in both directions. The kind that decides is
-    # the left's; the rooted column's only while the left IS that column. Untyped arithmetic over a
-    # DurationField (`F("lap") * 2`) is not known to be an interval — on SQLite it is a NUMBER, and a
-    # duration bound against it compares number to text — so it does not admit one.
+    # the left's, else the rooted column's — on SQLite only while the left IS that column. Untyped
+    # arithmetic over a DurationField (`F("lap") * 2`) is an interval on PostgreSQL (`interval * 2`),
+    # but on SQLite it is a NUMBER, and a duration bound against it would compare number with text.
     #   * A duration against anything else has no formatter that can bind it (`format_number_sql`
     #     has no `::Hour` method, a raw `MethodError`), and no meaning: `F("points") > Hour(1)`.
     #   * A `Time` against an interval reached `format_duration_sql`, which refuses it with a message
     #     about durations that never says why a `Time` is not one.
-    left_is_column = !(field_name isa FExpression && field_name.operation !== nothing)
-    decided_kind = left_kind !== nothing ? left_kind :
-                   (f !== nothing && left_is_column) ? field_canonical_kind(f) : nothing
+    rooted_kind = f === nothing ? nothing : field_canonical_kind(f)
+    root_decides = !(field_name isa FExpression && field_name.operation !== nothing) ||
+                   instruc.connection isa PormGPostgres
+    decided_kind = left_kind !== nothing ? left_kind : root_decides ? rooted_kind : nothing
     if operand isa Union{Dates.Period,Dates.CompoundPeriod} && !(decided_kind isa CInterval)
       throw(QueryBuildError("A duration ($(operand)) compares only against an interval — a DurationField, " *
                             "or the difference of two timestamps. To compare dates, shift one instead: " *
                             "F(\"date\") + Day(30) > F(\"other_date\")."))
-    elseif operand isa Dates.Time && decided_kind isa CInterval
+    elseif operand isa Dates.Time && (decided_kind isa CInterval || rooted_kind isa CInterval)
       throw(QueryBuildError("A Time ($(operand)) is a time of day, not a duration, so it does not compare " *
                             "against an interval. Write the duration instead: Hour(1), Minute(90), " *
                             "Hour(1) + Minute(30)."))

@@ -807,6 +807,60 @@ end
     @test sort((under |> DataFrame).milliseconds) == sort(filter(<(120_000), df.milliseconds))
   end
 
+  # #894 — sorting and filtering an interval's VALUE on both engines. On SQLite a projected interval is
+  # its `HH:MM:SS` text, which sorts `"100:00:00"` before `"99:00:00"` and `"-01:00:00"` before
+  # `"-02:00:00"`; PormG orders and compares its milliseconds instead. A difference times the round
+  # number spans both sides of 100 hours over the 2009 season, and its negation the negative pair.
+  # The oracle is the same arithmetic in Julia over the same rows.
+  @testset "an interval alias orders, filters and aggregates by its length (#894)" begin
+    scaled() = (F("start_at") - F("date")) * F("round")
+    negated() = (F("date") - F("start_at")) * F("round")
+    base = M.Race.objects
+    base.filter("year" => 2009, "start_at__@isnull" => false)
+    base.values("raceid", "round", "date", "start_at")
+    base.order_by("raceid")
+    df = base |> DataFrame
+    gap = Dict(r.raceid => r.round * Dates.value(Dates.DateTime(r.start_at) - Dates.DateTime(Dates.Date(string(r.date))))
+               for r in eachrow(df))
+    hours100 = 100 * 3_600_000
+    # Non-vacuous: values on both sides of 100 hours, so text order and numeric order disagree here.
+    @test any(>=(hours100), values(gap)) && any(<(hours100), values(gap))
+
+    run(build!) = (q = M.Race.objects; q.filter("year" => 2009, "start_at__@isnull" => false); build!(q); q |> DataFrame)
+    by_length(sign) = sort(collect(keys(gap)); by = id -> (sign * gap[id], id))
+
+    # order_by on the alias, ties broken by raceid; the negated column sorts the negative values.
+    @test run(q -> (q.values("raceid", "scaled" => scaled()); q.order_by("scaled", "raceid"))).raceid == by_length(1)
+    @test run(q -> (q.values("raceid", "neg" => negated()); q.order_by("neg", "raceid"))).raceid == by_length(-1)
+    @test run(q -> (q.values("raceid", "scaled" => scaled()); q.order_by("-scaled", "raceid"))).raceid ==
+          sort(collect(keys(gap)); by = id -> (-gap[id], id))
+
+    # A filter on the alias: the races past 99 h, and a range across the boundary.
+    @test sort(run(q -> (q.values("raceid", "scaled" => scaled()); q.filter("scaled__@gt" => Dates.Hour(99)))).raceid) ==
+          sort([id for (id, g) in gap if g > 99 * 3_600_000])
+    @test sort(run(q -> (q.values("raceid", "neg" => negated());
+                         q.filter("neg__@range" => [-Dates.Hour(150), -Dates.Hour(50)]))).raceid) ==
+          sort([id for (id, g) in gap if 50 * 3_600_000 <= g <= 150 * 3_600_000])
+
+    # Max/Min over the interval: the longest and the shortest, read back as durations.
+    ext = run(q -> q.values("year", "mx" => PormG.Functions.Max(scaled()), "mn" => PormG.Functions.Min(negated())))
+    @test Dates.toms(ext[1, :mx]) == maximum(values(gap))
+    @test Dates.toms(ext[1, :mn]) == -maximum(values(gap))
+
+    # A DurationField column: lap times order and filter by their length, as Julia's milliseconds do.
+    laps = M.Lap_times.objects
+    laps.filter("raceid__year" => 2009, "raceid__round" => 1, "lap" => 1)
+    laps.values("driverid", "milliseconds", "time")
+    laps.order_by("time", "driverid")
+    ldf = laps |> DataFrame
+    @test size(ldf, 1) > 1
+    @test ldf.milliseconds == sort(ldf.milliseconds)
+    quick = M.Lap_times.objects
+    quick.filter("raceid__year" => 2009, "raceid__round" => 1, "lap" => 1, "time__@lt" => Dates.Minute(2))
+    quick.values("milliseconds")
+    @test sort((quick |> DataFrame).milliseconds) == sort(filter(<(120_000), ldf.milliseconds))
+  end
+
   # #882 — an IntegerField beside a date is a whole number of days on both engines. SQLite used to
   # subtract it from the YEAR. The oracle is the same shift in Julia over the same rows.
   @testset "an integer column shifts a date by whole days (#882)" begin

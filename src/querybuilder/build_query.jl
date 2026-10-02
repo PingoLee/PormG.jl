@@ -180,7 +180,17 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
         # fallback stays for whatever else `_operand_kind` resolves on a bare `F` and that does not.
         kind === nothing && original.operation === nothing && (kind = _operand_kind(original, instruc))
       else
-        v_copy.field = _get_select_query(original, instruc, _as=v_copy._as)
+        # #894: `Max`/`Min` over an interval are computed on SQLite milliseconds and leave as the
+        # interval text — the second door #881 describes, and typed the way a difference is, on
+        # both engines. `_operand_kind` cannot type `Max(F("start_at") - F("date"))` (arithmetic
+        # answers `nothing`), so the kind is taken from the same call that renders, as above.
+        interval = false
+        if original isa FObject
+          sql, interval_ms, interval = _render_function_typed(original, instruc; _as = v_copy._as)
+          v_copy.field = interval_ms ? Dialect._sqlite_interval_text(sql) : sql
+        else
+          v_copy.field = _get_select_query(original, instruc, _as=v_copy._as)
+        end
         # A plain path: render first (above), THEN type — the memo ordering `_render_left_typed`
         # documents. A dotted join key cannot be typed before it has been resolved.
         # `_projection_column_kind`, not the arithmetic-narrowed `_operand_column_kind`: a projected
@@ -189,7 +199,8 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
         original isa String && (kind = _projection_column_kind(original, instruc))
         # #800: an extremum or a window value function has its operand's kind. Same order: render,
         # then type.
-        original isa SQLTypeFunction && (kind = _function_projection_kind(original, instruc))
+        original isa SQLTypeFunction &&
+          (kind = interval ? CInterval() : _function_projection_kind(original, instruc))
         # #824: a `Joined(...)` / `CTE(...)` handle (and a `"cte__col"` path, retagged to one before
         # this loop) reads as `Max` over it does — one rule, `_operand_kind`.
         original isa Union{JoinedReference,CTEReference} && (kind = _operand_kind(original, instruc))
@@ -233,9 +244,21 @@ function _nulls_placement(orientation::AbstractString, nulls::Union{Symbol,Nothi
   return uppercase(strip(String(orientation))) == "DESC" ? :first : :last
 end
 
+_emulates_nulls_order(conn) =
+  conn isa PormGSQLite && backend_sqlite_version(conn) < SQLITE_NULLS_ORDER_MIN_VERSION
+
 # Render one ORDER BY term with explicit NULL placement, portable across backends (#75).
-function _order_term_sql(expr, orientation::AbstractString, placement::Symbol, conn)
-  if conn isa PormGSQLite && backend_sqlite_version(conn) < SQLITE_NULLS_ORDER_MIN_VERSION
+#
+# #894: `null_flag`, when given, is a SEPARATE render of the same node as `expr`, for a SQLite interval
+# ordered by its re-rendered milliseconds. It binds its own copy of the term's values, identical to
+# `expr`'s and in the same order, so the two copies align whichever prints first — the duplication
+# the guard below refuses is one text bound once. It is an explicit argument, never compared with
+# `expr`: the two texts are equal, and Julia's `===` compares strings by content. Not the projection
+# alias: inside an expression SQLite resolves a name to a FROM column first, so
+# `values("lap" => F("best") * 2)` would flag the raw `lap` column.
+function _order_term_sql(expr, orientation::AbstractString, placement::Symbol, conn;
+                         null_flag::Union{Nothing,AbstractString} = nothing)
+  if _emulates_nulls_order(conn)
     # SQLite < 3.30 has no NULLS syntax → emulate placement by sorting on the null-flag first.
     # NULLS FIRST means nulls (flag 1) come first → DESC on the flag; NULLS LAST → ASC on the flag.
     # This references `expr` twice. A resolved ORDER BY column/alias is a bare identifier, but a
@@ -243,11 +266,11 @@ function _order_term_sql(expr, orientation::AbstractString, placement::Symbol, c
     # bind the value once yet reference it twice → parameter misalignment. Guard against it: only
     # emulate when `expr` is placeholder-free. For the rare parameterized order term on this ancient
     # SQLite, emit the plain term (native NULL placement) — normalization is skipped, never corrupted.
-    if occursin('?', string(expr))
+    if null_flag === nothing && occursin('?', string(expr))
       return string(expr, " ", orientation)
     end
     flag_dir = placement === :first ? "DESC" : "ASC"
-    return string("(", expr, " IS NULL) ", flag_dir, ", ", expr, " ", orientation)
+    return string("(", something(null_flag, expr), " IS NULL) ", flag_dir, ", ", expr, " ", orientation)
   end
   return string(expr, " ", orientation, " ", placement === :first ? "NULLS FIRST" : "NULLS LAST")
 end
@@ -269,6 +292,13 @@ function _projected_output_name(instruc::SQLInstruction, key)::Union{Nothing,Str
   end
   return nothing
 end
+
+# #894 — an ORDER BY term that is a bare `DurationField` column path, on SQLite. Typed after the term
+# has been rendered, so the memo the kind lookup reads is populated.
+_orders_as_sqlite_interval(term::SQLField, instruc::SQLInstruction) =
+  instruc.connection isa PormGSQLite && term.field isa String && _is_bare_column(term.field) &&
+  _operand_kind(term.field, instruc) isa CInterval
+_orders_as_sqlite_interval(::Any, ::SQLInstruction) = false
 
 function get_order_query(object::SQLObject, instruc::SQLInstruction)
   for v in object.order
@@ -375,9 +405,22 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # carry them too. Empty on the alias and memo branches, which bind nothing; empty on PostgreSQL
     # always (`parameter_mark` holds no bucket there).
     order_params = Any[]
+    # #894: what ORDER BY prints when it is not `v_field_copy.field` — a SQLite interval's
+    # milliseconds. Kept apart from the field on purpose: the field is what the memo write and the
+    # #76 DISTINCT guard below read, and neither may see an ordering-only rewrite.
+    order_expr = nothing
+    interval_name = nothing   # the alias `order_expr` re-renders, for the old-SQLite NULL flag
     if found_in_select
       # Use the alias name instead of the expression to avoid double parameterization.
       # Most databases (PG, SQLite, MySQL) support aliases in ORDER BY.
+      #
+      # #894: except an interval on SQLite, whose alias is its `HH:MM:SS` text — `"100:00:00"`
+      # sorts before `"99:00:00"`. It orders by its milliseconds instead, rendered again here (and
+      # bound again, under `:order`). Not `_sqlite_interval_ms` over the alias name: inside an ORDER
+      # BY expression SQLite resolves a name to a FROM column BEFORE a result alias, so
+      # `values("time" => Max("time")); order_by("time")` would sort by the raw column.
+      interval = _render_projected_interval_ms(v_field_copy._as, instruc)
+      interval === nothing || (order_expr = first(interval); interval_name = v_field_copy._as)
       v_field_copy.field = quote_identifier(v_field_copy._as, instruc.connection)
     # #478: bound INSIDE the condition, so the hit cannot outlive the branch that consumes it. The
     # `else` arm below resolves through `_get_select_query`, which reaches
@@ -403,6 +446,8 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # engine and is legal under DISTINCT by construction. Only a binding node takes this branch:
     # a String path or a handle keeps its memoized selector above, so their SQL is unchanged.
     elseif (projected_as = _projected_output_name(instruc, order_cache_key)) !== nothing
+      interval = _render_projected_interval_ms(projected_as, instruc)   # #894, as above
+      interval === nothing || (order_expr = first(interval); interval_name = projected_as)
       v_field_copy.field = quote_identifier(projected_as, instruc.connection)
       found_in_select = true
     else
@@ -416,9 +461,23 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # #540: no render-time re-validation. `SQLOrder` is an immutable struct whose inner constructor
     # runs the #77 whitelist, so `v.orientation` is ASC or DESC by construction and nothing can have
     # rewritten it since — the constructor is the only writer.
+    # #894: a `DurationField` column that is not projected orders by its stored text's milliseconds
+    # on SQLite. The column reference binds nothing, so repeating it costs no parameter.
+    if order_expr === nothing && !found_in_select && _orders_as_sqlite_interval(v.field, instruc)
+      order_expr = Dialect._sqlite_interval_ms(v_field_copy.field)
+    end
     orientation = v.orientation
     placement = _nulls_placement(orientation, v.nulls)
-    push!(instruc.order, _order_term_sql(v_field_copy.field, orientation, placement, instruc.connection))
+    # #894: before SQLite 3.30 the NULL placement is emulated with a flag. A re-rendered interval that
+    # binds gets a second render of the same projection as that flag (see `_order_term_sql`); one that
+    # binds nothing, and a bare column's millisecond parse, are their own flag.
+    null_flag = nothing
+    if interval_name !== nothing && occursin('?', order_expr) && _emulates_nulls_order(instruc.connection)
+      null_flag = first(_render_projected_interval_ms(interval_name, instruc))
+    end
+    push!(instruc.order, order_expr === nothing ?
+      _order_term_sql(v_field_copy.field, orientation, placement, instruc.connection) :
+      _order_term_sql(order_expr, orientation, placement, instruc.connection; null_flag = null_flag))
     # Cache the resolved selector, but NEVER overwrite one that is already there (#404). The
     # `found_in_select` branch above deliberately degrades `field` to the bare SELECT alias — legal
     # in ORDER BY, invalid anywhere else — and since #404 moved this call ahead of
@@ -457,11 +516,11 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
       # BY x`) — expression membership captures both. Skip when there is no explicit projection
       # (`SELECT DISTINCT *`) or the projection carries a `*` wildcard that already covers the column.
       if object.distinct && !isempty(object.values) && !any(_is_wildcard_projection, object.values)
-        order_expr = string(v_field_copy.field)
+        distinct_expr = string(v_field_copy.field)
         in_projection = false
         for i in eachindex(instruc.select)
           isassigned(instruc.select, i) || continue
-          if string(instruc.select[i].field) == order_expr
+          if string(instruc.select[i].field) == distinct_expr
             in_projection = true
             break
           end
@@ -1047,7 +1106,20 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   _guard_alias_clause_operator(v, having_key[2])
   # #654: `@isnull` on a COUNT alias refuses here, ahead of any render, for the reason above.
   isnull_aggregate = v.operator == "ISNULL" && _alias_isnull_aggregate(having_key, instruc)
-  field = _alias_lhs(having_key, having_cached, instruc)
+  # #894: an interval alias compared with a duration compares milliseconds on SQLite — the alias's
+  # own value is its `HH:MM:SS` text, which orders wrongly at 100 hours and for negative values. The
+  # duration binds as milliseconds, as it does against a difference inside an expression (#881). A
+  # value that is not a duration takes the text path below and raises what it always raised there.
+  source = having_key[1] === :base ? _projected_interval_source(having_key[2], instruc) : nothing
+  ms_values = source === nothing ? nothing : _predicate_duration_ms(v.operator, v.values)
+  interval = ms_values === nothing ? nothing : _render_interval_ms(source.field, instruc; _as = source._as)
+  if interval !== nothing && last(interval)
+    return _render_predicate(first(interval), v.operator,
+                             _bind_predicate_value(instruc, v.operator, ms_values), instruc)
+  end
+  # `interval` is the projection's own text when its render had no millisecond form; it binds what
+  # `_alias_lhs` would, so it stands in for it rather than rendering the projection twice.
+  field = interval === nothing ? _alias_lhs(having_key, having_cached, instruc) : first(interval)
   # #618: `contains=` / `operator=` are what run `_apply_like_wildcards` (and with it
   # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias
   # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the

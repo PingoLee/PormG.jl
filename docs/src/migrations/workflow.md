@@ -432,9 +432,36 @@ end
 [rename questions](#Answering-the-rename-questions) read stdin whenever `interactive=true` (the default),
 so answers can be piped in. A script or CI job with nothing on stdin runs normally until a question comes
 up, then reaches end of input and raises `InvalidMigrationError` rather than guessing. Pass
-`interactive=false` there. It plans
-every unmatched model and field as new, so it **never renames**: a renamed table is planned as a drop and a
-create, which the destructive guard above then stops.
+`interactive=false` there, and name the renames with `renames`:
 ```julia
-PormG.Migrations.makemigrations("my_db", interactive=false)
+PormG.Migrations.makemigrations("my_db"; interactive = false,
+    renames = ["drivers" => "driver", "result.statusid" => "result.racestatusid"])
 ```
+
+A hint is `"old" => "new"`. A table is named by its physical name (`db_table`), and a column as
+`"table.column"`, with its `db_column` and its table's **new** name on both sides. A hint answers that
+rename without a question, so it also works with `interactive=true`, and the plan is the one the matching
+answer would give, including a retype that comes with it. The hints apply as follows:
+
+- **Old name present, new name absent:** the hint renames.
+- **Old name gone, new name present:** the rename has already run, so the hint does nothing. A hint list
+  can stay in a script after it has been applied.
+- **Neither name present:** nothing is renamed, and a warning says to check the old name, which is
+  probably mistyped.
+- **Otherwise it raises `InvalidMigrationError`:** both names already exist, the old one is still
+  declared, the new one is not declared, or one name is used by two hints.
+
+Without a hint, `interactive=false` plans every unmatched model and field as new, with one exception. A
+pair with the **same definition**, a vanished table holding exactly the model's columns (one besides its key, at least) or a removed
+column identical to the added one, is almost certainly a rename. Planning a drop and an add for it would
+lose its rows, so `makemigrations` refuses instead. It raises `InvalidMigrationError` listing every such
+pair with the hint that decides it:
+
+```text
+makemigrations(interactive = false) will not guess a rename. These look like one — the same definition under a new name:
+  - column "result.statusid" → "result.racestatusid": pass "result.statusid" => "result.racestatusid" to rename, or "result.statusid" => nothing to drop it
+```
+
+`"old" => nothing` says it is **not** a rename: the old table or column is dropped and the new one created,
+and it is offered to no rename question. A pair whose definition differs is still planned as a drop and an
+add without a hint, which the destructive guard above stops at `migrate`.

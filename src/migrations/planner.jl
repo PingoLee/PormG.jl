@@ -1438,11 +1438,26 @@ function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
   return nothing
 end
 
+# #734: the `renames =` hints, parsed once (`_parse_rename_hints`). `tables` maps an old physical table
+# to its new one, and `columns` maps (declared table, old column) to the new column. `nothing` on the
+# new side says "not a rename": the old one is dropped, and it is offered to nothing. The names are
+# PHYSICAL — `db_table`, `db_column` — because both sides of the diff are keyed by them, and a column
+# hint names its table by the declared (new) name, the one the plan's statements use.
+struct RenameHints
+  tables::Dict{String, Union{String, Nothing}}
+  columns::Dict{String, Dict{String, Union{String, Nothing}}}
+end
+RenameHints() = RenameHints(Dict{String, Union{String, Nothing}}(), Dict{String, Dict{String, Union{String, Nothing}}}())
+
 function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, live::LiveTable, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::PormGSettings; interactive::Bool = true,
                              composite_targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}(),
                              sqlite_rebuild_context::Dict{Symbol, Tuple{Symbol, Dict{String, String}}} =
                                Dict{Symbol, Tuple{Symbol, Dict{String, String}}}(),
-                             lossy_alters::Vector{LossyAlter} = LossyAlter[])::Nothing
+                             lossy_alters::Vector{LossyAlter} = LossyAlter[],
+                             # #734: see `_resolve_table_fields`.
+                             hints::RenameHints = RenameHints(),
+                             fail_closed::Bool = true,
+                             rename_problems::Vector{String} = String[])::Nothing
   # @pormg_debug model_name == :new_join_position
   # #507 phase 2: NO whole-model early-out. `Models.are_model_fields_equal` used to short-circuit
   # this whole function when every field compared equal, and it was a second answer to a question
@@ -1533,13 +1548,19 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
   # its condition would be evaluated against the OLD type.
   retyped = Set{String}()
 
-  # #735: a join table's endpoint columns follow their end's rename without a question.
+  # #735: a join table's endpoint columns follow their end's rename without a question. #734: a hint
+  # wins over that, and over the prompt.
   preset_renames = _join_table_endpoint_renames(current_schema[model_name][:model], colect_deletion, colect_addition,
                                                 live, model_fields_map, current_fields_map, conn)
+  hinted, hint_dropped = _resolve_column_hints(hints, String(model_name), model_fields_map, current_fields_map)
+  hinted_olds = Set{String}(values(hinted))
+  filter!(p -> !(Symbol(last(p)) in hint_dropped) && !(last(p) in hinted_olds), preset_renames)
+  merge!(preset_renames, hinted)
 
   # Pass maps to resolve fields so original keys can be used for accessing model.fields
   _resolve_table_fields(conn, model_name, live, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive, index_actions=index_actions, sqlite_rename_map=sqlite_rename_map,
-                        lossy_alters=lossy_alters, preset_renames=preset_renames)
+                        lossy_alters=lossy_alters, preset_renames=preset_renames, excluded=hint_dropped,
+                        fail_closed=fail_closed, rename_problems=rename_problems)
   # #742: every rename is answered now — refuse a declared condition naming a column that goes away.
   _refuse_stale_check_conditions(current_schema[model_name][:model], sqlite_rename_map, keys(live.columns))
 
@@ -1712,7 +1733,16 @@ function _resolve_table_fields(
                                 # column ⇒ the removed column it is renamed from. A column listed here
                                 # is never asked about; the rename then goes through the same branch
                                 # a typed answer does.
-                                preset_renames::AbstractDict{String, String} = Dict{String, String}()
+                                preset_renames::AbstractDict{String, String} = Dict{String, String}(),
+                                # #734: removed columns a `=> nothing` hint says are not a rename —
+                                # offered to no question and to no fail-closed check.
+                                excluded::Set{Symbol} = Set{Symbol}(),
+                                # #734: with `interactive = false`, an unhinted pair that has the same
+                                # definition is recorded here instead of guessed, and
+                                # `get_migration_plan` raises with all of them. `fail_closed = false`
+                                # is `check`'s: it reports drift, it does not refuse it.
+                                fail_closed::Bool = true,
+                                rename_problems::Vector{String} = String[]
                               )::Nothing
   # The catalog's name for this table at plan time — `model_name` except on a table rename (#615).
   # Lookups ask for it; DDL names `model_name`. See `_alter_table_fields`.
@@ -1730,11 +1760,23 @@ function _resolve_table_fields(
       # Only the answer is parsed inside the reader; the rename work below propagates its own
       # failures as themselves (#197).
       old_field_sym::Union{Symbol, Nothing} = nothing
-      if haskey(preset_renames, field_name) && Symbol(preset_renames[field_name]) in colect_deletion
+      # A removed column another added column's hint or preset already claims is offered to nothing
+      # else — or an earlier field could take it, or fail closed on it, before its own claim is read.
+      claimed = Set{Symbol}(Symbol(old) for (new, old) in preset_renames if new != field_name)
+      candidates = Symbol[old for old in colect_deletion if !(old in excluded) && !(old in claimed)]
+      new_field = current_model.fields[current_fields_map[field_name]]
+      if haskey(preset_renames, field_name) && Symbol(preset_renames[field_name]) in candidates
         old_field_sym = Symbol(preset_renames[field_name])
-      elseif interactive
+      elseif !interactive
+        if fail_closed
+          for old in _same_definition_candidates(new_field, field_name, candidates, live, model_fields_map, conn)
+            push!(rename_problems, "  - column \"$model_name.$old\" → \"$model_name.$field_name\": pass " *
+                                   _rename_hint_fix("$model_name.$old", "$model_name.$field_name"))
+          end
+        end
+      elseif !isempty(candidates)
         colect_numbered, list_to_question = _ranked_field_candidates(
-          current_model.fields[current_fields_map[field_name]], field_name, colect_deletion, live, model_fields_map, conn)
+          new_field, field_name, candidates, live, model_fields_map, conn)
         old_field_sym = _read_rename_answer(
             _emsg("Is the field \"\e[4m\e[31m$field_name\e[0m\" from table \"\e[4m\e[34m$model_name\e[0m\" the same as one of the following fields: \e[4m\e[33m$list_to_question\e[0m? If yes, please enter the corresponding number; otherwise, type 'no':"),
             "one of the listed numbers, or 'no'") do response
@@ -1750,7 +1792,6 @@ function _resolve_table_fields(
                        catalog_table = catalog_table, lossy_alters = lossy_alters)
       else
         old_field_name = old_field_sym |> string
-        new_field = current_model.fields[current_fields_map[field_name]]
         old_spec = live.columns[model_fields_map[old_field_name]]
         # #507 phase 2: a rename is the SAME column change with a new name, so it goes through the
         # same `_plan_column_change!` the alteration loop uses — FK drop (by the pre-rename column,
@@ -2056,8 +2097,7 @@ function _read_rename_answer(parse_answer::Function, question::AbstractString, e
   line = readline(stdin; keep = true)
   isempty(line) && throw(InvalidMigrationError(
     "makemigrations reached the end of input at a rename question, so there is no answer to read. " *
-    "Run it at a terminal, or pass `interactive = false` to plan every unmatched model and field as " *
-    "new (nothing is renamed)."))
+    "Run it at a terminal, or pass `interactive = false` with the renames named in `renames = [...]`."))
   response = strip(lowercase(line))
   answer = parse_answer(response)
   answer === nothing && throw(InvalidMigrationError(
@@ -2120,6 +2160,110 @@ function _ranked_table_candidates(model::PormGModel, unclaimed::Vector{Symbol},
   labels = ["$index - $old ($(counts[old][1]) of $(counts[old][2]) columns match)" for (index, old) in enumerate(ranked)]
   return numbered, join(labels, ", ")
 end
+
+_hint_error(msg::AbstractString) = InvalidMigrationError("Invalid `renames` hint: " * msg)
+
+function _parse_rename_hints(renames::AbstractVector)::RenameHints
+  hints = RenameHints()
+  new_tables = Set{String}()
+  new_columns = Set{Tuple{String, String}}()
+  for hint in renames
+    (hint isa Pair && first(hint) isa AbstractString && (last(hint) isa AbstractString || last(hint) === nothing)) ||
+      throw(_hint_error("$(repr(hint)) is not `\"old\" => \"new\"` or `\"old\" => nothing`."))
+    old, new = String(first(hint)), last(hint) === nothing ? nothing : String(last(hint))
+    if occursin('.', old)
+      table, old_col = split(old, '.'; limit = 2)
+      new_col = nothing
+      if new !== nothing
+        occursin('.', new) || throw(_hint_error("\"$old\" => \"$new\" names a column on the left and a table on the right."))
+        new_table, new_col = split(new, '.'; limit = 2)
+        new_table == table || throw(_hint_error("\"$old\" => \"$new\" moves a column to another table; a rename keeps its table " *
+                                                "(name it by its new name on both sides)."))
+        (String(table), String(new_col)) in new_columns && throw(_hint_error("two hints rename a column into \"$new\"."))
+        push!(new_columns, (String(table), String(new_col)))
+      end
+      cols = get!(hints.columns, String(table), Dict{String, Union{String, Nothing}}())
+      haskey(cols, old_col) && throw(_hint_error("\"$old\" is named by two hints."))
+      cols[String(old_col)] = new_col === nothing ? nothing : String(new_col)
+    else
+      new !== nothing && occursin('.', new) && throw(_hint_error("\"$old\" => \"$new\" names a table on the left and a column on the right."))
+      haskey(hints.tables, old) && throw(_hint_error("\"$old\" is named by two hints."))
+      if new !== nothing
+        new in new_tables && throw(_hint_error("two hints rename a table into \"$new\"."))
+        push!(new_tables, new)
+      end
+      hints.tables[old] = new
+    end
+  end
+  return hints
+end
+
+# The table hints against the two sides (#734), resolved before any question: `renamed` is new ⇒ old
+# for every hint that applies, and `dropped` the old tables a `=> nothing` hint takes out of every
+# candidate list. A hint whose old table is gone and whose new one exists is STALE and does nothing —
+# the rename ran already, as Atlas and sqldef treat it — so a hint list can stay in a script after it
+# applied. With neither table there, it warns: the old name is more likely mistyped.
+function _resolve_table_hints(hints::RenameHints, live_names::Set{String},
+                              current_schema::AbstractDict{Symbol, <:Any})
+  renamed = Dict{Symbol, Symbol}()
+  dropped = Set{Symbol}()
+  # Sorted, so with two bad hints the same one is reported on every run.
+  for (old, new) in sort!(collect(hints.tables), by = first)
+    haskey(current_schema, Symbol(old)) &&
+      throw(_hint_error("\"$old\" is a declared model's table, so it is not being removed and cannot be renamed from."))
+    if new === nothing
+      old in live_names && push!(dropped, Symbol(old))
+      continue
+    end
+    haskey(current_schema, Symbol(new)) ||
+      throw(_hint_error("\"$old\" => \"$new\": no declared model has the table \"$new\"."))
+    # Stale — the rename ran already — only when the NEW table is there. With neither, the old name
+    # is more likely a typo than history, and the hint the caller relies on would do nothing.
+    if !(old in live_names)
+      new in live_names ||
+        @warn("The `renames` hint \"$old\" => \"$new\" names a table the database does not have, and \"$new\" does not exist yet either; check the old name — nothing is renamed.")
+      continue
+    end
+    new in live_names && throw(_hint_error("\"$old\" => \"$new\": both tables exist in the database."))
+    renamed[Symbol(new)] = Symbol(old)
+  end
+  for table in keys(hints.columns)
+    haskey(current_schema, Symbol(table)) ||
+      throw(_hint_error("no declared model has the table \"$table\" (a column hint names its table by its new name)."))
+  end
+  return renamed, dropped
+end
+
+# The column hints for one table against its two sides (#734): `preset` is new ⇒ old column, and
+# `dropped` the old columns a `=> nothing` hint takes out of every candidate list. Same rules as the
+# tables', one level down.
+function _resolve_column_hints(hints::RenameHints, table::AbstractString,
+                               live_cols::AbstractDict{String, String}, declared_cols::AbstractDict{String, String})
+  preset = Dict{String, String}()
+  dropped = Set{Symbol}()
+  for (old, new) in sort!(collect(get(hints.columns, String(table), Dict{String, Union{String, Nothing}}())), by = first)
+    haskey(declared_cols, old) &&
+      throw(_hint_error("\"$table.$old\" is a declared column, so it is not being removed and cannot be renamed from."))
+    if new === nothing
+      haskey(live_cols, old) && push!(dropped, Symbol(old))
+      continue
+    end
+    haskey(declared_cols, new) ||
+      throw(_hint_error("\"$table.$old\" => \"$table.$new\": the model of \"$table\" declares no column \"$new\"."))
+    # Stale only when the new column is there; see `_resolve_table_hints`.
+    if !haskey(live_cols, old)
+      haskey(live_cols, new) ||
+        @warn("The `renames` hint \"$table.$old\" => \"$table.$new\" names a column \"$table\" does not have, and \"$new\" does not exist yet either; check the old name — nothing is renamed.")
+      continue
+    end
+    haskey(live_cols, new) && throw(_hint_error("\"$table.$old\" => \"$table.$new\": both columns exist in the database."))
+    preset[new] = old
+  end
+  return preset, dropped
+end
+
+# The hint a failing-closed run asks for (#734), shown with the pair it would have guessed.
+_rename_hint_fix(old::AbstractString, new::AbstractString) = "\"$old\" => \"$new\" to rename, or \"$old\" => nothing to drop it"
 
 # Whether `model` is an auto many-to-many join table — synthesized, never declared (#735).
 _is_auto_join_table(model::PormGModel)::Bool =
@@ -2405,8 +2549,8 @@ function _refuse_specialized_sqlite_fields(current_schema::Dict{Symbol, Dict{Sym
 end
 
 """
-    get_migration_plan(live::Vector{LiveTable}, current_schema, conn, settings; interactive = true)
-    get_migration_plan(models::Vector{PormGModel}, current_schema, conn, settings; interactive = true)
+    get_migration_plan(live::Vector{LiveTable}, current_schema, conn, settings; interactive = true, renames = [])
+    get_migration_plan(models::Vector{PormGModel}, current_schema, conn, settings; interactive = true, renames = [])
 
 Diff the model definitions against the live database schema and return the DDL that would
 reconcile them, as an `OrderedDict{Symbol, OrderedDict{String, String}}` — model name ⇒
@@ -2438,9 +2582,20 @@ removed columns with the same definition first, and every other one names what r
 also change. Nothing is filtered out. The models are asked about in table-name order, and their fields
 in declaration order. An auto many-to-many join table, and the column named after a renamed end,
 follow that end's rename without a question when exactly one vanished table or column fits.
-`interactive = false`
-answers "new table" and "not a rename" for everything — a non-interactive run therefore
-**never renames**, it drops and creates.
+
+`renames` names renames without a question (#734): `"old_table" => "new_table"`, and
+`"table.old_column" => "table.new_column"` with the table's new name. Every name is physical
+(`db_table`, `db_column`). A hint wins over the prompt. A hint whose old name is gone and whose new
+one exists has already run, and does nothing; one naming neither warns. `InvalidMigrationError` is raised for a hint that contradicts the schema: both names exist,
+the old one is still declared, the new one is not declared, or two hints share a name.
+`"old" => nothing` says the old one is not a rename: it is dropped and offered to no question.
+
+`interactive = false` answers "new table" and "not a rename" for every unhinted pair, except a pair
+with the **same definition**: a vanished table holding exactly the model's columns (one besides its key, at least), or a removed
+column identical to the added one. That is the shape of a rename, so the run raises
+`InvalidMigrationError` listing every such pair and the hint that decides it, rather than dropping
+the rows. `fail_closed = false` turns that off; `check(kinds = [:schema_drift])` uses it, because it
+reports such a pair as drift.
 
 Any answer the prompt does not recognise — an empty line, a typo, an unlisted number — raises
 `InvalidMigrationError`, and so does reaching the end of input (#726). The prompts read `stdin`
@@ -2461,18 +2616,24 @@ still re-points, against the new name, after the rename has run.
 """
 function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn, settings::PormGSettings; interactive::Bool = true,
                             lossy_alters::Vector{LossyAlter} = LossyAlter[],
-                            schema_scope::Union{Set{String}, Nothing} = nothing)
+                            schema_scope::Union{Set{String}, Nothing} = nothing,
+                            renames::AbstractVector = Pair{String, Union{String, Nothing}}[],
+                            fail_closed::Bool = true)
   # The adapter (#522): a `PormGModel` read as a live table — see `live_table` for what it keeps.
   return get_migration_plan(LiveTable[live_table(model, conn) for model in models], current_schema,
                             conn, settings; interactive = interactive, lossy_alters = lossy_alters,
-                            schema_scope = schema_scope)
+                            schema_scope = schema_scope, renames = renames, fail_closed = fail_closed)
 end
 
 function get_migration_plan(live::Vector{LiveTable}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn, settings::PormGSettings; interactive::Bool = true,
                             lossy_alters::Vector{LossyAlter} = LossyAlter[],
-                            schema_scope::Union{Set{String}, Nothing} = nothing)
+                            schema_scope::Union{Set{String}, Nothing} = nothing,
+                            renames::AbstractVector = Pair{String, Union{String, Nothing}}[],
+                            fail_closed::Bool = true)
 # `live` is the schema as the database holds it; `current_schema` is the models file (see the docstring).
 
+# #734: parsed before anything else, so a malformed hint is refused even when nothing would use it.
+hints = _parse_rename_hints(renames)
 migration_plan = OrderedDict{Symbol, OrderedDict{String, String}}()
 futher_processing = Dict{Symbol, OrderedDict{Symbol, Any}}()
 current_schema = Models.synthesize_many_to_many_through_models(current_schema, settings)
@@ -2551,15 +2712,27 @@ decisions = Pair{Symbol, Union{Symbol, Nothing}}[]
 # is not recoverable here: `get_all_models` reads the bindings through `names`, which sorts them.
 unmatched = sort!([name for (name, entry) in current_schema if entry[:exist] == false],
                   by = name -> (_is_auto_join_table(current_schema[name][:model]), String(name)))
+# #734: the table hints, resolved against both sides. A hinted rename source is reserved for its model
+# and a `=> nothing` one is dropped, so neither is offered to any other model, or to `fail_closed`.
+hint_renamed, hint_dropped = _resolve_table_hints(hints, Set{String}(t.name for t in live), current_schema)
+reserved = union(Set{Symbol}(values(hint_renamed)), hint_dropped)
+# #734: every likely rename `interactive = false` refuses to guess, reported together at the end.
+rename_problems = String[]
 for model_name in unmatched
   model = current_schema[model_name][:model]
   # The vanished tables no earlier answer has claimed. With none left there is nothing to rename FROM:
   # the model is a new table, and nothing is asked (#726).
   unclaimed = haskey(futher_processing, :drop_table) ?
-    Symbol[name for (name, info) in futher_processing[:drop_table] if !info["exist"]] : Symbol[]
-  renames_so_far = Dict{String, String}(string(old) => string(new) for (new, old) in decisions if old !== nothing)
+    Symbol[name for (name, info) in futher_processing[:drop_table] if !info["exist"] && !(name in reserved)] : Symbol[]
+  # Every hinted rename is known up front, so it is applied whatever the order: a child of a table
+  # hinted later in the name order must still compare its keys against the parent's new name.
+  renames_so_far = Dict{String, String}(string(old) => string(new) for (new, old) in hint_renamed)
+  merge!(renames_so_far, Dict{String, String}(string(old) => string(new) for (new, old) in decisions if old !== nothing))
   old_model_name = nothing
-  if !isempty(unclaimed) && _is_auto_join_table(model)
+  if haskey(hint_renamed, model_name)
+    # A hint wins over every question (#734).
+    old_model_name = hint_renamed[model_name]
+  elseif !isempty(unclaimed) && _is_auto_join_table(model)
     old_model_name = _join_table_rename_source(model, unclaimed, futher_processing[:drop_table], renames_so_far, conn)
     old_model_name === nothing ||
       @info("The join table \"$(model_name)\" follows its model's rename: renaming \"$(old_model_name)\" to it.")
@@ -2572,6 +2745,18 @@ for model_name in unmatched
     # Only the answer is parsed inside `_ask_table_rename`; a genuine planner failure later propagates
     # as itself, not as "invalid choice" (#197).
     old_model_name = _ask_table_rename(model_name, candidates, list_to_question)
+  elseif old_model_name === nothing && !interactive && fail_closed && !haskey(hint_renamed, model_name)
+    # #734: a vanished table holding exactly the model's columns, each with the same definition, is
+    # almost certainly the model under its old name. Dropping it would lose its rows, so it is not
+    # guessed in either direction: the run refuses, and names the hint that decides it. A model
+    # declaring nothing but its key is no such signal — every table has one — so it is not refused.
+    key_only = !any(f -> !_slot(f, :primary_key, false), values(model.fields))
+    for old in (key_only ? Symbol[] : unclaimed)
+      live_old = _retarget_references(futher_processing[:drop_table][old]["model"], renames_so_far)
+      matching, declared = _table_match_count(model, live_old, conn)
+      (matching == declared && length(live_old.columns) == declared) || continue
+      push!(rename_problems, "  - table \"$old\" → \"$model_name\": pass " * _rename_hint_fix(String(old), String(model_name)))
+    end
   end
   push!(decisions, model_name => old_model_name)
   # Marked now, not when the plan is emitted: the next model's candidate list must not
@@ -2592,7 +2777,8 @@ sqlite_rebuild_context = Dict{Symbol, Tuple{Symbol, Dict{String, String}}}()
 for table in matched
   _alter_table_fields(conn, migration_plan, Symbol(table.name), retarget(table), current_schema, settings, interactive=interactive,
                       composite_targets = composite_targets, sqlite_rebuild_context = sqlite_rebuild_context,
-                      lossy_alters = lossy_alters)
+                      lossy_alters = lossy_alters, hints = hints, fail_closed = fail_closed,
+                      rename_problems = rename_problems)
 end
 
 for (model_name, old_model_name) in decisions
@@ -2608,10 +2794,19 @@ for (model_name, old_model_name) in decisions
     # method. Registered under `model_name`, like the column work it precedes.
     _alter_table_fields(conn, migration_plan, model_name, retarget(futher_processing[:drop_table][old_model_name]["model"]), current_schema, settings, interactive=interactive,
                         composite_targets = composite_targets, sqlite_rebuild_context = sqlite_rebuild_context,
-                        lossy_alters = lossy_alters)
+                        lossy_alters = lossy_alters, hints = hints, fail_closed = fail_closed,
+                        rename_problems = rename_problems)
     _configure_order_dict_migration_plan(migration_plan, model_name, "Rename table", Dialect.rename_table(conn, string(old_model_name), string(model_name)))
   end
 end
+
+# #734: refused as a whole, before anything is written. Django never renames under `--noinput`, and
+# PormG used to do the same: drop + add, which loses the rows. A pair with the same definition is the
+# shape of a rename, so a non-interactive run no longer picks a side for the user.
+isempty(rename_problems) || throw(InvalidMigrationError(
+  "makemigrations(interactive = false) will not guess a rename. These look like one — the same " *
+  "definition under a new name:\n$(join(rename_problems, "\n"))\n" *
+  _emsg("Add the hints to `renames = [...]` and run it again.")))
 
 @pormg_debug false
 
@@ -2645,8 +2840,8 @@ return migration_plan
 end
 
 """
-    makemigrations(db::String; models_file = nothing, interactive = true)
-    makemigrations(connection, settings::PormGSettings; path = "db/models.jl", interactive = true)
+    makemigrations(db::String; models_file = nothing, interactive = true, renames = [])
+    makemigrations(connection, settings::PormGSettings; path = "db/models.jl", interactive = true, renames = [])
 
 Compare your `models.jl` against the live database and **write** the pending migration plan.
 The first form is the one to call: `db` is a connection key from your configuration, e.g.
@@ -2668,8 +2863,14 @@ It does **not** touch the schema. The generated DDL lands in
   table or a rename of one that disappeared — a rename preserves the data. Answer `yes`, or the
   number of the old table. An unrecognised answer, or the end of input, raises
   `InvalidMigrationError`; no terminal is detected, so a script or CI job with no answers to give
-  must pass `false`. `false` answers "new table" for everything and so **never renames**; use it in
-  CI, not on real data.
+  must pass `false`. `false` asks nothing: an unhinted pair is planned as new, except a pair with
+  the same definition (a likely rename), which raises `InvalidMigrationError` naming the hint that
+  decides it (#734).
+- `renames`: the renames to plan without a question, e.g.
+  `renames = ["drivers" => "driver", "result.statusid" => "result.racestatusid"]` — physical
+  names, a column with its table's new name. `"old" => nothing` drops the old one instead. A hint
+  that has already run does nothing; one that contradicts the schema raises
+  `InvalidMigrationError`. See [`get_migration_plan`](@ref).
 
 Returns `nothing`. Logs and returns early — writing no plan — when the connection has
 `change_db: false`. An up-to-date schema logs that no migrations are pending, and moves an earlier
@@ -2688,7 +2889,8 @@ A pending plan holding hand-written data steps — entries labelled `Data (pre):
 See also [`migrate`](@ref), [`get_migration_plan`](@ref), and the
 [Database Migrations in PormG](@ref) guide.
 """
-function makemigrations(connection::PormGPostgres, settings::PormGSettings; path::String = "db/models.jl", interactive::Bool = true)
+function makemigrations(connection::PormGPostgres, settings::PormGSettings; path::String = "db/models.jl", interactive::Bool = true,
+                        renames::AbstractVector = Pair{String, Union{String, Nothing}}[])
 # #683: the plan is written under `db_def_folder`, which a `register_connection` entry only labels.
 Configuration._require_folder_backed(settings, "makemigrations")
 if !settings.change_db
@@ -2727,7 +2929,7 @@ lossy_alters = LossyAlter[]
 schema_scope = Set{String}()
 live_fingerprints = _schema_table_fingerprints(live_schema, (t.name for t in live_schema))
 migration_plan = get_migration_plan(live_schema, current_models, connection, settings, interactive=interactive,
-                                    lossy_alters = lossy_alters, schema_scope = schema_scope)
+                                    lossy_alters = lossy_alters, schema_scope = schema_scope, renames = renames)
 
 @pormg_debug false
 
@@ -2736,7 +2938,8 @@ _write_pending_plan(connection, settings, migration_plan; models_path = path, lo
 return nothing
 end
 
-function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::String = "db/models.jl", interactive::Bool = true)
+function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::String = "db/models.jl", interactive::Bool = true,
+                        renames::AbstractVector = Pair{String, Union{String, Nothing}}[])
   Configuration._require_folder_backed(settings, "makemigrations")
   if !settings.change_db
     @warn("Schema changes are disabled (`change_db: false`). Set `change_db: true` in your db/connection.yml under the active environment to allow migrations.")
@@ -2760,7 +2963,7 @@ function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::
   schema_scope = Set{String}()  # #739: see the PostgreSQL method above
   live_fingerprints = _schema_table_fingerprints(live_schema, (t.name for t in live_schema))
   migration_plan = get_migration_plan(live_schema, current_models, connection, settings, interactive=interactive,
-                                      lossy_alters = lossy_alters, schema_scope = schema_scope)
+                                      lossy_alters = lossy_alters, schema_scope = schema_scope, renames = renames)
 
   _write_pending_plan(connection, settings, migration_plan; models_path = path, lossy_alters = lossy_alters,
                       schema_tables = _scoped_fingerprints(live_fingerprints, schema_scope))
@@ -2879,7 +3082,8 @@ function _pending_plan_already_applied(connection::Union{PormGPostgres, PormGSQL
 end
 
 function makemigrations(db::String; models_file::Union{AbstractString, Nothing} = nothing,
-                        config::Dict{String,PormGSettings} = config, interactive::Bool = true)
+                        config::Dict{String,PormGSettings} = config, interactive::Bool = true,
+                        renames::AbstractVector = Pair{String, Union{String, Nothing}}[])
 settings = Configuration.get_settings(db)
 # Here as well as in the methods below, and unconditionally: the plan is written under the folder
 # whichever models file it is diffed against.
@@ -2887,7 +3091,7 @@ Configuration._require_folder_backed(settings, "makemigrations")
 # #736: the resolution `check(kinds = [:schema_drift])` gives its own `models_file` — absolute, so
 # `Base.include` cannot resolve it against the calling source file instead of the cwd.
 path = _resolve_models_file(settings, models_file, "makemigrations(\"$(db)\")")
-makemigrations(settings.connections, settings, path=path, interactive=interactive)
+makemigrations(settings.connections, settings, path=path, interactive=interactive, renames=renames)
 end
 
 function get_all_models(mod::Module)::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}

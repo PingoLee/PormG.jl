@@ -235,6 +235,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Data Migrations: run_once and Data (pre)/(post) Steps (#740)" include("unit/test_data_migrations.jl")
     @testset "Migration Statement Ordering: FK invariant (#89)" include("unit/test_migration_fk_ordering.jl")
     @testset "Migration Diff: makemigrations renames a table (#615)" include("unit/test_migration_rename_table.jl")
+    @testset "Migration Diff: rename hints and fail-closed renames (#734)" include("unit/test_migration_rename_hints.jl")
     @testset "Rename Index Timing (#556)" include("unit/test_rename_index_timing.jl")
     @testset "Migration Schema Check (#475)" include("unit/test_migrations_check.jl")
     @testset "Migration Schema Check: drift gate (#738)" include("unit/test_schema_drift_check.jl")

@@ -63,7 +63,7 @@ end
 _rd729_models(path, body) = write(path, "module models\nimport PormG.Models\n" * body * "\nend\n")
 
 # `makemigrations`, with `answers` fed to the rename prompts — renames are only ever proposed
-# interactively. No answers means `interactive = false`, which never asks and never renames.
+# interactively. No answers means `interactive = false`, which never asks (and renames only what `renames =` names, #734).
 function _rd729_plan!(pool, settings, models_path; answers::String = "")
     path, io = mktemp()
     write(io, answers)

@@ -1166,6 +1166,16 @@ const DOCERR_CASES = [
             q = m.objects; q.filter("positiontext" => 1.0); q.list(show_query = :dict)
         end,
     ),
+    # #868. The same *Text Fields* section says `max_length` counts the text an integer is written
+    # as. Every writer, value type and both engines are pinned in `test_text_value_types.jl`.
+    (
+        "fields.md — an integer longer than a text field's max_length raises on a write (#868)",
+        InvalidValueError,
+        () -> let m = Model("docerr_code_868", id = IDField(), code = CharField(max_length = 3))
+            m.connect_key = "docerr_pg"; m._module = Main
+            m.objects.create("code" => 12345, show_query = :dict)
+        end,
+    ),
     # #780. The same *Numeric Fields* paragraph names the type a declaration raises: a prefixed string
     # `default=`, a prefixed string width, and a non-finite string float default. Every constructor
     # and width keyword is pinned in `test_numeric_prefix_773.jl`.

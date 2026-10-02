@@ -444,6 +444,20 @@ end
 _binary_byte_length(value::AbstractVector{UInt8})::Int = length(value)
 _binary_byte_length(value::AbstractString)::Int = ncodeunits(value)
 
+# The text a text field's `max_length` is measured against: the text `format_text_sql` will write
+# (#868). A String is that text already; an integer or a date/time is written as its base-10 or ISO
+# text (#860), which is the length the column holds, so it is measured too. `nothing` means there is
+# no one text to measure: a field with another formatter; a value `format_text_sql` refuses, which
+# `_format_single` reports with its own typed error; and a `Bool`, which `format_text_sql` passes
+# through unformatted and each engine then stores as different text (LibPQ binds `"true"`/`"false"`,
+# SQLite stores `1`/`0`). Which of those a bound should measure is that divergence's question, not
+# this check's.
+_written_text(f_meta, value::AbstractString) = value
+_written_text(f_meta, value::Bool) = nothing
+_written_text(f_meta, value::Union{Integer, Date, DateTime, ZonedDateTime, Time}) =
+    f_meta.formatter === Models.format_text_sql ? Models.format_text_sql(value) : nothing
+_written_text(f_meta, value) = nothing
+
 # One write value, checked to be a single value before it binds — every writer, both backends, so
 # they all raise alike (#672 bulk_insert/bulk_update, #712 create/update/get_or_create/
 # update_or_create and bulk_copy).
@@ -566,11 +580,14 @@ function _validate_field_value(model::PormGModel, field::String, f_meta, value::
         if byte_length > f_meta.max_length
             _validation_error(operation, model, field, "max_length is $(f_meta.max_length) bytes, but the provided value is $(byte_length) bytes")
         end
-    #    For text fields it is a CHARACTER count. A CharField with no max_length (nothing) is
+    #    For text fields it is a CHARACTER count of the text written, so an integer or a date is
+    #    measured as its text, not skipped (#868). A CharField with no max_length (nothing) is
     #    unlimited (TEXT), so skip the check rather than comparing length against nothing.
-    elseif hasfield(typeof(f_meta), :max_length) && isa(value, AbstractString) && f_meta.max_length !== nothing
-        if length(value) > f_meta.max_length
-            _validation_error(operation, model, field, "max_length is $(f_meta.max_length), but the provided value has length $(length(value))")
+    elseif hasfield(typeof(f_meta), :max_length) && f_meta.max_length !== nothing &&
+           (text = _written_text(f_meta, value)) !== nothing
+        if length(text) > f_meta.max_length
+            written = value isa AbstractString ? "" : " (the $(typeof(value)) is written as $(repr(text)))"
+            _validation_error(operation, model, field, "max_length is $(f_meta.max_length), but the provided value has length $(length(text))$written")
         end
     end
     

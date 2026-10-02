@@ -95,6 +95,8 @@ Fd_result = Models.Model("fd_result",
   code      = Models.CharField(null = true),
   # #814 — the interval family: a duration literal binds through this column's formatter.
   lap       = Models.DurationField(null = true),
+  # #882 — a BIGINT day count, which PostgreSQL must cast: it has `date - integer`, not `date - bigint`.
+  laps      = Models.BigIntegerField(null = true),
 )
 
 PormG.Models.set_models(@__MODULE__, "fd_mock")
@@ -816,12 +818,19 @@ end
 
   # `Bool <: Integer` in Julia, so without an explicit exclusion `F("ts") + true` would be rewritten
   # to `Day(true)`. It must stay the arithmetic the caller actually wrote.
+  #
+  # #882 changed the SQLite half on purpose. This asserted the SQLite SQL had no day shift, and it
+  # rendered `"logged_at" + ?`, which on SQLite is the timestamp's YEAR plus one. A value PormG cannot
+  # type beside a date is refused there now, which still never reads the Bool as a day.
   @testset "a Bool is not whole days" begin
     q = FD.Fd_result.objects
     q.values("x" => F("logged_at") + true)
-    sql = _fd_sql(q; conn = _FD_SL)
-    @test !occursin(_FD_TS_WRAPPER, sql)
+    sql = _fd_sql(q; conn = _FD_PG)
+    @test !occursin("make_interval", sql)
     @test !occursin("days", sql)
+    q_sl = FD.Fd_result.objects
+    q_sl.values("x" => F("logged_at") + true)
+    @test_throws PormG.QueryBuildError _fd_sql(q_sl; conn = _FD_SL)
   end
 
   # The control that keeps the normalization from swallowing ordinary arithmetic: an integer column
@@ -1368,13 +1377,21 @@ end
 
   # Untyped stays untyped: `@year` is a number and `Sum` is computed, so neither enters the temporal
   # branches, and each renders the bare operator it always did.
+  #
+  # #882 moved one row on purpose. `F("seen") - F("logged_at__@year")` pinned a bare `-` on SQLite,
+  # which is the DATE's year minus the year number (`0`), silently. A date beside a value PormG cannot
+  # type is refused on SQLite now; PostgreSQL keeps its SQL.
   @testset "a function or transform PormG does not type is unchanged" begin
-    for (expr, sl_sql) in ((F("seen") - F("logged_at__@year"), "(\"Tb\".\"seen\" - CAST(strftime('%Y', \"Tb\".\"logged_at\") AS INTEGER))"),
-                           (F("seen__@year") - 1, "(CAST(strftime('%Y', \"Tb\".\"seen\") AS INTEGER) - ?)"))
-      q = FD.Fd_result.objects
-      q.values("x" => expr)
-      @test occursin(sl_sql, _fd_sql(q; conn = _FD_SL))
-    end
+    q = FD.Fd_result.objects
+    q.values("x" => F("seen__@year") - 1)
+    @test occursin("(CAST(strftime('%Y', \"Tb\".\"seen\") AS INTEGER) - ?)", _fd_sql(q; conn = _FD_SL))
+
+    q_sl = FD.Fd_result.objects
+    q_sl.values("x" => F("seen") - F("logged_at__@year"))
+    @test_throws PormG.QueryBuildError _fd_sql(q_sl; conn = _FD_SL)
+    q_pg = FD.Fd_result.objects
+    q_pg.values("x" => F("seen") - F("logged_at__@year"))
+    @test occursin("(\"Tb\".\"seen\" - ", _fd_sql(q_pg; conn = _FD_PG))
   end
 
   # A text literal is refused on BOTH engines. It bound as text: PostgreSQL has no `date - text` and
@@ -1396,15 +1413,18 @@ end
 
   # A date literal needs a typed temporal left; against a number, or a function PormG does not
   # type, it is refused rather than rendered as a bare `-`.
+  # #882: an integer column is a day count now, so `F("points") - Date(…)` is refused by the day-count
+  # rule instead, with that rule's message ("a day count minus a date"). Still refused on both.
   @testset "a date literal subtracted from a non-date is refused" begin
-    for expr in (F("points") - Dates.Date(2009, 3, 1), _FN.Sum("points") - Dates.Date(2009, 3, 1),
-                 F("seen__@year") - Dates.Date(2009, 3, 1)),
+    for (expr, msg) in ((F("points") - Dates.Date(2009, 3, 1), "A day count minus a date has no meaning"),
+                        (_FN.Sum("points") - Dates.Date(2009, 3, 1), "needs a date or timestamp on the left"),
+                        (F("seen__@year") - Dates.Date(2009, 3, 1), "needs a date or timestamp on the left")),
         conn in (_FD_SL, _FD_PG)
       q = FD.Fd_result.objects
       q.values("x" => expr)
       err = try _fd_sql(q; conn = conn); nothing catch e; e end
       @test err isa PormG.QueryBuildError
-      @test occursin("needs a date or timestamp on the left", sprint(showerror, err))
+      @test occursin(msg, sprint(showerror, err))
     end
   end
 
@@ -1585,9 +1605,10 @@ end
       ("a DATE minus whole days", F("seen") - 7,
        "date(\"Tb\".\"seen\", '-' || ? || ' days')",
        "((\"Tb\".\"seen\" - make_interval(days => \$1::integer)))::date"),
-      # Nonsense, but it was a bare `-` before and its right side has no temporal kind.
+      # #882 overwrote this row on purpose. It pinned a bare `-` on both engines, which on SQLite
+      # subtracts `points` from the YEAR. An integer column is a day count now; see the #882 testset.
       ("a DATE minus an integer column", F("seen") - F("points"),
-       "(\"Tb\".\"seen\" - \"Tb\".\"points\")", "(\"Tb\".\"seen\" - \"Tb\".\"points\")"),
+       "date(julianday(\"Tb\".\"seen\") - (\"Tb\".\"points\"))", "(\"Tb\".\"seen\" - \"Tb\".\"points\")"),
       # A difference used as a number keeps composing as one.
       ("a day count plus one", (F("seen") - F("race__date")) + 1,
        "(CAST(julianday(\"Tb\".\"seen\") - julianday(\"Tb_1\".\"date\") AS INTEGER) + ?)",
@@ -1677,4 +1698,107 @@ end
   @test outer.field_name === inner
   @test outer.operation == "*" && outer.operand == 2
   @test inner.operation == "-"   # the operand is not written on
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #882 — an integer COLUMN beside a date is a whole number of days, as an integer literal (#568) and a
+# `DATE - DATE` count (#814) already were. Before, `F("seen") - F("points")` shifted by days on
+# PostgreSQL and subtracted `points` from the YEAR on SQLite. Typed for date arithmetic only, so an
+# integer column's own read kind and binds are unchanged (the last testset below).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#882: an integer column is a whole-day count" begin
+  _jd_ts(x) = "strftime('%Y-%m-%dT%H:%M:%f+00:00', $x)"
+  @testset "$label" for (label, expr, sl_sql, pg_sql) in (
+      ("date - int", F("seen") - F("points"),
+       "date(julianday(\"Tb\".\"seen\") - (\"Tb\".\"points\"))", "(\"Tb\".\"seen\" - \"Tb\".\"points\")"),
+      ("date + int", F("seen") + F("points"),
+       "date(julianday(\"Tb\".\"seen\") + (\"Tb\".\"points\"))", "(\"Tb\".\"seen\" + \"Tb\".\"points\")"),
+      ("timestamp - int", F("logged_at") - F("points"),
+       _jd_ts("julianday(\"Tb\".\"logged_at\") - (\"Tb\".\"points\")"),
+       "(\"Tb\".\"logged_at\" - make_interval(days => \"Tb\".\"points\"))"),
+      ("int + date", F("points") + F("seen"),
+       "date((\"Tb\".\"points\") + julianday(\"Tb\".\"seen\"))", "(\"Tb\".\"points\" + \"Tb\".\"seen\")"),
+      ("int + timestamp", F("points") + F("logged_at"),
+       _jd_ts("(\"Tb\".\"points\") + julianday(\"Tb\".\"logged_at\")"),
+       "(make_interval(days => \"Tb\".\"points\") + \"Tb\".\"logged_at\")"),
+      # A field-path String is the column it names.
+      ("date - \"int\"", F("seen") - "points",
+       "date(julianday(\"Tb\".\"seen\") - (\"Tb\".\"points\"))", "(\"Tb\".\"seen\" - \"Tb\".\"points\")"),
+      # A joined date, so the right side's kind is read after the join resolved.
+      ("joined date - int", F("race__date") - F("points"),
+       "date(julianday(\"Tb_1\".\"date\") - (\"Tb\".\"points\"))", "(\"Tb_1\".\"date\" - \"Tb\".\"points\")"),
+      # BIGINT: PostgreSQL has `date - integer` and `make_interval(days => integer)` only, and
+      # resolves neither for a bigint (measured on db_2: `operator does not exist: date - bigint`).
+      ("date - bigint", F("seen") - F("laps"),
+       "date(julianday(\"Tb\".\"seen\") - (\"Tb\".\"laps\"))", "(\"Tb\".\"seen\" - CAST(\"Tb\".\"laps\" AS integer))"),
+      ("bigint + timestamp", F("laps") + F("logged_at"),
+       _jd_ts("(\"Tb\".\"laps\") + julianday(\"Tb\".\"logged_at\")"),
+       "(make_interval(days => CAST(\"Tb\".\"laps\" AS integer)) + \"Tb\".\"logged_at\")"),
+    )
+    q = FD.Fd_result.objects
+    q.values("x" => expr)
+    @test occursin(sl_sql, _fd_sql(q; conn = _FD_SL))
+    @test isempty(_fd_params(q; conn = _FD_SL))
+    q_pg = FD.Fd_result.objects
+    q_pg.values("x" => expr)
+    @test occursin(pg_sql, _fd_sql(q_pg; conn = _FD_PG))
+  end
+
+  # The shift composes like any other: its result is the DATE side's kind, so a duration after it
+  # is a date shift again, on both engines.
+  @testset "the shift is the date side's kind" begin
+    q = FD.Fd_result.objects
+    q.values("x" => (F("seen") - F("points")) + Dates.Day(1))
+    @test occursin("date(date(julianday(\"Tb\".\"seen\") - (\"Tb\".\"points\")), '+' || ? || ' days')",
+                   _fd_sql(q; conn = _FD_SL))
+    q_pg = FD.Fd_result.objects
+    q_pg.values("x" => (F("seen") - F("points")) + Dates.Day(1))
+    @test occursin("(((\"Tb\".\"seen\" - \"Tb\".\"points\") + make_interval(days => \$1::integer)))::date",
+                   _fd_sql(q_pg; conn = _FD_PG))
+  end
+
+  @testset "a day count minus a date is refused on both engines" begin
+    for conn in (_FD_SL, _FD_PG), expr in (F("points") - F("seen"), F("laps") - F("logged_at"))
+      q = FD.Fd_result.objects
+      q.values("x" => expr)
+      @test_throws PormG.QueryBuildError _fd_sql(q; conn = conn)
+    end
+  end
+
+  # Everything else beside a date: SQLite used only the date's year. Refused there; PostgreSQL keeps
+  # its SQL (it has no such operator either, and fails when the statement runs).
+  @testset "an untyped side beside a date is refused on SQLite: $label" for (label, expr) in (
+      ("a text column", F("seen") - F("code")),
+      ("a ForeignKey", F("seen") - F("race")),
+      ("arithmetic over an integer", F("seen") + F("points") * 2),
+      ("a float literal", F("seen") + 1.5),
+      ("a float column", F("logged_at") - F("amount")),
+      ("a text column on the left", F("code") + F("seen")),
+      ("arithmetic on the left", F("points") * 2 + F("seen")),
+    )
+    q = FD.Fd_result.objects
+    q.values("x" => expr)
+    err = try _fd_sql(q; conn = _FD_SL); nothing catch e; e end
+    @test err isa PormG.QueryBuildError
+    @test occursin("cannot type is not supported on SQLite", sprint(showerror, err))
+    q_pg = FD.Fd_result.objects
+    q_pg.values("x" => expr)
+    @test occursin(r"\(.+ [-+] .+\)", _fd_sql(q_pg; conn = _FD_PG))
+  end
+
+  # The typing is local to date arithmetic. Integer arithmetic, an integer compared against a number,
+  # and the projected column itself render and bind exactly as before.
+  @testset "an integer column stays an integer elsewhere" begin
+    for (expr, sl_sql) in ((F("points") + F("points"), "(\"Tb\".\"points\" + \"Tb\".\"points\")"),
+                           (F("points") - 1,           "(\"Tb\".\"points\" - ?)"),
+                           (F("laps") + F("points"),   "(\"Tb\".\"laps\" + \"Tb\".\"points\")"))
+      q = FD.Fd_result.objects
+      q.values("x" => expr)
+      @test occursin(sl_sql, _fd_sql(q; conn = _FD_SL))
+    end
+    q = FD.Fd_result.objects
+    q.filter(F("points") > 5)
+    @test occursin("WHERE (\"Tb\".\"points\" > \$1::bigint)", _fd_sql(q; conn = _FD_PG))
+    @test _fd_params(q; conn = _FD_PG) == Any[5]
+  end
 end

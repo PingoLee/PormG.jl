@@ -1589,6 +1589,47 @@ _side_kind(value::String, instruc::SQLInstruction) =
   occursin("__@", value) ? _operand_kind(value, instruc) : _projection_column_kind(value, instruc)
 _side_kind(value::SQLTypeFunction, instruc::SQLInstruction) = _function_projection_kind(value, instruc)
 
+# #882 — AN INTEGER COLUMN BESIDE A DATE IS A WHOLE NUMBER OF DAYS. An integer literal already is
+# (#568), and so is a `DATE - DATE` count (#814); an integer COLUMN was untyped, because
+# `field_canonical_kind` answers `nothing` for an `IntegerField`. So `F("seen") - F("points")` shifted
+# the date by `points` days on PostgreSQL, and on SQLite subtracted `points` from the YEAR, silently.
+#
+# Typed HERE, for date arithmetic only, and not in `field_canonical_kind`: that table also drives the
+# read path, the CTE kind records and the #536 comparison binder, and an integer column has no
+# representation for any of them to undo. `CInt64` for a `BigIntegerField`, because PostgreSQL has
+# `date ± integer` but no `date ± bigint`, so that count is cast (`_day_count_sql`).
+#
+# A bare column only — `F("points") * 2` is arithmetic over one, and a ForeignKey or an ID is an
+# integer that is not a quantity of anything. Both stay untyped, and an untyped side combined with a
+# date is refused on SQLite (`_refuse_untyped_date_operand`).
+function _day_count_column_kind(side, kind::TemporalKind, instruc::SQLInstruction)::TemporalKind
+  kind === nothing && _is_bare_column(side) || return kind
+  f = _operand_column_field(side, instruc)
+  f isa Models.sIntegerField && return CInt32()
+  f isa Models.sBigIntegerField && return CInt64()
+  return nothing
+end
+_is_bare_column(s::String) = !occursin("__@", s)
+_is_bare_column(::JoinedReference) = true
+_is_bare_column(x::FExpression) = x.operation === nothing && _is_bare_column(x.field_name)
+_is_bare_column(::Any) = false
+
+# A day count's SQL as a day shift reads it. Only a `BIGINT` count on PostgreSQL changes.
+_day_count_sql(sql::AbstractString, kind::TemporalKind, instruc::SQLInstruction) =
+  kind isa CInt64 && instruc.connection isa PormGPostgres ? "CAST($(sql) AS integer)" : sql
+
+# #882 — `date ± x` where `x` is none of the kinds a date combines with: a text column, `Sum(...)`,
+# `F("points") * 2`, a float. SQLite stores a date as TEXT, so `+`/`-` there added the date's YEAR to
+# the number, silently. Refused on SQLite. PostgreSQL has no such operator either and fails when the
+# statement runs; its SQL is left as it was.
+function _refuse_untyped_date_operand(operation::AbstractString, instruc::SQLInstruction)
+  instruc.connection isa PormGSQLite || return nothing
+  throw(QueryBuildError("`$(operation)` between a date and a value PormG cannot type is not supported on " *
+                        "SQLite, where a date is text and `$(operation)` would use only its year. Add a " *
+                        "whole number of days (an IntegerField, F(\"date\") + 7) or a duration " *
+                        "(F(\"date\") + Day(7))."))
+end
+
 # #564/#568 — THE ONE TEMPORAL RENDERER. It takes an ALREADY-RENDERED left side and the kind that
 # left evaluates to, which is what lets the duration spelling and the bare-integer spelling share it:
 # each resolves its own operand into `comps` and then renders identically.
@@ -2179,6 +2220,8 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
       end
       right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc;
                                                      left_kind = left_kind)
+      # #882: an integer column on the right is a day count, typed once it has rendered.
+      v.operation in ("+", "-") && (right_kind = _day_count_column_kind(v.operand, right_kind, instruc))
       if right_kind isa Union{CDate,CDateTime}
         if v.operation == "-"
           kind = _difference_result_kind(left_kind, right_kind)
@@ -2191,10 +2234,13 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
       end
       # #814: `date ± count` is a whole-day shift; `date ± interval` is refused on SQLite.
       if v.operation in ("+", "-")
-        if right_kind isa CInt32
-          return _render_day_count_shift(left_side, left_kind, right_side, v.operation, true, instruc), left_kind
+        if right_kind isa Union{CInt32,CInt64}
+          return _render_day_count_shift(left_side, left_kind, _day_count_sql(right_side, right_kind, instruc),
+                                         v.operation, true, instruc), left_kind
         end
         right_kind isa CInterval && _refuse_interval_shift(instruc)
+        # #882: anything else beside a date used only the date's year on SQLite.
+        _refuse_untyped_date_operand(v.operation, instruc)
       end
       return "($(left_side) $(v.operation) $(right_side))", nothing
     end
@@ -2204,17 +2250,23 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
     # or an interval MINUS a date has no meaning: PostgreSQL has neither `integer - date` nor
     # `interval - date` and failed at execution, and SQLite subtracted a year. Refused on both. A
     # count or interval with a non-temporal right renders exactly as before.
-    if left_kind isa Union{CInt32,CInterval} && v.operation in ("+", "-")
+    #
+    # #882: an integer column on the left is a count too (`F("points") + F("seen")`). Typed for this
+    # branch only; the right still renders against the left's own kind, so an integer column with a
+    # non-temporal right binds exactly as it did.
+    count_kind = v.operation in ("+", "-") ? _day_count_column_kind(v.field_name, left_kind, instruc) : left_kind
+    if count_kind isa Union{CInt32,CInt64,CInterval} && v.operation in ("+", "-")
       right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc;
                                                      left_kind = left_kind)
       _is_computed_interval(v.operand, right_kind) && _refuse_interval_arithmetic(v.operation, instruc)
       if right_kind isa Union{CDate,CDateTime}
         v.operation == "-" &&
-          throw(QueryBuildError("A $(left_kind isa CInt32 ? "day count" : "duration") minus a date has no " *
+          throw(QueryBuildError("A $(count_kind isa CInterval ? "duration" : "day count") minus a date has no " *
                                 "meaning. To move a date back, subtract from the date instead: " *
                                 "F(\"date\") - (F(\"date\") - F(\"dob\")), or F(\"date\") - Day(30)."))
-        left_kind isa CInt32 &&
-          return _render_day_count_shift(right_side, right_kind, left_side, "+", false, instruc), right_kind
+        count_kind isa Union{CInt32,CInt64} &&
+          return _render_day_count_shift(right_side, right_kind, _day_count_sql(left_side, count_kind, instruc),
+                                         "+", false, instruc), right_kind
         _refuse_interval_shift(instruc)
       end
       return "($(left_side) $(v.operation) $(right_side))", nothing
@@ -2240,11 +2292,17 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
     if v.operation in _ORDERING_OPERATIONS || v.operation in _ARITHMETIC_OPERATIONS
       ordering = v.operation in _ORDERING_OPERATIONS
       ordering && _is_computed_interval(v.field_name, left_kind) && _refuse_interval_ordering(v.operation, instruc)
-      if v.operand isa FExpression
-        right_side, right_kind = _set_update_query_typed(v.operand, instruc)
+      # A field-path String is the `F(...)` it names, rendered by `_render_operand_typed` exactly as
+      # `_set_update_query_operand`'s String arm renders it; typed here so #882 can see a date in it.
+      if v.operand isa FExpression || (v.operand isa String && _is_field_path(v.operand, instruc))
+        right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc)
         if _is_computed_interval(v.operand, right_kind)
           ordering ? _refuse_interval_ordering(v.operation, instruc) : _refuse_interval_arithmetic(v.operation, instruc)
         end
+        # #882: a date on the right of `+`/`-` whose left PormG cannot type (a text column, `Sum(...)`,
+        # `F("points") * 2`). Every typed left was handled above, so this left is not a count.
+        v.operation in ("+", "-") && right_kind isa Union{CDate,CDateTime} &&
+          _refuse_untyped_date_operand(v.operation, instruc)
         return "($(left_side) $(v.operation) $(right_side))", nothing
       end
     end

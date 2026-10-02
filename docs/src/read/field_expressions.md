@@ -434,6 +434,22 @@ query.filter("year" => 2009)
 query.values("name", "doubled" => F("date") + (F("date") - Date(2009, 3, 29)))
 ```
 
+An `IntegerField` or `BigIntegerField` column is a day count too, so it shifts a date the same way on
+both engines — here, each 2009 race date moved back by its round number:
+
+```julia
+query = M.Race.objects
+query.filter("year" => 2009)
+query.values("name", "round", "shifted" => F("date") - F("round"))
+```
+
+PostgreSQL renders `("Tb"."date" - "Tb"."round")`; SQLite shifts the julian-day number,
+`date(julianday("Tb"."date") - ("Tb"."round"))`. A `BigIntegerField` is cast to `integer` on
+PostgreSQL, which has `date - integer` but no `date - bigint`. Only a plain column counts: a
+`ForeignKey`, an ID, `F("round") * 2`, a float, a text column or `Sum(...)` beside a date raises
+`QueryBuildError` on SQLite, where a date is text and `+` or `-` would use only its year.
+PostgreSQL has no such operator either, and fails when the statement runs.
+
 A day count **minus** a date has no meaning and raises `QueryBuildError` on both engines; subtract the
 count from the date instead. Shifting a date or timestamp by an interval *value* — a `DurationField`
 or a timestamp difference — works on PostgreSQL and raises `QueryBuildError` on SQLite, where both

@@ -46,6 +46,7 @@ import PormG: value_parser, value_formatter, sql_canonicalize, field_canonical_k
 import PormG: sqlite_bind_value, literal_canonical_kind
 import PormG: CanonicalType, CDate, CDateTime, CTime, CInterval
 import PormG: CInt32   # #801 — the kind of a DATE - DATE difference (a whole number of days)
+import PormG: CInt64   # #882 — a BigIntegerField used as a day count beside a date
 import PormG: _emsg, _suggest_name  # shared helpers (Kernel)
 import PormG.ConnectionPool: fetch, fetch_copy, with_transaction, with_savepoint, with_sqlite_write_lock, current_task, finalize_transaction_connection!
 # #344: "was this failure a cancellation?" — sees through the DatabaseError wrapper the pool applies,

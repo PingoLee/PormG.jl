@@ -169,9 +169,9 @@ Adding, removing or changing a constraint later is planned like any other schema
 
 ## Composite Indexes (`Meta.indexes`)
 
-A single-column index is a field option (`db_index=true`). To index a combination of **two or more**
-columns — Django's `Meta.indexes` — declare a model-level `indexes=[...]` list of `Models.Index`
-objects:
+A plain single-column index is a field option (`db_index=true`). To index a combination of **two or
+more** columns — Django's `Meta.indexes` — or to give an index a direction, an access method or an
+operator class, declare a model-level `indexes=[...]` list of `Models.Index` objects:
 
 ```julia
 Lap_times = Models.Model("lap_times",
@@ -187,12 +187,16 @@ Lap_times = Models.Model("lap_times",
 
 Each `Index` takes:
 
-- `fields` — a tuple (or vector) of **two or more field names** on this model. Foreign-key fields
-  are referenced by the field name; PormG resolves each to its physical column (honoring
-  `db_column`). **The order matters**: an index over `("raceid", "lap")` serves a lookup by
-  `raceid`, or by `raceid` *and* `lap` together, but not one by `lap` alone.
+- `fields` — a tuple (or vector) of field names on this model: **two or more** for a plain index.
+  Foreign-key fields are referenced by the field name; PormG resolves each to its physical column
+  (honoring `db_column`). **The order matters**: an index over `("raceid", "lap")` serves a lookup
+  by `raceid`, or by `raceid` *and* `lap` together, but not one by `lap` alone. A leading `-` makes
+  a column descending, as in Django — see
+  [Methods, operator classes and descending columns](#Methods,-operator-classes-and-descending-columns).
 - `name` — the index name (optional). When omitted, PormG derives `<table>_<cols>_idx`, the plain
   sibling of the composite-unique convention. See [Index names](#Index-names).
+- `method`, `opclasses` — a PostgreSQL access method and operator classes, described in the same
+  section.
 
 An `Index` speeds up reads and constrains nothing. For a composite *uniqueness guarantee*, use
 [Composite Uniqueness](#Composite-Uniqueness-(unique_together)) instead — that is a
@@ -204,12 +208,83 @@ CREATE INDEX "lap_times_race_lap_idx"
   ON "lap_times" ("raceid", "lap");
 ```
 
-!!! warning "One column is `db_index`, not a one-field `Index`"
-    `Models.Index(fields=("lap",))` raises `ModelDefinitionError`. A one-column `CREATE INDEX` is
-    byte-identical whether `db_index=true` or an `Index` emitted it, and introspection has no way to
-    tell them apart — so a one-field `Index` would read back as `db_index`, never match its own
+!!! warning "One plain column is `db_index`, not a one-field `Index`"
+    `Models.Index(fields=("lap",))` raises `ModelDefinitionError`. A plain one-column `CREATE INDEX`
+    is byte-identical whether `db_index=true` or an `Index` emitted it, and introspection has no way
+    to tell them apart — so a one-field `Index` would read back as `db_index`, never match its own
     declaration, and make `makemigrations` propose **dropping** the index on every run. Declare
-    `db_index=true` on the field instead.
+    `db_index=true` on the field instead. A one-column index that is descending, has a `method` or
+    names an operator class is a different index, and `Models.Index` accepts it.
+
+### Methods, operator classes and descending columns
+
+Three options make an index more than a plain b-tree over ascending columns — the shapes Django
+spells `Index(fields=["-points"])`, `GinIndex(...)` and `opclasses=[...]`:
+
+```julia
+Result = Models.Model("result",
+  resultid = Models.IDField(),
+  raceid   = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  driverid = Models.ForeignKey(Driver, pk_field="driverid", on_delete="RESTRICT"),
+  points   = Models.FloatField(),
+  indexes = [
+    # the race's finishing order, highest score first
+    Models.Index(fields=("raceid", "-points"), name="result_race_points_idx"),
+  ],
+)
+
+Driver = Models.Model("driver",
+  driverid = Models.IDField(),
+  surname  = Models.CharField(max_length=255),
+  dob      = Models.DateField(null=true),
+  indexes = [
+    # `surname LIKE 'Sen%'` under a database locale other than C — PostgreSQL only
+    Models.Index(fields=("surname",), opclasses=("varchar_pattern_ops",), name="driver_surname_pattern_idx"),
+    # a tiny block-range index over a column that grows with insertion order — PostgreSQL only
+    Models.Index(fields=("dob",), method="brin"),
+  ],
+)
+```
+
+- **A leading `-`** makes that column descending. It works on both engines, and only with the
+  b-tree method: PostgreSQL orders no other kind of index.
+- **`method`** is the PostgreSQL access method: `"btree"` (the default), `"hash"`, `"gist"`,
+  `"spgist"`, `"gin"` or `"brin"`; a `Symbol` works too. `hash` and `spgist` index one column.
+- **`opclasses`** gives each field an operator class — one entry per field, `nothing` for a column
+  that keeps its default class, as in `opclasses=(nothing, "varchar_pattern_ops")`. Each is a
+  lower-case, unqualified name such as `jsonb_path_ops`, and an index that names one needs a `name`
+  (Django's rule: a derived name would not say which class it uses).
+
+`method` and `opclasses` are PostgreSQL features. On SQLite `makemigrations` refuses a model that
+declares either with `BackendCapabilityError` — it does not create a plain index in its place, which
+would give the model an index other than the one it declared. A descending column is portable.
+
+The planner renders each one in full, with a derived name that carries the direction and the method
+(`<table>_<cols>[_<method>]_idx`, where a descending column contributes `<col>_desc`):
+
+```sql
+CREATE INDEX "result_race_points_idx" ON "result" ("raceid", "points" DESC);
+COMMENT ON INDEX "result_race_points_idx" IS 'pormg:index';
+
+CREATE INDEX "driver_surname_pattern_idx" ON "driver" ("surname" varchar_pattern_ops);
+COMMENT ON INDEX "driver_surname_pattern_idx" IS 'pormg:index';
+
+CREATE INDEX "driver_dob_brin_idx" ON "driver" USING brin ("dob");
+COMMENT ON INDEX "driver_dob_brin_idx" IS 'pormg:index';
+```
+
+The comment is PormG's **ownership marker**, the one a [`CheckConstraint`](#Check-Constraints) gets
+for the same reason: it is how `makemigrations` tells an index it created from one written by hand
+(next section). On SQLite, which has no comments on indexes, the marker is an SQL comment closing
+the column list — `("raceid", "points" DESC /* pormg:index */)` — which SQLite stores with the index.
+Plain indexes carry no marker and render exactly as above.
+
+!!! note "A GIN or BRIN build holds a lock"
+    `CREATE INDEX` runs inside `migrate`'s transaction and blocks writes to the table while it builds,
+    which on a large table can take a while for any method. For a table that cannot pause its writes,
+    create the index with `CREATE INDEX CONCURRENTLY` as a
+    `run_once` step ([Data Migrations](migrations/advanced.md#Data-Migrations)), then declare it as it stands — the declaration adopts it
+    (below), and nothing is rebuilt.
 
 ## Changing composites on an existing table
 
@@ -220,30 +295,52 @@ it diffs columns — on a table that already exists, not only when the table is 
 |---|---|
 | add a `UniqueConstraint` / `Index` | `CREATE UNIQUE INDEX` / `CREATE INDEX` |
 | remove one | `DROP INDEX` — or, when a table constraint backs the index, `ALTER TABLE … DROP CONSTRAINT` on PostgreSQL and a table rebuild on SQLite |
-| change its `fields` | the drop, then the create |
+| change its `fields`, a direction, its `method` or its `opclasses` | the drop, then the create |
 | change an explicit `name` | `ALTER INDEX … RENAME TO` on PostgreSQL (`ALTER TABLE … RENAME CONSTRAINT` for a constraint); a drop and a create on SQLite, which cannot rename an index |
 
-A declaration is matched to a live index by **what it is** — unique or not, and its columns in
-order — and never by its name. So an index some other tool created counts as the one you declared:
-a schema adopted from Django keeps its `unique_together` constraint instead of gaining a second index
-beside it, and `inspectdb` writes every composite it reads into the generated model, so adopting a
-database plans nothing.
+A declaration is matched to a live index by **what it is** — unique or not, its columns in order,
+and each column's direction, the access method and each column's operator class — and never by its
+name. So an index some other tool created counts as the one you declared: a schema adopted from Django
+keeps its `unique_together` constraint instead of gaining a second index beside it, and `inspectdb`
+writes every composite it reads into the generated model, so adopting a database plans nothing. A
+declaration naming a column's *default* operator class (`opclasses=("jsonb_ops",)` on a GIN index)
+matches a live index built with that default.
 
-!!! warning "An undeclared composite is dropped"
-    The models file is the schema. A composite index or uniqueness constraint on a PormG-managed
-    table that no `UniqueConstraint` or `Index` declares — including one a DBA added by hand, and a
-    one-column `CREATE UNIQUE INDEX` — is planned for removal, exactly as an undeclared `db_index`
-    is. The removal is **destructive**: `dry_run()` lists it, and `migrate()` refuses it without
-    `destructive=true`. Declare the index to keep it.
+!!! warning "An undeclared plain composite is dropped"
+    The models file is the schema. A plain composite index or uniqueness constraint on a
+    PormG-managed table — b-tree, ascending, default operator classes — that no `UniqueConstraint`
+    or `Index` declares, including one a DBA added by hand and a one-column `CREATE UNIQUE INDEX`,
+    is planned for removal, exactly as an undeclared `db_index` is. The removal is **destructive**:
+    `dry_run()` lists it, and `migrate()` refuses it without `destructive=true`. Declare the index to
+    keep it.
 
-    Composite indexes PormG cannot reproduce are never read, so they are never dropped either: partial
-    (`WHERE …`), functional (`lower(name)`), non-b-tree, `DESC` / `NULLS FIRST`, an explicit
-    operator class or collation, `INCLUDE (…)`, `NULLS NOT DISTINCT`, a `DEFERRABLE` constraint,
-    and an invalid index (which [`check`](migrations/workflow.md#Finding-Invalid-Indexes) reports).
-    The [PostgreSQL guide](postgres.md#Production-notes) lists them. A
-    **one-column non-unique** index with one of those properties is skipped the same way, rather than
-    read as a `db_index`, so it is never dropped either — including a one-column `EXCLUDE` constraint
-    (see
+    An index with a **method, a descending column or an operator class** follows the
+    [`CheckConstraint`](#How-a-CHECK-migrates) rule instead, because those are exactly the indexes
+    people write by hand (a trigram GIN index, a `varchar_pattern_ops` one):
+
+    | The live index | Declared | Not declared |
+    |---|---|---|
+    | carries PormG's `pormg:index` marker | kept | dropped — **destructive** |
+    | has no marker (written by hand, or by Django) | **adopted** — on PostgreSQL a `COMMENT ON INDEX` adds the marker after any comment already there; on SQLite nothing is planned | **never planned away** |
+
+    An index adopted on SQLite stays unmarked, so removing its declaration later leaves it in place;
+    an explicit `name=` that renames it re-creates it, marked. A declaration cannot take the *name*
+    of a hand-made index for a different shape: `makemigrations` refuses it with
+    `InvalidMigrationError`, since `CREATE INDEX` would fail on the name. The marker lives in the
+    index's comment on PostgreSQL, so a later `COMMENT ON INDEX` that replaces it — or a restore
+    with `pg_restore --no-comments` — turns PormG's index into a hand-made one: never dropped, until
+    a declaration adopts it again.
+
+    Indexes PormG cannot reproduce are never read, so they are never dropped either: partial
+    (`WHERE …`), functional (`lower(name)`), an access method other than the six above, a `NULLS`
+    placement other than the direction's default (`DESC NULLS LAST`), an explicit collation,
+    `INCLUDE (…)`, storage parameters on an index with a method, direction or operator class
+    (`WITH (fastupdate = off)`), `NULLS NOT DISTINCT`, a `DEFERRABLE` constraint, a unique index
+    with a method, direction or operator class, and an invalid index (which
+    [`check`](migrations/workflow.md#Finding-Invalid-Indexes) reports). The
+    [PostgreSQL guide](postgres.md#Production-notes) lists them. A **one-column non-unique** index
+    with one of those properties is skipped the same way, rather than read as a `db_index`, so it is
+    never dropped either — including a one-column `EXCLUDE` constraint (see
     [What `makemigrations` manages](migrations/index.md#What-makemigrations-Manages,-Ignores,-and-Would-Drop)).
 
 A composite over a column you are dropping goes with the column — nothing extra is planned for it.

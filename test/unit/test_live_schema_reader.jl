@@ -565,7 +565,8 @@ end
 # `conindid`, the PARENT's unique index — and `indnullsnotdistinct` must not be named at all, as
 # it is PostgreSQL 15+ and the stated floor is 11.
 # Mutation gate: drop the `(unique && !constraint)` arm and `ux_g` vanishes; drop the refusal line
-# and all four refused indexes come back.
+# and all four refused indexes come back. (Since #29 `ix_desc` is read — a non-unique DESC index is a
+# `Models.Index(fields = ["-c", "-d"])`; the #29 testset below covers the advanced shapes.)
 # ─────────────────────────────────────────────────────────────────────────────
 struct CompositeMockPg161 <: PormG.PormGPostgres end
 const PG161_ROWS = Ref(DataFrame())
@@ -582,7 +583,8 @@ fetch(::CompositeMockPg161, sql::String; conn = nothing, params = nothing, ignor
       push!(rows, (table_name = tbl, index_name = idx, is_unique = unique, contype = contype,
                    is_deferrable = deferrable, is_valid = valid, has_include = include,
                    nulls_not_distinct = nnd, column_name = c, opt = opt, idx_coll = 0,
-                   col_coll = 0, opc_default = true))
+                   col_coll = 0, opc_default = true, opc_name = "int4_ops", method = "btree",
+                   has_reloptions = false, index_comment = missing))
     end
   add("ix_ba",   ["b", "a"])                                            # Index, declared order
   add("ix_solo", ["s"])                                                 # arity 1: db_index's
@@ -594,13 +596,15 @@ fetch(::CompositeMockPg161, sql::String; conn = nothing, params = nothing, ignor
   add("ux_bad",  ["c", "d"]; unique = true, valid = false)              # failed CONCURRENTLY build
   add("uq_def",  ["c", "d"]; unique = true, contype = "u", deferrable = true)    # DEFERRABLE
   add("ux_nnd",  ["c", "d"]; unique = true, nnd = true)                 # NULLS NOT DISTINCT
-  add("ix_desc", ["c", "d"]; opt = 3)                                   # (pre-existing) DESC key
+  add("ix_desc", ["c", "d"]; opt = 3)                                   # DESC keys: read since #29
   add("ux_other", ["x", "y"]; unique = true, tbl = "pit")               # keyed by its own table
   PG161_ROWS[] = DataFrame(rows)
 
   out = Migrations._pg_composite_indexes(CompositeMockPg161())
   lap = Dict(lc.name => lc for lc in out["lap"])
-  @test sort(collect(keys(lap))) == ["ix_ba", "uq_fe", "ux_cd", "ux_g"]
+  @test sort(collect(keys(lap))) == ["ix_ba", "ix_desc", "uq_fe", "ux_cd", "ux_g"]
+  @test lap["ix_desc"].descending == [true, true]
+  @test lap["ix_ba"].descending == [false, false] && lap["ix_ba"].method == "btree"
   @test (lap["ix_ba"].columns, lap["ix_ba"].unique, lap["ix_ba"].constraint) == (["b", "a"], false, false)
   @test (lap["ux_cd"].unique, lap["ux_cd"].constraint) == (true, false)
   @test (lap["ux_g"].columns, lap["ux_g"].unique) == (["g"], true)
@@ -613,6 +617,98 @@ fetch(::CompositeMockPg161, sql::String; conn = nothing, params = nothing, ignor
   @test occursin("con.contype IN ('u', 'p', 'x')", sql)
   @test !occursin("indnullsnotdistinct", sql)
   @test occursin("pg_get_indexdef(i.indexrelid) LIKE '%NULLS NOT DISTINCT%'", sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: the composite reader reads the advanced shapes `Models.Index` declares (#29)
+# A non-unique index may now carry another access method, a DESC member (`indoption = 3` — DESC
+# implies NULLS FIRST) and a non-default operator class, read by name. A one-column index joins the
+# composites only when it is advanced or carries the `pormg:index` marker: anything else of arity 1
+# is `db_index`'s, and the `indexes` CTE refuses every advanced shape and every marked index, so no
+# index has two owners. What stays refused is what a declaration cannot spell: a `NULLS` placement
+# other than the direction's default, an extension's method, an operator class that is not a
+# lower-case identifier, an advanced index with storage parameters, and a UNIQUE advanced one.
+# Mutation gate: replace `(opt == 3 && !unique)` with `opt == 3` and `ux_desc` comes back; drop the
+# `marker !== nothing` arm and `ix_marked_plain` vanishes.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: the composite reader reads the advanced shapes Models.Index declares (#29)" begin
+  rows = NamedTuple[]
+  add(idx, cols; unique = false, opt = 0, method = "btree", opc = "int4_ops", opc_default = true,
+      reloptions = false, comment = missing) =
+    for (k, c) in enumerate(cols)
+      push!(rows, (table_name = "result", index_name = idx, is_unique = unique, contype = missing,
+                   is_deferrable = missing, is_valid = true, has_include = false,
+                   nulls_not_distinct = false, column_name = c, opt = opt isa Vector ? opt[k] : opt,
+                   idx_coll = 0, col_coll = 0, opc_default = opc_default isa Vector ? opc_default[k] : opc_default,
+                   opc_name = opc isa Vector ? opc[k] : opc, method = method, has_reloptions = reloptions,
+                   index_comment = comment))
+    end
+  # Read.
+  add("ix_gin",          ["tags"]; method = "gin", opc = "jsonb_ops")                      # one column, GIN
+  add("ix_gin_path",     ["tags"]; method = "gin", opc = "jsonb_path_ops", opc_default = false,
+                                   comment = "a DBA note pormg:index")                     # marker mid-comment
+  add("ix_desc_one",     ["points"]; opt = 3)                                              # one column, DESC
+  add("ix_mixed",        ["raceid", "points"]; opt = [0, 3])                               # (raceid, points DESC)
+  add("ix_pattern",      ["surname"]; opc = "varchar_pattern_ops", opc_default = false)    # an opclass
+  add("ix_marked_plain", ["grid"]; comment = "pormg:index")                                # marked ⇒ composite
+  add("ix_hashed",       ["laps"]; method = "hash", opc = "int4_ops", comment = "pormg:index:0123456789abcdef")
+  # Refused.
+  add("ix_plain_one",    ["position"])                                                     # db_index's
+  add("ix_nulls_last",   ["points"]; opt = 1)                                              # DESC NULLS LAST
+  add("ix_nulls_first",  ["points"]; opt = 2)                                              # ASC NULLS FIRST
+  add("ix_bloom",        ["a", "b"]; method = "bloom")                                     # an extension's method
+  add("ix_upper_opc",    ["surname"]; opc = "My_Ops", opc_default = false)                 # not declarable
+  add("ix_gin_storage",  ["tags"]; method = "gin", reloptions = true)                      # WITH (fastupdate = off)
+  add("ux_desc",         ["a", "b"]; unique = true, opt = 3)                               # UniqueConstraint has no direction
+  add("ux_gin",          ["a"]; unique = true, method = "hash")
+  add("ix_unmarked",     ["grid"]; comment = "pormg:indexes")                              # not the marker
+  PG161_ROWS[] = DataFrame(rows)
+
+  out = Dict(lc.name => lc for lc in Migrations._pg_composite_indexes(CompositeMockPg161())["result"])
+  @test sort(collect(keys(out))) ==
+        ["ix_desc_one", "ix_gin", "ix_gin_path", "ix_hashed", "ix_marked_plain", "ix_mixed", "ix_pattern"]
+
+  @test (out["ix_gin"].method, out["ix_gin"].opclass_default, out["ix_gin"].marker) == ("gin", [true], nothing)
+  @test out["ix_gin_path"].opclasses == ["jsonb_path_ops"] && out["ix_gin_path"].opclass_default == [false]
+  @test out["ix_gin_path"].marker == "pormg:index"
+  @test out["ix_gin_path"].comment == "a DBA note pormg:index"          # kept whole, for adoption
+  @test out["ix_desc_one"].descending == [true]
+  @test out["ix_mixed"].descending == [false, true]
+  @test out["ix_pattern"].opclasses == ["varchar_pattern_ops"]
+  @test out["ix_marked_plain"].marker == "pormg:index" && !Migrations.composite_is_advanced(out["ix_marked_plain"])
+  @test out["ix_hashed"].marker == "pormg:index:0123456789abcdef"     # #29's second half, already owned
+
+  # Ownership: an advanced index is PormG's only when it carries the marker.
+  @test !Migrations.composite_is_owned(out["ix_gin"])
+  @test Migrations.composite_is_owned(out["ix_gin_path"])
+  @test Migrations.composite_is_owned(out["ix_mixed"]) == false
+  @test Migrations.composite_is_owned(out["ix_marked_plain"])          # plain: the models file owns it
+
+  # The query: the b-tree filter is gone from the composite reader, the marker predicate is in it,
+  # and the one-column `db_index` CTE keeps its b-tree filter AND gains the unmarked one.
+  sql = PG161_SQL[]
+  @test !occursin("am.amname = 'btree'", sql)
+  @test occursin(Migrations._PG_MARKED_INDEX, sql)
+  @test occursin("obj_description(i.indexrelid, 'pg_class') AS index_comment", sql)
+end
+
+@testset "the pormg:index marker pattern means the same thing in Julia and in PostgreSQL (#29)" begin
+  re = PormG.INDEX_MARKER_RE
+  @test occursin(re, "pormg:index")
+  @test occursin(re, "kept by the DBA pormg:index")
+  @test occursin(re, "pormg:index:0123456789abcdef")
+  @test !occursin(re, "pormg:indexes")
+  @test !occursin(re, "pormg:index:0123")            # a short hash is not the reserved form
+  @test !occursin(re, "pormg:index_x")
+  @test !occursin(re, "xpormg:index")              # bounded on the left too — found in review
+  @test !occursin(re, "my:pormg:index")
+  @test occursin(re, "(pormg:index)")
+  # Only the subset PostgreSQL's ARE engine shares with PCRE: a non-capturing group, a negative
+  # look-ahead and a negative look-behind (9.6+), nothing PCRE-only (`\\K`, possessive quantifiers,
+  # named groups). The live half runs both predicates in test_importers_introspection.jl (#29).
+  @test !occursin(r"\\K|\(\?P?<[A-Za-z]|\+\+|\*\+", re.pattern)
+  # The `db_index` CTE carries the complement, COALESCEd so an index without a comment still reads.
+  @test occursin("COALESCE(obj_description(i.indexrelid, 'pg_class'), '') !~", Migrations._PG_UNMARKED_INDEX)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -818,6 +914,9 @@ fetch(::IndexCteMockPg847, sql::String; conn = nothing, params = nothing, ignore
   @test occursin("pg_opclass oc ON oc.oid = (i.indclass::oid[])[k.ord - 1]", cte)
   @test occursin("oc.opcdefault", cte)                                           # varchar_pattern_ops
   @test occursin("(i.indcollation::oid[])[k.ord - 1] IN (0, a.attcollation)", cte)  # COLLATE "C"
+  # #29: an index carrying the `pormg:index` marker is the composite reader's, whatever its shape —
+  # without this a marked one-column index would have two owners.
+  @test occursin(Migrations._PG_UNMARKED_INDEX, cte)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

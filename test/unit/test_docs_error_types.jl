@@ -967,6 +967,48 @@ const DOCERR_CASES = [
         ModelDefinitionError,
         () -> Index(fields = ("lap",)),
     ),
+    # #29: the Index docstring lists what the constructor refuses; models.md states the first and
+    # third, and Django's opclass rule.
+    (
+        "models.md + src/Models.jl — Index docstring: a descending column on a method other than btree is rejected (#29)",
+        ModelDefinitionError,
+        () -> Index(fields = ("-points",), method = "gin"),
+    ),
+    (
+        "models.md + src/Models.jl — Index docstring: hash indexes a single column (#29)",
+        ModelDefinitionError,
+        () -> Index(fields = ("raceid", "lap"), method = "hash"),
+    ),
+    (
+        "models.md + src/Models.jl — Index docstring: an Index naming an opclass needs a name (#29)",
+        ModelDefinitionError,
+        () -> Index(fields = ("surname",), opclasses = ("varchar_pattern_ops",)),
+    ),
+    # models.md, postgres.md and the Index docstring: `makemigrations` refuses a method or an operator
+    # class on SQLite. Driven at the SQLite renderer every create path shares, the way the #648 row
+    # below is; the planner-entry half is pinned in `test_indexes.jl`.
+    (
+        "models.md + src/Models.jl — Index docstring: a method or an opclass is refused on SQLite (#29)",
+        BackendCapabilityError,
+        () -> PormG.Dialect.create_index(DocErrMockSQLite(), "\"driver_dob_brin_idx\"", "\"driver\"", ["\"dob\""];
+                                         method = "brin"),
+    ),
+    # models.md: a declaration that wants a hand-made index's NAME for another shape is refused.
+    (
+        "models.md — a declaration cannot take a hand-made index's name (#29)",
+        InvalidMigrationError,
+        () -> let m = Model("docerr_result_29", id = IDField(), raceid = IntegerField(), grid = IntegerField(),
+                            indexes = [Index(fields = ("raceid", "grid"), name = "result_hand_gin")])
+            t = PormG.Migrations.live_table(m, DocErrCatalogFreePg742())
+            hand = PormG.Migrations.LiveComposite("result_hand_gin", ["raceid"], false, false, "gin", [false],
+                                                  Union{String, Nothing}["int4_ops"], [true], nothing, nothing)
+            live = [PormG.Migrations.LiveTable(t.name, t.columns, t.indexes, [hand], t.checks)]
+            schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+                :docerr_result_29 => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => m, :exist => false))
+            settings = PormG.Configuration.Settings(); settings.change_db = true
+            PormG.Migrations.get_migration_plan(live, schema, DocErrCatalogFreePg742(), settings; interactive = false)
+        end,
+    ),
     # The other half of the same #347 warning: `indexes` is a model-level option, so a COLUMN of
     # that name is unreachable and must say so rather than raising a bare MethodError.
     (

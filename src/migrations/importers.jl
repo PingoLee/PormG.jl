@@ -2264,7 +2264,7 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
         # name") that cannot be followed: there is no name to change, only a declaration to delete.
         # The generated file would load and be unmigratable. Collapse it here, where the Django
         # source is still in view to name in the report.
-        if any(p -> p.fields == ix.fields && p.name == ix.name, _existing_indexes(model))
+        if any(p -> Models._index_shape(p) == Models._index_shape(ix) && p.name == ix.name, _existing_indexes(model))
           @warn "import: duplicate index declaration; keeping one" class=class_label fields=ix.fields
           push!(markers, "# PormG: a duplicate index over ($(join(ix.fields, ", "))) on " *
                          "'$(class_label)' was dropped — the same index is declared twice " *
@@ -2272,8 +2272,10 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
           continue
         end
         kept = _claim_index_name!(taken_index_names, ix.name, markers, class_label, "index", ix.fields)
-        kept === ix.name || (ix = Models.Index(fields = ix.fields, name = kept))
         try
+          # Inside the guard (#29): an index naming an opclass cannot lose its name — the constructor
+          # refuses it — so a clash reports that one index instead of aborting the import.
+          kept === ix.name || (ix = Models._index_renamed(ix, kept))
           Models._apply_indexes!(model, vcat(_existing_indexes(model), [ix]))
         catch e
           # A declaration that never lands must not burn its name for every later model.
@@ -5530,12 +5532,18 @@ const _META_OPTIONS_CONSUMED = ("abstract", "proxy", "db_table", "managed", "con
 # index, so accepting and ignoring them is faithful.
 const _UNIQUE_CONSTRAINT_KWARGS = ("fields", "name", "violation_error_message", "violation_error_code")
 
-# Django's `models.Index` arguments PormG can honour (#347). Deliberately shorter than the
-# UniqueConstraint whitelist: `Models.Index` is exactly `(fields, name)` and there is no Django
-# `Index` kwarg that is a pure no-op on the emitted index. `db_tablespace=`, `condition=`,
-# `include=`, `opclasses=` and `expressions=` all change WHAT gets indexed or where — the same
+# Django's `models.Index` arguments PormG can honour (#347, #29). There is no Django `Index` kwarg
+# that is a pure no-op on the emitted index, so everything else is refused: `db_tablespace=`,
+# `condition=`, `include=`, `expressions=` and the storage parameters of the PostgreSQL index classes
+# (`fastupdate=`, `pages_per_range=`, `fillfactor=`, …) all change WHAT gets indexed or how — the same
 # reject-rather-than-reinterpret rule `_parse_meta_constraints` documents.
-const _INDEX_KWARGS = ("fields", "name")
+const _INDEX_KWARGS = ("fields", "name", "opclasses")
+
+# Django's index classes and the access method each one is (#29). `django.contrib.postgres.indexes`
+# adds the five non-b-tree ones; `BloomIndex` is an extension's method PormG cannot declare.
+const _DJANGO_INDEX_METHODS = Dict("Index" => "btree", "BTreeIndex" => "btree", "HashIndex" => "hash",
+                                   "GistIndex" => "gist", "SpGistIndex" => "spgist",
+                                   "GinIndex" => "gin", "BrinIndex" => "brin")
 
 const _CONSTRAINT_CTOR_RE = r"^(?:[A-Za-z_]\w*\s*\.\s*)*([A-Za-z_]\w*)\s*\("
 
@@ -5746,43 +5754,47 @@ function _parse_meta_constraints(raw::AbstractString, fields_dict::Dict{Symbol, 
 end
 
 """
-    _resolve_index_group(declared, fields_dict, class_label, markers, element)
+    _resolve_index_group(declared, fields_dict, class_label, markers, element; allow_desc = false)
         -> Union{Vector{String}, Nothing}
 
 Resolve one Django index's declared field names to imported PormG field names, or `nothing` when the
 index cannot be imported (the caller drops it and moves on). Shared by `Meta.indexes` and
 `Meta.index_together`, which differ only in how the names are spelled out.
 
-Two rejections beyond "the field does not exist":
+Two things beyond "the field does not exist":
 
-  * **A `-` prefix is descending order.** `Index(fields=["-year"])` is not the index over `year`;
-    importing it as one would silently give the database a differently-ordered index and quietly
-    fail to serve the query the developer wrote it for. Ordered index columns are #29.
-  * **`Models.Index` needs two columns.** Django's one-field `Meta.indexes` entry is exactly
-    `db_index = True`, so the caller translates it rather than dropping it — this function reports
-    the arity back by returning the resolved vector and letting the caller branch on its length.
+  * **A `-` prefix is descending order.** `Index(fields=["-year"])` is not the index over `year`.
+    With `allow_desc` (`Meta.indexes`, #29) the prefix is kept on the resolved name, which is how
+    `Models.Index(fields = …)` declares a descending column; without it (`index_together`, which
+    has no such spelling) the group is refused rather than imported as a differently-ordered index.
+  * **A plain `Models.Index` needs two columns.** Django's one-field plain `Meta.indexes` entry is
+    exactly `db_index = True`, so the caller translates it rather than dropping it — this function
+    reports the arity back by returning the resolved vector and letting the caller branch on it.
 """
 function _resolve_index_group(declared::Vector{String}, fields_dict::Dict{Symbol, Any},
                               class_label::AbstractString, markers::Vector{String},
-                              element::AbstractString)::Union{Vector{String}, Nothing}
+                              element::AbstractString; allow_desc::Bool = false)::Union{Vector{String}, Nothing}
   if isempty(declared)
     _drop_index_decl!(markers, class_label, element, "it names no fields")
     return nothing
   end
   resolved = String[]
   for name in declared
-    if startswith(name, "-")
+    desc = startswith(name, "-")
+    if desc && !allow_desc
       _drop_index_decl!(markers, class_label, element,
-        "'$(_one_line(name))' is a DESCENDING column and PormG indexes have no column order")
+        "'$(_one_line(name))' is a DESCENDING column, which index_together cannot declare")
       return nothing
     end
-    r = _resolve_django_constraint_field(name, fields_dict)
+    bare = desc ? name[nextind(name, firstindex(name)):end] : name
+    r = _resolve_django_constraint_field(bare, fields_dict)
     if r === nothing
       _drop_index_decl!(markers, class_label, element,
-        "field '$(_one_line(name))' matches no imported field")
+        "field '$(_one_line(bare))' matches no imported field")
       return nothing
     end
-    push!(resolved, r)
+    # #29: the direction rides on the resolved name, as `Models.Index(fields = …)` spells it.
+    push!(resolved, desc ? "-" * r : r)
   end
   return resolved
 end
@@ -5802,8 +5814,11 @@ Returns **two** collections, because Django's one option covers two PormG spelli
 
 Argument acceptance is a **whitelist** (`_INDEX_KWARGS`), for the reason spelled out in
 `_parse_meta_constraints`: an unrecognised Django kwarg is refused rather than reinterpreted. The
-constructor is checked too — `GinIndex`, `BrinIndex` and friends (`django.contrib.postgres.indexes`)
-are reported and skipped, since PormG emits only a default b-tree (#29).
+constructor is checked too: `GinIndex`, `BrinIndex` and the other `django.contrib.postgres.indexes`
+classes become `method = …` (#29, `_DJANGO_INDEX_METHODS`), and anything else — `BloomIndex`, a
+project's own subclass — is reported and skipped. A `-field` is a descending column and `opclasses=`
+carries over; `condition=`, `include=`, a positional expression and every storage parameter are
+refused.
 
 Each entry is judged on its own: one rejected index never takes its siblings with it.
 """
@@ -5824,7 +5839,8 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
 
     m = match(_CONSTRAINT_CTOR_RE, el)
     ctor = m === nothing ? "" : String(m.captures[1])
-    if ctor != "Index"
+    method = get(_DJANGO_INDEX_METHODS, ctor, nothing)
+    if method === nothing
       _drop_index_decl!(markers, class_label, el,
         isempty(ctor) ? "it is not an index constructor" : "$(ctor) has no PormG equivalent")
       continue
@@ -5845,11 +5861,15 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
       if kv === nothing
         # `Index(Lower("name"), name="x")` — a FUNCTIONAL index. PormG would index the column
         # itself, which is a different index.
-        reason = "it takes a positional expression (`$(t)`)"
+        reason = "it takes a positional expression (`$(t)`) — a functional index, which PormG " *
+                 "cannot declare yet (#29)"
         break
       end
       k, v = kv
-      if !(k in _INDEX_KWARGS)
+      if k == "condition"
+        reason = "`condition=` makes it a partial index, which PormG cannot declare yet (#29)"
+        break
+      elseif !(k in _INDEX_KWARGS)
         reason = "`$(k)=` changes what the index means and PormG cannot express it"
         break
       end
@@ -5872,12 +5892,28 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
 
     resolved = _resolve_index_group(
       _clean_constraint_field_names(split_field_options(fields_inner)),
-      fields_dict, class_label, markers, el)
+      fields_dict, class_label, markers, el; allow_desc = true)
     resolved === nothing && continue
 
-    if length(resolved) == 1
-      # Django's single-field index IS `db_index=True`; translate rather than drop (see the
-      # docstring). No marker: nothing was lost.
+    # `opclasses=` is a list of string literals, one per field (Django requires it). Anything else —
+    # a name bound elsewhere, a computed list — is not a literal this importer can carry.
+    opclasses = nothing
+    if haskey(kwargs, "opclasses")
+      oc_inner = _balanced_group(kwargs["opclasses"])
+      ocs = oc_inner === nothing ? nothing :
+        Union{String, Nothing}[_meta_string_literal(String(strip(o))) for o in split_field_options(oc_inner)
+                               if !isempty(strip(o))]
+      if ocs === nothing || any(isnothing, ocs)
+        _drop_index_decl!(markers, class_label, el, "its `opclasses=` is not a list of string literals")
+        continue
+      end
+      opclasses = ocs
+    end
+
+    if length(resolved) == 1 && method == "btree" && opclasses === nothing && !startswith(resolved[1], "-")
+      # Django's single-field plain index IS `db_index=True`; translate rather than drop (see the
+      # docstring). No marker: nothing was lost. A one-field GIN, DESC or opclass index is a
+      # different index and stays a `Models.Index` (#29).
       push!(single, resolved[1])
       continue
     end
@@ -5889,7 +5925,7 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
       @warn "import: Index name is not a string literal; importing with a derived name" class=class_label value=kwargs["name"]
     end
     try
-      push!(out, Models.Index(fields = resolved, name = iname))
+      push!(out, Models.Index(fields = resolved, name = iname, method = method, opclasses = opclasses))
     catch e
       # A duplicate-field or empty-name rejection from the constructor: report THIS index and keep
       # the rest, rather than losing every index on the model to one bad entry.

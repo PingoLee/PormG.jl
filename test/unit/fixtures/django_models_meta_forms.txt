@@ -93,13 +93,12 @@ class Servidor(models.Model):
             models.Index(fields=["apelido"]),
             # IMPORTED as Models.Index. `lotacao` resolves to `lotacao_id`, as on constraints.
             models.Index(fields=["cpf", "lotacao"], name="idx_servidor_cpf_lotacao"),
-            # REJECTED — a DESCENDING column. PormG indexes have no per-column order, so importing
-            # this as ascending would build a different index under the developer's name.
+            # IMPORTED (#29) with the direction kept: Models.Index(fields = ("-cpf", "apelido")).
             models.Index(fields=["-cpf", "apelido"], name="idx_servidor_cpf_desc"),
             # REJECTED — a functional index. Django indexes lower(apelido); PormG would index the
             # column, which is not the same index.
             models.Index(Lower("apelido"), name="idx_apelido_lower"),
-            # REJECTED — a PostgreSQL-specific index type; PormG emits only a default b-tree (#29).
+            # IMPORTED (#29) as method = "gin" — a PostgreSQL-only index, which SQLite refuses.
             GinIndex(fields=["cpf", "apelido"], name="gin_servidor"),
             # REJECTED — `condition=` makes it a partial index over a subset of rows.
             models.Index(fields=["cpf", "ativo"], condition=Q(ativo=True), name="idx_ativos"),

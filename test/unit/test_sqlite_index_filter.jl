@@ -464,7 +464,7 @@ end
       #   uc TEXT UNIQUE                           (origin 'u', 1 col)            → the field's unique
       #   ix_part → composite partial index       (partial 1)
       #   ix_expr → composite expression index    (a member has no attribute name)
-      #   ix_desc → composite DESC index          (a member has desc = 1)
+      #   ix_desc → composite DESC index          (a member has desc = 1) → Index, since #29
       #   ix_coll → composite COLLATE NOCASE      (a member has a non-BINARY collation)
       fetch(pool, """CREATE TABLE t347 (
         id INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT, d TEXT, e TEXT, f TEXT, g TEXT,
@@ -482,9 +482,9 @@ end
       byname = Dict(lc.name => lc for lc in idx)
       names = collect(keys(byname))
 
-      # Exactly four survive every filter. The table-level UNIQUE's name is SQLite's, not ours.
+      # Exactly five survive every filter. The table-level UNIQUE's name is SQLite's, not ours.
       auto = only(filter(n -> startswith(n, "sqlite_autoindex_t347_"), names))
-      @test sort(names) == sort(["ix_ba", "ux_cd", "ux_solo", auto])
+      @test sort(names) == sort(["ix_ba", "ix_desc", "ux_cd", "ux_solo", auto])
 
       # Column ORDER is the index's identity, and it is DECLARED order, not table order. `b` comes
       # after `a` in the table, so a reader aggregating by attribute would return ["a","b"] here —
@@ -510,9 +510,11 @@ end
       @test !("ix_expr" in names)   # an expression member has a NULL name — emitting the remaining
                                     #   columns would declare a DIFFERENT index (functional: #29)
       # The two shapes `pragma_index_info` cannot even see, which is why this reader uses `xinfo`.
-      # Both would otherwise read back as a plain ascending BINARY index and regenerate as one — the
-      # reinterpretation the Django importer already refuses on `Index(fields=["-year"])`.
-      @test !("ix_desc" in names)   # a DESC key: PormG indexes carry no per-column order
+      # Read through `info`, both would come back as a plain ascending BINARY index and regenerate as
+      # one. Since #29 a DESC key is declarable (`Models.Index(fields = ["-c", "d"])`), so it is read
+      # WITH its direction — unmarked, so hand-made: never planned away. A collation still is not.
+      @test byname["ix_desc"].descending == [true, false]
+      @test byname["ix_desc"].marker === nothing && !PormG.Migrations.composite_is_owned(byname["ix_desc"])
       @test !("ix_coll" in names)   # COLLATE NOCASE: a different comparison, so a different index
 
       # An unknown table yields an empty vector rather than throwing — convert_schema_to_models calls
@@ -523,10 +525,13 @@ end
       # whole reader could be inert and every assertion above would still pass.
       m = convertSQLToModel(pool, "t347")
       @test haskey(m.cache, "composite_indexes")
-      ixs = m.cache["composite_indexes"]["indexes"]
-      @test length(ixs) == 1
-      @test ixs[1].fields == ["b", "a"]
-      @test ixs[1].name == "ix_ba"                # the LIVE name, so a re-migration reproduces it
+      ixs = Dict(ix.name => ix for ix in m.cache["composite_indexes"]["indexes"])
+      @test sort(collect(keys(ixs))) == ["ix_ba", "ix_desc"]   # the LIVE names, so a re-migration reproduces them
+      @test ixs["ix_ba"].fields == ["b", "a"]
+      @test (ixs["ix_desc"].fields, ixs["ix_desc"].descending) == (["c", "d"], [true, false])
+      # The hand-made DESC index's ownership rides along, so reading this model back as a live table
+      # (`live_table`) does not take it for one PormG marked — which would plan it away (#29).
+      @test m.cache["composite_index_owners"]["ix_desc"] == (nothing, nothing)
 
       # #161: the three unique shapes come back as `UniqueConstraint`s. Without this an inspectdb'd
       # models file would declare none of them, and the first `makemigrations` — which now drops an
@@ -1233,6 +1238,69 @@ end
         nocase = T(null = true, db_index = true), desc = T(null = true, db_index = true),
         collate = T(null = true, db_index = true), up = T(null = true, db_index = true))
       @test isempty(_ei_steps(_ei_plan(pool, declared_ix, :t847), :t847))
+    finally
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The `pormg:index` marker in SQLite's stored DDL (#29)
+# SQLite cannot comment an index, so PormG writes its ownership marker as an SQL comment closing the
+# column list — `("a" DESC, "b" /* pormg:index */)` — and `sqlite_master` keeps it verbatim. This
+# pins the four things that rest on it: SQLite keeps the comment through `RENAME COLUMN` and
+# `RENAME TO` (every rebuild ends in one); the reader finds it only where the renderer puts it, never
+# in a quoted identifier; a marked one-column index is the composite reader's and never the
+# `db_index` reader's (one owner per index); and a rebuild that has to drop a marked index does not
+# warn — PormG made it, and its declaration decides whether it comes back.
+# Mutation gate: un-anchor `_SQLITE_INDEX_MARKER_TAIL` and the quoted-identifier case reads as a
+# marker; drop the marker skip from `_sqlite_single_column_indexed_columns` and `t29_c_idx` has two
+# owners.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the pormg:index marker in SQLite's stored DDL (#29)" begin
+  marker = PormG.Migrations._sqlite_index_marker
+  @test marker("""CREATE INDEX "x" ON "t" ("a" DESC, "b" /* pormg:index */)""") == "pormg:index"
+  @test marker("""CREATE INDEX "x" ON "t" ("a" /* pormg:index:0123456789abcdef */) WHERE "a" > 0""") ==
+        "pormg:index:0123456789abcdef"                       # #29's second half: a WHERE after the list
+  @test marker("""CREATE INDEX "x" ON "t" ("/* pormg:index */")""") === nothing      # a quoted column name
+  @test marker("""CREATE INDEX "/* pormg:index */" ON "t" ("a")""") === nothing      # a quoted index name
+  @test marker("""CREATE INDEX "x" ON "t" ("a" /* pormg:indexes */)""") === nothing  # not the marker
+  @test marker("""CREATE INDEX "x" ON "t" ("a")""") === nothing
+
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "marker29.sqlite"); pool_size = 1)
+    try
+      fetch(pool, "CREATE TABLE t29 (id INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT);")
+      ddl(name, cols, desc) = PormG.Dialect.create_index(pool, "\"$(name)\"", "\"t29\"", ["\"$(c)\"" for c in cols];
+                                                         if_not_exists = false, descending = desc,
+                                                         marker = PormG.INDEX_MARKER)
+      fetch(pool, ddl("t29_a_desc_b_idx", ["a", "b"], [true, false]))
+      fetch(pool, ddl("t29_c_idx", ["c"], [false]))                # marked, yet plain: still not db_index
+      fetch(pool, "CREATE INDEX t29_plain_b ON t29(b);")
+
+      @test _sqlite_single_column_indexed_columns(pool, :t29) == Dict("b" => "t29_plain_b")
+      comps = Dict(c.name => c for c in _sqlite_composite_indexes(pool, :t29))
+      @test sort(collect(keys(comps))) == ["t29_a_desc_b_idx", "t29_c_idx"]
+      @test comps["t29_a_desc_b_idx"].descending == [true, false]
+      @test comps["t29_a_desc_b_idx"].marker == PormG.INDEX_MARKER
+
+      # SQLite keeps the comment through both renames a rebuild relies on.
+      fetch(pool, """ALTER TABLE t29 RENAME COLUMN a TO z;""")
+      fetch(pool, """ALTER TABLE t29 RENAME TO t29b;""")
+      comps = Dict(c.name => c for c in _sqlite_composite_indexes(pool, :t29b))
+      @test comps["t29_a_desc_b_idx"].columns == ["z", "b"]
+      @test comps["t29_a_desc_b_idx"].marker == PormG.INDEX_MARKER
+
+      # A rebuild that drops `z` loses the marked index without a warning (its declaration decides),
+      # while the same shape unmarked — what Django leaves behind — still warns by name.
+      fetch(pool, """CREATE INDEX "hand_z_desc" ON "t29b" ("z" DESC);""")
+      records, kept = Test.collect_test_logs() do
+        get_secondary_index_ddls(pool, "t29b"; surviving_columns = Set(["id", "b", "c"]))
+      end
+      warned = [string(r.kwargs[:index]) for r in records if r.level == Logging.Warn]
+      @test warned == ["hand_z_desc"]
+      @test !any(d -> occursin("t29_a_desc_b_idx", d), kept)
+      @test any(d -> occursin("t29_c_idx", d) && occursin("/* pormg:index */", d), kept)
     finally
       close_pool!(pool)
     end

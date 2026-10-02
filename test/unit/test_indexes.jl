@@ -206,6 +206,157 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Models.Index: method, opclasses and descending columns (#29)
+# Each rejection is a statement PostgreSQL would refuse at `migrate`, or a declaration the
+# planner could not tell apart from another — so it fails at the constructor, where the
+# developer wrote it. The two-field rule relaxes for exactly the indexes that cannot be read
+# back as `db_index`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Index method, opclasses and descending columns (#29)" begin
+  ix = Models.Index(fields = ("raceid", "-points"), name = "result_race_points_idx")
+  @test ix.fields == ["raceid", "points"]          # the `-` is a direction, not part of the name
+  @test ix.descending == [false, true]
+  @test ix.method == "btree"
+  @test ix.opclasses == [nothing, nothing]
+
+  # A Symbol method and an upper-case one both normalize; the default stays b-tree.
+  @test Models.Index(fields = ("data",), method = :brin).method == "brin"
+  @test Models.Index(fields = ("data",), method = "GIN").method == "gin"
+  @test Models.Index(fields = ("a", "b")).method == "btree"
+
+  # opclasses: one per field, `nothing` keeps a column's default class, and a lone string is one entry.
+  g = Models.Index(fields = ("surname",), opclasses = "varchar_pattern_ops", name = "s_pat")
+  @test g.opclasses == ["varchar_pattern_ops"]
+  m = Models.Index(fields = ("a", "b"), opclasses = (nothing, "int4_ops"), name = "ab_ops")
+  @test m.opclasses == [nothing, "int4_ops"]
+
+  # The two-field rule relaxes only for an index `db_index` cannot read back: a direction, a method
+  # or an operator class. A plain one-field index is still refused (see the testset below).
+  @test Models.Index(fields = ("-points",)).fields == ["points"]
+  @test Models.Index(fields = ("tags",), method = "gin").fields == ["tags"]
+  @test Models.Index(fields = ("surname",), opclasses = ("text_pattern_ops",), name = "x").fields == ["surname"]
+
+  err(f) = try; f(); nothing; catch e; e; end
+  msg(f) = (e = err(f); e isa PormG.ModelDefinitionError ? sprint(showerror, e) : "NOT A ModelDefinitionError: $(e)")
+
+  # "lap" and "-lap" are the same column twice.
+  @test occursin("duplicate", msg(() -> Models.Index(fields = ("lap", "-lap"))))
+  # A bare `-` and a double one are not field names.
+  @test occursin("not a field name", msg(() -> Models.Index(fields = ("-", "a"))))
+  @test occursin("not a field name", msg(() -> Models.Index(fields = ("--a", "b"))))
+  # An access method PormG does not know — an extension's, or a typo.
+  @test occursin("bloom", msg(() -> Models.Index(fields = ("a", "b"), method = "bloom")))
+  # PostgreSQL orders only b-tree indexes.
+  @test occursin("does not support a descending column", msg(() -> Models.Index(fields = ("-a",), method = "gin")))
+  # hash and spgist index one column.
+  @test occursin("single column", msg(() -> Models.Index(fields = ("a", "b"), method = "hash")))
+  @test occursin("single column", msg(() -> Models.Index(fields = ("a", "b"), method = :spgist)))
+  # opclasses: the wrong length, an uppercase or schema-qualified class (rendered bare, so this is
+  # also the injection guard), something that is not a name at all — and one without a name=.
+  @test occursin("one per field", msg(() -> Models.Index(fields = ("a", "b"), opclasses = ("int4_ops",), name = "n")))
+  @test occursin("not an operator class name", msg(() -> Models.Index(fields = ("a",), opclasses = ("Int4_Ops",), name = "n")))
+  @test occursin("not an operator class name", msg(() -> Models.Index(fields = ("a",), opclasses = ("public.x",), name = "n")))
+  @test occursin("not an operator class name", msg(() -> Models.Index(fields = ("a",), opclasses = ("x; DROP TABLE t",), name = "n")))
+  @test occursin("not an operator class name", msg(() -> Models.Index(fields = ("a",), opclasses = (1,), name = "n")))
+  @test occursin("explicit name=", msg(() -> Models.Index(fields = ("a",), opclasses = ("int4_ops",))))
+  # A plain one-field index still points at db_index.
+  @test occursin("db_index", msg(() -> Models.Index(fields = ("a",))))
+  @test occursin("db_index", msg(() -> Models.Index(fields = ("a",), opclasses = (nothing,))))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Planner: an advanced index renders its method, directions and classes, and its marker (#29)
+# The marker is the ownership record: only an advanced index carrying it is ever planned away.
+# On PostgreSQL it is the index's COMMENT, in the same step as the CREATE; on SQLite an SQL
+# comment closing the column list, where `sqlite_master` keeps it. A plain index renders
+# exactly as before, marker-free — the golden corpus pins that byte for byte.
+# ─────────────────────────────────────────────────────────────────────────────
+module IndexAdvancedModels
+import PormG
+import PormG.Models
+
+Result_ix = Models.Model("result_ix",
+  id       = Models.IDField(),
+  raceid   = Models.IntegerField(),
+  points   = Models.FloatField(),
+  indexes  = [Models.Index(fields = ("raceid", "-points"))],
+)
+Driver_ix = Models.Model("driver_ix",
+  id       = Models.IDField(),
+  surname  = Models.CharField(max_length = 60),
+  dob      = Models.DateField(),
+  indexes  = [
+    Models.Index(fields = ("surname",), opclasses = ("varchar_pattern_ops",), name = "driver_ix_surname_pattern"),
+    Models.Index(fields = ("dob",), method = "brin"),
+  ],
+)
+PormG.Models.set_models(@__MODULE__, "ix_mock_pg")
+end
+const IXA = IndexAdvancedModels
+
+function _ix_plan_one(conn, key::Symbol, model)
+  settings = PormG.Configuration.Settings(connections = conn, change_data = true)
+  schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+    key => Dict{Symbol, Union{Bool, PormGModel}}(:model => model, :exist => false))
+  return Migrations.get_migration_plan(PormGModel[], schema, conn, settings, interactive = false)
+end
+
+@testset "Planner renders an advanced index with its marker (#29)" begin
+  pg = _ix_plan_one(IXMockPostgres(), :result_ix, IXA.Result_ix)
+  @test pg[:result_ix]["Create index: result_ix_raceid_points_desc_idx"] ==
+        "CREATE INDEX \"result_ix_raceid_points_desc_idx\" ON \"result_ix\" (\"raceid\", \"points\" DESC);\n" *
+        "COMMENT ON INDEX \"result_ix_raceid_points_desc_idx\" IS 'pormg:index';"
+
+  pgd = _ix_plan_one(IXMockPostgres(), :driver_ix, IXA.Driver_ix)
+  @test pgd[:driver_ix]["Create index: driver_ix_surname_pattern"] ==
+        "CREATE INDEX \"driver_ix_surname_pattern\" ON \"driver_ix\" (\"surname\" varchar_pattern_ops);\n" *
+        "COMMENT ON INDEX \"driver_ix_surname_pattern\" IS 'pormg:index';"
+  @test pgd[:driver_ix]["Create index: driver_ix_dob_brin_idx"] ==
+        "CREATE INDEX \"driver_ix_dob_brin_idx\" ON \"driver_ix\" USING brin (\"dob\");\n" *
+        "COMMENT ON INDEX \"driver_ix_dob_brin_idx\" IS 'pormg:index';"
+
+  # SQLite: the direction is core; the marker closes the column list.
+  sl = _ix_plan_one(IXMockSQLite(), :result_ix, IXA.Result_ix)
+  @test sl[:result_ix]["Create index: result_ix_raceid_points_desc_idx"] ==
+        "CREATE INDEX \"result_ix_raceid_points_desc_idx\" ON \"result_ix\" (\"raceid\", \"points\" DESC /* pormg:index */);"
+
+  # A plain index is unchanged on both engines — no marker, no USING.
+  plain = _ix_plan(IXMockPostgres())
+  @test plain[:lap_time]["Create index: lap_times_raceid_lap_idx"] ==
+        "CREATE INDEX \"lap_times_raceid_lap_idx\" ON \"lap_times\" (\"raceid\", \"lap\");"
+
+  # The opclass comes before DESC — PostgreSQL's per-column order.
+  @test PormG.Dialect.create_index(IXMockPostgres(), "\"i\"", "\"t\"", ["\"a\""]; if_not_exists = false,
+          descending = [true], opclasses = ["text_pattern_ops"]) ==
+        "CREATE INDEX \"i\" ON \"t\" (\"a\" text_pattern_ops DESC);"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite: a method or an operator class is refused at BOTH sites (#29, the #648 pattern)
+# The planner refuses the declaration before anything is diffed, because a declaration that
+# matches nothing live renders nothing — the renderer alone would let the model run on SQLite
+# as if it had the index it declared. The renderer refuses too, for a hand-built caller.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite refuses a method or an opclass at the planner and the renderer (#29)" begin
+  e = try; _ix_plan_one(IXMockSQLite(), :driver_ix, IXA.Driver_ix); nothing; catch x; x; end
+  @test e isa PormG.BackendCapabilityError
+  @test occursin("PostgreSQL-only", sprint(showerror, e))
+  @test occursin("driver_ix", sprint(showerror, e))
+
+  e_m = try; PormG.Dialect.create_index(IXMockSQLite(), "\"i\"", "\"t\"", ["\"a\""]; method = "gin"); nothing; catch x; x; end
+  @test e_m isa PormG.BackendCapabilityError && occursin("access method \"gin\"", sprint(showerror, e_m))
+  e_o = try; PormG.Dialect.create_index(IXMockSQLite(), "\"i\"", "\"t\"", ["\"a\""]; opclasses = ["text_pattern_ops"]); nothing; catch x; x; end
+  @test e_o isa PormG.BackendCapabilityError && occursin("no operator classes", sprint(showerror, e_o))
+  # A descending column is NOT refused — SQLite orders an index the same way.
+  @test occursin("DESC", PormG.Dialect.create_index(IXMockSQLite(), "\"i\"", "\"t\"", ["\"a\""]; descending = [true]))
+  # The renderer's own guard against a hand-built caller: an opclass and a method are rendered bare.
+  @test_throws PormG.InvalidValueError PormG.Dialect.create_index(IXMockPostgres(), "\"i\"", "\"t\"", ["\"a\""];
+                                                                opclasses = ["x); DROP TABLE t; --"])
+  @test_throws PormG.InvalidValueError PormG.Dialect.create_index(IXMockPostgres(), "\"i\"", "\"t\"", ["\"a\""];
+                                                                method = "btree; DROP TABLE t")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # `indexes` is a model-level option, so a COLUMN of that name is unreachable
 # Adding "indexes" to MODEL_OPTION_KWARGS means the kwarg is peeled before the field
 # slurp. A consuming app that declared a column called `indexes` must now pin it with
@@ -338,6 +489,27 @@ end
 # inspectdb and the Django importer both render through Model_to_str, so an index that
 # does not survive the render is an index the generated models file silently loses.
 # ─────────────────────────────────────────────────────────────────────────────
+@testset "Model_to_str round-trips an advanced index (#29)" begin
+  m = Models.Model("result_rt",
+    id      = Models.IDField(),
+    raceid  = Models.IntegerField(),
+    points  = Models.FloatField(),
+    surname = Models.CharField(max_length = 60),
+    indexes = [
+      Models.Index(fields = ("raceid", "-points")),
+      Models.Index(fields = ("surname",), method = "gin", opclasses = ("gin_trgm_ops",), name = "rt_trgm"),
+      Models.Index(fields = ("raceid", "surname"), opclasses = (nothing, "varchar_pattern_ops"), name = "rt_mixed"),
+    ],
+  )
+  str = Models.Model_to_str(m)
+  @test occursin("Models.Index(fields = (\"raceid\", \"-points\",))", str)
+  @test occursin("Models.Index(fields = (\"surname\",), name = \"rt_trgm\", method = \"gin\", opclasses = (\"gin_trgm_ops\",))", str)
+  @test occursin("Models.Index(fields = (\"raceid\", \"surname\",), name = \"rt_mixed\", opclasses = (nothing, \"varchar_pattern_ops\",))", str)
+  r = _ix_reload(str).cache["composite_indexes"]["indexes"]
+  @test [Models._index_shape(ix) for ix in r] == [Models._index_shape(ix) for ix in m.cache["composite_indexes"]["indexes"]]
+  @test [ix.name for ix in r] == [nothing, "rt_trgm", "rt_mixed"]
+end
+
 @testset "Model_to_str round-trips indexes through the indexes= kwarg" begin
   m = Models.Model("standings_idx",
     id = Models.IDField(),
@@ -453,6 +625,41 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# _attach_composite_indexes!: an advanced index is written as declared (#29) — FOUND IN REVIEW
+# A DESC or GIN index comes back with its `-` and its method; a non-default class by name. And one
+# shape needs its DEFAULT class named too: PormG created `Index(fields = ("a",), opclasses =
+# ("int4_ops",), name = …)` marked, but every class in it is the default, so it reads back PLAIN —
+# and a plain one-field Index is refused. Before the fix the generated model declared nothing, and
+# its first plan dropped the index as an undeclared plain composite PormG owns.
+# Mutation gate: drop the default-class arm in `_attach_composite_indexes!` and `ix_a_named` is
+# skipped, so the cache holds two indexes, not three.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "_attach_composite_indexes! writes an advanced index as declared (#29)" begin
+  base() = Models.Model("live_adv", Dict{String, PormG.PormGField}(
+    "id" => Models.IDField(), "a" => Models.IntegerField(), "b" => Models.IntegerField(),
+  ))
+  adv(name, cols; method = "btree", desc = fill(false, length(cols)), opc = Union{String, Nothing}["int4_ops" for _ in cols],
+      dflt = fill(true, length(cols)), marker = nothing) =
+    LiveComposite(name, cols, false, false, method, desc, opc, dflt, marker, marker)
+  m = _attach_composite_indexes!(base(), [
+    adv("ix_desc", ["a", "b"]; desc = [false, true]),
+    adv("ix_gin", ["a"]; method = "gin", opc = Union{String, Nothing}["array_ops"], dflt = [false]),
+    adv("ix_a_named", ["a"]; marker = "pormg:index"),
+  ])
+  ixs = Dict(ix.name => ix for ix in m.cache["composite_indexes"]["indexes"])
+  @test sort(collect(keys(ixs))) == ["ix_a_named", "ix_desc", "ix_gin"]
+  @test (ixs["ix_desc"].fields, ixs["ix_desc"].descending) == (["a", "b"], [false, true])
+  @test (ixs["ix_gin"].method, ixs["ix_gin"].opclasses) == ("gin", ["array_ops"])
+  @test ixs["ix_a_named"].opclasses == ["int4_ops"]
+  # Ownership rides along for the advanced ones; the marked plain one is PormG's either way.
+  @test m.cache["composite_index_owners"]["ix_desc"] == (nothing, nothing)
+  @test !haskey(m.cache["composite_index_owners"], "ix_a_named")
+  # …and the declaration it writes matches the live index it came from, so the plan converges.
+  d = only(x for x in PormG.Migrations.declared_composites(m) if x.name == "ix_a_named")
+  @test PormG.Migrations.composite_shape_matches(adv("ix_a_named", ["a"]; marker = "pormg:index"), d)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Introspection seam, unique half (#161): a unique composite comes back as a UniqueConstraint
 # Before #161 no reader produced one, so an inspectdb'd models file declared no composite
 # uniqueness at all — and once makemigrations drops undeclared composites, that file's first
@@ -527,6 +734,8 @@ end
 # take its siblings with it — the assertion that the healthy one still ships is the guard.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Django importer reports the Meta.indexes it cannot express" begin
+  # Since #29 a descending column, `opclasses=` and the `django.contrib.postgres` index classes
+  # translate; what is left refused is what changes the index into one PormG cannot declare.
   django = """
   class Servidor(models.Model):
       cpf = models.CharField(max_length=11)
@@ -536,10 +745,11 @@ end
       class Meta:
           indexes = [
               models.Index(fields=['cpf', 'apelido'], name='ok_idx'),
-              models.Index(fields=['-cpf', 'apelido'], name='desc_idx'),
               models.Index(Lower('apelido'), name='expr_idx'),
-              GinIndex(fields=['cpf', 'apelido'], name='gin_idx'),
               models.Index(fields=['cpf', 'ativo'], condition=Q(ativo=True), name='partial_idx'),
+              BloomIndex(fields=['cpf', 'apelido'], name='bloom_idx'),
+              GinIndex(fields=['apelido'], fastupdate=False, name='slow_gin_idx'),
+              models.Index(fields=['cpf'], include=['apelido'], name='covering_idx'),
           ]
   """
   config_key = mktempdir()
@@ -554,12 +764,67 @@ end
     @test count("Models.Index(", generated) == 1
 
     # Each refusal is named in the file, with the reason that makes it a refusal.
-    @test occursin("DESCENDING column", generated)
     @test occursin("positional expression", generated)
-    @test occursin("GinIndex has no PormG equivalent", generated)
-    @test occursin("`condition=` changes what the index means", generated)
-    # Four dropped indexes, four markers — a blanket "report something" would pass a count of 1.
-    @test count("an index on 'Servidor' was dropped", generated) == 4
+    @test occursin("a functional index, which PormG cannot declare yet (#29)", generated)
+    @test occursin("`condition=` makes it a partial index, which PormG cannot declare yet (#29)", generated)
+    @test occursin("BloomIndex has no PormG equivalent", generated)
+    @test occursin("`fastupdate=` changes what the index means", generated)
+    @test occursin("`include=` changes what the index means", generated)
+    # Five dropped indexes, five markers — a blanket "report something" would pass a count of 1.
+    @test count("an index on 'Servidor' was dropped", generated) == 5
+  finally
+    delete!(PormG.config, config_key)
+    isdir(config_key) && rm(config_key; recursive = true)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django importer: the PostgreSQL index classes, `opclasses=` and a descending column (#29)
+# These were refused before #29, each as "PormG cannot express it". Each now lands as the
+# `Models.Index` that creates the same index — and a one-field entry stays an `Index` unless it is
+# plain, because only a plain one-column index is `db_index`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer translates GinIndex, opclasses= and -field (#29)" begin
+  django = """
+  class Piloto(models.Model):
+      sobrenome = models.CharField(max_length=60)
+      pontos = models.FloatField()
+      corrida = models.IntegerField()
+      data = models.DateField()
+
+      class Meta:
+          indexes = [
+              models.Index(fields=['corrida', '-pontos'], name='piloto_corrida_pontos_idx'),
+              models.Index(fields=['-pontos']),
+              GinIndex(fields=['sobrenome'], name='piloto_sobrenome_gin', opclasses=['gin_trgm_ops']),
+              BrinIndex(fields=['data'], name='piloto_data_brin'),
+              HashIndex(fields=['sobrenome'], name='piloto_sobrenome_hash'),
+              models.Index(fields=['sobrenome'], name='piloto_sobrenome_pattern',
+                           opclasses=['varchar_pattern_ops']),
+              models.Index(fields=['corrida']),
+          ]
+          index_together = [('-corrida', 'pontos')]
+  """
+  config_key = mktempdir()
+  PormG.config[config_key] = PormG.Configuration.Settings(
+    db_def_folder = config_key, django_prefix = nothing)
+  try
+    import_models_from_django(django; db = config_key, file = "ix_pg_unit.jl", force_replace = true)
+    generated = read(joinpath(config_key, "ix_pg_unit.jl"), String)
+
+    @test occursin("Models.Index(fields = (\"corrida\", \"-pontos\",), name = \"piloto_corrida_pontos_idx\")", generated)
+    @test occursin("Models.Index(fields = (\"-pontos\",))", generated)
+    @test occursin("Models.Index(fields = (\"sobrenome\",), name = \"piloto_sobrenome_gin\", method = \"gin\", " *
+                   "opclasses = (\"gin_trgm_ops\",))", generated)
+    @test occursin("Models.Index(fields = (\"data\",), name = \"piloto_data_brin\", method = \"brin\")", generated)
+    @test occursin("Models.Index(fields = (\"sobrenome\",), name = \"piloto_sobrenome_hash\", method = \"hash\")", generated)
+    @test occursin("Models.Index(fields = (\"sobrenome\",), name = \"piloto_sobrenome_pattern\", " *
+                   "opclasses = (\"varchar_pattern_ops\",))", generated)
+    @test count("Models.Index(", generated) == 6
+    # The one plain single-field entry is still the field's db_index.
+    @test occursin(r"corrida\s*=\s*Models\.IntegerField\(db_index\s*=\s*true", generated)
+    # `index_together` has no descending spelling in PormG's sense; it stays refused.
+    @test occursin("DESCENDING column, which index_together cannot declare", generated)
   finally
     delete!(PormG.config, config_key)
     isdir(config_key) && rm(config_key; recursive = true)

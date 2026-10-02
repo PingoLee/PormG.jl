@@ -583,3 +583,181 @@ end
   # …and creating it says out loud that it will be stored truncated.
   @test_logs (:warn, r"63-byte") match_mode = :any _cd_plan(CD_PG, LiveTable[], declared)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite: a descending Index is PormG's by its marker; a hand-made one never is (#29)
+# The ownership rule end to end. A declared `-grid` index is created with `/* pormg:index */` in its
+# column list and converges. A hand-made DESC index beside it — what an adopted Django schema carries
+# — is read, but carries no marker, so it is never planned away; declaring it adopts it without a
+# statement (SQLite cannot comment an index, and a drop-and-create would make the first plan after
+# inspectdb destructive). Undeclaring PormG's own is a destructive drop. Flipping a direction is the
+# drop of one derived name and the create of another. A create that wants a hand-made index's name is
+# refused at plan time — `migrate` would otherwise fail with "already exists" on every run. And the
+# marked index survives a table rebuild, marker included, and still converges after it.
+# Mutation gate: make `composite_is_owned` return true and the hand-made indexes are planned for
+# removal; drop the `unowned` name check and the clash plans a CREATE SQLite refuses.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: a descending Index is PormG's by its marker; a hand-made one never is (#29)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "cd_desc29.sqlite"); pool_size = 1)
+    try
+      v1 = _cd_result()
+      _cd_apply!(pool, _cd_plan(pool, LiveTable[], v1))
+
+      v2 = _cd_result(indexes = [Models.Index(fields = ("raceid", "-grid"))])
+      p2 = _cd_plan(pool, _cd_live(pool, "result"), v2)
+      @test _cd_keys(p2, :result) == ["Create index: result_raceid_grid_desc_idx"]
+      @test p2[:result]["Create index: result_raceid_grid_desc_idx"] ==
+            "CREATE INDEX \"result_raceid_grid_desc_idx\" ON \"result\" (\"raceid\", \"grid\" DESC /* pormg:index */);"
+      _cd_apply!(pool, p2)
+      @test _cd_converged(pool, ("result",), v2)
+
+      # Hand-made, unmarked: a one-column DESC index and a composite one. Read, never planned away.
+      fetch(pool, "CREATE INDEX hand_grid_desc ON result(grid DESC);")
+      fetch(pool, "CREATE INDEX hand_driver_desc ON result(driverid DESC, raceid);")
+      live = only(_cd_live(pool, "result"))
+      byname = Dict(c.name => c for c in live.composites)
+      @test byname["result_raceid_grid_desc_idx"].marker == PormG.INDEX_MARKER
+      @test byname["hand_grid_desc"].marker === nothing
+      @test _cd_converged(pool, ("result",), v2)
+
+      # Declaring a hand-made one adopts it — by shape, whatever it is called — and plans nothing.
+      adopt = _cd_result(indexes = [Models.Index(fields = ("raceid", "-grid")),
+                                    Models.Index(fields = ("-driverid", "raceid"), name = "hand_driver_desc")])
+      @test _cd_converged(pool, ("result",), adopt)
+
+      # A declaration that wants a hand-made index's NAME for another shape is refused at plan time.
+      clash = _cd_result(indexes = [Models.Index(fields = ("raceid", "-grid")),
+                                    Models.Index(fields = ("grid", "driverid"), name = "hand_grid_desc")])
+      err = try; _cd_plan(pool, _cd_live(pool, "result"), clash); nothing; catch e; e; end
+      @test err isa PormG.InvalidMigrationError
+      @test occursin("hand_grid_desc", err.msg) && occursin("does not own", err.msg)
+
+      # Flipping the direction: drop one derived name, create the other.
+      v3 = _cd_result(indexes = [Models.Index(fields = ("raceid", "grid"))])
+      p3 = _cd_plan(pool, _cd_live(pool, "result"), v3)
+      @test _cd_keys(p3, :result) == ["Remove composite index: result_raceid_grid_desc_idx",
+                                      "Create index: result_raceid_grid_idx"]
+      @test !occursin("pormg:index", p3[:result]["Create index: result_raceid_grid_idx"])   # plain: no marker
+      _cd_apply!(pool, p3)
+      @test _cd_converged(pool, ("result",), v3)
+
+      # Undeclaring PormG's own DESC index is a destructive drop; the hand-made ones stay.
+      v4 = _cd_result(indexes = [Models.Index(fields = ("raceid", "-grid"))])
+      _cd_apply!(pool, _cd_plan(pool, _cd_live(pool, "result"), v4))
+      p5 = _cd_plan(pool, _cd_live(pool, "result"), v1)
+      @test sort(_cd_keys(p5, :result)) == ["Remove composite index: result_raceid_grid_desc_idx"]
+      @test is_destructive(p5[:result]["Remove composite index: result_raceid_grid_desc_idx"])
+      _cd_apply!(pool, p5)
+      @test issubset(["hand_grid_desc", "hand_driver_desc"], _cd_index_names(pool, "result"))
+      @test _cd_converged(pool, ("result",), v1)
+
+      # A rebuild (a column change) re-creates the marked index verbatim — marker included — and the
+      # table converges after it, with the hand-made ones still there and still unmarked.
+      _cd_apply!(pool, _cd_plan(pool, _cd_live(pool, "result"), v4))
+      v6 = Models.Model("result"; id = Models.IDField(), raceid = Models.IntegerField(),
+                        driverid = Models.IntegerField(), grid = Models.IntegerField(null = true),
+                        laps = Models.IntegerField(null = true), indexes = [Models.Index(fields = ("raceid", "-grid"))])
+      v7 = Models.Model("result"; id = Models.IDField(), raceid = Models.IntegerField(),
+                        driverid = Models.IntegerField(), grid = Models.IntegerField(),
+                        laps = Models.IntegerField(null = true), indexes = [Models.Index(fields = ("raceid", "-grid"))])
+      _cd_apply!(pool, _cd_plan(pool, _cd_live(pool, "result"), v6))
+      p7 = _cd_plan(pool, _cd_live(pool, "result"), v7)          # NULL → NOT NULL: a rebuild
+      @test any(startswith("Alter"), _cd_keys(p7, :result))
+      _cd_apply!(pool, p7)
+      ddl = DataFrame(fetch(pool, "SELECT sql FROM sqlite_master WHERE name = 'result_raceid_grid_desc_idx';"))
+      @test occursin("/* pormg:index */", string(ddl[1, :sql]))
+      @test issubset(["hand_grid_desc", "hand_driver_desc"], _cd_index_names(pool, "result"))
+      @test _cd_converged(pool, ("result",), v7)
+    finally
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite: inspectdb keeps a hand-made index hand-made (#29)
+# A model READ from the database carries each advanced index's live ownership beside its
+# declaration (`cache["composite_index_owners"]`). Read back as a live table — the model-vector plan
+# entry point every older test uses — a hand-made DESC index must stay unowned, or the first plan
+# after inspectdb that drops the declaration would drop an index PormG never made.
+# Mutation gate: delete the `composite_index_owners` lookup in `live_table` and the plan below holds a
+# `Remove composite index`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: inspectdb keeps a hand-made index hand-made (#29)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "cd_owners29.sqlite"); pool_size = 1)
+    try
+      _cd_apply!(pool, _cd_plan(pool, LiveTable[], _cd_result()))
+      fetch(pool, "CREATE INDEX hand_grid_desc ON result(grid DESC);")
+      read_back = only(m for m in Migrations.convert_schema_to_models(pool) if lowercase(string(m.name)) == "result")
+      @test read_back.cache["composite_index_owners"]["hand_grid_desc"] == (nothing, nothing)
+      lc = only(c for c in live_table(read_back, pool).composites if c.name == "hand_grid_desc")
+      @test lc.marker === nothing && !Migrations.composite_is_owned(lc)
+      # The model-vector entry point, a declaration that no longer names it: nothing planned.
+      p = get_migration_plan(PormGModel[read_back], _cd_schema(_cd_result()), pool, _cd_settings(); interactive = false)
+      @test !any(k -> occursin("hand_grid_desc", k), _cd_keys(p, :result))
+    finally
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: method, opclasses and ownership over a hand-built live side (#29)
+# Plan shape only — a mock has no catalog; the live half is test_importers_introspection.jl. A
+# hand-made GIN index the model declares is ADOPTED: a COMMENT ON INDEX that appends the marker to the
+# DBA's comment rather than replacing it. Undeclared, a marked index is dropped and an unmarked one is
+# not. A declaration naming the default class explicitly matches a live index built with it, so it
+# converges. Changing the method is a drop and a create.
+# Mutation gate: drop the `adopts` loop and the adoption step vanishes; compare opclasses by
+# `opclass_default` alone and the explicit `jsonb_ops` declaration re-plans forever.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: method, opclasses and ownership over a hand-built live side (#29)" begin
+  with_live(model, composites...) = begin
+    t = live_table(model, CD_PG)
+    LiveTable[LiveTable(t.name, t.columns, t.indexes, collect(LiveComposite, composites), t.checks)]
+  end
+  gin(name, opc, dflt; marker = nothing, comment = marker) =
+    LiveComposite(name, ["driverid"], false, false, "gin", [false], Union{String, Nothing}[opc], [dflt], marker, comment)
+  base = _cd_result()
+
+  # Adoption keeps a DBA's comment and appends the marker; a rename after it carries the comment along.
+  declared = _cd_result(indexes = [Models.Index(fields = ("driverid",), method = "gin")])
+  p = _cd_plan(CD_PG, with_live(declared, gin("result_driver_gin", "jsonb_ops", true; comment = "built by ops, 2026")), declared)
+  @test _cd_keys(p, :result) == ["Adopt index: result_driver_gin"]
+  @test p[:result]["Adopt index: result_driver_gin"] ==
+        """COMMENT ON INDEX "result_driver_gin" IS 'built by ops, 2026 pormg:index';"""
+  named = _cd_result(indexes = [Models.Index(fields = ("driverid",), method = "gin", name = "result_driverid_gin2")])
+  p = _cd_plan(CD_PG, with_live(named, gin("result_driver_gin", "jsonb_ops", true)), named)
+  @test _cd_keys(p, :result) == ["Adopt index: result_driver_gin", "Rename composite index: result_driver_gin"]
+  # A quote in the kept comment is doubled, never closes the literal.
+  p = _cd_plan(CD_PG, with_live(declared, gin("result_driver_gin", "jsonb_ops", true; comment = "ops' note")), declared)
+  @test p[:result]["Adopt index: result_driver_gin"] == """COMMENT ON INDEX "result_driver_gin" IS 'ops'' note pormg:index';"""
+  # An index PormG already marked is not adopted again.
+  @test all(isempty, values(_cd_plan(CD_PG, with_live(declared, gin("result_driver_gin", "jsonb_ops", true; marker = "pormg:index")), declared)))
+
+  # Undeclared: the marked one is dropped, the hand-made one is not.
+  p = _cd_plan(CD_PG, with_live(base, gin("result_mine", "jsonb_ops", true; marker = "pormg:index"),
+                                      gin("result_theirs", "jsonb_ops", true)), base)
+  @test _cd_keys(p, :result) == ["Remove composite index: result_mine"]
+
+  # An explicit default class matches a live index built with that class: converged.
+  explicit = _cd_result(indexes = [Models.Index(fields = ("driverid",), method = "gin", opclasses = ("jsonb_ops",), name = "result_driver_gin")])
+  @test all(isempty, values(_cd_plan(CD_PG, with_live(explicit, gin("result_driver_gin", "jsonb_ops", true; marker = "pormg:index")), explicit)))
+  # …and a different named class does not.
+  path = _cd_result(indexes = [Models.Index(fields = ("driverid",), method = "gin", opclasses = ("jsonb_path_ops",), name = "result_driver_gin")])
+  p = _cd_plan(CD_PG, with_live(path, gin("result_driver_gin", "jsonb_ops", true; marker = "pormg:index")), path)
+  @test _cd_keys(p, :result) == ["Remove composite index: result_driver_gin", "Create index: result_driver_gin"]
+  @test occursin("USING gin (\"driverid\" jsonb_path_ops)", p[:result]["Create index: result_driver_gin"])
+
+  # Changing the method: the derived names differ, so it is a drop of one and a create of the other.
+  brin = _cd_result(indexes = [Models.Index(fields = ("driverid",), method = "brin")])
+  p = _cd_plan(CD_PG, with_live(brin, gin("result_driverid_gin_idx", "jsonb_ops", true; marker = "pormg:index")), brin)
+  @test _cd_keys(p, :result) == ["Remove composite index: result_driverid_gin_idx", "Create index: result_driverid_brin_idx"]
+
+  # A hand-made index's name cannot be taken by a different declaration.
+  taker = _cd_result(indexes = [Models.Index(fields = ("raceid", "grid"), name = "result_theirs")])
+  err = try; _cd_plan(CD_PG, with_live(taker, gin("result_theirs", "jsonb_ops", true)), taker); nothing; catch e; e; end
+  @test err isa PormG.InvalidMigrationError && occursin("does not own", err.msg)
+end

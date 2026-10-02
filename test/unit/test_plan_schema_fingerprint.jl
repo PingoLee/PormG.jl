@@ -127,6 +127,23 @@ _ps739_raised(f) = try f(); nothing catch e; e end
     for (facet, t) in variants
         @test (facet, Migrations._schema_table_fingerprint(t)) != (facet, base)
     end
+
+    # #29: the pin above has no composite, so it cannot see a slot added to `LiveComposite` — which is
+    # exactly how #29's six slots went in without moving it. This second pin can: computed once, with
+    # those slots, and frozen.
+    composite = LiveComposite("drivers_uniq", ["driverid", "surname"], true, true)
+    @test Migrations._schema_table_fingerprint(_ps739_table(composites = [composite])) == "2f23c4529100d99d"
+    # Each #29 facet of an index is a different schema for a plan to run on.
+    adv(; method = "btree", desc = [false], opc = Union{String, Nothing}["int4_ops"], dflt = [true], marker = nothing) =
+        _ps739_table(composites = [LiveComposite("drivers_ix", ["driverid"], false, false, method, desc, opc, dflt,
+                                                 marker, marker)])
+    plain_ix = Migrations._schema_table_fingerprint(adv(marker = "pormg:index"))
+    for (facet, t) in ("method" => adv(method = "brin", marker = "pormg:index"),
+                       "direction" => adv(desc = [true], marker = "pormg:index"),
+                       "opclass" => adv(opc = Union{String, Nothing}["int4_minmax_ops"], dflt = [false], marker = "pormg:index"),
+                       "marker" => adv())
+        @test (facet, Migrations._schema_table_fingerprint(t)) != (facet, plain_ix)
+    end
     # A timestamp default is written as its UTC wall time, never through `repr` (which is TimeZones'
     # to change): it digests, and two instants are two defaults.
     at(t) = Migrations._schema_table_fingerprint(_ps739_table(columns = [_ps739_col("driverid"; pk = true),

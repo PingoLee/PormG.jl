@@ -447,6 +447,55 @@ check_marker(sql::AbstractString)::String = CHECK_MARKER_PREFIX * check_conditio
 # about what a marker looks like.
 const CHECK_MARKER_RE = Regex(CHECK_MARKER_PREFIX * "[0-9a-f]{16}")
 
+# ── Index access methods, operator classes and ownership (#29) ───────────────────────────────────
+#
+# A plain `Models.Index` — b-tree, ascending, default operator classes — is owned the way every
+# composite is (#161): the models file is the schema, so an undeclared one is dropped. An ADVANCED
+# one (another access method, a `DESC` member or an explicit operator class) is owned the way a
+# table CHECK is (#742): PormG stores `pormg:index` beside every one it creates — `COMMENT ON INDEX`
+# on PostgreSQL, an SQL comment inside the column list on SQLite — and only an index carrying it is
+# ever planned away. A hand-made GIN index, which `docs/src/migrations/advanced.md` recommends
+# writing by hand, is read and can be adopted, but is never dropped for being undeclared.
+#
+# Nouns only, here for the #239 reason the CHECK marker is: `Models` validates against them,
+# `Dialect` renders them and `Migrations` reads them back.
+
+"""
+    INDEX_METHODS
+
+The PostgreSQL index access methods a `Models.Index` may declare through `method=`: `"btree"` (the
+default, and the only one SQLite has), `"hash"`, `"gist"`, `"spgist"`, `"gin"` and `"brin"`. An
+extension's method (`bloom`, `rum`) is not one of them, so an index using it is never read.
+"""
+const INDEX_METHODS = ("btree", "hash", "gist", "spgist", "gin", "brin")
+
+"""
+    INDEX_OPCLASS_RE
+
+What an operator class named in `Models.Index(opclasses = …)` must look like: a lower-case,
+unqualified SQL identifier. It is rendered unquoted — `jsonb_path_ops` is an operator class, while
+`"jsonb_path_ops"` would also be one but read back unquoted — so this pattern is both the injection
+guard and the reason a declared name compares equal to the catalog's `opcname`.
+"""
+const INDEX_OPCLASS_RE = r"^[a-z_][a-z0-9_]*$"
+
+"""
+    INDEX_MARKER
+
+The ownership marker PormG stores beside every advanced index it creates (see [`INDEX_METHODS`](@ref)).
+#29's second half reserves `pormg:index:<16 hex>` for an index whose definition holds SQL text;
+[`INDEX_MARKER_RE`](@ref) already reads that form as owned.
+"""
+const INDEX_MARKER = "pormg:index"
+
+# The marker as it may be READ back — anywhere in a PostgreSQL comment, and the whole of the comment
+# closing an SQLite column list. It is the only thing between a hand-made index and a planned DROP, so
+# it is bounded on both sides: the look-behind keeps `xpormg:index` from counting, the look-ahead
+# `pormg:indexes` or a longer hash. Written in the subset PostgreSQL's regex engine shares with PCRE
+# (look-behind is PostgreSQL 9.6+; the floor is 11), because the readers interpolate it into SQL
+# (`_PG_MARKED_INDEX` / `_PG_UNMARKED_INDEX`).
+const INDEX_MARKER_RE = Regex("(?<![0-9A-Za-z_:])" * INDEX_MARKER * "(?::[0-9a-f]{16})?(?![0-9A-Za-z_:])")
+
 # ── CHECK-expressed bounds ───────────────────────────────────────────────────────────────────────
 #
 # Two column facts neither backend can express in the type itself, so both are rendered as a CHECK

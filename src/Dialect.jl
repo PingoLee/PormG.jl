@@ -3154,4 +3154,92 @@ function migrations_table_info_sql(conn::PormGSQLite)::String
   return """PRAGMA table_info(pormg_migrations);"""
 end
 
+# ==============================================================================
+# DATA-STEP HISTORY TABLE (#740)
+# `pormg_migrations_data` records each `Migrations.run_once` step by name. Its own table, so the
+# frozen `pormg_migrations` v1 column set stays untouched; named under the `pormg_migrations` prefix,
+# so every introspection ignore list — which matches by prefix — already hides it from
+# `makemigrations`, `check` and the importers, and `unignore_defaults` cannot un-hide it.
+# ==============================================================================
+
+"""
+    create_data_steps_table(conn::PormGPostgres) -> String
+
+DDL for the `pormg_migrations_data` table `Migrations.run_once` records its steps in (#740).
+"""
+function create_data_steps_table(conn::PormGPostgres)::String
+  return """CREATE TABLE IF NOT EXISTS pormg_migrations_data (
+  "id" SERIAL PRIMARY KEY,
+  "name" VARCHAR(255) NOT NULL UNIQUE,
+  "transactional" BOOLEAN NOT NULL,
+  "applied_at" TIMESTAMP NOT NULL DEFAULT NOW(),
+  "format_version" INTEGER NOT NULL DEFAULT 1
+);"""
+end
+
+"""
+    create_data_steps_table(conn::PormGSQLite) -> String
+
+DDL for the `pormg_migrations_data` table (#740) on SQLite. `applied_at` is the canonical timestamp
+text, as in `pormg_migrations` (#570).
+"""
+function create_data_steps_table(conn::PormGSQLite)::String
+  return """CREATE TABLE IF NOT EXISTS pormg_migrations_data (
+  "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+  "name" VARCHAR(255) NOT NULL UNIQUE,
+  "transactional" BOOLEAN NOT NULL,
+  "applied_at" DATETIME NOT NULL DEFAULT ($(sqlite_applied_at_now_sql())),
+  "format_version" INTEGER NOT NULL DEFAULT 1
+);"""
+end
+
+"""
+    data_steps_table_exists_sql(conn) -> String
+
+SQL answering whether `pormg_migrations_data` exists, in the shape `migrations_table_exists_sql`
+answers it for `pormg_migrations`.
+"""
+function data_steps_table_exists_sql(conn::PormGPostgres)::String
+  # Scoped to the current schema, where `CREATE TABLE IF NOT EXISTS` creates it: a same-named table
+  # in another schema would otherwise read as "exists" and fail the SELECT that follows.
+  return """SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'pormg_migrations_data');"""
+end
+function data_steps_table_exists_sql(conn::PormGSQLite)::String
+  return """SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pormg_migrations_data';"""
+end
+
+"""
+    insert_data_step_sql(conn) -> String
+
+Parameterized INSERT recording one data step: `name`, then `transactional`. SQLite writes
+`applied_at` explicitly in the canonical form, as `insert_migration_record_sql` does.
+"""
+function insert_data_step_sql(conn::PormGPostgres)::String
+  return """INSERT INTO pormg_migrations_data ("name", "transactional", "format_version") VALUES (\$1, \$2, 1);"""
+end
+function insert_data_step_sql(conn::PormGSQLite)::String
+  return """INSERT INTO pormg_migrations_data ("name", "transactional", "format_version", "applied_at") VALUES (?, ?, 1, $(sqlite_applied_at_now_sql()));"""
+end
+
+"""
+    select_data_step_sql(conn) -> String
+
+Parameterized SELECT of the one data step with a given name (`run_once`'s "already applied?").
+"""
+function select_data_step_sql(conn::PormGPostgres)::String
+  return """SELECT "id" FROM pormg_migrations_data WHERE "name" = \$1;"""
+end
+function select_data_step_sql(conn::PormGSQLite)::String
+  return """SELECT "id" FROM pormg_migrations_data WHERE "name" = ?;"""
+end
+
+"""
+    select_all_data_steps_sql(conn) -> String
+
+Every recorded data step, in the order they were applied.
+"""
+function select_all_data_steps_sql(conn::Union{PormGPostgres, PormGSQLite})::String
+  return """SELECT "name", "transactional", "applied_at" FROM pormg_migrations_data ORDER BY "id" ASC;"""
+end
+
 end

@@ -2521,6 +2521,11 @@ matches the latest applied migration — which is kept, with a warning, for the 
 archive without re-applying. A missing models file raises `MissingConfigurationError` (the
 `String` form).
 
+A pending plan holding hand-written data steps — entries labelled `Data (pre): …` or
+`Data (post): …` — is neither overwritten nor moved aside: those steps exist only in that file, so
+`makemigrations` raises `InvalidMigrationError` naming them instead (#740). Apply the plan with
+[`migrate`](@ref) first, or move the steps out of it, then plan again.
+
 See also [`migrate`](@ref), [`get_migration_plan`](@ref), and the
 [Database Migrations in PormG](@ref) guide.
 """
@@ -2628,6 +2633,9 @@ function _write_pending_plan(connection::Union{PormGPostgres, PormGSQLite}, sett
         @warn("No changes detected. The pending plan was already applied by a previous migrate(), which failed to archive it (its checksum matches the latest applied migration), so it is kept: run migrate() to archive it — with destructive = true if the plan is destructive, since that guard runs first. It is archived, not applied again.")
         return nothing
       end
+      # #740: an empty diff is the LIKELY case for a plan holding only data steps — the models and
+      # the database already agree, and the steps are the plan's whole point.
+      _refuse_overwriting_data_steps(settings)
       @warn("No changes detected, so the earlier pending plan no longer describes anything; moving it aside.")
       discard_pending_migration(settings; backup = true)
     end
@@ -2635,6 +2643,7 @@ function _write_pending_plan(connection::Union{PormGPostgres, PormGSQLite}, sett
     return nothing
   end
   ispath(folder) || mkdir(folder)
+  _refuse_overwriting_data_steps(settings)   # #740
   header = _models_file_header_value(settings, models_path)
   generate_migration_plan("pending_migrations.jl", migration_plan, folder; models_file = header,
                           models_file_sha256 = header === nothing ? nothing : _models_file_digest(models_path),
@@ -2666,6 +2675,30 @@ function _models_file_header_value(settings::PormGSettings, models_path::Union{S
   file == abspath(joinpath(settings.db_def_folder, settings.model_file)) && return nothing
   rel = relpath(file, abspath(settings.db_def_folder))
   return first(splitpath(rel)) == ".." ? file : rel
+end
+
+# #740: refuse to replace a pending plan that holds hand-written data steps. They exist only in that
+# file — the diff can never regenerate them — so overwriting it, or moving it aside on an empty diff,
+# would silently drop work someone wrote by hand. Any label that reads like one counts
+# (`DATA_STEP_LOOSE_RE`), a misspelt one included: it is hand-written either way, and `migrate` refuses it, so it has to be fixed by hand.
+# A plan that does not parse is not refused here: it is not a plan anyone can apply, so the existing
+# overwrite or discard (with its `.discarded` backup) goes ahead, as `_pending_plan_already_applied`
+# lets it.
+function _refuse_overwriting_data_steps(settings::PormGSettings)::Nothing
+  isfile(_pending_plan_path(settings)) || return nothing
+  plan = try
+    _load_migration_plan(settings)
+  catch e
+    e isa InvalidMigrationError || rethrow()
+    return nothing
+  end
+  labels = String[label for entries in plan for label in keys(entries) if occursin(DATA_STEP_LOOSE_RE, label)]
+  isempty(labels) && return nothing
+  throw(InvalidMigrationError(
+    "The pending plan holds $(length(labels)) hand-written data step(s) — $(join(repr.(labels), ", ")) — " *
+    "which makemigrations() cannot regenerate, so it did not overwrite or discard the plan. Apply it " *
+    "first with migrate(), or move the steps out of it (or discard it with discard_pending_migration()), " *
+    "then run makemigrations() again."))
 end
 
 # Whether the pending plan is the latest applied migration — the file a `migrate()` COMMITted and then

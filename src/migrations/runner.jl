@@ -14,7 +14,8 @@ import SHA: sha256
 # Regex patterns for detecting destructive SQL operations (#728). A heuristic over the SQL text, not
 # a parser, and it errs toward flagging: a false positive costs an explicit `destructive = true`, a
 # false negative runs a data-losing statement unasked. Hand-edited plans are where it matters most —
-# `docs/src/migrations/advanced.md` tells users to add SQL, and this guard is its only review.
+# the `Data (pre):` / `Data (post):` steps of `docs/src/migrations/advanced.md` are SQL users write
+# themselves (#740), and this guard is its only review.
 const _DESTRUCTIVE_PATTERNS = [
   # Any DROP: a DROP command of any object kind (TABLE, INDEX, VIEW, SCHEMA, FUNCTION, SEQUENCE, …,
   # including kinds no list here would name), and the ALTER TABLE sub-clauses `DROP [COLUMN] x` —
@@ -1346,6 +1347,7 @@ struct MigrationStatus
   pending::Bool                  # Whether a pending_migrations.jl file exists
   has_history_table::Bool        # Whether pormg_migrations table exists
   drift_signals::Vector{String}  # Informational messages about potential drift
+  data_steps::Vector{NamedTuple} # run_once steps recorded in pormg_migrations_data (#740), oldest first
 end
 
 function Base.show(io::IO, s::MigrationStatus)
@@ -1360,6 +1362,7 @@ function Base.show(io::IO, s::MigrationStatus)
   end
   isempty(s.superseded) ||
     println(io, "  Superseded failures: ", length(s.superseded), " (a later run applied the same plan)")
+  isempty(s.data_steps) || println(io, "  Data steps: ", length(s.data_steps), " applied (run_once)")
   println(io, "  Pending file: ", _emsg(io, s.pending ? "\e[33myes (review and run migrate)\e[0m" : "none"))
   if !isempty(s.drift_signals)
     println(io, _emsg(io, "  \e[33mDrift signals:\e[0m"))
@@ -1388,7 +1391,12 @@ no user tables at all.
 A failed record counts only while nothing has resolved it (#739). Failures do not block the next
 `migrate`, and a plan runs in one transaction on both engines, so a `failed` row means nothing was
 applied; once a later run applies the same plan (the same checksum), the failure moves to
-`superseded` and its drift signal clears. A failure no later apply matches stays in `failed`. `status()` does not compare the live schema with the models — that is
+`superseded` and its drift signal clears. A failure no later apply matches stays in `failed`.
+
+`data_steps` lists the [`run_once`](@ref) steps recorded in `pormg_migrations_data` (#740), oldest
+first — empty until the first one runs.
+
+`status()` does not compare the live schema with the models — that is
 `check(db; kinds = [:schema_drift])`. It is read-only, and does not create the history table.
 """
 function status(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings)::MigrationStatus
@@ -1437,7 +1445,7 @@ function status(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSe
     try
       live_tables = _get_live_table_names(connection)
       # Filter out internal tables
-      internal_tables = Set(["pormg_migrations", "sqlite_sequence"])
+      internal_tables = Set(["pormg_migrations", "pormg_migrations_data", "sqlite_sequence"])
       live_user_tables = filter(t -> !(t in internal_tables), live_tables)
       
       if isempty(live_user_tables) && !isempty(applied)
@@ -1449,7 +1457,9 @@ function status(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSe
     end
   end
   
-  return MigrationStatus(applied, failed, superseded, has_pending, has_table, drift_signals)
+  # #740: the run_once steps, from their own table — empty until the first one runs.
+  return MigrationStatus(applied, failed, superseded, has_pending, has_table, drift_signals,
+                         _data_steps(connection))
 end
 
 function status(settings::PormGSettings)::MigrationStatus
@@ -1487,15 +1497,27 @@ end
 
 Order SQL statements for safe execution:
 
+0. Data steps labelled `Data (pre): …` (#740)
 1. New tables (CREATE TABLE)
 2. Drop tables
 3. Rename tables (#615)
 4. Rename fields
 5. All other alterations
 6. Field CREATE INDEX (#152)
+7. Data steps labelled `Data (post): …` (#740)
 
 Returns the ordered statements and the concatenated SQL content for checksum. Statement order is
 part of the checksum input, so changing a bucket changes the digest of every plan that uses it.
+
+# Data steps (#740)
+
+A hand-written entry whose label starts `Data (pre):` runs before every schema statement, and one
+starting `Data (post):` after every one — so a backfill sees the column its plan adds, and the
+indexes too. The label decides the position, not the binding's name: an entry anywhere else in the
+catch-all bucket is ordered by the name of the binding it sits in, which is how a backfill could run
+before its own `ADD COLUMN`. A plan with no such label orders exactly as it did before #740, and so
+checksums the same. A label that starts `Data (` but is neither prefix is refused
+(`_data_step_kind`).
 
 # Why these buckets are safe without a dependency sort (#89)
 
@@ -1547,23 +1569,74 @@ anything. Until then every such child re-pointed redundantly, and the re-point's
 (or SQLite child rebuild) made a pure rename destructive.
 """
 function _order_statements(migration_plan)
-  first_execution::Vector{String} = []
-  second_execution::Vector{String} = []
-  rename_table_execution::Vector{String} = []   # #615: before anything that names a column
-  third_execution::Vector{String} = []
-  last_execution::Vector{String} = []
-  index_execution::Vector{String} = []   # #152: field CREATE INDEX runs AFTER same-table rebuilds
+  ordered = String[last(entry) for entry in _ordered_entries(migration_plan)]
+  all_sql = join(ordered, "\n")
+  return ordered, all_sql
+end
+
+# The reserved labels of a hand-written data step (#740). Matched by exact prefix, colon included —
+# see `_data_step_kind`.
+const DATA_PRE_PREFIX = "Data (pre):"
+const DATA_POST_PREFIX = "Data (post):"
+# What counts as an ATTEMPT at one: looser than the prefixes, in case and spacing, so `data (post):`
+# or `Data(pre):` is refused as a misspelt data step instead of running in the catch-all bucket —
+# detect loosely, parse strictly, as the plan-header lines are read.
+const DATA_STEP_LOOSE_RE = r"^\s*data\s*\("i
+
+"""
+    _data_step_kind(label) -> Union{Symbol, Nothing}
+
+`:pre` or `:post` for a data-step label (#740), `nothing` for any other label. A label that reads
+like one — `data (`, in any case and spacing — but is neither reserved prefix exactly (`Data (Pre):`,
+`Data(post):`, `Data (post)` without its colon, `Data (middle):`) raises `InvalidMigrationError`
+naming it. Read as an ordinary label, a typo would
+land in the catch-all bucket, ordered by the binding's name: the very ordering these prefixes exist
+to replace, and silently.
+"""
+function _data_step_kind(label::AbstractString)::Union{Symbol, Nothing}
+  startswith(label, DATA_PRE_PREFIX) && return :pre
+  startswith(label, DATA_POST_PREFIX) && return :post
+  occursin(DATA_STEP_LOOSE_RE, label) && throw(InvalidMigrationError(
+    "Migration plan label $(repr(label)) reads like a data step but is not one: a data step's " *
+    "label starts with exactly `$(DATA_PRE_PREFIX)` (runs before every schema statement) or " *
+    "`$(DATA_POST_PREFIX)` (runs after every one), spelt exactly so. Fix the label, or rename it so it does not start with `Data (`."))
+  return nothing
+end
+
+"""
+    _ordered_entries(migration_plan) -> Vector{Pair{String, String}}
+
+The plan's `label => sql` entries in execution order — the buckets `_order_statements` documents,
+with each entry's label kept beside its SQL so `dry_run` can name the data steps (#740).
+"""
+function _ordered_entries(migration_plan)::Vector{Pair{String, String}}
+  data_pre = Pair{String, String}[]        # #740: hand-written data steps, before every schema statement
+  first_execution = Pair{String, String}[]
+  second_execution = Pair{String, String}[]
+  rename_table_execution = Pair{String, String}[]   # #615: before anything that names a column
+  third_execution = Pair{String, String}[]
+  last_execution = Pair{String, String}[]
+  index_execution = Pair{String, String}[]   # #152: field CREATE INDEX runs AFTER same-table rebuilds
+  data_post = Pair{String, String}[]       # #740: after every schema statement, indexes included
 
   for dict_instructs in migration_plan
     for (key, value) in dict_instructs
-      if key == "New model"
-        push!(first_execution, value)
+      entry = String(key) => String(value)
+      # #740: first, ahead of the schema buckets. The label decides, never the binding it sits in —
+      # and a data step named "Data (pre): Rename field …" must not fall into the `contains` arm.
+      kind = _data_step_kind(key)
+      if kind === :pre
+        push!(data_pre, entry)
+      elseif kind === :post
+        push!(data_post, entry)
+      elseif key == "New model"
+        push!(first_execution, entry)
       elseif key == "Drop table"
-        push!(second_execution, value)
+        push!(second_execution, entry)
       elseif key == "Rename table"
-        push!(rename_table_execution, value)
+        push!(rename_table_execution, entry)
       elseif contains(key, "Rename field")
-        push!(third_execution, value)
+        push!(third_execution, entry)
       elseif startswith(key, "Create index")
         # #152: a newly-added db_index field's CREATE INDEX must run AFTER any same-table rebuild. An
         # SQLite "Alter table:" rebuild DROP TABLEs the table (dropping every secondary index) and only
@@ -1574,16 +1647,15 @@ function _order_statements(migration_plan)
         # "Create index: <name>" composite step — both for the same reason. "Remove index …" (different
         # prefix), "Create unique constraint: …" and the m2m "Create many-to-many unique index"
         # (separate join table) are excluded.
-        push!(index_execution, value)
+        push!(index_execution, entry)
       else
-        push!(last_execution, value)
+        push!(last_execution, entry)
       end
     end
   end
 
-  ordered = vcat(first_execution, second_execution, rename_table_execution, third_execution, last_execution, index_execution)
-  all_sql = join(ordered, "\n")
-  return ordered, all_sql
+  return vcat(data_pre, first_execution, second_execution, rename_table_execution, third_execution,
+              last_execution, index_execution, data_post)
 end
 
 # ==============================================================================
@@ -1603,12 +1675,15 @@ Use `is_destructive(r)` and `total_statements(r)` for derived properties.
   `DELETE` with no `WHERE`).
 - `lossy_alters` — the plan's lossy column changes (#803), one [`LossyAlter`](@ref) each, with `rows`
   counted against the live database for those that fail on existing rows.
+- `data_steps` — the labels of the plan's hand-written data steps (#740), in the order they run:
+  every `Data (pre): …` before the schema statements, every `Data (post): …` after them.
 """
 struct DryRunResult
   checksum::String
   statements::Vector{String}
   destructive_statements::Vector{String}
   lossy_alters::Vector{LossyAlter}
+  data_steps::Vector{String}
 end
 
 """
@@ -1655,6 +1730,13 @@ function Base.show(io::IO, r::DryRunResult)
   if isempty(r.destructive_statements) && isempty(silent) && isempty(failing)
     println(io, _emsg(io, "  \e[32m✓ Safe (no destructive operations)\e[0m"))
   end
+  # #740: hand-written data steps, named — the SQL list below does not say which statements are data.
+  if !isempty(r.data_steps)
+    println(io, "  Data steps: ", length(r.data_steps), " (hand-written; `pre` runs before the schema statements, `post` after)")
+    for label in r.data_steps
+      println(io, "    → ", label)
+    end
+  end
   println(io, "\n  SQL statements:")
   for (i, s) in enumerate(r.statements)
     display_s = length(s) > 200 ? first(s, 200) * "..." : s
@@ -1677,7 +1759,11 @@ reads nothing.
 function dry_run(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings)::DryRunResult
   Configuration._require_folder_backed(settings, "dry_run")
   migration_plan = _load_migration_plan(settings)
-  ordered_statements, all_sql = _order_statements(migration_plan)
+  # The same ordering `_order_statements` returns, with each label kept, so the data steps can be
+  # named (#740).
+  entries = _ordered_entries(migration_plan)
+  ordered_statements = String[last(e) for e in entries]
+  all_sql = join(ordered_statements, "\n")
   
   checksum = compute_checksum(all_sql)
   destructive_stmts = detect_destructive_actions(ordered_statements)
@@ -1688,7 +1774,8 @@ function dry_run(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGS
     checksum,
     ordered_statements,
     destructive_stmts,
-    lossy_alters
+    lossy_alters,
+    String[first(e) for e in entries if _data_step_kind(first(e)) !== nothing]
   )
 end
 
@@ -3410,7 +3497,9 @@ a draft the one inherently safe, reversible migration op.
 
 When `backup=true` (default) the file is renamed to `pending_migrations.jl.discarded`
 (overwriting any previous discard) so the draft can be recovered; otherwise it is deleted.
-`makemigrations` overwrites the pending file anyway, so a later regenerate is unaffected.
+`makemigrations` overwrites the pending file anyway, so a later regenerate is unaffected — except
+for a plan holding hand-written `Data (pre):` / `Data (post):` steps, which `makemigrations` refuses
+to overwrite (#740). Discarding is how you throw such a plan away on purpose.
 
 Returns `(discarded=true, path, backup, tables, statements)` describing what was thrown away,
 or `nothing` when there is no pending migration. Pairs with [`status`](@ref), which reports
@@ -3452,4 +3541,153 @@ end
 function discard_pending_migration(db::String; config::Dict{String,PormGSettings} = config, backup::Bool = true)
   settings = config[db]
   discard_pending_migration(settings; backup = backup)
+end
+
+
+# ==============================================================================
+# Data steps (#740): `run_once`
+# ==============================================================================
+
+"""
+    run_once(f, db::String, name; transaction = true, lock_wait = 30, config) -> Symbol
+    run_once(f, connection, settings, name; transaction = true, lock_wait = 30) -> Symbol
+
+Run the data step `f` once per database, recorded by `name` (#740). `f` receives the database's
+pool, so raw SQL inside the step is `fetch(conn, sql)`; ORM calls inside it join the step's
+transaction on their own.
+
+```julia
+PormG.Migrations.run_once("db", "2026-10-02_backfill_driver_code") do conn
+    for d in M.Driver.objects.filter("code__@isnull" => true).list()
+        M.Driver.objects.filter("driverid" => d[:driverid]).
+            update("code" => uppercase(first(d[:surname], 3)))
+    end
+end
+```
+
+Returns `:applied` when this call ran the step, `:already_applied` when a step of that name is
+recorded already (`f` is not called), and `:disabled` on a `change_db: false` connection, where
+nothing is read or written — the same contract as [`migrate`](@ref), which a boot script calls
+beside it.
+
+- **Recorded in `pormg_migrations_data`**, one row per name, created on first use. The row is the
+  whole of "applied": a step is never re-run, whatever its code says now, so give a changed step a
+  new name. There is no down step.
+- **The migration lock.** On PostgreSQL it holds the advisory lock `migrate` holds
+  (`pormg::migrations`), waiting up to `lock_wait` seconds (`OperationalError` naming the holder
+  after that), so a data step and a schema migration never run at once and two instances cannot both
+  run one step. SQLite has no such lock; there the transactional step checks its record inside its
+  `BEGIN IMMEDIATE` transaction, which no other process can share.
+- **`transaction = true`** (default): the step and its record commit together. If `f` throws, both
+  roll back, nothing is recorded, the error propagates, and the next call runs the step again.
+- **`transaction = false`**: for what cannot run inside a transaction — PostgreSQL's
+  `CREATE INDEX CONCURRENTLY` — or a backfill too large for one. The record is written after `f`
+  returns, so a throw records nothing and keeps whatever `f` already did: write such a step to be
+  safe to run again (`CREATE INDEX CONCURRENTLY IF NOT EXISTS`). On SQLite nothing serializes it:
+  two runners can both run `f`, and the one that records second returns `:already_applied`. An
+  index a step creates must also be declared on the model (`db_index = true`),
+  or the next `makemigrations` plans to drop it.
+
+Raises `TransactionError` when called inside an open transaction on the same database — a step's
+commit has to be its own — and `InvalidValueError` for an empty name or one longer than 255
+characters. It reads no files, so a `register_connection` database works too.
+
+Expand → backfill → contract is two plans with a `run_once` between them: see *Data Migrations* in
+the advanced migrations guide.
+"""
+function run_once(f::Function, connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
+                  name::AbstractString; transaction::Bool = true, lock_wait::Real = 30)::Symbol
+  step = String(name)
+  isempty(strip(step)) && throw(InvalidValueError("run_once needs a step name; got $(repr(step))."))
+  length(step) <= 255 || throw(InvalidValueError(
+    "run_once step names are at most 255 characters (pormg_migrations_data.name); got $(length(step))."))
+  # Validated before the change_db return, as `migrate` does: a bad value fails on every instance.
+  timeouts = _migration_timeouts(lock_wait)
+  if !settings.change_db
+    @warn("The database is not set to change_db, so the data step $(repr(step)) was not run.")
+    return :disabled
+  end
+  # The `atomic(durable = true)` rule: inside an enclosing transaction the step's "commit" would be a
+  # savepoint, recorded as applied while the outer block can still roll it back.
+  Configuration.in_transaction_on(connection) && throw(TransactionError(
+    "run_once($(repr(step))) cannot run inside an open transaction on this database: a data step " *
+    "commits on its own, together with its record. Call it outside the transaction block."))
+  return _run_once_locked(f, connection, settings, step, transaction, timeouts)
+end
+
+function run_once(f::Function, db::String, name::AbstractString; config::Dict{String,PormGSettings} = config,
+                  transaction::Bool = true, lock_wait::Real = 30)::Symbol
+  settings = config[db]
+  return run_once(f, settings.connections, settings, name; transaction = transaction, lock_wait = lock_wait)
+end
+
+# PostgreSQL: everything under the migration lock — the table, the record check, the step.
+function _run_once_locked(f::Function, connection::PormGPostgres, settings::PormGSettings, step::String,
+                          transaction::Bool, timeouts::_MigrationTimeouts)::Symbol
+  return AdvisoryLock.with_advisory_lock(connection, _migration_lock_key(settings);
+                                         wait = true, timeout_ms = timeouts.lock_wait_ms) do
+    fetch(connection, Dialect.create_data_steps_table(connection))
+    # Under the lock, so no other run_once or migrate can record this step in between.
+    _data_step_recorded(connection, step) && return :already_applied
+    if transaction
+      run_in_transaction(connection) do
+        f(connection)
+        _record_data_step(connection, step, true)   # inside the context: commits with the step
+      end
+    else
+      f(connection)
+      _record_data_step(connection, step, false)
+    end
+    return :applied
+  end
+end
+
+# SQLite: no advisory lock. The transactional step checks its record INSIDE `BEGIN IMMEDIATE` (the
+# #737 shape), so two processes cannot both pass the check. The non-transactional one is not
+# serialized at all, on purpose: holding the process-wide SQLite write lock across `f` — a backfill
+# too large for one transaction, maybe spawning writer tasks of its own — would stall every other
+# writer in the process, and deadlock on a task `f` waits for. Two runners can therefore both run
+# it (which the docs tell its author to allow for); the second to record hits the UNIQUE name and
+# reports `:already_applied`.
+function _run_once_locked(f::Function, connection::PormGSQLite, settings::PormGSettings, step::String,
+                          transaction::Bool, ::_MigrationTimeouts)::Symbol
+  fetch(connection, Dialect.create_data_steps_table(connection))
+  if transaction
+    ran = run_in_transaction(connection) do
+      _data_step_recorded(connection, step) && return false
+      f(connection)
+      _record_data_step(connection, step, true)
+      return true
+    end
+    return ran ? :applied : :already_applied
+  end
+  _data_step_recorded(connection, step) && return :already_applied
+  f(connection)
+  try
+    _record_data_step(connection, step, false)
+  catch e
+    # Another runner recorded the same name while `f` ran here.
+    (e isa IntegrityError && _data_step_recorded(connection, step)) || rethrow()
+    return :already_applied
+  end
+  return :applied
+end
+
+# `fetch` with no `conn`, so inside `run_in_transaction` both run on the transaction's connection:
+# an explicit `conn` would hand it back to the pool mid-transaction (#139).
+_data_step_recorded(connection::Union{PormGPostgres, PormGSQLite}, step::String)::Bool =
+  nrow(DataFrame(fetch(connection, Dialect.select_data_step_sql(connection); params = Any[step]))) > 0
+
+_record_data_step(connection::Union{PormGPostgres, PormGSQLite}, step::String, transactional::Bool) =
+  fetch(connection, Dialect.insert_data_step_sql(connection); params = Any[step, transactional])
+
+# The recorded data steps for `status()`: empty when the table does not exist yet, which `status`
+# reports rather than creates — it is read-only.
+function _data_steps(connection::Union{PormGPostgres, PormGSQLite})::Vector{NamedTuple}
+  exists = DataFrame(fetch(connection, Dialect.data_steps_table_exists_sql(connection)))[1, 1]
+  (exists === true || (exists isa Integer && exists > 0)) || return NamedTuple[]
+  rows = DataFrame(fetch(connection, Dialect.select_all_data_steps_sql(connection)))
+  # `transactional` as a Bool on both engines: SQLite stores the BOOLEAN as 0/1.
+  return NamedTuple[(name = String(r.name), transactional = Bool(r.transactional), applied_at = r.applied_at)
+                    for r in eachrow(rows)]
 end

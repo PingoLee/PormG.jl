@@ -114,6 +114,13 @@ keyed by table name. Operation descriptions are stable strings such as `"New mod
 `"Add field: <name>"`, `"Rename field: <name>"`, `"Remove field: <name>"`,
 `"Create index on <name>"`, and `"Drop table"`.
 
+Two label prefixes are **reserved** for hand-written data steps (#740): an entry whose label starts
+with `Data (pre):` runs before every schema statement of the plan, and one starting with
+`Data (post):` after every one, whichever table's binding holds it. `makemigrations` never writes
+them. A label that reads like one but is neither prefix exactly — any case, any spacing, a missing
+colon — is refused with `InvalidMigrationError`. A plan with no such label orders, and therefore checksums, exactly as it did
+before these prefixes existed. See [Data Migrations](advanced.md#Data-Migrations).
+
 ### A plan file is read as data, never executed
 
 The plan is written in Julia syntax, but PormG never runs it. `dry_run()`, `migrate()` and
@@ -201,6 +208,23 @@ rather than the canonical `YYYY-MM-DDTHH:MM:SS.sss+00:00` every `DateTimeField` 
 created by an earlier release keeps that default (`CREATE TABLE IF NOT EXISTS` never revisits it),
 so PormG writes the column explicitly on every migration record, and `init_migrations` rewrites rows
 still in the old form into the canonical text — once, idempotently, with no action on your part.
+
+## Data-step table: `pormg_migrations_data`
+
+[`run_once`](advanced.md#Data-Migrations) records its steps in a table of its own,
+created on first use, so the `pormg_migrations` columns above are untouched (#740). Its name sits
+under the `pormg_migrations` prefix that every introspection ignore list carries, so `makemigrations`
+and `check` never plan anything for it.
+
+| Column | PostgreSQL type | SQLite type | Notes |
+| :--- | :--- | :--- | :--- |
+| `id` | `SERIAL PRIMARY KEY` | `INTEGER PRIMARY KEY AUTOINCREMENT` | surrogate key; the order steps were applied in |
+| `name` | `VARCHAR(255) NOT NULL UNIQUE` | same | the step name passed to `run_once`, its identity |
+| `transactional` | `BOOLEAN NOT NULL` | same | whether the step ran in a transaction |
+| `applied_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | `DATETIME … DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'))` | apply time |
+| `format_version` | `INTEGER NOT NULL DEFAULT 1` | same | data-step table contract version |
+
+It holds one row per applied step and nothing else: a step that failed is not recorded.
 
 ## What "frozen" guarantees
 

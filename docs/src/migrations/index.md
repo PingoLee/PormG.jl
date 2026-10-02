@@ -416,7 +416,7 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
     filesystem. Details: [Deploying → SQLite](deploying.md#SQLite).
 
 ### PostgreSQL: Advisory Locking
-`migrate()` acquires a PostgreSQL session-level advisory lock before it writes anything — the history table and the configured extensions included — so a second migrator against the same database **queues** instead of interleaving its DDL. It waits up to `lock_wait` seconds (default `30`) and then fails with an `OperationalError` naming the process that holds the lock, rather than proceeding unserialized. Running `migrate()` from several instances at boot: [Deploying](deploying.md).
+`migrate()` acquires a PostgreSQL session-level advisory lock before it writes anything — the history table and the configured extensions included — so a second migrator against the same database **queues** instead of interleaving its DDL. It waits up to `lock_wait` seconds (default `30`) and then fails with an `OperationalError` naming the process that holds the lock, rather than proceeding unserialized. [`run_once`](advanced.md#Data-Migrations) data steps take the same lock. Running `migrate()` from several instances at boot: [Deploying](deploying.md).
 
 The key is the constant `pormg::migrations`, with **no database or folder qualifier** — deliberately. A PostgreSQL advisory lock is tagged with the *database OID* alongside the key, so the database is already the lock's namespace:
 

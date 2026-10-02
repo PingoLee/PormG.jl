@@ -29,6 +29,18 @@ what happened, and none of the five is an error:
 `version` is the `pormg_migrations.version` of the row involved, and `n_statements` is how many plan
 statements this call executed.
 
+A release that also ships a data step runs it with [`run_once`](advanced.md#Data-Migrations): a
+backfill right after `migrate`, which it needs to have added the column, and a step that creates an
+index before it. Every instance can call it: the first runs the step and records it by name, and the
+rest find it recorded and skip it. (On SQLite a `transaction = false` step is the exception: see
+[Data Migrations](advanced.md#Data-Migrations).)
+
+```julia
+PormG.Migrations.run_once("db", "2026-10-02_backfill_driver_code") do conn
+    # ORM calls here run in the step's transaction
+end
+```
+
 A **failure** is an exception, and at boot the right response is usually to let it stop the process:
 
 - `DestructiveMigrationError`: the plan drops something and `destructive = true` was not passed. See
@@ -62,7 +74,9 @@ A **failure** is an exception, and at boot the right response is usually to let 
 Everything `migrate()` writes happens while it holds one PostgreSQL advisory lock,
 `pormg::migrations`. That covers creating the `pormg_migrations` history table, installing the
 configured extensions, and applying the plan. Instances that boot together therefore queue on the
-lock instead of racing each other's DDL. The lock is per database; see
+lock instead of racing each other's DDL. [`run_once`](advanced.md#Data-Migrations) takes the same
+lock, with the same `lock_wait`, so a data step never runs alongside a schema migration and two
+instances never both run one step. The lock is per database; see
 [Advisory Locking](index.md#PostgreSQL:-Advisory-Locking) for how the key is scoped.
 
 The plan is read, and a destructive plan refused, **before** the lock is requested, so an instance

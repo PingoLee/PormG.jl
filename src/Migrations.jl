@@ -19,6 +19,7 @@ import PormG.ConnectionPool: fetch, with_transaction, with_sqlite_write_lock, fi
 # before BEGIN, and asserts the suspension took. Both must be on this list — an export from
 # ConnectionPool alone is an UndefVarError here, and only the migration path would hit it.
 import PormG.ConnectionPool: acquire_connection, _assert_foreign_keys_suspended
+import PormG.ConnectionPool: run_in_transaction   # #740: `run_once`'s transactional step
 import PormG.Configuration
 import PormG.Configuration: get_settings
 using Logging
@@ -39,6 +40,10 @@ import PormG: FieldValidationError
 # #737: `migrate`'s keyword validation and the `MigrationResult` constructor refuse a bad value with
 # the same type every other public entry point uses for one.
 import PormG: InvalidValueError
+# #740: `run_once` refuses to run inside an open transaction, the `atomic(durable = true)` rule.
+import PormG: TransactionError
+# #740: on SQLite a non-transactional `run_once` that loses the race to record its name.
+import PormG: IntegrityError
 # MissingConfigurationError lives in Configuration (its umbrella ConfigurationError is in Kernel);
 # it is NOT a PormG-level binding, so it must be imported from the owning module.
 import PormG.Configuration: MissingConfigurationError
@@ -117,6 +122,7 @@ export get_migration_plan
 # Exports — new migration lifecycle APIs (Phases 1–7)
 export init_migrations, status, dry_run, check
 export mark_applied, mark_failed, remove_migration_record, discard_pending_migration
+export run_once
 export MigrationStatus, DryRunResult, SchemaCheckResult, SchemaCheckFinding, MigrationResult
 
 # `public` (Julia 1.11+) — user-facing but not exported (#289). `docs/src/migrations/stability.md`

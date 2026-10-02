@@ -446,7 +446,8 @@ include(joinpath(@__DIR__, "..", "load_drivers.jl"))
             NamedTuple[],
             false,
             false,
-            ["History table pormg_migrations does not exist."]
+            ["History table pormg_migrations does not exist."],
+            NamedTuple[]  # #740: no data steps
         )
         @test s.has_history_table == false
         @test length(s.applied) == 0
@@ -464,7 +465,8 @@ include(joinpath(@__DIR__, "..", "load_drivers.jl"))
             NamedTuple[],
             false,
             true,
-            String[]
+            String[],
+            NamedTuple[]
         )
         @test s2.has_history_table == true
         @test length(s2.applied) == 1
@@ -480,7 +482,8 @@ include(joinpath(@__DIR__, "..", "load_drivers.jl"))
             NamedTuple[],
             true,  # pending file also exists
             true,
-            ["Pending migrations file exists alongside applied history"]
+            ["Pending migrations file exists alongside applied history"],
+            NamedTuple[]
         )
         @test length(s3.failed) == 1
         @test s3.pending == true
@@ -503,7 +506,8 @@ include(joinpath(@__DIR__, "..", "load_drivers.jl"))
             Migrations.compute_checksum(join(stmts, "\n")),
             stmts,
             String[],  # no destructive statements
-            Migrations.LossyAlter[]  # #803: no lossy column changes
+            Migrations.LossyAlter[],  # #803: no lossy column changes
+            String[]  # #740: no data steps
         )
         @test Migrations.is_destructive(result) == false
         @test Migrations.total_statements(result) == 2
@@ -520,7 +524,8 @@ include(joinpath(@__DIR__, "..", "load_drivers.jl"))
             Migrations.compute_checksum(join(stmts_destr, "\n")),
             stmts_destr,
             destr_stmts,
-            Migrations.LossyAlter[]
+            Migrations.LossyAlter[],
+            String[]
         )
         @test Migrations.is_destructive(result2) == true
         @test length(result2.destructive_statements) == 1

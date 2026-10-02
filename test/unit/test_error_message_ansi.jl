@@ -151,6 +151,7 @@ end
         true,                                  # pending  → yellow line
         true,                                  # has_history_table
         ["schema drift detected"],             # drift_signals → yellow line
+        NamedTuple[],                          # data_steps (#740)
     )
 
     _with_have_color(true) do

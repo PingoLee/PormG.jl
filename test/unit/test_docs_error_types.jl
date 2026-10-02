@@ -1689,6 +1689,58 @@ const DOCERR_CASES = [
             PormG.Migrations.remove_migration_record(pool, st, "20310101000000999")
         end,
     ),
+    # #740: a label that looks like a data step and is not one. Refused while the plan is ordered,
+    # before the mock connection is touched — it would otherwise land in the catch-all bucket.
+    (
+        "migrations/advanced.md / stability.md — a `Data (` label that is not `Data (pre):`/`Data (post):` raises InvalidMigrationError (#740)",
+        InvalidMigrationError,
+        () -> mktempdir() do dir
+            mkpath(joinpath(dir, "migrations"))
+            write(joinpath(dir, "migrations", "pending_migrations.jl"),
+                  "module pending_migrations\nt = OrderedDict(\"Data (Pre): fill\" => \"UPDATE t SET a = 1;\")\nend\n")
+            st = PormG.Configuration.Settings(change_data = true)
+            st.db_def_folder = dir
+            PormG.Migrations.dry_run(DocErrMockPostgres(), st)
+        end,
+    ),
+    # #740: makemigrations will not replace a pending plan holding data steps. The models declare a
+    # table the empty in-memory database lacks, so the diff is non-empty: the overwrite path.
+    (
+        "migrations/advanced.md — makemigrations on a pending plan with data steps raises InvalidMigrationError (#740)",
+        InvalidMigrationError,
+        () -> mktempdir() do dir
+            mkpath(joinpath(dir, "migrations"))
+            write(joinpath(dir, "migrations", "pending_migrations.jl"),
+                  "module pending_migrations\nt = OrderedDict(\"Data (post): fill\" => \"UPDATE t SET a = 1;\")\nend\n")
+            models = joinpath(dir, "models.jl")
+            write(models, "module models\nimport PormG.Models\nDocErr740 = Models.Model(id = Models.IDField())\nend\n")
+            pool = PormG.ConnectionPool.SQLiteConnectionPool(":memory:"; pool_size = 1)
+            st = PormG.Configuration.Settings(connections = pool, db_def_folder = dir)
+            st.change_db = true
+            try
+                PormG.Migrations.makemigrations(pool, st; path = models, interactive = false)
+            finally
+                PormG.ConnectionPool.close_pool!(pool)
+            end
+        end,
+    ),
+    # #740: a data step commits on its own, so it refuses to run inside an open transaction.
+    (
+        "migrations/advanced.md / src/migrations/runner.jl — run_once docstring: run_once inside an open transaction raises TransactionError (#740)",
+        TransactionError,
+        () -> begin
+            pool = PormG.ConnectionPool.SQLiteConnectionPool(":memory:"; pool_size = 1)
+            st = PormG.Configuration.Settings(connections = pool)
+            st.change_db = true
+            try
+                PormG.ConnectionPool.run_in_transaction(pool) do
+                    PormG.Migrations.run_once(_ -> nothing, pool, st, "docerr_740")
+                end
+            finally
+                PormG.ConnectionPool.close_pool!(pool)
+            end
+        end,
+    ),
     # #726: a rename question with nothing left on stdin. `devnull` is end of input at once — the
     # CI shape the page describes — and the error fires at the question, before any DDL is planned.
     (

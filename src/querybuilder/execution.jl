@@ -1928,6 +1928,7 @@ const _NUMERIC_FIELDS = Union{Models.sIntegerField, Models.sPositiveIntegerField
 function _is_number_side(side, kind::_RenderKind, instruc::SQLInstruction)::Bool
   kind isa Union{CInt32,CInt64,CDecimal} && return true
   kind === nothing || return false
+  side isa Bool && return false                                        # `Bool <: Integer`, but not a number
   side isa String && !_is_field_path(side, instruc) && return false   # a text literal
   _is_bare_column(side) || return true                                 # untyped arithmetic, a function
   f = _operand_column_field(side, instruc)
@@ -2010,7 +2011,7 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
       product = op == "*" ? "($(lms)) * ($(right_side))" : "($(lms)) * 1.0 / ($(right_side))"
       return "CAST(round($(product)) AS INTEGER)", _IntervalMs()
     end
-    sqlite && throw(_sqlite_interval_error("`$(op)` between an interval and $(right_kind === nothing ? "text" : "a date or an interval")"))
+    sqlite && throw(_sqlite_interval_error("`$(op)` between an interval and $(right_kind === nothing ? "a value that is not a number (text, a boolean, a UUID)" : "a date or an interval")"))
     return "($(left_side) $(op) $(right_side))", nothing
   end
 

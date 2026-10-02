@@ -1977,9 +1977,11 @@ end
     ("d * Lag(points)", _fd_diff() * _FN.Lag("points", over = _FN.WindowOver(order_by = ["id"])), "window function"),
     # Review of #881: a text, UUID or boolean column has no canonical kind either, and SQLite multiplied
     # the milliseconds by its numeric prefix. PostgreSQL has no `interval * varchar`.
-    ("d * a text column", _fd_diff() * F("code"), "between an interval and text"),
+    ("d * a text column", _fd_diff() * F("code"), "between an interval and a value that is not a number"),
     ("a text column * d", F("code") * _fd_diff(), "on the right of a value that is not one"),
-    ("d / a boolean column", _fd_diff() / F("flag"), "between an interval and text"),
+    ("d / a boolean column", _fd_diff() / F("flag"), "between an interval and a value that is not a number"),
+    # `Bool <: Integer`: a literal `true` multiplied the milliseconds by 1 (delta review of #881).
+    ("d * true", _fd_diff() * true, "between an interval and a value that is not a number"),
   )
   q = FD.Fd_result.objects
   q.values("x" => expr)

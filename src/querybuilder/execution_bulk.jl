@@ -1946,8 +1946,11 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
             # in every other writer (#712): CSV would otherwise store its `repr` as the column text.
             _bulk_copy_cell(_format_single(f_meta, field, value, "bulk_copy"))
           catch e
-            e isa PormGError && rethrow()   # keep the taxonomy type (bulk_copy logs no per-row depuration; the message below carries the row index only for the wrapped case)
-            throw(InvalidValueError("Error in bulk_copy, row $(row_index) for model $(model.name) failed validation or formatting: $(e)"))
+            # A value refusal names the cell: bulk_copy logs no per-row depuration, so this message
+            # is the only place a 100k-row frame's bad cell is located (#869).
+            e isa InvalidValueError && throw(_bulk_copy_cell_error(e, model, field, row_index))
+            e isa PormGError && rethrow()   # any other taxonomy type is not about the value, and passes as is
+            throw(InvalidValueError("Error in bulk_copy, row $(row_index) for model $(model.name), field \"$(field)\" failed validation or formatting: $(e)"))
           end
         end
       end
@@ -1983,6 +1986,20 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
 
 end
 bulk_copy(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_copy(model |> object, df; kwargs...)
+
+# #869: a cell's `InvalidValueError`, re-raised with the row, model and field it came from. Before,
+# only an untyped error got the row index; a typed refusal (`format_text_sql`, `format_date_sql`,
+# `format_uuid_sql`, `format_duration_sql`, a max_length) was rethrown bare, naming no cell. Two of
+# the refusals already name part of the cell, so the message says each part once: `_single_value`'s
+# own "field `x` was given …" is kept as it is (#712 pins that wording for every writer), and
+# `_validation_error`'s model-and-field prefix is dropped for the one this adds.
+function _bulk_copy_cell_error(e::InvalidValueError, model::PormGModel, field::AbstractString, row_index::Integer)
+  head = "Error in bulk_copy, row $(row_index) for model $(model.name)"
+  startswith(e.msg, "Error in bulk_copy, field `$(field)` ") &&                    # _single_value
+    return InvalidValueError("$(head), $(chopprefix(e.msg, "Error in bulk_copy, "))")
+  reason = chopprefix(e.msg, "Error in bulk_copy for model $(model.name), field \"$(field)\": ")   # _validation_error
+  return InvalidValueError("$(head), field \"$(field)\": $(reason)")
+end
 
 function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{String, String}, model::PormGModel, row::DataFrames.DataFrameRow, index::Integer; op::AbstractString = "bulk_insert")
   for field in fields

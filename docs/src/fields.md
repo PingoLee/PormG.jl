@@ -209,6 +209,10 @@ M.Result.objects.filter("positiontext" => "1")    # the same
 M.Result.objects.filter("positiontext" => 1.0)    # FilterError: pass the text, "1"
 ```
 
+`max_length` counts the characters of the text that is written, whatever the value was: `12345` in a
+`CharField(max_length = 3)` is five characters and raises `InvalidValueError`, exactly as `"12345"`
+does, and so does a date (`"2020-01-01"` is ten).
+
 ### CharField(max_length)
 
 **Purpose**: Variable-length strings with maximum length constraint.

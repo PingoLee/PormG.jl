@@ -46,6 +46,8 @@ using PormG.Functions: Lower
 # #194 — an outer aggregate, for the grouped-correlation claim below. `Count` is deliberately not a
 # top-level PormG export (it would collide with Base/user code), so it is named here explicitly.
 using PormG.Functions: Count
+# #867 — an aggregate wrapping a `Subquery`, for the subqueries-page claim below.
+using PormG.Functions: Max
 # #569 — a text format outside the portable table, for the ToChar docstring claim below.
 using PormG.Functions: ToChar
 # #40 — the `Extract` part-spelling claim on the PostgreSQL guide.
@@ -192,6 +194,15 @@ const DOCERR_CASES = [
         () -> begin
             inner = DOCERR_STATUS_PG.objects.values("statusid", "status")
             DOCERR_RESULT_PG.objects.values("resultid", "x" => Subquery(inner)).
+                list(show_query = :dict)
+        end,
+    ),
+    (
+        "read/subqueries_and_ctes.md — an aggregate cannot wrap a `Subquery(...)` (#867)",
+        QueryBuildError,
+        () -> begin
+            inner = DOCERR_STATUS_PG.objects.values("status")
+            DOCERR_RESULT_PG.objects.values("resultid", "x" => Max(Subquery(inner))).
                 list(show_query = :dict)
         end,
     ),
@@ -1165,6 +1176,16 @@ const DOCERR_CASES = [
         () -> let m = Model("docerr_postext_860f", id = IDField(), positiontext = CharField())
             m.connect_key = "docerr_pg"; m._module = Main
             q = m.objects; q.filter("positiontext" => 1.0); q.list(show_query = :dict)
+        end,
+    ),
+    # #868. The same *Text Fields* section says `max_length` counts the text an integer is written
+    # as. Every writer, value type and both engines are pinned in `test_text_value_types.jl`.
+    (
+        "fields.md — an integer longer than a text field's max_length raises on a write (#868)",
+        InvalidValueError,
+        () -> let m = Model("docerr_code_868", id = IDField(), code = CharField(max_length = 3))
+            m.connect_key = "docerr_pg"; m._module = Main
+            m.objects.create("code" => 12345, show_query = :dict)
         end,
     ),
     # #780. The same *Numeric Fields* paragraph names the type a declaration raises: a prefixed string

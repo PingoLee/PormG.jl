@@ -11,12 +11,16 @@
 # The fix refuses what has no single text (a float, a `Decimal`: `1.5` vs `1.50`, `"1.0e10"`) with a
 # typed error, and widens `Int` to `Integer`. Deterministic and DB-free: mock connections on both
 # engines, `inspect_query` for the bound parameters, `show_query = :dict` for the write path.
+#
+# #868 (the last three testsets) is the write-side follow-up: once an integer or a date is written
+# as text, a text field's `max_length` has to measure that text too, not only a String's.
 # ============================================================
 
 using Test
 using PormG
 using Decimals: Decimal
 using PormG.Models: Model, IDField, CharField, DateField
+using Dates: Date, DateTime, Time
 using PormG.QueryBuilder: inspect_query, F, ToChar
 using PormG.Functions: Lower
 
@@ -126,4 +130,72 @@ end
     out = M.objects.create("surname" => Int32(5), show_query = :dict)
     @test "5" in out[:parameters]
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #868 — a text field's `max_length` is measured on the text written, not only on a String.
+# `format_text_sql` writes an integer (any width, #860) and a date/time as text, but the check ran
+# only for an `AbstractString`, so `CharField(max_length = 3)` took `12345` and `Date(2020, 1, 1)`:
+# SQLite stored the over-length value, PostgreSQL refused it as an untyped driver error. Now each is
+# the same `InvalidValueError` an over-length String gets, naming the field, on both engines.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# F1 driver codes are three letters ("SEN", "PRO"), so `code` is the bounded text column.
+textval868_driver(key) = begin
+  m = Model("textval868_driver", driverid = IDField(), code = CharField(max_length = 3, null = true))
+  m.connect_key = key
+  m
+end
+const TEXTVAL868_MODELS = ((:postgres, textval868_driver("textval860_pg")), (:sqlite, textval868_driver("textval860_sl")))
+
+# The message a refusal carries, or "" when there was none, so `occursin` fails instead of erroring.
+textval868_msg(err) = err === nothing ? "" : sprint(showerror, err)
+
+@testset "#868: create measures an integer or date written to a text field against max_length" begin
+  over = (12345, Int32(12345), UInt16(1000), big(1000), Date(2020, 1, 1), DateTime(2020, 1, 1, 12),
+          Time(12, 30))
+  for (backend, M) in TEXTVAL868_MODELS, v in over
+    @testset "$backend · $(typeof(v))" begin
+      err = textval860_refusal(() -> M.objects.create("code" => v, show_query = :dict))
+      @test err isa PormG.InvalidValueError
+      msg = textval868_msg(err)
+      # The same refusal an over-length String gets: the field, the bound, the measured length.
+      @test occursin("\"code\"", msg)
+      @test occursin("max_length is 3", msg)
+      @test occursin("has length $(length(PormG.Models.format_text_sql(v)))", msg)
+      # A value that is not a String says what text it was measured as.
+      @test occursin(repr(PormG.Models.format_text_sql(v)), msg)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #868: the boundary. A value whose text fits is written as before, at exactly max_length and
+# below. A `Bool` is still written: it is not measured (each engine stores it as a different text),
+# and it would not be refused if it were, since `length(true) == 1` — so this line pins that the
+# check did not start refusing it, not the skip itself.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#868: a value whose text fits max_length is still written" begin
+  for (backend, M) in TEXTVAL868_MODELS
+    @test "123" in M.objects.create("code" => 123, show_query = :dict)[:parameters]
+    @test "255" in M.objects.create("code" => UInt8(255), show_query = :dict)[:parameters]
+    @test "SEN" in M.objects.create("code" => "SEN", show_query = :dict)[:parameters]
+    @test M.objects.create("code" => true, show_query = :dict) isa AbstractDict
+    # An over-length String is refused exactly as before #868.
+    @test textval860_refusal(() -> M.objects.create("code" => "SENNA", show_query = :dict)) isa PormG.InvalidValueError
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #868: every writer shares the check (`_validate_field_value`), so a bulk write refuses the same
+# integer. `bulk_insert` stands in for the three bulk writers here, on the PostgreSQL mock only: the
+# SQLite mock stops earlier, at the driver's bind-limit probe, which needs the SQLite extension this
+# DB-free file does not load. The check it would reach is the same function on both engines.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#868: bulk_insert refuses an over-length integer in a text field" begin
+  M = last(first(TEXTVAL868_MODELS))
+  df = PormG.QueryBuilder.DataFrames.DataFrame(code = Any["SEN", 12345])
+  err = textval860_refusal(() -> PormG.QueryBuilder.bulk_insert(M.objects, df; show_query = :dict))
+  @test err isa PormG.InvalidValueError
+  @test occursin("max_length is 3", textval868_msg(err))
 end

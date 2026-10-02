@@ -532,7 +532,7 @@ end
 # SQLite stores a DATE as TEXT, and `-` on TEXT subtracted the YEARS — `(date + 30 days) - date`
 # was 0 on SQLite and 30 on PostgreSQL. Every value here is recomputed in Julia from the stored
 # dates, so the two engines agreeing on a wrong number still fails. A timestamp difference reads back
-# as a `CompoundPeriod` on PostgreSQL and is refused on SQLite.
+# as a `CompoundPeriod` on both engines (#814).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Subtracting two dates (#801)" begin
   is_sqlite = PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGSQLite
@@ -587,17 +587,62 @@ end
     @test df_f.resultid == df_all.resultid[keep]
   end
 
-  @testset "a timestamp difference: an interval on PostgreSQL, refused on SQLite" begin
+  # #814: an interval on BOTH engines now. SQLite renders the DurationField text and reads it back
+  # through the same #581 pin, so every value here is the same `CompoundPeriod` on either engine.
+  @testset "a timestamp difference is an interval on both engines (#814)" begin
     # Race 1's `start_at` is seeded as 2009-03-29T06:00 over a `date` of 2009-03-29.
     query = M.Race.objects
     query.filter("raceid" => 1)
-    query.values("since_midnight" => F("start_at") - F("date"))
+    query.values("since_midnight" => F("start_at") - F("date"),
+                 # Negative: the sign is carried, not lost to `abs`.
+                 "until_start" => F("date") - F("start_at"),
+                 # Past 100 hours: hours are never folded into days, as a DurationField stores them.
+                 "five_days_on" => (F("start_at") + Dates.Day(5)) - F("date"),
+                 # A sub-second part survives the millisecond round trip.
+                 "with_ms" => (F("start_at") + Dates.Millisecond(250)) - F("date"))
+    df = query |> DataFrame
+    @test size(df, 1) == 1
+    @test df[1, :since_midnight] isa Dates.CompoundPeriod   # the #581 pin, on every engine
+    @test df[1, :since_midnight] == Dates.Hour(6)
+    @test df[1, :until_start] == -Dates.Hour(6)
+    @test df[1, :five_days_on] == Dates.Hour(126)
+    @test df[1, :with_ms] == Dates.Hour(6) + Dates.Millisecond(250)
+  end
+
+  @testset "a timestamp difference equals the interval Julia computes (#814)" begin
+    # Every 2009 race with a start time. The oracle is `start_at - DateTime(date)` per row, in
+    # milliseconds, compared against the read-back period converted the same way.
+    query = M.Race.objects
+    query.filter("year" => 2009, "start_at__@isnull" => false)
+    query.values("raceid", "date", "start_at", "gap" => F("start_at") - F("date"))
+    query.order_by("raceid")
+    df = query |> DataFrame
+    @test size(df, 1) > 1
+    expected = [Dates.value(Dates.DateTime(s) - Dates.DateTime(Dates.Date(d))) for (s, d) in zip(df.start_at, df.date)]
+    @test all(g -> g isa Dates.CompoundPeriod, df.gap)
+    @test [Dates.toms(g) for g in df.gap] == expected
+  end
+
+  @testset "a timestamp difference compares against a duration (#814)" begin
+    # Equality is exact on both engines: the rendered text is the text the literal binds as.
+    eq = M.Race.objects
+    eq.filter("raceid" => 1, (F("start_at") - F("date")) == Dates.Hour(6))
+    eq.values("raceid")
+    @test (eq |> DataFrame).raceid == [1]
+
+    ne = M.Race.objects
+    ne.filter("raceid" => 1, (F("start_at") - F("date")) != Dates.Hour(6))
+    ne.values("raceid")
+    @test size(ne |> DataFrame, 1) == 0
+
+    # Ordering: an interval comparison on PostgreSQL, refused on SQLite (the difference is TEXT).
+    ord = M.Race.objects
+    ord.filter("raceid" => 1, (F("start_at") - F("date")) > Dates.Hour(1))
+    ord.values("raceid")
     if is_sqlite
-      @test_throws PormG.QueryBuildError (query |> DataFrame)
+      @test_throws PormG.QueryBuildError (ord |> DataFrame)
     else
-      df = query |> DataFrame
-      @test df[1, :since_midnight] isa Dates.CompoundPeriod   # the #581 pin, on every driver
-      @test df[1, :since_midnight] == Dates.Hour(6)
+      @test (ord |> DataFrame).raceid == [1]
     end
   end
 end

@@ -121,7 +121,8 @@ const DOCERR_RACE_PG = let m = Model("docerr_race_docerr_pg",
     m.connect_key = "docerr_pg"; m._module = Main; m
 end
 
-# #801 — a date AND a timestamp column on SQLite, the engine that refuses a timestamp difference.
+# #801 — a date AND a timestamp column on SQLite. Since #814 a timestamp difference renders there, and
+# what SQLite refuses is ORDERING it: the difference is interval TEXT, which does not sort like one.
 const DOCERR_RACE801_SL = let m = Model("docerr_race801_docerr_sl",
         raceid = IDField(), date = DateField(), start_at = DateTimeField(null = true))
     m.connect_key = "docerr_sl"; m._module = Main; m
@@ -1329,14 +1330,24 @@ const DOCERR_CASES = [
             q.list(show_query = :dict)
         end,
     ),
-    # #801. The date-arithmetic section states two refusals: a difference with a timestamp side on
-    # SQLite (PostgreSQL returns an interval there), and `+`/`*`/`/` between two temporal values.
+    # #801/#814. The date-arithmetic section states these refusals: ordering a timestamp difference on
+    # SQLite (#814 — it is TEXT there), a duration against something that is not an interval (#814),
+    # and `+`/`*`/`/` between two temporal values (#801).
     (
-        "read/field_expressions.md — a timestamp difference is refused on SQLite (#801)",
+        "read/field_expressions.md — ordering a timestamp difference is refused on SQLite (#814)",
         QueryBuildError,
         () -> begin
             q = DOCERR_RACE801_SL.objects
-            q.values("x" => F("start_at") - F("date"))
+            q.filter((F("start_at") - F("date")) > PormG.Dates.Hour(1))
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "read/field_expressions.md — a duration compares only against an interval (#814)",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RACE801_SL.objects
+            q.filter(F("date") > PormG.Dates.Hour(1))
             q.list(show_query = :dict)
         end,
     ),

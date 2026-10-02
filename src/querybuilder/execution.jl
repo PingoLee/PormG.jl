@@ -1666,23 +1666,58 @@ end
 # text a `DateTimeField` stores, and propagates NULL. The difference of two midnights is a whole
 # number, so the `CAST` is exact — it only turns SQLite's REAL into the integer PostgreSQL returns.
 #
-# A TIMESTAMP difference is REFUSED on SQLite rather than approximated: PostgreSQL returns an
-# interval, and SQLite's INTERVAL text (`HH:MM:SS.fffffffff`) would have to be assembled from each
-# side several times over, re-binding every parameter inside it. Refused loudly instead of rendered
-# silently wrong, which is what it did before this.
+# #814 — a TIMESTAMP difference on SQLite is the INTERVAL text a `DurationField` stores there
+# (`Models._duration_nanoseconds_to_string`: `[-]HH:MM:SS[.f]`, hours never folded into days, the
+# fraction's trailing zeros stripped), so `value_parser(::CInterval, ::PormGSQLite)` reads it back as
+# the `Dates.CompoundPeriod` PostgreSQL's `interval` reads back as — the #581 pin, on both engines.
+#
+# The text needs the difference FOUR times (sign, hours, minutes, seconds and the fraction), and
+# each side may carry bound parameters (`(F(ts) + Hour(1)) - F(ts)`). Repeating the side's text would
+# leave more `?` than bound values; re-rendering it, as the SQLite `xor` arm does, would bind them
+# again. So the difference is computed ONCE, in a correlated scalar subquery, and named there: each
+# side's text — and each of its parameters — appears exactly once. Milliseconds, because that is the
+# precision a stored timestamp carries (the #79 mask); `round` absorbs `julianday`'s binary fraction.
+# NULL on either side is NULL, as on PostgreSQL.
+#
+# The result is TEXT, and TEXT does not order like a duration — `"100:00:00" < "99:00:00"`, and a
+# negative sorts by its digits. That is the existing `DurationField`-on-SQLite property, and it is why
+# `_refuse_interval_ordering` refuses `<`/`>` against a difference on SQLite while `==`/`!=` stay exact.
 function _render_temporal_difference(left_side::AbstractString, right_side::AbstractString,
                                      kind::CanonicalType, instruc::SQLInstruction)::String
   if instruc.connection isa PormGPostgres
     return "($(left_side) - $(right_side))"
   elseif instruc.connection isa PormGSQLite
     kind isa CInt32 && return "CAST(julianday($(left_side)) - julianday($(right_side)) AS INTEGER)"
-    throw(QueryBuildError("Subtracting two timestamps (or a date and a timestamp) is not supported on " *
-                          "SQLite: PostgreSQL returns an interval, and SQLite has no rendering of one " *
-                          "yet (#814). The difference of two DATE values is supported on both engines " *
-                          "and returns a whole number of days."))
+    return "(SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE " *
+           "(CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || " *
+           "printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || " *
+           "(CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END " *
+           "FROM (SELECT CAST(round((julianday($(left_side)) - julianday($(right_side))) * 86400000) AS INTEGER) AS _pormg_ms))"
   else
     throw(_unsupported_conn("date difference", instruc.connection))
   end
+end
+
+# #814 — the operators whose answer depends on ORDER, as opposed to equality.
+const _ORDERING_OPERATIONS = (">", "<", ">=", "<=")
+
+# #814 — is this side a COMPUTED interval: a difference of two temporal values, rather than a
+# `DurationField` column? Only the difference is new: comparing a `DurationField` column with `<` on
+# SQLite already compared stored TEXT, before this issue and outside it, and refusing it here would
+# take away a comparison that is correct for every duration under 100 hours.
+_is_computed_interval(side, kind::TemporalKind) =
+  kind isa CInterval && side isa FExpression && side.operation !== nothing
+
+# #814 — SQLite renders a difference as TEXT (see `_render_temporal_difference`), so `<` would compare
+# it as text: wrong past 99 hours and for any negative difference, and silently. Refused there; the
+# same comparison is an `interval` comparison on PostgreSQL and is left alone. Equality is exact on
+# both: the rendered text is the canonical form a duration literal binds as.
+function _refuse_interval_ordering(operation::AbstractString, instruc::SQLInstruction)
+  operation in _ORDERING_OPERATIONS && instruc.connection isa PormGSQLite || return nothing
+  throw(QueryBuildError("`$(operation)` against the difference of two timestamps is not supported on " *
+                        "SQLite: the difference is interval TEXT there (`HH:MM:SS`), and text does not " *
+                        "order like a duration (\"100:00:00\" sorts before \"99:00:00\"). `==` and `!=` " *
+                        "are supported on both engines; ordering is supported on PostgreSQL."))
 end
 
 # #801 — the RIGHT side of a binary expression, rendered AND typed, for the one caller that must know
@@ -1781,7 +1816,8 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
                                operand)
     end
     return add_parameter!(instruc, formatted_date)
-  elseif operation in _COMPARISON_OPERATIONS && isa(operand, Union{Integer,Float16,Float32,Float64,Base.UUID,Dates.Time})
+  elseif operation in _COMPARISON_OPERATIONS &&
+         isa(operand, Union{Integer,Float16,Float32,Float64,Base.UUID,Dates.Time,Dates.Period,Dates.CompoundPeriod})
     # #536 — every other `_CompareLiteral` scalar on the right of a COMPARISON, bound the way the
     # pair spelling binds it: through the rooted column's formatter, with no explicit SQL type. The
     # column decides, not the value's Julia type — `F("points") == true` on an IntegerField binds
@@ -1809,6 +1845,22 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # (`nothing`) keeps the root, as it always has: `(F("date") * 2) > 5` binds exactly as before.
     if left_kind !== nothing && f !== nothing && left_kind != field_canonical_kind(f)
       column_formatter = value_formatter(left_kind, instruc.connection)
+    end
+    # #814: a duration and an interval belong together, in both directions. The kind that decides is
+    # the one the formatter above was chosen by — the left's, else the rooted column's.
+    #   * A duration against anything else has no formatter that can bind it (`format_number_sql`
+    #     has no `::Hour` method, a raw `MethodError`), and no meaning: `F("points") > Hour(1)`.
+    #   * A `Time` against an interval reached `format_duration_sql`, which refuses it with a message
+    #     about durations that never says why a `Time` is not one.
+    decided_kind = left_kind !== nothing ? left_kind : (f === nothing ? nothing : field_canonical_kind(f))
+    if operand isa Union{Dates.Period,Dates.CompoundPeriod} && !(decided_kind isa CInterval)
+      throw(QueryBuildError("A duration ($(operand)) compares only against an interval — a DurationField, " *
+                            "or the difference of two timestamps. To compare dates, shift one instead: " *
+                            "F(\"date\") + Day(30) > F(\"other_date\")."))
+    elseif operand isa Dates.Time && decided_kind isa CInterval
+      throw(QueryBuildError("A Time ($(operand)) is a time of day, not a duration, so it does not compare " *
+                            "against an interval. Write the duration instead: Hour(1), Minute(90), " *
+                            "Hour(1) + Minute(30)."))
     end
     formatter = column_formatter !== nothing ? column_formatter :
                 operand isa Base.UUID ? Models.format_uuid_sql :
@@ -2009,6 +2061,19 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
                               "add a duration instead: F(\"date\") + Day(30)."))
       end
       return "($(left_side) $(v.operation) $(right_side))", nothing
+    end
+
+    # #814: an ORDERING comparison against the difference of two timestamps — on either side — is
+    # refused on SQLite, where that difference is TEXT (`_refuse_interval_ordering`). The right side
+    # is typed for this one question, and rendered exactly once: `_set_update_query_typed` is the
+    # call `_set_update_query_operand` makes for an expression operand, so the text is the same.
+    if v.operation in _ORDERING_OPERATIONS
+      _is_computed_interval(v.field_name, left_kind) && _refuse_interval_ordering(v.operation, instruc)
+      if v.operand isa FExpression
+        right_side, right_kind = _set_update_query_typed(v.operand, instruc)
+        _is_computed_interval(v.operand, right_kind) && _refuse_interval_ordering(v.operation, instruc)
+        return "($(left_side) $(v.operation) $(right_side))", nothing
+      end
     end
 
     # #564: the left's kind travels to the binder, so the representation the literal binds and the

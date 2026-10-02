@@ -958,7 +958,15 @@ const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 # Adding a member is still two halves: the union here AND an oracle row in `test_f_date_operands.jl`.
 # The testset that walks `Base.uniontypes(_CompareLiteral)` fails on a member with no row, which is
 # what keeps this comment a rule rather than a list.
-const _CompareLiteral = Union{Integer,Float16,Float32,Float64,String,Base.UUID,Dates.Time,Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime}
+#
+# #814 added `Dates.Period` and `Dates.CompoundPeriod`, for `(F("ts") - F("other_ts")) > Hour(1)` and
+# `F("duration") == Minute(90)`: the column (or the difference) is an interval, and the literal binds
+# through `format_duration_sql`, as the pair `filter("duration" => Minute(90))` does. This is not the
+# conflation #494 was about — the #25 ARITHMETIC operands (`_DurationOperand`) still are not this
+# union, and `Interval` is not in it. A duration against anything that is not an interval is refused
+# by the literal arm with a `QueryBuildError`, rather than reaching a formatter with no method for it.
+const _CompareLiteral = Union{Integer,Float16,Float32,Float64,String,Base.UUID,Dates.Time,Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime,
+                              Dates.Period,Dates.CompoundPeriod}
 const _ColumnHandle   = Union{SQLTypeCTE,SQLTypeJoined}
 
 # Carrier for an F reference and any arithmetic built on top of it. Users construct it through

@@ -113,6 +113,9 @@ end
 | non-interactive `migrate` of a destructive plan | `PormG.Migrations.DestructiveMigrationError` |
 | `migrate` of a column change that would fail on existing rows | `PormG.Migrations.MigrationPrecheckError` (nothing written) |
 | `migrate` on a database that changed since `makemigrations` | `PormG.Migrations.PlanPreconditionError` (nothing applied; regenerate the plan) |
+| `makemigrations` over a pending plan holding `Data (pre)`/`Data (post)` steps | `InvalidMigrationError` (`migrate` the plan first) |
+| a plan label that looks like a data step but is misspelt (`Data (Pre):`) | `InvalidMigrationError` |
+| `run_once` inside an open transaction | `TransactionError` |
 
 ## Upgrading an app with old catch blocks
 

@@ -163,3 +163,34 @@ PormG.Migrations.migrate("db")           # apply
 - A `failed` row that a later run of the same plan resolved shows under `status("db").superseded`,
   not `.failed`. Failures do not block the next `migrate`; a plan runs in one transaction, so a
   failure applied nothing.
+
+### Changing data: data steps and `run_once`
+
+`makemigrations` plans schema only. A data change goes in one of two places — **never** in ad-hoc
+`run_in_transaction` code at boot, which runs again in every process and records nothing:
+
+```julia
+# A Julia step, once per database, recorded by name. ORM calls inside join its transaction.
+PormG.Migrations.migrate("db"; interactive = false)
+PormG.Migrations.run_once("db", "2026-10-02_backfill_driver_code") do conn
+    for d in M.Driver.objects.filter("code__@isnull" => true).list()
+        M.Driver.objects.filter("driverid" => d[:driverid]).
+            update("code" => uppercase(first(d[:surname], 3)))
+    end
+end
+```
+
+- `run_once` returns `:applied`, `:already_applied` (the block is not called) or `:disabled`
+  (`change_db: false`). A step never runs twice, so **to change a step, give it a new name.** It raises
+  `TransactionError` inside an open transaction, so call it outside one.
+- **`transaction = false`** is for `CREATE INDEX CONCURRENTLY`. Write such a step to be safe to run
+  twice (`IF NOT EXISTS`). An index it creates must also be declared on the model
+  (`db_index = true`), or the next `makemigrations` drops it. Run that step **before** `migrate`.
+- **A short SQL change inside the plan** goes in `pending_migrations.jl` as an entry labelled
+  `Data (pre): …` (before the plan's schema statements) or `Data (post): …` (after them, e.g. a
+  backfill of a column the plan adds). Spell the prefix exactly: a near-miss raises
+  `InvalidMigrationError`. `makemigrations` then refuses to overwrite the plan: `migrate` it first.
+- **A column that must become `NOT NULL` on a table with rows is two plans**: add it nullable and
+  `migrate`, backfill with `run_once`, then set `null = false` and `migrate` again. `migrate` refuses
+  the second plan while `NULL`s remain (`MigrationPrecheckError`), and a `Data (pre)` step cannot get
+  it past that check: the rows are counted before any statement runs.

@@ -677,17 +677,27 @@ Plan every model-level index statement for one table: the declared composites of
 the `live` ones, as [`LiveComposite`](@ref)s. Returns the names of the live indexes it drops, which
 the `db_index` flush in `_alter_table_fields` needs (see there).
 
-**Identity is `(unique, ordered physical columns)`, never the name.** A declared composite matches a
-live one with the same kind and columns, whatever either is called and whichever backing the live one
-has — so a Django-adopted `UNIQUE (a, b)` satisfies a declared `UniqueConstraint` rather than being
-duplicated by a second index. Then, in this order:
+**Identity is the index's shape, never the name** ([`composite_shape_matches`](@ref)): unique or
+not, the ordered physical columns and — since #29 — the access method, each member's direction and
+each member's operator class. A declared composite matches a live one of the same shape, whatever
+either is called and whichever backing the live one has — so a Django-adopted `UNIQUE (a, b)`
+satisfies a declared `UniqueConstraint` rather than being duplicated by a second index. Then, in this
+order:
 
-  * **Drop** every readable live composite nothing declares. State-based, like the single-column
-    `db_index` path: the models file is the schema. A bare index is `DROP INDEX`; a
-    constraint-backed one is `ALTER TABLE … DROP CONSTRAINT` on PostgreSQL (`DROP INDEX` on an index
-    a constraint owns is refused) and a table rebuild on SQLite (an autoindex cannot be dropped at
-    all). An index the readers refuse — partial, functional, `DESC`, `INCLUDE`, … — never reaches
-    `live`, so it is never dropped.
+  * **Drop** every readable live composite nothing declares that PormG owns
+    ([`composite_is_owned`](@ref)). State-based for a plain composite, like the single-column
+    `db_index` path: the models file is the schema. An ADVANCED one (#29) is dropped only when it
+    carries the `pormg:index` marker; a hand-made GIN index is kept, and its name is then refused to
+    any create or rename on the table, which would otherwise fail with "already exists". A bare index
+    is `DROP INDEX`; a constraint-backed one is `ALTER TABLE … DROP CONSTRAINT` on PostgreSQL
+    (`DROP INDEX` on an index a constraint owns is refused) and a table rebuild on SQLite (an
+    autoindex cannot be dropped at all). An index the readers refuse — partial, functional,
+    `INCLUDE`, … — never reaches `live`, so it is never dropped.
+  * **Adopt** a match that is advanced and carries no marker: on PostgreSQL a `COMMENT ON INDEX`
+    appends the marker to whatever comment the index has, and from then on it is PormG's. On SQLite
+    nothing — an index cannot be commented there, and a drop and re-create would make the first plan
+    after `inspectdb` destructive — so an adopted SQLite index stays unowned until something re-creates
+    it (an explicit rename does).
   * **Rename** a match whose declaration spells a `name=` the live index does not carry: `ALTER INDEX`
     / `RENAME CONSTRAINT` on PostgreSQL, drop-and-create for a bare SQLite index. A DERIVED name is
     not intent — a table renamed under #615 keeps its `<old>_a_b_uniq` — and SQLite's
@@ -755,7 +765,7 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
   for by_name in (true, false), (i, d) in enumerate(declared)
     matched[i] === nothing || continue
     j = findfirst(eachindex(live)) do j
-      !taken[j] && live[j][1].unique == d.unique && live[j][2] == d.columns &&
+      !taken[j] && composite_shape_matches(live[j][1], d; columns = live[j][2]) &&
         (by_name ? samename(live[j][1].name, d.name) :
                    !(_composite_name_key(conn, live[j][1].name) in claimed))
     end
@@ -779,6 +789,7 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
   drops = LiveComposite[]
   renames = Tuple{LiveComposite, DeclaredComposite}[]
   creates = DeclaredComposite[]
+  adopts = LiveComposite[]
   for (i, d) in enumerate(declared)
     j = matched[i]
     if j === nothing
@@ -801,11 +812,18 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
            !(conn isa PormGSQLite && lc.constraint)  # an autoindex has no name of its own to change
       push!(renames, (lc, d))
     end
+    # #29: a hand-made advanced index the declaration matches becomes PormG's (see the docstring).
+    conn isa PormGPostgres && !composite_is_owned(lc) && push!(adopts, lc)
   end
+  unowned = Dict{String, LiveComposite}()
   for (j, (lc, _)) in enumerate(live)
     taken[j] && continue
     conn isa PormGSQLite && lc.constraint && continue   # removed by the rebuild registered above
-    push!(drops, lc)
+    if composite_is_owned(lc)
+      push!(drops, lc)
+    else
+      unowned[_composite_name_key(conn, lc.name)] = lc  # #29: hand-made, never planned away
+    end
   end
 
   # A name this pass creates, or renames an index TO, must not still be held on this table by an
@@ -823,6 +841,13 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
     kept[_composite_name_key(conn, lc.name)] = lc
   end
   for d in Iterators.flatten((creates, (d for (_, d) in renames)))
+    stranger = get(unowned, _composite_name_key(conn, d.name), nothing)
+    stranger === nothing || throw(InvalidMigrationError(
+      "Index name '$(d.name)' on table '$(table)' is held by an index over " *
+      "($(join(stranger.columns, ", "))) that PormG does not own — it carries no pormg:index marker, " *
+      "so it is never planned away: one written by hand, or one a declaration adopted on SQLite, " *
+      "where adopting writes no marker. Drop it by hand to give the name to a different index, " *
+      "or give this one another name"))
     holder = get(kept, _composite_name_key(conn, d.name), nothing)
     holder === nothing && continue
     throw(InvalidMigrationError(
@@ -839,6 +864,13 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
     push!(dropped, lc.name)
   end
   foreach(drop!, drops)
+  # Before the renames: the comment belongs to the index, not its name, so a rename after it carries
+  # the marker along — and the label sits in the same `_order_statements` bucket, so plan order holds.
+  for lc in adopts
+    _configure_order_dict_migration_plan(migration_plan, model_name,
+      "Adopt index: $(replace(lc.name, "Rename field" => "Rename_field"))",
+      Dialect.comment_index(conn, "\"$(Dialect._quote_table_ddl(lc.name))\""; keep = lc.comment))
+  end
   for (lc, d) in renames
     if conn isa PormGPostgres
       _claim_composite_target!(conn, targets, d.name, table)
@@ -866,8 +898,12 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
     else
       # "Create index…" puts it in `_order_statements`' last bucket, after every same-table rebuild
       # (#152) — correct, since a CREATE INDEX only needs its table to exist.
+      #
+      # #29: an advanced index carries its method, directions and classes, and the ownership marker.
       _configure_order_dict_migration_plan(migration_plan, model_name, "Create index: $(d.name)",
-        Dialect.create_index(conn, quoted(d.name), quoted(table), cols; if_not_exists = false))
+        Dialect.create_index(conn, quoted(d.name), quoted(table), cols; if_not_exists = false,
+                             method = d.method, descending = d.descending, opclasses = d.opclasses,
+                             marker = composite_is_advanced(d) ? INDEX_MARKER : nothing))
     end
   end
   return dropped
@@ -2287,6 +2323,30 @@ function _refuse_specialized_sqlite_fields(current_schema::Dict{Symbol, Dict{Sym
   return nothing
 end
 
+# #29: an `Index` with an access method or an operator class is PostgreSQL-only, and on SQLite it is
+# refused HERE, for every managed model, before anything is diffed — the planner half of the #648 rule
+# above. `Dialect.create_index(::PormGSQLite)` refuses the same declaration, but only for an index the
+# plan creates: one that matches nothing live renders nothing, and the model would then run on SQLite
+# as if it had the index it declared. A descending column is core and is not refused. Sorted by table,
+# then in declaration order, so the index it names does not depend on Dict order.
+_refuse_postgres_only_indexes(::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn)::Nothing = nothing
+function _refuse_postgres_only_indexes(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
+                                       ::PormGSQLite)::Nothing
+  for table in sort!(collect(keys(current_schema)))
+    model = current_schema[table][:model]
+    for ix in get(get(model.cache, "composite_indexes", Dict{String, Any}()), "indexes", Models.Index[])
+      what = ix.method != "btree" ? "method = \"$(ix.method)\"" :
+             any(!isnothing, ix.opclasses) ? "opclasses = $(Tuple(ix.opclasses))" : nothing
+      what === nothing && continue
+      throw(BackendCapabilityError(
+        "Model '$(model.name)' declares an Index over ($(join(ix.fields, ", "))) with $(what), which " *
+        "is PostgreSQL-only: SQLite has b-tree indexes and no operator classes. PormG refuses it " *
+        "rather than create a different index; migrate this model on PostgreSQL."))
+    end
+  end
+  return nothing
+end
+
 """
     get_migration_plan(live::Vector{LiveTable}, current_schema, conn, settings; interactive = true)
     get_migration_plan(models::Vector{PormGModel}, current_schema, conn, settings; interactive = true)
@@ -2360,6 +2420,7 @@ unmanaged_tables = _exclude_unmanaged_models!(current_schema)
 _refuse_constrained_keys_into_unmanaged(current_schema)
 _refuse_managed_models_on_ignored_tables(current_schema, conn, settings)
 _refuse_specialized_sqlite_fields(current_schema, conn)
+_refuse_postgres_only_indexes(current_schema, conn)
 all_live = live
 isempty(unmanaged_tables) || (live = LiveTable[t for t in all_live if !(t.name in unmanaged_tables)])
 # #739: the tables this diff compares — every managed declared table (many-to-many join tables

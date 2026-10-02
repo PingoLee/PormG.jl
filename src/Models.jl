@@ -31,6 +31,8 @@ import PormG: ModelDefinitionError, InvalidValueError, FieldValidationError
 # `Dialect` (step 118) beside the renderer that also reads them.
 import PormG: PORTABLE_DB_DEFAULTS, canonical_db_default, db_default_is_portable,
               is_valid_db_default_sql
+# #29: the access methods and operator-class shape `Index` validates against (Kernel, layer 1).
+import PormG: INDEX_METHODS, INDEX_OPCLASS_RE
 import PormG: PormGSettings, config, Configuration
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, DO_NOTHING, PROTECT
 using Printf
@@ -2122,56 +2124,72 @@ end
 # per-field `db_index=true` path already calls — that one simply never passes more than one
 # column. `name === nothing` ⇒ the planner derives `<table>_<cols>_idx`, the plain sibling of
 # `UniqueConstraint`'s `<table>_<cols>_uniq`. Like `UniqueConstraint` this is NOT a `PormGField`:
-# it carries no column of its own, it references existing fields by name.
+# it carries no column of its own, it references existing fields by name. Since #29 it may also carry
+# an access method, per-column directions and operator classes; such an index is rendered with the
+# `pormg:index` ownership marker (see `INDEX_MARKER` in `src/column_ir.jl`).
 """
-    Index(; fields, name = nothing)
+    Index(; fields, name = nothing, method = "btree", opclasses = nothing)
 
-Index a combination of columns — Django's `Meta.indexes`. Pass it to [`Model`](@ref) through
+Index one or more columns — Django's `Meta.indexes`. Pass it to [`Model`](@ref) through
 `indexes =`.
 
 An `Index` is a read-performance declaration, not a rule: it constrains nothing. For a composite
 uniqueness *guarantee* use [`UniqueConstraint`](@ref), which is a `CREATE UNIQUE INDEX` and rejects
 duplicate rows.
 
-`fields` names **two or more** fields on this model. **The order is significant**: an index over
-`("raceid", "lap")` serves a lookup by `raceid`, or by `raceid` *and* `lap` together, but not one by
-`lap` alone. Foreign keys are referenced by their field name and resolved to the physical column
-(honoring `db_column`), and the declared case is preserved, so name each field exactly as it was
-declared.
+- `fields` names the indexed fields on this model. **The order is significant**: an index over
+  `("raceid", "lap")` serves a lookup by `raceid`, or by `raceid` *and* `lap` together, but not one
+  by `lap` alone. A leading `-` makes that column **descending**, as in Django: `"-points"`. Foreign
+  keys are referenced by their field name and resolved to the physical column (honoring
+  `db_column`), and the declared case is preserved, so name each field exactly as it was declared.
+- `name` is the index name. Omitted, the migration planner derives
+  `<table>_<cols>[_<method>]_idx`, where a descending column contributes `<col>_desc`; the naming
+  rules are [`UniqueConstraint`](@ref)'s.
+- `method` is the PostgreSQL access method: `"btree"` (the default), `"hash"`, `"gist"`,
+  `"spgist"`, `"gin"` or `"brin"` — a `Symbol` works too. Only b-tree supports a descending column,
+  and `hash` and `spgist` index a single column.
+- `opclasses` gives each field an operator class, Django's `opclasses`: one entry per field, with
+  `nothing` for the column's default class — `opclasses = ("jsonb_path_ops",)`. Each is a lower-case,
+  unqualified identifier, and an index that names one must also have a `name`.
 
-!!! warning "One column is `db_index = true`, not a one-field `Index`"
-    A single-column `Index` is rejected. It is not a missing feature — it is unrepresentable *in
-    both directions*: a one-column `CREATE INDEX` is byte-identical whether `db_index = true` or an
-    `Index` emitted it, so introspection reads it back as `db_index` (there is no marker to
-    distinguish them, unlike `UniqueConstraint`, which SQLite tags `origin = 'u'` vs `'c'`). A model
-    declaring a one-field `Index` would therefore compare unequal to its own live table forever, and
-    `makemigrations` would propose **dropping** the index on every run. Declare
-    `db_index = true` on the field instead.
+`method` other than `"btree"` and `opclasses` are PostgreSQL features. `makemigrations` refuses them
+on SQLite with `BackendCapabilityError` rather than creating a different index; a descending column
+works on both engines.
 
-`name` is the index name. Omitted, the migration planner derives `<table>_<cols>_idx`, the plain
-sibling of the composite-unique convention; the naming rules are [`UniqueConstraint`](@ref)'s.
+!!! warning "One plain column is `db_index = true`, not a one-field `Index`"
+    A single-column `Index` that is b-tree, ascending and uses the default operator class is
+    rejected. It is unrepresentable *in both directions*: such a `CREATE INDEX` is byte-identical
+    whether `db_index = true` or an `Index` emitted it, so introspection reads it back as
+    `db_index`, and a model declaring it would compare unequal to its own live table forever.
+    Declare `db_index = true` on the field instead. A one-column index with a `method`, a `-` or an
+    operator class is a different index, and is accepted.
 
-Invalid declarations raise `ModelDefinitionError` as early as they can be detected: fewer than two
-fields, a repeated field, or a blank `name` fails here in the constructor; a field that does not
-exist on the model, a `ManyToManyField` (it owns no column), or two indexes sharing a name fail when
-the model is built. An index whose name collides with another index's — a `UniqueConstraint`'s, or
-one on another table — fails at migration planning, where every name is known.
+Invalid declarations raise `ModelDefinitionError` as early as they can be detected: a plain index on
+fewer than two fields, a repeated field (`"lap"` and `"-lap"` repeat it), an unknown `method`, a
+descending column on a method other than `"btree"`, more than one field on `hash` or `spgist`,
+`opclasses` of the wrong length or shape, `opclasses` without a `name`, or a blank `name` fails here
+in the constructor; a field that does not exist on the model, a `ManyToManyField` (it owns no
+column), or two indexes sharing a name fail when the model is built. An index whose name collides
+with another index's — a `UniqueConstraint`'s, or one on another table — fails at migration
+planning, where every name is known.
 
 !!! note "Diffed like a column"
-    Each index becomes a `CREATE INDEX` — identical on PostgreSQL and SQLite. On a table that
-    already exists `makemigrations` plans adding, removing, re-columning and renaming one (#161),
-    exactly as for [`UniqueConstraint`](@ref); an undeclared composite index is planned for removal.
-    `inspectdb` reads them back, so a model generated from a live database declares every one.
+    On a table that already exists `makemigrations` plans adding, removing, changing and renaming an
+    `Index` (#161), exactly as for [`UniqueConstraint`](@ref). A plain index the models file does not
+    declare is planned for removal. An index with a `method`, a descending column or an operator
+    class is removed only when PormG created it: PormG marks every such index it creates, and one
+    written by hand is never planned away — declaring it adopts it. `inspectdb` reads all of them
+    back, so a model generated from a live database declares every one.
 
 # Examples
 ```julia
-Lap_times = Models.Model("lap_times",
+Result = Models.Model("result",
+  resultid = Models.IDField(),
   raceid   = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"),
   driverid = Models.ForeignKey(Driver, pk_field = "driverid", on_delete = "RESTRICT"),
-  lap      = Models.IntegerField(),
-  position = Models.IntegerField(),
+  points   = Models.FloatField(),
   indexes = [
-    Models.Index(fields = ("raceid", "lap"), name = "lap_times_race_lap_idx"),
+    Models.Index(fields = ("raceid", "-points"), name = "result_race_points_idx"),
   ],
 )
 ```
@@ -2179,8 +2197,17 @@ Lap_times = Models.Model("lap_times",
 which migrates to:
 
 ```sql
-CREATE INDEX "lap_times_race_lap_idx"
-  ON "lap_times" ("raceid", "lap");
+CREATE INDEX "result_race_points_idx"
+  ON "result" ("raceid", "points" DESC);
+```
+
+On PostgreSQL that statement is followed by `COMMENT ON INDEX "result_race_points_idx" IS
+'pormg:index';` — the ownership marker. A prefix search on a driver's surname, under a database
+locale other than `C`, needs the pattern operator class:
+
+```julia
+Models.Index(fields = ("surname",), opclasses = ("varchar_pattern_ops",),
+             name = "driver_surname_pattern_idx")
 ```
 
 See also [`Model`](@ref), [`UniqueConstraint`](@ref).
@@ -2188,23 +2215,104 @@ See also [`Model`](@ref), [`UniqueConstraint`](@ref).
 struct Index
   fields::Vector{String}
   name::Union{String, Nothing}
+  method::String
+  descending::Vector{Bool}
+  opclasses::Vector{Union{String, Nothing}}
 end
-function Index(; fields, name::Union{AbstractString, Nothing} = nothing)
-  cols = _normalize_constraint_fields(fields, "Index")
-  # ≥2 is a hard rule, not a stylistic one — see the docstring's warning. A one-column CREATE INDEX
-  # is indistinguishable from `db_index = true` on read-back, so a single-field Index would make
-  # `makemigrations` propose dropping its own index on every run.
-  length(cols) < 2 && throw(ModelDefinitionError(
+function Index(; fields, name::Union{AbstractString, Nothing} = nothing,
+               method::Union{AbstractString, Symbol} = "btree", opclasses = nothing)
+  raw = _normalize_constraint_fields(fields, "Index")
+  cols = String[]
+  descending = Bool[]
+  for f in raw
+    # Django's spelling: a leading `-` is a descending column. Exactly one, before a real name.
+    desc = startswith(f, "-")
+    bare = desc ? f[nextind(f, firstindex(f)):end] : f
+    (isempty(bare) || startswith(bare, "-")) && throw(ModelDefinitionError(
+      "Index field $(repr(f)) is not a field name; prefix a name with a single '-' for a " *
+      "descending column, as in \"-points\""))
+    push!(cols, bare)
+    push!(descending, desc)
+  end
+  m = lowercase(String(method))
+  m in INDEX_METHODS || throw(ModelDefinitionError(
+    "Index method $(repr(String(method))) is not one PormG supports; use one of " *
+    "$(join(repr.(INDEX_METHODS), ", "))"))
+  ocs = _index_opclasses(opclasses, length(cols))
+  advanced = m != "btree" || any(descending) || any(!isnothing, ocs)
+  # A PLAIN one-column index is `db_index`, and the rule is hard, not stylistic — see the
+  # docstring's warning: the two are byte-identical in the catalog, so a one-field plain Index would
+  # make `makemigrations` propose dropping its own index on every run. An advanced one is a
+  # different index: the `db_index` readers refuse every advanced shape (#847) and every index PormG
+  # marks, so nothing else can read it as `db_index`.
+  !advanced && length(cols) < 2 && throw(ModelDefinitionError(
     "Index requires at least two fields, got $(isempty(cols) ? "none" : repr(cols)); " *
-    "a single-column index is the field option db_index = true"))
+    "a single-column index is the field option db_index = true, unless it is descending, has a " *
+    "method or names an opclass"))
+  isempty(cols) && throw(ModelDefinitionError("Index requires at least one field"))
   length(unique(cols)) == length(cols) ||
     throw(ModelDefinitionError("Index has duplicate fields: $(cols)"))
+  # PostgreSQL only orders b-tree indexes (`amcanorder`); it would refuse the statement at migrate.
+  any(descending) && m != "btree" && throw(ModelDefinitionError(
+    "Index method \"$(m)\" does not support a descending column; only \"btree\" is ordered"))
+  m in ("hash", "spgist") && length(cols) > 1 && throw(ModelDefinitionError(
+    "Index method \"$(m)\" indexes a single column, got $(length(cols)): $(cols)"))
   # A blank name would render as an empty (invalid) index identifier; require nothing (auto-derive)
   # or a real name.
   name !== nothing && isempty(strip(name)) &&
     throw(ModelDefinitionError("Index name must be non-empty (pass name=nothing to auto-derive)"))
-  return Index(cols, name === nothing ? nothing : String(name))
+  # Django's rule ("An index must be named to use opclasses"): the derived name would not say which
+  # operator class the index uses, so two indexes over one column would derive the same name.
+  any(!isnothing, ocs) && name === nothing && throw(ModelDefinitionError(
+    "Index on $(cols) names an opclass, so it needs an explicit name="))
+  return Index(cols, name === nothing ? nothing : String(name), m, descending, ocs)
 end
+
+# `opclasses = nothing` means every column's default class; otherwise one entry per field, each
+# `nothing` (the default class) or an operator-class name matching `INDEX_OPCLASS_RE`. A lone string
+# is one entry, not its characters.
+_index_opclasses(::Nothing, n::Int) = Union{String, Nothing}[nothing for _ in 1:n]
+_index_opclasses(o::Union{AbstractString, Symbol}, n::Int) = _index_opclasses((o,), n)
+function _index_opclasses(o, n::Int)
+  applicable(iterate, o) || throw(ModelDefinitionError(
+    "Index opclasses must be a tuple or vector with one entry per field, got $(typeof(o))"))
+  out = Union{String, Nothing}[]
+  for x in o
+    if x === nothing
+      push!(out, nothing)
+    elseif x isa Union{AbstractString, Symbol} && occursin(INDEX_OPCLASS_RE, String(x))
+      push!(out, String(x))
+    else
+      throw(ModelDefinitionError(
+        "Index opclass $(repr(x)) is not an operator class name: use a lower-case, unqualified " *
+        "identifier such as \"jsonb_path_ops\", or nothing for the column's default class"))
+    end
+  end
+  length(out) == n || throw(ModelDefinitionError(
+    "Index opclasses has $(length(out)) entries for $(n) field(s); give one per field, " *
+    "nothing for a column that keeps its default class"))
+  return out
+end
+
+"""
+    _index_is_advanced(ix::Index) -> Bool
+
+Whether `ix` is more than a plain composite: another access method, a descending column, or an
+explicit operator class. An advanced index is owned through the `pormg:index` marker rather than by
+the models file alone (#29).
+"""
+_index_is_advanced(ix::Index)::Bool =
+  ix.method != "btree" || any(ix.descending) || any(!isnothing, ix.opclasses)
+
+# Everything that makes an `Index` the index it is, except its name — two declarations with equal
+# shapes create the same index. The Django importer collapses duplicates on it.
+_index_shape(ix::Index) = (ix.fields, ix.descending, ix.method, ix.opclasses)
+
+# `ix` under another name, every other attribute kept. Through the keyword constructor, so a name an
+# `opclasses` index cannot lose is refused rather than silently dropped.
+_index_renamed(ix::Index, name::Union{AbstractString, Nothing})::Index =
+  Index(fields = String[d ? "-" * f : f for (f, d) in zip(ix.fields, ix.descending)],
+        name = name, method = ix.method, opclasses = ix.opclasses)
 
 # Coerce the `indexes=` argument (a single Index, an iterable of them, or nothing) into a
 # concrete Vector. Anything that is not an Index is an error — which is also what a consuming app
@@ -2376,7 +2484,8 @@ DriverRaces = Models.Model("driver_races", db_table = "Driver_Races_Legacy",
 ```
 
 `indexes` (#347) takes [`Index`](@ref) objects — one, or a collection — for a read-performance index
-spanning more than one column, Django's `Meta.indexes`. A single-column index stays the field option
+spanning more than one column, Django's `Meta.indexes`, or one with a descending column, a PostgreSQL
+access method or operator classes (#29). A plain single-column index stays the field option
 `db_index = true`.
 
 `managed = false` (#741) marks a model PormG **queries but never migrates** — a view, or a table
@@ -2831,10 +2940,16 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
           push!(render_failures, "# PormG: Index over ($(join(ifields, ", "))) could not be rendered: field(s) $(join(missing_fields, ", ")) did not render — index omitted.")
           continue
         end
-        cols = join((format_string(get(renamed, f, f)) for f in ifields), ", ")
+        # #29: a descending member keeps Django's `-` in front of its (possibly re-spelled) name.
+        cols = join((format_string((d ? "-" : "") * get(renamed, f, f))
+                     for (f, d) in zip(ifields, ix.descending)), ", ")
         namepart = ix.name === nothing ? "" : ", name = $(format_string(String(ix.name)))"
+        # Only what differs from the default is written, so a plain index renders exactly as before.
+        methodpart = ix.method == "btree" ? "" : ", method = $(format_string(ix.method))"
+        opcpart = all(isnothing, ix.opclasses) ? "" :
+          ", opclasses = ($(join((o === nothing ? "nothing" : format_string(o) for o in ix.opclasses), ", ")),)"
         # Trailing comma keeps a single-field tuple valid Julia: ("a",)
-        push!(rendered_indexes, "Models.Index(fields = ($(cols),)$(namepart))")
+        push!(rendered_indexes, "Models.Index(fields = ($(cols),)$(namepart)$(methodpart)$(opcpart))")
       end
       isempty(rendered_indexes) ||
         (fields *= ",\n  indexes = [$(join(rendered_indexes, ", "))]")

@@ -73,6 +73,8 @@ import PormG: PORTABLE_DB_DEFAULTS, canonical_db_default, db_default_is_portable
               is_valid_db_default_sql, _wrapped_in_parens
 # #742: the table-CHECK ownership marker — rendered by `Dialect`, read back and compared here.
 import PormG: CHECK_MARKER_PREFIX, CHECK_MARKER_RE, canonical_check_condition, check_marker
+# #29: index access methods, operator classes and the `pormg:index` ownership marker.
+import PormG: INDEX_METHODS, INDEX_OPCLASS_RE, INDEX_MARKER, INDEX_MARKER_RE
 # The two forward type maps (`sqlite_type_map` / `postgres_type_map`) were imported here until #522
 # retired them: the readers compile a catalog type through `parse_canonical_type` now, and nothing
 # maps a rendered type back to a field struct any more.

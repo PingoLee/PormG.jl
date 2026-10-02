@@ -1708,9 +1708,12 @@ end
         generated = read(joinpath(config_key, output_file), String)
         @test occursin("# PormG: Meta.nao_existe_essa_opcao on 'Legado' is not recognised", generated)
         # The whole-option marker is gone; per-ENTRY markers took its place, one per index the
-        # importer refuses (descending, functional, GinIndex, partial — see the fixture).
+        # importer refuses (functional and partial — see the fixture). Since #29 the descending and
+        # GinIndex entries translate instead.
         @test !occursin("Meta.indexes on 'Servidor' — dropped", generated)
-        @test count("an index on 'Servidor' was dropped", generated) == 4
+        @test count("an index on 'Servidor' was dropped", generated) == 2
+        @test occursin("Models.Index(fields = (\"-cpf\", \"apelido\",), name = \"idx_servidor_cpf_desc\")", generated)
+        @test occursin("Models.Index(fields = (\"cpf\", \"apelido\",), name = \"gin_servidor\", method = \"gin\")", generated)
         # And what it CAN express reached the model: the composite index, plus the single-column
         # entry translated to `db_index` on the field rather than a one-field Index.
         @test occursin("Models.Index(fields = (\"cpf\", \"lotacao_id\",), name = \"idx_servidor_cpf_lotacao\")", generated)

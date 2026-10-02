@@ -1205,17 +1205,42 @@ const _PG_UNMARKED_CHECK =
   "COALESCE(obj_description(con.oid, 'pg_constraint'), '') !~ '$(CHECK_MARKER_RE.pattern)'"
 
 """
+    _PG_MARKED_INDEX / _PG_UNMARKED_INDEX
+
+SQL predicates on `pg_index i` (#29): does the index's comment carry the `pormg:index` ownership
+marker ([`INDEX_MARKER_RE`](@ref)) or not. A marked index is ALWAYS the composite reader's — even one
+column, even plain b-tree — and never `db_index`'s, which is what keeps the arity partition from
+giving one index two owners. `COALESCE` for `_PG_UNMARKED_CHECK`'s reason: an index without a comment
+has a NULL `obj_description`, and `NULL !~ …` is NULL, which `WHERE` treats as false.
+"""
+const _PG_MARKED_INDEX =
+  "COALESCE(obj_description(i.indexrelid, 'pg_class'), '') ~ '$(INDEX_MARKER_RE.pattern)'"
+const _PG_UNMARKED_INDEX =
+  "COALESCE(obj_description(i.indexrelid, 'pg_class'), '') !~ '$(INDEX_MARKER_RE.pattern)'"
+
+# One key member of a PostgreSQL index as `_pg_composite_indexes` reads it (#29).
+struct _PgIndexMember
+  column::String
+  descending::Bool
+  opclass::Union{String, Nothing}
+  opclass_default::Bool
+end
+
+_match_or_nothing(re::Regex, s::AbstractString) = (m = match(re, s); m === nothing ? nothing : String(m.match))
+
+"""
     _pg_composite_indexes(db::PormGPostgres; schema = "public") -> Dict{String, Vector{LiveComposite}}
 
 Every model-level index in `schema` that PormG can re-emit, as `table_name => [LiveComposite, …]` —
 the PostgreSQL half of #347 / #161 and the exact mirror of [`_sqlite_composite_indexes`](@ref).
 
-Three shapes, partitioned against the column readers of `get_database_schema` so no index has two
+Four shapes, partitioned against the column readers of `get_database_schema` so no index has two
 owners:
 
 | shape | reads as | the other arity belongs to |
 |---|---|---|
 | non-unique, `indnkeyatts > 1` | `Index` | the `indexes` CTE (`= 1`) — `db_index` |
+| non-unique, one column, advanced or carrying the `pormg:index` marker (#29) | `Index` | nobody: the `indexes` CTE refuses every advanced shape (#847) and every marked index |
 | unique with no backing constraint, any arity | `UniqueConstraint` | nobody: a one-column bare unique index is what a one-field `UniqueConstraint` creates |
 | unique backing a `contype = 'u'` constraint, arity > 1 | `UniqueConstraint`, `constraint = true` | the `unique_constraints` CTE (`= 1`) — the field's `unique` |
 
@@ -1248,16 +1273,23 @@ Everything PormG cannot re-emit is excluded, never read partially or approximate
 failure a schema dump must not have — the same reject-rather-than-reinterpret rule the Django
 importer applies to `Meta.indexes`. Beyond the shared predicates:
 
-  * `am.amname = 'btree'` — `Dialect.create_index` emits a default b-tree and nothing else. A GIN,
-    GiST, BRIN or hash index read back as an `Index` would regenerate as a b-tree (#29).
+  * An access method outside [`INDEX_METHODS`](@ref) (`bloom`, `rum`): `Models.Index(method = …)`
+    cannot declare it. The six it can are read since #29, with the method recorded, so a GIN index
+    regenerates as a GIN index. A UNIQUE index is read only as plain b-tree — `UniqueConstraint`
+    has no method, direction or operator class.
+  * Storage parameters (`WITH (fastupdate = off)`, `pages_per_range`) on an ADVANCED index: the
+    declaration has no slot for them, so a re-emission would lose them. A plain composite keeps its
+    pre-#29 behavior, which does not look at them.
   * `NOT i.indisexclusion` — an `EXCLUDE USING gist (…)` constraint's backing index is non-unique,
     non-primary and unfiltered, so it passes every other predicate. Regenerating it as a plain index
     would drop a constraint the database was enforcing.
   * `indoption`, `indclass` and `indcollation`, selected per column and filtered in Julia alongside
-    the NULL check: a **non-default sort** (`indoption != 0` — descending *or* `NULLS FIRST`), a
-    non-default **operator class** (`varchar_pattern_ops`), or an explicit **collation**
-    (`COLLATE "C"`) each makes a different index. PormG can express none of them, and the importer
-    already refuses Django's `Index(fields=["-year"])` and `opclasses=` on the same grounds.
+    the NULL check. Since #29 a non-unique index reads `indoption = 3` as a descending member (`DESC`
+    implies `NULLS FIRST`, so that is what plain `DESC` measures) and a non-default **operator class**
+    by its `opcname`, which `Models.Index(opclasses = …)` declares. Still refused: `indoption` 1
+    (`DESC NULLS LAST`) or 2 (`ASC NULLS FIRST`) — a `NULLS` placement the declaration cannot spell —
+    an operator class whose name is not a lower-case identifier, and an explicit **collation**
+    (`COLLATE "C"`), which PormG cannot express.
 
     The collation test answers the same *question* as the SQLite reader's non-BINARY `coll` filter
     but is not the same *test*, and the difference is deliberate rather than drift — do not "fix"
@@ -1296,8 +1328,9 @@ Two details the naive query gets wrong:
 `indnkeyatts` is PostgreSQL 11+, which the pre-existing `indexes` CTE already requires, so this adds
 no floor of its own.
 
-The partition with the `db_index` reader is per INDEX (`indnkeyatts = 1` there, `> 1` here), so no
-index reaches both readers. Since #847 that reader applies these same filters at arity 1 — it used to
+The partition with the `db_index` reader is per INDEX — `indnkeyatts = 1` there, `> 1` here, except
+that since #29 a one-column index that is advanced or carries the `pormg:index` marker is read here
+and refused there — so no index reaches both readers. Since #847 that reader applies these same filters at arity 1 — it used to
 read a one-column `DESC`, non-b-tree, `INCLUDE` or `EXCLUDE` index as a `db_index`, so the planner
 proposed dropping an index PormG never made.
 """
@@ -1319,7 +1352,11 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
            (i.indoption::int2[])[k.ord - 1] AS opt,
            (i.indcollation::oid[])[k.ord - 1] AS idx_coll,
            a.attcollation AS col_coll,
-           oc.opcdefault AS opc_default
+           oc.opcdefault AS opc_default,
+           oc.opcname::text AS opc_name,
+           am.amname::text AS method,
+           (ic.reloptions IS NOT NULL) AS has_reloptions,
+           obj_description(i.indexrelid, 'pg_class') AS index_comment
     FROM pg_index i
     JOIN pg_class ic ON ic.oid = i.indexrelid
     JOIN pg_am am ON am.oid = ic.relam
@@ -1333,21 +1370,24 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
                                AND con.contype IN ('u', 'p', 'x')
     WHERE c.relkind = 'r'
       $(_PG_OWNABLE_TABLE_FILTER)
-      AND am.amname = 'btree'
       AND NOT i.indisprimary
       AND NOT i.indisexclusion
       AND i.indpred IS NULL
-      AND (i.indisunique OR i.indnkeyatts > 1)
+      AND (i.indisunique OR i.indnkeyatts > 1 OR am.amname <> 'btree'
+           OR (i.indoption::int2[])[0] <> 0
+           OR NOT (SELECT x.opcdefault FROM pg_opclass x WHERE x.oid = (i.indclass::oid[])[0])
+           OR $(_PG_MARKED_INDEX))
       $(schema_clause)
     ORDER BY c.relname, ic.relname, k.ord;
     """
   rows = DataFrame(fetch(db, query, params))
   out = Dict{String, Vector{LiveComposite}}()
   nrow(rows) == 0 && return out
-  # index name ⇒ its column list, per table; `ORDER BY … k.ord` above means push order IS index order.
+  # index name ⇒ its members, per table; `ORDER BY … k.ord` above means push order IS index order.
   # `nothing` marks a member PormG cannot express; the whole index is then skipped below.
-  grouped = OrderedDict{Tuple{String, String}, Vector{Union{String, Nothing}}}()
+  grouped = OrderedDict{Tuple{String, String}, Vector{Union{_PgIndexMember, Nothing}}}()
   kind = Dict{Tuple{String, String}, Tuple{Bool, Bool}}()      # ⇒ (unique, constraint-backed)
+  facts = Dict{Tuple{String, String}, Tuple{String, Bool, Union{String, Nothing}}}()  # ⇒ (method, reloptions, comment)
   refused = Set{Tuple{String, String}}()
   for r in eachrow(rows)
     (r.table_name === missing || r.index_name === missing) && continue
@@ -1355,6 +1395,8 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
     unique = r.is_unique === true
     constraint = r.contype !== missing && string(r.contype) == "u"
     kind[key] = (unique, constraint)
+    facts[key] = (r.method === missing ? "" : string(r.method), r.has_reloptions !== false,
+                  r.index_comment === missing ? nothing : string(r.index_comment))
     # Whole-index refusals (see the docstring). A NULL defaults to REFUSED, like every test below.
     (r.is_valid !== true || r.has_include !== false || r.nulls_not_distinct !== false ||
      (constraint && r.is_deferrable !== false)) && push!(refused, key)
@@ -1362,29 +1404,50 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
     # fix the subscripts are always in range, so a NULL here means something unexpected, and this
     # reader's whole contract is that it never reads an index approximately.
     #
-    #   * `indoption != 0`, not `& 1`. Bit 0 is DESC and bit 1 is NULLS FIRST (`access/skey.h`), and
-    #     `DESC` implies `NULLS FIRST` — a live `(a DESC, b)` measures 3, not 1. Masking bit 0 alone
-    #     therefore lets `(a NULLS FIRST, b)` (value 2) through, and PormG would re-emit it as
-    #     NULLS LAST. `Dialect.create_index` only ever emits the all-default 0.
-    #   * `opcdefault = false` is an explicit operator class (`varchar_pattern_ops`).
+    #   * `indoption`: bit 0 is DESC and bit 1 is NULLS FIRST (`access/skey.h`), and `DESC` implies
+    #     `NULLS FIRST` — a live `(a DESC, b)` measures 3, not 1. So 0 is ascending and 3 descending
+    #     (#29), while 1 (`DESC NULLS LAST`) and 2 (`ASC NULLS FIRST`) are a `NULLS` placement no
+    #     declaration spells: masking bit 0 alone would let `(a NULLS FIRST, b)` through, and PormG
+    #     would re-emit it as NULLS LAST. A UNIQUE index is read only as all-0 (see the docstring).
+    #   * `opcdefault = false` is an explicit operator class (`varchar_pattern_ops`), read by name for
+    #     a non-unique index whose class name `Models.Index(opclasses = …)` could have written.
     #   * `indcollation` differing from the COLUMN's own collation is an explicit `COLLATE` in the
     #     index — a different comparison, so a different index. 0 means no collation applies (an
     #     integer column). Deliberately RELATIVE, unlike SQLite's absolute non-BINARY test — see the
     #     docstring; a PormG-created index can never trip this, since PormG emits no `COLLATE` at all.
+    opt = r.opt === missing ? -1 : Int(r.opt)
+    opc_ok = r.opc_default === true ||
+             (r.opc_default === false && !unique && r.opc_name !== missing &&
+              occursin(INDEX_OPCLASS_RE, string(r.opc_name)))
     unusable = r.column_name === missing ||
-               r.opt === missing || Int(r.opt) != 0 ||
-               r.opc_default === missing || r.opc_default == false ||
+               !(opt == 0 || (opt == 3 && !unique)) ||
+               !opc_ok ||
                r.idx_coll === missing ||
                (r.idx_coll != 0 && (r.col_coll === missing || r.idx_coll != r.col_coll))
-    push!(get!(grouped, key, Union{String, Nothing}[]), unusable ? nothing : string(r.column_name))
+    push!(get!(grouped, key, Union{_PgIndexMember, Nothing}[]),
+          unusable ? nothing : _PgIndexMember(string(r.column_name), opt == 3,
+                                              r.opc_name === missing ? nothing : string(r.opc_name),
+                                              r.opc_default === true))
   end
-  for ((tbl, idx), cols) in grouped
+  for ((tbl, idx), members) in grouped
     (tbl, idx) in refused && continue
+    any(m -> m === nothing, members) && continue    # a member PormG cannot re-emit ⇒ drop it whole
     unique, constraint = kind[(tbl, idx)]
-    # Arity partition (see the table above): only a BARE unique index may have one column.
-    length(cols) > 1 || (unique && !constraint) || continue
-    any(c -> c === nothing, cols) && continue    # a member PormG cannot re-emit ⇒ drop it whole
-    push!(get!(out, tbl, LiveComposite[]), LiveComposite(idx, String[String(c) for c in cols], unique, constraint))
+    method, has_reloptions, comment = facts[(tbl, idx)]
+    method in INDEX_METHODS || continue              # an extension's access method (`bloom`)
+    lc = LiveComposite(idx, String[m.column for m in members], unique, constraint, method,
+                       Bool[m.descending for m in members],
+                       Union{String, Nothing}[m.opclass for m in members],
+                       Bool[m.opclass_default for m in members],
+                       comment === nothing ? nothing : _match_or_nothing(INDEX_MARKER_RE, comment),
+                       comment)
+    advanced = composite_is_advanced(lc)
+    unique && advanced && continue                   # `UniqueConstraint` is plain b-tree only
+    advanced && has_reloptions && continue           # `WITH (…)` would be lost on re-emission
+    # Arity partition (see the table above): one column is a BARE unique index, or a non-unique one
+    # that is advanced or marked — every other one-column index is `db_index`'s.
+    length(members) > 1 || (unique && !constraint) || (!unique && (advanced || lc.marker !== nothing)) || continue
+    push!(get!(out, tbl, LiveComposite[]), lc)
   end
   return out
 end
@@ -1696,6 +1759,8 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
           AND (i.indoption::int2[])[k.ord - 1] = 0
           AND oc.opcdefault
           AND (i.indcollation::oid[])[k.ord - 1] IN (0, a.attcollation)
+          -- #29: an index PormG marked is the composite reader's, whatever its shape.
+          AND $(_PG_UNMARKED_INDEX)
         GROUP BY i.indrelid
     ),
     non_negative_checks AS (
@@ -2183,6 +2248,9 @@ function _sqlite_single_column_indexed_columns(conn::PormGSQLite, table_name)::D
     # approximately.
     (r.is_desc === missing || r.is_desc != 0) && continue
     (r.ddl === missing || _sqlite_index_has_explicit_collate(string(r.ddl))) && continue
+    # #29: an index PormG marked is the composite reader's, whatever its shape — the partition that
+    # keeps one index from having two owners.
+    _sqlite_index_marker(string(r.ddl)) === nothing || continue
     # First index wins if two single-column indexes cover the same column — the duplicate is
     # redundant, and `db_index` is a boolean either way.
     get!(out, string(r.col), string(r.idx))
@@ -2230,24 +2298,44 @@ function _attach_composite_indexes!(model, composites::Vector{LiveComposite})
   isempty(composites) && return model
   kept_uc = Models.UniqueConstraint[]
   kept_ix = Models.Index[]
+  owners = Dict{String, Tuple{Union{String, Nothing}, Union{String, Nothing}}}()
   for lc in composites
     if !all(c -> haskey(model.fields, c), lc.columns)
       @debug "introspection: composite index skipped — column not on the introspected model" table=model.name index=lc.name columns=lc.columns
       continue
     end
     name = startswith(lc.name, "sqlite_autoindex_") ? nothing : lc.name
+    # #29: an advanced index is written as declared — `-col` for a descending member, its access
+    # method, and the operator class of every member that does not use its column's default. One
+    # shape needs its DEFAULT classes named too: a marked one-column b-tree index, which PormG created
+    # from `Index(fields = ("surname",), opclasses = ("text_ops",))`. Read back it is plain, and a plain
+    # one-field `Index` is refused — so without the names the generated model would declare nothing,
+    # and its first plan would drop the index. Named, it matches the live index by name.
+    opclasses = all(lc.opclass_default) ? nothing :
+      Union{String, Nothing}[d ? nothing : o for (o, d) in zip(lc.opclasses, lc.opclass_default)]
+    if !lc.unique && length(lc.columns) == 1 && !composite_is_advanced(lc) && lc.marker !== nothing &&
+       all(!isnothing, lc.opclasses)
+      opclasses = copy(lc.opclasses)
+    end
     decl = try
       lc.unique ? Models.UniqueConstraint(fields = lc.columns, name = name) :
-                  Models.Index(fields = lc.columns, name = name)
+                  Models.Index(fields = String[d ? "-" * c : c for (c, d) in zip(lc.columns, lc.descending)],
+                               name = name, method = lc.method, opclasses = opclasses)
     catch e
       e isa ModelDefinitionError || rethrow()
       @debug "introspection: composite index skipped — PormG cannot name it" table=model.name index=lc.name columns=lc.columns exception=e
       continue
     end
     decl isa Models.Index ? push!(kept_ix, decl) : push!(kept_uc, decl)
+    # #29: whether an advanced index is PormG's is a fact about the LIVE index, which a declaration
+    # cannot carry. Kept beside it — as `cache["index"]` keeps the live `db_index` names — so that
+    # `live_table`, which reads this model back as a live table, does not take a hand-made index for
+    # one PormG marked and plan it away.
+    composite_is_advanced(lc) && (owners[lc.name] = (lc.marker, lc.comment))
   end
   isempty(kept_uc) || (model.cache["unique_constraints"] = Dict{String, Any}("constraints" => kept_uc))
   isempty(kept_ix) || (model.cache["composite_indexes"] = Dict{String, Any}("indexes" => kept_ix))
+  isempty(owners) || (model.cache["composite_index_owners"] = owners)
   return model
 end
 
@@ -2298,11 +2386,12 @@ Every model-level index on `table_name` that PormG can re-emit, as [`LiveComposi
 `Models.Index` (#347) or a `Models.UniqueConstraint` (#19, #161) materializes, plus the table-level
 `UNIQUE (a, b)` a schema adopted from Django carries.
 
-Three shapes, partitioned against the column readers so no index has two owners:
+Four shapes, partitioned against the column readers so no index has two owners:
 
 | `origin` | `unique` | arity | reads as | the other arity belongs to |
 |---|---|---|---|---|
 | `'c'` (`CREATE INDEX`) | 0 | > 1 | `Index` | [`_sqlite_single_column_indexed_columns`](@ref) — `db_index` |
+| `'c'` (`CREATE INDEX`) | 0 | 1, descending or carrying the `pormg:index` marker (#29) | `Index` | nobody: the `db_index` reader refuses both |
 | `'c'` (`CREATE UNIQUE INDEX`) | 1 | ≥ 1 | `UniqueConstraint` | nobody: a one-column bare unique index is what a one-field `UniqueConstraint` creates |
 | `'u'` (a `UNIQUE` clause) | 1 | > 1 | `UniqueConstraint`, `constraint = true` | [`_sqlite_single_column_unique_columns`](@ref) — the field's `unique` |
 
@@ -2327,18 +2416,22 @@ Three things this reader needs that the single-column ones do not:
     name — the same reject-rather-than-reinterpret rule the Django importer applies to
     `Meta.indexes`. Three shapes qualify:
       - an **expression** member (`lower(name)`) has a NULL `ii.name` — functional indexes are #29;
-      - a **descending** member (`"desc" = 1`) — PormG indexes carry no per-column order, and the
-        importer already *refuses* Django's `Index(fields=["-year"])` for exactly this reason;
+      - a **descending** member (`"desc" = 1`) of a UNIQUE index — `UniqueConstraint` has no
+        direction. On a non-unique index it is read since #29, as `Models.Index(fields = ["-year"])`
+        declares it;
       - a non-**BINARY** collation (`COLLATE NOCASE`) — a different comparison, so a different index.
+
+The ownership marker ([`_sqlite_index_marker`](@ref)) is read from the index's `sqlite_master` text.
 
 ONE query per table; an unknown table yields an empty vector rather than throwing.
 """
 function _sqlite_composite_indexes(conn::PormGSQLite, table_name)::Vector{LiveComposite}
   rows = fetch(conn, """
     SELECT il.name AS idx, il."unique" AS is_unique, il.origin AS origin,
-           ii.name AS col, ii."desc" AS is_desc, ii.coll AS coll
+           ii.name AS col, ii."desc" AS is_desc, ii.coll AS coll, sm.sql AS ddl
     FROM pragma_index_list(?) AS il
     JOIN pragma_index_xinfo(il.name) AS ii
+    LEFT JOIN sqlite_master AS sm ON sm.type = 'index' AND sm.name = il.name
     WHERE il.partial = 0 AND ii."key" = 1
       AND (il.origin = 'c' OR (il.origin = 'u' AND il."unique" = 1))
     ORDER BY il.name, ii.seqno
@@ -2346,27 +2439,56 @@ function _sqlite_composite_indexes(conn::PormGSQLite, table_name)::Vector{LiveCo
   # An empty frame's columns are eltype Missing, so guard before touching them.
   nrow(rows) == 0 && return LiveComposite[]
   # `nothing` marks a member PormG cannot express; the whole index is then skipped below.
-  grouped = OrderedDict{String, Vector{Union{String, Nothing}}}()
+  grouped = OrderedDict{String, Vector{Union{Tuple{String, Bool}, Nothing}}}()   # ⇒ (column, descending)
   kind = Dict{String, Tuple{Bool, Bool}}()      # index ⇒ (unique, constraint-backed)
+  ddl = Dict{String, Union{String, Nothing}}()
   for r in eachrow(rows)
     r.idx === missing && continue
     idx = string(r.idx)
-    kind[idx] = (r.is_unique !== missing && r.is_unique != 0, r.origin !== missing && r.origin == "u")
+    unique = r.is_unique !== missing && r.is_unique != 0
+    kind[idx] = (unique, r.origin !== missing && r.origin == "u")
+    ddl[idx] = r.ddl === missing ? nothing : string(r.ddl)
+    desc = r.is_desc !== missing && r.is_desc != 0
     unusable = r.col === missing ||                                    # expression member
-               (r.is_desc !== missing && r.is_desc != 0) ||            # DESC member
+               r.is_desc === missing || (desc && unique) ||            # DESC member of a UNIQUE index
                (r.coll !== missing && uppercase(string(r.coll)) != "BINARY")   # non-default collation
-    push!(get!(grouped, idx, Union{String, Nothing}[]), unusable ? nothing : string(r.col))
+    push!(get!(grouped, idx, Union{Tuple{String, Bool}, Nothing}[]), unusable ? nothing : (string(r.col), desc))
   end
   out = LiveComposite[]
-  for (idx, cols) in grouped
+  for (idx, members) in grouped
+    any(m -> m === nothing, members) && continue    # a member PormG cannot re-emit ⇒ drop it whole
     unique, constraint = kind[idx]
-    # Arity partition (see the table above): only a BARE unique index may have one column.
-    length(cols) > 1 || (unique && !constraint) || continue
-    any(c -> c === nothing, cols) && continue    # a member PormG cannot re-emit ⇒ drop it whole
-    push!(out, LiveComposite(idx, String[String(c) for c in cols], unique, constraint))
+    marker = ddl[idx] === nothing ? nothing : _sqlite_index_marker(ddl[idx])
+    desc = Bool[m[2] for m in members]
+    # Arity partition (see the table above): one column is a BARE unique index, or a non-unique one
+    # that is descending or marked — every other one-column index is `db_index`'s.
+    length(members) > 1 || (unique && !constraint) || (!unique && (any(desc) || marker !== nothing)) || continue
+    push!(out, LiveComposite(idx, String[m[1] for m in members], unique, constraint, "btree", desc,
+                             Union{String, Nothing}[nothing for _ in members], fill(true, length(members)),
+                             marker, nothing))
   end
   return out
 end
+
+"""
+    _sqlite_index_marker(ddl) -> Union{String, Nothing}
+
+The `pormg:index` ownership marker (#29) of an index's `sqlite_master` text, or `nothing`.
+`Dialect.create_index` writes it as an SQL comment that is the LAST thing inside the column list —
+`("a" DESC, "b" /* pormg:index */)` — and it is read back anchored there, as the CHECK marker is
+anchored to its clause: found anywhere, a quoted identifier or a later `WHERE` literal holding the
+same text would count. The column list is found with the lexer the rebuild already trusts
+([`_sqlite_index_argument_start`](@ref)), which skips quotes and comments, so the parenthesis it
+stops at is the list's own.
+"""
+function _sqlite_index_marker(ddl::AbstractString)::Union{String, Nothing}
+  start = _sqlite_index_argument_start(ddl)
+  # No `(` at all: not a `CREATE INDEX` text this could have written.
+  (start == 1 && !Base.startswith(ddl, "(")) && return nothing
+  m = match(_SQLITE_INDEX_MARKER_TAIL, _sqlite_clause_through_parens(ddl, start))
+  return m === nothing ? nothing : String(m.captures[1])
+end
+const _SQLITE_INDEX_MARKER_TAIL = Regex("/\\*\\s*(" * INDEX_MARKER_RE.pattern * ")\\s*\\*/\\s*\\)\\s*\$")
 
 # ── SQLite index reference analysis (#519) ───────────────────────────────────────────────────────
 #
@@ -2698,10 +2820,13 @@ Whether this index is one PormG could not have created itself — an expression 
 one with an explicit `COLLATE`, or one with a sort direction — and therefore one it cannot re-create
 after a table rebuild.
 
-PormG emits exactly two index shapes — `Dialect.create_index` (from `db_index` and `Models.Index`) and
-`Dialect.create_unique_index` (from `Meta.unique_together` and the many-to-many join table). Both are a
-bare list of column names, nothing else. Anything a rebuild drops that does NOT have that shape carries
-intent no model declaration can hold, so nothing will bring it back and the operator has to be told.
+PormG emits two plain index shapes — `Dialect.create_index` (from `db_index` and `Models.Index`) and
+`Dialect.create_unique_index` (from `Meta.unique_together` and the many-to-many join table) — a bare
+list of column names, nothing else. Since #29 it also emits a third, a `Models.Index` with a
+descending column, and marks it `/* pormg:index */` ([`_sqlite_index_marker`](@ref)); the rebuild
+checks the marker before calling this, so a marked index never reaches it. Anything else a rebuild
+drops carries intent no model declaration created, so nothing will bring it back and the operator has
+to be told — an unmarked `DESC` index included: a declaration may well express it, but none made it.
 
 Four things disqualify an index, and each is checked against what the renderers can actually produce:
 
@@ -2711,7 +2836,7 @@ Four things disqualify an index, and each is checked against what the renderers 
     (`CREATE INDEX ix ON t(a) WHERE a > 0`), where the difference test alone sees nothing;
   * an explicit **`COLLATE`**, which changes which rows the index can serve;
   * an **`ASC`/`DESC`** direction. Django's `Index(fields=['-name'])` produces exactly this, so a
-    schema imported from Django can arrive carrying one.
+    schema imported from Django can arrive carrying one — unmarked, since Django wrote it.
 
 A plain `CREATE UNIQUE INDEX` is deliberately NOT disqualifying: PormG renders those from
 `unique_together` and for M2M join tables, and one that references a dropped column is intent the
@@ -3048,14 +3173,18 @@ function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Sy
         # sites, and this one is bounded by a single table's index count. Since #729 each rebuild is
         # rendered once, after the whole plan (`_finalize_sqlite_rebuilds!`), so it warns once per table
         # — it used to repeat for every registration of the same rebuild.
-        if _sqlite_index_is_unmodellable(stmt, pragma_members, all_referenced)
+        #
+        # #29: nor for an index carrying the `pormg:index` marker. PormG created it from a declaration,
+        # and that declaration — like a plain index's — is what decides whether it comes back.
+        if _sqlite_index_marker(stmt) === nothing &&
+           _sqlite_index_is_unmodellable(stmt, pragma_members, all_referenced)
           # The message names all four disqualifying shapes, because the `definition` printed beside it
           # tells the operator which one they have — and a message that said "expression or partial"
           # beside a `("a" DESC)` definition contradicted itself.
           @warn "SQLite table rebuild will DROP an index PormG cannot re-create: it uses an " *
-                "expression, a WHERE clause, an explicit COLLATE or a sort direction, none of which a " *
-                "model declaration expresses. Re-create it by hand after the migration if you still " *
-                "need it." table = string(table_name) index = string(r.name) dropped_columns = sort(lost) definition = stmt
+                "expression, a WHERE clause, an explicit COLLATE or a sort direction, and carries no " *
+                "pormg:index marker, so no model declaration created it and none will bring it back. " *
+                "Re-create it by hand after the migration if you still need it." table = string(table_name) index = string(r.name) dropped_columns = sort(lost) definition = stmt
         end
         continue
       end

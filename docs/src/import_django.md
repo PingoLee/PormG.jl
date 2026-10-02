@@ -515,7 +515,9 @@ Django parameters are automatically converted to PormG equivalents:
 | `proxy = True` | **no table** | A proxy shares its parent's table; emitting one would declare that table twice. |
 | `managed = False` | **imported** as `managed = false` | A model PormG queries but never migrates — see [Unmanaged models](@ref). Inherited from an abstract base, as in Django. A value other than `True`/`False` (a setting, an expression) is reported and the model stays managed. A managed model's `ForeignKey` into an unmanaged one is imported with `db_constraint = false`, and reported: PormG refuses a constrained key into a table it does not migrate, which may be a view. |
 | `indexes = [Index(fields=['a','b'])]` | **imported** as `indexes = [Models.Index(fields = ("a", "b"))]` | See the acceptance rule below — narrower than Django's. |
-| `indexes = [Index(fields=['a'])]` | **imported** as `a = …(db_index=true)` | A one-column index *is* `db_index`, and is the only spelling that round-trips, so nothing is reported. Two exceptions: on the **primary key** it is redundant (already indexed) and skipped, and on a field type with no `db_index` option (`PasswordField`) it is dropped **and** reported. |
+| `indexes = [Index(fields=['a'])]` | **imported** as `a = …(db_index=true)` | A plain one-column index *is* `db_index`, and is the only spelling that round-trips, so nothing is reported. Two exceptions: on the **primary key** it is redundant (already indexed) and skipped, and on a field type with no `db_index` option (`PasswordField`) it is dropped **and** reported. A one-column index with a `-`, a PostgreSQL index class or `opclasses=` is a different index and stays a `Models.Index`. |
+| `indexes = [Index(fields=['a', '-b'])]` | **imported** as `Models.Index(fields = ("a", "-b"))` | A descending column keeps its `-`. |
+| `indexes = [GinIndex(fields=['a'], opclasses=['gin_trgm_ops'], name=…)]` | **imported** as `Models.Index(fields = ("a",), name = …, method = "gin", opclasses = ("gin_trgm_ops",))` | Likewise `BTreeIndex`, `HashIndex`, `GistIndex`, `SpGistIndex` and `BrinIndex` from `django.contrib.postgres.indexes`, each as its `method`. These are PostgreSQL-only: `makemigrations` on SQLite refuses the model. |
 | `index_together = (('a','b'), …)` | **imported** as one `Models.Index` per group | The legacy spelling; the non-unique twin of `unique_together`. |
 | `ordering`, `get_latest_by` | **dropped**, reported | PormG orders per query, not per model. |
 | `verbose_name*`, `permissions`, `default_related_name`, `app_label`, … | **dropped**, reported | No PormG equivalent. |
@@ -550,20 +552,20 @@ class, an enum, a field — stays verbatim: only the class a report is *about* i
     reinterpreting one is not.
 
 !!! warning "`Meta.indexes` acceptance is a whitelist too"
-    An entry is imported only when it is a `models.Index` whose arguments are within `fields` and
-    `name`. Everything else causes **that one index** to be dropped and reported, leaving its
-    siblings alone:
+    An entry is imported only when it is a `models.Index` or one of the `django.contrib.postgres`
+    index classes above, and its arguments are within `fields`, `name` and `opclasses` (a list of
+    string literals). A `-` in `fields` is a descending column. Everything else causes **that one
+    index** to be dropped and reported, leaving its siblings alone:
 
-    - `condition=`, `include=`, `opclasses=`, `expressions=`, `db_tablespace=` — each changes *what*
-      is indexed or where it lives;
-    - a positional expression, `models.Index(Lower("name"), …)` — a functional index; PormG would
-      index the column itself, which is a different index;
-    - a **descending** column, `fields=["-year"]` — PormG indexes carry no per-column order, so
-      importing it ascending would build a different index under the developer's name;
-    - a PostgreSQL-specific class such as `GinIndex` / `BrinIndex` — PormG emits only a default
-      b-tree.
-
-    Advanced index shapes (GIN/GiST/BRIN, functional, partial, ordered) are tracked separately.
+    - `condition=` — a partial index, and a positional expression, `models.Index(Lower("name"), …)` —
+      a functional index. PormG cannot declare either yet; importing the columns alone would build a
+      different index under the developer's name;
+    - `include=`, `expressions=`, `db_tablespace=`, and an index class's storage parameters
+      (`fastupdate=`, `gin_pending_list_limit=`, `pages_per_range=`, `fillfactor=`, …) — each
+      changes *what* is indexed, how, or where it lives;
+    - any other class, such as `BloomIndex` (an extension's access method) or a project's own
+      subclass;
+    - a descending column in `index_together`, which has no such spelling.
 
 !!! note "An index name reused across models loses the name, not the index"
     An index name is unique per database, so two models declaring the same name cannot both be

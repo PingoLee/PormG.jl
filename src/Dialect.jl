@@ -18,6 +18,8 @@ import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError
 # #496: the `db_default` vocabulary (Kernel, layer 1). `db_default_sql` below renders from it, and
 # `Migrations._column_default` compiles the declared side through the same function.
 import PormG: PORTABLE_DB_DEFAULTS
+# #29: index access methods, the operator-class shape, and the `pormg:index` ownership marker.
+import PormG: INDEX_METHODS, INDEX_OPCLASS_RE, INDEX_MARKER
 import PormG.ConnectionPool: fetch
 import PormG: postgres_type_map_reverse, date_format_map, sqlite_type_map_reverse
 # The canonical column IR (#507). `alter_field` renders an ALTER from a `ColumnDelta`, which is why
@@ -1818,12 +1820,75 @@ _sqlite_check_constraint_clause(c)::String =
 # index, the next `makemigrations` plans it again, and the plan converges never. Without the clause
 # the collision fails the migration loudly, inside its transaction. The single-column `db_index` path
 # keeps the clause: its names carry a random suffix and cannot collide that way.
-function create_index(conn::PormGPostgres, index_name::String, table_name::String, columns::Vector{String}; if_not_exists::Bool = true)
-  return """CREATE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) ($(join(columns, ", ")));"""
+#
+# #29 adds an advanced index: an access `method` (`USING`), a `DESC` member and an operator class per
+# member, and the ownership `marker` PormG stores beside every advanced index it creates. Every
+# keyword defaults to what the statement always was, so a plain index renders byte-identically.
+# `opclasses` reach here already validated against `INDEX_OPCLASS_RE` by `Models.Index` and `method`
+# against `INDEX_METHODS` — they are rendered bare, so the check below is the renderer's own guard
+# against a hand-built caller, not the validation.
+function _index_members(columns::Vector{String}, descending::AbstractVector{Bool},
+                        opclasses::AbstractVector)::Vector{String}
+  out = String[]
+  for (k, c) in enumerate(columns)
+    oc = get(opclasses, k, nothing)
+    if oc !== nothing
+      occursin(INDEX_OPCLASS_RE, oc) ||
+        throw(InvalidValueError("operator class $(repr(oc)) is not a lower-case, unqualified identifier"))
+      c *= " " * oc
+    end
+    get(descending, k, false) && (c *= " DESC")
+    push!(out, c)
+  end
+  return out
 end
 
-function create_index(conn::PormGSQLite, index_name::String, table_name::String, columns::Vector{String}; if_not_exists::Bool = true)
-  return """CREATE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) ($(join(columns, ", ")));"""
+function create_index(conn::PormGPostgres, index_name::String, table_name::String, columns::Vector{String};
+                      if_not_exists::Bool = true, method::String = "btree",
+                      descending::AbstractVector{Bool} = Bool[], opclasses::AbstractVector = Union{String, Nothing}[],
+                      marker::Union{String, Nothing} = nothing)
+  method in INDEX_METHODS || throw(InvalidValueError("index method $(repr(method)) is not one of $(INDEX_METHODS)"))
+  using_ = method == "btree" ? "" : "USING $(method) "
+  stmt = """CREATE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) $(using_)($(join(_index_members(columns, descending, opclasses), ", ")));"""
+  # The marker rides in the same step as the index, so an index PormG created never exists without
+  # the comment that says so — `add_check_constraint`'s shape. `_split_pg_statements` (#841) runs
+  # the two one at a time.
+  return marker === nothing ? stmt : stmt * "\n" * comment_index(conn, index_name; marker = marker)
+end
+
+# SQLite has no access method and no operator class, and refuses them here rather than create a
+# different index — the renderer half of the #648 rule; the planner refuses the declaration first
+# (`_refuse_postgres_only_indexes`). A `DESC` member is core: SQLite orders an index the same way.
+#
+# The marker is an SQL comment INSIDE the column list, after the last member: SQLite keeps the
+# `CREATE INDEX` text verbatim in `sqlite_master` — comments included, through `RENAME TO` and
+# `RENAME COLUMN` — and inside the parentheses it is part of the stored text whatever follows the
+# list. `_sqlite_index_marker` reads it back anchored to that closing parenthesis, the CHECK marker's
+# shape (`_sqlite_check_constraint_clause`).
+function create_index(conn::PormGSQLite, index_name::String, table_name::String, columns::Vector{String};
+                      if_not_exists::Bool = true, method::String = "btree",
+                      descending::AbstractVector{Bool} = Bool[], opclasses::AbstractVector = Union{String, Nothing}[],
+                      marker::Union{String, Nothing} = nothing)
+  method == "btree" || throw(BackendCapabilityError(
+    "SQLite has no index access method \"$(method)\" — only b-tree. An index declared with " *
+    "method = \"$(method)\" is PostgreSQL-only; declare it on a model that migrates on PostgreSQL."))
+  any(!isnothing, opclasses) && throw(BackendCapabilityError(
+    "SQLite has no operator classes, so an index declaring opclasses = $(Tuple(opclasses)) is " *
+    "PostgreSQL-only; declare it on a model that migrates on PostgreSQL."))
+  members = join(_index_members(columns, descending, opclasses), ", ")
+  marker === nothing || (members *= " /* $(marker) */")
+  return """CREATE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) ($(members));"""
+end
+
+# The ownership marker as the index's comment — also how a declaration ADOPTS a hand-made index of the
+# same shape: nothing about the index changes, it only becomes PormG's. `index_name` is the quoted
+# identifier, as `create_index` takes it. `keep` is the comment already there: `COMMENT ON` replaces
+# the whole comment, so the marker is APPENDED rather than written over a note a DBA left, and the
+# kept text — live catalog content — has its quotes doubled (`comment_check_constraint`'s rule).
+function comment_index(conn::PormGPostgres, index_name::String; marker::String = INDEX_MARKER,
+                       keep::Union{String, Nothing} = nothing)::String
+  text = (keep === nothing || isempty(strip(keep))) ? marker : string(rstrip(keep), " ", marker)
+  return """COMMENT ON INDEX $(index_name) IS '$(replace(text, "'" => "''"))';"""
 end
 
 function create_unique_index(conn::PormGPostgres, index_name::String, table_name::String, columns::Vector{String}; if_not_exists::Bool = true)

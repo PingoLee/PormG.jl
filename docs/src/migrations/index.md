@@ -64,9 +64,10 @@ database falls into one of the groups below. "Destructive" means `dry_run()` lis
 | Tables listed in a connection's [`ignore_tables:`](../configuration/connection_yml.md#Tables-PormG-leaves-alone), in [`register_ignore_tables!`](../extending.md#Extension-points), or in the backend's [built-in list](../configuration/connection_yml.md#The-built-in-list) (less the connection's [`unignore_defaults:`](../configuration/connection_yml.md#Switching-a-built-in-entry-off)) | **Never reads them.** A *managed* model on an ignored table is refused with `InvalidConfigurationError`. |
 | Tables of [unmanaged models](../models.md#Unmanaged-models) | **Never creates, alters, renames or drops them.** They are still read, so that the plan's index names and SQLite views can be checked against them. |
 | A table no model declares | Plans `DROP TABLE`, **destructive**. Refused with `InvalidMigrationError` while a view or trigger still reads it (see [Deleting a Model](#Deleting-a-Model)). |
-| A column, an index or a `UNIQUE` constraint the model does not declare | Plans its removal, **destructive**. See [Changing composites on an existing table](../models.md#Changing-composites-on-an-existing-table) for indexes. |
+| A column, a plain index or a `UNIQUE` constraint the model does not declare | Plans its removal, **destructive**. See [Changing composites on an existing table](../models.md#Changing-composites-on-an-existing-table) for indexes. |
+| A non-unique index with an access method (GIN, GiST, BRIN, hash, SP-GiST), a `DESC` column or an operator class — the shapes [`Models.Index`](../models.md#Methods,-operator-classes-and-descending-columns) can declare | Reads it. **Plans its removal only when it carries PormG's `pormg:index` marker**, i.e. PormG created it; one written by hand is never planned away, and a declaration of the same shape adopts it. A method or an operator class is PostgreSQL-only. |
 | A `CHECK` you wrote by hand | Reads it but **never plans it away**. On SQLite, a rebuild of the table loses it, with a warning (see below). A [`CheckConstraint`](../models.md#Check-Constraints) the model no longer declares *is* planned away. |
-| An index that a model cannot declare, over several columns or a non-unique one over one column: partial, expression, non-b-tree, `DESC`, with an operator class, a collation of its own (on SQLite, over several columns: any collation but `BINARY`, including one declared on the column) or `INCLUDE`. On PostgreSQL, also any **invalid** index, whatever its shape (a failed `CREATE INDEX CONCURRENTLY`) | **Never reads it, so never drops it.** An invalid one is reported by `check("db"; kinds = [:invalid_index])` (see [Finding invalid indexes](workflow.md#Finding-Invalid-Indexes)), and dropping or rebuilding it is left to you. On SQLite a rebuild re-creates it, unless it covers a column the rebuild removes. A field that declares `db_index = true` on a column carrying only such an index gets PormG's own index beside it on PostgreSQL. On SQLite, a non-unique index that lists the column itself (not inside an expression) is taken as satisfying it and nothing is created; otherwise PormG's own index is created there too. |
+| An index that a model cannot declare, over several columns or a non-unique one over one column: partial, expression, an extension's access method (`bloom`), a `NULLS` placement other than the direction's default, a collation of its own (on SQLite, over several columns: any collation but `BINARY`, including one declared on the column), `INCLUDE`, or a unique index with a method, direction or operator class. On PostgreSQL, also any **invalid** index, whatever its shape (a failed `CREATE INDEX CONCURRENTLY`) | **Never reads it, so never drops it.** An invalid one is reported by `check("db"; kinds = [:invalid_index])` (see [Finding invalid indexes](workflow.md#Finding-Invalid-Indexes)), and dropping or rebuilding it is left to you. On SQLite a rebuild re-creates it, unless it covers a column the rebuild removes. A field that declares `db_index = true` on a column carrying only such an index gets PormG's own index beside it on PostgreSQL. On SQLite, a non-unique index that lists the column itself (not inside an expression) is taken as satisfying it and nothing is created; otherwise PormG's own index is created there too. |
 | Views and triggers on a table SQLite has to rebuild | Dropped and **re-created** around the rebuild. Refused when one would come back stale (see [Triggers and views across a rebuild](#SQLite:-Table-Recreation)). |
 | Table clauses no model can express, on a table SQLite rebuilds: a hand-written `CHECK`, `STRICT`, `WITHOUT ROWID`, a column `COLLATE`, a generated column, `ON CONFLICT`, a composite foreign key, a key's `ON UPDATE` / `DEFERRABLE` / `MATCH` | **Lost**, with one warning per table quoting them (see [SQLite: Table Recreation](#SQLite:-Table-Recreation)). SQL comments inside the `CREATE TABLE` text are lost too, without a warning. |
 | A column whose type PormG has no field for (`macaddr`, `citext`, an array, a custom type) | Plans a retype to the declared type, converting the column, unless you exclude the table (see *Adopting a schema PormG did not create*, above). |
@@ -343,25 +344,25 @@ Give the column a `default` and SQLite will not take the clause inline — PormG
 
     For every other required column, add it in two steps on either backend: declare it nullable with no default, migrate, backfill the values, then tighten it — the tightening is an alteration of an existing column, which takes the table rebuild on SQLite and an `ALTER COLUMN` on PostgreSQL.
 
-!!! warning "Deleting an indexed column, and the two index shapes PormG cannot re-create"
+!!! warning "Deleting an indexed column, and the index shapes PormG cannot re-create"
     SQLite refuses `ALTER TABLE ... DROP COLUMN` for a column **any** index references, so deleting an indexed column takes the table rebuild rather than a plain `DROP COLUMN`. The rebuild drops every index with the old table and re-creates the ones the rebuilt table can still support, so the end state is the same — it just costs a data copy on a large table.
 
-    PormG writes exactly two index shapes — a plain `CREATE INDEX` (from `db_index` and `Models.Index`) and a plain `CREATE UNIQUE INDEX` (from `Meta.unique_together` and many-to-many join tables). Both are a bare list of column names. An index carrying anything more cannot be re-created from a model, because **no model declaration expresses it**:
+    On SQLite PormG writes a plain `CREATE INDEX` (from `db_index` and `Models.Index`), a plain `CREATE UNIQUE INDEX` (from `Meta.unique_together` and many-to-many join tables), and a `Models.Index` with a descending column, which it marks `/* pormg:index */`. An index carrying anything else was not created from a model declaration, so **no declaration brings it back**:
 
     - an **expression index** — `CREATE INDEX ... ON t(lower(a))`
     - a **partial index** — `CREATE INDEX ... ON t(a) WHERE b > 0`
     - an explicit **`COLLATE`** — `CREATE INDEX ... ON t(a COLLATE NOCASE)`
-    - a sort **direction** — `CREATE INDEX ... ON t(a DESC)`; Django's `Index(fields=['-name'])` produces exactly this
+    - a sort **direction** without PormG's marker — `CREATE INDEX ... ON t(a DESC)`; Django's `Index(fields=['-name'])` produces exactly this. A `Models.Index(fields=("-a",))` declaration can express it, but did not create it.
 
-    PormG never creates any of them, but a database it adopted through `generate_models_from_db` or the Django importer can arrive carrying them, and so can one indexed by hand.
+    PormG never creates the first three, but a database it adopted through `generate_models_from_db` or the Django importer can arrive carrying any of the four, and so can one indexed by hand.
 
-    When a rebuild drops one of those four, PormG logs a warning naming the index and its definition, so **an index PormG cannot model is never dropped silently**. Nothing puts it back, though: re-create it by hand after the migration if you still need it.
+    When a rebuild drops one of those four, PormG logs a warning naming the index and its definition, so **an index PormG did not create is never dropped silently**. Nothing puts it back, though: re-create it by hand after the migration if you still need it. A marked descending index is dropped without a warning, like a plain one — its declaration decides whether it comes back.
 
     ```
     ┌ Warning: SQLite table rebuild will DROP an index PormG cannot re-create: it uses an
-    │ expression, a WHERE clause, an explicit COLLATE or a sort direction, none of which a
-    │ model declaration expresses. Re-create it by hand after the migration if you still
-    │ need it.
+    │ expression, a WHERE clause, an explicit COLLATE or a sort direction, and carries no
+    │ pormg:index marker, so no model declaration created it and none will bring it back.
+    │ Re-create it by hand after the migration if you still need it.
     │   table = "driver"
     │   index = "driver_surname_lower_idx"
     │   dropped_columns = 1-element Vector{String}: …

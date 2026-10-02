@@ -547,20 +547,62 @@ duplicated by a second index over the same columns.
 
 What reaches this struct is exactly what PormG can re-emit — a readers' contract, stated on
 [`_pg_composite_indexes`](@ref) and [`_sqlite_composite_indexes`](@ref). A partial, functional,
-non-b-tree, `DESC`, `INCLUDE` or explicitly-collated index is never read, so it is never matched,
-never dropped and never renamed.
+`INCLUDE` or explicitly-collated index is never read, so it is never matched, never dropped and
+never renamed; nor is an access method outside [`INDEX_METHODS`](@ref), a `NULLS` placement other
+than the direction's default, or a unique index that is not plain b-tree.
+
+Since #29 a non-unique index may also be ADVANCED — another access `method`, a `descending` member,
+or an operator class other than the column's default. Each member's class is recorded by name in
+`opclasses` (PostgreSQL's `opcname`; `nothing` on SQLite, which has none) beside whether it is the
+default (`opclass_default`), so a declaration that names a default class explicitly still matches.
+`marker` is the `pormg:index` ownership marker when the index carries one and `comment` the whole
+PostgreSQL comment it sits in. An advanced index without a marker was made by hand: it can be
+adopted, never dropped (see [`composite_is_owned`](@ref)).
 
 The arities partition with the column readers, so no index has two owners: a non-unique index here
-has more than one column (one column is `db_index`), a constraint-backed unique one has more than
-one column (one column is the field's `unique`), and a bare unique index may have one — nothing
-else reads that shape, and it is what a one-field `UniqueConstraint` materializes.
+has more than one column, or is advanced, or carries the marker (any other one-column index is
+`db_index`, whose readers refuse every advanced shape and every marked index); a constraint-backed
+unique one has more than one column (one column is the field's `unique`), and a bare unique index
+may have one — nothing else reads that shape, and it is what a one-field `UniqueConstraint`
+materializes.
 """
 struct LiveComposite
   name::String
   columns::Vector{String}
   unique::Bool
   constraint::Bool
+  method::String
+  descending::Vector{Bool}
+  opclasses::Vector{Union{String, Nothing}}
+  opclass_default::Vector{Bool}
+  marker::Union{String, Nothing}
+  comment::Union{String, Nothing}
 end
+# A plain b-tree composite — every reader before #29, and most test fixtures.
+LiveComposite(name::AbstractString, columns::Vector{String}, unique::Bool, constraint::Bool) =
+  LiveComposite(String(name), columns, unique, constraint, "btree", fill(false, length(columns)),
+                Union{String, Nothing}[nothing for _ in columns], fill(true, length(columns)),
+                nothing, nothing)
+
+"""
+    composite_is_advanced(c) -> Bool
+
+Whether a live or declared composite is more than plain b-tree: another access method, a descending
+member, or a non-default operator class (#29). Advanced indexes are owned through the
+`pormg:index` marker; plain ones through the models file alone.
+"""
+composite_is_advanced(c::LiveComposite)::Bool =
+  c.method != "btree" || any(c.descending) || !all(c.opclass_default)
+
+"""
+    composite_is_owned(c::LiveComposite) -> Bool
+
+Whether PormG may plan `c` away when no declaration matches it. A plain composite always — the
+models file is the schema (#161). An advanced one only when it carries the `pormg:index` marker:
+PormG created it, so a declaration that no longer names it means it should go. A hand-made GIN
+index has no marker and is never dropped for being undeclared — the CHECK rule (#742).
+"""
+composite_is_owned(c::LiveComposite)::Bool = !composite_is_advanced(c) || c.marker !== nothing
 
 """
     LiveCheck
@@ -646,6 +688,37 @@ struct DeclaredComposite
   unique::Bool
   explicit::Bool
   auto::Bool
+  method::String
+  descending::Vector{Bool}
+  opclasses::Vector{Union{String, Nothing}}
+end
+# A plain b-tree composite: every `UniqueConstraint`, the join-table index, a plain `Index`.
+DeclaredComposite(name::AbstractString, columns::Vector{String}, unique::Bool, explicit::Bool, auto::Bool) =
+  DeclaredComposite(String(name), columns, unique, explicit, auto, "btree", fill(false, length(columns)),
+                    Union{String, Nothing}[nothing for _ in columns])
+
+composite_is_advanced(d::DeclaredComposite)::Bool =
+  d.method != "btree" || any(d.descending) || any(!isnothing, d.opclasses)
+
+"""
+    composite_shape_matches(live::LiveComposite, d::DeclaredComposite; columns = live.columns) -> Bool
+
+Whether a live index IS the declared one: unique or not, the same columns in the same order, and —
+since #29 — the same access method, the same direction per member and the same operator class per
+member. A declared `nothing` class is satisfied by the column's default whatever its name, and a
+named one by that name alone, so `opclasses = ("jsonb_ops",)` matches a GIN index built with the
+default class it names. The name is never part of it (see [`DeclaredComposite`](@ref)). `columns`
+is the live side in the declared model's terms — the planner maps a renamed column first.
+"""
+function composite_shape_matches(live::LiveComposite, d::DeclaredComposite;
+                                 columns::Vector{String} = live.columns)::Bool
+  (live.unique == d.unique && columns == d.columns && live.method == d.method &&
+   live.descending == d.descending) || return false
+  for (k, want) in enumerate(d.opclasses)
+    ok = want === nothing ? live.opclass_default[k] : live.opclasses[k] == want
+    ok || return false
+  end
+  return true
 end
 
 """
@@ -655,8 +728,10 @@ The name PormG derives for a model-level index that declares none: `<table>_<col
 `UniqueConstraint`, `<table>_<cols>_idx` for an `Index` — physical table and column names, joined
 by `_`, case kept. One spelling for the create path and the diff alike.
 """
-composite_index_name(table::AbstractString, columns::Vector{String}, unique::Bool)::String =
-  "$(table)_$(join(columns, "_"))_$(unique ? "uniq" : "idx")"
+composite_index_name(table::AbstractString, columns::Vector{String}, unique::Bool;
+                     descending::AbstractVector{Bool} = Bool[], method::AbstractString = "btree")::String =
+  "$(table)_$(join((get(descending, k, false) ? c * "_desc" : c for (k, c) in enumerate(columns)), "_"))" *
+  "$(method == "btree" ? "" : "_" * method)_$(unique ? "uniq" : "idx")"
 
 """
     declared_composites(model::PormGModel) -> Vector{DeclaredComposite}
@@ -681,8 +756,16 @@ function declared_composites(model::PormGModel)::Vector{DeclaredComposite}
                                         ("composite_indexes", "indexes", false))
     for decl in get(get(model.cache, cache_key, Dict{String, Any}()), list_key, Any[])
       cols = String[Models.model_column(model, f) for f in decl.fields]
-      name = decl.name === nothing ? composite_index_name(table, cols, unique) : String(decl.name)
-      push!(out, DeclaredComposite(name, cols, unique, decl.name !== nothing, false))
+      if decl isa Models.Index
+        name = decl.name === nothing ?
+          composite_index_name(table, cols, unique; descending = decl.descending, method = decl.method) :
+          String(decl.name)
+        push!(out, DeclaredComposite(name, cols, unique, decl.name !== nothing, false, decl.method,
+                                     copy(decl.descending), copy(decl.opclasses)))
+      else
+        name = decl.name === nothing ? composite_index_name(table, cols, unique) : String(decl.name)
+        push!(out, DeclaredComposite(name, cols, unique, decl.name !== nothing, false))
+      end
     end
   end
   return out
@@ -698,7 +781,9 @@ It is the declared-side compiler applied to a model: every physical column is co
 `_spec_or_degraded` under the `<uncompilable:old>` marker (the #69 fail-safe keeps its asymmetry —
 a live column that cannot be compiled must still compare UNEQUAL to a declared one), `db_index`
 plus `cache["index"]` fill `indexes`, and [`declared_composites`](@ref) fills `composites` — as bare
-indexes, since that is what PormG itself creates. Not a second
+indexes, since that is what PormG itself creates, an advanced one (#29) carrying the `pormg:index`
+marker PormG writes beside it unless `cache["composite_index_owners"]` (a model `inspectdb` read)
+records the live index's own. Not a second
 representation of the schema: the planner's unit tests and the golden plan corpus hand-build the
 live side as models, and this is what lets them keep doing so while `makemigrations` itself never
 builds one. A `ManyToManyField` is skipped, as it is a join table and not a column.
@@ -725,7 +810,17 @@ function live_table(model::PormGModel, conn::Union{PormGPostgres, PormGSQLite}):
       indexes[col] = name === nothing ? nothing : string(name)
     end
   end
-  composites = LiveComposite[LiveComposite(d.name, d.columns, d.unique, false) for d in declared_composites(model)]
+  # #29: an advanced declaration reads back as PormG created it — marked, with each named class
+  # recorded by name and every unnamed one as the default — unless the model was READ from a database
+  # (`_attach_composite_indexes!`), which records each advanced index's own marker and comment: a
+  # hand-made index read back as marked would be planned away the moment its declaration went.
+  owners = get(model.cache, "composite_index_owners", nothing)
+  ownership(d) = !composite_is_advanced(d) ? (nothing, nothing) :
+                 owners !== nothing && haskey(owners, d.name) ? owners[d.name] : (INDEX_MARKER, INDEX_MARKER)
+  composites = LiveComposite[
+    LiveComposite(d.name, d.columns, d.unique, false, d.method, copy(d.descending), copy(d.opclasses),
+                  Bool[o === nothing for o in d.opclasses], ownership(d)...)
+    for d in declared_composites(model)]
   # #742: a model read as a live table holds its declared CHECKs as PormG created them — owned, with
   # the marker of their own condition — so a model diffed against itself plans nothing.
   checks = LiveCheck[LiveCheck(c.name, c.condition, check_marker(c.condition))

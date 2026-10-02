@@ -265,18 +265,19 @@ end
   # what makes `Models.Index` a round trip rather than a one-way declaration. The reversed order is
   # the mutation gate — a reader aggregating by attribute number returns (a, b) here.
   ddl("""CREATE INDEX "pormg_it_uniq_ba_idx" ON "pormg_it_uniq" (b, a)""")
-  # …and one composite index PormG must REFUSE to read: a DESC key. PormG indexes carry no per-column
-  # order, so reading this back would regenerate an ascending index under the developer's name — the
-  # same reinterpretation the Django importer refuses on `Index(fields=["-year"])`.
+  # …and a composite index with a DESC key. Until #29 PormG refused to read it — no declaration could
+  # carry the order, so it would have regenerated ascending under the developer's name. It is read
+  # now, with the direction, as `Models.Index(fields = ("-b", "a"))`: unmarked, so hand-made, so
+  # never planned away.
   #
   # The LEADING column is descending on purpose. That is the case the PostgreSQL reader got wrong:
   # `indoption` is an `int2vector` with lower bound 0 while `WITH ORDINALITY` counts from 1, so an
   # off-by-one subscript examined the NEXT column's flags and missed a descending first column
   # entirely — with no false positives, so every other test stayed green.
   ddl("""CREATE INDEX "pormg_it_uniq_desc_idx" ON "pormg_it_uniq" (b DESC, a)""")
-  # PostgreSQL only: three more shapes that must not regenerate as a plain b-tree, each reached by a
-  # different per-column catalog vector.
+  # PostgreSQL only: three more shapes, each reached by a different per-column catalog vector.
   #   opc  — a non-default operator class (`indclass`), the other half of the same subscript bug.
+  #          Read since #29, by name, as `opclasses = ("text_pattern_ops", nothing)`.
   #   nf   — ASCENDING but `NULLS FIRST` (`indoption` = 2). Bit 0 alone is not enough: DESC implies
   #          NULLS FIRST, so a descending key measures 3 and a `& 1` mask lets this one through,
   #          re-emitting it as NULLS LAST.
@@ -514,20 +515,29 @@ end
     @test haskey(uniq.cache, "composite_indexes")
     live_ix = uniq.cache["composite_indexes"]["indexes"]
     live_ix_names = [i.name for i in live_ix]
-    # EXACTLY one: the composite UNIQUE above must not also arrive here. On PostgreSQL it is a
-    # `pg_constraint` row whose backing index is `indisunique`; on SQLite `il."unique" = 1`. Either
-    # filter failing would re-declare a uniqueness guarantee as a plain index.
-    @test length(live_ix) == 1
+    # The composite UNIQUE above must not also arrive here. On PostgreSQL it is a `pg_constraint`
+    # row whose backing index is `indisunique`; on SQLite `il."unique" = 1`. Either filter failing
+    # would re-declare a uniqueness guarantee as a plain index.
+    expected_ix = is_pg ? ["pormg_it_uniq_ba_idx", "pormg_it_uniq_desc_idx", "pormg_it_uniq_opc_idx"] :
+                          ["pormg_it_uniq_ba_idx", "pormg_it_uniq_desc_idx"]
+    @test live_ix_names == expected_ix
     # Named individually as well, so a failure says WHICH shape leaked rather than only that the
-    # count moved. The DESC one is the discriminating case for the `indoption` subscript.
-    @test !("pormg_it_uniq_desc_idx" in live_ix_names)
+    # list moved.
     if is_pg
-      @test !("pormg_it_uniq_opc_idx" in live_ix_names)
       @test !("pormg_it_uniq_nf_idx" in live_ix_names)     # ASC + NULLS FIRST: indoption == 2
       @test !("pormg_it_uniq_coll_idx" in live_ix_names)   # explicit COLLATE: indcollation differs
     end
-    @test live_ix[1].name == "pormg_it_uniq_ba_idx"
-    @test live_ix[1].fields == ["b", "a"]        # declared order, not attribute order
+    ix_by_name = Dict(i.name => i for i in live_ix)
+    @test ix_by_name["pormg_it_uniq_ba_idx"].fields == ["b", "a"]        # declared order, not attribute order
+    # #29: the DESC key is read WITH its direction — on its LEADING column, the discriminating case
+    # for the `indoption` subscript.
+    @test (ix_by_name["pormg_it_uniq_desc_idx"].fields, ix_by_name["pormg_it_uniq_desc_idx"].descending) ==
+          (["b", "a"], [true, false])
+    if is_pg
+      @test ix_by_name["pormg_it_uniq_opc_idx"].opclasses == ["text_pattern_ops", nothing]
+    end
+    # Both are hand-made — read, but never PormG's to drop.
+    @test uniq.cache["composite_index_owners"]["pormg_it_uniq_desc_idx"][1] === nothing
     # Members are not marked `db_index` either — the single-column reader must stay disjoint.
     @test !uniq.fields["a"].db_index
     @test !uniq.fields["b"].db_index
@@ -535,11 +545,15 @@ end
     # …and it survives the model → source → module round trip a user actually performs, which is
     # the whole point of reading it back: `inspectdb` writes through `Model_to_str`.
     uniq_src = PormG.Models.Model_to_str(uniq)
-    @test occursin("indexes = [Models.Index(fields = (\"b\", \"a\",), name = \"pormg_it_uniq_ba_idx\")]", uniq_src)
+    @test occursin("indexes = [Models.Index(fields = (\"b\", \"a\",), name = \"pormg_it_uniq_ba_idx\"), " *
+                   "Models.Index(fields = (\"-b\", \"a\",), name = \"pormg_it_uniq_desc_idx\")", uniq_src)
+    is_pg && @test occursin("Models.Index(fields = (\"plain\", \"slug\",), name = \"pormg_it_uniq_opc_idx\", " *
+                            "opclasses = (\"text_pattern_ops\", nothing,))", uniq_src)
     uniq_mod = Module()
     Core.eval(uniq_mod, :(import PormG.Models))
     uniq_reloaded = Core.eval(uniq_mod, Meta.parse(uniq_src))
-    @test uniq_reloaded.cache["composite_indexes"]["indexes"][1].fields == ["b", "a"]
+    @test [PormG.Models._index_shape(i) for i in uniq_reloaded.cache["composite_indexes"]["indexes"]] ==
+          [PormG.Models._index_shape(i) for i in live_ix]
 
     # ── 3c'. …and the composite UNIQUE (a, b) comes back as a UniqueConstraint (#161) ──
     # It used to vanish on both backends — the constraint-backed shape failed the arity-1 gates and
@@ -1981,6 +1995,132 @@ if adapter_name == "PostgreSQL"
       @test all(isempty, values(plan742(adopted)))
     finally
       drop742!()
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL Index method, opclasses and DESC: declared, marked, read back, adopted, owned (#29)
+# The live half of test/unit/test_composite_diff.jl's #29 testsets, where the stand-in has no
+# catalog. Every access method a declaration can name — GIN with a non-default class, BRIN, hash,
+# SP-GiST — plus a DESC composite and `varchar_pattern_ops`, all built-in, so no extension is needed.
+# Each is created with `COMMENT ON INDEX … 'pormg:index'`, read back as declared by the composite
+# reader (methods by `pg_am`, directions by `indoption`, classes by `pg_opclass`), and converges.
+# `inspectdb` writes them back so that its own output plans nothing. A hand-made GIN index with a
+# DBA's comment is left alone until declared, then adopted with a COMMENT that keeps the note; an
+# explicit DEFAULT class in the declaration still matches it. Undeclared, the marked indexes are
+# dropped and an unmarked hand-made one is not. Dropped in `finally`.
+# Mutation gate: drop `_PG_MARKED_INDEX` from the composite reader's arity predicate and the
+# one-column marked indexes stop reading back, so the converged plan re-creates them.
+# ─────────────────────────────────────────────────────────────────────────────
+if adapter_name == "PostgreSQL"
+  @testset "Index method, opclasses and DESC: declared, marked, read back, adopted, owned (#29)" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
+    tbl = "pormg_it_29_result"
+    drop29!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
+    M29 = PormG.Models
+    IX = M29.Index
+    model29(indexes...) = M29.Model(tbl;
+      id = M29.IDField(), raceid = M29.IntegerField(), points = M29.FloatField(),
+      laps = M29.IntegerField(), surname = M29.CharField(max_length = 60), notes = M29.TextField(),
+      dob = M29.DateField(), telemetry = M29.JSONField(), indexes = collect(indexes))
+    schema29(m) = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+      Symbol(tbl) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => m, :exist => false))
+    settings29 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
+    live29() = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
+    plan29(m) = PormG.Migrations.get_migration_plan([live29()], schema29(m), pool, settings29; interactive = false)
+    keys29(p) = haskey(p, Symbol(tbl)) ? collect(keys(p[Symbol(tbl)])) : String[]
+    apply29!(plan) = for sql in first(PormG.Migrations._order_statements(collect(values(plan))))
+      foreach(ddl, PormG.Migrations._split_pg_statements(sql))
+    end
+    comments29() = Dict(String(r.relname) => (r.comment === missing ? nothing : String(r.comment))
+      for r in eachrow(ddl("SELECT c.relname, obj_description(c.oid, 'pg_class') AS comment " *
+                           "FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid " *
+                           "WHERE i.indrelid = '$(tbl)'::regclass AND NOT i.indisprimary")))
+    declared = (
+      IX(fields = ("telemetry",), method = "gin", opclasses = ("jsonb_path_ops",), name = "pormg_it_29_telemetry_path"),
+      IX(fields = ("dob",), method = "brin"),
+      IX(fields = ("laps",), method = :hash),
+      IX(fields = ("notes",), method = "spgist"),
+      IX(fields = ("raceid", "-points")),
+      IX(fields = ("surname",), opclasses = ("varchar_pattern_ops",), name = "pormg_it_29_surname_pattern"),
+      # A marked one-column index whose class is the column's DEFAULT: it reads back plain, so
+      # inspectdb must name the class to write a declaration at all (found in review).
+      IX(fields = ("raceid",), opclasses = ("int4_ops",), name = "pormg_it_29_raceid_int4"),
+    )
+    marked = ["pormg_it_29_telemetry_path", "pormg_it_29_result_dob_brin_idx", "pormg_it_29_result_laps_hash_idx",
+              "pormg_it_29_result_notes_spgist_idx", "pormg_it_29_result_raceid_points_desc_idx",
+              "pormg_it_29_surname_pattern", "pormg_it_29_raceid_int4"]
+
+    drop29!()
+    try
+      apply29!(PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema29(model29()), pool,
+                                                    settings29; interactive = false))
+      p = plan29(model29(declared...))
+      @test sort(keys29(p)) == sort(["Create index: $(n)" for n in marked])
+      @test occursin("USING gin (\"telemetry\" jsonb_path_ops)", p[Symbol(tbl)]["Create index: pormg_it_29_telemetry_path"])
+      apply29!(p)
+      # Every one carries the marker, and PostgreSQL built what was declared.
+      @test all(comments29()[n] == PormG.INDEX_MARKER for n in marked)
+      defs = Dict(String(r.indexname) => String(r.indexdef) for r in eachrow(ddl(
+        "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = '$(tbl)'")))
+      @test occursin("USING brin (dob)", defs["pormg_it_29_result_dob_brin_idx"])
+      @test occursin("USING hash (laps)", defs["pormg_it_29_result_laps_hash_idx"])
+      @test occursin("USING spgist (notes)", defs["pormg_it_29_result_notes_spgist_idx"])
+      @test occursin("(raceid, points DESC)", defs["pormg_it_29_result_raceid_points_desc_idx"])
+      @test occursin("varchar_pattern_ops", defs["pormg_it_29_surname_pattern"])
+
+      # Read back as declared — the one-column ones too, which only the marker or the shape puts in
+      # the composite reader — and converged.
+      live = live29()
+      byname = Dict(c.name => c for c in live.composites)
+      @test issubset(marked, keys(byname))
+      @test (byname["pormg_it_29_telemetry_path"].method, byname["pormg_it_29_telemetry_path"].opclasses) ==
+            ("gin", ["jsonb_path_ops"])
+      @test byname["pormg_it_29_result_raceid_points_desc_idx"].descending == [false, true]
+      @test all(byname[n].marker == PormG.INDEX_MARKER for n in marked)
+      @test isempty(live.indexes)                     # none is a `db_index`: one owner per index
+      @test all(isempty, values(plan29(model29(declared...))))
+
+      # inspectdb: the generated declarations plan nothing against the live table.
+      read_back = only(m for m in PormG.Migrations.convert_schema_to_models(pool; include_table = [tbl]))
+      src = PormG.Models.Model_to_str(read_back)
+      @test occursin("method = \"gin\", opclasses = (\"jsonb_path_ops\",)", src)
+      @test occursin("Models.Index(fields = (\"raceid\", \"-points\",)", src)
+      @test occursin("Models.Index(fields = (\"raceid\",), name = \"pormg_it_29_raceid_int4\", opclasses = (\"int4_ops\",))", src)
+      mod29 = Module()
+      Core.eval(mod29, :(import PormG.Models))
+      regenerated = Core.eval(mod29, Meta.parse(src))
+      @test all(isempty, values(plan29(regenerated)))
+
+      # A hand-made GIN index with a DBA's note: read, never planned away…
+      ddl("CREATE INDEX pormg_it_29_hand_gin ON \"$(tbl)\" USING gin (telemetry)")
+      ddl("COMMENT ON INDEX pormg_it_29_hand_gin IS 'built by ops for the telemetry dashboard'")
+      @test all(isempty, values(plan29(model29(declared...))))
+      # …until declared, which adopts it — a COMMENT that keeps the note, nothing destructive.
+      adopting = model29(declared..., IX(fields = ("telemetry",), method = "gin"))
+      p = plan29(adopting)
+      @test keys29(p) == ["Adopt index: pormg_it_29_hand_gin"]
+      @test !PormG.Migrations.is_destructive(join(values(p[Symbol(tbl)]), "\n"))
+      apply29!(p)
+      @test comments29()["pormg_it_29_hand_gin"] == "built by ops for the telemetry dashboard pormg:index"
+      @test all(isempty, values(plan29(adopting)))
+      # Naming the column's DEFAULT class explicitly is the same index.
+      explicit = model29(declared..., IX(fields = ("telemetry",), method = "gin", opclasses = ("jsonb_ops",),
+                                         name = "pormg_it_29_hand_gin"))
+      @test all(isempty, values(plan29(explicit)))
+
+      # Undeclared: every marked index goes — the adopted one included — and a hand-made one stays.
+      ddl("CREATE INDEX pormg_it_29_hand_desc ON \"$(tbl)\" (points DESC)")
+      p = plan29(model29())
+      @test sort(keys29(p)) == sort(["Remove composite index: $(n)" for n in vcat(marked, "pormg_it_29_hand_gin")])
+      @test PormG.Migrations.is_destructive(join(values(p[Symbol(tbl)]), "\n"))
+      apply29!(p)
+      @test collect(keys(comments29())) == ["pormg_it_29_hand_desc"]
+      @test all(isempty, values(plan29(model29())))
+    finally
+      drop29!()
     end
   end
 end

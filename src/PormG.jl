@@ -79,6 +79,8 @@ import .Kernel: PORTABLE_DB_DEFAULTS, canonical_db_default, db_default_is_portab
 # both to import, like the `db_default` vocabulary above.
 import .Kernel: CHECK_MARKER_PREFIX, CHECK_MARKER_RE, canonical_check_condition, check_condition_hash,
                 check_marker
+# #29's index vocabulary — validated by `Models`, rendered by `Dialect`, read back by `Migrations`.
+import .Kernel: INDEX_METHODS, INDEX_OPCLASS_RE, INDEX_MARKER, INDEX_MARKER_RE
 # Physical-table-name resolution (#59). Deliberately NOT exported — internal plumbing reached as
 # `PormG.model_table_name`, so it stays off the public surface guard. Lives in Kernel because
 # layer-2 `Configuration` needs it and is included before `Models`.

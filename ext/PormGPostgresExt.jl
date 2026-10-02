@@ -12,9 +12,11 @@
 # alone makes these strictly more specific; an untyped second argument where LibPQ types one would
 # be ambiguous once both extensions are loaded (#785). `test/unit/test_postgres_ext.jl` pins both.
 #
-# Known gaps, documented rather than worked around: multi-statement SQL (Postgres.jl runs every
-# statement over the extended protocol — JuliaDatabases/Postgres.jl#23), `passfile`/`hostaddr`/Unix
-# sockets (unsupported by Postgres.jl), and no COPY row count from the driver (counted here instead).
+# Known gaps, documented rather than worked around: multi-statement SQL handed to `fetch` (Postgres.jl
+# runs every statement over the extended protocol — JuliaDatabases/Postgres.jl#23; the migration
+# runner cuts its plan entries into single statements for exactly that reason, #841),
+# `passfile`/`hostaddr`/Unix sockets (unsupported by Postgres.jl), and no COPY row count from the
+# driver (counted here instead).
 # ==============================================================================
 
 module PormGPostgresExt

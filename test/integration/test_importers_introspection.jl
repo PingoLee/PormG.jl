@@ -1147,7 +1147,9 @@ end
 # column, and a text column declared `COLLATE "C"`; the other indexes are added by hand. Dropped in
 # `finally`.
 # An invalid index (a failed `CREATE INDEX CONCURRENTLY`) is pinned only in the SQL text
-# (test/unit/test_live_schema_reader.jl): producing one live needs a concurrent failure.
+# (test/unit/test_live_schema_reader.jl). A UNIQUE one is easy to produce live — the #871 testset
+# below does — but this CTE already refuses every unique index, so it cannot isolate `indisvalid`;
+# a failed NON-unique build needs a concurrent failure.
 # SQLite's half (`DESC`, an explicit `COLLATE`) is hermetic: test/unit/test_sqlite_index_filter.jl.
 # Mutation gate: restore the pre-#847 CTE and every hand-made column reads as indexed and the plan
 # is no longer empty; tighten the collation test to `= 0` and `plain_txt`/`colc` stop reading back.
@@ -1224,6 +1226,94 @@ if adapter_name == "PostgreSQL"
                           "pormg_it_847_inc", "pormg_it_847_exc"]), left)
     finally
       drop847!()
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL invalid index: reported by check(kinds = [:invalid_index]), left alone by the plan (#871)
+# Since #847 both index readers skip an invalid index, so nothing reported one. This builds the
+# issue's repro live — duplicate rows, then a `CREATE UNIQUE INDEX CONCURRENTLY` that fails on them
+# and leaves an invalid index behind; no concurrency needed — beside two VALID hand-made indexes
+# (`DESC`, an operator class) and PormG's own `db_index`. Only the invalid one is a finding. Then the
+# #847 contract: re-planning plans nothing, and a real plan applied to the same table (an added
+# column) leaves the invalid index in place, still invalid. Dropped in `finally`.
+# The class's other shapes, the remedy text and the filters are hermetic:
+# test/unit/test_migrations_check.jl.
+# Mutation gate: drop the `:invalid_index` arm from `check` and the reported set is empty.
+# ─────────────────────────────────────────────────────────────────────────────
+if adapter_name == "PostgreSQL"
+  @testset "Invalid index is reported by check() and survives the plan (#871)" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    settings = PormG.config[PORMG_DB_FOLDER]
+    ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
+    tbl = "pormg_it_invalid871"
+    drop871!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
+    M871 = PormG.Models
+    schema_for(model) = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+      Symbol(tbl) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => model, :exist => false))
+    # A function, so each model gets its own field objects.
+    fields871() = (id   = M871.IDField(),
+                   code = M871.CharField(max_length = 40, db_index = true),
+                   dsc  = M871.IntegerField(null = true),
+                   ops  = M871.CharField(max_length = 40, null = true))
+    schema871 = schema_for(M871.Model(tbl; fields871()...))
+    settings871 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
+    apply!(plan) = for (_, entries) in plan, (_, sql) in entries
+      foreach(ddl, PormG.Migrations._split_pg_statements(sql))
+    end
+    invalid_state() = ddl("""SELECT i.indisvalid, i.indisready FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+                             WHERE c.relname = 'pormg_it_871_code_uq'""")
+
+    drop871!()
+    try
+      apply!(PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema871, pool, settings871;
+                                                 interactive = false))
+      # Two valid hand-made indexes PormG does not read (#847) — they must NOT be reported.
+      ddl("CREATE INDEX pormg_it_871_dsc ON \"$(tbl)\" (dsc DESC)")
+      ddl("CREATE INDEX pormg_it_871_ops ON \"$(tbl)\" (ops varchar_pattern_ops)")
+      # The repro: a duplicate makes the concurrent unique build fail, which leaves the index behind.
+      ddl("INSERT INTO \"$(tbl)\" (code) VALUES ('VER'), ('VER')")
+      failed = try
+        ddl("CREATE UNIQUE INDEX CONCURRENTLY pormg_it_871_code_uq ON \"$(tbl)\" (code)")
+        false
+      catch
+        true
+      end
+      # Precondition: the build failed and the index exists, invalid. Without it the report below
+      # proves nothing.
+      @test failed
+      @test invalid_state().indisvalid == [false]
+
+      # Acceptance 1: exactly the invalid index, by name and table — not the valid hand-made ones,
+      # and not PormG's own `db_index` on the same column.
+      r = PormG.Migrations.check(pool, settings; kinds = [:invalid_index], include_table = [tbl])
+      @test r.backend === :postgres
+      @test [(f.kind, f.table, f.detail) for f in r.findings] == [(:invalid_index, tbl, "pormg_it_871_code_uq")]
+      msg = only(r.findings).message
+      @test occursin("DROP INDEX CONCURRENTLY \"public\".\"pormg_it_871_code_uq\";", msg)
+      @test occursin("CREATE UNIQUE INDEX pormg_it_871_code_uq ON public.$(tbl) USING btree (code)", msg)
+      # The remedy names the cause to remove first — reindexing over the duplicates fails again.
+      @test occursin("for a unique index, usually duplicate values", msg)
+      # The uniqueness claim follows the catalog's `indisready`, not an assumption about which phase
+      # of the concurrent build failed.
+      @test occursin("rejects duplicate values", msg) == only(invalid_state().indisready)
+      @test occursin("still maintains it on every write", msg) == only(invalid_state().indisready)
+
+      # Acceptance 2, the #847 contract: the plan never touches it. The unchanged model plans nothing…
+      live = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
+      @test all(isempty, values(PormG.Migrations.get_migration_plan([live], schema871, pool, settings871;
+                                                                    interactive = false)))
+      # …and a real change to the same table, applied, leaves it there and still invalid.
+      changed = schema_for(M871.Model(tbl; fields871()..., extra = M871.IntegerField(null = true)))
+      plan = PormG.Migrations.get_migration_plan([live], changed, pool, settings871; interactive = false)
+      @test !all(isempty, values(plan))
+      apply!(plan)
+      @test invalid_state().indisvalid == [false]
+      @test length(PormG.Migrations.check(pool, settings; kinds = [:invalid_index],
+                                          include_table = [tbl]).findings) == 1
+    finally
+      drop871!()
     end
   end
 end

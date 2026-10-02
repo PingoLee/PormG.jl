@@ -144,6 +144,30 @@ A column whose definition changes reads differently per engine. PostgreSQL repor
 names no column. Added and removed columns keep their `"Add field: …"` and `"Remove field: …"`
 labels on both engines.
 
+### Finding Invalid Indexes
+
+A `CREATE INDEX CONCURRENTLY` or `REINDEX CONCURRENTLY` that fails part way does not clean up after
+itself. It leaves an **invalid** index behind: PostgreSQL never uses it for queries, yet it still
+costs on writes, and a unique one may still reject duplicates. `makemigrations` neither reads
+nor drops such an index, so nothing in the plan will ever mention it. `check` lists them:
+
+```julia
+r = PormG.Migrations.check("db"; kinds = [:invalid_index])
+println(r)
+```
+
+Each finding names the table and the index (`detail`), and its `message` carries the index
+definition and the remedy, quoted so it pastes as is: `DROP INDEX CONCURRENTLY "public"."<name>";`,
+then, once what made the build fail is gone (for a unique index, usually duplicate values), create it
+again. On PostgreSQL 12 or later, `REINDEX INDEX CONCURRENTLY` can rebuild it in place instead, and
+the message offers it. The exception is a `<name>_ccnew` or `<name>_ccold` copy that a failed
+`REINDEX CONCURRENTLY` left behind: the original, or the rebuilt index, is already in place, so drop
+the copy and do not re-create it. Reindexing it would make a valid duplicate. `check`
+only reports; what to run is your call. An index being built `CONCURRENTLY` at that moment reads as
+invalid too, until the build finishes. The class can sit in the same `kinds` list as
+`:schema_drift`. On SQLite, which has no invalid-index state, it is accepted and always reports
+nothing.
+
 
 ### Discarding a Pending Migration
 

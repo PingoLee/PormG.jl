@@ -129,6 +129,15 @@ nothing, as `migrate` does.
   On SQLite nothing serializes a non-transactional step: two processes, or two tasks, can both run
   it, and the one that records it second returns `:already_applied`. That is one more reason to make
   it safe to run twice.
+
+  `IF NOT EXISTS` has a trap here. If the concurrent build fails (a duplicate under `UNIQUE`, a
+  deadlock, a cancel), PostgreSQL leaves an **invalid** index of that name behind. The next run then
+  skips the `CREATE`, records the step, and the index is never usable.
+  `check("db"; kinds = [:invalid_index])` lists such indexes (see
+  [Finding invalid indexes](workflow.md#Finding-Invalid-Indexes)). Drop the invalid one **before**
+  the step runs again. Once the step is recorded it never runs again, so if that has already
+  happened, drop the index, remove what made the build fail (for a unique index, usually duplicate
+  values), and create it by hand or under a new step name.
 - **A step that creates schema has to agree with the models.** Declare the index the step creates
   (`points = Models.FloatField(db_index = true)`). Left undeclared, the next `makemigrations` plans
   to drop it; declared, it counts as already there, whatever it is named. The index is then part of

@@ -1775,6 +1775,43 @@ end
 # is a text literal. The rule `_set_update_query_operand`'s String arm applies.
 _is_field_path(s::String, instruc::SQLInstruction) = contains(s, "__") || s in instruc.object.model.field_names
 
+# #814 — A DAY COUNT COMBINED WITH A DATE: `date ± count` and `count + date`, where the count is a
+# `DATE - DATE` difference (`CInt32`). PostgreSQL has `date ± integer` and `integer + date` as whole-
+# day shifts, and SQLite added the date's YEAR to the integer, silently. Rendered as the shift
+# PostgreSQL means, on both, and typed as the DATE side's kind.
+#
+# PostgreSQL: native for a DATE; a timestamp has no `+ integer`, so the count becomes
+# `make_interval(days => …)`. SQLite: through the julian-day NUMBER, `julianday(d) ± n`, then back to
+# the side's stored text. The number keeps the TEXT ORDER of the two sides as written, which is the
+# order their parameters were bound in. A modifier (`date(d, n || ' days')`) cannot do that for
+# `count + date`, since the count would print after the date it was bound before. SQLite rounds a
+# julian number to the millisecond when it formats it, which is a stored timestamp's own precision.
+function _render_day_count_shift(date_side::AbstractString, date_kind::Union{CDate,CDateTime},
+                                 count_side::AbstractString, operation::String, date_first::Bool,
+                                 instruc::SQLInstruction)::String
+  if instruc.connection isa PormGPostgres
+    days = date_kind isa CDate ? count_side : "make_interval(days => $(count_side))"
+    return date_first ? "($(date_side) $(operation) $(days))" : "($(days) + $(date_side))"
+  elseif instruc.connection isa PormGSQLite
+    jd = date_first ? "julianday($(date_side)) $(operation) ($(count_side))" :
+                      "($(count_side)) + julianday($(date_side))"
+    return date_kind isa CDate ? "date($(jd))" : sql_canonicalize(date_kind, instruc.connection, jd)
+  else
+    throw(_unsupported_conn("date shift by a day count", instruc.connection))
+  end
+end
+
+# #814 — a date or timestamp shifted by an INTERVAL value (a `DurationField`, or the difference of
+# two timestamps) rather than by a duration literal. PostgreSQL's `timestamp ± interval` is native and
+# is left alone. On SQLite both sides are TEXT, and `+` added the year to the hours, silently. Refused
+# there until it has a rendering; a duration literal (`+ Hour(6)`) is the supported spelling.
+function _refuse_interval_shift(instruc::SQLInstruction)
+  instruc.connection isa PormGSQLite || return nothing
+  throw(QueryBuildError("Adding an interval value (a DurationField, or the difference of two timestamps) " *
+                        "to a date or timestamp is not supported on SQLite, where both are text. Shift " *
+                        "by a duration instead — F(\"start_at\") + Hour(6) — or a whole number of days."))
+end
+
 # #801: arithmetic that has no meaning between two temporal values. PostgreSQL has no `date + date`
 # operator and fails at execution; SQLite adds the two years and returns a number. Refused at build
 # time on both, so the engines agree on the answer — an error — and neither is silent.
@@ -2103,6 +2140,33 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
         throw(QueryBuildError("`$(v.operation)` between two date/timestamp values has no meaning; only " *
                               "`-` does (a whole number of days between two dates). To shift a date, " *
                               "add a duration instead: F(\"date\") + Day(30)."))
+      end
+      # #814: `date ± count` is a whole-day shift; `date ± interval` is refused on SQLite.
+      if v.operation in ("+", "-")
+        if right_kind isa CInt32
+          return _render_day_count_shift(left_side, left_kind, right_side, v.operation, true, instruc), left_kind
+        end
+        right_kind isa CInterval && _refuse_interval_shift(instruc)
+      end
+      return "($(left_side) $(v.operation) $(right_side))", nothing
+    end
+
+    # #814 — the same two pairings with the DATE on the right. `count + date` is the shift
+    # `date + count`, and `interval + date` is `date + interval`, refused on SQLite as above. A count
+    # or an interval MINUS a date has no meaning: PostgreSQL has neither `integer - date` nor
+    # `interval - date` and failed at execution, and SQLite subtracted a year. Refused on both. A
+    # count or interval with a non-temporal right renders exactly as before.
+    if left_kind isa Union{CInt32,CInterval} && v.operation in ("+", "-")
+      right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc;
+                                                     left_kind = left_kind)
+      if right_kind isa Union{CDate,CDateTime}
+        v.operation == "-" &&
+          throw(QueryBuildError("A $(left_kind isa CInt32 ? "day count" : "duration") minus a date has no " *
+                                "meaning. To move a date back, subtract from the date instead: " *
+                                "F(\"date\") - (F(\"date\") - F(\"dob\")), or F(\"date\") - Day(30)."))
+        left_kind isa CInt32 &&
+          return _render_day_count_shift(right_side, right_kind, left_side, "+", false, instruc), right_kind
+        _refuse_interval_shift(instruc)
       end
       return "($(left_side) $(v.operation) $(right_side))", nothing
     end

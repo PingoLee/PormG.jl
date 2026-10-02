@@ -648,6 +648,31 @@ end
     @test span_df[1, :season_days] == Dates.value(maximum(Dates.Date.(string.(df.date))) - minimum(Dates.Date.(string.(df.date))))
   end
 
+  @testset "a day count combined with a date is a whole-day shift (#814)" begin
+    # `date + (date - opener)` moves each race forward by its own distance from the season opener:
+    # a date twice as far from the opener. SQLite added the YEAR to the count before. The oracle is
+    # the same shift in Julia; the timestamp case keeps its time of day.
+    opener = Dates.Date(2009, 3, 29)
+    days_in() = F("date") - opener
+    query = M.Race.objects
+    query.filter("year" => 2009, "start_at__@isnull" => false)
+    query.values("raceid", "date", "start_at",
+                 "doubled" => F("date") + days_in(),
+                 "count_first" => days_in() + F("date"),
+                 "back_to_opener" => F("date") - days_in(),
+                 "start_doubled" => F("start_at") + days_in())
+    query.order_by("raceid")
+    df = query |> DataFrame
+    @test size(df, 1) > 1
+    dates = Dates.Date.(string.(df.date))
+    expected = [d + (d - opener) for d in dates]
+    @test Dates.Date.(string.(df.doubled)) == expected
+    @test Dates.Date.(string.(df.count_first)) == expected
+    @test all(==(opener), Dates.Date.(string.(df.back_to_opener)))
+    @test [Dates.DateTime(x) for x in df.start_doubled] ==
+          [Dates.DateTime(s) + (d - opener) for (s, d) in zip(df.start_at, dates)]
+  end
+
   @testset "a timestamp difference compares against a duration (#814)" begin
     # Equality is exact on both engines: the rendered text is the text the literal binds as.
     eq = M.Race.objects

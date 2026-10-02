@@ -1288,6 +1288,119 @@ const _FN = PormG.Functions
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #814: a day count combined with a date is a whole-day SHIFT, on both engines.
+# After #801 a DATE - DATE difference is a day count (CInt32). `date ± count` and `count + date` are
+# shifts on PostgreSQL (`date + integer`), while SQLite added the date's YEAR to the integer,
+# silently. Both now render the shift and type it as the date side's kind. SQLite goes through the
+# julian-day number, so the two sides keep the text order they were bound in, which the `count + date`
+# case with a bound parameter on each side pins. `count - date` has no meaning and is refused on both.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#814: a day count combined with a date is a whole-day shift" begin
+  count() = F("seen") - F("race__date")   # a day count: DATE - DATE
+  for (label, expr, kind, sl_sql, pg_sql) in (
+      ("date - count", F("seen") - count(), PormG.CDate(),
+       "date(julianday(\"Tb\".\"seen\") - (CAST(julianday(\"Tb\".\"seen\") - julianday(\"Tb_1\".\"date\") AS INTEGER)))",
+       "(\"Tb\".\"seen\" - (\"Tb\".\"seen\" - \"Tb_1\".\"date\"))"),
+      ("date + count", F("seen") + count(), PormG.CDate(),
+       "date(julianday(\"Tb\".\"seen\") + (CAST(julianday(\"Tb\".\"seen\") - julianday(\"Tb_1\".\"date\") AS INTEGER)))",
+       "(\"Tb\".\"seen\" + (\"Tb\".\"seen\" - \"Tb_1\".\"date\"))"),
+      ("count + date", count() + F("seen"), PormG.CDate(),
+       "date((CAST(julianday(\"Tb\".\"seen\") - julianday(\"Tb_1\".\"date\") AS INTEGER)) + julianday(\"Tb\".\"seen\"))",
+       "((\"Tb\".\"seen\" - \"Tb_1\".\"date\") + \"Tb\".\"seen\")"),
+      # A timestamp has no `+ integer` on PostgreSQL, so the count becomes an interval there; SQLite
+      # renders the shifted julian number in the canonical timestamp form.
+      ("timestamp + count", F("logged_at") + count(), PormG.CDateTime(true),
+       "strftime('%Y-%m-%dT%H:%M:%f+00:00', julianday(\"Tb\".\"logged_at\") + (CAST(julianday(\"Tb\".\"seen\") - julianday(\"Tb_1\".\"date\") AS INTEGER)))",
+       "(\"Tb\".\"logged_at\" + make_interval(days => (\"Tb\".\"seen\" - \"Tb_1\".\"date\")))"),
+      ("count + timestamp", count() + F("logged_at"), PormG.CDateTime(true),
+       "strftime('%Y-%m-%dT%H:%M:%f+00:00', (CAST(julianday(\"Tb\".\"seen\") - julianday(\"Tb_1\".\"date\") AS INTEGER)) + julianday(\"Tb\".\"logged_at\"))",
+       "(make_interval(days => (\"Tb\".\"seen\" - \"Tb_1\".\"date\")) + \"Tb\".\"logged_at\")"),
+    )
+    @testset "$label" begin
+      q = FD.Fd_result.objects
+      q.values("x" => expr)
+      @test occursin(sl_sql, _fd_sql(q; conn = _FD_SL))
+      q_pg = FD.Fd_result.objects
+      q_pg.values("x" => expr)
+      @test occursin(pg_sql, _fd_sql(q_pg; conn = _FD_PG))
+      for conn in (_FD_SL, _FD_PG)
+        @test _fd_kinds(q -> q.values("x" => expr); conn = conn)[:x] === kind
+      end
+    end
+  end
+
+  # Each side carries its own bound parameter. The cross-backend differential is the oracle for
+  # order: PostgreSQL numbers placeholders as it binds them, so walking its `$N` markers left to right
+  # gives the true text order, and SQLite's flat vector must equal it. A shift spelled as a modifier,
+  # `date(<date>, <count> || ' days')`, would print the count after the date it was bound before.
+  @testset "count + date keeps parameter order on SQLite" begin
+    expr = ((F("seen") + Dates.Day(3)) - F("race__date")) + (F("seen") + Dates.Day(5))
+    q_pg = FD.Fd_result.objects
+    q_pg.values("x" => expr)
+    pg = inspect_query(q_pg; connection = _FD_PG)
+    idx = [parse(Int, m.match[2:end]) for m in eachmatch(r"\$\d+", pg[:sql_text])]
+    text_order = [pg[:parameters][i] for i in idx]
+    @test text_order == Any[3, 5]
+
+    q = FD.Fd_result.objects
+    q.values("x" => expr)
+    @test _fd_params(q; conn = _FD_SL) == text_order
+  end
+
+  @testset "count - date is refused on both engines" begin
+    for expr in (count() - F("seen"), count() - Dates.Date(2009, 3, 1)), conn in (_FD_SL, _FD_PG)
+      q = FD.Fd_result.objects
+      q.values("x" => expr)
+      err = try _fd_sql(q; conn = conn); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      @test occursin("day count minus a date has no meaning", sprint(showerror, err))
+    end
+  end
+
+  # The interval half: `date ± interval` is native on PostgreSQL and was text arithmetic on SQLite —
+  # the year plus the hours. Refused on SQLite; `interval - date` is meaningless and refused on both.
+  @testset "a date shifted by an interval value is refused on SQLite" begin
+    tsdiff() = F("logged_at") - F("race__starts_at")
+    for expr in (F("seen") + F("lap"), F("logged_at") - F("lap"), F("lap") + F("seen"), F("seen") + tsdiff())
+      q = FD.Fd_result.objects
+      q.values("x" => expr)
+      err = try _fd_sql(q; conn = _FD_SL); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      @test occursin("not supported on SQLite", sprint(showerror, err))
+
+      q_pg = FD.Fd_result.objects
+      q_pg.values("x" => expr)
+      @test occursin(" + ", _fd_sql(q_pg; conn = _FD_PG)) || occursin(" - ", _fd_sql(q_pg; conn = _FD_PG))
+    end
+    for conn in (_FD_SL, _FD_PG)
+      q = FD.Fd_result.objects
+      q.values("x" => F("lap") - F("seen"))
+      err = try _fd_sql(q; conn = conn); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      @test occursin("duration minus a date has no meaning", sprint(showerror, err))
+    end
+  end
+
+  # A count or an interval with a NON-temporal right is arithmetic, exactly as before.
+  @testset "a day count or a duration with a number is unchanged" begin
+    for (expr, sl_sql, pg_sql) in (
+        (count() * 2, "(CAST(julianday(\"Tb\".\"seen\") - julianday(\"Tb_1\".\"date\") AS INTEGER) * ?)",
+         "((\"Tb\".\"seen\" - \"Tb_1\".\"date\") * \$1::bigint)"),
+        (count() - F("points"), "(CAST(julianday(\"Tb\".\"seen\") - julianday(\"Tb_1\".\"date\") AS INTEGER) - \"Tb\".\"points\")",
+         "((\"Tb\".\"seen\" - \"Tb_1\".\"date\") - \"Tb\".\"points\")"),
+        (F("lap") + 1, "(\"Tb\".\"lap\" + ?)", "(\"Tb\".\"lap\" + \$1::bigint)"),
+      )
+      q = FD.Fd_result.objects
+      q.values("x" => expr)
+      @test occursin(sl_sql, _fd_sql(q; conn = _FD_SL))
+      q_pg = FD.Fd_result.objects
+      q_pg.values("x" => expr)
+      @test occursin(pg_sql, _fd_sql(q_pg; conn = _FD_PG))
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #801: a day count compares against a number.
 # `(F("seen") - F("race__date")) > 30` raised on BOTH engines before: the comparison literal was
 # bound through the ROOTED column's formatter, which is a DateField's — `format_date_sql(30)`. The

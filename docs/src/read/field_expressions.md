@@ -411,6 +411,21 @@ engines; a string that names a field (`F("date") - "dob"`) is that field. Subtra
 from something that is not a date or timestamp PormG can type — a number, `Sum(...)`, `__@year` —
 raises `QueryBuildError` too.
 
+A day count combined with a date is a whole-day **shift**, as it is on PostgreSQL: `F("date") ± count`
+and `count + F("date")` are dates (timestamps stay timestamps), on both engines. Each 2009 race moved
+as far again past the season opener:
+
+```julia
+query = M.Race.objects
+query.filter("year" => 2009)
+query.values("name", "doubled" => F("date") + (F("date") - Date(2009, 3, 29)))
+```
+
+A day count **minus** a date has no meaning and raises `QueryBuildError` on both engines; subtract the
+count from the date instead. Shifting a date or timestamp by an interval *value* — a `DurationField`
+or a timestamp difference — works on PostgreSQL and raises `QueryBuildError` on SQLite, where both
+are text; shift by a duration (`F("start_at") + Hour(6)`) or a day count there.
+
 ### When NOT to Use F
 
 For plain scalar comparisons, always prefer the suffix filter API:

@@ -1370,6 +1370,24 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        "read/field_expressions.md — a day count minus a date is refused (#814)",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RACE801_SL.objects
+            q.values("x" => (F("date") - F("date")) - F("date"))
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "read/field_expressions.md — shifting a date by an interval value is refused on SQLite (#814)",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RACE801_SL.objects
+            q.values("x" => F("date") + (F("start_at") - F("date")))
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
         "read/field_expressions.md — `+` between two dates is refused (#801)",
         QueryBuildError,
         () -> begin

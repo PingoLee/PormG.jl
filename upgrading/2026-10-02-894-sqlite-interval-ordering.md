@@ -37,8 +37,9 @@ These are unchanged, on purpose:
 - A `DurationField`'s `==` and `@in` still compare the stored text. That is exact on the canonical
   form every write stores (#891), and an index on the column still serves them.
 - `Greatest`/`Least` over intervals, and an interval with no millisecond form (`Coalesce`, `Case`,
-  a window function), still sort the text.
-- `Sum`/`Avg` still read the text's leading hours.
+  a window function), still sort the text. Since #900, `Greatest`/`Least`/`Coalesce` use the
+  milliseconds too (see that entry).
+- `Sum`/`Avg` still read the text's leading hours. #900 changed that as well.
 
 ### How to find the calls to migrate
 

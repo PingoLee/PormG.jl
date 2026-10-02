@@ -861,6 +861,64 @@ end
     @test sort((quick |> DataFrame).milliseconds) == sort(filter(<(120_000), ldf.milliseconds))
   end
 
+  # #900 — the functions #894 left on the text. On SQLite `Sum`/`Avg` added up the text's leading hours,
+  # `Greatest`/`Least` compared the text, and `Coalesce` sorted it. The rows and the oracle are #894's;
+  # a lap time's `milliseconds` column is the oracle for its `time`.
+  @testset "Sum/Avg, Greatest/Least and Coalesce over intervals (#900)" begin
+    FN = PormG.Functions
+    scaled() = (F("start_at") - F("date")) * F("round")
+    negated() = (F("date") - F("start_at")) * F("round")
+    base = M.Race.objects
+    base.filter("year" => 2009, "start_at__@isnull" => false)
+    base.values("raceid", "round", "date", "start_at")
+    df = base |> DataFrame
+    gap = Dict(r.raceid => r.round * Dates.value(Dates.DateTime(r.start_at) - Dates.DateTime(Dates.Date(string(r.date))))
+               for r in eachrow(df))
+    @test any(>=(100 * 3_600_000), values(gap)) && any(<(100 * 3_600_000), values(gap))
+    run(build!) = (q = M.Race.objects; q.filter("year" => 2009, "start_at__@isnull" => false); build!(q); q |> DataFrame)
+
+    # Sum/Avg: the whole value, read back as a duration on both engines.
+    agg = run(q -> q.values("year", "s" => FN.Sum(scaled()), "a" => FN.Avg(scaled())))
+    @test agg[1, :s] isa Dates.CompoundPeriod
+    @test Dates.toms(agg[1, :s]) == sum(values(gap))
+    # PostgreSQL keeps microseconds, SQLite rounds the mean to the millisecond.
+    @test isapprox(Dates.toms(agg[1, :a]), sum(values(gap)) / length(gap); atol = 1)
+
+    # Greatest/Least per race, and ordered by: `scaled` is the longer, `negated` the shorter.
+    gl = run(q -> (q.values("raceid", "g" => FN.Greatest(scaled(), negated()), "l" => FN.Least(scaled(), negated()));
+                   q.order_by("g", "raceid")))
+    @test gl.raceid == sort(collect(keys(gap)); by = id -> (gap[id], id))
+    @test [Dates.toms(x) for x in gl.g] == [gap[id] for id in gl.raceid]
+    @test [Dates.toms(x) for x in gl.l] == [-gap[id] for id in gl.raceid]
+    # The magnitude of an interval, the spelling the guide gives for `Abs` (refused on SQLite).
+    mag = run(q -> (q.values("raceid", "m" => FN.Greatest(negated(), negated() * -1)); q.order_by("raceid")))
+    @test [Dates.toms(x) for x in mag.m] == [gap[id] for id in mag.raceid]
+
+    # Coalesce: filtered by its alias, across the 100-hour boundary.
+    @test sort(run(q -> (q.values("raceid", "c" => FN.Coalesce(scaled(), negated()));
+                         q.filter("c__@gt" => Dates.Hour(99)))).raceid) ==
+          sort([id for (id, g) in gap if g > 99 * 3_600_000])
+
+    # A DurationField: lap times summed and averaged per driver, ordered and filtered by the sum.
+    laps = M.Lap_times.objects
+    laps.filter("raceid__year" => 2009, "raceid__round" => 1, "lap__@lte" => 3)
+    laps.values("driverid", "milliseconds")
+    ldf = laps |> DataFrame
+    totals = Dict{Int,Int}()
+    for r in eachrow(ldf)
+      totals[r.driverid] = get(totals, r.driverid, 0) + r.milliseconds
+    end
+    @test length(totals) > 1
+    per_driver(build!) = (q = M.Lap_times.objects; q.filter("raceid__year" => 2009, "raceid__round" => 1, "lap__@lte" => 3);
+                          build!(q); q |> DataFrame)
+    sums = per_driver(q -> (q.values("driverid", "total" => FN.Sum("time")); q.order_by("-total", "driverid")))
+    @test sums.driverid == sort(collect(keys(totals)); by = id -> (-totals[id], id))
+    @test [Dates.toms(x) for x in sums.total] == [totals[id] for id in sums.driverid]
+    cut = sort(collect(values(totals)))[cld(length(totals), 2)]
+    over = per_driver(q -> (q.values("driverid", "total" => FN.Sum("time")); q.filter("total__@gt" => Dates.Millisecond(cut))))
+    @test sort(over.driverid) == sort([id for (id, t) in totals if t > cut])
+  end
+
   # #882 — an IntegerField beside a date is a whole number of days on both engines. SQLite used to
   # subtract it from the YEAR. The oracle is the same shift in Julia over the same rows.
   @testset "an integer column shifts a date by whole days (#882)" begin

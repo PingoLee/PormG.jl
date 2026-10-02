@@ -1857,25 +1857,41 @@ end
 #     `_finalize_render` turns it into text;
 #   - a `DurationField` column, bare or through `F(...)`: its stored text parsed in SQL
 #     (`Dialect._sqlite_interval_ms`), which repeats the column reference and binds nothing;
-#   - `Max`/`Min` over either: the extremum of the milliseconds (`_render_function_typed`).
+#   - a function in `_INTERVAL_MS_FUNCTIONS` over either (`_render_function_typed`): `Max`/`Min`
+#     (#894), and `Sum`/`Avg`, `Greatest`/`Least` and `Coalesce` (#900).
 #
-# Anything else — `Coalesce`, `Case`, a window value function — is text, and sorts as text.
+# Anything else — `Case`, a window function — is text, and sorts as text.
 function _render_interval_ms(node, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)::Tuple{String,Bool}
+  sql, ms, _ = _render_interval_operand(node, instruc; _as = _as)
+  return ms === nothing ? (sql, false) : (ms, true)
+end
+
+# #900 — one operand of a function that may be an interval, rendered exactly ONCE: `(sql, ms, interval)`.
+# `sql` is exactly what `_get_select_query` renders for it — the text on SQLite. `ms` is its SQLite
+# millisecond form, or `nothing` (always `nothing` on PostgreSQL, which computes on the `interval`
+# itself). `interval` says whether the operand is an interval at all, on either engine, and types the
+# function's projection. Both forms are built from the one render: the text of an `_IntervalMs` is
+# `_sqlite_interval_text` over it, and a `DurationField` column's millisecond form repeats a column
+# reference, which binds nothing. So a caller picks either form after the fact without a second
+# render, and a function whose operands disagree keeps the SQL it always rendered.
+function _render_interval_operand(node, instruc::SQLInstruction;
+                                  _as::Union{Nothing,String}=nothing)::Tuple{String,Union{String,Nothing},Bool}
+  sqlite = instruc.connection isa PormGSQLite
   if node isa FExpression
-    sql, kind = _render_expr_typed(node, instruc)
-    ms = _interval_ms_sql(sql, node, kind)
-    ms === nothing || return ms, true
-    return first(_finalize_render(sql, kind, instruc)), false
+    raw, kind = _render_expr_typed(node, instruc)
+    sql, final_kind = _finalize_render(raw, kind, instruc)
+    return sql, sqlite ? _interval_ms_sql(raw, node, kind) : nothing, final_kind isa CInterval
   elseif node isa FObject
-    sql, ms, _ = _render_function_typed(node, instruc; _as = _as)
-    return sql, ms
+    raw, ms, interval = _render_function_typed(node, instruc; _as = _as)
+    ms && return Dialect._sqlite_interval_text(raw), raw, true
+    return raw, nothing, interval || _function_projection_kind(node, instruc) isa CInterval
   end
   sql = _get_select_query(node, instruc; _as = _as)
   # Render first, then type: resolving the path is what populates the memo the kind lookup reads.
   bare = node isa SQLField ? node.field : node
-  _is_bare_column(bare) && _operand_kind(bare, instruc) isa CInterval &&
-    return Dialect._sqlite_interval_ms(sql), true
-  return sql, false
+  interval = _operand_kind(bare, instruc) isa CInterval
+  ms = sqlite && interval && _is_bare_column(bare) ? Dialect._sqlite_interval_ms(sql) : nothing
+  return sql, ms, interval
 end
 
 # #894 — whether a projection's source can have a millisecond form, decided WITHOUT rendering it. The
@@ -1886,13 +1902,28 @@ _interval_ms_candidate(::FExpression) = true
 _interval_ms_candidate(p::String) = _is_bare_column(p)
 _interval_ms_candidate(p::SQLField) = _interval_ms_candidate(p.field)
 _interval_ms_candidate(::JoinedReference) = true
-_interval_ms_candidate(p::FObject) =
-  p.function_name in _INTERVAL_MS_EXTREMA && !(p.column isa AbstractVector) && _interval_ms_candidate(p.column)
+function _interval_ms_candidate(p::FObject)
+  if p.function_name in _INTERVAL_MS_AGGREGATES
+    return !(p.column isa AbstractVector) && _interval_ms_candidate(p.column)
+  elseif p.function_name in _INTERVAL_MS_VARIADIC
+    # A declared `output_field` is a cast (#852) the milliseconds would have to go through: keep it.
+    declared = get(p.kwargs, "output_field", nothing)
+    return p.column isa AbstractVector && (declared === nothing || declared == "") &&
+           all(x -> _is_null_operand(x) || _interval_ms_candidate(x), p.column)
+  end
+  return false
+end
 _interval_ms_candidate(::Any) = false
 
-# The aggregates that keep their operand's value, and therefore its millisecond form. `Greatest` and
-# `Least` would too, but they compare their arguments as text on SQLite still (a follow-up to #894).
-const _INTERVAL_MS_EXTREMA = ("MAX", "MIN")
+_is_null_operand(x) = x isa SQLText && _is_null_literal(x.field)
+
+# The functions whose value has a millisecond form when their operands do (#894, #900). The one-operand
+# aggregates: `MAX`/`MIN` keep an operand's value, and `SUM`/`AVG` compute one, as PostgreSQL's
+# `sum(interval)` and `avg(interval)` do. The variadic ones keep one of their operands' values, and
+# need every non-NULL operand in milliseconds — the text of one beside the number of another compares
+# nothing. `Greatest`/`Least` reach `Coalesce` through #844's rotations, so the three share one path.
+const _INTERVAL_MS_AGGREGATES = ("MAX", "MIN", "SUM", "AVG")
+const _INTERVAL_MS_VARIADIC = ("GREATEST", "LEAST", "COALESCE")
 
 # #894 — the source of the projection named `name` when it is a SQLite interval that may have a
 # millisecond form, or `nothing`. Decided without rendering anything, so a caller can check its other

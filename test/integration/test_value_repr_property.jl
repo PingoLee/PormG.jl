@@ -238,10 +238,10 @@ _vri_lap()  = M.Lap_times.objects.filter("raceid" => 1, "driverid" => 1, "lap" =
     @test rows[2][:prev] isa Date && rows[2][:prev] == _VRI_RACE_DATE
     @test ismissing(rows[1][:prev]) || rows[1][:prev] === nothing
 
-    # A computed aggregate is not the column and is not typed: on SQLite `SUM` over the interval text
-    # is a number, on PostgreSQL the driver's own interval. Only its shape is pinned here.
+    # #900: `Sum` over an interval is an interval on both engines, read back as one. Before it, SQLite
+    # summed the text's leading hours (a number), and PostgreSQL's value was the driver's own.
     sum_ = pit().values("s" => Sum("duration")).list(:dict)[1][:s]
-    @test _VRI_ENGINE === :sqlite ? sum_ isa Real : sum_ isa Union{Dates.Period, Dates.CompoundPeriod}
+    @test sum_ isa Dates.CompoundPeriod && sum_ == Dates.Second(23)
   end
 
   @testset "a written row reads back as a re-read does (#800)" begin

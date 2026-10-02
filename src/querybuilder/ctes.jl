@@ -1466,7 +1466,8 @@ end
 
 # #823: the twin of `_refuse_case_type` for an expression projected directly. There is no `Case` to
 # give an `output_field`, so the fix it names is `Cast` — or, for a shape `Cast` does not take
-# (`Subquery`, `Exists`), projecting it in the outer query instead of the body.
+# (`Exists`), projecting it in the outer query instead of the body. `Cast` takes a `Subquery` since
+# #878, so a bare one is told to wrap itself.
 const _CAST_HINT = "Name the type the column holds by wrapping the expression in " *
                    "\e[32mCast(…, \"integer\")\e[0m (or the type it returns)"
 function _refuse_projection_type(field::String, reason::String; hint::String = _CAST_HINT)
@@ -1589,8 +1590,14 @@ end
 _set_field_from_sql_function(v::FExpression, field::String, instruct::SQLInstruction) =
   _f_expression_field(v, field, instruct, _refuse_projection_type)
 # #823 — every other shape a body can project (`Subquery`, `Exists`, …) has no type PormG infers, and
-# is refused by name rather than left to a MethodError. `Cast` does not take these, so the hint
-# points at the outer query.
+# is refused by name rather than left to a MethodError. #878: `Cast(Subquery(s), type)` builds and is
+# typed by the type it names, so a bare `Subquery` is pointed at that; the rest — which `Cast` does not
+# take — at the outer query.
+_set_field_from_sql_function(v::SubqueryObject, field, ::SQLInstruction) =
+  _refuse_projection_type(string(something(field, "?")),
+                          "it is Subquery(…), whose type PormG does not infer";
+                          hint = "Name the type the column holds by wrapping it in " *
+                                 "\e[32mCast(Subquery(…), \"integer\")\e[0m (or the type it returns)")
 _set_field_from_sql_function(v, field, ::SQLInstruction) =
   _refuse_projection_type(string(something(field, "?")),
                           "it is $(chopsuffix(string(nameof(typeof(v))), "Object"))(…), whose type PormG does not infer";

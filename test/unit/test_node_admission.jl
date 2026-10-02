@@ -75,6 +75,7 @@ Adm_child = Models.Model("adm_child",
   parent = Models.ForeignKey(Adm_parent, on_delete = "CASCADE", related_name = "adm_kids", null = true),
   note   = Models.CharField(null = true),
   qty    = Models.IntegerField(null = true),
+  day    = Models.DateField(null = true),   # #878: a date operand for the transforms' subquery
 )
 PormG.Models.set_models(@__MODULE__, "adm_mock")
 end
@@ -83,7 +84,9 @@ const AD = AdmModels
 const QBA = PormG.QueryBuilder
 import PormG.QueryBuilder: F, inspect_query, Joined, CTE, SQLOrder, SQLField, Value, Sum, Rank,
                            WindowOver, Lower, Lag, OP, Subquery, Exists, OuterRef, Q, Qor,
-                           Max, Min, Avg, Count, Coalesce, Greatest, NullIf, Power
+                           Max, Min, Avg, Count, Coalesce, Greatest, NullIf, Power,
+                           Abs, Round, Cast, Extract, ToChar, Upper, Length, Trim, LTrim, RTrim,
+                           Floor, Ceil, Sqrt, Exp, Ln
 
 _adm_render(q) = inspect_query(q; connection = _ADM)[:sql_text]
 
@@ -189,9 +192,14 @@ const SLOTS = Tuple{String,Any,Function}[
    v -> (q = _with_cte(AD.Adm_child.objects); q.values("note");
          q.filter(QBA.OperObject(operator = "=", values = "x", column = v)); _adm_render(q))),
 
-  ("Lower(x) — the functions.jl family",
-   Union{String,PormG.SQLTypeField,PormG.SQLTypeText,PormG.SQLTypeFunction,PormG.SQLTypeF,PormG.SQLTypeCTE,PormG.SQLTypeJoined},
+  # #878: declared from the signature's own union, which `Lower` and the thirteen other one-argument
+  # functions share. It was a hand-copied literal here, so a member added to the signature — the
+  # `SubqueryObject` #878 admitted — would never have been probed.
+  ("Lower(x) — the functions.jl family", QBA._ScalarOperand,
    v -> (q = _with_cte(AD.Adm_child.objects); q.values("id", "l" => Lower(v)); _adm_render(q))),
+
+  ("Extract(x, part) / ToChar(x, format)", QBA._TemporalOperand,
+   v -> (q = _with_cte(AD.Adm_child.objects); q.values("id", "y" => Extract(v, "year")); _adm_render(q))),
 
   ("SQLObjectQuery.values", eltype(fieldtype(QBA.SQLObjectQuery, :values)),
    v -> (q = _with_cte(AD.Adm_child.objects); q.values("id", "x" => v); _adm_render(q))),
@@ -205,6 +213,11 @@ const SLOTS = Tuple{String,Any,Function}[
 
   ("function operand — Coalesce/Greatest/… (_function_operand)", Union{PormG.SQLType,PormG.SQLObject},
    v -> (q = _with_cte(AD.Adm_child.objects); q.values("id", "x" => Coalesce(v, 0)); _adm_render(q))),
+
+  # #878 — the `__@date`/`__@quarter`/`__@quadrimester` targets take `x` untyped too, and handed it
+  # straight to `FObject.column`: `DATE(Subquery(…))` died in `convert`. `_transform_operand` gates it.
+  ("transform operand — DATE/QUARTER/QUADRIMESTER", Union{PormG.SQLType,PormG.SQLObject},
+   v -> (q = _with_cte(AD.Adm_child.objects); q.values("id", "x" => QBA.DATE(v)); _adm_render(q))),
 ]
 
 # A TYPED refusal is a pass: admission was decided, loudly, by the taxonomy. Anything else — a raw
@@ -480,4 +493,106 @@ end
   @test occursin("MAX(COALESCE((SELECT", sql)
   pg = inspect_query(build(s -> Greatest(s, 7.0)); connection = _ADM_PG)[:sql_text]
   @test occursin("GREATEST((SELECT", pg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #878 — a Subquery operand of a one-argument function or a date transform: SQL and parameters.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#878: a Subquery operand of a single-operand function or a transform renders on both engines" begin
+  # The #867 shape: the inner query binds its own `3`, the outer one binds `"A"`. The subquery's text
+  # sits in the SELECT list, so its parameter comes first, then anything the function itself binds
+  # (`Round`'s precision, which renders after the operand), then the outer WHERE. Pinned EXACTLY on
+  # both engines — a misbind is silent wrong data, and a fragment check could not see one.
+  nsub() = (s = AD.Adm_child.objects; s.filter("parent" => OuterRef("id"), "qty__@gt" => 3); s.values("t" => Max("qty")); s)
+  dsub() = (s = AD.Adm_child.objects; s.filter("parent" => OuterRef("id"), "qty__@gt" => 3); s.values("t" => Max("day")); s)
+  build(f, sub) = (q = AD.Adm_parent.objects; q.filter("sku" => "A"); q.values("id", "x" => f(Subquery(sub()))); q)
+
+  cases = (
+    ("Lower",    Lower,                     nsub, Any[3, "A"],    ("LOWER((SELECT",            "LOWER((SELECT")),
+    ("Abs",      Abs,                       nsub, Any[3, "A"],    ("ABS((SELECT",              "ABS(((SELECT")),
+    ("Round",    s -> Round(s, 2),          nsub, Any[3, 2, "A"], ("ROUND((SELECT",            "ROUND(((SELECT")),
+    ("Cast",     s -> Cast(s, "integer"),   nsub, Any[3, "A"],    ("CAST((SELECT",             "((SELECT")),
+    ("Extract",  s -> Extract(s, "year"),   dsub, Any[3, "A"],    ("strftime('%Y', (SELECT",   "EXTRACT(YEAR FROM (SELECT")),
+    ("ToChar",   s -> ToChar(s, "YYYY-MM"), dsub, Any[3, "A"],    ("strftime('%Y-%m', (SELECT", "to_char((SELECT")),
+    ("DATE",     QBA.DATE,                  dsub, Any[3, "A"],    ("strftime('%Y-%m-%d', (SELECT", "((SELECT")),
+    ("QUARTER",  QBA.QUARTER,               dsub, Any[3, "A"],    ("strftime('%m', (SELECT",   "EXTRACT(QUARTER FROM (SELECT")),
+  )
+  for (backend, conn, i) in (("SQLite", _ADM, 1), ("PostgreSQL", _ADM_PG, 2))
+    @testset "$backend" begin
+      for (label, f, sub, params, needle) in cases
+        r = inspect_query(build(f, sub); connection = conn)
+        @test occursin(needle[i], r[:sql_text])
+        @test r[:parameters] == params
+      end
+    end
+  end
+  # PostgreSQL's spellings that the needles above stop short of: the casts close AFTER the subquery.
+  pg(f, sub) = inspect_query(build(f, sub); connection = _ADM_PG)[:sql_text]
+  @test occursin(r"\)\)::integer as \"x\"", pg(s -> Cast(s, "integer"), nsub))
+  @test occursin(r"\)\)::date as \"x\"", pg(QBA.DATE, dsub))
+
+  # Every one-argument constructor shares `_ScalarOperand`, but a signature re-narrowed by hand would
+  # only show up here: each must hold the subquery and render it, on both engines.
+  unary = (Lower, Upper, Length, Abs, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln)
+  @test length(unary) == 12          # + `Round` and `Cast`, pinned above = the 14 of the issue
+  for ctor in unary, conn in (_ADM, _ADM_PG)
+    @test ctor(Subquery(nsub())).column isa QBA.SubqueryObject
+    r = inspect_query(build(ctor, nsub); connection = conn)
+    @test occursin("(SELECT", r[:sql_text]) && r[:parameters] == Any[3, "A"]
+  end
+
+  # In an AGGREGATED outer query a wrapped subquery is a grouped expression — unlike a bare one,
+  # which #92 keeps out of GROUP BY. It is grouped by ordinal, so nothing renders or binds twice.
+  for conn in (_ADM, _ADM_PG)
+    q = AD.Adm_parent.objects
+    q.filter("sku" => "A")
+    q.values("id", "n" => Count("adm_kids__id"), "x" => Lower(Subquery(nsub())))
+    r = inspect_query(q; connection = conn)
+    @test occursin(r"GROUP BY 1, 3\s*$", r[:sql_text])
+    @test count("(SELECT", r[:sql_text]) == 1
+    @test r[:parameters] == Any[3, "A"]
+  end
+
+  # A CTE body can type a subquery column through `Cast`, and a filter on that column binds after
+  # the body's own parameter. A BARE subquery there is refused with this spelling as the fix
+  # (`test_window_functions.jl`, #823).
+  for conn in (_ADM, _ADM_PG)
+    body = AD.Adm_parent.objects
+    body.values("id", "m" => Cast(Subquery(nsub()), "integer"))
+    q = AD.Adm_child.objects
+    q.with("ev" => body, join_field = "parent" => "id")
+    q.filter(CTE("ev", "m") => 7)
+    q.values("id", CTE("ev", "m"))
+    r = inspect_query(q; connection = conn)
+    @test occursin("WITH", r[:sql_text]) && occursin("(SELECT", r[:sql_text])
+    @test r[:parameters] == Any[3, 7]
+  end
+
+  # The transform keeps its read formatter with a subquery inside, which is what reads the value back
+  # as a date (`_function_projection_kind` answers `CDate()` for a `DATE` node whatever its operand).
+  @test QBA.DATE(Subquery(dsub())).formatter === PormG.Models.format_date_sql
+  @test QBA.QUARTER(Subquery(dsub())).formatter === PormG.Models.format_quarter_sql
+  @test QBA.QUADRIMESTER(Subquery(dsub())).formatter === PormG.Models.format_quadrimester_sql
+  # …and the ladder's own input, a split path, still passes the gate unchanged.
+  @test QBA.DATE(["day"]).column == ["day"]
+
+  # The slot holds a `SubqueryObject` now, so the aggregate refusal no longer comes from the slot
+  # leaving it out. It must still be refused, by the gate, for every aggregate.
+  @test fieldtype(QBA.FObject, :column) >: QBA.SubqueryObject
+  for agg in (Sum, Avg, Count, Max, Min)
+    @test _adm_867_msg(() -> agg(Subquery(nsub()))) isa String
+  end
+
+  # What the transform gate refuses, it refuses by type name, with the path spelling that works.
+  msg = _adm_867_msg(() -> QBA.DATE(SQLOrder(SQLField("day", "day"))))
+  @test msg isa String
+  @test occursin("`SQLOrder`", msg)
+  @test occursin("\"col__@date\"", msg)
+  @test occursin("`ExistsObject`", _adm_867_msg(() -> QBA.QUARTER(Exists(nsub()))))
+  @test occursin("\"col__@quadrimester\"", _adm_867_msg(() -> QBA.QUADRIMESTER(1)))
+  # The slot's `Vector{T}` admits any vector, but only a split path has a consumer: a vector of
+  # anything else used to pass the gate and die in the build walk as a raw `MethodError`.
+  @test occursin("\"col__@date\"", _adm_867_msg(() -> QBA.DATE([1, 2])))
+  @test occursin("`$(Vector{Int})`", _adm_867_msg(() -> QBA.DATE([1, 2])))   # the vector's own type, not `Array`
+  @test occursin("\"col__@quarter\"", _adm_867_msg(() -> QBA.QUARTER(Any["day"])))
 end

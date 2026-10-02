@@ -61,13 +61,51 @@ _norm_fn_arg(x::AbstractString) = String(x)
 _norm_fn_arg(x::Vector{<:AbstractString}) = String.(x)
 _norm_fn_arg(x) = x
 
+# #867 — the aggregates' admission gate. Their `x` is untyped, so every node type reached
+# `FObject.column` and anything outside that union died in `convert` there: `Max(Subquery(…))`,
+# `Sum(Exists(…))`, `Count(SQLOrder(…))` and a bare query handler each raised a raw `MethodError`
+# naming the struct's whole column union. The gate tests against the slot's OWN declared type, so
+# the two cannot disagree (#533), and a refusal names the spelling that works.
+#
+# An aggregate over a `Subquery` is refused rather than rendered as `MAX((SELECT …))`. The
+# subquery already aggregates in its own `values(...)`, which is the fan-out-safe shape the docs
+# teach, and an outer aggregate around a correlated subquery would meet the #194 grouped-correlation
+# guard from a direction it was not written for. Admitting it later is additive.
+#
+# No message interpolates the node itself: `repr` of an `SQLArrays` reads `undef` slots and throws,
+# which would turn the refusal back into a raw error.
+const _FObjectColumn = fieldtype(FObject, :column)
+function _aggregate_operand(fn::String, x)
+  y = _norm_fn_arg(x)
+  y isa _FObjectColumn && return y
+  throw(QueryBuildError(_aggregate_refusal(fn, y)))
+end
+_aggregate_refusal(fn::String, ::SubqueryObject) =
+  "\e[4m\e[31m$fn\e[0m cannot wrap a `Subquery(...)`: a subquery is already one value per row. " *
+  "Aggregate inside it instead — " *
+  "\e[4m\e[32ms.values(\"t\" => $fn(\"col\")); q.values(\"x\" => Subquery(s))\e[0m (#867)."
+_aggregate_refusal(fn::String, ::ExistsObject) =
+  "\e[4m\e[31m$fn\e[0m cannot wrap `Exists(...)`: it is a predicate, not a value. Filter on it, " *
+  "or count the rows it holds for — " *
+  "\e[4m\e[32mSum(Case([When(Q(Exists(s)), then = 1)], default = 0))\e[0m (#867)."
+_aggregate_refusal(fn::String, ::SQLObjectHandler) =
+  "\e[4m\e[31m$fn\e[0m cannot take a query. Aggregate inside it and project it as a column — " *
+  "\e[4m\e[32ms.values(\"t\" => $fn(\"col\")); q.values(\"x\" => Subquery(s))\e[0m (#867)."
+_aggregate_refusal(fn::String, ::SQLTypeOrder) =
+  "\e[4m\e[31m$fn\e[0m cannot take an ordering term. Pass the column path — " *
+  "\e[4m\e[32m$fn(\"col\")\e[0m — and order with \e[4m\e[32morder_by\e[0m (#867)."
+_aggregate_refusal(fn::String, y) =
+  "\e[4m\e[31m$fn\e[0m cannot take an operand of type `$(nameof(typeof(y)))`. " *
+  "Its operand is a column path (a string), an `F(...)` expression or a function; wrap a literal " *
+  "as \e[4m\e[32mValue(x)\e[0m (#867)."
+
 """
     Sum(column; distinct=false)
 
 Computes the sum of all values in the column.
 """
 function Sum(x; distinct::Bool = false)
-  return FObject(function_name = "SUM", column = _norm_fn_arg(x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
+  return FObject(function_name = "SUM", column = _aggregate_operand("Sum", x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
 
 """
@@ -86,7 +124,7 @@ and is exempt.
 See also [Filters and Aggregates](@ref).
 """
 function Avg(x; distinct::Bool = false)
-  return FObject(function_name = "AVG", column = _norm_fn_arg(x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
+  return FObject(function_name = "AVG", column = _aggregate_operand("Avg", x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
 """
   Count(x; distinct::Bool = false)
@@ -107,7 +145,7 @@ df = query |> DataFrame
 ```
 """
 function Count(x; distinct::Bool = false)
-  return FObject(function_name = "COUNT", column = _norm_fn_arg(x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
+  return FObject(function_name = "COUNT", column = _aggregate_operand("Count", x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
 """
     Max(x)
@@ -129,7 +167,7 @@ delivers them.
 See also [`Min`](@ref), [Filters and Aggregates](@ref).
 """
 function Max(x)
-  return FObject(function_name = "MAX", column = _norm_fn_arg(x), aggregate = true)
+  return FObject(function_name = "MAX", column = _aggregate_operand("Max", x), aggregate = true)
 end
 
 """
@@ -142,7 +180,7 @@ reads back as the column's own Julia type on both engines (#800).
 See also [Filters and Aggregates](@ref).
 """
 function Min(x)
-  return FObject(function_name = "MIN", column = _norm_fn_arg(x), aggregate = true)
+  return FObject(function_name = "MIN", column = _aggregate_operand("Min", x), aggregate = true)
 end
 
 # #444 — aggregates DO accept a CTE column handle, and this note records why there is no guard here.
@@ -511,9 +549,28 @@ Value(x::JoinedReference) = throw(QueryBuildError(
 # takes the per-element arm instead, so there is nothing left to dodge.
 const _FunctionLiteral = Union{Bool,Integer,Float16,Float32,Float64,
                                Dates.Date,Dates.DateTime,Dates.Time,ZonedDateTime}
+#
+# #867 — "a PormG node passes through" now means a node the walk has an arm for. The pass-through
+# used to be `Union{SQLType,SQLObject}`, which admitted an `SQLOrder` and a bare query handler
+# (`Coalesce(qs, 0)`, `Subquery` forgotten), and both died in `values()` with a raw `MethodError`
+# naming `_check_function` (#533's defect class). The union below is that consumer set, named once;
+# every other node is refused here by type name. `repr` is not used for those, for the reason given
+# at `_aggregate_operand` above.
+const _FunctionOperandNode = Union{SQLTypeField,SQLTypeText,SQLTypeFunction,SQLTypeF,SQLTypeOper,
+                                  SQLTypeQ,SQLTypeQor,SQLTypeCTE,SQLTypeJoined,
+                                  SubqueryObject,ExistsObject}
 _function_operand(x::AbstractString) = String(x)
 _function_operand(x::_FunctionLiteral) = Value(x)
-_function_operand(x::Union{SQLType,SQLObject}) = x
+_function_operand(x::_FunctionOperandNode) = x
+_function_operand(::SQLObjectHandler) = throw(QueryBuildError(
+  "A query is not a function operand. Project one value from it and wrap it — " *
+  "\e[4m\e[32ms.values(\"col\"); Coalesce(Subquery(s), 0)\e[0m (#867)."))
+_function_operand(::SQLTypeOrder) = throw(QueryBuildError(
+  "An ordering term is not a function operand. Pass the column path — " *
+  "\e[4m\e[32mCoalesce(\"col\", 0)\e[0m — and order with \e[4m\e[32morder_by\e[0m (#867)."))
+_function_operand(x::Union{SQLType,SQLObject}) = throw(QueryBuildError(
+  "A `$(nameof(typeof(x)))` is not a function operand. An operand is a column path (a string), a " *
+  "literal, or an expression (`F(...)`, a function, `Subquery(...)`, `CTE(...)`) (#867)."))
 _function_operand(x) = throw(QueryBuildError(
   "\e[4m\e[31m$(repr(x))\e[0m (::$(typeof(x))) is not a function operand. An operand is a column " *
   "path (a string), a number, a `Bool`, a `Date`/`DateTime`/`ZonedDateTime`/`Time`, or an expression " *

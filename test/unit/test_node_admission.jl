@@ -37,6 +37,12 @@ one invariant, split by what is reflectable.
 
 Everything renders through mock connections — no live database.
 
+**#867 extended it to function operands.** Two slots take their operand untyped and so admit every
+node: the aggregates (`Sum`/`Avg`/`Count`/`Max`/`Min`, straight into `FObject.column`) and the
+variadic family behind `_function_operand` (`Coalesce`, `Greatest`, `Power`, …). Probing both found
+`Max(Subquery(…))` dying in `convert` and `Coalesce(SQLOrder(…), 0)` in the build walk. Both are
+now refused at the constructor, and a `Subquery` operand of the variadic family renders.
+
 Sibling coverage:
   - `test_memo_interface.jl`  → the same discipline as a TEXT scan over `src/`/`ext/` (#478).
   - `test_column_spec.jl`     → the same discipline as type reflection over `PormGField` slots (#507).
@@ -50,7 +56,9 @@ import Dates
 import TimeZones
 
 struct AdmMockSQLite <: PormG.PormGSQLite end
+struct AdmMockPostgres <: PormG.PormGPostgres end
 const _ADM = AdmMockSQLite()
+const _ADM_PG = AdmMockPostgres()
 PormG.backend_sqlite_version(::AdmMockSQLite) = 3045000
 
 PormG.config["adm_mock"] = PormG.Configuration.Settings(
@@ -74,7 +82,8 @@ end
 const AD = AdmModels
 const QBA = PormG.QueryBuilder
 import PormG.QueryBuilder: F, inspect_query, Joined, CTE, SQLOrder, SQLField, Value, Sum, Rank,
-                           WindowOver, Lower, Lag, OP, Subquery, Exists, OuterRef, Q, Qor
+                           WindowOver, Lower, Lag, OP, Subquery, Exists, OuterRef, Q, Qor,
+                           Max, Min, Avg, Count, Coalesce, Greatest, NullIf, Power
 
 _adm_render(q) = inspect_query(q; connection = _ADM)[:sql_text]
 
@@ -130,6 +139,9 @@ const SPECIMENS = Dict{Type,Any}(
   QBA.ExistsObject    => Exists(_inner()),
   QBA.QObject         => Q("note" => "x"),
   QBA.QorObject       => Qor("note" => "x", "note" => "y"),
+  # #867: the operand slots are declared as wide as `SQLType`, so they reach these two as well.
+  QBA.WindowSpec      => WindowOver(partition_by = "note"),
+  QBA.SQLArrays       => QBA.SQLArrays(),
 )
 
 _with_cte(q) = (c = AD.Adm_parent.objects; c.values("id", "sku");
@@ -183,6 +195,16 @@ const SLOTS = Tuple{String,Any,Function}[
 
   ("SQLObjectQuery.values", eltype(fieldtype(QBA.SQLObjectQuery, :values)),
    v -> (q = _with_cte(AD.Adm_child.objects); q.values("id", "x" => v); _adm_render(q))),
+
+  # #867 — the two operand slots that take their argument UNTYPED, so the declared type is every
+  # node there is. The aggregates hand it to `FObject.column`; the variadic family hands it to
+  # `_function_operand`, whose node arm stood at `Union{SQLType,SQLObject}` before #867 narrowed it.
+  # (The `SQLObject` half — a bare query handler — is not a node, so the testset below covers it.)
+  ("aggregate operand — Sum/Avg/Count/Max/Min", PormG.SQLType,
+   v -> (q = _with_cte(AD.Adm_child.objects); q.values("id", "x" => Max(v)); _adm_render(q))),
+
+  ("function operand — Coalesce/Greatest/… (_function_operand)", Union{PormG.SQLType,PormG.SQLObject},
+   v -> (q = _with_cte(AD.Adm_child.objects); q.values("id", "x" => Coalesce(v, 0)); _adm_render(q))),
 ]
 
 # A TYPED refusal is a pass: admission was decided, loudly, by the taxonomy. Anything else — a raw
@@ -351,4 +373,107 @@ end
   # conflating the two was the whole of #494.
   @test !(Dates.Period <: QBA._CompareOperand)
   @test Dates.Period <: slot
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #867 — shared helper: a refusal's message with the ANSI stripped, or whatever else was thrown.
+# ─────────────────────────────────────────────────────────────────────────────
+_adm_867_msg(f) = try
+  f()
+  nothing
+catch e
+  e isa PormG.QueryBuildError ? replace(e.msg, r"\e\[[0-9;]*m" => "") : e
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #867 — the aggregates refuse a node `FObject.column` cannot hold, from the constructor.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#867: an aggregate refuses a node it cannot hold, at construction" begin
+  # Each is raised by the constructor itself, before any `values()`. That is where the raw
+  # `convert` error used to come from, and a refusal there points at the line the user wrote.
+  for (name, agg) in (("Sum", Sum), ("Avg", Avg), ("Count", Count), ("Max", Max), ("Min", Min))
+    msg = _adm_867_msg(() -> agg(Subquery(_inner())))
+    @test msg isa String
+    # The spelling that works: aggregate INSIDE the subquery, with this constructor's own name.
+    @test occursin("s.values(\"t\" => $(name)(\"col\")); q.values(\"x\" => Subquery(s))", msg)
+  end
+
+  @test occursin("Sum(Case([When(Q(Exists(s)), then = 1)], default = 0))", _adm_867_msg(() -> Max(Exists(_inner()))))
+  @test occursin("Subquery(s)", _adm_867_msg(() -> Count(_inner())))
+  @test occursin("order_by", _adm_867_msg(() -> Min(SQLOrder(SQLField("note", "note")))))
+  # The fallback names the type and never `repr`s the node: an `SQLArrays` has `undef` slots.
+  @test occursin("`SQLArrays`", _adm_867_msg(() -> Sum(QBA.SQLArrays())))
+  @test occursin("`$(nameof(Int))`", _adm_867_msg(() -> Sum(1)))
+
+  # The Exists hint the refusal prints is a real query, not prose.
+  q = AD.Adm_parent.objects
+  q.values("id", "n" => Sum(PormG.Functions.Case([PormG.Functions.When(Q(Exists(_inner())), then = 1)], default = 0)))
+  @test occursin(r"SUM\(CASE\s+WHEN \(EXISTS \(SELECT 1", _adm_render(q))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #867 — the aggregate gate passes what the slot holds, and the SQL is unchanged from main.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#867: what the aggregate gate admits renders as before" begin
+  # A string, a CTE handle and a nested function all sit inside `FObject.column`'s own union, so
+  # the gate returns them untouched. The SQL is pinned exactly, not by fragment.
+  q = AD.Adm_child.objects
+  q.values("note", "m" => Max("qty"), "c" => Count("id"; distinct = true), "s" => Sum(Coalesce("qty", 0)))
+  @test _adm_render(q) == "SELECT\n    \"Tb\".\"note\" as \"note\", \n  MAX(\"Tb\".\"qty\") as \"m\", \n  COUNT(DISTINCT \"Tb\".\"id\") as \"c\", \n  SUM(COALESCE(\"Tb\".\"qty\", ?)) as \"s\"\nFROM \"adm_child\" as \"Tb\"\nGROUP BY 1 \n"   # rendered on main @ d43337df
+
+  q = _with_cte(AD.Adm_child.objects)
+  q.values("note", "m" => Max(CTE("ev", "sku")))
+  @test occursin("MAX(", _adm_render(q))
+  @test Max(CTE("ev", "sku")).column isa QBA.CTEReference
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #867 — the variadic family: every consumed node is still admitted, the rest is refused.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#867: the variadic family refuses a query and an ordering term" begin
+  # The positive half, so the refusal cannot grow past what the walk consumes: every leaf of the
+  # consumer union must still CONSTRUCT. The #533 probe above cannot see an over-narrowing, because a
+  # typed refusal is a pass there; this is the assertion that can.
+  for T in _node_leaves(QBA._FunctionOperandNode)
+    @test (Coalesce(SPECIMENS[T], 0); true)
+  end
+  @test length(_node_leaves(QBA._FunctionOperandNode)) >= 13
+
+  # `Coalesce(qs, 0)` is the natural slip: the query, with `Subquery(...)` forgotten.
+  @test occursin("Coalesce(Subquery(s), 0)", _adm_867_msg(() -> Coalesce(_inner(), 0)))
+  @test occursin("order_by", _adm_867_msg(() -> Greatest(SQLOrder(SQLField("note", "note")), 1)))
+  @test occursin("`WindowSpec`", _adm_867_msg(() -> Power(WindowOver(partition_by = "note"), 2)))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #867 — the half #863 fixed, pinned: a Subquery operand's SQL and parameters on both engines.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#867: a Subquery operand renders on both engines, with its parameters in place" begin
+  # The parameter vector is pinned EXACTLY on both engines. On SQLite `Greatest` renders one
+  # COALESCE per rotation (#844), so the subquery appears twice and its own parameter binds once
+  # per copy, in text order with the literal between them. A misbind here is silent wrong data,
+  # which is why a fragment check would not do.
+  sub() = (s = AD.Adm_child.objects; s.filter("parent" => OuterRef("id"), "qty__@gt" => 3); s.values("t" => Max("qty")); s)
+  build(f) = (q = AD.Adm_parent.objects; q.filter("sku" => "A"); q.values("id", "x" => f(Subquery(sub()))); q)
+
+  for (backend, conn, greatest, coalesce, nullif) in (
+      ("SQLite", _ADM, Any[3, 7.0, 7.0, 3, "A"], Any[3, 0, "A"], Any[3, 0, "A"]),
+      ("PostgreSQL", _ADM_PG, Any[3, 7.0, "A"], Any[3, 0, "A"], Any[3, 0, "A"]))
+    @testset "$backend" begin
+      for (label, f, expected) in (("Greatest", s -> Greatest(s, 7.0), greatest),
+                                   ("Coalesce", s -> Coalesce(s, 0), coalesce),
+                                   ("NullIf",   s -> NullIf(s, 0), nullif))
+        r = inspect_query(build(f); connection = conn)
+        @test occursin("(SELECT", r[:sql_text])
+        @test r[:parameters] == expected
+      end
+    end
+  end
+
+  # The rotation is visible in the SQLite text: two copies, each with its own alias.
+  sql = inspect_query(build(s -> Greatest(s, 7.0)); connection = _ADM)[:sql_text]
+  @test count("(SELECT", sql) == 2
+  @test occursin("MAX(COALESCE((SELECT", sql)
+  pg = inspect_query(build(s -> Greatest(s, 7.0)); connection = _ADM_PG)[:sql_text]
+  @test occursin("GREATEST((SELECT", pg)
 end

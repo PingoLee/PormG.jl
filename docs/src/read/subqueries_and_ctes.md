@@ -242,6 +242,26 @@ df = query |> DataFrame
 
 For an outer row with **no** related rows, an aggregate scalar returns its natural value (`Count` → `0`), while a plain-column scalar is SQL `NULL` → `missing` in the DataFrame.
 
+### A subquery as a function argument
+
+A `Subquery` is one value per outer row, so it can be an argument to a scalar function such as `Coalesce`, `Greatest`, `Least`, `NullIf` or `Power`. To turn the `missing` above into a default, wrap the subquery:
+
+```julia
+using PormG.Functions: Coalesce
+
+latest = M.Driver_standings.objects
+latest.filter("driverid" => OuterRef("driverid"))
+latest.values("position")
+latest.order_by("-driverstandingsid")
+latest.limit(1)
+
+query = M.Driver.objects
+query.values("surname", "latest_position" => Coalesce(Subquery(latest), 0))
+df = query |> DataFrame
+```
+
+An aggregate cannot wrap a subquery: `Max(Subquery(latest))` raises `QueryBuildError` when it is built. The subquery is already one value per row, so put the aggregate **inside** it, as *Why: the fan-out-safe aggregate* above shows.
+
 ### Rules and limitations
 
 - **Exactly one column.** The inner query must project exactly one column via `.values(...)` (the inner alias is cosmetic). Zero or several columns raise a `QueryBuildError` at build time. The same one-column rule applies to `@in` subqueries, where it surfaces as a `FilterError` — the type names which argument you got wrong (a projection here, a filter there). Catch `PormGError` to handle both.

@@ -195,6 +195,113 @@ Access_token = Models.Model(
 
 ---
 
+## Network Address Fields
+
+Two fields hold IP addresses, as PostgreSQL's native network types. The first is Django's field of
+the same name, so a Django project imports into it unchanged; the second follows django-netfields.
+
+| Field | Holds | PostgreSQL | SQLite |
+|---|---|---|---|
+| `GenericIPAddressField()` | one host address, IPv4 or IPv6 | `inet` | not supported |
+| `CIDRField()` | one network in CIDR notation | `cidr` | not supported |
+
+**PostgreSQL only.** SQLite has no type that stores an address with these semantics: it cannot
+compare by network, and it would store each spelling of an address as different text. PormG refuses
+rather than emulates: on SQLite, `makemigrations` raises `BackendCapabilityError` for a model that
+declares either field. To keep a model on SQLite, declare the column as a `CharField` or `TextField`;
+it then holds whatever text you write.
+
+Both fields read back as a `String`. On write they accept a `String` or a `Sockets.IPv4` /
+`Sockets.IPv6`. PormG validates the value before it reaches the server, and writes it in the text
+PostgreSQL prints for it. IPv6 is compressed and lower-cased, and an IPv4-mapped address keeps its
+dotted tail:
+
+| You write | Stored and read back as |
+|---|---|
+| `"2001:0DB8:0000:0000:0000:0000:0000:0001"` | `"2001:db8::1"` |
+| `"0:0:0:0:0:ffff:a00:1"` | `"::ffff:10.0.0.1"` |
+| `" 10.0.0.1 "` | `"10.0.0.1"` |
+| `"10.20.0.0/16"` (in a `CIDRField`) | `"10.20.0.0/16"` |
+| `"10.20.0.1"` (in a `CIDRField`) | `"10.20.0.1/32"` |
+
+The normalization matters for `default=`. PostgreSQL stores a column default in its printed form, so
+a declared default is normalized the same way and compares equal to it. Otherwise the next
+`makemigrations` would plan a default change.
+
+PormG's parser is **stricter than PostgreSQL's**. It refuses the classful short forms (`"10.1"`), an
+octet with a leading zero (`"010.0.0.1"`), an IPv6 zone id (`"fe80::1%eth0"`) and an empty string.
+Store `nothing` in a `null = true` field instead of an empty string.
+
+### GenericIPAddressField()
+
+**Purpose**: One IPv4 or IPv6 host address: the address a pit-wall client connected from, or the IP
+of a timing relay.
+
+```julia
+Pit_wall_session = Models.Model("pit_wall_session",
+  id         = Models.IDField(),
+  team       = Models.CharField(max_length = 100),
+  client_ip  = Models.GenericIPAddressField(),
+  relay_ip   = Models.GenericIPAddressField(protocol = "IPv4", null = true),
+  mapped_ip  = Models.GenericIPAddressField(unpack_ipv4 = true, null = true),
+  garage_lan = Models.CIDRField(null = true),
+)
+```
+
+**Key Parameters**:
+- `protocol::String = "both"`: `"both"`, `"IPv4"` or `"IPv6"`, in any case. A write of the other
+  family raises `InvalidValueError`. An IPv4-mapped value (`::ffff:10.0.0.1`) counts as IPv6.
+- `unpack_ipv4::Bool = false`: store an IPv4-mapped address as plain IPv4 (`::ffff:10.0.0.1` becomes
+  `10.0.0.1`), as Django does. It is only allowed with `protocol = "both"`; any other combination
+  raises `FieldValidationError` when the model is defined.
+- `default`: normalized like a written value. An invalid default raises `FieldValidationError` when
+  the model is defined.
+
+**A host, not a network.** A value with a `/prefix` (`"10.0.0.0/8"`) raises `InvalidValueError`,
+which is Django's rule. Store a network in a `CIDRField`. A PostgreSQL `inet` column can hold a
+masked value that some other client wrote; PormG still reads it back as a `String`, but cannot write
+it through this field.
+
+### CIDRField()
+
+**Purpose**: One network in CIDR notation, for example the subnet a team's garage equipment sits on.
+
+The value is always stored with its prefix. A value without one is a full-width network, so
+`"10.20.0.1"` is stored as `"10.20.0.1/32"`. A value with bits set to the right of its mask raises
+`InvalidValueError`, as PostgreSQL refuses it: `"10.20.0.1/16"` is a host inside `10.20.0.0/16`, not a
+network, and the message names `10.20.0.0/16`.
+
+### Querying network fields
+
+```julia
+# Equality and @in compare natively, so any spelling of the address matches.
+M.Pit_wall_session.objects.
+  filter("client_ip" => "2001:0DB8::0001").
+  values("team", "client_ip").
+  list()
+
+M.Pit_wall_session.objects.
+  filter("garage_lan__@in" => ["10.20.0.0/16", "10.21.0.0/16"]).
+  values("team").
+  list()
+
+# Pattern lookups read the printed text: HOST(column) for inet, the text of a cidr.
+M.Pit_wall_session.objects.
+  filter("client_ip__@startswith" => "10.20.").
+  values("team").
+  list()
+```
+
+- **Pattern lookups** (`@contains`, `@startswith`, `@endswith`, their `i`/`n` variants, and `@regex`)
+  take a fragment of the text, such as `"10.20."` or `"/16"`. The fragment is bound as plain text, not
+  validated as an address.
+- **Ordering lookups** (`@gt`, `@gte`, `@lt`, `@lte`, `@range`) and `order_by` compare by network, as
+  PostgreSQL does: `10.0.0.9` comes before `10.0.0.10`.
+- A filter value may be a `Sockets.IPv4` / `Sockets.IPv6` too; a value that is not a valid address
+  raises `FilterError`.
+
+---
+
 ## Text Fields
 
 **A text value is a string, an integer, a date or a time.** An integer of any width (`1`,

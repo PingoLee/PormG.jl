@@ -2268,6 +2268,25 @@ end
 # Public API (makemigrations)
 # ---
 
+# #28: a specialized PostgreSQL type declared on a SQLite connection is refused HERE, for every
+# managed model, before anything is diffed. `Dialect.field_to_column` refuses the same fields, but it
+# only runs for a column the plan renders — and on SQLite these fields compile to `CText` (their
+# column spec exists for the compiler only), so re-declaring an existing `TEXT` column as one is an
+# empty delta that renders nothing. The model would then run on SQLite with text semantics, which is
+# exactly the emulation the rule forbids. The rule is "a model that DECLARES one cannot be planned on
+# SQLite", not "a column that is RENDERED". Sorted, so the field it names does not depend on Dict order.
+_refuse_specialized_sqlite_fields(::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn)::Nothing = nothing
+function _refuse_specialized_sqlite_fields(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
+                                           ::PormGSQLite)::Nothing
+  for table in sort!(collect(keys(current_schema)))
+    model = current_schema[table][:model]
+    for name in sort!(collect(keys(model.fields)))
+      Dialect._refuse_specialized_sqlite_type(Models.field_db_column(model.fields[name], string(name)), model.fields[name])
+    end
+  end
+  return nothing
+end
+
 """
     get_migration_plan(live::Vector{LiveTable}, current_schema, conn, settings; interactive = true)
     get_migration_plan(models::Vector{PormGModel}, current_schema, conn, settings; interactive = true)
@@ -2340,6 +2359,7 @@ current_schema = Models.synthesize_many_to_many_through_models(current_schema, s
 unmanaged_tables = _exclude_unmanaged_models!(current_schema)
 _refuse_constrained_keys_into_unmanaged(current_schema)
 _refuse_managed_models_on_ignored_tables(current_schema, conn, settings)
+_refuse_specialized_sqlite_fields(current_schema, conn)
 all_live = live
 isempty(unmanaged_tables) || (live = LiveTable[t for t in all_live if !(t.name in unmanaged_tables)])
 # #739: the tables this diff compares — every managed declared table (many-to-many join tables

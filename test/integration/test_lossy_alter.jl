@@ -20,7 +20,9 @@
 #       over a failing row are each counted by the server and refused (#830);
 #   (n) the pre-16 grammar fallback for `:text_cast` counts what `pg_input_is_valid` counts (#828);
 #   (o) a text column with a DEFAULT retypes to integer — the old default is dropped before the
-#       `USING`, which PostgreSQL would otherwise try to cast and refuse (#828).
+#       `USING`, which PostgreSQL would otherwise try to cast and refuse (#828);
+#   (p) text → `inet` parses through its `USING`, a value that is no address is counted, and `inet`
+#       → text writes the printed form (`abbrev`), not the masked cast (#28).
 #
 # Run it under both PostgreSQL drivers: `PORMG_POSTGRES_DRIVER=Postgres` selects Postgres.jl (#788),
 # whose parameter typing differs from LibPQ's.
@@ -432,6 +434,36 @@ end
             SELECT pg_get_expr(d.adbin, d.adrelid) AS d FROM pg_attrdef d
               JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
              WHERE d.adrelid = '$(_LA803PG_TABLE)'::regclass AND a.attname = 'note'""").d == ["5"]
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (p) text ↔ inet (#28)
+# text → inet casts with a `USING`, and the server's own parser counts a value that is no address,
+# as for any other text cast. The way back must write what `inet` PRINTS — `abbrev` — not the
+# assignment cast's `10.0.0.1/32`: SQLite, which already stores the printed text, would otherwise
+# hold a different string for the same row.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: text ↔ inet retypes through USING, and the way back keeps the printed text (#28)" begin
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, '10.0.0.1', 1, NULL), ('PRO', 2, 2.5, NULL, 2, NULL);") do st
+        sink = _la803pg_plan!(st, _la803pg_models(note = "Models.GenericIPAddressField(null = true)"))
+        @test [f.kind for f in sink] == [:text_cast]
+        @test only(PormG.Migrations.dry_run(st.connections, st).lossy_alters).rows == 0
+        @test _la803pg_migrate(st).outcome === :applied
+        @test _la803pg_type(st, "note") == "inet"
+
+        sink = _la803pg_plan!(st, _la803pg_models(note = "Models.TextField(null = true)"))
+        @test isempty(sink)
+        @test _la803pg_migrate(st).outcome === :applied
+        @test _la803pg_type(st, "note") == "text"
+        @test collect(skipmissing(_la803pg_sql(st, "SELECT note FROM \"$(_LA803PG_TABLE)\";").note)) == ["10.0.0.1"]
+    end
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, '10.0.0.1', 1, NULL), ('PRO', 2, 2.5, 'pit-wall', 2, NULL);") do st
+        _la803pg_plan!(st, _la803pg_models(note = "Models.GenericIPAddressField(null = true)"))
+        err = _la803pg_err(() -> _la803pg_migrate(st; destructive = true))
+        @test err isa PormG.Migrations.MigrationPrecheckError
+        @test err !== nothing && only(err.findings).rows == 1
+        @test _la803pg_type(st, "note") == "text"
     end
 end
 

@@ -3129,6 +3129,208 @@ function UUIDField(; kwargs...)
 end
 
 # ============================================================================
+# Network address fields (#28)
+# ============================================================================
+
+# A `default=` for either network field: normalized by the field's own formatter, so the declared
+# default is stored in the same text a written value is, and re-raised as FieldValidationError — the
+# UUIDField pattern (#239). Called directly rather than through `validate_default`, whose bare `catch`
+# would replace the formatter's message with "Expected type: …".
+function _network_default(field_type::AbstractString, value, formatter::Function, protocol::AbstractString = "both")
+  value === nothing && return nothing
+  value isa Union{AbstractString, Sockets.IPAddr} ||
+    throw(_fielderr("$(field_type): 'default' must be a String, a Sockets.IPv4 / Sockets.IPv6 address or nothing, got $(typeof(value))."))
+  try
+    return check_ip_protocol(protocol, formatter(value))
+  catch e
+    e isa InvalidValueError || rethrow(e)
+    throw(FieldValidationError("Invalid default value for $(field_type): $(e.msg)"))
+  end
+end
+
+# Django spells the choices `"both"`, `"IPv4"` and `"IPv6"` and compares them case-insensitively;
+# the slot holds the lower-cased form so a model file says one thing however it was declared.
+function _ip_protocol_kwarg(value)::String
+  value isa AbstractString ||
+    throw(_fielderr("GenericIPAddressField: 'protocol' must be a String (\"both\", \"IPv4\" or \"IPv6\"), got $(typeof(value))."))
+  p = lowercase(strip(String(value)))
+  p in ("both", "ipv4", "ipv6") ||
+    throw(_fielderr("GenericIPAddressField: 'protocol' must be \"both\", \"IPv4\" or \"IPv6\", got $(repr(String(value)))."))
+  return p
+end
+
+mutable struct sGenericIPAddressField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  db_column::Union{String, Nothing}
+  default::Union{String, Nothing}
+  editable::Bool
+  type::String
+  formatter::Function
+  protocol::String
+  unpack_ipv4::Bool
+  db_default::DbDefault
+end
+
+"""
+    GenericIPAddressField(; kwargs...)
+
+One IPv4 or IPv6 host address — PostgreSQL's native `inet`. Django's field of the same name, so a
+Django project imports into it unchanged.
+
+Values are read and written as a `String`; a `Sockets.IPv4` or `Sockets.IPv6` is accepted on write.
+PormG validates a value before it is sent and writes it in the text PostgreSQL prints for it — IPv6
+compressed and lower-cased, `0:0:0:0:0:ffff:a00:1` as `::ffff:10.0.0.1` — which is also the form a
+`default=` must take to match the catalog.
+
+**PostgreSQL only.** SQLite has no type that stores an address with `inet`'s semantics, and PormG
+does not emulate one: creating or altering a SQLite table with this field raises
+`BackendCapabilityError`.
+
+A value with a `/prefix` is refused with `InvalidValueError`: this field holds a host, and a network
+belongs in a [`CIDRField`](@ref). An empty string is refused too; store `nothing` in a
+`null = true` field instead.
+
+# Keyword Arguments
+- `protocol::String = "both"`: `"both"`, `"IPv4"` or `"IPv6"` (any case). A write of the other family raises `InvalidValueError`
+- `unpack_ipv4::Bool = false`: store an IPv4-mapped address (`::ffff:10.0.0.1`) as its IPv4 form (`10.0.0.1`). Only with `protocol = "both"`
+- `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field
+- `unique::Bool = false`: Whether values in this field must be unique across all records
+- `blank::Bool = false`: Whether the field can be left blank in forms
+- `null::Bool = false`: Whether the database column can store NULL values
+- `db_index::Bool = false`: Whether to create a database index on this field
+- `default::Union{String, Nothing} = nothing`: Default address, normalized like a written value
+- `db_default::Union{NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). Pin it to PostgreSQL — `(postgres = "'10.0.0.1'::inet",)`; the portable spellings (`"CURRENT_TIMESTAMP"`, …) are not addresses. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `editable::Bool = true`: Whether the field should be editable in forms
+
+# Database Mapping
+- **PostgreSQL Type**: inet
+- **SQLite**: none — rendering the column raises `BackendCapabilityError` (see above)
+
+# Examples
+```julia
+Pit_wall_session = Models.Model("pit_wall_session",
+  id          = Models.IDField(),
+  team        = Models.CharField(max_length = 100),
+  client_ip   = Models.GenericIPAddressField(),
+  relay_ip    = Models.GenericIPAddressField(protocol = "IPv4", null = true),
+  garage_lan  = Models.CIDRField(),
+)
+```
+
+See also [`CIDRField`](@ref).
+"""
+function GenericIPAddressField(; kwargs...)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, unpack_ipv4, db_default) =
+    _common_kwargs("GenericIPAddressField", kwargs; editable = true, bools = (unpack_ipv4 = false,),
+                   extra = (:protocol,))
+
+  protocol = _ip_protocol_kwarg(get(kwargs, :protocol, "both"))
+  # Django's own rule and wording: unpacking turns an IPv6 value into an IPv4 one, so it only means
+  # something on a field that accepts both.
+  unpack_ipv4 && protocol != "both" &&
+    throw(_fielderr("GenericIPAddressField: you can only use `unpack_ipv4` if `protocol` is set to \"both\", got protocol = \"$protocol\"."))
+
+  formatter = unpack_ipv4 ? format_inet_unpacked_sql : format_inet_sql
+  default = _network_default("GenericIPAddressField", get(kwargs, :default, nothing), formatter, protocol)
+
+  return sGenericIPAddressField(
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    db_column,
+    default,
+    editable,
+    "INET",
+    formatter,
+    protocol, unpack_ipv4, db_default
+  )
+end
+
+mutable struct sCIDRField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  db_column::Union{String, Nothing}
+  default::Union{String, Nothing}
+  editable::Bool
+  type::String
+  formatter::Function
+  db_default::DbDefault
+end
+
+"""
+    CIDRField(; kwargs...)
+
+One IPv4 or IPv6 network in CIDR notation — PostgreSQL's native `cidr`.
+
+Values are read and written as a `String`; a `Sockets.IPv4` or `Sockets.IPv6` is accepted on write
+as a one-address network. A value is written in the text PostgreSQL prints for it, always with its
+prefix: a value without one is the full-width network (`10.0.0.1` is stored as `10.0.0.1/32`).
+
+**PostgreSQL only**, as [`GenericIPAddressField`](@ref) is: on SQLite, rendering the column raises
+`BackendCapabilityError`.
+
+A value with bits set to the right of its mask raises `InvalidValueError`, as PostgreSQL refuses
+it: `10.0.0.1/24` is a host inside `10.0.0.0/24`, and the message names that network.
+
+# Keyword Arguments
+- `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field
+- `unique::Bool = false`: Whether values in this field must be unique across all records
+- `blank::Bool = false`: Whether the field can be left blank in forms
+- `null::Bool = false`: Whether the database column can store NULL values
+- `db_index::Bool = false`: Whether to create a database index on this field
+- `default::Union{String, Nothing} = nothing`: Default network, normalized like a written value
+- `db_default::Union{NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). Pin it to PostgreSQL — `(postgres = "'10.0.0.0/8'::cidr",)`; the portable spellings (`"CURRENT_TIMESTAMP"`, …) are not addresses. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `editable::Bool = true`: Whether the field should be editable in forms
+
+# Database Mapping
+- **PostgreSQL Type**: cidr
+- **SQLite**: none — rendering the column raises `BackendCapabilityError` (see above)
+
+# Examples
+```julia
+Team_network = Models.Model("team_network",
+  id       = Models.IDField(),
+  team     = Models.CharField(max_length = 100),
+  subnet   = Models.CIDRField(unique = true),
+)
+```
+
+See also [`GenericIPAddressField`](@ref).
+"""
+function CIDRField(; kwargs...)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
+    _common_kwargs("CIDRField", kwargs; editable = true)
+
+  default = _network_default("CIDRField", get(kwargs, :default, nothing), format_cidr_sql)
+
+  return sCIDRField(
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    db_column,
+    default,
+    editable,
+    "CIDR",
+    format_cidr_sql, db_default
+  )
+end
+
+# ============================================================================
 # URL Field
 # ============================================================================
 

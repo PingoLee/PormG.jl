@@ -1,14 +1,15 @@
 # PostgreSQL Guide
 
-PormG treats PostgreSQL and SQLite as equals: the same models, the same fluent query API, and the same migration engine run on both, so most application code is backend-agnostic. This page is the entry point for the two things that are *not* symmetric:
+PormG is PostgreSQL-first for production and SQLite-friendly for local development and tests. For standard relational models the same models, the same fluent query API and the same migration engine run on both, so most application code is backend-agnostic. This page is the entry point for the three things that are *not* symmetric:
 
-1. **PostgreSQL-only capabilities** — features that exist only on PostgreSQL (with a documented SQLite fallback or no-op).
-2. **PostgreSQL ↔ SQLite divergences** — behaviour a power user must know when the same code runs on both backends.
+1. **PostgreSQL-only capabilities** — features that exist only on PostgreSQL, most with a documented SQLite fallback or no-op.
+2. **PostgreSQL-only field types** — specialized types SQLite has no column for. PormG refuses them on SQLite rather than emulate them, so a model that declares one runs on PostgreSQL only.
+3. **PostgreSQL ↔ SQLite divergences** — behaviour a power user must know when the same code runs on both backends.
 
 The deep-dive pages own the full reference and verified examples; this guide points you to them rather than restating them.
 
 !!! tip "Keep code backend-agnostic"
-    Where a feature is PostgreSQL-only, PormG provides a SQLite-safe fallback (`with_advisory_lock` becomes a no-op; use `bulk_insert` instead of `bulk_copy`) so the *same* source runs against SQLite in tests and PostgreSQL in production. Prefer that over branching on the backend.
+    Where a query or write feature is PostgreSQL-only, PormG provides a SQLite-safe fallback (`with_advisory_lock` becomes a no-op; use `bulk_insert` instead of `bulk_copy`) so the *same* source runs against SQLite in tests and PostgreSQL in production. Prefer that over branching on the backend. The exception is a [PostgreSQL-only field type](#PostgreSQL-only-field-types): a model that declares one has no SQLite table, so its tests run on PostgreSQL.
 
 ## PostgreSQL-only capabilities
 
@@ -77,6 +78,34 @@ Api_token = Models.Model("api_tokens",
 - `auto_add=true` generates a `uuid4()` application-side on insert, so identity is the same on both backends.
 
 Full parameter reference and validation rules: **[Fields → JSON](fields.md) / [UUID](fields.md#UUID-Fields)**.
+
+## PostgreSQL-only field types
+
+Some PostgreSQL types have no SQLite counterpart that keeps their semantics. PormG does not emulate
+them: on SQLite, `makemigrations` raises `BackendCapabilityError` for a model that declares one, before
+any migration is written. Such a model runs on PostgreSQL only.
+
+### `GenericIPAddressField` / `CIDRField` — `inet` / `cidr`
+
+```julia
+Pit_wall_session = Models.Model("pit_wall_session",
+  id = Models.IDField(),
+  client_ip = Models.GenericIPAddressField(),   # one host address
+  garage_lan = Models.CIDRField(null=true),     # one network
+)
+```
+
+- Native `inet` and `cidr`: they compare, sort and index by network, and every spelling of an
+  address is one value.
+- A text → `inet`/`cidr` retype is parsed by the server, and a row that does not parse is counted
+  before anything runs. An `inet` → text retype writes the printed form (`abbrev`, `10.0.0.1`), not the
+  masked `10.0.0.1/32` PostgreSQL's own cast would.
+- `Cast(…, "text")` over an `inet` column follows PostgreSQL's cast and includes the mask
+  (`10.0.0.1/32`); the column's value, read directly, does not.
+- Why SQLite is refused: it has no type that compares an address by network. A text column would sort
+  `10.0.0.10` before `10.0.0.9` and store each spelling of an address as a different value.
+
+Reference: **[Fields → Network Address Fields](fields.md#Network-Address-Fields)**.
 
 ## PostgreSQL-only lookups and functions
 
@@ -149,6 +178,7 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **`ON CONFLICT`** | supported | supported (SQLite ≥ 3.24) — same syntax |
 | **`JSONField` storage** | `JSONB` (binary, indexable) | `TEXT` (JSON string) |
 | **`UUIDField` storage** | native `UUID` | `TEXT` |
+| **`GenericIPAddressField` / `CIDRField`** | native `inet` / `cidr` | not supported — `makemigrations` raises `BackendCapabilityError` |
 | **`DecimalField` width** | `numeric`, exact at any `max_digits` | `NUMERIC` affinity, exact up to `max_digits = 15`; a wider declaration raises `BackendCapabilityError` at `makemigrations` |
 | **Window frames** | explicit `frame=` clauses | default frame only |
 | **JSONB lookups** (`@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys`) | JSONB operators | `BackendCapabilityError` — `__` key paths still work |

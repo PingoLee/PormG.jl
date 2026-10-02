@@ -189,7 +189,7 @@ jobs:
           # 1.13, so the "1" arm is unreachable and there is no second version for this
           # job to try. The entry stays spanning regardless — it costs nothing and keeps
           # PormG resolvable if a Julia ever does ship SHA 1.x.
-          skip: Base64, Dates, Logging, Printf, Random, SHA, UUIDs, InteractiveUtils, Test
+          skip: Base64, Dates, Logging, Printf, Random, SHA, Sockets, UUIDs, InteractiveUtils, Test
           # There is no `test/Project.toml` — the test target is declared through the
           # root `[extras]`/`[targets]`, which the action merges in by itself.
           #

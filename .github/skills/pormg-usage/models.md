@@ -105,6 +105,8 @@ unresolvable `ForeignKey`). Catch `DefinitionError` to get both.
 | `TextField()` | `TEXT` | |
 | `EmailField()` / `URLField()` / `SlugField()` | `VARCHAR` | `max_length`; `SlugField` indexes by default |
 | `UUIDField()` | `UUID` / `TEXT` | `auto_add = true` generates one |
+| `GenericIPAddressField()` | `inet` / — | **PostgreSQL only** (SQLite: `BackendCapabilityError` at `makemigrations`). One host address, read as a `String`; `protocol` (`"both"`, `"IPv4"`, `"IPv6"`), `unpack_ipv4`; a `/prefix` is refused |
+| `CIDRField()` | `cidr` / — | **PostgreSQL only.** One network, always stored with its prefix; host bits set → `InvalidValueError` |
 | `IntegerField()` / `BigIntegerField()` | `INTEGER` / `BIGINT` | |
 | `FloatField()` | `DOUBLE PRECISION` / `REAL` | rejects `Inf`, `NaN` |
 | `DecimalField()` | `NUMERIC(p,s)` | `max_digits`, `decimal_places` |

@@ -806,4 +806,24 @@ end
     under.values("milliseconds")
     @test sort((under |> DataFrame).milliseconds) == sort(filter(<(120_000), df.milliseconds))
   end
+
+  # #882 — an IntegerField beside a date is a whole number of days on both engines. SQLite used to
+  # subtract it from the YEAR. The oracle is the same shift in Julia over the same rows.
+  @testset "an integer column shifts a date by whole days (#882)" begin
+    # The field-expressions guide's example: each 2009 race date moved back by its round number.
+    query = M.Race.objects
+    query.filter("year" => 2009, "start_at__@isnull" => false)
+    query.values("raceid", "round", "date", "start_at",
+                 "shifted" => F("date") - F("round"),
+                 "count_first" => F("round") + F("date"),
+                 "start_shifted" => F("start_at") + F("round"))
+    query.order_by("raceid")
+    df = query |> DataFrame
+    @test size(df, 1) > 1
+    dates = Dates.Date.(string.(df.date))
+    @test Dates.Date.(string.(df.shifted)) == [d - Dates.Day(r) for (d, r) in zip(dates, df.round)]
+    @test Dates.Date.(string.(df.count_first)) == [d + Dates.Day(r) for (d, r) in zip(dates, df.round)]
+    @test [Dates.DateTime(x) for x in df.start_shifted] ==
+          [Dates.DateTime(s) + Dates.Day(r) for (s, r) in zip(df.start_at, df.round)]
+  end
 end

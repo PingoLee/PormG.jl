@@ -802,11 +802,11 @@ end
 # it is built (#835), so whenever a CTE body can type a `Concat` column (it needs an `output_field`
 # there), it types it text too.
 #
-# `EXTRACT_DATE` is `ToChar` (`to_char` / `strftime`, text on both engines). Its alias had no type —
-# `PormGTypeField` keys `TO_CHAR`, a name no node carries — so a number compared with it bound as
-# given: `strftime('%Y', …) = 2020` matched nothing on SQLite, the #851 symptom by another route. A
-# `ToChar` built with its own `formatter=` keeps it: `p.formatter` is checked first.
-const _TEXT_OUTPUT_FUNCTIONS = ("LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "REPLACE", "CONCAT", "EXTRACT_DATE")
+# `ToChar` (`EXTRACT_DATE`) is text too, but it is not listed: `PormGTypeField` types it, and that is
+# checked first. #851 listed it here while the table keyed `TO_CHAR`, a name no node carries; #862
+# keyed the table by the node's name instead, so the type has one home. A `ToChar` built with its own
+# `formatter=` keeps it either way: `p.formatter` is checked before both.
+const _TEXT_OUTPUT_FUNCTIONS = ("LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "REPLACE", "CONCAT")
 # Functions whose result has the type of their operands — the first one that names a type decides.
 const _OPERAND_TYPED_FUNCTIONS = ("MAX", "MIN", "COALESCE", "GREATEST", "LEAST", "NULLIF")
 

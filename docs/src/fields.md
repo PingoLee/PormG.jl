@@ -197,6 +197,18 @@ Access_token = Models.Model(
 
 ## Text Fields
 
+**A text value is a string, an integer, a date or a time.** An integer of any width (`1`,
+`Int32(1)`, `UInt8(1)`) is written as its base-10 text, and a date or a time as its ISO text. A
+float or a `Decimal` has no single text: `1.5` and `1.50` are the same number, and Julia prints
+`1e10` as `"1.0e10"`. So it raises `InvalidValueError` on a write and `FilterError` in a filter,
+instead of comparing against a text that matches nothing. Pass the text you mean.
+
+```julia
+M.Result.objects.filter("positiontext" => 1)      # compared as "1"
+M.Result.objects.filter("positiontext" => "1")    # the same
+M.Result.objects.filter("positiontext" => 1.0)    # FilterError: pass the text, "1"
+```
+
 ### CharField(max_length)
 
 **Purpose**: Variable-length strings with maximum length constraint.

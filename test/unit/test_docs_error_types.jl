@@ -1140,6 +1140,25 @@ const DOCERR_CASES = [
             q = m.objects; q.filter("laps" => "0x10"); q.list(show_query = :dict)
         end,
     ),
+    # #860. `fields.md` → *Text Fields* names the type a float or a `Decimal` raises against a text
+    # field, on a write and in a filter. Every route and both engines are pinned in
+    # `test_text_value_types.jl`.
+    (
+        "fields.md — a float in a text field raises on a write (#860)",
+        InvalidValueError,
+        () -> let m = Model("docerr_postext_860", id = IDField(), positiontext = CharField())
+            m.connect_key = "docerr_pg"; m._module = Main
+            m.objects.create("positiontext" => 1.0, show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — a float compared with a text field raises in a filter (#860)",
+        FilterError,
+        () -> let m = Model("docerr_postext_860f", id = IDField(), positiontext = CharField())
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("positiontext" => 1.0); q.list(show_query = :dict)
+        end,
+    ),
     # #780. The same *Numeric Fields* paragraph names the type a declaration raises: a prefixed string
     # `default=`, a prefixed string width, and a non-finite string float default. Every constructor
     # and width keyword is pinned in `test_numeric_prefix_773.jl`.

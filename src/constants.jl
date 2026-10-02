@@ -170,10 +170,14 @@ const PormGtransform = Dict{String,Union{Int64, String}}(
 )
 
 # dictionary from function to type of the field
+#
+# Keyed by the node's `function_name`, which is the Dialect dispatch name — not the SQL keyword. So
+# `ToChar` is `EXTRACT_DATE`: it renders `to_char`/`strftime`, and the key here was `TO_CHAR` until
+# #862, a name no node carries, so no reader of this table ever typed a `ToChar` expression.
 const PormGTypeField = Dict{String,Symbol}(
   "COUNT" => :format_number_sql,
   "EXTRACT" => :format_number_sql,
-  "TO_CHAR" => :format_text_sql,
+  "EXTRACT_DATE" => :format_text_sql,
 )
 
 # I whant work with dictionary to handle pool connections

@@ -427,6 +427,22 @@ const NET28_CIDR_CORPUS = [
                              PG_NET28; table = "t", column = "c"))
     @test occursin("CAST(\"c\" AS text)", first(Migrations._precheck_sql(PG_NET28, f_t)))
 
+    # #905: inet → cidr goes through text, whose `cidr` parser refuses an address with bits right of
+    # its mask — the assignment cast would zero them — and the rows that hold one are counted first.
+    # The way back loses nothing and stays a plain ALTER.
+    @test occursin("TYPE cidr USING CAST(CAST(\"c\" AS text) AS cidr)", retype(c, g))
+    @test kinds(c, g) == [:host_bits]
+    f_h = only(_lossy_alters(column_delta(c, g, PG_NET28; name = "c"), PG_NET28; table = "t", column = "c"))
+    @test Migrations.lossy_alter_class(f_h) === :rows
+    @test Migrations._precheck_sql(PG_NET28, f_h) ==
+          ("SELECT COUNT(*) AS n FROM \"t\" WHERE \"c\" <> CAST(CAST(\"c\" AS cidr) AS inet)", Any[])
+    # The plan header carries it, and reading the header back accepts the kind.
+    header = Migrations._lossy_alter_header(f_h)
+    @test Migrations._parse_lossy_alter_header(chopprefix(header, Migrations.LOSSY_ALTER_HEADER), "p.jl") == f_h
+    @test !occursin("USING", retype(g, c)) && isempty(kinds(g, c))
+    @test :drop_default in kinds(NA.CIDRField(null = true),
+                                 NA.GenericIPAddressField(null = true, db_default = (postgres = "'10.0.0.1'::inet",)))
+
     # `alter_field` drops the old default before ANY `USING`, `abbrev` included — so a live expression
     # default the model does not declare is lost, and that is a finding needing the opt-in, exactly as
     # for the castless pairs (#828).

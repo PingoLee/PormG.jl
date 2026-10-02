@@ -731,6 +731,9 @@ ALTER would fail on — not an estimate:
   input function with `pg_input_is_valid` — the parser the `USING` cast runs, typmod included, so an
   overflow counts too. That function is PostgreSQL 16+; on an older `server_version` (an `Int` in
   `server_version_num` form) see `_text_cast_fallback`.
+- `:host_bits` — the addresses that are not their own network (#905): bits set right of the mask,
+  which `cidr`'s input function refuses in the plan's `USING`. `CAST(… AS cidr)` is the assignment
+  cast, which zeroes those bits, so a value it changes is one the ALTER fails on. Any version.
 """
 function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
                        server_version::Union{Nothing, Int} = nothing)::Union{Nothing, Tuple{String, Vector{Any}}}
@@ -787,6 +790,8 @@ function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
     measured = conn isa PormGPostgres && parse_canonical_type(f.old_type, conn) isa CInet ?
       "abbrev($col)" : "CAST($col AS text)"
     "char_length(rtrim($measured)) > $(ph(1))::integer", Any[f.bound]
+  elseif f.kind === :host_bits
+    "$col <> CAST(CAST($col AS cidr) AS inet)", Any[]
   elseif f.kind === :integer_range
     lo, hi = _INT_RANGE[f.bound]
     "round(CAST($col AS numeric)) NOT BETWEEN $(ph(1))::numeric AND $(ph(2))::numeric", Any[Int(lo), Int(hi)]

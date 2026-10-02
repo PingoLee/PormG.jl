@@ -105,6 +105,9 @@ const SPEC_CORPUS = [
   Models.FloatField(),
   Models.UUIDField(),
   Models.JSONField(),
+  Models.GenericIPAddressField(),
+  Models.GenericIPAddressField(protocol = "ipv4", unpack_ipv4 = false),
+  Models.CIDRField(),
   Models.BinaryField(max_length = 4),
   Models.BinaryField(),
   Models.ForeignKey("Races"),
@@ -124,7 +127,7 @@ const SPEC_CORPUS = [
   @testset "every field kind compiles on both engines" begin
     concrete = filter(T -> isconcretetype(T) && parentmodule(T) === PormG.Models,
                       subtypes(PormG.PormGField))
-    @test length(concrete) == 25
+    @test length(concrete) == 27   # 25 until #28 added GenericIPAddressField and CIDRField
 
     # One constructible instance per struct. Relational types need a target; the bounded ones need
     # their bound. Anything not listed takes its zero-argument constructor.

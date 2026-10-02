@@ -162,6 +162,11 @@ function _is_json_field(f_meta)::Bool
     return getproperty(f_meta, :type) in ("JSON", "JSONB")
 end
 
+# `GenericIPAddressField` (`"INET"`) and `CIDRField` (`"CIDR"`), #28.
+function _is_network_field(f_meta)::Bool
+    return getproperty(f_meta, :type) in ("INET", "CIDR")
+end
+
 # Keyed on the STRUCT, not on `f_meta.type`, unlike every predicate above (#296). `ImageField` and
 # `FileField` also carry `type == "BLOB"` — they are `sImageField` and store a filesystem *path* as
 # text — so a `type`-based test would route their string values into the byte validator and reject
@@ -412,6 +417,26 @@ function _validate_uuid_value(model::PormGModel, field::String, value::Any, oper
     end
 end
 
+# The family check lives here rather than in the formatter: `protocol` is a slot of the field, and the
+# formatter is one named function per field shape (see `Models.check_ip_protocol`). Every writer calls
+# `_validate_field_value`, so every writer gets it.
+function _validate_network_value(model::PormGModel, field::String, f_meta, value::Any, operation::String)
+    cidr = getproperty(f_meta, :type) == "CIDR"
+    example = cidr ? "\"10.0.0.0/24\"" : "\"10.0.0.1\""
+    if value isa Union{AbstractString, Sockets.IPAddr}
+        try
+            text = f_meta.formatter(value)
+            hasproperty(f_meta, :protocol) && Models.check_ip_protocol(f_meta.protocol, text)
+            return true
+        catch e
+            e isa InvalidValueError || rethrow()
+            _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass an address string like $example or a Sockets.IPv4 / Sockets.IPv6")
+        end
+    else
+        _type_mismatch_error(operation, model, field, value, cidr ? "a CIDR network string" : "an IP address string"; suggestion="pass a string like $example or a Sockets.IPv4 / Sockets.IPv6")
+    end
+end
+
 function _validate_json_value(model::PormGModel, field::String, value::Any, operation::String)
     if value isa Union{AbstractDict, AbstractVector, NamedTuple, Bool, Integer, AbstractFloat}
         return true
@@ -565,6 +590,8 @@ function _validate_field_value(model::PormGModel, field::String, f_meta, value::
         _validate_uuid_value(model, field, value, operation)
     elseif _is_json_field(f_meta)
         _validate_json_value(model, field, value, operation)
+    elseif _is_network_field(f_meta)
+        _validate_network_value(model, field, f_meta, value, operation)
     elseif _is_binary_field(f_meta)
         _validate_binary_value(model, field, value, operation)
     end

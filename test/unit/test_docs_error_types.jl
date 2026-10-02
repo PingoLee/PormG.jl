@@ -35,6 +35,8 @@ using PormG.Models: TextField, URLField, UUIDField
 using PormG.Models: FloatField
 # #648 — the SQLite width refusal `fields.md`, `postgres.md` and `errors.md` name.
 using PormG.Models: DecimalField
+# #28 — the network-address claims on `fields.md` and `postgres.md`.
+using PormG.Models: GenericIPAddressField, CIDRField
 # #632 — the same bullet's `Decimal` rule, which needs the type to state its refusing half.
 import Decimals
 using PormG.QueryBuilder: bulk_insert, bulk_update
@@ -1177,6 +1179,63 @@ const DOCERR_CASES = [
             m.connect_key = "docerr_pg"; m._module = Main
             q = m.objects; q.filter("positiontext" => 1.0); q.list(show_query = :dict)
         end,
+    ),
+    # #28. `fields.md` → *Network Address Fields* names the type each refusal raises. The write
+    # refusals are driven through `create`, the public writer; every writer is pinned live in
+    # `test/integration/test_network_address_fields.jl`, the rest in `test_network_address_fields.jl`.
+    (
+        "fields.md — a GenericIPAddressField value with a /prefix raises on a write (#28)",
+        InvalidValueError,
+        () -> let m = Model("docerr_pitwall_28a", id = IDField(), client_ip = GenericIPAddressField())
+            m.connect_key = "docerr_pg"; m._module = Main
+            m.objects.create("client_ip" => "10.0.0.0/8", show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — a write of the other family raises under protocol = \"IPv4\" (#28)",
+        InvalidValueError,
+        () -> let m = Model("docerr_pitwall_28b", id = IDField(), relay_ip = GenericIPAddressField(protocol = "IPv4"))
+            m.connect_key = "docerr_pg"; m._module = Main
+            m.objects.create("relay_ip" => "2001:db8::1", show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — a CIDRField value with host bits set raises on a write (#28)",
+        InvalidValueError,
+        () -> let m = Model("docerr_pitwall_28c", id = IDField(), garage_lan = CIDRField())
+            m.connect_key = "docerr_pg"; m._module = Main
+            m.objects.create("garage_lan" => "10.20.0.1/16", show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — unpack_ipv4 with a protocol other than \"both\" raises when the model is defined (#28)",
+        FieldValidationError,
+        () -> GenericIPAddressField(protocol = "IPv6", unpack_ipv4 = true),
+    ),
+    (
+        "fields.md — an invalid GenericIPAddressField default raises when the model is defined (#28)",
+        FieldValidationError,
+        () -> GenericIPAddressField(default = "10.1"),
+    ),
+    (
+        "fields.md — a filter value that is not a valid address raises (#28)",
+        FilterError,
+        () -> let m = Model("docerr_pitwall_28f", id = IDField(), client_ip = GenericIPAddressField())
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("client_ip" => "10.1"); q.list(show_query = :dict)
+        end,
+    ),
+    # Driven at the SQLite renderer every DDL path shares, the way the #648 row above is; the
+    # `makemigrations` path it surfaces through is pinned live in the integration file.
+    (
+        "fields.md + postgres.md + src/models/fields.jl — a GenericIPAddressField raises on SQLite when its column is rendered (#28)",
+        BackendCapabilityError,
+        () -> PormG.Dialect.field_to_column("client_ip", GenericIPAddressField(), DocErrMockSQLite()),
+    ),
+    (
+        "fields.md + postgres.md + src/models/fields.jl — a CIDRField raises on SQLite when its column is rendered (#28)",
+        BackendCapabilityError,
+        () -> PormG.Dialect.field_to_column("garage_lan", CIDRField(), DocErrMockSQLite()),
     ),
     # #876. The same *Text Fields* section names the types a `Bool` raises against a text field: on a
     # write, in a filter, and as a `default=`. Every route and both engines are pinned in

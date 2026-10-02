@@ -781,7 +781,12 @@ function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
     (conn isa PormGPostgres ? "octet_length($col) > $(ph(1))::integer" :
                               "length(CAST($col AS BLOB)) > $(ph(1))"), Any[f.bound]
   elseif f.kind === :varchar_length
-    "char_length(rtrim(CAST($col AS text))) > $(ph(1))::integer", Any[f.bound]
+    # #28: an `inet` is measured as the text the ALTER writes — `abbrev`, the printed form (see
+    # `Dialect._postgres_retype_using`) — not as its text cast, which adds the mask (`/32`) and would
+    # refuse a value that fits.
+    measured = conn isa PormGPostgres && parse_canonical_type(f.old_type, conn) isa CInet ?
+      "abbrev($col)" : "CAST($col AS text)"
+    "char_length(rtrim($measured)) > $(ph(1))::integer", Any[f.bound]
   elseif f.kind === :integer_range
     lo, hi = _INT_RANGE[f.bound]
     "round(CAST($col AS numeric)) NOT BETWEEN $(ph(1))::numeric AND $(ph(2))::numeric", Any[Int(lo), Int(hi)]
@@ -805,8 +810,10 @@ const _PG_INPUT_IS_VALID = 160000
 # input functions accept a few rare spellings these do not (a hex float; a UUID hyphenated at odd
 # places is accepted, unbalanced braces too). A value wrongly refused costs a hand-written step on a
 # pre-16 server; one wrongly accepted still fails the ALTER, which rolls back. Dates, timestamps and JSON have
-# no such grammar (`'Jan 5 2020'`, a `DateStyle`-dependent order, nested JSON), so there every
-# non-NULL value counts as unverifiable: such a retype over a populated table needs PostgreSQL 16.
+# no such grammar (`'Jan 5 2020'`, a `DateStyle`-dependent order, nested JSON), and neither do `inet`
+# and `cidr` (#28: the server takes classful short forms such as `10.1` that PormG's own parser
+# refuses, so that parser is not the server's grammar), so there every non-NULL value counts as
+# unverifiable: such a retype over a populated table needs PostgreSQL 16.
 const _TEXT_CAST_RE = (
   int = raw"^\s*[+-]?[0-9]+\s*$",
   float = raw"^\s*([+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?|[+-]?(inf|infinity|nan))\s*$",
@@ -1893,14 +1900,16 @@ _migration_timeouts(lock_wait::Real = 30, lock_timeout = nothing, statement_time
 
 One fact about the live database, as reported by [`check`](@ref).
 
-  * `kind` — the finding class: `:expression_default` or `:schema_drift`.
+  * `kind` — the finding class: `:expression_default`, `:schema_drift` or `:invalid_index`.
   * `table` — the table name.
   * `columns` — the column name(s) the finding is about. One entry for a column finding, none for a
-    table-level one (a `:schema_drift` "New model" or "Drop table").
+    table-level one (a `:schema_drift` "New model" or "Drop table", and every `:invalid_index`).
   * `detail` — the text the finding is about, verbatim: for `:expression_default`, the `DEFAULT`
     expression as the database renders it; for `:schema_drift`, the label of the step
-    `makemigrations` would plan (`"Add field: country"`, `"Drop table"`, …).
-  * `message` — a one-line explanation of the consequence.
+    `makemigrations` would plan (`"Add field: country"`, `"Drop table"`, …); for `:invalid_index`,
+    the index name.
+  * `message` — a one-line explanation of the consequence (for `:invalid_index`, also the remedy
+    and the index definition).
 """
 struct SchemaCheckFinding
   kind::Symbol
@@ -2087,11 +2096,110 @@ function _sqlite_expression_default_findings(db::PormGSQLite;
 end
 
 # ---------------------------------------------------------------------------------------------
+# `:invalid_index` — an index PostgreSQL marked invalid (#871)
+# ---------------------------------------------------------------------------------------------
+
+# Every invalid index (`NOT pg_index.indisvalid`) on a table the readers read: the same `relkind`,
+# ownable-table filter (#730) and schema as `_pg_table_checks`. Both index readers SKIP such an
+# index (#847) — never read, never dropped — and that contract stays; this is the report that makes
+# the skip visible, so nobody keeps one by accident.
+#
+# Deliberately NO shape filter. The readers keep b-tree, non-partial, non-expression indexes only,
+# because those are the ones PormG can re-emit; an invalid GIN, partial or unique index is just as
+# useless, and just as costly on writes, so it is reported too. Ordered by table, then index name:
+# `_sort_findings` is stable and ties on `(kind, table)` here, so this ORDER BY is the final order.
+function _pg_invalid_indexes(db::PormGPostgres; schema::Union{String, Nothing} = "public")::DataFrame
+  schema_clause = schema === nothing ? "" : "AND n.nspname = \$1"
+  params = schema === nothing ? String[] : String[schema]
+  query = """
+    SELECT c.relname AS table_name,
+           ic.relname AS index_name,
+           n.nspname AS schema_name,
+           i.indisunique AS is_unique,
+           i.indisready AS is_ready,
+           pg_get_indexdef(i.indexrelid) AS def
+    FROM pg_index i
+    JOIN pg_class ic ON ic.oid = i.indexrelid
+    JOIN pg_class c ON c.oid = i.indrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE NOT i.indisvalid
+      AND c.relkind = 'r'
+      $(_PG_OWNABLE_TABLE_FILTER)
+      $(schema_clause)
+    ORDER BY c.relname, ic.relname;
+    """
+  return DataFrame(fetch(db, query, params))
+end
+
+# The consequence and the remedy, with the name quoted and schema-qualified so the statement can be
+# pasted as is. PostgreSQL's own wording for the state (CREATE INDEX, "Building Indexes
+# Concurrently"): ignored for querying, still consuming update overhead. `indisready` sharpens that
+# (found in review): a READY index is inserted into on every write, and a ready unique one keeps
+# rejecting duplicates (the docs' caveat on unique concurrent builds); one that never became ready —
+# the common case, a unique build failing on duplicates — is skipped on insert, so what it still
+# costs is its disk space and the HOT updates it blocks, being in the table's index list.
+#
+# DROP leads, and REINDEX is offered only where it is a fix (found in review). A failed
+# `REINDEX CONCURRENTLY` leaves a `<name>_ccnew` copy beside an intact original (or, failing after the
+# swap, a `<name>_ccold`): reindexing THAT copy would make it a valid duplicate of the original —
+# paid for on every write, and silent from then on, because it is no longer invalid. PostgreSQL's
+# own advice for either is to drop it. For any other index the cause has to go first (a unique build
+# that failed on duplicates fails the same way again), and `REINDEX … CONCURRENTLY` is 12+ while
+# PormG's floor is 11, so it is the alternative, not the instruction.
+const _REINDEX_LEFTOVER_RE = r"_cc(new|old)\d*$"
+
+function _invalid_index_message(schema::AbstractString, index_name::AbstractString, unique::Bool,
+                                ready::Bool, def::AbstractString)::String
+  quoted = "\"$(Dialect._quote_table_ddl(schema))\".\"$(Dialect._quote_table_ddl(index_name))\""
+  cost = ready ? "still maintains it on every write" * (unique ? " and still rejects duplicate values with it" : "") :
+                 "it still takes disk space and keeps updates to its columns from being HOT"
+  head = "invalid index: PostgreSQL never uses it for queries, but $(cost). " *
+         "One still being built CONCURRENTLY reads the same until it finishes. "
+  leftover = match(_REINDEX_LEFTOVER_RE, index_name)
+  remedy = if leftover !== nothing && leftover.captures[1] == "new"
+    "It looks like the new copy a failed REINDEX CONCURRENTLY left beside the original, which is " *
+    "intact: drop this copy with `DROP INDEX CONCURRENTLY $(quoted);` and do not re-create or " *
+    "reindex it (that makes a valid duplicate of the original), then retry the REINDEX if you still " *
+    "want one."
+  elseif leftover !== nothing
+    "It looks like the old copy a REINDEX CONCURRENTLY swapped out before failing; the rebuilt index " *
+    "is already in place: drop this copy with `DROP INDEX CONCURRENTLY $(quoted);` and do not " *
+    "re-create it."
+  else
+    cause = unique ? " (for a unique index, usually duplicate values)" : ""
+    "Usually a failed CREATE INDEX CONCURRENTLY. Drop it with `DROP INDEX CONCURRENTLY $(quoted);`, " *
+    "remove what made the build fail$(cause), and create it again from the definition below; on " *
+    "PostgreSQL 12 or later, `REINDEX INDEX CONCURRENTLY $(quoted);` rebuilds it in place instead, " *
+    "once the cause is gone."
+  end
+  return head * remedy * " Definition: $(def)"
+end
+
+function _pg_invalid_index_findings(db::PormGPostgres; ignore_table::Vector{String},
+                                    include_table::Union{Vector{String}, Nothing} = nothing)::Vector{SchemaCheckFinding}
+  findings = SchemaCheckFinding[]
+  rows = _pg_invalid_indexes(db)
+  nrow(rows) == 0 && return findings
+  for r in eachrow(rows)
+    (r.table_name === missing || r.index_name === missing) && continue
+    table_name = String(r.table_name)
+    include_table === nothing || table_name in include_table || continue
+    _is_ignored_table(table_name, ignore_table) && continue
+    # `columns` stays empty: an index is a table-level object, like a `"New model"` drift finding.
+    push!(findings, SchemaCheckFinding(:invalid_index, table_name, String[], String(r.index_name),
+      _invalid_index_message(coalesce(r.schema_name, "public"), r.index_name,
+                             coalesce(r.is_unique, false) === true, coalesce(r.is_ready, false) === true,
+                             coalesce(r.def, ""))))
+  end
+  return findings
+end
+
+# ---------------------------------------------------------------------------------------------
 # `:schema_drift` — the declared models against the live schema (#738)
 # ---------------------------------------------------------------------------------------------
 
 # The finding classes `check(...; kinds)` accepts.
-const _CHECK_KINDS = (:expression_default, :schema_drift)
+const _CHECK_KINDS = (:expression_default, :schema_drift, :invalid_index)
 
 function _validate_check_kinds(kinds::AbstractVector{Symbol}, models_file)
   isempty(kinds) && throw(InvalidValueError(
@@ -2238,6 +2346,9 @@ against a production connection.
     r = PormG.Migrations.check("db"; kinds = [:schema_drift])
     exit(isempty(r) ? 0 : 1)
     ```
+  * `:invalid_index` — every index PostgreSQL has marked invalid, typically left by a failed
+    `CREATE INDEX CONCURRENTLY`. PostgreSQL-only in effect: SQLite has no such state, so there the
+    class is accepted and always reports nothing.
 
 `ignore_table` replaces the backend's default skip list (`postgres_ignore_table` /
 `sqlite_ignore_schema`, less the connection's `unignore_defaults:` entries, #818); tables registered
@@ -2353,6 +2464,38 @@ Schema Check (postgres):
       the DEFAULT is a SQL expression; it imports as `db_default=` with exactly this text. Declare it that way and NOT as `default=`, which would render it as a quoted literal
 ```
 
+# `:invalid_index`
+
+An index whose `pg_index.indisvalid` is false. The usual source is a `CREATE INDEX CONCURRENTLY` or
+`REINDEX CONCURRENTLY` that failed part way (a duplicate value under a `UNIQUE` build, a deadlock, a
+cancelled statement), often inside a [`run_once`](@ref) step with `transaction = false`.
+PostgreSQL never uses such an index for queries, yet it still costs on writes, and a unique one may
+still reject duplicates. An index being built `CONCURRENTLY` right now reads as invalid too,
+until the build finishes.
+
+One finding per index, on any table the other classes read, whatever its shape: `table` is the
+table, `columns` is empty, `detail` the index name, and `message` the consequence, the remedy and the
+index definition. The remedy always leads with `DROP INDEX CONCURRENTLY`, quoted and schema-qualified
+so it pastes as is. A `REINDEX INDEX CONCURRENTLY` alternative (PostgreSQL 12 or later) is offered
+as something to run once the cause is gone — a unique build that failed on duplicates fails the same
+way again — and never for a `<name>_ccnew` / `<name>_ccold` copy a failed `REINDEX CONCURRENTLY` left
+behind: drop that copy and do not re-create it, since the original (or the rebuilt index) is
+already in place, and reindexing it would make a valid duplicate.
+
+**It reports; it never acts.** `makemigrations` neither reads nor drops an invalid index (#847): a
+field declaring `db_index = true` over a column carrying only an invalid index gets PormG's own index
+beside it, and the invalid one stays until you drop it. Rebuilding or dropping it is your decision,
+because only you know whether the failed build is still wanted.
+
+```julia
+julia> PormG.Migrations.check("db_2"; kinds = [:invalid_index])
+Schema Check (postgres):
+  1 finding(s)
+
+  invalid_index (1)
+    ⚠ driver  driver_code_uq — invalid index: PostgreSQL never uses it for queries, but it still takes disk space and keeps updates to its columns from being HOT. One still being built CONCURRENTLY reads the same until it finishes. Usually a failed CREATE INDEX CONCURRENTLY. Drop it with `DROP INDEX CONCURRENTLY "public"."driver_code_uq";`, remove what made the build fail (for a unique index, usually duplicate values), and create it again from the definition below; on PostgreSQL 12 or later, `REINDEX INDEX CONCURRENTLY "public"."driver_code_uq";` rebuilds it in place instead, once the cause is gone. Definition: CREATE UNIQUE INDEX driver_code_uq ON public.driver USING btree (code)
+```
+
 See also [`SchemaCheckResult`](@ref), [`SchemaCheckFinding`](@ref).
 """
 function check(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings;
@@ -2380,6 +2523,14 @@ function check(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSet
       end
       append!(findings, _pg_expression_default_findings(schemas; ignore_table = ignore))
     end
+  end
+
+  # SQLite has no invalid-index state, so the class reports nothing there rather than raising: a
+  # `kinds` list shared by both engines' gates must not fail on one of them.
+  if :invalid_index in kinds && connection isa PormGPostgres
+    ignore = unique(vcat(base_ignore, _EXTRA_IGNORE_TABLES[]))
+    append!(findings, _pg_invalid_index_findings(connection; ignore_table = ignore,
+                                                 include_table = include_table))
   end
 
   if :schema_drift in kinds

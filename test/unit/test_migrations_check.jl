@@ -392,3 +392,142 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# :invalid_index — every invalid PostgreSQL index is reported, whatever its shape (#871)
+# Both index readers skip an invalid index since #847, so nothing read, dropped or reported one. The
+# class reports it by table and name with a pasteable remedy. Driven through a mock `PormGPostgres`
+# whose `fetch` returns synthetic catalog rows and records the SQL, so the query's own predicates are
+# pinned as text — the shape filters the readers carry must NOT be there, or an invalid GIN or
+# unique index would go unreported. The live repro (a failed `CREATE UNIQUE INDEX CONCURRENTLY`) is
+# in test/integration/test_importers_introspection.jl.
+# Mutation gate: drop the `:invalid_index` arm from `check` and every finding vanishes; drop
+# `NOT i.indisvalid` from the query and the SQL assertion fails; make the leftover regex never
+# match and both copies are offered the REINDEX that would make a valid duplicate.
+# ─────────────────────────────────────────────────────────────────────────────
+struct InvalidIdxMockPg871 <: PormG.PormGPostgres end
+const PG871_ROWS = Ref(DataFrame())
+const PG871_SQL = Ref("")
+const PG871_PARAMS = Ref{Any}(nothing)
+fetch(::InvalidIdxMockPg871, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
+  (PG871_SQL[] = sql; PG871_PARAMS[] = params; PG871_ROWS[])
+
+@testset "check(kinds = [:invalid_index]) reports invalid PostgreSQL indexes (#871)" begin
+  # One row per invalid index, in the catalog query's own ORDER BY (table, then index name).
+  _chk_idx(tbl, idx; unique = false, ready = true, def = "CREATE INDEX $(idx) ON public.$(tbl) USING btree (x)") =
+    (table_name = tbl, index_name = idx, schema_name = "public", is_unique = unique, is_ready = ready,
+     def = def)
+  PG871_ROWS[] = DataFrame([
+    _chk_idx("auth_user", "auth_user_x_idx"),                          # under the default skip list
+    _chk_idx("lap", "ix_gin"; def = "CREATE INDEX ix_gin ON public.lap USING gin (tags)"),
+    _chk_idx("lap", "lap_ccnews_idx"),                                 # NOT a REINDEX leftover: `$` anchors
+    _chk_idx("lap", "ux_notready"; unique = true, ready = false),      # failed before it became ready
+    _chk_idx("legacy_timing_x", "lt_idx"),                             # under the registry
+    _chk_idx("pit", "pit_lap_idx_ccnew"),                              # a failed REINDEX's new copy
+    _chk_idx("pit", "pit_lap_idx_ccold1"),                             # …and its swapped-out old one
+    _chk_idx("t854", "t854_code_uq"; unique = true,
+             def = "CREATE UNIQUE INDEX t854_code_uq ON public.t854 USING btree (code)"),
+    _chk_idx("t854", "we\"ird"),                                       # a quote in the index name
+  ])
+  settings = PormG.Configuration.Settings()
+  mock = InvalidIdxMockPg871()
+  saved = copy(PormG._EXTRA_IGNORE_TABLES[])
+  try
+    PormG._EXTRA_IGNORE_TABLES[] = ["legacy_timing_"]
+    r = check(mock, settings; kinds = [:invalid_index])
+    @test r.backend === :postgres
+
+    # Every shape is reported — GIN, unique, not-ready — and the two ignored tables are not. The
+    # order is the query's: `_sort_findings` ties on (kind, table) and is stable.
+    @test [(f.table, f.detail) for f in r.findings] ==
+          [("lap", "ix_gin"), ("lap", "lap_ccnews_idx"), ("lap", "ux_notready"), ("pit", "pit_lap_idx_ccnew"),
+           ("pit", "pit_lap_idx_ccold1"), ("t854", "t854_code_uq"), ("t854", "we\"ird")]
+    @test all(f -> f.kind === :invalid_index && isempty(f.columns), r.findings)
+
+    by_name = Dict(f.detail => f.message for f in r.findings)
+    # The remedy is quoted and schema-qualified, so it pastes as is.
+    @test occursin("DROP INDEX CONCURRENTLY \"public\".\"t854_code_uq\";", by_name["t854_code_uq"])
+    @test occursin("REINDEX INDEX CONCURRENTLY \"public\".\"t854_code_uq\";", by_name["t854_code_uq"])
+    # …escaping a quote in the name exactly as PormG's own DDL does.
+    @test occursin("DROP INDEX CONCURRENTLY \"public\".\"we\"\"ird\";", by_name["we\"ird"])
+    # The definition is carried, so an operator can tell what a rebuild would recreate.
+    @test occursin("USING btree (code)", by_name["t854_code_uq"])
+    @test occursin("USING gin (tags)", by_name["ix_gin"])
+    # REINDEX is the alternative, never the lead: the cause goes first (a unique build that failed
+    # on duplicates fails the same way again)…
+    @test occursin("for a unique index, usually duplicate values", by_name["t854_code_uq"])
+    @test findfirst("DROP INDEX", by_name["t854_code_uq"]) < findfirst("REINDEX", by_name["t854_code_uq"])
+    @test !occursin("duplicate values)", by_name["ix_gin"])
+    @test occursin("PostgreSQL 12 or later", by_name["t854_code_uq"])
+    # …and it is never offered for a copy a failed REINDEX CONCURRENTLY left: reindexing a `_ccnew`
+    # would make it a valid duplicate of the intact original, silent from then on.
+    for leftover in ("pit_lap_idx_ccnew", "pit_lap_idx_ccold1")
+      @test !occursin("REINDEX INDEX CONCURRENTLY", by_name[leftover])
+      @test occursin("DROP INDEX CONCURRENTLY \"public\".\"$(leftover)\";", by_name[leftover])
+    end
+    @test occursin("left beside the original", by_name["pit_lap_idx_ccnew"])
+    # The regex is anchored: a name merely CONTAINING `_ccnew` gets the generic remedy.
+    @test occursin("REINDEX INDEX CONCURRENTLY", by_name["lap_ccnews_idx"])
+    @test occursin("rebuilt index is already in place", by_name["pit_lap_idx_ccold1"])
+    # Only a READY index is maintained on writes, and only a ready unique one still rejects
+    # duplicates; one that never became ready costs its space and the HOT updates it blocks.
+    @test occursin("still maintains it on every write", by_name["ix_gin"])
+    @test !occursin("still maintains it", by_name["ux_notready"])
+    @test occursin("disk space", by_name["ux_notready"])
+    @test occursin("rejects duplicate values", by_name["t854_code_uq"])
+    @test !occursin("rejects duplicate values", by_name["ux_notready"])
+    @test !occursin("rejects duplicate values", by_name["ix_gin"])
+
+    # `include_table` restricts what is reported; `ignore_table` replaces the default skip list (so
+    # `auth_user` comes back) but never the registry.
+    @test [f.detail for f in check(mock, settings; kinds = [:invalid_index], include_table = ["t854"]).findings] ==
+          ["t854_code_uq", "we\"ird"]
+    @test Set(f.table for f in check(mock, settings; kinds = [:invalid_index], ignore_table = String[]).findings) ==
+          Set(["auth_user", "lap", "pit", "t854"])
+  finally
+    PormG._EXTRA_IGNORE_TABLES[] = saved
+  end
+
+  # The query: invalid indexes on the tables the readers read, in the readers' schema, bound as a
+  # parameter — and none of the readers' SHAPE filters, which would hide an invalid GIN, partial or
+  # unique index.
+  sql = PG871_SQL[]
+  @test occursin("WHERE NOT i.indisvalid", sql)
+  @test occursin("c.relkind = 'r'", sql)
+  @test occursin(PormG.Migrations._PG_OWNABLE_TABLE_FILTER, sql)
+  @test occursin("n.nspname = \$1", sql) && PG871_PARAMS[] == ["public"]
+  # The within-table order: `_sort_findings` ties on (kind, table) for these, so this is final.
+  @test occursin("ORDER BY c.relname, ic.relname", sql)
+  # Everything from the outer WHERE on — the SELECT list names `indisunique`, the filters must not.
+  where_clause = last(split(sql, "WHERE NOT i.indisvalid"))
+  @test !occursin("amname", sql)
+  @test !occursin("indisunique", where_clause)
+  @test !occursin("indpred", sql)
+
+  # The class is accepted beside the others and renders through `show`.
+  out = sprint(show, check(mock, settings; kinds = [:invalid_index], include_table = ["t854"]))
+  @test occursin("invalid_index (2)", out)
+  @test occursin("t854  t854_code_uq — invalid index", out)
+  @test !occursin("\e[", out)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# :invalid_index on SQLite: accepted, silent, empty (#871)
+# SQLite has no invalid-index state. The class must not raise there: a `kinds` list shared by both
+# engines' gates would otherwise fail on SQLite for a state it cannot be in.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "check(kinds = [:invalid_index]) reports nothing on SQLite (#871)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "inv.sqlite"); pool_size = 1)
+    try
+      fetch(pool, """CREATE TABLE "lap" ("id" INTEGER PRIMARY KEY, "code" TEXT)""")
+      fetch(pool, """CREATE UNIQUE INDEX "lap_code_uq" ON "lap" ("code")""")
+      result = @test_logs min_level = Logging.Warn check(pool, PormG.Configuration.Settings();
+                                                         kinds = [:invalid_index])
+      @test result.backend === :sqlite
+      @test isempty(result)
+    finally
+      PormG.ConnectionPool.close_pool!(pool)
+    end
+  end
+end

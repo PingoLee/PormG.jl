@@ -289,8 +289,11 @@ end
   @test pg("numeric") == CDecimal(nothing, nothing)               # unparameterised: read as it is
   @test pg("boolean") == CBool() && pg("date") == CDate() && pg("uuid") == CUUID()
   @test pg("json") == CJSON() && pg("jsonb") == CJSON() && pg("bytea") == CBytes()
+  # #28: the network types PormG renders since GenericIPAddressField / CIDRField. `inet` sat in the
+  # unsupported loop below until then.
+  @test pg("inet") == PormG.CInet() && pg("cidr") == PormG.CCidr()
   # Deliberately unsupported — PormG never renders them, so a declaration must not match them.
-  for raw in ("character(8)", "bpchar", "integer[]", "bit(1)", "inet", "citext")
+  for raw in ("character(8)", "bpchar", "integer[]", "bit(1)", "macaddr", "citext")
     @test (raw, pg(raw) isa CUnsupported) == (raw, true)
   end
 

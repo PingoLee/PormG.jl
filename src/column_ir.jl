@@ -51,6 +51,18 @@ struct CUUID    <: CanonicalType end
 struct CJSON    <: CanonicalType end
 struct CBytes   <: CanonicalType end
 
+# A network address (#28): `GenericIPAddressField` renders `inet`, `CIDRField` renders `cidr`. Two
+# singletons rather than one `CNetwork(kind)`, by the rule the set already follows: a PostgreSQL
+# type with its own input function, output text and casts gets its own kind (`CUUID`, `CJSON`),
+# and a parameter is a MODIFIER of one base type (`CVarChar(len)`, `CDecimal(p, s)`). Folding the
+# two into a flag would invite the branch-on-a-field mistake `value_repr.jl` warns about.
+#
+# The template for the next PostgreSQL-native type (an array is #28's other half): the kind is
+# PostgreSQL's alone. SQLite has no column for such a field — `Dialect.field_to_column` refuses it
+# there — so the SQLite parser never produces these kinds.
+struct CInet    <: CanonicalType end
+struct CCidr    <: CanonicalType end
+
 # `nothing` = the type carried no length modifier. PormG always renders one for a char-family field,
 # so `nothing` only arises for a spelling PormG did not write (a hand-made table, an imported one).
 # It is kept distinct from any concrete length rather than defaulted, because guessing 250 here would

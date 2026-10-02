@@ -256,6 +256,11 @@ function _register_types!(conn::Postgres.Connection)
   for oid in (2950, 114, 3802)                                                               # uuid, json, jsonb
     Postgres.register_type!(conn, oid, String)
   end
+  # inet, cidr (#28). Already `String` through Postgres.jl's unknown-oid fallback; pinned so a future
+  # default registry entry cannot change the read type away from LibPQ's.
+  for oid in (869, 650)
+    Postgres.register_type!(conn, oid, String)
+  end
   return conn
 end
 

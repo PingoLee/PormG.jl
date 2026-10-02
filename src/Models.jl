@@ -3,6 +3,7 @@ module Models
 using Dates, TimeZones
 using Base64
 using UUIDs
+import Sockets  # #28: `IPAddr` is accepted on write by the network-address fields
 import JSON
 import OrderedCollections
 import PormG: PormGField, PormGModel, reserved_words, MODEL_OPTION_KWARGS, Migration
@@ -52,10 +53,11 @@ import PormG: @pormg_debug
 #
 # Everything else here (`add_field!`, `ensure_model_initialized`, `validate_default`,
 # `normalize_sqlite_datetime_string`, …) is genuinely internal and deliberately omitted.
-public AutoField, BigIntegerField, BinaryField, BooleanField, CharField, DateField, DateTimeField,
-  DecimalField, DurationField, EmailField, FileField, FloatField, ForeignKey, IDField, ImageField,
-  IntegerField, JSONField, ManyToManyField, OneToOneField, PasswordField, PositiveIntegerField,
-  PositiveSmallIntegerField, SlugField, TextField, TimeField, URLField, UUIDField
+public AutoField, BigIntegerField, BinaryField, BooleanField, CharField, CIDRField, DateField,
+  DateTimeField, DecimalField, DurationField, EmailField, FileField, FloatField, ForeignKey,
+  GenericIPAddressField, IDField, ImageField, IntegerField, JSONField, ManyToManyField,
+  OneToOneField, PasswordField, PositiveIntegerField, PositiveSmallIntegerField, SlugField,
+  TextField, TimeField, URLField, UUIDField
 
 # The module's ENTRY POINTS (#295), declared separately because they are a different category from
 # the field constructors above: a field is a column, these define and register the model itself.
@@ -2987,6 +2989,11 @@ function _model_to_str_general(field_name, field, struct_name, sets, fields)
   pinned = _db_column_already_pinned(sets)
   for sfield in fieldnames(typeof(field))
     pinned && sfield === :db_column && continue
+    # No constructor takes a `formatter` keyword — the struct derives it from the others. It can
+    # differ from the zero-argument instance's (#28: `unpack_ipv4 = true` picks
+    # `format_inet_unpacked_sql`), and emitting it would write a keyword the reload only warns about.
+    # `display.jl` skips it for the same reason.
+    sfield === :formatter && continue
     if getfield(field, sfield) != getfield(stadard_field, sfield)
       push!(sets, """$sfield=$(getfield(field, sfield) |> format_string)""")
     end
@@ -3628,6 +3635,7 @@ _fk_target_binding(field::PormGField)::Union{String, Nothing} =
 # SECTION: Fields
 #═══════════════════════════════════════════════════════════════════════════════
 
+include("models/network_address.jl")
 include("models/fields.jl")
 
 is_many_to_many_field(::PormGField)::Bool = false

@@ -144,6 +144,30 @@ A column whose definition changes reads differently per engine. PostgreSQL repor
 names no column. Added and removed columns keep their `"Add field: …"` and `"Remove field: …"`
 labels on both engines.
 
+### Finding Invalid Indexes
+
+A `CREATE INDEX CONCURRENTLY` or `REINDEX CONCURRENTLY` that fails part way does not clean up after
+itself. It leaves an **invalid** index behind: PostgreSQL never uses it for queries, yet it still
+costs on writes, and a unique one may still reject duplicates. `makemigrations` neither reads
+nor drops such an index, so nothing in the plan will ever mention it. `check` lists them:
+
+```julia
+r = PormG.Migrations.check("db"; kinds = [:invalid_index])
+println(r)
+```
+
+Each finding names the table and the index (`detail`), and its `message` carries the index
+definition and the remedy, quoted so it pastes as is: `DROP INDEX CONCURRENTLY "public"."<name>";`,
+then, once what made the build fail is gone (for a unique index, usually duplicate values), create it
+again. On PostgreSQL 12 or later, `REINDEX INDEX CONCURRENTLY` can rebuild it in place instead, and
+the message offers it. The exception is a `<name>_ccnew` or `<name>_ccold` copy that a failed
+`REINDEX CONCURRENTLY` left behind: the original, or the rebuilt index, is already in place, so drop
+the copy and do not re-create it. Reindexing it would make a valid duplicate. `check`
+only reports; what to run is your call. An index being built `CONCURRENTLY` at that moment reads as
+invalid too, until the build finishes. The class can sit in the same `kinds` list as
+`:schema_drift`. On SQLite, which has no invalid-index state, it is accepted and always reports
+nothing.
+
 
 ### Discarding a Pending Migration
 
@@ -305,7 +329,7 @@ line per column or constraint). `dry_run()` lists them, and `migrate()` acts on 
 
 | Kind | Examples | What `migrate()` does |
 | :--- | :--- | :--- |
-| **Fails on existing rows** | `null = true` → `false` over rows holding `NULL`; a shorter `max_length`; `BigIntegerField` → `IntegerField`; fewer `max_digits`; `IntegerField` → `PositiveIntegerField` over negative values; a **new** column that is `NOT NULL` with no `default`, added to a table that has rows; `unique = true` over duplicate values; `primary_key = true` moved to a column with duplicates (or `NULL`s, on PostgreSQL); a new `UniqueConstraint` over duplicate tuples; a new `CheckConstraint` some rows fail; a new or re-pointed foreign key over rows with no parent; on PostgreSQL, text → a number, boolean, date, timestamp, UUID or JSON over values that do not parse as the new type | Counts the offending rows first. Any row that would fail means the plan is refused before anything is written; none means it applies with no opt-in. |
+| **Fails on existing rows** | `null = true` → `false` over rows holding `NULL`; a shorter `max_length`; `BigIntegerField` → `IntegerField`; fewer `max_digits`; `IntegerField` → `PositiveIntegerField` over negative values; a **new** column that is `NOT NULL` with no `default`, added to a table that has rows; `unique = true` over duplicate values; `primary_key = true` moved to a column with duplicates (or `NULL`s, on PostgreSQL); a new `UniqueConstraint` over duplicate tuples; a new `CheckConstraint` some rows fail; a new or re-pointed foreign key over rows with no parent; on PostgreSQL, text → a number, boolean, date, timestamp, UUID, JSON or an IP address or network over values that do not parse as the new type | Counts the offending rows first. Any row that would fail means the plan is refused before anything is written; none means it applies with no opt-in. |
 | **Changes existing values** | fewer `decimal_places` (values round); `FloatField` or `DecimalField` → `IntegerField` (values round); `DateTimeField` → `DateField` (the time is dropped); a `TIMESTAMPTZ` → `TIMESTAMP` (the offset is dropped); on PostgreSQL, a number → `BooleanField` (every non-zero value becomes `true`); on PostgreSQL, one of the text or boolean conversions above on a column with a database default the model does not declare as a `db_default` — the conversion has to drop it | Needs `destructive = true`, exactly like a `DROP`. |
 | **Cannot run as planned** | a plan written by an older PormG that changes text → a number, boolean, date, timestamp, UUID or JSON, or boolean ↔ a number, on PostgreSQL | Refused: PostgreSQL has no automatic cast between these, and that plan carries no `USING` clause. Run `makemigrations()` again; current plans write the `USING`. |
 

@@ -1,14 +1,15 @@
 # PostgreSQL Guide
 
-PormG treats PostgreSQL and SQLite as equals: the same models, the same fluent query API, and the same migration engine run on both, so most application code is backend-agnostic. This page is the entry point for the two things that are *not* symmetric:
+PormG is PostgreSQL-first for production and SQLite-friendly for local development and tests. For standard relational models the same models, the same fluent query API and the same migration engine run on both, so most application code is backend-agnostic. This page is the entry point for the three things that are *not* symmetric:
 
-1. **PostgreSQL-only capabilities** — features that exist only on PostgreSQL (with a documented SQLite fallback or no-op).
-2. **PostgreSQL ↔ SQLite divergences** — behaviour a power user must know when the same code runs on both backends.
+1. **PostgreSQL-only capabilities** — features that exist only on PostgreSQL, most with a documented SQLite fallback or no-op.
+2. **PostgreSQL-only field types** — specialized types SQLite has no column for. PormG refuses them on SQLite rather than emulate them, so a model that declares one runs on PostgreSQL only.
+3. **PostgreSQL ↔ SQLite divergences** — behaviour a power user must know when the same code runs on both backends.
 
 The deep-dive pages own the full reference and verified examples; this guide points you to them rather than restating them.
 
 !!! tip "Keep code backend-agnostic"
-    Where a feature is PostgreSQL-only, PormG provides a SQLite-safe fallback (`with_advisory_lock` becomes a no-op; use `bulk_insert` instead of `bulk_copy`) so the *same* source runs against SQLite in tests and PostgreSQL in production. Prefer that over branching on the backend.
+    Where a query or write feature is PostgreSQL-only, PormG provides a SQLite-safe fallback (`with_advisory_lock` becomes a no-op; use `bulk_insert` instead of `bulk_copy`) so the *same* source runs against SQLite in tests and PostgreSQL in production. Prefer that over branching on the backend. The exception is a [PostgreSQL-only field type](#PostgreSQL-only-field-types): a model that declares one has no SQLite table, so its tests run on PostgreSQL.
 
 ## PostgreSQL-only capabilities
 
@@ -77,6 +78,34 @@ Api_token = Models.Model("api_tokens",
 - `auto_add=true` generates a `uuid4()` application-side on insert, so identity is the same on both backends.
 
 Full parameter reference and validation rules: **[Fields → JSON](fields.md) / [UUID](fields.md#UUID-Fields)**.
+
+## PostgreSQL-only field types
+
+Some PostgreSQL types have no SQLite counterpart that keeps their semantics. PormG does not emulate
+them: on SQLite, `makemigrations` raises `BackendCapabilityError` for a model that declares one, before
+any migration is written. Such a model runs on PostgreSQL only.
+
+### `GenericIPAddressField` / `CIDRField` — `inet` / `cidr`
+
+```julia
+Pit_wall_session = Models.Model("pit_wall_session",
+  id = Models.IDField(),
+  client_ip = Models.GenericIPAddressField(),   # one host address
+  garage_lan = Models.CIDRField(null=true),     # one network
+)
+```
+
+- Native `inet` and `cidr`: they compare, sort and index by network, and every spelling of an
+  address is one value.
+- A text → `inet`/`cidr` retype is parsed by the server, and a row that does not parse is counted
+  before anything runs. An `inet` → text retype writes the printed form (`abbrev`, `10.0.0.1`), not the
+  masked `10.0.0.1/32` PostgreSQL's own cast would.
+- `Cast(…, "text")` over an `inet` column follows PostgreSQL's cast and includes the mask
+  (`10.0.0.1/32`); the column's value, read directly, does not.
+- Why SQLite is refused: it has no type that compares an address by network. A text column would sort
+  `10.0.0.10` before `10.0.0.9` and store each spelling of an address as a different value.
+
+Reference: **[Fields → Network Address Fields](fields.md#Network-Address-Fields)**.
 
 ## PostgreSQL-only lookups and functions
 
@@ -149,6 +178,7 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **`ON CONFLICT`** | supported | supported (SQLite ≥ 3.24) — same syntax |
 | **`JSONField` storage** | `JSONB` (binary, indexable) | `TEXT` (JSON string) |
 | **`UUIDField` storage** | native `UUID` | `TEXT` |
+| **`GenericIPAddressField` / `CIDRField`** | native `inet` / `cidr` | not supported — `makemigrations` raises `BackendCapabilityError` |
 | **`DecimalField` width** | `numeric`, exact at any `max_digits` | `NUMERIC` affinity, exact up to `max_digits = 15`; a wider declaration raises `BackendCapabilityError` at `makemigrations` |
 | **Window frames** | explicit `frame=` clauses | default frame only |
 | **JSONB lookups** (`@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys`) | JSONB operators | `BackendCapabilityError` — `__` key paths still work |
@@ -202,6 +232,6 @@ Notes:
 - **Transactions & savepoints.** `run_in_transaction`, `with_savepoint`, and connection-loss semantics inside a transaction: **[Transactions](write/transaction.md)**.
 - **Statement timeouts.** A long query is cancelled by PostgreSQL's `statement_timeout` (surfacing as a query-canceled error); the `:block` advisory-lock strategy also sets `statement_timeout` for the acquisition window (see [Advisory Locks](advisory_lock.md)).
 - **Composite uniqueness.** Multi-column unique constraints render as a `CREATE UNIQUE INDEX` on both backends — see [Composite Uniqueness](models.md#Composite-Uniqueness-(unique_together)). A table-level `UNIQUE (…)` constraint already in the schema — what Django's `unique_together` creates — is read back too, and satisfies a declaration over the same columns rather than gaining a second index beside it.
-- **Composite indexes.** Multi-column *non-unique* indexes render as a plain `CREATE INDEX`, likewise identical on both backends — see [Composite Indexes](models.md#Composite-Indexes-(Meta.indexes)). Of the **multi-column** indexes already in a live schema, introspection reads back only what PormG can re-emit: a **default b-tree, all-ascending, default-operator-class** index over plain columns, unique or not. A GIN/GiST/BRIN/hash index, a partial or functional one, an `EXCLUDE` constraint's backing index, a `DESC` key, a non-default operator class (`varchar_pattern_ops`) or collation, an `INCLUDE (…)` clause, `NULLS NOT DISTINCT`, a `DEFERRABLE` unique constraint, or an invalid index is left alone rather than regenerated as something else. Those shapes stay hand-managed — and because they are never read, `makemigrations` never drops them, while every composite it *does* read and no model declares is planned for removal ([Changing composites on an existing table](models.md#Changing-composites-on-an-existing-table)).
+- **Composite indexes.** Multi-column *non-unique* indexes render as a plain `CREATE INDEX`, likewise identical on both backends — see [Composite Indexes](models.md#Composite-Indexes-(Meta.indexes)). Of the **multi-column** indexes already in a live schema, introspection reads back only what PormG can re-emit: a **default b-tree, all-ascending, default-operator-class** index over plain columns, unique or not. A GIN/GiST/BRIN/hash index, a partial or functional one, an `EXCLUDE` constraint's backing index, a `DESC` key, a non-default operator class (`varchar_pattern_ops`) or collation, an `INCLUDE (…)` clause, `NULLS NOT DISTINCT`, a `DEFERRABLE` unique constraint, or an invalid index is left alone rather than regenerated as something else. (An invalid index — a failed `CREATE INDEX CONCURRENTLY` — is worth removing, and `check("db"; kinds = [:invalid_index])` lists every one with the remedy: [Finding invalid indexes](migrations/workflow.md#Finding-Invalid-Indexes).) Those shapes stay hand-managed — and because they are never read, `makemigrations` never drops them, while every composite it *does* read and no model declares is planned for removal ([Changing composites on an existing table](models.md#Changing-composites-on-an-existing-table)).
 
     The **single-column** reader that feeds `db_index` applies the same rules: a one-column GIN, `DESC`, `varchar_pattern_ops`, collated, `INCLUDE`, invalid or `EXCLUDE` index is not read as `db_index = true`, so `makemigrations` never drops it. It used to be read, which planned a destructive `DROP INDEX` for it whenever the field did not declare `db_index` — and on an `EXCLUDE` constraint that `DROP INDEX` failed at `migrate`. A field that *does* declare `db_index = true` on such a column gets PormG's own plain b-tree index beside it, because the hand-made one is not the index `db_index` describes.

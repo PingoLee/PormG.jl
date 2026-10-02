@@ -2705,6 +2705,12 @@ end
   # `Rtidx325` is the negative fixture: a declared-but-unindexed column and a composite
   # UniqueConstraint whose members must NOT be marked `db_index`.
   @testset "Phase 19: Type/Length/Index Round-trip + No Churn (#325)" begin
+    # #28: PostgreSQL's network types, declared with a non-canonical default — `inet`'s catalog stores
+    # the printed form, so (c) below is what proves the field normalizes it. PostgreSQL only: SQLite
+    # has no column for them, and declaring one there would refuse the whole table.
+    _rt325_network = pool isa PormG.PormGPostgres ?
+      "client_ip = Models.GenericIPAddressField(null=true, default=\"2001:DB8::1\"),\n        " *
+      "subnet = Models.CIDRField(null=true)," : ""
     write_edge_models("""
     Rt325 = Models.Model(
         id = Models.IDField(),
@@ -2712,6 +2718,7 @@ end
         slug = Models.SlugField(max_length=120, unique=true),
         uuid_token = Models.UUIDField(),
         payload = Models.JSONField(null=true),
+        $(_rt325_network)
         photo = Models.ImageField(null=true),
         body = Models.TextField(null=true),
         created_at = Models.DateTimeField(auto_now_add=true),
@@ -2765,6 +2772,13 @@ end
     @test !hasfield(typeof(live.fields["payload"]), :max_length)
     @test !hasfield(typeof(live.fields["photo"]), :max_length)
     @test !hasfield(typeof(live.fields["body"]), :max_length)
+    # #28: `inet`/`cidr` read back as their own fields — not the warned `TextField` they were — and
+    # the declared default comes back in its normalized text, which is what keeps (c) below quiet.
+    if pool isa PormG.PormGPostgres
+      @test live.fields["client_ip"] isa Models.sGenericIPAddressField
+      @test live.fields["subnet"] isa Models.sCIDRField
+      @test live.fields["client_ip"].default == "2001:db8::1"
+    end
 
     # `db_index`: read back on both backends now, and NOT over-marked. `slug` is the interesting
     # one — SlugField defaults `db_index=true` AND declares `unique=true`, so PormG emits both a
@@ -2804,6 +2818,7 @@ end
         slug = Models.SlugField(max_length=120, unique=true),
         uuid_token = Models.UUIDField(),
         payload = Models.JSONField(null=true),
+        $(_rt325_network)
         photo = Models.ImageField(null=true),
         body = Models.TextField(null=true),
         created_at = Models.DateTimeField(auto_now_add=true),

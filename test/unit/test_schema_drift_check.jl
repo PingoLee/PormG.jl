@@ -258,6 +258,8 @@ end
         @test_throws PormG.Configuration.MissingConfigurationError _dc738_drift(pool, settings; models_file = abspath("nope.jl"))
         refusal(f) = try f(); "" catch e; e isa InvalidValueError ? sprint(showerror, e) : "wrong type: $(typeof(e))" end
         @test occursin(":schema_drfit", refusal(() -> Migrations.check(pool, settings; kinds = [:schema_drfit])))
+        # The refusal lists every class, #871's included.
+        @test occursin(":invalid_index", refusal(() -> Migrations.check(pool, settings; kinds = [:schema_drfit])))
         @test occursin("at least one", refusal(() -> Migrations.check(pool, settings; kinds = Symbol[])))
         @test occursin("read only by the :schema_drift class",
                        refusal(() -> Migrations.check(pool, settings; models_file = other)))
@@ -269,6 +271,12 @@ end
         shown = sprint(show, both)
         @test occursin("schema_drift", shown) && occursin("circuit738.country", shown) && occursin("Add field: country", shown)
         @test !occursin("DEFAULT", shown)
+
+        # All three: `:invalid_index` is accepted beside the others and adds nothing on SQLite (#871).
+        all3 = _dc738_quiet(() -> Migrations.check(pool, settings;
+                                                   kinds = [:schema_drift, :expression_default, :invalid_index],
+                                                   models_file = other))
+        @test [f.kind for f in all3.findings] == [:schema_drift]
     end
 end
 

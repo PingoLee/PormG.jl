@@ -221,7 +221,12 @@ const sqlite_type_map_reverse = Dict{String, String}(
   "BOOLEAN" => "BOOLEAN",
   "UUID" => "TEXT",
   "JSONB" => "TEXT",
-  "JSON" => "TEXT"
+  "JSON" => "TEXT",
+  # #28. For the migration compiler only: SQLite has no `inet`/`cidr`, and `Dialect.field_to_column`
+  # refuses both fields there, so no DDL carries this. It keeps the compiled spec a `CText` rather
+  # than an `INET` that SQLite's affinity rule would read as INTEGER.
+  "INET" => "TEXT",
+  "CIDR" => "TEXT"
 )
 
 const postgres_type_map_reverse = Dict{String, String}(

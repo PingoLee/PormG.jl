@@ -65,6 +65,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "Schema Drift Gate (#738)"     begin include("test_schema_drift_check.jl") end
     @testset "Having (Aggregates)"          begin include("test_having.jl")             end
     @testset "Field Validation DB Tests"    begin include("test_field_validation_db_roundtrip.jl") end
+    @testset "Network Address Fields (#28)" begin include("test_network_address_fields.jl") end
     @testset "JSON/JSONB Lookups (#27)"      begin include("test_json_fields.jl")         end
     @testset "Django Data-Type Contracts"   begin include("test_django_contract.jl")    end
     @testset "Importer / Introspection"     begin include("test_importers_introspection.jl") end

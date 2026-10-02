@@ -239,7 +239,8 @@ database plans nothing.
     Composite indexes PormG cannot reproduce are never read, so they are never dropped either: partial
     (`WHERE …`), functional (`lower(name)`), non-b-tree, `DESC` / `NULLS FIRST`, an explicit
     operator class or collation, `INCLUDE (…)`, `NULLS NOT DISTINCT`, a `DEFERRABLE` constraint,
-    and an invalid index. The [PostgreSQL guide](postgres.md#Production-notes) lists them. A
+    and an invalid index (which [`check`](migrations/workflow.md#Finding-Invalid-Indexes) reports).
+    The [PostgreSQL guide](postgres.md#Production-notes) lists them. A
     **one-column non-unique** index with one of those properties is skipped the same way, rather than
     read as a `db_index`, so it is never dropped either — including a one-column `EXCLUDE` constraint
     (see
@@ -496,7 +497,8 @@ PormG provides comprehensive field types for all common database scenarios:
 - **Text Fields**: `CharField`, `TextField`, `EmailField`
 - **Numeric Fields**: `IntegerField`, `BigIntegerField`, `FloatField`, `DecimalField`
 - **Date/Time Fields**: `DateField`, `DateTimeField`, `TimeField`, `DurationField`
-- **Other Types**: `BooleanField`, `ImageField`, `BinaryField`
+- **Other Types**: `BooleanField`, `ImageField`, `BinaryField`, `UUIDField`, `JSONField`
+- **Network Address Fields** (PostgreSQL only): `GenericIPAddressField`, `CIDRField`
 - **Relationship Fields**: `ForeignKey`, `OneToOneField`
 
 For detailed documentation on each field type, including parameters, examples, and best practices, see [Field Types Reference](fields.md).

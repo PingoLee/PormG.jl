@@ -11,7 +11,9 @@
 #      instead of waiting — and blocking every later query on that table — indefinitely;
 #   4. a plan whose recorded schema the database no longer holds is refused inside the advisory
 #      lock, before BEGIN, with no `failed` row (#739 — the SQLite lifecycle is pinned in
-#      `test/unit/test_plan_schema_fingerprint.jl`).
+#      `test/unit/test_plan_schema_fingerprint.jl`);
+#   5. `run_once` runs a data step once, waits on the same lock, and runs CREATE INDEX CONCURRENTLY
+#      with `transaction = false` (#740 — the SQLite side is `test/unit/test_data_migrations.jl`).
 #
 # Isolation: each pool gets a temporary `db_def_folder`, so the plan files are private. The shared
 # fixture is touched only through one scratch table and the history rows this file writes, and
@@ -255,6 +257,102 @@ end
     finally
         PormG.ConnectionPool.fetch(pg, "DELETE FROM pormg_migrations WHERE name = '$(name)';")
         PormG.ConnectionPool.fetch(pg, "DROP TABLE IF EXISTS \"$(table)\";")
+        _boot737_close(st)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# run_once on PostgreSQL: once, under migrate's lock, and without a transaction on request (#740)
+# The unit file pins the SQLite lifecycle and, with a probe pool, the lock key. This is the live
+# side: a step runs once and records itself; a held `pormg::migrations` lock — the shape of a
+# migrate() in progress — makes run_once wait `lock_wait` and then name the holder; and
+# `transaction = false` runs what PostgreSQL refuses inside a transaction, CREATE INDEX CONCURRENTLY.
+# A scratch table and this file's own step names only; both are removed in `finally`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "run_once at boot: once, under the migration lock (#740)" begin
+    table = "pormg_boot740_scratch"
+    names = ["pormg_test_boot740_fill", "pormg_test_boot740_idx", "pormg_test_boot740_locked"]
+    st = _boot737_settings("runonce"; pool_size = 2)
+    holder = _boot737_settings("runonce_holder"; pool_size = 2)
+    pg = st.connections
+    hconn = PormG.ConnectionPool.acquire_connection(holder.connections)
+    try
+        PormG.ConnectionPool.fetch(pg, "CREATE TABLE IF NOT EXISTS \"$(table)\" (id integer PRIMARY KEY, note text);")
+        PormG.ConnectionPool.fetch(pg, "INSERT INTO \"$(table)\" (id) VALUES (1), (2);")
+        recorded(n) = nrow(DataFrame(PormG.ConnectionPool.fetch(pg,
+            "SELECT 1 FROM pormg_migrations_data WHERE name = \$1;"; params = Any[n])))
+
+        # Once: the second call finds the record and never runs the block.
+        calls = Ref(0)
+        fill_note(conn) = (calls[] += 1; PormG.ConnectionPool.fetch(conn, "UPDATE \"$(table)\" SET note = 'filled';"))
+        @test PormG.Migrations.run_once(fill_note, pg, st, names[1]) === :applied
+        @test PormG.Migrations.run_once(fill_note, pg, st, names[1]) === :already_applied
+        @test calls[] == 1
+        notes = DataFrame(PormG.ConnectionPool.fetch(pg, "SELECT note FROM \"$(table)\";")).note
+        @test all(==("filled"), notes)
+        @test recorded(names[1]) == 1
+
+        # The migration lock's key, as `holder` (a session of its own) takes it below.
+        lk = PormG.QueryBuilder.PgParameterizedQuery("", Any[], 0)
+        ph = PormG.QueryBuilder.add_parameter!(lk, PormG.Migrations.MIGRATION_LOCK_KEY)
+        key_expr = "(( 'x' || substr(md5($(ph)), 1, 16))::bit(64))::bigint"
+        held_by_holder(sql) = DataFrame(first(PormG.ConnectionPool.with_transaction(holder.connections, sql;
+                                                                                     conn = hconn, params = lk)))
+
+        # A throw rolls the step back with its record, and releases the lock. Asked from ANOTHER
+        # session: advisory locks are re-entrant per session, so a retry through the same pool could
+        # succeed on a leaked lock and prove nothing.
+        boom(conn) = (PormG.ConnectionPool.fetch(conn, "UPDATE \"$(table)\" SET note = 'boom';"); error("step failed"))
+        @test _boot737_quiet(() -> try PormG.Migrations.run_once(boom, pg, st, names[3]); nothing catch e; e end) isa ErrorException
+        @test all(==("filled"), DataFrame(PormG.ConnectionPool.fetch(pg, "SELECT note FROM \"$(table)\";")).note)
+        @test recorded(names[3]) == 0
+        @test held_by_holder("SELECT pg_try_advisory_lock($(key_expr)) AS got;").got[1] == true
+        held_by_holder("SELECT pg_advisory_unlock($(key_expr));")
+        @test PormG.Migrations.run_once(_ -> nothing, pg, st, names[3]; lock_wait = 1) === :applied
+        PormG.ConnectionPool.fetch(pg, "DELETE FROM pormg_migrations_data WHERE name = \$1;"; params = Any[names[3]])
+
+        # Outside a transaction: CONCURRENTLY works only there.
+        idx(conn) = PormG.ConnectionPool.fetch(conn,
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS \"pormg_boot740_note_idx\" ON \"$(table)\" (note);")
+        @test PormG.Migrations.run_once(idx, pg, st, names[2]; transaction = false) === :applied
+        @test nrow(DataFrame(PormG.ConnectionPool.fetch(pg,
+            "SELECT 1 FROM pg_indexes WHERE indexname = 'pormg_boot740_note_idx';"))) == 1
+
+        # The migration lock, held by "another migrator": run_once waits lock_wait, then names it.
+        run_on(sql) = DataFrame(first(PormG.ConnectionPool.with_transaction(holder.connections, sql; conn = hconn)))
+        run_on("SET application_name = 'pormg_boot740_holder';")
+        PormG.ConnectionPool.with_transaction(holder.connections, "SELECT pg_advisory_lock($(key_expr));";
+                                              conn = hconn, params = lk)
+        try
+            ran = Ref(false)
+            t0 = time()
+            err = try
+                _boot737_quiet(() -> PormG.Migrations.run_once(_ -> (ran[] = true), pg, st, names[3]; lock_wait = 1))
+                nothing
+            catch e
+                e
+            end
+            @test err isa PormG.OperationalError
+            @test err !== nothing && occursin("pormg_boot740_holder", sprint(showerror, err))
+            @test time() - t0 < 15
+            @test !ran[]
+            @test recorded(names[3]) == 0
+        finally
+            PormG.ConnectionPool.with_transaction(holder.connections, "SELECT pg_advisory_unlock($(key_expr));";
+                                                  conn = hconn, params = lk)
+            PormG.ConnectionPool.with_transaction(holder.connections, "RESET application_name;"; conn = hconn)
+        end
+
+        # status() reports the steps this file recorded.
+        steps = [r[:name] for r in PormG.Migrations.status(pg, st).data_steps]
+        @test names[1] in steps && names[2] in steps
+    finally
+        PormG.ConnectionPool.release_connection(holder.connections, hconn)
+        for n in names
+            PormG.ConnectionPool.fetch(pg, "DELETE FROM pormg_migrations_data WHERE name = \$1;"; params = Any[n])
+        end
+        PormG.ConnectionPool.fetch(pg, "DROP TABLE IF EXISTS \"$(table)\";")
+        _boot737_close(holder)
         _boot737_close(st)
     end
 end

@@ -254,7 +254,9 @@ dev:
   place, so `django_celery_beat_*` stays hidden; list both to read those tables. When a managed
   model is refused, the error names every entry that hides its table.
 - **`pormg_migrations` and the SQLite engine tables cannot be removed.** They belong to PormG and to
-  the engine. On SQLite that leaves nothing to remove, so any entry is refused.
+  the engine. On SQLite that leaves nothing to remove, so any entry is refused. The entries are
+  prefixes, so `pormg_migrations` also covers `pormg_migrations_data`, the table
+  [`run_once`](../migrations/advanced.md#Data-Migrations) records its steps in.
 - **It is per connection, like `ignore_tables:`.** Another connection in the same process keeps the
   full list. `register_ignore_tables!` is not affected.
 

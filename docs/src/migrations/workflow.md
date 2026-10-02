@@ -245,8 +245,9 @@ This reports the state of the migration **history**: applied migrations, failed 
 pending plan exists, and warnings about the history itself, such as a missing `pormg_migrations`
 table or migrations recorded over a database with no tables. A failed attempt that a later run
 resolved by applying the same plan is listed under `superseded`, not `failed`, and raises no
-warning: a plan runs in one transaction, so the failure wrote nothing. It is read-only, and it does not compare
-the live schema with your models. For that, use `check("db"; kinds = [:schema_drift])` (see
+warning: a plan runs in one transaction, so the failure wrote nothing. `data_steps` lists the
+[`run_once`](advanced.md#Data-Migrations) steps already applied. It is read-only, and it does not
+compare the live schema with your models. For that, use `check("db"; kinds = [:schema_drift])` (see
 [Checking the Database Against the Models](#Checking-the-Database-Against-the-Models)).
 
 ---
@@ -282,7 +283,7 @@ PormG blocks destructive SQL by default. A statement is destructive when it is:
   flagged, because a targeted data step or a backfill is not a table wipe.
 
 `makemigrations` writes only the first kind, but a [hand-edited plan](stability.md#A-plan-file-is-read-as-data,-never-executed)
-can carry any of them. The guard reads the SQL text and does not parse it, so it errs toward flagging. A
+— such as one carrying a [data step](advanced.md#Data-Migrations) — can carry any of them. The guard reads the SQL text and does not parse it, so it errs toward flagging. A
 string literal that reads like one of these also flags the plan: `default = "Drop zone"` renders as
 `SET DEFAULT 'Drop zone'`. It can also miss a few hand-written spellings: any `WHERE` excuses a
 `DELETE`, even `WHERE true`, and a keyword glued to a quoted name or a comment (`DROP"col"`) is not

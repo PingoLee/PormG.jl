@@ -424,14 +424,14 @@ end
     silent = LossyAlter(:decimal_scale, "results", "points", "numeric(10,4)", "numeric(10,2)"; scale = 2)
     failing = LossyAlter(:set_not_null, "results", "grid", "integer", "integer"; rows = 3)
     counted_ok = LossyAlter(:set_not_null, "results", "laps", "integer", "integer"; rows = 0)
-    r = Migrations.DryRunResult("0"^64, [long], [long], [silent, failing, counted_ok])
+    r = Migrations.DryRunResult("0"^64, [long], [long], [silent, failing, counted_ok], String[])
     out = sprint(show, r)
     @test occursin("CHANGES EXISTING VALUES", out) && occursin("decimal_scale", out)
     @test occursin("WOULD FAIL: 1", out) && occursin("3 row(s) would fail", out)
     @test !occursin("\"laps\"", out)
-    @test Migrations.is_destructive(Migrations.DryRunResult("0"^64, String[], String[], [silent]))
-    @test !Migrations.is_destructive(Migrations.DryRunResult("0"^64, String[], String[], [failing]))
-    @test occursin("Safe", sprint(show, Migrations.DryRunResult("0"^64, String[], String[], [counted_ok])))
+    @test Migrations.is_destructive(Migrations.DryRunResult("0"^64, String[], String[], [silent], String[]))
+    @test !Migrations.is_destructive(Migrations.DryRunResult("0"^64, String[], String[], [failing], String[]))
+    @test occursin("Safe", sprint(show, Migrations.DryRunResult("0"^64, String[], String[], [counted_ok], String[])))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

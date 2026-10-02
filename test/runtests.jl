@@ -229,6 +229,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Migration Advisory-Lock Identity (#90)" include("unit/test_migration_lock_key.jl")
     @testset "migrate() at Boot: Outcome and Locking (#737)" include("unit/test_migrate_outcome.jl")
     @testset "Plan Schema Precondition and Superseded Failures (#739)" include("unit/test_plan_schema_fingerprint.jl")
+    @testset "Data Migrations: run_once and Data (pre)/(post) Steps (#740)" include("unit/test_data_migrations.jl")
     @testset "Migration Statement Ordering: FK invariant (#89)" include("unit/test_migration_fk_ordering.jl")
     @testset "Migration Diff: makemigrations renames a table (#615)" include("unit/test_migration_rename_table.jl")
     @testset "Rename Index Timing (#556)" include("unit/test_rename_index_timing.jl")

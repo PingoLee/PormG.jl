@@ -77,6 +77,9 @@ _norm_fn_arg(x) = x
 const _FObjectColumn = fieldtype(FObject, :column)
 function _aggregate_operand(fn::String, x)
   y = _norm_fn_arg(x)
+  # #878: the slot holds a `SubqueryObject` now (for `Lower(Subquery(…))` and its siblings), so the
+  # refusal is decided here, before the slot test, rather than by the slot leaving it out.
+  y isa SubqueryObject && throw(QueryBuildError(_aggregate_refusal(fn, y)))
   y isa _FObjectColumn && return y
   throw(QueryBuildError(_aggregate_refusal(fn, y)))
 end
@@ -585,6 +588,15 @@ _text_operand(x::Union{Integer,Float16,Float32,Float64}) = throw(QueryBuildError
   "Write it as a string: \e[4m\e[32m\"$(x)\"\e[0m (#705)."))
 _text_operand(x) = _function_operand(x)
 
+# #878 — the operand of the one-argument scalar functions (`Lower`, `Upper`, `Trim`, `LTrim`,
+# `RTrim`, `Length`, `Abs`, `Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Cast`), named once. The
+# union used to be spelled out in each signature and omitted `SubqueryObject`, so `Lower(Subquery(s))`
+# was a `MethodError` while `Coalesce(Subquery(s), 0)` worked. A subquery is one value per row, which
+# is all these functions need, and Django takes the same spelling. Every member has a consumer in the
+# build walk and the renderer (#533); `test_node_admission.jl` probes this union directly.
+const _ScalarOperand = Union{AbstractString,SQLTypeField,SQLTypeText,SQLTypeFunction,SQLTypeF,
+                             SQLTypeCTE,SQLTypeJoined,SubqueryObject}
+
 # #859 — `Coalesce`, `Greatest` and `Least` take at least two expressions, as Django's do ("Greatest
 # must take at least two expressions"). One argument is never useful — the result IS that argument —
 # and it was not harmless: SQLite's `max(x)`/`min(x)` are scalar only with two or more arguments, so a
@@ -623,6 +635,9 @@ the expression is built, on both engines: a type name is a keyword in the SQL, s
 bind parameter, and PormG only writes a spelling it has parsed. The same rule applies to every
 `output_field=` string.
 
+The expression may be a column path, an `F(...)` expression, another function or a
+`Subquery(...)` — `Cast(Subquery(s), "date")` casts the one value the subquery returns per row.
+
 ```julia
 using PormG.Functions: Cast
 using PormG.Models: IntegerField
@@ -633,10 +648,10 @@ M.Result.objects.values("resultid", "points_2dp" => Cast("points", "numeric(10,2
 
 See also [Functions and Dates](@ref).
 """
-function Cast(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, type::AbstractString)
+function Cast(x::_ScalarOperand, type::AbstractString)
   return FObject(function_name = "CAST", column = _norm_fn_arg(x), aggregate = _any_agg(x), kwargs = Dict{String, Any}("type" => Dialect.cast_type_name(type)))
 end
-function Cast(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, type::PormGField)
+function Cast(x::_ScalarOperand, type::PormGField)
   return Cast(x, type.type)
 end
 
@@ -703,6 +718,12 @@ end
 # Variadic convenience: Concat("forename", Value(" "), "surname") → same as vector form
 Concat(args...; kwargs...) = Concat(collect(args); kwargs...)
 
+# #878 — `Extract` and `ToChar` take the operand `_ScalarOperand` would, plus an already-split `__@`
+# path (the transform ladder hands `YEAR`/`MONTH`/`DAY`/`Y_M` a `Vector{String}`). Named once for
+# both, for the same reason: the subquery was missing from each spelled-out copy.
+const _TemporalOperand = Union{AbstractString,SQLTypeField,SQLTypeFunction,SQLTypeF,SQLTypeCTE,
+                               SQLTypeJoined,SubqueryObject,Vector{<:AbstractString}}
+
 """
     Extract(column, part)
 
@@ -719,7 +740,7 @@ SQLite runs `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY` and raises
 To change the result type, wrap it in [`Cast`](@ref) — e.g. on PostgreSQL,
 `Cast(Extract("date", "epoch"), "bigint")`.
 """
-function Extract(x::Union{AbstractString, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined, Vector{<:AbstractString}}, part::AbstractString; formatter::Union{Nothing, Function, PormGField} = nothing)
+function Extract(x::_TemporalOperand, part::AbstractString; formatter::Union{Nothing, Function, PormGField} = nothing)
   isa(formatter, PormGField) && (formatter = formatter.formatter)
   # #691: refuse an unknown part at build time on both engines. The node keeps the caller's
   # spelling — the dialect renders the canonical one — so the `"YEAR"` range rewrite in
@@ -883,7 +904,7 @@ Named `ToChar` since `0.3.0` (previously `To_char`, with a `formater` keyword).
 
 See also [Functions and Dates](@ref).
 """
-function ToChar(x::Union{AbstractString, SQLTypeField, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined, Vector{<:AbstractString}}, format::AbstractString; formatter::Union{Nothing, Function, PormGField} = nothing)
+function ToChar(x::_TemporalOperand, format::AbstractString; formatter::Union{Nothing, Function, PormGField} = nothing)
   isa(formatter, PormGField) && (formatter = formatter.formatter)
   return FObject(function_name = "EXTRACT_DATE", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = formatter, kwargs = Dict{String, Any}("format" => String(format)))
 end
@@ -980,7 +1001,7 @@ end
 
 Converts a string to lowercase.
 """
-function Lower(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+function Lower(x::_ScalarOperand)
   return FObject(function_name = "LOWER", column = _norm_fn_arg(x), aggregate = _any_agg(x))
 end
 
@@ -989,7 +1010,7 @@ end
 
 Converts a string to uppercase.
 """
-function Upper(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+function Upper(x::_ScalarOperand)
   return FObject(function_name = "UPPER", column = _norm_fn_arg(x), aggregate = _any_agg(x))
 end
 
@@ -998,7 +1019,7 @@ end
 
 Returns the length of a string.
 """
-function Length(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+function Length(x::_ScalarOperand)
   return FObject(function_name = "LENGTH", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 
@@ -1007,7 +1028,7 @@ end
 
 Returns the absolute value of a number.
 """
-function Abs(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+function Abs(x::_ScalarOperand)
   return FObject(function_name = "ABS", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 
@@ -1016,7 +1037,7 @@ end
 
 Rounds a number to the specified precision.
 """
-function Round(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined}, precision::Integer = 0)
+function Round(x::_ScalarOperand, precision::Integer = 0)
   return FObject(function_name = "ROUND", column = _norm_fn_arg(x), aggregate = _any_agg(x), kwargs = Dict{String, Any}("precision" => precision), formatter = Models.format_number_sql)
 end
 
@@ -1060,7 +1081,7 @@ end
 
 Removes leading and trailing whitespace from a string.
 """
-function Trim(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+function Trim(x::_ScalarOperand)
   return FObject(function_name = "TRIM", column = _norm_fn_arg(x), aggregate = _any_agg(x))
 end
 
@@ -1069,7 +1090,7 @@ end
 
 Removes leading whitespace from a string.
 """
-function LTrim(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+function LTrim(x::_ScalarOperand)
   return FObject(function_name = "LTRIM", column = _norm_fn_arg(x), aggregate = _any_agg(x))
 end
 
@@ -1078,7 +1099,7 @@ end
 
 Removes trailing whitespace from a string.
 """
-function RTrim(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+function RTrim(x::_ScalarOperand)
   return FObject(function_name = "RTRIM", column = _norm_fn_arg(x), aggregate = _any_agg(x))
 end
 
@@ -1087,7 +1108,7 @@ end
 
 Returns the largest integer less than or equal to a number.
 """
-function Floor(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+function Floor(x::_ScalarOperand)
   return FObject(function_name = "FLOOR", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 
@@ -1096,7 +1117,7 @@ end
 
 Returns the smallest integer greater than or equal to a number.
 """
-function Ceil(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+function Ceil(x::_ScalarOperand)
   return FObject(function_name = "CEIL", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 
@@ -1107,7 +1128,7 @@ end
 
 Returns the square root of a number.
 """
-function Sqrt(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+function Sqrt(x::_ScalarOperand)
   return FObject(function_name = "SQRT", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 
@@ -1116,7 +1137,7 @@ end
 
 Returns the exponential value (e^x) of a number.
 """
-function Exp(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+function Exp(x::_ScalarOperand)
   return FObject(function_name = "EXP", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 
@@ -1125,7 +1146,7 @@ end
 
 Returns the natural logarithm of a number.
 """
-function Ln(x::Union{AbstractString, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF, SQLTypeCTE, SQLTypeJoined})
+function Ln(x::_ScalarOperand)
   return FObject(function_name = "LN", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 
@@ -1169,7 +1190,25 @@ Y_M(x) = ToChar(x, "YYYY-MM", formatter = Models.format_yyyy_mm)
 # spelling differs (`(col)::date` on PostgreSQL, `strftime` on SQLite — see `Dialect.DATE`). Naming
 # the function lets the dialect decide, and it is what lets the `F` ladder delegate here instead of
 # resolving into `Dialect` on its own.
-DATE(x) = FObject(function_name = "DATE", column = x, aggregate = _any_agg(x), formatter = Models.format_date_sql)
+# #878 — the transform targets take `x` untyped, so every value reached `FObject.column` and anything
+# outside its union died in `convert` there (#533's defect class: a raw `MethodError` naming the whole
+# column union). The gate is `_aggregate_operand`'s: test against the slot's OWN declared type, so the
+# two cannot disagree, and refuse the rest by type name. A `Subquery` is inside the slot since #878 and
+# renders where a column would — `((SELECT …))::date` on PostgreSQL, `strftime('%Y-%m-%d', (SELECT …))`
+# on SQLite — with the formatter on this node, so it reads back as a date. The ladder hands these a
+# split path (`Vector{String}`). The slot's `Vector{T}` member is wider than that — any vector — and a
+# vector of anything else died in the build walk instead, so a vector must be a split path here.
+function _transform_operand(fn::String, x)
+  y = _norm_fn_arg(x)
+  y isa _FObjectColumn && !(y isa AbstractVector && !(y isa Vector{String})) && return y
+  throw(QueryBuildError(
+    "\e[4m\e[31m$(fn)\e[0m cannot take an operand of type " *
+    "`$(y isa AbstractVector ? string(typeof(y)) : nameof(typeof(y)))`. Its operand is a " *
+    "column path, an expression or a `Subquery(...)`; the usual spelling is the transform on the path " *
+    "— \e[4m\e[32m\"col__@$(lowercase(fn))\"\e[0m (#878)."))
+end
+DATE(x) = (y = _transform_operand("DATE", x);
+           FObject(function_name = "DATE", column = y, aggregate = _any_agg(y), formatter = Models.format_date_sql))
 # Same that function CAST in django ORM
 # # relatorio = relatorio.annotate(quarter=functions.Concat(functions.Cast(f'{data}__year', CharField()), Value('-Q'), Case(
 # # 					When(**{ f'{data}__month__lte': 4 }, then=Value('1')),
@@ -1230,8 +1269,11 @@ end
 # both spellings on that one rendering. The formatter is what makes the right-hand side type-check:
 # the `Concat` node above carries none, which is the second half of #579 — `=> "abc"` bound the
 # string and matched nothing instead of raising.
-QUARTER(x) = FObject(function_name = "QUARTER", column = x, aggregate = _any_agg(x), formatter = Models.format_quarter_sql)
-QUADRIMESTER(x) = FObject(function_name = "QUADRIMESTER", column = x, aggregate = _any_agg(x), formatter = Models.format_quadrimester_sql)
+# #878: through `_transform_operand` (above `DATE`), for the same reason.
+QUARTER(x) = (y = _transform_operand("QUARTER", x);
+              FObject(function_name = "QUARTER", column = y, aggregate = _any_agg(y), formatter = Models.format_quarter_sql))
+QUADRIMESTER(x) = (y = _transform_operand("QUADRIMESTER", x);
+                   FObject(function_name = "QUADRIMESTER", column = y, aggregate = _any_agg(y), formatter = Models.format_quadrimester_sql))
 
 
 function ISNULL(v::AbstractString, value::Bool; aggregate::Bool = false)

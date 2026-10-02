@@ -244,7 +244,7 @@ For an outer row with **no** related rows, an aggregate scalar returns its natur
 
 ### A subquery as a function argument
 
-A `Subquery` is one value per outer row, so it can be an argument to a scalar function such as `Coalesce`, `Greatest`, `Least`, `NullIf` or `Power`. To turn the `missing` above into a default, wrap the subquery:
+A `Subquery` is one value per outer row, so it can be the argument of any scalar function. That covers the multi-argument ones (`Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`), the one-argument ones (`Lower`, `Upper`, `Trim`, `LTrim`, `RTrim`, `Length`, `Abs`, `Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`), `Cast`, `Extract` and `ToChar`. To turn the `missing` above into a default, wrap the subquery:
 
 ```julia
 using PormG.Functions: Coalesce
@@ -257,6 +257,21 @@ latest.limit(1)
 
 query = M.Driver.objects
 query.values("surname", "latest_position" => Coalesce(Subquery(latest), 0))
+df = query |> DataFrame
+```
+
+The one-argument functions take it the same way. Each driver's points in the standings, averaged over every race they appear in and rounded to one decimal place:
+
+```julia
+using PormG.Functions: Avg, Round
+
+avg_points = M.Driver_standings.objects
+avg_points.filter("driverid" => OuterRef("driverid"))
+avg_points.values("t" => Avg("points"))
+
+query = M.Driver.objects
+query.filter("driverid__@lte" => 3)
+query.values("surname", "avg_points" => Round(Subquery(avg_points), 1))
 df = query |> DataFrame
 ```
 
@@ -597,8 +612,9 @@ compared with the column is bound. PormG derives the type from the body's projec
 
 Any other function raises `QueryBuildError` when the query is built. Give it an `output_field` or
 wrap it in `Cast` to name its type. The same applies to `F` arithmetic on a value that is not a
-number (a text column plus `1`, or `F("date") + Day(1)`) and to `Value(missing)`. A `Subquery` or `Exists`
-projected in the body raises `QueryBuildError` too; project it in the outer query instead.
+number (a text column plus `1`, or `F("date") + Day(1)`) and to `Value(missing)`. A bare `Subquery`
+projected in the body raises `QueryBuildError` too; wrap it in `Cast` to name its type
+(`Cast(Subquery(s), "integer")`). An `Exists` there raises as well; project it in the outer query instead.
 
 This type is for **binding** a value compared with the column. **Reading** the column back is a
 separate question, and the answer is the body's own. A column the body selects, such as

@@ -490,3 +490,59 @@ end
     @test occursin("#194", err.msg)
     @test occursin("driverid", err.msg)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subquery (#878): the operand of a one-argument scalar function or a date transform. #863 made a
+# Subquery an argument of the variadic functions (`Coalesce`, `Greatest`, …); `Lower`, `Abs`,
+# `Round`, `Cast`, `Extract` and the `@date` transform were a `MethodError` until #878. The unit
+# suite pins the SQL and the parameter order on mock connections; this is what proves each
+# spelling PARSES and reads back as the right Julia type on the real engine. Each expected value is
+# the bare subquery from the same row, transformed in Julia, so it does not depend on the function.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery (#878) - a scalar function or a date transform over a Subquery" begin
+    avg_points = M.Driver_standings.objects
+    avg_points.filter("driverid" => OuterRef("driverid"))
+    avg_points.values("t" => Avg("points"))
+
+    name = M.Driver.objects
+    name.filter("driverid" => OuterRef("driverid"))
+    name.values("t" => Max("surname"))
+
+    last_race = M.Driver_standings.objects
+    last_race.filter("driverid" => OuterRef("driverid"))
+    last_race.values("t" => Max("raceid__date"))
+
+    df = M.Driver.objects.
+        filter("driverid__@in" => [1, 2, 3, 4, 5]).
+        values("driverid",
+               "avg" => Subquery(avg_points),
+               "avg_abs" => Abs(Subquery(avg_points)),
+               "avg_1dp" => Round(Subquery(avg_points), 1),
+               "surname" => Subquery(name),
+               "lower" => Lower(Subquery(name)),
+               "last" => Subquery(last_race),
+               "last_cast" => Cast(Subquery(last_race), "date"),
+               "last_year" => Extract(Subquery(last_race), "year"),
+               "last_date" => PormG.QueryBuilder.DATE(Subquery(last_race))) |> DataFrame
+
+    @test nrow(df) == 5
+    # The bare subquery itself is right: one driver checked against a plain aggregate.
+    @test df[df.driverid .== 1, :avg][1] ≈
+        M.Driver_standings.objects.filter("driverid" => 1).values("t" => Avg("points")).list()[1][:t]
+    for row in eachrow(df)
+        # `Float64`: PostgreSQL's `ABS`/`ROUND` cast the operand `::numeric` (as for a plain column),
+        # so the driver hands back a `Decimal`, which `≈` cannot compare.
+        @test Float64(row.avg_abs) ≈ abs(Float64(row.avg))
+        @test Float64(row.avg_1dp) ≈ round(Float64(row.avg), RoundNearestTiesAway; digits = 1)
+        @test row.lower == lowercase(row.surname)
+        # The wrapped spellings read back as a `Date` on both engines — on SQLite the stored value is
+        # text, so this is the read kind `Cast(…, "date")` and `DATE` record, not the driver. The BARE
+        # subquery records none, so on SQLite it is still the stored text: the oracle parses it.
+        last = row.last isa Date ? row.last : Date(row.last)
+        @test row.last_cast isa Date
+        @test row.last_date isa Date
+        @test row.last_cast == last
+        @test row.last_date == last
+        @test row.last_year == year(last)
+    end
+end

@@ -1658,7 +1658,13 @@ Base.:<(::JoinedReference, operand::Missing)    = throw(_unsupported_compare_ope
   # builds a `ToChar` over the CTE's column, and the retag puts the handle here. Aggregates hold one
   # too: `Max("ev__x")` is retagged to a `CTEReference`, and `Max(CTE("ev", "x"))` passes one in —
   # see the #444 note after `Min` in functions.jl, which records why there is no guard.
-  column::Union{String,SQLTypeField,SQLTypeText,SQLTypeCTE,SQLTypeJoined,N,Vector{N},Vector{T},SQLTypeOper,SQLTypeQ,SQLTypeQor,SQLTypeF} where {N<:SQLTypeFunction,T}
+  # #878: `SubqueryObject` is admitted for the scalar functions (`Lower(Subquery(…))`, `Cast`, the
+  # date transforms). Its consumers already existed — `_check_function` and `_get_select_query` have
+  # arms, and `_retag_cte_string` passes it through — because the variadic family held one inside its
+  # `Vector` column since #863. `_retag_cte_column`/`_retag_joined_column` have no arm, and need none:
+  # they only walk the parse of a `CTE`/`Joined` path string, which cannot contain a subquery. The
+  # aggregates still refuse one, at `_aggregate_operand`.
+  column::Union{String,SQLTypeField,SQLTypeText,SQLTypeCTE,SQLTypeJoined,SubqueryObject,N,Vector{N},Vector{T},SQLTypeOper,SQLTypeQ,SQLTypeQor,SQLTypeF} where {N<:SQLTypeFunction,T}
   aggregate::Bool = false
   formatter::Union{Nothing,Function} = nothing # function to format the value
   _as::OptionalString = nothing

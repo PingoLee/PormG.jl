@@ -1234,7 +1234,8 @@ _cte_refusal(Model_, expr) = try _cte_case_field(Model_, expr); nothing catch e;
         "text arithmetic" => (F("surname") + 1, "Cast"),
         "an untyped function operand" => (F("raceid") + PormG.Functions.Lower("surname"), "Cast"),
         "a NULL Value" => (Value(missing), "Cast"),
-        "a Subquery" => (PormG.Subquery(sub), "outer query"),
+        # #878: `Cast` takes a `Subquery` now, so the fix it names is the wrap, not the outer query.
+        "a Subquery" => (PormG.Subquery(sub), "Cast(Subquery(…), \"integer\")"),
         "an Exists" => (PormG.Exists(sub), "outer query"),
       )
       for (label, (expr, fix)) in refusals

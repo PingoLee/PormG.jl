@@ -1386,6 +1386,20 @@ function _null_skipping_operands(v::SQLTypeFunction, instruc::SQLInstruction)
 end
 
 function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
+  sql, interval_ms, _ = _render_function_typed(v, instruc; _as = _as)
+  # #894: an extremum held in milliseconds leaves as the interval text, as a difference does (#881).
+  return interval_ms ? Dialect._sqlite_interval_text(sql) : sql
+end
+
+# The function's SQL, whether it is an interval held in SQLite milliseconds, and whether it is an
+# interval at all (#894). Only `Max`/`Min` over an interval are either: their value is one of their
+# operand's, so `MAX` over the milliseconds is the longest interval, where `MAX` over the stored
+# `HH:MM:SS` text was the last one in text order (`"99:00:00"` over `"100:00:00"`, and `"-01:00:00"`
+# over `"02:00:00"`). The third value types the projection on both engines: `_operand_kind` cannot
+# type `Max(F("start_at") - F("date"))`, because arithmetic answers `nothing` there, and only the
+# render knows. Every other function renders exactly as before and answers `false, false`.
+function _render_function_typed(v::SQLTypeFunction, instruc::SQLInstruction;
+                                _as::Union{Nothing,String}=nothing)::Tuple{String,Bool,Bool}
   # Parameterize scalar kwargs instead of rendering them as SQL literals.
   # IMPORTANT: these must be parameterized AFTER the column is resolved, because the SQL text order
   # places condition params first positionally (e.g., WHEN cond THEN ? ... ELSE ? END).
@@ -1424,7 +1438,24 @@ function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Uni
   end
 
   # Phase 2: Resolve column (conditions) — this adds condition params in SQL text order
-  resolved_column = _get_select_query(_null_skipping_operands(v, instruc), instruc, _as=_as)
+  #
+  # #894: an extremum over an interval resolves its operand to milliseconds. `_render_interval_ms`
+  # renders it exactly once either way, and to the same SQL as below when it has no millisecond
+  # form, so the operand binds the same values in the same order on both arms.
+  #
+  # On PostgreSQL the operand of an extremum over arithmetic renders through the typed renderer,
+  # which is exactly what `_get_select_query(::FExpression)` renders, so its SQL is unchanged and
+  # only its kind is kept.
+  interval_ms = interval = false
+  if instruc.connection isa PormGSQLite && v isa FObject && _interval_ms_candidate(v)
+    resolved_column, interval_ms = _render_interval_ms(v.column, instruc; _as = _as)
+    interval = interval_ms
+  elseif v isa FObject && _interval_ms_candidate(v) && v.column isa FExpression
+    resolved_column, operand_kind = _finalize_render(_render_expr_typed(v.column, instruc)..., instruc)
+    interval = operand_kind isa CInterval
+  else
+    resolved_column = _get_select_query(_null_skipping_operands(v, instruc), instruc, _as=_as)
+  end
 
   # #74 fan-out guard: record COUNT/SUM/AVG and the source alias of their column so build() can
   # refuse aggregates a to-many join would silently inflate. MAX/MIN are immune and omitted; a
@@ -1451,7 +1482,7 @@ function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Uni
     end
   end
 
-  return getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection)
+  return getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection), interval_ms, interval
 end
 function _get_select_query(q::SQLTypeQor, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   resp = []
@@ -2535,6 +2566,53 @@ function _render_column_rhs(column::AbstractString, operator::AbstractString, rh
   return string(column, " ", operator, " ", rhs)
 end
 
+# #894 — the milliseconds a SQLite `DurationField` filter compares, or `nothing` for the text
+# comparison every other filter makes. Ordering lookups only (`@gt`/`@gte`/`@lt`/`@lte`/`@range`/
+# `@nrange`): the stored text orders wrongly at 100 hours and for negative values, while equality and
+# membership are exact on the canonical text the writer stores (#891) and stay sargable on the column.
+# A value that is not a duration keeps the text path, so the formatter raises what it always raised.
+const _INTERVAL_ORDERING_LOOKUPS = (">", ">=", "<", "<=", "BETWEEN", "NOT BETWEEN")
+function _is_sqlite_duration_column(v::SQLTypeOper, instruc::SQLInstruction)::Bool
+  (instruc.connection isa PormGSQLite && v.operator in _INTERVAL_ORDERING_LOOKUPS) || return false
+  (v.column isa SQLField && v.column.field isa String && _is_bare_column(v.column.field)) || return false
+  field = get(instruc.object.model.fields, v.column.field, nothing)
+  if field === nothing
+    key = memo_key(v.column)   # a joined path's terminal field (#474); `nothing` for no name
+    key === nothing || (field = memo_field(instruc, key))
+  end
+  return field isa Models.sDurationField
+end
+function _sqlite_duration_column_ms(v::SQLTypeOper, instruc::SQLInstruction)
+  _is_sqlite_duration_column(v, instruc) || return nothing
+  v.operator in ("BETWEEN", "NOT BETWEEN") && return _duration_values_ms(v.values)
+  return _duration_value_ms(v.values)
+end
+
+# #894 — `filter("gap__@gt" => F("start_at") - F("date") - Hour(1))` over `"gap" => <interval>`: an
+# interval alias compared with an expression rather than a value. The alias's own SQL is its
+# `HH:MM:SS` text, so this compared two texts. Both sides render once here, each to its milliseconds
+# where it has them; if only one does, that one is wrapped back into the interval text — exactly the
+# text it would have printed — so the comparison is the text one it always was, with each side bound
+# once. `nothing` for every other filter, which renders as before.
+function _sqlite_interval_alias_comparison(v::SQLTypeOper, instruc::SQLInstruction)
+  instruc.connection isa PormGSQLite || return nothing
+  (v.values isa Union{FExpression,FObject} && v.operator in _INTERVAL_MS_PREDICATES) || return nothing
+  # An ALIAS only: a model column projected under its own name (`values("lap")`) is a column, and
+  # `_alias_filter_key` refuses model fields and every `__` path. A column's comparison stays in the
+  # field-path arms below, which keep `==` on the stored text and the column-vs-column text compare.
+  name = _alias_filter_key(v.column, instruc)
+  name === nothing && return nothing
+  source = _projected_interval_source(name, instruc)
+  source === nothing && return nothing
+  lhs, lhs_ms = _render_interval_ms(source.field, instruc; _as = source._as)
+  rhs, rhs_ms = _render_interval_ms(v.values, instruc)
+  if !(lhs_ms && rhs_ms)
+    lhs_ms && (lhs = Dialect._sqlite_interval_text(lhs))
+    rhs_ms && (rhs = Dialect._sqlite_interval_text(rhs))
+  end
+  return _render_column_rhs(lhs, v.operator, rhs, instruc)
+end
+
 # The field a filter's left-hand side names, and the path to report it by — a key of the model's own
 # fields, or the terminal field of a joined path from the #474 memo. `(nothing, "")` when the operand
 # is not a field. Read AFTER the column is rendered: rendering is what fills the memo.
@@ -2574,6 +2652,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   # _render_sargable_date_range and _resolve_bucket_column for scope.
   sargable = _render_sargable_date_range(v, instruc)
   sargable !== nothing && return sargable
+  # #894: an interval alias compared with another expression, on SQLite. Both spellings reach here:
+  # the top-level alias filter (`get_filter_query`) and `Q`/`Qor`.
+  interval_comparison = _sqlite_interval_alias_comparison(v, instruc)
+  interval_comparison === nothing || return interval_comparison
 
   column = _get_filter_query(v.column, instruc)
   # #27: JSONB containment/overlap operators (@>, ?, ?|, ?&) — dedicated binding + PG-only render.
@@ -2596,6 +2678,14 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   end
   if isa(v.values, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
     @pormg_debug false
+    # #894: a `DurationField` ordered against an `F` interval — another `DurationField`, a timestamp
+    # difference — compares milliseconds on SQLite, as `F("time") < F(...)` does. The right side is
+    # rendered once either way, to the same SQL `_get_filter_query` gives it when it has no
+    # millisecond form, so the fallback keeps the text comparison with the same bindings.
+    if v.values isa FExpression && v.operator in _ORDERING_OPERATIONS && _is_sqlite_duration_column(v, instruc)
+      rhs, rhs_ms = _render_interval_ms(v.values, instruc)
+      return _render_column_rhs(rhs_ms ? Dialect._sqlite_interval_ms(column) : column, v.operator, rhs, instruc)
+    end
     # F expressions are safe since they reference model fields; a CTE handle (#444) is the same
     # thing scoped to a CTE — `filter("raceid" => CTE("r91", "raceid"))` is a column comparison,
     # never a bound value.
@@ -2706,6 +2796,14 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # #654: `ISNULL` and `BETWEEN` used to RETURN from here, rendering their own SQL above the
     # shared ladder — which is why the alias branch could not reach them. They only bind now, and
     # fall through to `_render_predicate` like every other operator.
+    #
+    # #894: a `DurationField` ordered against a duration compares its milliseconds on SQLite, as
+    # `F("time") > Minute(2)` does (`_render_interval_left`). The column reference is repeated by the
+    # parse, which is safe because it binds nothing.
+    if (ms_values = _sqlite_duration_column_ms(v, instruc)) !== nothing
+      return _render_predicate(Dialect._sqlite_interval_ms(column), v.operator,
+                               _bind_predicate_value(instruc, v.operator, ms_values), instruc)
+    end
     if v.operator == "ISNULL"
       placeholders = v.values   # the `Bool` polarity; `IS [NOT] NULL` binds nothing
     elseif v.operator in ("BETWEEN", "NOT BETWEEN")

@@ -1790,8 +1790,130 @@ function _duration_ms(p)::Int64
                           "combined with a timestamp difference on SQLite. Use weeks, days or a time: " *
                           "Day(30), Hour(1)."))
   end
+  return _ns_to_ms(ns)
+end
+function _ns_to_ms(ns::Int64)::Int64
   q, r = divrem(ns, 1_000_000)
   return 2 * abs(r) >= 1_000_000 ? q + sign(ns) : q
+end
+
+# #894 — a filter value as the milliseconds it binds against an interval that is compared as a number,
+# or `nothing` when it is not a duration: a `Period`, an `Interval`, or a duration string in a
+# `DurationField`'s accepted forms. `nothing` sends the caller back to the text comparison, so a value
+# that is not a duration still raises what it always raised there.
+function _duration_value_ms(x)::Union{Int64,Nothing}
+  x isa Interval && (x = x.period)
+  ns = try
+    if x isa Union{Dates.Period,Dates.CompoundPeriod}
+      Models._duration_to_nanoseconds(x)   # a month or a year has no fixed length: `nothing`
+    elseif x isa AbstractString
+      Models._duration_string_nanoseconds(x)
+    else
+      return nothing
+    end
+  catch e
+    e isa InvalidValueError || rethrow()
+    return nothing
+  end
+  return _ns_to_ms(ns)
+end
+
+# The comparison, membership and range operators an interval compares as a number (#894), and their
+# value as milliseconds, or `nothing`: another operator (a pattern lookup, `@isnull`) or a value that
+# is not a duration keeps the text comparison.
+const _INTERVAL_MS_PREDICATES = ("=", "!=", "<>", ">", ">=", "<", "<=")
+const _INTERVAL_MS_LIST_PREDICATES = ("IN", "NOT IN", "BETWEEN", "NOT BETWEEN")
+function _predicate_duration_ms(operator::AbstractString, values)
+  operator in _INTERVAL_MS_PREDICATES && return _duration_value_ms(values)
+  operator in _INTERVAL_MS_LIST_PREDICATES && return _duration_values_ms(values)
+  return nothing
+end
+
+# Every value of a membership list or a range, or `nothing` when any one is not a duration.
+function _duration_values_ms(values)::Union{Vector{Int64},Nothing}
+  values isa Union{AbstractVector,Tuple} || return nothing
+  out = Int64[]
+  for x in values
+    ms = _duration_value_ms(x)
+    ms === nothing && return nothing
+    push!(out, ms)
+  end
+  return out
+end
+
+# #894 — what a SQLite interval's VALUE becomes where the query sorts or compares it: the milliseconds,
+# not the `HH:MM:SS` text a projection returns. Text order is numeric order only below 100 hours and
+# for non-negative values (`"100:00:00" < "99:00:00"`), which is right for a lap time and silently
+# wrong for a timestamp difference. #881 made every comparison INSIDE an expression numeric; this is
+# the same rule for the projected value itself — `order_by` on its alias, a filter on its alias — and
+# for a bare `DurationField` column.
+#
+# Renders `node` exactly ONCE, into the active parameter bucket, and returns `(sql, true)` with its
+# millisecond form, or `(sql, false)` with exactly the SQL `_get_select_query` renders for it when it
+# has none. So a caller that falls back to the text still binds what the projection binds — there is
+# no speculative render whose parameters would have to be taken back.
+#
+#   - interval arithmetic and a timestamp difference: `_render_expr_typed`'s `_IntervalMs`, before
+#     `_finalize_render` turns it into text;
+#   - a `DurationField` column, bare or through `F(...)`: its stored text parsed in SQL
+#     (`Dialect._sqlite_interval_ms`), which repeats the column reference and binds nothing;
+#   - `Max`/`Min` over either: the extremum of the milliseconds (`_render_function_typed`).
+#
+# Anything else — `Coalesce`, `Case`, a window value function — is text, and sorts as text.
+function _render_interval_ms(node, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)::Tuple{String,Bool}
+  if node isa FExpression
+    sql, kind = _render_expr_typed(node, instruc)
+    ms = _interval_ms_sql(sql, node, kind)
+    ms === nothing || return ms, true
+    return first(_finalize_render(sql, kind, instruc)), false
+  elseif node isa FObject
+    sql, ms, _ = _render_function_typed(node, instruc; _as = _as)
+    return sql, ms
+  end
+  sql = _get_select_query(node, instruc; _as = _as)
+  # Render first, then type: resolving the path is what populates the memo the kind lookup reads.
+  bare = node isa SQLField ? node.field : node
+  _is_bare_column(bare) && _operand_kind(bare, instruc) isa CInterval &&
+    return Dialect._sqlite_interval_ms(sql), true
+  return sql, false
+end
+
+# #894 — whether a projection's source can have a millisecond form, decided WITHOUT rendering it. The
+# caller already knows the projection is an interval (its recorded kind is `CInterval`); this rules
+# out only the shapes `_render_interval_ms` would hand back as text anyway, so their ORDER BY and
+# alias filters keep the one alias reference (or memoized text) they always had instead of a re-render.
+_interval_ms_candidate(::FExpression) = true
+_interval_ms_candidate(p::String) = _is_bare_column(p)
+_interval_ms_candidate(p::SQLField) = _interval_ms_candidate(p.field)
+_interval_ms_candidate(::JoinedReference) = true
+_interval_ms_candidate(p::FObject) =
+  p.function_name in _INTERVAL_MS_EXTREMA && !(p.column isa AbstractVector) && _interval_ms_candidate(p.column)
+_interval_ms_candidate(::Any) = false
+
+# The aggregates that keep their operand's value, and therefore its millisecond form. `Greatest` and
+# `Least` would too, but they compare their arguments as text on SQLite still (a follow-up to #894).
+const _INTERVAL_MS_EXTREMA = ("MAX", "MIN")
+
+# #894 — the source of the projection named `name` when it is a SQLite interval that may have a
+# millisecond form, or `nothing`. Decided without rendering anything, so a caller can check its other
+# conditions before it commits to a render that binds. SQLite only — PostgreSQL orders and compares
+# the `interval` itself.
+function _projected_interval_source(name::AbstractString, instruc::SQLInstruction)::Union{SQLField,Nothing}
+  instruc.connection isa PormGSQLite || return nothing
+  get(instruc.projection_kinds, Symbol(name), nothing) isa CInterval || return nothing
+  source = _projected_source(memo_key(:base, name), instruc)
+  source isa SQLField && _interval_ms_candidate(source.field) || return nothing
+  return source
+end
+
+# The projection named `name` as SQLite milliseconds, rendered into the active bucket: `(sql, true)`;
+# or `nothing` when `_projected_interval_source` has none. `(sql, false)` is the rare candidate whose
+# render turned out to be text after all — still the projection's own SQL with its own bindings, so a
+# caller that prints it orders and compares exactly as the alias would have.
+function _render_projected_interval_ms(name::AbstractString, instruc::SQLInstruction)::Union{Tuple{String,Bool},Nothing}
+  source = _projected_interval_source(name, instruc)
+  source === nothing && return nothing
+  return _render_interval_ms(source.field, instruc; _as = source._as)
 end
 
 # #814 — a WINDOW function cannot be inside a SQLite interval. The interval becomes text in a correlated
@@ -1945,8 +2067,9 @@ end
 # milliseconds (`_interval_ms_sql`) and refuses what has no millisecond form, or no operator on
 # PostgreSQL either.
 #
-# One rule keeps the old text comparison: a `DurationField` column against a literal or another
-# column compares its stored text, as before #881. Only an `_IntervalMs` side makes it a number.
+# One rule keeps the old text comparison: a `DurationField` column tested for EQUALITY against a
+# literal or another column compares its stored text, as before #881. Ordering one (`<`, `>`) compares
+# its milliseconds since #894.
 function _render_interval_left(v::FExpression, left_side::String, left_kind::_RenderKind,
                                instruc::SQLInstruction)::Tuple{String,_RenderKind}
   op = v.operation
@@ -1964,6 +2087,13 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
         op in _ORDERING_OPERATIONS &&
           throw(_sqlite_interval_error("Ordering (`$(op)`) an interval against a value with no millisecond form"))
       end
+      # #894: two `DurationField` columns ORDERED against each other compare their milliseconds too.
+      # Equality keeps the text: it is exact for a canonical value, and `==` on a column stays sargable.
+      if sqlite && op in _ORDERING_OPERATIONS && left_kind isa CInterval && right_kind isa CInterval
+        lms = _interval_ms_sql(left_side, v.field_name, left_kind)
+        rms = _interval_ms_sql(right_side, v.operand, right_kind)
+        lms !== nothing && rms !== nothing && return "($(lms) $(op) $(rms))", nothing
+      end
       return "($(_as_interval_text(left_side, left_kind)) $(op) $(_as_interval_text(right_side, right_kind)))", nothing
     end
     if sqlite && left_kind isa _IntervalMs
@@ -1975,6 +2105,14 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
       # Equality against any other literal compares the text, exactly as before #881, and the binder
       # raises what it always raised for a literal that is not a duration.
       left_side = _as_interval_text(left_side, left_kind)
+    end
+    # #894: a `DurationField` column ORDERED against a duration compares its milliseconds — its stored
+    # text sorts `"100:00:00"` before `"99:00:00"`. A value that is not a duration (and a month, which
+    # has no fixed length) keeps the text comparison, and the binder raises what it always raised.
+    if sqlite && left_kind isa CInterval && op in _ORDERING_OPERATIONS &&
+       (lms = _interval_ms_sql(left_side, v.field_name, left_kind)) !== nothing &&
+       (ms = _duration_value_ms(v.operand)) !== nothing
+      return "($(lms) $(op) $(add_parameter!(instruc, ms)))", nothing
     end
     return "($(left_side) $(op) $(_set_update_query_operand(v.operand, v.field_name, op, instruc; left_kind = bind_kind)))", nothing
   end

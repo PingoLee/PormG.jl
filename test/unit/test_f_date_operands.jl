@@ -1203,13 +1203,25 @@ end
     @test occursin("(\"Tb\".\"lap\" < (\"Tb\".\"logged_at\" - \"Tb_1\".\"starts_at\"))", _fd_sql(q_pg; conn = _FD_PG))
   end
 
-  # A DurationField COLUMN compared with `<` is outside this issue: it compared stored TEXT before
-  # and still does. Refusing it would take away a comparison that is right below 100 hours.
-  @testset "a DurationField column still orders, as before" begin
+  # A DurationField COLUMN ordered against a duration was outside #814 and #881: it compared the
+  # stored TEXT, right below 100 hours and wrong at and above it. #894 decided to lift that, so this
+  # testset, which pinned the text, now pins the milliseconds — overwritten on that issue's decision,
+  # not to fit the code. Equality keeps the text: it is exact on the canonical value (#891).
+  @testset "a DurationField column orders by its milliseconds on SQLite (#894)" begin
     q = FD.Fd_result.objects
     q.filter(F("lap") > Dates.Minute(90))
-    @test occursin("WHERE (\"Tb\".\"lap\" > ?)", _fd_sql(q; conn = _FD_SL))
-    @test _fd_params(q; conn = _FD_SL) == Any["01:30:00"]
+    @test occursin("WHERE ($(_FD_LAP_MS) > ?)", _fd_sql(q; conn = _FD_SL))
+    @test _fd_params(q; conn = _FD_SL) == Any[5_400_000]
+
+    q_eq = FD.Fd_result.objects
+    q_eq.filter(F("lap") == Dates.Minute(90))
+    @test occursin("WHERE (\"Tb\".\"lap\" = ?)", _fd_sql(q_eq; conn = _FD_SL))
+    @test _fd_params(q_eq; conn = _FD_SL) == Any["01:30:00"]
+
+    q_pg = FD.Fd_result.objects
+    q_pg.filter(F("lap") > Dates.Minute(90))
+    @test occursin("WHERE (\"Tb\".\"lap\" > \$1)", _fd_sql(q_pg; conn = _FD_PG))
+    @test _fd_params(q_pg; conn = _FD_PG) == Any["01:30:00"]
   end
 
   # An interval with no rooted COLUMN — two aggregates — still binds the duration as interval text.

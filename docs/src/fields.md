@@ -844,6 +844,15 @@ Onboard_video = Models.Model(
 )
 ```
 
+**Accepts**: a `Dates.Period` or `Dates.CompoundPeriod` of weeks down to nanoseconds, or a string
+in one of three forms — `HH:MM:SS(.sss)`, `M:SS(.sss)` or bare seconds `SS(.sss)`. A string is
+written in the same canonical `HH:MM:SS` form as the period it spells, so a field past its range
+is carried into the next one: `"125:30"` is stored as `"02:05:30"`, `"90"` as `"00:01:30"`, and
+`"01:75:00"` as `"02:15:00"`. Hours are never carried into days. Months and years are refused,
+because they have no fixed length. Before #891 a string was stored as it was spelled (`1:27:30`,
+`00:00:90`, `00:125:30`), so on SQLite a row written then can still hold that spelling. The upgrade
+guide's #891 entry shows how to re-save those rows.
+
 **Reads back as**: a `Dates.CompoundPeriod` — on PostgreSQL (either driver) and on SQLite alike, so
 code can dispatch on it. That holds for the column read through a query: `list()`, `DataFrame`, and
 the column in `values(...)`, including a whole-second value like a `23 seconds` pit stop, which one
@@ -864,14 +873,25 @@ the column, so it is still whatever the engine delivered: text on SQLite, and a 
 `CompoundPeriod` on PostgreSQL. That covers `Sum("time")`, a `CTE(...)` column the body computes,
 and a `Coalesce` whose arguments are of different types. The computed intervals PormG types are the
 difference of two timestamps, `F("start_at") - F("date")`, and interval arithmetic — `F("time") * 2`,
-`F("time") + (F("start_at") - F("date"))`, a difference plus a duration: each reads back as a
-`CompoundPeriod` on both engines (see *Subtracting two dates* in the F-expressions guide).
+`F("time") + (F("start_at") - F("date"))`, a difference plus a duration — and `Max`/`Min` over
+either (#894): each reads back as a `CompoundPeriod` on both engines (see *Subtracting two dates*
+in the F-expressions guide).
 
-On **SQLite** a duration is stored as text (`00:01:49.088`), and hours are never folded
-into days, so `<` and `>` between the column and a duration or another column compare that text:
-right below 100 hours, wrong at and above it (`"100:00:00"` sorts before `"99:00:00"`) and for
-negative durations. `==` is exact. Inside arithmetic, or against a timestamp difference, the column is
-read as milliseconds instead, so those compare and add as durations (`(F("time") * 2) > Minute(3)`).
+On **SQLite** a duration is stored as text (`00:01:49.088`), and hours are never folded into days.
+That text sorts wrongly at 100 hours and above (`"100:00:00"` sorts before `"99:00:00"`) and for
+negative durations. So PormG reads it as milliseconds wherever the column is **ordered**, which
+agrees with PostgreSQL:
+- `order_by("time")`
+- `<` or `>` against a duration or another `DurationField` (`"time__@gt" => Minute(2)`,
+  `F("time") > Minute(2)`)
+- `@range`
+- `Max`/`Min`
+- inside arithmetic, or against a timestamp difference (`(F("time") * 2) > Minute(3)`)
+
+That reading rounds each side to the nearest **millisecond**, the precision of a timestamp there,
+while PostgreSQL keeps microseconds. So two durations less than a millisecond apart can order the
+same on SQLite when PostgreSQL tells them apart. `==` and `@in` compare the stored text, which is
+exact for every value written in the canonical form (see *Accepts* above).
 
 The **components** inside it are the engine's own, though: the same lap time can arrive as minutes,
 seconds and milliseconds from one engine and as hours through nanoseconds from another. Compare

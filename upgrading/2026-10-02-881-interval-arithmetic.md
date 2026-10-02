@@ -31,8 +31,9 @@ interval, so it reads back as one.
 
 Still refused on SQLite: a month or a year added to a difference (no fixed length), an extremum over a
 `DurationField` combined with an interval (`Max("time") + d`), and a window function inside an
-interval. `order_by` on a projected difference, `Max`/`Min`/`Sum`/`Avg` over one, and a bare
-`DurationField` compared with a duration (`F("time") > Minute(2)`) still use the stored text.
+interval. `Sum`/`Avg` over a projected difference still use the stored text. Ordering the projected
+value, `Max`/`Min` over it and a bare `DurationField` ordered against a duration
+(`F("time") > Minute(2)`) did too, until the #894 entry made them numeric.
 
 ### How to find the calls to migrate
 

@@ -421,12 +421,41 @@ Some shapes have no operator on PostgreSQL either, which fails when the statemen
 `d / d`, `F("points") / d`, a number plus or minus an interval (`d + 5`, `count + d`), and a date
 times an interval. SQLite refuses them at build time with `QueryBuildError`.
 
-**Ordering or aggregating the projected value** is not affected. The value a query returns is the
-text, so `order_by` on its alias, `Max`/`Min`, `Greatest` and `Least` sort the text, exactly as they
-do for a `DurationField` column on SQLite: right below 100 hours, wrong at and above it, and for
-negative differences. `Sum`, `Avg` and `Abs` read the text's leading number, so they work on whole
-hours and drop the minutes and seconds. Aggregate durations on PostgreSQL. A `DurationField` column
-compared with a duration (`F("time") > Minute(2)`) also still compares its stored text.
+**Ordering, filtering and the extremum of the projected value** are numeric on SQLite too. A query
+still returns the text, but PormG sorts and compares the milliseconds behind it. Sorting the text
+would be right only below 100 hours, where `"100:00:00"` sorts before `"99:00:00"`, and wrong for
+negative values. These cases use the milliseconds:
+
+- `order_by` on an interval's alias, and a filter on that alias, bound as milliseconds. A filter can
+  be `"since_midnight__@gt" => Hour(12)`, `@range`, `@in` or `==`, or compare against another
+  interval expression (`"since_midnight__@gt" => F("start_at") - F("date") - Hour(1)`).
+- `Max` and `Min` over an interval: a difference, interval arithmetic or a `DurationField`. They
+  return the longest and the shortest value, read back as a `Dates.CompoundPeriod` on both engines.
+- A `DurationField` column that is ordered (`order_by("time")`), compared with an ordering lookup
+  (`"time__@gt" => Minute(2)`, `@range`), or written as `F("time") > Minute(2)`. Its `==` and `@in`
+  compare the stored text. That is exact, because every write stores the canonical `HH:MM:SS` form
+  (since #891), and an index on the column still serves them.
+
+Like the arithmetic above, these comparisons round each side to the nearest millisecond on SQLite.
+
+The latest 2009 starts, by time of day:
+
+```julia
+query = M.Race.objects
+query.filter("year" => 2009)
+query.values("name", "since_midnight" => F("start_at") - F("date"))
+query.order_by("-since_midnight")
+```
+
+On SQLite the `ORDER BY` repeats the difference in milliseconds rather than naming the
+`since_midnight` text, and it binds that expression's own parameters again.
+
+Some shapes still sort or read the text on SQLite:
+
+- `Greatest` and `Least` over intervals.
+- An interval with no millisecond form: `Coalesce`, `Case` or a window function over durations.
+- `Sum`, `Avg` and `Abs`. These read the text's leading number, so they count whole hours and drop
+  the minutes and seconds. Aggregate durations on PostgreSQL.
 
 A duration compares only against an interval — a timestamp difference or a `DurationField`. Against
 anything else (`F("date") > Hour(1)`, or a day count) it raises `QueryBuildError`. A `Time` is a time

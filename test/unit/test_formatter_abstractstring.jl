@@ -45,11 +45,11 @@ The `Base` facts the fix rests on are pinned in the first testset rather than le
 # Mutation gates
 
 Each testset names its own. Re-narrowing any widened signature to `::String` fails the matching
-dispatch assertion, and reverting the conversion in `_duration_from_seconds_string`,
-`_normalize_duration_string`, `validate_timezone`, `normalize_sqlite_datetime_string` or
+dispatch assertion, and reverting the conversion in `_duration_string_nanoseconds`,
+`validate_timezone`, `normalize_sqlite_datetime_string` or
 `format_yyyy_mm` fails at least one assertion here.
 
-**One of the eight conversion sites is NOT guarded, and saying so is the point.** Reverting
+**One of the seven conversion sites is NOT guarded, and saying so is the point.** Reverting
 `format_uuid_sql` (`src/Models.jl`) to `string(...)` leaves this file 100% green — measured, not
 assumed — because that method regexes with `occursin`, which has a generic fallback, and returns
 `lowercase(s)`, a `String` whichever type came in. Its conversion has no observable consequence at
@@ -113,18 +113,18 @@ _lazy(s::String) = LazyString(s)
   # DurationField: `format_duration_sql` normalises any AbstractString spelling identically
   # The headline repro from #598 — `results.csv`'s `fastestlaptime` is a DurationField, and a
   # CSV reader that returns its own string type made `bulk_insert` die on row 1. Covers all
-  # three accepted shapes (HH:MM:SS, M:SS, bare seconds), because the bare-seconds branch takes
-  # a DIFFERENT path: `occursin` clears its guard and the throw happens one frame down inside
-  # `_duration_from_seconds_string`, which is a separate conversion site.
-  # Mutation gate: reverting either `String(value)` in the two duration helpers fails the
+  # three accepted shapes (HH:MM:SS, M:SS, bare seconds). Since #891 they share one parser,
+  # `_duration_string_nanoseconds` — there were two conversion sites before, one per branch — and
+  # leave as the canonical `HH:MM:SS` text a `Period` is written as.
+  # Mutation gate: reverting the `String(value)` in `_duration_string_nanoseconds` fails the
   # LazyString rows with `ArgumentError`.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "format_duration_sql (DurationField)" begin
     for (text, expected) in (
       ("1:27.452", "00:01:27.452"),   # M:SS.sss  — the issue's literal value
       ("01:27:30", "01:27:30"),       # HH:MM:SS
-      ("1:27:30.5", "1:27:30.5"),     # HH:MM:SS.s
-      ("90", "00:00:90"),             # bare seconds → `_duration_from_seconds_string`
+      ("1:27:30.5", "01:27:30.5"),    # H:MM:SS.s — the hour padded since #891
+      ("90", "00:01:30"),             # bare seconds, folded into minutes since #891
       ("12.25", "00:00:12.25"),       # bare seconds with a fraction
     )
       # Equality with the `String` spelling, not merely "does not throw": for a defect whose

@@ -1200,6 +1200,41 @@ end
         @test_throws PormGError validate_field_data(DurationModel, "lap_time", "bad-duration", "insert")
     end
 
+    @testset "DurationField string folds past-range fields into HH:MM:SS (#891)" begin
+        # Every accepted spelling leaves as the text a `Period` of the same length is written as:
+        # the two must agree, or SQLite reads one back as a raw string (`_parse_sqlite_interval`) and
+        # `_sqlite_interval_ms` parses its first two minute digits only. `"125:30"` was written
+        # `"00:125:30"`, which that parser reads as 12:05.
+        for (text, period) in (
+            ("125:30", Minute(125) + Second(30)),          # the issue's value: M:SS past 59 minutes
+            ("120", Second(120)),                           # bare seconds past 59
+            ("01:75:00", Hour(1) + Minute(75)),             # H:MM:SS with minutes past 59
+            ("0:00:90.5", Second(90) + Millisecond(500)),   # ... and seconds past 59, with a fraction
+            ("-125:30", -(Minute(125) + Second(30))),       # the sign covers every field
+            ("1:49.088", Minute(1) + Second(49) + Millisecond(88)),   # in range: unchanged
+            ("100:00:00", Hour(100)),                       # hours are never folded into days
+        )
+            @test Models.format_duration_sql(text) == Models.format_duration_sql(period)
+        end
+        @test Models.format_duration_sql("125:30") == "02:05:30"
+        @test Models.format_duration_sql("-125:30") == "-02:05:30"
+        @test Models.format_duration_sql("1:49.088") == "00:01:49.088"
+
+        # Read back on SQLite as the duration it spells — not left as a raw string.
+        @test PormG.Dialect._parse_sqlite_interval(Models.format_duration_sql("125:30")) ==
+              Dates.CompoundPeriod(Hour(2), Minute(5), Second(30), Nanosecond(0))
+        # Fractions past the nanosecond truncate, the precision every reader carries.
+        @test Models.format_duration_sql("1.1234567891") == "00:00:01.123456789"
+
+        # Only the leading field widens; the ones after it keep their two digits, as before.
+        for bad in ("1:5", "1:005", "1:5:00", "1:00:5", "125:3", "::", "1:", "1.", "1:2:3:4")
+            @test_throws PormGError Models.format_duration_sql(bad)
+        end
+        # A count past Int64 is invalid, never an OverflowError.
+        @test_throws PormG.InvalidValueError Models.format_duration_sql("99999999999999999999")
+        @test_throws PormG.InvalidValueError Models.format_duration_sql("9999999999999:00:00")
+    end
+
     @testset "DateTimeField Timezone Conversions & Round-Trip" begin
         # Test explicit timezone handling: DateTime, ZonedDateTime, and timezone mismatches
         TzModel = Models.Model_Type(

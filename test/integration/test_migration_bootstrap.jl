@@ -743,8 +743,9 @@ end
     )
     """)
 
-    # Interactive: the sole addition (link_ref_id) prompts once with the name-sorted deletion candidates
-    # "1 - link_id, 2 - zztombstone" (sorting is now deterministic, see _colect_numbered_fields); feed "1"
+    # Interactive: the sole addition (link_ref_id) prompts once with the deletion candidates
+    # "1 - link_id, 2 - zztombstone" (neither has link_ref_id's definition, so name order decides — see
+    # _ranked_field_candidates, #735); feed "1"
     # to map it onto link_id, leaving zztombstone as a pure deletion on the same table.
     mktemp() do _path, io
       write(io, "1\n"); flush(io); seekstart(io)
@@ -1667,7 +1668,10 @@ end
         fullname = Models.CharField(null=true)
     )
     """)
-    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    # #734: `name` and `fullname` have the same definition, so an unhinted non-interactive run refuses
+    # to guess. The hint makes this the RENAME the phase is named for; it used to plan ADD + DROP.
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false,
+                   renames = ["migrationtest.name" => "migrationtest.fullname"])
     migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     cols = column_names(pool, "migrationtest")
@@ -1990,8 +1994,9 @@ end
   # `interactive=false`.
   #
   # In non-interactive mode PormG cannot ask the user whether the new
-  # field is a rename of an old one, so it falls back to the safe
-  # add+drop path: ADD the new column, DROP the old column.
+  # field is a rename of an old one. Since #734 a same-definition pair
+  # with no hint is refused rather than guessed; `"old" => nothing` takes
+  # the add+drop path: ADD the new column, DROP the old column.
   # Because DROP is destructive, `migrate(..., destructive=true)` is
   # required — exactly as Django would require an explicit confirmation.
   #
@@ -2023,9 +2028,14 @@ end
     )
     """)
 
-    # Non-interactive: planner sees `display_name` as a new field and
-    # `fullname` as a removed field → ADD + DROP (destructive).
-    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    # Non-interactive, unhinted: `display_name` has `fullname`'s definition, so the planner refuses to
+    # guess a rename and writes nothing (#734).
+    @test_throws PormG.InvalidMigrationError makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+
+    # `=> nothing` says it is not a rename: `display_name` as a new field and `fullname` as a
+    # removed field → ADD + DROP (destructive), the behavior this phase pins.
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false,
+                   renames = ["migrationtest.fullname" => nothing])
 
     result = Migrations.dry_run(pool, edge_settings)
     # The plan must include an ADD for the new name …
@@ -2640,7 +2650,9 @@ end
         constraints = [Models.UniqueConstraint(fields=("season", "round"), name="uniqcomp318_season_round_uniq")]
     )
     """)
-    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    # #734: Uniqcomp318 has the shape of Phase 17's `uniqtest`, which this file stops declaring. That
+    # is not a rename — the phase asserts a FRESH table's constraint names — so the hint says so.
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false, renames = ["uniqtest" => nothing])
     migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # (a) The constraints are physically REAL, asserted behaviorally (the same oracle Phase 17 uses):
@@ -2733,7 +2745,8 @@ end
         constraints = [Models.UniqueConstraint(fields=("season", "round"), name="rtidx325_season_round_uniq")]
     )
     """)
-    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    # #734: the same again — Rtidx325 has Phase 18's `uniqcomp318` shape, and is a new table.
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false, renames = ["uniqcomp318" => nothing])
     migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
 
     # (a) The columns are physically REAL and hold what they claim to. A behavioral oracle, like

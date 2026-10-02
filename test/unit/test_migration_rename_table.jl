@@ -705,3 +705,186 @@ end
         @test rw("CREATE INDEX i ON old_t") == "CREATE INDEX i ON old_t"
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rename detection (#735)
+# Every removed column used to be offered for every added one, name-sorted, and every vanished table
+# for every new model, in `Dict` order. The candidates are now RANKED by the column IR — a removed
+# column with the same definition first, a table holding more of the model's columns first — and each
+# says why. Nothing is filtered out (the maintainer's call: a rename that also retypes stays one plan),
+# so every assertion below pins an ORDER, the label, or a join table that no longer needs asking.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# `_rt_plan`, keeping what the prompts printed.
+function _rt_prompted(live, current_schema, conn, answers::String)
+    path, io = mktemp(); write(io, answers); close(io)
+    out_path, out_io = mktemp()
+    plan = try
+        open(path) do stdin_file
+            redirect_stdin(stdin_file) do
+                redirect_stdout(out_io) do
+                    Migrations.get_migration_plan(live, current_schema, conn, _rt_settings(); interactive = true)
+                end
+            end
+        end
+    finally
+        close(out_io)
+    end
+    return plan, read(out_path, String)
+end
+
+@testset "rename detection ranks candidates by the column IR (#735)" begin
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # The field prompt lists the same-definition column first
+    # `a` sorts first by name, and is the WRONG answer: renaming it into `m` also retypes it. `z` has
+    # the same definition, so it is now candidate 1 — and the old name-sorted prompt would have made
+    # the answer "1" rename the timestamp instead.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "the field prompt lists the same-definition column first, and marks the rest" begin
+        livem    = Models.Model("tbl_t"; id = Models.IDField(), a = Models.DateTimeField(null = true),
+                                z = Models.IntegerField())
+        declared = Models.Model("tbl_t"; id = Models.IDField(), m = Models.IntegerField())
+        plan, printed = _rt_prompted(PormGModel[livem], _rt_schema(declared), RT_PG, "1\n")
+        @test plan[:tbl_t]["Rename field: m"] == "ALTER TABLE \"tbl_t\" RENAME COLUMN \"z\" TO \"m\";"
+        @test occursin("1 - z (integer), 2 - a (timestamptz; renaming also changes: type, nullable)", printed)
+        # Only the retyping candidate says what else the rename would change.
+        @test occursin(r"2 - a \(timestamptz; renaming also changes: [^)]*type", printed)
+        @test !occursin(r"1 - z \([^)]*renaming also changes", printed)
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # The issue's measured pair is still offered — ranked and marked, not filtered
+    # `IntegerField` → `DateTimeField(null = true)`. Django would not ask; PormG still does, and the
+    # chosen rename carries the retype in the same plan (#150), as before.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "a rename that also retypes is still offered, marked, and planned as one change" begin
+        livem    = Models.Model("tbl_t"; id = Models.IDField(), n = Models.IntegerField())
+        declared = Models.Model("tbl_t"; id = Models.IDField(), when = Models.DateTimeField(null = true))
+        plan, printed = _rt_prompted(PormGModel[livem], _rt_schema(declared), RT_PG, "1\n")
+        @test occursin(r"1 - n \(integer; renaming also changes: [^)]*type", printed)
+        @test plan[:tbl_t]["Rename field: when"] == "ALTER TABLE \"tbl_t\" RENAME COLUMN \"n\" TO \"when\";"
+        @test haskey(plan[:tbl_t], "Alter field: when")
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # The table prompt lists the table holding most of the model's columns first
+    # `gone_a_t` comes first in the catalog and shares only the key; `gone_b_t` holds all three
+    # columns. It is candidate 1 now, numbered from 1 with no gap, and the label says why.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "the table prompt lists the best-matching table first" begin
+        gone_a   = Models.Model("gone_a_t"; id = Models.IDField(), x = Models.IntegerField())
+        gone_b   = Models.Model("gone_b_t"; id = Models.IDField(), n = Models.IntegerField(),
+                                label = Models.CharField(max_length = 20))
+        declared = Models.Model("new_t"; id = Models.IDField(), n = Models.IntegerField(),
+                                label = Models.CharField(max_length = 20))
+        plan, printed = _rt_prompted(PormGModel[gone_a, gone_b], _rt_schema(declared), RT_PG, "1\n")
+        @test plan[:new_t]["Rename table"] == "ALTER TABLE \"gone_b_t\" RENAME TO \"new_t\";"
+        @test haskey(plan[:gone_a_t], "Drop table")
+        @test occursin("1 - gone_b_t (3 of 3 columns match), 2 - gone_a_t (1 of 3 columns match)", printed)
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # The table questions come in table-name order, not `Dict` order
+    # Five new models and one vanished table: each is asked "is it new?", and the order the questions
+    # are printed in is the order a script has to answer them in. Declaration order cannot be read
+    # (`get_all_models` goes through `names`, which sorts), so it is table-name order. A model that
+    # already matches its table is never asked, so adding one cannot reorder the questions.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "the table questions come in table-name order" begin
+        names_ = ["new_e_t", "new_c_t", "new_a_t", "new_d_t", "new_b_t"]
+        gone   = Models.Model("gone_t"; id = Models.IDField(), n = Models.IntegerField())
+        keep   = Models.Model("keep_t"; id = Models.IDField(), n = Models.IntegerField())
+        models = [Models.Model(n; id = Models.IDField(), n = Models.IntegerField()) for n in names_]
+        for schema in (_rt_schema(models...), _rt_schema(keep, models...))
+            _, printed = _rt_prompted(PormGModel[gone, keep], schema, RT_PG, "yes\n"^5)
+            asked = [m.captures[1] for m in eachmatch(r"The table (\w+) has no match", printed)]
+            @test asked == sort(names_)
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite, applied: a model rename carries its many-to-many join table along (#735)
+# The auto join table is named `<model>_<field>`, with a `<model>_<pk>` column per end, so renaming
+# the owner renamed both — and nothing linked them: the user had to answer the table question again
+# for the join table and then a field question for its column, and `interactive = false` dropped every
+# link row. ONE answer now renames all three, and the rows survive.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: a model rename carries its many-to-many join table and keeps the links (#735)" begin
+    mktempdir() do dir
+        pool = SQLiteConnectionPool(joinpath(dir, "rt735_m2m.sqlite"); pool_size = 1)
+        try
+            driver  = Models.Model("driver_t"; id = Models.IDField(), name = Models.CharField(max_length = 20))
+            team_v1 = Models.Model("team_t"; id = Models.IDField(), label = Models.CharField(max_length = 20),
+                                   drivers = Models.ManyToManyField(driver))
+            _rt_apply!(pool, Migrations.get_migration_plan(LiveTable[], _rt_schema(driver, team_v1),
+                                                          pool, _rt_settings(); interactive = false))
+            fetch(pool, """INSERT INTO "driver_t" ("id", "name") VALUES (1, 'Senna'), (2, 'Prost')""")
+            fetch(pool, """INSERT INTO "team_t" ("id", "label") VALUES (1, 'McLaren')""")
+            fetch(pool, """INSERT INTO "team_t_drivers" ("id", "team_t_id", "driver_t_id") VALUES (1, 1, 1), (2, 1, 2)""")
+
+            team_v2 = Models.Model("squad_t"; id = Models.IDField(), label = Models.CharField(max_length = 20),
+                                   drivers = Models.ManyToManyField(driver))
+            schema_v2 = _rt_schema(driver, team_v2)
+            # One answer: squad_t is team_t. The join table and its column are not asked about — a
+            # second answer would be read as one, and a missing one raises at end of input.
+            plan, printed = _rt_prompted(read_live_schema(pool), schema_v2, pool, "1\n")
+            @test count("has no match", printed) == 1
+            @test !occursin("Is the field", printed)
+            @test plan[:squad_t]["Rename table"] == "ALTER TABLE \"team_t\" RENAME TO \"squad_t\";"
+            @test plan[:squad_t_drivers]["Rename table"] == "ALTER TABLE \"team_t_drivers\" RENAME TO \"squad_t_drivers\";"
+            @test plan[:squad_t_drivers]["Rename field: squad_t_id"] ==
+                  "ALTER TABLE \"squad_t_drivers\" RENAME COLUMN \"team_t_id\" TO \"squad_t_id\";"
+            @test !any(k -> haskey(plan[k], "Drop table"), collect(keys(plan)))
+
+            _rt_apply!(pool, plan)
+            rows = fetch(pool, """SELECT "squad_t_id", "driver_t_id" FROM "squad_t_drivers" ORDER BY "id" """) |> DataFrame
+            @test rows.squad_t_id == [1, 1]
+            @test rows.driver_t_id == [1, 2]
+            @test isempty(fetch(pool, "PRAGMA foreign_key_check;") |> DataFrame)
+
+            # Converged: the next makemigrations proposes nothing.
+            @test isempty(Migrations.get_migration_plan(read_live_schema(pool), schema_v2, pool,
+                                                       _rt_settings(); interactive = false))
+        finally
+            close_pool!(pool)
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite, applied: renaming the OTHER end renames only the join table's column (#735)
+# The join table is named after its owner, so it keeps its name and is matched as it is; only the
+# column named after the renamed end moves, and it is not asked about either.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: renaming a many-to-many target renames its join column and keeps the links (#735)" begin
+    mktempdir() do dir
+        pool = SQLiteConnectionPool(joinpath(dir, "rt735_m2m_target.sqlite"); pool_size = 1)
+        try
+            driver_v1 = Models.Model("driver_t"; id = Models.IDField(), name = Models.CharField(max_length = 20))
+            team_v1   = Models.Model("team_t"; id = Models.IDField(), drivers = Models.ManyToManyField(driver_v1))
+            _rt_apply!(pool, Migrations.get_migration_plan(LiveTable[], _rt_schema(driver_v1, team_v1),
+                                                          pool, _rt_settings(); interactive = false))
+            fetch(pool, """INSERT INTO "driver_t" ("id", "name") VALUES (1, 'Senna')""")
+            fetch(pool, """INSERT INTO "team_t" ("id") VALUES (1)""")
+            fetch(pool, """INSERT INTO "team_t_drivers" ("id", "team_t_id", "driver_t_id") VALUES (1, 1, 1)""")
+
+            pilot   = Models.Model("pilot_t"; id = Models.IDField(), name = Models.CharField(max_length = 20))
+            team_v2 = Models.Model("team_t"; id = Models.IDField(), drivers = Models.ManyToManyField(pilot))
+            schema_v2 = _rt_schema(pilot, team_v2)
+            plan, printed = _rt_prompted(read_live_schema(pool), schema_v2, pool, "1\n")
+            @test !occursin("Is the field", printed)
+            @test plan[:pilot_t]["Rename table"] == "ALTER TABLE \"driver_t\" RENAME TO \"pilot_t\";"
+            @test collect(keys(plan[:team_t_drivers])) == ["Rename field: pilot_t_id"]
+
+            _rt_apply!(pool, plan)
+            rows = fetch(pool, """SELECT "team_t_id", "pilot_t_id" FROM "team_t_drivers" """) |> DataFrame
+            @test rows.team_t_id == [1] && rows.pilot_t_id == [1]
+            @test isempty(Migrations.get_migration_plan(read_live_schema(pool), schema_v2, pool,
+                                                       _rt_settings(); interactive = false))
+        finally
+            close_pool!(pool)
+        end
+    end
+end

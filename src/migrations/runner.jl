@@ -2267,9 +2267,9 @@ function _drift_message(label::AbstractString)::String
   return "the database and the models differ here; makemigrations would plan this step"
 end
 
-const _DRIFT_RENAME_NOTE = "(makemigrations asks; a non-interactive plan never renames, it drops and creates)"
+const _DRIFT_RENAME_NOTE = "(makemigrations asks; a non-interactive run needs a `renames` hint)"
 
-# One finding per planned step. A plan built with `interactive = false` never renames, so a renamed
+# One finding per planned step. A plan built with `interactive = false, fail_closed = false` renames nothing, so a renamed
 # column is an add plus a remove and a renamed table a new model plus a drop. Both halves are drift —
 # the live and declared names differ — but each says what it might pair with, so the reader knows it
 # may be one change rather than two (#738).
@@ -2315,7 +2315,9 @@ function _schema_drift_findings(connection::Union{PormGPostgres, PormGSQLite}, s
                                 models_file)::Vector{SchemaCheckFinding}
   declared = _drift_declared_models(settings, models_file)
   live = read_live_schema(connection; ignore_table = ignore_table, include_table = include_table)
-  plan = get_migration_plan(live, declared, connection, settings; interactive = false)
+  # `fail_closed = false` (#734): a likely rename is drift to REPORT — `_drift_findings` names it "could
+  # be a rename" — not a reason for the gate to throw instead of answering.
+  plan = get_migration_plan(live, declared, connection, settings; interactive = false, fail_closed = false)
   # `include_table` is applied to the PLAN, not to the declared models. Narrowing the declared side
   # before planning looked equivalent and was not: the planner synthesizes each ManyToManyField's
   # through table from the declared models, so an included owner still produced a through table

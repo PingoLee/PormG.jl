@@ -1861,6 +1861,36 @@ const DOCERR_CASES = [
             end
         end,
     ),
+    # #734: `interactive = false` refuses a same-definition pair it was given no hint for — the table
+    # holds exactly the model's columns — instead of dropping its rows.
+    (
+        "migrations/workflow.md — Automation & CI/CD: an unhinted same-definition pair under interactive = false raises InvalidMigrationError (#734)",
+        InvalidMigrationError,
+        () -> begin
+            live = Model("docerr_result_734", resultid = IDField(), points = IntegerField())
+            declared = Model("docerr_race_result_734", resultid = IDField(), points = IntegerField())
+            schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+                Symbol(PormG.Models.model_table_name(declared)) =>
+                    Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => declared, :exist => false))
+            PormG.Migrations.get_migration_plan(PormG.PormGModel[live], schema, DocErrMockPostgres(),
+                                                PormG.Configuration.Settings(); interactive = false)
+        end,
+    ),
+    # #734: a hint that contradicts the schema — here, a new table no model declares.
+    (
+        "migrations/workflow.md — Automation & CI/CD: a renames hint that contradicts the schema raises InvalidMigrationError (#734)",
+        InvalidMigrationError,
+        () -> begin
+            live = Model("docerr_result_734", resultid = IDField(), points = IntegerField())
+            declared = Model("docerr_race_result_734", resultid = IDField(), points = IntegerField())
+            schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+                Symbol(PormG.Models.model_table_name(declared)) =>
+                    Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => declared, :exist => false))
+            PormG.Migrations.get_migration_plan(PormG.PormGModel[live], schema, DocErrMockPostgres(),
+                                                PormG.Configuration.Settings(); interactive = false,
+                                                renames = ["docerr_result_734" => "docerr_undeclared_734"])
+        end,
+    ),
     # #741: a managed model's constrained key into an unmanaged one. Two raise sites, because
     # `makemigrations` loads models without registering them.
     (

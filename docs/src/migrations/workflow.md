@@ -53,10 +53,25 @@ The models file is the connection's own `model_file` under its folder. `models_f
 A model whose table does not exist, next to a table no model claims any more, may be the same table under a new name, and only you know which. `makemigrations` asks:
 
 ```text
-The table race_result has no match in the database. Is it a new table? Answer yes, or no / the number of the table it was renamed from: 1 - result:
+The table race_result has no match in the database. Is it a new table? Answer yes, or no / the number of the table it was renamed from: 1 - result (18 of 18 columns match), 2 - sprint_results (15 of 18 columns match):
 ```
 
 Answer `yes` to create `race_result` and drop `result`, or `1` to plan `ALTER TABLE "result" RENAME TO "race_result"` and keep every row. `no` asks for the number on its own. A field with no matching column is asked the same way: its old column's number, or `no` for a new column.
+
+The candidates are **ranked**, and each one says why:
+
+- **Tables** are listed by how many of the model's columns they already hold under the same name and with the same definition, most first. Ties keep the database's own order.
+- **Fields** list first the removed columns that have the same definition as the new one. A column whose rename would also change it says what changes:
+
+  ```text
+  Is the field "status_id" from table "result" the same as one of the following fields: 1 - statusid (INTEGER, FK → status), 2 - positiontext (TEXT(250); renaming also changes: type, reference)? …
+  ```
+
+  The type is spelled the way the database reports it, so this is SQLite. PostgreSQL shows its own names, such as `bigint` or `character varying(250)`. Nothing is filtered out. Choosing a candidate that changes more than its name plans the rename and the change together, in one migration.
+
+The models are asked about in **table-name order** and their fields in declaration order, so the same models file asks the same questions in the same order on every run. Each table is numbered from `1`.
+
+A **many-to-many join table follows its model.** The auto join table of a `ManyToManyField` is named after its model (`<model>_<field>`), with one column per end (`<model>_<pk>`). Renaming the model therefore renames both. Answer the model's question, and the join table and its column are renamed with it: they are not asked about, and the links are kept. A join table is followed only when exactly one vanished table fits it: the same number of columns, with keys to the same two tables once the rename is applied. When none or several fit, it is asked about like any other table.
 
 Any other answer — an empty line, a typo, a number that is not listed — raises `InvalidMigrationError` and writes nothing, so run `makemigrations` again. So does running out of input: see [Automation & CI/CD](#Automation-and-CI/CD) for running without a terminal.
 
@@ -422,9 +437,36 @@ end
 [rename questions](#Answering-the-rename-questions) read stdin whenever `interactive=true` (the default),
 so answers can be piped in. A script or CI job with nothing on stdin runs normally until a question comes
 up, then reaches end of input and raises `InvalidMigrationError` rather than guessing. Pass
-`interactive=false` there. It plans
-every unmatched model and field as new, so it **never renames**: a renamed table is planned as a drop and a
-create, which the destructive guard above then stops.
+`interactive=false` there, and name the renames with `renames`:
 ```julia
-PormG.Migrations.makemigrations("my_db", interactive=false)
+PormG.Migrations.makemigrations("my_db"; interactive = false,
+    renames = ["drivers" => "driver", "result.statusid" => "result.racestatusid"])
 ```
+
+A hint is `"old" => "new"`. A table is named by its physical name (`db_table`), and a column as
+`"table.column"`, with its `db_column` and its table's **new** name on both sides. A hint answers that
+rename without a question, so it also works with `interactive=true`, and the plan is the one the matching
+answer would give, including a retype that comes with it. The hints apply as follows:
+
+- **Old name present, new name absent:** the hint renames.
+- **Old name gone, new name present:** the rename has already run, so the hint does nothing. A hint list
+  can stay in a script after it has been applied.
+- **Neither name present:** nothing is renamed, and a warning says to check the old name, which is
+  probably mistyped.
+- **Otherwise it raises `InvalidMigrationError`:** both names already exist, the old one is still
+  declared, the new one is not declared, or one name is used by two hints.
+
+Without a hint, `interactive=false` plans every unmatched model and field as new, with one exception. A
+pair with the **same definition**, a vanished table holding exactly the model's columns (one besides its key, at least) or a removed
+column identical to the added one, is almost certainly a rename. Planning a drop and an add for it would
+lose its rows, so `makemigrations` refuses instead. It raises `InvalidMigrationError` listing every such
+pair with the hint that decides it:
+
+```text
+makemigrations(interactive = false) will not guess a rename. These look like one — the same definition under a new name:
+  - column "result.statusid" → "result.racestatusid": pass "result.statusid" => "result.racestatusid" to rename, or "result.statusid" => nothing to drop it
+```
+
+`"old" => nothing` says it is **not** a rename: the old table or column is dropped and the new one created,
+and it is offered to no rename question. A pair whose definition differs is still planned as a drop and an
+add without a hint, which the destructive guard above stops at `migrate`.

@@ -260,6 +260,22 @@ Turning `db_index` on or off *in the same change as the rename* is planned in th
 
     SQLite is unaffected — it has no `ALTER TABLE ADD CONSTRAINT`, so the duplicate was never possible there.
 
+### Renaming a model that has a many-to-many field
+
+A `ManyToManyField` without `through=` gets an auto join table named after its model, with one column per end: `Team.drivers` is stored in `team_drivers (id, team_id, driver_id)`. Rename the `team` table to `squad` and both names change with it, to `squad_drivers` and `squad_id`.
+
+You answer one question, the one about the model. The join table and its column follow:
+
+```sql
+ALTER TABLE "team" RENAME TO "squad";
+ALTER TABLE "team_drivers" RENAME TO "squad_drivers";
+ALTER TABLE "squad_drivers" RENAME COLUMN "team_id" TO "squad_id";
+```
+
+Every link row is kept. The same holds when the model at the *other* end is renamed: `driver_id` follows `driver`, while the join table keeps its name.
+
+A join table is followed only when it is unambiguous. Exactly one vanished table must have the same number of columns and keys to the same two tables once the rename is applied, and only one endpoint column may fit each end. Otherwise PormG asks, as it does for any other table or field. That happens, for example, with a self-referential relation whose `from_…` and `to_…` columns both changed.
+
 ## Deleting a Model
 
 Removing a model from `models.jl` plans a `DROP TABLE` for its table. That is destructive, so `migrate` asks first, or needs `destructive = true` when nothing can answer (see [Destructive Operations Safety](workflow.md#Destructive-Operations-Safety)).
@@ -280,7 +296,7 @@ What counts as reading the table depends on the engine, because each one would l
 
 Triggers **on** the dropped table go with it, on both engines, and never block the drop.
 
-To get through, drop the listed views and triggers yourself and run `makemigrations` again. Re-create them against the new schema afterwards if you still need them. If you meant to rename the model rather than delete it, run `makemigrations` interactively and answer its rename question: a rename on its own keeps its views and triggers on both engines. On SQLite, a rename in the same migration as a table rebuild is refused when a view or trigger that rebuild carries names the renamed table (see the rebuild check below); apply the rename as a migration of its own first. `interactive = false` never renames, so it plans the drop.
+To get through, drop the listed views and triggers yourself and run `makemigrations` again. Re-create them against the new schema afterwards if you still need them. If you meant to rename the model rather than delete it, run `makemigrations` interactively and answer its rename question: a rename on its own keeps its views and triggers on both engines. On SQLite, a rename in the same migration as a table rebuild is refused when a view or trigger that rebuild carries names the renamed table (see the rebuild check below); apply the rename as a migration of its own first. With `interactive = false`, name the rename with `renames = ["old_table" => "new_table"]` instead (see [Automation & CI/CD](workflow.md#Automation-and-CI/CD)). Without a hint it plans the drop, unless the new model's columns match the old table's exactly, in which case it refuses to guess.
 
 !!! tip "Coming from Django?"
     Django's `DeleteModel` drops the table with `CASCADE` on PostgreSQL, so a view that reads it disappears along with it. PormG refuses instead, on both engines, so dropping an object it did not create is always your explicit step.

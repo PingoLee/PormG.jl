@@ -447,11 +447,10 @@ _binary_byte_length(value::AbstractString)::Int = ncodeunits(value)
 # The text a text field's `max_length` is measured against: the text `format_text_sql` will write
 # (#868). A String is that text already; an integer or a date/time is written as its base-10 or ISO
 # text (#860), which is the length the column holds, so it is measured too. `nothing` means there is
-# no one text to measure: a field with another formatter; a value `format_text_sql` refuses, which
-# `_format_single` reports with its own typed error; and a `Bool`, which `format_text_sql` passes
-# through unformatted and each engine then stores as different text (LibPQ binds `"true"`/`"false"`,
-# SQLite stores `1`/`0`). Which of those a bound should measure is that divergence's question, not
-# this check's.
+# no one text to measure: a field with another formatter, or a value `format_text_sql` refuses, which
+# `_format_single` reports with its own typed error. A `Bool` is one of those (#876) — it has no
+# single text — and needs its own method only because `Bool <: Integer` would reach the one below,
+# whose formatter call would raise that refusal here, as a length check, instead.
 _written_text(f_meta, value::AbstractString) = value
 _written_text(f_meta, value::Bool) = nothing
 _written_text(f_meta, value::Union{Integer, Date, DateTime, ZonedDateTime, Time}) =

@@ -1886,7 +1886,8 @@ end
         )
         # #268 audit: same contract as single-row insert — the taxonomy type survives bulk.
         @test_throws InvalidValueError bulk_insert(StringModel.objects, df_bad_strings, show_query=:dict)
-        # …and bulk_update shares the rethrow pattern (bulk_copy is identical code, PG-only).
+        # …and bulk_update shares the rethrow pattern. (bulk_copy, PG-only, keeps the type too but
+        # re-raises it naming the row and field, #869 — pinned in test_bulk_copy_cell_errors.jl.)
         @test_throws InvalidValueError bulk_update(StringModel.objects,
             DataFrame(id = [1], code = ["TOOLONG"]), columns = ["code"], match_on = ["id"],
             show_query = :dict)

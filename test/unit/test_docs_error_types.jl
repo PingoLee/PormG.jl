@@ -46,6 +46,8 @@ using PormG.Functions: Lower
 # #194 — an outer aggregate, for the grouped-correlation claim below. `Count` is deliberately not a
 # top-level PormG export (it would collide with Base/user code), so it is named here explicitly.
 using PormG.Functions: Count
+# #867 — an aggregate wrapping a `Subquery`, for the subqueries-page claim below.
+using PormG.Functions: Max
 # #569 — a text format outside the portable table, for the ToChar docstring claim below.
 using PormG.Functions: ToChar
 # #40 — the `Extract` part-spelling claim on the PostgreSQL guide.
@@ -191,6 +193,15 @@ const DOCERR_CASES = [
         () -> begin
             inner = DOCERR_STATUS_PG.objects.values("statusid", "status")
             DOCERR_RESULT_PG.objects.values("resultid", "x" => Subquery(inner)).
+                list(show_query = :dict)
+        end,
+    ),
+    (
+        "read/subqueries_and_ctes.md — an aggregate cannot wrap a `Subquery(...)` (#867)",
+        QueryBuildError,
+        () -> begin
+            inner = DOCERR_STATUS_PG.objects.values("status")
+            DOCERR_RESULT_PG.objects.values("resultid", "x" => Max(Subquery(inner))).
                 list(show_query = :dict)
         end,
     ),

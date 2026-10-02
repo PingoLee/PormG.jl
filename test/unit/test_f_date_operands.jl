@@ -1638,3 +1638,43 @@ end
     @test occursin("WHERE (\"Tb\".\"seen\" > \"Tb_1\".\"date\")", _fd_sql(q; conn = _FD_SL))
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #884 — a number on the LEFT keeps the whole expression. `2 * (F("points") - F("amount"))` was
+# built from the expression's root column alone, so it rendered `"points" * 2` on both engines and
+# the subtraction was gone. Here because a date difference is the case that needed it (`2 * d`, #881).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#884: a number on the left keeps the whole expression" begin
+  for (label, expr, sl_sql, pg_sql, params) in (
+      ("2 * (a - b)", 2 * (F("points") - F("amount")),
+       "((\"Tb\".\"points\" - \"Tb\".\"amount\") * ?)",
+       "((\"Tb\".\"points\" - \"Tb\".\"amount\") * \$1::bigint)", Any[2]),
+      ("1 + (a * b)", 1 + (F("points") * F("amount")),
+       "((\"Tb\".\"points\" * \"Tb\".\"amount\") + ?)",
+       "((\"Tb\".\"points\" * \"Tb\".\"amount\") + \$1::bigint)", Any[1]),
+      ("2.5 * ((a - b) + c)", 2.5 * ((F("points") - F("amount")) + F("points")),
+       "(((\"Tb\".\"points\" - \"Tb\".\"amount\") + \"Tb\".\"points\") * ?)",
+       "(((\"Tb\".\"points\" - \"Tb\".\"amount\") + \"Tb\".\"points\") * \$1::double precision)", Any[2.5]),
+      # The bare-column control: it was always right, and must stay the same SQL.
+      ("2 * F(a)", 2 * F("points"),
+       "(\"Tb\".\"points\" * ?)", "(\"Tb\".\"points\" * \$1::bigint)", Any[2]),
+    )
+    @testset "$label" begin
+      q = FD.Fd_result.objects
+      q.values("x" => expr)
+      @test occursin(sl_sql, _fd_sql(q; conn = _FD_SL))
+      @test _fd_params(q; conn = _FD_SL) == params
+      q_pg = FD.Fd_result.objects
+      q_pg.values("x" => expr)
+      @test occursin(pg_sql, _fd_sql(q_pg; conn = _FD_PG))
+      @test _fd_params(q_pg; conn = _FD_PG) == params
+    end
+  end
+
+  # The node is the one `f op n` builds: same operation and operand, and the expression nested.
+  inner = F("points") - F("amount")
+  outer = 2 * inner
+  @test outer.field_name === inner
+  @test outer.operation == "*" && outer.operand == 2
+  @test inner.operation == "-"   # the operand is not written on
+end

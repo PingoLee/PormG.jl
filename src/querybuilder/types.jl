@@ -1317,28 +1317,12 @@ Base.isequal(a::FExpression, b::FExpression) = a === b
 Base.isequal(::FExpression, ::Any) = false
 Base.isequal(::FExpression, ::Missing) = false
 
-# Allow arithmetic operations with F expressions on the right side
-function Base.:+(operand::Union{Integer,Float64}, f::FExpression)
-  return FExpression(
-    field_name=f.field_name,
-    operation="+",
-    operand=operand,
-    function_name="F",
-    column=f.field_name,
-    aggregate=f.aggregate
-  )
-end
-
-function Base.:*(operand::Union{Integer,Float64}, f::FExpression)
-  return FExpression(
-    field_name=f.field_name,
-    operation="*",
-    operand=operand,
-    function_name="F",
-    column=f.field_name,
-    aggregate=f.aggregate
-  )
-end
+# A number on the LEFT of an F expression. `+` and `*` commute, so `n + f` is `f + n`, built by the
+# overloads above. #884: these used to build the node from `f.field_name` themselves. For a bare
+# `F("x")` that is the column, but for an expression it is only the left-most column, so
+# `2 * (F("a") - F("b"))` rendered `"a" * 2` on both engines, silently.
+Base.:+(operand::Union{Integer,Float64}, f::FExpression) = f + operand
+Base.:*(operand::Union{Integer,Float64}, f::FExpression) = f * operand
 
 # `<: SQLTypeF` on purpose, and — unlike `CTEReference` / `JoinedReference` below — every union the
 # abstract type reaches is a place an outer-row reference is legitimate SQL: the ~18 scalar-function

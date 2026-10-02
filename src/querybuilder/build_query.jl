@@ -172,9 +172,10 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       kind = nothing
       if original isa FExpression
         v_copy.field, kind = _set_update_query_typed(original, instruc)
-        # #824: a bare `F("ts__@date")` is the transform's result, which the column lookup above
-        # cannot name. Here and not in `_set_update_query_typed`: that also types the LEFT of date
-        # arithmetic, and a transformed left is not this issue's to change.
+        # #824: a bare `F("ts__@date")` is the transform's result, which the column lookup cannot
+        # name. Since #814 `_set_update_query_typed` names it too (`_side_kind`), because the same
+        # call types the sides of date arithmetic, and a transformed side has to be typed there. This
+        # fallback stays for whatever else `_operand_kind` resolves on a bare `F` and that does not.
         kind === nothing && original.operation === nothing && (kind = _operand_kind(original, instruc))
       else
         v_copy.field = _get_select_query(original, instruc, _as=v_copy._as)

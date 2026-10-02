@@ -1160,6 +1160,26 @@ end
 # on purpose (`interval - date` is not valid date arithmetic).
 Base.:+(operand::_DurationOperand, f::FExpression) = f + operand
 
+# #814 — a date or timestamp LITERAL as the right side of `-`: the time from that instant to the
+# expression's, `F("date") - Date(2009, 3, 1)`. `-` only: adding, multiplying or dividing two
+# instants has no meaning (#801 refuses the column spelling of each). The literal is the explicit
+# spelling of what `F("date") - "2009-03-01"` attempted, which bound TEXT — PostgreSQL has no
+# `date - text`, and SQLite subtracted the years — and which is now refused on both engines.
+# The renderer types the literal (`_render_operand_typed`) and refuses it against a left that is not
+# temporal.
+const _TemporalLiteral = Union{Dates.Date, Dates.DateTime, TimeZones.ZonedDateTime}
+
+function Base.:-(f::FExpression, operand::_TemporalLiteral)
+  return FExpression(
+    field_name=f.operation === nothing ? f.field_name : f,
+    operation="-",
+    operand=operand,
+    function_name="F",
+    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
+    aggregate=f.aggregate
+  )
+end
+
 # Comparison operations for F expressions
 #
 # #457 — a comparison RETURNS a new expression; it NEVER mutates `f`. Until this, all six wrote
@@ -1748,6 +1768,10 @@ end
 function Base.:-(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
   return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", aggregate=_is_agg(operand))
 end
+# #814: `Lag("date", …) - Date(2009, 3, 1)`, the window-function twin of the `F` method above.
+function Base.:-(f::WindowFunction, operand::_TemporalLiteral)
+  return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", aggregate=false)
+end
 function Base.:*(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
   return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", aggregate=_is_agg(operand))
 end
@@ -1770,6 +1794,10 @@ function Base.:+(f::FObject, operand::Union{Integer,Float64,String,FExpression,F
 end
 function Base.:-(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
   return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
+end
+# #814: `Max("date") - Date(2009, 3, 1)`, the function twin of the `F` method above.
+function Base.:-(f::FObject, operand::_TemporalLiteral)
+  return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", aggregate=f.aggregate)
 end
 function Base.:*(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
   return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))

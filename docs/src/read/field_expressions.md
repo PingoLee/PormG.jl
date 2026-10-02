@@ -26,7 +26,7 @@
 
 ```julia
 using PormG: F
-using PormG.Functions: Count, Sum
+using PormG.Functions: Count, Sum, Max, Min
 
 # Field reference
 F("grid")
@@ -389,6 +389,27 @@ of day, not a duration, and is refused against an interval: write `Hour(1)` or `
 
 `+`, `*` and `/` between two date or timestamp values have no meaning and raise `QueryBuildError`
 on both engines. To move a date, add a duration: `F("date") + Day(30)`.
+
+Either side of a difference can be more than a column. An extremum (`Max`, `Min`), a window value
+function (`Lag`, `Lead`, `FirstValue`, …), a `__@date` path and a date literal each count as the date
+or timestamp they produce, so the same rules apply — the length of the 2009 season in days, and how
+many days after the season opener each race was held:
+
+```julia
+query = M.Race.objects
+query.filter("year" => 2009)
+query.values("season_days" => Max("date") - Min("date"))
+
+query = M.Race.objects
+query.filter("year" => 2009)
+query.values("name", "since_opener" => F("date") - Date(2009, 3, 29))
+```
+
+A date literal is a `Date`, `DateTime` or `ZonedDateTime`. A **string** on the right of date
+arithmetic is text, not a date (`F("date") - "2009-03-29"`), and raises `QueryBuildError` on both
+engines; a string that names a field (`F("date") - "dob"`) is that field. Subtracting a date literal
+from something that is not a date or timestamp PormG can type — a number, `Sum(...)`, `__@year` —
+raises `QueryBuildError` too.
 
 ### When NOT to Use F
 

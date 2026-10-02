@@ -1352,6 +1352,24 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        "read/field_expressions.md — a string on the right of date arithmetic is refused (#814)",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RACE801_SL.objects
+            q.values("x" => F("date") - "2009-03-29")
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "read/field_expressions.md — a date literal subtracted from a non-date is refused (#814)",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RACE801_SL.objects
+            q.values("x" => F("raceid") - PormG.Dates.Date(2009, 3, 29))
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
         "read/field_expressions.md — `+` between two dates is refused (#801)",
         QueryBuildError,
         () -> begin

@@ -1571,8 +1571,23 @@ _difference_result_kind(_, _) = nothing
 function _render_left_typed(value::Any, operation::String, instruc::SQLInstruction)::Tuple{String,TemporalKind}
   value isa FExpression && return _set_update_query_typed(value, instruc)
   sql = _set_update_query_left(value, operation, instruc)
-  return sql, _projection_column_kind(value, instruc)
+  return sql, _side_kind(value, instruc)
 end
+
+# #814 — the kind of an ALREADY-RENDERED side that is not itself an expression: a column, a
+# transformed path, or a function. The column lookup answers for a column, and only for one. A
+# transform (`"date__@date"`) or a function (`Max("date")`) answered `nothing` there, so
+# `F("date") - Max("date")` fell to a bare `-`, which on SQLite subtracts the YEARS of two TEXT
+# dates, silently. Both now ask the projection path's own resolver (`build_query.jl`), the one that
+# already types `.values("m" => Max("date"))` for the read path, so a side is typed in arithmetic
+# exactly as it is when projected on its own: `Max`/`Min` keep their operand's kind, `@date` is a
+# date, and a function PormG does not type (`Sum`, `@year`) stays `nothing`.
+#
+# The order rule is the caller's: render first, then call this.
+_side_kind(value::Any, instruc::SQLInstruction) = _projection_column_kind(value, instruc)
+_side_kind(value::String, instruc::SQLInstruction) =
+  occursin("__@", value) ? _operand_kind(value, instruc) : _projection_column_kind(value, instruc)
+_side_kind(value::SQLTypeFunction, instruc::SQLInstruction) = _function_projection_kind(value, instruc)
 
 # #564/#568 — THE ONE TEMPORAL RENDERER. It takes an ALREADY-RENDERED left side and the kind that
 # left evaluates to, which is what lets the duration spelling and the bare-integer spelling share it:
@@ -1730,14 +1745,35 @@ end
 # difference. A `String` that names a field is the `F(...)` it stands for, which is the route
 # `_set_update_query_operand` already takes. Everything else — a function, a text literal, a number —
 # has no kind this build can know, and answers `nothing`.
+#
+# #814 widened what has a kind: a function is typed as the projection path types it (`_side_kind`),
+# and a date literal (`F("date") - Date(2009, 3, 1)`) by its own Julia type — bound in the
+# representation of THAT kind, since the difference reads both sides as the instants they are. On
+# PostgreSQL it carries the cast that names it, because `date - $1` has three candidate operators
+# (`date - date`, `date - integer`, `date - interval`) and an uncast parameter is ambiguous among them.
 function _render_operand_typed(operand::Any, field_name::Any, operation::String, instruc::SQLInstruction;
                                left_kind::TemporalKind = nothing)::Tuple{String,TemporalKind}
   operand isa FExpression && return _set_update_query_typed(operand, instruc)
-  if operand isa String && (contains(operand, "__") || operand in instruc.object.model.field_names)
+  if operand isa String && _is_field_path(operand, instruc)
     return _set_update_query_typed(FExpression(field_name = operand, function_name = "F", column = operand), instruc)
   end
-  return _set_update_query_operand(operand, field_name, operation, instruc; left_kind = left_kind), nothing
+  if operand isa _TemporalLiteral
+    kind = literal_canonical_kind(operand)
+    # A timestamp literal binds the canonical UTC text (`…+00:00`). Against a `timestamp` column (no
+    # time zone) it is cast to that type, whose input ignores the offset and keeps the UTC wall time
+    # the column itself stores; everything else casts to `timestamptz`, which reads the offset.
+    sql_type = !(instruc.connection isa PormGPostgres) ? nothing :
+               kind isa CDate ? "date" :
+               left_kind == CDateTime(false) ? "timestamp" : "timestamptz"
+    return add_parameter!(instruc, value_formatter(kind, instruc.connection)(operand); sql_type = sql_type), kind
+  end
+  sql = _set_update_query_operand(operand, field_name, operation, instruc; left_kind = left_kind)
+  return sql, operand isa SQLTypeFunction ? _side_kind(operand, instruc) : nothing
 end
+
+# A `String` operand names a FIELD when it is a path or one of the model's own fields; otherwise it
+# is a text literal. The rule `_set_update_query_operand`'s String arm applies.
+_is_field_path(s::String, instruc::SQLInstruction) = contains(s, "__") || s in instruc.object.model.field_names
 
 # #801: arithmetic that has no meaning between two temporal values. PostgreSQL has no `date + date`
 # operator and fails at execution; SQLite adds the two years and returns a number. Refused at build
@@ -1966,7 +2002,7 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
       # `TimeField` or a `DurationField` has a representation the read path must undo. Each CONSUMER
       # states which kinds it can act on, rather than the producer pre-narrowing for all of them.
       sql = _get_filter_query(v.field_name, instruc)
-      return sql, _projection_column_kind(v.field_name, instruc)
+      return sql, _side_kind(v.field_name, instruc)
     elseif v.field_name isa Integer
       # A bare integer is a value, not a column — no representation to carry.
       return add_parameter!(instruc, v.field_name; sql_type=_infer_parameter_sql_type(v.field_name, instruc)), nothing
@@ -2049,6 +2085,14 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
     # never takes this branch (`F("date") > F("dob")` is the ordinary case and stays below), nor does
     # a non-temporal left, so every other expression renders byte-for-byte as it did.
     if left_kind isa Union{CDate,CDateTime} && v.operation in ("-", _TEMPORAL_PAIR_REFUSED_OPERATIONS...)
+      # #814: a TEXT literal on the right is refused on both engines. It bound as text: PostgreSQL has
+      # no `date - text` and failed at execution, and SQLite subtracted the leading years of the two
+      # strings, silently. The literal it meant is a `Date`, which is typed and bound as one.
+      if v.operand isa String && !_is_field_path(v.operand, instruc)
+        throw(QueryBuildError("`F(...) $(v.operation) \"$(v.operand)\"`: a String on the right of date " *
+                              "arithmetic is text, not a date. Pass a date instead — " *
+                              "F(\"date\") - Date(2009, 3, 1) — or a field name, F(\"date\") - \"dob\"."))
+      end
       right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc;
                                                      left_kind = left_kind)
       if right_kind isa Union{CDate,CDateTime}
@@ -2061,6 +2105,17 @@ function _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple
                               "add a duration instead: F(\"date\") + Day(30)."))
       end
       return "($(left_side) $(v.operation) $(right_side))", nothing
+    end
+
+    # #814: a date literal subtracted from something that is not a date PormG can type — a number, a
+    # text column, a function it does not type (`Sum`, `Coalesce` over mixed kinds). Bound as a date
+    # and rendered as a bare `-`, it would subtract a year on SQLite and fail on PostgreSQL; refused
+    # instead, naming the sides that are typed. `-` only: a date literal is also a COMPARISON operand
+    # (#494), and `F("seen") > Date(…)` arrives here too.
+    if v.operation == "-" && v.operand isa _TemporalLiteral
+      throw(QueryBuildError("Subtracting a date ($(v.operand)) needs a date or timestamp on the left: a " *
+                            "DateField or DateTimeField, a shift of one (F(\"date\") + Day(1)), " *
+                            "Max/Min of one, or a `__@date` path. The left side here is none of those."))
     end
 
     # #814: an ORDERING comparison against the difference of two timestamps — on either side — is

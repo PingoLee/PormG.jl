@@ -623,6 +623,31 @@ end
     @test [Dates.toms(g) for g in df.gap] == expected
   end
 
+  @testset "a function, a transform and a date literal are typed sides (#814)" begin
+    # Each was a bare `-` before #814: on SQLite the difference of the YEARS. Every value is
+    # recomputed in Julia from the same rows.
+    query = M.Race.objects
+    query.filter("year" => 2009)
+    query.values("raceid", "date", "start_at",
+                 # A date literal — the season opener — bound as a date on both engines.
+                 "since_opener" => F("date") - Dates.Date(2009, 3, 29),
+                 # The `@date` transform: a timestamp cut to its date, minus a date.
+                 "same_day" => F("start_at__@date") - F("date"))
+    query.order_by("raceid")
+    df = query |> DataFrame
+    @test size(df, 1) > 1
+    @test df.since_opener == [Dates.value(Dates.Date(string(d)) - Dates.Date(2009, 3, 29)) for d in df.date]
+    @test maximum(df.since_opener) > 200          # days, not years: the season spans months
+    @test all(==(0), skipmissing(df.same_day))     # each race starts on its own date
+
+    # An aggregate on each side: the length of the 2009 season, in days.
+    span = M.Race.objects
+    span.filter("year" => 2009)
+    span.values("season_days" => PormG.Functions.Max("date") - PormG.Functions.Min("date"))
+    span_df = span |> DataFrame
+    @test span_df[1, :season_days] == Dates.value(maximum(Dates.Date.(string.(df.date))) - minimum(Dates.Date.(string.(df.date))))
+  end
+
   @testset "a timestamp difference compares against a duration (#814)" begin
     # Equality is exact on both engines: the rendered text is the text the literal binds as.
     eq = M.Race.objects

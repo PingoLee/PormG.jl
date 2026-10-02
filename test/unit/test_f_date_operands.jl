@@ -1169,6 +1169,125 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #814: a function, a transform and a date literal are TYPED sides of a difference.
+# #801 fixed `-` only when both sides had a kind the build could see, and these three had none, so
+# they rendered a bare `-` — on SQLite the difference of two TEXT dates' leading YEARS, silently.
+# A function and a transform are now typed by the projection path's own resolver (`Max`/`Min`/`Lag`
+# keep their operand's kind, `@date` is a date), a `Date`/`DateTime` literal by its Julia type, and
+# each difference renders as #801's day count or #814's interval. A function or transform PormG does
+# not type (`Sum`, `@year`) still renders a bare `-`, exactly as before.
+# ─────────────────────────────────────────────────────────────────────────────
+const _FN = PormG.Functions
+
+@testset "#814: functions, transforms and date literals are typed sides" begin
+  for (label, expr, kind, sl_sql, pg_sql, params) in (
+      # An aggregate on each side: the extremum keeps its operand's kind.
+      ("Max - Min of two DATE columns", _FN.Max("seen") - _FN.Min("race__date"), PormG.CInt32(),
+       "CAST(julianday(MAX(\"Tb\".\"seen\")) - julianday(MIN(\"Tb_1\".\"date\")) AS INTEGER)",
+       "(MAX(\"Tb\".\"seen\") - MIN(\"Tb_1\".\"date\"))", Any[]),
+      ("Max of a TIMESTAMP - Min of a DATE", _FN.Max("logged_at") - _FN.Min("seen"), PormG.CInterval(),
+       "julianday(MAX(\"Tb\".\"logged_at\")) - julianday(MIN(\"Tb\".\"seen\"))",
+       "(MAX(\"Tb\".\"logged_at\") - MIN(\"Tb\".\"seen\"))", Any[]),
+      # A window value function on the right: the issue's `F("date") - Max("date")` shape, per row.
+      # `Lag` binds its default offset, once, in the side's own render.
+      ("column - Lag of the column", F("seen") - _FN.Lag("seen", over = _FN.WindowOver(order_by = ["id"])),
+       PormG.CInt32(),
+       "CAST(julianday(\"Tb\".\"seen\") - julianday(LAG(\"Tb\".\"seen\", ?) OVER (ORDER BY \"Tb\".\"id\" ASC)) AS INTEGER)",
+       "(\"Tb\".\"seen\" - LAG(\"Tb\".\"seen\", \$1::integer) OVER (ORDER BY \"Tb\".\"id\" ASC))", Any[1]),
+      # The `@date` transform on both sides — a TIMESTAMP cut to its date, minus a DATE.
+      ("@date - @date", F("logged_at__@date") - F("seen__@date"), PormG.CInt32(),
+       "CAST(julianday(strftime('%Y-%m-%d', \"Tb\".\"logged_at\")) - julianday(strftime('%Y-%m-%d', \"Tb\".\"seen\")) AS INTEGER)",
+       "((\"Tb\".\"logged_at\")::date - (\"Tb\".\"seen\")::date)", Any[]),
+      # A date literal, bound in the representation of its own kind and cast on PostgreSQL, where an
+      # uncast `date - \$1` has three candidate operators.
+      ("DATE column - Date literal", F("seen") - Dates.Date(2009, 3, 1), PormG.CInt32(),
+       "CAST(julianday(\"Tb\".\"seen\") - julianday(?) AS INTEGER)",
+       "(\"Tb\".\"seen\" - \$1::date)", Any["2009-03-01"]),
+      ("TIMESTAMP column - DateTime literal", F("logged_at") - Dates.DateTime(2009, 3, 29, 6), PormG.CInterval(),
+       "julianday(\"Tb\".\"logged_at\") - julianday(?)",
+       "(\"Tb\".\"logged_at\" - \$1::timestamptz)", Any["2009-03-29T06:00:00.000+00:00"]),
+      ("Max - Date literal", _FN.Max("seen") - Dates.Date(2009, 3, 1), PormG.CInt32(),
+       "CAST(julianday(MAX(\"Tb\".\"seen\")) - julianday(?) AS INTEGER)",
+       "(MAX(\"Tb\".\"seen\") - \$1::date)", Any["2009-03-01"]),
+    )
+    @testset "$label" begin
+      q = FD.Fd_result.objects
+      q.values("x" => expr)
+      @test occursin(sl_sql, _fd_sql(q; conn = _FD_SL))
+      @test _fd_params(q; conn = _FD_SL) == params
+
+      q_pg = FD.Fd_result.objects
+      q_pg.values("x" => expr)
+      @test occursin(pg_sql, _fd_sql(q_pg; conn = _FD_PG))
+      @test _fd_params(q_pg; conn = _FD_PG) == params
+
+      for conn in (_FD_SL, _FD_PG)
+        @test _fd_kinds(q -> q.values("x" => expr); conn = conn)[:x] === kind
+      end
+    end
+  end
+
+  # A transformed LEFT is typed in date arithmetic too, not only in a difference: `@date` plus a
+  # sub-day duration is a timestamp, so SQLite renders the canonical mask rather than truncating the
+  # hours away with `date(...)` — which is what an untyped left rendered.
+  @testset "a transformed left of a shift is typed" begin
+    q = FD.Fd_result.objects
+    q.values("x" => F("logged_at__@date") + Dates.Hour(6))
+    @test occursin("strftime('%Y-%m-%dT%H:%M:%f+00:00', strftime('%Y-%m-%d', \"Tb\".\"logged_at\"), '+' || ? || ' hours')",
+                   _fd_sql(q; conn = _FD_SL))
+  end
+
+  # Untyped stays untyped: `@year` is a number and `Sum` is computed, so neither enters the temporal
+  # branches, and each renders the bare operator it always did.
+  @testset "a function or transform PormG does not type is unchanged" begin
+    for (expr, sl_sql) in ((F("seen") - F("logged_at__@year"), "(\"Tb\".\"seen\" - CAST(strftime('%Y', \"Tb\".\"logged_at\") AS INTEGER))"),
+                           (F("seen__@year") - 1, "(CAST(strftime('%Y', \"Tb\".\"seen\") AS INTEGER) - ?)"))
+      q = FD.Fd_result.objects
+      q.values("x" => expr)
+      @test occursin(sl_sql, _fd_sql(q; conn = _FD_SL))
+    end
+  end
+
+  # A text literal is refused on BOTH engines. It bound as text: PostgreSQL has no `date - text` and
+  # failed at execution, and SQLite subtracted the years. The message names the `Date` spelling.
+  @testset "a text literal on the right of date arithmetic is refused" begin
+    for expr in (F("seen") - "2009-03-01", F("logged_at") - "2009-03-29 06:00", _FN.Max("seen") - "2009-03-01"),
+        conn in (_FD_SL, _FD_PG)
+      q = FD.Fd_result.objects
+      q.values("x" => expr)
+      err = try _fd_sql(q; conn = conn); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      @test occursin("Date(2009, 3, 1)", sprint(showerror, err))
+    end
+    # A field name is not a literal, and keeps working (#801's own case).
+    q = FD.Fd_result.objects
+    q.values("x" => F("seen") - "race__date")
+    @test occursin("julianday(\"Tb_1\".\"date\")", _fd_sql(q; conn = _FD_SL))
+  end
+
+  # A date literal needs a typed temporal left; against a number, or a function PormG does not
+  # type, it is refused rather than rendered as a bare `-`.
+  @testset "a date literal subtracted from a non-date is refused" begin
+    for expr in (F("points") - Dates.Date(2009, 3, 1), _FN.Sum("points") - Dates.Date(2009, 3, 1),
+                 F("seen__@year") - Dates.Date(2009, 3, 1)),
+        conn in (_FD_SL, _FD_PG)
+      q = FD.Fd_result.objects
+      q.values("x" => expr)
+      err = try _fd_sql(q; conn = conn); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      @test occursin("needs a date or timestamp on the left", sprint(showerror, err))
+    end
+  end
+
+  # A date literal is still a COMPARISON operand (#494) — the refusal above is for `-` only.
+  @testset "a date comparison is unchanged" begin
+    q = FD.Fd_result.objects
+    q.filter(F("seen") > Dates.Date(2009, 3, 1))
+    @test _fd_params(q; conn = _FD_SL) == Any["2009-03-01"]
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #801: a day count compares against a number.
 # `(F("seen") - F("race__date")) > 30` raised on BOTH engines before: the comparison literal was
 # bound through the ROOTED column's formatter, which is a DateField's — `format_date_sql(30)`. The

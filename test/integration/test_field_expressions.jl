@@ -702,14 +702,108 @@ end
     ne.values("raceid")
     @test size(ne |> DataFrame, 1) == 0
 
-    # Ordering: an interval comparison on PostgreSQL, refused on SQLite (the difference is TEXT).
-    ord = M.Race.objects
-    ord.filter("raceid" => 1, (F("start_at") - F("date")) > Dates.Hour(1))
-    ord.values("raceid")
-    if is_sqlite
-      @test_throws PormG.QueryBuildError (ord |> DataFrame)
-    else
-      @test (ord |> DataFrame).raceid == [1]
+    # Ordering. #881 overwrote the SQLite half on purpose: #814 refused it there (the difference was
+    # TEXT); it is a millisecond comparison now. Each row here is one text comparison would get wrong
+    # or the refusal would have stopped.
+    since_midnight() = F("start_at") - F("date")
+    for (cmp, want) in ((since_midnight() > Dates.Hour(1), [1]), (since_midnight() < Dates.Hour(1), Int[]),
+                        (since_midnight() >= Dates.Hour(6), [1]), (since_midnight() <= Dates.Hour(6), [1]),
+                        # "126:00:00" sorts below "99:00:00" as text; it is 126 hours.
+                        (((F("start_at") + Dates.Day(5)) - F("date")) > Dates.Hour(99), [1]),
+                        # A negative difference sorts by its digits as text ("-06:00:00" > "-05:00:00").
+                        ((F("date") - F("start_at")) < -Dates.Hour(5), [1]))
+      ord = M.Race.objects
+      ord.filter("raceid" => 1, cmp)
+      ord.values("raceid")
+      @test (ord |> DataFrame).raceid == want
     end
+  end
+
+  # #881 — ordering, arithmetic and interval shifts on both engines. On SQLite PormG computes in
+  # milliseconds and formats only the finished value; every value is recomputed in Julia from the
+  # same rows, in milliseconds.
+  @testset "a timestamp difference filters against a duration as Julia does (#881)" begin
+    # The field-expressions guide's example: the 2009 races that started after noon UTC.
+    after_noon = M.Race.objects
+    after_noon.filter("year" => 2009, (F("start_at") - F("date")) > Dates.Hour(12))
+    after_noon.values("raceid")
+    after_noon.order_by("raceid")
+
+    all_rows = M.Race.objects
+    all_rows.filter("year" => 2009, "start_at__@isnull" => false)
+    all_rows.values("raceid", "date", "start_at")
+    all_rows.order_by("raceid")
+    df = all_rows |> DataFrame
+    gap_ms = [Dates.value(Dates.DateTime(s) - Dates.DateTime(Dates.Date(string(d)))) for (s, d) in zip(df.start_at, df.date)]
+    keep = gap_ms .> 12 * 3_600_000
+    got = (after_noon |> DataFrame).raceid
+    @test 0 < length(got) < size(df, 1)   # the filter does work, so the equality is not vacuous
+    @test got == df.raceid[keep]
+  end
+
+  @testset "arithmetic on a timestamp difference equals Julia's (#881)" begin
+    d() = F("start_at") - F("date")
+    query = M.Race.objects
+    query.filter("year" => 2009, "start_at__@isnull" => false)
+    query.values("raceid", "date", "start_at",
+                 "twice" => d() + d(), "zero" => d() - d(), "doubled" => d() * 2, "doubled_left" => 2 * d(),
+                 "halved" => d() / 2, "plus_hour" => d() + Dates.Hour(1),
+                 # The field-expressions guide's example: how far each start was from 14:00 UTC.
+                 "from_14h" => d() - Dates.Hour(14))
+    query.order_by("raceid")
+    df = query |> DataFrame
+    @test size(df, 1) > 1
+    gap = [Dates.value(Dates.DateTime(s) - Dates.DateTime(Dates.Date(string(dd)))) for (s, dd) in zip(df.start_at, df.date)]
+    ms(col) = [Dates.toms(x) for x in df[!, col]]
+    @test all(x -> x isa Dates.CompoundPeriod, df.twice)
+    @test ms(:twice) == 2 .* gap
+    @test ms(:zero) == zeros(Int, length(gap))
+    @test ms(:doubled) == 2 .* gap
+    @test ms(:doubled_left) == 2 .* gap
+    @test ms(:halved) == [round(Int, g / 2, RoundNearestTiesAway) for g in gap]
+    @test ms(:plus_hour) == gap .+ 3_600_000
+    @test ms(:from_14h) == gap .- 14 * 3_600_000
+    @test any(<(0), ms(:from_14h))   # a negative interval reads back with its sign
+  end
+
+  @testset "a date shifted by a timestamp difference is the timestamp (#881)" begin
+    d() = F("start_at") - F("date")
+    query = M.Race.objects
+    query.filter("year" => 2009, "start_at__@isnull" => false)
+    query.values("raceid", "start_at", "date",
+                 "date_first" => F("date") + d(), "interval_first" => d() + F("date"),
+                 "back" => F("start_at") - d())
+    query.order_by("raceid")
+    df = query |> DataFrame
+    @test size(df, 1) > 1
+    starts = [Dates.DateTime(s) for s in df.start_at]
+    midnights = [Dates.DateTime(Dates.Date(string(x))) for x in df.date]
+    @test [Dates.DateTime(x) for x in df.date_first] == starts
+    @test [Dates.DateTime(x) for x in df.interval_first] == starts
+    @test [Dates.DateTime(x) for x in df.back] == midnights
+  end
+
+  @testset "a DurationField joins interval arithmetic and shifts (#881)" begin
+    # The field-expressions guide's example: when each driver's first lap of the 2009 Australian GP
+    # ended — the race start plus the lap time. `milliseconds` is the same lap time, as a number.
+    query = M.Lap_times.objects
+    query.filter("raceid__year" => 2009, "raceid__round" => 1, "lap" => 1)
+    query.values("driverid__surname", "milliseconds", "raceid__start_at",
+                 "ended_at" => F("raceid__start_at") + F("time"),
+                 "doubled" => F("time") * 2,
+                 "plus_gap" => F("time") + (F("raceid__start_at") - F("raceid__start_at")))
+    df = query |> DataFrame
+    @test size(df, 1) > 1
+    @test [Dates.DateTime(x) for x in df.ended_at] ==
+          [Dates.DateTime(s) + Dates.Millisecond(m) for (s, m) in zip(df.raceid__start_at, df.milliseconds)]
+    @test [Dates.toms(x) for x in df.doubled] == 2 .* df.milliseconds
+    @test [Dates.toms(x) for x in df.plus_gap] == df.milliseconds
+
+    # A lap time against a difference: both are durations, compared as numbers on both engines.
+    under = M.Lap_times.objects
+    under.filter("raceid__year" => 2009, "raceid__round" => 1, "lap" => 1,
+                 F("time") < (F("raceid__start_at") + Dates.Minute(2)) - F("raceid__start_at"))
+    under.values("milliseconds")
+    @test sort((under |> DataFrame).milliseconds) == sort(filter(<(120_000), df.milliseconds))
   end
 end

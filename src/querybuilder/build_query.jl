@@ -171,6 +171,8 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       original = v_copy.field
       kind = nothing
       if original isa FExpression
+        # #881: one of the renderer's two doors out — an interval it held in milliseconds on SQLite
+        # arrives here as the stored text, typed `CInterval`.
         v_copy.field, kind = _set_update_query_typed(original, instruc)
         # #824: a bare `F("ts__@date")` is the transform's result, which the column lookup cannot
         # name. Since #814 `_set_update_query_typed` names it too (`_side_kind`), because the same

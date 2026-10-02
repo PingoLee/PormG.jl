@@ -131,6 +131,14 @@ const _FD_SUBDAY_TS     = "1991-10-06T06:00:00.000+00:00"   # #527, the sub-day 
 # `test_alignment_sqlite.jl`; here it is only the marker the wrapper-choice cases look for.
 const _FD_TS_WRAPPER    = "strftime('%Y-%m-%dT%H:%M:%f+00:00', "
 
+# #881 — the SQLite reading of the `lap` DurationField's stored `[-]HH:MM:SS[.f]` text as signed
+# milliseconds. Spelled literally for the reason the strings above are: `Dialect._sqlite_interval_ms`
+# is under test. Its result on real values is checked against SQLite itself further down.
+const _FD_LAP_MS = "((CASE WHEN substr(\"Tb\".\"lap\", 1, 1) = '-' THEN -1 ELSE 1 END) * " *
+                   "(CAST(ltrim(\"Tb\".\"lap\", '+-') AS INTEGER) * 3600000 + " *
+                   "CAST(substr(\"Tb\".\"lap\", instr(\"Tb\".\"lap\", ':') + 1, 2) AS INTEGER) * 60000 + " *
+                   "CAST(round(CAST(substr(\"Tb\".\"lap\", instr(\"Tb\".\"lap\", ':') + 4) AS REAL) * 1000) AS INTEGER)))"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # The contract itself: the dispatch union and the storage slot must admit the same types.
 # This is the assertion that keeps #494 fixed. Every other testset here checks a consequence; this
@@ -1117,24 +1125,10 @@ end
     @test occursin("CAST(julianday(\"Tb\".\"seen\") - julianday(LAG(", _fd_sql(q; conn = _FD_SL))
   end
 
-  # Arithmetic ON a difference is text arithmetic on SQLite (`d + d` is the sum of the leading hours),
-  # so it is refused there, on either side and through a duration shift. PostgreSQL's interval
-  # arithmetic is native and renders as before.
-  @testset "arithmetic on a difference is refused on SQLite" begin
-    d() = F("logged_at") - F("race__starts_at")
-    for expr in (d() + d(), d() * 2, d() / 2, F("points") * d(), F("lap") + d(), d() + Dates.Hour(1),
-                 (F("seen") - F("race__date")) + d())
-      q = FD.Fd_result.objects
-      q.values("x" => expr)
-      err = try _fd_sql(q; conn = _FD_SL); nothing catch e; e end
-      @test err isa PormG.QueryBuildError
-      @test occursin("on the difference of two timestamps is not supported on SQLite", sprint(showerror, err))
-
-      q_pg = FD.Fd_result.objects
-      q_pg.values("x" => expr)
-      @test occursin("(\"Tb\".\"logged_at\" - \"Tb_1\".\"starts_at\")", _fd_sql(q_pg; conn = _FD_PG))
-    end
-  end
+  # #881 overwrote "arithmetic on a difference is refused on SQLite" on purpose. #814 refused it there
+  # because the difference was TEXT (`d + d` added the leading hours). It is a number of milliseconds
+  # now, until the finished value is formatted, so the arithmetic is arithmetic; see the #881 testsets.
+  # What still has no meaning is refused there (`#881: what SQLite still refuses`).
 
   @testset "the SQLite text reads back as a CompoundPeriod" begin
     parse = PormG.value_parser(PormG.CInterval(), _FD_SL)
@@ -1148,45 +1142,56 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # #814: comparing a timestamp difference.
-# `==`/`!=` are exact on both engines — the SQLite text is the canonical form a duration literal
-# binds as. ORDERING is refused on SQLite only: the difference is TEXT there, and "100:00:00" sorts
-# before "99:00:00". A duration literal (`Hour(1)`) is a comparison operand now, bound through
-# `format_duration_sql`; a `Time` is refused with a hint, and a duration against a non-interval is
-# refused at build time rather than reaching a formatter with no method for it.
+# A duration literal (`Hour(1)`) is a comparison operand, bound through `format_duration_sql` on
+# PostgreSQL; a `Time` is refused with a hint, and a duration against a non-interval is refused at
+# build time rather than reaching a formatter with no method for it.
+#
+# #881 overwrote the SQLite half on purpose. #814 compared the difference as TEXT there, so `==`/`!=`
+# bound the stored text and ORDERING was refused ("100:00:00" sorts before "99:00:00"). The difference
+# is milliseconds now, so every comparison is numeric and the duration binds its milliseconds.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#814: comparing a timestamp difference" begin
   diff() = F("logged_at") - F("race__starts_at")
+  ms_diff = "CAST(round((julianday(\"Tb\".\"logged_at\") - julianday(\"Tb_1\".\"starts_at\")) * 86400000) AS INTEGER)"
 
-  @testset "== and != against a duration bind the stored text, on both engines" begin
-    for (op, token) in ((==, "="), (!=, "!=")), conn in (_FD_SL, _FD_PG)
+  @testset "== and != against a duration: milliseconds on SQLite, the text on PostgreSQL" begin
+    for (op, token) in ((==, "="), (!=, "!="))
       q = FD.Fd_result.objects
       q.filter(op(diff(), Dates.Hour(6)))
-      @test occursin(" $(token) ", _fd_sql(q; conn = conn))
-      @test _fd_params(q; conn = conn) == Any["06:00:00"]
+      @test occursin("WHERE ($(ms_diff) $(token) ?)", _fd_sql(q; conn = _FD_SL))
+      @test _fd_params(q; conn = _FD_SL) == Any[21_600_000]
+      q_pg = FD.Fd_result.objects
+      q_pg.filter(op(diff(), Dates.Hour(6)))
+      @test occursin(" $(token) ", _fd_sql(q_pg; conn = _FD_PG))
+      @test _fd_params(q_pg; conn = _FD_PG) == Any["06:00:00"]
     end
   end
 
-  @testset "ordering is refused on SQLite, and binds on PostgreSQL" begin
-    for op in (>, <, >=, <=)
+  @testset "ordering compares milliseconds on SQLite, and an interval on PostgreSQL" begin
+    for (op, token) in ((>, ">"), (<, "<"), (>=, ">="), (<=, "<="))
       q = FD.Fd_result.objects
       q.filter(op(diff(), Dates.Hour(1)))
-      err = try _fd_sql(q; conn = _FD_SL); nothing catch e; e end
-      @test err isa PormG.QueryBuildError
-      @test occursin("does not order like a duration", sprint(showerror, err))
+      @test occursin("WHERE ($(ms_diff) $(token) ?)", _fd_sql(q; conn = _FD_SL))
+      @test _fd_params(q; conn = _FD_SL) == Any[3_600_000]
 
       q_pg = FD.Fd_result.objects
       q_pg.filter(op(diff(), Dates.Hour(1)))
       @test occursin("(\"Tb\".\"logged_at\" - \"Tb_1\".\"starts_at\")", _fd_sql(q_pg; conn = _FD_PG))
       @test _fd_params(q_pg; conn = _FD_PG) == Any["01:00:00"]
     end
+    # A compound duration is its total, and a fraction of a millisecond rounds half away from zero.
+    q = FD.Fd_result.objects
+    q.filter(diff() > Dates.Hour(1) + Dates.Minute(30) + Dates.Microsecond(500))
+    @test _fd_params(q; conn = _FD_SL) == Any[5_400_001]
   end
 
-  # The difference on the RIGHT of an ordering is the same comparison, and refused the same way.
-  @testset "a difference on the right is refused too" begin
+  # A DurationField column against a difference compares both as milliseconds on SQLite: the column's
+  # stored text is parsed in SQL (it is a column reference, so repeating it binds nothing).
+  @testset "a difference on the right of a DurationField column" begin
     q = FD.Fd_result.objects
     q.filter(F("lap") < diff())
-    err = try _fd_sql(q; conn = _FD_SL); nothing catch e; e end
-    @test err isa PormG.QueryBuildError
+    @test occursin("WHERE ($(_FD_LAP_MS) < $(ms_diff))", _fd_sql(q; conn = _FD_SL))
+    @test isempty(_fd_params(q; conn = _FD_SL))
 
     q_pg = FD.Fd_result.objects
     q_pg.filter(F("lap") < diff())
@@ -1205,30 +1210,32 @@ end
   # An interval with no rooted COLUMN — two aggregates — still binds the duration as interval text.
   # Review of #814: it fell to the literal's own family and reached `format_number_sql(::Hour)`, a
   # raw MethodError on both engines.
+  # #881: on SQLite the difference is milliseconds, so the duration binds its milliseconds there.
   @testset "a duration against an interval with no rooted column binds" begin
-    for conn in (_FD_SL, _FD_PG)
+    for (conn, bound) in ((_FD_SL, 3_600_000), (_FD_PG, "01:00:00"))
       q = FD.Fd_result.objects
       q.values("race")
       q.filter((_FN.Max("logged_at") - _FN.Min("logged_at")) == Dates.Hour(1))
-      @test _fd_params(q; conn = conn) == Any["01:00:00"]
+      @test _fd_params(q; conn = conn) == Any[bound]
     end
   end
 
-  # Untyped arithmetic over a DurationField: on PostgreSQL `lap * 2` is an interval and the duration
-  # binds as one; on SQLite it is a NUMBER, so a duration bound against it would compare number with
-  # text and answer a constant. Review of #814 found SQLite admitting the duration through the rooted
-  # column; it is refused there, and only there.
-  @testset "untyped arithmetic over a DurationField admits a duration on PostgreSQL only" begin
-    for (expr, bound) in (((F("lap") * 2) > Dates.Hour(1), "01:00:00"), ((F("lap") + F("lap")) == Dates.Hour(2), "02:00:00"))
+  # Arithmetic over a DurationField: on PostgreSQL `lap * 2` is an interval and the duration binds as
+  # one. #814 refused the duration on SQLite, where `lap * 2` was a NUMBER (the leading hours doubled)
+  # and the comparison answered a constant. #881 overwrote that half on purpose: the column's text is
+  # read as milliseconds inside arithmetic, so `lap * 2` is an interval there too, compared as one.
+  @testset "arithmetic over a DurationField compares as an interval on both engines" begin
+    for (expr, sl_left, sl_bound, pg_bound) in (
+        ((F("lap") * 2) > Dates.Hour(1), "CAST(round(($(_FD_LAP_MS)) * (?)) AS INTEGER) > ?", 3_600_000, "01:00:00"),
+        ((F("lap") + F("lap")) == Dates.Hour(2), "($(_FD_LAP_MS) + $(_FD_LAP_MS)) = ?", 7_200_000, "02:00:00"))
       q = FD.Fd_result.objects
       q.filter(expr)
-      err = try _fd_sql(q; conn = _FD_SL); nothing catch e; e end
-      @test err isa PormG.QueryBuildError
-      @test occursin("compares only against an interval", sprint(showerror, err))
+      @test occursin("WHERE ($(sl_left))", _fd_sql(q; conn = _FD_SL))
+      @test last(_fd_params(q; conn = _FD_SL)) == sl_bound
 
       q_pg = FD.Fd_result.objects
       q_pg.filter(expr)
-      @test last(_fd_params(q_pg; conn = _FD_PG)) == bound
+      @test last(_fd_params(q_pg; conn = _FD_PG)) == pg_bound
     end
     # A Time against it still gets the hint naming the duration to write, on both engines.
     for conn in (_FD_SL, _FD_PG)
@@ -1513,23 +1520,48 @@ end
   end
 
   # The interval half: `date ± interval` is native on PostgreSQL and was text arithmetic on SQLite —
-  # the year plus the hours. Refused on SQLite; `interval - date` is meaningless and refused on both.
-  @testset "a date shifted by an interval value is refused on SQLite" begin
+  # the year plus the hours. #814 refused it on SQLite; #881 overwrote that on purpose and shifts the
+  # julian-day number by the interval's milliseconds, with the date on either side. The result is a
+  # timestamp on both engines (PostgreSQL's `date + interval` is one), typed so it reads back alike.
+  # `interval - date` is meaningless and refused on both.
+  @testset "a date shifted by an interval value" begin
     tsdiff() = F("logged_at") - F("race__starts_at")
-    for (expr, pg_sql) in ((F("seen") + F("lap"), "(\"Tb\".\"seen\" + \"Tb\".\"lap\")"),
-                           (F("logged_at") - F("lap"), "(\"Tb\".\"logged_at\" - \"Tb\".\"lap\")"),
-                           (F("lap") + F("seen"), "(\"Tb\".\"lap\" + \"Tb\".\"seen\")"),
-                           (F("seen") + tsdiff(), "(\"Tb\".\"seen\" + (\"Tb\".\"logged_at\" - \"Tb_1\".\"starts_at\"))"))
+    ms_diff = "CAST(round((julianday(\"Tb\".\"logged_at\") - julianday(\"Tb_1\".\"starts_at\")) * 86400000) AS INTEGER)"
+    for (expr, sl_sql, pg_sql, kind) in (
+        (F("seen") + F("lap"), _FD_TS_WRAPPER * "julianday(\"Tb\".\"seen\") + (($(_FD_LAP_MS)) / 86400000.0))",
+         "(\"Tb\".\"seen\" + \"Tb\".\"lap\")", PormG.CDateTime(false)),
+        (F("logged_at") - F("lap"), _FD_TS_WRAPPER * "julianday(\"Tb\".\"logged_at\") - (($(_FD_LAP_MS)) / 86400000.0))",
+         "(\"Tb\".\"logged_at\" - \"Tb\".\"lap\")", PormG.CDateTime(true)),
+        (F("lap") + F("seen"), _FD_TS_WRAPPER * "(($(_FD_LAP_MS)) / 86400000.0) + julianday(\"Tb\".\"seen\"))",
+         "(\"Tb\".\"lap\" + \"Tb\".\"seen\")", PormG.CDateTime(false)),
+        (F("seen") + tsdiff(), _FD_TS_WRAPPER * "julianday(\"Tb\".\"seen\") + (($(ms_diff)) / 86400000.0))",
+         "(\"Tb\".\"seen\" + (\"Tb\".\"logged_at\" - \"Tb_1\".\"starts_at\"))", PormG.CDateTime(false)),
+        (tsdiff() + F("logged_at"), _FD_TS_WRAPPER * "(($(ms_diff)) / 86400000.0) + julianday(\"Tb\".\"logged_at\"))",
+         "((\"Tb\".\"logged_at\" - \"Tb_1\".\"starts_at\") + \"Tb\".\"logged_at\")", PormG.CDateTime(true)))
       q = FD.Fd_result.objects
       q.values("x" => expr)
-      err = try _fd_sql(q; conn = _FD_SL); nothing catch e; e end
-      @test err isa PormG.QueryBuildError
-      @test occursin("not supported on SQLite", sprint(showerror, err))
+      @test occursin(sl_sql, _fd_sql(q; conn = _FD_SL))
+      @test isempty(_fd_params(q; conn = _FD_SL))
 
       q_pg = FD.Fd_result.objects
       q_pg.values("x" => expr)
       @test occursin(pg_sql, _fd_sql(q_pg; conn = _FD_PG))
+      for conn in (_FD_SL, _FD_PG)
+        @test _fd_kinds(q -> q.values("x" => expr); conn = conn)[:x] == kind
+      end
     end
+    # A side with parameters is bound once, in text order, with the date on either side.
+    q = FD.Fd_result.objects
+    q.values("x" => F("seen") - ((F("logged_at") + Dates.Hour(2)) - F("race__starts_at")))
+    @test Base.count("?", _fd_sql(q; conn = _FD_SL)) == 1   # `count` here is the testset's day count
+    @test _fd_params(q; conn = _FD_SL) == Any[2]
+    # An interval that has no millisecond form — an extremum over a duration, text that may carry
+    # parameters — is still refused on SQLite.
+    q2 = FD.Fd_result.objects
+    q2.values("x" => _FN.Max("seen") + _FN.Max("lap"))
+    err = try _fd_sql(q2; conn = _FD_SL); nothing catch e; e end
+    @test err isa PormG.QueryBuildError
+    @test occursin("not supported on SQLite", sprint(showerror, err))
     for conn in (_FD_SL, _FD_PG)
       q = FD.Fd_result.objects
       q.values("x" => F("lap") - F("seen"))
@@ -1539,14 +1571,13 @@ end
     end
   end
 
-  # A count or an interval with a NON-temporal right is arithmetic, exactly as before.
-  @testset "a day count or a duration with a number is unchanged" begin
+  # A count with a NON-temporal right is arithmetic, exactly as before.
+  @testset "a day count with a number is unchanged" begin
     for (expr, sl_sql, pg_sql) in (
         (count() * 2, "(CAST(julianday(\"Tb\".\"seen\") - julianday(\"Tb_1\".\"date\") AS INTEGER) * ?)",
          "((\"Tb\".\"seen\" - \"Tb_1\".\"date\") * \$1::bigint)"),
         (count() - F("points"), "(CAST(julianday(\"Tb\".\"seen\") - julianday(\"Tb_1\".\"date\") AS INTEGER) - \"Tb\".\"points\")",
          "((\"Tb\".\"seen\" - \"Tb_1\".\"date\") - \"Tb\".\"points\")"),
-        (F("lap") + 1, "(\"Tb\".\"lap\" + ?)", "(\"Tb\".\"lap\" + \$1::bigint)"),
       )
       q = FD.Fd_result.objects
       q.values("x" => expr)
@@ -1555,6 +1586,20 @@ end
       q_pg.values("x" => expr)
       @test occursin(pg_sql, _fd_sql(q_pg; conn = _FD_PG))
     end
+  end
+
+  # #881 overwrote the `F("lap") + 1` row on purpose. It pinned `"lap" + ?` on SQLite, which adds 1 to
+  # the stored text's leading HOURS. PostgreSQL has no `interval + integer` and fails when it runs, so
+  # SQLite refuses it at build time; PostgreSQL's SQL is unchanged.
+  @testset "a duration plus a number is refused on SQLite" begin
+    q = FD.Fd_result.objects
+    q.values("x" => F("lap") + 1)
+    err = try _fd_sql(q; conn = _FD_SL); nothing catch e; e end
+    @test err isa PormG.QueryBuildError
+    @test occursin("between an interval and a number is not supported on SQLite", sprint(showerror, err))
+    q_pg = FD.Fd_result.objects
+    q_pg.values("x" => F("lap") + 1)
+    @test occursin("(\"Tb\".\"lap\" + \$1::bigint)", _fd_sql(q_pg; conn = _FD_PG))
   end
 end
 
@@ -1800,5 +1845,187 @@ end
     q.filter(F("points") > 5)
     @test occursin("WHERE (\"Tb\".\"points\" > \$1::bigint)", _fd_sql(q; conn = _FD_PG))
     @test _fd_params(q; conn = _FD_PG) == Any[5]
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #881 — on SQLite an interval is an INTEGER number of milliseconds while the expression is built,
+# and becomes the stored `HH:MM:SS` text once, where its SQL leaves the expression. So arithmetic on a
+# timestamp difference is arithmetic on a number there, and only the finished value is formatted.
+# PostgreSQL renders the SQL it always rendered, and now types interval arithmetic `CInterval`.
+# ─────────────────────────────────────────────────────────────────────────────
+const _FD_MS_DIFF = "CAST(round((julianday(\"Tb\".\"logged_at\") - julianday(\"Tb_1\".\"starts_at\")) * 86400000) AS INTEGER)"
+const _FD_PG_DIFF = "(\"Tb\".\"logged_at\" - \"Tb_1\".\"starts_at\")"
+_fd_diff() = F("logged_at") - F("race__starts_at")
+
+@testset "#881: arithmetic on an interval renders in milliseconds on SQLite" begin
+  @testset "$label" for (label, expr, sl_ms, sl_params, pg_sql, pg_params) in (
+      ("d + d", _fd_diff() + _fd_diff(), "($(_FD_MS_DIFF) + $(_FD_MS_DIFF))", Any[],
+       "($(_FD_PG_DIFF) + $(_FD_PG_DIFF))", Any[]),
+      ("d - d", _fd_diff() - _fd_diff(), "($(_FD_MS_DIFF) - $(_FD_MS_DIFF))", Any[],
+       "($(_FD_PG_DIFF) - $(_FD_PG_DIFF))", Any[]),
+      ("d + Hour(1)", _fd_diff() + Dates.Hour(1), "($(_FD_MS_DIFF) + ?)", Any[3_600_000],
+       "($(_FD_PG_DIFF) + make_interval(hours => \$1::integer))", Any[1]),
+      ("d - Minute(90)", _fd_diff() - Dates.Minute(90), "($(_FD_MS_DIFF) - ?)", Any[5_400_000],
+       "($(_FD_PG_DIFF) - make_interval(mins => \$1::integer))", Any[90]),
+      ("d * 2", _fd_diff() * 2, "CAST(round(($(_FD_MS_DIFF)) * (?)) AS INTEGER)", Any[2],
+       "($(_FD_PG_DIFF) * \$1::bigint)", Any[2]),
+      # #884: a number on the left is the same node as on the right.
+      ("2 * d", 2 * _fd_diff(), "CAST(round(($(_FD_MS_DIFF)) * (?)) AS INTEGER)", Any[2],
+       "($(_FD_PG_DIFF) * \$1::bigint)", Any[2]),
+      ("d / 2", _fd_diff() / 2, "CAST(round(($(_FD_MS_DIFF)) * 1.0 / (?)) AS INTEGER)", Any[2],
+       "($(_FD_PG_DIFF) / \$1::bigint)", Any[2]),
+      ("points * d", F("points") * _fd_diff(), "CAST(round((\"Tb\".\"points\") * ($(_FD_MS_DIFF))) AS INTEGER)", Any[],
+       "(\"Tb\".\"points\" * $(_FD_PG_DIFF))", Any[]),
+      # A DurationField column joins in through its parsed text.
+      ("d + lap", _fd_diff() + F("lap"), "($(_FD_MS_DIFF) + $(_FD_LAP_MS))", Any[],
+       "($(_FD_PG_DIFF) + \"Tb\".\"lap\")", Any[]),
+      ("lap - d", F("lap") - _fd_diff(), "($(_FD_LAP_MS) - $(_FD_MS_DIFF))", Any[],
+       "(\"Tb\".\"lap\" - $(_FD_PG_DIFF))", Any[]),
+      ("lap * 2", F("lap") * 2, "CAST(round(($(_FD_LAP_MS)) * (?)) AS INTEGER)", Any[2],
+       "(\"Tb\".\"lap\" * \$1::bigint)", Any[2]),
+    )
+    q = FD.Fd_result.objects
+    q.values("x" => expr)
+    sql = _fd_sql(q; conn = _FD_SL)
+    # The finished value, in milliseconds, formatted ONCE: the same subquery a bare difference gets.
+    @test occursin("FROM (SELECT $(sl_ms) AS _pormg_ms))", sql)
+    @test count("_pormg_ms)) as \"x\"", sql) == 1
+    @test _fd_params(q; conn = _FD_SL) == sl_params
+
+    q_pg = FD.Fd_result.objects
+    q_pg.values("x" => expr)
+    @test occursin(pg_sql, _fd_sql(q_pg; conn = _FD_PG))
+    @test _fd_params(q_pg; conn = _FD_PG) == pg_params
+    for conn in (_FD_SL, _FD_PG)
+      @test _fd_kinds(q -> q.values("x" => expr); conn = conn)[:x] === PormG.CInterval()
+    end
+  end
+
+  # A zero-length duration is the identity and binds nothing, as it does on a date.
+  @testset "d + Hour(0) is d" begin
+    q = FD.Fd_result.objects
+    q.values("x" => _fd_diff() + Dates.Hour(0))
+    @test occursin("FROM (SELECT $(_FD_MS_DIFF) AS _pormg_ms))", _fd_sql(q; conn = _FD_SL))
+    @test isempty(_fd_params(q; conn = _FD_SL))
+  end
+
+  # The arithmetic composes before it is compared: still milliseconds, never the text.
+  @testset "interval arithmetic compares as an interval, on both engines" begin
+    q = FD.Fd_result.objects
+    q.filter((_fd_diff() + _fd_diff()) > Dates.Hour(1))
+    @test occursin("WHERE (($(_FD_MS_DIFF) + $(_FD_MS_DIFF)) > ?)", _fd_sql(q; conn = _FD_SL))
+    @test _fd_params(q; conn = _FD_SL) == Any[3_600_000]
+    # PostgreSQL refused this before #881 (the binder took the rooted DateTimeField's kind); typed
+    # `CInterval`, the duration binds as an interval, as it does against a bare difference.
+    q_pg = FD.Fd_result.objects
+    q_pg.filter((_fd_diff() + _fd_diff()) > Dates.Hour(1))
+    @test occursin("WHERE (($(_FD_PG_DIFF) + $(_FD_PG_DIFF)) > \$1)", _fd_sql(q_pg; conn = _FD_PG))
+    @test _fd_params(q_pg; conn = _FD_PG) == Any["01:00:00"]
+  end
+end
+
+# What SQLite still refuses. Each has no PostgreSQL operator either (`integer + interval`,
+# `interval * interval`, `integer / interval`, `date * interval`), or the interval has no millisecond
+# form (an extremum over a duration column is text, which may carry parameters), or the duration has
+# no fixed length (a month).
+@testset "#881: what SQLite still refuses: $label" for (label, expr, msg) in (
+    ("count + d", (F("seen") - F("race__date")) + _fd_diff(), "between a number and an interval"),
+    ("d + a number", _fd_diff() + 5, "between an interval and a number"),
+    ("d * d", _fd_diff() * _fd_diff(), "`*` between an interval and"),
+    ("d / d", _fd_diff() / _fd_diff(), "`/` between an interval and"),
+    ("a number / d", F("points") / _fd_diff(), "on the right of a value that is not one"),
+    ("a number - d", F("points") - _fd_diff(), "between a number and an interval"),
+    ("a date * d", F("seen") * _fd_diff(), "between a date and an interval"),
+    ("d + Month(1)", _fd_diff() + Dates.Month(1), "no fixed length"),
+    ("Max(lap) + d", _FN.Max("lap") + _fd_diff(), "not a timestamp difference or a DurationField column"),
+    ("d * Lag(points)", _fd_diff() * _FN.Lag("points", over = _FN.WindowOver(order_by = ["id"])), "window function"),
+  )
+  q = FD.Fd_result.objects
+  q.values("x" => expr)
+  err = try _fd_sql(q; conn = _FD_SL); nothing catch e; e end
+  @test err isa PormG.QueryBuildError
+  @test occursin(msg, sprint(showerror, err))
+end
+
+# The kind that carries milliseconds is the renderer's own. Every door out of it — the projection's
+# read kind, the String every other caller gets — sees the stored text and `CInterval`.
+@testset "#881: the millisecond kind never leaves the renderer" begin
+  @test !(QB._IntervalMs <: PormG.CanonicalType)
+  @test !(QB._IntervalMs() isa QB.TemporalKind)
+  q = FD.Fd_result.objects
+  q.values("x" => _fd_diff() * 2, "y" => _fd_diff())
+  sql = _fd_sql(q; conn = _FD_SL)
+  @test count("AS _pormg_ms))", sql) == 2
+  @test all(k -> !(k isa QB._IntervalMs), values(_fd_kinds(q -> q.values("x" => _fd_diff() * 2); conn = _FD_SL)))
+  # The other door, `_set_update_query`: an expression on the right of `==` against a value that is
+  # not an interval renders through it, and gets the text, as it did before #881.
+  q2 = FD.Fd_result.objects
+  q2.filter(F("code") == _fd_diff() * 2)
+  sql2 = _fd_sql(q2; conn = _FD_SL)
+  @test occursin("WHERE (\"Tb\".\"code\" = (SELECT CASE WHEN _pormg_ms IS NULL", sql2)
+  @test occursin("FROM (SELECT CAST(round(($(_FD_MS_DIFF)) * (?)) AS INTEGER) AS _pormg_ms)))", sql2)
+end
+
+# The SQL measured against SQLite itself, in memory (no live database). The two `Dialect` helpers are
+# inverses on the stored text, and the rendered statements answer what a number would: a difference
+# over 99 hours, and a negative one, order correctly, where comparing the text did not.
+@testset "#881: the millisecond SQL agrees with SQLite itself" begin
+  isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+  db = Main.SQLite.DB()
+  try
+    exe(sql, params = Any[]) = Main.SQLite.DBInterface.execute(db, sql, params)
+    # Read inside the iteration: a SQLite row is a view of the cursor.
+    col(sql, params = Any[]) = [row.v for row in exe(sql, params)]
+
+    exe("CREATE TABLE t (id INTEGER, lap TEXT)")
+    stored = ["06:00:00", "126:30:15.25", "-01:30:00", "00:01:49.088", "00:00:59.9996", "00:00:00", missing]
+    for (i, s) in enumerate(stored)
+      exe("INSERT INTO t VALUES (?, ?)", Any[i, s])
+    end
+    ms = col("SELECT $(PormG.Dialect._sqlite_interval_ms("lap")) AS v FROM t ORDER BY id")
+    @test isequal(ms, Any[21_600_000, 455_415_250, -5_400_000, 109_088, 60_000, 0, missing])
+    # Back to text: the canonical stored values come back unchanged, NULL stays NULL.
+    text = col("SELECT $(PormG.Dialect._sqlite_interval_text(PormG.Dialect._sqlite_interval_ms("lap"))) AS v FROM t ORDER BY id")
+    @test isequal(text, Any["06:00:00", "126:30:15.25", "-01:30:00", "00:01:49.088", "00:01:00", "00:00:00", missing])
+
+    # The rendered statements, on tables shaped like the fixture.
+    exe("CREATE TABLE fd_race (id INTEGER, name TEXT, date TEXT, starts_at TEXT)")
+    exe("CREATE TABLE fd_result (id INTEGER, race INTEGER, points INTEGER, seen TEXT, logged_at TEXT, " *
+        "amount REAL, uid TEXT, flag INTEGER, at TEXT, code TEXT, lap TEXT, laps INTEGER)")
+    exe("INSERT INTO fd_race VALUES (1, 'r', '2009-03-29', '2009-03-29T06:00:00.000+00:00')")
+    # 1: 100 h after the start ("100:00:00" sorts below "99:00:00" as text); 2: 2 h before it; 3: 30 min.
+    exe("INSERT INTO fd_result (id, race, points, seen, logged_at, lap) VALUES " *
+        "(1, 1, 3, '2009-04-02', '2009-04-02T10:00:00.000+00:00', '00:01:49.088'), " *
+        "(2, 1, 1, '2009-03-29', '2009-03-29T04:00:00.000+00:00', '-01:00:00'), " *
+        "(3, 1, 2, '2009-03-29', '2009-03-29T06:30:00.000+00:00', '00:00:30')")
+    run(build!) = begin
+      q = FD.Fd_result.objects
+      build!(q)
+      insp = inspect_query(q; connection = _FD_SL)
+      [Dict(k => getproperty(row, k) for k in propertynames(row)) for row in exe(insp[:sql_text], insp[:parameters])]
+    end
+    ids(build!) = sort([r[:id] for r in run(q -> (build!(q); q.values("id")))])
+
+    @test ids(q -> q.filter(_fd_diff() > Dates.Hour(99))) == [1]
+    @test ids(q -> q.filter(_fd_diff() < Dates.Hour(0))) == [2]
+    @test ids(q -> q.filter(_fd_diff() == Dates.Minute(30))) == [3]
+    @test ids(q -> q.filter((_fd_diff() * 2) >= Dates.Hour(1))) == [1, 3]
+    @test ids(q -> q.filter(F("lap") < _fd_diff())) == [1, 3]
+
+    values_of(expr) = Dict(r[:id] => r[:x] for r in run(q -> q.values("id", "x" => expr)))
+    @test values_of(_fd_diff())[1] == "100:00:00"
+    @test values_of(_fd_diff() + _fd_diff())[2] == "-04:00:00"
+    @test values_of(2 * _fd_diff())[3] == "01:00:00"
+    @test values_of(_fd_diff() / 3)[3] == "00:10:00"
+    @test values_of(F("points") * _fd_diff())[3] == "01:00:00"
+    @test values_of(_fd_diff() - Dates.Minute(90))[1] == "98:30:00"
+    @test values_of(_fd_diff() + F("lap"))[1] == "100:01:49.088"
+    # Shifts: back to the race start, by a difference and by a DurationField column.
+    @test values_of(F("logged_at") - _fd_diff())[1] == "2009-03-29T06:00:00.000+00:00"
+    @test values_of(F("seen") + F("lap"))[2] == "2009-03-28T23:00:00.000+00:00"
+    @test values_of(_fd_diff() + F("seen"))[3] == "2009-03-29T00:30:00.000+00:00"
+  finally
+    close(db)
   end
 end

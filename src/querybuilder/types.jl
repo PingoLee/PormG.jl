@@ -909,6 +909,19 @@ Interval(s::AbstractString) = Interval(_parse_time_string_to_compoundperiod(s))
 # expression's `output_field`.
 const TemporalKind = Union{CanonicalType, Nothing}
 
+# #881 — an interval INSIDE a SQLite expression, as an integer number of milliseconds. SQLite has no
+# interval type, so a stored interval is text (`HH:MM:SS`), and text neither orders nor adds like a
+# duration. A computed interval is therefore carried as milliseconds while the expression is built,
+# and becomes the text once, where its SQL leaves the expression tree (`_finalize_render`).
+#
+# A kind of its own, not a `CanonicalType`: it is a representation of the query being built, never
+# of a stored column, so the value-representation table must not be able to answer for it, and
+# `TemporalKind` keeps meaning "a kind a reader or a binder can act on". Every signature typed
+# `TemporalKind` (the binder's `left_kind`, `projection_kinds`) is a guard that fails loudly if one
+# ever escapes the renderer.
+struct _IntervalMs end
+const _RenderKind = Union{TemporalKind, _IntervalMs}
+
 # Duration operands accepted by F-expression +/- date arithmetic (#25).
 const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 

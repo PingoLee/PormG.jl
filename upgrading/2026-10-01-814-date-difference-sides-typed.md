@@ -24,14 +24,12 @@ shift or a comparison built on such a side, so a few shapes outside differences 
 | `F("ts__@date") == DateTime(2009, 3, 1, 12)` on **SQLite** | bound the timestamp text; matched **no** rows (PostgreSQL's date input dropped the time and matched) | binds the calendar date, like `filter("ts__@date" => …)`; matches that day |
 | `F("date") - "2009-03-01"` (a text literal) | PostgreSQL: `StatementError` (`date - text`); SQLite: a wrong number | `QueryBuildError` on both: pass `Date(2009, 3, 1)` |
 
-New refusals, each on SQLite only, where a timestamp difference is interval **text**. Before #814
-each of these was already refused, because the difference itself was:
+One new refusal, on SQLite only: a window function as a side of a timestamp difference. Before #814
+it was already refused, because the difference itself was.
 
-- `>`, `<`, `>=`, `<=` against a timestamp difference (`==` and `!=` work);
-- arithmetic on a difference (`d + d`, `d * 2`, `d + Hour(1)`);
-- a window function as a side of a timestamp difference;
-- a date shifted by an interval **value** (a `DurationField`, or a difference). This one is new to
-  SQLite: it used to return the year plus the hours.
+(Ordering against a difference, arithmetic on one and a date shifted by an interval value were also
+refused on SQLite by #814. #881 renders all three before any release carried those refusals; see its
+own entry.)
 
 ### How to find the calls to migrate
 
@@ -65,5 +63,4 @@ Dates.hour(row[:next])                 # `row[:next]` is now a Date
 DateTime(row[:next])                   # when a timestamp is genuinely wanted
 ```
 
-On SQLite, to order or do arithmetic on how far apart two timestamps are, subtract two `DateField`
-values (whole days), or run the query on PostgreSQL.
+Ordering and arithmetic on a timestamp difference work on both engines since #881.

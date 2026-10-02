@@ -1533,9 +1533,13 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
   # its condition would be evaluated against the OLD type.
   retyped = Set{String}()
 
+  # #735: a join table's endpoint columns follow their end's rename without a question.
+  preset_renames = _join_table_endpoint_renames(current_schema[model_name][:model], colect_deletion, colect_addition,
+                                                live, model_fields_map, current_fields_map, conn)
+
   # Pass maps to resolve fields so original keys can be used for accessing model.fields
   _resolve_table_fields(conn, model_name, live, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive, index_actions=index_actions, sqlite_rename_map=sqlite_rename_map,
-                        lossy_alters=lossy_alters)
+                        lossy_alters=lossy_alters, preset_renames=preset_renames)
   # #742: every rename is answered now — refuse a declared condition naming a column that goes away.
   _refuse_stale_check_conditions(current_schema[model_name][:model], sqlite_rename_map, keys(live.columns))
 
@@ -1703,16 +1707,20 @@ function _resolve_table_fields(
                                   Tuple{Symbol, String, String, Union{String, Nothing}}[],
                                 sqlite_rename_map::Dict{String, String} = Dict{String, String}(),
                                 # #803: the lossy-ALTER sink, owned by `get_migration_plan`'s caller.
-                                lossy_alters::Vector{LossyAlter} = LossyAlter[]
+                                lossy_alters::Vector{LossyAlter} = LossyAlter[],
+                                # #735: answers known before anything is asked — added physical
+                                # column ⇒ the removed column it is renamed from. A column listed here
+                                # is never asked about; the rename then goes through the same branch
+                                # a typed answer does.
+                                preset_renames::AbstractDict{String, String} = Dict{String, String}()
                               )::Nothing
   # The catalog's name for this table at plan time — `model_name` except on a table rename (#615).
   # Lookups ask for it; DDL names `model_name`. See `_alter_table_fields`.
   catalog_table = Symbol(live.name)
-  # Check by rename field  
+  # Check by rename field
   while !isempty(colect_addition)
     field_name_sym = colect_addition[1]
-    field_name = field_name_sym |> string       
-    colect_numbered, list_to_question = _colect_numbered_fields(colect_deletion)
+    field_name = field_name_sym |> string
     if colect_deletion |> isempty
       # `field_name` here is the physical column; pass the real field key so _add_new_field's
       # model.fields lookup resolves (the DDL re-derives the db_column from the field) (#50).
@@ -1722,7 +1730,11 @@ function _resolve_table_fields(
       # Only the answer is parsed inside the reader; the rename work below propagates its own
       # failures as themselves (#197).
       old_field_sym::Union{Symbol, Nothing} = nothing
-      if interactive
+      if haskey(preset_renames, field_name) && Symbol(preset_renames[field_name]) in colect_deletion
+        old_field_sym = Symbol(preset_renames[field_name])
+      elseif interactive
+        colect_numbered, list_to_question = _ranked_field_candidates(
+          current_model.fields[current_fields_map[field_name]], field_name, colect_deletion, live, model_fields_map, conn)
         old_field_sym = _read_rename_answer(
             _emsg("Is the field \"\e[4m\e[31m$field_name\e[0m\" from table \"\e[4m\e[34m$model_name\e[0m\" the same as one of the following fields: \e[4m\e[33m$list_to_question\e[0m? If yes, please enter the corresponding number; otherwise, type 'no':"),
             "one of the listed numbers, or 'no'") do response
@@ -1962,16 +1974,70 @@ function _resolve_table_fields(
   return nothing
 end
 
-function _colect_numbered_fields(colect::Vector{Symbol})
-  # Number the rename candidates in a deterministic (name-sorted) order so the prompt — and the index the
-  # user answers with — is stable across runs regardless of the underlying set-iteration order. Sorting a
-  # copy leaves the caller's `colect_deletion` untouched (it's still needed for the later `filter!`).
-  colect = sort(colect, by = string)
-  colect_numbered = Dict{Int64, Symbol}()
-  for (index, field_name) in enumerate(colect)
-    colect_numbered[index] = field_name
+# #735: what renaming the live column `old_spec` into the declared `new_field` would ALSO change — the
+# `ColumnDelta` slots, empty when the definition is the same and only the name differs. The one
+# answer to "is this a likely rename?" that the prompts rank by: the column IR already decides whether
+# two columns are the same, so there is no second compatibility notion to drift from it.
+_rename_changes(new_field::PormGField, old_spec::ColumnSpec, conn, name::AbstractString)::Vector{Symbol} =
+  column_delta(new_field, old_spec, conn; name = name).changed
+
+# A live column as a rename prompt shows it: its type as the catalog renders it, and its parent when
+# it is a key — enough to judge a candidate without opening the model. Read off the spec alone.
+function _describe_live_column(spec::ColumnSpec)::String
+  ref = spec.reference
+  (ref === nothing || ref.table === nothing) && return spec.raw
+  return "$(spec.raw), FK → $(ref.table)"
+end
+
+# The field-rename candidates for the declared column `field_name`, numbered for the prompt (#735).
+# Every removed column is still offered — the maintainer chose ranking over Django's filter, so a
+# rename that also retypes stays one plan — but the same-definition ones come first, and each other
+# one says what renaming it would change. Name order inside each group keeps the numbering
+# deterministic across runs (it used to be name order alone). Sorting a copy leaves the caller's
+# `colect_deletion` untouched; it is still needed for the later `filter!`.
+function _ranked_field_candidates(new_field::PormGField, field_name::AbstractString, colect::Vector{Symbol},
+                                  live::LiveTable, model_fields_map::AbstractDict{String, String}, conn)
+  changes = Dict{Symbol, Vector{Symbol}}(
+    old => _rename_changes(new_field, live.columns[model_fields_map[string(old)]], conn, field_name) for old in colect)
+  ranked = sort(colect, by = old -> (!isempty(changes[old]), string(old)))
+  numbered = Dict{Int64, Symbol}(index => old for (index, old) in enumerate(ranked))
+  labels = map(enumerate(ranked)) do (index, old)
+    what = _describe_live_column(live.columns[model_fields_map[string(old)]])
+    isempty(changes[old]) ? "$index - $old ($what)" :
+                            "$index - $old ($what; renaming also changes: $(join(changes[old], ", ")))"
   end
-  return colect_numbered, join([string(index, " - ", colect_numbered[index]) for index in sort(collect(keys(colect_numbered)))], ", ")
+  return numbered, join(labels, ", ")
+end
+
+# The removed columns that `field_name` could be renamed from with nothing else changing (#735).
+_same_definition_candidates(new_field::PormGField, field_name::AbstractString, colect::Vector{Symbol},
+                            live::LiveTable, model_fields_map::AbstractDict{String, String}, conn)::Vector{Symbol} =
+  Symbol[old for old in colect
+         if isempty(_rename_changes(new_field, live.columns[model_fields_map[string(old)]], conn, field_name))]
+
+# #735: an auto many-to-many join table's endpoint columns follow their end's table rename, unasked.
+# The join table is synthesized (`Models.synthesize_many_to_many_through_models`) with one column per
+# end, named after that end's model — so renaming a model renames the column, and the user, who never
+# declared the column, was asked about it. Once `get_migration_plan` has retargeted the live
+# references, the old endpoint column and the new one have the same definition: same type, same
+# parent. A pair is taken only when it is the ONLY same-definition pair for both columns, so a
+# self-relation whose two ends both moved (`from_…`/`to_…`) is asked rather than guessed.
+function _join_table_endpoint_renames(current_model::PormGModel, colect_deletion::Vector{Symbol},
+                                      colect_addition::Vector{Symbol}, live::LiveTable,
+                                      model_fields_map::AbstractDict{String, String},
+                                      current_fields_map::AbstractDict{String, String}, conn)::Dict{String, String}
+  renames = Dict{String, String}()
+  (current_model.cache !== nothing && haskey(current_model.cache, "many_to_many_auto")) || return renames
+  same = Dict{Symbol, Vector{Symbol}}(
+    added => _same_definition_candidates(current_model.fields[current_fields_map[string(added)]], string(added),
+                                         colect_deletion, live, model_fields_map, conn)
+    for added in colect_addition)
+  for (added, olds) in same
+    length(olds) == 1 || continue
+    count(other -> only(olds) in other, values(same)) == 1 || continue
+    renames[string(added)] = string(only(olds))
+  end
+  return renames
 end
 
 # The one reader for every rename question `makemigrations` asks (#726). `parse_answer` maps the
@@ -2008,8 +2074,8 @@ _numbered_choice(response::AbstractString, numbered::AbstractDict{Int64, Symbol}
 # the number of a candidate is a rename, directly. `no` asks for that number on its own: that is the
 # two-step answer (`no`, then `<n>`) which scripts and the tests already feed, and it keeps its
 # meaning. Returns the old table's name, or `nothing` for a new table.
-function _ask_table_rename(model_name::Symbol, candidates::AbstractDict{Int64, Symbol})::Union{Symbol, Nothing}
-  list_to_question = join([string(index, " - ", candidates[index]) for index in sort(collect(keys(candidates)))], ", ")
+function _ask_table_rename(model_name::Symbol, candidates::AbstractDict{Int64, Symbol},
+                           list_to_question::AbstractString = join([string(index, " - ", candidates[index]) for index in sort(collect(keys(candidates)))], ", "))::Union{Symbol, Nothing}
   kind, old = _read_rename_answer(
       "The table $model_name has no match in the database. Is it a new table? Answer yes, or no / the number of the table it was renamed from: $list_to_question: ",
       "yes, no, or one of the listed numbers") do response
@@ -2026,6 +2092,57 @@ function _ask_table_rename(model_name::Symbol, candidates::AbstractDict{Int64, S
     old = _numbered_choice(response, candidates)
     return old === nothing ? nothing : (:rename, old)
   end)
+end
+
+# #735: how many of `model`'s declared columns `live` already holds under the same name with the same
+# definition — `(matching, declared)`. The table-rename prompt ranks its candidates by it, so the table
+# a model was most likely renamed from is listed first. The same predicate as the field prompt's.
+function _table_match_count(model::PormGModel, live::LiveTable, conn)::Tuple{Int, Int}
+  matching = declared = 0
+  for (key, field) in model.fields
+    Models.is_many_to_many_field(field) && continue
+    declared += 1
+    col = Models.field_db_column(field, String(strip(String(key), '"')))
+    spec = get(live.columns, col, nothing)
+    spec === nothing || isempty(_rename_changes(field, spec, conn, col)) && (matching += 1)
+  end
+  return matching, declared
+end
+
+# The table-rename candidates for `model`, numbered for the prompt (#735): most matching columns first,
+# ties in live-catalog order — the order the candidates used to be numbered in (#615). Numbered 1..n
+# in that order, so a table an earlier answer claimed leaves no gap.
+function _ranked_table_candidates(model::PormGModel, unclaimed::Vector{Symbol},
+                                  drop_table::AbstractDict{Symbol, Any}, conn)
+  counts = Dict{Symbol, Tuple{Int, Int}}(old => _table_match_count(model, drop_table[old]["model"], conn) for old in unclaimed)
+  ranked = sort(unclaimed, by = old -> -first(counts[old]))   # stable: ties keep catalog order
+  numbered = Dict{Int64, Symbol}(index => old for (index, old) in enumerate(ranked))
+  labels = ["$index - $old ($(counts[old][1]) of $(counts[old][2]) columns match)" for (index, old) in enumerate(ranked)]
+  return numbered, join(labels, ", ")
+end
+
+# Whether `model` is an auto many-to-many join table — synthesized, never declared (#735).
+_is_auto_join_table(model::PormGModel)::Bool =
+  model.cache !== nothing && haskey(model.cache, "many_to_many_auto")
+
+# #735: the live table an auto join table was renamed from, when one of its ends was renamed — or
+# `nothing`. Its name is derived from its owner (`<model>_<field>`), so renaming the owner renames
+# it, and it used to be asked about as a model of its own: three correct answers for one rename, and
+# with `interactive = false` every link row dropped. It is matched by SHAPE, not by re-deriving the
+# old name — the derivation has a `db_table` pin and a Django app prefix in it, and the shape has
+# neither: the same number of columns, keys to the same parents once the renames decided so far are
+# applied, and at least one of those parents among the renamed tables. Taken only when exactly one
+# unclaimed table fits; otherwise the model is asked about like any other.
+function _join_table_rename_source(model::PormGModel, unclaimed::Vector{Symbol}, drop_table::AbstractDict{Symbol, Any},
+                                   renames::Dict{String, String}, conn)::Union{Symbol, Nothing}
+  parents(specs) = sort!(String[s.reference.table for s in specs if s.reference !== nothing && s.reference.table !== nothing])
+  declared = parents(column_spec(field, conn; name = String(key)) for (key, field) in model.fields)
+  any(p -> p in values(renames), declared) || return nothing
+  fits = filter(unclaimed) do old
+    live = _retarget_references(drop_table[old]["model"], renames)
+    length(live.columns) == length(model.fields) && parents(values(live.columns)) == declared
+  end
+  return length(fits) == 1 ? only(fits) : nothing
 end
 # The value `_add_new_field` writes into `ADD COLUMN … DEFAULT` for a new temporal column, and then
 # drops again. It exists for ONE reason: a NOT NULL column with no declared default cannot be added to
@@ -2313,7 +2430,15 @@ With `interactive = true` (the default) a model with no matching table prompts w
 new or a rename of a table that disappeared, so a rename keeps its data. Answer `yes` for a new
 table, or the number of the table it was renamed from; `no` asks for that number on its own. A model
 is not asked when every vanished table has already been claimed by an earlier answer. A field with no
-matching column is asked the same way, by number or `no`. `interactive = false`
+matching column is asked the same way, by number or `no`.
+
+The candidates are ranked by the column IR (#735). A table is listed by how many of the model's
+columns it holds with the same definition, most first, so `(k of n columns match)`. A field lists the
+removed columns with the same definition first, and every other one names what renaming it would
+also change. Nothing is filtered out. The models are asked about in table-name order, and their fields
+in declaration order. An auto many-to-many join table, and the column named after a renamed end,
+follow that end's rename without a question when exactly one vanished table or column fits.
+`interactive = false`
 answers "new table" and "not a rename" for everything — a non-interactive run therefore
 **never renames**, it drops and creates.
 
@@ -2376,8 +2501,9 @@ composite_targets = Dict{String, Tuple{String, String}}()
 # an empty live side: every declared model is a new table. `all_live`, not `live`: a database holding
 # only unmanaged tables is not empty, and takes the full path below so the whole-plan checks run.
 if isempty(all_live)
-  for (model_name, model) in current_schema
-    _add_new_table(conn, migration_plan, model_name, model[:model]; composite_targets = composite_targets)
+  # By table name, not `Dict` order (#735), so two runs over one models file write one plan.
+  for model_name in sort!(collect(keys(current_schema)), by = String)
+    _add_new_table(conn, migration_plan, model_name, current_schema[model_name][:model]; composite_targets = composite_targets)
   end
   return migration_plan
 end
@@ -2419,25 +2545,38 @@ end
 # order the questions were answered, and the plan is emitted from it below — after the diff, exactly
 # where it used to be written.
 decisions = Pair{Symbol, Union{Symbol, Nothing}}[]
-for (model_name, model) in current_schema
-  if model[:exist] == false
-    # The vanished tables no earlier answer has claimed, numbered by their position in the live
-    # catalog (#615) — so a claimed one leaves a gap rather than renumbering the rest. With none left
-    # there is nothing to rename FROM: the model is a new table, and nothing is asked (#726).
-    candidates = Dict{Int64, Symbol}()
-    if haskey(futher_processing, :drop_table)
-      for (index, (m_name, m_info)) in enumerate(futher_processing[:drop_table])
-        !m_info["exist"] && (candidates[index] = m_name)
-      end
-    end
+# #735: asked in a FIXED order — the declared models by table name, then the auto join tables, which
+# can follow a rename decided for one of their ends. It used to be `current_schema`'s `Dict` order, so
+# adding an unrelated model could reorder the questions under a script's answers. Declaration order
+# is not recoverable here: `get_all_models` reads the bindings through `names`, which sorts them.
+unmatched = sort!([name for (name, entry) in current_schema if entry[:exist] == false],
+                  by = name -> (_is_auto_join_table(current_schema[name][:model]), String(name)))
+for model_name in unmatched
+  model = current_schema[model_name][:model]
+  # The vanished tables no earlier answer has claimed. With none left there is nothing to rename FROM:
+  # the model is a new table, and nothing is asked (#726).
+  unclaimed = haskey(futher_processing, :drop_table) ?
+    Symbol[name for (name, info) in futher_processing[:drop_table] if !info["exist"]] : Symbol[]
+  renames_so_far = Dict{String, String}(string(old) => string(new) for (new, old) in decisions if old !== nothing)
+  old_model_name = nothing
+  if !isempty(unclaimed) && _is_auto_join_table(model)
+    old_model_name = _join_table_rename_source(model, unclaimed, futher_processing[:drop_table], renames_so_far, conn)
+    old_model_name === nothing ||
+      @info("The join table \"$(model_name)\" follows its model's rename: renaming \"$(old_model_name)\" to it.")
+  end
+  if old_model_name === nothing && interactive && !isempty(unclaimed)
+    # Ranked against the references as the renames decided so far leave them (#735).
+    candidates, list_to_question = _ranked_table_candidates(model, unclaimed,
+      OrderedDict{Symbol, Any}(name => Dict{String, Any}("model" => _retarget_references(futher_processing[:drop_table][name]["model"], renames_so_far))
+                               for name in unclaimed), conn)
     # Only the answer is parsed inside `_ask_table_rename`; a genuine planner failure later propagates
     # as itself, not as "invalid choice" (#197).
-    old_model_name = (interactive && !isempty(candidates)) ? _ask_table_rename(model_name, candidates) : nothing
-    push!(decisions, model_name => old_model_name)
-    # Marked now, not when the plan is emitted: the next model's candidate list must not
-    # offer a table this one has already claimed.
-    old_model_name === nothing || (futher_processing[:drop_table][old_model_name]["exist"] = true)
+    old_model_name = _ask_table_rename(model_name, candidates, list_to_question)
   end
+  push!(decisions, model_name => old_model_name)
+  # Marked now, not when the plan is emitted: the next model's candidate list must not
+  # offer a table this one has already claimed.
+  old_model_name === nothing || (futher_processing[:drop_table][old_model_name]["exist"] = true)
 end
 
 # #678: every rename is known now, so retarget the live references before anything is diffed. A

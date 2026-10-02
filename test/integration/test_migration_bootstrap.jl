@@ -743,8 +743,9 @@ end
     )
     """)
 
-    # Interactive: the sole addition (link_ref_id) prompts once with the name-sorted deletion candidates
-    # "1 - link_id, 2 - zztombstone" (sorting is now deterministic, see _colect_numbered_fields); feed "1"
+    # Interactive: the sole addition (link_ref_id) prompts once with the deletion candidates
+    # "1 - link_id, 2 - zztombstone" (neither has link_ref_id's definition, so name order decides — see
+    # _ranked_field_candidates, #735); feed "1"
     # to map it onto link_id, leaving zztombstone as a pure deletion on the same table.
     mktemp() do _path, io
       write(io, "1\n"); flush(io); seekstart(io)

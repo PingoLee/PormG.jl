@@ -4305,7 +4305,10 @@ function synthesize_many_to_many_through_models(current_schema::Dict{Symbol, Dic
       # Django's rule (#741): the auto join table is unmanaged only when BOTH ends are. A managed end
       # still owns its half of the relation, so the table it needs is created.
       through_model.managed = model_is_managed(source_model) || model_is_managed(target_model)
+      # `field` is the declaring field's name, which the table name ends in (`<model>_<field>`): the
+      # planner's rename-follow uses it to tell the same relation from another one (#911).
       through_model.cache["many_to_many_auto"] = Dict{String, Any}(
+        "field" => field_name,
         "owner_column" => relation.owner_column,
         "related_column" => relation.related_column,
         "unique_index" => "$(relation.through_table)_$(relation.owner_column)_$(relation.related_column)_uniq",

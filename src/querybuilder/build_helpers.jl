@@ -1387,17 +1387,19 @@ end
 
 function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   sql, interval_ms, _ = _render_function_typed(v, instruc; _as = _as)
-  # #894: an extremum held in milliseconds leaves as the interval text, as a difference does (#881).
+  # #894: an interval held in milliseconds leaves as the interval text, as a difference does (#881).
   return interval_ms ? Dialect._sqlite_interval_text(sql) : sql
 end
 
 # The function's SQL, whether it is an interval held in SQLite milliseconds, and whether it is an
-# interval at all (#894). Only `Max`/`Min` over an interval are either: their value is one of their
-# operand's, so `MAX` over the milliseconds is the longest interval, where `MAX` over the stored
-# `HH:MM:SS` text was the last one in text order (`"99:00:00"` over `"100:00:00"`, and `"-01:00:00"`
-# over `"02:00:00"`). The third value types the projection on both engines: `_operand_kind` cannot
-# type `Max(F("start_at") - F("date"))`, because arithmetic answers `nothing` there, and only the
-# render knows. Every other function renders exactly as before and answers `false, false`.
+# interval at all (#894). Only the functions in `_INTERVAL_MS_AGGREGATES`/`_INTERVAL_MS_VARIADIC` over
+# an interval are either. `MAX` over the milliseconds is the longest interval, where `MAX` over the
+# stored `HH:MM:SS` text was the last one in text order (`"99:00:00"` over `"100:00:00"`, and
+# `"-01:00:00"` over `"02:00:00"`); `SUM` and `AVG` over the text added up its leading hours (#900).
+# The third value types the projection on both engines: `_operand_kind` cannot type
+# `Max(F("start_at") - F("date"))`, because arithmetic answers `nothing` there, and it types no
+# `Sum` at all (a computed value is not the column) — only the render knows. Every other function
+# renders exactly as before and answers `false, false`.
 function _render_function_typed(v::SQLTypeFunction, instruc::SQLInstruction;
                                 _as::Union{Nothing,String}=nothing)::Tuple{String,Bool,Bool}
   # Parameterize scalar kwargs instead of rendering them as SQL literals.
@@ -1439,20 +1441,47 @@ function _render_function_typed(v::SQLTypeFunction, instruc::SQLInstruction;
 
   # Phase 2: Resolve column (conditions) — this adds condition params in SQL text order
   #
-  # #894: an extremum over an interval resolves its operand to milliseconds. `_render_interval_ms`
-  # renders it exactly once either way, and to the same SQL as below when it has no millisecond
-  # form, so the operand binds the same values in the same order on both arms.
+  # #894/#900: a function in `_INTERVAL_MS_FUNCTIONS` over an interval resolves its operands to
+  # milliseconds on SQLite. `_render_interval_operand` renders each operand exactly once, and hands
+  # back the SQL below alongside the millisecond form, so the function binds the same values in the
+  # same order whichever form it prints, and keeps the SQL it always rendered when it has none.
   #
   # On PostgreSQL the operand of an extremum over arithmetic renders through the typed renderer,
   # which is exactly what `_get_select_query(::FExpression)` renders, so its SQL is unchanged and
   # only its kind is kept.
   interval_ms = interval = false
-  if instruc.connection isa PormGSQLite && v isa FObject && _interval_ms_candidate(v)
-    resolved_column, interval_ms = _render_interval_ms(v.column, instruc; _as = _as)
-    interval = interval_ms
-  elseif v isa FObject && _interval_ms_candidate(v) && v.column isa FExpression
-    resolved_column, operand_kind = _finalize_render(_render_expr_typed(v.column, instruc)..., instruc)
-    interval = operand_kind isa CInterval
+  fanout_column = nothing   # the operand as the #74 guard reads it: its column, not the parse of it
+  if v isa FObject && v.function_name == "ABS" && instruc.connection isa PormGSQLite && !(v.column isa AbstractVector)
+    resolved_column, ms, operand_interval = _render_interval_operand(v.column, instruc; _as = _as)
+    # #900: PostgreSQL has no `abs(interval)`, so the statement fails there when it runs. SQLite
+    # computed the absolute value of the text's leading hours, silently. Refused, as `d * d` is (#881).
+    (ms === nothing && !operand_interval) || throw(QueryBuildError(
+      "`Abs` of an interval is not supported: PostgreSQL has no abs(interval), and SQLite stores an " *
+      "interval as text. For the magnitude of an interval d, write Greatest(d, d * -1)."))
+  elseif v isa FObject && _interval_ms_candidate(v)
+    sqlite = instruc.connection isa PormGSQLite
+    if v.column isa AbstractVector
+      operands = _null_skipping_operands(v, instruc)
+      forms = [_render_interval_operand(x, instruc; _as = _as) for x in operands]
+      # A NULL literal is NULL in either form, and never the value; every other operand must agree.
+      valued = [f for (x, f) in zip(operands, forms) if !_is_null_operand(x)]
+      if sqlite && !isempty(valued) && all(f -> f[2] !== nothing, valued)
+        resolved_column = Any[_is_null_operand(x) ? f[1] : f[2] for (x, f) in zip(operands, forms)]
+        interval_ms = interval = true
+      else
+        resolved_column = Any[f[1] for f in forms]
+        interval = !sqlite && !isempty(valued) && all(f -> f[3], valued)
+      end
+    else
+      fanout_column, ms, operand_interval = _render_interval_operand(v.column, instruc; _as = _as)
+      if sqlite && ms !== nothing
+        resolved_column, interval_ms, interval = ms, true, true
+      else
+        # An interval with no millisecond form on SQLite is its text, and `SUM` over that is a number:
+        # only PostgreSQL's value is typed from the operand here.
+        resolved_column, interval = fanout_column, !sqlite && operand_interval
+      end
+    end
   else
     resolved_column = _get_select_query(_null_skipping_operands(v, instruc), instruc, _as=_as)
   end
@@ -1461,11 +1490,12 @@ function _render_function_typed(v::SQLTypeFunction, instruc::SQLInstruction;
   # refuse aggregates a to-many join would silently inflate. MAX/MIN are immune and omitted; a
   # `distinct=true` aggregate is an explicit opt-in and is exempted by the check.
   if v.function_name in ("COUNT", "SUM", "AVG")
-    src = _extract_leading_alias(resolved_column)
+    guard_column = fanout_column === nothing ? resolved_column : fanout_column
+    src = _extract_leading_alias(guard_column)
     push!(instruc.agg_sources, (
       alias = src === nothing ? "\0AMBIGUOUS" : src,
       func = v.function_name,
-      label = _as === nothing ? string(v.function_name, "(", resolved_column, ")") : _as,
+      label = _as === nothing ? string(v.function_name, "(", guard_column, ")") : _as,
       distinct = get(v.kwargs, "distinct", false) === true))
   end
 
@@ -1482,7 +1512,11 @@ function _render_function_typed(v::SQLTypeFunction, instruc::SQLInstruction;
     end
   end
 
-  return getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection), interval_ms, interval
+  sql = getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection)
+  # #900: PostgreSQL's `avg(interval)` is an interval; the milliseconds' mean is rounded to one, the
+  # precision every SQLite interval has (#881).
+  interval_ms && v.function_name == "AVG" && (sql = "CAST(round($(sql)) AS INTEGER)")
+  return sql, interval_ms, interval
 end
 function _get_select_query(q::SQLTypeQor, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   resp = []

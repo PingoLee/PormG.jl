@@ -509,8 +509,10 @@ end
   # (Until #800 this case projected `Max("ts")`, asserting the extremum untyped. #800 moved that
   # boundary on purpose — see the testset below — so the case now pins a function that really
   # cannot be typed.)
+  # (#900 moved it again: a sum of intervals is an interval on both engines, so the case sums a
+  # decimal, which went through a double.)
   @testset "an untypable projection records no kind" begin
-    kinds = _rvc_kinds(q -> q.values("x" => PormG.Functions.Sum("dur"),
+    kinds = _rvc_kinds(q -> q.values("x" => PormG.Functions.Sum("amount"),
                                      "y" => PormG.Functions.ToChar("ts", "YYYY-MM")))
     @test !haskey(kinds, :x)
     @test !haskey(kinds, :y)
@@ -518,8 +520,8 @@ end
 
   # #800: an extremum returns one of its operand's own values, so it has the column's kind — on
   # SQLite `MAX(dur)` is the stored text `"00:00:23"`, which the interval parser undoes. A computed
-  # aggregate does not: a sum of intervals is not a value PormG wrote, and a decimal sum went through
-  # a double. Django answers the same question with `output_field`.
+  # aggregate does not: a decimal sum went through a double. Django answers the same question with
+  # `output_field`. (#800 left a sum of intervals untyped too; #900 types it, below.)
   @testset "Max/Min record their column's kind; a computed aggregate records none (#800)" begin
     F_ = PormG.Functions
     cols = (ts = PormG.CDateTime(true), d = PormG.CDate(), t = PormG.CTime(),
@@ -540,9 +542,15 @@ end
     for alias in (:n, :a, :c)
       @test !haskey(kinds, alias)
     end
-    for fn in (F_.Sum, F_.Avg, F_.Count), col in ("dur", "amount", "d")
+    for fn in (F_.Sum, F_.Avg, F_.Count), col in ("amount", "d")
       @test !haskey(_rvc_kinds(q -> q.values("s" => fn(col))), :s)
     end
+    # #900: `Sum`/`Avg` over an interval are an interval, as PostgreSQL's `sum(interval)` and
+    # `avg(interval)` are; SQLite computes them over the milliseconds. A count never is.
+    for fn in (F_.Sum, F_.Avg)
+      @test _rvc_kinds(q -> q.values("s" => fn("dur")))[:s] == PormG.CInterval()
+    end
+    @test !haskey(_rvc_kinds(q -> q.values("s" => F_.Count("dur"))), :s)
   end
 
   # #824: a CTE column's field is INFERRED from the CTE body — an `Avg("amount")` column is handed the

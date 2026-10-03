@@ -870,12 +870,13 @@ the window value functions `Lag`, `Lead`, `FirstValue`, `LastValue` and `NthValu
 `Coalesce`, `Greatest`, `Least` or `NullIf` over `time` (#824). It also holds for a `Joined(...)`
 handle on the column, and for a `CTE(...)` column whose body projects it. A computed value is not
 the column, so it is still whatever the engine delivered: text on SQLite, and a bare `Period` or a
-`CompoundPeriod` on PostgreSQL. That covers `Sum("time")`, a `CTE(...)` column the body computes,
-and a `Coalesce` whose arguments are of different types. The computed intervals PormG types are the
-difference of two timestamps, `F("start_at") - F("date")`, and interval arithmetic — `F("time") * 2`,
+`CompoundPeriod` on PostgreSQL. That covers a `CTE(...)` column the body computes, and a `Coalesce`
+whose arguments are of different types. The computed intervals PormG types are the difference of two
+timestamps, `F("start_at") - F("date")`, and interval arithmetic — `F("time") * 2`,
 `F("time") + (F("start_at") - F("date"))`, a difference plus a duration — and `Max`/`Min` over
-either (#894): each reads back as a `CompoundPeriod` on both engines (see *Subtracting two dates*
-in the F-expressions guide).
+either (#894). `Sum("time")` and `Avg("time")` are typed too, and so are `Greatest`, `Least` and
+`Coalesce` over intervals of either kind (#900). Each reads back as a `CompoundPeriod` on both engines
+(see *Subtracting two dates* in the F-expressions guide).
 
 On **SQLite** a duration is stored as text (`00:01:49.088`), and hours are never folded into days.
 That text sorts wrongly at 100 hours and above (`"100:00:00"` sorts before `"99:00:00"`) and for
@@ -885,7 +886,8 @@ agrees with PostgreSQL:
 - `<` or `>` against a duration or another `DurationField` (`"time__@gt" => Minute(2)`,
   `F("time") > Minute(2)`)
 - `@range`
-- `Max`/`Min`
+- `Max`/`Min`, `Sum`/`Avg`, and `Greatest`/`Least`/`Coalesce` over durations and timestamp
+  differences (a duration literal among their arguments keeps the text)
 - inside arithmetic, or against a timestamp difference (`(F("time") * 2) > Minute(3)`)
 
 That reading rounds each side to the nearest **millisecond**, the precision of a timestamp there,

@@ -418,8 +418,9 @@ from it, and both are intentional divergences:
   the column. `Max`/`Min` over a timestamp are fine.
 
 Some shapes have no operator on PostgreSQL either, which fails when the statement runs: `d * d`,
-`d / d`, `F("points") / d`, a number plus or minus an interval (`d + 5`, `count + d`), and a date
-times an interval. SQLite refuses them at build time with `QueryBuildError`.
+`d / d`, `F("points") / d`, a number plus or minus an interval (`d + 5`, `count + d`), a date
+times an interval, and `Abs(d)` (there is no `abs(interval)`). SQLite refuses them at build time with
+`QueryBuildError`. For the magnitude of an interval, write `Greatest(d, d * -1)`.
 
 **Ordering, filtering and the extremum of the projected value** are numeric on SQLite too. A query
 still returns the text, but PormG sorts and compares the milliseconds behind it. Sorting the text
@@ -431,6 +432,13 @@ negative values. These cases use the milliseconds:
   interval expression (`"since_midnight__@gt" => F("start_at") - F("date") - Hour(1)`).
 - `Max` and `Min` over an interval: a difference, interval arithmetic or a `DurationField`. They
   return the longest and the shortest value, read back as a `Dates.CompoundPeriod` on both engines.
+- `Sum` and `Avg` over an interval, which return the total and the mean duration, as PostgreSQL's
+  `sum(interval)` and `avg(interval)` do. On SQLite the mean is rounded to the millisecond. Both
+  read back as a `Dates.CompoundPeriod` on both engines.
+- `Greatest`, `Least` and `Coalesce` when every argument is a difference, interval arithmetic, a
+  `DurationField` (by path, `F(...)` or `Joined(...)`), one of the functions in this list, or a
+  `NULL` literal. Any other argument keeps the text comparison: a text column, a `CTE(...)` column,
+  or a duration literal (`Coalesce("time", Value(Hour(0)))`). So does a declared `output_field`.
 - A `DurationField` column that is ordered (`order_by("time")`), compared with an ordering lookup
   (`"time__@gt" => Minute(2)`, `@range`), or written as `F("time") > Minute(2)`. Its `==` and `@in`
   compare the stored text. That is exact, because every write stores the canonical `HH:MM:SS` form
@@ -450,12 +458,17 @@ query.order_by("-since_midnight")
 On SQLite the `ORDER BY` repeats the difference in milliseconds rather than naming the
 `since_midnight` text, and it binds that expression's own parameters again.
 
-Some shapes still sort or read the text on SQLite:
+Two shapes have no millisecond form and still sort the text on SQLite. Their values are right, but
+ordering or filtering on them is text order, which is wrong at 100 hours and above and for negative
+values:
 
-- `Greatest` and `Least` over intervals.
-- An interval with no millisecond form: `Coalesce`, `Case` or a window function over durations.
-- `Sum`, `Avg` and `Abs`. These read the text's leading number, so they count whole hours and drop
-  the minutes and seconds. Aggregate durations on PostgreSQL.
+- `Case` over durations.
+- A window value function over a duration (`Lag("time", over = …)`). For lap times, which stay far
+  below 100 hours, the text order is the numeric one.
+
+An aggregate over an interval inside arithmetic, such as `Sum(d) / Count("raceid")`, still computes
+on the text on SQLite, so it reads whole hours. Project `Avg(d)` instead, or the `Sum` and the `Count`
+as separate values.
 
 A duration compares only against an interval — a timestamp difference or a `DurationField`. Against
 anything else (`F("date") > Hour(1)`, or a day count) it raises `QueryBuildError`. A `Time` is a time

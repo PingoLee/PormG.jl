@@ -856,7 +856,14 @@ function _having_alias_formatter(alias::MemoKey, instruc::SQLInstruction)
   # whose `String` arm reads a string as a COLUMN PATH — `Value("points")` would be typed as the
   # `points` column.
   (source === nothing || source isa SQLTypeText) && return nothing
-  return _expression_formatter(source.field, instruc)
+  formatter = _expression_formatter(source.field, instruc)
+  # #900: a `Sum`/`Avg` over an interval is an interval, not the number `_expression_formatter` names
+  # for every sum, and `"total__@gt" => Hour(1)` raised a `MethodError` from the number formatter. The
+  # SELECT renders first, so the projection's kind is known here: the value is checked as a duration,
+  # as `Max("time")`'s alias checks it, so a number is refused rather than compared with the text.
+  formatter === Models.format_number_sql &&
+    get(instruc.projection_kinds, Symbol(alias[2]), nothing) isa CInterval && return Models.format_duration_sql
+  return formatter
 end
 
 # Functions whose result is text whatever their operands are. Checked BEFORE `output_field`: none of

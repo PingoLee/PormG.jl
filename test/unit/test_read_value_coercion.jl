@@ -737,6 +737,50 @@ end
     @test !haskey(kinds, :ma)
   end
 
+  # #888: a `Subquery(...)` reads back as its one projected column, typed by the inner build exactly
+  # as that column would be typed projected on its own. Before, the subquery answered `nothing` on
+  # every spelling, so on SQLite a date came back as its stored `String` while PostgreSQL's driver
+  # delivered a `Date`. A computed inner column (`Avg`, `Max` over text) records nothing, as it does
+  # unwrapped; a function over the subquery is typed by its usual rule, now that its operand has a
+  # kind. Recorded the same on both engines — only the parser the kind selects differs.
+  @testset "a Subquery records its one column's kind, bare or as an operand (#888)" begin
+    F_ = PormG.Functions
+    sub(e) = (s = RVC.Rvc_row.objects; s.filter("id" => PormG.OuterRef("id")); s.values("t" => e); s)
+    for conn in (_RVC_SL, _RVC_PG)
+      kinds = _rvc_kinds(q -> q.values("id",
+        "d"   => PormG.Subquery(sub(F_.Max("d"))),
+        "ts"  => PormG.Subquery(sub(F_.Max("ts"))),
+        "dur" => PormG.Subquery(sub("dur").limit(1)),
+        "amt" => PormG.Subquery(sub(F_.Max("amount"))),
+        "avg" => PormG.Subquery(sub(F_.Avg("amount"))),
+        "txt" => PormG.Subquery(sub(F_.Max("note"))),
+        "co"  => F_.Coalesce(PormG.Subquery(sub(F_.Max("d"))), Date(1900, 1, 1)),
+        "nu"  => F_.NullIf(PormG.Subquery(sub(F_.Max("d"))), "d"),
+        "cn"  => F_.Coalesce(PormG.Subquery(sub(F_.Max("d"))), "note"),
+        "cd"  => F_.Cast(PormG.Subquery(sub(F_.Max("amount"))), "date")); connection = conn)
+      @test kinds[:d] == PormG.CDate()
+      @test kinds[:ts] == PormG.CDateTime(true)
+      @test kinds[:dur] == PormG.CInterval()
+      @test kinds[:amt] == PormG.CDecimal(12, 2)
+      @test kinds[:co] == PormG.CDate()          # the agreement rule, with a matching literal
+      @test kinds[:nu] == PormG.CDate()          # `NullIf(a, b)` is `a`
+      @test kinds[:cd] == PormG.CDate()          # the declared cast still wins (#878)
+      for alias in (:avg, :txt, :cn)             # computed, text, and a disagreeing operand
+        @test !haskey(kinds, alias)
+      end
+    end
+
+    # One node projected twice is typed twice: the record is keyed by the node, and its kind is a
+    # function of the node's own query. And the caller's query is never written to — the inner build
+    # ran on a copy (#508), so the record cannot leak into a later build of `s` on its own.
+    s = sub(F_.Max("d"))
+    sq = PormG.Subquery(s)
+    kinds = _rvc_kinds(q -> q.values("id", "a" => sq, "b" => F_.Coalesce(sq, Date(1900, 1, 1))))
+    @test kinds[:a] == PormG.CDate()
+    @test kinds[:b] == PormG.CDate()
+    @test isempty(s.object.projection_kinds)
+  end
+
   # #648: a DecimalField column records its kind, WITH its width, on every projection spelling that
   # names the column itself — so the SQLite parser runs. An aggregate or arithmetic over it records
   # nothing and stays as the driver delivered it: that value is computed through a double, so no

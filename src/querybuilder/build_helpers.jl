@@ -1668,6 +1668,10 @@ function _get_select_query(v::SubqueryObject, instruc::SQLInstruction; _as::Unio
     instruc.correlated_projection = prev_correlated
   end
   reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
+  # #888: the inner build typed its one column (`query()` writes `projection_kinds` back onto
+  # `handler`, our copy), so the value this text returns has that kind. File it under the node the
+  # caller holds, for `_operand_kind` to read once the enclosing projection has rendered.
+  _record_subquery_kind!(instruc, v, handler)
   return string("(", inner_sql, ")")
 end
 function _get_select_query(q::SQLTypeF, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)

@@ -277,6 +277,23 @@ df = query |> DataFrame
 
 An aggregate cannot wrap a subquery: `Max(Subquery(latest))` raises `QueryBuildError` when it is built. The subquery is already one value per row, so put the aggregate **inside** it, as *Why: the fan-out-safe aggregate* above shows.
 
+A subquery reads back as its one column does, on both engines (#888). When that column is one of a model column's own values (the column itself, or `Max`/`Min` over it), the result has the column's Julia type: a `DateField` gives a `Date`, where SQLite alone would hand back the stored text. Each driver's most recent race date:
+
+```julia
+using PormG.Functions: Max
+
+last_race = M.Driver_standings.objects
+last_race.filter("driverid" => OuterRef("driverid"))
+last_race.values("t" => Max("raceid__date"))
+
+query = M.Driver.objects
+query.filter("driverid__@lte" => 3)
+query.values("surname", "last_race" => Subquery(last_race))
+df = query |> DataFrame   # df.last_race holds Dates.Date values on PostgreSQL and SQLite
+```
+
+A function over the subquery follows its usual rule with that type: `Coalesce(Subquery(last_race), Date(1900, 1, 1))` is a `Date` too, and `NullIf` takes the subquery's type. A computed inner column (`Avg`, `Sum`, `Count`, arithmetic) is not a model column's value, so it comes back as the engine delivers it. Wrap it in `Cast(Subquery(…), "date")` (or the type it holds) to name the type yourself.
+
 ### Rules and limitations
 
 - **Exactly one column.** The inner query must project exactly one column via `.values(...)` (the inner alias is cosmetic). Zero or several columns raise a `QueryBuildError` at build time. The same one-column rule applies to `@in` subqueries, where it surfaces as a `FilterError` — the type names which argument you got wrong (a projection here, a filter there). Catch `PormGError` to handle both.

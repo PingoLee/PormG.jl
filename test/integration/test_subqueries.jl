@@ -523,7 +523,9 @@ end
                "last" => Subquery(last_race),
                "last_cast" => Cast(Subquery(last_race), "date"),
                "last_year" => Extract(Subquery(last_race), "year"),
-               "last_date" => PormG.QueryBuilder.DATE(Subquery(last_race))) |> DataFrame
+               "last_date" => PormG.QueryBuilder.DATE(Subquery(last_race)),
+               # #888: a function over the bare subquery is typed by its operand now.
+               "last_or" => Coalesce(Subquery(last_race), Date(1900, 1, 1))) |> DataFrame
 
     @test nrow(df) == 5
     # The bare subquery itself is right: one driver checked against a plain aggregate.
@@ -535,10 +537,14 @@ end
         @test Float64(row.avg_abs) ≈ abs(Float64(row.avg))
         @test Float64(row.avg_1dp) ≈ round(Float64(row.avg), RoundNearestTiesAway; digits = 1)
         @test row.lower == lowercase(row.surname)
-        # The wrapped spellings read back as a `Date` on both engines — on SQLite the stored value is
-        # text, so this is the read kind `Cast(…, "date")` and `DATE` record, not the driver. The BARE
-        # subquery records none, so on SQLite it is still the stored text: the oracle parses it.
-        last = row.last isa Date ? row.last : Date(row.last)
+        # Every spelling reads back as a `Date` on both engines — on SQLite the stored value is text,
+        # so this is the read kind each one records, not the driver. #888 moved the bare subquery here
+        # on purpose: it recorded no kind, so on SQLite it was the stored `String` and this oracle
+        # parsed it (`row.last isa Date ? row.last : Date(row.last)`). It is its column's `Date` now.
+        last = row.last
+        @test last isa Date
+        @test row.last_or isa Date
+        @test row.last_or == last
         @test row.last_cast isa Date
         @test row.last_date isa Date
         @test row.last_cast == last

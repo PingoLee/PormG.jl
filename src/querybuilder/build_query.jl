@@ -165,7 +165,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       #
       # `FExpression` concretely, not the abstract `SQLTypeF`: `OuterRefObject` is also `<: SQLTypeF`
       # (#533) and has no typed renderer. A function is typed only when it returns its operand's own
-      # value (`_function_projection_kind`, #800). Everything else — other functions, subqueries —
+      # value (`_function_projection_kind`, #800). Everything else — other functions, an `Exists` —
       # answers `nothing`, which means "no representation this table owns", and the read path then
       # leaves the column exactly as the driver delivered it.
       original = v_copy.field
@@ -202,8 +202,10 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
         original isa SQLTypeFunction &&
           (kind = interval ? CInterval() : _function_projection_kind(original, instruc))
         # #824: a `Joined(...)` / `CTE(...)` handle (and a `"cte__col"` path, retagged to one before
-        # this loop) reads as `Max` over it does — one rule, `_operand_kind`.
-        original isa Union{JoinedReference,CTEReference} && (kind = _operand_kind(original, instruc))
+        # this loop) reads as `Max` over it does — one rule, `_operand_kind`. #888: so does a
+        # `Subquery(...)`, as its one column — rendered above, which is what recorded its kind.
+        original isa Union{JoinedReference,CTEReference,SubqueryObject} &&
+          (kind = _operand_kind(original, instruc))
       end
       instruc.select[i] = v_copy
       if v_copy._as === nothing
@@ -982,7 +984,10 @@ end
 # The operand's kind: a column path is its field's; a bare `F(col)` is the column; a function is what
 # `_function_projection_kind` says of it, so `Max(Coalesce(…))` and `Coalesce(Max("d"), …)` compose; a
 # literal is its Julia type's (#721's rule, the kind a projected `Value(x)` records). Any other operand
-# — arithmetic, a subquery — answers `nothing`, rather than a kind the value may not have.
+# — arithmetic — answers `nothing`, rather than a kind the value may not have.
+#
+# #888: a `Subquery(...)` is its one projected column, as its own build typed it — see
+# `_subquery_kind`.
 #
 # #824: a `Joined(...)` handle is the joined column, exactly as `Max(Joined(…))` reads it, so the two
 # agree. A `CTE(...)` handle is NOT its inferred field: `_set_field_from_sql_function` hands an
@@ -1005,6 +1010,7 @@ function _operand_kind(p::JoinedReference, instruc::SQLInstruction)
   return column_field === nothing ? nothing : field_canonical_kind(column_field)
 end
 _operand_kind(p::CTEReference, instruc::SQLInstruction) = _cte_column_kind(p, instruc)
+_operand_kind(p::SubqueryObject, instruc::SQLInstruction) = _subquery_kind(p, instruc)
 _operand_kind(::Any, ::SQLInstruction) = nothing
 
 # #824 — the read kind of a CTE column. The body is built before the outer query (`build_cte_clause`
@@ -1024,6 +1030,27 @@ function _cte_column_kind(ref::CTEReference, instruc::SQLInstruction)::Union{Can
   body = get(cte, "query", nothing)
   body isa SQLObjectHandler || return nothing
   return get(body.object.projection_kinds, Symbol(ref.path), nothing)
+end
+
+# #888 — the read kind of a `Subquery(...)`: its one projected column's, by `_cte_column_kind`'s rule.
+# The inner build typed that column the way it types any projection (a plain column has its kind,
+# `Max` its operand's, a `Cast(…, "date")` `CDate`, and `Avg`/`Sum`/`Count`/arithmetic none), and
+# `_get_select_query(::SubqueryObject)` filed it under the node when it rendered it. So this is read
+# AFTER the render, like every kind lookup here; a node this build did not render — or an inner
+# projection with no kind — answers `nothing`, the fail-open default, and the value stays as the
+# driver delivered it.
+_subquery_kind(p::SubqueryObject, instruc::SQLInstruction)::Union{CanonicalType,Nothing} =
+  instruc.subquery_kinds === nothing ? nothing : get(instruc.subquery_kinds, p, nothing)
+
+# The kind the inner build recorded. A subquery projects exactly one column (the render refuses any
+# other count), but a wildcard over a one-field model can record that column under two names — its
+# attribute and its `db_column` — so the answer is the kind they agree on, and none if they do not.
+function _record_subquery_kind!(instruc::SQLInstruction, p::SubqueryObject, inner::SQLObjectHandler)
+  kinds = unique(Base.values(inner.object.projection_kinds))
+  length(kinds) == 1 || return nothing
+  instruc.subquery_kinds === nothing && (instruc.subquery_kinds = IdDict{SubqueryObject,CanonicalType}())
+  instruc.subquery_kinds[p] = only(kinds)
+  return nothing
 end
 
 # The field a type name `output_field=` / `Cast` holds stands for — already validated and spelled by

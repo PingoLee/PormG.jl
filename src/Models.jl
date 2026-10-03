@@ -902,7 +902,9 @@ first so that at least the same configuration resolves the same way on every boo
 Folder-name matching is kept rather than removed because it is what makes the ordinary case work:
 applications load configuration by short key (`Configuration.load("db")`, so `db_def_folder ==
 "db"`) and import models by relative path (`@import_models "../db/models.jl"`, so the folder is
-`"../db"`). Those agree on `abspath` only when `pwd()` lines up.
+`"../db"`). Those agree on `abspath` only when `pwd()` lines up. `Configuration.load("db"; root =
+APP_ROOT)` (#857) removes the dependency: the key stays `"db"` but `db_def_folder` is the absolute
+folder, so the same import is an exact path hit from any working directory.
 
 Free of globals and of `set_models` side effects — it only logs — so every rule is unit-testable
 without loading a configuration, in the spirit of `_infer_self_heal_key`.

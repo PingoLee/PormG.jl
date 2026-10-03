@@ -171,6 +171,11 @@ need setup, e.g. `basename(settings.db_def_folder) == "db_legacy"`. To single ou
 connections created by `register_connection`, check `settings.dynamic` rather than the folder
 name.
 
+`settings.db_def_folder` is a **path**, and the configuration key is the `key` argument. The two
+coincide only for a `load("db")` without `root`: `load("db"; root = APP_ROOT)` registers `"db"`
+with an absolute folder (#857), so compare `key == "db"` or the folder's `basename`, never
+`settings.db_def_folder == "db"`.
+
 Typical uses include VPN setup, credential refresh, or SSH tunnel activation.
 When no hook is registered, connections proceed normally.
 """
@@ -648,7 +653,8 @@ function _peek_default_env(db_settings_file::String)::Union{Nothing, String}
 end
 
 function _resolve_loaded_key(path_or_key::String,
-                            config::Dict{String,PormGSettings} = config)::Union{Nothing, String}
+                            config::Dict{String,PormGSettings} = config;
+                            folder::String = path_or_key)::Union{Nothing, String}
   # The dict is a parameter, not the global: `load` accepts a `config=` override, and answering
   # "is this folder already loaded?" against the global while writing to a local dict mixes two
   # different configurations — it threw a `KeyError` from `load`'s own migrate branch.
@@ -656,8 +662,9 @@ function _resolve_loaded_key(path_or_key::String,
 
   # #550: `_canonical_folder_path`, not bare `abspath` — and the SAME helper `Models` binds with,
   # so `is_loaded("db")` and a model's actual connection key cannot disagree about whether two
-  # spellings name one folder.
-  target_path = _canonical_folder_path(path_or_key)
+  # spellings name one folder. `folder` differs from the key only under `load(…; root)` (#857),
+  # where the key is a short name and the folder lives under `root`, not under `pwd()`.
+  target_path = _canonical_folder_path(folder)
   for (key, settings) in config
     settings.dynamic && continue
     if _canonical_folder_path(settings.db_def_folder) == target_path
@@ -1389,9 +1396,42 @@ end
 # that the application did not choose this configuration (#553). `Models._pick_connect_key` and
 # the migrate branch below read that flag; before #553 both inferred it from `isabspath`, which the
 # relative `set_models(mod, "db")` form inverts.
-function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,PormGSettings} = config, implicit::Bool = false)
+#
+# Kept ABOVE the docstring: a comment between a docstring and its definition detaches it.
+"""
+    load(path = "db"; env = nothing, root = nothing, scaffold = false) -> Union{Nothing,String}
+
+Load the configuration folder `path` (its `connection.yml`) and register it under a connection key.
+Returns the key actually registered — normally `path`, but a folder already loaded under another
+spelling is reused rather than registered twice (#550) — or `nothing` when `scaffold = true` wrote a
+skeleton instead.
+
+Without `root`, `path` is both the key and the folder, resolved against `pwd()`. With `root`, the
+two separate (#857): the key is `path` exactly as passed, and the folder is `joinpath(root, path)`,
+stored absolute as `Settings.db_def_folder`. That gives short, stable keys (`"db"`, `"db_bs"`)
+without running from the project root:
+
+```julia
+PormG.Configuration.load("db"; root = APP_ROOT, env = "prod")   # key "db", folder APP_ROOT/db
+```
+
+`path` must be relative when `root` is given; an absolute one raises `InvalidConfigurationError`,
+since `joinpath` would silently discard `root`.
+"""
+function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,PormGSettings} = config, implicit::Bool = false, root::Union{Nothing,AbstractString} = nothing)
   # create settings if does not exists
   path === nothing && (path = DB_PATH )
+
+  # #857: `path` is the key; `folder` is where it lives. They are the same string unless `root` is
+  # given, and only then is the folder independent of `pwd()`. Canonical, so the stored folder is
+  # absolute and compares equal to the one `Models` binds a relatively imported model to.
+  if root !== nothing && isabspath(path)
+    throw(InvalidConfigurationError(
+      "Cannot load \"$(path)\" with `root = \"$(root)\"`: the path is absolute, so `joinpath` would " *
+      "discard the root. Pass the folder relative to the root (e.g. `load(\"db\"; root = …)`), or " *
+      "drop `root` to load an absolute path as is."))
+  end
+  folder = root === nothing ? path : _canonical_folder_path(joinpath(String(root), path))
 
   # #620: the mirror of `register_connection`'s "Cannot overwrite static connection" refusal.
   # `_resolve_loaded_key` short-circuits on an exact key hit BEFORE its loop skips dynamic
@@ -1425,23 +1465,27 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
 
   @pormg_debug false
 
-  db_settings_file = joinpath(path, PORMG_DB_CONFIG_FILE_NAME)
+  db_settings_file = joinpath(folder, PORMG_DB_CONFIG_FILE_NAME)
 
   # Fail loudly on a missing folder/yml (#205). The old behavior — scaffold a skeleton, log an
   # `@error`, and `return nothing` — turned a typo'd path into a silent no-op that resurfaced far
   # away as a confusing settings-lookup error. First-run scaffolding is now explicit: pass
   # `scaffold=true`, or use `PormG.setup(path)`.
-  if !isdir(path) || !isfile(db_settings_file)
+  if !isdir(folder) || !isfile(db_settings_file)
+    # The call to repeat carries `root` when it was given: `load("db")` alone would look under `pwd()`.
+    # `repr`, so a Windows root's backslashes come out escaped and the call pastes back as valid Julia.
+    root_kw = root === nothing ? "" : "root = $(repr(String(root)))"
     if scaffold
-      Generator.create_db_folder_and_yml(path=path)
-      @info "PormG wrote a new configuration skeleton at $(db_settings_file). Edit it, then call `PormG.Configuration.load(\"$(path)\")` again."
+      Generator.create_db_folder_and_yml(path=folder)
+      again = root === nothing ? "load(\"$(path)\")" : "load(\"$(path)\"; $(root_kw))"
+      @info "PormG wrote a new configuration skeleton at $(db_settings_file). Edit it, then call `PormG.Configuration.$(again)` again."
       return nothing
     end
-    missing_what = !isdir(path) ? "the folder \"$(path)\" does not exist" :
-                                  "no \"$(PORMG_DB_CONFIG_FILE_NAME)\" was found in \"$(path)\""
+    missing_what = !isdir(folder) ? "the folder \"$(folder)\" does not exist" :
+                                    "no \"$(PORMG_DB_CONFIG_FILE_NAME)\" was found in \"$(folder)\""
     throw(MissingConfigurationError(
       "cannot load PormG configuration: $(missing_what). Create it interactively with " *
-      "`PormG.setup(\"$(path)\")`, or call `PormG.Configuration.load(\"$(path)\"; scaffold=true)` " *
+      "`PormG.setup(\"$(folder)\")`, or call `PormG.Configuration.load(\"$(path)\"; $(root === nothing ? "" : root_kw * ", ")scaffold=true)` " *
       "to write a skeleton to edit."))
   end
 
@@ -1456,7 +1500,9 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   # touched. Detecting it was never the missing piece — `_resolve_loaded_key` has always been
   # able to — so rather than guard the duplicate we stop creating it.
   key = path
-  existing = _resolve_loaded_key(path, config)
+  # The folder a reused entry already records; see the `Settings` write below.
+  kept_folder = nothing
+  existing = _resolve_loaded_key(path, config; folder = folder)
   if existing !== nothing && existing != path
     if config[existing].implicit && !implicit
       # The caller is naming the folder explicitly; the entry we hold was minted implicitly, with
@@ -1473,7 +1519,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
       # number that explains a request dying a moment later.
       _warn_pool_takeover("PormG: this folder was already loaded under a key the implicit load " *
                           "minted; re-registering it under the key you asked for and discarding " *
-                          "the implicit entry.", path, existing, config)
+                          "the implicit entry.", folder, existing, config)
       config[existing].connections !== nothing && close_pool!(config[existing].connections)
       delete!(config, existing)
     else
@@ -1482,8 +1528,9 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
       # pool too (below), so it can take connections down just as the migrate branch can.
       _warn_pool_takeover("PormG: this folder is already loaded under a different key; reloading " *
                           "that entry instead of registering a second one for the same folder.",
-                          path, existing, config)
+                          folder, existing, config)
       key = existing
+      kept_folder = config[existing].db_def_folder
     end
   end
 
@@ -1491,23 +1538,32 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
     close_pool!(config[key].connections)
   end
 
-  # `db_def_folder = key`, not `path`: the field is documented as "same then key" and the
-  # migration runner derives ~8 things from it, including the advisory-lock key
-  # (`pormg_migrations_$(db_def_folder)`). Writing the caller's spelling into a reused entry
-  # silently changed that lock's identity for one folder. `key` and `path` name the same folder,
-  # so this loses nothing — `read_db_connection_data` below is still given `path`, the spelling
-  # that was checked against the filesystem above.
-  config[key] = Settings(app_env = selected_env, db_def_folder = key, implicit = implicit)
+  # With `root` the field is the folder and the key is short (#857), so the two stop coinciding —
+  # which is the point: every `joinpath(db_def_folder, …)` in the migrations code then resolves
+  # against `root` instead of `pwd()`. Nothing reads the field as a key; the one place that printed it
+  # as one (the `migrate(…)` hint after `makemigrations`) looks the key up instead.
+  #
+  # Without `root`, a fresh or migrated entry stores `path` (== `key`), as it always has. A REUSED
+  # entry keeps the folder it already records, not the caller's spelling and not the bare key:
+  # writing the spelling used to change the advisory-lock key derived from it (since removed by
+  # #90), and since #857 the key is no longer a folder at all — a short key loaded with `root` holds
+  # an absolute folder, and overwriting it with `"db"` would point `makemigrations` at
+  # `<pwd>/db/models.jl`, possibly another project's. For a pre-#857 entry the kept folder IS the
+  # key, so that case is unchanged.
+  stored_folder = root !== nothing ? folder : something(kept_folder, path)
+  config[key] = Settings(app_env = selected_env, db_def_folder = stored_folder, implicit = implicit)
   settings::PormGSettings = config[key]
 
-  settings.db_config_settings = read_db_connection_data(path, settings)
+  # Both given `folder`, the spelling checked against the filesystem above. The pool builder
+  # resolves a relative SQLite `database:` inside it, so under `root` that file is `pwd`-free too.
+  settings.db_config_settings = read_db_connection_data(folder, settings)
   # #749, #818: validated here, before a pool exists, so a bad `ignore_tables:` or
   # `unignore_defaults:` fails at load and not at the first `makemigrations` — and leaves no open pool
   # behind when it does.
   _configured_ignore_tables(settings)
   _configured_unignore_defaults(settings, _builtin_ignores_for_adapter(get(settings.db_config_settings, "adapter", nothing)))
 
-  _build_connection_pool!(settings, path)
+  _build_connection_pool!(settings, folder)
   _check_configured_extensions!(settings)
   # Return the key actually registered. It is not always the string that was passed — see the
   # reuse/migrate branch above — and a caller that keeps holding the spelling it handed in would
@@ -1516,21 +1572,39 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
 end
 
 """
-    load_many(paths::AbstractVector{<:AbstractString}; env::Union{Nothing,String} = nothing)
+    load_many(paths::AbstractVector{<:AbstractString}; env = nothing, root = nothing)
 
-Load several static configuration folders using the same environment override.
+Load several static configuration folders using the same environment override, and the same
+`root` when one is given (see `load`).
 Returns the list of connection keys that were loaded.
+
+The server form loads short keys from a known project root, whatever the working directory:
+
+```julia
+PormG.Configuration.load_many(["db", "db_analytics"]; root = APP_ROOT, env = "prod")
+```
 """
-function load_many(paths::AbstractVector{<:AbstractString}; env::Union{Nothing,String} = nothing, config::Dict{String,PormGSettings} = config)
+function load_many(paths::AbstractVector{<:AbstractString}; env::Union{Nothing,String} = nothing, config::Dict{String,PormGSettings} = config, root::Union{Nothing,AbstractString} = nothing)
   loaded_keys = String[]
   for path in paths
     key = String(path)
     # #550: `load` may reuse an entry already held under a different spelling of the same folder,
     # so the key it actually registered is not necessarily the string we passed. It returns the
     # real one — callers use this list to look entries up.
-    push!(loaded_keys, something(load(key; env=env, config=config), key))
+    push!(loaded_keys, something(load(key; env=env, config=config, root=root), key))
   end
   return loaded_keys
+end
+
+# The key `settings` is registered under, found by identity — or `db_def_folder` when it is not in
+# `config` (a `Settings` built by hand, or a `config=` override). For messages that tell the user
+# what to call next: since `load(…; root)` (#857) the folder is no longer the key, and
+# `migrate(db::String)` looks its argument up as a key.
+function _settings_key(settings::PormGSettings, config::Dict{String,PormGSettings} = config)::String
+  for (k, v) in config
+    v === settings && return k
+  end
+  return settings.db_def_folder
 end
 
 """
@@ -1799,7 +1873,7 @@ end
 
 mutable struct Settings <: PormGSettings
   app_env::String
-  db_def_folder::String # same then key
+  db_def_folder::String # the folder; equal to the key unless `load(…; root)` was used (#857)
   model_file::String
   db_config_settings::Dict{String,Any}
   change_db::Bool # Enable makemigrations and migrations functionality in the app

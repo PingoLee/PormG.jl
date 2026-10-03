@@ -1726,6 +1726,13 @@ const DOCERR_CASES = [
         InvalidConfigurationError,
         () -> mktempdir(PormG._read_upgrading_entries),
     ),
+    # #857 — `root` with an absolute path. Refused before the filesystem is consulted, so no folder
+    # needs to exist and `config` is never touched.
+    (
+        "configuration/setup.md / errors.md — load(path; root) with an absolute path is refused (#857)",
+        InvalidConfigurationError,
+        () -> PormG.Configuration.load(abspath("docerr_857_db"); root = pwd()),
+    ),
     # #683 — a `register_connection` entry has no models folder. The entry is added and removed
     # inside the call so no other case sees a dynamic key in `config`; the refusal fires before
     # the mock connection is ever touched.

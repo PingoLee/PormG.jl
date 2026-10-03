@@ -69,3 +69,22 @@ PormG.Configuration.load("db"; env="prod")
 ```
 This is the **preferred method** for server applications, as it avoids relying on global `ENV` state.
 If `env` is not provided, PormG falls back to `ENV["PORMG_ENV"]`, then to a top-level `default_env:` key in `connection.yml`, then to `dev`.
+
+### Loading from a project root
+`load("db")` uses the string you pass for two things: the **connection key** your models bind to,
+and the **folder** it reads `connection.yml` from, resolved against the working directory. That
+works when you run from the project root. A server, a precompiled package or a test runner usually
+does not, so pass the root explicitly:
+
+```julia
+const APP_ROOT = normpath(joinpath(@__DIR__, ".."))
+
+PormG.Configuration.load("db"; root = APP_ROOT, env = "prod")
+```
+
+With `root`, the key is still `"db"` (the string as passed), and the folder is
+`joinpath(APP_ROOT, "db")`, from any working directory. That folder is stored absolute as
+`settings.db_def_folder`. Everything that reads it resolves against the root instead of `pwd()`:
+`makemigrations` and `migrate`, the models file, and a relative SQLite `database:`. Leave `root` out
+and `load` behaves exactly as before. The path must be relative when `root` is given. An absolute
+one is refused, since `joinpath` would silently discard the root.

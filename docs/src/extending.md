@@ -74,6 +74,10 @@ PormG.set_before_connect_hook() do key, settings
 end
 ```
 
+`settings.db_def_folder` is a folder **path**, and `key` is the connection key. They coincide only
+for a `load("db")` without `root`. Under `load("db"; root = APP_ROOT)` the folder is absolute, so
+compare `key == "db"` or the folder's `basename`, never `settings.db_def_folder == "db"`.
+
 ### `set_connection_resolver(f)`
 
 Register a callback that **lazily resolves unknown connection keys** — useful for multi-tenant

@@ -39,11 +39,10 @@ using PormG
 const DB_DIRS  = [&quot;db&quot;, &quot;db_telemetry&quot;]
 const APP_ROOT = normpath(joinpath(@__DIR__, &quot;..&quot;))
 
-# `cd` matters: PormG stores the string you pass as the configuration key, without normalising it,
-# so short names resolved from a known root are what keep one predictable key per folder.
-_load_configs() = cd(APP_ROOT) do
-    PormG.Configuration.load_many(DB_DIRS; env = get(ENV, &quot;RACECONTROL_ENV&quot;, &quot;dev&quot;))
-end
+# `root` keeps the keys short (&quot;db&quot;, &quot;db_telemetry&quot;) while the folders resolve under APP_ROOT, so
+# the precompile worker, `__init__` and the server all register the same keys, whatever their `pwd()`.
+_load_configs() =
+    PormG.Configuration.load_many(DB_DIRS; root = APP_ROOT, env = get(ENV, &quot;RACECONTROL_ENV&quot;, &quot;dev&quot;))
 
 _load_configs()                       # precompile: bakes the right connect_key into the image
 PormG.@import_models &quot;../db/models.jl&quot; models
@@ -58,4 +57,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../dynamic/">« Dynamic &amp; Multi-Tenancy</a><a class="docs-footer-nextpage" href="../../migrations/">Overview »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Saturday 3 October 2026 14:45">Saturday 3 October 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../dynamic/">« Dynamic &amp; Multi-Tenancy</a><a class="docs-footer-nextpage" href="../../migrations/">Overview »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Saturday 3 October 2026 14:49">Saturday 3 October 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

@@ -1570,8 +1570,23 @@ _difference_result_kind(_, _) = nothing
 # `date()` truncation nobody sees.
 function _render_left_typed(value::Any, operation::String, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   value isa FExpression && return _render_expr_typed(value, instruc)
+  value isa FObject && return _render_function_operand_typed(value, instruc)
   sql = _set_update_query_left(value, operation, instruc)
   return sql, _side_kind(value, instruc)
+end
+
+# #907 — a function as a side of an expression, rendered ONCE by `_render_function_typed`, which is
+# what `_get_select_query` renders for it, so its SQL and its bindings are the ones it always had.
+# What changes is that the millisecond form #900 gave a function over an interval is kept here too:
+# on SQLite `Sum(d)`, `Avg(d)`, `Max("time")` stay `_IntervalMs` inside the tree, so `Sum(d) / Count(…)`
+# and `Sum("time") - Max("time")` are arithmetic on milliseconds rather than on the text's leading
+# hours, and `Max("time") + d` has the millisecond form #881 refused it for. On PostgreSQL the SQL is
+# unchanged and the function is typed `CInterval` wherever its render says it is one, which
+# `_function_projection_kind` alone cannot say of a `Sum`. Every other function is typed as before.
+function _render_function_operand_typed(v::FObject, instruc::SQLInstruction)::Tuple{String,_RenderKind}
+  sql, interval_ms, interval = _render_function_typed(v, instruc)
+  interval_ms && return sql, _IntervalMs()
+  return sql, interval ? CInterval() : _function_projection_kind(v, instruc)
 end
 
 # #814 — the kind of an ALREADY-RENDERED side that is not itself an expression: a column, a
@@ -1768,9 +1783,10 @@ _is_interval_kind(kind::_RenderKind) = kind isa Union{CInterval,_IntervalMs}
 
 # #881 — a side as SQLite milliseconds, or `nothing` when it has no such form. An `_IntervalMs` side
 # is one already. A `DurationField` column is its stored text, parsed in SQL; the column reference is
-# repeated by the parse, which is safe because a column binds no parameter. Any other interval — an
-# extremum over a duration column (`Max("lap")`), a `Coalesce` — is text whose SQL may carry
-# parameters, and has no millisecond form here.
+# repeated by the parse, which is safe because a column binds no parameter. A function over an interval
+# with a millisecond form (`Max("lap")`, `Sum(d)`) arrives as `_IntervalMs` already (#907,
+# `_render_function_operand_typed`). Any other interval — a `Case`, a window function — is text whose
+# SQL may carry parameters, and has no millisecond form here.
 function _interval_ms_sql(sql::AbstractString, side, kind::_RenderKind)::Union{String,Nothing}
   kind isa _IntervalMs && return String(sql)
   kind isa CInterval && _is_bare_column(side) && return Dialect._sqlite_interval_ms(sql)
@@ -1885,6 +1901,15 @@ function _render_interval_operand(node, instruc::SQLInstruction;
     raw, ms, interval = _render_function_typed(node, instruc; _as = _as)
     ms && return Dialect._sqlite_interval_text(raw), raw, true
     return raw, nothing, interval || _function_projection_kind(node, instruc) isa CInterval
+  elseif sqlite && node isa SQLText && (literal_ms = _duration_literal_ms(node.field)) !== nothing
+    # #907: a duration literal binds its milliseconds ONCE, and its text is that bound number formatted
+    # in SQL — which is the text `format_duration_sql` binds for it, because `_duration_literal_ms`
+    # admits only a value with a whole number of milliseconds. So the literal has both forms from one
+    # bind, as a `DurationField` column does, and a function that falls back to the text prints it
+    # with the value it always compared. Binding the text first and the number later is not an option:
+    # SQLite's parameters are positional, and a later operand may already have bound after it.
+    ph = add_parameter!(instruc, literal_ms)
+    return Dialect._sqlite_interval_text(ph), ph, true
   end
   sql = _get_select_query(node, instruc; _as = _as)
   # Render first, then type: resolving the path is what populates the memo the kind lookup reads.
@@ -1913,7 +1938,25 @@ function _interval_ms_candidate(p::FObject)
   end
   return false
 end
+_interval_ms_candidate(p::SQLText) = _duration_literal_ms(p.field) !== nothing   # #907
 _interval_ms_candidate(::Any) = false
+
+# #907 — a duration literal's exact number of milliseconds, or `nothing`: a value that is not a
+# duration, a month or a year (no fixed length), or one with a fraction of a millisecond, whose
+# millisecond form would not print back as the text it binds today. Decided from the literal alone,
+# before anything renders, which is what lets a function choose its form ahead of the first bind.
+function _duration_literal_ms(x)::Union{Int64,Nothing}
+  x isa Interval && (x = x.period)
+  x isa Union{Dates.Period,Dates.CompoundPeriod} || return nothing
+  ns = try
+    Models._duration_to_nanoseconds(x)
+  catch e
+    e isa InvalidValueError || rethrow()
+    return nothing
+  end
+  q, r = divrem(ns, 1_000_000)
+  return r == 0 ? q : nothing
+end
 
 _is_null_operand(x) = x isa SQLText && _is_null_literal(x.field)
 
@@ -2002,6 +2045,7 @@ _sqlite_interval_error(what::AbstractString) =
 function _render_operand_typed(operand::Any, field_name::Any, operation::String, instruc::SQLInstruction;
                                left_kind::TemporalKind = nothing)::Tuple{String,_RenderKind}
   operand isa FExpression && return _render_expr_typed(operand, instruc)
+  operand isa FObject && return _render_function_operand_typed(operand, instruc)   # #907
   if operand isa String && _is_field_path(operand, instruc)
     return _render_expr_typed(FExpression(field_name = operand, function_name = "F", column = operand), instruc)
   end
@@ -2631,7 +2675,8 @@ function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{Stri
     # exactly once: `_render_operand_typed` is the call `_set_update_query_operand` makes for an
     # expression operand, and a field-path String is the `F(...)` it names, so the text is the same.
     if v.operation in _ORDERING_OPERATIONS || v.operation in _ARITHMETIC_OPERATIONS
-      if v.operand isa FExpression || (v.operand isa String && _is_field_path(v.operand, instruc))
+      # #907: a function on the right is typed too (`F("points") * Sum("time")`), as it is on the left.
+      if v.operand isa Union{FExpression,FObject} || (v.operand isa String && _is_field_path(v.operand, instruc))
         right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc)
         # #881: an interval on the right (`F("points") * d`, `F("points") > d`).
         _is_interval_kind(right_kind) &&

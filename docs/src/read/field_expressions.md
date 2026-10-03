@@ -411,9 +411,8 @@ from it, and both are intentional divergences:
 
 - **Precision** is the millisecond on SQLite, the precision a stored timestamp has; PostgreSQL keeps
   microseconds. Dividing by zero gives `NULL` on SQLite and an error on PostgreSQL.
-- **What has no millisecond form is refused on SQLite** with `QueryBuildError`: an extremum over a
-  `DurationField` (`Max("time") + d`), a month or a year (`d + Month(1)`, which has no fixed length),
-  and a window function inside the interval (`F("start_at") - Lag("start_at", over = …)`). The window
+- **What has no millisecond form is refused on SQLite** with `QueryBuildError`: a month or a year
+  (`d + Month(1)`, which has no fixed length), and a window function inside the interval (`F("start_at") - Lag("start_at", over = …)`). The window
   sees a single row in the subquery that formats the text; project its value in a CTE first and use
   the column. `Max`/`Min` over a timestamp are fine.
 
@@ -436,9 +435,14 @@ negative values. These cases use the milliseconds:
   `sum(interval)` and `avg(interval)` do. On SQLite the mean is rounded to the millisecond. Both
   read back as a `Dates.CompoundPeriod` on both engines.
 - `Greatest`, `Least` and `Coalesce` when every argument is a difference, interval arithmetic, a
-  `DurationField` (by path, `F(...)` or `Joined(...)`), one of the functions in this list, or a
-  `NULL` literal. Any other argument keeps the text comparison: a text column, a `CTE(...)` column,
-  or a duration literal (`Coalesce("time", Value(Hour(0)))`). So does a declared `output_field`.
+  `DurationField` (by path, `F(...)` or `Joined(...)`), one of the functions in this list, a
+  duration literal (`Coalesce("time", Value(Hour(0)))`, the usual "default to zero"), or a `NULL`
+  literal. Any other argument keeps the text comparison: a text column, a `CTE(...)` column, or a
+  duration literal with a month, a year or a fraction of a millisecond. So does a declared
+  `output_field`.
+- A `When` condition on an interval's alias, as a filter on it is
+  (`Case(When(Q("total__@gt" => Hour(1)); then = 1); default = 0)`). The alias must come before the
+  `Case` in `values(...)`.
 - A `DurationField` column that is ordered (`order_by("time")`), compared with an ordering lookup
   (`"time__@gt" => Minute(2)`, `@range`), or written as `F("time") > Minute(2)`. Its `==` and `@in`
   compare the stored text. That is exact, because every write stores the canonical `HH:MM:SS` form
@@ -462,13 +466,23 @@ Two shapes have no millisecond form and still sort the text on SQLite. Their val
 ordering or filtering on them is text order, which is wrong at 100 hours and above and for negative
 values:
 
-- `Case` over durations.
+- `Case` whose value is a duration. Its `When` conditions compare milliseconds (see above).
 - A window value function over a duration (`Lag("time", over = …)`). For lap times, which stay far
   below 100 hours, the text order is the numeric one.
 
-An aggregate over an interval inside arithmetic, such as `Sum(d) / Count("raceid")`, still computes
-on the text on SQLite, so it reads whole hours. Project `Avg(d)` instead, or the `Sum` and the `Count`
-as separate values.
+An aggregate over an interval can be used inside arithmetic too. On SQLite it stays a number of
+milliseconds until the whole expression is finished, as a difference does. `Sum(d) / Count("id")`
+is a mean duration, `Sum("time") - Max("time")` the total without the slowest lap,
+`Max("time") + d` an interval, and `Count("lap") * Sum("time")` a scaled one. A count plus, minus or
+divided by an interval is refused, as `count + d` is above. The total race time per driver, less
+the slowest lap, in the 2009 Australian GP:
+
+```julia
+query = M.Lap_times.objects
+query.filter("raceid__year" => 2009, "raceid__round" => 1)
+query.values("driverid__surname", "without_slowest" => Sum("time") - Max("time"))
+query.order_by("without_slowest")
+```
 
 A duration compares only against an interval — a timestamp difference or a `DurationField`. Against
 anything else (`F("date") > Hour(1)`, or a day count) it raises `QueryBuildError`. A `Time` is a time

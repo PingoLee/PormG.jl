@@ -72,7 +72,7 @@ Catch the umbrella when you want a category, the concrete type when you want a r
 | Call | Raises | When |
 |---|---|---|
 | `Configuration.load(...)` | `PormG.Configuration.MissingConfigurationError` | No `connection.yml` found; try `PormG.setup(path)` |
-| `Configuration.load(...)` | `InvalidConfigurationError` | Unknown or missing adapter, unsupported extension, bad `extensions` shape, an environment block that is not a block of settings |
+| `Configuration.load(...)` | `InvalidConfigurationError` | Unknown or missing adapter, unsupported extension, bad `extensions` shape, an environment block that is not a block of settings, an absolute `path` together with `root` |
 | `upgrade_guide(...)` | `InvalidConfigurationError` | The `upgrading/` log bundled with the install is missing or holds no entries — a broken install, reported so it cannot read as *"nothing to port"* |
 | model definition | `FieldValidationError` / `ModelDefinitionError` | Bad field argument / bad model shape. Catch `DefinitionError` for both |
 | `makemigrations` / `migrate` / `dry_run` | `InvalidMigrationError` | The migration or the schema it describes is not valid — a plan file that does not parse, say, or a label that reads like a data step (`Data (Pre):`, `data (post):`) but is neither `Data (pre):` nor `Data (post):`. No pending plan is **not** one: `migrate` returns `outcome = :nothing_pending` |

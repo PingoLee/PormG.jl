@@ -222,11 +222,10 @@ using PormG
 const DB_DIRS  = ["db", "db_telemetry"]
 const APP_ROOT = normpath(joinpath(@__DIR__, ".."))
 
-# `cd` matters: PormG stores the string you pass as the configuration key, without normalising it,
-# so short names resolved from a known root are what keep one predictable key per folder.
-_load_configs() = cd(APP_ROOT) do
-    PormG.Configuration.load_many(DB_DIRS; env = get(ENV, "RACECONTROL_ENV", "dev"))
-end
+# `root` keeps the keys short ("db", "db_telemetry") while the folders resolve under APP_ROOT, so
+# the precompile worker, `__init__` and the server all register the same keys, whatever their `pwd()`.
+_load_configs() =
+    PormG.Configuration.load_many(DB_DIRS; root = APP_ROOT, env = get(ENV, "RACECONTROL_ENV", "dev"))
 
 _load_configs()                       # precompile: bakes the right connect_key into the image
 PormG.@import_models "../db/models.jl" models

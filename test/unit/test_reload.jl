@@ -187,9 +187,8 @@ function _run_boot_pattern_regression()
         const INIT_PID = Ref(0)
 
         # An explicit env: neither the inherited PORMG_ENV nor the file's default_env: decides.
-        _load_configs() = cd(APP_ROOT) do
-            PormG.Configuration.load_many(DB_DIRS; env = "dev")
-        end
+        # `root`, not a `cd(APP_ROOT)` wrapper (#857): the keys stay short from any working directory.
+        _load_configs() = PormG.Configuration.load_many(DB_DIRS; root = APP_ROOT, env = "dev")
 
         _load_configs()                       # precompile: bakes the short key into the image
         PormG.@import_models "../db/models.jl" models
@@ -212,6 +211,9 @@ function _run_boot_pattern_regression()
         Pkg.instantiate(; update_registry=false)
         pkgid = Base.PkgId(Base.UUID("$(_BOOT_APP_UUID)"), "$(pkg_name)")
         println("BOOT_PRECOMPILED_BEFORE:", Base.isprecompiled(pkgid))
+        # Leave the package root before `using`, so neither the precompile worker (it inherits this
+        # working directory) nor `__init__` can find `db/` relative to `pwd()`: only `root` can (#857).
+        cd(mktempdir())
         using $(pkg_name)
         cfg = $(pkg_name).PormG.config
         println("BOOT_PRECOMPILED_AFTER:", Base.isprecompiled(pkgid))

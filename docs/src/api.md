@@ -592,12 +592,21 @@ transaction.
 
 ## Configuration API
 
-### `Configuration.load(path; env=nothing)`
+### `Configuration.load(path; env=nothing, root=nothing)`
 
 Loads a database configuration folder. Use `env` to explicitly set the environment instead of relying on `ENV["PORMG_ENV"]`.
 
 ```julia
 PormG.Configuration.load("db"; env="prod")
+```
+
+Without `root`, `path` is both the connection key and the folder, resolved against `pwd()`. With
+`root`, the key is `path` as passed and the folder is `joinpath(root, path)`, stored absolute in
+`settings.db_def_folder`. That gives a short key from any working directory. `path` must then be
+relative:
+
+```julia
+PormG.Configuration.load("db"; root = APP_ROOT, env = "prod")   # key "db"
 ```
 
 Returns `Union{Nothing, String}`: the **connection key** it registered, or `nothing` when
@@ -610,12 +619,12 @@ key = PormG.Configuration.load("db"; env="prod")
 settings = PormG.Configuration.get_settings(key)
 ```
 
-### `Configuration.load_many(paths; env=nothing)`
+### `Configuration.load_many(paths; env=nothing, root=nothing)`
 
-Bootstraps multiple database folders in one call:
+Bootstraps multiple database folders in one call, with the same `env` and `root` for each:
 
 ```julia
-PormG.Configuration.load_many(["db", "db_analytics"]; env="prod")
+PormG.Configuration.load_many(["db", "db_analytics"]; root = APP_ROOT, env = "prod")
 ```
 
 Returns the connection keys actually registered. As with `load`, a folder already held under another

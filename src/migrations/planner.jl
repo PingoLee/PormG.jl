@@ -3077,7 +3077,10 @@ function _write_pending_plan(connection::Union{PormGPostgres, PormGSQLite}, sett
           findings = [_lossy_alter_summary(f) for f in lossy_alters])
   end
   @warn("The migration plan has been saved to '$(settings.db_def_folder)/migrations/pending_migrations.jl'. Review the plan before applying the migrations.")
-  @info(_emsg("\e[32mMigration plan generated successfully. Run 'PormG.Migrations.migrate($( settings.db_def_folder == "db" ? "" : string("\"", settings.db_def_folder, "\"")))' to apply the migrations.\e[0m"))
+  # The KEY, not the folder: `migrate(db::String)` looks its argument up as a key, and under
+  # `load(…; root)` the folder is an absolute path no entry is keyed by (#857).
+  key = Configuration._settings_key(settings)
+  @info(_emsg("\e[32mMigration plan generated successfully. Run 'PormG.Migrations.migrate($( key == DB_PATH ? "" : string("\"", key, "\"")))' to apply the migrations.\e[0m"))
   return nothing
 end
 

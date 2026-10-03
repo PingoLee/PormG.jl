@@ -1072,7 +1072,10 @@ end
             # The table answer, then one per endpoint column; each prompt lists the old columns still free.
             plan, printed = _rt_prompted(read_live_schema(pool), schema_v2, pool, "1\n1\n1\n")
             @test count("Is the field", printed) == 2
-            @test occursin(r"\"from_pilot_t_id\".*1 - from_driver_t_id \([^)]*\), 2 - to_driver_t_id", printed)
+            # The field prompt colours the column name, but only when stdout has colour on — as on CI —
+            # so the codes are stripped before matching across them.
+            plain = replace(printed, r"\e\[[0-9;]*m" => "")
+            @test occursin(r"\"from_pilot_t_id\".*1 - from_driver_t_id \([^)]*\), 2 - to_driver_t_id", plain)
             @test plan[:pilot_t_mentors]["Rename table"] == "ALTER TABLE \"driver_t_mentors\" RENAME TO \"pilot_t_mentors\";"
             @test plan[:pilot_t_mentors]["Rename field: from_pilot_t_id"] ==
                   "ALTER TABLE \"pilot_t_mentors\" RENAME COLUMN \"from_driver_t_id\" TO \"from_pilot_t_id\";"

@@ -741,3 +741,200 @@ end
     close(db)
   end
 end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# #907 — what #900 left on the text
+# An aggregate over an interval INSIDE arithmetic (`Sum(d) / Count(…)`, `Sum("lap") - Max("lap")`)
+# computed on the text's leading hours, and `Max("lap") + d` was refused, because a function side of an
+# expression was typed without its millisecond form. A duration literal among `Coalesce`'s arguments
+# kept the whole function on the text, and a `When` condition on an interval alias compared the text
+# with `"01:00:00"`. All of them compute on the milliseconds now. PostgreSQL's SQL is unchanged.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #907 — an aggregate over an interval inside arithmetic is millisecond arithmetic on SQLite
+# The aggregate stays `_IntervalMs` while the expression is built, and the result is formatted once,
+# where it leaves the tree. `Max("lap") + F("best")`, refused by #881 for want of a millisecond form,
+# has one since #894. PostgreSQL renders the SQL it rendered before; the result is typed `CInterval`
+# on both engines, so it reads back as a `Dates.CompoundPeriod`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#907: an aggregate over an interval inside arithmetic uses milliseconds on SQLite" begin
+  # The mean gap per circuit, by hand: the sum's milliseconds over the count, rounded to a millisecond.
+  per_race_ms = "CAST(round((SUM($(_IO_GAP_MS))) * 1.0 / (COUNT(\"Tb\".\"id\"))) AS INTEGER)"
+  q = _IOM.Io_race.objects
+  q.values("circuit", "p" => _IO_FN.Sum(_io_gap()) / _IO_FN.Count("id"))
+  q.order_by("p")
+  sql = _io_sql(q)
+  @test occursin("$(_io_text(per_race_ms)) as \"p\"", sql)
+  # The alias orders by the re-rendered milliseconds, as any interval expression does (#894).
+  @test occursin("ORDER BY $(per_race_ms) ASC NULLS LAST", sql)
+
+  # Two aggregates, and an aggregate beside a `DurationField` column: one millisecond expression each.
+  q = _IOM.Io_lap.objects
+  q.values("circuit", "x" => _IO_FN.Sum("lap") - _IO_FN.Max("lap"))
+  @test occursin("$(_io_text("(SUM($(_IO_LAP_MS)) - MAX($(_IO_LAP_MS)))")) as \"x\"", _io_sql(q))
+  q = _IOM.Io_lap.objects
+  q.values("best", "x" => _IO_FN.Max("lap") + F("best"))
+  @test occursin("$(_io_text("(MAX($(_IO_LAP_MS)) + $(_IO_BEST_MS))")) as \"x\"", _io_sql(q))
+
+  # On the right of a number too (review of #907): a count times a sum is the milliseconds scaled, as
+  # `F("points") * d` is. A count plus a sum has no PostgreSQL operator (`bigint + interval`), and is
+  # refused on SQLite as `count + d` is, where it added the text's leading hours.
+  q = _IOM.Io_lap.objects
+  q.values("circuit", "x" => _IO_FN.Count("id") * _IO_FN.Sum("lap"))
+  @test occursin("$(_io_text("CAST(round((COUNT(\"Tb\".\"id\")) * (SUM($(_IO_LAP_MS)))) AS INTEGER)")) as \"x\"", _io_sql(q))
+  q = _IOM.Io_lap.objects
+  q.values("circuit", "x" => _IO_FN.Count("id") + _IO_FN.Sum("lap"))
+  err = try _io_sql(q); nothing catch e; e end
+  @test err isa PormG.QueryBuildError && occursin("on the right of a value that is not one", sprint(showerror, err))
+  q_pg = _IOM.Io_lap.objects
+  q_pg.values("circuit", "x" => _IO_FN.Count("id") * _IO_FN.Sum("lap"))
+  @test occursin("(COUNT(\"Tb\".\"id\") * SUM(\"Tb\".\"lap\")) as \"x\"", _io_sql(q_pg; conn = _IO_PG))
+
+  # A date shifted by a sum is a date shifted by an interval (#881), no longer an untyped operand.
+  q = _IOM.Io_race.objects
+  q.values("circuit", "x" => _IO_FN.Max("starts_at") + _IO_FN.Sum(_io_gap()))
+  @test occursin("julianday(MAX(\"Tb\".\"starts_at\")) + ((SUM($(_IO_GAP_MS))) / 86400000.0)", _io_sql(q))
+
+  # PostgreSQL: the SQL it rendered before.
+  q_pg = _IOM.Io_race.objects
+  q_pg.values("circuit", "p" => _IO_FN.Sum(_io_gap()) / _IO_FN.Count("id"))
+  @test occursin("(SUM((\"Tb\".\"starts_at\" - \"Tb\".\"date\")) / COUNT(\"Tb\".\"id\")) as \"p\"", _io_sql(q_pg; conn = _IO_PG))
+  q_pg = _IOM.Io_lap.objects
+  q_pg.values("circuit", "x" => _IO_FN.Sum("lap") - _IO_FN.Max("lap"))
+  @test occursin("(SUM(\"Tb\".\"lap\") - MAX(\"Tb\".\"lap\")) as \"x\"", _io_sql(q_pg; conn = _IO_PG))
+
+  # Typed on both engines. Untyped before: `_function_projection_kind` types no `Sum`.
+  for conn in (_IO_SL, _IO_PG)
+    q = _IOM.Io_race.objects
+    q.values("circuit", "p" => _IO_FN.Sum(_io_gap()) / _IO_FN.Count("id"))
+    QB.query(q; connection = conn, show_query = :sql)
+    @test q.object.projection_kinds[:p] == PormG.CInterval()
+  end
+
+  # A sum of numbers inside arithmetic is untouched and untyped.
+  q = _IOM.Io_lap.objects
+  q.values("circuit", "x" => _IO_FN.Sum("id") / _IO_FN.Count("id"))
+  @test occursin("(SUM(\"Tb\".\"id\") / COUNT(\"Tb\".\"id\")) as \"x\"", _io_sql(q))
+  QB.query(q; connection = _IO_SL, show_query = :sql)
+  @test !haskey(q.object.projection_kinds, :x)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #907 — a duration literal among Greatest/Least/Coalesce's arguments binds its milliseconds
+# `Coalesce("lap", Value(Hour(0)))` is the usual "default to zero". Its literal bound the text, so the
+# whole function stayed on the text: it sorted `100:00:00` first, and `@gt Hour(99)` matched nothing.
+# The literal binds its milliseconds ONCE, before anything after it binds (SQLite's parameters are
+# positional); its text, where the function needs it, is that number formatted in SQL.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#907: a duration literal in Coalesce/Greatest binds its milliseconds on SQLite" begin
+  coalesce_ms = "COALESCE($(_IO_LAP_MS), ?)"
+  q = _IOM.Io_lap.objects
+  q.values("id", "c" => _IO_FN.Coalesce("lap", QB.Value(Dates.Hour(0))))
+  q.filter("c__@gt" => Dates.Hour(99))
+  sql = _io_sql(q)
+  @test occursin("$(_io_text(coalesce_ms)) as \"c\"", sql)
+  @test occursin("WHERE $(coalesce_ms) > ?", sql)
+  # One value per marker: the projection's 0, the filter's re-rendered 0, then 99 h.
+  @test _io_params(q) == Any[0, 0, 356_400_000]
+  @test count(==('?'), sql) == 3
+
+  # Greatest's rotations bind the literal once each, in text order.
+  q = _IOM.Io_lap.objects
+  q.values("id", "g" => _IO_FN.Greatest("lap", QB.Value(Dates.Minute(90))))
+  @test occursin("MAX(COALESCE($(_IO_LAP_MS), ?), COALESCE(?, $(_IO_LAP_MS)))", _io_sql(q))
+  @test _io_params(q) == Any[5_400_000, 5_400_000]
+
+  # A literal with a fraction of a millisecond has no exact millisecond form: the text, as before.
+  q = _IOM.Io_lap.objects
+  q.values("id", "c" => _IO_FN.Coalesce("lap", QB.Value(Dates.Nanosecond(1500))))
+  @test occursin("COALESCE(\"Tb\".\"lap\", ?) as \"c\"", _io_sql(q))
+  @test _io_params(q) == Any["00:00:00.0000015"]
+
+  # Beside a text column the function keeps the text, and the literal prints as its formatted
+  # milliseconds — the value it bound as text before (the oracle below runs it).
+  q = _IOM.Io_lap.objects
+  q.values("id", "c" => _IO_FN.Coalesce("circuit", QB.Value(Dates.Hour(1))))
+  @test occursin("COALESCE(\"Tb\".\"circuit\", $(_io_text("?"))) as \"c\"", _io_sql(q))
+  @test _io_params(q) == Any[3_600_000]
+
+  # PostgreSQL: unchanged, the literal bound as itself.
+  q_pg = _IOM.Io_lap.objects
+  q_pg.values("id", "c" => _IO_FN.Coalesce("lap", QB.Value(Dates.Hour(0))))
+  @test occursin("COALESCE(\"Tb\".\"lap\", \$1) as \"c\"", _io_sql(q_pg; conn = _IO_PG))
+  @test _io_params(q_pg; conn = _IO_PG) == Any[Dates.Hour(0)]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #907 — a When condition on an interval alias compares milliseconds on SQLite
+# A `When` renders its `Q` through `_get_filter_query`, which never reached the alias-filter path #894
+# gave the milliseconds, so `Case(When(Q("t__@gt" => Hour(1)); …))` compared the alias's text with
+# `"01:00:00"`. The alias must be projected before the `Case` that reads it — its kind is recorded in
+# `values` order — or it renders as before.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#907: a When condition on an interval alias compares milliseconds on SQLite" begin
+  for (fn, sql_fn) in ((_IO_FN.Sum, "SUM"), (_IO_FN.Max, "MAX"))
+    q = _IOM.Io_lap.objects
+    q.values("circuit", "t" => fn("lap"), "c" => _IO_FN.Case(_IO_FN.When(Q("t__@gt" => Dates.Hour(1)); then = 1); default = 0))
+    @test occursin("CASE WHEN ($(sql_fn)($(_IO_LAP_MS)) > ?) THEN ? ELSE ? END as \"c\"", _io_sql(q))
+    @test _io_params(q) == Any[3_600_000, 1, 0]
+  end
+
+  # PostgreSQL compares the interval, as before.
+  q_pg = _IOM.Io_lap.objects
+  q_pg.values("circuit", "t" => _IO_FN.Sum("lap"), "c" => _IO_FN.Case(_IO_FN.When(Q("t__@gt" => Dates.Hour(1)); then = 1); default = 0))
+  @test occursin("CASE WHEN (SUM(\"Tb\".\"lap\") > \$1)", _io_sql(q_pg; conn = _IO_PG))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #907 — the oracle: every rendered statement, run against SQLite itself
+# The #894 rows, plus laps with no time, which the "default to zero" `Coalesce` is for. Each expected
+# value is PostgreSQL's. Under the text: `Sum(d) / Count` was a number of hours, `Sum - Max` the
+# difference of two leading-hour counts, `Max + best` was refused, the `Coalesce` sorted `100:00:00`
+# first and matched no row over 99 h, and the `When` did not flag a 100 h lap as over 99 h.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#907: SQLite computes interval aggregates in arithmetic numerically (in-memory oracle)" begin
+  isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+  db = Main.SQLite.DB()
+  try
+    exe(sql, params = Any[]) = Main.SQLite.DBInterface.execute(db, sql, params)
+    _io_seed!(exe)
+    col(model, key, build!) = begin
+      q = model.objects
+      build!(q)
+      insp = inspect_query(q; connection = _IO_SL)
+      [getproperty(r, key) for r in exe(insp[:sql_text], insp[:parameters])]
+    end
+
+    # The mean gap per circuit — a: (99 h - 1 h) / 2, b: (-2 h + 6 h) / 2, c: 100 h — ordered by it.
+    @test col(_IOM.Io_race, :p, q -> (q.values("circuit", "p" => _IO_FN.Sum(_io_gap()) / _IO_FN.Count("id"));
+                                      q.order_by("p"))) == ["02:00:00", "49:00:00", "100:00:00"]
+    @test col(_IOM.Io_race, :circuit, q -> (q.values("circuit", "p" => _IO_FN.Sum(_io_gap()) / _IO_FN.Count("id"));
+                                            q.filter("p__@gt" => Dates.Hour(48)); q.order_by("circuit"))) == ["a", "c"]
+    # Total minus the longest lap per circuit — a: 98 h - 99 h, b: 98 h - 100 h, c: 0.
+    @test col(_IOM.Io_lap, :x, q -> (q.values("circuit", "x" => _IO_FN.Sum("lap") - _IO_FN.Max("lap"));
+                                     q.order_by("circuit"))) == ["-01:00:00", "-02:00:00", "00:00:00"]
+    # The lap count times the total — a and b: 2 × 98 h, c: 1 × 1:30.
+    @test col(_IOM.Io_lap, :x, q -> (q.values("circuit", "x" => _IO_FN.Count("id") * _IO_FN.Sum("lap"));
+                                     q.order_by("circuit"))) == ["196:00:00", "196:00:00", "00:01:30"]
+    # The longest lap plus the best, per best: 199 h twice, -3 h twice, 2:30.
+    @test col(_IOM.Io_lap, :x, q -> (q.values("best", "x" => _IO_FN.Max("lap") + F("best"));
+                                     q.filter("x__@gt" => Dates.Hour(99)))) == ["199:00:00", "199:00:00"]
+    # The longest lap per circuit flagged over 99 h — a: 99 h, b: 100 h, c: 1:30.
+    @test col(_IOM.Io_lap, :f, q -> (q.values("circuit", "m" => _IO_FN.Max("lap"),
+                                              "f" => _IO_FN.Case(_IO_FN.When(Q("m__@gt" => Dates.Hour(99)); then = 1); default = 0));
+                                     q.order_by("circuit"))) == [0, 1, 0]
+
+    # "Default to zero": a lap with no time is 0, and the order and the filter are numeric.
+    exe("INSERT INTO io_lap VALUES (6, NULL, NULL, NULL)")
+    zero_lap(q) = q.values("id", "c" => _IO_FN.Coalesce("lap", QB.Value(Dates.Hour(0))))
+    @test col(_IOM.Io_lap, :id, q -> (zero_lap(q); q.order_by("c", "id"))) == [4, 3, 6, 5, 1, 2]
+    @test col(_IOM.Io_lap, :c, q -> (zero_lap(q); q.filter("id" => 6))) == ["00:00:00"]
+    @test col(_IOM.Io_lap, :id, q -> (zero_lap(q); q.filter("c__@gt" => Dates.Hour(99)))) == [2]
+    # Beside a text column the literal prints the text it bound before: row 6 has no circuit.
+    @test col(_IOM.Io_lap, :c, q -> (q.values("id", "c" => _IO_FN.Coalesce("circuit", QB.Value(Dates.Minute(90))));
+                                     q.order_by("id"))) == ["a", "b", "a", "b", "c", "01:30:00"]
+  finally
+    close(db)
+  end
+end

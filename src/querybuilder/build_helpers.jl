@@ -2690,6 +2690,13 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   # the top-level alias filter (`get_filter_query`) and `Q`/`Qor`.
   interval_comparison = _sqlite_interval_alias_comparison(v, instruc)
   interval_comparison === nothing || return interval_comparison
+  # #907: the same alias compared with a duration VALUE, where only a `When` condition gets here — every
+  # filter on an alias takes `_render_alias_predicate` first, which asks the same question.
+  alias = _alias_filter_key(v.column, instruc)
+  if alias !== nothing
+    interval_comparison = _render_interval_alias_predicate(v, memo_key(:base, alias), instruc)
+    interval_comparison === nothing || return interval_comparison
+  end
 
   column = _get_filter_query(v.column, instruc)
   # #27: JSONB containment/overlap operators (@>, ?, ?|, ?&) — dedicated binding + PG-only render.

@@ -1113,20 +1113,10 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   _guard_alias_clause_operator(v, having_key[2])
   # #654: `@isnull` on a COUNT alias refuses here, ahead of any render, for the reason above.
   isnull_aggregate = v.operator == "ISNULL" && _alias_isnull_aggregate(having_key, instruc)
-  # #894: an interval alias compared with a duration compares milliseconds on SQLite — the alias's
-  # own value is its `HH:MM:SS` text, which orders wrongly at 100 hours and for negative values. The
-  # duration binds as milliseconds, as it does against a difference inside an expression (#881). A
-  # value that is not a duration takes the text path below and raises what it always raised there.
-  source = having_key[1] === :base ? _projected_interval_source(having_key[2], instruc) : nothing
-  ms_values = source === nothing ? nothing : _predicate_duration_ms(v.operator, v.values)
-  interval = ms_values === nothing ? nothing : _render_interval_ms(source.field, instruc; _as = source._as)
-  if interval !== nothing && last(interval)
-    return _render_predicate(first(interval), v.operator,
-                             _bind_predicate_value(instruc, v.operator, ms_values), instruc)
-  end
-  # `interval` is the projection's own text when its render had no millisecond form; it binds what
-  # `_alias_lhs` would, so it stands in for it rather than rendering the projection twice.
-  field = interval === nothing ? _alias_lhs(having_key, having_cached, instruc) : first(interval)
+  # #894: an interval alias compared with a duration compares milliseconds on SQLite.
+  interval = _render_interval_alias_predicate(v, having_key, instruc)
+  interval === nothing || return interval
+  field = _alias_lhs(having_key, having_cached, instruc)
   # #618: `contains=` / `operator=` are what run `_apply_like_wildcards` (and with it
   # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias
   # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the
@@ -1143,6 +1133,32 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   # unknown-operator refusal that was missing here entirely.
   return _render_predicate(string(field), v.operator, placeholder, instruc;
                            aggregate = isnull_aggregate)
+end
+
+# #894 — an interval alias compared with a duration compares milliseconds on SQLite: the alias's own
+# value is its `HH:MM:SS` text, which orders wrongly at 100 hours and for negative values. The duration
+# binds as milliseconds, as it does against a difference inside an expression (#881). `nothing`, having
+# rendered and bound nothing, for every other predicate — a value that is not a duration, an operator
+# that is not an ordering or a membership, PostgreSQL — which the caller renders as it always did.
+#
+# Two callers: `_render_alias_predicate`, for a filter on the alias (WHERE, HAVING, `Q`), and #907
+# `_get_filter_query(::SQLTypeOper)`, for a `When` condition on it, which renders through that path and
+# never reached this one, so `Case(When(Q("t__@gt" => Hour(1)); …))` compared the text with `"01:00:00"`.
+#
+# The projection renders exactly once, into the active bucket. When that render turns out to have no
+# millisecond form, its text stands in for `_alias_lhs`, which would bind the same values, and the value
+# binds as the alias's own formatter binds it — the predicate `_render_alias_predicate` renders below.
+function _render_interval_alias_predicate(v::SQLTypeOper, having_key::MemoKey, instruc::SQLInstruction)::Union{String,Nothing}
+  having_key[1] === :base || return nothing
+  source = _projected_interval_source(having_key[2], instruc)
+  source === nothing && return nothing
+  ms_values = _predicate_duration_ms(v.operator, v.values)
+  ms_values === nothing && return nothing
+  sql, interval_ms = _render_interval_ms(source.field, instruc; _as = source._as)
+  interval_ms && return _render_predicate(sql, v.operator, _bind_predicate_value(instruc, v.operator, ms_values), instruc)
+  placeholder = _bind_predicate_value(instruc, v.operator,
+                  _resolve_having_filter_value(having_key, v.values, instruc, v.operator))
+  return _render_predicate(sql, v.operator, placeholder, instruc)
 end
 
 # The plain filter key a predicate compares — a `String` path with no `__` — or `nothing`.

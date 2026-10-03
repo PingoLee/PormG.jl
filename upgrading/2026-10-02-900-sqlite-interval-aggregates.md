@@ -37,7 +37,8 @@ for negative values. They now compute on the milliseconds (`d` = `F("start_at") 
 interval arithmetic, a `DurationField` or one of these functions (a `NULL` literal aside). With any
 other argument they render as before: a text column, a `CTE(...)` column, or a duration literal
 (`Coalesce("time", Value(Hour(0)))`, which is still typed but orders as text). So does a declared
-`output_field`.
+`output_field`. Since #907 a duration literal with a whole number of milliseconds uses them too (see
+that entry).
 
 These are unchanged, on purpose:
 
@@ -46,7 +47,8 @@ These are unchanged, on purpose:
   above, or on negative values, is text order.
 - An aggregate over an interval used inside arithmetic (`Sum(d) / Count("id")`,
   `Sum("time") - Max("time")`) still computes on the text on SQLite, so it reads whole hours. Project
-  `Avg(d)`, or the `Sum` and the `Count` as separate values, instead.
+  `Avg(d)`, or the `Sum` and the `Count` as separate values, instead. #907 changed that, and a
+  `When` condition on an interval alias with it.
 
 ### How to find the calls to migrate
 

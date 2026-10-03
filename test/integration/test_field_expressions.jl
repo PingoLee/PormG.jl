@@ -919,6 +919,55 @@ end
     @test sort(over.driverid) == sort([id for (id, t) in totals if t > cut])
   end
 
+  # #907 — what #900 left on the text. On SQLite an aggregate over an interval inside arithmetic
+  # computed on the text's leading hours, a duration literal among `Greatest`'s arguments kept it on
+  # the text, and a `When` on an interval alias compared the text. The oracle is #900's.
+  @testset "interval aggregates in arithmetic, a duration literal, a When on an alias (#907)" begin
+    FN = PormG.Functions
+    scaled() = (F("start_at") - F("date")) * F("round")
+    base = M.Race.objects
+    base.filter("year" => 2009, "start_at__@isnull" => false)
+    base.values("raceid", "round", "date", "start_at")
+    df = base |> DataFrame
+    gap = Dict(r.raceid => r.round * Dates.value(Dates.DateTime(r.start_at) - Dates.DateTime(Dates.Date(string(r.date))))
+               for r in eachrow(df))
+    @test any(>(99 * 3_600_000), values(gap)) && any(<(99 * 3_600_000), values(gap))
+    run(build!) = (q = M.Race.objects; q.filter("year" => 2009, "start_at__@isnull" => false); build!(q); q |> DataFrame)
+
+    # The mean by hand, and the total less the largest: both read back as durations.
+    agg = run(q -> q.values("year", "p" => FN.Sum(scaled()) / FN.Count("raceid"), "x" => FN.Sum(scaled()) - FN.Max(scaled())))
+    @test agg[1, :p] isa Dates.CompoundPeriod
+    # PostgreSQL keeps microseconds, SQLite rounds the quotient to the millisecond.
+    @test isapprox(Dates.toms(agg[1, :p]), sum(values(gap)) / length(gap); atol = 1)
+    @test Dates.toms(agg[1, :x]) == sum(values(gap)) - maximum(values(gap))
+
+    # A duration literal: at least 99 h, filtered across the 100-hour boundary.
+    floor99 = run(q -> (q.values("raceid", "g" => FN.Greatest(scaled(), Value(Dates.Hour(99))));
+                        q.filter("g__@gt" => Dates.Hour(99))))
+    @test sort(floor99.raceid) == sort([id for (id, g) in gap if g > 99 * 3_600_000])
+
+    # A When on the alias flags exactly the races over 99 h.
+    flags = run(q -> (q.values("raceid", "g" => scaled(),
+                               "f" => FN.Case(FN.When(Q("g__@gt" => Dates.Hour(99)); then = 1); default = 0));
+                      q.order_by("raceid")))
+    @test flags.f == [gap[id] > 99 * 3_600_000 ? 1 : 0 for id in flags.raceid]
+
+    # A DurationField: each driver's first three laps, less the slowest of them.
+    laps = M.Lap_times.objects
+    laps.filter("raceid__year" => 2009, "raceid__round" => 1, "lap__@lte" => 3)
+    laps.values("driverid", "milliseconds")
+    ldf = laps |> DataFrame
+    expected = Dict(first(g.driverid) => sum(g.milliseconds) - maximum(g.milliseconds) for g in groupby(ldf, :driverid))
+    @test length(expected) > 1
+    q = M.Lap_times.objects
+    q.filter("raceid__year" => 2009, "raceid__round" => 1, "lap__@lte" => 3)
+    q.values("driverid", "x" => FN.Sum("time") - FN.Max("time"))
+    q.order_by("x", "driverid")
+    got = q |> DataFrame
+    @test got.driverid == sort(collect(keys(expected)); by = id -> (expected[id], id))
+    @test [Dates.toms(x) for x in got.x] == [expected[id] for id in got.driverid]
+  end
+
   # #882 — an IntegerField beside a date is a whole number of days on both engines. SQLite used to
   # subtract it from the YEAR. The oracle is the same shift in Julia over the same rows.
   @testset "an integer column shifts a date by whole days (#882)" begin

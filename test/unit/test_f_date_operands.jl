@@ -1572,13 +1572,17 @@ end
     q.values("x" => F("seen") - ((F("logged_at") + Dates.Hour(2)) - F("race__starts_at")))
     @test Base.count("?", _fd_sql(q; conn = _FD_SL)) == 1   # `count` here is the testset's day count
     @test _fd_params(q; conn = _FD_SL) == Any[2]
-    # An interval that has no millisecond form — an extremum over a duration, text that may carry
-    # parameters — is still refused on SQLite.
+    # #907: an extremum over a duration has had a millisecond form since #894, and a function side of an
+    # expression keeps it, so a date shifted by one is shifted by its milliseconds. This was refused on
+    # SQLite while the extremum was typed as text; PostgreSQL's `max(date) + max(interval)` is the
+    # timestamp it now computes there too, and its SQL is unchanged.
     q2 = FD.Fd_result.objects
     q2.values("x" => _FN.Max("seen") + _FN.Max("lap"))
-    err = try _fd_sql(q2; conn = _FD_SL); nothing catch e; e end
-    @test err isa PormG.QueryBuildError
-    @test occursin("not supported on SQLite", sprint(showerror, err))
+    @test occursin(_FD_TS_WRAPPER * "julianday(MAX(\"Tb\".\"seen\")) + ((MAX($(_FD_LAP_MS))) / 86400000.0))",
+                   _fd_sql(q2; conn = _FD_SL))
+    q2_pg = FD.Fd_result.objects
+    q2_pg.values("x" => _FN.Max("seen") + _FN.Max("lap"))
+    @test occursin("(MAX(\"Tb\".\"seen\") + MAX(\"Tb\".\"lap\")) as \"x\"", _fd_sql(q2_pg; conn = _FD_PG))
     for conn in (_FD_SL, _FD_PG)
       q = FD.Fd_result.objects
       q.values("x" => F("lap") - F("seen"))
@@ -1974,8 +1978,9 @@ end
 
 # What SQLite still refuses. Each has no PostgreSQL operator either (`integer + interval`,
 # `interval * interval`, `integer / interval`, `date * interval`), or the interval has no millisecond
-# form (an extremum over a duration column is text, which may carry parameters), or the duration has
-# no fixed length (a month).
+# form (a window value function over a duration column is text, which may carry parameters), or the
+# duration has no fixed length (a month). #907 took an extremum over a duration off this list: it has a
+# millisecond form since #894, and a function side of an expression now keeps it.
 @testset "#881: what SQLite still refuses: $label" for (label, expr, msg) in (
     ("count + d", (F("seen") - F("race__date")) + _fd_diff(), "between a number and an interval"),
     ("d + a number", _fd_diff() + 5, "between an interval and a number"),
@@ -1985,7 +1990,8 @@ end
     ("a number - d", F("points") - _fd_diff(), "between a number and an interval"),
     ("a date * d", F("seen") * _fd_diff(), "between a date and an interval"),
     ("d + Month(1)", _fd_diff() + Dates.Month(1), "no fixed length"),
-    ("Max(lap) + d", _FN.Max("lap") + _fd_diff(), "not a timestamp difference or a DurationField column"),
+    ("Lag(lap) + d", _FN.Lag("lap", over = _FN.WindowOver(order_by = ["id"])) + _fd_diff(),
+     "not a timestamp difference or a DurationField column"),
     ("d * Lag(points)", _fd_diff() * _FN.Lag("points", over = _FN.WindowOver(order_by = ["id"])), "window function"),
     # Review of #881: a text, UUID or boolean column has no canonical kind either, and SQLite multiplied
     # the milliseconds by its numeric prefix. PostgreSQL has no `interval * varchar`.

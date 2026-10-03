@@ -1330,7 +1330,12 @@ function _get_select_query(v::WindowFunction, instruc::SQLInstruction; _as::Unio
     return getfield(Dialect, func_name)(_build_over_clause(v.over, instruc), instruc.connection)
   end
 
-  resolved_column = _resolve_window_expression(v.column, instruc)
+  # #887: a subquery column renders with the projection's alias, so a #194 refusal of its correlation
+  # names the column the caller wrote, as it does for `Coalesce(Subquery(…), …)`. Only here, not in
+  # `_resolve_window_expression`: that also renders PARTITION BY and ORDER BY terms, and its path arm
+  # memoizes under whatever `_as` it is handed.
+  resolved_column = v.column isa SubqueryObject ? _get_select_query(v.column, instruc; _as = _as) :
+                                                  _resolve_window_expression(v.column, instruc)
 
   if v.function_name in ["LAG", "LEAD"]
     resolved_kwargs = Dict{String,Any}()

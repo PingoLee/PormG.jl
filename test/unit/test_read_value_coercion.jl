@@ -612,6 +612,14 @@ end
       @test kinds[:wi] == PormG.CInterval()
     end
     @test !haskey(_rvc_kinds(q -> q.values("id", "r" => F_.Rank()); connection = _RVC_PG), :r)
+
+    # #887: a value function over a `Subquery` has the subquery's kind — its one column's (#888).
+    sub = RVC.Rvc_row.objects
+    sub.filter("id" => PormG.OuterRef("id"))
+    sub.values("t" => F_.Max("d"))
+    kinds = _rvc_kinds(q -> q.values("id", "p" => F_.Lag(PormG.Subquery(sub), over = F_.WindowOver(order_by = "id")));
+                       connection = _RVC_PG)
+    @test kinds[:p] == PormG.CDate()
   end
 
   # #824: the `@date` transform is a date whatever its operand — `(col)::date` on PostgreSQL,

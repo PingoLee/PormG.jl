@@ -83,7 +83,7 @@ end
 const AD = AdmModels
 const QBA = PormG.QueryBuilder
 import PormG.QueryBuilder: F, inspect_query, Joined, CTE, SQLOrder, SQLField, Value, Sum, Rank,
-                           WindowOver, Lower, Lag, OP, Subquery, Exists, OuterRef, Q, Qor,
+                           WindowOver, Lower, Lag, Lead, FirstValue, LastValue, NthValue, OP, Subquery, Exists, OuterRef, Q, Qor,
                            Max, Min, Avg, Count, Coalesce, Greatest, NullIf, Power,
                            Abs, Round, Cast, Extract, ToChar, Upper, Length, Trim, LTrim, RTrim,
                            Floor, Ceil, Sqrt, Exp, Ln
@@ -595,4 +595,102 @@ end
   @test occursin("\"col__@date\"", _adm_867_msg(() -> QBA.DATE([1, 2])))
   @test occursin("`$(Vector{Int})`", _adm_867_msg(() -> QBA.DATE([1, 2])))   # the vector's own type, not `Array`
   @test occursin("\"col__@quarter\"", _adm_867_msg(() -> QBA.QUARTER(Any["day"])))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #887 — a Subquery operand of the window value functions: SQL and parameters.
+# `Lag`, `Lead`, `FirstValue`, `LastValue` and `NthValue` dispatched on `WindowColumnArg`, which left
+# `SubqueryObject` out, so each raised a raw `MethodError` — #878's defect one family over. The SLOTS
+# probe above now drives `WindowFunction.column` with a subquery too; this pins what it renders.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#887: a Subquery operand of a window value function renders on both engines" begin
+  nsub() = (s = AD.Adm_child.objects; s.filter("parent" => OuterRef("id"), "qty__@gt" => 3); s.values("t" => Max("qty")); s)
+  over = WindowOver(order_by = "id")
+  build(w) = (q = AD.Adm_parent.objects; q.filter("sku" => "A"); q.values("id", "p" => w); q)
+
+  @test QBA.SubqueryObject <: QBA.WindowColumnPart
+  @test QBA.WindowColumnArg === Union{QBA.WindowColumnPart,AbstractString}   # still derived (#603)
+
+  # The column renders first, so the subquery's own `3` binds first, then what the function binds
+  # (`Lag`/`Lead`'s offset and default), then the outer WHERE. `NthValue`'s `n` is a literal in the
+  # SQL. Pinned EXACTLY on both engines — a misbind is silent wrong data.
+  cases = (
+    ("Lag",        Lag(Subquery(nsub()); offset = 2, default = 99, over = over), Any[3, 2, 99, "A"], "LAG((SELECT"),
+    ("Lead",       Lead(Subquery(nsub()); over = over),                          Any[3, 1, "A"],     "LEAD((SELECT"),
+    ("FirstValue", FirstValue(Subquery(nsub()); over = over),                    Any[3, "A"],        "FIRST_VALUE((SELECT"),
+    ("LastValue",  LastValue(Subquery(nsub()); over = over),                     Any[3, "A"],        "LAST_VALUE((SELECT"),
+    ("NthValue",   NthValue(Subquery(nsub()), 2; over = over),                   Any[3, "A"],        "NTH_VALUE((SELECT"),
+  )
+  for (backend, conn) in (("SQLite", _ADM), ("PostgreSQL", _ADM_PG))
+    @testset "$backend" begin
+      for (label, w, params, needle) in cases
+        @test w.column isa QBA.SubqueryObject
+        r = inspect_query(build(w); connection = conn)
+        @test occursin(needle, r[:sql_text])
+        @test occursin("OVER (ORDER BY", r[:sql_text])
+        @test r[:parameters] == params
+      end
+    end
+  end
+
+  # In an AGGREGATED outer query the window stays out of GROUP BY, and the subquery's correlation is
+  # checked by #194 like any projected subquery's: on a grouped column it builds, on an ungrouped one
+  # it is refused, naming the projection the caller wrote. The refused shape orders the window by
+  # `sku`: a window ORDER BY term joins the group set (#789), so ordering by `id` would group the very
+  # column the subquery correlates on, and that query is legal.
+  for conn in (_ADM, _ADM_PG)
+    q = AD.Adm_parent.objects
+    q.values("id", "n" => Count("adm_kids__id"), "p" => Lag(Subquery(nsub()), over = over))
+    r = inspect_query(q; connection = conn)
+    @test occursin(r"GROUP BY 1\s*$", r[:sql_text])
+    @test r[:parameters] == Any[3, 1]
+
+    q = AD.Adm_parent.objects
+    q.values("n" => Count("adm_kids__id"), "p" => Lag(Subquery(nsub()), over = WindowOver(order_by = "sku")))
+    msg = _adm_867_msg(() -> inspect_query(q; connection = conn))
+    @test msg isa String
+    @test occursin("#194", msg)
+    @test occursin("correlated column p correlates", msg)   # the alias, not "Subquery(…)"
+  end
+
+  # Inside another subquery it is refused like a bare nested `Subquery`: `OuterRef` resolves one level.
+  outer_sub = AD.Adm_child.objects
+  outer_sub.filter("parent" => OuterRef("id"))
+  outer_sub.values("t" => Lag(Subquery(nsub()), over = over))
+  q = AD.Adm_parent.objects
+  q.values("id", "x" => Subquery(outer_sub))
+  @test occursin("projected inside another subquery", something(_adm_867_msg(() -> _adm_render(q)), ""))
+
+  # A CTE body cannot type a window over a bare subquery (#878's reason), and says how to: a `Cast`
+  # inside the window, which builds, and whose filter binds after the body's own parameters.
+  body = AD.Adm_parent.objects
+  body.values("id", "p" => Lag(Subquery(nsub()), over = over))
+  q = AD.Adm_child.objects
+  q.with("ev" => body, join_field = "parent" => "id")
+  q.values("id", CTE("ev", "p"))
+  msg = _adm_867_msg(() -> _adm_render(q))
+  @test msg isa String
+  @test occursin("LAG over Subquery(…)", msg)
+  @test occursin("Lag(Cast(Subquery(…), \"integer\"), over = …)", msg)
+  for conn in (_ADM, _ADM_PG)
+    body = AD.Adm_parent.objects
+    body.values("id", "p" => Lag(Cast(Subquery(nsub()), "integer"), over = over))
+    q = AD.Adm_child.objects
+    q.with("ev" => body, join_field = "parent" => "id")
+    q.filter(CTE("ev", "p") => 7)
+    q.values("id", CTE("ev", "p"))
+    r = inspect_query(q; connection = conn)
+    @test occursin("LAG(", r[:sql_text]) && occursin("(SELECT", r[:sql_text])
+    @test r[:parameters] == Any[3, 1, 7]
+  end
+
+  # #508: one window node reused across two builds renders the same SQL and binds the same values,
+  # and the caller's subquery is still the node it holds.
+  sq = Subquery(nsub())
+  w = Lag(sq, over = over)
+  first_run = inspect_query(build(w); connection = _ADM)
+  second_run = inspect_query(build(w); connection = _ADM)
+  @test first_run[:sql_text] == second_run[:sql_text]
+  @test first_run[:parameters] == second_run[:parameters] == Any[3, 1, "A"]
+  @test w.column === sq
 end

@@ -244,7 +244,7 @@ For an outer row with **no** related rows, an aggregate scalar returns its natur
 
 ### A subquery as a function argument
 
-A `Subquery` is one value per outer row, so it can be the argument of any scalar function. That covers the multi-argument ones (`Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`), the one-argument ones (`Lower`, `Upper`, `Trim`, `LTrim`, `RTrim`, `Length`, `Abs`, `Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`), `Cast`, `Extract` and `ToChar`. To turn the `missing` above into a default, wrap the subquery:
+A `Subquery` is one value per outer row, so it can be the argument of any scalar function. That covers the multi-argument ones (`Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`), the one-argument ones (`Lower`, `Upper`, `Trim`, `LTrim`, `RTrim`, `Length`, `Abs`, `Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`), `Cast`, `Extract` and `ToChar`, and the window value functions (`Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`). To turn the `missing` above into a default, wrap the subquery:
 
 ```julia
 using PormG.Functions: Coalesce

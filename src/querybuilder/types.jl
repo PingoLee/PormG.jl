@@ -170,9 +170,18 @@ const WindowPartitionPart = Union{String,SQLTypeField,SQLTypeFunction,SQLTypeF,S
 """Window ORDER BY expressions."""
 const WindowOrderPart = Union{String,SQLTypeOrder,SQLTypeCTE,SQLTypeJoined}
 
+# #887 — `SubqueryObject`: a subquery is one value per row, which is all a window VALUE function
+# reads (`LAG((SELECT …), 1) OVER (…)`), so `Lag(Subquery(s))` and its four siblings take one, as the
+# scalar functions do since #878. Every consumer of the slot has an arm for it: `_check_function` and
+# `_retag_cte_string` pass it through, `_get_select_query(::WindowFunction)` renders it with the
+# projection's alias (for #194), and a CTE body refuses it with the `Cast` hint. The two `_retag_*_column`
+# walks never meet one — they walk the parse of a `CTE`/`Joined` path string.
+#
+# #612: above the docstring, not between it and the `const` — see `WindowPartitionPart`.
 """Window function column SLOT — what `WindowFunction.column` may hold. The vocabulary a CALLER may
 write is the wider `WindowColumnArg` below (#603)."""
-const WindowColumnPart = Union{Nothing,String,SQLTypeField,SQLTypeText,SQLTypeFunction,SQLTypeF,SQLTypeCTE,SQLTypeJoined}
+const WindowColumnPart = Union{Nothing,String,SQLTypeField,SQLTypeText,SQLTypeFunction,SQLTypeF,SQLTypeCTE,SQLTypeJoined,
+                               SubqueryObject}
 
 # #603 — the ARGUMENT vocabulary for the window VALUE functions (`Lag`, `Lead`, `FirstValue`,
 # `LastValue`, `NthValue`): what a CALLER may write, as against what the node may HOLD. Those five

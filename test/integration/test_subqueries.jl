@@ -552,3 +552,33 @@ end
         @test row.last_year == year(last)
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subquery (#887): the operand of a window value function. `Lag(Subquery(…))` and its four siblings
+# were a `MethodError` until #887. The unit suite pins the SQL and the parameter order on mock
+# connections; this proves `LAG((SELECT …)) OVER (…)` runs on the real engine and reads back as the
+# subquery's column (#888). The oracle is the bare subquery on the previous row, shifted in Julia.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery (#887) - a window value function over a Subquery" begin
+    last_race = M.Driver_standings.objects
+    last_race.filter("driverid" => OuterRef("driverid"))
+    last_race.values("t" => Max("raceid__date"))
+
+    df = M.Driver.objects.
+        filter("driverid__@in" => [1, 2, 3, 4, 5]).
+        values("driverid",
+               "last" => Subquery(last_race),
+               "prev_last" => Lag(Subquery(last_race), over = WindowOver(order_by = ["driverid"])),
+               "first_last" => FirstValue(Subquery(last_race), over = WindowOver(order_by = ["driverid"]))).
+        order_by("driverid") |> DataFrame
+
+    @test nrow(df) == 5
+    @test df.driverid == [1, 2, 3, 4, 5]
+    @test all(x -> x isa Date, df.last)
+    @test ismissing(df.prev_last[1])
+    for i in 2:nrow(df)
+        @test df.prev_last[i] isa Date
+        @test df.prev_last[i] == df.last[i - 1]
+    end
+    @test all(==(df.last[1]), df.first_last)
+end

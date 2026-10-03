@@ -2313,12 +2313,45 @@ _is_auto_join_table(model::PormGModel)::Bool =
 # neither: the same number of columns, keys to the same parents once the renames decided so far are
 # applied, and at least one of those parents among the renamed tables. Taken only when exactly one
 # unclaimed table fits; otherwise the model is asked about like any other.
+#
+# #911: and the old name must be the new one with the owner renamed — `<old owner>_<field>`, the same
+# `<field>`. Shape alone cannot tell the same relation from ANOTHER one to the same target: renaming
+# the owner while swapping `drivers` for `reserves` in the same change gave `team_t_drivers` the shape
+# of `squad_t_reserves`, and its link rows moved to the new relation with one `@info` line as the only
+# signal. A suffix check alone is not enough either, since `team_reserve_drivers` ends in `_drivers`.
+# So the name is split at the declaring field, and the two stems must be the OWNER's decided rename:
+# the name is derived from the owner alone (`_many_to_many_table_name`), so no other rename — the
+# target's included — can account for a change in it. The owner's table may carry a prefix the stem
+# lacks (`get_model_name` strips a Django app label), so the rename is matched up to a prefix both of
+# its sides share. Still no derivation: nothing re-builds the old name. A join table whose field was
+# renamed too, or whose new name is a `db_table` pin that does not follow `<model>_<field>`, is asked
+# about — that is a second decision, not a consequence of the first.
 function _join_table_rename_source(model::PormGModel, unclaimed::Vector{Symbol}, drop_table::AbstractDict{Symbol, Any},
                                    renames::Dict{String, String}, conn)::Union{Symbol, Nothing}
   parents(specs) = sort!(String[s.reference.table for s in specs if s.reference !== nothing && s.reference.table !== nothing])
   declared = parents(column_spec(field, conn; name = String(key)) for (key, field) in model.fields)
   any(p -> p in values(renames), declared) || return nothing
+  # `_many_to_many_table_name` lowercases the whole `<model>_<field>` string, so the suffix is too.
+  # A join table that does not say which field declared it is never followed — it is asked about.
+  field = get(model.cache["many_to_many_auto"], "field", nothing)
+  field === nothing && return nothing
+  suffix = "_" * lowercase(String(field))
+  new_name = String(model_table_name(model))
+  endswith(new_name, suffix) || return nothing
+  new_stem = chopsuffix(new_name, suffix)
+  # The owner end's table, as the join table declares it — the new name, when the owner was renamed.
+  owner_column = get(model.cache["many_to_many_auto"], "owner_column", nothing)
+  owner_specs = [column_spec(f, conn; name = String(k)) for (k, f) in model.fields if String(k) == owner_column]
+  length(owner_specs) == 1 && only(owner_specs).reference !== nothing || return nothing
+  owner = only(owner_specs).reference.table
+  owner === nothing && return nothing
+  # `old_stem → new_stem` is the owner's decided rename, give or take a prefix both of its sides share,
+  # ending at a `_` (an app label is `<label>_`).
+  prefix = chopsuffix(owner, new_stem)
+  (endswith(owner, new_stem) && (isempty(prefix) || endswith(prefix, "_"))) || return nothing
+  renamed_stem(old_stem) = !isempty(old_stem) && any(((o, n),) -> n == owner && o == prefix * old_stem, renames)
   fits = filter(unclaimed) do old
+    endswith(String(old), suffix) && renamed_stem(chopsuffix(String(old), suffix)) || return false
     live = _retarget_references(drop_table[old]["model"], renames)
     length(live.columns) == length(model.fields) && parents(values(live.columns)) == declared
   end

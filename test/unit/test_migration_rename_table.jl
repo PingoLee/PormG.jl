@@ -715,15 +715,15 @@ end
 # so every assertion below pins an ORDER, the label, or a join table that no longer needs asking.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# `_rt_plan`, keeping what the prompts printed.
-function _rt_prompted(live, current_schema, conn, answers::String)
+# `_rt_plan`, keeping what the prompts printed. Keywords (`renames`) go to the planner.
+function _rt_prompted(live, current_schema, conn, answers::String; kwargs...)
     path, io = mktemp(); write(io, answers); close(io)
     out_path, out_io = mktemp()
     plan = try
         open(path) do stdin_file
             redirect_stdin(stdin_file) do
                 redirect_stdout(out_io) do
-                    Migrations.get_migration_plan(live, current_schema, conn, _rt_settings(); interactive = true)
+                    Migrations.get_migration_plan(live, current_schema, conn, _rt_settings(); interactive = true, kwargs...)
                 end
             end
         end
@@ -885,6 +885,360 @@ end
                                                        _rt_settings(); interactive = false))
         finally
             close_pool!(pool)
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The join-table follow's fallback paths (#911)
+# `_join_table_rename_source` follows a vanished table only when exactly ONE fits the join table's
+# shape AND its name ends in the same `_<field>` suffix; `_join_table_endpoint_renames` moves an
+# endpoint column only when it is the single same-definition pair. Everything else is asked about —
+# or, with `interactive = false`, refused by the #734 rule or left to the destructive guard. The two
+# #735 testsets above cover the paths that follow; these cover the ones that must not guess.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Create the v1 schema on a fresh SQLite file, the way the #735 testsets do.
+_rt911_setup!(pool, models...) =
+    _rt_apply!(pool, Migrations.get_migration_plan(LiveTable[], _rt_schema(models...), pool, _rt_settings();
+                                                  interactive = false))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Two many-to-many fields to the same target: each join table follows its OWN field (#911)
+# `team_t.drivers` and `team_t.reserve_drivers` both point at `driver_t`, so `team_t_drivers` and
+# `team_t_reserve_drivers` have the same shape, and shape alone cannot pair them with
+# `squad_t_drivers` / `squad_t_reserve_drivers` — #735 asked about both. Both old names even end in
+# `_drivers`, so a suffix check alone would still see two fits for `squad_t_drivers`. Splitting each
+# name at its own field, and requiring the stems to be the owner's rename, pairs them: ONE answer
+# renames all five objects, and the link rows stay in their own relation — a swap here would turn
+# every race driver into a reserve, silently.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: two many-to-many fields to one target each follow their own field (#911)" begin
+    mktempdir() do dir
+        pool = SQLiteConnectionPool(joinpath(dir, "rt911_two_fields.sqlite"); pool_size = 1)
+        try
+            driver = Models.Model("driver_t"; id = Models.IDField(), name = Models.CharField(max_length = 20))
+            team(name) = Models.Model(name; id = Models.IDField(), label = Models.CharField(max_length = 20),
+                                      drivers  = Models.ManyToManyField(driver, related_name = "teams"),
+                                      reserve_drivers = Models.ManyToManyField(driver, related_name = "reserve_teams"))
+            _rt911_setup!(pool, driver, team("team_t"))
+            fetch(pool, """INSERT INTO "driver_t" ("id", "name") VALUES (1, 'Senna'), (2, 'Prost'), (3, 'Berger')""")
+            fetch(pool, """INSERT INTO "team_t" ("id", "label") VALUES (1, 'McLaren')""")
+            fetch(pool, """INSERT INTO "team_t_drivers" ("id", "team_t_id", "driver_t_id") VALUES (1, 1, 1), (2, 1, 2)""")
+            fetch(pool, """INSERT INTO "team_t_reserve_drivers" ("id", "team_t_id", "driver_t_id") VALUES (1, 1, 3)""")
+
+            schema_v2 = _rt_schema(driver, team("squad_t"))
+            # One answer, for `squad_t`. A second question would read end of input and raise.
+            plan, printed = _rt_prompted(read_live_schema(pool), schema_v2, pool, "1\n")
+            @test count("has no match", printed) == 1
+            @test !occursin("Is the field", printed)
+            # Each join table paired with its own field — the property the stem check exists for.
+            @test plan[:squad_t_drivers]["Rename table"]  == "ALTER TABLE \"team_t_drivers\" RENAME TO \"squad_t_drivers\";"
+            @test plan[:squad_t_reserve_drivers]["Rename table"] == "ALTER TABLE \"team_t_reserve_drivers\" RENAME TO \"squad_t_reserve_drivers\";"
+            @test !any(k -> haskey(plan[k], "Drop table"), collect(keys(plan)))
+
+            # `interactive = false` with the owner hinted plans the same — nothing refused, nothing dropped.
+            quiet = Migrations.get_migration_plan(read_live_schema(pool), schema_v2, pool, _rt_settings();
+                                                  interactive = false, renames = ["team_t" => "squad_t"])
+            @test _rt_ordered(quiet) == _rt_ordered(plan)
+
+            _rt_apply!(pool, plan)
+            # Senna and Prost race, Berger is the reserve — each row still in its own relation.
+            @test (fetch(pool, """SELECT "driver_t_id" FROM "squad_t_drivers" ORDER BY "id" """) |> DataFrame).driver_t_id == [1, 2]
+            @test (fetch(pool, """SELECT "driver_t_id" FROM "squad_t_reserve_drivers" ORDER BY "id" """) |> DataFrame).driver_t_id == [3]
+            @test isempty(fetch(pool, "PRAGMA foreign_key_check;") |> DataFrame)
+            @test isempty(Migrations.get_migration_plan(read_live_schema(pool), schema_v2, pool,
+                                                       _rt_settings(); interactive = false))
+        finally
+            close_pool!(pool)
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A leftover table with the join table's shape and suffix is not mistaken for it (#911)
+# `archive_drivers` — the table of a removed model — has the same columns, keys to the same two
+# parents and the same `_drivers` ending as `team_t_drivers`. Shape and suffix both fit it; the stem
+# does not (`archive` is no decided rename), so `team_t_drivers` is the one fit and follows, and the
+# leftover is dropped with its model. One question, as in the #735 case.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: a same-shaped leftover table is not mistaken for the join table (#911)" begin
+    mktempdir() do dir
+        pool = SQLiteConnectionPool(joinpath(dir, "rt911_leftover.sqlite"); pool_size = 1)
+        try
+            driver  = Models.Model("driver_t"; id = Models.IDField())
+            team_v1 = Models.Model("team_t"; id = Models.IDField(), label = Models.CharField(max_length = 20),
+                                   drivers = Models.ManyToManyField(driver))
+            # An exact twin of the join table: keyed to `team_t` and `driver_t`, `CASCADE` included.
+            archive = Models.Model("archive_drivers"; id = Models.IDField(),
+                                   team_t_id = Models.ForeignKey(team_v1, pk_field = "id", on_delete = "CASCADE"),
+                                   driver_t_id = Models.ForeignKey(driver, pk_field = "id", on_delete = "CASCADE"))
+            _rt911_setup!(pool, driver, team_v1, archive)
+
+            team_v2   = Models.Model("squad_t"; id = Models.IDField(), label = Models.CharField(max_length = 20),
+                                     drivers = Models.ManyToManyField(driver))
+            plan, printed = _rt_prompted(read_live_schema(pool), _rt_schema(driver, team_v2), pool, "1\n")
+            @test count("has no match", printed) == 1
+            @test plan[:squad_t_drivers]["Rename table"] == "ALTER TABLE \"team_t_drivers\" RENAME TO \"squad_t_drivers\";"
+            @test haskey(plan[:archive_drivers], "Drop table")
+        finally
+            close_pool!(pool)
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Two vanished tables with the join table's shape: only the owner's rename can make one fit (#911)
+# #911 asked what happens when two vanished tables fit. With the name split at the field and the
+# stem tied to the OWNER's rename, that cannot happen: the join table's name is derived from its
+# owner alone, and the owner has one decided rename. The nearest case is both ends renamed —
+# `team_t` → `squad_t` (owner) and `x_crew_t` → `x_squad_t` (target) — with a leftover
+# `crew_t_drivers` keyed exactly like `team_t_drivers`. Under the shared `x_` the target's rename reads
+# `crew_t` → `squad_t`, the leftover's stem; it is still not a fit, because the target's rename never
+# renames the join table. So `team_t_drivers` follows, both endpoint columns follow their ends, and
+# the leftover is dropped. When nothing fits, the join table is asked about — see the swapped-relation
+# testset below for that path, with `interactive = false` left to the destructive guard.
+# Both end renames are hinted, so no table question is asked at all.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: a target's rename does not make a second vanished table fit the join table (#911)" begin
+    mktempdir() do dir
+        pool = SQLiteConnectionPool(joinpath(dir, "rt911_two_ends.sqlite"); pool_size = 1)
+        try
+            crew    = Models.Model("x_crew_t"; id = Models.IDField())
+            team_v1 = Models.Model("team_t"; id = Models.IDField(), label = Models.CharField(max_length = 20),
+                                   drivers = Models.ManyToManyField(crew))
+            # An exact twin of `team_t_drivers` whose stem, `crew_t`, is the target's renamed table.
+            leftover = Models.Model("crew_t_drivers"; id = Models.IDField(),
+                                    team_t_id = Models.ForeignKey(team_v1, pk_field = "id", on_delete = "CASCADE"),
+                                    x_crew_t_id = Models.ForeignKey(crew, pk_field = "id", on_delete = "CASCADE"))
+            _rt911_setup!(pool, crew, team_v1, leftover)
+            fetch(pool, """INSERT INTO "x_crew_t" ("id") VALUES (1)""")
+            fetch(pool, """INSERT INTO "team_t" ("id", "label") VALUES (1, 'Ferrari')""")
+            fetch(pool, """INSERT INTO "team_t_drivers" ("id", "team_t_id", "x_crew_t_id") VALUES (1, 1, 1)""")
+
+            squad     = Models.Model("x_squad_t"; id = Models.IDField())
+            team_v2   = Models.Model("squad_t"; id = Models.IDField(), label = Models.CharField(max_length = 20),
+                                     drivers = Models.ManyToManyField(squad))
+            schema_v2 = _rt_schema(squad, team_v2)
+            ends      = ["team_t" => "squad_t", "x_crew_t" => "x_squad_t"]
+
+            # No answers at all: the ends are hinted, and the join table follows its owner unasked.
+            plan, printed = _rt_prompted(read_live_schema(pool), schema_v2, pool, ""; renames = ends)
+            @test !occursin("has no match", printed)
+            @test !occursin("Is the field", printed)
+            @test plan[:squad_t_drivers]["Rename table"] == "ALTER TABLE \"team_t_drivers\" RENAME TO \"squad_t_drivers\";"
+            @test plan[:squad_t_drivers]["Rename field: squad_t_id"] ==
+                  "ALTER TABLE \"squad_t_drivers\" RENAME COLUMN \"team_t_id\" TO \"squad_t_id\";"
+            @test plan[:squad_t_drivers]["Rename field: x_squad_t_id"] ==
+                  "ALTER TABLE \"squad_t_drivers\" RENAME COLUMN \"x_crew_t_id\" TO \"x_squad_t_id\";"
+            @test haskey(plan[:crew_t_drivers], "Drop table")
+
+            # `interactive = false` plans the same.
+            quiet = Migrations.get_migration_plan(read_live_schema(pool), schema_v2, pool, _rt_settings();
+                                                  interactive = false, renames = ends)
+            @test _rt_ordered(quiet) == _rt_ordered(plan)
+
+            _rt_apply!(pool, plan)
+            rows = fetch(pool, """SELECT "squad_t_id", "x_squad_t_id" FROM "squad_t_drivers" """) |> DataFrame
+            @test rows.squad_t_id == [1] && rows.x_squad_t_id == [1]
+            @test isempty(Migrations.get_migration_plan(read_live_schema(pool), schema_v2, pool,
+                                                       _rt_settings(); interactive = false))
+        finally
+            close_pool!(pool)
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A self-relation whose `from_…` and `to_…` endpoint columns both change: asked, not guessed (#911)
+# `driver_t.mentors` is self-referential, so its join table has `from_driver_t_id` and
+# `to_driver_t_id` (#364). Renaming the model renames both, and after retargeting all four columns
+# have the same definition (INTEGER, FK → pilot_t) — no unique pair, so a guess could swap mentor and
+# mentee. The TABLE still follows (one fit, same suffix); the columns are asked, and with
+# `interactive = false` the #734 rule refuses and names the hints.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: a self-relation's two endpoint columns are asked about, not guessed (#911)" begin
+    mktempdir() do dir
+        pool = SQLiteConnectionPool(joinpath(dir, "rt911_self.sqlite"); pool_size = 1)
+        try
+            driver(name) = Models.Model(name; id = Models.IDField(),
+                                        mentors = Models.ManyToManyField(uppercasefirst(name), related_name = "mentees"))
+            _rt911_setup!(pool, driver("driver_t"))
+            fetch(pool, """INSERT INTO "driver_t" ("id") VALUES (1), (2)""")
+            # Driver 1 mentors driver 2 — the direction a swapped rename would reverse.
+            fetch(pool, """INSERT INTO "driver_t_mentors" ("id", "from_driver_t_id", "to_driver_t_id") VALUES (1, 1, 2)""")
+
+            schema_v2 = _rt_schema(driver("pilot_t"))
+            # The table answer, then one per endpoint column; each prompt lists the old columns still free.
+            plan, printed = _rt_prompted(read_live_schema(pool), schema_v2, pool, "1\n1\n1\n")
+            @test count("Is the field", printed) == 2
+            @test occursin(r"\"from_pilot_t_id\".*1 - from_driver_t_id \([^)]*\), 2 - to_driver_t_id", printed)
+            @test plan[:pilot_t_mentors]["Rename table"] == "ALTER TABLE \"driver_t_mentors\" RENAME TO \"pilot_t_mentors\";"
+            @test plan[:pilot_t_mentors]["Rename field: from_pilot_t_id"] ==
+                  "ALTER TABLE \"pilot_t_mentors\" RENAME COLUMN \"from_driver_t_id\" TO \"from_pilot_t_id\";"
+            @test plan[:pilot_t_mentors]["Rename field: to_pilot_t_id"] ==
+                  "ALTER TABLE \"pilot_t_mentors\" RENAME COLUMN \"to_driver_t_id\" TO \"to_pilot_t_id\";"
+
+            # `interactive = false`, table hinted: refused, naming the column hints — not guessed.
+            err = try
+                Migrations.get_migration_plan(read_live_schema(pool), schema_v2, pool, _rt_settings();
+                                              interactive = false, renames = ["driver_t" => "pilot_t"])
+                nothing
+            catch e
+                e
+            end
+            @test err isa PormG.InvalidMigrationError
+            @test occursin("\"pilot_t_mentors.from_driver_t_id\" => \"pilot_t_mentors.from_pilot_t_id\"", err.msg)
+            @test occursin("\"pilot_t_mentors.to_driver_t_id\" => \"pilot_t_mentors.to_pilot_t_id\"", err.msg)
+
+            _rt_apply!(pool, plan)
+            rows = fetch(pool, """SELECT "from_pilot_t_id", "to_pilot_t_id" FROM "pilot_t_mentors" """) |> DataFrame
+            @test rows.from_pilot_t_id == [1] && rows.to_pilot_t_id == [2]
+            @test isempty(Migrations.get_migration_plan(read_live_schema(pool), schema_v2, pool,
+                                                       _rt_settings(); interactive = false))
+        finally
+            close_pool!(pool)
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A join table pinned with `db_table` keeps its name: only its endpoint column follows (#911)
+# The pin makes the table name independent of the owner, so renaming `team_t` leaves `team_roster`
+# matched by name — it never reaches the shape match — and only the `team_t_id` column, named after
+# the owner, moves. One question, no rename of the table, the links kept.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: a db_table-pinned join table keeps its name and renames its column (#911)" begin
+    mktempdir() do dir
+        pool = SQLiteConnectionPool(joinpath(dir, "rt911_pinned.sqlite"); pool_size = 1)
+        try
+            driver = Models.Model("driver_t"; id = Models.IDField())
+            team(name) = Models.Model(name; id = Models.IDField(), label = Models.CharField(max_length = 20),
+                                      drivers = Models.ManyToManyField(driver, db_table = "team_roster"))
+            _rt911_setup!(pool, driver, team("team_t"))
+            fetch(pool, """INSERT INTO "driver_t" ("id") VALUES (1)""")
+            fetch(pool, """INSERT INTO "team_t" ("id", "label") VALUES (1, 'Williams')""")
+            fetch(pool, """INSERT INTO "team_roster" ("id", "team_t_id", "driver_t_id") VALUES (1, 1, 1)""")
+
+            schema_v2 = _rt_schema(driver, team("squad_t"))
+            plan, printed = _rt_prompted(read_live_schema(pool), schema_v2, pool, "1\n")
+            @test count("has no match", printed) == 1
+            @test !occursin("Is the field", printed)
+            @test collect(keys(plan[:team_roster])) == ["Rename field: squad_t_id"]
+            @test plan[:team_roster]["Rename field: squad_t_id"] ==
+                  "ALTER TABLE \"team_roster\" RENAME COLUMN \"team_t_id\" TO \"squad_t_id\";"
+
+            _rt_apply!(pool, plan)
+            rows = fetch(pool, """SELECT "squad_t_id", "driver_t_id" FROM "team_roster" """) |> DataFrame
+            @test rows.squad_t_id == [1] && rows.driver_t_id == [1]
+            @test isempty(Migrations.get_migration_plan(read_live_schema(pool), schema_v2, pool,
+                                                       _rt_settings(); interactive = false))
+        finally
+            close_pool!(pool)
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Same-change hazard: a DIFFERENT relation to the same target is not followed (#911)
+# The owner is renamed while, in the same change, `drivers` is removed and `reserves` (same target)
+# added. `team_t_drivers` has `squad_t_reserves`'s shape, so #735 renamed it into the new relation —
+# every race driver became a reserve, with one `@info` line as the only signal. The suffix differs
+# (`_drivers` vs `_reserves`), so the join table is now asked about; Django plans the same change as
+# RemoveField + AddField. The direct calls pin the predicate both ways: the same field still follows.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a relation swapped in the same change as its owner's rename is asked about (#911)" begin
+    driver  = Models.Model("driver_t"; id = Models.IDField())
+    team_v1 = Models.Model("team_t"; id = Models.IDField(), label = Models.CharField(max_length = 20),
+                           drivers = Models.ManyToManyField(driver))
+    swapped = Models.Model("squad_t"; id = Models.IDField(), label = Models.CharField(max_length = 20),
+                           reserves = Models.ManyToManyField(driver))
+    kept    = Models.Model("squad_t"; id = Models.IDField(), label = Models.CharField(max_length = 20),
+                           drivers = Models.ManyToManyField(driver))
+
+    @testset "_join_table_rename_source: same shape, different field → nothing" begin
+        settings = _rt_settings()
+        synth(models...) = Models.synthesize_many_to_many_through_models(_rt_schema(models...), settings)
+        old_join = synth(driver, team_v1)[:team_t_drivers][:model]
+        drop = OrderedDict{Symbol, Any}(:team_t_drivers => Dict{String, Any}("model" => Migrations.live_table(old_join, RT_PG)))
+        renames = Dict("team_t" => "squad_t")
+        # The swapped relation: same columns, same parents — and not followed.
+        @test Migrations._join_table_rename_source(synth(driver, swapped)[:squad_t_reserves][:model],
+                                                   [:team_t_drivers], drop, renames, RT_PG) === nothing
+        # The same relation under the renamed owner still follows (the #735 path).
+        @test Migrations._join_table_rename_source(synth(driver, kept)[:squad_t_drivers][:model],
+                                                   [:team_t_drivers], drop, renames, RT_PG) === :team_t_drivers
+    end
+
+    # The suffix alone is not the check: `team_t_reserve_drivers` ends in `_drivers` too. Swapping
+    # `reserve_drivers` for `drivers` splits the old name at `_drivers` into the stem `team_t_reserve`,
+    # which no decided rename turns into `squad_t` — so it is not followed.
+    @testset "_join_table_rename_source: a field name ending in the new one is not the same relation" begin
+        settings = _rt_settings()
+        synth(models...) = Models.synthesize_many_to_many_through_models(_rt_schema(models...), settings)
+        reserve_v1 = Models.Model("team_t"; id = Models.IDField(), reserve_drivers = Models.ManyToManyField(driver))
+        old_join = synth(driver, reserve_v1)[:team_t_reserve_drivers][:model]
+        drop = OrderedDict{Symbol, Any}(:team_t_reserve_drivers => Dict{String, Any}("model" => Migrations.live_table(old_join, RT_PG)))
+        squad = Models.Model("squad_t"; id = Models.IDField(), drivers = Models.ManyToManyField(driver))
+        @test Migrations._join_table_rename_source(synth(driver, squad)[:squad_t_drivers][:model],
+                                                   [:team_t_reserve_drivers], drop, Dict("team_t" => "squad_t"), RT_PG) === nothing
+    end
+
+    # The stem's rename must be the join table's OWNER's. `x_crew_t` → `x_squad_t` would turn the
+    # leftover `crew_t_drivers` into a `squad_t` stem under a shared `x_`, but `x_squad_t` is not the
+    # owner of `squad_t.drivers` — an unrelated rename says nothing about this table. Without the
+    # clause the leftover is the only fit and is renamed in, unasked.
+    @testset "_join_table_rename_source: an unrelated rename does not supply the stem" begin
+        settings = _rt_settings()
+        synth(models...) = Models.synthesize_many_to_many_through_models(_rt_schema(models...), settings)
+        leftover = Models.Model("crew_t_drivers"; id = Models.IDField(),
+                                team_t_id = Models.ForeignKey(team_v1, pk_field = "id", on_delete = "CASCADE"),
+                                driver_t_id = Models.ForeignKey(driver, pk_field = "id", on_delete = "CASCADE"))
+        drop = OrderedDict{Symbol, Any}(:crew_t_drivers => Dict{String, Any}("model" => Migrations.live_table(leftover, RT_PG)))
+        renames = Dict("team_t" => "squad_t", "x_crew_t" => "x_squad_t")
+        @test Migrations._join_table_rename_source(synth(driver, kept)[:squad_t_drivers][:model],
+                                                   [:crew_t_drivers], drop, renames, RT_PG) === nothing
+    end
+
+    # With a Django app label the join table's stem is the model name WITHOUT the label
+    # (`get_model_name`), while the owner's table keeps it: `f1_team` → `f1_squad` renames
+    # `team_drivers` → `squad_drivers`. The rename matches up to the `f1_` both sides share, so the
+    # #735 follow still works for an imported Django project.
+    @testset "_join_table_rename_source: a Django app label on the owner's table still follows" begin
+        settings = _rt_settings()
+        settings.django_prefix = "f1"
+        synth(models...) = Models.synthesize_many_to_many_through_models(_rt_schema(models...), settings)
+        team_f1  = Models.Model("f1_team"; id = Models.IDField(), drivers = Models.ManyToManyField(driver))
+        squad_f1 = Models.Model("f1_squad"; id = Models.IDField(), drivers = Models.ManyToManyField(driver))
+        old_join = synth(driver, team_f1)[:team_drivers][:model]
+        drop = OrderedDict{Symbol, Any}(:team_drivers => Dict{String, Any}("model" => Migrations.live_table(old_join, RT_PG)))
+        new_join = synth(driver, squad_f1)[:squad_drivers][:model]
+        @test Migrations._join_table_rename_source(new_join, [:team_drivers], drop,
+                                                   Dict("f1_team" => "f1_squad"), RT_PG) === :team_drivers
+    end
+
+    @testset "SQLite: the swapped join table is asked about; yes plans create + drop" begin
+        mktempdir() do dir
+            pool = SQLiteConnectionPool(joinpath(dir, "rt911_swap.sqlite"); pool_size = 1)
+            try
+                _rt911_setup!(pool, driver, team_v1)
+                schema_v2 = _rt_schema(driver, swapped)
+                plan, printed = _rt_prompted(read_live_schema(pool), schema_v2, pool, "1\nyes\n")
+                asked = [m.captures[1] for m in eachmatch(r"The table (\w+) has no match", printed)]
+                @test asked == ["squad_t", "squad_t_reserves"]
+                @test occursin("1 - team_t_drivers (2 of 3 columns match)", printed)
+                @test haskey(plan[:squad_t_reserves], "New model")
+                @test haskey(plan[:team_t_drivers], "Drop table")
+                @test !haskey(plan[:squad_t_reserves], "Rename table")
+
+                # `interactive = false`: the same plan, and the guard at `migrate` sees the drop.
+                quiet = Migrations.get_migration_plan(read_live_schema(pool), schema_v2, pool, _rt_settings();
+                                                      interactive = false, renames = ["team_t" => "squad_t"])
+                @test haskey(quiet[:team_t_drivers], "Drop table") && !haskey(quiet[:squad_t_reserves], "Rename table")
+                @test !isempty(Migrations.detect_destructive_actions(_rt_ordered(quiet)))
+            finally
+                close_pool!(pool)
+            end
         end
     end
 end

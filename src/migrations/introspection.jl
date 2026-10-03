@@ -1080,6 +1080,44 @@ about the plan.
 convert_schema_to_models(db::PormGSQLite; kwargs...)::Vector{PormGModel} =
   PormGModel[model_from_live(table, db) for table in read_live_schema(db; kwargs...)]
 
+"""
+    read_live_views(db; ignore_table, include_table) -> Vector{LiveTable}
+
+Every view of the live database as a `LiveTable`, for `inspectdb`'s `include_views = true` (#767) —
+and for nothing else. [`read_live_schema`](@ref) never sees a view (#730), and this reader is
+deliberately a separate function rather than a flag on it: `makemigrations`, `status()` and
+`check()` all read through `read_live_schema`, so no option there can reach them.
+
+A view carries no primary key, no foreign key and no CHECK, so each `LiveTable` is its columns alone.
+The filters are `read_live_schema`'s.
+
+A SQLite view whose definition no longer resolves — it reads a table or column dropped since — cannot
+be described: SQLite raises on the pragma. It is skipped with a warning and its name and error pushed
+onto `unreadable`, rather than aborting the whole import (PostgreSQL refuses to drop what a view
+reads, so its arm never meets one). This is Django's `# Unable to inspect table` behaviour.
+"""
+function read_live_views(db::PormGSQLite; ignore_table::Vector{String} = sqlite_ignore_schema,
+                         include_table::Union{Vector{String}, Nothing} = nothing,
+                         unreadable::Vector{String} = String[])::Vector{LiveTable}
+  ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
+  out = LiveTable[]
+  for r in eachrow(fetch(db, "SELECT name FROM sqlite_master WHERE type = 'view' AND name NOT LIKE 'sqlite_%';") |> DataFrame)
+    view_name = String(r.name)
+    include_table !== nothing && !any(included -> view_name == included, include_table) && continue
+    _is_ignored_table(view_name, ignore_table) && continue
+    view = try
+      _sqlite_live_table(db, view_name)
+    catch e
+      e isa InterruptException && rethrow()
+      @warn "inspectdb: the view could not be read; it is not imported" view = view_name exception = e
+      push!(unreadable, "$(view_name): $(sprint(showerror, e))")
+      continue
+    end
+    push!(out, view)
+  end
+  return out
+end
+
 # ---
 # PostgreSQL Introspection
 # ---
@@ -1561,7 +1599,29 @@ end
 convert_schema_to_models(db::PormGPostgres; kwargs...)::Vector{PormGModel} =
   PormGModel[model_from_live(table, db) for table in read_live_schema(db; kwargs...)]
 
-function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} = "public", table::Union{String, Nothing} = nothing)
+# #767: the PostgreSQL arm — views AND materialized views, as Django's `inspectdb --include-views`
+# reads them. The schema dump is the one `read_live_schema` uses, asked for `views = true`.
+function read_live_views(db::PormGPostgres; ignore_table::Vector{String} = postgres_ignore_table,
+                         include_table::Union{Vector{String}, Nothing} = nothing,
+                         unreadable::Vector{String} = String[])::Vector{LiveTable}
+  ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
+  out = LiveTable[]
+  for schema in eachrow(get_database_schema(db; views = true))
+    view_name = String(schema.table_name)
+    include_table !== nothing && !any(included -> view_name == included, include_table) && continue
+    _is_ignored_table(view_name, ignore_table) && continue
+    push!(out, _pg_live_table(schema))
+  end
+  return out
+end
+
+function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} = "public", table::Union{String, Nothing} = nothing,
+                             views::Bool = false)
+  # #767: by default every relation PormG could own (#730); `views = true` reads views and
+  # materialized views instead, for `inspectdb`'s `include_views` only. The extension filter applies
+  # to both — an extension can own a view too (`pg_stat_statements`) — and `relispartition` is never
+  # true of a view.
+  relkind_clause = views ? "c.relkind IN ('v', 'm')" : "c.relkind = 'r'"
   # ONE ROUND TRIP. There used to be a `SELECT split_part(version(), ' ', 2)` probe here, whose only
   # consumer was a `major_version >= 10` gate around an `attidentity` SQL fragment. That gate was
   # dead: the `indexes` CTE below uses `indnkeyatts`, which is PostgreSQL 11+, and it sits in THIS
@@ -1868,7 +1928,7 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
     LEFT JOIN unique_constraints u ON u.table_oid = c.oid
     LEFT JOIN non_negative_checks nn ON nn.table_oid = c.oid
     LEFT JOIN byte_length_checks bl ON bl.table_oid = c.oid AND bl.col_name = a.attname
-    WHERE c.relkind = 'r'
+    WHERE $(relkind_clause)
       $(_PG_OWNABLE_TABLE_FILTER)
       $(schema_clause)
       $(table_clause)

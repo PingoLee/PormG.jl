@@ -82,8 +82,80 @@ function _plan_inspectdb_bindings!(models_array)::Dict{String, String}
   return binding_by_table
 end
 
+# What `_render_live_models` needs to know about the views beyond their models (#767).
+struct _LiveViews
+  untyped::Dict{String, Vector{String}}   # view ⇒ columns the database gives no type, in column order
+  unreadable::Vector{String}              # "<view>: <error>", for a view that could not be described
+end
+_LiveViews() = _LiveViews(Dict{String, Vector{String}}(), String[])
+
+# #767: what an `inspectdb` entry point writes — the tables, then, opt-in, the views, each
+# `managed = false` (#741) and keyless: PormG reads a view, it never migrates one, and nothing in a
+# view guarantees a key. Views go LAST and through the same binding pass as the tables, so a view
+# whose binding collides with a table's is deduplicated by the same rule (#338/#360) rather than
+# shadowing it.
+function _live_import_models(conn, ignore_table::Vector{String},
+                             include_table::Union{Vector{String}, Nothing}, include_views::Bool)
+  tables = convert_schema_to_models(conn; ignore_table = ignore_table, include_table = include_table)
+  include_views || return tables, _LiveViews()
+  info = _LiveViews()
+  live = read_live_views(conn; ignore_table = ignore_table, include_table = include_table,
+                         unreadable = info.unreadable)
+  views = PormGModel[Models._apply_managed!(model_from_live(v, conn), false) for v in live]
+  for v in live
+    info.untyped[v.name] = String[col for (col, spec) in v.columns
+                                  if spec.type isa CUnsupported && isempty(strip(spec.raw))]
+  end
+  return PormGModel[tables; views], info
+end
+
+# The marker above a model generated from a view (#767): what it is, and the one thing a reader must
+# do before writing through it. The key is never guessed — nothing in a view guarantees one, and a
+# guessed key would hand back duplicate rows as if they were one.
+_view_marker(view::AbstractString)::String =
+  "# PormG: generated from the view '$(_one_line(view))' — managed = false, so migrations never " *
+  "create, alter or drop it. A view has no primary key, so none is declared: reads work, but " *
+  "writes that address rows by key (a filtered delete, bulk_update without match_on) need one — " *
+  "mark a column that is unique in the view primary_key = true."
+
+# SQLite declares no type for a view column computed by an expression (`SUM(points)`, `COUNT(*)`), so
+# it is emitted as TextField — and a filter on it then binds text, which SQLite orders after every
+# number: `points__@gt => 10` returns nothing. The type is not guessed; the reader is told.
+_untyped_view_marker(view::AbstractString, cols::Vector{String})::String =
+  "# PormG: the database reports no type for $(join(("'$(_one_line(c, 60))'" for c in cols), ", ")) " *
+  "of the view '$(_one_line(view))' — SQLite gives none to a computed column — so " *
+  "$(length(cols) == 1 ? "it is" : "they are") emitted as TextField. Declare the real field type " *
+  "by hand: as a TextField, a filter compares the column as text."
+
+# #338: one binding/name registry PER GENERATED FILE, shared across every model rendered into it —
+# seeded with what the file's own boilerplate already imports, so a table literally named "models"
+# collides too. Without this, two tables that render the same binding silently shadow one another.
+# #360: pass 1 first — resolve every binding and rewrite each FK's `.to` to its target's FINAL
+# binding, then render with the bindings pass 1 already decided (one derivation, no drift).
+function _render_live_models(models_array::Vector{PormGModel}, views::_LiveViews)::Vector{Any}
+  binding_by_table = _plan_inspectdb_bindings!(models_array)
+  taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
+  taken_names = Set{String}()
+  Instructions = Any[]
+  for model in models_array
+    table = model_table_name(model)
+    rendered = Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings,
+                                   taken_names=taken_names, binding=binding_by_table[table])
+    if haskey(views.untyped, table)
+      untyped = views.untyped[table]
+      rendered = _view_marker(table) * "\n" *
+                 (isempty(untyped) ? "" : _untyped_view_marker(table, untyped) * "\n") * rendered
+    end
+    push!(Instructions, rendered)
+  end
+  for u in views.unreadable
+    push!(Instructions, "# PormG: a view could not be read, so it is not imported — $(_one_line(u, 300))")
+  end
+  return Instructions
+end
+
 """
-    import_models_from_sqlite(db::String="db"; force_replace::Bool=false, ignore_schema=nothing, include_table=nothing, file::String="automatic_models.jl")
+    import_models_from_sqlite(db::String="db"; force_replace::Bool=false, ignore_schema=nothing, include_table=nothing, include_views::Bool=false, file::String="automatic_models.jl")
 
 Import models from a SQLite database and generate a Julia file with model definitions.
 
@@ -94,6 +166,9 @@ Import models from a SQLite database and generate a Julia file with model defini
   connection's default list: `sqlite_ignore_schema`, less any `unignore_defaults:` entry. A vector
   replaces it. The connection's `ignore_tables:` and `register_ignore_tables!` are added either way.
 - `include_table::Union{Vector{String},Nothing}=nothing`: When set, only these tables are imported.
+- `include_views::Bool=false`: Also write each view as a `managed = false` model, after the tables
+  (#767). A view has no primary key and none is guessed, so the model is keyless and carries a
+  `# PormG:` marker saying so. `include_table` and `ignore_schema` filter views by name too.
 - `file::String="automatic_models.jl"`: The output filename for the generated models.
 
 # Description
@@ -118,6 +193,7 @@ function import_models_from_sqlite(db::String = "db";
                                   force_replace::Bool=false,
                                   ignore_schema::Union{Vector{String}, Nothing} = nothing,
                                   include_table::Union{Vector{String}, Nothing} = nothing,
+                                  include_views::Bool = false,
                                   file::String="automatic_models.jl")
 
   # Resolve the connection from its config key (mirrors import_models_from_postgres):
@@ -142,26 +218,14 @@ function import_models_from_sqlite(db::String = "db";
   # Convert the database schema to models
   # #818: `nothing` is the connection's default list — the built-in one less its `unignore_defaults:`.
   base = something(ignore_schema, _backend_ignore_tables(conn, settings))
-  models_array = convert_schema_to_models(conn, ignore_table=_with_connection_ignores(base, settings), include_table=include_table)
+  models_array, views = _live_import_models(conn, _with_connection_ignores(base, settings), include_table, include_views)
 
   if isempty(models_array)
     @warn("No tables found in the database to import.")
     return nothing
   end
 
-  # Collect all create instructions
-  # #338: one binding/name registry PER GENERATED FILE, shared across every model rendered into it —
-  # seeded with what the file's own boilerplate already imports, so a table literally named "models"
-  # collides too. Without this, two tables that render the same binding silently shadow one another.
-  # #360: pass 1 first — resolve every binding and rewrite each FK's `.to` to its target's FINAL
-  # binding, then render with the bindings pass 1 already decided (one derivation, no drift).
-  binding_by_table = _plan_inspectdb_bindings!(models_array)
-  taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
-  taken_names = Set{String}()
-  Instructions::Vector{Any} = []
-  for model in models_array
-    push!(Instructions, Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names, binding=binding_by_table[model_table_name(model)]))
-  end
+  Instructions = _render_live_models(models_array, views)
 
   generate_models_from_db(file, Instructions, settings; path=model_path)
 
@@ -172,7 +236,7 @@ function import_models_from_sqlite(db::String = "db";
 end
 
 """
-    import_models_from_postgres(db::String; force_replace::Bool=false, ignore_table=nothing, file::String="automatic_models.jl")
+    import_models_from_postgres(db::String; force_replace::Bool=false, ignore_table=nothing, include_table=nothing, include_views::Bool=false, file::String="automatic_models.jl")
 
 Import models from a PostgreSQL database and generate a Julia file with model definitions.
 
@@ -182,6 +246,11 @@ Import models from a PostgreSQL database and generate a Julia file with model de
 - `ignore_table::Union{Vector{String},Nothing}=nothing`: Table name prefixes to ignore. `nothing` is the
   connection's default list: `postgres_ignore_table`, less any `unignore_defaults:` entry (#818). A
   vector replaces it. The connection's `ignore_tables:` and `register_ignore_tables!` are added either way.
+- `include_table::Union{Vector{String},Nothing}=nothing`: When set, only these tables are imported.
+- `include_views::Bool=false`: Also write each view and materialized view as a `managed = false`
+  model, after the tables (#767). A view has no primary key and none is guessed, so the model is
+  keyless and carries a `# PormG:` marker saying so. `include_table` and `ignore_table` filter views
+  by name too.
 - `file::String="automatic_models.jl"`: The output filename for the generated models.
 
 # Description
@@ -207,6 +276,7 @@ function import_models_from_postgres(db::String;
   force_replace::Bool=false, 
   ignore_table::Union{Vector{String}, Nothing} = nothing,
   include_table::Union{Vector{String}, Nothing} = nothing,
+  include_views::Bool = false,
   file::String="automatic_models.jl",
   config::Dict{String,PormGSettings} = config)
   
@@ -225,23 +295,14 @@ function import_models_from_postgres(db::String;
   # Convert the database schema to models
   # #818: `nothing` is the connection's default list — the built-in one less its `unignore_defaults:`.
   base = something(ignore_table, _backend_ignore_tables(conn, settings))
-  models_array = convert_schema_to_models(conn, ignore_table=_with_connection_ignores(base, settings), include_table=include_table)
+  models_array, views = _live_import_models(conn, _with_connection_ignores(base, settings), include_table, include_views)
 
   if isempty(models_array)
       @warn("No tables found in the database to import.")
       return nothing
   end
 
-  # Convert each model to string representation
-  # #338: one binding/name registry per generated file — see import_models_from_sqlite for why.
-  # #360: pass 1 first — see import_models_from_sqlite.
-  binding_by_table = _plan_inspectdb_bindings!(models_array)
-  taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
-  taken_names = Set{String}()
-  Instructions::Vector{Any} = []
-  for model in models_array
-      push!(Instructions, Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names, binding=binding_by_table[model_table_name(model)]))
-  end
+  Instructions = _render_live_models(models_array, views)
   
   # Generate the models file
   generate_models_from_db(file, Instructions, settings, path=model_path)
@@ -257,6 +318,7 @@ function import_models_from_postgres(;db::PormGPostgres = connection(),
                                   force_replace::Bool=false, 
                                   ignore_table::Union{Vector{String}, Nothing} = nothing,
                                   include_table::Union{Vector{String}, Nothing} = nothing,
+                                  include_views::Bool = false,
                                   file::String="automatic_models.jl")
 
   Configuration._require_folder_backed(settings, "import_models_from_postgres")
@@ -271,23 +333,14 @@ function import_models_from_postgres(;db::PormGPostgres = connection(),
   # Convert the database schema to models
   # #818: `nothing` is the connection's default list — the built-in one less its `unignore_defaults:`.
   base = something(ignore_table, _backend_ignore_tables(db, settings))
-  models_array = convert_schema_to_models(db, ignore_table=_with_connection_ignores(base, settings), include_table=include_table)
+  models_array, views = _live_import_models(db, _with_connection_ignores(base, settings), include_table, include_views)
 
   if isempty(models_array)
       @warn("No tables found in the database to import.")
       return nothing
   end
 
-  # Convert each model to string representation
-  # #338: one binding/name registry per generated file — see import_models_from_sqlite for why.
-  # #360: pass 1 first — see import_models_from_sqlite.
-  binding_by_table = _plan_inspectdb_bindings!(models_array)
-  taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
-  taken_names = Set{String}()
-  Instructions::Vector{Any} = []
-  for model in models_array
-      push!(Instructions, Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names, binding=binding_by_table[model_table_name(model)]))
-  end
+  Instructions = _render_live_models(models_array, views)
   
   # Generate the models file
   generate_models_from_db(file, Instructions, settings, path=model_path)
@@ -2214,8 +2267,10 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
           push!(markers, "# PormG: Meta.unique_together on '$(class_label)' could not be read — dropped.")
         end
       end
+      checks = Tuple{Models.CheckConstraint, String}[]
       if haskey(meta_options, "constraints")
-        append!(constraints, _parse_meta_constraints(meta_options["constraints"], fields_dict, class_label, markers))
+        uq, checks = _parse_meta_constraints(meta_options["constraints"], fields_dict, class_label, markers)
+        append!(constraints, uq)
       end
       for c in constraints
         # The same duplicate-declaration collapse the index loop below does, for the same reason:
@@ -2240,6 +2295,25 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
           @warn "import: could not apply a unique constraint; skipping it" class=class_label fields=c.fields exception=e
           push!(markers, "# PormG: a constraint over ($(join(c.fields, ", "))) on '$(class_label)' " *
                          "was dropped — $(replace(sprint(showerror, e), "\n" => " "))")
+        end
+      end
+      # The translated CHECKs (#768), after the uniques because a CHECK name must be unique among
+      # all of the model's constraints. `_apply_check_constraints!` REPLACES the list, so each one is
+      # applied together with those already kept — a duplicate name drops that CHECK, not its siblings.
+      kept_checks = Models.CheckConstraint[]
+      for (c, el) in checks
+        try
+          Models._apply_check_constraints!(model, vcat(kept_checks, [c]))
+          push!(kept_checks, c)
+          # Said only once it has landed, so a CHECK dropped below never also reads as imported.
+          if occursin(r"\bviolation_error_(?:message|code)\s*=", el)
+            push!(markers, "# PormG: CheckConstraint '$(_one_line(c.name))' on '$(class_label)' was " *
+                           "imported without its violation_error_message / violation_error_code — those " *
+                           "only change Django's Python-side error, and PormG has no equivalent.")
+          end
+        catch e
+          e isa ModelDefinitionError || rethrow()
+          _drop_constraint!(markers, class_label, el, replace(sprint(showerror, e), "\n" => " "))
         end
       end
 
@@ -5562,9 +5636,9 @@ _one_line(s::AbstractString, limit::Int = 120)::String =
   String(first(strip(replace(s, r"\s+" => " ")), limit))
 
 function _drop_constraint!(markers::Vector{String}, class_label::AbstractString,
-                           element::AbstractString, reason::AbstractString)
+                           element::AbstractString, reason::AbstractString; reason_limit::Int = 200)
   short = _one_line(element)
-  reason = _one_line(reason, 200)
+  reason = _one_line(reason, reason_limit)
   @warn "import: Meta.constraints entry dropped" class=class_label reason=reason constraint=short
   push!(markers, "# PormG: a constraint on '$(class_label)' was dropped — $(reason): $(short)")
   return markers
@@ -5627,9 +5701,12 @@ function _claim_index_name!(taken::Set{String}, name::Union{String, Nothing},
 end
 
 """
-    _parse_meta_constraints(raw, fields_dict, class_label, markers) -> Vector{UniqueConstraint}
+    _parse_meta_constraints(raw, fields_dict, class_label, markers)
+        -> (Vector{UniqueConstraint}, Vector{Tuple{CheckConstraint, String}})
 
-Django `Meta.constraints = [...]` → PormG composite uniqueness.
+Django `Meta.constraints = [...]` → PormG composite uniqueness, plus the `CheckConstraint`s whose
+`Q(...)` translates to SQL (#768) — each paired with its source text, so the caller can report the
+one that fails to apply.
 
 Argument acceptance is a **whitelist**, and that is the point of this function rather than an
 incidental detail. `Models.UniqueConstraint` is exactly `(fields, name)`, so a Django
@@ -5644,11 +5721,12 @@ Each entry is judged on its own: one rejected constraint never takes its sibling
 function _parse_meta_constraints(raw::AbstractString, fields_dict::Dict{Symbol, Any},
                                  class_label::AbstractString, markers::Vector{String})
   out = Models.UniqueConstraint[]
+  checks = Tuple{Models.CheckConstraint, String}[]
   inner = _balanced_group(raw)
   if inner === nothing
     @warn "import: Meta.constraints is not a list or tuple literal; dropped" class=class_label
     push!(markers, "# PormG: Meta.constraints on '$(class_label)' could not be read — dropped.")
-    return out
+    return out, checks
   end
 
   for element in split_field_options(inner)
@@ -5658,15 +5736,19 @@ function _parse_meta_constraints(raw::AbstractString, fields_dict::Dict{Symbol, 
     m = match(_CONSTRAINT_CTOR_RE, el)
     ctor = m === nothing ? "" : String(m.captures[1])
     if ctor == "CheckConstraint"
-      # #742: PormG has `Models.CheckConstraint`, but its condition is SQL and Django's is a `Q(...)`
-      # object — and a mistranslated condition is a schema that silently accepts or refuses the wrong
-      # rows. So the CHECK is reported, with its name carried into the marker, for the developer to
-      # write the one SQL condition by hand; the original `Q(...)` text follows it.
+      # #768: the simple `Q(...)` shapes translate to SQL; anything else — and a mistranslated
+      # condition is a schema that silently accepts or refuses the wrong rows — keeps the #742 stub,
+      # with the constraint's name carried into the marker and the reason it was not translated.
+      check = _translate_django_check(el, fields_dict)
+      if check isa Models.CheckConstraint
+        push!(checks, (check, el))
+        continue
+      end
       nm = match(r"\bname\s*=\s*['\"]([^'\"]+)['\"]", el)
       name = nm === nothing ? "<name>" : String(nm.captures[1])
       _drop_constraint!(markers, class_label, el,
-        "CheckConstraint takes its condition as SQL, not Q() — declare it as " *
-        "Models.CheckConstraint(condition = \"<SQL>\", name = \"$(name)\")")
+        "CheckConstraint was not translated to SQL ($(check)) — declare it as " *
+        "Models.CheckConstraint(condition = \"<SQL>\", name = \"$(name)\")"; reason_limit = 400)
       continue
     end
     if ctor != "UniqueConstraint"
@@ -5750,7 +5832,326 @@ function _parse_meta_constraints(raw::AbstractString, fields_dict::Dict{Symbol, 
       _drop_constraint!(markers, class_label, el, replace(sprint(showerror, e), "\n" => " "))
     end
   end
-  return out
+  return out, checks
+end
+
+#───────────────────────────────────────────────────────────────────────────────
+# Django `CheckConstraint(check=Q(...))` → SQL (#768)
+#───────────────────────────────────────────────────────────────────────────────
+# A deliberately small grammar, because the failure direction is asymmetric: a CHECK the importer
+# declines is a marker the developer fills in, while a CHECK it mistranslates is a schema that
+# silently accepts or refuses the wrong rows. So the translator is a WHITELIST, at every level — the
+# lookups, the value literals, and which literal may meet which field — and anything outside it
+# keeps the #742 stub. The admitted shapes are the ones whose SQL means the same thing on both
+# engines:
+#
+# - `exact` / `in` on text, number and boolean fields; `gt`/`gte`/`lt`/`lte`/`range` on NUMBER fields
+#   only — an ordering comparison on text depends on the collation, which differs between
+#   PostgreSQL and SQLite. An INTEGER column takes only integral literals: Django runs `int()` on the
+#   value (and `math.ceil` for `gte`/`lt`), so `Q(laps__gt=1.5)` is `laps > 1` there, not `> 1.5`;
+# - `isnull=True/False` and `exact=None` on any column;
+# - `F("other")` on the right of `exact`/`gt`/`gte`/`lt`/`lte`, between two fields of the same family.
+#   Dates, times, decimals and durations are not a family here: SQLite stores them in more than one
+#   representation, so two such columns do not compare there as they do on PostgreSQL.
+#
+# Columns are always double-quoted, as Django renders them — a bare `user` on PostgreSQL is
+# `CURRENT_USER`, not a column.
+
+# The lookups the translator admits; `exact` is also what a bare `field=value` means.
+const _Q_LOOKUPS = ("exact", "gt", "gte", "lt", "lte", "in", "isnull", "range")
+const _Q_ORDERING = Dict("gt" => ">", "gte" => ">=", "lt" => "<", "lte" => "<=")
+
+# Raised inside the translator, caught at its entry point; `why` becomes the marker's reason.
+struct _QUntranslatable <: Exception
+  why::String
+end
+_q_fail(why::AbstractString) = throw(_QUntranslatable(String(why)))
+
+# The family a field's values compare in, or `:other` when no literal may meet it.
+function _q_family(field)::Symbol
+  field isa Union{Models.sIDField, Models.sIntegerField, Models.sBigIntegerField,
+                  Models.sPositiveSmallIntegerField, Models.sPositiveIntegerField} && return :int
+  field isa Models.sFloatField && return :float
+  field isa Union{Models.sCharField, Models.sTextField, Models.sEmailField, Models.sSlugField,
+                  Models.sURLField} && return :text
+  field isa Models.sBooleanField && return :bool
+  return :other
+end
+
+_q_ident(col::AbstractString)::String = "\"" * replace(col, "\"" => "\"\"") * "\""
+
+_q_numeric(fam::Symbol)::Bool = fam in (:int, :float)
+
+# May this right-hand side meet a field of family `fam` and mean on both engines what it means in
+# Django? A number needs a number field — and an integral one, for an integer field; a string a text
+# field; a boolean a boolean field; an `F()` a field of the same family (either number family).
+function _q_admits(fam::Symbol, val)::Bool
+  val.kind == :number && return fam == :float || (fam == :int && val.integral)
+  val.kind == :text && return fam == :text
+  val.kind == :bool && return fam == :bool
+  val.kind == :column && return _q_numeric(fam) ? _q_numeric(val.family) : (fam in (:text, :bool) && val.family == fam)
+  return false
+end
+
+# A string literal whose every backslash escape is one `_py_unescape` decodes as Python does. `\\`,
+# `\'` and `\"` are; `\x41`, `\u00e9`, `\N{…}` and octal escapes are left verbatim by it, so the SQL
+# would compare against the backslash text instead of the character. `\n`, `\t` and `\r` decode, and
+# the caller refuses them for what they decode to.
+function _q_plain_escapes(t::AbstractString)::Bool
+  i = firstindex(t)
+  while i <= lastindex(t)
+    if t[i] == '\\'
+      j = nextind(t, i)
+      j > lastindex(t) && return false
+      t[j] in ('\\', '\'', '"', 'n', 't', 'r') || return false
+      i = nextind(t, j)
+    else
+      i = nextind(t, i)
+    end
+  end
+  return true
+end
+
+# The column and family a Django field name resolves to, or a failure naming it.
+function _q_column(name::AbstractString, fields::Dict{Symbol, Any})
+  name == "pk" && _q_fail("`pk` is not resolved to a column")
+  occursin(r"^[A-Za-z_]\w*$", name) || _q_fail("`$(name)` is not a field name")
+  key = _resolve_django_constraint_field(name, fields)
+  key === nothing && _q_fail("field `$(name)` matches no imported field")
+  field = fields[Symbol(key)]
+  Models.is_many_to_many_field(field) && _q_fail("`$(name)` is a ManyToManyField, which has no column")
+  return (sql = _q_ident(Models.field_db_column(field, key)), family = _q_family(field), field = field)
+end
+
+# The index of the bracket closing the one that opens at `open_i`, or `nothing`. Quote-aware.
+function _q_group_end(s::AbstractString, open_i::Int)::Union{Int, Nothing}
+  st = _PyScan()
+  i = open_i
+  while i <= lastindex(s)
+    c = s[i]
+    was_in_string = _in_string(st)
+    j = _py_step!(st, s, i)
+    !was_in_string && st.depth == 0 && c in (')', ']', '}') && return i
+    i = j
+  end
+  return nothing
+end
+
+# One right-hand side: a literal, `None`, or `F("field")`. Lists are the caller's (`in`/`range`).
+function _q_value(v::AbstractString, fields::Dict{Symbol, Any})
+  t = String(strip(v))
+  t == "None" && return (kind = :null, sql = "NULL", family = :none, integral = false)
+  t == "True" && return (kind = :bool, sql = "TRUE", family = :bool, integral = false)
+  t == "False" && return (kind = :bool, sql = "FALSE", family = :bool, integral = false)
+  # A number literal starts with a digit (after an optional sign, or a leading `.`): `_py_number`
+  # strips every `_`, so `_1` — a NAME in Python, a constant this importer cannot see — would read as 1.
+  if occursin(r"^[+-]?(?:\d|\.\d)", t)
+    n = _py_number(t)
+    n === nothing && _q_fail("`$(t)` is not a number literal")
+    return (kind = :number, sql = string(n), family = :number, integral = n isa Int || isinteger(n))
+  end
+  if _py_quoted_literal(t)
+    _q_plain_escapes(t) || _q_fail("string `$(t)` uses an escape sequence PormG does not decode")
+    s = _py_unquote(t)
+    any(iscntrl, s) && _q_fail("string `$(t)` carries a control character")
+    return (kind = :text, sql = "'" * replace(s, "'" => "''") * "'", family = :text, integral = false)
+  end
+  m = match(r"^(?:models\s*\.\s*)?F\s*\(\s*(.*?)\s*\)$", t)
+  if m !== nothing && _py_quoted_literal(m.captures[1])
+    col = _q_column(_py_unquote(m.captures[1]), fields)
+    return (kind = :column, sql = col.sql, family = col.family, integral = false)
+  end
+  _q_fail("`$(t)` is not a literal or a plain F() reference")
+end
+
+# The elements of a list or tuple literal, each a literal (no `None`, no `F()`).
+function _q_list(v::AbstractString, fields::Dict{Symbol, Any})
+  t = String(strip(v))
+  ok = !isempty(t) && first(t) in ('[', '(') && _q_group_end(t, firstindex(t)) == lastindex(t)
+  ok || _q_fail("`$(t)` is not a list or tuple literal")
+  inner = t[nextind(t, firstindex(t)):prevind(t, lastindex(t))]
+  vals = [_q_value(e, fields) for e in split_field_options(inner)]
+  isempty(vals) && _q_fail("`$(t)` is empty")
+  # `("ferias")` is the string itself in Python, not a one-element tuple — Django's `in` would iterate
+  # its characters. Only the trailing comma makes it a tuple.
+  first(t) == '(' && length(vals) == 1 && !endswith(rstrip(inner), ",") &&
+    _q_fail("`$(t)` is a parenthesised value, not a tuple")
+  any(x -> x.kind in (:null, :column), vals) && _q_fail("`$(t)` holds a None or an F()")
+  return vals
+end
+
+# One `field__lookup=value` keyword of a `Q(...)`. Only a BETWEEN counts as a compound: its own
+# `AND` is correct SQL beside another one, but it is not how anyone would write it.
+function _q_leaf(k::AbstractString, v::AbstractString, fields::Dict{Symbol, Any})
+  return (sql = _q_leaf_sql(k, v, fields), compound = endswith(k, "__range"))
+end
+
+function _q_leaf_sql(k::AbstractString, v::AbstractString, fields::Dict{Symbol, Any})::String
+  startswith(k, "_") && _q_fail("`$(k)=` is a Q() option, not a lookup")
+  parts = split(k, "__")
+  lookup = length(parts) > 1 && parts[end] in _Q_LOOKUPS ? String(pop!(parts)) : "exact"
+  length(parts) == 1 || _q_fail("`$(k)` is not a field of this model with one of the lookups " *
+                                "$(join(_Q_LOOKUPS, ", "))")
+  col = _q_column(parts[1], fields)
+  fam = col.family
+
+  if lookup == "isnull"
+    val = _q_value(v, fields)
+    val.kind == :bool || _q_fail("`$(k)=` takes True or False")
+    return col.sql * (val.sql == "TRUE" ? " IS NULL" : " IS NOT NULL")
+  elseif lookup == "in"
+    vals = _q_list(v, fields)
+    fam in (:int, :float, :text, :bool) && all(x -> _q_admits(fam, x), vals) ||
+      _q_fail("`$(k)=` mixes a value with a field it cannot be compared to exactly on both engines")
+    return col.sql * " IN (" * join((x.sql for x in vals), ", ") * ")"
+  elseif lookup == "range"
+    vals = _q_list(v, fields)
+    length(vals) == 2 || _q_fail("`$(k)=` takes exactly two bounds")
+    _q_numeric(fam) && all(x -> x.kind == :number && _q_admits(fam, x), vals) ||
+      _q_fail("`$(k)=` is translated over number fields only, with integral bounds on an integer field")
+    return col.sql * " BETWEEN " * vals[1].sql * " AND " * vals[2].sql
+  end
+
+  val = _q_value(v, fields)
+  if lookup == "exact"
+    val.kind == :null && return col.sql * " IS NULL"
+    _q_admits(fam, val) ||
+      _q_fail("`$(k)=` compares a field to a value it cannot be compared to exactly on both engines")
+    return col.sql * " = " * val.sql
+  end
+  # gt / gte / lt / lte
+  if !(_q_numeric(fam) && val.kind in (:number, :column) && _q_admits(fam, val))
+    fam == :int && val.kind == :number &&
+      _q_fail("`$(k)=` compares an integer field to a fractional literal; an integer field takes integral literals")
+    _q_fail("`$(k)=` is an ordering comparison, translated over number fields only")
+  end
+  return col.sql * " " * _Q_ORDERING[lookup] * " " * val.sql
+end
+
+# A recursive-descent reader over Python's `|` < `&` < `~` precedence. Each producer returns the SQL
+# and whether it is a compound — compounds are parenthesised wherever they nest, and the outermost
+# one is not, so the stored condition reads like a hand-written one.
+mutable struct _QReader
+  s::String
+  i::Int
+  fields::Dict{Symbol, Any}
+  depth::Int      # nesting so far; bounded, so a pathological input is a stub, not a StackOverflowError
+end
+
+# CPython itself refuses source nested much past 200 levels, so no real models.py comes near this.
+const _Q_MAX_DEPTH = 100
+# The depth one level below `r`. Siblings share their parent's depth, so this bounds NESTING, not size.
+function _q_child_depth(r::_QReader)::Int
+  r.depth + 1 > _Q_MAX_DEPTH && _q_fail("the Q() expression is nested more than $(_Q_MAX_DEPTH) levels deep")
+  return r.depth + 1
+end
+
+function _q_peek(r::_QReader)::Char
+  while r.i <= lastindex(r.s) && isspace(r.s[r.i])
+    r.i = nextind(r.s, r.i)
+  end
+  return r.i <= lastindex(r.s) ? r.s[r.i] : '\0'
+end
+
+_q_wrap(x) = x.compound ? "(" * x.sql * ")" : x.sql
+
+function _q_binary(r::_QReader, op::Char, sqlop::String, operand)
+  parts = [operand(r)]
+  while _q_peek(r) == op
+    r.i = nextind(r.s, r.i)
+    push!(parts, operand(r))
+  end
+  length(parts) == 1 && return parts[1]
+  return (sql = join((_q_wrap(p) for p in parts), sqlop), compound = true)
+end
+
+_q_or(r::_QReader) = _q_binary(r, '|', " OR ", _q_and)
+_q_and(r::_QReader) = _q_binary(r, '&', " AND ", _q_not)
+
+function _q_not(r::_QReader)
+  if _q_peek(r) == '~'
+    r.i = nextind(r.s, r.i)
+    outer = r.depth
+    r.depth = _q_child_depth(r)
+    inner = _q_not(r)
+    r.depth = outer
+    # Self-delimiting: NOT binds tighter than AND/OR, and its operand is parenthesised.
+    return (sql = "NOT (" * inner.sql * ")", compound = false)
+  end
+  return _q_atom(r)
+end
+
+function _q_atom(r::_QReader)
+  c = _q_peek(r)
+  if c == '('
+    close_i = _q_group_end(r.s, r.i)
+    close_i === nothing && _q_fail("unbalanced parentheses")
+    inner = _q_expression(r.s[nextind(r.s, r.i):prevind(r.s, close_i)], r.fields, _q_child_depth(r))
+    r.i = nextind(r.s, close_i)
+    return inner
+  end
+  m = match(r"^(?:models\s*\.\s*)?Q\s*\(", SubString(r.s, r.i))
+  m === nothing && _q_fail("`$(_one_line(SubString(r.s, r.i), 40))` is not a Q() expression")
+  open_i = prevind(r.s, r.i + ncodeunits(m.match))
+  close_i = _q_group_end(r.s, open_i)
+  close_i === nothing && _q_fail("unbalanced parentheses")
+  args = split_field_options(r.s[nextind(r.s, open_i):prevind(r.s, close_i)])
+  r.i = nextind(r.s, close_i)
+  isempty(args) && _q_fail("an empty Q() matches every row")
+  # Q(a, b, x=1) is the AND of its children, positional ones first — Django's own order.
+  children = map(args) do a
+    kv = _split_top_level_assign(a)
+    kv === nothing ? _q_expression(a, r.fields, _q_child_depth(r)) : _q_leaf(kv[1], kv[2], r.fields)
+  end
+  length(children) == 1 && return children[1]
+  return (sql = join((_q_wrap(ch) for ch in children), " AND "), compound = true)
+end
+
+# A whole Q expression; trailing text (an operator PormG does not read, say) is a failure.
+function _q_expression(s::AbstractString, fields::Dict{Symbol, Any}, depth::Int = 0)
+  r = _QReader(String(s), firstindex(s), fields, depth)
+  x = _q_or(r)
+  _q_peek(r) == '\0' || _q_fail("`$(_one_line(SubString(r.s, r.i), 40))` is not part of a Q() expression")
+  return x
+end
+
+"""
+    _translate_django_check(element, fields_dict) -> Union{CheckConstraint, String}
+
+One Django `CheckConstraint(...)` as a `Models.CheckConstraint` with an SQL condition over the
+model's physical columns, or the reason it was not translated (#768). See the grammar note above.
+"""
+function _translate_django_check(element::AbstractString, fields::Dict{Symbol, Any})::Union{Models.CheckConstraint, String}
+  args = _balanced_group(element)
+  args === nothing && return "its argument list could not be read"
+  kwargs = Dict{String, String}()
+  for tok in split_field_options(args)
+    kv = _split_top_level_assign(tok)
+    kv === nothing && return "it takes a positional argument"
+    kv[1] in ("check", "condition", "name", "violation_error_message", "violation_error_code") ||
+      return "`$(kv[1])=` is not translated"
+    kwargs[kv[1]] = kv[2]
+  end
+  haskey(kwargs, "check") && haskey(kwargs, "condition") && return "it declares both `check=` and `condition=`"
+  q = get(kwargs, "condition", get(kwargs, "check", nothing))
+  q === nothing && return "it declares no condition"
+  name = haskey(kwargs, "name") ? _meta_string_literal(kwargs["name"]) : nothing
+  name === nothing && return "its `name=` is not a string literal"
+  # Django substitutes `%(app_label)s` / `%(class)s` per model; the live constraint carries the
+  # substituted name, so the placeholder text would declare a second CHECK beside it.
+  occursin("%(", name) && return "its name uses a %(…)s placeholder"
+  condition = try
+    _q_expression(q, fields).sql
+  catch e
+    e isa _QUntranslatable || rethrow()
+    return e.why
+  end
+  return try
+    Models.CheckConstraint(condition = condition, name = name)
+  catch e
+    e isa ModelDefinitionError || rethrow()
+    "the translated condition was refused: $(sprint(showerror, e))"
+  end
 end
 
 """

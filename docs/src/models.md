@@ -488,6 +488,44 @@ M.Driver_points.objects.
 
 The view itself is yours to create and change, for example as manual SQL in a migration.
 
+### Generating models for existing views
+
+The live-database importers skip views by default, as `makemigrations` does. Pass
+`include_views = true` to also write each view (and, on PostgreSQL, each materialized view) as an
+unmanaged model, after the tables:
+
+```julia
+PormG.Migrations.import_models_from_postgres("db"; include_views = true)
+PormG.Migrations.import_models_from_sqlite("db_sl"; include_views = true)
+```
+
+`include_table` and the ignore lists filter views by name, as they filter tables. A view has no
+primary key, and PormG does not guess one: nothing in a view guarantees that a column is unique, and a
+guessed key would return duplicate rows as if they were one. So the generated model is keyless, and a
+marker above it says so. For
+`CREATE VIEW driver_points_v AS SELECT driverid, SUM(points) AS points FROM result GROUP BY driverid`
+on PostgreSQL:
+
+```julia
+# PormG: generated from the view 'driver_points_v' — managed = false, so migrations never create, alter or drop it. A view has no primary key, so none is declared: reads work, but writes that address rows by key (a filtered delete, bulk_update without match_on) need one — mark a column that is unique in the view primary_key = true.
+Driver_points_v = Models.Model("driver_points_v", managed = false,
+  driverid = Models.BigIntegerField(null=true),
+  points = Models.FloatField(null=true))
+```
+
+Reads, filters and aggregates work on a keyless model. The writes that address rows by key — a
+filtered `delete()`, `bulk_update` without `match_on`, an upsert without a conflict `target` — raise,
+naming the fix. A foreign key a view exposes is generated as a plain column, because a view has no
+foreign-key constraint to read; declare it as a `ForeignKey` with `db_constraint = false` by hand to
+traverse it.
+
+On SQLite, a view column computed by an expression — `SUM(points)`, `COUNT(*)` — has no declared type,
+so it is generated as a `TextField`, and a second marker names those columns. Declare each one's real
+type by hand (`FloatField`, `IntegerField`, …). As a `TextField` the column still reads, but a filter
+on it compares text: `filter("points__@gt" => 10)` matches nothing. On SQLite, a view that no longer
+resolves — it reads a table or column dropped since it was created — is skipped with a warning and a
+marker instead of stopping the import.
+
 ## Naming Conventions and Considerations
 
 ### Model Naming Rules

@@ -1193,7 +1193,7 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
   # [isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper}) ? push!(instruc._where, _get_filter_query(v, instruc)) : throw("Error in values, $(v) is not a SQLTypeQor, SQLTypeQ or SQLTypeOper") for v in object.filter]
   @pormg_debug false
   for v in object.filter
-    _guard_no_aggregate_predicate(v)   # #537
+    _guard_no_aggregate_predicate(v, instruc)   # #537
     _guard_field_alias_collision(v, instruc)   # #703
     if isa(v, ExistsObject)
       push!(instruc._where, _get_filter_query(v, instruc))
@@ -1249,6 +1249,7 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         # Same rule as `_row_alias_leaf` and `_get_having_query`, so both spellings agree.
         if _expression_operand(v.values)
           _guard_window_alias_predicate(source, having_key[2], instruc)   # #685, as the typed path does
+          clause === :where && _guard_where_operand(v, instruc)   # #895: a row alias against an aggregate
           set_context!(instruc, clause)
           try
             push!(clause === :having ? instruc.having : instruc._where, _get_filter_query(v, instruc))
@@ -1277,6 +1278,7 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         end
         continue
       end
+      _guard_where_operand(v, instruc)   # #895
       push!(instruc._where, _get_filter_query(v, instruc))
     elseif isa(v, Union{SQLTypeQor,SQLTypeQ,SQLTypeF})
       _guard_window_alias_in_q(v, instruc)   # #685
@@ -1478,7 +1480,7 @@ end
 # a window is not an aggregate, even over one (#776 asks `_contains_agg` for GROUP BY instead) — hence
 # the explicit `isa` beside it. A SELECT-side CASE
 # (`When(OP(...))`) never enters this walk; it renders through `_get_select_query(::SQLTypeOper)`.
-function _guard_no_aggregate_predicate(filter, depth::Int = 0)
+function _guard_no_aggregate_predicate(filter, instruc::SQLInstruction, depth::Int = 0)
   depth > 32 && return nothing
   if filter isa SQLTypeOper
     col = filter.column
@@ -1492,15 +1494,57 @@ function _guard_no_aggregate_predicate(filter, depth::Int = 0)
         "Project it under an alias and filter on the alias, which renders as HAVING — " *
         "\e[4m\e[32mvalues(\"total\" => Sum(\"qty\")); filter(\"total__@gt\" => 1)\e[0m (#537)."))
     end
+  elseif filter isa FExpression
+    # #895: the same predicate spelled as an expression — `(Count("id") + 1) > 2`, `Max(…) - Min(…) >
+    # Hour(1)`, and since #895 a bare `Count("id") > 1`. It rendered in WHERE, with no GROUP BY, and
+    # failed at the driver. An `F` leaf never routes to HAVING (`_split_having` keeps it in WHERE), so
+    # every one is WHERE-bound, and refused as `OP(...)` is rather than moved: moving it would also
+    # turn on GROUP BY from a filter. The window check runs first, because `_contains_agg` also
+    # answers `true` for a window over an aggregate, and that one needs the CTE advice. Both are
+    # asked after aliases resolve (#722, #789): `Case([When("total__@gt" => 1, then = 1)]) == 1` over
+    # `"total" => Sum(…)` renders `CASE WHEN SUM(…)`, which no flag set at construction can see.
+    _resolved_window(filter, instruc) && throw(QueryBuildError(
+      "\e[4m\e[31mfilter(…)\e[0m — an expression containing a window function cannot be a WHERE " *
+      "predicate: SQL evaluates windows after WHERE. " * _WINDOW_PREDICATE_ADVICE * " (#895)."))
+    _resolved_contains_agg(filter, instruc) && throw(QueryBuildError(_AGGREGATE_EXPRESSION_ADVICE))
   elseif filter isa SQLTypeQ
     for f in filter.filters
-      _guard_no_aggregate_predicate(f, depth + 1)
+      _guard_no_aggregate_predicate(f, instruc, depth + 1)
     end
   elseif filter isa SQLTypeQor
     for f in filter.or
-      _guard_no_aggregate_predicate(f, depth + 1)
+      _guard_no_aggregate_predicate(f, instruc, depth + 1)
     end
   end
+  return nothing
+end
+
+# The spelling that DOES filter on an aggregate expression, shared by the two #895 refusals.
+const _AGGREGATE_EXPRESSION_ADVICE =
+  "\e[4m\e[31mfilter(…)\e[0m — an expression containing an aggregate cannot be a WHERE predicate, " *
+  "and PormG does not move it to HAVING. Project the expression under an alias and filter on the " *
+  "alias, which renders as HAVING — \e[4m\e[32mvalues(\"raceid\", \"span\" => Max(\"milliseconds\") - " *
+  "Min(\"milliseconds\")); filter(\"span__@gt\" => 1000)\e[0m (#895)."
+
+# #895 — the right-hand side of a WHERE-bound pair: `filter("grid" => Max("grid"))` rendered
+# `WHERE "Tb"."grid" = MAX("Tb"."grid")`, the left-hand twin of the `F` arm above. Called where a pair
+# is pushed into WHERE — the top-level column and row-alias sites in `get_filter_query`, and
+# `_get_where_query` for a split `Q` — and NOT in `_get_filter_query(::SQLTypeOper)`, which also
+# renders a SELECT-side `When(...)`, where an aggregate is legal. An aggregate alias compared with an
+# aggregate is not WHERE-bound (`HAVING COUNT(…) > MAX(…)` is legal), so the routing decides first and
+# this never sees it. Asked after aliases resolve, as the `F` arm is.
+function _guard_where_operand(v::SQLTypeOper, instruc::SQLInstruction)
+  _expression_operand(v.values) || return nothing
+  _resolved_window(v.values, instruc) && throw(QueryBuildError(
+    "\e[4m\e[31mfilter(\"$(_filter_path_label(v))\" => …)\e[0m — the right-hand side contains a window " *
+    "function, which cannot be a WHERE predicate: SQL evaluates windows after WHERE. " *
+    _WINDOW_PREDICATE_ADVICE * " (#895)."))
+  _resolved_contains_agg(v.values, instruc) && throw(QueryBuildError(
+    "\e[4m\e[31mfilter(\"$(_filter_path_label(v))\" => …)\e[0m — the right-hand side contains an " *
+    "aggregate, which cannot be a WHERE predicate, and PormG does not move it to HAVING. Project " *
+    "the left-hand side as an aggregate alias and compare that, which renders as HAVING — " *
+    "\e[4m\e[32mvalues(\"raceid\", \"worst\" => Max(\"milliseconds\")); " *
+    "filter(\"worst__@gt\" => Min(\"milliseconds\") * 2)\e[0m (#895)."))
   return nothing
 end
 
@@ -1670,6 +1714,7 @@ _get_having_query(q::SQLTypeQor, instruc::SQLInstruction)::String =
 # match `_get_filter_query(::SQLTypeQ/::SQLTypeQor)`, so a `Q` with no alias leaf renders as before.
 # The caller holds the `:where` context.
 function _get_where_query(v::SQLTypeOper, instruc::SQLInstruction)::String
+  _guard_where_operand(v, instruc)   # #895: every leaf here is WHERE-bound
   hit = _row_alias_leaf(v, instruc)
   hit === nothing && return _get_filter_query(v, instruc)
   return _render_alias_predicate(v, hit[1], hit[2], instruc)

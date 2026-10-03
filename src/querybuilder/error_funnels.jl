@@ -46,16 +46,16 @@ _write_not_allowed(operation::AbstractString, conn_key) = WritesDisabledError(
 # #536 — an `F(...)` / `Joined(...)` comparison against a value the operand vocabulary does not
 # admit. Without this the call fell through to `Base.==` (identity) and evaluated to a bare `Bool`,
 # so `q.filter(F("uid") == uuid)` reported *"Invalid filter argument: false"* — naming a value the
-# user never wrote (#530's complaint, on every type the union omitted). Shared by the twelve
-# catch-all methods in `types.jl` (six per family), which is what earns it a funnel: one wording,
-# one fix, and the accepted list is read LIVE from `_CompareLiteral` so the text cannot drift from
-# the union it describes.
+# user never wrote (#530's complaint, on every type the union omitted). Shared by the eighteen
+# catch-all methods in `types.jl` — six per family, `F`, `Joined` and, since #895, a function on the
+# left (`Lower(…) == x`) — which is what earns it a funnel: one wording, one fix, and the accepted
+# list is read LIVE from `_CompareLiteral` so the text cannot drift from the union it describes.
 function _unsupported_compare_operand(op::AbstractString, operand)
   accepted = join(string.(Base.uniontypes(_CompareLiteral)), ", ")
   hint = (operand === nothing || operand === missing) ?
     " To test for NULL, filter with \e[4m\e[32m\"col__@isnull\" => true\e[0m instead." : ""
   return QueryBuildError(
-    "\e[4m\e[31m$(typeof(operand))\e[0m is not a supported right-hand side for an F/Joined comparison " *
+    "\e[4m\e[31m$(typeof(operand))\e[0m is not a supported right-hand side for an F/Joined/function comparison " *
     "(\e[4m\e[31m$(op)\e[0m). A comparison operand must be a literal of one of these types — " *
     "$(accepted) — or a column reference (\e[4m\e[32mF(...)\e[0m, \e[4m\e[32mCTE(...)\e[0m, " *
     "\e[4m\e[32mJoined(...)\e[0m)." * hint)

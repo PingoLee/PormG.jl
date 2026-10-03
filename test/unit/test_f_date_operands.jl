@@ -1228,12 +1228,16 @@ end
   # Review of #814: it fell to the literal's own family and reached `format_number_sql(::Hour)`, a
   # raw MethodError on both engines.
   # #881: on SQLite the difference is milliseconds, so the duration binds its milliseconds there.
+  # #895: this used to reach the comparison through `filter(...)`, a statement both engines reject
+  # (an aggregate in WHERE), which #895 now refuses at build time. The binding question is the same
+  # one in a SELECT-side `Case`, where the comparison is legal SQL, so it is asked there. The `then`
+  # and `default` values bind after the duration, in text order.
   @testset "a duration against an interval with no rooted column binds" begin
     for (conn, bound) in ((_FD_SL, 3_600_000), (_FD_PG, "01:00:00"))
       q = FD.Fd_result.objects
-      q.values("race")
-      q.filter((_FN.Max("logged_at") - _FN.Min("logged_at")) == Dates.Hour(1))
-      @test _fd_params(q; conn = conn) == Any[bound]
+      cond = PormG.Q((_FN.Max("logged_at") - _FN.Min("logged_at")) == Dates.Hour(1))
+      q.values("race", "one_hour" => _FN.Case([_FN.When(cond, then = 1)], default = 0))
+      @test _fd_params(q; conn = conn) == Any[bound, 1, 0]
     end
   end
 

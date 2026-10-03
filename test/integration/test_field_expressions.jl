@@ -988,3 +988,37 @@ end
           [Dates.DateTime(s) + Dates.Day(r) for (s, r) in zip(df.start_at, df.round)]
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #895: a function on the left of a comparison filters rows; an aggregate there is refused.
+# The aggregate spelling rendered `WHERE (MAX(…) - MIN(…)) > ?`, which both engines reject at the
+# driver; it now raises before anything is sent. The guide's two examples, with oracles computed in
+# Julia over the same rows: the drivers whose surname lowercases to "senna", and the races whose lap
+# spread is over an hour through the alias spelling the refusal points at.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "A function comparison filters rows; an aggregate one is refused (#895)" begin
+  FN = PormG.Functions
+  query = M.Driver.objects
+  query.filter(FN.Lower("surname") == "senna")
+  query.values("forename", "surname")
+  df = query |> DataFrame
+  everyone = M.Driver.objects.values("forename", "surname") |> DataFrame
+  expected = sort(everyone[lowercase.(everyone.surname) .== "senna", :forename])
+  @test length(expected) == 2
+  @test sort(df.forename) == expected
+
+  refused = M.Lap_times.objects
+  refused.values("raceid")
+  refused.filter((FN.Max("milliseconds") - FN.Min("milliseconds")) > 3_600_000)
+  @test_throws PormG.QueryBuildError refused |> DataFrame
+
+  query = M.Lap_times.objects
+  query.values("raceid", "spread" => FN.Max("milliseconds") - FN.Min("milliseconds"))
+  query.filter("spread__@gt" => 3_600_000)
+  query.order_by("raceid")
+  df = query |> DataFrame
+  laps = M.Lap_times.objects.values("raceid", "milliseconds") |> DataFrame
+  spread = combine(groupby(laps, :raceid), :milliseconds => (x -> maximum(x) - minimum(x)) => :spread)
+  @test !isempty(df.raceid)
+  @test df.raceid == sort(spread[spread.spread .> 3_600_000, :raceid])
+end

@@ -489,9 +489,14 @@ end
 
   # The issue's own query, and an `update` SET value (SQLite: `update` renders on the model's own
   # connection, which is this file's SQLite mock).
-  sql = _tlp_sql((q = TLP.Tlp_row.objects; q.filter("seen__@gte" => PormG.QueryBuilder.Max("ts__@date")); q);
+  # #895: the issue's query compared a plain column with `Max(…)` in WHERE, which both engines reject
+  # and #895 now refuses at build time. The transform inside the aggregate is the thing pinned here,
+  # so it is asked in the position where an aggregate on the right is legal: against an aggregate
+  # alias, in HAVING.
+  sql = _tlp_sql((q = TLP.Tlp_row.objects; q.values("id", "last_seen" => PormG.QueryBuilder.Max("seen"));
+                  q.filter("last_seen__@gte" => PormG.QueryBuilder.Max("ts__@date")); q);
                  conn = _TLP_SL)
-  @test occursin("\"Tb\".\"seen\" >= MAX(strftime('%Y-%m-%d', \"Tb\".\"ts\"))", sql)
+  @test occursin("HAVING MAX(\"Tb\".\"seen\") >= MAX(strftime('%Y-%m-%d', \"Tb\".\"ts\"))", sql)
   q = TLP.Tlp_row.objects
   q.filter("id" => 1)
   upd = q.update("seen" => PormG.Functions.Coalesce("ts__@date", "seen"), show_query = :dict)

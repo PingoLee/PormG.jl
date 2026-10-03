@@ -1320,10 +1320,10 @@ end
 # column is the right answer to THIS question; it is not a claim that the rest of that path is sound.
 #
 # A `CTE(...)` cannot be a LEFT operand — no comparison method takes one on that side — so it has no
-# arm. Nor does an `FObject`, and the honest reason is that nothing needs one: no comparison overload
-# accepts a bare `FObject` on the left at all (`Max("seen") == Date(…)` falls through to `Base.==`),
-# so the only route in is one hop down — `(Sum("points") - 10) == Date(…)` — where falling back to
-# the operand's own type is correct. A `__@` transform does not arrive here as an `FObject` either:
+# arm. Nor does an `FObject`: since #895 a function on the left builds the node one hop down —
+# `Max("seen") == Date(…)` is an `FExpression` over the `FObject`, as `(Sum("points") - 10) == Date(…)`
+# always was — and falling back to the operand's own type is correct there, because a function is not
+# its column: `Lower("code")` is text whatever `code` is. A `__@` transform does not arrive here as an `FObject` either:
 # `F("seen__@year")` puts the whole path in `field_name` as a STRING, and `_date_field_type` already
 # declines it.
 #

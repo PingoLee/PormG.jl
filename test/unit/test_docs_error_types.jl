@@ -764,6 +764,31 @@ const DOCERR_CASES = [
         () -> DOCERR_RACE_PG.objects.values("name", "n" => Count("raceid")).
             filter(Qor("n__@lt" => 20, "name" => "Monaco Grand Prix")).list(show_query = :dict),
     ),
+    # #895 — *Filter the alias, not the expression* (field_expressions.md) and the HAVING section of
+    # filters_and_aggregates.md say an aggregate written straight into `filter` raises when the query
+    # is built, in each spelling the warning lists. Every message, and the HAVING spellings that
+    # still render, are pinned in `test/unit/test_filter_aggregate_expression.jl`.
+    (
+        "read/field_expressions.md — an expression containing an aggregate is refused in filter (#895)",
+        QueryBuildError,
+        () -> DOCERR_RACE_PG.objects.values("name").
+            filter((Max("raceid") - Count("raceid")) > 3).list(show_query = :dict),
+    ),
+    (
+        "read/field_expressions.md + read/filters_and_aggregates.md — a bare aggregate comparison is refused in filter (#895)",
+        QueryBuildError,
+        () -> DOCERR_RACE_PG.objects.values("name").filter(Count("raceid") <= 3).list(show_query = :dict),
+    ),
+    (
+        "read/field_expressions.md — an aggregate inside Q is refused in filter (#895)",
+        QueryBuildError,
+        () -> DOCERR_RACE_PG.objects.values("name").filter(Q(Count("raceid") > 3)).list(show_query = :dict),
+    ),
+    (
+        "read/field_expressions.md — an aggregate on the right of a pair is refused in filter (#895)",
+        QueryBuildError,
+        () -> DOCERR_RACE_PG.objects.values("name").filter("raceid" => Max("raceid")).list(show_query = :dict),
+    ),
     # Intentional PG/SQLite divergence: these pages tell the reader the lookup is PostgreSQL-only
     # and raises on SQLite. Asserting it on the SQLite mock keeps the documented divergence honest.
     (

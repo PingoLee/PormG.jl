@@ -1819,6 +1819,42 @@ function Base.:*(operand::Union{Integer,Float64}, f::FObject)
   return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", aggregate=f.aggregate)
 end
 
+# Comparison operations for FObject — the `F` comparisons above, with a function on the left (#895).
+#
+# `Count("id") > 1` raised a raw `MethodError: isless(::Int64, ::FObject)`, because no comparison
+# method took a function on the left, and `Lower("surname") == "senna"` fell through to `Base.==` and
+# reached `filter(...)` as a bare `false`. One hop down they already worked: `(Count("id") + 0) > 1` is
+# arithmetic, which builds an `FExpression`, and the comparison nests over it. So a comparison builds
+# that same node — the nesting branch of `_compare(::FExpression)` — and the filter decides what it
+# means: a row function filters in WHERE, and a predicate containing an aggregate is refused by
+# `_guard_no_aggregate_predicate` (build_query.jl), as `OP(Count("id"), ">", 1)` has been since #537.
+#
+# The operand vocabulary is `_CompareOperand`, the `F` one, and a value outside it is refused by the
+# same funnel. A function on the RIGHT is outside it, as it is for `F`.
+_compare(f::FObject, operation::String, operand) =
+  FExpression(field_name=f, operation=operation, operand=operand, function_name="F", column="",
+              aggregate=f.aggregate)
+
+for (op, sym) in ((:(==), "="), (:(!=), "!="), (:(>), ">"), (:(<), "<"), (:(>=), ">="), (:(<=), "<="))
+  @eval Base.$op(f::FObject, operand::_CompareOperand) = _compare(f, $sym, operand)
+  # `FExpression`'s #536/#603 catch-all, for the same reasons: a non-`String` `AbstractString` is
+  # normalized and re-dispatched, and anything else is refused instead of answering from `Base`.
+  @eval function Base.$op(x::FObject, operand)
+    operand isa AbstractString && return Base.$op(x, String(operand))
+    throw(_unsupported_compare_operand($sym, operand))
+  end
+end
+# The Base methods these collide with, as for `FExpression` — Aqua's ambiguity check pins the set.
+Base.:(==)(::FObject, operand::Missing) = throw(_unsupported_compare_operand("=", operand))
+Base.:(==)(::FObject, operand::WeakRef) = throw(_unsupported_compare_operand("=", operand))
+Base.:<(::FObject, operand::Missing)    = throw(_unsupported_compare_operand("<", operand))
+
+# The `isequal` half, as for `FExpression` (#536, #541): `isequal` falls back to `==`, which now
+# builds a predicate, and `Dict`/`Set`/`unique` rely on it answering a `Bool`. Identity for two nodes.
+Base.isequal(a::FObject, b::FObject) = a === b
+Base.isequal(::FObject, ::Any) = false
+Base.isequal(::FObject, ::Missing) = false
+
 
 # ---
 # Bitwise expression types and operands (narrow overloads to prevent spooky dispatch)

@@ -942,6 +942,8 @@ Notice how PormG separates:
 - **`WHERE`** — row-level conditions (`status = 'Finished'`)
 - **`HAVING`** — aggregate conditions (`COUNT(grid) <= 3`)
 
+The alias is what routes the condition to `HAVING`. An aggregate written directly into `filter`, such as `filter(Count("grid") <= 3)`, raises `QueryBuildError` instead of rendering in `WHERE`. See [Filter the alias, not the expression](field_expressions.md#In-Filters-(Auto-HAVING)).
+
 ### Aggregate Arithmetic in HAVING
 
 You can filter on computed aggregate expressions too:

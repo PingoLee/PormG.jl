@@ -3,7 +3,7 @@
 `F()` expressions enable database-side field references and arithmetic. They let you compare fields to other fields, perform calculations in SQL, and create computed columns — all without pulling data into Julia.
 
 !!! note
-    **For Django users:** PormG's `F()` is inspired by Django but leverages Julia's operator overloading (e.g., `F("a") + F("b")`). It also allows seamless mixing with aggregate functions like `Sum()` and `Count()`, and the engine automatically detects aggregates to generate `HAVING` clauses.
+    **For Django users:** PormG's `F()` is inspired by Django but leverages Julia's operator overloading (e.g., `F("a") + F("b")`). It also allows seamless mixing with aggregate functions like `Sum()` and `Count()`. Project such an expression under an alias and filter on the alias: PormG detects the aggregate and renders that filter as `HAVING` (see [In Filters (Auto-HAVING)](#In-Filters-(Auto-HAVING))).
 
 ---
 
@@ -57,6 +57,30 @@ Sum("points") / Count("resultid") # Aggregate ratios
 | `<=` | `<=` | Less than or equal |
 
 These are most useful when the comparison involves **two columns** or a **computed expression** — cases where the suffix filter API cannot help.
+
+### A function on the left
+
+The same operators work with a SQL function on the left, such as `Lower` or `Upper`. The comparison becomes a `WHERE` predicate, and the value on the right is a bound parameter:
+
+```julia
+using PormG.Functions: Lower
+
+query = M.Driver.objects
+query.filter(Lower("surname") == "senna")
+query.values("forename", "surname")
+df = query |> DataFrame
+```
+
+Generated SQL:
+```sql
+SELECT "Tb"."forename" as "forename", "Tb"."surname" as "surname"
+FROM "driver" as "Tb"
+WHERE (LOWER("Tb"."surname") = $1::text)
+```
+
+Against the F1 data this returns Ayrton Senna and Bruno Senna. The right-hand side takes what an `F` comparison takes: a literal, or a column reference such as `F("forename")`.
+
+An **aggregate** on the left (`Count("resultid") > 10`) builds an expression too, but `filter` refuses it, because an aggregate cannot be a `WHERE` predicate. Filter on an aggregate through an alias instead. See [In Filters (Auto-HAVING)](#In-Filters-(Auto-HAVING)).
 
 ### Expressions are values, not builders
 
@@ -696,6 +720,34 @@ FROM ...
 GROUP BY 1
 HAVING SUM("points") / COUNT("resultid") > $1
 ```
+
+!!! warning "Filter the alias, not the expression"
+    `HAVING` comes from the **alias**. An expression that contains an aggregate, passed straight to `filter`, raises `QueryBuildError` when the query is built:
+
+    ```julia
+    query = M.Lap_times.objects
+    query.values("raceid")
+    query.filter((Max("milliseconds") - Min("milliseconds")) > 3_600_000)   # QueryBuildError
+    ```
+
+    The same applies to a bare aggregate (`Count("resultid") > 10`), to one inside `Q`/`Qor`, and to one on the right of a pair (`"milliseconds" => Max("milliseconds")`). PormG does not move such a predicate to `HAVING`, because that would also add a `GROUP BY` the query never asked for. Project the expression and filter on its name:
+
+    ```julia
+    query = M.Lap_times.objects
+    query.values("raceid", "spread" => Max("milliseconds") - Min("milliseconds"))
+    query.filter("spread__@gt" => 3_600_000)   # races whose slowest lap is over an hour slower than the fastest
+    query.order_by("raceid")
+    df = query |> DataFrame
+    ```
+
+    ```sql
+    SELECT "Tb"."raceid" as "raceid",
+           (MAX("Tb"."milliseconds") - MIN("Tb"."milliseconds")) as "spread"
+    FROM "lap_times" as "Tb"
+    GROUP BY 1
+    HAVING (MAX("Tb"."milliseconds") - MIN("Tb"."milliseconds")) > $1
+    ORDER BY "raceid" ASC NULLS LAST
+    ```
 
 ---
 

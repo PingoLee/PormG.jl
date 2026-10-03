@@ -170,9 +170,18 @@ const WindowPartitionPart = Union{String,SQLTypeField,SQLTypeFunction,SQLTypeF,S
 """Window ORDER BY expressions."""
 const WindowOrderPart = Union{String,SQLTypeOrder,SQLTypeCTE,SQLTypeJoined}
 
+# #887 — `SubqueryObject`: a subquery is one value per row, which is all a window VALUE function
+# reads (`LAG((SELECT …), 1) OVER (…)`), so `Lag(Subquery(s))` and its four siblings take one, as the
+# scalar functions do since #878. Every consumer of the slot has an arm for it: `_check_function` and
+# `_retag_cte_string` pass it through, `_get_select_query(::WindowFunction)` renders it with the
+# projection's alias (for #194), and a CTE body refuses it with the `Cast` hint. The two `_retag_*_column`
+# walks never meet one — they walk the parse of a `CTE`/`Joined` path string.
+#
+# #612: above the docstring, not between it and the `const` — see `WindowPartitionPart`.
 """Window function column SLOT — what `WindowFunction.column` may hold. The vocabulary a CALLER may
 write is the wider `WindowColumnArg` below (#603)."""
-const WindowColumnPart = Union{Nothing,String,SQLTypeField,SQLTypeText,SQLTypeFunction,SQLTypeF,SQLTypeCTE,SQLTypeJoined}
+const WindowColumnPart = Union{Nothing,String,SQLTypeField,SQLTypeText,SQLTypeFunction,SQLTypeF,SQLTypeCTE,SQLTypeJoined,
+                               SubqueryObject}
 
 # #603 — the ARGUMENT vocabulary for the window VALUE functions (`Lag`, `Lead`, `FirstValue`,
 # `LastValue`, `NthValue`): what a CALLER may write, as against what the node may HOLD. Those five
@@ -400,6 +409,16 @@ const CorrelatedRef = NamedTuple{(:label, :ref, :column, :expr),NTuple{4,String}
   # build by a reader whose only handle on a column is the name the driver gave it: `_list_raw` has
   # no namespace to key with, and routing this through `memo_key` would force it to invent one.
   projection_kinds::Dict{Symbol,CanonicalType} = Dict{Symbol,CanonicalType}()
+  # #888 — the read kind of each `Subquery(...)` this build RENDERED, keyed by the node itself. The
+  # inner build records its one projection's kind (`projection_kinds` above, written back onto the
+  # rendered copy of the handler); `_get_select_query(::SubqueryObject)` files it here, and
+  # `_operand_kind(::SubqueryObject)` reads it AFTER the render — the order every other kind
+  # lookup keeps (#564). Not a memo, for the reason `projection_kinds` gives: it describes a result,
+  # it has no `MemoKey` namespace, and nothing reads it to skip a render. Keyed by IDENTITY because
+  # the kind is a function of the node's own query, so a node projected twice answers the same, and
+  # the caller's node is never written to (#508). `nothing` until the first typed subquery: most
+  # builds render none, and a build is allocation-sensitive (#41).
+  subquery_kinds::Union{Nothing,IdDict{SubqueryObject,CanonicalType}} = nothing
   connection::ConnType = nothing
   # array_defs::SQLTypeArrays = SQLArrays()
   cache::Dict{MemoKey,SQLTypeField} = sizehint!(Dict{MemoKey,SQLTypeField}(), 12)

@@ -1422,6 +1422,44 @@ end
     @test occursin("(\"Tb\".\"seen\" - ", _fd_sql(q_pg; conn = _FD_PG))
   end
 
+  # #888: a `Subquery(...)` has its one column's kind now, so a `Coalesce` over a date subquery and a
+  # date column agrees on `CDate` and is a typed side, like `Coalesce("seen", "race__date")`. Before,
+  # the subquery answered `nothing`, the `Coalesce` did too, and SQLite refused the difference as an
+  # untyped operand (#882). A day count on both engines now — the subquery's filter value still binds
+  # inside its own text.
+  @testset "a Coalesce over a date Subquery is a typed side (#888)" begin
+    sub() = (s = FD.Fd_result.objects; s.filter("id" => PormG.OuterRef("id"), "points" => 3);
+             s.values("t" => _FN.Max("seen")); s)
+    expr() = F("seen") - _FN.Coalesce(PormG.Subquery(sub()), F("seen"))
+    q = FD.Fd_result.objects
+    q.values("x" => expr())
+    sl = _fd_sql(q; conn = _FD_SL)
+    @test occursin("CAST(julianday(\"Tb\".\"seen\") - julianday(COALESCE((SELECT", sl)
+    @test occursin("), \"Tb\".\"seen\")) AS INTEGER)", sl)
+    @test _fd_params(q; conn = _FD_SL) == Any[3]
+    q_pg = FD.Fd_result.objects
+    q_pg.values("x" => expr())
+    @test occursin("(\"Tb\".\"seen\" - COALESCE((SELECT", _fd_sql(q_pg; conn = _FD_PG))
+    for conn in (_FD_SL, _FD_PG)
+      @test _fd_kinds(q -> q.values("x" => expr()); conn = conn)[:x] === PormG.CInt32()
+    end
+
+    # The timestamp twin is an interval (#814): the same correlated subquery inside SQLite's
+    # `julianday` difference, its filter value bound once and ahead of the outer filter's.
+    ts_sub() = (s = FD.Fd_result.objects; s.filter("id" => PormG.OuterRef("id"), "points" => 3);
+                s.values("t" => _FN.Max("logged_at")); s)
+    ts_expr() = F("logged_at") - _FN.Coalesce(PormG.Subquery(ts_sub()), F("logged_at"))
+    q = FD.Fd_result.objects
+    q.filter("points" => 42)
+    q.values("x" => ts_expr())
+    sl = _fd_sql(q; conn = _FD_SL)
+    @test occursin("julianday(\"Tb\".\"logged_at\") - julianday(COALESCE((SELECT", sl)
+    @test _fd_params(q; conn = _FD_SL) == Any[3, 42]
+    for conn in (_FD_SL, _FD_PG)
+      @test _fd_kinds(q -> q.values("x" => ts_expr()); conn = conn)[:x] === PormG.CInterval()
+    end
+  end
+
   # A text literal is refused on BOTH engines. It bound as text: PostgreSQL has no `date - text` and
   # failed at execution, and SQLite subtracted the years. The message names the `Date` spelling.
   @testset "a text literal on the right of date arithmetic is refused" begin

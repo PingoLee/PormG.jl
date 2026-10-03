@@ -461,9 +461,9 @@ negative values. These cases use the milliseconds:
 - `Greatest`, `Least` and `Coalesce` when every argument is a difference, interval arithmetic, a
   `DurationField` (by path, `F(...)` or `Joined(...)`), one of the functions in this list, a
   duration literal (`Coalesce("time", Value(Hour(0)))`, the usual "default to zero"), or a `NULL`
-  literal. Any other argument keeps the text comparison: a text column, a `CTE(...)` column, or a
-  duration literal with a month, a year or a fraction of a millisecond. So does a declared
-  `output_field`.
+  literal. Any other argument keeps the text comparison: a text column, a `CTE(...)` column, a
+  `Subquery(...)`, or a duration literal with a month, a year or a fraction of a millisecond. So
+  does a declared `output_field`.
 - A `When` condition on an interval's alias, as a filter on it is
   (`Case(When(Q("total__@gt" => Hour(1)); then = 1); default = 0)`). The alias must come before the
   `Case` in `values(...)`.
@@ -486,13 +486,17 @@ query.order_by("-since_midnight")
 On SQLite the `ORDER BY` repeats the difference in milliseconds rather than naming the
 `since_midnight` text, and it binds that expression's own parameters again.
 
-Two shapes have no millisecond form and still sort the text on SQLite. Their values are right, but
-ordering or filtering on them is text order, which is wrong at 100 hours and above and for negative
-values:
+Three shapes have no millisecond form and still sort the text on SQLite. Ordering or filtering on
+them is text order, which is wrong at 100 hours and above and for negative values:
 
-- `Case` whose value is a duration. Its `When` conditions compare milliseconds (see above).
-- A window value function over a duration (`Lag("time", over = …)`). For lap times, which stay far
+- `Case` whose value is a duration. Its `When` conditions compare milliseconds (see above). Its
+  value reads back as the stored text.
+- A window value function over a duration (`Lag("time", over = …)`), including one over a
+  `Subquery(...)`. Its value reads back as a `Dates.CompoundPeriod`. For lap times, which stay far
   below 100 hours, the text order is the numeric one.
+- A `Subquery(...)` that returns a duration (#888). Its value reads back as a
+  `Dates.CompoundPeriod`, but `Greatest` and `Least` over one choose their result by the text, so
+  past 100 hours or below zero the value itself can be the wrong argument, not only its order.
 
 An aggregate over an interval can be used inside arithmetic too. On SQLite it stays a number of
 milliseconds until the whole expression is finished, as a difference does. `Sum(d) / Count("id")`

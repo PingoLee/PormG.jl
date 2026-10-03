@@ -868,7 +868,8 @@ The same holds for the row a write hands back (`create()`, `update_or_create`, `
 and for a function that returns one of the column's own values: `Max("time")` and `Min("time")`,
 the window value functions `Lag`, `Lead`, `FirstValue`, `LastValue` and `NthValue`, and
 `Coalesce`, `Greatest`, `Least` or `NullIf` over `time` (#824). It also holds for a `Joined(...)`
-handle on the column, and for a `CTE(...)` column whose body projects it. A computed value is not
+handle on the column, for a `CTE(...)` column whose body projects it, and for a `Subquery(...)`
+that projects it (#888). A computed value is not
 the column, so it is still whatever the engine delivered: text on SQLite, and a bare `Period` or a
 `CompoundPeriod` on PostgreSQL. That covers a `CTE(...)` column the body computes, and a `Coalesce`
 whose arguments are of different types. The computed intervals PormG types are the difference of two
